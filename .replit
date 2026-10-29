@@ -5,9 +5,42 @@ run = "npm install && npm run dev -- --host 0.0.0.0 --port 5000"
 localPort = 5000
 externalPort = 80
 
+[[ports]]
+localPort = 5001
+externalPort = 3000
+
+[[ports]]
+localPort = 8787
+externalPort = 3001
+
 [nix]
 channel = "stable-25_05"
 
 [deployment]
-deploymentTarget = "cloudrun"
-run = "npm install && npm run dev -- --host 0.0.0.0 --port 5000"
+deploymentTarget = "autoscale"
+run = ["node", "server/ai-server.mjs"]
+build = ["npm", "run", "build"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run server"
+waitForPort = 8787
