@@ -1,0 +1,8 @@
+node_modules/
+dist/
+dist-artifact/
+.data/
+*.log
+*.zip
+.env
+.env.*
