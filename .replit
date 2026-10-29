@@ -7,3 +7,7 @@ externalPort = 80
 
 [nix]
 channel = "stable-25_05"
+
+[deployment]
+deploymentTarget = "cloudrun"
+run = "npm install && npm run dev -- --host 0.0.0.0 --port 5000"
