@@ -5,7 +5,9 @@ import { cn } from '@/lib/utils';
 import { deleteBlob, getBlob } from '@/lib/storage';
 import { useRuntime } from '@/lib/platform';
 import { useMediaUrl } from '@/lib/media';
-import { createVideo, fmtUsd, pendingVideos, VIDEO_DURATIONS, VIDEO_RESOLUTIONS, videoCost, type VideoAspect, type VideoJob, type VideoResolution } from '@/ai/video';
+import { createVideo, fmtUsd, pendingVideos, VIDEO_DURATIONS, VIDEO_RESOLUTIONS, videoCost, videoTransport, type VideoAspect, type VideoJob, type VideoResolution } from '@/ai/video';
+import { primaryProvider } from '@/ai/functions';
+import { metaLine } from '@/ai/meta';
 import { AIThinking } from '@/components/ai/AI';
 import { download } from '@/components/ui/download';
 import { AutoTextarea, Field, Segmented, Spinner, Toggle } from '@/components/ui/primitives';
@@ -19,8 +21,16 @@ const ASPECTS: { id: VideoAspect; label: string; hint: string }[] = [
   { id: '16:9', label: 'Wide', hint: '16:9 · YouTube, websites, listings' },
 ];
 
-/** Videos come from HeyGen through OpenRouter in the viewer's Zapier connector. */
-export function videoAvailability(zapier: string): { ok: boolean; reason: string } {
+/**
+ * Videos come from HeyGen through OpenRouter in the viewer's Zapier connector (claude.ai), or from
+ * the keys that power Videos on your server (self-hosted).
+ */
+export function videoAvailability(zapier: string, ai = useRuntime.getState().ai): { ok: boolean; reason: string } {
+  if (videoTransport.server) {
+    if (!ai.reachable) return { ok: false, reason: 'Start the Yourlocalbusiness server (npm run server) to make videos.' };
+    if (!ai.routing.videos?.length) return { ok: false, reason: 'No API key makes videos yet. In Settings → AI, tick Videos for an OpenRouter, Google or xAI key.' };
+    return { ok: true, reason: '' };
+  }
   switch (zapier) {
     case 'ready':
     case 'checking':
@@ -56,7 +66,10 @@ export interface VideoPanelProps {
 export function VideoPanel({ title = 'AI video', prompt, onPromptChange, defaultAspect, startImage, media, onChange, name, pendingKey, purpose = 'post', className }: VideoPanelProps) {
   const fid = useId();
   const zapier = useRuntime((s) => s.zapier);
-  const avail = videoAvailability(zapier);
+  const ai = useRuntime((s) => s.ai);
+  const avail = videoAvailability(zapier, ai);
+  const server = videoTransport.server;
+  const maker = server ? primaryProvider('videos') : undefined;
   const job = useImageJob();
   const [aspect, setAspect] = useState<VideoAspect>(defaultAspect);
   const [duration, setDuration] = useState<number>(8);
@@ -87,6 +100,7 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
         const old = current.current;
         onChange(r.media);
         if (old && old.id !== r.media.id && old.kind === 'video') setTimeout(() => deleteBlob(old.id), 0);
+        if (r.meta) return { done: `Video by ${metaLine(r.meta)} · ${Math.round(r.ms / 1000)}s`, note: r.meta.note ?? '' };
         return { done: `HeyGen video · ${Math.round(r.ms / 1000)}s${r.cost != null ? ` · ${fmtUsd(r.cost)}` : ''}` };
       },
     );
@@ -111,6 +125,10 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
       </h3>
       {!avail.ok ? (
         <p className="text-[11.5px] leading-snug text-muted">{avail.reason}</p>
+      ) : server ? (
+        <p className="text-[11.5px] leading-snug text-muted">
+          {maker ? `${maker.label} makes the clip with ${maker.models.video} at ${maker.effort.video?.label ?? 'its default'} quality (set per key in Settings → AI). It takes a minute or more.` : 'Your AI keys make the clip.'}
+        </p>
       ) : (
         <p className="text-[11.5px] leading-snug text-muted">HeyGen Video makes the clip, with sound, through OpenRouter in your Zapier. It takes about a minute.</p>
       )}
@@ -153,7 +171,7 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
             ))}
           </select>
         </label>
-        <Segmented<VideoResolution> size="sm" value={resolution} onChange={setResolution} options={VIDEO_RESOLUTIONS.map((r) => ({ id: r.id, label: r.label }))} />
+        {!server && <Segmented<VideoResolution> size="sm" value={resolution} onChange={setResolution} options={VIDEO_RESOLUTIONS.map((r) => ({ id: r.id, label: r.label }))} />}
       </div>
       {art.skills.length > 0 && (
         <p className="text-[11.5px] text-muted" title={art.text}>
@@ -161,9 +179,11 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
         </p>
       )}
       {startImage && <Toggle checked={fromImage} onChange={setFromImage} label="Start from the cover photo" />}
-      <p className="text-[11.5px] text-muted">
-        About {fmtUsd(cost)} on OpenRouter (list price; it has billed less so far).
-      </p>
+      {!server && (
+        <p className="text-[11.5px] text-muted">
+          About {fmtUsd(cost)} on OpenRouter (list price; it has billed less so far).
+        </p>
+      )}
       <AIThinking running={job.running} stage={job.stage} onStop={job.stop} compact />
       {job.error && (
         <div className="rounded-md border border-bad/30 bg-bad-soft px-3 py-2 text-[12.5px]" role="alert">

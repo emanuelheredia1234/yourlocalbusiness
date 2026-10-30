@@ -15,7 +15,10 @@ vi.mock('@/lib/platform', () => ({
   useRuntime: { getState: () => ({ set: () => {} }) },
 }));
 
-import { downloadVideo, parseVideoStart, startVideo, videoAspectFor, videoCost, waitForVideo } from './video';
+import { downloadVideo, parseVideoStart, startVideo, videoAspectFor, videoCost, videoTransport, waitForVideo } from './video';
+
+// these tests cover the claude.ai route (Zapier); video.server.test.ts covers your server
+videoTransport.server = false;
 import { postVideoPrompt } from './image';
 import { newProject } from '@/store/defaults';
 

@@ -1,9 +1,10 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { Brain, RefreshCw, Sparkles, Square, ThumbsDown, ThumbsUp } from 'lucide-react';
-import type { ProviderId, Skill } from '@/lib/types';
+import type { GenMeta, ProviderId, Skill } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { FEEDBACK_REASONS } from '@/ai/brain';
 import { providerLabel } from '@/ai/engine';
+import { metaDetails, metaLine } from '@/ai/meta';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { navigate } from '@/lib/router';
@@ -76,11 +77,20 @@ export function AIThinking({ running, stage, chars, onStop, className, compact }
   );
 }
 
-export function ProviderBadge({ provider }: { provider: ProviderId }) {
+export function ProviderBadge({ provider, meta }: { provider: ProviderId; meta?: GenMeta }) {
   return (
     <span className={cn('badge', provider === 'local' ? 'bg-surface-2 text-ink-2' : 'bg-ink text-surface')}>
       <Sparkles size={10} className={provider === 'local' ? '' : 'text-accent'} />
-      {providerLabel(provider)}
+      {provider === 'server' && meta ? `AI · ${meta.providerLabel}` : providerLabel(provider)}
+    </span>
+  );
+}
+
+/** Which key, model and effort answered, and what it used (tokens, cost), from the generation log. */
+export function AIMetaLine({ meta, className }: { meta: GenMeta; className?: string }) {
+  return (
+    <span className={cn('num inline-flex min-w-0 items-center gap-1 truncate', className)} title={metaDetails(meta)}>
+      {metaLine(meta).split(' · ').slice(1).join(' · ')}
     </span>
   );
 }
@@ -88,6 +98,7 @@ export function ProviderBadge({ provider }: { provider: ProviderId }) {
 export function AIResultBar({ provider, skills, ms, note, logId, className }: { provider: ProviderId; skills: Skill[]; ms?: number; note?: string; logId: string | null; className?: string }) {
   const rate = useStore((s) => s.rateGeneration);
   const log = useStore((s) => s.genLog.find((g) => g.id === logId));
+  const meta = provider === 'server' ? log?.meta : undefined;
   const [open, setOpen] = useState(false);
   const [reasons, setReasons] = useState<string[]>([]);
   const [text, setText] = useState('');
@@ -95,7 +106,8 @@ export function AIResultBar({ provider, skills, ms, note, logId, className }: { 
   const rated = log?.rating;
   return (
     <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted', className)}>
-      <ProviderBadge provider={provider} />
+      <ProviderBadge provider={provider} meta={meta} />
+      {meta && <AIMetaLine meta={meta} />}
       {skills.length > 0 ? (
         <button className="inline-flex items-center gap-1.5 rounded px-1 hover:bg-surface-2 hover:text-ink" onClick={() => navigate('brain')} title={skills.map((s) => s.name).join(', ')}>
           <Brain size={13} className="text-primary" />

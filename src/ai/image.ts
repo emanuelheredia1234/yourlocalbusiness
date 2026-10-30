@@ -1,10 +1,10 @@
 // AI image creation for social posts and marketplace listings.
 //
-//   photo         → in the claude.ai artifact: Manus, through the viewer's Zapier connector.
-//                   Self-hosted: your server's image provider (Meta Muse Image by default;
-//                   OpenAI or any OpenAI-compatible host when you swap keys in Settings).
-//   illustration  → Claude draws an SVG (artifact `sample`, or your server's Claude); without
-//                   Claude a built-in brand illustration is used and labelled as such.
+//   photo         → in the claude.ai artifact: Meta Muse Image through OpenRouter in the viewer's
+//                   Zapier connector. Self-hosted: your server, with the keys that power Photos
+//                   in Settings → AI (OpenAI, Google, xAI, Meta, OpenRouter, or a Manus task).
+//   illustration  → the AI draws an SVG (Claude in claude.ai, or your server's keys); without
+//                   either a built-in brand illustration is used and labelled as such.
 //
 // The artwork never carries text; headlines, prices and lists are typeset on top by the
 // canvas compositor so they read exactly right.
@@ -21,10 +21,12 @@ import { heroScene, sceneForStyle, type ArtScene } from './local/art';
 import { runTask } from './engine';
 import { visualBrief, type VisualBrief } from './brain';
 import { serverBase } from './claude';
+import { primaryProvider, routeFor } from './functions';
+import { compactMeta, isAIMeta, metaLine, type AIMeta } from './meta';
 import { listingIllustrationTask, postIllustrationTask, type IllustrationInput } from './tasks';
 import { generateMuseImage, museErrorMessage } from './openrouter';
 import { videoErrorMessage } from './video';
-import { base64ToBlob, continueManusTask, createManusTask, fetchManusImage, fmtElapsed, MANUS_IMAGE_LIMIT, manusAttachPrompt, manusErrorMessage, manusImagePrompt, pendingManus, waitForManus, type ManusTask } from './manus';
+import { base64ToBlob, continueManusTask, createManusTask, fetchManusImage, fmtElapsed, manusAttachPrompt, manusErrorMessage, manusImageLimit, manusImagePrompt, manusViaServer, pendingManus, waitForManus, type ManusTask } from './manus';
 import { zapierErrorMessage } from '@/lib/zapier';
 
 export class ImageGenError extends Error {
@@ -37,18 +39,32 @@ export class ImageGenError extends Error {
   }
 }
 
-export const PROVIDER_LABELS: Record<string, string> = { meta: 'Meta Muse Image', openai: 'OpenAI', custom: 'Custom provider' };
-
-/** Where photos come from here: Meta Muse Image (OpenRouter via Zapier) inside claude.ai, your image API when self-hosted. */
-export function photoRoute(): 'muse' | 'server' {
+/**
+ * Where photos come from here: Meta Muse Image (OpenRouter via Zapier) inside claude.ai; self-hosted,
+ * the first key that powers Photos on your server ("manus" when that key is Manus).
+ */
+export function photoRoute(): 'muse' | 'server' | 'manus' | 'none' {
   if (__ARTIFACT_BUILD__) return 'muse';
-  const img = useRuntime.getState().image;
-  if (img.reachable && img.configured) return 'server';
-  return useRuntime.getState().zapier === 'ready' ? 'muse' : 'server';
+  const route = routeFor('photos');
+  if (!route.length) return 'none';
+  return route[0] === 'manus' ? 'manus' : 'server';
 }
 
 export function photoLabel(): string {
-  return photoRoute() === 'muse' ? 'Photo · Muse' : 'Photo';
+  const route = photoRoute();
+  if (route === 'muse') return 'Photo · Muse';
+  const p = primaryProvider('photos');
+  return p ? `Photo · ${p.label.split(' ')[0]}` : 'Photo';
+}
+
+/** One line on who makes photos here and what it costs, for under the controls. */
+export function photoSourceNote(): string {
+  const route = photoRoute();
+  if (route === 'muse') return 'Meta Muse Image creates the photo through OpenRouter in your Zapier, in a few seconds. OpenRouter bills about a cent per image.';
+  const p = primaryProvider('photos');
+  if (!p) return '';
+  if (route === 'manus') return `Manus makes the photo as a task (a few minutes, ${p.effort.image?.label ?? 'Standard'} agent), using your Manus credits.`;
+  return `${p.label} makes the photo with ${p.models.image} at ${p.effort.image?.label ?? 'its default'} quality, billed to your key.`;
 }
 
 export function photoAvailability(): { ok: boolean; reason: string } {
@@ -64,9 +80,9 @@ export function photoAvailability(): { ok: boolean; reason: string } {
         return { ok: true, reason: '' };
     }
   }
-  const img = useRuntime.getState().image;
-  if (!img.reachable) return { ok: false, reason: 'Start the Yourlocalbusiness server (npm run server) to generate photos.' };
-  if (!img.configured) return { ok: false, reason: 'Add an image API key (Meta Muse Image, OpenAI…) in Settings → Image generation.' };
+  const rt = useRuntime.getState();
+  if (!rt.ai.reachable) return { ok: false, reason: 'Start the Yourlocalbusiness server (npm run server) to generate photos.' };
+  if (photoRoute() === 'none') return { ok: false, reason: 'No API key makes photos yet. In Settings → AI, tick Photos for an OpenAI, Google, xAI, Meta, OpenRouter or Manus key.' };
   return { ok: true, reason: '' };
 }
 
@@ -211,6 +227,8 @@ export interface ArtResult {
   note?: string;
   revisedPrompt?: string;
   ms: number;
+  /** your server: which key, model and quality made it, and what it cost */
+  meta?: AIMeta;
 }
 
 interface ArtRequest {
@@ -242,6 +260,7 @@ async function requestManusPhoto(req: ArtRequest): Promise<ArtResult> {
   if (!task) {
     req.onStage?.('Starting a Manus task…');
     task = await createManusTask({
+      fn: 'photos',
       // the clean subject: manusImagePrompt adds the style, palette, framing and no-text rules itself
       prompt: manusImagePrompt({ subject: req.subject, aspect: req.aspect, styleHint: req.styleHint, colors: req.project.brand.colors, purpose: req.purpose, textSpace: req.textArea }),
       title: `${req.purpose === 'post' ? 'Post' : 'Listing'} image · ${req.project.brand.name || 'Yourlocalbusiness'}`,
@@ -256,7 +275,7 @@ async function requestManusPhoto(req: ArtRequest): Promise<ArtResult> {
     req.onStage?.('Bringing the image back from Manus…');
     got = await fetchManusImage(task.taskId, { signal: req.signal });
     if (!got.image && !task.followedUp) {
-      // too large to come back through Zapier, or never attached: ask once for a small JPEG
+      // too large to come back, or never attached: ask once for a small JPEG
       req.onStage?.('Asking Manus for a smaller copy…');
       await continueManusTask(task.taskId, manusAttachPrompt({ imageCount: got.state.imageCount, aspect: req.aspect }));
       task = { ...task, followedUp: true };
@@ -276,8 +295,8 @@ async function requestManusPhoto(req: ArtRequest): Promise<ArtResult> {
   const img = got.image;
   const taskUrl = got.state.taskUrl || task.taskUrl;
   if (!img) {
-    const big = got.state.images.find((i) => i.sizeBytes > MANUS_IMAGE_LIMIT);
-    const why = big ? `${(big.sizeBytes / 1e6).toFixed(1)} MB, more than the ${MANUS_IMAGE_LIMIT / 1e6} MB that fits through Zapier` : got.state.images.find((i) => i.note)?.note;
+    const big = got.state.images.find((i) => i.sizeBytes > manusImageLimit());
+    const why = big ? `${(big.sizeBytes / 1e6).toFixed(1)} MB, more than the ${manusImageLimit() / 1e6} MB that fits${manusViaServer() ? '' : ' through Zapier'}` : got.state.images.find((i) => i.note)?.note;
     throw new ImageGenError(
       got.state.imageCount ? `Manus made the image but it couldn’t be brought back${why ? ` (${why})` : ''}. Open the task to download it.` : 'Manus finished without an image file. Open the task to see what happened.',
       'MANUS_NO_IMAGE',
@@ -334,7 +353,7 @@ export function recordVisualSkills(brief: VisualBrief, o: { task: string; label:
 }
 
 async function requestPhoto(req: ArtRequest): Promise<ArtResult> {
-  // a Manus photo started before the switch to Muse can still be picked up
+  // a Manus photo started earlier (or one Manus is set to make) runs as a Manus task
   if (req.resume) return requestManusPhoto(req);
   const brief = artDirection(req.purpose);
   if (brief.text) req = { ...req, photoPrompt: withArtDirection(req.photoPrompt, brief) };
@@ -344,13 +363,15 @@ async function requestPhoto(req: ArtRequest): Promise<ArtResult> {
 }
 
 async function requestPhotoFrom(req: ArtRequest): Promise<ArtResult> {
-  if (photoRoute() === 'muse') return requestMusePhoto(req);
+  const route = photoRoute();
+  if (route === 'muse') return requestMusePhoto(req);
+  if (route === 'manus') return requestManusPhoto(req);
   const t0 = performance.now();
-  req.onStage?.('Generating the photo…');
+  req.onStage?.(`${primaryProvider('photos')?.label ?? 'The AI'} is creating the photo…`);
   const s = useStore.getState().settings;
   let res: Response;
   try {
-    res = await fetch(`${serverBase(s.ai.serverUrl)}/api/image`, {
+    res = await fetch(`${serverBase(s.ai.serverUrl)}/api/ai/image`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: req.photoPrompt, aspect: req.aspect }),
@@ -362,15 +383,24 @@ async function requestPhotoFrom(req: ArtRequest): Promise<ArtResult> {
   }
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string; code?: string } | null;
+    // the keys changed since the page last asked: Manus makes the photo now
+    if (body?.code === 'USE_AGENT') return requestManusPhoto(req);
     throw new ImageGenError(body?.error || `Image generation failed (${res.status}).`, body?.code || 'UPSTREAM');
   }
   const blob = await res.blob();
-  const providerId = res.headers.get('x-image-provider') || '';
+  let meta: AIMeta | undefined;
+  try {
+    const raw = JSON.parse(decodeURIComponent(res.headers.get('x-ai-meta') || ''));
+    if (isAIMeta(raw)) meta = raw;
+  } catch {
+    /* no meta */
+  }
   const revised = res.headers.get('x-revised-prompt');
   const url = URL.createObjectURL(blob);
   try {
     const image = await loadImage(url);
-    return { image, source: blob, kind: 'photo', provider: PROVIDER_LABELS[providerId] ?? 'Image provider', engine: 'server', revisedPrompt: revised ? decodeURIComponent(revised) : undefined, ms: Math.round(performance.now() - t0) };
+    const note = meta?.attempts?.length ? `${meta.attempts.map((a) => `${a.providerLabel} failed (${a.error})`).join(' ')} ${meta.providerLabel} made it instead.` : meta?.note || undefined;
+    return { image, source: blob, kind: 'photo', provider: meta?.providerLabel ?? 'Image provider', engine: 'server', revisedPrompt: revised ? decodeURIComponent(revised) : undefined, ms: Math.round(performance.now() - t0), meta, note };
   } catch {
     throw new ImageGenError('The image provider returned an image this browser can’t open.', 'UPSTREAM');
   } finally {
@@ -379,21 +409,27 @@ async function requestPhotoFrom(req: ArtRequest): Promise<ArtResult> {
   }
 }
 
+/** "OpenAI · gpt-image-2.5-flare · effort High · ≈$0.13" for a photo made on your server. */
+export function artMetaLine(art: Pick<ArtResult, 'meta'>): string {
+  return art.meta ? metaLine(art.meta) : '';
+}
+
 async function requestIllustration(req: ArtRequest): Promise<ArtResult> {
   const s = useStore.getState();
   const task = req.purpose === 'post' ? postIllustrationTask : listingIllustrationTask;
   const run = await runTask(task, { subject: req.subject, aspect: req.aspect, scene: req.scene, seed: req.seed, textArea: req.textArea, styleHint: req.styleHint }, { project: req.project, skills: s.skills, settings: s.settings, signal: req.signal, onStage: req.onStage });
-  s.recordGeneration({ id: run.id, task: task.id, label: task.label, module: task.module, provider: run.data.drawnBy === 'claude' ? run.provider : 'local', skillIds: run.skills.map((k) => k.id), createdAt: Date.now(), ms: run.ms, projectId: req.project.id });
+  const drawn = run.data.drawnBy === 'claude';
+  s.recordGeneration({ id: run.id, task: task.id, label: task.label, module: task.module, provider: drawn ? run.provider : 'local', skillIds: run.skills.map((k) => k.id), createdAt: Date.now(), ms: run.ms, projectId: req.project.id, ...(drawn && run.meta ? { meta: compactMeta(run.meta) } : {}) });
   const image = await loadImage(svgDataUrl(run.data.svg));
-  const claude = run.data.drawnBy === 'claude';
   return {
     image,
     source: new Blob([run.data.svg], { type: 'image/svg+xml' }),
-    kind: claude ? 'illustration' : 'design',
-    provider: claude ? 'Claude' : 'Built-in',
-    engine: claude ? run.provider : 'local',
-    note: claude ? undefined : run.note ?? 'Claude isn’t connected here, so a built-in brand illustration was used.',
+    kind: drawn ? 'illustration' : 'design',
+    provider: drawn ? (run.provider === 'server' ? run.meta?.providerLabel ?? 'AI' : 'Claude') : 'Built-in',
+    engine: drawn ? run.provider : 'local',
+    note: drawn ? run.note : run.note ?? 'No AI is connected here, so a built-in brand illustration was used.',
     ms: run.ms,
+    meta: drawn ? run.meta : undefined,
   };
 }
 

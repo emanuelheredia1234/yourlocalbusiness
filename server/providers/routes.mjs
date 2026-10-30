@@ -16,7 +16,7 @@
 
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { FUNCTIONS, FUNCTION_GROUPS, PROVIDERS, describeProviders, fnById } from './registry.mjs';
+import { FUNCTIONS, FUNCTION_GROUPS, PROVIDERS, describeProviders, effortLabel, fnById } from './registry.mjs';
 import { AIStore } from './store.mjs';
 import { UsageLog } from './usage.mjs';
 import { AIRouter, asProviderError } from './router.mjs';
@@ -283,10 +283,19 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     usage,
     match: (url) => url.pathname.startsWith('/api/ai/'),
     handle,
-    /** For /api/health: which keys are ready and what powers each function. */
+    /** For /api/health: which keys are ready, their model and effort per kind, and what powers each function. */
     health: () => ({
       ready: store.order().some((id) => store.ready(id)),
-      providers: store.order().map((id) => ({ id, label: PROVIDERS[id].label, ready: store.ready(id) })),
+      providers: store.order().map((id) => {
+        const s = store.settings(id);
+        return {
+          id,
+          label: PROVIDERS[id].label,
+          ready: store.ready(id),
+          models: s.models,
+          effort: Object.fromEntries(Object.entries(s.effort).map(([kind, value]) => [kind, { id: value, label: value ? effortLabel(id, kind, value) : 'Set by the model' }])),
+        };
+      }),
       routing: store.routing(),
     }),
   };

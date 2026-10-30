@@ -135,14 +135,18 @@ export function Drawer({ open, onClose, title, children, footer, width = 440 }: 
 
 export function Popover({ open, onClose, anchor, children, align = 'end', className }: { open: boolean; onClose: () => void; anchor: React.RefObject<HTMLElement>; children: ReactNode; align?: 'start' | 'end'; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ top: number; left?: number; right?: number }>({ top: 0 });
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left?: number; right?: number; maxHeight?: number }>({ top: 0 });
   useEscape(open, onClose);
   useLayoutEffect(() => {
     if (!open || !anchor.current) return;
     const r = anchor.current.getBoundingClientRect();
-    const top = r.bottom + 6;
-    if (align === 'end') setPos({ top, right: Math.max(8, window.innerWidth - r.right) });
-    else setPos({ top, left: Math.max(8, r.left) });
+    const vh = window.innerHeight;
+    // open below, or above when there's clearly more room there; never past the screen edge
+    const below = vh - r.bottom - 14;
+    const above = r.top - 14;
+    const v = below >= 320 || below >= above ? { top: r.bottom + 6, maxHeight: Math.min(vh * 0.7, below) } : { bottom: vh - r.top + 6, maxHeight: Math.min(vh * 0.7, above) };
+    if (align === 'end') setPos({ ...v, right: Math.max(8, window.innerWidth - r.right) });
+    else setPos({ ...v, left: Math.max(8, r.left) });
   }, [open, anchor, align]);
   useEffect(() => {
     if (!open) return;
@@ -155,7 +159,7 @@ export function Popover({ open, onClose, anchor, children, align = 'end', classN
   }, [open, onClose, anchor]);
   if (!open) return null;
   return createPortal(
-    <div ref={ref} className={cn('fixed z-[70] max-h-[70vh] animate-rise-in overflow-auto rounded-lg border border-line bg-surface p-1.5 shadow-pop', className)} style={{ top: pos.top, left: pos.left, right: pos.right }}>
+    <div ref={ref} className={cn('fixed z-[70] max-h-[70vh] animate-rise-in overflow-auto rounded-lg border border-line bg-surface p-1.5 shadow-pop', className)} style={{ top: pos.top, bottom: pos.bottom, left: pos.left, right: pos.right, maxHeight: pos.maxHeight }}>
       {children}
     </div>,
     document.body,

@@ -274,7 +274,8 @@ export const useStore = create<StoreState>()(
           settings: {
             ...d,
             ...(p.settings ?? {}),
-            ai: { ...d.ai, ...(p.settings?.ai ?? {}) },
+            // only the current AI settings (older versions also kept a provider choice and "creativity")
+            ai: { serverUrl: p.settings?.ai?.serverUrl ?? d.ai.serverUrl, useBrain: p.settings?.ai?.useBrain ?? d.ai.useBrain, simulateLatency: p.settings?.ai?.simulateLatency ?? d.ai.simulateLatency },
             profile: { ...d.profile, ...(p.settings?.profile ?? {}) },
             accounts: { ...d.accounts, ...(p.settings?.accounts ?? {}) },
           },

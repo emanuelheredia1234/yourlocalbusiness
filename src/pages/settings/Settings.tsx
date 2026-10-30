@@ -1,12 +1,10 @@
 import { useRef, useState } from 'react';
-import { Bot, Check, Cloud, Cpu, Database, Download, FolderOpen, Link2, Moon, Palette, Plus, RefreshCw, Server, Sun, Trash2, Unplug, Upload, User, Users } from 'lucide-react';
+import { Bot, Database, Download, FolderOpen, Link2, Moon, Palette, Plus, Sun, Trash2, Unplug, Upload, User, Users } from 'lucide-react';
 import type { AppSettings, Brand, Project } from '@/lib/types';
 import { cn, ensureUrl, fmtCompact, fmtRelative, readFileAsText, slugify } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
 import { pushMyListings } from '@/lib/community';
 import { PLATFORMS, SOCIAL_PLATFORMS, FORMATS } from '@/ai/knowledge';
-import { pingServer } from '@/ai/claude';
-import { providerLabel, resolveProvider } from '@/ai/engine';
 import { brandKitTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore, type StoreState } from '@/store/useStore';
@@ -14,13 +12,13 @@ import { defaultSettings } from '@/store/defaults';
 import { toast } from '@/store/ui';
 import { clearSampleData, hasSampleData, loadSampleData } from '@/store/sample';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { AutoTextarea, ChipInput, Field, Segmented, Spinner, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
+import { AutoTextarea, ChipInput, Field, Segmented, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
 import { BannerDesigner, BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
 import { BrandBanner, BrandLogo } from '@/components/brand/Logo';
 import { PlatformChip } from '@/components/posts/PlatformIcon';
 import { openConnect } from '@/components/posts/Connect';
 import { download } from '@/components/ui/download';
-import { ImageProviders } from './ImageProviders';
+import { AIProviders, ArtifactAI } from './AIProviders';
 
 type Tab = 'brand' | 'ai' | 'accounts' | 'projects' | 'prefs';
 
@@ -39,7 +37,7 @@ export default function Settings() {
         onChange={setTab}
         tabs={[
           { id: 'brand', label: 'Brand', icon: <Palette size={15} /> },
-          { id: 'ai', label: 'AI engine', icon: <Bot size={15} /> },
+          { id: 'ai', label: 'AI', icon: <Bot size={15} /> },
           { id: 'accounts', label: 'Accounts', icon: <Link2 size={15} /> },
           { id: 'projects', label: 'Projects & data', icon: <Database size={15} /> },
           { id: 'prefs', label: 'Preferences', icon: <User size={15} /> },
@@ -176,88 +174,10 @@ function BrandSettings({ project }: { project: Project }) {
   );
 }
 
-// ───────────────────────── AI engine ─────────────────────────
+// ───────────────────────── AI ─────────────────────────
 
 function AISettings() {
-  const settings = useStore((s) => s.settings);
-  const updateSettings = useStore((s) => s.updateSettings);
-  const rt = useRuntime();
-  const [testing, setTesting] = useState(false);
-  const setAI = (patch: Partial<AppSettings['ai']>) => updateSettings((s) => ({ ...s, ai: { ...s.ai, ...patch } }));
-  const current = resolveProvider(settings);
-  const claudeText = rt.claude === 'available' ? 'Connected: generations run on Claude through this page.' : rt.claude === 'checking' ? 'Checking…' : 'Not available here. Open the app as a claude.ai Artifact, or run your own server.';
-  const serverText = rt.server === 'ok' ? 'Server reachable.' : rt.server === 'down' ? 'No server reachable at this address.' : 'Not checked yet.';
-  const options: { id: AppSettings['ai']['provider']; title: string; desc: string; icon: React.ReactNode; status?: string; ok?: boolean }[] = [
-    { id: 'auto', title: 'Automatic (recommended)', desc: 'Use Claude when it’s available, otherwise the built-in engine. Nothing breaks offline.', icon: <Cpu size={16} /> },
-    { id: 'claude', title: 'Claude in claude.ai', desc: 'Runs on the viewer’s Claude account when the app is opened as an Artifact.', icon: <Cloud size={16} />, status: claudeText, ok: rt.claude === 'available' },
-    { id: 'server', title: 'Your Claude server', desc: 'Self-hosted proxy (server/ai-server.mjs) that keeps your API key off the browser.', icon: <Server size={16} />, status: serverText, ok: rt.server === 'ok' },
-    { id: 'local', title: 'Built-in engine only', desc: 'Instant, private and offline: niche-aware templates with Brain skills applied.', icon: <Bot size={16} /> },
-  ];
-
-  return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-flow-dense xl:grid-cols-[minmax(0,1fr)_340px]">
-      <Card title="Generation provider" desc="Every module uses the same engine and the same Brain skills.">
-        <div className="grid gap-2" role="radiogroup" aria-label="AI provider">
-          {options.map((o) => (
-            <button key={o.id} role="radio" aria-checked={settings.ai.provider === o.id} onClick={() => setAI({ provider: o.id })} className={cn('flex items-start gap-3 rounded-lg border p-3 text-left', settings.ai.provider === o.id ? 'border-primary bg-primary-soft' : 'border-line hover:bg-surface-2')}>
-              <span className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md', settings.ai.provider === o.id ? 'bg-primary text-on-primary' : 'bg-surface-2 text-ink-2')}>{o.icon}</span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[14px] font-semibold">{o.title}</span>
-                <span className="block text-[12.5px] text-muted">{o.desc}</span>
-                {o.status && <span className={cn('mt-1 block text-xs font-medium', o.ok ? 'text-good' : 'text-muted')}>{o.status}</span>}
-              </span>
-              {settings.ai.provider === o.id && <Check size={16} className="mt-1 text-primary" />}
-            </button>
-          ))}
-        </div>
-        {settings.ai.provider === 'server' && (
-          <div className="mt-4 flex flex-wrap items-end gap-2">
-            <Field label="Server URL" htmlFor="ai-url" hint="Leave blank when the app is served by the same server." className="min-w-[240px] flex-1">
-              <input id="ai-url" className="input" value={settings.ai.serverUrl} onChange={(e) => setAI({ serverUrl: e.target.value.trim() })} placeholder="https://your-server.example.com" />
-            </Field>
-            <button
-              className="btn btn-secondary"
-              disabled={testing}
-              onClick={async () => {
-                setTesting(true);
-                const ok = await pingServer(settings.ai.serverUrl);
-                setTesting(false);
-                toast(ok ? { kind: 'success', title: 'Server is reachable' } : { kind: 'error', title: 'Couldn’t reach the server', body: 'Check the URL and that the server is running.' });
-              }}
-            >
-              {testing ? <Spinner size={14} /> : <RefreshCw size={14} />} Test connection
-            </button>
-          </div>
-        )}
-        <p className="mt-4 rounded-md bg-surface-2 px-3 py-2 text-[13px]">
-          Right now generations run on: <b>{providerLabel(current)}</b>
-        </p>
-      </Card>
-      <div className="xl:col-start-1">
-        <ImageProviders />
-      </div>
-      <div className="flex min-w-0 flex-col gap-5">
-        <Card title="Behavior">
-          <div className="flex flex-col gap-4">
-            <Field label="Creativity">
-              <Segmented
-                size="sm"
-                value={settings.ai.creativity}
-                onChange={(creativity) => setAI({ creativity })}
-                options={[
-                  { id: 'focused', label: 'Focused' },
-                  { id: 'balanced', label: 'Balanced' },
-                  { id: 'bold', label: 'Bold' },
-                ]}
-              />
-            </Field>
-            <Toggle checked={settings.ai.useBrain} onChange={(v) => setAI({ useBrain: v })} label="Use Brain skills" description="Apply your skills to every generation." />
-            <Toggle checked={settings.ai.simulateLatency} onChange={(v) => setAI({ simulateLatency: v })} label="Show thinking steps" description="The built-in engine is instant; this shows its progress stages briefly." />
-          </div>
-        </Card>
-      </div>
-    </div>
-  );
+  return __ARTIFACT_BUILD__ ? <ArtifactAI /> : <AIProviders />;
 }
 
 // ───────────────────────── Accounts ─────────────────────────

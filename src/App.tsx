@@ -98,8 +98,13 @@ export default function App() {
   }, []);
   const serverUrl = useStore((s) => s.settings.ai.serverUrl);
   useEffect(() => {
-    // Outside claude.ai, look for the optional Claude proxy server (same origin unless a URL is set).
-    if (!__ARTIFACT_BUILD__ && /^https?:$/.test(location.protocol)) pingServer(serverUrl);
+    // Outside claude.ai, ask your AI server which keys are ready (same origin unless a URL is set),
+    // again whenever you come back to the tab: keys may have changed meanwhile.
+    if (__ARTIFACT_BUILD__ || !/^https?:$/.test(location.protocol)) return;
+    void pingServer(serverUrl);
+    const again = () => document.visibilityState === 'visible' && void pingServer(serverUrl);
+    document.addEventListener('visibilitychange', again);
+    return () => document.removeEventListener('visibilitychange', again);
   }, [serverUrl]);
   useEffect(() => {
     if (hasListings) startCommunitySync();

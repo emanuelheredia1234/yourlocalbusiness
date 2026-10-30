@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Project, ProviderId, Skill } from '@/lib/types';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { runTask, type RunResult } from './engine';
+import { compactMeta } from './meta';
 import type { TaskDef } from './tasks';
 
 export interface GenState<O> {
@@ -72,6 +73,7 @@ export function useAI<I, O>(task: TaskDef<I, O>) {
             createdAt: Date.now(),
             ms: res.ms,
             projectId: project.id,
+            ...(res.meta ? { meta: compactMeta(res.meta) } : {}),
           });
         }
         if (mounted.current) setState({ running: false, stage: '', chars: 0, result: res, error: null, logId, provider: res.provider });

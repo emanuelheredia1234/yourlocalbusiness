@@ -6,16 +6,18 @@ import { cn, fmtRelative } from '@/lib/utils';
 import { safeStorage } from '@/lib/storage';
 import { useRuntime } from '@/lib/platform';
 import { zapierErrorMessage } from '@/lib/zapier';
-import { manusErrorMessage } from '@/ai/manus';
+import { manusErrorMessage, manusViaServer } from '@/ai/manus';
 import { FB_PAGE_KEY, fbScheduleWindowError, fmtWhen, localTimeZone, postText, refreshFacebookSchedule, startFacebookSchedule } from '@/ai/manusFacebook';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { Field, Modal, Spinner } from '../ui/primitives';
 import { MediaThumb } from '../media/MediaUpload';
 
-/** Whether this view can reach Manus (claude.ai with the Zapier connector). */
+/** Whether this view can reach Manus: claude.ai with the Zapier connector, or a server whose Manus key powers Facebook scheduling. */
 export function useManusReady(): boolean {
   const z = useRuntime((s) => s.zapier);
+  const fb = useRuntime((s) => s.ai.routing.facebook);
+  if (manusViaServer()) return !!fb?.includes('manus');
   return z === 'ready' || (__ARTIFACT_BUILD__ && z === 'checking');
 }
 
@@ -121,12 +123,16 @@ export function ManusFacebookHost() {
             <p className="max-h-48 overflow-y-auto whitespace-pre-line rounded-md border border-line bg-surface-2/50 p-3 text-[13px] leading-relaxed text-ink-2">{postText(post)}</p>
           </div>
           <ul className="flex list-disc flex-col gap-1 pl-5 text-[12.5px] text-muted">
-            <li>It’s a Manus task through your Zapier connection, and uses your Manus credits.</li>
+            <li>{manusViaServer() ? 'It’s a Manus task with your Manus API key (its agent profile is set in Settings → AI), and uses your Manus credits.' : 'It’s a Manus task through your Zapier connection, and uses your Manus credits.'}</li>
             <li>The first time, sign in to Facebook inside Manus. If Manus needs you, the post card says so, with a link.</li>
             <li>Manus schedules it; it never publishes right away.</li>
           </ul>
           {resend && <p className="text-[12.5px] font-medium text-warn">This post was already sent to Manus. Sending again can create a second scheduled post.</p>}
-          {!ready && <p className="text-[12.5px] font-medium text-warn">Manus is reached through your Zapier connector in claude.ai, which isn’t available in this view.</p>}
+          {!ready && (
+            <p className="text-[12.5px] font-medium text-warn">
+              {manusViaServer() ? 'Add your Manus API key in Settings → AI and tick Facebook scheduling in its “Powers” list.' : 'Manus is reached through your Zapier connector in claude.ai, which isn’t available in this view.'}
+            </p>
+          )}
           {err && (
             <div className="rounded-md border border-bad/30 bg-bad-soft px-3 py-2 text-[12.5px]" role="alert">
               <p className="font-semibold text-bad">{err.title}</p>

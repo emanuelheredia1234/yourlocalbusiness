@@ -60,6 +60,11 @@ export function createMockProviders({ keys = {} } = {}) {
     const auth = req.headers.authorization || req.headers['x-api-key'] || req.headers['x-goog-api-key'] || req.headers['x-manus-api-key'] || '';
     calls.push({ provider: id, method: req.method, path: p, query: Object.fromEntries(url.searchParams), headers: req.headers, body });
 
+    // what the mock has seen, for QA scripts (the request bodies, without images)
+    if (id === '__calls') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify(calls.slice(0, -1).map((c) => ({ provider: c.provider, path: c.path, body: c.body && typeof c.body === 'object' ? { ...c.body, messages: undefined, input: undefined } : null }))));
+    }
     // downloads (no key needed, like signed links)
     if (id === 'files') {
       if (p.endsWith('.mp4')) {
