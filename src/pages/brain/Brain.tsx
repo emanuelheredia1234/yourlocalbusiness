@@ -4,6 +4,7 @@ import type { Skill, SkillCategory } from '@/lib/types';
 import { cn, fmtBytes, fmtRelative, readFileAsText, uid } from '@/lib/utils';
 import { CATEGORY_META, SCOPE_META, SKILL_LIBRARY, brainStrength, describeDirectives, effectiveDirectives, extractFacts, extractKeywords, newSkill, skillFromLibrary } from '@/ai/brain';
 import { providerLabel } from '@/ai/engine';
+import { compactMeta, metaLine } from '@/ai/meta';
 import { skillTestTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore } from '@/store/useStore';
@@ -476,7 +477,7 @@ function Output({ title, ai, highlight, compareTo }: { title: string; ai: Return
           {highlight ? <Sparkles size={14} className="text-accent" /> : null}
           {title}
         </h3>
-        {ai.result && <ProviderBadge provider={ai.result.provider} />}
+        {ai.result && <ProviderBadge provider={ai.result.provider} meta={ai.result.meta ? compactMeta(ai.result.meta) : undefined} />}
       </div>
       <AIThinking running={ai.running} stage={ai.stage} compact />
       {ai.result && !ai.running ? (
@@ -519,7 +520,9 @@ function ActivityLog() {
             <span className="max-w-[340px] truncate text-xs text-muted" title={g.skillIds.map((id) => names.get(id) ?? 'Deleted skill').join(', ')}>
               {g.skillIds.length ? `${g.skillIds.length} skill${g.skillIds.length > 1 ? 's' : ''}: ${g.skillIds.map((id) => names.get(id) ?? 'deleted').join(', ')}` : 'No skills'}
             </span>
-            <span className={cn('badge', g.provider === 'local' ? 'bg-surface-2 text-ink-2' : 'bg-ink text-surface')}>{providerLabel(g.provider)}</span>
+            <span className={cn('badge', g.provider === 'local' ? 'bg-surface-2 text-ink-2' : 'bg-ink text-surface')} title={g.meta ? metaLine(g.meta) : undefined}>
+              {g.provider === 'server' && g.meta ? `AI · ${g.meta.providerLabel} · ${g.meta.effortLabel}` : providerLabel(g.provider)}
+            </span>
             {g.rating === 1 && <ThumbsUp size={13} className="text-good" />}
             {g.rating === -1 && <ThumbsDown size={13} className="text-bad" />}
           </li>

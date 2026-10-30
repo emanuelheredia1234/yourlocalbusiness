@@ -2,7 +2,9 @@ import type { AppSettings, ProviderId, Project, Skill } from '@/lib/types';
 import { useRuntime } from '@/lib/platform';
 import { sleep, uid } from '@/lib/utils';
 import { polishDeep, resolveBrain } from './brain';
-import { AIError, callArtifactClaude, callServerClaude, friendlyAIError } from './claude';
+import { AIError, callArtifactClaude, callServerAI, friendlyAIError } from './claude';
+import { functionForTask, routeFor } from './functions';
+import type { AIMeta } from './meta';
 import type { TaskDef, TaskEnv } from './tasks';
 
 export interface RunOptions {
@@ -23,29 +25,24 @@ export interface RunResult<O> {
   ms: number;
   note?: string;
   id: string;
+  /** which key, model and effort answered on your server, and what it used */
+  meta?: AIMeta;
 }
 
-export function resolveProvider(settings: AppSettings, forceLocal = false): ProviderId {
+/**
+ * One AI for the whole app. In claude.ai it's Claude; self-hosted it's your server, which sends
+ * each task to the API keys that power its function (Settings → AI). Without either, the
+ * built-in engine answers.
+ */
+export function resolveProvider(_settings: AppSettings, forceLocal = false): ProviderId {
   if (forceLocal) return 'local';
   const rt = useRuntime.getState();
-  const claudeOk = rt.claude === 'available' || rt.claude === 'checking';
-  switch (settings.ai.provider) {
-    case 'local':
-      return 'local';
-    case 'claude':
-      return claudeOk ? 'claude' : 'local';
-    case 'server':
-      // a blank URL means the same origin (the bundled server in /server)
-      return 'server';
-    default:
-      if (rt.claude === 'available') return 'claude';
-      if (rt.server === 'ok') return 'server';
-      return 'local';
-  }
+  if (__ARTIFACT_BUILD__) return rt.claude === 'available' || rt.claude === 'checking' ? 'claude' : 'local';
+  return rt.server === 'down' ? 'local' : 'server';
 }
 
 export function providerLabel(p: ProviderId): string {
-  return p === 'claude' ? 'Claude' : p === 'server' ? 'Claude (your server)' : 'Built-in engine';
+  return p === 'claude' ? 'Claude' : p === 'server' ? 'AI' : 'Built-in engine';
 }
 
 export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOptions): Promise<RunResult<O>> {
@@ -59,29 +56,46 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
   let data = base;
   let used: ProviderId = 'local';
   let note: string | undefined;
+  let meta: AIMeta | undefined;
+  const fn = functionForTask(task.id);
+  const rt = useRuntime.getState();
+  let ask = provider !== 'local' && !!task.claude;
 
-  if (provider !== 'local' && task.claude) {
-    opts.onStage?.(provider === 'claude' ? 'Claude is thinking…' : 'Asking your Claude server…');
+  if (provider === 'server' && ask && fn && rt.ai.reachable && routeFor(fn.id).length === 0) {
+    // no request to make: say what to set up
+    ask = false;
+    note = `No API key powers ${fn.label} yet, so the built-in engine answered. In Settings → AI, tick ${fn.label} for one of your keys.`;
+  } else if (!__ARTIFACT_BUILD__ && provider === 'local' && !opts.forceLocal && task.claude && rt.server === 'down') {
+    note = 'Your AI server isn’t running (npm run server), so the built-in engine answered.';
+  }
+
+  if (ask && task.claude) {
+    opts.onStage?.(provider === 'claude' ? 'Claude is thinking…' : 'Asking your AI…');
     try {
       const prompt = task.claude.prompt(input, env, base);
-      const wantImages = provider === 'server' || useRuntime.getState().claudeImages;
+      const wantImages = provider === 'server' || rt.claudeImages;
       const images = wantImages && task.claude.images ? await task.claude.images(input).catch(() => undefined) : undefined;
       const callOpts = {
         tier: task.tier,
         signal: opts.signal,
         images,
         onText: (text: string) => {
-          opts.onStage?.('Claude is writing…');
+          opts.onStage?.(provider === 'claude' ? 'Claude is writing…' : 'Writing…');
           opts.onText?.(text);
         },
       };
-      const raw = provider === 'claude' ? await callArtifactClaude(prompt, callOpts) : await callServerClaude(opts.settings.ai.serverUrl, prompt, callOpts);
-      data = task.claude.merge(raw, base, input, env);
+      if (provider === 'claude') data = task.claude.merge(await callArtifactClaude(prompt, callOpts), base, input, env);
+      else {
+        const out = await callServerAI(fn?.id ?? 'product', prompt, { ...callOpts, serverUrl: opts.settings.ai.serverUrl, brain: opts.settings.ai.useBrain });
+        meta = out.meta ?? undefined;
+        data = task.claude.merge(out.value, base, input, env);
+        if (meta?.attempts?.length) note = `${meta.attempts.map((a) => `${a.providerLabel} failed (${a.error})`).join(' ')} ${meta.providerLabel} answered instead.`;
+      }
       used = provider;
     } catch (e) {
       const err = e as AIError;
       if (err?.code === 'cancelled' || opts.signal?.aborted) throw new AIError('Stopped.', 'cancelled');
-      note = friendlyAIError(err?.code ?? 'upstream_error');
+      note = friendlyAIError(err?.code ?? 'upstream_error', provider === 'server' ? err?.message : '');
     }
   } else if (opts.settings.ai.simulateLatency) {
     for (const stage of task.stages) {
@@ -93,5 +107,5 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
   }
 
   data = polishDeep(data, brain.directives);
-  return { data, provider: used, skills: brain.skills, ms: Math.round(performance.now() - t0), note, id: uid('gen') };
+  return { data, provider: used, skills: brain.skills, ms: Math.round(performance.now() - t0), note, id: uid('gen'), meta: used === 'server' ? meta : undefined };
 }

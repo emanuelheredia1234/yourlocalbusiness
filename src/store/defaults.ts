@@ -75,7 +75,7 @@ const acct = () => ({ connected: false, handle: '', followers: 0 });
 
 export function defaultSettings(): AppSettings {
   return {
-    ai: { provider: 'auto', serverUrl: '', creativity: 'balanced', useBrain: true, simulateLatency: true },
+    ai: { serverUrl: '', useBrain: true, simulateLatency: true },
     theme: 'system',
     profile: { name: '', email: '' },
     accounts: { instagram: acct(), facebook: acct(), tiktok: acct(), linkedin: acct(), x: acct(), youtube: acct() } as Record<SocialPlatform, ReturnType<typeof acct>>,

@@ -130,15 +130,29 @@ function ProjectSwitcher({ onNavigate }: { onNavigate?: () => void }) {
 function EngineStatus() {
   const claude = useRuntime((s) => s.claude);
   const server = useRuntime((s) => s.server);
-  const provider = useStore((s) => s.settings.ai.provider);
+  const ai = useRuntime((s) => s.ai);
   const useBrain = useStore((s) => s.settings.ai.useBrain);
   const skills = useStore((s) => s.skills.filter((k) => k.enabled).length);
-  const live = (provider === 'auto' || provider === 'claude') && claude === 'available' ? 'Claude' : provider === 'server' && server === 'ok' ? 'Claude (server)' : provider === 'local' ? 'Built-in engine' : claude === 'checking' ? 'Connecting…' : 'Built-in engine';
+  const keys = ai.providers.filter((p) => p.ready).length;
+  const live = __ARTIFACT_BUILD__
+    ? claude === 'available'
+      ? 'Claude'
+      : claude === 'checking'
+        ? 'Connecting…'
+        : 'Built-in engine'
+    : server === 'down'
+      ? 'Server offline'
+      : !ai.reachable
+        ? 'Connecting…'
+        : keys
+          ? `${keys} key${keys === 1 ? '' : 's'} on`
+          : 'No keys yet';
+  const good = __ARTIFACT_BUILD__ ? claude === 'available' : ai.reachable && keys > 0;
   return (
     <button onClick={() => navigate('workspace-settings')} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-surface-2">
       <span className="relative flex h-7 w-7 items-center justify-center rounded-md bg-ink text-accent">
         <Sparkles size={14} />
-        <span className={cn('absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface', live.startsWith('Claude') ? 'bg-good' : 'bg-accent')} />
+        <span className={cn('absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-surface', good ? 'bg-good' : 'bg-accent')} />
       </span>
       <span className="min-w-0">
         <span className="block truncate text-[12.5px] font-semibold text-ink">AI: {live}</span>

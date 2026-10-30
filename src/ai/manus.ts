@@ -1,15 +1,17 @@
-// Manus (the AI agent) through the viewer's Zapier connector.
-//
-// Two custom Zapier actions on the user's Manus connection do the work:
-//   create_task_with_image → Manus API v2 task.create (optionally with one image attached)
-//   task_output            → task.detail + task.listMessages, with image attachments as base64
+// Manus (the AI agent). Two ways to reach it, with the same answers:
+//   claude.ai artifact → the viewer's Zapier connector, where two custom actions on the Manus
+//                        connection do the work (create_task_with_image, task_output)
+//   self-hosted        → your server (/api/ai/manus/*) with your Manus API key, which also picks
+//                        the agent profile (the key's effort in Settings → AI)
 // Manus tasks take minutes, so the page starts a task and then polls its output.
 
 import type { BrandColors, ImageAspect } from '@/lib/types';
 import { safeStorage } from '@/lib/storage';
 import { readFileAsDataURL } from '@/lib/utils';
 import { ZapierError, zapierCall } from '@/lib/zapier';
+import { useStore } from '@/store/useStore';
 import { ART_SIZE } from './local/art';
+import { serverBase } from './claude';
 
 export const MANUS_API = 'App229860CLIAPI';
 export const MANUS_CREATE = 'code_action_app229860cliapi__create_task_with_image';
@@ -18,6 +20,36 @@ export const MANUS_CONTINUE = 'continue_task';
 
 /** Largest image file brought back through Zapier, in bytes (it travels as base64, about 1.35× that). */
 export const MANUS_IMAGE_LIMIT = 2_000_000;
+/** Your server brings back much larger files. */
+export const MANUS_SERVER_IMAGE_LIMIT = 15_000_000;
+
+/** Self-hosted builds reach Manus through your server; the claude.ai artifact through Zapier. */
+export const manusTransport = { server: !__ARTIFACT_BUILD__ };
+export const manusViaServer = () => manusTransport.server;
+
+export function manusImageLimit(): number {
+  return manusViaServer() ? MANUS_SERVER_IMAGE_LIMIT : MANUS_IMAGE_LIMIT;
+}
+
+/** One call to your server's Manus routes; errors come back as ManusErrors. */
+async function serverManus(action: 'create' | 'output' | 'continue', body: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetch(`${serverBase(useStore.getState().settings.ai.serverUrl)}/api/ai/manus/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw new ManusError('Stopped.', 'cancelled');
+    throw new ManusError('Couldn’t reach your AI server.', 'MANUS_NETWORK');
+  }
+  const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!res.ok) {
+    const code = String(json?.code ?? '');
+    const message = String(json?.error ?? `Manus request failed (${res.status}).`);
+    if (code === 'NO_PROVIDER') throw new ManusError(message, 'MANUS_SETUP');
+    if (res.status >= 500 && action !== 'create') throw new ManusError(message, 'MANUS_NETWORK');
+    throw new ManusError(message, action === 'create' ? 'MANUS_CREATE' : 'MANUS_ERROR');
+  }
+  return json;
+}
 
 export class ManusError extends Error {
   constructor(
@@ -185,6 +217,8 @@ async function shrinkForUpload(blob: Blob): Promise<Blob> {
 }
 
 export interface CreateManusOptions {
+  /** what the task is for: its key must power this function (self-hosted) */
+  fn: 'photos' | 'facebook';
   prompt: string;
   title?: string;
   image?: Blob | null;
@@ -192,11 +226,25 @@ export interface CreateManusOptions {
   /** let Manus pause to ask (e.g. to sign in to Facebook) */
   interactive?: boolean;
   hidden?: boolean;
+  /** claude.ai only: self-hosted, the key's effort in Settings → AI picks the profile */
   profile?: 'standard' | 'lite' | 'max';
 }
 
+const SERVER_UPLOAD_LIMIT = 8_000_000;
+
 /** Start a Manus task (one-shot write: never retried automatically). */
 export async function createManusTask(o: CreateManusOptions): Promise<ManusTask> {
+  if (manusViaServer()) {
+    const body: Record<string, unknown> = { fn: o.fn, prompt: o.prompt, interactive_mode: !!o.interactive, hide_in_task_list: !!o.hidden };
+    if (o.title) body.title = o.title.slice(0, 120);
+    if (o.image) {
+      const blob = o.image.size > SERVER_UPLOAD_LIMIT ? await shrinkForUpload(o.image) : o.image;
+      const type = blob.type || 'image/jpeg';
+      body.image_filename = (o.imageName || 'image').replace(/\.[a-z0-9]+$/i, '') + (type === 'image/png' ? '.png' : '.jpg');
+      body.image_data_url = await readFileAsDataURL(blob);
+    }
+    return parseManusCreate(await serverManus('create', body));
+  }
   // the code action declares every field as text
   const params: Record<string, unknown> = {
     prompt: o.prompt,
@@ -225,14 +273,15 @@ export async function createManusTask(o: CreateManusOptions): Promise<ManusTask>
 }
 
 export async function readManusTask(taskId: string, o: { waitSeconds?: number; maxImages?: number; maxImageBytes?: number; signal?: AbortSignal } = {}): Promise<ManusState> {
-  const raw = await zapierCall(MANUS_OUTPUT, { task_id: taskId, wait_seconds: o.waitSeconds ?? 0, max_images: o.maxImages ?? 0, max_image_bytes: o.maxImageBytes ?? MANUS_IMAGE_LIMIT }, { selectedApi: MANUS_API, signal: o.signal });
+  const params = { task_id: taskId, max_images: o.maxImages ?? 0, max_image_bytes: o.maxImageBytes ?? manusImageLimit() };
+  const raw = manusViaServer() ? await serverManus('output', params, o.signal) : await zapierCall(MANUS_OUTPUT, { ...params, wait_seconds: o.waitSeconds ?? 0 }, { selectedApi: MANUS_API, signal: o.signal });
   const s = parseManusState(raw);
   return { ...s, taskId: s.taskId || taskId };
 }
 
 /** Index of the first image small enough to bring back (unknown sizes are worth a try), or -1. */
 export function pickManusImage(images: ManusImage[]): number {
-  return images.findIndex((i) => i.sizeBytes <= MANUS_IMAGE_LIMIT && (!i.contentType || i.contentType.startsWith('image/')));
+  return images.findIndex((i) => i.sizeBytes <= manusImageLimit() && (!i.contentType || i.contentType.startsWith('image/')));
 }
 
 /**
@@ -249,7 +298,8 @@ export async function fetchManusImage(taskId: string, o: { signal?: AbortSignal 
 
 /** Send follow-up instructions to a task (one-shot write: never retried automatically). */
 export async function continueManusTask(taskId: string, prompt: string): Promise<void> {
-  await zapierCall(MANUS_CONTINUE, { task_id: taskId, prompt }, { selectedApi: MANUS_API });
+  if (manusViaServer()) await serverManus('continue', { task_id: taskId, prompt });
+  else await zapierCall(MANUS_CONTINUE, { task_id: taskId, prompt }, { selectedApi: MANUS_API });
 }
 
 const sleep = (ms: number, signal?: AbortSignal) =>
@@ -280,7 +330,8 @@ export async function waitForManus(task: ManusTask, o: { signal?: AbortSignal; t
     } catch (e) {
       if ((e as { code?: string }).code === 'cancelled' || o.signal?.aborted) throw new ManusError('Stopped.', 'cancelled', task.taskUrl);
       // a status read is safe to repeat: tolerate a couple of transient failures
-      if (e instanceof ZapierError && (e.retryable || e.code === 'server_unavailable' || e.code === 'upstream_error') && failures < 2) {
+      const transient = (e instanceof ZapierError && (e.retryable || e.code === 'server_unavailable' || e.code === 'upstream_error')) || (e instanceof ManusError && e.code === 'MANUS_NETWORK');
+      if (transient && failures < 2) {
         failures += 1;
         await sleep(4000 + Math.random() * 3000, o.signal);
         continue;
@@ -294,8 +345,8 @@ export async function waitForManus(task: ManusTask, o: { signal?: AbortSignal; t
     else if (!pickedUp) pickedUp = s.text !== o.after!.text || s.imageCount !== o.after!.imageCount || Date.now() - t0 > 90_000;
     if (s.done && pickedUp) return s;
     if (Date.now() - t0 > limit) throw new ManusError('Manus is still working on it.', 'MANUS_TIMEOUT', s.taskUrl || task.taskUrl);
-    // the read long-polls while Manus runs; pause a little between reads otherwise (e.g. waiting for you)
-    await sleep(s.waiting ? 15_000 : 8_000, o.signal);
+    // the Zapier read long-polls while Manus runs; pause a little between reads otherwise (e.g. waiting for you)
+    await sleep(s.waiting ? 15_000 : manusViaServer() ? 6_000 : 8_000, o.signal);
   }
 }
 
@@ -346,9 +397,13 @@ export function fmtElapsed(ms: number): string {
 export function manusErrorMessage(code: string, message = ''): { title: string; body: string } | null {
   switch (code) {
     case 'MANUS_SETUP':
-      return { title: 'Manus isn’t set up in Zapier', body: 'The custom Manus actions are missing from your Zapier account. Ask Claude to set up Manus in Zapier again.' };
+      return manusViaServer()
+        ? { title: 'Manus isn’t set up for this', body: message || 'Add your Manus API key in Settings → AI and tick this function in its “Powers” list.' }
+        : { title: 'Manus isn’t set up in Zapier', body: 'The custom Manus actions are missing from your Zapier account. Ask Claude to set up Manus in Zapier again.' };
     case 'MANUS_CREATE':
-      return { title: 'Manus couldn’t start the task', body: message || 'Check your Manus connection and credits in Zapier.' };
+      return { title: 'Manus couldn’t start the task', body: message || (manusViaServer() ? 'Check your Manus key and credits in Settings → AI.' : 'Check your Manus connection and credits in Zapier.') };
+    case 'MANUS_NETWORK':
+      return { title: 'Couldn’t reach your AI server', body: 'Check that the server is running (npm run server), then try again.' };
     case 'MANUS_ERROR':
       return { title: 'Manus reported an error', body: message || 'Open the task in Manus to see what happened.' };
     case 'MANUS_TIMEOUT':

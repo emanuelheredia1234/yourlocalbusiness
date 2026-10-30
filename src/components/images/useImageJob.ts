@@ -58,9 +58,9 @@ export function useImageJob() {
   return { ...state, run, stop, clearError };
 }
 
-/** Re-renders when photo support (your server, or Zapier → Manus) changes. */
+/** Re-renders when photo support (your server's keys, or Zapier in claude.ai) changes. */
 export function usePhotoAvailability() {
-  useRuntime((s) => s.image);
+  useRuntime((s) => s.ai);
   useRuntime((s) => s.zapier);
   return photoAvailability();
 }

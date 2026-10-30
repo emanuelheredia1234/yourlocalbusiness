@@ -16,7 +16,10 @@ vi.mock('@/lib/platform', () => ({
   useRuntime: { getState: () => ({ set: () => {} }) },
 }));
 
-import { createManusTask, fetchManusImage, MANUS_CREATE, MANUS_IMAGE_LIMIT, manusAttachPrompt, manusImagePrompt, parseManusState, pickManusImage, waitForManus } from './manus';
+import { createManusTask, fetchManusImage, MANUS_CREATE, MANUS_IMAGE_LIMIT, manusAttachPrompt, manusImagePrompt, manusTransport, parseManusState, pickManusImage, waitForManus } from './manus';
+
+// these tests cover the claude.ai route (Zapier); manus.server.test.ts covers your server
+manusTransport.server = false;
 
 // Shapes as Zapier returns them for the code actions (values made up)
 const envelope = (data: unknown) => ({ isError: false, results: { data: { success: true, data }, logs: ['…'] }, timing: { totalMs: 1 } });
@@ -37,7 +40,7 @@ afterEach(() => {
 describe('starting a Manus task', () => {
   it('sends every field as text, the way the code action declares them', async () => {
     mock.answer = () => envelope({ ok: true, task_id: 'abc', task_url: 'https://manus.im/app/abc', task_title: 'T', image_attached: false, error: '', stage: '' });
-    const t = await createManusTask({ prompt: 'one image', hidden: true });
+    const t = await createManusTask({ fn: 'photos', prompt: 'one image', hidden: true });
     expect(t).toEqual({ taskId: 'abc', taskUrl: 'https://manus.im/app/abc', title: 'T' });
     expect(mock.calls).toEqual([{ action: MANUS_CREATE, params: { prompt: 'one image', interactive_mode: 'false', hide_in_task_list: 'true', agent_profile: 'standard' } }]);
   });

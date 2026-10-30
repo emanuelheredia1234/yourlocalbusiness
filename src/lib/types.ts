@@ -727,7 +727,25 @@ export interface Skill {
   updatedAt: number;
 }
 
+/** Who answered: Claude in claude.ai, your server's AI keys, or the built-in engine. */
 export type ProviderId = 'local' | 'claude' | 'server';
+
+/** Which key, model and effort served a generation on your server, and what it used. */
+export interface GenMeta {
+  provider: string;
+  providerLabel: string;
+  /** text | image | video | agent: what the effort meant (reasoning, quality, agent profile) */
+  kind?: string;
+  model: string;
+  effort: string;
+  effortLabel: string;
+  input?: number;
+  output?: number;
+  reasoning?: number | null;
+  costUsd?: number | null;
+  costEstimated?: boolean;
+  credits?: number | null;
+}
 
 export interface GenerationLog {
   id: string;
@@ -740,6 +758,7 @@ export interface GenerationLog {
   ms: number;
   rating?: 1 | -1;
   projectId?: string;
+  meta?: GenMeta;
 }
 
 // ───────────── Settings & app ─────────────
@@ -752,9 +771,9 @@ export interface AccountConnection {
 
 export interface AppSettings {
   ai: {
-    provider: 'auto' | 'local' | 'claude' | 'server';
+    /** your AI server's address; blank when the app and server run together */
     serverUrl: string;
-    creativity: 'focused' | 'balanced' | 'bold';
+    /** the Brain: skills and art direction for every key that's on */
     useBrain: boolean;
     simulateLatency: boolean;
   };

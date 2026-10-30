@@ -1,0 +1,24 @@
+{
+  "groups": [
+    { "id": "writing", "label": "Writing & research" },
+    { "id": "media", "label": "Media" },
+    { "id": "agents", "label": "Agents" }
+  ],
+  "functions": [
+    { "id": "research", "label": "Product research", "group": "writing", "kind": "text", "desc": "Product ideas, demand signals and pricing.", "tasks": ["productIdeas"] },
+    { "id": "brand", "label": "Brand kit & voice", "group": "writing", "kind": "text", "desc": "Names, taglines, colors and Brain skill tests.", "tasks": ["brandKit", "skillTest"] },
+    { "id": "product", "label": "Product outline & chapters", "group": "writing", "kind": "text", "desc": "Outlines, chapter drafts and item details.", "tasks": ["outline", "sectionDraft", "expandItem"] },
+    { "id": "files", "label": "Product files (PDF & Excel)", "group": "writing", "kind": "text", "desc": "Welcome pages, workbook pages and spreadsheet designs.", "tasks": ["ebookExtras", "workbook"] },
+    { "id": "business", "label": "Business model", "group": "writing", "kind": "text", "desc": "Service packages and how the business runs.", "tasks": ["businessModel"] },
+    { "id": "listing", "label": "Marketplace listing", "group": "writing", "kind": "text", "desc": "Listing title, description and tags.", "tasks": ["listing"] },
+    { "id": "code", "label": "Code & assets", "group": "writing", "kind": "text", "desc": "Calculators, forms, widgets and code edits.", "tasks": ["code", "codeEdit"] },
+    { "id": "seo", "label": "SEO & sales pages", "group": "writing", "kind": "text", "desc": "SEO metadata, sales pages and page sections.", "tasks": ["seoMeta", "salesPage", "salesSection"] },
+    { "id": "email", "label": "Emails & lead magnets", "group": "writing", "kind": "text", "desc": "Lead magnets and email sequences.", "tasks": ["leadMagnet", "emailSequence"] },
+    { "id": "social", "label": "Social posts & campaigns", "group": "writing", "kind": "text", "desc": "Posts, captions, campaign plans and content batches.", "tasks": ["campaignPlan", "contentBatch", "post"] },
+    { "id": "ads", "label": "Ads", "group": "writing", "kind": "text", "desc": "Ad copy and campaign variants.", "tasks": ["ads"] },
+    { "id": "illustrations", "label": "Illustrations", "group": "writing", "kind": "text", "desc": "Brand illustrations drawn as SVG.", "tasks": ["postImage", "listingImage"] },
+    { "id": "photos", "label": "Photos", "group": "media", "kind": "image", "desc": "AI photos for posts and listings.", "tasks": [] },
+    { "id": "videos", "label": "Videos", "group": "media", "kind": "video", "desc": "AI videos for posts and product demos.", "tasks": [] },
+    { "id": "facebook", "label": "Facebook scheduling", "group": "agents", "kind": "agent", "desc": "An agent schedules posts in Meta Business Suite.", "tasks": [] }
+  ]
+}

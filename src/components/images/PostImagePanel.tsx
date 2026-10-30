@@ -4,7 +4,7 @@ import type { ImageAspect, ImageKind, MediaRef, PostPlatform, Project, StyleId }
 import { cn } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
 import { navigate } from '@/lib/router';
-import { createPostImage, defaultImageKind, photoLabel, photoRoute, postSubject, releaseMedia, retypesetPostImage } from '@/ai/image';
+import { artMetaLine, createPostImage, defaultImageKind, photoLabel, photoSourceNote, postSubject, releaseMedia, retypesetPostImage } from '@/ai/image';
 import { pendingManus, type ManusTask } from '@/ai/manus';
 import { AIThinking } from '@/components/ai/AI';
 import { download } from '@/components/ui/download';
@@ -74,7 +74,7 @@ export function PostImagePanel({ project, headline, prompt, onPromptChange, styl
   }, [photo.ok, kind]);
   // a Manus image started before a reload, still on its way
   const [resumable, setResumable] = useState<ManusTask | null>(() => (pendingKey ? pendingManus.get(pendingKey) : null));
-  const muse = kind === 'photo' && photoRoute() === 'muse';
+  const source = kind === 'photo' && photo.ok ? photoSourceNote() : '';
   const art = useArtDirection('post');
 
   // show just the scene: the style, headline and watermark notes are handled by the controls below
@@ -93,7 +93,8 @@ export function PostImagePanel({ project, headline, prompt, onPromptChange, styl
       (signal, onStage, onTask) => createPostImage({ project, kind: resume ? 'photo' : kind, prompt: description || headline, aspect, style, headline, overlay, watermark, signal, onStage, onTask, pendingKey, resume }),
       (r) => {
         replace(r.media);
-        return { done: `${r.art.kind === 'design' ? 'Built-in brand design' : `${r.art.provider} ${KIND_LABEL[r.art.kind]}`} · ${(r.art.ms / 1000).toFixed(1)}s`, note: r.art.note ?? '' };
+        const made = r.art.kind === 'design' ? 'Built-in brand design' : r.art.meta ? `${r.art.kind === 'photo' ? 'Photo' : 'Illustration'} by ${artMetaLine(r.art)}` : `${r.art.provider} ${KIND_LABEL[r.art.kind]}`;
+        return { done: `${made} · ${(r.art.ms / 1000).toFixed(1)}s`, note: r.art.note ?? '' };
       },
     );
   };
@@ -151,7 +152,7 @@ export function PostImagePanel({ project, headline, prompt, onPromptChange, styl
           )}
         </p>
       )}
-      {muse && photo.ok && <p className="text-[11.5px] leading-snug text-muted">Meta Muse Image creates the photo through OpenRouter in your Zapier, in a few seconds. OpenRouter bills about a cent per image.</p>}
+      {source && <p className="text-[11.5px] leading-snug text-muted">{source}</p>}
       {resumable && !job.running && (
         <div className="flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-[12.5px]">
           <span className="min-w-0 flex-1 text-ink-2">A Manus photo you started is still on its way.</span>

@@ -1,6 +1,6 @@
 // Scheduling a real Facebook post with Manus: Manus opens Meta Business Suite in its own
 // browser and schedules exactly the post the user confirmed. Runs through the viewer's
-// Zapier connector (see ./manus.ts).
+// Zapier connector in claude.ai, or your server's Manus key when self-hosted (see ./manus.ts).
 
 import type { ExternalPublish, Post } from '@/lib/types';
 import { getBlob } from '@/lib/storage';
@@ -95,6 +95,7 @@ export async function startFacebookSchedule(post: Post, page: string): Promise<E
   const image = post.media?.kind === 'image' ? await getBlob(post.media.id) : null;
   const timeZone = localTimeZone();
   const task = await createManusTask({
+    fn: 'facebook',
     prompt: facebookSchedulePrompt({ page, whenIso: post.scheduledAt, timeZone, text: postText(post), hasImage: !!image }),
     title: `Schedule Facebook post · ${post.headline}`.slice(0, 110),
     image,

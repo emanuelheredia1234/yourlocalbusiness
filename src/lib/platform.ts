@@ -118,15 +118,29 @@ export const getMcp = () => use<McpNs>('mcp');
 // ───────────── Runtime status (reactive) ─────────────
 export type ClaudeStatus = 'checking' | 'available' | 'unavailable' | 'declined' | 'limited';
 
-/** What your own server (server/ai-server.mjs) can do for image generation. */
-export interface ImageServerState {
+/** One key on your server (server/ai-server.mjs), as /api/health reports it. */
+export interface AIServerProvider {
+  id: string;
+  label: string;
+  /** switched on and has a key */
+  ready: boolean;
+  /** model per kind (text, image, video, agent) */
+  models: Record<string, string>;
+  effort: Record<string, { id: string; label: string }>;
+}
+
+/** What your own server can do: which keys are ready and which ones power each function. */
+export interface AIServerState {
   /** the server answered /api/health */
   reachable: boolean;
-  /** an image provider key is set, so photo generation works */
-  configured: boolean;
-  active: string;
-  label: string;
+  /** at least one key is ready */
+  ready: boolean;
+  providers: AIServerProvider[];
+  /** function id → the keys that power it, in priority order */
+  routing: Record<string, string[]>;
 }
+
+export const NO_AI_SERVER: AIServerState = { reachable: false, ready: false, providers: [], routing: {} };
 
 /** The Zapier connector as this page sees it (for Manus images and Facebook scheduling). */
 export type ZapierStatus = 'checking' | 'ready' | 'needs_reauth' | 'missing' | 'unavailable';
@@ -135,7 +149,7 @@ interface RuntimeState {
   claude: ClaudeStatus;
   claudeImages: boolean;
   server: 'unknown' | 'ok' | 'down';
-  image: ImageServerState;
+  ai: AIServerState;
   zapier: ZapierStatus;
   /** the viewer can pass files to connector tools without inlining them */
   zapierFileArgs: boolean;
@@ -148,7 +162,7 @@ export const useRuntime = create<RuntimeState>((set) => ({
   claude: 'checking',
   claudeImages: false,
   server: 'unknown',
-  image: { reachable: false, configured: false, active: '', label: '' },
+  ai: NO_AI_SERVER,
   zapier: 'checking',
   zapierFileArgs: false,
   community: 'checking',

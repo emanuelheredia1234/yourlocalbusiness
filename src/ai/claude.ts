@@ -1,7 +1,8 @@
 import type { Project } from '@/lib/types';
-import { getSample, useRuntime, type SampleError, type SampleOptions } from '@/lib/platform';
+import { NO_AI_SERVER, getSample, useRuntime, type AIServerState, type SampleError, type SampleOptions } from '@/lib/platform';
 import { readFileAsDataURL, uid } from '@/lib/utils';
 import { FORMATS } from './knowledge';
+import { isAIMeta, type AIMeta } from './meta';
 
 // ───────────────────────── Transport ─────────────────────────
 
@@ -50,16 +51,35 @@ export async function callArtifactClaude(prompt: string, opts: CallOptions): Pro
   }
 }
 
-/** Ask Claude through your own server (see server/ai-server.mjs). */
-export async function callServerClaude(serverUrl: string, prompt: string, opts: CallOptions): Promise<unknown> {
-  const base = (serverUrl || '').replace(/\/$/, '');
+export interface ServerCallOptions extends CallOptions {
+  serverUrl: string;
+  /** the Brain switch, recorded with the request */
+  brain?: boolean;
+}
+
+/** Server error codes → the app's codes (friendlyAIError explains them). */
+const SERVER_CODES: Record<string, string> = {
+  NO_PROVIDER: 'no_provider',
+  RATE_LIMIT: 'rate_limited',
+  CREDITS: 'credits',
+  AUTH: 'auth',
+  CONTENT_POLICY: 'refused',
+  REFUSAL: 'refused',
+  CUT_OFF: 'cut_off',
+};
+
+/**
+ * Ask your server's AI (server/ai-server.mjs): it sends the prompt to the keys that power this
+ * function, with each key's model and effort, and says which one answered and what it used.
+ */
+export async function callServerAI(fn: string, prompt: string, opts: ServerCallOptions): Promise<{ value: unknown; meta: AIMeta | null }> {
   const images = opts.images?.length ? await Promise.all(opts.images.slice(0, 2).map((b) => readFileAsDataURL(b))) : undefined;
   let res: Response;
   try {
-    res = await fetch(`${base}/api/generate`, {
+    res = await fetch(`${serverBase(opts.serverUrl)}/api/ai/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt, tier: opts.tier, images }),
+      body: JSON.stringify({ fn, prompt, tier: opts.tier, images, brain: opts.brain }),
       signal: opts.signal,
     });
   } catch (e) {
@@ -67,31 +87,38 @@ export async function callServerClaude(serverUrl: string, prompt: string, opts: 
     useRuntime.getState().set({ server: 'down' });
     throw new AIError('Could not reach your AI server.', 'network');
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new AIError(`AI server error ${res.status}: ${text.slice(0, 160)}`, res.status === 429 ? 'rate_limited' : 'upstream_error');
-  }
   useRuntime.getState().set({ server: 'ok' });
-  const body = (await res.json()) as { text?: string };
-  opts.onText?.(body.text ?? '');
-  return parseJsonLoose(body.text ?? '');
+  const body = (await res.json().catch(() => null)) as { text?: string; meta?: unknown; error?: string; code?: string } | null;
+  if (!res.ok) {
+    const code = SERVER_CODES[body?.code ?? ''] ?? (res.status === 429 ? 'rate_limited' : 'upstream_error');
+    throw new AIError(body?.error || `AI server error ${res.status}`, code);
+  }
+  const text = body?.text ?? '';
+  opts.onText?.(text);
+  const meta = isAIMeta(body?.meta) ? body.meta : null;
+  try {
+    return { value: parseJsonLoose(text), meta };
+  } catch {
+    throw new AIError(meta ? `${meta.providerLabel} (${meta.model}) answered with something that isn’t valid JSON.` : 'The answer was not valid JSON.', 'invalid_json', text);
+  }
 }
 
 export const serverBase = (serverUrl: string) => (serverUrl || '').replace(/\/+$/, '');
 
+/** Ask the server which keys are ready and what powers each function. */
 export async function pingServer(serverUrl: string): Promise<boolean> {
   try {
     const res = await fetch(`${serverBase(serverUrl)}/api/health`, { method: 'GET' });
-    const body = res.ok ? ((await res.json().catch(() => null)) as { ok?: boolean; image?: { configured?: boolean; active?: string; label?: string } } | null) : null;
+    const body = res.ok ? ((await res.json().catch(() => null)) as { ok?: boolean; ai?: Partial<AIServerState> } | null) : null;
     const ok = body?.ok === true;
-    const img = body?.image;
+    const ai = body?.ai;
     useRuntime.getState().set({
       server: ok ? 'ok' : 'down',
-      image: { reachable: !!body, configured: img?.configured === true, active: img?.active ?? '', label: img?.label ?? '' },
+      ai: ok && ai ? { reachable: true, ready: ai.ready === true, providers: Array.isArray(ai.providers) ? ai.providers : [], routing: ai.routing && typeof ai.routing === 'object' ? ai.routing : {} } : { ...NO_AI_SERVER, reachable: ok },
     });
     return ok;
   } catch {
-    useRuntime.getState().set({ server: 'down', image: { reachable: false, configured: false, active: '', label: '' } });
+    useRuntime.getState().set({ server: 'down', ai: NO_AI_SERVER });
     return false;
   }
 }
@@ -258,24 +285,31 @@ export function conform<T>(base: T, raw: unknown, allow: ReadonlySet<string> = n
   return base;
 }
 
-export function friendlyAIError(code: string): string {
+/** Why the built-in engine answered instead. `message` is the server's own explanation, when there is one. */
+export function friendlyAIError(code: string, message = ''): string {
+  const fallback = 'The built-in engine answered instead.';
   switch (code) {
     case 'not_granted':
       return 'Claude access was declined for this page, so the built-in engine answered instead.';
     case 'rate_limited':
-      return 'Claude is busy or your usage limit was reached. The built-in engine answered instead; try Claude again later.';
+      return message ? `${message} ${fallback}` : 'The AI is busy or a usage limit was reached. The built-in engine answered instead; try again later.';
     case 'session_expired':
       return 'Your Claude session expired. Sign in again to use Claude; the built-in engine answered instead.';
     case 'refused':
-      return 'Claude declined this request. Try rephrasing; the built-in engine answered instead.';
+      return message ? `${message} Try rephrasing; ${fallback.toLowerCase()}` : 'The AI declined this request. Try rephrasing; the built-in engine answered instead.';
     case 'invalid_json':
-      return 'Claude’s answer could not be read, so the built-in engine filled in. Try again.';
+      return message ? `${message} The built-in engine filled in; try again.` : 'The AI’s answer could not be read, so the built-in engine filled in. Try again.';
     case 'network':
-      return 'Your AI server could not be reached. The built-in engine answered instead.';
+      return 'Your AI server could not be reached (is it running?). The built-in engine answered instead.';
+    case 'no_provider':
+    case 'credits':
+    case 'auth':
+    case 'cut_off':
+      return message ? `${message} ${fallback}` : fallback;
     case 'unavailable':
     case 'sampling_disabled':
       return 'Claude isn’t available here. The built-in engine answered.';
     default:
-      return 'Claude hit a temporary problem. The built-in engine answered instead.';
+      return message ? `${message} ${fallback}` : 'The AI hit a temporary problem. The built-in engine answered instead.';
   }
 }

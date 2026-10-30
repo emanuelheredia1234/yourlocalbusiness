@@ -5,7 +5,7 @@ import { cn, fmtMoney } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
 import { navigate } from '@/lib/router';
 import { FORMATS, matchBusinessType } from '@/ai/knowledge';
-import { createListingImage, defaultImageKind, listingShots, photoLabel, photoRoute, releaseMedia, type ListingShot, type ListingShotId } from '@/ai/image';
+import { createListingImage, defaultImageKind, listingShots, photoLabel, photoRoute, photoSourceNote, releaseMedia, type ListingShot, type ListingShotId } from '@/ai/image';
 import { pendingManus, type ManusTask } from '@/ai/manus';
 import { ManusLink } from '@/components/images/PostImagePanel';
 import type { ListingText } from '@/lib/imageCanvas';
@@ -75,7 +75,8 @@ export function ListingImages({ project }: { project: Project }) {
   const job = useImageJob();
   const art = useArtDirection('listing');
   const effKind: ImageKind = kind === 'photo' && !photo.ok ? 'illustration' : kind;
-  const viaMuse = effKind === 'photo' && photoRoute() === 'muse';
+  // photos from an image API come back in seconds, so a set is made all at once (Manus tasks one by one)
+  const fastPhotos = effKind === 'photo' && (photoRoute() === 'muse' || photoRoute() === 'server');
   const d = project.studio.listing;
   const gallery = d.galleryIds ?? [];
 
@@ -118,7 +119,7 @@ export function ListingImages({ project }: { project: Project }) {
   const generate = async (ids: ListingShotId[], resume?: Partial<Record<ListingShotId, ManusTask>>) => {
     const list = shots.filter((s) => ids.includes(s.id));
     if (!list.length) return;
-    const parallel = !!resume || viaMuse;
+    const parallel = !!resume || fastPhotos;
     let made = 0;
     let note = '';
     setResumable({});
@@ -333,7 +334,7 @@ export function ListingImages({ project }: { project: Project }) {
             <Square size={11} className="fill-current" /> Stop
           </button>
         )}
-        <span className="text-[11.5px] text-muted">{viaMuse ? 'Meta Muse Image makes the photos through OpenRouter in your Zapier (about a cent each).' : effKind === 'photo' ? 'Photos are billed by your image provider.' : 'Illustrations are drawn by Claude in your brand colors.'}</span>
+        <span className="text-[11.5px] text-muted">{effKind === 'photo' ? photoSourceNote() : __ARTIFACT_BUILD__ ? 'Illustrations are drawn by Claude in your brand colors.' : 'Illustrations are drawn by your AI in your brand colors.'}</span>
         {effKind === 'photo' && art.skills.length > 0 && (
           <span className="w-full text-[11.5px] text-muted" title={art.text}>
             {artDirectionLabel(art.skills.map((k) => k.name))}
