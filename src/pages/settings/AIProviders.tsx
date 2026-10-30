@@ -115,7 +115,10 @@ function useAIServer() {
   const serverUrl = useStore((s) => s.settings.ai.serverUrl);
   const base = serverBase(serverUrl);
   const [adminToken, setAdminTokenState] = useState(() => safeStorage.getItem(ADMIN_KEY) || '');
+  // every request reads the newest token, so a check started before you unlocked can't use the old one
+  const token = useRef(adminToken);
   const setAdminToken = (t: string) => {
+    token.current = t;
     setAdminTokenState(t);
     if (t) safeStorage.setItem(ADMIN_KEY, t);
     else safeStorage.removeItem(ADMIN_KEY);
@@ -124,14 +127,14 @@ function useAIServer() {
     async <T,>(method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; json: (T & { error?: string; code?: string }) | null }> => {
       const res = await fetch(`${base}${path}`, {
         method,
-        headers: { 'content-type': 'application/json', ...(adminToken ? { 'x-admin-token': adminToken } : {}) },
+        headers: { 'content-type': 'application/json', ...(token.current ? { 'x-admin-token': token.current } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
       }).catch(() => null);
       if (!res) return { ok: false, status: 0, json: { error: 'Couldn’t reach your AI server.' } as T & { error: string } };
       const json = (await res.json().catch(() => null)) as (T & { error?: string; code?: string }) | null;
       return { ok: res.ok, status: res.status, json };
     },
-    [base, adminToken],
+    [base],
   );
   return { call, adminToken, setAdminToken, serverUrl };
 }
@@ -155,8 +158,12 @@ export function AIProviders() {
     if (r.ok && r.json) setUsage({ recent: r.json.recent, totals: r.json.totals });
   }, [call]);
 
+  const loads = useRef(0);
   const load = useCallback(async () => {
+    const n = ++loads.current;
     const r = await call<{ catalog: CatalogProvider[]; state: AIState }>('GET', '/api/ai/providers');
+    // only the newest check counts
+    if (n !== loads.current) return;
     if (!r.ok || !r.json?.catalog) {
       setStatus('offline');
       return;
@@ -755,7 +762,7 @@ function AdminAccess({ adminTokenSet, token, onToken, onCheck }: { adminTokenSet
           disabled={!value.trim()}
           onClick={() => {
             onToken(value.trim());
-            setTimeout(onCheck, 0);
+            onCheck();
           }}
         >
           Unlock

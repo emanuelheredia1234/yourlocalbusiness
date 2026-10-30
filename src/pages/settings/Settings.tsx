@@ -30,7 +30,7 @@ export default function Settings() {
       <header>
         <p className="eyebrow mb-1">Settings</p>
         <h1 className="page-title">Workspace settings</h1>
-        <p className="mt-1 text-[13.5px] text-muted">Your brand kit, AI engine, connected accounts, projects and data. Brand changes flow into every module automatically.</p>
+        <p className="mt-1 text-[13.5px] text-muted">Your brand kit, AI keys, connected accounts, projects and data. Brand changes flow into every module automatically.</p>
       </header>
       <Tabs<Tab>
         value={tab}
