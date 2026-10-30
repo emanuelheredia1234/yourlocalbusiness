@@ -19,7 +19,7 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       // Replit serves the dev server from its own domain
       allowedHosts: process.env.REPL_ID ? true : undefined,
-      proxy: { '/api': 'http://localhost:8787' },
+      proxy: { '/api': { target: 'http://localhost:8787', xfwd: true } },
     },
     build: {
       outDir: artifact ? 'dist-artifact' : 'dist',

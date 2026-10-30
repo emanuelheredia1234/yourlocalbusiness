@@ -147,6 +147,36 @@ describe('image routes', () => {
     expect(proxied.status).toBe(403);
     const crossSite = await call({ dir }, { method: 'PUT', pathname: '/api/image/providers/meta', body: { apiKey: 'k-1234' }, headers: { origin: 'https://evil.example' } });
     expect(crossSite.status).toBe(403);
+    const proxiedPreview = await call(
+      { dir, token: 'secret-token' },
+      {
+        method: 'PUT',
+        pathname: '/api/image/providers/meta',
+        body: { apiKey: 'k-1234' },
+        headers: {
+          origin: 'https://preview.example',
+          'x-forwarded-host': 'preview.example',
+          'x-forwarded-for': '203.0.113.9',
+          'x-admin-token': 'secret-token',
+        },
+      },
+    );
+    expect(proxiedPreview.status).toBe(200);
+    const untrustedForwardedHost = await call(
+      { dir, token: 'secret-token' },
+      {
+        method: 'PUT',
+        pathname: '/api/image/providers/meta',
+        body: { apiKey: 'k-1234' },
+        remote: '203.0.113.9',
+        headers: {
+          origin: 'https://preview.example',
+          'x-forwarded-host': 'preview.example',
+          'x-admin-token': 'secret-token',
+        },
+      },
+    );
+    expect(untrustedForwardedHost.status).toBe(403);
     const local = await call({ dir }, { method: 'PUT', pathname: '/api/image/providers/meta', body: { apiKey: 'k-1234' } });
     expect(local.status).toBe(200);
     expect(JSON.stringify(local.body)).not.toContain('k-1234');

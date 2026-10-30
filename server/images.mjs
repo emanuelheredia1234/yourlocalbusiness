@@ -331,7 +331,16 @@ function sameOrigin(req, allowedOrigin) {
   if (!origin) return true;
   if (allowedOrigin && origin === allowedOrigin) return true;
   try {
-    return new URL(origin).host === req.headers.host;
+    const originHost = new URL(origin).host;
+    if (originHost === req.headers.host) return true;
+
+    // Replit's preview proxy sends /api requests through the local Vite proxy,
+    // which changes Host to localhost:8787. Trust its forwarded host only for
+    // requests that actually arrived from this machine.
+    const forwardedHost = req.headers['x-forwarded-host'];
+    return LOOPBACK.has(req.socket.remoteAddress || '')
+      && typeof forwardedHost === 'string'
+      && forwardedHost.split(',').map((host) => host.trim()).includes(originHost);
   } catch {
     return false;
   }
