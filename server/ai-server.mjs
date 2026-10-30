@@ -1,23 +1,22 @@
-// Yourlocalbusiness — optional Claude proxy + static file server.
+// Yourlocalbusiness — AI server + static file server.
 //
-// Keeps your Anthropic credentials on the server. The web app calls:
-//   POST /api/generate  { prompt, tier: 'quick' | 'default', images?: dataURL[] }  →  { text }
-//   GET  /api/health                                                                →  { ok, model, image }
-//   /api/image…  AI image generation through Meta Muse Image, OpenAI or any OpenAI-compatible host (see images.mjs)
-// and, when ./dist exists (npm run build), everything else is served from it.
+// Keeps your AI provider keys on the server. The web app calls /api/ai/… (see providers/routes.mjs):
+// writing, photos, videos and Manus agent tasks, each sent to the keys that power that function in
+// Settings → AI, with each key's own model and effort. GET /api/health says which keys are ready.
+// When ./dist exists (npm run build), everything else is served from it.
 //
-// Credentials: ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN / an `ant auth login` profile — the SDK resolves them).
-// Image keys: META_MODEL_API_KEY, OPENAI_API_KEY, IMAGE_CUSTOM_BASE_URL/IMAGE_CUSTOM_API_KEY/IMAGE_CUSTOM_MODEL,
-//   IMAGE_PROVIDER (meta | openai | custom), or add them in the app (stored in DATA_DIR/image-providers.json).
+// Keys: Replit Secrets / env vars OPENROUTER_API_KEY, GEMINI_API_KEY (or GOOGLE_API_KEY), XAI_API_KEY,
+//   ANTHROPIC_API_KEY, META_MODEL_API_KEY, MANUS_API_KEY, OPENAI_API_KEY; or add them in the app
+//   (saved in DATA_DIR/ai-providers.json, never sent back to the browser). Secrets win over keys typed in the app.
 // Optional env: PORT (8787), HOST (0.0.0.0), ALLOWED_ORIGIN (enable CORS for one origin), RATE_LIMIT_PER_MIN (30),
-//   DATA_DIR (./.data), ADMIN_TOKEN (lets a remote browser change image keys; otherwise only this machine can).
+//   DATA_DIR (./.data), ADMIN_TOKEN (lets a remote browser change AI settings; otherwise only this machine can),
+//   AI_PROVIDER_BASE_URLS (JSON map of provider id → base URL, for a proxy or a test server).
 
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Anthropic from '@anthropic-ai/sdk';
-import { createImageRoutes } from './images.mjs';
+import { createAIRoutes } from './providers/routes.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(here, '..', 'dist');
@@ -27,48 +26,13 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '';
 const RATE_LIMIT = Number(process.env.RATE_LIMIT_PER_MIN || 30);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(here, '..', '.data'));
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
-const MODEL = 'claude-opus-5-5';
 const MAX_BODY = 14 * 1024 * 1024; // prompt + up to two images
-const MAX_PROMPT_CHARS = 120_000;
-const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
-// Thinking is always on for this model; effort is the depth control (its default is "medium").
-const TIERS = {
-  quick: { effort: 'low', max_tokens: 16000 },
-  default: { effort: 'medium', max_tokens: 64000 },
-};
-
-const SYSTEM =
-  'You generate content for the Yourlocalbusiness app (product research, branding, sales pages, emails, social posts, ads and code widgets for creators and local businesses). Follow the instructions in the user message exactly and reply with only the JSON value it asks for.';
-
-const client = new Anthropic();
-
-const NO_CREDENTIALS = 'No Anthropic credentials on the server. Set ANTHROPIC_API_KEY (or run `ant auth login`) and restart.';
-
-// Health only reports ready when credentials work (Models API lookup: no tokens are generated).
-let credCheck = { at: 0, ok: false, error: '' };
-async function credentialsReady() {
-  const ttl = credCheck.ok ? 5 * 60_000 : 30_000;
-  if (credCheck.at && Date.now() - credCheck.at < ttl) return credCheck;
-  try {
-    await client.models.retrieve(MODEL);
-    credCheck = { at: Date.now(), ok: true, error: '' };
-  } catch (e) {
-    // Anything that fails before an HTTP response is credential resolution (the SDK found no key/profile).
-    credCheck = { at: Date.now(), ok: false, error: e instanceof Anthropic.APIError ? describeError(e).error : NO_CREDENTIALS };
-  }
-  return credCheck;
-}
-
-function describeError(e) {
-  if (e instanceof Anthropic.AuthenticationError) return { status: 500, error: 'The server’s Anthropic credentials are invalid.' };
-  if (e instanceof Anthropic.PermissionDeniedError) return { status: 500, error: 'The server’s Anthropic credentials can’t use this model.' };
-  if (e instanceof Anthropic.RateLimitError) return { status: 429, error: 'Rate limited by the AI provider. Try again shortly.' };
-  if (e instanceof Anthropic.BadRequestError) return { status: 400, error: e.message };
-  if (e instanceof Anthropic.APIConnectionError) return { status: 502, error: 'Could not reach the AI provider.' };
-  if (e instanceof Anthropic.APIError) return { status: e.status && e.status >= 500 ? 502 : e.status || 500, error: e.message };
-  if (e instanceof Anthropic.AnthropicError) return { status: 500, error: NO_CREDENTIALS };
-  return { status: 500, error: 'Unexpected server error' };
+let BASE_URLS = {};
+try {
+  BASE_URLS = JSON.parse(process.env.AI_PROVIDER_BASE_URLS || '{}');
+} catch {
+  console.warn('AI_PROVIDER_BASE_URLS is not valid JSON; ignoring it.');
 }
 
 // ───────────── helpers ─────────────
@@ -121,67 +85,6 @@ function rateLimited(ip) {
   return recent.length > RATE_LIMIT;
 }
 
-function imageBlock(dataUrl) {
-  const m = /^data:([a-z/+.-]+);base64,([A-Za-z0-9+/=\s]+)$/i.exec(String(dataUrl || ''));
-  if (!m) return null;
-  const media_type = m[1].toLowerCase();
-  if (!IMAGE_TYPES.has(media_type)) return null;
-  return { type: 'image', source: { type: 'base64', media_type, data: m[2].replace(/\s+/g, '') } };
-}
-
-// ───────────── /api/generate ─────────────
-
-async function generate(req, res) {
-  const ip = req.socket.remoteAddress || 'unknown';
-  if (rateLimited(ip)) return send(res, 429, { error: 'Too many requests. Try again in a minute.' }, corsHeaders(req));
-  let body;
-  try {
-    body = await readJson(req);
-  } catch (e) {
-    return send(res, e.status || 400, { error: e.message }, corsHeaders(req));
-  }
-  const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
-  if (!prompt) return send(res, 400, { error: 'Missing prompt' }, corsHeaders(req));
-  if (prompt.length > MAX_PROMPT_CHARS) return send(res, 413, { error: 'Prompt too long' }, corsHeaders(req));
-  const tier = TIERS[body.tier] || TIERS.default;
-  const images = (Array.isArray(body.images) ? body.images : []).slice(0, 2).map(imageBlock).filter(Boolean);
-
-  const controller = new AbortController();
-  res.on('close', () => {
-    if (!res.writableEnded) controller.abort();
-  });
-
-  try {
-    const stream = client.beta.messages.stream(
-      {
-        model: MODEL,
-        max_tokens: tier.max_tokens,
-        output_config: { effort: tier.effort },
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default', // if a safety classifier declines, re-run on Anthropic's recommended fallback model
-        system: SYSTEM,
-        messages: [{ role: 'user', content: [...images, { type: 'text', text: prompt }] }],
-      },
-      { signal: controller.signal },
-    );
-    const message = await stream.finalMessage();
-    if (message.stop_reason === 'refusal') {
-      return send(res, 422, { error: 'The model declined this request.', category: message.stop_details?.category ?? null }, corsHeaders(req));
-    }
-    const text = message.content
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text)
-      .join('');
-    if (message.stop_reason === 'max_tokens' && !text) return send(res, 502, { error: 'The response was cut off. Try again.' }, corsHeaders(req));
-    return send(res, 200, { text, model: message.model, stop_reason: message.stop_reason }, corsHeaders(req));
-  } catch (e) {
-    if (controller.signal.aborted) return; // client went away
-    const { status, error } = describeError(e);
-    if (status === 500 && error === 'Unexpected server error') console.error(e);
-    return send(res, status, { error }, corsHeaders(req));
-  }
-}
-
 // ───────────── static files (production build) ─────────────
 
 const MIME = {
@@ -224,7 +127,7 @@ function serveStatic(req, res) {
 
 // ───────────── router ─────────────
 
-const images = createImageRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN });
+const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS });
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', 'http://local');
@@ -233,14 +136,19 @@ const server = http.createServer((req, res) => {
     return res.end();
   }
   if (url.pathname === '/api/health' && req.method === 'GET') {
-    // Always 200: `ok` says whether generations will work, so browsers don't log an error for a keyless server.
-    return void credentialsReady().then((c) => send(res, 200, { ok: c.ok, model: MODEL, image: images.health(), ...(c.error ? { error: c.error } : {}) }, corsHeaders(req)));
+    // `ok`: the server is up; `ai` says which keys are ready and what powers each function
+    return send(res, 200, { ok: true, ai: ai.health() }, corsHeaders(req));
   }
-  if (url.pathname === '/api/generate' && req.method === 'POST') return void generate(req, res);
-  if (images.match(url)) {
-    return void images.handle(req, res, url).then((handled) => {
-      if (handled === false) send(res, 404, { error: 'Not found' }, corsHeaders(req));
-    });
+  if (ai.match(url)) {
+    return void ai.handle(req, res, url).then(
+      (handled) => {
+        if (handled === false) send(res, 404, { error: 'Not found' }, corsHeaders(req));
+      },
+      (e) => {
+        console.error(e);
+        if (!res.headersSent) send(res, 500, { error: 'Unexpected server error' }, corsHeaders(req));
+      },
+    );
   }
   if (url.pathname.startsWith('/api/')) return send(res, 404, { error: 'Not found' }, corsHeaders(req));
   if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(req, res);
@@ -248,8 +156,15 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  const img = images.health();
-  console.log(`Yourlocalbusiness server on http://localhost:${PORT}  (model ${MODEL}, server-side fallbacks on)`);
-  console.log(img.configured ? `Image generation: ${img.label}` : 'Image generation: no provider key yet (add one in Settings → Image generation, or set META_MODEL_API_KEY).');
+  const h = ai.health();
+  console.log(`Yourlocalbusiness server on http://localhost:${PORT}`);
+  const ready = h.providers.filter((p) => p.ready).map((p) => p.label);
+  console.log(ready.length ? `AI keys ready: ${ready.join(', ')}` : 'No AI keys yet: add them in Settings → AI, or as Secrets (e.g. OPENROUTER_API_KEY).');
+  if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
   if (!fs.existsSync(DIST)) console.log('No ./dist yet: run `npm run build` to serve the app from here, or use `npm run dev` (it proxies /api to this server).');
+});
+
+process.on('SIGTERM', () => {
+  ai.usage.flush();
+  process.exit(0);
 });
