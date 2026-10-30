@@ -1,0 +1,1 @@
+- [Replit preview origin checks](preview-origin-checks.md) — trust matching forwarded hosts only when the backend request comes from loopback.
