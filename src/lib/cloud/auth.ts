@@ -321,6 +321,8 @@ export function authMessage(e: { code?: string; message?: string; status?: numbe
       return 'Too many tries. Wait a minute, then try again.';
     case 'signup_disabled':
       return 'New sign-ups are turned off for this app.';
+    case 'email_address_not_authorized':
+      return 'This app can’t send emails to that address yet. The app’s owner needs to set up email sending in Supabase (Authentication → Emails → SMTP).';
     case 'email_address_invalid':
     case 'validation_failed':
       return 'Enter a valid email address.';
