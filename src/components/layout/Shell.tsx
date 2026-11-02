@@ -6,6 +6,7 @@ import {
   ChartColumn,
   ChevronsUpDown,
   LayoutDashboard,
+  LogOut,
   Megaphone,
   Menu,
   Moon,
@@ -23,7 +24,8 @@ import { cn, fmtRelative } from '@/lib/utils';
 import { navigate, useRoute, type Route } from '@/lib/router';
 import { useRuntime } from '@/lib/platform';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { useUI } from '@/store/ui';
+import { toast, useUI } from '@/store/ui';
+import { signOut, useAuthState } from '@/lib/auth';
 import { FORMATS } from '@/ai/knowledge';
 import { Popover, MenuItem } from '../ui/primitives';
 import { LogoMark } from '../brand/Logo';
@@ -321,6 +323,7 @@ export function Topbar() {
   const setCmd = useUI((s) => s.setCommandOpen);
   const setCart = useUI((s) => s.setCartOpen);
   const cartCount = useStore((s) => s.cart.reduce((n, c) => n + c.qty, 0));
+  const auth = useAuthState();
   const project = useActiveProject();
   return (
     <header className="sticky z-30 flex h-[60px] shrink-0 items-center gap-2 border-b border-line bg-surface/90 backdrop-blur gutter" style={{ top: 'env(safe-area-inset-top, 0px)' }}>
@@ -338,6 +341,21 @@ export function Topbar() {
         <Search size={18} />
       </button>
       <ThemeToggle />
+      {auth.enabled && auth.user && (
+        <button
+          className="btn btn-ghost btn-icon"
+          type="button"
+          aria-label={`Sign out${auth.user.email ? ` ${auth.user.email}` : ''}`}
+          title={auth.user.email || 'Sign out'}
+          onClick={() =>
+            void signOut().catch((error: unknown) =>
+              toast({ kind: 'error', title: 'Could not sign out', body: error instanceof Error ? error.message : 'Please try again.' }),
+            )
+          }
+        >
+          <LogOut size={17} />
+        </button>
+      )}
       <NotificationsButton />
       <button className="btn btn-ghost btn-icon relative" onClick={() => setCart(true)} aria-label={`Cart, ${cartCount} items`}>
         <ShoppingCart size={18} />

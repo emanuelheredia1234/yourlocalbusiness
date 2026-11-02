@@ -44,3 +44,8 @@ outputType = "console"
 task = "shell.exec"
 args = "npm run server"
 waitForPort = 8787
+
+[userenv]
+
+[userenv.shared]
+ADMIN_EMAILS = "hectorheredia242@gmail.com"

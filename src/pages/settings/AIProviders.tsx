@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Brain, ChevronDown, CircleAlert, ExternalLink, Flas
 import { cn, fmtRelative } from '@/lib/utils';
 import { safeStorage } from '@/lib/storage';
 import { pingServer, serverBase } from '@/ai/claude';
+import { authFetch } from '@/lib/auth';
 import { AI_FUNCTIONS, AI_FUNCTION_GROUPS, type AIKind } from '@/ai/functions';
 import { fmtTokens, fmtUsdSmall } from '@/ai/meta';
 import { useStore } from '@/store/useStore';
@@ -125,7 +126,7 @@ function useAIServer() {
   };
   const call = useCallback(
     async <T,>(method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; json: (T & { error?: string; code?: string }) | null }> => {
-      const res = await fetch(`${base}${path}`, {
+      const res = await authFetch(`${base}${path}`, {
         method,
         headers: { 'content-type': 'application/json', ...(token.current ? { 'x-admin-token': token.current } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),

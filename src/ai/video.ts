@@ -12,6 +12,7 @@ import { readFileAsDataURL } from '@/lib/utils';
 import { ZapierError, zapierCall } from '@/lib/zapier';
 import { useStore } from '@/store/useStore';
 import { serverBase } from './claude';
+import { authFetch } from '@/lib/auth';
 import { fmtElapsed } from './manus';
 import { isAIMeta, type AIMeta } from './meta';
 import { OPENROUTER_API } from './openrouter';
@@ -119,7 +120,7 @@ export interface VideoState {
 async function serverVideo(path: string, init: RequestInit = {}): Promise<Response> {
   let res: Response;
   try {
-    res = await fetch(`${serverBase(useStore.getState().settings.ai.serverUrl)}/api/ai/video${path}`, init);
+    res = await authFetch(`${serverBase(useStore.getState().settings.ai.serverUrl)}/api/ai/video${path}`, init);
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw new VideoError('Stopped.', 'cancelled');
     throw new VideoError('Couldn’t reach your AI server.', 'VIDEO_NETWORK');
