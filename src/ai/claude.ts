@@ -109,10 +109,8 @@ export const serverBase = (serverUrl: string) => (serverUrl || '').replace(/\/+$
 
 /** A request to your server, saying who's signed in (when accounts are on). */
 export async function serverFetch(serverUrl: string, path: string, init: RequestInit = {}): Promise<Response> {
-  const target = `${serverBase(serverUrl)}${path}`;
-  const headers = new Headers(init.headers);
-  for (const [key, value] of Object.entries(await authHeaders(target))) headers.set(key, value);
-  return fetch(target, { ...init, headers });
+  const headers = { ...((init.headers as Record<string, string> | undefined) ?? {}), ...(await authHeaders()) };
+  return fetch(`${serverBase(serverUrl)}${path}`, { ...init, headers });
 }
 
 /** Ask the server which keys are ready and what powers each function. */
