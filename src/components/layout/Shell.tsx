@@ -339,7 +339,10 @@ export function Topbar() {
       <button className="btn btn-ghost btn-icon md:hidden" onClick={() => setCmd(true)} aria-label="Search">
         <Search size={18} />
       </button>
-      <ThemeToggle />
+      {/* on phones the theme switch lives in Settings → Preferences, leaving room for the page title */}
+      <span className="hidden sm:contents">
+        <ThemeToggle />
+      </span>
       <NotificationsButton />
       <button className="btn btn-ghost btn-icon relative" onClick={() => setCart(true)} aria-label={`Cart, ${cartCount} items`}>
         <ShoppingCart size={18} />
