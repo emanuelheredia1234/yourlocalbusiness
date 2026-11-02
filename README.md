@@ -40,13 +40,15 @@ Simulated (clearly labelled in the UI):
 
 | Provider | Secret name |
 | --- | --- |
-| OpenRouter | `OPENROUTER_API_KEY` |
+| OpenRouter (4 slots) | `OPENROUTER_API_KEY`, and `OPENROUTER_API_KEY_2`, `_3`, `_4` for OpenRouter 2–4 |
 | Google Gemini | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) |
 | xAI Grok | `XAI_API_KEY` |
 | Anthropic Claude | `ANTHROPIC_API_KEY` |
 | Meta Muse | `META_MODEL_API_KEY` |
 | Manus | `MANUS_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
+
+**OpenRouter slots.** There are four OpenRouter cards, so different OpenRouter keys can power different things, each with its own model and effort. For example, give OpenRouter 2 a key that powers only Product research (the "Find a winning product" page): tick just that in its Powers list, and either untick it on your other keys or move OpenRouter 2 above them.
 
 **Powers.** Each card has a dropdown of everything AI does in the app, stacked as checkboxes:
 - **Writing & research:** product research, brand kit & voice, outline & chapters, product files, business model, marketplace listing, code & assets, SEO & sales pages, emails & lead magnets, social posts & campaigns, ads and illustrations.

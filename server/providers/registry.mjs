@@ -309,8 +309,24 @@ export const PROVIDERS = {
   },
 };
 
+/** Extra OpenRouter key slots: each has its own key, functions, models and effort, and uses OpenRouter's API. */
+for (const n of [2, 3, 4]) {
+  PROVIDERS[`openrouter${n}`] = {
+    ...PROVIDERS.openrouter,
+    label: `OpenRouter ${n}`,
+    envKeys: [`OPENROUTER_API_KEY_${n}`],
+    adapter: 'openrouter',
+    note: 'Another OpenRouter key with its own functions, model and effort: for example, a key just for Product research.',
+  };
+}
+
 /** The order the keys are shown in, and the default priority. */
-export const PROVIDER_IDS = ['openrouter', 'google', 'xai', 'anthropic', 'meta', 'manus', 'openai'];
+export const PROVIDER_IDS = ['openrouter', 'openrouter2', 'openrouter3', 'openrouter4', 'google', 'xai', 'anthropic', 'meta', 'manus', 'openai'];
+
+/** The API a key slot talks to: extra slots share their provider's adapter. */
+export function adapterId(providerId) {
+  return PROVIDERS[providerId]?.adapter ?? providerId;
+}
 
 export function kindDef(providerId, kind) {
   return PROVIDERS[providerId]?.kinds?.[kind] ?? null;

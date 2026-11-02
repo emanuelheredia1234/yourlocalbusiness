@@ -6,7 +6,9 @@
 // tasks are paid jobs, so they move on only when the provider certainly started nothing.
 
 import crypto from 'node:crypto';
-import { PROVIDERS, effortIds, effortLabel, estimateCost, fnById, kindDef } from './registry.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { PROVIDERS, adapterId, effortIds, effortLabel, estimateCost, fnById, kindDef } from './registry.mjs';
 import { ProviderError } from './http.mjs';
 import anthropic from './adapters/anthropic.mjs';
 import google from './adapters/google.mjs';
@@ -27,6 +29,7 @@ export const COMPARE_PROMPT =
 
 const MAX_JOBS = 40;
 const JOB_TTL = 6 * 3600_000;
+const TASK_TTL = 7 * 24 * 3600_000;
 
 export function asProviderError(e, label = '') {
   if (e instanceof ProviderError) return e;
@@ -42,18 +45,51 @@ function canFallBack(err, kind) {
 const round6 = (n) => Math.round(n * 1e6) / 1e6;
 
 export class AIRouter {
-  constructor({ store, usage, fetch = globalThis.fetch, baseUrls = {}, adapters = ADAPTERS }) {
+  /** tasksFile: where the Manus tasks this app started are remembered (only those can be read or continued). */
+  constructor({ store, usage, fetch = globalThis.fetch, baseUrls = {}, adapters = ADAPTERS, tasksFile = '' }) {
     this.store = store;
     this.usage = usage;
     this.fetch = fetch;
     this.baseUrls = baseUrls;
     this.adapters = adapters;
     this.jobs = new Map();
+    this.tasksFile = tasksFile;
     this.manusTasks = new Map();
+    try {
+      const raw = tasksFile ? JSON.parse(fs.readFileSync(tasksFile, 'utf8')) : null;
+      for (const [id, t] of Object.entries(raw?.tasks ?? {})) if (Date.now() - (t.at ?? 0) < TASK_TTL) this.manusTasks.set(id, t);
+    } catch {
+      /* none yet */
+    }
+  }
+
+  saveTasks() {
+    if (!this.tasksFile) return;
+    try {
+      fs.mkdirSync(path.dirname(this.tasksFile), { recursive: true, mode: 0o700 });
+      const tmp = `${this.tasksFile}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ tasks: Object.fromEntries(this.manusTasks) }), { mode: 0o600 });
+      fs.renameSync(tmp, this.tasksFile);
+    } catch (e) {
+      console.error('Could not save the Manus task list:', e.message);
+    }
+  }
+
+  /** Only tasks this app started can be read or continued: the key's other Manus tasks stay private. */
+  knownTask(taskId) {
+    const t = this.manusTasks.get(taskId);
+    if (!t) throw new ProviderError('NOT_FOUND', 'This Manus task wasn’t started by this app.', { status: 404 });
+    return t;
   }
 
   ctx(id) {
-    return { fetch: this.fetch, base: String(this.baseUrls[id] || this.adapters[id].base).replace(/\/+$/, ''), key: this.store.key(id), label: PROVIDERS[id].label };
+    const a = adapterId(id);
+    return { fetch: this.fetch, base: String(this.baseUrls[id] || this.baseUrls[a] || this.adapters[a].base).replace(/\/+$/, ''), key: this.store.key(id), label: PROVIDERS[id].label };
+  }
+
+  /** The adapter for a key slot (extra OpenRouter slots use OpenRouter's). */
+  adapter(id) {
+    return this.adapters[adapterId(id)];
   }
 
   noProvider(fn) {
@@ -95,7 +131,7 @@ export class AIRouter {
 
   // ───────────── writing ─────────────
 
-  async text(fn, { prompt, images = [], tier = 'default', signal, brain = null }) {
+  async text(fn, { prompt, images = [], tier = 'default', signal, brain = null, userId = null }) {
     if (fnById[fn]?.kind !== 'text') throw new ProviderError('BAD_REQUEST', 'Unknown AI function.', { status: 400 });
     const route = this.store.route(fn);
     if (!route.length) throw this.noProvider(fn);
@@ -107,14 +143,14 @@ export class AIRouter {
       const effort = s.effort.text;
       const t0 = Date.now();
       try {
-        const r = await this.adapters[id].text(this.ctx(id), { model, effort, system: SYSTEM, prompt, images, tier, signal });
+        const r = await this.adapter(id).text(this.ctx(id), { model, effort, system: SYSTEM, prompt, images, tier, signal });
         const meta = this.describe(id, 'text', fn, { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits });
         if (attempts.length) meta.attempts = attempts;
-        this.log(meta, { brain });
+        this.log(meta, { brain, userId });
         return { text: r.text, meta };
       } catch (e) {
         last = asProviderError(e, PROVIDERS[id].label);
-        this.logFailure(id, 'text', fn, model, effort, t0, last, { brain });
+        this.logFailure(id, 'text', fn, model, effort, t0, last, { brain, userId });
         attempts.push({ provider: id, providerLabel: PROVIDERS[id].label, code: last.code, error: last.message });
         if (!canFallBack(last, 'text') || signal?.aborted) break;
       }
@@ -126,7 +162,7 @@ export class AIRouter {
   // ───────────── photos ─────────────
 
   /** One photo from the first key that can make it. Manus works as a task instead (see manusCreate). */
-  async image({ prompt, aspect, signal }) {
+  async image({ prompt, aspect, signal, userId = null }) {
     const fn = 'photos';
     const route = this.store.route(fn).filter((id) => id !== 'manus');
     if (!route.length) {
@@ -141,15 +177,15 @@ export class AIRouter {
       const effort = s.effort.image;
       const t0 = Date.now();
       try {
-        const r = await this.adapters[id].image(this.ctx(id), { model, effort, prompt, aspect, signal });
+        const r = await this.adapter(id).image(this.ctx(id), { model, effort, prompt, aspect, signal });
         const meta = this.describe(id, 'image', fn, { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits, params: r.params });
         if (attempts.length) meta.attempts = attempts;
         if (r.dropped?.length) meta.note = `${PROVIDERS[id].label} didn’t accept ${r.dropped.join(', ')}, so it was left out.`;
-        this.log(meta);
+        this.log(meta, { userId });
         return { bytes: r.bytes, contentType: r.contentType, revisedPrompt: r.revisedPrompt || '', meta };
       } catch (e) {
         last = asProviderError(e, PROVIDERS[id].label);
-        this.logFailure(id, 'image', fn, model, effort, t0, last);
+        this.logFailure(id, 'image', fn, model, effort, t0, last, { userId });
         attempts.push({ provider: id, providerLabel: PROVIDERS[id].label, code: last.code, error: last.message });
         if (!canFallBack(last, 'image') || signal?.aborted) break;
       }
@@ -193,7 +229,8 @@ export class AIRouter {
     this.usage.update(job.usageId, { ok: job.state === 'done', pending: false, ms: view.meta.ms, cost: view.meta.cost, usage: view.meta.usage, ...(job.error ? { error: job.error } : {}) });
   }
 
-  async startVideo({ prompt, aspect = '9:16', duration = 8, firstFrame = null, signal }) {
+  /** owner: the user who started it (only they, or the admin, may follow it). */
+  async startVideo({ prompt, aspect = '9:16', duration = 8, firstFrame = null, signal, owner = null }) {
     const fn = 'videos';
     let route = this.store.route(fn);
     if (!route.length) throw this.noProvider(fn);
@@ -208,7 +245,7 @@ export class AIRouter {
       const effort = s.effort.video;
       const t0 = Date.now();
       try {
-        const started = await this.adapters[id].video.start(this.ctx(id), { model, effort, prompt, aspect, duration, firstFrame, signal });
+        const started = await this.adapter(id).video.start(this.ctx(id), { model, effort, prompt, aspect, duration, firstFrame, signal });
         const job = {
           id: `vid_${crypto.randomUUID()}`,
           provider: id,
@@ -221,8 +258,9 @@ export class AIRouter {
           note: [started.note, fits.includes(id) ? '' : `${PROVIDERS[id].label} can’t make ${aspect} videos, so it used its nearest shape.`].filter(Boolean).join(' '),
           state: 'running',
           attempts,
+          owner,
         };
-        job.usageId = this.usage.add({ ok: true, pending: true, provider: id, fn, kind: 'video', model, effort, ms: 0 });
+        job.usageId = this.usage.add({ ok: true, pending: true, provider: id, fn, kind: 'video', model, effort, ms: 0, userId: owner });
         if (started.run) {
           // providers that answer in one long call: the job finishes when the call does
           started.run.then(
@@ -235,7 +273,7 @@ export class AIRouter {
         return this.jobView(job);
       } catch (e) {
         last = asProviderError(e, PROVIDERS[id].label);
-        this.logFailure(id, 'video', fn, model, effort, t0, last);
+        this.logFailure(id, 'video', fn, model, effort, t0, last, { userId: owner });
         attempts.push({ provider: id, providerLabel: PROVIDERS[id].label, code: last.code, error: last.message });
         if (!canFallBack(last, 'video') || signal?.aborted) break;
       }
@@ -252,7 +290,7 @@ export class AIRouter {
 
   async videoStatus(jobId, { signal } = {}) {
     const job = this.getJob(jobId);
-    const adapter = this.adapters[job.provider].video;
+    const adapter = this.adapter(job.provider).video;
     if (job.state === 'running' && adapter.status && Date.now() - (job.checkedAt || 0) > 2500) {
       job.checkedAt = Date.now();
       try {
@@ -276,7 +314,7 @@ export class AIRouter {
     const job = this.getJob(jobId);
     if (job.state !== 'done') throw new ProviderError('NOT_READY', 'The video isn’t ready yet.', { status: 409 });
     if (!job.bytes) {
-      const out = await this.adapters[job.provider].video.content(this.ctx(job.provider), job, { signal });
+      const out = await this.adapter(job.provider).video.content(this.ctx(job.provider), job, { signal });
       job.bytes = out.bytes;
       job.contentType = out.contentType;
     }
@@ -286,7 +324,7 @@ export class AIRouter {
 
   // ───────────── Manus tasks (photos and Facebook scheduling) ─────────────
 
-  async manusCreate({ fn, prompt, title, interactive, hidden, image, signal }) {
+  async manusCreate({ fn, prompt, title, interactive, hidden, image, signal, owner = null }) {
     const kind = fnById[fn]?.kind;
     if (fn !== 'photos' && fn !== 'facebook') throw new ProviderError('BAD_REQUEST', 'Unknown Manus task.', { status: 400 });
     if (!this.store.powers('manus', fn)) throw new ProviderError('NO_PROVIDER', `Your Manus key isn’t set to power ${fnById[fn].label}. Turn it on in Settings → AI.`, { status: 409 });
@@ -295,27 +333,28 @@ export class AIRouter {
     try {
       const out = await this.adapters.manus.create(this.ctx('manus'), { prompt, title, profile, interactive, hidden, image, signal });
       const meta = this.describe('manus', kind, fn, { model: 'manus', effort: profile, ms: Date.now() - t0 });
-      const usageId = this.usage.add({ ok: true, pending: true, provider: 'manus', fn, kind, model: 'manus', effort: profile, ms: meta.ms, taskId: out.task_id });
-      this.manusTasks.set(out.task_id, { usageId, fn, kind, profile });
+      const usageId = this.usage.add({ ok: true, pending: true, provider: 'manus', fn, kind, model: 'manus', effort: profile, ms: meta.ms, taskId: out.task_id, userId: owner });
+      this.manusTasks.set(out.task_id, { usageId, fn, kind, profile, at: Date.now(), owner });
+      for (const [id, t] of this.manusTasks) if (Date.now() - (t.at ?? 0) > TASK_TTL) this.manusTasks.delete(id);
+      this.saveTasks();
       return { ...out, meta };
     } catch (e) {
       const err = asProviderError(e, 'Manus');
-      this.logFailure('manus', kind, fn, 'manus', profile, t0, err);
+      this.logFailure('manus', kind, fn, 'manus', profile, t0, err, { userId: owner });
       throw err;
     }
   }
 
   async manusOutput({ taskId, maxImages, maxImageBytes, signal }) {
+    const t = this.knownTask(taskId);
     const out = await this.adapters.manus.output(this.ctx('manus'), { taskId, maxImages, maxImageBytes, signal });
-    const t = this.manusTasks.get(taskId);
-    if (t) {
-      this.usage.update(t.usageId, { credits: out.credit_usage || null, pending: !out.done, ok: out.status !== 'error' });
-      out.meta = this.describe('manus', t.kind, t.fn, { model: 'manus', effort: t.profile, ms: 0, credits: out.credit_usage || null });
-    }
+    this.usage.update(t.usageId, { credits: out.credit_usage || null, pending: !out.done, ok: out.status !== 'error' });
+    out.meta = this.describe('manus', t.kind, t.fn, { model: 'manus', effort: t.profile, ms: 0, credits: out.credit_usage || null });
     return out;
   }
 
   async manusContinue({ taskId, prompt, signal }) {
+    this.knownTask(taskId);
     return this.adapters.manus.send(this.ctx('manus'), { taskId, prompt, signal });
   }
 
@@ -324,7 +363,7 @@ export class AIRouter {
   /** A free check that a key works (lists its models; Manus lists one task). */
   async checkKey(id, { signal } = {}) {
     if (!this.store.key(id)) return { ok: false, code: 'NO_KEY', error: 'Add an API key first.' };
-    const a = this.adapters[id];
+    const a = this.adapter(id);
     try {
       if (a.check) {
         await a.check(this.ctx(id), { signal });
@@ -346,9 +385,9 @@ export class AIRouter {
     const k = kindDef(id, kind);
     if (!k) return { models: [], source: 'builtin' };
     const builtin = k.models.map((x) => ({ id: x.id, label: x.label }));
-    if (!this.store.key(id) || !this.adapters[id].listModels) return { models: builtin, source: 'builtin' };
+    if (!this.store.key(id) || !this.adapter(id).listModels) return { models: builtin, source: 'builtin' };
     try {
-      const ids = await this.adapters[id].listModels(this.ctx(id), kind, { signal });
+      const ids = await this.adapter(id).listModels(this.ctx(id), kind, { signal });
       const known = new Set(builtin.map((b) => b.id));
       const extra = ids.filter((x) => !known.has(x)).sort().slice(0, 600).map((x) => ({ id: x, label: x }));
       return { models: [...builtin.map((b) => ({ ...b, available: !ids.length || ids.includes(b.id) })), ...extra], source: 'live' };
@@ -371,7 +410,7 @@ export class AIRouter {
     for (const effort of pick) {
       const t0 = Date.now();
       try {
-        const r = await this.adapters[id].text(this.ctx(id), { model, effort, system: SYSTEM, prompt: COMPARE_PROMPT, images: [], tier: 'quick', signal });
+        const r = await this.adapter(id).text(this.ctx(id), { model, effort, system: SYSTEM, prompt: COMPARE_PROMPT, images: [], tier: 'quick', signal });
         const meta = this.describe(id, 'text', 'test', { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits });
         this.log(meta);
         results.push({ effort, effortLabel: meta.effortLabel, ok: true, ms: meta.ms, usage: meta.usage, cost: meta.cost, answer: r.text.trim().slice(0, 240) });

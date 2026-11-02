@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { FUNCTION_IDS, PROVIDER_IDS, defaultEffort, effortIds, estimateCost, supports } from './registry.mjs';
+import { FUNCTION_IDS, PROVIDERS, PROVIDER_IDS, adapterId, defaultEffort, effortIds, estimateCost, supports } from './registry.mjs';
 import { AIStore } from './store.mjs';
 import { UsageLog } from './usage.mjs';
 import { AIRouter } from './router.mjs';
@@ -14,12 +14,12 @@ import { chatUsage } from './adapters/chat.mjs';
 import { scrubKeys } from './http.mjs';
 import { MP4, PNG, createMockProviders, reasoningFor } from '../test/mock-providers.mjs';
 
-const ENV = { OPENROUTER_API_KEY: 'or-key-1111', GEMINI_API_KEY: 'g-key-2222', XAI_API_KEY: 'x-key-3333', ANTHROPIC_API_KEY: 'a-key-4444', META_MODEL_API_KEY: 'm-key-5555', MANUS_API_KEY: 'mn-key-6666', OPENAI_API_KEY: 'o-key-7777' };
+const ENV = { OPENROUTER_API_KEY: 'or-key-1111', OPENROUTER_API_KEY_2: 'or2-key-8888', GEMINI_API_KEY: 'g-key-2222', XAI_API_KEY: 'x-key-3333', ANTHROPIC_API_KEY: 'a-key-4444', META_MODEL_API_KEY: 'm-key-5555', MANUS_API_KEY: 'mn-key-6666', OPENAI_API_KEY: 'o-key-7777' };
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ylb-ai-'));
 
 let mock;
 beforeAll(async () => {
-  mock = await createMockProviders({ keys: { openrouter: 'or-key-1111', google: 'g-key-2222', xai: 'x-key-3333', anthropic: 'a-key-4444', meta: 'm-key-5555', manus: 'mn-key-6666', openai: 'o-key-7777' } }).start();
+  mock = await createMockProviders({ keys: { openrouter: ['or-key-1111', 'or2-key-8888'], google: 'g-key-2222', xai: 'x-key-3333', anthropic: 'a-key-4444', meta: 'm-key-5555', manus: 'mn-key-6666', openai: 'o-key-7777' } }).start();
 });
 afterAll(() => mock.close());
 beforeEach(() => mock.reset());
@@ -27,7 +27,7 @@ beforeEach(() => mock.reset());
 /** A router where only `ids` (in that order) have keys. */
 function setup(ids = PROVIDER_IDS, env = ENV) {
   const dir = tmpDir();
-  const keys = Object.fromEntries(Object.entries(env).filter(([name]) => ids.some((id) => ({ openrouter: 'OPENROUTER_API_KEY', google: 'GEMINI_API_KEY', xai: 'XAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY', meta: 'META_MODEL_API_KEY', manus: 'MANUS_API_KEY', openai: 'OPENAI_API_KEY' })[id] === name)));
+  const keys = Object.fromEntries(Object.entries(env).filter(([name]) => ids.some((id) => PROVIDERS[id].envKeys.includes(name))));
   const store = new AIStore(path.join(dir, 'ai-providers.json'), { env: keys });
   store.setOrder(ids);
   const usage = new UsageLog('');
@@ -67,6 +67,41 @@ describe('registry', () => {
     expect(estimateCost('meta', 'image', 'muse-image-1.0', null)).toBe(0.011);
     expect(estimateCost('openrouter', 'video', 'heygen/heygen-video-1', null, { seconds: 8, effort: '768p' })).toBeCloseTo(0.288, 6);
     expect(estimateCost('openai', 'text', 'unknown-model', { input: 5, output: 5 })).toBeNull();
+  });
+});
+
+describe('extra OpenRouter key slots', () => {
+  it('are separate keys that share OpenRouter’s models, efforts and API', () => {
+    expect(PROVIDER_IDS.slice(0, 4)).toEqual(['openrouter', 'openrouter2', 'openrouter3', 'openrouter4']);
+    expect(PROVIDERS.openrouter3).toMatchObject({ label: 'OpenRouter 3', envKeys: ['OPENROUTER_API_KEY_3'] });
+    expect(adapterId('openrouter4')).toBe('openrouter');
+    expect(adapterId('openai')).toBe('openai');
+    expect(effortIds('openrouter2', 'text', 'google/gemini-3.8-flash')).toEqual(effortIds('openrouter', 'text', 'google/gemini-3.8-flash'));
+    expect(supports('openrouter2', 'videos').ok).toBe(true);
+  });
+
+  it('let one OpenRouter key power product research while another does the rest', async () => {
+    const { store, router } = setup(['openrouter', 'openrouter2']);
+    store.update('openrouter', { functions: FUNCTION_IDS.filter((f) => f !== 'research' && supports('openrouter', f).ok) });
+    store.update('openrouter2', { functions: ['research'], models: { text: 'anthropic/claude-opus-5.5' }, effort: { text: 'high' } });
+    expect(store.route('research')).toEqual(['openrouter2']);
+    const research = await router.text('research', { prompt: 'Find winning products' });
+    let sent = mock.last('openrouter', '/chat/completions');
+    expect(research.meta).toMatchObject({ provider: 'openrouter2', providerLabel: 'OpenRouter 2', model: 'anthropic/claude-opus-5.5', effort: 'high' });
+    expect(sent.headers.authorization).toBe('Bearer or2-key-8888');
+    expect(sent.body).toMatchObject({ model: 'anthropic/claude-opus-5.5', reasoning: { effort: 'high' } });
+    const seo = await router.text('seo', { prompt: 'Write SEO metadata' });
+    sent = mock.last('openrouter', '/chat/completions');
+    expect(seo.meta.provider).toBe('openrouter');
+    expect(sent.headers.authorization).toBe('Bearer or-key-1111');
+    expect(sent.body.model).toBe('google/gemini-3.8-flash');
+  });
+
+  it('show up next to OpenRouter in an order saved before they existed', () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, 'ai.json'), JSON.stringify({ providers: {}, order: ['openai', 'openrouter', 'google', 'xai', 'anthropic', 'meta', 'manus'] }));
+    const store = new AIStore(path.join(dir, 'ai.json'), { env: {} });
+    expect(store.order()).toEqual(['openai', 'openrouter', 'openrouter2', 'openrouter3', 'openrouter4', 'google', 'xai', 'anthropic', 'meta', 'manus']);
   });
 });
 
@@ -325,6 +360,20 @@ describe('Manus tasks', () => {
     expect(usage.recent(1)[0]).toMatchObject({ provider: 'manus', credits: 41, pending: false });
   });
 
+  it('only reads or continues tasks this app started, also after a restart', async () => {
+    const { store, usage, dir } = setup(['manus']);
+    const tasksFile = path.join(dir, 'ai-tasks.json');
+    const router = new AIRouter({ store, usage, baseUrls: mock.baseUrls(), tasksFile });
+    // a task in the same Manus account that the app didn't start stays private
+    await expect(router.manusOutput({ taskId: 'otherTask123' })).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    await expect(router.manusContinue({ taskId: 'otherTask123', prompt: 'hello' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mock.calls.some((c) => c.provider === 'manus')).toBe(false);
+    const t = await router.manusCreate({ fn: 'facebook', prompt: 'Schedule it' });
+    const restarted = new AIRouter({ store, usage, baseUrls: mock.baseUrls(), tasksFile });
+    await expect(restarted.manusOutput({ taskId: t.task_id, maxImages: 0 })).resolves.toMatchObject({ task_id: t.task_id });
+    await expect(restarted.manusContinue({ taskId: t.task_id, prompt: 'thanks' })).resolves.toEqual({ ok: true });
+  });
+
   it('photos use the image effort; Manus must be set to power the function', async () => {
     const { router, store } = setup(['manus']);
     store.update('manus', { effort: { image: 'lite' }, functions: ['photos'] });
@@ -472,6 +521,25 @@ describe('HTTP routes', () => {
     const meta = JSON.parse(decodeURIComponent(r.headers.get('x-ai-meta')));
     expect(meta.provider).toBe('openai');
     expect(Buffer.from(await r.arrayBuffer()).equals(PNG)).toBe(true);
+  });
+
+  it('saves a key in an extra OpenRouter slot', async () => {
+    const r = await call('/api/ai/providers/openrouter3', { method: 'PUT', body: JSON.stringify({ apiKey: 'sk-or-v1-slot3-9999', functions: ['research'] }) });
+    expect(r.status).toBe(200);
+    const slot = (await r.json()).state.providers.find((p) => p.id === 'openrouter3');
+    expect(slot).toMatchObject({ configured: true, source: 'app', keyHint: '••••9999', functions: ['research'] });
+  });
+
+  it('shows usage only to the admin', async () => {
+    const remote = { 'x-forwarded-for': '203.0.113.9' };
+    expect((await call('/api/ai/usage', { headers: remote })).status).toBe(403);
+    expect((await call('/api/ai/usage', { headers: { ...remote, 'x-admin-token': 'admin-secret-token' } })).status).toBe(200);
+  });
+
+  it('refuses Manus task ids it didn’t start', async () => {
+    const r = await call('/api/ai/manus/output', { method: 'POST', body: JSON.stringify({ task_id: 'notOurs12345' }) });
+    expect(r.status).toBe(404);
+    expect((await r.json()).code).toBe('NOT_FOUND');
   });
 
   it('runs a free key check and lists live models', async () => {
