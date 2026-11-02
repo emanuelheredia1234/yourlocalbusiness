@@ -74,8 +74,9 @@ export function createMockProviders({ keys = {} } = {}) {
       res.writeHead(200, { 'content-type': 'image/png', 'content-length': PNG.length });
       return res.end(req.method === 'HEAD' ? undefined : PNG);
     }
+    // one key, or several (e.g. extra OpenRouter slots)
     const want = keys[id];
-    if (want && !String(auth).includes(want)) return json(res, 401, { error: { message: 'Invalid API key' } });
+    if (want && ![want].flat().some((k) => String(auth).includes(k))) return json(res, 401, { error: { message: 'Invalid API key' } });
     if (failFor(id, res)) return;
 
     // ── Anthropic (streamed Messages API) ──

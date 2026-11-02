@@ -126,7 +126,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       return reply(req, res, 200, { catalog: describeProviders(), functions: FUNCTIONS, groups: FUNCTION_GROUPS, state: state(req) });
     }
 
-    const prov = /^\/api\/ai\/providers\/([a-z]+)(\/models|\/test)?$/.exec(p);
+    const prov = /^\/api\/ai\/providers\/([a-z][a-z0-9]*)(\/models|\/test)?$/.exec(p);
     if (prov && PROVIDERS[prov[1]]) {
       const id = prov[1];
       if (!prov[2] && m === 'PUT') {

@@ -5,7 +5,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { FUNCTION_IDS, PROVIDERS, PROVIDER_IDS, defaultEffort, effortIds, kindDef, supportedFunctions, supports } from './registry.mjs';
+import { FUNCTION_IDS, PROVIDERS, PROVIDER_IDS, adapterId, defaultEffort, effortIds, kindDef, supportedFunctions, supports } from './registry.mjs';
 
 export function maskKey(key) {
   if (!key) return '';
@@ -109,9 +109,16 @@ export class AIStore {
     return { enabled: saved.enabled !== false, functions, models, effort };
   }
 
+  /** Priority order. Slots added since the order was saved go right after their provider's last slot. */
   order() {
-    const known = this.state.order.filter((id) => PROVIDERS[id]);
-    return [...new Set([...known, ...PROVIDER_IDS])];
+    const out = [...new Set(this.state.order.filter((id) => PROVIDERS[id]))];
+    for (const id of PROVIDER_IDS) {
+      if (out.includes(id)) continue;
+      const last = out.reduce((at, x, i) => (adapterId(x) === adapterId(id) ? i : at), -1);
+      if (last < 0) out.push(id);
+      else out.splice(last + 1, 0, id);
+    }
+    return out;
   }
 
   /** Switched on and has a key. */

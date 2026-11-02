@@ -8,7 +8,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { PROVIDERS, effortIds, effortLabel, estimateCost, fnById, kindDef } from './registry.mjs';
+import { PROVIDERS, adapterId, effortIds, effortLabel, estimateCost, fnById, kindDef } from './registry.mjs';
 import { ProviderError } from './http.mjs';
 import anthropic from './adapters/anthropic.mjs';
 import google from './adapters/google.mjs';
@@ -83,7 +83,13 @@ export class AIRouter {
   }
 
   ctx(id) {
-    return { fetch: this.fetch, base: String(this.baseUrls[id] || this.adapters[id].base).replace(/\/+$/, ''), key: this.store.key(id), label: PROVIDERS[id].label };
+    const a = adapterId(id);
+    return { fetch: this.fetch, base: String(this.baseUrls[id] || this.baseUrls[a] || this.adapters[a].base).replace(/\/+$/, ''), key: this.store.key(id), label: PROVIDERS[id].label };
+  }
+
+  /** The adapter for a key slot (extra OpenRouter slots use OpenRouter's). */
+  adapter(id) {
+    return this.adapters[adapterId(id)];
   }
 
   noProvider(fn) {
@@ -137,7 +143,7 @@ export class AIRouter {
       const effort = s.effort.text;
       const t0 = Date.now();
       try {
-        const r = await this.adapters[id].text(this.ctx(id), { model, effort, system: SYSTEM, prompt, images, tier, signal });
+        const r = await this.adapter(id).text(this.ctx(id), { model, effort, system: SYSTEM, prompt, images, tier, signal });
         const meta = this.describe(id, 'text', fn, { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits });
         if (attempts.length) meta.attempts = attempts;
         this.log(meta, { brain });
@@ -171,7 +177,7 @@ export class AIRouter {
       const effort = s.effort.image;
       const t0 = Date.now();
       try {
-        const r = await this.adapters[id].image(this.ctx(id), { model, effort, prompt, aspect, signal });
+        const r = await this.adapter(id).image(this.ctx(id), { model, effort, prompt, aspect, signal });
         const meta = this.describe(id, 'image', fn, { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits, params: r.params });
         if (attempts.length) meta.attempts = attempts;
         if (r.dropped?.length) meta.note = `${PROVIDERS[id].label} didn’t accept ${r.dropped.join(', ')}, so it was left out.`;
@@ -238,7 +244,7 @@ export class AIRouter {
       const effort = s.effort.video;
       const t0 = Date.now();
       try {
-        const started = await this.adapters[id].video.start(this.ctx(id), { model, effort, prompt, aspect, duration, firstFrame, signal });
+        const started = await this.adapter(id).video.start(this.ctx(id), { model, effort, prompt, aspect, duration, firstFrame, signal });
         const job = {
           id: `vid_${crypto.randomUUID()}`,
           provider: id,
@@ -282,7 +288,7 @@ export class AIRouter {
 
   async videoStatus(jobId, { signal } = {}) {
     const job = this.getJob(jobId);
-    const adapter = this.adapters[job.provider].video;
+    const adapter = this.adapter(job.provider).video;
     if (job.state === 'running' && adapter.status && Date.now() - (job.checkedAt || 0) > 2500) {
       job.checkedAt = Date.now();
       try {
@@ -306,7 +312,7 @@ export class AIRouter {
     const job = this.getJob(jobId);
     if (job.state !== 'done') throw new ProviderError('NOT_READY', 'The video isn’t ready yet.', { status: 409 });
     if (!job.bytes) {
-      const out = await this.adapters[job.provider].video.content(this.ctx(job.provider), job, { signal });
+      const out = await this.adapter(job.provider).video.content(this.ctx(job.provider), job, { signal });
       job.bytes = out.bytes;
       job.contentType = out.contentType;
     }
@@ -355,7 +361,7 @@ export class AIRouter {
   /** A free check that a key works (lists its models; Manus lists one task). */
   async checkKey(id, { signal } = {}) {
     if (!this.store.key(id)) return { ok: false, code: 'NO_KEY', error: 'Add an API key first.' };
-    const a = this.adapters[id];
+    const a = this.adapter(id);
     try {
       if (a.check) {
         await a.check(this.ctx(id), { signal });
@@ -377,9 +383,9 @@ export class AIRouter {
     const k = kindDef(id, kind);
     if (!k) return { models: [], source: 'builtin' };
     const builtin = k.models.map((x) => ({ id: x.id, label: x.label }));
-    if (!this.store.key(id) || !this.adapters[id].listModels) return { models: builtin, source: 'builtin' };
+    if (!this.store.key(id) || !this.adapter(id).listModels) return { models: builtin, source: 'builtin' };
     try {
-      const ids = await this.adapters[id].listModels(this.ctx(id), kind, { signal });
+      const ids = await this.adapter(id).listModels(this.ctx(id), kind, { signal });
       const known = new Set(builtin.map((b) => b.id));
       const extra = ids.filter((x) => !known.has(x)).sort().slice(0, 600).map((x) => ({ id: x, label: x }));
       return { models: [...builtin.map((b) => ({ ...b, available: !ids.length || ids.includes(b.id) })), ...extra], source: 'live' };
@@ -402,7 +408,7 @@ export class AIRouter {
     for (const effort of pick) {
       const t0 = Date.now();
       try {
-        const r = await this.adapters[id].text(this.ctx(id), { model, effort, system: SYSTEM, prompt: COMPARE_PROMPT, images: [], tier: 'quick', signal });
+        const r = await this.adapter(id).text(this.ctx(id), { model, effort, system: SYSTEM, prompt: COMPARE_PROMPT, images: [], tier: 'quick', signal });
         const meta = this.describe(id, 'text', 'test', { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits });
         this.log(meta);
         results.push({ effort, effortLabel: meta.effortLabel, ok: true, ms: meta.ms, usage: meta.usage, cost: meta.cost, answer: r.text.trim().slice(0, 240) });
