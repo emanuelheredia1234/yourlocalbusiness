@@ -11,12 +11,15 @@
 // Optional env: PORT (8787), HOST (0.0.0.0), ALLOWED_ORIGIN (enable CORS for one origin), RATE_LIMIT_PER_MIN (30),
 //   DATA_DIR (./.data), ADMIN_TOKEN (lets a remote browser change AI settings; otherwise only this machine can),
 //   AI_PROVIDER_BASE_URLS (JSON map of provider id → base URL, for a proxy or a test server).
+// Accounts (Supabase): SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY (account deletion), ADMIN_EMAILS
+//   (the owner's email: manages the AI keys), SIGN_IN_REQUIRED (default true). See server/auth.mjs.
 
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createAIRoutes } from './providers/routes.mjs';
+import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
+import { authFromEnv } from './auth.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(here, '..', 'dist');
@@ -49,7 +52,7 @@ function send(res, status, body, headers = {}) {
 
 function corsHeaders(req) {
   if (!ALLOWED_ORIGIN || req.headers.origin !== ALLOWED_ORIGIN) return {};
-  return { 'access-control-allow-origin': ALLOWED_ORIGIN, 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-admin-token', vary: 'origin' };
+  return { 'access-control-allow-origin': ALLOWED_ORIGIN, 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-admin-token, authorization', vary: 'origin' };
 }
 
 function readJson(req) {
@@ -127,7 +130,22 @@ function serveStatic(req, res) {
 
 // ───────────── router ─────────────
 
-const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS });
+const auth = authFromEnv();
+const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth });
+
+/** DELETE /api/account: the signed-in user's account and files go for good (their saved data is removed with the account). */
+async function deleteAccount(req, res) {
+  if (!sameOrigin(req, ALLOWED_ORIGIN)) return send(res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' }, corsHeaders(req));
+  const ident = await ai.whoIs(req, res);
+  if (!ident) return;
+  if (!ident.who) return send(res, 401, { error: 'Sign in first.', code: 'AUTH_REQUIRED' }, corsHeaders(req));
+  try {
+    await auth.deleteUser(ident.who.id);
+    return send(res, 200, { ok: true }, corsHeaders(req));
+  } catch (e) {
+    return send(res, e.status || 500, { error: e.message, code: e.code || 'UPSTREAM' }, corsHeaders(req));
+  }
+}
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', 'http://local');
@@ -135,10 +153,15 @@ const server = http.createServer((req, res) => {
     res.writeHead(204, corsHeaders(req));
     return res.end();
   }
-  if (url.pathname === '/api/health' && req.method === 'GET') {
-    // `ok`: the server is up; `ai` says which keys are ready and what powers each function
-    return send(res, 200, { ok: true, ai: ai.health() }, corsHeaders(req));
+  if (url.pathname === '/api/config' && req.method === 'GET') {
+    // what the browser needs to sign in (the publishable key is meant to be public)
+    return send(res, 200, { accounts: auth.publicConfig() }, corsHeaders(req));
   }
+  if (url.pathname === '/api/health' && req.method === 'GET') {
+    // `ok`: the server is up; `ai` says which keys are ready and what powers each function (signed-in users only, with accounts on)
+    return void ai.whoIs(req, res).then((ident) => ident && send(res, 200, { ok: true, ai: ai.health(ident.who) }, corsHeaders(req)));
+  }
+  if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res);
   if (ai.match(url)) {
     return void ai.handle(req, res, url).then(
       (handled) => {
@@ -156,10 +179,11 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  const h = ai.health();
+  const h = ai.health({ id: 'startup' });
   console.log(`Yourlocalbusiness server on http://localhost:${PORT}`);
   const ready = h.providers.filter((p) => p.ready).map((p) => p.label);
   console.log(ready.length ? `AI keys ready: ${ready.join(', ')}` : 'No AI keys yet: add them in Settings → AI, or as Secrets (e.g. OPENROUTER_API_KEY).');
+  console.log(auth.enabled ? `Accounts: on (Supabase)${auth.signInRequired ? ', sign-in required' : ''}` : 'Accounts: off (add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to turn them on).');
   if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
   if (!fs.existsSync(DIST)) console.log('No ./dist yet: run `npm run build` to serve the app from here, or use `npm run dev` (it proxies /api to this server).');
 });

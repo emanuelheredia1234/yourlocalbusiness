@@ -58,7 +58,13 @@ const cleanImages = (list) =>
       return d && IMAGE_TYPES.has(d.mime);
     });
 
-export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {} }) {
+const NO_ACCOUNTS = { enabled: false, signInRequired: false, identify: async () => null };
+
+/**
+ * auth (server/auth.mjs): with accounts on, AI needs a signed-in user, the owner (ADMIN_EMAILS) manages
+ * the keys, and each video job or Manus task can only be read by whoever started it.
+ */
+export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS }) {
   const store = new AIStore(path.join(dataDir, 'ai-providers.json'), { env, legacyFile: path.join(dataDir, 'image-providers.json') });
   const usage = new UsageLog(path.join(dataDir, 'ai-usage.json'));
   const router = new AIRouter({ store, usage, fetch, baseUrls, tasksFile: path.join(dataDir, 'ai-tasks.json') });
@@ -71,32 +77,51 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     return reply(req, res, err.status || 502, { error: err.message, code: err.code, ...(err.attempts ? { attempts: err.attempts } : {}) });
   };
 
-  const admin = (req, res) => {
+  /** The owner: signed in with an ADMIN_EMAILS address, or this machine / the ADMIN_TOKEN. */
+  const isAdmin = (req, who) => !!who?.isAdmin || canManage(req, adminToken);
+
+  const admin = (req, res, who) => {
     if (!sameOrigin(req, allowedOrigin)) {
       reply(req, res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
       return false;
     }
-    if (!canManage(req, adminToken)) {
-      reply(req, res, 403, {
-        error: adminToken ? 'Enter the admin token to change AI settings.' : 'AI settings can only be changed from the machine running the server. On Replit, add a Secret named ADMIN_TOKEN and enter it here.',
-        code: 'FORBIDDEN',
-      });
+    if (!isAdmin(req, who)) {
+      const error = auth.enabled
+        ? 'Only the app’s owner can change the AI keys. Sign in with the email in the ADMIN_EMAILS Secret.'
+        : adminToken
+          ? 'Enter the admin token to change AI settings.'
+          : 'AI settings can only be changed from the machine running the server. On Replit, add a Secret named ADMIN_TOKEN and enter it here.';
+      reply(req, res, 403, { error, code: 'FORBIDDEN' });
       return false;
     }
     return true;
   };
 
-  const generationAllowed = (req, res, bucket) => {
+  /** A signed-in user is needed when accounts are on. */
+  const signedIn = (req, res, who) => {
+    if (auth.signInRequired && !who) {
+      reply(req, res, 401, { error: 'Sign in to use AI.', code: 'AUTH_REQUIRED' });
+      return false;
+    }
+    return true;
+  };
+
+  const generationAllowed = (req, res, bucket, who) => {
     if (!sameOrigin(req, allowedOrigin)) {
       reply(req, res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
       return false;
     }
-    if (rateLimited(`${bucket}:${req.socket.remoteAddress || 'unknown'}`)) {
+    if (!signedIn(req, res, who)) return false;
+    if (rateLimited(`${bucket}:${who ? `user:${who.id}` : req.socket.remoteAddress || 'unknown'}`)) {
       reply(req, res, 429, { error: 'Too many requests. Try again in a minute.', code: 'RATE_LIMIT' });
       return false;
     }
     return true;
   };
+
+  /** Jobs and tasks belong to whoever started them (older ones have no owner). */
+  const mayUse = (req, owner, who) => !owner || owner === who?.id || isAdmin(req, who);
+  const notFound = (req, res) => reply(req, res, 404, { error: 'Not found.', code: 'NOT_FOUND' });
 
   async function body(req, res) {
     try {
@@ -116,37 +141,54 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     return c.signal;
   };
 
-  const state = (req) => ({ ...store.list(), canManage: canManage(req, adminToken), adminTokenSet: !!adminToken, imported: store.imported });
+  const state = (req, who) => ({ ...store.list(), canManage: isAdmin(req, who), adminTokenSet: !!adminToken, imported: store.imported });
+
+  /** The signed-in user behind a request (null when signed out, or accounts are off). */
+  async function whoIs(req, res) {
+    if (!auth.enabled || !req.headers.authorization) return { who: null };
+    try {
+      return { who: await auth.identify(req) };
+    } catch (e) {
+      reply(req, res, e.status || 503, { error: e.message, code: e.code || 'AUTH_UNAVAILABLE' });
+      return null;
+    }
+  }
 
   async function handle(req, res, url) {
     const p = url.pathname;
     const m = req.method;
+    const ident = await whoIs(req, res);
+    if (!ident) return;
+    const { who } = ident;
 
     if (p === '/api/ai/providers' && m === 'GET') {
-      return reply(req, res, 200, { catalog: describeProviders(), functions: FUNCTIONS, groups: FUNCTION_GROUPS, state: state(req) });
+      if (!signedIn(req, res, who)) return;
+      // with accounts on, only the owner sees the keys' settings
+      const show = !auth.enabled || isAdmin(req, who);
+      return reply(req, res, 200, { catalog: describeProviders(), functions: FUNCTIONS, groups: FUNCTION_GROUPS, state: show ? state(req, who) : null, role: show ? 'admin' : 'user' });
     }
 
     const prov = /^\/api\/ai\/providers\/([a-z][a-z0-9]*)(\/models|\/test)?$/.exec(p);
     if (prov && PROVIDERS[prov[1]]) {
       const id = prov[1];
       if (!prov[2] && m === 'PUT') {
-        if (!admin(req, res)) return;
+        if (!admin(req, res, who)) return;
         const b = await body(req, res);
         if (!b) return;
         try {
           store.update(id, b);
-          return reply(req, res, 200, { state: state(req) });
+          return reply(req, res, 200, { state: state(req, who) });
         } catch (e) {
           return reply(req, res, e.status || 400, { error: e.message, code: 'BAD_REQUEST' });
         }
       }
       if (prov[2] === '/models' && m === 'GET') {
-        if (!admin(req, res)) return;
+        if (!admin(req, res, who)) return;
         const kind = url.searchParams.get('kind') || 'text';
         return reply(req, res, 200, await router.models(id, kind, { signal: abortOnClose(res) }));
       }
       if (prov[2] === '/test' && m === 'POST') {
-        if (!admin(req, res)) return;
+        if (!admin(req, res, who)) return;
         const b = await body(req, res);
         if (!b) return;
         try {
@@ -159,12 +201,12 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     }
 
     if (p === '/api/ai/settings' && m === 'PUT') {
-      if (!admin(req, res)) return;
+      if (!admin(req, res, who)) return;
       const b = await body(req, res);
       if (!b) return;
       try {
         store.setOrder(b.order);
-        return reply(req, res, 200, { state: state(req) });
+        return reply(req, res, 200, { state: state(req, who) });
       } catch (e) {
         return reply(req, res, e.status || 400, { error: e.message, code: 'BAD_REQUEST' });
       }
@@ -172,12 +214,12 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
 
     if (p === '/api/ai/usage' && m === 'GET') {
       // errors and task ids can reveal the owner's account details
-      if (!admin(req, res)) return;
+      if (!admin(req, res, who)) return;
       return reply(req, res, 200, { recent: usage.recent(Number(url.searchParams.get('limit')) || 50), totals: usage.totals() });
     }
 
     if (p === '/api/ai/generate' && m === 'POST') {
-      if (!generationAllowed(req, res, 'gen')) return;
+      if (!generationAllowed(req, res, 'gen', who)) return;
       const b = await body(req, res);
       if (!b) return;
       const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
@@ -187,7 +229,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (fnById[fn]?.kind !== 'text') return reply(req, res, 400, { error: 'Unknown AI function.', code: 'BAD_REQUEST' });
       const signal = abortOnClose(res);
       try {
-        const out = await router.text(fn, { prompt, images: cleanImages(b.images), tier: b.tier === 'quick' ? 'quick' : 'default', brain: typeof b.brain === 'boolean' ? b.brain : null, signal });
+        const out = await router.text(fn, { prompt, images: cleanImages(b.images), tier: b.tier === 'quick' ? 'quick' : 'default', brain: typeof b.brain === 'boolean' ? b.brain : null, signal, userId: who?.id });
         return reply(req, res, 200, out);
       } catch (e) {
         if (signal.aborted) return;
@@ -196,7 +238,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     }
 
     if (p === '/api/ai/image' && m === 'POST') {
-      if (!generationAllowed(req, res, 'img')) return;
+      if (!generationAllowed(req, res, 'img', who)) return;
       const b = await body(req, res);
       if (!b) return;
       const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
@@ -204,7 +246,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (prompt.length > MAX_MEDIA_PROMPT) return reply(req, res, 413, { error: 'Image prompt too long', code: 'BAD_REQUEST' });
       const signal = abortOnClose(res);
       try {
-        const out = await router.image({ prompt, aspect: ASPECTS[b.aspect] ? b.aspect : '1:1', signal });
+        const out = await router.image({ prompt, aspect: ASPECTS[b.aspect] ? b.aspect : '1:1', signal, userId: who?.id });
         res.writeHead(200, {
           'content-type': out.contentType,
           'cache-control': 'no-store',
@@ -221,7 +263,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     }
 
     if (p === '/api/ai/video' && m === 'POST') {
-      if (!generationAllowed(req, res, 'vid')) return;
+      if (!generationAllowed(req, res, 'vid', who)) return;
       const b = await body(req, res);
       if (!b) return;
       const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
@@ -230,7 +272,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       const firstFrame = typeof b.firstFrame === 'string' && parseDataUrl(b.firstFrame) && IMAGE_TYPES.has(parseDataUrl(b.firstFrame).mime) ? b.firstFrame : null;
       try {
         // one-shot paid job: started once, never retried
-        const job = await router.startVideo({ prompt, aspect: VIDEO_ASPECTS.has(b.aspect) ? b.aspect : '9:16', duration: Math.max(1, Math.min(15, Number(b.duration) || 8)), firstFrame });
+        const job = await router.startVideo({ prompt, aspect: VIDEO_ASPECTS.has(b.aspect) ? b.aspect : '9:16', duration: Math.max(1, Math.min(15, Number(b.duration) || 8)), firstFrame, owner: who?.id ?? null });
         return reply(req, res, 200, { job });
       } catch (e) {
         return fail(req, res, e);
@@ -239,6 +281,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
 
     const vid = /^\/api\/ai\/video\/(vid_[0-9a-f-]{36})(\/content)?$/.exec(p);
     if (vid && m === 'GET') {
+      if (!signedIn(req, res, who)) return;
+      if (!mayUse(req, router.jobs.get(vid[1])?.owner, who)) return notFound(req, res);
       try {
         if (!vid[2]) return reply(req, res, 200, { job: await router.videoStatus(vid[1], { signal: abortOnClose(res) }) });
         const out = await router.videoContent(vid[1], { signal: abortOnClose(res) });
@@ -251,19 +295,24 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
 
     const mt = /^\/api\/ai\/manus\/(create|output|continue)$/.exec(p);
     if (mt && m === 'POST') {
-      if (!generationAllowed(req, res, mt[1] === 'output' ? 'manus-read' : 'manus')) return;
+      if (!generationAllowed(req, res, mt[1] === 'output' ? 'manus-read' : 'manus', who)) return;
       const b = await body(req, res);
       if (!b) return;
       try {
         if (mt[1] === 'create') {
           const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
           if (!prompt) return reply(req, res, 400, { error: 'Missing prompt', code: 'BAD_REQUEST' });
+          // Manus is signed in to the owner's Facebook: only the owner may schedule posts with it
+          if (b.fn === 'facebook' && auth.enabled && !isAdmin(req, who)) {
+            return reply(req, res, 403, { error: 'Facebook scheduling runs in the app owner’s Manus account, so only the owner can use it.', code: 'OWNER_ONLY' });
+          }
           const image = typeof b.image_data_url === 'string' && parseDataUrl(b.image_data_url) ? { dataUrl: b.image_data_url, filename: typeof b.image_filename === 'string' ? b.image_filename.slice(0, 120) : 'image.jpg' } : null;
           // one-shot write: never retried
-          return reply(req, res, 200, await router.manusCreate({ fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image }));
+          return reply(req, res, 200, await router.manusCreate({ fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null }));
         }
         const taskId = typeof b.task_id === 'string' ? b.task_id.trim() : '';
         if (!/^[A-Za-z0-9_-]{6,64}$/.test(taskId)) return reply(req, res, 400, { error: 'Missing task id', code: 'BAD_REQUEST' });
+        if (!mayUse(req, router.manusTasks.get(taskId)?.owner, who)) return notFound(req, res);
         if (mt[1] === 'output') {
           const out = await router.manusOutput({ taskId, maxImages: Math.max(0, Math.min(8, Number(b.max_images) || 0)), maxImageBytes: Math.max(1, Math.min(30_000_000, Number(b.max_image_bytes) || 15_000_000)), signal: abortOnClose(res) });
           return reply(req, res, 200, out);
@@ -285,8 +334,14 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     usage,
     match: (url) => url.pathname.startsWith('/api/ai/'),
     handle,
+    /** Who's calling (for routes outside /api/ai/*). */
+    whoIs,
     /** For /api/health: which keys are ready, their model and effort per kind, and what powers each function. */
-    health: () => ({
+    health: (who = null) =>
+      auth.signInRequired && !who
+        ? { ready: false, providers: [], routing: {}, signedIn: false }
+        : {
+      signedIn: !!who,
       ready: store.order().some((id) => store.ready(id)),
       providers: store.order().map((id) => {
         const s = store.settings(id);
@@ -299,6 +354,6 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         };
       }),
       routing: store.routing(),
-    }),
+    },
   };
 }
