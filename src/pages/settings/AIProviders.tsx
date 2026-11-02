@@ -151,10 +151,12 @@ export function AIProviders() {
   const [state, setState] = useState<AIState | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'offline'>('loading');
   const [usage, setUsage] = useState<{ recent: UsageEntry[]; totals: UsageTotals } | null>(null);
+  const [usageLocked, setUsageLocked] = useState(false);
   const saves = useRef(0);
 
   const loadUsage = useCallback(async () => {
     const r = await call<{ recent: UsageEntry[]; totals: UsageTotals }>('GET', '/api/ai/usage?limit=25');
+    setUsageLocked(r.status === 403);
     if (r.ok && r.json) setUsage({ recent: r.json.recent, totals: r.json.totals });
   }, [call]);
 
@@ -281,7 +283,7 @@ export function AIProviders() {
             </div>
             <div className="flex min-w-0 flex-col gap-5">
               <RoutingSummary state={state} catalog={catalog} />
-              <UsageCard usage={usage} catalog={catalog} onRefresh={() => void loadUsage()} />
+              <UsageCard usage={usage} locked={usageLocked} catalog={catalog} onRefresh={() => void loadUsage()} />
             </div>
           </div>
         </>
@@ -690,7 +692,7 @@ function RoutingSummary({ state, catalog }: { state: AIState; catalog: CatalogPr
   );
 }
 
-function UsageCard({ usage, catalog, onRefresh }: { usage: { recent: UsageEntry[]; totals: UsageTotals } | null; catalog: CatalogProvider[]; onRefresh: () => void }) {
+function UsageCard({ usage, locked, catalog, onRefresh }: { usage: { recent: UsageEntry[]; totals: UsageTotals } | null; locked: boolean; catalog: CatalogProvider[]; onRefresh: () => void }) {
   const name = (id: string) => catalog.find((c) => c.id === id)?.label ?? id;
   const fnName = (id: string) => (id === 'test' ? 'Effort comparison' : AI_FUNCTIONS.find((f) => f.id === id)?.label ?? id);
   return (
@@ -702,7 +704,7 @@ function UsageCard({ usage, catalog, onRefresh }: { usage: { recent: UsageEntry[
         </button>
       </div>
       {!usage || !usage.recent.length ? (
-        <p className="text-[12.5px] text-muted">Nothing yet. Each request your keys answer shows up here with its effort, tokens and cost.</p>
+        <p className="text-[12.5px] text-muted">{locked ? 'Enter the admin token above to see usage: it can show details of your provider accounts.' : 'Nothing yet. Each request your keys answer shows up here with its effort, tokens and cost.'}</p>
       ) : (
         <>
           {usage.totals.providers.length > 0 && (

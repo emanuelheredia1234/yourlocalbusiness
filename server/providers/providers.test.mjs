@@ -325,6 +325,20 @@ describe('Manus tasks', () => {
     expect(usage.recent(1)[0]).toMatchObject({ provider: 'manus', credits: 41, pending: false });
   });
 
+  it('only reads or continues tasks this app started, also after a restart', async () => {
+    const { store, usage, dir } = setup(['manus']);
+    const tasksFile = path.join(dir, 'ai-tasks.json');
+    const router = new AIRouter({ store, usage, baseUrls: mock.baseUrls(), tasksFile });
+    // a task in the same Manus account that the app didn't start stays private
+    await expect(router.manusOutput({ taskId: 'otherTask123' })).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    await expect(router.manusContinue({ taskId: 'otherTask123', prompt: 'hello' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mock.calls.some((c) => c.provider === 'manus')).toBe(false);
+    const t = await router.manusCreate({ fn: 'facebook', prompt: 'Schedule it' });
+    const restarted = new AIRouter({ store, usage, baseUrls: mock.baseUrls(), tasksFile });
+    await expect(restarted.manusOutput({ taskId: t.task_id, maxImages: 0 })).resolves.toMatchObject({ task_id: t.task_id });
+    await expect(restarted.manusContinue({ taskId: t.task_id, prompt: 'thanks' })).resolves.toEqual({ ok: true });
+  });
+
   it('photos use the image effort; Manus must be set to power the function', async () => {
     const { router, store } = setup(['manus']);
     store.update('manus', { effort: { image: 'lite' }, functions: ['photos'] });
@@ -451,6 +465,18 @@ describe('HTTP routes', () => {
     const meta = JSON.parse(decodeURIComponent(r.headers.get('x-ai-meta')));
     expect(meta.provider).toBe('openai');
     expect(Buffer.from(await r.arrayBuffer()).equals(PNG)).toBe(true);
+  });
+
+  it('shows usage only to the admin', async () => {
+    const remote = { 'x-forwarded-for': '203.0.113.9' };
+    expect((await call('/api/ai/usage', { headers: remote })).status).toBe(403);
+    expect((await call('/api/ai/usage', { headers: { ...remote, 'x-admin-token': 'admin-secret-token' } })).status).toBe(200);
+  });
+
+  it('refuses Manus task ids it didn’t start', async () => {
+    const r = await call('/api/ai/manus/output', { method: 'POST', body: JSON.stringify({ task_id: 'notOurs12345' }) });
+    expect(r.status).toBe(404);
+    expect((await r.json()).code).toBe('NOT_FOUND');
   });
 
   it('runs a free key check and lists live models', async () => {

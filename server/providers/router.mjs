@@ -6,6 +6,8 @@
 // tasks are paid jobs, so they move on only when the provider certainly started nothing.
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { PROVIDERS, effortIds, effortLabel, estimateCost, fnById, kindDef } from './registry.mjs';
 import { ProviderError } from './http.mjs';
 import anthropic from './adapters/anthropic.mjs';
@@ -27,6 +29,7 @@ export const COMPARE_PROMPT =
 
 const MAX_JOBS = 40;
 const JOB_TTL = 6 * 3600_000;
+const TASK_TTL = 7 * 24 * 3600_000;
 
 export function asProviderError(e, label = '') {
   if (e instanceof ProviderError) return e;
@@ -42,14 +45,41 @@ function canFallBack(err, kind) {
 const round6 = (n) => Math.round(n * 1e6) / 1e6;
 
 export class AIRouter {
-  constructor({ store, usage, fetch = globalThis.fetch, baseUrls = {}, adapters = ADAPTERS }) {
+  /** tasksFile: where the Manus tasks this app started are remembered (only those can be read or continued). */
+  constructor({ store, usage, fetch = globalThis.fetch, baseUrls = {}, adapters = ADAPTERS, tasksFile = '' }) {
     this.store = store;
     this.usage = usage;
     this.fetch = fetch;
     this.baseUrls = baseUrls;
     this.adapters = adapters;
     this.jobs = new Map();
+    this.tasksFile = tasksFile;
     this.manusTasks = new Map();
+    try {
+      const raw = tasksFile ? JSON.parse(fs.readFileSync(tasksFile, 'utf8')) : null;
+      for (const [id, t] of Object.entries(raw?.tasks ?? {})) if (Date.now() - (t.at ?? 0) < TASK_TTL) this.manusTasks.set(id, t);
+    } catch {
+      /* none yet */
+    }
+  }
+
+  saveTasks() {
+    if (!this.tasksFile) return;
+    try {
+      fs.mkdirSync(path.dirname(this.tasksFile), { recursive: true, mode: 0o700 });
+      const tmp = `${this.tasksFile}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ tasks: Object.fromEntries(this.manusTasks) }), { mode: 0o600 });
+      fs.renameSync(tmp, this.tasksFile);
+    } catch (e) {
+      console.error('Could not save the Manus task list:', e.message);
+    }
+  }
+
+  /** Only tasks this app started can be read or continued: the key's other Manus tasks stay private. */
+  knownTask(taskId) {
+    const t = this.manusTasks.get(taskId);
+    if (!t) throw new ProviderError('NOT_FOUND', 'This Manus task wasn’t started by this app.', { status: 404 });
+    return t;
   }
 
   ctx(id) {
@@ -296,7 +326,9 @@ export class AIRouter {
       const out = await this.adapters.manus.create(this.ctx('manus'), { prompt, title, profile, interactive, hidden, image, signal });
       const meta = this.describe('manus', kind, fn, { model: 'manus', effort: profile, ms: Date.now() - t0 });
       const usageId = this.usage.add({ ok: true, pending: true, provider: 'manus', fn, kind, model: 'manus', effort: profile, ms: meta.ms, taskId: out.task_id });
-      this.manusTasks.set(out.task_id, { usageId, fn, kind, profile });
+      this.manusTasks.set(out.task_id, { usageId, fn, kind, profile, at: Date.now() });
+      for (const [id, t] of this.manusTasks) if (Date.now() - (t.at ?? 0) > TASK_TTL) this.manusTasks.delete(id);
+      this.saveTasks();
       return { ...out, meta };
     } catch (e) {
       const err = asProviderError(e, 'Manus');
@@ -306,16 +338,15 @@ export class AIRouter {
   }
 
   async manusOutput({ taskId, maxImages, maxImageBytes, signal }) {
+    const t = this.knownTask(taskId);
     const out = await this.adapters.manus.output(this.ctx('manus'), { taskId, maxImages, maxImageBytes, signal });
-    const t = this.manusTasks.get(taskId);
-    if (t) {
-      this.usage.update(t.usageId, { credits: out.credit_usage || null, pending: !out.done, ok: out.status !== 'error' });
-      out.meta = this.describe('manus', t.kind, t.fn, { model: 'manus', effort: t.profile, ms: 0, credits: out.credit_usage || null });
-    }
+    this.usage.update(t.usageId, { credits: out.credit_usage || null, pending: !out.done, ok: out.status !== 'error' });
+    out.meta = this.describe('manus', t.kind, t.fn, { model: 'manus', effort: t.profile, ms: 0, credits: out.credit_usage || null });
     return out;
   }
 
   async manusContinue({ taskId, prompt, signal }) {
+    this.knownTask(taskId);
     return this.adapters.manus.send(this.ctx('manus'), { taskId, prompt, signal });
   }
 

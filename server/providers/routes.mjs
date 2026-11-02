@@ -10,7 +10,7 @@
 //   POST /api/ai/video                     { prompt, aspect, duration, firstFrame? } → job
 //   GET  /api/ai/video/:id                 → job;  GET /api/ai/video/:id/content → video bytes
 //   POST /api/ai/manus/create | /output | /continue   (Manus tasks, same shapes as the Zapier actions)
-//   GET  /api/ai/usage                     → recent requests and totals
+//   GET  /api/ai/usage                     → recent requests and totals                                      (admin)
 //
 // "admin" = this machine, or the ADMIN_TOKEN header. Generation routes refuse other sites' pages.
 
@@ -61,7 +61,7 @@ const cleanImages = (list) =>
 export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {} }) {
   const store = new AIStore(path.join(dataDir, 'ai-providers.json'), { env, legacyFile: path.join(dataDir, 'image-providers.json') });
   const usage = new UsageLog(path.join(dataDir, 'ai-usage.json'));
-  const router = new AIRouter({ store, usage, fetch, baseUrls });
+  const router = new AIRouter({ store, usage, fetch, baseUrls, tasksFile: path.join(dataDir, 'ai-tasks.json') });
 
   const reply = (req, res, status, body, headers) => send(res, status, body, { ...corsHeaders(req), ...headers });
 
@@ -171,6 +171,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     }
 
     if (p === '/api/ai/usage' && m === 'GET') {
+      // errors and task ids can reveal the owner's account details
+      if (!admin(req, res)) return;
       return reply(req, res, 200, { recent: usage.recent(Number(url.searchParams.get('limit')) || 50), totals: usage.totals() });
     }
 
