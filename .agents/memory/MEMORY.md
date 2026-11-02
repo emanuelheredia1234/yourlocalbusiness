@@ -1,1 +1,2 @@
 - [Replit preview origin checks](preview-origin-checks.md) — trust matching forwarded hosts only when the backend request comes from loopback.
+- [Dev server workflow ownership](workflow-server-ownership.md) — start each long-running service from one place to avoid duplicate port binds.
