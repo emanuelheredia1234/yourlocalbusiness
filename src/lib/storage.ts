@@ -54,12 +54,34 @@ const STORE = 'blobs';
 const memBlobs = new Map<string, Blob>();
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 
-function openDb(): Promise<IDBDatabase | null> {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve) => {
+/** Signed in: each account keeps its media in its own database on this device, mirrored to its cloud folder. */
+export interface MediaCloud {
+  /** save a stored file to the account (queued) */
+  upload(id: string): void;
+  /** fetch a file this device doesn't have */
+  download(id: string): Promise<Blob | null>;
+  /** delete it from the account (queued) */
+  remove(id: string): void;
+  /** delete every file in the account */
+  clear(): void;
+}
+let namespace: string | null = null;
+let cloud: MediaCloud | null = null;
+const dbNameFor = (ns: string | null) => (ns ? `${DB_NAME}:${ns}` : DB_NAME);
+
+/** Switch whose media this device reads and writes (null: the browser's own, without an account). */
+export function setMediaAccount(ns: string | null, hooks: MediaCloud | null): void {
+  namespace = ns;
+  cloud = hooks;
+  memBlobs.clear();
+  dbPromise = null;
+}
+
+function openNamedDb(name: string): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
     try {
       if (typeof indexedDB === 'undefined') return resolve(null);
-      const req = indexedDB.open(DB_NAME, 1);
+      const req = indexedDB.open(name, 1);
       req.onupgradeneeded = () => {
         req.result.createObjectStore(STORE);
       };
@@ -70,12 +92,14 @@ function openDb(): Promise<IDBDatabase | null> {
       resolve(null);
     }
   });
+}
+
+function openDb(): Promise<IDBDatabase | null> {
+  if (!dbPromise) dbPromise = openNamedDb(dbNameFor(namespace));
   return dbPromise;
 }
 
-export async function putBlob(id: string, blob: Blob): Promise<void> {
-  memBlobs.set(id, blob);
-  const db = await openDb();
+async function writeBlob(db: IDBDatabase | null, id: string, blob: Blob): Promise<void> {
   if (!db) return;
   await new Promise<void>((resolve) => {
     try {
@@ -90,7 +114,14 @@ export async function putBlob(id: string, blob: Blob): Promise<void> {
   });
 }
 
-export async function getBlob(id: string): Promise<Blob | null> {
+export async function putBlob(id: string, blob: Blob): Promise<void> {
+  memBlobs.set(id, blob);
+  await writeBlob(await openDb(), id, blob);
+  cloud?.upload(id);
+}
+
+/** This device's copy only (never downloads). */
+export async function getLocalBlob(id: string): Promise<Blob | null> {
   const mem = memBlobs.get(id);
   if (mem) return mem;
   const db = await openDb();
@@ -111,8 +142,23 @@ export async function getBlob(id: string): Promise<Blob | null> {
   });
 }
 
+export async function getBlob(id: string): Promise<Blob | null> {
+  const local = await getLocalBlob(id);
+  if (local || !cloud) return local;
+  // saved from another device: download it once and keep a copy here
+  const hooks = cloud;
+  const ns = namespace;
+  const remote = await hooks.download(id).catch(() => null);
+  if (remote && ns === namespace) {
+    memBlobs.set(id, remote);
+    await writeBlob(await openDb(), id, remote);
+  }
+  return remote;
+}
+
 export async function deleteBlob(id: string): Promise<void> {
   memBlobs.delete(id);
+  cloud?.remove(id);
   const db = await openDb();
   if (!db) return;
   try {
@@ -125,6 +171,7 @@ export async function deleteBlob(id: string): Promise<void> {
 
 export async function clearBlobs(): Promise<void> {
   memBlobs.clear();
+  cloud?.clear();
   const db = await openDb();
   if (!db) return;
   try {
@@ -133,6 +180,48 @@ export async function clearBlobs(): Promise<void> {
   } catch {
     /* ignore */
   }
+}
+
+/** Every file in the browser's own media store (from before accounts), for bringing it into an account. */
+export async function readBrowserMedia(): Promise<Map<string, Blob>> {
+  const out = new Map<string, Blob>();
+  const db = await openNamedDb(DB_NAME);
+  if (!db) return out;
+  await new Promise<void>((resolve) => {
+    try {
+      const tx = db.transaction(STORE, 'readonly');
+      const req = tx.objectStore(STORE).openCursor();
+      req.onsuccess = () => {
+        const c = req.result;
+        if (!c) return resolve();
+        if (c.value instanceof Blob) out.set(String(c.key), c.value);
+        c.continue();
+      };
+      req.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+  db.close();
+  return out;
+}
+
+/** Delete a media database from this device: an account's (on sign-out) or the browser's own (null). */
+export function deleteMediaDatabase(ns: string | null): Promise<void> {
+  if (ns === namespace) {
+    memBlobs.clear();
+    void dbPromise?.then((db) => db?.close());
+    dbPromise = null;
+  }
+  return new Promise((resolve) => {
+    try {
+      if (typeof indexedDB === 'undefined') return resolve();
+      const req = indexedDB.deleteDatabase(dbNameFor(ns));
+      req.onsuccess = req.onerror = req.onblocked = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
 }
 
 export const MAX_UPLOAD_BYTES = 60 * 1024 * 1024;

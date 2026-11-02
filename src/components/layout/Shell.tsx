@@ -27,6 +27,7 @@ import { useUI } from '@/store/ui';
 import { FORMATS } from '@/ai/knowledge';
 import { Popover, MenuItem } from '../ui/primitives';
 import { LogoMark } from '../brand/Logo';
+import { AccountButton, AccountRow } from '../auth/Account';
 
 export function AppMark({ size = 30 }: { size?: number }) {
   return (
@@ -216,6 +217,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         >
           <Settings size={18} /> Settings & brand
         </button>
+        <AccountRow onNavigate={onNavigate} />
       </div>
     </div>
   );
@@ -349,6 +351,7 @@ export function Topbar() {
       <button className="btn btn-primary btn-icon sm:hidden" onClick={() => openComposer()} aria-label="Create post">
         <Plus size={18} />
       </button>
+      <AccountButton />
     </header>
   );
 }

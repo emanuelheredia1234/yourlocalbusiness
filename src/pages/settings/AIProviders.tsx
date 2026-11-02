@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Brain, ChevronDown, CircleAlert, ExternalLink, FlaskConical, KeyRound, ListChecks, Plug, RefreshCw, Route, ShieldCheck, Trash2 } from 'lucide-react';
 import { cn, fmtRelative } from '@/lib/utils';
 import { safeStorage } from '@/lib/storage';
+import { useRuntime } from '@/lib/platform';
+import { authHeaders, useAuth } from '@/lib/cloud/auth';
 import { pingServer, serverBase } from '@/ai/claude';
 import { AI_FUNCTIONS, AI_FUNCTION_GROUPS, type AIKind } from '@/ai/functions';
 import { fmtTokens, fmtUsdSmall } from '@/ai/meta';
@@ -127,7 +129,7 @@ function useAIServer() {
     async <T,>(method: string, path: string, body?: unknown): Promise<{ ok: boolean; status: number; json: (T & { error?: string; code?: string }) | null }> => {
       const res = await fetch(`${base}${path}`, {
         method,
-        headers: { 'content-type': 'application/json', ...(token.current ? { 'x-admin-token': token.current } : {}) },
+        headers: { 'content-type': 'application/json', ...(token.current ? { 'x-admin-token': token.current } : {}), ...(await authHeaders()) },
         body: body === undefined ? undefined : JSON.stringify(body),
       }).catch(() => null);
       if (!res) return { ok: false, status: 0, json: { error: 'Couldn’t reach your AI server.' } as T & { error: string } };
@@ -150,6 +152,9 @@ export function AIProviders() {
   const [catalog, setCatalog] = useState<CatalogProvider[] | null>(null);
   const [state, setState] = useState<AIState | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'offline'>('loading');
+  // with accounts on, only the owner manages keys; everyone else sees what powers the app
+  const [role, setRole] = useState<'admin' | 'user'>('admin');
+  const accounts = useAuth((s) => s.phase === 'ready');
   const [usage, setUsage] = useState<{ recent: UsageEntry[]; totals: UsageTotals } | null>(null);
   const [usageLocked, setUsageLocked] = useState(false);
   const saves = useRef(0);
@@ -163,7 +168,7 @@ export function AIProviders() {
   const loads = useRef(0);
   const load = useCallback(async () => {
     const n = ++loads.current;
-    const r = await call<{ catalog: CatalogProvider[]; state: AIState }>('GET', '/api/ai/providers');
+    const r = await call<{ catalog: CatalogProvider[]; state: AIState | null; role?: 'admin' | 'user' }>('GET', '/api/ai/providers');
     // only the newest check counts
     if (n !== loads.current) return;
     if (!r.ok || !r.json?.catalog) {
@@ -172,8 +177,9 @@ export function AIProviders() {
     }
     setCatalog(r.json.catalog);
     setState(r.json.state);
+    setRole(r.json.role === 'user' && !r.json.state ? 'user' : 'admin');
     setStatus('ready');
-    void loadUsage();
+    if (r.json.state) void loadUsage();
   }, [call, loadUsage]);
 
   useEffect(() => {
@@ -223,10 +229,12 @@ export function AIProviders() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 className="section-title flex items-center gap-2">
-              <KeyRound size={17} className="text-primary" /> AI, powered by your keys
+              <KeyRound size={17} className="text-primary" /> {role === 'user' ? 'Your AI' : 'AI, powered by your keys'}
             </h2>
             <p className="mt-0.5 max-w-3xl text-[13px] text-muted">
-              One AI for the whole app. Add a key, tick what it powers, and pick its model and effort: the effort is sent in that provider’s own setting, so it changes the answer and what you pay. Keys stay on your server and are never shown again.
+              {role === 'user'
+                ? 'The app’s owner set up the AI for everyone. Here’s what powers each part of the app.'
+                : 'One AI for the whole app. Add a key, tick what it powers, and pick its model and effort: the effort is sent in that provider’s own setting, so it changes the answer and what you pay. Keys stay on your server and are never shown again.'}
             </p>
           </div>
           <button className="btn btn-ghost btn-sm" onClick={() => void load()}>
@@ -248,9 +256,11 @@ export function AIProviders() {
         </Note>
       )}
 
+      {status === 'ready' && role === 'user' && <OwnerManaged />}
+
       {status === 'ready' && catalog && state && (
         <>
-          {!state.canManage && <AdminAccess adminTokenSet={state.adminTokenSet} token={adminToken} onToken={setAdminToken} onCheck={() => void load()} />}
+          {!state.canManage && !accounts && <AdminAccess adminTokenSet={state.adminTokenSet} token={adminToken} onToken={setAdminToken} onCheck={() => void load()} />}
           {state.imported && <Note icon={<ListChecks size={16} />} title="Your image keys moved here">Keys from the old “Image generation” settings now power Photos. Tick more functions to use them for writing too.</Note>}
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex min-w-0 flex-col gap-3">
@@ -799,6 +809,39 @@ function ServerAddress() {
         </button>
       </div>
     </details>
+  );
+}
+
+/** Signed in as someone other than the owner: what powers each function (from /api/health). */
+function OwnerManaged() {
+  const ai = useRuntime((s) => s.ai);
+  const byId = new Map(ai.providers.map((p) => [p.id, p]));
+  return (
+    <section className="panel p-4 sm:p-5" aria-label="What powers each function">
+      <h3 className="flex items-center gap-2 text-[14px] font-semibold">
+        <Route size={15} className="text-primary" /> What powers each function
+      </h3>
+      <p className="mt-0.5 text-[12.5px] text-muted">Only the owner can change keys, models and effort. Where nothing is set up, the built-in engine writes instead.</p>
+      <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-3 md:grid-cols-2">
+        {AI_FUNCTION_GROUPS.map((g) => (
+          <div key={g.id}>
+            <p className="eyebrow mb-1">{g.label}</p>
+            <ul className="flex flex-col gap-1">
+              {AI_FUNCTIONS.filter((f) => f.group === g.id).map((f) => {
+                const p = byId.get(ai.routing[f.id]?.[0] ?? '');
+                const model = p?.models[f.kind];
+                return (
+                  <li key={f.id} className="flex items-baseline justify-between gap-3 text-[13px]">
+                    <span className="text-ink-2">{f.label}</span>
+                    <span className={cn('truncate text-right text-[12.5px]', p ? 'font-semibold text-ink' : 'text-muted')}>{p ? `${p.label}${model ? ` · ${model}` : ''}` : 'Built-in engine'}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

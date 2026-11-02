@@ -145,8 +145,14 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
       let out = rows.filter((r) => visible(r) && matches(r, filters));
       const order = url.searchParams.get('order');
       if (order) {
-        const [col, dir] = order.split('.');
-        out = [...out].sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * (dir === 'desc' ? -1 : 1));
+        const keys = order.split(',').map((o) => o.split('.'));
+        out = [...out].sort((a, b) => {
+          for (const [col, dir] of keys) {
+            const c = (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * (dir === 'desc' ? -1 : 1);
+            if (c) return c;
+          }
+          return 0;
+        });
       }
       let offset = Number(url.searchParams.get('offset') || 0);
       let limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 1000;
@@ -186,7 +192,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
           written.push(row);
         }
       }
-      return /return=representation/.test(prefer) ? send(res, 201, written) : send(res, 201, undefined);
+      return /return=representation/.test(prefer) ? send(res, 201, written.map((r) => project(r, url.searchParams.get('select')))) : send(res, 201, undefined);
     }
 
     if (req.method === 'PATCH') {
@@ -241,7 +247,17 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
       if (req.method === 'POST' || req.method === 'PUT') {
         if (objects.has(key) && req.headers['x-upsert'] !== 'true' && req.method === 'POST') return send(res, 400, { statusCode: '409', error: 'Duplicate', message: 'The resource already exists' });
         if (rawBuf.length > 50 * 1024 * 1024) return send(res, 413, { statusCode: '413', error: 'Payload too large', message: 'The object exceeded the maximum allowed size' });
-        objects.set(key, { bytes: rawBuf, type: String(req.headers['content-type'] || 'application/octet-stream'), created: Date.now() });
+        let bytes = rawBuf;
+        let type = String(req.headers['content-type'] || 'application/octet-stream');
+        // supabase-js sends Blobs and Files as multipart form data: keep the file part
+        if (/^multipart\/form-data/i.test(type)) {
+          const form = await new Response(rawBuf, { headers: { 'content-type': type } }).formData();
+          const file = [...form.values()].find((v) => typeof v !== 'string');
+          if (!file) return send(res, 400, { statusCode: '400', error: 'Bad request', message: 'no file in the form' });
+          bytes = Buffer.from(await file.arrayBuffer());
+          type = file.type || 'application/octet-stream';
+        }
+        objects.set(key, { bytes, type, created: Date.now() });
         return send(res, 200, { Key: key, Id: crypto.randomUUID() });
       }
       if (req.method === 'GET') {
@@ -297,7 +313,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
 
     if (p === '/verify' && req.method === 'GET') {
       const v = codes.get(`verify:${url.searchParams.get('token')}`);
-      if (!v) return send(res, 303, undefined, { location: `${url.searchParams.get('redirect_to') || base}#error=access_denied&error_code=otp_expired` });
+      if (!v) return send(res, 303, undefined, { location: `${url.searchParams.get('redirect_to') || base}#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired` });
       codes.delete(`verify:${url.searchParams.get('token')}`);
       const u = users.get(v.userId);
       if (v.type === 'signup') u.confirmed_at = u.confirmed_at || new Date().toISOString();
