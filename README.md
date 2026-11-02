@@ -15,12 +15,14 @@ An AI workspace for researching, building, branding, listing and marketing digit
 | **Analytics** | Impressions, engagement rate, clicks, opt-ins and sales with period deltas, daily chart (with table view), top post types and visual styles, platform split, funnel, top posts, sales and ad delivery. |
 | **Marketplace** | Products and local businesses, search, category pills, location filter + map, listing details with booking or inquiry, cart, checkout, order history with access files. Your published listings appear instantly. |
 | **Brain** | Skills (voice, audience, rules, offers, SEO, email…) written in plain language and parsed into rules, a skill library, knowledge documents (facts and key terms are extracted), a with/without playground with highlighted differences, an activity log, and learned preferences from thumbs-down feedback. |
-| **Settings** | Brand kit (logo upload or designer, colors, banner, images, socials), **AI** (your API keys: what each one powers, its model and effort, priority, usage, and the Brain switch), connected accounts, projects, backup/restore, sample data, preferences. |
+| **Settings** | Brand kit (logo upload or designer, colors, banner, images, socials), **AI** (your API keys: what each one powers, its model and effort, priority, usage, and the Brain switch), social accounts, projects, backup/restore, sample data, preferences, and **Account** (save status, password, log out, delete account). |
+| **Accounts** | Sign up and sign in with email and password; each person's workspace and files are saved to their account (Supabase) and open on any device. |
 
 ## What is real and what is simulated
 
 Real:
 - All generation, editing, exporting (HTML, Markdown, CSV, JSON backups, Apps Script) and local persistence.
+- Accounts (with Supabase): sign-up, email confirmation, password reset, and saving each person's workspace and files to their account.
 - AI: Claude in the claude.ai Artifact; your own API keys in the self-hosted app (see "AI: one AI, powered by your API keys"); otherwise a built-in, niche-aware engine that works offline. Brain skills apply to all of them.
 - AI images and videos: real files you can download, schedule with posts and publish on listings. Without a key that makes photos, a built-in brand illustration is used and labelled as such.
 - When the app is opened as a shared claude.ai Artifact, published Marketplace listings and purchases sync between everyone who opens it.
@@ -129,6 +131,43 @@ When the app runs as a claude.ai Artifact and you have the **Zapier** connector 
 - Other platforms keep the in-app (simulated) scheduler.
 - Self-hosted, the same Facebook scheduling runs with your Manus API key (tick Facebook scheduling on the Manus card; its agent profile is the key's effort).
 
+## Accounts: sign-up, sign-in and saving to your account (Supabase)
+
+With Supabase connected, people sign in with an email and password. Each person's projects, posts, skills, listings, orders and files are saved to their own account and open on any device. Without the Supabase Secrets, the app works as before and keeps everything in the browser.
+
+Set it up once:
+1. Create a Supabase project (supabase.com → New project).
+2. Supabase → **SQL Editor** → paste [`supabase/migrations/20261102000000_accounts.sql`](supabase/migrations/20261102000000_accounts.sql) → **Run**. If your Supabase project is linked to this GitHub repository, it can apply the migration for you. It creates:
+   - `user_docs`: one row per project, post, listing, etc.; each user can only read and change their own rows.
+   - a private `media` bucket: each user can only use their own folder.
+3. Supabase → **Authentication** → Sign In / Providers → Email: keep **Confirm email** on. The owner check below relies on confirmed emails.
+4. Supabase → **Authentication** → **URL Configuration**:
+   - Set **Site URL** to your app's address (for example `https://your-app.replit.app`).
+   - Add the same address, and your Replit workspace preview address if you use it, under **Redirect URLs**. Confirmation and password-reset links come back there.
+5. Replit → Tools → **Secrets**:
+   - `SUPABASE_URL`: the Project URL (Supabase → Project Settings → API).
+   - `SUPABASE_PUBLISHABLE_KEY`: the publishable key (`sb_publishable_…`). It is meant to be public; row-level security protects the data. The legacy `anon` key also works, as `SUPABASE_ANON_KEY`.
+   - `SUPABASE_SECRET_KEY` (optional): the secret key (`sb_secret_…`). It lets people delete their account and files. It stays on the server.
+   - `ADMIN_EMAILS`: your email. You manage the AI keys, models, effort and usage log; everyone else uses your keys.
+6. Press Run, or republish. The server log says `Accounts: on (Supabase), sign-in required`.
+7. For real users, add your own email sender (Supabase → Authentication → Emails → SMTP Settings). Supabase's built-in sender only sends a few emails an hour.
+
+What people get:
+- **Screens:** Sign in, Create account and Forgot password. The email links open the app.
+- **Account menu with Log out:** in the top bar, at the bottom of the sidebar, and in the setup screens.
+- **Settings → Account:** save status, change password, log out, and delete account.
+- **Automatic saving:**
+  - About 1–2 seconds after each change.
+  - Changes made offline wait on the device and save once you're back online.
+  - Coming back to the tab picks up changes made on other devices.
+- **Logging out** removes the account's copy from that device. It stays in the account.
+- **Moving an older workspace in:** the first time an account is opened in a browser that has a workspace from before accounts, the app offers to add it to the account, with its images and files.
+- **AI for everyone signed in, on your keys:**
+  - Only the `ADMIN_EMAILS` account can see and change keys or read the usage log. Everyone else sees what powers each function.
+  - Video jobs and Manus tasks belong to whoever started them.
+  - Facebook scheduling through your Manus key is owner-only.
+- **Optional sign-in:** `SIGN_IN_REQUIRED=false` makes signing in optional. "Continue without an account" keeps work in that browser, and AI then works without signing in.
+
 ## Run it
 
 ```bash
@@ -154,6 +193,9 @@ Server environment:
 - `DATA_DIR` (default `./.data`)
 - `ADMIN_TOKEN`
 - `AI_PROVIDER_BASE_URLS`: a JSON map of provider id to base URL, for a proxy or the test mock
+- accounts: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `ADMIN_EMAILS`, `SIGN_IN_REQUIRED` (see "Accounts")
+
+`GET /api/config` tells the app whether accounts are on, and `DELETE /api/account` deletes the signed-in user, with their saved workspace and files.
 
 `GET /api/health` returns `{ ok, ai }`, where `ai` lists each key's readiness, model and effort, and which keys power each function.
 
@@ -174,7 +216,14 @@ The simulated integrations are isolated so they can be swapped for real ones:
 
 ## Data
 
-Everything is stored in the browser: app state in `localStorage`, uploaded and AI-generated images and videos in IndexedDB. Export or import a JSON backup from `Settings → Projects & data` (media files aren't included in backups). The server only stores your AI keys and settings (`DATA_DIR/ai-providers.json`) and a usage log (`DATA_DIR/ai-usage.json`).
+With accounts on, each user's workspace is saved in Supabase:
+- each project, post, ad, skill, generation, listing, order, sale and notice is a row in `user_docs`, plus one row for account-level settings;
+- their files go to Storage, under `media/<user id>/`;
+- each device they use keeps a copy for speed and offline work.
+
+Theme, server address and demo switches stay per device.
+
+Without accounts, everything is stored in the browser: app state in `localStorage`, uploaded and AI-generated images and videos in IndexedDB. Export or import a JSON backup from `Settings → Projects & data` (media files aren't included in backups). The server only stores your AI keys and settings (`DATA_DIR/ai-providers.json`) and a usage log (`DATA_DIR/ai-usage.json`).
 
 ## Project layout
 
@@ -183,11 +232,14 @@ src/
   ai/            AI engine: tasks, functions catalog, server and Claude adapters, Brain, niche knowledge, built-in generators (local/*)
   components/    UI kit, charts, brand/logo, post visuals, code editor, layout
   lib/           types, utilities, storage, metrics, routing, platform (Artifact runtime) bindings
+  lib/cloud/     accounts: Supabase sign-in (auth.ts), saving the workspace (sync.ts) and files (media.ts)
   pages/         onboarding, dashboard, studio, marketing (seo/email/social/ads), calendar, analytics, store, brain, settings
   store/         zustand stores (persisted project context, UI state, sample data)
 shared/          ai-functions.json: what AI does in the app (used by the app and the server)
 server/          AI server (ai-server.mjs) + static server; providers/: registry, key store, adapters, router, routes, usage log;
-                 test/mock-providers.mjs: a stand-in for every provider's API
+                 auth.mjs: checks the Supabase sign-in token; test/mock-providers.mjs: a stand-in for every provider's API;
+                 test/mock-supabase.mjs: a stand-in for Supabase Auth, the database and Storage
+supabase/        migrations: the accounts tables, bucket and row-level security
 scripts/         Artifact packaging
 ```
 
@@ -197,4 +249,5 @@ scripts/         Artifact packaging
 npm run typecheck
 npm test                    # includes the real server against the provider mock
 node server/test/mock-providers.mjs 9911   # offline QA: prints the AI_PROVIDER_BASE_URLS to start the server with
+node server/test/mock-supabase.mjs 54321   # offline accounts QA: use its url and keys as SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY / SUPABASE_SECRET_KEY
 ```

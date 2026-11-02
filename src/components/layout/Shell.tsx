@@ -6,7 +6,6 @@ import {
   ChartColumn,
   ChevronsUpDown,
   LayoutDashboard,
-  LogOut,
   Megaphone,
   Menu,
   Moon,
@@ -24,11 +23,11 @@ import { cn, fmtRelative } from '@/lib/utils';
 import { navigate, useRoute, type Route } from '@/lib/router';
 import { useRuntime } from '@/lib/platform';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { toast, useUI } from '@/store/ui';
-import { signOut, useAuthState } from '@/lib/auth';
+import { useUI } from '@/store/ui';
 import { FORMATS } from '@/ai/knowledge';
 import { Popover, MenuItem } from '../ui/primitives';
 import { LogoMark } from '../brand/Logo';
+import { AccountButton, AccountRow } from '../auth/Account';
 
 export function AppMark({ size = 30 }: { size?: number }) {
   return (
@@ -218,6 +217,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         >
           <Settings size={18} /> Settings & brand
         </button>
+        <AccountRow onNavigate={onNavigate} />
       </div>
     </div>
   );
@@ -323,7 +323,6 @@ export function Topbar() {
   const setCmd = useUI((s) => s.setCommandOpen);
   const setCart = useUI((s) => s.setCartOpen);
   const cartCount = useStore((s) => s.cart.reduce((n, c) => n + c.qty, 0));
-  const auth = useAuthState();
   const project = useActiveProject();
   return (
     <header className="sticky z-30 flex h-[60px] shrink-0 items-center gap-2 border-b border-line bg-surface/90 backdrop-blur gutter" style={{ top: 'env(safe-area-inset-top, 0px)' }}>
@@ -340,22 +339,10 @@ export function Topbar() {
       <button className="btn btn-ghost btn-icon md:hidden" onClick={() => setCmd(true)} aria-label="Search">
         <Search size={18} />
       </button>
-      <ThemeToggle />
-      {auth.enabled && auth.user && (
-        <button
-          className="btn btn-ghost btn-icon"
-          type="button"
-          aria-label={`Sign out${auth.user.email ? ` ${auth.user.email}` : ''}`}
-          title={auth.user.email || 'Sign out'}
-          onClick={() =>
-            void signOut().catch((error: unknown) =>
-              toast({ kind: 'error', title: 'Could not sign out', body: error instanceof Error ? error.message : 'Please try again.' }),
-            )
-          }
-        >
-          <LogOut size={17} />
-        </button>
-      )}
+      {/* on phones the theme switch lives in Settings → Preferences, leaving room for the page title */}
+      <span className="hidden sm:contents">
+        <ThemeToggle />
+      </span>
       <NotificationsButton />
       <button className="btn btn-ghost btn-icon relative" onClick={() => setCart(true)} aria-label={`Cart, ${cartCount} items`}>
         <ShoppingCart size={18} />
@@ -367,6 +354,7 @@ export function Topbar() {
       <button className="btn btn-primary btn-icon sm:hidden" onClick={() => openComposer()} aria-label="Create post">
         <Plus size={18} />
       </button>
+      <AccountButton />
     </header>
   );
 }

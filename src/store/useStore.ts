@@ -91,12 +91,13 @@ export interface StoreState {
 
 const touch = (p: Project): Project => ({ ...p, updatedAt: Date.now() });
 
-function starterSkills(): Skill[] {
+export function starterSkills(): Skill[] {
   const lib = SKILL_LIBRARY.find((s) => s.libraryId === 'no-hype');
   return lib ? [skillFromLibrary(lib)] : [];
 }
 
-function initial() {
+/** A fresh workspace (also what a new account starts from). */
+export function initial() {
   return {
     version: 1,
     projects: [] as Project[],

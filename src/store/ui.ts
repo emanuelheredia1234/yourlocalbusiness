@@ -36,6 +36,10 @@ interface UIState {
 
   postEditorId: string | null;
   openPostEditor: (id: string | null) => void;
+
+  /** a Settings tab to open next (e.g. "account" from the account menu) */
+  settingsTab: string | null;
+  setSettingsTab: (t: string | null) => void;
 }
 
 export const useUI = create<UIState>((set) => ({
@@ -69,6 +73,9 @@ export const useUI = create<UIState>((set) => ({
 
   postEditorId: null,
   openPostEditor: (id) => set({ postEditorId: id }),
+
+  settingsTab: null,
+  setSettingsTab: (t) => set({ settingsTab: t }),
 }));
 
 export const toast = (t: Omit<Toast, 'id'>) => useUI.getState().toast(t);

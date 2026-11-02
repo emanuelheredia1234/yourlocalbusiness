@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import { Bot, Database, Download, FolderOpen, Link2, Moon, Palette, Plus, Sun, Trash2, Unplug, Upload, User, Users } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Bot, CircleUserRound, Database, Download, FolderOpen, Link2, Moon, Palette, Plus, SlidersHorizontal, Sun, Trash2, Unplug, Upload, Users } from 'lucide-react';
 import type { AppSettings, Brand, Project } from '@/lib/types';
 import { cn, ensureUrl, fmtCompact, fmtRelative, readFileAsText, slugify } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
@@ -9,7 +9,9 @@ import { brandKitTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore, type StoreState } from '@/store/useStore';
 import { defaultSettings } from '@/store/defaults';
-import { toast } from '@/store/ui';
+import { toast, useUI } from '@/store/ui';
+import { useAuth } from '@/lib/cloud/auth';
+import { AccountSettings } from '@/components/auth/Account';
 import { clearSampleData, hasSampleData, loadSampleData } from '@/store/sample';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, ChipInput, Field, Segmented, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
@@ -20,11 +22,19 @@ import { openConnect } from '@/components/posts/Connect';
 import { download } from '@/components/ui/download';
 import { AIProviders, ArtifactAI } from './AIProviders';
 
-type Tab = 'brand' | 'ai' | 'accounts' | 'projects' | 'prefs';
+type Tab = 'brand' | 'ai' | 'accounts' | 'projects' | 'prefs' | 'account';
 
 export default function Settings() {
   const project = useActiveProject()!;
-  const [tab, setTab] = useState<Tab>('brand');
+  const signedIn = useAuth((s) => s.phase === 'ready');
+  const wanted = useUI((s) => s.settingsTab);
+  const [tab, setTab] = useState<Tab>(() => (wanted === 'account' && signedIn ? 'account' : 'brand'));
+  // the account menu asks for a tab
+  useEffect(() => {
+    if (!wanted) return;
+    if (wanted === 'account' ? signedIn : ['brand', 'ai', 'accounts', 'projects', 'prefs'].includes(wanted)) setTab(wanted as Tab);
+    useUI.getState().setSettingsTab(null);
+  }, [wanted, signedIn]);
   return (
     <div className="flex flex-col gap-5">
       <header>
@@ -38,9 +48,10 @@ export default function Settings() {
         tabs={[
           { id: 'brand', label: 'Brand', icon: <Palette size={15} /> },
           { id: 'ai', label: 'AI', icon: <Bot size={15} /> },
-          { id: 'accounts', label: 'Accounts', icon: <Link2 size={15} /> },
+          { id: 'accounts', label: 'Social accounts', icon: <Link2 size={15} /> },
           { id: 'projects', label: 'Projects & data', icon: <Database size={15} /> },
-          { id: 'prefs', label: 'Preferences', icon: <User size={15} /> },
+          { id: 'prefs', label: 'Preferences', icon: <SlidersHorizontal size={15} /> },
+          ...(signedIn ? [{ id: 'account' as const, label: 'Account', icon: <CircleUserRound size={15} /> }] : []),
         ]}
       />
       {tab === 'brand' && <BrandSettings project={project} />}
@@ -48,6 +59,7 @@ export default function Settings() {
       {tab === 'accounts' && <Accounts />}
       {tab === 'projects' && <ProjectsData />}
       {tab === 'prefs' && <Preferences />}
+      {tab === 'account' && signedIn && <AccountSettings />}
     </div>
   );
 }
@@ -219,6 +231,7 @@ function Accounts() {
 const EXPORT_KEYS = ['projects', 'activeProjectId', 'posts', 'ads', 'skills', 'genLog', 'myListings', 'cart', 'orders', 'sales', 'notices', 'settings'] as const;
 
 function ProjectsData() {
+  const signedIn = useAuth((s) => s.phase === 'ready');
   const projects = useStore((s) => s.projects);
   const activeId = useStore((s) => s.activeProjectId);
   const setActive = useStore((s) => s.setActiveProject);
@@ -335,7 +348,7 @@ function ProjectsData() {
             )}
           </div>
         </Card>
-        <Card title="Backup & restore" desc="Everything lives in this browser. Export a backup to move it or keep it safe (uploaded images and videos aren’t included).">
+        <Card title="Backup & restore" desc={signedIn ? 'Your workspace is saved to your account. Export a backup to keep your own copy (uploaded images and videos aren’t included).' : 'Everything lives in this browser. Export a backup to move it or keep it safe (uploaded images and videos aren’t included).'}>
           <div className="flex flex-wrap gap-2">
             <button className="btn btn-secondary" onClick={exportJson}>
               <Download size={15} /> Export backup (.json)
@@ -360,7 +373,13 @@ function ProjectsData() {
           <button
             className="btn btn-danger"
             onClick={async () => {
-              if (await confirmAction({ title: 'Erase everything on this device?', body: 'All projects, posts, skills, listings and orders are deleted. Export a backup first if you might need them.', confirmLabel: 'Erase everything', danger: true })) {
+              if (
+                await confirmAction(
+                  signedIn
+                    ? { title: 'Erase your whole workspace?', body: 'All projects, posts, skills, listings, orders and files are deleted from your account and every device. Export a backup first if you might need them.', confirmLabel: 'Erase everything', danger: true }
+                    : { title: 'Erase everything on this device?', body: 'All projects, posts, skills, listings and orders are deleted. Export a backup first if you might need them.', confirmLabel: 'Erase everything', danger: true },
+                )
+              ) {
                 resetAll();
                 pushMyListings();
               }
@@ -377,6 +396,7 @@ function ProjectsData() {
 // ───────────────────────── Preferences ─────────────────────────
 
 function Preferences() {
+  const signedIn = useAuth((s) => s.phase === 'ready');
   const settings = useStore((s) => s.settings);
   const updateSettings = useStore((s) => s.updateSettings);
   const community = useRuntime((s) => s.community);
@@ -421,7 +441,7 @@ function Preferences() {
       </Card>
       <Card title="About">
         <p className="flex items-center gap-2 text-[13px] text-ink-2">
-          <Users size={15} className="text-primary" /> Yourlocalbusiness keeps your data in this browser. AI runs on Claude when available, otherwise on the built-in engine.
+          <Users size={15} className="text-primary" /> {signedIn ? 'Yourlocalbusiness saves your workspace to your account.' : 'Yourlocalbusiness keeps your data in this browser.'} AI runs on your server’s keys when they’re set up, otherwise on the built-in engine.
         </p>
       </Card>
     </div>

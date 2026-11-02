@@ -6,6 +6,8 @@ import { navigate } from '@/lib/router';
 import { FORMATS, matchBusinessType } from '@/ai/knowledge';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { AppMark } from '@/components/layout/Shell';
+import { AccountChip } from '@/components/auth/Account';
+import { useAuth } from '@/lib/cloud/auth';
 import { BrandBanner, LogoMark } from '@/components/brand/Logo';
 import { StepResearch } from './StepResearch';
 import { StepSetup } from './StepSetup';
@@ -57,6 +59,7 @@ function OptionCard({ icon, title, body, examples, onClick, selected }: { icon: 
 
 function Rail({ project, path, step }: { project: Project; path: StepId[]; step: StepId }) {
   const idx = path.indexOf(step);
+  const signedIn = useAuth((s) => s.phase === 'ready');
   const b = project.brand;
   return (
     <aside className="relative hidden w-[300px] shrink-0 flex-col overflow-hidden bg-[rgb(var(--primary-2))] text-white lg:flex" style={{ paddingLeft: 'env(safe-area-inset-left, 0px)' }}>
@@ -98,7 +101,7 @@ function Rail({ project, path, step }: { project: Project; path: StepId[]; step:
             {b.tagline && <p className="mt-2 text-xs italic text-white/75">“{b.tagline}”</p>}
           </div>
         )}
-        <p className="mt-3 text-[11.5px] text-white/50">Progress saves automatically on this device.</p>
+        <p className="mt-3 text-[11.5px] text-white/50">{signedIn ? 'Progress saves to your account automatically.' : 'Progress saves automatically on this device.'}</p>
       </div>
     </aside>
   );
@@ -248,6 +251,7 @@ export function Onboarding() {
               <X size={15} /> Cancel setup
             </button>
           )}
+          <AccountChip />
         </div>
         <div id="wizard-scroll" className="scroll-thin min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-[1000px] gutter pb-10 pt-8">

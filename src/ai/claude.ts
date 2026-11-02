@@ -1,9 +1,9 @@
 import type { Project } from '@/lib/types';
 import { NO_AI_SERVER, getSample, useRuntime, type AIServerState, type SampleError, type SampleOptions } from '@/lib/platform';
 import { readFileAsDataURL, uid } from '@/lib/utils';
-import { authFetch } from '@/lib/auth';
 import { FORMATS } from './knowledge';
 import { isAIMeta, type AIMeta } from './meta';
+import { authHeaders } from '@/lib/cloud/auth';
 
 // ───────────────────────── Transport ─────────────────────────
 
@@ -78,7 +78,7 @@ export async function callServerAI(fn: string, prompt: string, opts: ServerCallO
   const images = opts.images?.length ? await Promise.all(opts.images.slice(0, 2).map((b) => readFileAsDataURL(b))) : undefined;
   let res: Response;
   try {
-    res = await authFetch(`${serverBase(opts.serverUrl)}/api/ai/generate`, {
+    res = await serverFetch(opts.serverUrl, '/api/ai/generate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ fn, prompt, tier: opts.tier, images, brain: opts.brain }),
@@ -107,10 +107,18 @@ export async function callServerAI(fn: string, prompt: string, opts: ServerCallO
 
 export const serverBase = (serverUrl: string) => (serverUrl || '').replace(/\/+$/, '');
 
+/** A request to your server, saying who's signed in (when accounts are on). */
+export async function serverFetch(serverUrl: string, path: string, init: RequestInit = {}): Promise<Response> {
+  const target = `${serverBase(serverUrl)}${path}`;
+  const headers = new Headers(init.headers);
+  for (const [key, value] of Object.entries(await authHeaders(target))) headers.set(key, value);
+  return fetch(target, { ...init, headers });
+}
+
 /** Ask the server which keys are ready and what powers each function. */
 export async function pingServer(serverUrl: string): Promise<boolean> {
   try {
-    const res = await authFetch(`${serverBase(serverUrl)}/api/health`, { method: 'GET' });
+    const res = await serverFetch(serverUrl, '/api/health', { method: 'GET' });
     const body = res.ok ? ((await res.json().catch(() => null)) as { ok?: boolean; ai?: Partial<AIServerState> } | null) : null;
     const ok = body?.ok === true;
     const ai = body?.ai;

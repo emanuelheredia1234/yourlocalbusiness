@@ -20,8 +20,7 @@ import { FORMATS, IMAGE_STYLES, VIDEO_STYLES, matchBusinessType } from './knowle
 import { heroScene, sceneForStyle, type ArtScene } from './local/art';
 import { runTask } from './engine';
 import { visualBrief, type VisualBrief } from './brain';
-import { serverBase } from './claude';
-import { authFetch } from '@/lib/auth';
+import { serverFetch } from './claude';
 import { primaryProvider, routeFor } from './functions';
 import { compactMeta, isAIMeta, metaLine, type AIMeta } from './meta';
 import { listingIllustrationTask, postIllustrationTask, type IllustrationInput } from './tasks';
@@ -372,7 +371,7 @@ async function requestPhotoFrom(req: ArtRequest): Promise<ArtResult> {
   const s = useStore.getState().settings;
   let res: Response;
   try {
-    res = await authFetch(`${serverBase(s.ai.serverUrl)}/api/ai/image`, {
+    res = await serverFetch(s.ai.serverUrl, '/api/ai/image', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ prompt: req.photoPrompt, aspect: req.aspect }),

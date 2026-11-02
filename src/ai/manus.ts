@@ -11,8 +11,7 @@ import { readFileAsDataURL } from '@/lib/utils';
 import { ZapierError, zapierCall } from '@/lib/zapier';
 import { useStore } from '@/store/useStore';
 import { ART_SIZE } from './local/art';
-import { serverBase } from './claude';
-import { authFetch } from '@/lib/auth';
+import { serverFetch } from './claude';
 
 export const MANUS_API = 'App229860CLIAPI';
 export const MANUS_CREATE = 'code_action_app229860cliapi__create_task_with_image';
@@ -36,7 +35,7 @@ export function manusImageLimit(): number {
 async function serverManus(action: 'create' | 'output' | 'continue', body: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
   let res: Response;
   try {
-    res = await authFetch(`${serverBase(useStore.getState().settings.ai.serverUrl)}/api/ai/manus/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+    res = await serverFetch(useStore.getState().settings.ai.serverUrl, `/api/ai/manus/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw new ManusError('Stopped.', 'cancelled');
     throw new ManusError('Couldn’t reach your AI server.', 'MANUS_NETWORK');
