@@ -16,7 +16,9 @@ const SECRET = 'sb_secret_mock_456';
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 /** Primary keys per table: rows with the same values are one row (upserts replace them). */
-const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'] };
+const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'] };
+/** tables with row-level security and no policies: only the secret key reaches them */
+const SERVICE_ONLY = new Set(['user_secrets']);
 
 export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 } = {}) {
   const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true });
@@ -40,6 +42,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
     role: 'authenticated',
     email: u.email,
     email_confirmed_at: u.confirmed_at,
+    confirmation_sent_at: u.confirmation_sent_at ?? null,
     confirmed_at: u.confirmed_at,
     created_at: u.created_at,
     updated_at: u.updated_at,
@@ -99,6 +102,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
     codes.set(`verify:${token}`, { userId: user.id, type, redirectTo, challenge, method });
     const link = `${base}/auth/v1/verify?token=${token}&type=${type}&redirect_to=${encodeURIComponent(redirectTo || '')}`;
     emails.push({ to: user.email, type, link, at: Date.now() });
+    if (type === 'signup') user.confirmation_sent_at = new Date().toISOString();
   }
 
   // ───────────── PostgREST subset ─────────────
@@ -133,7 +137,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
   async function rest(req, res, url, table, raw) {
     const who = await caller(req);
     if (!who) return send(res, 401, { code: 'PGRST301', message: 'JWT expired or invalid' });
-    if (who.anon) return send(res, 401, { code: '42501', message: 'permission denied for table ' + table });
+    if (who.anon || (SERVICE_ONLY.has(table) && !who.service)) return send(res, 401, { code: '42501', message: 'permission denied for table ' + table });
     const rows = tables.get(table) ?? [];
     tables.set(table, rows);
     const visible = (r) => who.service || r.user_id === who.userId;
@@ -419,11 +423,13 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
       return base;
     },
     /** A valid access token for a user (creating a confirmed user if needed). */
-    async tokenFor(email, password = 'password123') {
+    /** autoconfirmed: made while "Confirm email" was off (no confirmation email was ever sent) */
+    async tokenFor(email, password = 'password123', { autoconfirmed = false } = {}) {
       let u = [...users.values()].find((x) => x.email === email);
       if (!u) {
         const now = new Date().toISOString();
-        u = { id: crypto.randomUUID(), email, password, created_at: now, updated_at: now, confirmed_at: now };
+        const sent = new Date(Date.now() - 60_000).toISOString();
+        u = { id: crypto.randomUUID(), email, password, created_at: sent, updated_at: now, confirmed_at: now, confirmation_sent_at: autoconfirmed ? null : sent };
         users.set(u.id, u);
       }
       return { token: (await session(u)).access_token, user: u };

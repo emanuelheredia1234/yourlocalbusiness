@@ -324,17 +324,23 @@ export class AIRouter {
 
   // ───────────── Manus tasks (photos and Facebook scheduling) ─────────────
 
-  async manusCreate({ fn, prompt, title, interactive, hidden, image, signal, owner = null }) {
+  /** The owner's Manus key, or a user's own (apiKey): their task runs in their Manus account. */
+  manusCtx(apiKey) {
+    return apiKey ? { ...this.ctx('manus'), key: apiKey, label: 'Manus (your key)' } : this.ctx('manus');
+  }
+
+  async manusCreate({ fn, prompt, title, interactive, hidden, image, signal, owner = null, apiKey = null }) {
     const kind = fnById[fn]?.kind;
     if (fn !== 'photos' && fn !== 'facebook') throw new ProviderError('BAD_REQUEST', 'Unknown Manus task.', { status: 400 });
-    if (!this.store.powers('manus', fn)) throw new ProviderError('NO_PROVIDER', `Your Manus key isn’t set to power ${fnById[fn].label}. Turn it on in Settings → AI.`, { status: 409 });
+    if (!apiKey && !this.store.powers('manus', fn)) throw new ProviderError('NO_PROVIDER', `Your Manus key isn’t set to power ${fnById[fn].label}. Turn it on in Settings → AI.`, { status: 409 });
     const profile = this.store.settings('manus').effort[kind];
     const t0 = Date.now();
     try {
-      const out = await this.adapters.manus.create(this.ctx('manus'), { prompt, title, profile, interactive, hidden, image, signal });
+      const out = await this.adapters.manus.create(this.manusCtx(apiKey), { prompt, title, profile, interactive, hidden, image, signal });
       const meta = this.describe('manus', kind, fn, { model: 'manus', effort: profile, ms: Date.now() - t0 });
-      const usageId = this.usage.add({ ok: true, pending: true, provider: 'manus', fn, kind, model: 'manus', effort: profile, ms: meta.ms, taskId: out.task_id, userId: owner });
-      this.manusTasks.set(out.task_id, { usageId, fn, kind, profile, at: Date.now(), owner });
+      if (apiKey) meta.providerLabel = 'Manus (your key)';
+      const usageId = this.usage.add({ ok: true, pending: true, provider: 'manus', fn, kind, model: 'manus', effort: profile, ms: meta.ms, taskId: out.task_id, userId: owner, ...(apiKey ? { ownKey: true } : {}) });
+      this.manusTasks.set(out.task_id, { usageId, fn, kind, profile, at: Date.now(), owner, ...(apiKey ? { ownKey: true } : {}) });
       for (const [id, t] of this.manusTasks) if (Date.now() - (t.at ?? 0) > TASK_TTL) this.manusTasks.delete(id);
       this.saveTasks();
       return { ...out, meta };
@@ -345,17 +351,22 @@ export class AIRouter {
     }
   }
 
-  async manusOutput({ taskId, maxImages, maxImageBytes, signal }) {
+  async manusOutput({ taskId, maxImages, maxImageBytes, signal, apiKey = null }) {
     const t = this.knownTask(taskId);
-    const out = await this.adapters.manus.output(this.ctx('manus'), { taskId, maxImages, maxImageBytes, signal });
+    const out = await this.adapters.manus.output(this.manusCtx(apiKey), { taskId, maxImages, maxImageBytes, signal });
     this.usage.update(t.usageId, { credits: out.credit_usage || null, pending: !out.done, ok: out.status !== 'error' });
     out.meta = this.describe('manus', t.kind, t.fn, { model: 'manus', effort: t.profile, ms: 0, credits: out.credit_usage || null });
     return out;
   }
 
-  async manusContinue({ taskId, prompt, signal }) {
+  async manusContinue({ taskId, prompt, signal, apiKey = null }) {
     this.knownTask(taskId);
-    return this.adapters.manus.send(this.ctx('manus'), { taskId, prompt, signal });
+    return this.adapters.manus.send(this.manusCtx(apiKey), { taskId, prompt, signal });
+  }
+
+  /** A free check of a user's own Manus key (lists one task). */
+  async checkManusKey(apiKey, { signal } = {}) {
+    await this.adapters.manus.check(this.manusCtx(apiKey), { signal });
   }
 
   // ───────────── settings helpers ─────────────

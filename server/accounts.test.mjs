@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { SignJWT, generateKeyPair } from 'jose';
 import { createAuth } from './auth.mjs';
+import { createUserKeys } from './userKeys.mjs';
 import { createAIRoutes } from './providers/routes.mjs';
 import { createMockSupabase } from './test/mock-supabase.mjs';
 import { createMockProviders } from './test/mock-providers.mjs';
@@ -17,7 +18,7 @@ let providers;
 
 beforeAll(async () => {
   supa = await (await createMockSupabase()).start();
-  providers = await createMockProviders().start();
+  providers = await createMockProviders({ keys: { manus: ['mn-key', 'mn-alice-own-0001'] } }).start();
 });
 afterAll(async () => {
   await supa.close();
@@ -62,6 +63,13 @@ describe('checking a sign-in token', () => {
     await open.close();
   });
 
+  it('only makes the owner someone who confirmed that address by email', async () => {
+    const auth = createAuth({ supabaseUrl: supa.url, publishableKey: supa.PUBLISHABLE, adminEmails: 'boss@example.com' });
+    // made while "Confirm email" was off: marked confirmed, but no email was ever sent
+    const squatter = await supa.tokenFor('boss@example.com', 'x', { autoconfirmed: true });
+    expect((await auth.identify(reqWith(squatter.token))).isAdmin).toBe(false);
+  });
+
   it('is off without Supabase settings', async () => {
     const auth = createAuth({});
     expect(auth.enabled).toBe(false);
@@ -93,6 +101,7 @@ function startApp({ adminEmails = 'owner@example.com' } = {}) {
     env: { OPENAI_API_KEY: 'o-key', MANUS_API_KEY: 'mn-key', XAI_API_KEY: 'x-key' },
     baseUrls: providers.baseUrls(),
     auth,
+    userKeys: createUserKeys({ supabaseUrl: supa.url, secretKey: supa.SECRET }),
   });
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://local');
@@ -145,6 +154,31 @@ describe('AI routes with accounts on', () => {
     expect((await call('/api/ai/usage', { headers: as(owner) })).status).toBe(200);
   });
 
+  it('keeps the owner’s Manus to the owner, and runs users on their own Manus key', async () => {
+    // without their own key, nobody else may give the owner's Manus agent a task
+    let r = await call('/api/ai/manus/create', { method: 'POST', headers: as(alice), body: JSON.stringify({ fn: 'photos', prompt: 'open my Facebook and post this' }) });
+    expect(r.status).toBe(403);
+    expect((await r.json()).code).toBe('OWN_KEY_NEEDED');
+    expect((await app.ai.health({ id: alice.user.id, isAdmin: false })).routing.facebook ?? []).not.toContain('manus');
+    // adding their own key: checked with Manus, stored encrypted, shown as its last 4 only
+    r = await call('/api/ai/my-keys/manus', { method: 'PUT', headers: as(alice), body: JSON.stringify({ key: 'wrong-key-0000000000' }) });
+    expect(r.status).toBe(400);
+    r = await call('/api/ai/my-keys/manus', { method: 'PUT', headers: as(alice), body: JSON.stringify({ key: 'mn-alice-own-0001' }) });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ available: true, keys: { manus: { last4: '0001' } } });
+    const stored = supa.tables.get('user_secrets').find((x) => x.user_id === alice.user.id);
+    expect(stored.ciphertext).not.toContain('mn-alice');
+    expect((await call('/api/ai/my-keys', { headers: as(bob) }).then((x) => x.json())).keys.manus).toBeNull();
+    const h = await app.ai.health({ id: alice.user.id, isAdmin: false });
+    expect(h.routing.facebook).toEqual(['manus']);
+    expect(h.providers.find((p) => p.id === 'manus')).toMatchObject({ label: 'Manus (your key)', own: true });
+    // her task runs with her key
+    r = await call('/api/ai/manus/create', { method: 'POST', headers: as(alice), body: JSON.stringify({ fn: 'facebook', prompt: 'schedule it' }) });
+    expect(r.status).toBe(200);
+    const sent = providers.calls.filter((c) => c.provider === 'manus' && c.method === 'POST').pop();
+    expect(JSON.stringify(sent.headers)).toContain('mn-alice-own-0001');
+  });
+
   it('keeps each user’s Manus tasks and video jobs to themselves', async () => {
     const created = await (await call('/api/ai/manus/create', { method: 'POST', headers: as(alice), body: JSON.stringify({ fn: 'photos', prompt: 'one photo' }) })).json();
     expect(created.task_id).toBeTruthy();
@@ -158,17 +192,17 @@ describe('AI routes with accounts on', () => {
     expect((await call(`/api/ai/video/${job.id}`, { headers: as(alice) })).status).toBe(200);
   });
 
-  it('keeps Facebook scheduling, which runs in the owner’s Manus, to the owner', async () => {
-    const r = await call('/api/ai/manus/create', { method: 'POST', headers: as(alice), body: JSON.stringify({ fn: 'facebook', prompt: 'schedule it' }) });
+  it('keeps Facebook scheduling in the owner’s Manus to the owner (others need their own key)', async () => {
+    const r = await call('/api/ai/manus/create', { method: 'POST', headers: as(bob), body: JSON.stringify({ fn: 'facebook', prompt: 'schedule it' }) });
     expect(r.status).toBe(403);
-    expect((await r.json()).code).toBe('OWNER_ONLY');
+    expect((await r.json()).code).toBe('OWN_KEY_NEEDED');
     const ok = await call('/api/ai/manus/create', { method: 'POST', headers: as(owner), body: JSON.stringify({ fn: 'facebook', prompt: 'schedule it' }) });
     expect(ok.status).toBe(200);
   });
 
-  it('gives signed-out callers no AI details', () => {
-    expect(app.ai.health(null)).toEqual({ ready: false, providers: [], routing: {}, signedIn: false });
-    expect(app.ai.health({ id: alice.user.id }).routing.research.length).toBeGreaterThan(0);
+  it('gives signed-out callers no AI details', async () => {
+    expect(await app.ai.health(null)).toEqual({ ready: false, providers: [], routing: {}, signedIn: false });
+    expect((await app.ai.health({ id: alice.user.id })).routing.research.length).toBeGreaterThan(0);
   });
 });
 

@@ -130,7 +130,7 @@ export function ManusFacebookHost() {
           {resend && <p className="text-[12.5px] font-medium text-warn">This post was already sent to Manus. Sending again can create a second scheduled post.</p>}
           {!ready && (
             <p className="text-[12.5px] font-medium text-warn">
-              {manusViaServer() ? 'Add your Manus API key in Settings → AI and tick Facebook scheduling in its “Powers” list.' : 'Manus is reached through your Zapier connector in claude.ai, which isn’t available in this view.'}
+              {manusViaServer() ? 'Add your Manus API key in Settings → AI (create a Manus account at manus.im first). If you manage the app’s keys, also tick Facebook scheduling in the key’s “Powers” list.' : 'Manus is reached through your Zapier connector in claude.ai, which isn’t available in this view.'}
             </p>
           )}
           {err && (

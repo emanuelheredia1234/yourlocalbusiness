@@ -256,7 +256,12 @@ export function AIProviders() {
         </Note>
       )}
 
-      {status === 'ready' && role === 'user' && <OwnerManaged />}
+      {status === 'ready' && role === 'user' && (
+        <>
+          <OwnManus call={call} serverUrl={serverUrl} />
+          <OwnerManaged />
+        </>
+      )}
 
       {status === 'ready' && catalog && state && (
         <>
@@ -809,6 +814,95 @@ function ServerAddress() {
         </button>
       </div>
     </details>
+  );
+}
+
+/** A user's own Manus account: their photos-by-agent and Facebook scheduling run there, on their credits. */
+function OwnManus({ call, serverUrl }: { call: Call; serverUrl: string }) {
+  const [info, setInfo] = useState<{ available: boolean; last4: string | null } | null>(null);
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const apply = (j: { available?: boolean; keys?: { manus?: { last4: string } | null } } | null) => setInfo({ available: j?.available !== false, last4: j?.keys?.manus?.last4 ?? null });
+  useEffect(() => {
+    void call<{ available: boolean; keys: { manus: { last4: string } | null } }>('GET', '/api/ai/my-keys').then((r) => (r.ok ? apply(r.json) : setInfo({ available: false, last4: null })));
+  }, [call]);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    const r = await call<{ available: boolean; keys: { manus: { last4: string } | null } }>('PUT', '/api/ai/my-keys/manus', { key: key.trim() });
+    setBusy(false);
+    if (!r.ok) return setError(r.json?.error ?? 'Couldn’t save the key.');
+    apply(r.json);
+    setKey('');
+    void pingServer(serverUrl);
+    toast({ kind: 'success', title: 'Your Manus key is saved', body: 'Manus photos and Facebook scheduling now run in your own Manus account.' });
+  };
+  const remove = async () => {
+    if (!(await confirmAction({ title: 'Remove your Manus key?', body: 'Manus photos and Facebook scheduling stop until you add a key again.', confirmLabel: 'Remove key', danger: true }))) return;
+    const r = await call<{ available: boolean; keys: { manus: { last4: string } | null } }>('DELETE', '/api/ai/my-keys/manus');
+    if (!r.ok) return toast({ kind: 'error', title: 'Couldn’t remove the key', body: r.json?.error ?? 'Please try again.' });
+    apply(r.json);
+    void pingServer(serverUrl);
+  };
+  return (
+    <section className="panel p-4 sm:p-5" aria-label="Your own Manus">
+      <h3 className="flex items-center gap-2 text-[14px] font-semibold">
+        <KeyRound size={15} className="text-primary" /> Use your own Manus
+      </h3>
+      <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-muted">
+        Manus is an AI agent with its own browser. With your own Manus account it can make product photos and schedule your posts on <strong className="text-ink-2">your</strong> Facebook Page. Tasks run in your Manus account and use your Manus credits.
+      </p>
+      {info?.last4 ? (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <span className="rounded-md bg-good-soft px-2.5 py-1 text-[12.5px] font-semibold text-good">Your Manus key ending in {info.last4} is saved</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => void remove()}>
+            <Trash2 size={14} /> Remove
+          </button>
+        </div>
+      ) : (
+        <ol className="mt-3 flex list-decimal flex-col gap-1.5 pl-5 text-[13px] text-ink-2">
+          <li>
+            Create a Manus account at{' '}
+            <a className="font-semibold text-primary hover:underline" href="https://manus.im" target="_blank" rel="noreferrer">
+              manus.im <ExternalLink size={12} className="inline" />
+            </a>{' '}
+            (free to start; tasks use Manus credits).
+          </li>
+          <li>
+            In Manus, open <strong>Settings → API Integration</strong>, press <strong>Create API Key</strong>, name it (for example “Yourlocalbusiness”) and copy it. Manus shows it only once.{' '}
+            <a className="text-primary hover:underline" href="https://open.manus.ai/docs/v2/authentication" target="_blank" rel="noreferrer">
+              Manus’s guide <ExternalLink size={12} className="inline" />
+            </a>
+          </li>
+          <li>Paste it below and press Save. It’s checked with Manus, stored encrypted on the server, and never shown again (only its last 4 characters).</li>
+          <li>For Facebook scheduling: in Manus, sign in to Facebook once in its browser (Manus asks the first time you schedule).</li>
+        </ol>
+      )}
+      {info && !info.available ? (
+        <p className="mt-3 text-[12.5px] text-warn">The app’s owner needs to add the SUPABASE_SECRET_KEY Secret before you can save your own key.</p>
+      ) : (
+        <form
+          className="mt-3 flex flex-wrap items-end gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (key.trim()) void save();
+          }}
+        >
+          <Field label={info?.last4 ? 'Replace with a new key' : 'Your Manus API key'} htmlFor="own-manus-key" className="min-w-[240px] flex-1">
+            <input id="own-manus-key" className="input" type="password" autoComplete="off" spellCheck={false} placeholder="Paste your Manus API key" value={key} onChange={(e) => setKey(e.target.value)} />
+          </Field>
+          <button type="submit" className="btn btn-primary" disabled={busy || !key.trim()}>
+            {busy && <Spinner size={14} />} Save key
+          </button>
+        </form>
+      )}
+      {error && (
+        <p role="alert" className="mt-2 text-[13px] text-bad">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 

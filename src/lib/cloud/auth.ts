@@ -54,7 +54,7 @@ const DISCARD_KEY = 'ylb-signed-out';
 /** this device's copy of an account's workspace */
 const stateKey = (userId: string) => `${LEGACY_KEY}:${userId}`;
 /** per-device keys that point at a user's posts and jobs */
-const DEVICE_KEYS = ['ylb-manus-pending', 'ylb-video-pending', 'ylb-fb-page'];
+const DEVICE_KEYS = ['ylb-manus-pending', 'ylb-video-pending', 'ylb-fb-page', 'ylb-admin-token'];
 
 let client: SupabaseClient | null = null;
 let sync: Sync | null = null;
@@ -428,9 +428,16 @@ export async function deleteAccount(): Promise<{ error?: string }> {
   if (!client || !st.user) return { error: 'You’re not signed in.' };
   const base = (useStore.getState().settings.ai.serverUrl || '').replace(/\/+$/, '');
   const target = `${base}/api/account`;
+  // nothing may upload into the folder while the server empties it
+  sync?.stop();
+  media?.stop();
   const res = await fetch(target, { method: 'DELETE', headers: await authHeaders(target) }).catch(() => null);
   const body = res ? ((await res.json().catch(() => null)) as { error?: string } | null) : null;
-  if (!res?.ok) return { error: body?.error || 'Couldn’t reach the server to delete your account. Try again.' };
+  if (!res?.ok) {
+    sync?.start();
+    media?.start();
+    return { error: body?.error || 'Couldn’t reach the server to delete your account. Try again.' };
+  }
   const userId = st.user.id;
   st.set({ phase: 'leaving' });
   await forgetDevice(userId);

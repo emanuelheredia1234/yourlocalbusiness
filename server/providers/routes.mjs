@@ -68,12 +68,13 @@ const cleanImages = (list) =>
     });
 
 const NO_ACCOUNTS = { enabled: false, signInRequired: false, identify: async () => null };
+const NO_USER_KEYS = { enabled: false, get: async () => null, info: async () => ({ manus: null }), set: async () => {}, remove: async () => {} };
 
 /**
  * auth (server/auth.mjs): with accounts on, AI needs a signed-in user, the owner (ADMIN_EMAILS) manages
  * the keys, and each video job or Manus task can only be read by whoever started it.
  */
-export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS }) {
+export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS, userKeys = NO_USER_KEYS }) {
   const store = new AIStore(path.join(dataDir, 'ai-providers.json'), { env, legacyFile: path.join(dataDir, 'image-providers.json') });
   const usage = new UsageLog(path.join(dataDir, 'ai-usage.json'));
   const router = new AIRouter({ store, usage, fetch, baseUrls, tasksFile: path.join(dataDir, 'ai-tasks.json') });
@@ -86,8 +87,12 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     return reply(req, res, err.status || 502, { error: err.message, code: err.code, ...(err.attempts ? { attempts: err.attempts } : {}) });
   };
 
-  /** The owner: signed in with an ADMIN_EMAILS address, or this machine / the ADMIN_TOKEN. */
-  const isAdmin = (req, who) => !!who?.isAdmin || canManage(req, adminToken);
+  /**
+   * The owner. With accounts on: only someone signed in with an ADMIN_EMAILS address (an admin token
+   * left in a shared browser, or a request from this machine, must not make another account the owner).
+   * Without accounts: this machine, or the ADMIN_TOKEN.
+   */
+  const isAdmin = (req, who) => (auth.enabled ? !!who?.isAdmin : canManage(req, adminToken));
 
   const admin = (req, res, who) => {
     if (!sameOrigin(req, allowedOrigin)) {
@@ -302,6 +307,40 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       }
     }
 
+    // the signed-in user's own keys: GET lists (last 4 only), PUT saves after a free check, DELETE removes
+    const mk = /^\/api\/ai\/my-keys(?:\/([a-z]+))?$/.exec(p);
+    if (mk) {
+      if (!sameOrigin(req, allowedOrigin)) return reply(req, res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
+      if (!auth.enabled || !who) return reply(req, res, 401, { error: 'Sign in to add your own keys.', code: 'AUTH_REQUIRED' });
+      try {
+        if (m === 'GET' && !mk[1]) return reply(req, res, 200, { available: userKeys.enabled, keys: await userKeys.info(who.id) });
+        if (mk[1] !== 'manus') return notFound(req, res);
+        if (m === 'DELETE') {
+          await userKeys.remove(who.id, 'manus');
+          return reply(req, res, 200, { available: true, keys: await userKeys.info(who.id) });
+        }
+        if (m === 'PUT') {
+          if (rateLimited(`my-keys:${who.id}`)) return reply(req, res, 429, { error: 'Too many requests. Try again in a minute.', code: 'RATE_LIMIT' });
+          const b = await body(req, res);
+          if (!b) return;
+          const key = typeof b.key === 'string' ? b.key.trim() : '';
+          if (key.length < 16 || key.length > 400 || /\s/.test(key)) return reply(req, res, 400, { error: 'That doesn’t look like a Manus API key. Copy it again from Manus → Settings → API Integration.', code: 'BAD_REQUEST' });
+          if (!userKeys.enabled) return reply(req, res, 501, { error: 'Your own keys need the SUPABASE_SECRET_KEY Secret on the server. Ask the app’s owner to add it.', code: 'NOT_CONFIGURED' });
+          try {
+            await router.checkManusKey(key);
+          } catch (e) {
+            const err = asProviderError(e, 'Manus');
+            return reply(req, res, 400, { error: err.code === 'AUTH' ? 'Manus didn’t accept that key. Check you copied all of it, or create a new one.' : `Couldn’t check the key with Manus: ${err.message}`, code: 'BAD_KEY' });
+          }
+          await userKeys.set(who.id, 'manus', key);
+          return reply(req, res, 200, { available: true, keys: await userKeys.info(who.id) });
+        }
+        return reply(req, res, 405, { error: 'Method not allowed', code: 'METHOD' });
+      } catch (e) {
+        return reply(req, res, e.status || 502, { error: e.message, code: e.code || 'UPSTREAM' });
+      }
+    }
+
     const mt = /^\/api\/ai\/manus\/(create|output|continue)$/.exec(p);
     if (mt && m === 'POST') {
       if (!generationAllowed(req, res, mt[1] === 'output' ? 'manus-read' : 'manus', who)) return;
@@ -311,24 +350,34 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         if (mt[1] === 'create') {
           const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
           if (!prompt) return reply(req, res, 400, { error: 'Missing prompt', code: 'BAD_REQUEST' });
-          // Manus is signed in to the owner's Facebook: only the owner may schedule posts with it
-          if (b.fn === 'facebook' && auth.enabled && !isAdmin(req, who)) {
-            return reply(req, res, 403, { error: 'Facebook scheduling runs in the app owner’s Manus account, so only the owner can use it.', code: 'OWNER_ONLY' });
+          // Manus is an agent with its own browser, signed in to the owner's accounts (Facebook…), and the
+          // prompt is written by the caller: with accounts on, only the owner may give it tasks
+          // …unless they've added their own Manus key: then it's their own account and credits
+          const ownKey = auth.enabled && !isAdmin(req, who) ? await userKeys.get(who?.id, 'manus') : null;
+          if (auth.enabled && !isAdmin(req, who) && !ownKey) {
+            return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings → AI.', code: 'OWN_KEY_NEEDED' });
           }
           const image = typeof b.image_data_url === 'string' && parseDataUrl(b.image_data_url) ? { dataUrl: b.image_data_url, filename: typeof b.image_filename === 'string' ? b.image_filename.slice(0, 120) : 'image.jpg' } : null;
           // one-shot write: never retried
-          return reply(req, res, 200, await router.manusCreate({ fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null }));
+          return reply(req, res, 200, await router.manusCreate({ fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null, apiKey: ownKey }));
         }
         const taskId = typeof b.task_id === 'string' ? b.task_id.trim() : '';
         if (!/^[A-Za-z0-9_-]{6,64}$/.test(taskId)) return reply(req, res, 400, { error: 'Missing task id', code: 'BAD_REQUEST' });
-        if (!mayUse(req, router.manusTasks.get(taskId)?.owner, who)) return notFound(req, res);
+        const task = router.manusTasks.get(taskId);
+        if (!mayUse(req, task?.owner, who)) return notFound(req, res);
+        // a task started with someone's own key is read and continued with that key
+        const apiKey = task?.ownKey ? await userKeys.get(task.owner, 'manus') : null;
+        if (task?.ownKey && !apiKey) return reply(req, res, 409, { error: 'The Manus key this task was started with was removed. Add it again in Settings → AI.', code: 'OWN_KEY_NEEDED' });
         if (mt[1] === 'output') {
-          const out = await router.manusOutput({ taskId, maxImages: Math.max(0, Math.min(8, Number(b.max_images) || 0)), maxImageBytes: Math.max(1, Math.min(30_000_000, Number(b.max_image_bytes) || 15_000_000)), signal: abortOnClose(res) });
+          const out = await router.manusOutput({ apiKey, taskId, maxImages: Math.max(0, Math.min(8, Number(b.max_images) || 0)), maxImageBytes: Math.max(1, Math.min(30_000_000, Number(b.max_image_bytes) || 15_000_000)), signal: abortOnClose(res) });
           return reply(req, res, 200, out);
+        }
+        if (auth.enabled && !isAdmin(req, who) && !task?.ownKey) {
+          return reply(req, res, 403, { error: 'Manus runs in the app owner’s account, so only the owner can use it.', code: 'OWNER_ONLY' });
         }
         const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
         if (!prompt) return reply(req, res, 400, { error: 'Missing message', code: 'BAD_REQUEST' });
-        return reply(req, res, 200, await router.manusContinue({ taskId, prompt: prompt.slice(0, 20_000) }));
+        return reply(req, res, 200, await router.manusContinue({ apiKey, taskId, prompt: prompt.slice(0, 20_000) }));
       } catch (e) {
         return fail(req, res, e);
       }
@@ -346,13 +395,16 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     /** Who's calling (for routes outside /api/ai/*). */
     whoIs,
     /** For /api/health: which keys are ready, their model and effort per kind, and what powers each function. */
-    health: (who = null) =>
-      auth.signInRequired && !who
-        ? { ready: false, providers: [], routing: {}, signedIn: false }
-        : {
+    health: async (who = null) => {
+      if (auth.signInRequired && !who) return { ready: false, providers: [], routing: {}, signedIn: false };
+      // with accounts on, the owner's Manus is the owner's alone; others can add their own Manus key
+      const hide = auth.enabled && !who?.isAdmin ? new Set(['manus']) : new Set();
+      const ownManus = hide.size && who?.id ? !!(await userKeys.get(who.id, 'manus').catch(() => null)) : false;
+      const ids = store.order().filter((id) => !hide.has(id));
+      const base = {
       signedIn: !!who,
-      ready: store.order().some((id) => store.ready(id)),
-      providers: store.order().map((id) => {
+      ready: ids.some((id) => store.ready(id)),
+      providers: ids.map((id) => {
         const s = store.settings(id);
         return {
           id,
@@ -362,7 +414,16 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           effort: Object.fromEntries(Object.entries(s.effort).map(([kind, value]) => [kind, { id: value, label: value ? effortLabel(id, kind, value) : 'Set by the model' }])),
         };
       }),
-      routing: store.routing(),
+      routing: Object.fromEntries(Object.entries(store.routing()).map(([fn, list]) => [fn, list.filter((id) => !hide.has(id))])),
+      };
+      if (ownManus) {
+        const s = store.settings('manus');
+        base.ready = true;
+        base.providers.push({ id: 'manus', label: 'Manus (your key)', ready: true, own: true, models: s.models, effort: Object.fromEntries(Object.entries(s.effort).map(([kind, value]) => [kind, { id: value, label: value ? effortLabel('manus', kind, value) : 'Set by the model' }])) });
+        base.routing.facebook = ['manus'];
+        base.routing.photos = [...(base.routing.photos ?? []), 'manus'];
+      }
+      return base;
     },
   };
 }

@@ -20,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
 import { authFromEnv } from './auth.mjs';
+import { userKeysFromEnv } from './userKeys.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(here, '..', 'dist');
@@ -131,7 +132,7 @@ function serveStatic(req, res) {
 // ───────────── router ─────────────
 
 const auth = authFromEnv();
-const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth });
+const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv() });
 
 /** DELETE /api/account: the signed-in user's account and files go for good (their saved data is removed with the account). */
 async function deleteAccount(req, res) {
@@ -159,7 +160,7 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === '/api/health' && req.method === 'GET') {
     // `ok`: the server is up; `ai` says which keys are ready and what powers each function (signed-in users only, with accounts on)
-    return void ai.whoIs(req, res).then((ident) => ident && send(res, 200, { ok: true, ai: ai.health(ident.who) }, corsHeaders(req)));
+    return void ai.whoIs(req, res).then(async (ident) => ident && send(res, 200, { ok: true, ai: await ai.health(ident.who) }, corsHeaders(req)));
   }
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res);
   if (ai.match(url)) {
@@ -178,8 +179,8 @@ const server = http.createServer((req, res) => {
   return send(res, 405, 'Method not allowed');
 });
 
-server.listen(PORT, HOST, () => {
-  const h = ai.health({ id: 'startup' });
+server.listen(PORT, HOST, async () => {
+  const h = await ai.health({ id: 'startup' });
   console.log(`Yourlocalbusiness server on http://localhost:${PORT}`);
   const ready = h.providers.filter((p) => p.ready).map((p) => p.label);
   console.log(ready.length ? `AI keys ready: ${ready.join(', ')}` : 'No AI keys yet: add them in Settings → AI, or as Secrets (e.g. OPENROUTER_API_KEY).');

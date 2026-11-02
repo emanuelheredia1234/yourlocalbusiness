@@ -85,24 +85,50 @@ export function createAuth({ supabaseUrl = '', publishableKey = '', secretKey = 
       user = await viaAuthServer(token);
     }
     if (!user) return null;
-    const isAdmin = admins.has(user.email) && !!user.email && (await emailsAreConfirmed());
+    const isAdmin = admins.has(user.email) && !!user.email && (await emailsAreConfirmed()) && (await provedEmail(token, user));
     return { ...user, isAdmin };
+  }
+
+  // The owner must have opened a confirmation link sent to that address: an account made while
+  // "Confirm email" was off (marked confirmed without any email) doesn't count.
+  const proven = new Map(); // user id → { ok, until }
+  async function provedEmail(token, user) {
+    const hit = proven.get(user.id);
+    if (hit && hit.until > Date.now()) return hit.ok;
+    let ok = false;
+    try {
+      const res = await fetch(`${url}/auth/v1/user`, { headers: { apikey: publishableKey, authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000) });
+      const u = res.ok ? await res.json() : null;
+      ok = !!(u && u.id === user.id && String(u.email ?? '').toLowerCase() === user.email && u.email_confirmed_at && u.confirmation_sent_at && Date.parse(u.email_confirmed_at) >= Date.parse(u.confirmation_sent_at));
+      proven.set(user.id, { ok, until: Date.now() + (res.ok ? 10 * 60_000 : 30_000) });
+    } catch {
+      proven.set(user.id, { ok: false, until: Date.now() + 30_000 });
+    }
+    return ok;
   }
 
   /** Delete a user and their files (needs the secret key). */
   async function deleteUser(userId) {
     if (!secretKey) throw Object.assign(new Error('Add the SUPABASE_SECRET_KEY Secret to let people delete their accounts.'), { status: 501, code: 'NOT_CONFIGURED' });
     const headers = { apikey: secretKey, ...(secretKey.startsWith('sb_secret_') ? {} : { authorization: `Bearer ${secretKey}` }) };
-    // their files first: list and remove media/<user id>/…
-    for (let round = 0; round < 50; round++) {
-      const list = await fetch(`${url}/storage/v1/object/list/media`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefix: `${userId}/`, limit: 1000, offset: 0 }) });
-      const items = list.ok ? await list.json() : [];
-      if (!Array.isArray(items) || !items.length) break;
-      await fetch(`${url}/storage/v1/object/media`, { method: 'DELETE', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: items.map((i) => `${userId}/${i.name}`) }) });
-      if (items.length < 1000) break;
+    const failed = (what, status) => Object.assign(new Error(`Couldn’t delete your files (${what}, ${status}). Nothing was deleted yet; try again.`), { status: 502, code: 'UPSTREAM' });
+    // their files first: list and remove media/<user id>/… until the folder is empty
+    async function clearFolder() {
+      for (let round = 0; round < 50; round++) {
+        const list = await fetch(`${url}/storage/v1/object/list/media`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefix: `${userId}/`, limit: 1000, offset: 0 }) });
+        if (!list.ok) throw failed('listing', list.status);
+        const items = await list.json();
+        if (!Array.isArray(items) || !items.length) return;
+        const del = await fetch(`${url}/storage/v1/object/media`, { method: 'DELETE', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: items.map((i) => `${userId}/${i.name}`) }) });
+        if (!del.ok) throw failed('deleting', del.status);
+      }
+      throw failed('too many files', 0);
     }
+    await clearFolder();
     const res = await fetch(`${url}/auth/v1/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE', headers });
     if (!res.ok) throw Object.assign(new Error(`Supabase didn’t delete the account (${res.status}).`), { status: 502, code: 'UPSTREAM' });
+    // an upload that was still running when we started may have landed meanwhile
+    await clearFolder().catch((e) => console.warn(`Deleted account ${userId}, but some files remain: ${e.message}`));
   }
 
   return {
