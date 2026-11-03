@@ -220,7 +220,12 @@ export function createMockProviders({ keys = {} } = {}) {
       // a "post right now" task reports a post on that network, with its link
       const postNow = /^Post ONE organic post on (Facebook|Instagram|TikTok|LinkedIn|X), right now/m.exec(t?.prompt ?? '');
       const LINKS = { Facebook: 'https://www.facebook.com/mockpage/posts/1001', Instagram: 'https://www.instagram.com/p/MOCK1/', TikTok: 'https://www.tiktok.com/@mock/video/1001', LinkedIn: 'https://www.linkedin.com/feed/update/urn:li:activity:1001/', X: 'https://x.com/mock/status/1001' };
-      const reply = postNow ? `Posted it.\nRESULT: POSTED | Mock Account | ${LINKS[postNow[1]]}` : 'Here is your image.\nRESULT: SCHEDULED | Mock Page | Monday 9:00 AM';
+      // a Facebook groups task reports each group (one that needs approval says so)
+      const groupsTask = /^Share ONE post in each of these Facebook groups/m.test(t?.prompt ?? '');
+      const groupLines = groupsTask ? [...(t?.prompt ?? '').matchAll(/^\d+\. (.+)$/gm)].map((m) => m[1]).filter((g) => !/^(Open Facebook|Read the group|Post as|In the group|Attach|This is a text|Choose|Wait about)/.test(g)) : [];
+      const reply = groupsTask
+        ? `Done.\n${groupLines.map((g, i) => (/approval/i.test(g) ? `GROUP: ${g} | PENDING | waiting for admin approval` : `GROUP: ${g} | POSTED | https://www.facebook.com/groups/mock${i}/posts/1`)).join('\n')}\nRESULT: GROUPS DONE`
+        : postNow ? `Posted it.\nRESULT: POSTED | Mock Account | ${LINKS[postNow[1]]}` : 'Here is your image.\nRESULT: SCHEDULED | Mock Page | Monday 9:00 AM';
       return json(res, 200, {
         ok: true,
         messages: done

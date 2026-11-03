@@ -513,6 +513,8 @@ export interface Post {
   watermark: boolean;
   /** the post handed to Manus, which posts it on the network in its own browser */
   external?: ExternalPublish;
+  /** the post shared in Facebook groups by Manus (separate from posting it on the Page) */
+  groupShare?: GroupShare;
   source: 'batch' | 'composer' | 'ads';
   planSlotId?: string;
   batchId?: string;
@@ -520,6 +522,31 @@ export interface Post {
   createdAt: number;
   updatedAt: number;
   seed: number;
+}
+
+/** One Facebook group in a group share, as Manus reported it. */
+export interface GroupResult {
+  group: string;
+  /** posted · pending: waiting for the group's admins · skipped: the group's rules or settings don't allow it · failed */
+  state: 'posted' | 'pending' | 'skipped' | 'failed';
+  detail: string;
+  url?: string;
+}
+
+/** A post Manus shares in the Facebook groups you listed, one after another. */
+export interface GroupShare {
+  via: 'manus';
+  taskId: string;
+  taskUrl: string;
+  /** working · needs_input: Manus paused for you · done: it reported every group · failed · finished: done without a clear report */
+  state: 'working' | 'needs_input' | 'done' | 'failed' | 'finished';
+  message: string;
+  groups: string[];
+  /** your profile, or the Page name to post as where the group allows it */
+  postAs: string;
+  results: GroupResult[];
+  requestedAt: number;
+  checkedAt: number;
 }
 
 export interface ExternalPublish {
@@ -817,5 +844,7 @@ export interface Project {
     plan: CampaignPlan | null;
     batchId?: string;
     lastChannel?: Channel;
+    /** Facebook groups you share posts in (names or links), remembered for next time */
+    facebookGroups?: string[];
   };
 }

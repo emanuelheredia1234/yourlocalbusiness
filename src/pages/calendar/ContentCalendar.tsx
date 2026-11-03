@@ -9,6 +9,7 @@ import { toast, useUI } from '@/store/ui';
 import { Empty, Segmented, Tabs } from '@/components/ui/primitives';
 import { FormatBadge, PostCard, PostTypeTag } from '@/components/posts/PostCard';
 import { ExternalBadge, ManusPostButton, manusSetupHint, useCanOfferManus, useManusPost, useManusReady } from '@/components/posts/ManusPost';
+import { GroupShareBadge, PostToGroupsButton } from '@/components/posts/ManusGroups';
 import { DueBadge, PostedBy, PostMoreMenu, addToCalendarFlow, isDue, manusHolds, useMarkPosted } from '@/components/posts/PostActions';
 import { PlatformChip, PlatformGlyph } from '@/components/posts/PlatformIcon';
 import { PostVisual } from '@/components/visuals/PostVisual';
@@ -331,6 +332,7 @@ function QueueList({ posts }: { posts: Post[] }) {
                     <span className="text-[11px] text-muted">{STYLE_LABEL[p.style]}</span>
                     <DueBadge post={p} />
                     <ExternalBadge post={p} compact />
+                    <GroupShareBadge post={p} compact />
                   </div>
                   <p className="truncate text-[13.5px] font-semibold">{p.headline}</p>
                   <p className="clamp-2 text-[12.5px] text-muted">{p.caption}</p>
@@ -342,6 +344,7 @@ function QueueList({ posts }: { posts: Post[] }) {
                     <Pencil size={13} /> Edit
                   </button>
                   <ManusPostButton post={p} primary />
+                  <PostToGroupsButton post={p} />
                   <button className="btn btn-secondary btn-sm" onClick={() => useMarkPosted.getState().open(p.id)}>
                     <CheckCheck size={13} /> Mark as posted
                   </button>
@@ -390,6 +393,8 @@ function PublishedList({ posts }: { posts: Post[] }) {
                   <Pencil size={12} /> Open
                 </button>
                 {p.external && <ExternalBadge post={p} compact />}
+                {p.groupShare && <GroupShareBadge post={p} compact />}
+                <PostToGroupsButton post={p} size="xs" />
                 <PostMoreMenu post={p} className="ml-auto" />
               </div>
             </div>

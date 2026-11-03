@@ -16,6 +16,7 @@ import { ManusLink, PostImagePanel, aspectForPlatform } from '../images/PostImag
 import { VideoPanel } from '../images/VideoPanel';
 import { useImageJob } from '../images/useImageJob';
 import { ExternalBadge, ManusPostButton, useManusReady } from './ManusPost';
+import { GroupShareBadge, PostToGroupsButton } from './ManusGroups';
 import { DueBadge, PostMoreMenu, PostedBy, addToCalendarFlow, manusHolds, useMarkPosted } from './PostActions';
 import { createPostImage, defaultImageKind, postVideoPrompt } from '@/ai/image';
 import { brandHandle } from '@/lib/brandMark';
@@ -196,6 +197,7 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
         <DueBadge post={post} />
         <PostedBy post={post} />
         <ExternalBadge post={post} />
+        <GroupShareBadge post={post} />
         <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1">
           {post.status === 'draft' && (
             <button className={cn('btn btn-sm', manusReady ? 'btn-secondary' : 'btn-primary')} onClick={() => addToCalendarFlow([post.id])}>
@@ -203,6 +205,7 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
             </button>
           )}
           <ManusPostButton post={post} primary={post.status === 'scheduled'} />
+          <PostToGroupsButton post={post} />
           {post.status === 'scheduled' && !manusReady && (
             <button className="btn btn-secondary btn-sm" onClick={() => useMarkPosted.getState().open(post.id)}>
               <CheckCheck size={14} /> Mark as posted
@@ -325,6 +328,7 @@ export function PostEditorHost() {
               <Undo2 size={14} /> Mark as not posted
             </button>
           )}
+          <PostToGroupsButton post={post} />
           <ManusPostButton post={post} primary />
           <button className="btn btn-secondary btn-sm" onClick={close}>
             Done
@@ -344,6 +348,11 @@ export function PostEditorHost() {
           {post.external && (
             <div className="mb-4">
               <ExternalBadge post={post} />
+            </div>
+          )}
+          {post.groupShare && (
+            <div className="mb-4">
+              <GroupShareBadge post={post} />
             </div>
           )}
           <PostFields post={post} onChange={(patch) => update(post.id, patch)} />

@@ -10,6 +10,7 @@ import { ConfirmHost, Spinner, Toaster } from '@/components/ui/primitives';
 import { PostEditorHost } from '@/components/posts/PostCard';
 import { ManusPostHost, useManusPostWatcher } from '@/components/posts/ManusPost';
 import { MarkPostedHost } from '@/components/posts/PostActions';
+import { ManusGroupsHost, useGroupShareWatcher } from '@/components/posts/ManusGroups';
 import { ComposerHost } from '@/pages/dashboard/QuickComposer';
 import { StoreOverlays } from '@/pages/store/StoreOverlays';
 import { Onboarding } from '@/pages/onboarding/Onboarding';
@@ -53,6 +54,7 @@ export default function App() {
   const hasListings = useStore((s) => s.myListings.length > 0);
   useThemeSync();
   useManusPostWatcher();
+  useGroupShareWatcher();
 
   useEffect(() => {
     initRuntime();
@@ -148,6 +150,7 @@ export default function App() {
       <ComposerHost />
       <PostEditorHost />
       <ManusPostHost />
+      <ManusGroupsHost />
       <MarkPostedHost />
       <StoreOverlays />
       <ConfirmHost />

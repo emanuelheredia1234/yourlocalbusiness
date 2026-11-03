@@ -71,7 +71,7 @@ const open = (url: string) => window.open(url, '_blank', 'noopener,noreferrer');
 /** Failures after which the task may exist anyway (sending again could post twice). */
 const UNCERTAIN = new Set(['MANUS_CREATE_UNKNOWN', 'server_unavailable', 'upstream_error', 'cancelled']);
 
-function errorCopy(e: unknown): { title: string; body: string; uncertain?: boolean } {
+export function errorCopy(e: unknown): { title: string; body: string; uncertain?: boolean } {
   const code = (e as { code?: string })?.code ?? 'upstream_error';
   const msg = (e as Error)?.message ?? '';
   const m = manusErrorMessage(code, msg);
