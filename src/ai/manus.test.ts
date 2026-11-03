@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ManusState } from './manus';
 import { manusImagePrompt, parseManusCreate, parseManusState } from './manus';
-import { facebookSchedulePrompt, fbScheduleWindowError, parseScheduleResult, stateFromManus } from './manusFacebook';
+import { facebookPostPrompt, facebookSchedulePrompt, fbScheduleWindowError, parseScheduleResult, stateFromManus } from './manusFacebook';
 import { unwrapZapier, ZapierError } from '@/lib/zapier';
 
 // Shapes as Zapier returns them (values made up)
@@ -67,7 +67,27 @@ describe('Facebook scheduling with Manus', () => {
     expect(facebookSchedulePrompt({ page: '', whenIso: '2026-10-29T16:00:00Z', timeZone: 'UTC', text: 'x', hasImage: false })).toContain('text-only post');
   });
 
+  it('posts right away with the video attached, exactly once', () => {
+    const p = facebookPostPrompt({ mode: 'now', page: 'Sumari', whenIso: '2026-10-29T16:00:00Z', timeZone: 'America/Chicago', text: 'New candles 🕯️\n\n#handmade', media: 'video' });
+    expect(p).toMatch(/right now/);
+    expect(p).toContain('"Sumari"');
+    expect(p).toContain('New candles 🕯️\n\n#handmade');
+    expect(p).toContain('Attach the video file provided');
+    expect(p).toMatch(/Wait until Facebook has finished uploading/);
+    expect(p).toContain('Choose "Publish"');
+    expect(p).toContain('Never schedule it for later.');
+    expect(p).toMatch(/Post exactly once/);
+    expect(p).toContain('RESULT: POSTED');
+    expect(p).not.toContain('RESULT: SCHEDULED');
+    const img = facebookPostPrompt({ mode: 'now', page: '', whenIso: '2026-10-29T16:00:00Z', timeZone: 'UTC', text: 'x', media: 'image' });
+    expect(img).toContain('Attach the image file provided');
+    expect(img).toMatch(/business's Facebook Page/);
+    expect(facebookPostPrompt({ mode: 'now', page: 'A', whenIso: '2026-10-29T16:00:00Z', timeZone: 'UTC', text: 'x', media: null })).toContain('text-only post');
+  });
+
   it('reads Manus’s result line', () => {
+    expect(parseScheduleResult('Done.\nRESULT: POSTED | Sumari | https://facebook.com/123')).toEqual({ state: 'posted', detail: 'Sumari · https://facebook.com/123' });
+    expect(parseScheduleResult('RESULT: PUBLISHED | Sumari').state).toBe('posted');
     expect(parseScheduleResult('Done!\nRESULT: SCHEDULED | Sumari | Oct 29, 11:00 AM')).toEqual({ state: 'scheduled', detail: 'Sumari · Oct 29, 11:00 AM' });
     expect(parseScheduleResult('**RESULT: FAILED | Not signed in**')).toEqual({ state: 'failed', detail: 'Not signed in' });
     expect(parseScheduleResult('All good, it is scheduled.')).toEqual({ state: null, detail: '' });
@@ -81,5 +101,9 @@ describe('Facebook scheduling with Manus', () => {
     expect(stateFromManus({ ...base, status: 'stopped', done: true, text: 'RESULT: FAILED | Page not found' })).toEqual({ state: 'failed', message: 'Page not found' });
     expect(stateFromManus({ ...base, status: 'stopped', done: true, text: 'I scheduled it.' }).state).toBe('finished');
     expect(stateFromManus({ ...base, status: 'error', error: 'crashed' })).toEqual({ state: 'failed', message: 'crashed' });
+    // posting right away
+    expect(stateFromManus(base, 'now')).toEqual({ state: 'working', message: 'Manus is posting it on Facebook…' });
+    expect(stateFromManus({ ...base, status: 'stopped', done: true, text: 'RESULT: POSTED | Sumari | https://fb.com/1' }, 'now')).toEqual({ state: 'posted', message: 'Sumari · https://fb.com/1' });
+    expect(stateFromManus({ ...base, status: 'stopped', done: true, text: 'I posted it.' }, 'now').message).toBe('I posted it.');
   });
 });

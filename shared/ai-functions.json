@@ -19,6 +19,6 @@
     { "id": "illustrations", "label": "Illustrations", "group": "writing", "kind": "text", "desc": "Brand illustrations drawn as SVG.", "tasks": ["postImage", "listingImage"] },
     { "id": "photos", "label": "Photos", "group": "media", "kind": "image", "desc": "AI photos for posts and listings.", "tasks": [] },
     { "id": "videos", "label": "Videos", "group": "media", "kind": "video", "desc": "AI videos for posts and product demos.", "tasks": [] },
-    { "id": "facebook", "label": "Facebook scheduling", "group": "agents", "kind": "agent", "desc": "An agent schedules posts in Meta Business Suite.", "tasks": [] }
+    { "id": "facebook", "label": "Facebook posting", "group": "agents", "kind": "agent", "desc": "An agent posts on your Facebook Page (right away or scheduled), with the post’s image or video.", "tasks": [] }
   ]
 }

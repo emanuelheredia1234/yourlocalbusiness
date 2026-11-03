@@ -21,6 +21,7 @@ export function createMockProviders({ keys = {} } = {}) {
   const behavior = {}; // provider id → 'fail500' | 'policy' | 'auth' | 'rate' | undefined
   const videoPolls = new Map();
   const manusTasks = new Map();
+  const manusFiles = new Map(); // file id → { filename, status, size } (Manus file.upload)
   let server;
   let base = '';
 
@@ -47,7 +48,7 @@ export function createMockProviders({ keys = {} } = {}) {
     res.end();
   }
 
-  function handle(req, res, raw) {
+  function handle(req, res, raw, rawBuf = Buffer.from(raw)) {
     const url = new URL(req.url, 'http://mock');
     const [, id, ...rest] = url.pathname.split('/');
     const p = `/${rest.join('/')}`;
@@ -64,6 +65,17 @@ export function createMockProviders({ keys = {} } = {}) {
     if (id === '__calls') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(calls.slice(0, -1).map((c) => ({ provider: c.provider, path: c.path, body: c.body && typeof c.body === 'object' ? { ...c.body, messages: undefined, input: undefined } : null }))));
+    }
+    // Manus's presigned upload address (S3): no key, the exact length is required
+    if (id === 'manus-upload' && req.method === 'PUT') {
+      const f = manusFiles.get(rest[0]);
+      if (!f) return json(res, 403, { error: 'expired or unknown upload' });
+      const len = Number(req.headers['content-length'] || NaN);
+      if (!Number.isFinite(len)) return json(res, 411, { error: 'MissingContentLength' });
+      if (len !== rawBuf.length) return json(res, 400, { error: 'IncompleteBody' });
+      Object.assign(f, { status: 'uploaded', size: rawBuf.length, head: rawBuf.subarray(0, 16).toString('hex') });
+      res.writeHead(200, { etag: '"mock"' });
+      return res.end();
     }
     // downloads (no key needed, like signed links)
     if (id === 'files') {
@@ -176,6 +188,16 @@ export function createMockProviders({ keys = {} } = {}) {
     }
 
     // ── Manus ──
+    if (id === 'manus' && p === '/v2/file.upload') {
+      const fileId = `file${String(manusFiles.size + 1).padStart(5, '0')}`;
+      manusFiles.set(fileId, { filename: body?.filename, status: 'pending', size: 0 });
+      return json(res, 200, { ok: true, request_id: 'r1', file: { id: fileId, filename: body?.filename, status: 'pending', created_at: String(Math.floor(Date.now() / 1000)) }, upload_url: `${base}/manus-upload/${fileId}?X-Amz-Signature=mock`, upload_expires_at: String(Math.floor(Date.now() / 1000) + 180) });
+    }
+    if (id === 'manus' && p === '/v2/file.detail') {
+      const f = manusFiles.get(url.searchParams.get('file_id'));
+      if (!f) return json(res, 404, { ok: false, error: { code: 'not_found', message: 'file not found' } });
+      return json(res, 200, { ok: true, request_id: 'r1', file: { id: url.searchParams.get('file_id'), filename: f.filename, status: f.status } });
+    }
     if (id === 'manus' && p === '/v2/task.create') {
       const taskId = `task${String(manusTasks.size + 1).padStart(6, '0')}`;
       manusTasks.set(taskId, { polls: 0, profile: body?.agent_profile, followUps: [] });
@@ -226,6 +248,7 @@ export function createMockProviders({ keys = {} } = {}) {
         manus: `${base}/manus`,
       };
     },
+    manusFiles,
     last(provider, path) {
       return [...calls].reverse().find((c) => c.provider === provider && (!path || c.path === path));
     },
@@ -235,9 +258,12 @@ export function createMockProviders({ keys = {} } = {}) {
     },
     async start(port = 0) {
       server = http.createServer((req, res) => {
-        let raw = '';
-        req.on('data', (c) => (raw += c));
-        req.on('end', () => handle(req, res, raw));
+        const chunks = [];
+        req.on('data', (c) => chunks.push(c));
+        req.on('end', () => {
+          const rawBuf = Buffer.concat(chunks);
+          handle(req, res, rawBuf.toString('utf8'), rawBuf);
+        });
       });
       await new Promise((r) => server.listen(port, '127.0.0.1', r));
       base = `http://127.0.0.1:${server.address().port}`;

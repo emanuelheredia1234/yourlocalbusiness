@@ -41,10 +41,47 @@ const isImage = (a) => a && (a.type === 'image' || /^image\//.test(String(a.cont
 export default {
   base: 'https://api.manus.ai',
 
-  /** Start a task (a paid, one-shot write: never retried). */
-  async create(ctx, { prompt, title, profile, interactive, hidden, image, signal }) {
+  /**
+   * Hand Manus a file (a video, or anything over the 20 MB inline limit) for a task: a file record,
+   * then the bytes straight to its upload address (good for 3 minutes; S3 needs the exact length),
+   * then wait until Manus has it. `body` is a web ReadableStream or bytes. Returns its file_id.
+   */
+  async uploadFile(ctx, { filename, size, body, signal }) {
+    const rec = await call(ctx, '/v2/file.upload', { method: 'POST', body: { filename: String(filename).slice(0, 120) }, signal });
+    const fileId = String(rec.file?.id ?? '');
+    const uploadUrl = String(rec.upload_url ?? '');
+    if (!fileId || !uploadUrl) throw new ProviderError('UPSTREAM', 'Manus didn’t return an upload address for the file.', { provider: ctx.label });
+    let put;
+    try {
+      put = await ctx.fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'content-length': String(size) },
+        body,
+        duplex: 'half',
+        signal: AbortSignal.any([AbortSignal.timeout(15 * 60_000), ...(signal ? [signal] : [])]),
+      });
+    } catch (e) {
+      throw new ProviderError('NETWORK', `Couldn’t send the file to Manus (${e?.message || 'network error'}).`, { provider: ctx.label });
+    }
+    if (!put.ok) throw new ProviderError('UPSTREAM', `Manus didn’t accept the file (${put.status}).`, { provider: ctx.label });
+    for (let i = 0; i < 20; i++) {
+      const d = await call(ctx, `/v2/file.detail?file_id=${encodeURIComponent(fileId)}`, { signal });
+      const status = String(d.file?.status ?? '');
+      if (status === 'uploaded') return { file_id: fileId, filename: String(filename) };
+      if (status === 'error' || status === 'deleted') throw new ProviderError('UPSTREAM', 'Manus couldn’t store the file. Try again.', { provider: ctx.label });
+      await new Promise((r) => setTimeout(r, Math.min(3000, 500 + i * 250)));
+    }
+    throw new ProviderError('UPSTREAM', 'Manus is still processing the file. Try again in a minute.', { provider: ctx.label });
+  },
+
+  /** Start a task (a paid, one-shot write: never retried). `files`: [{ file_id, filename }] from uploadFile. */
+  async create(ctx, { prompt, title, profile, interactive, hidden, image, files = [], signal }) {
     const file = image ? parseDataUrl(image.dataUrl) : null;
-    const content = file ? [{ type: 'text', text: prompt }, { type: 'file', file_data: `data:${file.mime};base64,${file.base64}`, filename: image.filename || 'image.jpg', mime_type: file.mime }] : prompt;
+    const parts = [
+      ...(file ? [{ type: 'file', file_data: `data:${file.mime};base64,${file.base64}`, filename: image.filename || 'image.jpg', mime_type: file.mime }] : []),
+      ...files.map((f) => ({ type: 'file', file_id: f.file_id, filename: f.filename })),
+    ];
+    const content = parts.length ? [{ type: 'text', text: prompt }, ...parts] : prompt;
     const body = { message: { content }, agent_profile: profile || 'standard', interactive_mode: !!interactive, hide_in_task_list: !!hidden };
     if (title) body.title = String(title).slice(0, 120);
     const p = await call(ctx, '/v2/task.create', { method: 'POST', body, signal, timeoutMs: 60_000 });

@@ -484,8 +484,10 @@ export interface ExternalPublish {
   network: 'facebook';
   taskId: string;
   taskUrl: string;
+  /** what Manus was asked to do: post right away, or schedule for scheduledFor (older posts: schedule) */
+  mode?: 'now' | 'schedule';
   /** working: Manus is on it · needs_input: Manus paused for you · finished: done without a clear result line */
-  state: 'working' | 'needs_input' | 'scheduled' | 'failed' | 'finished';
+  state: 'working' | 'needs_input' | 'posted' | 'scheduled' | 'failed' | 'finished';
   message: string;
   page: string;
   scheduledFor: string;

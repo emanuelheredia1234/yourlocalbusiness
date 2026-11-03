@@ -360,21 +360,21 @@ export class AIRouter {
     return { bytes: job.bytes, contentType: job.contentType || 'video/mp4' };
   }
 
-  // ───────────── Manus tasks (photos and Facebook scheduling) ─────────────
+  // ───────────── Manus tasks (photos and Facebook posts) ─────────────
 
   /** The owner's Manus key, or a user's own (apiKey): their task runs in their Manus account. */
   manusCtx(apiKey) {
     return apiKey ? { ...this.ctx('manus'), key: apiKey, label: 'Manus (your key)' } : this.ctx('manus');
   }
 
-  async manusCreate({ fn, prompt, title, interactive, hidden, image, signal, owner = null, apiKey = null }) {
+  async manusCreate({ fn, prompt, title, interactive, hidden, image, files = [], signal, owner = null, apiKey = null }) {
     const kind = fnById[fn]?.kind;
     if (fn !== 'photos' && fn !== 'facebook') throw new ProviderError('BAD_REQUEST', 'Unknown Manus task.', { status: 400 });
     if (!apiKey && !this.store.powers('manus', fn)) throw new ProviderError('NO_PROVIDER', `Your Manus key isn’t set to power ${fnById[fn].label}. Turn it on in Settings → AI.`, { status: 409 });
     const profile = this.store.settings('manus').effort[kind];
     const t0 = Date.now();
     try {
-      const out = await this.adapters.manus.create(this.manusCtx(apiKey), { prompt, title, profile, interactive, hidden, image, signal });
+      const out = await this.adapters.manus.create(this.manusCtx(apiKey), { prompt, title, profile, interactive, hidden, image, files, signal });
       const meta = this.describe('manus', kind, fn, { model: 'manus', effort: profile, ms: Date.now() - t0 });
       if (apiKey) meta.providerLabel = 'Manus (your key)';
       const usageId = this.usage.add({ ok: true, pending: true, provider: 'manus', fn, kind, model: 'manus', effort: profile, ms: meta.ms, taskId: out.task_id, userId: owner, ...(apiKey ? { ownKey: true } : {}) });
@@ -400,6 +400,12 @@ export class AIRouter {
   async manusContinue({ taskId, prompt, signal, apiKey = null }) {
     this.knownTask(taskId);
     return this.adapters.manus.send(this.manusCtx(apiKey), { taskId, prompt, signal });
+  }
+
+  /** Upload a file to the Manus account behind this key (the owner's, or a user's own). */
+  async manusUpload({ filename, size, body, signal, apiKey = null }) {
+    if (!apiKey && !this.store.key('manus')) throw new ProviderError('NO_PROVIDER', 'Add a Manus API key in Settings → AI first.', { status: 409 });
+    return this.adapters.manus.uploadFile(this.manusCtx(apiKey), { filename, size, body, signal });
   }
 
   /** A free check of a user's own Manus key (lists one task). */

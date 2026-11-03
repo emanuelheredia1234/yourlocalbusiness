@@ -223,7 +223,20 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
 
   // ───────────── Storage subset ─────────────
 
+  const signed = new Map(); // token → { key, until } (createSignedUrl)
+
   async function storage(req, res, url, rawBuf) {
+    const p0 = url.pathname.replace(/^\/storage\/v1/, '');
+    // a signed link: no key needed, the token is the permission (like Supabase Storage)
+    const sg = /^\/object\/sign\/([^/]+)\/(.+)$/.exec(p0);
+    if (sg && req.method === 'GET') {
+      const t = signed.get(url.searchParams.get('token') || '');
+      const key = `${sg[1]}/${decodeURIComponent(sg[2])}`;
+      if (!t || t.key !== key || t.until < Date.now()) return send(res, 400, { statusCode: '400', error: 'InvalidJWT', message: 'invalid signature' });
+      const o = objects.get(key);
+      if (!o) return send(res, 400, { statusCode: '404', error: 'not_found', message: 'Object not found' });
+      return send(res, 200, o.bytes, { 'content-type': o.type, 'content-length': o.bytes.length });
+    }
     const who = await caller(req);
     if (!who || who.anon) return send(res, 400, { statusCode: '403', error: 'Unauthorized', message: 'Invalid JWT' });
     const own = (path) => who.service || path.split('/')[0] === who.userId;
@@ -247,6 +260,16 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
         if (objects.delete(`${m[1]}/${path}`)) removed.push({ name: path });
       }
       return send(res, 200, removed);
+    }
+    m = /^\/object\/sign\/([^/]+)\/(.+)$/.exec(p);
+    if (m && req.method === 'POST') {
+      const path = decodeURIComponent(m[2]);
+      if (!own(path)) return send(res, 400, { statusCode: '403', error: 'Unauthorized', message: 'new row violates row-level security policy' });
+      if (!objects.has(`${m[1]}/${path}`)) return send(res, 400, { statusCode: '404', error: 'not_found', message: 'Object not found' });
+      const { expiresIn = 60 } = JSON.parse(rawBuf.toString() || '{}');
+      const token = b64url(crypto.randomBytes(18));
+      signed.set(token, { key: `${m[1]}/${path}`, until: Date.now() + Number(expiresIn) * 1000 });
+      return send(res, 200, { signedURL: `/object/sign/${m[1]}/${m[2]}?token=${token}` });
     }
     m = /^\/object\/(?:authenticated\/)?([^/]+)\/(.+)$/.exec(p);
     if (m) {

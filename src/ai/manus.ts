@@ -12,6 +12,7 @@ import { ZapierError, zapierCall } from '@/lib/zapier';
 import { useStore } from '@/store/useStore';
 import { ART_SIZE } from './local/art';
 import { serverFetch } from './claude';
+import { signedFileUrl } from '@/lib/cloud/auth';
 
 export const MANUS_API = 'App229860CLIAPI';
 export const MANUS_CREATE = 'code_action_app229860cliapi__create_task_with_image';
@@ -223,6 +224,8 @@ export interface CreateManusOptions {
   title?: string;
   image?: Blob | null;
   imageName?: string;
+  /** files already sent to Manus (sendFileToManus), e.g. a post's video */
+  files?: { file_id: string; filename: string }[];
   /** let Manus pause to ask (e.g. to sign in to Facebook) */
   interactive?: boolean;
   hidden?: boolean;
@@ -232,11 +235,43 @@ export interface CreateManusOptions {
 
 const SERVER_UPLOAD_LIMIT = 8_000_000;
 
+/**
+ * Send a file (a post's video, or anything big) to the Manus account that will run the task, through
+ * your server. Signed in, the server takes it straight from your account's storage, so a big video
+ * never has to pass through the browser (hosts like Replit's published apps refuse uploads over about
+ * 32 MB); otherwise the browser sends it. Returns what createManusTask's `files` needs.
+ */
+export async function sendFileToManus(o: { blob: Blob; name?: string; mediaId?: string; signal?: AbortSignal }): Promise<{ file_id: string; filename: string }> {
+  if (!manusViaServer()) throw new ManusError('Videos can only be sent to Manus from the self-hosted app (for example on Replit).', 'MANUS_CREATE');
+  const type = o.blob.type || 'application/octet-stream';
+  const ext = type === 'video/quicktime' ? 'mov' : type === 'video/webm' ? 'webm' : type.startsWith('video/') ? 'mp4' : type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : type.startsWith('image/') ? 'jpg' : 'bin';
+  const filename = `${(o.name || 'file').replace(/\.[a-z0-9]+$/i, '').slice(0, 80) || 'file'}.${ext}`;
+  const serverUrl = useStore.getState().settings.ai.serverUrl;
+  const link = o.mediaId ? await signedFileUrl(o.mediaId).catch(() => null) : null;
+  let res: Response;
+  try {
+    res = link
+      ? await serverFetch(serverUrl, '/api/ai/manus/attach', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: link, filename }), signal: o.signal })
+      : await serverFetch(serverUrl, `/api/ai/manus/attach?filename=${encodeURIComponent(filename)}`, { method: 'POST', headers: { 'content-type': type }, body: o.blob, signal: o.signal });
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw new ManusError('Stopped.', 'cancelled');
+    throw new ManusError('Couldn’t reach your AI server to send the file to Manus.', 'MANUS_NETWORK');
+  }
+  const json = (await res.json().catch(() => null)) as { file_id?: string; filename?: string; error?: string; code?: string } | null;
+  if (!res.ok || !json?.file_id) {
+    if (res.status === 413) throw new ManusError('That file is too big to send to Manus from here. Use a shorter or smaller video (under about 30 MB), or sign in so the server can take it from your account.', 'MANUS_CREATE');
+    if (json?.code === 'NO_PROVIDER' || json?.code === 'OWN_KEY_NEEDED') throw new ManusError(json.error || 'Add a Manus API key in Settings → AI first.', 'MANUS_SETUP');
+    throw new ManusError(json?.error || `Couldn’t send the file to Manus (${res.status}).`, 'MANUS_CREATE');
+  }
+  return { file_id: json.file_id, filename: json.filename || filename };
+}
+
 /** Start a Manus task (one-shot write: never retried automatically). */
 export async function createManusTask(o: CreateManusOptions): Promise<ManusTask> {
   if (manusViaServer()) {
     const body: Record<string, unknown> = { fn: o.fn, prompt: o.prompt, interactive_mode: !!o.interactive, hide_in_task_list: !!o.hidden };
     if (o.title) body.title = o.title.slice(0, 120);
+    if (o.files?.length) body.files = o.files;
     if (o.image) {
       const blob = o.image.size > SERVER_UPLOAD_LIMIT ? await shrinkForUpload(o.image) : o.image;
       const type = blob.type || 'image/jpeg';
@@ -245,6 +280,7 @@ export async function createManusTask(o: CreateManusOptions): Promise<ManusTask>
     }
     return parseManusCreate(await serverManus('create', body));
   }
+  if (o.files?.length) throw new ManusError('Videos can only be sent to Manus from the self-hosted app (for example on Replit).', 'MANUS_CREATE');
   // the code action declares every field as text
   const params: Record<string, unknown> = {
     prompt: o.prompt,

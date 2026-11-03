@@ -302,6 +302,72 @@ describe('the review’s fixes', () => {
   });
 });
 
+describe('a post’s video for Manus', () => {
+  it('takes the video from the person’s own storage and hands it to Manus with the task', async () => {
+    const owner = await supa.tokenFor('owner@example.com');
+    const a = await serverCopy({ env: { SUPABASE_URL: supa.url } });
+    await fetch(`${a.base}/api/ai/providers/manus`, { method: 'PUT', headers: as(owner), body: JSON.stringify({ apiKey: 'mn-owner-typed-5678', functions: ['facebook'] }) });
+    // the video in the owner's account (as the app's media sync would have put it there)
+    const video = Buffer.concat([Buffer.from('000000206674797069736f6d', 'hex'), Buffer.alloc(2_500_000, 3)]);
+    supa.objects.set(`media/${owner.user.id}/media_vid1`, { bytes: video, type: 'video/mp4', created: Date.now() });
+    const signRes = await fetch(`${supa.url}/storage/v1/object/sign/media/${owner.user.id}/media_vid1`, { method: 'POST', headers: { apikey: supa.PUBLISHABLE, authorization: `Bearer ${owner.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ expiresIn: 600 }) });
+    const link = `${supa.url}/storage/v1${(await signRes.json()).signedURL}`;
+    let r = await fetch(`${a.base}/api/ai/manus/attach`, { method: 'POST', headers: as(owner), body: JSON.stringify({ url: link, filename: 'candles.mp4' }) });
+    expect(r.status).toBe(200);
+    const file = await r.json();
+    expect(file).toMatchObject({ filename: 'candles.mp4' });
+    const stored = providers.manusFiles.get(file.file_id);
+    expect(stored).toMatchObject({ status: 'uploaded', size: video.length, head: video.subarray(0, 16).toString('hex') });
+    // then the task carries it as a file part
+    r = await fetch(`${a.base}/api/ai/manus/create`, { method: 'POST', headers: as(owner), body: JSON.stringify({ fn: 'facebook', prompt: 'Post ONE organic post', files: [file] }) });
+    expect(r.status).toBe(200);
+    const sent = providers.calls.filter((c) => c.provider === 'manus' && c.path === '/v2/task.create').pop();
+    expect(sent.body.message.content).toEqual([{ type: 'text', text: 'Post ONE organic post' }, { type: 'file', file_id: file.file_id, filename: 'candles.mp4' }]);
+    await a.close();
+  });
+
+  it('takes the bytes from the browser when the file isn’t in an account', async () => {
+    const owner = await supa.tokenFor('owner@example.com');
+    const a = await serverCopy({ env: { SUPABASE_URL: supa.url } });
+    await fetch(`${a.base}/api/ai/providers/manus`, { method: 'PUT', headers: as(owner), body: JSON.stringify({ apiKey: 'mn-owner-typed-5678', functions: ['facebook'] }) });
+    const bytes = Buffer.alloc(1_200_000, 9);
+    const r = await fetch(`${a.base}/api/ai/manus/attach?filename=${encodeURIComponent('../../clip.mp4')}`, { method: 'POST', headers: { ...as(owner), 'content-type': 'video/mp4' }, body: bytes });
+    expect(r.status).toBe(200);
+    const file = await r.json();
+    expect(file.filename).toBe('.._.._clip.mp4');
+    expect(providers.manusFiles.get(file.file_id)).toMatchObject({ status: 'uploaded', size: bytes.length });
+    await a.close();
+  });
+
+  it('only fetches the person’s own files from this app’s Supabase', async () => {
+    const owner = await supa.tokenFor('owner@example.com');
+    const other = await supa.tokenFor('other-owner-files@example.com');
+    const a = await serverCopy({ env: { SUPABASE_URL: supa.url } });
+    await fetch(`${a.base}/api/ai/providers/manus`, { method: 'PUT', headers: as(owner), body: JSON.stringify({ apiKey: 'mn-owner-typed-5678', functions: ['facebook'] }) });
+    const tries = [
+      `${supa.url}/storage/v1/object/sign/media/${other.user.id}/media_x?token=t`, // someone else's folder
+      `${supa.url}/storage/v1/object/sign/media/${owner.user.id}/../${other.user.id}/media_x?token=t`, // climbing out
+      `http://169.254.169.254/storage/v1/object/sign/media/${owner.user.id}/x?token=t`, // not Supabase
+      `${supa.url}/storage/v1/object/media/${owner.user.id}/x`, // not a signed link
+      'not a url',
+    ];
+    for (const url of tries) {
+      const r = await fetch(`${a.base}/api/ai/manus/attach`, { method: 'POST', headers: as(owner), body: JSON.stringify({ url, filename: 'x.mp4' }) });
+      expect(r.status, url).toBe(400);
+    }
+    await a.close();
+  });
+
+  it('needs the person’s own Manus key (not the owner’s) for anyone else', async () => {
+    const user = await supa.tokenFor('user-no-manus@example.com');
+    const a = await serverCopy({ env: { SUPABASE_URL: supa.url } });
+    const r = await fetch(`${a.base}/api/ai/manus/attach?filename=x.mp4`, { method: 'POST', headers: { ...as(user), 'content-type': 'video/mp4' }, body: Buffer.alloc(10) });
+    expect(r.status).toBe(403);
+    expect((await r.json()).code).toBe('OWN_KEY_NEEDED');
+    await a.close();
+  });
+});
+
 describe('the app’s owner', () => {
   it('is whoever Supabase marks as admin (app_metadata), whatever their email', async () => {
     const auth = createAuth({ supabaseUrl: supa.url, publishableKey: supa.PUBLISHABLE, adminEmails: 'someone-else@example.com' });

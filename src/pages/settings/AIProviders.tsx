@@ -855,7 +855,7 @@ function ServerAddress() {
   );
 }
 
-/** A user's own Manus account: their photos-by-agent and Facebook scheduling run there, on their credits. */
+/** A user's own Manus account: their photos-by-agent and Facebook posts run there, on their credits. */
 function OwnManus({ call, serverUrl }: { call: Call; serverUrl: string }) {
   const [info, setInfo] = useState<{ available: boolean; last4: string | null } | null>(null);
   const [key, setKey] = useState('');
@@ -874,10 +874,10 @@ function OwnManus({ call, serverUrl }: { call: Call; serverUrl: string }) {
     apply(r.json);
     setKey('');
     void pingServer(serverUrl);
-    toast({ kind: 'success', title: 'Your Manus key is saved', body: 'Manus photos and Facebook scheduling now run in your own Manus account.' });
+    toast({ kind: 'success', title: 'Your Manus key is saved', body: 'Manus photos and Facebook posts now run in your own Manus account.' });
   };
   const remove = async () => {
-    if (!(await confirmAction({ title: 'Remove your Manus key?', body: 'Manus photos and Facebook scheduling stop until you add a key again.', confirmLabel: 'Remove key', danger: true }))) return;
+    if (!(await confirmAction({ title: 'Remove your Manus key?', body: 'Manus photos and Facebook posts stop until you add a key again.', confirmLabel: 'Remove key', danger: true }))) return;
     const r = await call<{ available: boolean; keys: { manus: { last4: string } | null } }>('DELETE', '/api/ai/my-keys/manus');
     if (!r.ok) return toast({ kind: 'error', title: 'Couldn’t remove the key', body: r.json?.error ?? 'Please try again.' });
     apply(r.json);
@@ -914,7 +914,7 @@ function OwnManus({ call, serverUrl }: { call: Call; serverUrl: string }) {
             </a>
           </li>
           <li>Paste it below and press Save. It’s checked with Manus, stored encrypted on the server, and never shown again (only its last 4 characters).</li>
-          <li>For Facebook scheduling: in Manus, sign in to Facebook once in its browser (Manus asks the first time you schedule).</li>
+          <li>For Facebook posts: in Manus, sign in to Facebook once in its browser (Manus asks the first time it posts for you).</li>
         </ol>
       )}
       {info && !info.available ? (

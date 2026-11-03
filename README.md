@@ -55,7 +55,7 @@ Simulated (clearly labelled in the UI):
 **Powers.** Each card has a dropdown of everything AI does in the app, stacked as checkboxes:
 - **Writing & research:** product research, brand kit & voice, outline & chapters, product files, business model, marketplace listing, code & assets, SEO & sales pages, emails & lead magnets, social posts & campaigns, ads and illustrations.
 - **Media:** photos and videos.
-- **Agents:** Facebook scheduling.
+- **Agents:** Facebook posting.
 
 What a provider can't do is greyed out with the reason. A new key powers everything it can until you choose.
 
@@ -69,7 +69,7 @@ What a provider can't do is greyed out with the reason. A new key powers everyth
 | xAI | `reasoning_effort`: low … xhigh | `quality`: low / medium | `resolution`: 480p / 720p / 1080p | tokens × list price |
 | Meta | `reasoning_effort`: minimal … max | `reasoning_strength`: low / high | – | Meta's reported charge |
 | OpenRouter | `reasoning.effort`: none … max | set by the model | `resolution`: 480p / 768p / 2K (HeyGen) | OpenRouter's exact cost |
-| Manus | – | `agent_profile` (photos as a task) | – | Manus credits; Facebook scheduling uses `agent_profile` lite … max-ultra |
+| Manus | – | `agent_profile` (photos as a task) | – | Manus credits; Facebook posting uses `agent_profile` lite … max-ultra |
 
 **Priority.** Keys are tried in the order shown (move them with the arrows). If the first one fails (outage, rate limit, no credit, bad key), the next key that powers the same function answers, and the result says so. A blocked prompt isn't sent elsewhere. Videos and agent tasks move on only when the first provider certainly started nothing, so a paid job is never doubled.
 
@@ -125,11 +125,15 @@ When the app runs as a claude.ai Artifact and you have the **Zapier** connector 
 
 - **Photos for posts and listings**: each image is one Manus task (usually about 3 minutes and roughly 40 Manus credits in testing). The app polls the task, brings the finished image back, adds your headline, logo and prices, and saves it. Listing sets run their four images in parallel. If you reload mid-way, the app offers to pick the task up again; "Watch it in Manus" links to the task.
 - **Image size**: Manus is asked for a JPEG under 1.5 MB at the image's final size, because its image tools otherwise save PNGs of about 5 MB, too big to come back through Zapier (the app accepts up to 2 MB). If the file is still too big, or Manus didn't attach one, the app asks once, in the same task, for a smaller JPEG (Zapier's built-in Manus **Continue Task** action).
-- **Facebook scheduling**: on any Facebook image post (composer, post cards, post editor, calendar list) choose **Schedule on Facebook**. After you confirm the Page, time and text, Manus opens Meta Business Suite in its own browser and schedules exactly that post (never "publish now"). The post shows live status: working, **Manus needs you** (for example, sign in to Facebook inside Manus the first time), scheduled, or failed, with a link to the task. The app checks every 45 seconds while it's open, or press **Check now**.
+- **Facebook posts**: on any Facebook post with an image, a video, or text only (composer, post cards, post editor, calendar list), choose **Post on Facebook**.
+  - Confirm the Page and choose **Post now** or **Schedule** (for the post's time, 30 minutes to 75 days ahead).
+  - Manus opens Facebook in its own browser and posts exactly that post on your Page: the caption, and the image or video as they are. It posts once and never adds anything else.
+  - The post shows live status: posting or scheduling, **Manus needs you** (for example, to sign in to Facebook inside Manus the first time), posted or scheduled, or failed, with a link to the task. A post Manus has posted is marked published. The app checks every 45 seconds while it's open, or press **Check now**.
+  - Videos (self-hosted only): the video goes to Manus first, through your server, using Manus's file upload (up to 300 MB here). Signed in, the server takes the video straight from your account's storage with a private link that lasts 10 minutes, so big videos never pass through the browser. Replit's published apps refuse uploads over about 32 MB, so without accounts keep videos under that.
 - Setup on the Zapier side (already done for this workspace): Manus enabled on your Zapier MCP plus two custom Manus actions, `create_task_with_image` (Manus API `task.create`, optionally with an image) and `task_output` (`task.detail` + `task.listMessages`, returning images as base64 so the page can show them; the app first lists the files without their bytes, then downloads only the first one that fits).
 - Zapier runs custom actions as "write" calls, so claude.ai may ask you to approve them. To stop the prompts during long Manus tasks, set Zapier's **execute write action** tool to **Always allow** in claude.ai connector settings.
 - Other platforms keep the in-app (simulated) scheduler.
-- Self-hosted, the same Facebook scheduling runs with your Manus API key (tick Facebook scheduling on the Manus card; its agent profile is the key's effort).
+- Self-hosted, the same Facebook posting runs with your Manus API key (tick **Facebook posting** on the Manus card; its agent profile is the key's effort). Everyone else posts with their own Manus key, on their own Pages.
 
 ## Accounts: sign-up, sign-in and saving to your account (Supabase)
 
@@ -174,7 +178,7 @@ What people get:
   - **Everyone else can use their own Manus.** Settings → AI → "Use your own Manus" links to manus.im and explains how to create an API key (Manus → Settings → API Integration → Create API Key).
     - The key is checked with Manus, encrypted on the server (AES-256-GCM, from `USER_KEYS_SECRET` if set, otherwise from the secret key) and kept in `user_secrets`.
     - The app only ever shows its last 4 characters.
-    - Their Manus photos and Facebook scheduling then run in their own Manus account, on their credits.
+    - Their Manus photos and Facebook posts then run in their own Manus account, on their credits.
 - **A separate AI server:** if the app and the AI server run at different addresses (Settings → AI → Advanced), the sign-in is only sent to that server after you press **Test connection** there. This is remembered per account on that device and forgotten at Log out, so a half-typed address, or one from an imported backup, never receives it.
 - **One tab at a time:** an account works in one tab per browser. Opening it in a second tab moves it there; the first tab offers "Use it here".
 - **Optional sign-in:** `SIGN_IN_REQUIRED=false` makes signing in optional. "Continue without an account" keeps work in that browser, and AI then works without signing in.

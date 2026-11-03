@@ -16,6 +16,7 @@
 
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { FUNCTIONS, FUNCTION_GROUPS, PROVIDERS, describeProviders, effortLabel, fnById } from './registry.mjs';
 import { AIStore } from './store.mjs';
 import { UsageLog } from './usage.mjs';
@@ -383,6 +384,55 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       }
     }
 
+    // a file for a Manus task (a post's video or image): sent to the Manus account that will run the
+    // task, through Manus's upload (up to 512 MB; inline attachments stop at 20 MB). Either the bytes
+    // themselves (?filename=…), or a short-lived signed link to the user's own file in Supabase Storage
+    // (JSON { url, filename }), which the server downloads: big videos never pass through the browser.
+    if (p === '/api/ai/manus/attach' && m === 'POST') {
+      if (!generationAllowed(req, res, 'manus', who)) return;
+      const ownKey = auth.enabled && !isAdmin(req, who) ? await userKeys.get(who?.id, 'manus') : null;
+      if (auth.enabled && !isAdmin(req, who) && !ownKey) return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings → AI.', code: 'OWN_KEY_NEEDED' });
+      if (!ownKey && !store.key('manus') && store.remote.enabled) await freshEnough(store.refresh({ force: true }), 2500);
+      const MAX = 300 * 1024 * 1024;
+      const cleanName = (n) => String(n || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').slice(0, 120) || 'file';
+      try {
+        let filename;
+        let size;
+        let stream;
+        if (/application\/json/i.test(String(req.headers['content-type'] || ''))) {
+          const b = await body(req, res);
+          if (!b) return;
+          let src;
+          try {
+            src = new URL(String(b.url || ''));
+          } catch {
+            src = null;
+          }
+          // only the signed-in user's own files in this app's Supabase project
+          const supa = env.SUPABASE_URL ? new URL(env.SUPABASE_URL) : null;
+          const prefix = who ? `/storage/v1/object/sign/media/${who.id}/` : null;
+          if (!src || !supa || !prefix || src.origin !== supa.origin || !src.pathname.startsWith(prefix) || src.pathname.includes('..')) {
+            return reply(req, res, 400, { error: 'That file isn’t one of yours.', code: 'BAD_REQUEST' });
+          }
+          const got = await fetch(src.href, { signal: abortOnClose(res) }).catch(() => null);
+          if (!got?.ok || !got.body) return reply(req, res, 502, { error: 'Couldn’t read the file from your account. Try again.', code: 'UPSTREAM' });
+          size = Number(got.headers.get('content-length') || 0);
+          stream = got.body;
+          filename = cleanName(b.filename);
+        } else {
+          size = Number(req.headers['content-length'] || 0);
+          stream = Readable.toWeb(req);
+          filename = cleanName(url.searchParams.get('filename'));
+        }
+        if (!size) return reply(req, res, 411, { error: 'The file’s size is missing.', code: 'BAD_REQUEST' });
+        if (size > MAX) return reply(req, res, 413, { error: 'That file is over 300 MB.', code: 'TOO_LARGE' });
+        const out = await router.manusUpload({ filename, size, body: stream, signal: abortOnClose(res), apiKey: ownKey });
+        return reply(req, res, 200, out);
+      } catch (e) {
+        return fail(req, res, e);
+      }
+    }
+
     const mt = /^\/api\/ai\/manus\/(create|output|continue)$/.exec(p);
     if (mt && m === 'POST') {
       if (!generationAllowed(req, res, mt[1] === 'output' ? 'manus-read' : 'manus', who)) return;
@@ -401,7 +451,12 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           }
           const image = typeof b.image_data_url === 'string' && parseDataUrl(b.image_data_url) ? { dataUrl: b.image_data_url, filename: typeof b.image_filename === 'string' ? b.image_filename.slice(0, 120) : 'image.jpg' } : null;
           // one-shot write: never retried
-          const created = await withFreshKeys(() => router.manusCreate({ fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null, apiKey: ownKey }));
+          // files already sent to Manus with /api/ai/manus/attach
+          const files = (Array.isArray(b.files) ? b.files : [])
+            .filter((f) => f && typeof f.file_id === 'string' && /^[A-Za-z0-9_-]{4,128}$/.test(f.file_id))
+            .slice(0, 3)
+            .map((f) => ({ file_id: f.file_id, filename: typeof f.filename === 'string' ? f.filename.slice(0, 120) : 'file' }));
+          const created = await withFreshKeys(() => router.manusCreate({ files, fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null, apiKey: ownKey }));
           // the task list must reach Supabase before the app asks another copy of the server about it
           await router.tasksSaved();
           return reply(req, res, 200, created);

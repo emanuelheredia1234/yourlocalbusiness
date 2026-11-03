@@ -122,6 +122,19 @@ export async function authHeaders(target: string): Promise<Record<string, string
   }
 }
 
+/**
+ * A short-lived private link to one of the signed-in person's own stored files (their media folder),
+ * for the server to fetch it directly; null when signed out or the file isn't in the account.
+ */
+export async function signedFileUrl(id: string, seconds = 600): Promise<string | null> {
+  const userId = useAuth.getState().user?.id;
+  if (!client || !userId || !/^[A-Za-z0-9_-]{1,80}$/.test(id)) return null;
+  // a file saved moments ago may still be on its way up
+  await media?.settle(90_000);
+  const { data, error } = await client.storage.from('media').createSignedUrl(`${userId}/${id}`, seconds);
+  return error || !data?.signedUrl ? null : data.signedUrl;
+}
+
 // ───────────── start-up ─────────────
 
 async function loadConfig(): Promise<AccountsConfig | null> {
