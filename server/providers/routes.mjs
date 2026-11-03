@@ -68,16 +68,31 @@ const cleanImages = (list) =>
     });
 
 const NO_ACCOUNTS = { enabled: false, signInRequired: false, identify: async () => null };
+const LOCAL_ONLY = { enabled: false, get: async () => null, version: async () => null, put: async () => null };
 const NO_USER_KEYS = { enabled: false, get: async () => null, info: async () => ({ manus: null }), set: async () => {}, remove: async () => {} };
 
 /**
  * auth (server/auth.mjs): with accounts on, AI needs a signed-in user, the owner (ADMIN_EMAILS) manages
  * the keys, and each video job or Manus task can only be read by whoever started it.
  */
-export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS, userKeys = NO_USER_KEYS }) {
-  const store = new AIStore(path.join(dataDir, 'ai-providers.json'), { env, legacyFile: path.join(dataDir, 'image-providers.json') });
-  const usage = new UsageLog(path.join(dataDir, 'ai-usage.json'));
-  const router = new AIRouter({ store, usage, fetch, baseUrls, tasksFile: path.join(dataDir, 'ai-tasks.json') });
+export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS, userKeys = NO_USER_KEYS, appState = LOCAL_ONLY }) {
+  // appState (server/appState.mjs): with Supabase's secret key, the owner's keys and settings, the
+  // Manus task list and the usage log are also kept in Supabase, so they survive restarts
+  const store = new AIStore(path.join(dataDir, 'ai-providers.json'), { env, legacyFile: path.join(dataDir, 'image-providers.json'), remote: appState });
+  const usage = new UsageLog(path.join(dataDir, 'ai-usage.json'), { remote: appState });
+  const router = new AIRouter({ store, usage, fetch, baseUrls, tasksFile: path.join(dataDir, 'ai-tasks.json'), remote: appState });
+  // hosts that wipe the disk when the app restarts or sleeps (keys typed into the app would vanish)
+  const ephemeralDisk = !!(env.REPLIT_DEPLOYMENT || env.VERCEL);
+
+  /** A settings change is kept on this server; report if it didn't also reach Supabase. */
+  const savedReply = async (req, res, who) => {
+    try {
+      await store.persisted();
+    } catch (e) {
+      return reply(req, res, 502, { error: `${e.message} The change works until this server restarts; try saving again.`, code: 'NOT_SAVED', state: state(req, who) });
+    }
+    return reply(req, res, 200, { state: state(req, who) });
+  };
 
   const reply = (req, res, status, body, headers) => send(res, status, body, { ...corsHeaders(req), ...headers });
 
@@ -155,7 +170,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     return c.signal;
   };
 
-  const state = (req, who) => ({ ...store.list(), canManage: isAdmin(req, who), adminTokenSet: !!adminToken, imported: store.imported });
+  const state = (req, who) => ({ ...store.list(), canManage: isAdmin(req, who), adminTokenSet: !!adminToken, imported: store.imported, storage: store.storage, ephemeralDisk, accounts: auth.enabled });
 
   /** The signed-in user behind a request (null when signed out, or accounts are off). */
   async function whoIs(req, res) {
@@ -174,6 +189,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     const ident = await whoIs(req, res);
     if (!ident) return;
     const { who } = ident;
+    // keys or settings changed through another copy of the server (looked up every few seconds)
+    await store.refresh();
 
     if (p === '/api/ai/providers' && m === 'GET') {
       if (!signedIn(req, res, who)) return;
@@ -190,8 +207,10 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         const b = await body(req, res);
         if (!b) return;
         try {
+          // start from the newest settings, so this change can't undo one saved elsewhere
+          await store.refresh({ force: true });
           store.update(id, b);
-          return reply(req, res, 200, { state: state(req, who) });
+          return await savedReply(req, res, who);
         } catch (e) {
           return reply(req, res, e.status || 400, { error: e.message, code: 'BAD_REQUEST' });
         }
@@ -219,8 +238,9 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       const b = await body(req, res);
       if (!b) return;
       try {
+        await store.refresh({ force: true });
         store.setOrder(b.order);
-        return reply(req, res, 200, { state: state(req, who) });
+        return await savedReply(req, res, who);
       } catch (e) {
         return reply(req, res, e.status || 400, { error: e.message, code: 'BAD_REQUEST' });
       }
@@ -359,10 +379,15 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           }
           const image = typeof b.image_data_url === 'string' && parseDataUrl(b.image_data_url) ? { dataUrl: b.image_data_url, filename: typeof b.image_filename === 'string' ? b.image_filename.slice(0, 120) : 'image.jpg' } : null;
           // one-shot write: never retried
-          return reply(req, res, 200, await router.manusCreate({ fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null, apiKey: ownKey }));
+          const created = await router.manusCreate({ fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null, apiKey: ownKey });
+          // the task list must reach Supabase before the app asks another copy of the server about it
+          await router.tasksSaved();
+          return reply(req, res, 200, created);
         }
         const taskId = typeof b.task_id === 'string' ? b.task_id.trim() : '';
         if (!/^[A-Za-z0-9_-]{6,64}$/.test(taskId)) return reply(req, res, 400, { error: 'Missing task id', code: 'BAD_REQUEST' });
+        // started by another copy of the server, or before a restart
+        await router.ensureTask(taskId);
         const task = router.manusTasks.get(taskId);
         if (!mayUse(req, task?.owner, who)) return notFound(req, res);
         // a task started with someone's own key is read and continued with that key
@@ -395,8 +420,14 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     /** Who's calling (for routes outside /api/ai/*). */
     whoIs,
     /** For /api/health: which keys are ready, their model and effort per kind, and what powers each function. */
+    /** At start-up: settings, Manus tasks and the usage log from Supabase (when it keeps them). */
+    init: async () => {
+      const [settings] = await Promise.all([store.loadRemote(), usage.loadRemote(), router.loadTasksRemote()]);
+      return settings;
+    },
     health: async (who = null) => {
       if (auth.signInRequired && !who) return { ready: false, providers: [], routing: {}, signedIn: false };
+      await store.refresh();
       // with accounts on, the owner's Manus is the owner's alone; others can add their own Manus key
       const hide = auth.enabled && !who?.isAdmin ? new Set(['manus']) : new Set();
       const ownManus = hide.size && who?.id ? !!(await userKeys.get(who.id, 'manus').catch(() => null)) : false;

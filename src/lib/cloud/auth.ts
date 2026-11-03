@@ -70,9 +70,20 @@ export function isSameOriginAuthTarget(target: string, appOrigin: string): boole
   }
 }
 
-/** Headers that tell this app's server who's asking (empty when signed out or cross-origin). */
-export async function authHeaders(target?: string): Promise<Record<string, string>> {
-  if (!client || !target || typeof location === 'undefined' || !isSameOriginAuthTarget(target, location.origin)) return {};
+/** Where the sign-in token may go: this app's own server, or the server address set on this device. */
+function mayCarryToken(target: string): boolean {
+  if (typeof location === 'undefined') return false;
+  if (isSameOriginAuthTarget(target, location.origin)) return true;
+  const configured = serverBaseNow();
+  return !!configured && /^https?:\/\//.test(configured) && isSameOriginAuthTarget(target, new URL(configured).origin);
+}
+
+/**
+ * Headers that tell your server who's asking: the request's full address is required, so the token
+ * only ever goes to your own server (empty when signed out, accounts are off, or it's elsewhere).
+ */
+export async function authHeaders(target: string): Promise<Record<string, string>> {
+  if (!client || !target || !mayCarryToken(target)) return {};
   try {
     const { data } = await client.auth.getSession();
     const token = data.session?.access_token;

@@ -1,16 +1,31 @@
-// A log of recent AI requests (who served it, effort, tokens, cost) in DATA_DIR/ai-usage.json.
+// A log of recent AI requests (who served it, effort, tokens, cost) in DATA_DIR/ai-usage.json and,
+// when Supabase's secret key is set, also in Supabase (merged, so copies of the server don't erase
+// each other's entries, and the log survives restarts).
 
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
 const MAX_ENTRIES = 500;
+const REMOTE_KEY = 'ai-usage';
+const REMOTE_EVERY = 15_000;
+
+/** Both logs, newest first; for an entry in both, this server's copy (it may have been updated since). */
+export function mergeEntries(mine, theirs) {
+  const byId = new Map();
+  for (const e of Array.isArray(theirs) ? theirs : []) if (e && typeof e.id === 'string') byId.set(e.id, e);
+  for (const e of mine) byId.set(e.id, e);
+  return [...byId.values()].sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).slice(0, MAX_ENTRIES);
+}
 
 export class UsageLog {
-  constructor(file) {
+  constructor(file, { remote = { enabled: false } } = {}) {
     this.file = file;
+    this.remote = remote;
     this.entries = [];
     this.timer = null;
+    this.remoteTimer = null;
+    this.remoteChain = Promise.resolve();
     try {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (Array.isArray(raw?.entries)) this.entries = raw.entries.slice(0, MAX_ENTRIES);
@@ -35,12 +50,49 @@ export class UsageLog {
   }
 
   scheduleSave() {
+    if (this.remote.enabled && !this.remoteTimer) {
+      this.remoteTimer = setTimeout(() => {
+        this.remoteTimer = null;
+        void this.flushRemote();
+      }, REMOTE_EVERY);
+      this.remoteTimer.unref?.();
+    }
     if (!this.file || this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = null;
       this.flush();
     }, 1000);
     this.timer.unref?.();
+  }
+
+  /** At start-up: bring in the log kept in Supabase. Never throws. */
+  async loadRemote() {
+    if (!this.remote.enabled) return;
+    try {
+      const got = await this.remote.get(REMOTE_KEY);
+      if (got) this.entries = mergeEntries(this.entries, got.value?.entries);
+    } catch (e) {
+      console.warn(`Usage log: ${e.message}`);
+    }
+  }
+
+  /** Merge with Supabase's copy and save it there (one at a time). Never throws. */
+  flushRemote() {
+    if (!this.remote.enabled) return Promise.resolve();
+    if (this.remoteTimer) {
+      clearTimeout(this.remoteTimer);
+      this.remoteTimer = null;
+    }
+    this.remoteChain = this.remoteChain.then(async () => {
+      try {
+        const got = await this.remote.get(REMOTE_KEY);
+        this.entries = mergeEntries(this.entries, got?.value?.entries);
+        await this.remote.put(REMOTE_KEY, { entries: this.entries });
+      } catch (e) {
+        console.warn(`Usage log: ${e.message}`);
+      }
+    });
+    return this.remoteChain;
   }
 
   flush() {

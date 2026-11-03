@@ -46,7 +46,9 @@ const round6 = (n) => Math.round(n * 1e6) / 1e6;
 
 export class AIRouter {
   /** tasksFile: where the Manus tasks this app started are remembered (only those can be read or continued). */
-  constructor({ store, usage, fetch = globalThis.fetch, baseUrls = {}, adapters = ADAPTERS, tasksFile = '' }) {
+  constructor({ store, usage, fetch = globalThis.fetch, baseUrls = {}, adapters = ADAPTERS, tasksFile = '', remote = { enabled: false } }) {
+    this.remote = remote;
+    this.taskChain = Promise.resolve();
     this.store = store;
     this.usage = usage;
     this.fetch = fetch;
@@ -63,7 +65,42 @@ export class AIRouter {
     }
   }
 
+  /** Merge the Manus tasks kept in Supabase into this server's list (started by another copy, or before a restart). */
+  async loadTasksRemote() {
+    if (!this.remote.enabled) return;
+    try {
+      const got = await this.remote.get('ai-tasks');
+      for (const [id, t] of Object.entries(got?.value?.tasks ?? {})) {
+        if (!this.manusTasks.has(id) && Date.now() - (t?.at ?? 0) < TASK_TTL) this.manusTasks.set(id, t);
+      }
+    } catch (e) {
+      console.warn(`Manus tasks: ${e.message}`);
+    }
+  }
+
+  /** Resolves when the task list has been saved to Supabase (never rejects). */
+  tasksSaved() {
+    return this.taskChain;
+  }
+
+  /** Before reading or continuing a task: if this server doesn't know it, look in Supabase. */
+  async ensureTask(taskId) {
+    if (!this.manusTasks.has(taskId)) await this.loadTasksRemote();
+  }
+
   saveTasks() {
+    if (this.remote.enabled) {
+      // merge with the list in Supabase, then save it there (one save at a time)
+      this.taskChain = this.taskChain.then(async () => {
+        try {
+          await this.loadTasksRemote();
+          for (const [id, t] of this.manusTasks) if (Date.now() - (t.at ?? 0) > TASK_TTL) this.manusTasks.delete(id);
+          await this.remote.put('ai-tasks', { tasks: Object.fromEntries(this.manusTasks) });
+        } catch (e) {
+          console.warn(`Manus tasks: ${e.message}`);
+        }
+      });
+    }
     if (!this.tasksFile) return;
     try {
       fs.mkdirSync(path.dirname(this.tasksFile), { recursive: true, mode: 0o700 });

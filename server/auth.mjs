@@ -2,6 +2,10 @@
 // "Authorization: Bearer …". Tokens are verified locally against the project's public signing keys
 // (JWKS); projects still on the legacy shared-secret key are checked by asking Supabase Auth.
 //
+// The app's owner (who manages the AI keys everyone uses) is either an account whose Supabase
+// app_metadata has "ylb_role": "admin" (only the project's owner can set that, with SQL or the secret
+// key), or one signed in with an ADMIN_EMAILS address that was confirmed by email.
+//
 // Env: SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY (or the legacy SUPABASE_ANON_KEY), ADMIN_EMAILS
 // (the owner's email; comma-separated for several; defaults to DEFAULT_ADMIN_EMAILS), SIGN_IN_REQUIRED ("false" lets the app run without accounts).
 
@@ -67,7 +71,7 @@ export function createAuth({ supabaseUrl = '', publishableKey = '', secretKey = 
     }
     if (!res.ok && res.status !== 401 && res.status !== 403) throw Object.assign(new Error('Couldn’t check your sign-in with Supabase. Try again shortly.'), { status: 503, code: 'AUTH_UNAVAILABLE' });
     const u = res.ok ? await res.json().catch(() => null) : null;
-    const user = typeof u?.id === 'string' ? { id: u.id, email: String(u.email ?? '').toLowerCase() } : null;
+    const user = typeof u?.id === 'string' ? { id: u.id, email: String(u.email ?? '').toLowerCase(), roleAdmin: u.app_metadata?.ylb_role === 'admin' } : null;
     remembered.set(h, { user, until: Date.now() + 60_000 });
     if (remembered.size > 500) remembered.delete(remembered.keys().next().value);
     return user;
@@ -82,15 +86,17 @@ export function createAuth({ supabaseUrl = '', publishableKey = '', secretKey = 
     let user = null;
     try {
       const { payload } = await jwtVerify(token, jwks, { issuer, audience: 'authenticated', algorithms: ['ES256', 'RS256', 'EdDSA'] });
-      if (payload.role === 'authenticated' && typeof payload.sub === 'string') user = { id: payload.sub, email: String(payload.email ?? '').toLowerCase() };
+      // app_metadata is set by Supabase from the user's record; users can't change it themselves
+      if (payload.role === 'authenticated' && typeof payload.sub === 'string') user = { id: payload.sub, email: String(payload.email ?? '').toLowerCase(), roleAdmin: payload.app_metadata?.ylb_role === 'admin' };
     } catch (e) {
       if (INVALID.has(e?.code)) return null; // expired, wrong issuer or audience, bad signature
       // legacy shared-secret tokens (or keys that couldn't be fetched): ask Supabase Auth instead
       user = await viaAuthServer(token);
     }
     if (!user) return null;
-    const isAdmin = admins.has(user.email) && !!user.email && (await emailsAreConfirmed()) && (await provedEmail(token, user));
-    return { ...user, isAdmin };
+    const { roleAdmin, ...who } = user;
+    const isAdmin = roleAdmin || (admins.has(who.email) && !!who.email && (await emailsAreConfirmed()) && (await provedEmail(token, who)));
+    return { ...who, isAdmin };
   }
 
   // The owner must have opened a confirmation link sent to that address: an account made while

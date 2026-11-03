@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
 import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
+import { appStateFromEnv } from './appState.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(here, '..', 'dist');
@@ -132,7 +133,9 @@ function serveStatic(req, res) {
 // ───────────── router ─────────────
 
 const auth = authFromEnv();
-const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv() });
+const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv(), appState: appStateFromEnv() });
+// keys and settings saved in Supabase (when its secret key is set) before the first request
+const settingsFrom = await ai.init();
 
 /** DELETE /api/account: the signed-in user's account and files go for good (their saved data is removed with the account). */
 async function deleteAccount(req, res) {
@@ -185,11 +188,18 @@ server.listen(PORT, HOST, async () => {
   const ready = h.providers.filter((p) => p.ready).map((p) => p.label);
   console.log(ready.length ? `AI keys ready: ${ready.join(', ')}` : 'No AI keys yet: add them in Settings → AI, or as Secrets (e.g. OPENROUTER_API_KEY).');
   console.log(auth.enabled ? `Accounts: on (Supabase)${auth.signInRequired ? ', sign-in required' : ''}` : 'Accounts: off (add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to turn them on).');
+  console.log(
+    ai.store.storage === 'supabase'
+      ? `AI keys and settings: kept in Supabase, encrypted (${settingsFrom === 'unreachable' ? 'Supabase couldn’t be reached; using this server’s copy for now' : settingsFrom}).`
+      : 'AI keys and settings: kept on this server’s disk. Add the SUPABASE_SECRET_KEY Secret to keep them in Supabase (published Replit apps wipe the disk when they restart).',
+  );
   if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
   if (!fs.existsSync(DIST)) console.log('No ./dist yet: run `npm run build` to serve the app from here, or use `npm run dev` (it proxies /api to this server).');
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   ai.usage.flush();
+  // the usage log's latest entries, if Supabase keeps it (don't wait long: the host is stopping us)
+  await Promise.race([ai.usage.flushRemote(), new Promise((r) => setTimeout(r, 2500))]);
   process.exit(0);
 });

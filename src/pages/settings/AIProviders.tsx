@@ -54,6 +54,11 @@ interface AIState {
   canManage: boolean;
   adminTokenSet: boolean;
   imported: boolean;
+  /** where keys typed here are kept: 'supabase' survives restarts, 'disk' only this server's files */
+  storage?: 'supabase' | 'disk';
+  /** the host wipes its files when the app restarts (Replit's published apps, Vercel) */
+  ephemeralDisk?: boolean;
+  accounts?: boolean;
 }
 interface CompareResult {
   provider: string;
@@ -266,6 +271,16 @@ export function AIProviders() {
       {status === 'ready' && catalog && state && (
         <>
           {!state.canManage && !accounts && <AdminAccess adminTokenSet={state.adminTokenSet} token={adminToken} onToken={setAdminToken} onCheck={() => void load()} />}
+          {state.canManage && state.storage === 'disk' && (state.ephemeralDisk || state.accounts) && (
+            <Note icon={<CircleAlert size={16} />} title="Keys you add here can disappear">
+              They’re kept in this server’s files, which {state.ephemeralDisk ? 'this host wipes' : 'hosts like Replit’s published apps wipe'} when the app restarts or sleeps. Add the <code className="rounded bg-surface-2 px-1">SUPABASE_SECRET_KEY</code> Secret (Supabase → Project Settings → API Keys, the <code className="rounded bg-surface-2 px-1">sb_secret_…</code> key) and republish: your keys and settings are then kept in Supabase, encrypted. Keys added as Secrets (like <code className="rounded bg-surface-2 px-1">OPENAI_API_KEY</code>) always stay.
+            </Note>
+          )}
+          {state.canManage && state.storage === 'supabase' && (
+            <p className="flex items-center gap-1.5 text-[12.5px] text-muted">
+              <ShieldCheck size={14} className="text-good" /> Keys and settings are saved in your Supabase project, encrypted, so they stay through restarts.
+            </p>
+          )}
           {state.imported && <Note icon={<ListChecks size={16} />} title="Your image keys moved here">Keys from the old “Image generation” settings now power Photos. Tick more functions to use them for writing too.</Note>}
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="flex min-w-0 flex-col gap-3">

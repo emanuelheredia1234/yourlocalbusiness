@@ -5,7 +5,7 @@
 // ever sees the last 4 characters. Needs SUPABASE_SECRET_KEY; USER_KEYS_SECRET (optional) sets the
 // encryption key, otherwise it's derived from the secret key.
 
-import crypto from 'node:crypto';
+import { createSecretBox, serviceHeaders } from './secretBox.mjs';
 
 export const USER_KEY_PROVIDERS = ['manus'];
 
@@ -21,24 +21,11 @@ export function userKeysFromEnv(env = process.env, fetchImpl = globalThis.fetch)
 export function createUserKeys({ supabaseUrl = '', secretKey = '', encryptionSecret = '', fetch = globalThis.fetch } = {}) {
   const url = String(supabaseUrl).replace(/\/+$/, '');
   const enabled = !!(url && secretKey);
-  const key = crypto.createHash('sha256').update(`ylb-user-keys:${encryptionSecret || secretKey}`).digest();
-  const headers = { apikey: secretKey, 'content-type': 'application/json', ...(secretKey.startsWith('sb_secret_') ? {} : { authorization: `Bearer ${secretKey}` }) };
+  const box = createSecretBox(encryptionSecret || secretKey, 'ylb-user-keys');
+  const encrypt = box.seal;
+  const decrypt = box.open;
+  const headers = serviceHeaders(secretKey);
   const cache = new Map(); // `${user}:${provider}` → { value, until }
-
-  const encrypt = (plain, aad) => {
-    const iv = crypto.randomBytes(12);
-    const c = crypto.createCipheriv('aes-256-gcm', key, iv);
-    c.setAAD(Buffer.from(aad));
-    const ct = Buffer.concat([c.update(plain, 'utf8'), c.final()]);
-    return Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64');
-  };
-  const decrypt = (b64, aad) => {
-    const raw = Buffer.from(b64, 'base64');
-    const d = crypto.createDecipheriv('aes-256-gcm', key, raw.subarray(0, 12));
-    d.setAAD(Buffer.from(aad));
-    d.setAuthTag(raw.subarray(12, 28));
-    return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString('utf8');
-  };
 
   const unavailable = () => Object.assign(new Error('Your own keys need the SUPABASE_SECRET_KEY Secret on the server. Ask the app’s owner to add it.'), { status: 501, code: 'NOT_CONFIGURED' });
   const upstream = (what, status) => Object.assign(new Error(`Couldn’t ${what} your key (Supabase ${status}). Try again.`), { status: 502, code: 'UPSTREAM' });

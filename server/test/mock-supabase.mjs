@@ -16,9 +16,9 @@ const SECRET = 'sb_secret_mock_456';
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 /** Primary keys per table: rows with the same values are one row (upserts replace them). */
-const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'] };
+const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'], app_state: ['key'] };
 /** tables with row-level security and no policies: only the secret key reaches them */
-const SERVICE_ONLY = new Set(['user_secrets']);
+const SERVICE_ONLY = new Set(['user_secrets', 'app_state']);
 
 export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 } = {}) {
   const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true });
@@ -46,7 +46,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
     confirmed_at: u.confirmed_at,
     created_at: u.created_at,
     updated_at: u.updated_at,
-    app_metadata: { provider: 'email', providers: ['email'] },
+    app_metadata: { provider: 'email', providers: ['email'], ...(u.app_metadata ?? {}) },
     user_metadata: {},
     identities: [],
     is_anonymous: false,
@@ -54,7 +54,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
 
   async function session(u) {
     const now = Math.floor(Date.now() / 1000);
-    const access_token = await new SignJWT({ email: u.email, role: 'authenticated', aal: 'aal1', session_id: crypto.randomUUID(), is_anonymous: false })
+    const access_token = await new SignJWT({ email: u.email, role: 'authenticated', aal: 'aal1', session_id: crypto.randomUUID(), is_anonymous: false, app_metadata: userJson(u).app_metadata, user_metadata: {} })
       .setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' })
       .setSubject(u.id)
       .setIssuer(issuer())
@@ -424,12 +424,12 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
     },
     /** A valid access token for a user (creating a confirmed user if needed). */
     /** autoconfirmed: made while "Confirm email" was off (no confirmation email was ever sent) */
-    async tokenFor(email, password = 'password123', { autoconfirmed = false } = {}) {
+    async tokenFor(email, password = 'password123', { autoconfirmed = false, appMetadata = null } = {}) {
       let u = [...users.values()].find((x) => x.email === email);
       if (!u) {
         const now = new Date().toISOString();
         const sent = new Date(Date.now() - 60_000).toISOString();
-        u = { id: crypto.randomUUID(), email, password, created_at: sent, updated_at: now, confirmed_at: now, confirmation_sent_at: autoconfirmed ? null : sent };
+        u = { id: crypto.randomUUID(), email, password, created_at: sent, updated_at: now, confirmed_at: now, confirmation_sent_at: autoconfirmed ? null : sent, ...(appMetadata ? { app_metadata: appMetadata } : {}) };
         users.set(u.id, u);
       }
       return { token: (await session(u)).access_token, user: u };

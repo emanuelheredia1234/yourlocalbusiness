@@ -1,4 +1,7 @@
-// Per-key AI settings, kept on the server in DATA_DIR/ai-providers.json:
+// Per-key AI settings, kept on the server in DATA_DIR/ai-providers.json and, when Supabase's secret
+// key is set, also (encrypted) in Supabase: hosts like Replit's published apps wipe their disk on
+// restart, and several copies of the server must agree on the keys (server/appState.mjs).
+//
 //   { providers: { [id]: { apiKey?, enabled?, functions?, effort?: {kind: value}, models?: {kind: id} } }, order: [id] }
 // Keys from Replit Secrets / env vars take precedence over keys typed into the app, and no key
 // is ever sent back to the browser (only its last 4 characters).
@@ -15,31 +18,105 @@ export function maskKey(key) {
 const MODEL_RE = /^[A-Za-z0-9][\w.:/@+-]{0,127}$/;
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
+const REMOTE_KEY = 'ai-providers';
+const LOCAL_ONLY = { enabled: false };
 
 export class AIStore {
   /**
    * @param {string} file  where settings are saved
    * @param {object} o     env: where Secrets are read; legacyFile: the old image-providers.json to import once
    */
-  constructor(file, { env = process.env, legacyFile = '' } = {}) {
+  constructor(file, { env = process.env, legacyFile = '', remote = LOCAL_ONLY } = {}) {
     this.file = file;
     this.env = env;
+    this.remote = remote;
+    this.remoteVersion = null; // updated_at of the copy in Supabase this server has
+    this.lastCheck = 0;
+    this.checking = null;
+    this.pending = Promise.resolve();
     this.state = { providers: {}, order: [...PROVIDER_IDS] };
     this.imported = false;
     let loaded = false;
     try {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (raw && typeof raw === 'object') {
-        this.state = {
-          providers: raw.providers && typeof raw.providers === 'object' ? raw.providers : {},
-          order: Array.isArray(raw.order) ? raw.order : [...PROVIDER_IDS],
-        };
+        this.adopt(raw);
         loaded = true;
       }
     } catch {
       /* first run */
     }
     if (!loaded && legacyFile) this.importLegacy(legacyFile);
+  }
+
+  adopt(raw) {
+    this.state = {
+      providers: raw?.providers && typeof raw.providers === 'object' ? raw.providers : {},
+      order: Array.isArray(raw?.order) ? raw.order : [...PROVIDER_IDS],
+    };
+  }
+
+  /** Where settings typed into the app are kept: 'supabase' (survives restarts) or 'disk'. */
+  get storage() {
+    return this.remote.enabled ? 'supabase' : 'disk';
+  }
+
+  /**
+   * At start-up: take the settings saved in Supabase. If Supabase has none yet, upload this server's
+   * (keys typed into the app before the secret key was added). Never throws.
+   */
+  async loadRemote() {
+    if (!this.remote.enabled) return 'disk';
+    try {
+      const got = await this.remote.get(REMOTE_KEY);
+      this.lastCheck = Date.now();
+      if (got) {
+        this.adopt(got.value);
+        this.remoteVersion = got.updatedAt;
+        this.saveLocal();
+        return 'loaded';
+      }
+      if (Object.keys(this.state.providers).length) {
+        this.remoteVersion = await this.remote.put(REMOTE_KEY, this.state);
+        return 'uploaded';
+      }
+      return 'empty';
+    } catch (e) {
+      console.warn(`AI settings: ${e.message} Using this server’s copy for now.`);
+      return 'unreachable';
+    }
+  }
+
+  /** Pick up changes saved by another copy of the server (looked up at most every `every` ms). */
+  async refresh({ force = false, every = 10_000 } = {}) {
+    if (!this.remote.enabled) return;
+    if (!force && Date.now() - this.lastCheck < every) return;
+    if (!this.checking) {
+      this.checking = (async () => {
+        try {
+          const version = await this.remote.version(REMOTE_KEY);
+          if (version && version !== this.remoteVersion) {
+            const got = await this.remote.get(REMOTE_KEY);
+            if (got) {
+              this.adopt(got.value);
+              this.remoteVersion = got.updatedAt;
+              this.saveLocal();
+            }
+          }
+        } catch (e) {
+          console.warn(`AI settings: ${e.message}`);
+        } finally {
+          this.lastCheck = Date.now();
+          this.checking = null;
+        }
+      })();
+    }
+    return this.checking;
+  }
+
+  /** Resolves when the last change reached Supabase; rejects (NOT_SAVED) if it couldn't. */
+  persisted() {
+    return this.pending;
   }
 
   /** Bring over image keys saved by the old Settings → Image generation page (photos only). */
@@ -61,11 +138,33 @@ export class AIStore {
     if (this.imported) this.save();
   }
 
+  saveLocal() {
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
+      const tmp = `${this.file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
+      fs.renameSync(tmp, this.file);
+    } catch (e) {
+      // a read-only disk is fine when Supabase keeps the settings
+      if (!this.remote.enabled) throw e;
+      console.warn(`AI settings: couldn’t write ${this.file} (${e.message}).`);
+    }
+  }
+
   save() {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    const tmp = `${this.file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
-    fs.renameSync(tmp, this.file);
+    this.saveLocal();
+    if (!this.remote.enabled) return;
+    // saves go to Supabase one after another, so an older one can never land after a newer one
+    const snapshot = structuredClone(this.state);
+    const p = this.pending
+      .catch(() => undefined)
+      .then(() => this.remote.put(REMOTE_KEY, snapshot))
+      .then((version) => {
+        this.remoteVersion = version;
+        this.lastCheck = Date.now();
+      });
+    p.catch((e) => console.warn(`AI settings: ${e.message}`));
+    this.pending = p;
   }
 
   /** The Secret (env var) holding this provider's key, if one is set. */
