@@ -79,7 +79,8 @@ export function usePhotoAvailability() {
 export function useArtDirection(purpose: 'post' | 'listing') {
   const skills = useStore((s) => s.skills);
   const useBrain = useStore((s) => s.settings.ai.useBrain);
-  return useMemo(() => visualBrief(skills, purpose === 'post' ? 'social' : 'studio', useBrain), [skills, useBrain, purpose]);
+  const projectId = useStore((s) => s.activeProjectId ?? undefined);
+  return useMemo(() => visualBrief(skills, purpose === 'post' ? 'social' : 'studio', useBrain, undefined, projectId), [skills, useBrain, purpose, projectId]);
 }
 
 /** One line naming the skills, e.g. "Brain art direction: Authentic, real-life imagery". */

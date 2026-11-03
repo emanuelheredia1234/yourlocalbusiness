@@ -381,6 +381,26 @@ describe('Manus tasks', () => {
     expect(mock.last('manus', '/v2/task.create').body).toMatchObject({ agent_profile: 'lite', hide_in_task_list: true, message: { content: 'one image' } });
     await expect(router.manusCreate({ fn: 'facebook', prompt: 'x' })).rejects.toMatchObject({ code: 'NO_PROVIDER' });
   });
+
+  it('a brand-voice read runs on Social posting; the stand-in reports the voice, or waits for you to sign in first', async () => {
+    const { router } = setup(['manus']);
+    // the first lines of src/ai/manusVoice.ts voicePrompt (the stand-in answers on those)
+    const prompt = (profile) => `Read the latest posts of one Instagram profile and describe how they sound and look, so that new posts can continue the same brand voice. Use your web browser.\n\nThe Instagram account: https://www.instagram.com/${profile}/\n`;
+    const read = await router.manusCreate({ fn: 'facebook', prompt: prompt('copper'), interactive: true });
+    await router.manusOutput({ taskId: read.task_id });
+    const out = await router.manusOutput({ taskId: read.task_id });
+    expect(out).toMatchObject({ done: true, status: 'stopped' });
+    expect(out.text).toMatch(/^VOICE TONE: friendly \|/m);
+    expect(out.text).toMatch(/^EXAMPLE: /m);
+    expect(out.text).toMatch(/RESULT: VOICE READ \| 15$/);
+
+    const waits = await router.manusCreate({ fn: 'facebook', prompt: prompt('needs-signin'), interactive: true });
+    expect(await router.manusOutput({ taskId: waits.task_id })).toMatchObject({ status: 'waiting', waiting: true, waiting_type: 'needConnectMyBrowser', done: false });
+
+    const closed = await router.manusCreate({ fn: 'facebook', prompt: prompt('private.copper'), interactive: true });
+    await router.manusOutput({ taskId: closed.task_id });
+    expect((await router.manusOutput({ taskId: closed.task_id })).text).toMatch(/RESULT: FAILED \| The account is private/);
+  });
 });
 
 describe('routing between keys', () => {

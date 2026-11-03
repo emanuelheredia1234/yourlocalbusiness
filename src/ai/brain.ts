@@ -169,8 +169,10 @@ export function describeDirectives(d: Directives): string[] {
 
 // ───────────── Resolution: which skills apply, merged by priority ─────────────
 
-export function skillApplies(skill: Skill, scope: ModuleScope): boolean {
+/** `projectId`: the project being written for. A skill made for one project (the voice Manus learned from its posts) applies only there. */
+export function skillApplies(skill: Skill, scope: ModuleScope, projectId?: string): boolean {
   if (!skill.enabled) return false;
+  if (skill.projectId && skill.projectId !== projectId) return false;
   if (!skill.scope.length || skill.scope.includes('all')) return true;
   return skill.scope.includes(scope);
 }
@@ -214,9 +216,9 @@ export interface ResolvedBrain {
   prompt: string;
 }
 
-export function resolveBrain(all: Skill[], scope: ModuleScope, useBrain = true): ResolvedBrain {
+export function resolveBrain(all: Skill[], scope: ModuleScope, useBrain = true, projectId?: string): ResolvedBrain {
   if (!useBrain) return { skills: [], directives: {}, prompt: '' };
-  const skills = all.filter((s) => skillApplies(s, scope));
+  const skills = all.filter((s) => skillApplies(s, scope, projectId));
   const directives = mergeDirectives(skills);
   return { skills, directives, prompt: brainPrompt(skills, directives) };
 }
@@ -257,12 +259,12 @@ export interface VisualBrief {
  * other skills only for their sentences about imagery. Anything about words or text is left out:
  * those models are told to draw no text at all.
  */
-export function visualBrief(all: Skill[], scope: ModuleScope, useBrain = true, maxChars = 600): VisualBrief {
+export function visualBrief(all: Skill[], scope: ModuleScope, useBrain = true, maxChars = 600, projectId?: string): VisualBrief {
   if (!useBrain) return { text: '', skills: [] };
   const parts: string[] = [];
   const used: Skill[] = [];
   let total = 0;
-  for (const skill of all.filter((k) => skillApplies(k, scope)).sort((a, b) => b.priority - a.priority)) {
+  for (const skill of all.filter((k) => skillApplies(k, scope, projectId)).sort((a, b) => b.priority - a.priority)) {
     const sentences = (skill.instructions.replace(/\s+/g, ' ').match(/[^.!?]+[.!?]?/g) || []).map((x) => x.trim()).filter((x) => x.length > 8 && !/^avoid words\s*:/i.test(x));
     const keep = sentences.filter((x) => !TEXT_WORDS.test(x) && (skill.category === 'visual' || VISUAL_WORDS.test(x)));
     // whole sentences only, up to ~300 characters per skill and maxChars overall

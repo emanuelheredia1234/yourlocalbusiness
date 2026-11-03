@@ -16,6 +16,38 @@ export const reasoningFor = (effort) => EFFORT_TOKENS[effort] ?? 300;
 
 const ANSWER = JSON.stringify({ ok: true, note: 'mock answer' });
 
+/** A brand-voice read (src/ai/manusVoice.ts): the profile, when the prompt is one. */
+const voiceProfile = (prompt) => (/^Read the latest posts of one .+ profile and describe how they sound and look/m.test(prompt ?? '') ? (/^The .+?(?:: | named “)(.+?)(?:”.*)?$/m.exec(prompt)?.[1] ?? '') : null);
+/** A read of a "needs-signin" profile waits for you to sign in for its first two checks. */
+const signInFirst = (task) => /needs-signin/i.test(voiceProfile(task?.prompt) ?? '');
+
+/**
+ * The stand-in Manus's report for a brand-voice read, in the lines the app reads. A profile with "private" in it
+ * can't be read; one with "needs-signin" first waits for you to sign in (see task.detail). Made-up style notes
+ * for QA only: they describe no real account.
+ */
+export function mockVoiceReply(prompt) {
+  const profile = voiceProfile(prompt) ?? '';
+  if (/private/i.test(profile)) return 'I opened the profile, but it is private and I can’t see its posts.\nRESULT: FAILED | The account is private: its posts aren’t visible to me.';
+  return [
+    'I read the 15 most recent posts on the profile. Here is how they sound and look.',
+    'VOICE TONE: friendly | warm, cheerful, neighborly, down-to-earth',
+    'VOICE PERSON: we',
+    'VOICE WORDS: fresh from the oven | come say hi | made by hand | treat yourself',
+    'VOICE OPENINGS: a cheerful greeting or a question to the reader',
+    'VOICE ENDINGS: an invitation to stop by or to order ahead',
+    'VOICE EMOJI: few | 🍞 ☕ ✨',
+    'VOICE HASHTAGS: few | #freshbread #shoplocal #bakerylife',
+    'VOICE LENGTH: short | two or three lines, with a line break before the invitation',
+    'VOICE TOPICS: what is baking today | behind the scenes | seasonal flavors',
+    'VOICE VISUALS: Bright natural light on close-ups of bread and pastries on wooden counters, with warm golden colors and hands at work.',
+    'EXAMPLE: Good morning! The first loaves just came out of the oven and the whole street smells like it. Come say hi ☕',
+    'EXAMPLE: Ever wondered what happens before sunrise in our kitchen? Flour, patience and a lot of coffee 🍞',
+    'EXAMPLE: Something new is joining the pastry case this week. Stop by and tell us what you think ✨',
+    'RESULT: VOICE READ | 15',
+  ].join('\n');
+}
+
 export function createMockProviders({ keys = {} } = {}) {
   const calls = [];
   const behavior = {}; // provider id → 'fail500' | 'policy' | 'auth' | 'rate' | undefined
@@ -217,19 +249,26 @@ export function createMockProviders({ keys = {} } = {}) {
       const t = manusTasks.get(url.searchParams.get('task_id'));
       if (!t) return json(res, 404, { ok: false, error: { code: 'not_found', message: 'task not found' } });
       t.polls += 1;
-      const done = t.polls >= 2;
+      const done = t.polls >= (signInFirst(t) ? 4 : 2);
+      if (signInFirst(t) && t.polls < 3) return json(res, 200, { ok: true, task: { id: url.searchParams.get('task_id'), status: 'waiting', title: 'Mock task', task_url: `https://manus.im/app/${url.searchParams.get('task_id')}` } });
       return json(res, 200, { ok: true, task: { id: url.searchParams.get('task_id'), status: done ? 'stopped' : 'running', title: 'Mock task', task_url: `https://manus.im/app/${url.searchParams.get('task_id')}`, ...(done ? { credit_usage: t.profile === 'lite' ? 12 : 41 } : {}) } });
     }
     if (id === 'manus' && p === '/v2/task.listMessages') {
       const t = manusTasks.get(url.searchParams.get('task_id'));
-      const done = t && t.polls >= 2;
+      const voice = voiceProfile(t?.prompt) !== null;
+      const done = t && t.polls >= (signInFirst(t) ? 4 : 2);
+      if (t && signInFirst(t) && t.polls < 3) {
+        return json(res, 200, { ok: true, messages: [{ id: 'e2', type: 'status_update', status_update: { agent_status: 'waiting', status_detail: { waiting_for_event_type: 'needConnectMyBrowser', waiting_description: 'Please sign in to the network in my browser so I can see the posts.' } } }, { id: 'e1', type: 'user_message', user_message: { content: 'read it' } }] });
+      }
       // a "post right now" task reports a post on that network, with its link
       const postNow = /^Post ONE organic post on (Facebook|Instagram|TikTok|LinkedIn|X), right now/m.exec(t?.prompt ?? '');
       const LINKS = { Facebook: 'https://www.facebook.com/mockpage/posts/1001', Instagram: 'https://www.instagram.com/p/MOCK1/', TikTok: 'https://www.tiktok.com/@mock/video/1001', LinkedIn: 'https://www.linkedin.com/feed/update/urn:li:activity:1001/', X: 'https://x.com/mock/status/1001' };
       // a Facebook groups task reports each group (one that needs approval says so)
       const groupsTask = /^Share ONE post in each of these Facebook groups/m.test(t?.prompt ?? '');
       const groupLines = groupsTask ? [...(t?.prompt ?? '').matchAll(/^\d+\. (.+)$/gm)].map((m) => m[1]).filter((g) => !/^(Open Facebook|Read the group|Post as|In the group|Attach|This is a text|Choose|Wait about)/.test(g)) : [];
-      const reply = groupsTask
+      const reply = voice
+        ? mockVoiceReply(t?.prompt)
+        : groupsTask
         ? `Done.\n${groupLines.map((g, i) => (/approval/i.test(g) ? `GROUP: ${g} | PENDING | waiting for admin approval` : `GROUP: ${g} | POSTED | https://www.facebook.com/groups/mock${i}/posts/1`)).join('\n')}\nRESULT: GROUPS DONE`
         : postNow ? `Posted it.\nRESULT: POSTED | Mock Account | ${LINKS[postNow[1]]}` : 'Here is your image.\nRESULT: SCHEDULED | Mock Page | Monday 9:00 AM';
       return json(res, 200, {

@@ -162,8 +162,8 @@ function BrandSettings({ project }: { project: Project }) {
         <Card title="Brand images" desc="Photos and product shots used in posts, listings and covers.">
           <BrandImagesEditor brand={brand} onChange={(images) => set({ images })} />
         </Card>
-        <Card title="Social profiles">
-          <SocialLinksEditor socials={brand.socials} onChange={(socials) => set({ socials })} />
+        <Card title="Social profiles" desc="Your profile links or handles. Nothing gets connected: they show in post previews and tell Manus which account to post as.">
+          <SocialLinksEditor socials={brand.socials} onChange={(socials) => set({ socials })} projectId={project.id} voiceSetup="button" />
         </Card>
       </div>
       <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4 xl:self-start">
@@ -216,8 +216,8 @@ function Accounts() {
         </div>
         <p className="mt-3 text-[12.5px] text-muted">Without Manus, copy a post’s text and download its image or video from the post’s ⋯ menu, post it yourself, then choose Mark as posted.</p>
       </Card>
-      <Card title="Your handles" desc={`For ${project.brand.name || 'this project'}. They show in post previews and tell Manus which account to post as.`}>
-        <SocialLinksEditor socials={project.brand.socials} onChange={(socials) => updateBrand({ socials })} />
+      <Card title="Your profiles" desc={`For ${project.brand.name || 'this project'}. They show in post previews and tell Manus which account to post as.`}>
+        <SocialLinksEditor socials={project.brand.socials} onChange={(socials) => updateBrand({ socials })} projectId={project.id} voiceSetup="none" />
       </Card>
     </div>
   );

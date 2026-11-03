@@ -166,8 +166,8 @@ export function StepSetup({ project }: { project: Project }) {
         <BrandImagesEditor brand={brand} onChange={(images) => setBrand({ images })} />
       </Section>
 
-      <Section n={5} title="Your social handles" desc="Shown in post previews, and they tell Manus which account to post as. Nothing is connected here.">
-        <SocialLinksEditor socials={brand.socials} onChange={(socials) => setBrand({ socials })} />
+      <Section n={5} title="Your social profiles" desc="Add your profile links or handles. Nothing gets connected: they show in post previews and tell Manus which account to post as, from its own browser where you sign in.">
+        <SocialLinksEditor socials={brand.socials} onChange={(socials) => setBrand({ socials })} projectId={project.id} />
       </Section>
       <p className={cn('text-xs text-muted')}>
         <Sparkles size={12} className="mr-1 inline text-accent" />

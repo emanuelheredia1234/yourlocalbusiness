@@ -12,6 +12,7 @@ import { BrandBanner, BrandLogo, LOGO_FONTS, LogoMark, SHAPES } from './Logo';
 import { MediaDrop, MediaThumb } from '../media/MediaUpload';
 import { download } from '../ui/download';
 import { PlatformGlyph } from '../posts/PlatformIcon';
+import { VoiceNote, VoiceSwitch } from './SocialVoice';
 
 export function LogoDesigner({ brand, onChange, iconOptions, paletteOptions }: { brand: Brand; onChange: (patch: Partial<Brand>) => void; iconOptions?: string[]; paletteOptions?: BrandColors[] }) {
   const [showAll, setShowAll] = useState(false);
@@ -265,8 +266,22 @@ export function BannerDesigner({ brand, onChange }: { brand: Brand; onChange: (p
   );
 }
 
-export function SocialLinksEditor({ socials, onChange }: { socials: Brand['socials']; onChange: (s: Brand['socials']) => void }) {
-  return (
+const SOCIAL_PLACEHOLDER: Record<SocialPlatform, string> = {
+  instagram: '@yourhandle',
+  facebook: 'Page name or facebook.com/…',
+  tiktok: '@yourhandle',
+  linkedin: 'linkedin.com/company/…',
+  x: '@yourhandle',
+  youtube: '@yourchannel',
+};
+
+/**
+ * Your profile links or handles. Nothing is connected: they show in post previews and tell Manus which account
+ * to post as. With `projectId`, each profile also gets the "Learn my brand voice" switch (Manus reads its posts);
+ * `voiceSetup` says how to point at a missing Manus setup (see VoiceNote).
+ */
+export function SocialLinksEditor({ socials, onChange, projectId, voiceSetup }: { socials: Brand['socials']; onChange: (s: Brand['socials']) => void; projectId?: string; voiceSetup?: 'button' | 'text' | 'none' }) {
+  const grid = (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {SOCIAL_PLATFORMS.map((p: SocialPlatform) => (
         <Field key={p} label={PLATFORMS[p].label} htmlFor={`soc-${p}`}>
@@ -274,10 +289,18 @@ export function SocialLinksEditor({ socials, onChange }: { socials: Brand['socia
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-white" style={{ background: PLATFORMS[p].color }}>
               <PlatformGlyph platform={p} size={16} />
             </span>
-            <input id={`soc-${p}`} className="input" placeholder={p === 'linkedin' ? 'linkedin.com/company/…' : `@yourhandle`} value={socials[p] ?? ''} onChange={(e) => onChange({ ...socials, [p]: e.target.value })} />
+            <input id={`soc-${p}`} className="input" placeholder={SOCIAL_PLACEHOLDER[p]} value={socials[p] ?? ''} onChange={(e) => onChange({ ...socials, [p]: e.target.value })} />
           </div>
+          {projectId && <VoiceSwitch projectId={projectId} platform={p} />}
         </Field>
       ))}
+    </div>
+  );
+  if (!projectId) return grid;
+  return (
+    <div className="flex flex-col gap-4">
+      {grid}
+      <VoiceNote projectId={projectId} setup={voiceSetup} />
     </div>
   );
 }
