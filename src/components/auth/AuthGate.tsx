@@ -17,6 +17,7 @@ import {
   signUp,
   startAuth,
   useAuth,
+  takeWorkspaceHere,
   type Notice,
 } from '@/lib/cloud/auth';
 import { Spinner } from '@/components/ui/primitives';
@@ -40,6 +41,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
       return <ImportScreen />;
     case 'failed':
       return <FailedScreen />;
+    case 'elsewhere':
+      return <ElsewhereScreen />;
     case 'opening':
       return <Waiting text="Opening your workspace…" />;
     case 'leaving':
@@ -369,6 +372,30 @@ function ImportScreen() {
           </button>
         </div>
         <p className="mt-3 text-xs text-muted">Start fresh leaves that workspace where it is in this browser.</p>
+      </section>
+    </Frame>
+  );
+}
+
+/** Another tab of this browser opened the same account (two tabs saving at once would undo each other). */
+function ElsewhereScreen() {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Frame>
+      <section className="panel p-6 text-center">
+        <h1 className="font-display text-[20px] font-bold">Your workspace is open in another tab</h1>
+        <p className="mt-2 text-[13.5px] leading-relaxed text-muted">To keep your changes from overwriting each other, it works in one tab at a time. Everything from this tab is saved.</p>
+        <button
+          className="btn btn-primary mt-5 w-full"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            await takeWorkspaceHere();
+            setBusy(false);
+          }}
+        >
+          {busy && <Spinner size={14} />} Use it here
+        </button>
       </section>
     </Frame>
   );

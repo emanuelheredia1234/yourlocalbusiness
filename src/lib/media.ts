@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { MediaRef } from './types';
-import { getBlob } from './storage';
+import { getBlob, hasMediaCloud } from './storage';
 import { readFileAsDataURL } from './utils';
 
 const urlCache = new Map<string, string>();
@@ -20,15 +20,25 @@ export function useMediaUrl(ref: MediaRef | null | undefined): string | null {
       return;
     }
     setUrl(ref.thumb ?? null);
-    getBlob(ref.id).then(async (blob) => {
-      if (!alive || !blob) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let tries = 0;
+    const load = () =>
+      getBlob(ref.id).then(async (blob) => {
+      if (!alive) return;
+      if (!blob) {
+        // saved on another device and maybe still uploading: look again a little later
+        if (hasMediaCloud() && tries < 3) timer = setTimeout(load, [20_000, 70_000, 180_000][tries++]);
+        return;
+      }
       // Inside the claude.ai viewer, images and videos use data: URLs (always allowed there); elsewhere object URLs.
       const u = __ARTIFACT_BUILD__ && blob.size < 12 * 1024 * 1024 ? await readFileAsDataURL(blob).catch(() => URL.createObjectURL(blob)) : URL.createObjectURL(blob);
       urlCache.set(ref.id, u);
       if (alive) setUrl(u);
     });
+    void load();
     return () => {
       alive = false;
+      if (timer) clearTimeout(timer);
     };
   }, [ref?.id, ref?.thumb]);
   return url;

@@ -74,7 +74,8 @@ export function clearSampleData(): void {
   useStore.setState((s) => ({
     posts: s.posts.filter((p) => p.source !== 'sample'),
     sales: s.sales.filter((x) => x.source !== 'sample'),
-    projects: s.projects.map((p) => ({ ...p, marketing: { ...p.marketing, subscribers: p.marketing.subscribers.filter((x) => x.source !== 'sample') } })),
+    // only projects that had sample subscribers change (each changed project is saved again)
+    projects: s.projects.map((p) => (p.marketing.subscribers.some((x) => x.source === 'sample') ? { ...p, marketing: { ...p.marketing, subscribers: p.marketing.subscribers.filter((x) => x.source !== 'sample') } } : p)),
   }));
 }
 

@@ -3,13 +3,13 @@
 // Uploads and deletions wait in a queue that survives reloads; files from other devices download
 // the first time they're shown.
 
-import { getLocalBlob, type MediaCloud } from '@/lib/storage';
+import { CLOUD_FILE_LIMIT as LIMIT, getLocalBlob, type MediaCloud } from '@/lib/storage';
 import { safeStorage } from '@/lib/storage';
 import { useSyncStatus } from './sync';
 
 const BUCKET = 'media';
 /** the bucket's per-file limit (supabase/migrations) */
-export const CLOUD_FILE_LIMIT = 50 * 1024 * 1024;
+export const CLOUD_FILE_LIMIT = LIMIT;
 
 interface StorageApi {
   storage: {
@@ -24,26 +24,34 @@ interface StorageApi {
 
 export type MediaSync = MediaCloud & {
   start(): void;
-  stop(): void;
+  /** stop, and wait for an upload that's under way */
+  stop(): Promise<void>;
   pending(): number;
   /** wait until the queue is empty (or the time is up); true when everything is saved */
   settle(timeoutMs: number): Promise<boolean>;
   forget(): void;
+  /** stop for good without forgetting the queue (another tab takes over) */
+  dispose(): void;
 };
 
 export function createMediaSync(client: StorageApi, userId: string): MediaSync {
   const qKey = `ylb-media-sync:${userId}`;
   const path = (id: string) => `${userId}/${id}`;
   const bucket = () => client.storage.from(BUCKET);
-  const q: { up: string[]; del: string[] } = (() => {
+  // big: files too large for the account (kept on this device only; they count as not saved)
+  const q: { up: string[]; del: string[]; big: string[] } = (() => {
     try {
       const v = JSON.parse(safeStorage.getItem(qKey) || 'null');
-      return v && Array.isArray(v.up) && Array.isArray(v.del) ? v : { up: [], del: [] };
+      return v && Array.isArray(v.up) && Array.isArray(v.del) ? { up: v.up, del: v.del, big: Array.isArray(v.big) ? v.big : [] } : { up: [], del: [], big: [] };
     } catch {
-      return { up: [], del: [] };
+      return { up: [], del: [], big: [] };
     }
   })();
+  let disposed = false;
+  let current: Promise<void> | null = null;
+  let ownProblem = false;
   const save = () => {
+    if (disposed) return;
     safeStorage.setItem(qKey, JSON.stringify(q));
     useSyncStatus.getState().set({ files: q.up.length + q.del.length });
   };
@@ -56,9 +64,9 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
   let retries = 0;
   const waiters = new Set<() => void>();
 
-  const pending = () => q.up.length + q.del.length;
+  const pending = () => q.up.length + q.del.length + q.big.length;
   const report = () => {
-    if (!pending()) for (const w of [...waiters]) w();
+    if (!q.up.length && !q.del.length) for (const w of [...waiters]) w();
   };
 
   function kick(wait = 300) {
@@ -66,7 +74,7 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      void work();
+      current = work().finally(() => (current = null));
     }, wait);
   }
 
@@ -74,7 +82,7 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
     if (busy || !running) return;
     busy = true;
     try {
-      while (running && pending()) {
+      while (running && (q.up.length || q.del.length)) {
         if (q.del.length) {
           const part = q.del.slice(0, 100);
           const { error } = await bucket().remove(part.map(path));
@@ -89,17 +97,20 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
           const { error } = await bucket().upload(path(id), blob, { upsert: true, contentType: blob.type || undefined });
           if (error) throw new Error(error.message);
           missing.delete(id);
-        }
-        // gone meanwhile, or too big for the account (it stays on this device)
+        } else if (blob && !q.big.includes(id)) q.big.push(id); // too big for the account: stays on this device
         q.up = q.up.filter((x) => x !== id);
         save();
       }
       retries = 0;
-      if (useSyncStatus.getState().problem && !useSyncStatus.getState().saving) useSyncStatus.getState().set({ problem: null, message: null });
+      if (ownProblem) {
+        ownProblem = false;
+        useSyncStatus.getState().set({ problem: null, message: null });
+      }
     } catch (e) {
       retries++;
       const msg = String((e as Error)?.message ?? e);
       const offline = (typeof navigator !== 'undefined' && navigator.onLine === false) || /fetch|network|load failed/i.test(msg);
+      ownProblem = true;
       useSyncStatus.getState().set(offline ? { problem: 'offline', message: 'You’re offline. Your files are kept on this device and saved when you’re back.' } : { problem: 'error', message: `Couldn’t save a file to your account: ${msg}` });
       busy = false;
       kick(Math.min(60_000, 2000 * 2 ** Math.min(retries, 5)));
@@ -118,6 +129,7 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
     },
     remove(id) {
       q.up = q.up.filter((x) => x !== id);
+      q.big = q.big.filter((x) => x !== id);
       if (!q.del.includes(id)) q.del.push(id);
       save();
       kick();
@@ -149,6 +161,7 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
     clear() {
       q.up = [];
       q.del = [];
+      q.big = [];
       save();
       // everything in the folder, a page at a time
       void (async () => {
@@ -165,20 +178,22 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
       save();
       kick(0);
     },
-    stop() {
+    async stop() {
       running = false;
       if (timer) clearTimeout(timer);
       timer = null;
+      await current?.catch(() => undefined);
     },
     pending,
     settle(timeoutMs) {
+      if (q.big.length) return Promise.resolve(false); // some files can only stay on this device
       if (!pending()) return Promise.resolve(true);
       kick(0);
       return new Promise((resolve) => {
         const done = () => {
           clearTimeout(t);
           waiters.delete(done);
-          resolve(true);
+          resolve(!q.big.length);
         };
         const t = setTimeout(() => {
           waiters.delete(done);
@@ -187,7 +202,15 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
         waiters.add(done);
       });
     },
+    dispose() {
+      disposed = true;
+      running = false;
+      if (timer) clearTimeout(timer);
+      timer = null;
+    },
     forget() {
+      disposed = true;
+      running = false;
       safeStorage.removeItem(qKey);
     },
   };

@@ -30,6 +30,7 @@ export type AuthPhase =
   | 'ready'
   | 'guest' // accounts are on but optional, and this person carried on without one
   | 'failed' // couldn't load the workspace
+  | 'elsewhere' // this account is open in another tab of this browser
   | 'leaving'; // signing out
 
 export interface Notice {
@@ -85,7 +86,7 @@ export async function authHeaders(target?: string): Promise<Record<string, strin
 
 async function loadConfig(): Promise<AccountsConfig | null> {
   if (__ARTIFACT_BUILD__ || typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return null;
-  const base = (useStore.getState().settings.ai.serverUrl || '').replace(/\/+$/, '');
+  const base = serverBaseNow();
   try {
     const res = await fetch(`${base}/api/config`, { signal: AbortSignal.timeout(8000) });
     if (res.ok) {
@@ -124,10 +125,35 @@ function linkError(): string | null {
 }
 
 let started = false;
+const SERVER_URL_KEY = 'ylb-server-url';
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The AI server's address as this device knows it (kept apart from any workspace). */
+export function serverBaseNow(): string {
+  return (useStore.getState().settings.ai.serverUrl || safeStorage.getItem(SERVER_URL_KEY) || '').replace(/\/+$/, '');
+}
+
+/** The session supabase-js kept on this device (to open the device's copy while offline). */
+function storedUser(): User | null {
+  try {
+    const raw = JSON.parse(safeStorage.getItem('ylb-auth') || 'null') as { user?: User } | null;
+    return raw?.user?.id ? raw.user : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function startAuth(): Promise<void> {
   if (started) return;
   started = true;
   safeStorage.removeItem(DISCARD_KEY);
+  // remember a separate AI server address for this device, whichever workspace is open
+  useStore.subscribe((s, prev) => {
+    if (s.settings.ai.serverUrl !== prev.settings.ai.serverUrl && useAuth.getState().phase === 'ready') {
+      if (s.settings.ai.serverUrl) safeStorage.setItem(SERVER_URL_KEY, s.settings.ai.serverUrl);
+      else safeStorage.removeItem(SERVER_URL_KEY);
+    }
+  });
   const config = await loadConfig();
   const st = useAuth.getState();
   if (!config) return st.set({ phase: 'off', config: null });
@@ -136,27 +162,32 @@ export async function startAuth(): Promise<void> {
   if (!lib) return st.set({ phase: 'off', config: null });
   const badLink = linkError();
   const cameWithCode = new URLSearchParams(location.search).has('code');
-  // a password-reset link: Supabase marks its sign-in code as a recovery
-  const recovering = cameWithCode && /\/recovery/.test(safeStorage.getItem('ylb-auth-code-verifier') ?? '');
   client = lib.createClient(config.url, config.publishableKey, {
     auth: { flowType: 'pkce', detectSessionInUrl: true, persistSession: true, autoRefreshToken: true, storageKey: 'ylb-auth' },
   });
+  listenToOtherTabs();
   client.auth.onAuthStateChange((event, session) => {
     // Supabase asks not to call it again from inside this callback
-    setTimeout(() => void onAuthEvent(event, session?.user ?? null, { badLink, cameWithCode, recovering }), 0);
+    setTimeout(() => void onAuthEvent(event, session?.user ?? null, { badLink, cameWithCode }), 0);
   });
 }
 
-async function onAuthEvent(event: string, user: User | null, ctx: { badLink: string | null; cameWithCode: boolean; recovering: boolean }) {
+async function onAuthEvent(event: string, user: User | null, ctx: { badLink: string | null; cameWithCode: boolean }) {
   const st = useAuth.getState();
   switch (event) {
     case 'INITIAL_SESSION':
       if (user) {
-        if (ctx.recovering) st.set({ phase: 'recovery', user: { id: user.id, email: user.email ?? '' } });
-        else if (st.phase !== 'recovery') await openWorkspace(user);
+        // a password-reset link announces itself separately: give it a moment
+        if (ctx.cameWithCode) await sleep(500);
+        if (useAuth.getState().phase !== 'recovery') await openWorkspace(user);
         return;
       }
       if (st.phase !== 'loading') return;
+      // offline, with a sign-in kept on this device: open this device's copy and save when back
+      if (typeof navigator !== 'undefined' && navigator.onLine === false && storedUser()) {
+        await openWorkspace(storedUser()!);
+        return;
+      }
       st.set({
         phase: 'signed-out',
         notice: ctx.badLink
@@ -167,10 +198,18 @@ async function onAuthEvent(event: string, user: User | null, ctx: { badLink: str
       });
       return;
     case 'PASSWORD_RECOVERY':
-      st.set({ phase: 'recovery', user: user ? { id: user.id, email: user.email ?? '' } : null });
+      // only the tab that opened the reset link asks for a new password; other tabs carry on
+      if (ctx.cameWithCode) {
+        st.set({ phase: 'recovery', user: user ? { id: user.id, email: user.email ?? '' } : null });
+        sync?.dispose();
+        void media?.stop();
+      } else if (user) await openWorkspace(user);
       return;
     case 'SIGNED_IN':
-      if (!user || st.phase === 'recovery' || ctx.recovering) return;
+    case 'TOKEN_REFRESHED':
+      if (!user || st.phase === 'recovery') return;
+      // TOKEN_REFRESHED: back online after starting offline with an expired sign-in
+      if (event === 'TOKEN_REFRESHED' && !['signed-out', 'loading'].includes(st.phase)) return;
       await openWorkspace(user);
       return;
     case 'USER_UPDATED':
@@ -178,13 +217,69 @@ async function onAuthEvent(event: string, user: User | null, ctx: { badLink: str
       return;
     case 'SIGNED_OUT':
       // signed out in another tab, or the sign-in ended (password changed elsewhere)
-      if (['opening', 'import', 'ready', 'failed', 'recovery'].includes(st.phase)) {
-        sync?.stop();
-        media?.stop();
+      if (['opening', 'import', 'ready', 'failed', 'recovery', 'elsewhere'].includes(st.phase)) {
+        sync?.dispose();
+        media?.dispose();
         location.reload();
       }
       return;
   }
+}
+
+// ───────────── one tab per account ─────────────
+// Each tab keeps its own copy in memory, so two tabs saving the same account would undo each other.
+// The tab that opens the workspace takes over; the others step aside until asked to take it back.
+
+const TAB = Math.random().toString(36).slice(2);
+let channel: BroadcastChannel | null = null;
+const releases = new Set<() => void>();
+let lastUser: User | null = null;
+
+function listenToOtherTabs() {
+  if (typeof BroadcastChannel === 'undefined') return;
+  channel = new BroadcastChannel('ylb-workspace');
+  channel.onmessage = (e) => {
+    const m = e.data as { type: string; userId: string; tab: string };
+    if (!m || m.tab === TAB) return;
+    const st = useAuth.getState();
+    if (m.type === 'claim' && st.user?.id === m.userId && ['opening', 'import', 'ready'].includes(st.phase)) {
+      stepAside();
+      channel?.postMessage({ type: 'released', userId: m.userId, tab: TAB });
+    } else if (m.type === 'released') for (const r of [...releases]) r();
+  };
+}
+
+/** Another tab took over: stop saving from here (what's waiting is in storage; that tab saves it). */
+function stepAside() {
+  sync?.dispose();
+  media?.dispose();
+  sync = null;
+  media = null;
+  useStore.persist.setOptions({ name: DISCARD_KEY });
+  setMediaAccount(null, null);
+  useAuth.getState().set({ phase: 'elsewhere' });
+}
+
+/** Ask other tabs with this account open to step aside; wait briefly for them. */
+async function claimWorkspace(userId: string) {
+  if (!channel) return;
+  const answered = new Promise<void>((resolve) => {
+    const done = () => {
+      releases.delete(done);
+      resolve();
+    };
+    releases.add(done);
+    setTimeout(done, 700);
+  });
+  channel.postMessage({ type: 'claim', userId, tab: TAB });
+  await answered;
+}
+
+/** "Use it here" after another tab took over. */
+export async function takeWorkspaceHere() {
+  const user = lastUser ?? (await client?.auth.getSession())?.data.session?.user ?? null;
+  if (user) await openWorkspace(user, { force: true });
+  else useAuth.getState().set({ phase: 'signed-out' });
 }
 
 // ───────────── the account's workspace on this device ─────────────
@@ -205,58 +300,72 @@ function blankWorkspace(): Partial<StoreState> {
   const now = useStore.getState().settings;
   const d = defaultSettings();
   const { version: _v, ...fresh } = initial();
-  return { ...fresh, skills: [], settings: { ...d, theme: now.theme, ai: { ...d.ai, serverUrl: now.ai.serverUrl, simulateLatency: now.ai.simulateLatency } } };
+  return { ...fresh, skills: [], settings: { ...d, theme: now.theme, ai: { ...d.ai, serverUrl: serverBaseNow(), simulateLatency: now.ai.simulateLatency } } };
 }
 
-async function openWorkspace(user: User) {
+/** Set once this device has fully opened the account (its copy is then trustworthy). */
+const openedKey = (userId: string) => `ylb-opened:${userId}`;
+
+async function openWorkspace(user: User, { force = false } = {}) {
   const st = useAuth.getState();
   if (!client) return;
   // sign-in events arrive in pairs (a new sign-in, then the page's first look): open once
-  if (st.user?.id === user.id && ['opening', 'import', 'ready', 'leaving'].includes(st.phase)) return;
+  if (!force && st.user?.id === user.id && ['opening', 'import', 'ready', 'leaving', 'elsewhere'].includes(st.phase)) return;
+  lastUser = user;
   st.set({ phase: 'opening', user: { id: user.id, email: user.email ?? '' }, error: null, notice: null });
-  sync?.stop();
-  media?.stop();
+  sync?.dispose();
+  media?.dispose();
   try {
+    await claimWorkspace(user.id);
     media = createMediaSync(client, user.id);
     setMediaAccount(user.id, media);
     const key = stateKey(user.id);
-    const hadCopy = safeStorage.getItem(key) !== null;
+    const opened = safeStorage.getItem(openedKey(user.id)) === '1' && safeStorage.getItem(key) !== null;
     useStore.persist.setOptions({ name: key });
-    if (hadCopy) await useStore.persist.rehydrate();
+    if (opened) await useStore.persist.rehydrate();
     else useStore.setState(blankWorkspace());
-    sync = createSync({ backend: supabaseBackend(client, user.id), userId: user.id });
-    let fresh = false;
+    // a device that never finished opening the account starts clean (no stray save marks)
+    sync = createSync({ backend: supabaseBackend(client, user.id), userId: user.id, fresh: !opened });
+    let remoteEmpty = false;
+    let offline = false;
     try {
-      fresh = (await sync.pull()).remoteEmpty && !hadCopy;
+      remoteEmpty = (await sync.pull()).remoteEmpty;
     } catch (e) {
-      if (!hadCopy) throw e;
-      // offline with a copy on this device: carry on and save when back
-      useSyncStatus.getState().set({ problem: 'offline', message: 'Couldn’t reach your account, so you’re working from this device’s copy. Changes are saved when you’re back online.' });
+      if (!opened) throw e;
+      offline = true;
     }
-    if (fresh) {
-      if (browserWorkspace() && !safeStorage.getItem(`ylb-import-asked:${user.id}`)) {
-        st.set({ phase: 'import' });
-        return;
-      }
-      useStore.setState({ skills: starterSkills() });
+    if (remoteEmpty && browserWorkspace() && !safeStorage.getItem(`ylb-import-asked:${user.id}`)) {
+      st.set({ phase: 'import' });
+      return;
     }
-    begin();
+    begin({ seed: remoteEmpty && !opened });
+    // offline with a copy on this device: carry on and save when back
+    if (offline) useSyncStatus.getState().set({ problem: 'offline', message: 'Couldn’t reach your account, so you’re working from this device’s copy. Changes are saved when you’re back online.' });
   } catch (e) {
     st.set({ phase: 'failed', error: (e as Error)?.message || 'Couldn’t load your workspace.' });
   }
 }
 
-function begin() {
+/** Start saving; a brand-new account gets the starter skills (saved like any change). */
+function begin({ seed = false } = {}) {
+  const st = useAuth.getState();
   sync?.start();
   media?.start();
-  useAuth.getState().set({ phase: 'ready' });
+  if (seed) useStore.setState({ skills: starterSkills() });
+  if (st.user) {
+    safeStorage.setItem(openedKey(st.user.id), '1');
+    const url = useStore.getState().settings.ai.serverUrl;
+    if (url) safeStorage.setItem(SERVER_URL_KEY, url);
+  }
+  st.set({ phase: 'ready' });
 }
 
 /** Retry after the workspace failed to load. */
 export async function retryOpen() {
-  const user = (await client?.auth.getUser())?.data.user;
-  if (user) await openWorkspace(user);
-  else useAuth.getState().set({ phase: 'signed-out' });
+  const st = useAuth.getState();
+  const user = (await client?.auth.getSession().catch(() => null))?.data.session?.user ?? lastUser ?? storedUser();
+  if (user) await openWorkspace(user, { force: true });
+  else st.set({ phase: 'signed-out' });
 }
 
 /** A new account on a browser with a workspace from before accounts: bring it in, or start fresh. */
@@ -265,8 +374,7 @@ export async function answerImport(bring: boolean) {
   if (!st.user) return;
   safeStorage.setItem(`ylb-import-asked:${st.user.id}`, '1');
   if (!bring) {
-    useStore.setState({ skills: starterSkills() });
-    return begin();
+    return begin({ seed: true });
   }
   st.set({ phase: 'opening' });
   const old = browserWorkspace();
@@ -292,8 +400,10 @@ export async function answerImport(bring: boolean) {
     sync?.markAll();
     safeStorage.removeItem(LEGACY_KEY);
     await deleteMediaDatabase(null);
-  } else useStore.setState({ skills: starterSkills() });
-  begin();
+    begin();
+    return;
+  }
+  begin({ seed: true });
 }
 
 // ───────────── forms ─────────────
@@ -390,15 +500,28 @@ export async function saveNow(timeoutMs = 10_000): Promise<boolean> {
 
 /** Forget this account on this device: its copy of the workspace, its files and its pending jobs. */
 async function forgetDevice(userId: string) {
-  sync?.stop();
-  media?.stop();
-  useStore.persist.setOptions({ name: DISCARD_KEY });
   sync?.forget();
+  await media?.stop();
   media?.forget();
+  useStore.persist.setOptions({ name: DISCARD_KEY });
   safeStorage.removeItem(stateKey(userId));
+  safeStorage.removeItem(openedKey(userId));
+  // a tab that stepped aside may have left save marks in storage: they belong to this account too
+  safeStorage.removeItem(`ylb-sync:${userId}`);
+  safeStorage.removeItem(`ylb-media-sync:${userId}`);
   for (const k of DEVICE_KEYS) safeStorage.removeItem(k);
-  setMediaAccount(null, null);
   await deleteMediaDatabase(userId);
+  setMediaAccount(null, null);
+}
+
+/** supabase-js may keep its session when signing out fails (offline, expired): remove it ourselves. */
+function dropSession() {
+  try {
+    for (const k of Object.keys(localStorage)) if (k === 'ylb-auth' || k.startsWith('ylb-auth-')) localStorage.removeItem(k);
+  } catch {
+    /* storage blocked */
+  }
+  safeStorage.removeItem('ylb-auth');
 }
 
 function reloadSignedOut() {
@@ -413,11 +536,12 @@ function reloadSignedOut() {
 export async function signOut({ force = false } = {}): Promise<'unsaved' | 'done'> {
   const st = useAuth.getState();
   if (!client || !st.user) return 'done';
-  if (st.phase === 'ready' && !(await saveNow()) && !force) return 'unsaved';
+  if (!force && st.phase === 'ready' && !(await saveNow())) return 'unsaved';
   const userId = st.user.id;
   st.set({ phase: 'leaving' });
   await forgetDevice(userId);
   await client.auth.signOut({ scope: 'local' }).catch(() => undefined);
+  dropSession();
   reloadSignedOut();
   return 'done';
 }
@@ -426,11 +550,10 @@ export async function signOut({ force = false } = {}): Promise<'unsaved' | 'done
 export async function deleteAccount(): Promise<{ error?: string }> {
   const st = useAuth.getState();
   if (!client || !st.user) return { error: 'You’re not signed in.' };
-  const base = (useStore.getState().settings.ai.serverUrl || '').replace(/\/+$/, '');
-  const target = `${base}/api/account`;
+  const target = `${serverBaseNow()}/api/account`;
   // nothing may upload into the folder while the server empties it
   sync?.stop();
-  media?.stop();
+  await media?.stop();
   const res = await fetch(target, { method: 'DELETE', headers: await authHeaders(target) }).catch(() => null);
   const body = res ? ((await res.json().catch(() => null)) as { error?: string } | null) : null;
   if (!res?.ok) {
@@ -442,6 +565,7 @@ export async function deleteAccount(): Promise<{ error?: string }> {
   st.set({ phase: 'leaving' });
   await forgetDevice(userId);
   await client.auth.signOut({ scope: 'local' }).catch(() => undefined);
+  dropSession();
   reloadSignedOut();
   return {};
 }

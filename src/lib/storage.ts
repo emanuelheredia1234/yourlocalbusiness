@@ -71,11 +71,16 @@ const dbNameFor = (ns: string | null) => (ns ? `${DB_NAME}:${ns}` : DB_NAME);
 
 /** Switch whose media this device reads and writes (null: the browser's own, without an account). */
 export function setMediaAccount(ns: string | null, hooks: MediaCloud | null): void {
+  void dbPromise?.then((db) => db?.close());
   namespace = ns;
   cloud = hooks;
   memBlobs.clear();
   dbPromise = null;
 }
+
+/** Signed in: files are also saved to the account, whose per-file limit is 50 MB. */
+export const CLOUD_FILE_LIMIT = 50 * 1024 * 1024;
+export const hasMediaCloud = () => !!cloud;
 
 function openNamedDb(name: string): Promise<IDBDatabase | null> {
   return new Promise((resolve) => {
@@ -85,7 +90,11 @@ function openNamedDb(name: string): Promise<IDBDatabase | null> {
       req.onupgradeneeded = () => {
         req.result.createObjectStore(STORE);
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        // let a deletion (on log out) go through instead of waiting on this connection
+        req.result.onversionchange = () => req.result.close();
+        resolve(req.result);
+      };
       req.onerror = () => resolve(null);
       req.onblocked = () => resolve(null);
     } catch {
@@ -231,6 +240,7 @@ export async function saveMediaFile(file: File): Promise<MediaRef> {
   const isVideo = file.type.startsWith('video/');
   if (!isVideo && !file.type.startsWith('image/')) throw new Error('Choose an image or video file.');
   if (file.size > MAX_UPLOAD_BYTES) throw new Error('That file is over 60 MB. Try a shorter clip or a smaller image.');
+  if (cloud && file.size > CLOUD_FILE_LIMIT) throw new Error('That file is over 50 MB, the most your account can save. Try a shorter clip or a smaller image.');
   const id = uid('media');
   let thumb = '';
   let w: number | undefined;

@@ -137,9 +137,10 @@ With Supabase connected, people sign in with an email and password. Each person'
 
 Set it up once:
 1. Create a Supabase project (supabase.com → New project).
-2. Supabase → **SQL Editor** → paste [`supabase/migrations/20261102000000_accounts.sql`](supabase/migrations/20261102000000_accounts.sql) → **Run**. If your Supabase project is linked to this GitHub repository, it can apply the migration for you. It creates:
+2. Supabase → **SQL Editor** → paste and **Run** each file in [`supabase/migrations`](supabase/migrations), oldest first. If your Supabase project is linked to this GitHub repository, it can apply the migration for you. It creates:
    - `user_docs`: one row per project, post, listing, etc.; each user can only read and change their own rows.
    - a private `media` bucket: each user can only use their own folder.
+   - `user_secrets`: each user's own Manus key, encrypted by the server. Browsers can't read or write it at all.
 3. Supabase → **Authentication** → Sign In / Providers → Email: keep **Confirm email** on. The owner check below relies on confirmed emails.
 4. Supabase → **Authentication** → **URL Configuration**:
    - Set **Site URL** to your app's address (for example `https://your-app.replit.app`).
@@ -147,7 +148,7 @@ Set it up once:
 5. Replit → Tools → **Secrets**:
    - `SUPABASE_URL`: the Project URL (Supabase → Project Settings → API).
    - `SUPABASE_PUBLISHABLE_KEY`: the publishable key (`sb_publishable_…`). It is meant to be public; row-level security protects the data. The legacy `anon` key also works, as `SUPABASE_ANON_KEY`.
-   - `SUPABASE_SECRET_KEY` (optional): the secret key (`sb_secret_…`). It lets people delete their account and files. It stays on the server.
+   - `SUPABASE_SECRET_KEY`: the secret key (`sb_secret_…`). It lets people delete their account and files, and save their own Manus key. It stays on the server.
    - `ADMIN_EMAILS`: your email. You manage the AI keys, models, effort and usage log; everyone else uses your keys.
 6. Press Run, or republish. The server log says `Accounts: on (Supabase), sign-in required`.
 7. Let other people sign up: add your own email sender (Supabase → Authentication → Emails → **SMTP Settings**, with a service such as Resend, Postmark, Brevo or Amazon SES). Until then, Supabase's built-in sender only emails members of your Supabase team (so only you can confirm an account) and sends a few emails an hour; anyone else sees "This app can't send emails to that address yet".
@@ -165,7 +166,12 @@ What people get:
 - **AI for everyone signed in, on your keys:**
   - Only the `ADMIN_EMAILS` account can see and change keys or read the usage log. Everyone else sees what powers each function.
   - Video jobs and Manus tasks belong to whoever started them.
-  - Facebook scheduling through your Manus key is owner-only.
+  - **Manus is yours alone.** It's an agent with its own browser, signed in to your accounts (Facebook…), so only the owner can give your Manus key a task.
+  - **Everyone else can use their own Manus.** Settings → AI → "Use your own Manus" links to manus.im and explains how to create an API key (Manus → Settings → API Integration → Create API Key).
+    - The key is checked with Manus, encrypted on the server (AES-256-GCM, from `USER_KEYS_SECRET` if set, otherwise from the secret key) and kept in `user_secrets`.
+    - The app only ever shows its last 4 characters.
+    - Their Manus photos and Facebook scheduling then run in their own Manus account, on their credits.
+- **One tab at a time:** an account works in one tab per browser. Opening it in a second tab moves it there; the first tab offers "Use it here".
 - **Optional sign-in:** `SIGN_IN_REQUIRED=false` makes signing in optional. "Continue without an account" keeps work in that browser, and AI then works without signing in.
 
 ## Run it

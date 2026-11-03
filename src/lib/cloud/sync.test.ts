@@ -4,7 +4,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createMockSupabase } from '../../../server/test/mock-supabase.mjs';
 import { initial, useStore } from '@/store/useStore';
-import { deleteBlob, getBlob, putBlob, setMediaAccount } from '@/lib/storage';
+import { deleteBlob, getBlob, putBlob, safeStorage, setMediaAccount } from '@/lib/storage';
+const localStorage_set = (k: string, v: string) => safeStorage.setItem(k, v);
 import { chunkBySize, createSync, supabaseBackend, useSyncStatus } from './sync';
 import { createMediaSync } from './media';
 
@@ -138,6 +139,45 @@ describe('saving the workspace to the account', () => {
     expect(a.pending()).toBe(0);
     a.stop();
     a.forget();
+  });
+
+  it('a deletion on another device beats a stale change here (e.g. an auto-published post)', async () => {
+    const a = newDevice();
+    await a.pull();
+    a.start();
+    const id = useStore.getState().createProject('product');
+    useStore.getState().addPosts([{ id: 'post_due', projectId: id, status: 'scheduled', platform: 'x', createdAt: 3, updatedAt: 3, headline: 'x', body: 'x' } as never]);
+    await a.flush();
+    a.stop();
+    // the phone deletes the post; this device, not yet up to date, publishes it
+    supa.tables.set('user_docs', rows().filter((r) => r.id !== 'post_due'));
+    const stale = createSync({ backend: supabaseBackend(client, userId), userId, delay: 5, refreshAfter: 0 });
+    stale.start();
+    useStore.getState().updatePost('post_due', { status: 'published' } as never);
+    expect(await stale.flush()).toBe(true);
+    expect(rows().some((r) => r.id === 'post_due')).toBe(false);
+    expect(useStore.getState().posts.some((p) => p.id === 'post_due')).toBe(false);
+    stale.stop();
+    stale.forget();
+  });
+
+  it('never deletes from the account for save marks left without the workspace', async () => {
+    const a = newDevice();
+    await a.pull();
+    a.start();
+    const id = useStore.getState().createProject('product');
+    await a.flush();
+    a.stop();
+    // marks from an interrupted sign-out, then a fresh open with a blank workspace
+    localStorage_set(`ylb-sync:${userId}`, JSON.stringify({ v: {}, d: { [`project:${id}`]: 'up', 'settings:user': 'up' } }));
+    const { version: _v, ...fresh } = initial();
+    useStore.setState({ ...fresh, skills: [] });
+    const leftover = createSync({ backend: supabaseBackend(client, userId), userId, delay: 5 });
+    await leftover.flush();
+    expect(rows().some((r) => r.id === id)).toBe(true);
+    // a device opening the account for the first time starts with no marks at all
+    expect(createSync({ backend: supabaseBackend(client, userId), userId, fresh: true }).pending()).toBe(0);
+    leftover.forget();
   });
 
   it('can’t touch another account’s rows', async () => {

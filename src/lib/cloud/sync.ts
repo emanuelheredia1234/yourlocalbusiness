@@ -139,15 +139,18 @@ export interface SyncOptions {
   store?: Store;
   /** wait this long after the last change before saving */
   delay?: number;
-  /** how stale a pull may get before coming back to the tab pulls again */
+  /** how stale a pull may get before saving (or coming back to the tab) pulls again */
   refreshAfter?: number;
+  /** this device has no copy of the account: forget any saved-change marks left behind */
+  fresh?: boolean;
 }
 
 export type Sync = ReturnType<typeof createSync>;
 
-export function createSync({ backend, userId, store = useStore, delay = 1500, refreshAfter = 30_000 }: SyncOptions) {
+export function createSync({ backend, userId, store = useStore, delay = 1500, refreshAfter = 30_000, fresh = false }: SyncOptions) {
   const metaKey = `ylb-sync:${userId}`;
   const meta: Meta = (() => {
+    if (fresh) return { v: {}, d: {} };
     try {
       const m = JSON.parse(safeStorage.getItem(metaKey) || 'null') as Meta | null;
       return m && typeof m.v === 'object' && typeof m.d === 'object' ? m : { v: {}, d: {} };
@@ -162,6 +165,9 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
   let timer: ReturnType<typeof setTimeout> | null = null;
   let retries = 0;
   let lastPull = 0;
+  /** stopped for good (signed out, or another tab took over): never write again */
+  let disposed = false;
+  let poll: ReturnType<typeof setInterval> | null = null;
   let unsubscribe: (() => void) | null = null;
   let removeListeners: (() => void) | null = null;
   // pulls and saves take turns, so neither works from a picture the other is changing
@@ -173,6 +179,7 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
   };
 
   const saveMeta = () => {
+    if (disposed) return;
     safeStorage.setItem(metaKey, JSON.stringify(meta));
     useSyncStatus.getState().set({ pending: Object.keys(meta.d).length });
   };
@@ -232,9 +239,12 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
 
   /** Put rows from Supabase into the store without counting them as local changes. */
   function apply(rows: DocRow[], removed: string[]) {
+    if (disposed) return;
     const s = store.getState();
     const patch: Partial<StoreState> = {};
-    const gone = new Set(removed);
+    // something changed here while the download ran: this device's version wins and is saved next
+    rows = rows.filter((r) => !meta.d[keyOf(r.kind, r.id)]);
+    const gone = new Set(removed.filter((k) => !meta.d[k]));
     for (const { slice, kind, newestFirst } of SLICES) {
       const incoming = new Map<string, Entity>();
       for (const r of rows) if (r.kind === kind && isEntity(r.data, r.id)) incoming.set(r.id, r.data);
@@ -274,8 +284,9 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
   }
 
   /** Bring this device up to date. Returns whether the account had nothing saved yet. */
-  const pull = () =>
-    turn(async () => {
+  const pull = () => turn(pullNow);
+
+  async function pullNow() {
       const index = await backend.index();
       const remote = new Map(index.map((r) => [keyOf(r.kind, r.id), r.updated_at]));
       const local = localKeys(store.getState());
@@ -289,9 +300,13 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
       }
       const removed: string[] = [];
       for (const key of local) {
-        if (remote.has(key) || meta.d[key]) continue;
-        if (key !== SETTINGS_KEY && meta.v[key]) removed.push(key); // deleted on another device
-        else mark(key, 'up'); // never saved yet
+        if (remote.has(key) || meta.d[key] === 'del') continue;
+        if (key !== SETTINGS_KEY && meta.v[key]) {
+          // deleted on another device: that wins, even over a change here (say an auto-published post)
+          removed.push(key);
+          delete meta.d[key];
+          seq.delete(key);
+        } else if (!meta.d[key]) mark(key, 'up'); // never saved yet
       }
       for (const key of Object.keys(meta.v)) if (!remote.has(key)) delete meta.v[key];
       const rows: DocRow[] = [];
@@ -302,7 +317,7 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
       lastPull = Date.now();
       if (running && Object.keys(meta.d).length) schedule();
       return { remoteEmpty: index.length === 0, downloaded: rows.length, removed: removed.length };
-    });
+  }
 
   /** Save everything waiting. Resolves true when nothing is left to save. */
   const flush = () =>
@@ -311,10 +326,28 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
         clearTimeout(timer);
         timer = null;
       }
-      const entries = Object.entries(meta.d);
-      if (!entries.length) return true;
+      if (disposed) return false;
+      if (!Object.keys(meta.d).length) return true;
       const status = useSyncStatus.getState();
       status.set({ saving: true });
+      // catch up first, so this device doesn't save over newer changes from another one
+      if (Date.now() - lastPull > refreshAfter) {
+        try {
+          await pullNow();
+        } catch (e) {
+          status.set({ saving: false, ...describe(e) });
+          if (running) {
+            retries++;
+            schedule(Math.min(60_000, 2000 * 2 ** Math.min(retries, 5)));
+          }
+          return false;
+        }
+      }
+      const entries = Object.entries(meta.d);
+      if (!entries.length) {
+        status.set({ saving: false, problem: null, message: null, lastSavedAt: Date.now() });
+        return true;
+      }
       const at = new Map(entries.map(([key]) => [key, seq.get(key) ?? 0]));
       const done = (key: string) => {
         if ((seq.get(key) ?? 0) === at.get(key)) delete meta.d[key];
@@ -325,8 +358,13 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
         const dels = new Map<DocKind, string[]>();
         for (const [key, op] of entries) {
           const [kind, id] = splitKey(key);
-          const data = op === 'up' ? entityFor(s, kind, id) : undefined;
-          if (data === undefined) dels.set(kind, [...(dels.get(kind) ?? []), id]);
+          if (op === 'del') {
+            dels.set(kind, [...(dels.get(kind) ?? []), id]);
+            continue;
+          }
+          const data = entityFor(s, kind, id);
+          // marked to save but not here (e.g. marks left behind without the workspace): never delete for it
+          if (data === undefined) done(key);
           else ups.push({ kind, id, data, size: JSON.stringify(data).length });
         }
         for (const part of chunkBySize(ups, (r) => r.size)) {
@@ -392,14 +430,19 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
         if (document.visibilityState === 'hidden') void flush();
         else if (Date.now() - lastPull > refreshAfter) void pull().catch(() => undefined);
       };
-      const onOnline = () => void flush();
+      const onOnline = () => void pull().catch(() => undefined).then(() => flush());
+      const onHide = () => void flush();
       document.addEventListener('visibilitychange', onVisible);
       window.addEventListener('online', onOnline);
-      window.addEventListener('pagehide', onOnline);
+      window.addEventListener('pagehide', onHide);
+      // a tab that stays open keeps up with other devices too
+      poll = setInterval(() => {
+        if (document.visibilityState === 'visible' && Date.now() - lastPull > refreshAfter) void pull().catch(() => undefined);
+      }, Math.max(15_000, refreshAfter));
       removeListeners = () => {
         document.removeEventListener('visibilitychange', onVisible);
         window.removeEventListener('online', onOnline);
-        window.removeEventListener('pagehide', onOnline);
+        window.removeEventListener('pagehide', onHide);
       };
     }
     saveMeta();
@@ -414,6 +457,21 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
     removeListeners = null;
     if (timer) clearTimeout(timer);
     timer = null;
+    if (poll) clearInterval(poll);
+    poll = null;
+  }
+
+  /** Stop for good: nothing more is saved or written on this device. */
+  function dispose() {
+    stop();
+    disposed = true;
+  }
+
+  /** Mark these items to be saved (e.g. starter skills for a new account). */
+  function markKeys(kind: DocKind, ids: string[]) {
+    for (const id of ids) mark(keyOf(kind, id), 'up');
+    saveMeta();
+    if (running) schedule();
   }
 
   /** Treat everything in the store as changed here (after bringing in a workspace from this browser). */
@@ -422,7 +480,20 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
     saveMeta();
   }
 
-  return { pull, flush, start, stop, markAll, pending: () => Object.keys(meta.d).length, forget: () => safeStorage.removeItem(metaKey) };
+  return {
+    pull,
+    flush,
+    start,
+    stop,
+    dispose,
+    markAll,
+    markKeys,
+    pending: () => Object.keys(meta.d).length,
+    forget: () => {
+      dispose();
+      safeStorage.removeItem(metaKey);
+    },
+  };
 }
 
 /** user_docs in Supabase (row-level security keeps each user to their own rows). */
