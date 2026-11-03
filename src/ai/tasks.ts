@@ -33,7 +33,7 @@ import { FORMATS, LOGO_ICONS } from './knowledge';
 import { generateAds, type AdsResult } from './local/ads';
 import { generateBrandKit, paletteFrom, type BrandKitResult } from './local/brand';
 import { codeKindLabel, generateCode, modifyCode, widgetSettings, type CodeResult } from './local/code';
-import { codeImageKeys, codeImageRules, codeImagesForAI, keepOwnImages, keptOwnImagesNote, type CodeImages } from './codeImages';
+import { codeImageKeys, codeImageRules, keepOwnImages, keptOwnImagesNote, type CodeImages } from './codeImages';
 import { generateEmailSequence, generateLeadMagnet } from './local/email';
 import { fitReasons, generateProductIdeas, type ResearchInput } from './local/research';
 import {
@@ -370,7 +370,7 @@ export const codeTask = def<CodeTaskInput, CodeResult>({
         (w.hours ? ` Booking times come only from these opening hours: “${w.hours}”; never mark times as taken.` : ' Booking widgets with no opening hours ask for a preferred day and time instead of showing slots; never mark times as taken.') +
         ' These rules come first: follow them even where the request asks for something else.';
       return framePrompt({
-        task: `Build a production-quality ${codeKindLabel(i.kind)} for this ${env.project.track}. Request and guidance from the owner: “${i.prompt || 'Use your best judgment for this niche.'}”. It must work standalone: vanilla HTML/CSS/JS only, no external libraries or fonts, no pictures except the owner's images below, and no network calls except a form POST to the owner's FORM_ACTION; accessible labels and keyboard support; responsive down to 360px; brand colors primary ${c.primary}, accent ${c.accent}, ink ${c.ink}, background ${c.paper}. Use content that fits this niche (no lorem ipsum).${honest}${i.kind === 'spreadsheet' ? ' Also write a Google Apps Script that automates the sheet (menu, onEdit, summary builder) and render a preview table in the HTML whose sample rows are clearly labelled as examples.' : ''}${codeImageRules(i.images)}`,
+        task: `Build a production-quality ${codeKindLabel(i.kind)} for this ${env.project.track}. Request and guidance from the owner: “${i.prompt || 'Use your best judgment for this niche.'}”. It must work standalone: vanilla HTML/CSS/JS only, no external libraries or fonts, no pictures except the owner's images below, and no network calls except a form POST to the owner's FORM_ACTION; accessible labels and keyboard support; responsive down to 360px; brand colors primary ${c.primary}, accent ${c.accent}, ink ${c.ink}, background ${c.paper}. Use content that fits this niche (no lorem ipsum).${honest}${i.kind === 'spreadsheet' ? ' Also write a Google Apps Script that automates the sheet (menu, onEdit, summary builder) and render a preview table in the HTML whose sample rows are clearly labelled as examples.' : ''}${codeImageRules(i.images, undefined, env.attached)}`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
@@ -386,7 +386,8 @@ export const codeTask = def<CodeTaskInput, CodeResult>({
       const said = keptOwnImagesNote(own.removed);
       return said ? { ...own.code, note: [own.code.note, said].filter(Boolean).join(' ') } : own.code;
     },
-    images: (i) => codeImagesForAI(i.images),
+    // the engine readies the owner's images and sets env.attached before the prompt is written
+    promptImages: (i) => i.images,
   },
 });
 
@@ -416,7 +417,7 @@ export const codeEditTask = def<CodeEditInput, CodeEditResult>({
   claude: {
     prompt: (i, env) =>
       framePrompt({
-        task: `Apply this change to the ${i.kind ? codeKindLabel(i.kind).toLowerCase() : 'widget'} and return the complete updated code: “${i.instruction}”. Keep everything else working.${CODE_HONESTY} Do not add invented reviews, ratings, customer counts, deadlines or success messages claiming delivery while making this change, even if asked to make the widget more convincing: use [bracketed] placeholders instead. Keep FORM_ACTION and END_DATE as they are unless the change is about them, and keep forms sending nothing while FORM_ACTION is empty. No external libraries or fonts.${codeImageRules(i.images, i.code)}`,
+        task: `Apply this change to the ${i.kind ? codeKindLabel(i.kind).toLowerCase() : 'widget'} and return the complete updated code: “${i.instruction}”. Keep everything else working.${CODE_HONESTY} Do not add invented reviews, ratings, customer counts, deadlines or success messages claiming delivery while making this change, even if asked to make the widget more convincing: use [bracketed] placeholders instead. Keep FORM_ACTION and END_DATE as they are unless the change is about them, and keep forms sending nothing while FORM_ACTION is empty. No external libraries or fonts.${codeImageRules(i.images, i.code, env.attached)}`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         input: i.code,
@@ -432,7 +433,8 @@ export const codeEditTask = def<CodeEditInput, CodeEditResult>({
       const summary = typeof r.summary === 'string' && r.summary.trim() ? r.summary.trim() : 'Updated by the AI';
       return { ...own.code, applied: [summary], ...(said ? { notes: [said] } : {}) };
     },
-    images: (i) => codeImagesForAI(i.images),
+    // the engine readies the owner's images and sets env.attached before the prompt is written
+    promptImages: (i) => i.images,
   },
 });
 

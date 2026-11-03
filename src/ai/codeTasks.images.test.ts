@@ -66,12 +66,18 @@ describe('creating a widget with the owner’s guidance and images', () => {
     expect(prompt).not.toContain('IMAGES:');
   });
 
-  it('sends the images along (resized), and nothing without them', async () => {
+  it('hands the images to the engine, which readies them and says which were attached', async () => {
+    // the engine attaches promptImages (resized) and sets env.attached before it writes the prompt
+    expect(codeTask.claude!.images).toBeUndefined();
+    expect(codeTask.claude!.promptImages!(input)?.map((i) => i.key)).toEqual(['img-1', 'img-2']);
+    expect(codeTask.claude!.promptImages!({ kind: 'faq', prompt: '' }) ?? []).toEqual([]);
+    expect(codeEditTask.claude!.images).toBeUndefined();
+    // only the second image could be attached: it is "attached image 1", the first goes by its note
+    const e = { ...env(), attached: ['img-2'] };
+    const prompt = codeTask.claude!.prompt(input, e, codeTask.local(input, e));
+    expect(prompt).toContain('{{img-2}} (attached image 1)');
+    expect(prompt).toContain('{{img-1}} (not attached: go by its note)');
     sentImages.mockClear();
-    const blobs = await codeTask.claude!.images!(input);
-    expect(blobs).toHaveLength(2);
-    expect(sentImages).toHaveBeenCalledWith(['img-1', 'img-2']);
-    expect(await codeTask.claude!.images!({ kind: 'faq', prompt: '' })).toBeUndefined();
     expect(await codeImagesForAI([{ key: 'img-1', media: media('v', { kind: 'video', mime: 'video/mp4' }) }])).toBeUndefined();
   });
 

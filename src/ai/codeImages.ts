@@ -4,7 +4,7 @@
 // shows it fills in the right address (a data URL in the preview and downloads, a path once published).
 
 import type { PromptImage } from '@/lib/types';
-import { describeImagesForAI, imageKeyNumber, imageTokens, imagesForAI } from '@/lib/promptImages';
+import { MAX_AI_IMAGES, describeImagesForAI, imageKeyNumber, imageTokens, imagesForAI } from '@/lib/promptImages';
 import { removeImages } from './local/code';
 
 /** The images in a code task's input (named so it can't clash with other imports of PromptImage). */
@@ -18,9 +18,10 @@ export const codeImageKeys = (code: Code): string[] => imageTokens(`${code.html}
 /**
  * What a widget prompt says about images: which the AI may use and how, or that it may use none. For an
  * edit, `code` is the widget's code now: images it doesn't show yet are named, since "this photo" in the
- * owner's change usually means the one they just added.
+ * owner's change usually means the one they just added. `attached` is what the engine really sent (env.attached),
+ * so "attached image N" always matches the files the AI gets.
  */
-export function codeImageRules(images: CodeImages | undefined, code?: Code): string {
+export function codeImageRules(images: CodeImages | undefined, code?: Code, attached: number | readonly string[] = MAX_AI_IMAGES): string {
   const own = (images ?? []).filter((i) => i.media.kind === 'image');
   if (!own.length) {
     return code
@@ -31,7 +32,7 @@ export function codeImageRules(images: CodeImages | undefined, code?: Code): str
   const fresh = shown ? own.filter((i) => !shown.has(i.key)).map((i) => `{{${i.key}}}`) : [];
   return [
     ` IMAGES: the owner added ${own.length === 1 ? 'this image' : `these ${own.length} images`} for this widget, each with its token:`,
-    describeImagesForAI(own),
+    describeImagesForAI(own, attached),
     `The code may show only these images, and only through their tokens, written exactly as shown: <img src="{{${own[0].key}}}" alt="…"> in the HTML, or url({{${own[0].key}}}) in the CSS. Never use any other image address, a data: URL or base64, and never invent an image.`,
     'Images marked “attached image N” are attached to this request in that order when your model can see images; otherwise go by the owner’s note and the request.',
     ...(code
