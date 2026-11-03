@@ -13,7 +13,8 @@
 //   AI_PROVIDER_BASE_URLS (JSON map of provider id → base URL, for a proxy or a test server).
 // Accounts (Supabase): SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY (account deletion), ADMIN_EMAILS
 //   (the owner's email: manages the AI keys), SIGN_IN_REQUIRED (default true). See server/auth.mjs.
-//   With the secret key, users' own keys (server/userKeys.mjs) and their daily AI counters (server/limits.mjs) live in Supabase.
+//   With the secret key, users' own keys (server/userKeys.mjs) and their daily AI counters (server/limits.mjs) live in Supabase,
+//   and people can publish pages at https://<app>/<name> and on their own domains (server/pages.mjs; env APP_HOSTS).
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -24,6 +25,7 @@ import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
 import { limitsFromEnv } from './limits.mjs';
 import { MIGRATION, appStateFromEnv } from './appState.mjs';
+import { pagesFromEnv } from './pages.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(here, '..', 'dist');
@@ -148,41 +150,53 @@ async function deleteAccount(req, res) {
   if (!ident.who) return send(res, 401, { error: 'Sign in first.', code: 'AUTH_REQUIRED' }, corsHeaders(req));
   try {
     await auth.deleteUser(ident.who.id);
+    pages.forgetUser(ident.who.id);
     return send(res, 200, { ok: true }, corsHeaders(req));
   } catch (e) {
     return send(res, e.status || 500, { error: e.message, code: e.code || 'UPSTREAM' }, corsHeaders(req));
   }
 }
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url || '/', 'http://local');
+// published pages: the signed-in API, the pages themselves, and people's own domains
+const pages = pagesFromEnv(process.env, { auth, whoIs: ai.whoIs, send, readJson, rateLimited, corsHeaders, allowedOrigin: ALLOWED_ORIGIN, distDir: DIST });
+
+const crashed = (req, res, e) => {
+  console.error(e);
+  if (!res.headersSent) send(res, 500, { error: 'Unexpected server error' }, corsHeaders(req));
+};
+
+function route(req, res, url) {
   if (req.method === 'OPTIONS' && url.pathname.startsWith('/api/')) {
     res.writeHead(204, corsHeaders(req));
     return res.end();
   }
   if (url.pathname === '/api/config' && req.method === 'GET') {
-    // what the browser needs to sign in (the publishable key is meant to be public)
-    return send(res, 200, { accounts: auth.publicConfig() }, corsHeaders(req));
+    // what the browser needs to sign in (the publishable key is meant to be public), and whether it can publish pages
+    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config() }, corsHeaders(req));
   }
   if (url.pathname === '/api/health' && req.method === 'GET') {
     // `ok`: the server is up; `ai` says which keys are ready and what powers each function (signed-in users only, with accounts on)
     return void ai.whoIs(req, res).then(async (ident) => ident && send(res, 200, { ok: true, ai: await ai.health(ident.who) }, corsHeaders(req)));
   }
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res);
+  if (pages.matchApi(url)) return void pages.handleApi(req, res, url).catch((e) => crashed(req, res, e));
   if (ai.match(url)) {
-    return void ai.handle(req, res, url).then(
-      (handled) => {
-        if (handled === false) send(res, 404, { error: 'Not found' }, corsHeaders(req));
-      },
-      (e) => {
-        console.error(e);
-        if (!res.headersSent) send(res, 500, { error: 'Unexpected server error' }, corsHeaders(req));
-      },
-    );
+    return void ai.handle(req, res, url).then((handled) => {
+      if (handled === false) send(res, 404, { error: 'Not found' }, corsHeaders(req));
+    }, (e) => crashed(req, res, e));
   }
   if (url.pathname.startsWith('/api/')) return send(res, 404, { error: 'Not found' }, corsHeaders(req));
-  if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(req, res);
-  return send(res, 405, 'Method not allowed');
+  if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
+  // a published page (/<name>, /<name>/img/…), unless the name is one of the app's own paths
+  if (pages.matchPage(url)) return void pages.servePage(req, res, url).then((handled) => handled || serveStatic(req, res), (e) => crashed(req, res, e));
+  return serveStatic(req, res);
+}
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url || '/', 'http://local');
+  // someone's own domain shows only their published pages, never the app or /api: so it's decided first
+  if (!pages.mayBeDomain(req)) return route(req, res, url);
+  pages.serveDomain(req, res, url).then((handled) => handled || route(req, res, url), (e) => crashed(req, res, e));
 });
 
 server.listen(PORT, HOST, async () => {
@@ -191,6 +205,7 @@ server.listen(PORT, HOST, async () => {
   const ready = h.providers.filter((p) => p.ready).map((p) => p.label);
   console.log(ready.length ? `AI keys ready: ${ready.join(', ')}` : 'No AI keys yet: add them in Settings → AI, or as Secrets (e.g. OPENROUTER_API_KEY).');
   console.log(auth.enabled ? `Accounts: on (Supabase)${auth.signInRequired ? ', sign-in required' : ''}` : 'Accounts: off (add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to turn them on).');
+  if (auth.enabled) console.log(pages.enabled ? 'Publishing pages: on (needs supabase/migrations/20261103040000_published_pages.sql in Supabase).' : 'Publishing pages: off (add the SUPABASE_SECRET_KEY Secret to turn it on).');
   console.log(
     ai.store.storage === 'supabase'
       ? {

@@ -122,15 +122,28 @@ export function createAuth({ supabaseUrl = '', publishableKey = '', secretKey = 
     if (!secretKey) throw Object.assign(new Error('Add the SUPABASE_SECRET_KEY Secret to let people delete their accounts.'), { status: 501, code: 'NOT_CONFIGURED' });
     const headers = { apikey: secretKey, ...(secretKey.startsWith('sb_secret_') ? {} : { authorization: `Bearer ${secretKey}` }) };
     const failed = (what, status) => Object.assign(new Error(`Couldn’t delete your files (${what}, ${status}). Nothing was deleted yet; try again.`), { status: 502, code: 'UPSTREAM' });
+    // The files in a folder and its sub-folders (published pages keep their images in
+    // <user id>/published/<page>/). Storage lists a sub-folder as an entry without an id.
+    async function filesIn(prefix, depth = 0) {
+      const list = await fetch(`${url}/storage/v1/object/list/media`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefix, limit: 1000, offset: 0 }) });
+      if (!list.ok) throw failed('listing', list.status);
+      const items = await list.json();
+      const out = [];
+      for (const i of Array.isArray(items) ? items : []) {
+        if (i?.id != null) out.push(`${prefix}${i.name}`);
+        else if (i?.name && depth < 4) out.push(...(await filesIn(`${prefix}${i.name}/`, depth + 1)));
+      }
+      return out;
+    }
     // their files first: list and remove media/<user id>/… until the folder is empty
     async function clearFolder() {
       for (let round = 0; round < 50; round++) {
-        const list = await fetch(`${url}/storage/v1/object/list/media`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefix: `${userId}/`, limit: 1000, offset: 0 }) });
-        if (!list.ok) throw failed('listing', list.status);
-        const items = await list.json();
-        if (!Array.isArray(items) || !items.length) return;
-        const del = await fetch(`${url}/storage/v1/object/media`, { method: 'DELETE', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: items.map((i) => `${userId}/${i.name}`) }) });
-        if (!del.ok) throw failed('deleting', del.status);
+        const files = await filesIn(`${userId}/`);
+        if (!files.length) return;
+        for (let i = 0; i < files.length; i += 1000) {
+          const del = await fetch(`${url}/storage/v1/object/media`, { method: 'DELETE', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: files.slice(i, i + 1000) }) });
+          if (!del.ok) throw failed('deleting', del.status);
+        }
       }
       throw failed('too many files', 0);
     }
