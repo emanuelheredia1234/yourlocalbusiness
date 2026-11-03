@@ -1,44 +1,39 @@
 import type { EmailStep, Project, Subscriber } from '@/lib/types';
-import { createRng, ensureUrl, hashStr, readableOn, uid } from '@/lib/utils';
+import { ensureUrl, readableOn, uid } from '@/lib/utils';
 import { renderTokens } from '@/ai/local/email';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { BrandLogo } from '@/components/brand/Logo';
 
+/** Merge values for previews: a real subscriber's, or clear placeholders (never invented people or sites). */
 export function emailTokens(p: Project, sub?: Pick<Subscriber, 'name' | 'email'> | null): Record<string, string> {
-  const site = ensureUrl(p.brand.websiteUrl || `${p.brand.slug || 'yourbrand'}.com`).replace(/\/$/, '');
+  const site = p.brand.websiteUrl ? ensureUrl(p.brand.websiteUrl).replace(/\/$/, '') : '';
   const profile = useStore.getState().settings.profile;
   return {
-    first_name: (sub?.name || 'Alex').split(' ')[0],
-    email: sub?.email || 'alex@example.com',
-    lead_magnet_link: `${site}/free`,
-    product_link: `${site}/${p.marketing.seo?.slug || 'offer'}`,
+    first_name: sub?.name ? sub.name.split(' ')[0] : '[First name]',
+    email: sub?.email || '[subscriber’s email]',
+    lead_magnet_link: site ? `${site}/free` : '[link to your free download]',
+    product_link: site ? `${site}/${p.marketing.seo?.slug || 'offer'}` : '[link to your offer]',
     sender_name: profile.name || p.brand.name,
+    sender_email: profile.email || 'your sending address',
     brand: p.brand.name,
   };
 }
 
-export function addSubscriber(name: string, email: string, source: Subscriber['source']): Subscriber {
-  const sub: Subscriber = { id: uid('sub'), name: name.trim() || email.split('@')[0], email: email.trim().toLowerCase(), joinedAt: Date.now(), source, step: 0, opened: [], clicked: [] };
+/** Add subscribers you imported (skipping emails already on the list). Returns how many were added. */
+export function importSubscribers(rows: { name: string; email: string }[]): number {
   const s = useStore.getState();
-  s.updateMarketing({ subscribers: [sub, ...getActiveProject()!.marketing.subscribers] });
-  s.notify({ kind: 'lead', title: source === 'test' ? `Test subscriber added: ${sub.name}` : `New subscriber: ${sub.name}`, body: sub.email, route: 'marketing-email' });
-  return sub;
-}
-
-export function patchSubscriber(id: string, patch: Partial<Subscriber>) {
-  const subs = getActiveProject()!.marketing.subscribers;
-  useStore.getState().updateMarketing({ subscribers: subs.map((s) => (s.id === id ? { ...s, ...patch } : s)) });
-}
-
-/** Deterministic simulated engagement for one subscriber + email (demo only). */
-export function simulatedEngagement(sub: Subscriber, step: number): { open: boolean; click: boolean; convert: boolean } {
-  const rng = createRng(hashStr(`${sub.id}|${step}`));
-  const openP = [0.92, 0.74, 0.66, 0.6, 0.58][step - 1] ?? 0.5;
-  const clickP = [0.55, 0.32, 0.28, 0.24, 0.3][step - 1] ?? 0.2;
-  const open = rng.chance(openP);
-  const click = open && rng.chance(clickP);
-  const convert = step === 5 && click && rng.chance(0.45);
-  return { open, click, convert };
+  const current = getActiveProject()!.marketing.subscribers;
+  const have = new Set(current.map((x) => x.email.toLowerCase()));
+  const now = Date.now();
+  const added: Subscriber[] = [];
+  for (const r of rows) {
+    const email = r.email.trim().toLowerCase();
+    if (!email || have.has(email)) continue;
+    have.add(email);
+    added.push({ id: uid('sub'), name: r.name.trim() || email.split('@')[0], email, joinedAt: now, source: 'import' });
+  }
+  if (added.length) s.updateMarketing({ subscribers: [...added, ...current] });
+  return added.length;
 }
 
 /** An email rendered the way a subscriber’s inbox shows it. */
@@ -50,7 +45,7 @@ export function EmailView({ project, email, tokens, compact }: { project: Projec
       {!compact && (
         <div className="border-b border-[#e6ebe8] px-4 py-3 text-[12.5px] text-[#5b6861]">
           <p>
-            <b className="text-[#1d2420]">{project.brand.name}</b> &lt;hello@{(project.brand.slug || 'brand').replace(/[^a-z0-9-]/gi, '')}.com&gt;
+            <b className="text-[#1d2420]">{project.brand.name}</b> &lt;{tokens.sender_email}&gt;
           </p>
           <p>To: {tokens.email}</p>
           <p className="mt-1 text-[15px] font-semibold text-[#1d2420]">{renderTokens(email.subject, tokens)}</p>

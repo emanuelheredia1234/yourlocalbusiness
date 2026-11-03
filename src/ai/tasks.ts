@@ -632,7 +632,7 @@ export const adsTask = def<{ campaign: AdCampaign }, AdsResult>({
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
-        shape: `{"interests": [string], "audiences": [{"name": string, "description": string, "size": string, "interests": [string]}] (3), "creatives": [{"variant": string, "angle": string, "primaryText": string, "headline": string, "description": string, "cta": string, "visualHeadline": string}] (3)${i.campaign.platforms.includes('google') ? ', "search": {"headlines": [string], "descriptions": [string], "keywords": [string], "sitelinks": [{"title": string, "desc": string}]}' : ''}}`,
+        shape: `{"interests": [string], "audiences": [{"name": string, "description": string, "interests": [string]}] (3), "creatives": [{"variant": string, "angle": string, "primaryText": string, "headline": string, "description": string, "cta": string, "visualHeadline": string}] (3)${i.campaign.platforms.includes('google') ? ', "search": {"headlines": [string], "descriptions": [string], "keywords": [string], "sitelinks": [{"title": string, "desc": string}]}' : ''}}`,
       }),
     merge: (raw, base) => {
       const r = obj(raw);

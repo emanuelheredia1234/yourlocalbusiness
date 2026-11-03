@@ -85,15 +85,17 @@ describe('cleaning up what older versions made up', () => {
     const p1 = useStore.getState().projects[0];
     useStore.setState({
       myListings: [{ id: 'l1', projectId: 'p1', title: 'Planner', rating: 4.8, reviews: 212, sales: 5, seller: { name: 'Me', verified: true } } as never, { id: 'l2', projectId: 'p1', title: 'Clean', seller: { name: 'Me' } } as never],
-      projects: [{ ...p1, marketing: { ...p1.marketing, subscribers: [{ id: 's1', source: 'sample' }, { id: 's2', source: 'test' }] as never, plan: { summary: { total: 3, estReach: 24000 } } as never } }],
-      notices: ['Simulated sale: Planner', 'Order YLB-123456 confirmed', 'New sale: Planner', 'Inquiry sent to Copper & Crumb', 'Planner is live on the Marketplace', 'Your brand is ready'].map((title, i) => ({ id: `n${i}`, title, kind: 'info' as const, createdAt: i, read: false })),
+      projects: [{ ...p1, marketing: { ...p1.marketing, subscribers: [{ id: 's1', source: 'sample' }, { id: 's2', source: 'test' }, { id: 's3', source: 'optin', step: 3, opened: [1], clicked: [], converted: true }] as never, plan: { summary: { total: 3, estReach: 24000 } } as never } }],
+      ads: [{ id: 'ad1', status: 'active', launchedAt: 5, seed: 9, projections: { spend: 1 }, audiences: [{ id: 'a', name: 'Core', description: 'd', size: '1.2M–2.4M', interests: [] }] } as never],
+      notices: ['Simulated sale: Planner', 'Order YLB-123456 confirmed', 'New sale: Planner', 'Inquiry sent to Copper & Crumb', 'Planner is live on the Marketplace', 'Test subscriber added: Me', 'Ad campaign live (simulated): Launch', 'Your brand is ready'].map((title, i) => ({ id: `n${i}`, title, kind: 'info' as const, createdAt: i, read: false })),
       settings: { ...defaultSettings(), marketActivity: true, showSampleListings: true, ai: { serverUrl: '', useBrain: true, simulateLatency: true } } as never,
     });
     cleanWorkspace();
     const s = useStore.getState();
     expect(s.myListings[0]).toEqual({ id: 'l1', projectId: 'p1', title: 'Planner', seller: { name: 'Me' } });
     expect(s.myListings[1]).toEqual({ id: 'l2', projectId: 'p1', title: 'Clean', seller: { name: 'Me' } });
-    expect(s.projects[0].marketing.subscribers.map((x) => x.id)).toEqual(['s2']);
+    expect(s.projects[0].marketing.subscribers).toEqual([{ id: 's3', source: 'optin' }]);
+    expect(s.ads[0]).toEqual({ id: 'ad1', status: 'draft', audiences: [{ id: 'a', name: 'Core', description: 'd', interests: [] }] });
     expect(s.projects[0].marketing.plan?.summary).toEqual({ total: 3 });
     expect(s.notices.map((n) => n.title)).toEqual(['Your brand is ready']);
     expect('marketActivity' in s.settings || 'showSampleListings' in s.settings).toBe(false);

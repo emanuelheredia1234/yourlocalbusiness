@@ -1,5 +1,5 @@
-import type { AdCampaign, AdCreative, AdObjective, AdPlatform, AdProjection, AudienceSet, Directives, Project, SearchAd, StyleId } from '@/lib/types';
-import { capitalize, clamp, createRng, hashStr, slugify, titleCase, truncate, uid } from '@/lib/utils';
+import type { AdCampaign, AdCreative, AdObjective, AdPlatform, AudienceSet, Directives, Project, SearchAd, StyleId } from '@/lib/types';
+import { capitalize, hashStr, slugify, titleCase, truncate, uid } from '@/lib/utils';
 import { buildFacts, verbOutcome, Voice, type Facts } from '../text';
 import { primaryKeywordFor } from './seo';
 
@@ -16,62 +16,6 @@ export const AD_OBJECTIVES: { id: AdObjective; label: string; desc: string }[] =
   { id: 'leads', label: 'Leads', desc: 'Grow your list with the free lead magnet' },
   { id: 'sales', label: 'Sales & bookings', desc: 'Drive purchases or bookings' },
 ];
-
-const BENCH: Record<AdPlatform, { cpm: [number, number]; ctr: [number, number]; cpc?: [number, number] }> = {
-  meta: { cpm: [9, 14], ctr: [0.011, 0.017] },
-  tiktok: { cpm: [6, 10], ctr: [0.009, 0.015] },
-  google: { cpm: [30, 60], ctr: [0.035, 0.06], cpc: [1.4, 3.6] },
-  linkedin: { cpm: [32, 48], ctr: [0.004, 0.007] },
-};
-
-export function projectAds(c: Pick<AdCampaign, 'platforms' | 'dailyBudget' | 'durationDays' | 'objective' | 'seed'>, f: Facts): AdProjection {
-  const rng = createRng(c.seed || 7);
-  const platforms = c.platforms.length ? c.platforms : (['meta'] as AdPlatform[]);
-  const spend = Math.max(0, c.dailyBudget) * Math.max(1, c.durationDays);
-  const per = spend / platforms.length;
-  let impressions = 0;
-  let clicks = 0;
-  for (const p of platforms) {
-    const b = BENCH[p];
-    const mult = f.niche.priceMult > 1.5 ? 1.25 : f.local ? 0.9 : 1;
-    if (p === 'google' && b.cpc) {
-      const cpc = rng.float(b.cpc[0], b.cpc[1]) * mult;
-      const k = per / cpc;
-      clicks += k;
-      impressions += k / rng.float(b.ctr[0], b.ctr[1]);
-    } else {
-      const cpm = rng.float(b.cpm[0], b.cpm[1]) * mult;
-      const imp = (per / cpm) * 1000;
-      impressions += imp;
-      clicks += imp * rng.float(b.ctr[0], b.ctr[1]) * (c.objective === 'awareness' ? 0.7 : 1);
-    }
-  }
-  const cvr =
-    c.objective === 'leads'
-      ? rng.float(0.09, 0.16)
-      : c.objective === 'sales'
-        ? f.track === 'business'
-          ? rng.float(0.035, 0.07)
-          : clamp(0.045 - f.price / 6000, 0.008, 0.045)
-        : c.objective === 'traffic'
-          ? rng.float(0.01, 0.025)
-          : rng.float(0.004, 0.01);
-  const conversions = clicks * cvr;
-  const value = c.objective === 'leads' ? f.price * 0.12 : f.price;
-  const revenue = conversions * value;
-  return {
-    spend: Math.round(spend),
-    impressions: Math.round(impressions),
-    reach: Math.round(impressions / 1.9),
-    ctr: impressions ? clicks / impressions : 0,
-    cpc: clicks ? spend / clicks : 0,
-    clicks: Math.round(clicks),
-    cvr,
-    conversions: Math.round(conversions * 10) / 10,
-    cpa: conversions ? spend / conversions : 0,
-    roas: spend ? revenue / spend : 0,
-  };
-}
 
 export function suggestInterests(f: Facts): string[] {
   const fromTags = f.hashtags.map((h) => titleCase(h.replace('#', '').replace(/([a-z])([A-Z])/g, '$1 $2')));
@@ -97,19 +41,17 @@ export interface AdsResult {
   interests: string[];
   creatives: AdCreative[];
   search: SearchAd | null;
-  projections: AdProjection;
 }
 
 export function generateAds(project: Project, c: AdCampaign, d: Directives = {}, variation = 0): AdsResult {
   const f = buildFacts(project);
   const v = Voice.create(f, d, hashStr(`${project.id}|ads|${variation}|${c.objective}`));
-  const rng = v.rng;
   const interests = c.interests.length ? c.interests : suggestInterests(f);
   const where = f.local && f.city ? `${c.radiusMi || 10} mi around ${f.city}${f.region ? `, ${f.region}` : ''}` : c.locations || 'United States';
   const audiences: AudienceSet[] = [
-    { id: uid('aud'), name: f.local ? 'Local core audience' : 'Core interest audience', description: `Ages ${c.ageMin}–${c.ageMax} · ${where} · interested in ${interests.slice(0, 3).join(', ')}`, size: f.local ? '40K–90K' : '1.2M–2.4M', interests: interests.slice(0, 6) },
-    { id: uid('aud'), name: 'Warm retargeting', description: 'Website visitors (30 days), video viewers 50%+, Instagram & Facebook engagers (60 days)', size: '2K–12K', interests: ['Website visitors', 'Video viewers', 'Page engagers'] },
-    { id: uid('aud'), name: f.local ? 'Lookalike: past customers (local)' : 'Lookalike 1–3%: buyers & subscribers', description: `Seeded from ${f.track === 'business' ? 'customer list' : 'purchasers and email subscribers'}`, size: f.local ? '25K–60K' : '2M–6M', interests: ['Lookalike'] },
+    { id: uid('aud'), name: f.local ? 'Local core audience' : 'Core interest audience', description: `Ages ${c.ageMin}–${c.ageMax} · ${where} · interested in ${interests.slice(0, 3).join(', ')}`, interests: interests.slice(0, 6) },
+    { id: uid('aud'), name: 'Warm retargeting', description: 'Website visitors (30 days), video viewers 50%+, Instagram & Facebook engagers (60 days)', interests: ['Website visitors', 'Video viewers', 'Page engagers'] },
+    { id: uid('aud'), name: f.local ? 'Lookalike: past customers (local)' : 'Lookalike 1–3%: buyers & subscribers', description: `Seeded from ${f.track === 'business' ? 'customer list' : 'purchasers and email subscribers'}`, interests: ['Lookalike'] },
   ];
   const cta: Record<AdObjective, string> =
     f.track === 'business'
@@ -189,14 +131,12 @@ export function generateAds(project: Project, c: AdCampaign, d: Directives = {},
           ],
     };
   }
-  const seed = c.seed || rng.int(1, 1_000_000);
-  return { audiences, interests, creatives, search, projections: projectAds({ ...c, seed }, f) };
+  return { audiences, interests, creatives, search };
 }
 
 export function newAdCampaign(project: Project): AdCampaign {
   const f = buildFacts(project);
-  const seed = hashStr(project.id + Date.now());
-  const base: AdCampaign = {
+  return {
     id: uid('ad'),
     projectId: project.id,
     name: `${f.productShort} · ${f.track === 'business' ? 'Bookings' : 'Launch'}`,
@@ -215,9 +155,6 @@ export function newAdCampaign(project: Project): AdCampaign {
     creatives: [],
     selectedCreativeIds: [],
     search: null,
-    projections: { spend: 0, impressions: 0, reach: 0, ctr: 0, cpc: 0, clicks: 0, cvr: 0, conversions: 0, cpa: 0, roas: 0 },
     createdAt: Date.now(),
-    seed,
   };
-  return { ...base, projections: projectAds(base, f) };
 }

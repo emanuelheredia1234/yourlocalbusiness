@@ -10,7 +10,7 @@ An AI workspace for researching, building, branding, listing and marketing digit
 | **Dashboard** | Quick composer (AI caption + **AI image**, or your own photo/video with an AI caption), project summary, KPI snapshot with sparklines, launch readiness, upcoming posts. |
 | **AI images** | Post images (portrait, square, story or landscape) and a marketplace listing set: cover mockup, in-use shot, "What's inside / What you get" checklist graphic and offer card. Choose **Photo** (made by the API key that powers Photos: OpenAI, Google, xAI, Meta, OpenRouter or a Manus task; in claude.ai, Meta Muse through Zapier) or **Illustration** (drawn by the AI as SVG). The app typesets headlines, logos, prices and lists on top, so text is always spelled right; change the headline later and the text is re-set on the same artwork without a new generation. |
 | **Product / Business Studio** | Structure builder (course curriculum, guide chapters, spreadsheet tabs… or service packages, operating model and value stack), section drafting, AI code & asset generator (calculators, quizzes, booking widgets, pricing tables, spreadsheets + Apps Script…) with a live CodeMirror editor, split-pane preview, plain-language edits with undo, HTML export, AI listing images with a buyer gallery, and one-click publishing to the Marketplace. |
-| **Marketing Hub** | Four channels: **SEO** (metadata, live 0–100 score with checklist, Google and link previews, click-to-edit sales page, section manager, HTML export with JSON-LD), **Email** (lead magnet, opt-in page, 5-email sequence with editable delays, time-compressed subscriber simulation, subscriber list + CSV), **Social** (cadence, watermark, 5 image + 5 video styles, platforms and your handles, post-type mix, 30-day plan, 7-day ready-to-post batch with mockups, add to calendar in bulk), **Paid ads** (objectives, platforms, budget, targeting, A/B creatives, Google search ads, projections, simulated launch). |
+| **Marketing Hub** | Four channels: **SEO** (metadata, live 0–100 score with checklist, Google and link previews, click-to-edit sales page, section manager, HTML export with JSON-LD), **Email** (lead magnet, opt-in page copy and preview, 5-email sequence with editable delays, preview and CSV export for your email provider, subscriber list with CSV import and export), **Social** (cadence, watermark, 5 image + 5 video styles, platforms and your handles, post-type mix, 30-day plan, 7-day ready-to-post batch with mockups, add to calendar in bulk), **Paid ads** (objectives, platforms, budget, targeting, A/B creatives, Google search ads, then copy or CSV export to each platform's ads manager). |
 | **Content calendar** | Planned (5-week calendar with drag-to-move, or list; posts whose time has passed are flagged **Due**), Posted (by Manus, or marked by you, with the real link when there is one), Drafts; full inline editor with a platform preview. Nothing posts on its own: Manus posts when you confirm, or you post yourself and choose **Mark as posted**. |
 | **Analytics** | Real counts only: posts that went out (reported by Manus or marked by you) with period deltas, posts planned and due, things made with AI, a daily chart (with table view), posts by network, type and format, and the posted list with links. Likes, views, clicks and sales live on each network and on your own checkout, so the app doesn't show or estimate them. |
 | **Marketplace** | Products and local businesses, search, category pills, location filter + map, and listing details. Buyers buy, book or get in touch through each seller's own checkout or booking link, website, email or phone: the app takes no payments and sends no messages. No ratings, reviews or sold counts (nothing measures them). |
@@ -18,7 +18,7 @@ An AI workspace for researching, building, branding, listing and marketing digit
 | **Settings** | Brand kit (logo upload or designer, colors, banner, images, socials), **AI** (your API keys: what each one powers, its model and effort, priority, usage, and the Brain switch), social accounts, projects, backup/restore, preferences, and **Account** (save status, password, log out, delete account). |
 | **Accounts** | Sign up and sign in with email and password; each person's workspace and files are saved to their account (Supabase) and open on any device. |
 
-## What is real and what is simulated
+## What the app does, and what it leaves to other tools
 
 Real:
 - All generation, editing, exporting (HTML, Markdown, CSV, JSON backups, Apps Script) and local persistence.
@@ -28,9 +28,10 @@ Real:
 - Posting: Manus posts on Facebook, Instagram, TikTok, LinkedIn and X for you, in its own browser signed in as you (see "Posting with Manus"). The app itself never logs in to a network and never posts on its own. Without Manus, copy the text and download the image or video from a post's ⋯ menu, post it yourself, and mark it posted.
 - When the app is opened as a shared claude.ai Artifact, published Marketplace listings sync between everyone who opens it. Elsewhere, only you see your listings for now.
 
-Simulated (clearly labelled in the UI):
-- Email sending: the sequence plays in an in-app inbox; nothing is emailed.
-- Ad launches: delivery is modeled from benchmark projections; no ad account is charged.
+Not done by the app (it says so where it matters):
+- Sending email: you export the sequence to your email provider (Kit, Mailchimp, MailerLite…), which collects sign-ups and sends it.
+- Running ads: you copy the campaign into Meta Ads Manager, Google Ads, TikTok or LinkedIn, where you launch and pay for it. The app shows only your own budget, never estimated reach or results.
+- Taking payments: buyers pay on each seller's own checkout link.
 
 ## AI: one AI, powered by your API keys
 
@@ -140,7 +141,7 @@ Manus is an AI agent with its own browser. You sign in to each network once insi
   - Instagram and TikTok need an image or a video; X warns when text is over 280 characters (longer works only on accounts that allow it).
 - **Status**: the post shows posting or scheduling, **Manus needs you** (for example, to sign in the first time), posted or scheduled, or failed, with a link to the task. When Manus reports it posted, the post moves to **Posted** with its link, if Manus saw one (only links on that network's own website are kept). The app checks every 45 seconds while it's open, or press **Check now**. "Posted" is Manus's own report.
 - **Videos** (self-hosted only): the video goes to Manus first, through your server, using Manus's file upload (up to 300 MB here). Signed in, the server takes the video straight from your account's storage with a private link that lasts 10 minutes, so big videos never pass through the browser. Replit's published apps refuse uploads over about 32 MB, so without accounts keep videos under that.
-- **Older workspaces**: earlier versions pretended to connect accounts and publish posts, and offered sample data and simulated buyers. When a workspace opens, posts that version marked published (without Manus) go back on the calendar as planned, its handles move to your brand's social handles, and sample posts, subscribers and sales, simulated sales (and what they added to your listings' sold counts), the social plan's invented reach estimate and the notices about them are removed. So are the pretend checkout's orders, sales and cart, the sample Marketplace listings, and the made-up ratings, reviews, "verified" badges and sold counts on listings. Posts Manus really posted stay posted.
+- **Older workspaces**: earlier versions pretended to connect accounts and publish posts, and offered sample data and simulated buyers. When a workspace opens, posts that version marked published (without Manus) go back on the calendar as planned, its handles move to your brand's social handles, and sample posts, subscribers and sales, simulated sales (and what they added to your listings' sold counts), the social plan's invented reach estimate and the notices about them are removed. So are the pretend checkout's orders, sales and cart, the sample Marketplace listings, and the made-up ratings, reviews, "verified" badges and sold counts on listings, the email simulator's test subscribers (and its opens, clicks and "customers" on the rest), and ad campaigns' simulated launches, projections and audience sizes. Posts Manus really posted stay posted.
 
 ## Accounts: sign-up, sign-in and saving to your account (Supabase)
 
@@ -229,11 +230,11 @@ npm run build:artifact      # dist-artifact/yourlocalbusiness.html (single file)
 
 ## Going to production
 
-The simulated integrations are isolated so they can be swapped for real ones:
+Where to plug in real integrations:
 - Posting through the networks' own APIs instead of Manus: `startManusPost` in `src/ai/manusPost.ts` is the one place a post leaves the app.
 - Payments: sellers use their own checkout link (a listing's `buyUrl`). To take payments in the app, add Stripe Checkout on your server and record paid orders from its webhook.
-- Email delivery: export the sequence or connect an email provider where subscribers are added (`src/pages/marketing/email/shared.tsx`).
-- Ads: `src/pages/marketing/AdsEngine.tsx` launch handlers.
+- Email delivery: connect an email provider's API where the sequence is exported (`src/pages/marketing/email/PreviewPanel.tsx`).
+- Ads: push campaigns through the platforms' marketing APIs from `ExportPanel` in `src/pages/marketing/AdsEngine.tsx`.
 - Shared marketplace outside claude.ai: replace the Artifact database calls in `src/lib/community.ts` with your API.
 
 ## Data

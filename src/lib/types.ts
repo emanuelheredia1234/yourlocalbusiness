@@ -301,11 +301,8 @@ export interface Subscriber {
   name: string;
   email: string;
   joinedAt: number;
-  source: 'test' | 'optin';
-  step: number;
-  opened: number[];
-  clicked: number[];
-  converted?: boolean;
+  /** optin: signed up on your page · import: from a CSV you imported */
+  source: 'optin' | 'import';
 }
 
 export interface SeoMeta {
@@ -532,24 +529,10 @@ export interface SearchAd {
   sitelinks: { title: string; desc: string }[];
 }
 
-export interface AdProjection {
-  spend: number;
-  impressions: number;
-  reach: number;
-  ctr: number;
-  cpc: number;
-  clicks: number;
-  cvr: number;
-  conversions: number;
-  cpa: number;
-  roas: number;
-}
-
 export interface AudienceSet {
   id: string;
   name: string;
   description: string;
-  size: string;
   interests: string[];
 }
 
@@ -562,7 +545,8 @@ export interface AdCampaign {
   dailyBudget: number;
   durationDays: number;
   startDate: string;
-  status: 'draft' | 'active' | 'paused' | 'completed';
+  /** always a plan: campaigns run in each platform's own ads manager, never from this app */
+  status: 'draft';
   locations: string;
   radiusMi: number;
   ageMin: number;
@@ -572,10 +556,9 @@ export interface AdCampaign {
   creatives: AdCreative[];
   selectedCreativeIds: string[];
   search: SearchAd | null;
-  projections: AdProjection;
   createdAt: number;
-  launchedAt?: number;
-  seed: number;
+  /** when you last exported it for an ads manager */
+  exportedAt?: number;
 }
 
 // ───────────── Marketplace ─────────────

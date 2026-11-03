@@ -1,19 +1,16 @@
 import { useMemo, useState } from 'react';
-import { Check, Globe, MoreHorizontal, Pause, Play, Plus, Rocket, Search, Square, Target, ThumbsUp, Trash2, Users } from 'lucide-react';
+import { Check, Download, ExternalLink, Globe, MoreHorizontal, Plus, Search, Target, ThumbsUp, Trash2, Users } from 'lucide-react';
 import type { AdCampaign, AdCreative, AdObjective, AdPlatform, Project, SearchAd, StyleId } from '@/lib/types';
-import { cn, fmtCompact, fmtMoney, fmtPct, stripProtocol } from '@/lib/utils';
+import { cn, fmtMoney, fmtRelative, slugify, stripProtocol } from '@/lib/utils';
 import { IMAGE_STYLES, STYLE_LABEL, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
-import { AD_OBJECTIVES, AD_PLATFORMS, newAdCampaign, projectAds, suggestInterests } from '@/ai/local/ads';
+import { AD_OBJECTIVES, AD_PLATFORMS, newAdCampaign, suggestInterests } from '@/ai/local/ads';
 import { buildFacts } from '@/ai/text';
 import { adsTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
-import { adDaily } from '@/lib/metrics';
-import { useNow } from '@/lib/hooks';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { toast } from '@/store/ui';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { AutoTextarea, ChipInput, Empty, Field, LinesEditor, confirmAction } from '@/components/ui/primitives';
-import { StatTile } from '@/components/charts/Charts';
+import { AutoTextarea, ChipInput, CopyButton, Empty, Field, LinesEditor, confirmAction } from '@/components/ui/primitives';
+import { download } from '@/components/ui/download';
 import { PostVisual } from '@/components/visuals/PostVisual';
 import { LogoMark } from '@/components/brand/Logo';
 import { MarketingHeader } from './MarketingNav';
@@ -39,7 +36,7 @@ export default function AdsEngine() {
       <MarketingHeader
         eyebrow="Marketing Hub · Paid ads"
         title="Paid ads engine"
-        desc="Plan campaigns for Meta, TikTok, Google Search and LinkedIn: audiences, three A/B creatives, search ads and budget projections based on industry benchmarks."
+        desc="Plan campaigns for Meta, TikTok, Google Search and LinkedIn: targeting, three A/B creatives and search ads. Then copy them into each platform’s ads manager, where you launch and pay for them."
         actions={
           <button className="btn btn-primary" onClick={create}>
             <Plus size={16} /> New campaign
@@ -50,22 +47,18 @@ export default function AdsEngine() {
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="Campaigns">
           {campaigns.map((c) => (
             <button key={c.id} role="tab" aria-selected={active?.id === c.id} className={cn('chip', active?.id === c.id && 'chip-active')} onClick={() => setActiveId(c.id)}>
-              <StatusDot status={c.status} /> {c.name}
+              {c.name}
             </button>
           ))}
         </div>
       )}
       {!active ? (
-        <Empty icon={<Target size={20} />} title="No ad campaigns yet" body={`Create a campaign and the AI drafts audiences, creatives and search ads for ${project.brand.name}, with projected reach, clicks and cost.`} action={<button className="btn btn-primary" onClick={create}><Plus size={15} /> Create campaign</button>} className="min-h-[320px]" />
+        <Empty icon={<Target size={20} />} title="No ad campaigns yet" body={`Create a campaign and the AI drafts targeting, creatives and search ads for ${project.brand.name}.`} action={<button className="btn btn-primary" onClick={create}><Plus size={15} /> Create campaign</button>} className="min-h-[320px]" />
       ) : (
         <CampaignEditor key={active.id} project={project} c={active} onDeleted={() => setActiveId(null)} />
       )}
     </div>
   );
-}
-
-function StatusDot({ status }: { status: AdCampaign['status'] }) {
-  return <span className={cn('h-2 w-2 rounded-full', status === 'active' ? 'bg-good' : status === 'paused' ? 'bg-warn' : status === 'completed' ? 'bg-muted' : 'bg-line-2')} aria-hidden="true" />;
 }
 
 function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCampaign; onDeleted: () => void }) {
@@ -76,17 +69,14 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
   const suggestions = useMemo(() => suggestInterests(facts), [facts]);
   const live = () => useStore.getState().ads.find((a) => a.id === c.id) ?? c;
   const set = (patch: Partial<AdCampaign>) => {
-    const next = { ...live(), ...patch };
-    if ('platforms' in patch || 'dailyBudget' in patch || 'durationDays' in patch || 'objective' in patch) next.projections = projectAds(next, facts);
-    upsertAd(next);
+    upsertAd({ ...live(), ...patch });
   };
   const setCreative = (id: string, patch: Partial<AdCreative>) => set({ creatives: live().creatives.map((x) => (x.id === id ? { ...x, ...patch } : x)) });
-  const locked = c.status === 'active' || c.status === 'completed';
 
   const generate = async () => {
     if (c.creatives.length && !(await confirmAction({ title: 'Regenerate creatives and audiences?', body: 'Your edited ad copy will be replaced.', confirmLabel: 'Regenerate' }))) return;
     const r = await ai.run({ campaign: live() });
-    if (r) set({ audiences: r.audiences, interests: c.interests.length ? c.interests : r.interests, creatives: r.creatives, search: r.search, projections: r.projections, selectedCreativeIds: r.creatives.map((x) => x.id) });
+    if (r) set({ audiences: r.audiences, interests: c.interests.length ? c.interests : r.interests, creatives: r.creatives, search: r.search, selectedCreativeIds: r.creatives.map((x) => x.id) });
   };
 
   return (
@@ -95,12 +85,9 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
         <section className="panel flex min-w-0 flex-col gap-4 p-4 sm:p-5" aria-label="Campaign settings">
           <div className="flex flex-wrap items-center gap-2">
             <input className="min-w-[200px] flex-1 rounded bg-transparent px-1 py-1 font-display text-[18px] font-semibold outline-none hover:bg-surface-2 focus:bg-surface-2" value={c.name} onChange={(e) => set({ name: e.target.value })} aria-label="Campaign name" />
-            <span className={cn('badge', c.status === 'active' ? 'bg-good-soft text-good' : c.status === 'paused' ? 'bg-warn-soft text-warn' : 'bg-surface-2 text-muted')}>
-              <StatusDot status={c.status} /> {c.status === 'draft' ? 'Draft' : c.status === 'active' ? 'Live (simulated)' : c.status === 'paused' ? 'Paused' : 'Completed'}
-            </span>
+            <span className="badge bg-surface-2 text-muted">Plan</span>
           </div>
-          {locked && <p className="rounded-md bg-surface-2 px-3 py-2 text-xs text-muted">Budget and targeting are locked while the campaign runs. Pause it to make changes.</p>}
-          <fieldset disabled={locked} className="flex flex-col gap-4 disabled:opacity-70">
+          <fieldset className="flex flex-col gap-4">
             <Field label="Objective">
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4" role="radiogroup" aria-label="Objective">
                 {AD_OBJECTIVES.map((o) => (
@@ -168,7 +155,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
             </Field>
           </fieldset>
           <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
-            <GenerateButton running={ai.running} onClick={generate} disabled={!c.platforms.length || locked}>
+            <GenerateButton running={ai.running} onClick={generate} disabled={!c.platforms.length}>
               {c.creatives.length ? 'Regenerate audiences & creatives' : 'Generate audiences & creatives'}
             </GenerateButton>
             <button
@@ -187,7 +174,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
           {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
         </section>
 
-        <Projections c={c} onStatus={(status) => set(status === 'active' && !c.launchedAt ? { status, launchedAt: Date.now() } : { status })} />
+        <ExportPanel c={c} onExported={() => set({ exportedAt: Date.now() })} />
       </div>
 
       {c.creatives.length > 0 && (
@@ -200,7 +187,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
           </div>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {c.creatives.map((cr) => (
-              <CreativeCard key={cr.id} project={project} cr={cr} selected={c.selectedCreativeIds.includes(cr.id)} locked={locked} onSelect={(v) => set({ selectedCreativeIds: v ? [...c.selectedCreativeIds, cr.id] : c.selectedCreativeIds.filter((x) => x !== cr.id) })} onChange={(p) => setCreative(cr.id, p)} />
+              <CreativeCard key={cr.id} project={project} cr={cr} selected={c.selectedCreativeIds.includes(cr.id)} onSelect={(v) => set({ selectedCreativeIds: v ? [...c.selectedCreativeIds, cr.id] : c.selectedCreativeIds.filter((x) => x !== cr.id) })} onChange={(p) => setCreative(cr.id, p)} />
             ))}
           </div>
         </section>
@@ -218,7 +205,6 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
               <div key={a.id} className="panel flex flex-col gap-2 p-4">
                 <div className="flex items-start justify-between gap-2">
                   <p className="text-[14px] font-semibold">{a.name}</p>
-                  <span className="badge shrink-0 bg-surface-2 text-ink-2">{a.size}</span>
                 </div>
                 <p className="text-[12.5px] text-muted">{a.description}</p>
                 <div className="mt-auto flex flex-wrap gap-1">
@@ -237,94 +223,95 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
   );
 }
 
-function Projections({ c, onStatus }: { c: AdCampaign; onStatus: (s: AdCampaign['status']) => void }) {
-  const now = useNow(10_000);
-  const p = c.projections;
-  const delivered = useMemo(() => adDaily(c, now), [c, now]);
-  const sum = (k: 'spend' | 'impressions' | 'clicks' | 'conversions') => delivered.reduce((n, d) => n + d[k], 0);
+const AD_MANAGERS: Record<AdPlatform, { label: string; url: string }> = {
+  meta: { label: 'Meta Ads Manager', url: 'https://adsmanager.facebook.com/' },
+  tiktok: { label: 'TikTok Ads Manager', url: 'https://ads.tiktok.com/' },
+  google: { label: 'Google Ads', url: 'https://ads.google.com/' },
+  linkedin: { label: 'LinkedIn Campaign Manager', url: 'https://www.linkedin.com/campaignmanager/' },
+};
+
+const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
+
+/** Everything to paste into an ads manager, as plain text. */
+export function adsText(c: AdCampaign): string {
+  const picked = c.creatives.filter((x) => c.selectedCreativeIds.includes(x.id));
+  const lines = [`${c.name}`, `Objective: ${AD_OBJECTIVES.find((o) => o.id === c.objective)?.label ?? c.objective}`, `Budget: ${fmtMoney(c.dailyBudget)}/day for ${c.durationDays} days (${fmtMoney(c.dailyBudget * c.durationDays)} total)`, `Location: ${c.locations}${c.radiusMi ? ` (+${c.radiusMi} mi)` : ''} · Ages ${c.ageMin}–${c.ageMax}`, c.interests.length ? `Interests: ${c.interests.join(', ')}` : '', ''];
+  for (const a of c.audiences) lines.push(`Audience: ${a.name}`, `  ${a.description}`, a.interests.length ? `  ${a.interests.join(', ')}` : '', '');
+  for (const cr of picked) lines.push(`Ad ${cr.variant}: ${cr.angle}`, `  Primary text: ${cr.primaryText}`, `  Headline: ${cr.headline}`, `  Description: ${cr.description}`, `  Button: ${cr.cta}`, '');
+  if (c.search) lines.push('Google search ads', ...c.search.headlines.map((h) => `  Headline: ${h}`), ...c.search.descriptions.map((d) => `  Description: ${d}`), `  Keywords: ${c.search.keywords.join(', ')}`, ...c.search.sitelinks.map((l) => `  Sitelink: ${l.title}: ${l.desc}`), '');
+  return lines.filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n').trim();
+}
+
+/** The ads as a CSV: one row per creative (and per search headline and description). */
+export function adsCsv(c: AdCampaign): string {
+  const rows = [['type', 'variant', 'angle', 'primary_text', 'headline', 'description', 'button']];
+  for (const cr of c.creatives.filter((x) => c.selectedCreativeIds.includes(x.id))) rows.push(['social', cr.variant, cr.angle, cr.primaryText, cr.headline, cr.description, cr.cta]);
+  if (c.search) {
+    for (const h of c.search.headlines) rows.push(['search headline', '', '', '', h, '', '']);
+    for (const d of c.search.descriptions) rows.push(['search description', '', '', '', '', d, '']);
+    for (const k of c.search.keywords) rows.push(['keyword', '', '', '', k, '', '']);
+  }
+  return rows.map((r) => r.map(csvCell).join(',')).join('\n');
+}
+
+/** Budget (your own numbers), and taking the plan to each platform's ads manager. */
+function ExportPanel({ c, onExported }: { c: AdCampaign; onExported: () => void }) {
+  const ready = c.creatives.length > 0 && c.selectedCreativeIds.length > 0;
   return (
     <aside className="flex min-w-0 flex-col gap-4">
-      <section className="panel p-4" aria-label="Projected results">
-        <h2 className="mb-1 text-[14px] font-semibold">Projected results</h2>
-        <p className="mb-3 text-xs text-muted">
-          {fmtMoney(c.dailyBudget)}/day × {c.durationDays} days. Estimates from typical benchmark ranges; real results vary.
+      <section className="panel p-4" aria-label="Budget">
+        <h2 className="mb-1 text-[14px] font-semibold">Budget</h2>
+        <p className="num text-[22px] font-bold">{fmtMoney(c.dailyBudget * c.durationDays)}</p>
+        <p className="text-xs text-muted">
+          {fmtMoney(c.dailyBudget)}/day × {c.durationDays} days, the amount you set. Reach, clicks and costs depend on each platform’s auction: its ads manager estimates them when you set the campaign up.
         </p>
-        <div className="grid grid-cols-2 gap-2">
-          <Mini label="Total spend" value={fmtMoney(p.spend)} />
-          <Mini label="Impressions" value={fmtCompact(p.impressions)} />
-          <Mini label="Clicks" value={fmtCompact(p.clicks)} sub={`CTR ${fmtPct(p.ctr)}`} />
-          <Mini label="Cost per click" value={fmtMoney(p.cpc, { cents: true })} />
-          <Mini label="Conversions" value={fmtCompact(p.conversions)} sub={`CVR ${fmtPct(p.cvr)}`} />
-          <Mini label="Cost per result" value={fmtMoney(p.cpa, { cents: true })} />
-          <Mini label="Reach" value={fmtCompact(p.reach)} />
-          <Mini label="ROAS" value={`${p.roas.toFixed(1)}×`} />
-        </div>
       </section>
-      <section className="panel flex flex-col gap-3 p-4" aria-label="Launch">
-        <h2 className="text-[14px] font-semibold">Launch</h2>
-        {c.status === 'draft' && (
-          <>
-            <button className="btn btn-primary" disabled={!c.creatives.length || !c.selectedCreativeIds.length} onClick={() => {
-              onStatus('active');
-              useStore.getState().notify({ kind: 'info', title: `Ad campaign live (simulated): ${c.name}`, route: 'marketing-ads' });
-              toast({ kind: 'success', title: 'Campaign launched (simulation)', body: 'Delivery is simulated from your projections and shows up in Analytics.' });
-            }}>
-              <Rocket size={15} /> Launch campaign
-            </button>
-            <p className="text-xs text-muted">{c.creatives.length ? 'This is a simulated launch: no ad accounts are charged. Delivery is modeled from the projections above.' : 'Generate creatives first.'}</p>
-          </>
-        )}
-        {c.status === 'active' && (
-          <div className="flex gap-2">
-            <button className="btn btn-secondary flex-1" onClick={() => onStatus('paused')}>
-              <Pause size={15} /> Pause
-            </button>
-            <button className="btn btn-ghost" onClick={() => onStatus('completed')}>
-              <Square size={13} /> End
-            </button>
-          </div>
-        )}
-        {c.status === 'paused' && (
-          <div className="flex gap-2">
-            <button className="btn btn-primary flex-1" onClick={() => onStatus('active')}>
-              <Play size={15} /> Resume
-            </button>
-            <button className="btn btn-ghost" onClick={() => onStatus('completed')}>
-              <Square size={13} /> End
-            </button>
-          </div>
-        )}
-        {c.launchedAt && (
-          <div className="grid grid-cols-2 gap-2">
-            <StatTile label="Spent so far" value={fmtMoney(sum('spend'))} hint="Simulated delivery" />
-            <StatTile label="Clicks so far" value={fmtCompact(sum('clicks'))} trend={delivered.map((d) => d.clicks)} />
-            <StatTile label="Impressions" value={fmtCompact(sum('impressions'))} trend={delivered.map((d) => d.impressions)} />
-            <StatTile label="Conversions" value={fmtCompact(sum('conversions'))} />
-          </div>
-        )}
+      <section className="panel flex flex-col gap-3 p-4" aria-label="Run it">
+        <h2 className="text-[14px] font-semibold">Run it on the platforms</h2>
+        <p className="text-xs text-muted">This app doesn’t run or pay for ads. Copy the plan into each platform’s ads manager, where you set the budget and launch it.</p>
+        <div className="flex flex-wrap gap-2">
+          <CopyButton
+            label="Copy the plan"
+            text={() => {
+              onExported();
+              return adsText(c);
+            }}
+          />
+          <button
+            className="btn btn-secondary btn-sm"
+            disabled={!ready}
+            onClick={() => {
+              onExported();
+              void download(`${slugify(c.name)}-ads.csv`, adsCsv(c));
+            }}
+          >
+            <Download size={14} /> Ads CSV
+          </button>
+        </div>
+        {!ready && <p className="text-xs text-muted">Generate creatives first.</p>}
+        <ul className="flex flex-col gap-1.5 text-[13px]">
+          {(c.platforms.length ? c.platforms : (['meta'] as AdPlatform[])).map((p) => (
+            <li key={p}>
+              <a href={AD_MANAGERS[p].url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-semibold text-primary hover:underline">
+                Open {AD_MANAGERS[p].label} <ExternalLink size={12} />
+              </a>
+            </li>
+          ))}
+        </ul>
+        {c.exportedAt && <p className="text-xs text-muted">Last copied or exported {fmtRelative(c.exportedAt)}.</p>}
       </section>
     </aside>
   );
 }
 
-function Mini({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-md bg-surface-2 px-3 py-2">
-      <p className="text-[11px] font-medium text-muted">{label}</p>
-      <p className="num text-[16px] font-bold">{value}</p>
-      {sub && <p className="num text-[10.5px] text-muted">{sub}</p>}
-    </div>
-  );
-}
-
-function CreativeCard({ project, cr, selected, locked, onSelect, onChange }: { project: Project; cr: AdCreative; selected: boolean; locked: boolean; onSelect: (v: boolean) => void; onChange: (p: Partial<AdCreative>) => void }) {
+function CreativeCard({ project, cr, selected, onSelect, onChange }: { project: Project; cr: AdCreative; selected: boolean; onSelect: (v: boolean) => void; onChange: (p: Partial<AdCreative>) => void }) {
   const [editing, setEditing] = useState(false);
   const site = stripProtocol(project.brand.websiteUrl || `${project.brand.slug}.com`).toUpperCase();
   return (
     <article className={cn('panel flex min-w-0 flex-col overflow-hidden', selected ? 'ring-2 ring-primary' : 'opacity-80')}>
       <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
         <label className="flex items-center gap-2 text-[13px] font-semibold">
-          <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={selected} disabled={locked} onChange={(e) => onSelect(e.target.checked)} />
+          <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={selected} onChange={(e) => onSelect(e.target.checked)} />
           Variant {cr.variant}
         </label>
         <span className="text-xs text-muted">{cr.angle}</span>
@@ -359,7 +346,7 @@ function CreativeCard({ project, cr, selected, locked, onSelect, onChange }: { p
         </div>
       </div>
       <div className="flex flex-col gap-2 p-3">
-        <button className="btn btn-secondary btn-sm self-start" onClick={() => setEditing((e) => !e)} disabled={locked}>
+        <button className="btn btn-secondary btn-sm self-start" onClick={() => setEditing((e) => !e)}>
           {editing ? <Check size={14} /> : null} {editing ? 'Done' : 'Edit creative'}
         </button>
         {editing && (

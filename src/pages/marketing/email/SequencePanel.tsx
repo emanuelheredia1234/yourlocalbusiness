@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, Clock, Download, Eye, Mail, PenLine, Send } from 'lucide-react';
+import { ChevronDown, Clock, Download, Eye, Mail, PenLine } from 'lucide-react';
 import type { EmailStep, Project } from '@/lib/types';
 import { cn, slugify } from '@/lib/utils';
 import { delayToMs, renderTokens } from '@/ai/local/email';
@@ -17,7 +17,7 @@ function sequenceText(p: Project): string {
     .join('\n\n────────────────────────\n\n');
 }
 
-export function SequencePanel({ project, onSimulate }: { project: Project; onSimulate: () => void }) {
+export function SequencePanel({ project, onPreview }: { project: Project; onPreview: () => void }) {
   const updateMarketing = useStore((s) => s.updateMarketing);
   const emails = project.marketing.emails;
   const ai = useAI(emailSequenceTask);
@@ -42,7 +42,7 @@ export function SequencePanel({ project, onSimulate }: { project: Project; onSim
         <div className="min-w-0">
           <h2 className="section-title">5-email nurture sequence</h2>
           <p className="text-[13px] text-muted">
-            {project.marketing.leadMagnet ? <>Sent automatically to everyone who claims “{project.marketing.leadMagnet.title}”.</> : 'Tip: create the lead magnet first so email 1 can deliver it.'} Delivery → quick win → myth-busting → objections → offer.
+            {project.marketing.leadMagnet ? <>For everyone who claims “{project.marketing.leadMagnet.title}”: set it up as an automation in your email provider.</> : 'Tip: create the lead magnet first so email 1 can deliver it.'} Delivery → quick win → myth-busting → objections → offer.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -52,8 +52,8 @@ export function SequencePanel({ project, onSimulate }: { project: Project; onSim
               <button className="btn btn-secondary btn-sm" onClick={() => download(`${slugify(project.brand.name)}-email-sequence.txt`, sequenceText(project))}>
                 <Download size={14} /> Export
               </button>
-              <button className="btn btn-primary btn-sm" onClick={onSimulate}>
-                <Send size={14} /> Simulate subscriber
+              <button className="btn btn-primary btn-sm" onClick={onPreview}>
+                <Eye size={14} /> Preview & export
               </button>
             </>
           )}

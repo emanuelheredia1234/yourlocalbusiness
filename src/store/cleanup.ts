@@ -10,10 +10,10 @@ import { PLATFORMS } from '@/ai/knowledge';
 import { cleanListing } from '@/lib/community';
 import { useStore, type StoreState } from './useStore';
 
-type Data = Pick<StoreState, 'posts' | 'projects' | 'notices' | 'settings' | 'activeProjectId' | 'myListings'>;
+type Data = Pick<StoreState, 'posts' | 'projects' | 'notices' | 'settings' | 'activeProjectId' | 'myListings' | 'ads'>;
 
 /** Notices about things that never happened: the pretend publisher, simulated buyers, the pretend checkout and inquiries. */
-const INVENTED_NOTICES: RegExp[] = [/^Published to /i, /just went live/i, /^Simulated sale:/i, /^Order YLB-/i, /^New sale:/i, /^Inquiry sent to /i, / is live on the Marketplace$/i];
+const INVENTED_NOTICES: RegExp[] = [/^Published to /i, /just went live/i, /^Simulated sale:/i, /^Order YLB-/i, /^New sale:/i, /^Inquiry sent to /i, / is live on the Marketplace$/i, /^Test subscriber added/i, /^New subscriber:/i, /^Ad campaign live/i];
 
 export const isInventedNotice = (n: Pick<Notice, 'title'>) => INVENTED_NOTICES.some((r) => r.test(n.title));
 
@@ -52,13 +52,28 @@ export function purgeInventedData(s: Data): Partial<Data> | null {
   const isDirty = (l: object) => 'rating' in l || 'reviews' in l || 'sales' in l || 'verified' in ((l as { seller?: object }).seller ?? {});
   if (s.myListings.some(isDirty)) patch.myListings = s.myListings.map((l) => (isDirty(l) ? cleanListing(l) : l));
 
-  // Projects: sample subscribers, and the social plan's invented reach estimate.
+  // Ads: a campaign is a plan; nothing was launched, delivered or estimated.
+  const adDirty = (a: object) => (a as { status?: string }).status !== 'draft' || 'launchedAt' in a || 'projections' in a || 'seed' in a || ((a as { audiences?: object[] }).audiences ?? []).some((x) => 'size' in x);
+  if (s.ads.some(adDirty)) {
+    patch.ads = s.ads.map((a) => {
+      if (!adDirty(a)) return a;
+      const { launchedAt: _l, projections: _p, seed: _s, ...rest } = a as typeof a & { launchedAt?: unknown; projections?: unknown; seed?: unknown };
+      return { ...rest, status: 'draft' as const, audiences: (rest.audiences ?? []).map(({ size: _z, ...x }: (typeof rest.audiences)[number] & { size?: unknown }) => x) };
+    });
+  }
+
+  // Projects: sample and test subscribers (and the simulated opens and clicks on the rest), and the
+  // social plan's invented reach estimate.
   let projects = s.projects;
+  const SIM_FIELDS = ['step', 'opened', 'clicked', 'converted'];
   const cleanProject = (p: Project): Project => {
-    const subs = p.marketing.subscribers.filter((x) => (x.source as string) !== 'sample');
+    const before = p.marketing.subscribers;
+    const kept = before.filter((x) => (x.source as string) !== 'sample' && (x.source as string) !== 'test');
+    const simulated = kept.some((x) => SIM_FIELDS.some((k) => k in x));
+    const subs = simulated ? kept.map((x) => Object.fromEntries(Object.entries(x).filter(([k]) => !SIM_FIELDS.includes(k))) as typeof x) : kept;
     const plan = p.marketing.plan;
     const hasReach = !!plan && 'estReach' in (plan.summary as object);
-    if (subs.length === p.marketing.subscribers.length && !hasReach) return p;
+    if (subs.length === before.length && !simulated && !hasReach) return p;
     const summary = hasReach ? (({ estReach: _r, ...rest }) => rest)(plan!.summary as typeof plan.summary & { estReach?: number }) : plan?.summary;
     return { ...p, marketing: { ...p.marketing, subscribers: subs, plan: plan && summary ? { ...plan, summary } : plan } };
   };

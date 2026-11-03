@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowRight, Check, Download, FileText, Gift, Plus, Trash2 } from 'lucide-react';
+import { Check, Download, FileText, Gift, Plus, Trash2 } from 'lucide-react';
 import type { LeadMagnet, LeadMagnetType, Project } from '@/lib/types';
 import { cn, emailValid, readableOn, slugify, withAlpha } from '@/lib/utils';
 import { LEAD_MAGNET_TYPES, leadMagnetMarkdown } from '@/ai/local/email';
@@ -11,9 +11,8 @@ import { AutoTextarea, CopyButton, Empty, Field, LinesEditor, confirmAction } fr
 import { Icon } from '@/components/ui/Icon';
 import { BrandLogo } from '@/components/brand/Logo';
 import { download } from '@/components/ui/download';
-import { addSubscriber } from './shared';
 
-export function LeadMagnetPanel({ project, onSimulate }: { project: Project; onSimulate: (subId: string) => void }) {
+export function LeadMagnetPanel({ project }: { project: Project }) {
   const updateMarketing = useStore((s) => s.updateMarketing);
   const lm = project.marketing.leadMagnet;
   const [type, setType] = useState<LeadMagnetType>(lm?.type ?? 'checklist');
@@ -98,17 +97,17 @@ export function LeadMagnetPanel({ project, onSimulate }: { project: Project; onS
         )}
       </div>
 
-      <aside className="flex min-w-0 flex-col gap-4">{lm && <OptInPreview project={project} lm={lm} set={set} onSimulate={onSimulate} />}</aside>
+      <aside className="flex min-w-0 flex-col gap-4">{lm && <OptInPreview project={project} lm={lm} set={set} />}</aside>
     </div>
   );
 }
 
-function OptInPreview({ project, lm, set, onSimulate }: { project: Project; lm: LeadMagnet; set: (p: Partial<LeadMagnet>) => void; onSimulate: (subId: string) => void }) {
+function OptInPreview({ project, lm, set }: { project: Project; lm: LeadMagnet; set: (p: Partial<LeadMagnet>) => void }) {
   const c = project.brand.colors;
   const profile = useStore((s) => s.settings.profile);
   const [name, setName] = useState(profile.name);
   const [email, setEmail] = useState(profile.email);
-  const [done, setDone] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
   const [touched, setTouched] = useState(false);
   const onPrimary = readableOn(c.primary);
   return (
@@ -116,7 +115,7 @@ function OptInPreview({ project, lm, set, onSimulate }: { project: Project; lm: 
       <section className="panel overflow-hidden" aria-label="Opt-in page preview">
         <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
           <h3 className="text-[13px] font-semibold">Opt-in page preview</h3>
-          <span className="badge bg-surface-2 text-muted">Live</span>
+          <span className="badge bg-surface-2 text-muted">Preview</span>
         </div>
         <div className="p-5" style={{ background: `linear-gradient(160deg, ${withAlpha(c.primary, 0.1)}, ${c.paper} 60%)`, color: c.ink }}>
           <div className="mb-4">
@@ -141,10 +140,10 @@ function OptInPreview({ project, lm, set, onSimulate }: { project: Project; lm: 
           </div>
           {done ? (
             <div className="mt-5 rounded-md bg-white/80 p-4 text-[13.5px] text-[#1d2420]">
-              <p className="font-bold">You’re in! Check your inbox.</p>
-              <p className="mt-0.5 text-[12.5px] text-[#5b6861]">“{lm.title}” is on its way. (Test subscriber added; no real email is sent.)</p>
-              <button className="btn btn-primary btn-sm mt-3" onClick={() => onSimulate(done)}>
-                Watch the sequence arrive <ArrowRight size={14} />
+              <p className="font-bold">This is only a preview.</p>
+              <p className="mt-0.5 text-[12.5px] text-[#5b6861]">On your real opt-in page, this form sends the sign-up to your email provider, which delivers “{lm.title}”. Nothing was saved or sent here.</p>
+              <button className="btn btn-secondary btn-sm mt-3" onClick={() => setDone(false)}>
+                Back to the form
               </button>
             </div>
           ) : (
@@ -154,8 +153,7 @@ function OptInPreview({ project, lm, set, onSimulate }: { project: Project; lm: 
                 e.preventDefault();
                 setTouched(true);
                 if (!emailValid(email)) return;
-                const sub = addSubscriber(name, email, 'test');
-                setDone(sub.id);
+                setDone(true);
               }}
             >
               <label className="sr-only" htmlFor="oi-name">
@@ -174,7 +172,7 @@ function OptInPreview({ project, lm, set, onSimulate }: { project: Project; lm: 
             </form>
           )}
         </div>
-        <p className="border-t border-line px-4 py-2 text-[11.5px] text-muted">Submitting adds a test subscriber so you can try the funnel. Test sign-ups never count toward Analytics.</p>
+        <p className="border-t border-line px-4 py-2 text-[11.5px] text-muted">A preview of your page’s copy. To collect sign-ups, use your email provider’s form (or connect this copy to it).</p>
       </section>
 
       <section className="panel flex flex-col gap-3 p-4" aria-label="Opt-in copy">
