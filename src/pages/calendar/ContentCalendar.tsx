@@ -10,7 +10,7 @@ import { Empty, Segmented, Tabs } from '@/components/ui/primitives';
 import { FormatBadge, PostCard, PostTypeTag, styleLabel } from '@/components/posts/PostCard';
 import { ExternalBadge, ManusPostButton, manusSetupHint, useCanOfferManus, useManusPost, useManusReady } from '@/components/posts/ManusPost';
 import { GroupShareBadge, PostToGroupsButton } from '@/components/posts/ManusGroups';
-import { DueBadge, PostedBy, PostMoreMenu, addToCalendarFlow, isDue, manusHolds, useMarkPosted } from '@/components/posts/PostActions';
+import { DueBadge, PostedBy, PostMoreMenu, addToCalendarFlow, failedOnItsNetwork, isDue, manusHolds, useMarkPosted } from '@/components/posts/PostActions';
 import { PlatformChip, PlatformGlyph } from '@/components/posts/PlatformIcon';
 import { PostVisual } from '@/components/visuals/PostVisual';
 import { networkLabel } from '@/ai/manusPost';
@@ -149,7 +149,7 @@ function PlannedBar({ posts, manusReady: isReady }: { posts: Post[]; manusReady:
   const due = posts.filter((p) => isDue(p, now) && notSent(p));
   const ready = posts.filter(notSent);
   // a failed try may still have gone out: Manus doesn't look for an earlier copy before posting
-  const failed = ready.filter((p) => p.external?.state === 'failed').length;
+  const failed = ready.filter(failedOnItsNetwork).length;
   if (!due.length && !(manusReady && ready.length > 1)) return null;
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-surface-2/50 px-4 py-2.5">

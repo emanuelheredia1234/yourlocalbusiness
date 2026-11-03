@@ -21,6 +21,7 @@ import {
   textWarning,
   type PostMode,
 } from '@/ai/manusPost';
+import { failedOnItsNetwork } from './PostActions';
 import { useStore } from '@/store/useStore';
 import { navigate } from '@/lib/router';
 import { toast, useUI } from '@/store/ui';
@@ -93,8 +94,16 @@ type Progress = { stage?: string; sent?: boolean; taskUrl?: string; error?: { ti
  * sent again from this window, and not while a new try may have started: that has its own warning.)
  */
 function failedTry(post: Post, progress?: Progress) {
-  const last = post.external;
-  return !progress?.sent && !progress?.error?.uncertain && last?.state === 'failed' && last.network === post.platform ? last : undefined;
+  return !progress?.sent && !progress?.error?.uncertain && failedOnItsNetwork(post) ? post.external : undefined;
+}
+
+/** Where to look for a copy of a failed try: a scheduled one is in the network's scheduled posts only until its time; after that it's out. */
+function failedTryCopy(ext: NonNullable<Post['external']>, platform: Post['platform'], tz: string): string {
+  const network = networkLabel(platform);
+  if (ext.mode === 'now') return `The last try failed, but it may have gone out before Manus stopped. Check ${network}`;
+  const at = ext.scheduledFor ? new Date(ext.scheduledFor).getTime() : NaN;
+  if (Number.isFinite(at) && at > Date.now()) return `The last try failed, but Manus may have scheduled it (for ${fmtWhen(ext.scheduledFor, tz)}) before it stopped. Check ${NETWORKS[platform].scheduledList}`;
+  return `The last try failed, but Manus may have scheduled it before it stopped${Number.isFinite(at) ? ` (for ${fmtWhen(ext.scheduledFor, tz)})` : ''}, so it may already be out. Check ${network}`;
 }
 
 /** Confirm, then hand each post (its text, and its image or video) to Manus, one after another. */
@@ -298,7 +307,7 @@ function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry 
         {resend && <p className="text-[12.5px] font-medium text-warn">Already sent to Manus. Sending it again can post it twice.</p>}
         {failedBefore && (
           <p className="text-[12.5px] font-medium text-warn">
-            {failedBefore.mode === 'now' ? `The last try failed, but it may have gone out before Manus stopped. Check ${networkLabel(post.platform)}` : `The last try failed, but Manus may have scheduled it before it stopped. Check ${NETWORKS[post.platform].scheduledList}`} or{' '}
+            {failedTryCopy(failedBefore, post.platform, tz)} or{' '}
             <a href={failedBefore.taskUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">
               the task in Manus
             </a>{' '}

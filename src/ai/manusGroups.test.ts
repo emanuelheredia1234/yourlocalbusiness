@@ -104,7 +104,24 @@ describe('sending to groups again', () => {
   it('remembers the list you had plus the groups you added, once each, up to 10', () => {
     expect(rememberedGroups(groups, ['Etsy Sellers', 'https://www.facebook.com/groups/candlemakers'])).toEqual([...groups, 'https://www.facebook.com/groups/candlemakers']);
     expect(rememberedGroups(['Candle Makers'], ['candle makers', 'Candle Makers'])).toEqual(['Candle Makers']);
-    const ten = Array.from({ length: 9 }, (_, i) => `Group ${i + 1}`);
-    expect(rememberedGroups(ten, ['New A', 'New B'])).toEqual([...ten, 'New A']);
+    // over 10, the groups just sent stay
+    const nine = Array.from({ length: 9 }, (_, i) => `Group ${i + 1}`);
+    expect(rememberedGroups(nine, ['New A', 'New B'])).toEqual([...nine.slice(0, 8), 'New A', 'New B']);
+    // a group the last run reported failed and you didn't send again (often a name you corrected) is dropped
+    const ten = [...nine, 'Candle Makers'];
+    expect(rememberedGroups(ten, ['Candle Makers of Texas'], ['Candle Makers'])).toEqual([...nine, 'Candle Makers of Texas']);
+    // unless you sent it again
+    expect(rememberedGroups(['Candle Makers'], ['Candle Makers'], ['Candle Makers'])).toEqual(['Candle Makers']);
+  });
+  it('treats the same group typed differently (case, trailing slash) as one', () => {
+    const link = 'https://www.facebook.com/groups/austinbiz';
+    const run1 = { groups: [link, 'Candle Makers'], results: [{ group: link, state: 'pending' as const, detail: '' }, posted('Candle Makers')] };
+    // re-added with a trailing slash: the new run reports it, the old result isn't kept beside it
+    expect(carriedResults(run1, [`${link}/`])).toEqual([posted('Candle Makers')]);
+    expect(carriedResults(run1, ['candle makers'])).toEqual([{ group: link, state: 'pending', detail: '' }]);
+    const run2 = { groups: [`${link}/`], results: [], earlier: [{ group: link, state: 'pending' as const, detail: '' }] };
+    expect(groupRecord(run2).groups).toEqual([`${link}/`]);
+    expect(groupsToRetry({ groups: ['Candle Makers'], results: [posted('candle makers')] })).toEqual(['Candle Makers']);
+    expect(groupsAlreadyOut({ groups: ['Candle Makers', 'Etsy'], results: [posted('candle makers')] })).toEqual(['Candle Makers']);
   });
 });

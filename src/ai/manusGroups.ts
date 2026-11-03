@@ -12,13 +12,16 @@ import { postText } from './manusPost';
 export const MAX_GROUPS = 10;
 
 /** The groups from what you typed: one per line (a name or a facebook.com/groups link), no repeats. */
+/** Two entries are the same group when they match ignoring case and a trailing slash. */
+export const groupKey = (g: string) => g.trim().toLowerCase().replace(/\/+$/, '');
+
 export function parseGroups(raw: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const line of raw.split(/\r?\n|,(?=\s*https?:)/)) {
     const g = line.trim().replace(/^[-•*\d.)\s]+(?=\S)/, '').trim();
     if (!g || g.length > 200) continue;
-    const key = g.toLowerCase().replace(/\/+$/, '');
+    const key = groupKey(g);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(g);
@@ -124,15 +127,16 @@ const wentOut = (r: GroupResult) => r.state === 'posted' || r.state === 'pending
 
 /** Everything a post's group shares reported: results kept from earlier runs, then this run's. */
 export function groupRecord(share: ShareRecord): { groups: string[]; results: GroupResult[] } {
-  const earlier = (share.earlier ?? []).filter((r) => !share.groups.includes(r.group));
+  const listed = new Set(share.groups.map(groupKey));
+  const earlier = (share.earlier ?? []).filter((r) => !listed.has(groupKey(r.group)));
   return { groups: [...earlier.map((r) => r.group), ...share.groups], results: [...earlier, ...share.results] };
 }
 
 /** The groups a post's shares reported as posted or waiting for approval. */
 export function groupsAlreadyOut(share: ShareRecord): string[] {
   const rec = groupRecord(share);
-  const out = new Set(rec.results.filter(wentOut).map((r) => r.group));
-  return rec.groups.filter((g) => out.has(g));
+  const out = new Set(rec.results.filter(wentOut).map((r) => groupKey(r.group)));
+  return rec.groups.filter((g) => out.has(groupKey(g)));
 }
 
 /**
@@ -142,19 +146,29 @@ export function groupsAlreadyOut(share: ShareRecord): string[] {
  */
 export function groupsToRetry(share: ShareRecord): string[] {
   const rec = groupRecord(share);
-  const out = new Set(groupsAlreadyOut(share));
-  const rest = rec.groups.filter((g) => !out.has(g));
+  const out = new Set(groupsAlreadyOut(share).map(groupKey));
+  const rest = rec.groups.filter((g) => !out.has(groupKey(g)));
   return rest.length ? rest : rec.groups;
 }
 
 /** The results a new share of the post keeps: the groups that already have it and aren't being sent again. */
 export function carriedResults(share: ShareRecord, sent: string[]): GroupResult[] {
-  return groupRecord(share).results.filter((r) => wentOut(r) && !sent.includes(r.group));
+  const sentKeys = new Set(sent.map(groupKey));
+  return groupRecord(share).results.filter((r) => wentOut(r) && !sentKeys.has(groupKey(r.group)));
 }
 
-/** The group list to remember after sending a post to groups again: the list you had, plus any group you added (once each, up to MAX_GROUPS). */
-export function rememberedGroups(current: string[], sent: string[]): string[] {
-  return parseGroups([...current, ...sent].join('\n')).slice(0, MAX_GROUPS);
+/**
+ * The group list to remember after sending a post to groups again: the list you had, plus any group you
+ * added, once each. Groups the last run reported as failed that you didn't send again (often a name you
+ * corrected) are dropped. Over MAX_GROUPS, the groups you just sent stay first.
+ */
+export function rememberedGroups(current: string[], sent: string[], dropped: string[] = []): string[] {
+  const sentKeys = new Set(sent.map(groupKey));
+  const gone = new Set(dropped.map(groupKey).filter((k) => !sentKeys.has(k)));
+  const merged = parseGroups([...current.filter((g) => !gone.has(groupKey(g))), ...sent].join('\n'));
+  if (merged.length <= MAX_GROUPS) return merged;
+  let room = MAX_GROUPS - merged.filter((g) => sentKeys.has(groupKey(g))).length;
+  return merged.filter((g) => sentKeys.has(groupKey(g)) || room-- > 0).slice(0, MAX_GROUPS);
 }
 
 export function groupStateFromManus(s: ManusState, groups: string[]): Pick<GroupShare, 'state' | 'message' | 'results'> {

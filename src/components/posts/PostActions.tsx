@@ -22,6 +22,10 @@ export function addToCalendarFlow(ids: string[]): boolean {
   return true;
 }
 
+/** Its last Manus try on its own network failed. Manus doesn't look for an earlier copy before posting, so that
+ *  try may still have gone out (or been scheduled) before it stopped. */
+export const failedOnItsNetwork = (post: Post) => post.external?.state === 'failed' && post.external.network === post.platform;
+
 /** Manus has (or may have) the post on the network for a set time: changing it here doesn't move it there. */
 export const manusHolds = (post: Post) => !!post.external && post.external.state !== 'failed';
 
