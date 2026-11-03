@@ -1,5 +1,9 @@
 import { create } from 'zustand';
 import { uid } from '@/lib/utils';
+import { navigate } from '@/lib/router';
+
+/** The Social media engine's tabs (create = Create individual post). */
+export type SocialTab = 'setup' | 'plan' | 'batch' | 'create';
 
 export interface Toast {
   id: string;
@@ -14,10 +18,13 @@ interface UIState {
   toast: (t: Omit<Toast, 'id'>) => void;
   dismissToast: (id: string) => void;
 
-  composerOpen: boolean;
-  composerPreset: { topic?: string } | null;
+  /** a topic to start a new "Create individual post" draft from (n changes with each one) */
+  composerPreset: { topic?: string; n: number } | null;
+  /** Open "Create individual post" in the Social media engine. A topic starts a new draft with it; without one, the draft you had stays. */
   openComposer: (preset?: { topic?: string }) => void;
-  closeComposer: () => void;
+  /** the Social media engine tab to show next */
+  socialTab: SocialTab | null;
+  setSocialTab: (t: SocialTab | null) => void;
 
   commandOpen: boolean;
   setCommandOpen: (v: boolean) => void;
@@ -47,10 +54,13 @@ export const useUI = create<UIState>((set) => ({
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })),
 
-  composerOpen: false,
   composerPreset: null,
-  openComposer: (preset) => set({ composerOpen: true, composerPreset: preset ?? null }),
-  closeComposer: () => set({ composerOpen: false, composerPreset: null }),
+  openComposer: (preset) => {
+    set((s) => ({ socialTab: 'create', composerPreset: preset?.topic ? { topic: preset.topic, n: (s.composerPreset?.n ?? 0) + 1 } : s.composerPreset }));
+    navigate('marketing-social');
+  },
+  socialTab: null,
+  setSocialTab: (t) => set({ socialTab: t }),
 
   commandOpen: false,
   setCommandOpen: (v) => set({ commandOpen: v }),

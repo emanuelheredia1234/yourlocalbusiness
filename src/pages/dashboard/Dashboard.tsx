@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { ArrowRight, Brain, CalendarClock, Check, CircleAlert, ExternalLink, Globe, Mail, Megaphone, Search, Send, ShoppingBag, Sparkles, Store, TrendingUp, WandSparkles } from 'lucide-react';
+import { ArrowRight, Brain, CalendarClock, Check, CircleAlert, ExternalLink, Globe, Mail, Megaphone, PenSquare, Search, Send, ShoppingBag, Sparkles, Store, TrendingUp, WandSparkles } from 'lucide-react';
 import type { GenerationLog, Project } from '@/lib/types';
 import { cn, ensureUrl, fmtDateTime, fmtMoney, fmtRelative, greeting, stripProtocol } from '@/lib/utils';
 import { navigate, type Route } from '@/lib/router';
@@ -12,7 +12,7 @@ import { BrandLogo } from '@/components/brand/Logo';
 import { ProgressRing } from '@/components/ui/primitives';
 import { PlatformGlyph } from '@/components/posts/PlatformIcon';
 import { DueBadge } from '@/components/posts/PostActions';
-import { QuickComposer } from './QuickComposer';
+import { suggestTopics } from '@/ai/local/social';
 
 export function readiness(project: Project, ctx: { scheduled: number; posted: number; listed: boolean }) {
   const items: { label: string; done: boolean; route: Route; cta: string }[] = [
@@ -148,15 +148,7 @@ export function Dashboard() {
       </section>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="panel p-4 sm:p-5" aria-label="Quick composer">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="section-title">Create a new post</h2>
-              <p className="text-[13px] text-muted">One click for an AI caption and visual, or bring your own photo or video.</p>
-            </div>
-          </div>
-          <QuickComposer />
-        </section>
+        <CreatePostCard project={project} />
 
         <div className="flex min-w-0 flex-col gap-5">
           <section className="panel overflow-hidden" aria-label="Active project">
@@ -288,5 +280,36 @@ export function Dashboard() {
         </section>
       </div>
     </div>
+  );
+}
+
+/** "Create individual post" lives in the Social media engine: start one there, from an idea or blank. */
+function CreatePostCard({ project }: { project: Project }) {
+  const openComposer = useUI((s) => s.openComposer);
+  const ideas = useMemo(() => suggestTopics(project).slice(0, 4), [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <section className="panel flex flex-col gap-3 p-4 sm:p-5" aria-label="Create individual post">
+      <div>
+        <h2 className="section-title">Create individual post</h2>
+        <p className="text-[13px] text-muted">One post at a time, in the Social media engine: an AI caption and visual, or your own photo or video with an AI caption.</p>
+      </div>
+      {ideas.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs font-semibold text-muted">Start from an idea</p>
+          {ideas.map((t) => (
+            <button key={t} type="button" className="flex items-center gap-2 rounded-md border border-line px-3 py-2 text-left text-[13px] text-ink-2 hover:border-primary/40 hover:bg-surface-2" onClick={() => openComposer({ topic: t })}>
+              <Sparkles size={13} className="shrink-0 text-accent" />
+              <span className="min-w-0 flex-1">{t}</span>
+              <ArrowRight size={13} className="shrink-0 text-muted" />
+            </button>
+          ))}
+        </div>
+      )}
+      <div>
+        <button className="btn btn-primary" onClick={() => openComposer()}>
+          <PenSquare size={15} /> Create individual post
+        </button>
+      </div>
+    </section>
   );
 }

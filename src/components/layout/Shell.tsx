@@ -404,7 +404,7 @@ export function CommandPalette() {
   }, [open]);
   const items = useMemo(
     () => [
-      { label: 'Create a new post', hint: 'Quick composer', run: () => openComposer() },
+      { label: 'Create individual post', hint: 'Social media engine', run: () => openComposer() },
       { label: 'Go to Dashboard', run: () => navigate('dashboard') },
       { label: 'Open Studio', hint: 'Outline, code generator, publish', run: () => navigate('studio') },
       { label: 'Marketing Hub', run: () => navigate('marketing') },

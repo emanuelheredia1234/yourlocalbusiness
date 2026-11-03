@@ -7,10 +7,10 @@ import { suggestTopics } from '@/ai/local/social';
 import { postTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { toast, useUI } from '@/store/ui';
+import { toast } from '@/store/ui';
 import { navigate } from '@/lib/router';
 import { isOwnPhoto } from '@/lib/media';
-import { AutoTextarea, ChipInput, Field, Modal, Segmented, Toggle } from '@/components/ui/primitives';
+import { AutoTextarea, ChipInput, Field, Segmented, Toggle } from '@/components/ui/primitives';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { PostVisual, pointsFromCaption } from '@/components/visuals/PostVisual';
 import { MediaDrop, MediaThumb } from '@/components/media/MediaUpload';
@@ -287,18 +287,5 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
         )}
       </div>
     </div>
-  );
-}
-
-export function ComposerHost() {
-  const open = useUI((s) => s.composerOpen);
-  const preset = useUI((s) => s.composerPreset);
-  const close = useUI((s) => s.closeComposer);
-  const project = useActiveProject();
-  if (!open || !project) return null;
-  return (
-    <Modal open onClose={close} size="xl" title="Create a new post" subtitle="Generate with AI, or upload your own media and let AI write the caption.">
-      <QuickComposer onDone={close} initialTopic={preset?.topic} />
-    </Modal>
   );
 }

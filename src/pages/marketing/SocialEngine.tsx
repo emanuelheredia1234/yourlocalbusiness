@@ -1,16 +1,18 @@
-import { useMemo, useState } from 'react';
-import { CalendarDays, Layers, SlidersHorizontal } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { CalendarDays, Layers, PenSquare, SlidersHorizontal } from 'lucide-react';
 import { campaignPlanTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { getActiveProject, useActiveProject, useStore } from '@/store/useStore';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { Empty, Tabs, confirmAction } from '@/components/ui/primitives';
+import { useUI, type SocialTab } from '@/store/ui';
+import { QuickComposer } from '@/pages/dashboard/QuickComposer';
 import { MarketingHeader } from './MarketingNav';
 import { CampaignSetup, cadence } from './social/CampaignSetup';
 import { PlanView } from './social/PlanView';
 import { BatchView } from './social/BatchView';
 
-type Tab = 'setup' | 'plan' | 'batch';
+type Tab = SocialTab;
 
 export default function SocialEngine() {
   const project = useActiveProject()!;
@@ -18,7 +20,20 @@ export default function SocialEngine() {
   const updateMarketing = useStore((s) => s.updateMarketing);
   const plan = project.marketing.plan;
   const cfg = project.marketing.campaign;
-  const [tab, setTab] = useState<Tab>(() => (!plan ? 'setup' : 'batch'));
+  // "Create post" elsewhere in the app asks for a tab (see useUI.openComposer)
+  const requested = useUI((s) => s.socialTab);
+  const preset = useUI((s) => s.composerPreset);
+  const [tab, setTab] = useState<Tab>(() => requested ?? (!plan ? 'setup' : 'batch'));
+  useEffect(() => {
+    if (!requested) return;
+    setTab(requested);
+    useUI.getState().setSocialTab(null);
+  }, [requested]);
+  // once opened, the composer stays mounted while you switch tabs: your draft (and anything it's generating) stays
+  const [composerShown, setComposerShown] = useState(tab === 'create');
+  useEffect(() => {
+    if (tab === 'create') setComposerShown(true);
+  }, [tab]);
   const planAI = useAI(campaignPlanTask);
   const batchPosts = useMemo(() => allPosts.filter((p) => p.projectId === project.id && p.source === 'batch').sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)), [allPosts, project.id]);
   const covered = useMemo(() => new Set(batchPosts.map((p) => p.planSlotId).filter((x): x is string => !!x)), [batchPosts]);
@@ -42,7 +57,7 @@ export default function SocialEngine() {
 
   return (
     <div className="flex flex-col gap-5">
-      <MarketingHeader eyebrow="Marketing Hub · Social" title="Social media engine" desc="Set your cadence, visual styles, platforms and post mix. The AI writes a 30-day campaign plan, then a 7-day batch of ready-to-publish posts you can edit and schedule." actions={tab === 'setup' || !plan ? planButton : undefined} />
+      <MarketingHeader eyebrow="Marketing Hub · Social" title="Social media engine" desc="Set your cadence, visual styles, platforms and post mix. The AI writes a 30-day campaign plan, then a 7-day batch of ready-to-publish posts you can edit and schedule." actions={tab === 'setup' || (!plan && tab !== 'create') ? planButton : undefined} />
       <Tabs<Tab>
         value={tab}
         onChange={setTab}
@@ -50,6 +65,7 @@ export default function SocialEngine() {
           { id: 'setup', label: '1 · Campaign setup', icon: <SlidersHorizontal size={15} /> },
           { id: 'plan', label: '2 · 30-day plan', icon: <CalendarDays size={15} />, count: plan?.summary.total },
           { id: 'batch', label: '3 · 7-day batch', icon: <Layers size={15} />, count: batchPosts.filter((p) => p.status !== 'published').length || undefined },
+          { id: 'create', label: 'Create individual post', icon: <PenSquare size={15} /> },
         ]}
       />
       <AIThinking running={planAI.running} stage={planAI.stage} chars={planAI.chars} onStop={planAI.stop} />
@@ -79,6 +95,12 @@ export default function SocialEngine() {
           <Empty icon={<CalendarDays size={20} />} title="No plan yet" body="Finish the setup, then generate a 30-day plan that moves people from awareness to purchase." action={planButton} />
         ))}
       {tab === 'batch' && <BatchView project={project} posts={batchPosts} covered={covered} />}
+      {composerShown && (
+        <section hidden={tab !== 'create'} aria-label="Create individual post" className="panel p-4 sm:p-5">
+          <p className="mb-4 text-[13.5px] text-muted">One post at a time, outside your campaign: generate it with AI, or upload your own photo or video and let AI write the caption.</p>
+          <QuickComposer key={`${project.id}:${preset?.n ?? 0}`} initialTopic={preset?.topic} />
+        </section>
+      )}
     </div>
   );
 }
