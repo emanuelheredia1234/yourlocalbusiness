@@ -76,7 +76,6 @@ export function defaultSettings(): AppSettings {
     ai: { serverUrl: '', useBrain: true },
     theme: 'system',
     profile: { name: '', email: '' },
-    showSampleListings: true,
     shareToCommunity: true,
   };
 }

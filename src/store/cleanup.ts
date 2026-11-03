@@ -1,21 +1,19 @@
 // Removes what older versions of the app made up, from workspaces saved before that was fixed:
 // posts it pretended to publish (with invented likes and links), "connected" accounts that never
-// logged in, sample data, sales by simulated buyers, an invented reach estimate, demo switches, and
-// the notices that announced them. It runs whenever a workspace opens and after a
+// logged in, sample data, a pretend checkout (orders, sales, cart) and made-up ratings, reviews and
+// sold counts on listings, an invented reach estimate, demo switches, and the notices about them. It runs whenever a workspace opens and after a
 // backup is imported. It changes only what it must, and running it again changes nothing. Signed
 // in, its changes reach your account like any other edit.
 
 import type { Notice, Project, SocialPlatform } from '@/lib/types';
 import { PLATFORMS } from '@/ai/knowledge';
+import { cleanListing } from '@/lib/community';
 import { useStore, type StoreState } from './useStore';
 
-type Data = Pick<StoreState, 'posts' | 'projects' | 'notices' | 'settings' | 'activeProjectId' | 'sales' | 'myListings'>;
+type Data = Pick<StoreState, 'posts' | 'projects' | 'notices' | 'settings' | 'activeProjectId' | 'myListings'>;
 
-/** Notices about things that never happened (the pretend publisher, the simulated buyers). */
-const INVENTED_NOTICES: RegExp[] = [/^Published to /i, /just went live/i, /^Simulated sale:/i];
-
-/** Sales nobody made: sample data and the demo's simulated buyers. */
-const INVENTED_SALES = new Set(['sample', 'simulated']);
+/** Notices about things that never happened: the pretend publisher, simulated buyers, the pretend checkout and inquiries. */
+const INVENTED_NOTICES: RegExp[] = [/^Published to /i, /just went live/i, /^Simulated sale:/i, /^Order YLB-/i, /^New sale:/i, /^Inquiry sent to /i, / is live on the Marketplace$/i];
 
 export const isInventedNotice = (n: Pick<Notice, 'title'>) => INVENTED_NOTICES.some((r) => r.test(n.title));
 
@@ -49,14 +47,10 @@ export function purgeInventedData(s: Data): Partial<Data> | null {
   }
   if (postsChanged) patch.posts = posts;
 
-  // Sales nobody made, and what they added to your listings' "sold" counts.
-  const fakeSales = s.sales.filter((x) => INVENTED_SALES.has(x.source as string));
-  if (fakeSales.length) {
-    patch.sales = s.sales.filter((x) => !INVENTED_SALES.has(x.source as string));
-    const sold = new Map<string, number>();
-    for (const x of fakeSales) sold.set(x.listingId, (sold.get(x.listingId) ?? 0) + (x.qty || 0));
-    if (s.myListings.some((l) => sold.has(l.id))) patch.myListings = s.myListings.map((l) => (sold.has(l.id) ? { ...l, sales: Math.max(0, (l.sales || 0) - (sold.get(l.id) ?? 0)) } : l));
-  }
+  // Listings: no ratings, reviews, "verified" badges or sold counts (nothing ever measured them).
+  // (Orders and sales from the pretend checkout leave the account in sync.ts: RETIRED_KINDS.)
+  const isDirty = (l: object) => 'rating' in l || 'reviews' in l || 'sales' in l || 'verified' in ((l as { seller?: object }).seller ?? {});
+  if (s.myListings.some(isDirty)) patch.myListings = s.myListings.map((l) => (isDirty(l) ? cleanListing(l) : l));
 
   // Projects: sample subscribers, and the social plan's invented reach estimate.
   let projects = s.projects;
@@ -90,9 +84,9 @@ export function purgeInventedData(s: Data): Partial<Data> | null {
   if (projects !== s.projects) patch.projects = projects;
 
   // Settings: the pretend connections, the demo buyers switch, the fake "thinking" delay.
-  const legacy = s.settings as typeof s.settings & { marketActivity?: unknown; ai: { simulateLatency?: unknown } };
-  if (accounts || 'marketActivity' in legacy || 'simulateLatency' in legacy.ai) {
-    const { accounts: _a, marketActivity: _m, ...settings } = legacy;
+  const legacy = s.settings as typeof s.settings & { marketActivity?: unknown; showSampleListings?: unknown; ai: { simulateLatency?: unknown } };
+  if (accounts || 'marketActivity' in legacy || 'showSampleListings' in legacy || 'simulateLatency' in legacy.ai) {
+    const { accounts: _a, marketActivity: _m, showSampleListings: _s, ...settings } = legacy;
     const { simulateLatency: _l, ...ai } = legacy.ai;
     patch.settings = { ...settings, ai };
   }

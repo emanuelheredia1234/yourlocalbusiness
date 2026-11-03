@@ -64,7 +64,7 @@ export function Dashboard() {
     { route: 'marketing-seo', title: 'SEO sales page', desc: 'Meta, score, HTML export', icon: <Search size={18} />, status: project.marketing.salesPage ? 'Drafted' : 'Not started' },
     { route: 'marketing-email', title: 'Email funnel', desc: 'Lead magnet + 5 emails', icon: <Mail size={18} />, status: project.marketing.emails.length ? 'Drafted' : 'Not started' },
     { route: 'marketing-social', title: 'Social campaign', desc: '30-day plan, 7-day batch', icon: <Megaphone size={18} />, status: project.marketing.plan ? `${project.marketing.plan.summary.total} posts planned` : 'Not started' },
-    { route: 'store', title: 'Marketplace', desc: 'Browse, sell, buy', icon: <Store size={18} />, status: listed ? 'Listed' : 'Not listed' },
+    { route: 'store', title: 'Marketplace', desc: 'List and browse', icon: <Store size={18} />, status: listed ? 'Listed' : 'Not listed' },
     { route: 'brain', title: 'Brain', desc: 'Skills that shape the AI', icon: <Brain size={18} />, status: 'Train it' },
   ];
 

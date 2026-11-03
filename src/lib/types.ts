@@ -219,6 +219,10 @@ export interface ListingDraft {
   tags: string[];
   bookingType: BookingType;
   hours: string;
+  /** your own page where people buy or book (payment happens there, not in this app) */
+  buyUrl?: string;
+  contactEmail?: string;
+  phone?: string;
   coverImageId?: string;
   /** brand images shown in the listing's gallery (max 4) */
   galleryIds?: string[];
@@ -600,13 +604,18 @@ export interface Listing {
   price: number;
   priceModel: ServicePriceModel;
   compareAt?: number;
-  seller: { name: string; logo?: MiniLogo; verified?: boolean; ownerId?: string };
+  seller: { name: string; logo?: MiniLogo; ownerId?: string };
   format?: ProductFormat;
   niche?: string;
   category: string;
   tags: string[];
   location?: { city: string; region: string; lat?: number; lng?: number; online?: boolean };
   website?: string;
+  /** the seller's own page to buy or book (a Stripe Payment Link, Gumroad, Etsy, Calendly…): payment happens there */
+  buyUrl?: string;
+  /** how to reach the seller */
+  contactEmail?: string;
+  phone?: string;
   bookingType?: BookingType;
   hours?: string;
   services?: { name: string; price: number; duration?: string }[];
@@ -614,53 +623,9 @@ export interface Listing {
   cover: CoverSpec;
   /** extra listing images as small data URLs (max 4) */
   gallery?: string[];
-  rating: number;
-  reviews: number;
-  sales: number;
   createdAt: number;
-  origin: 'sample' | 'mine' | 'community';
+  origin: 'mine' | 'community';
   projectId?: string;
-}
-
-export interface CartItem {
-  id: string;
-  listingId: string;
-  title: string;
-  price: number;
-  qty: number;
-  kind: ListingKind;
-  option?: string;
-  bookingAt?: string;
-  sellerName: string;
-  sellerOwnerId?: string;
-  cover: CoverSpec;
-  origin: Listing['origin'];
-}
-
-export interface Order {
-  id: string;
-  number: string;
-  createdAt: number;
-  items: CartItem[];
-  subtotal: number;
-  fees: number;
-  total: number;
-  email: string;
-  name: string;
-  paymentMethod: string;
-  last4?: string;
-}
-
-export interface SaleRecord {
-  id: string;
-  listingId: string;
-  projectId?: string;
-  title: string;
-  amount: number;
-  qty: number;
-  createdAt: number;
-  buyer: string;
-  source: 'checkout' | 'community';
 }
 
 // ───────────── Brain ─────────────
@@ -787,7 +752,6 @@ export interface AppSettings {
    * follower count). The cleanup moves any handle into the brand's social handles and removes this.
    */
   accounts?: Partial<Record<SocialPlatform, { handle?: string } | undefined>>;
-  showSampleListings: boolean;
   shareToCommunity: boolean;
 }
 

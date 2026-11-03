@@ -1,6 +1,6 @@
 // Saves the signed-in user's workspace to Supabase and keeps devices in step.
 //
-// Each project, post, ad, skill, generation, listing, order, sale and notice is its own row in
+// Each project, post, ad, skill, generation, listing and notice is its own row in
 // user_docs (plus one row for the account-level settings). Changes are found by comparing the
 // store before and after each update, saved a moment later in small batches, and remembered across
 // reloads until Supabase has them. Pulling compares each row's updated_at with what this device last
@@ -12,7 +12,7 @@ import { safeStorage } from '@/lib/storage';
 import { useStore, type StoreState } from '@/store/useStore';
 
 export type DocKind = 'project' | 'post' | 'ad' | 'skill' | 'gen' | 'listing' | 'order' | 'sale' | 'notice' | 'settings';
-type SliceKey = 'projects' | 'posts' | 'ads' | 'skills' | 'genLog' | 'myListings' | 'orders' | 'sales' | 'notices';
+type SliceKey = 'projects' | 'posts' | 'ads' | 'skills' | 'genLog' | 'myListings' | 'notices';
 type Entity = { id: string; createdAt?: number };
 
 /** Which store list each kind of row fills, and its order (lists that grow at the top are newest first). */
@@ -23,11 +23,12 @@ export const SLICES: { slice: SliceKey; kind: DocKind; newestFirst: boolean }[] 
   { slice: 'skills', kind: 'skill', newestFirst: false },
   { slice: 'genLog', kind: 'gen', newestFirst: true },
   { slice: 'myListings', kind: 'listing', newestFirst: true },
-  { slice: 'orders', kind: 'order', newestFirst: true },
-  { slice: 'sales', kind: 'sale', newestFirst: true },
   { slice: 'notices', kind: 'notice', newestFirst: true },
 ];
 const SETTINGS_KEY = 'settings:user';
+/** Kinds older versions saved that nothing uses any more: the pretend checkout's orders and sales. Removed from the account when seen. */
+export const RETIRED_KINDS: DocKind[] = ['order', 'sale'];
+const KNOWN_KINDS = new Set<DocKind>([...SLICES.map((x) => x.kind), 'settings']);
 
 export interface DocRow {
   kind: DocKind;
@@ -289,7 +290,9 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
   const pull = () => turn(pullNow);
 
   async function pullNow() {
-      const index = await backend.index();
+      const all = await backend.index();
+      const retired = all.filter((r) => RETIRED_KINDS.includes(r.kind));
+      const index = all.filter((r) => KNOWN_KINDS.has(r.kind));
       const remote = new Map(index.map((r) => [keyOf(r.kind, r.id), r.updated_at]));
       const local = localKeys(store.getState());
       const need = new Map<DocKind, string[]>();
@@ -318,7 +321,12 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
       saveMeta();
       lastPull = Date.now();
       if (running && Object.keys(meta.d).length) schedule();
-      return { remoteEmpty: index.length === 0, downloaded: rows.length, removed: removed.length };
+      // rows of retired kinds (pretend orders and sales) leave the account; if that fails, the next pull tries again
+      for (const kind of RETIRED_KINDS) {
+        const ids = retired.filter((r) => r.kind === kind).map((r) => r.id);
+        for (const part of chunks(ids, 100)) await backend.remove(kind, part).catch(() => undefined);
+      }
+      return { remoteEmpty: all.length === 0, downloaded: rows.length, removed: removed.length };
   }
 
   /** Save everything waiting. Resolves true when nothing is left to save. */

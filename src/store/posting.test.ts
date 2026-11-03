@@ -81,24 +81,22 @@ describe('cleaning up what older versions made up', () => {
     expect(isInventedNotice({ title: 'Manus scheduled your TikTok post' })).toBe(false);
   });
 
-  it('removes sample data and simulated sales, and takes them off listings’ sold counts', () => {
-    const sale = (id: string, source: string, qty = 1) => ({ id, listingId: 'l1', projectId: 'p1', title: 't', amount: 10, qty, createdAt: 1, buyer: 'b', source }) as never;
+  it('removes made-up listing numbers, demo settings and their notices', () => {
     const p1 = useStore.getState().projects[0];
     useStore.setState({
-      sales: [sale('real', 'checkout'), sale('sim', 'simulated', 2), sale('smp', 'sample')],
-      myListings: [{ id: 'l1', projectId: 'p1', sales: 5 } as never, { id: 'l2', projectId: 'p1', sales: 1 } as never],
+      myListings: [{ id: 'l1', projectId: 'p1', title: 'Planner', rating: 4.8, reviews: 212, sales: 5, seller: { name: 'Me', verified: true } } as never, { id: 'l2', projectId: 'p1', title: 'Clean', seller: { name: 'Me' } } as never],
       projects: [{ ...p1, marketing: { ...p1.marketing, subscribers: [{ id: 's1', source: 'sample' }, { id: 's2', source: 'test' }] as never, plan: { summary: { total: 3, estReach: 24000 } } as never } }],
-      notices: [{ id: 'n', title: 'Simulated sale: Planner', kind: 'sale', createdAt: 1, read: false }],
-      settings: { ...defaultSettings(), marketActivity: true, ai: { serverUrl: '', useBrain: true, simulateLatency: true } } as never,
+      notices: ['Simulated sale: Planner', 'Order YLB-123456 confirmed', 'New sale: Planner', 'Inquiry sent to Copper & Crumb', 'Planner is live on the Marketplace', 'Your brand is ready'].map((title, i) => ({ id: `n${i}`, title, kind: 'info' as const, createdAt: i, read: false })),
+      settings: { ...defaultSettings(), marketActivity: true, showSampleListings: true, ai: { serverUrl: '', useBrain: true, simulateLatency: true } } as never,
     });
     cleanWorkspace();
     const s = useStore.getState();
-    expect(s.sales.map((x) => x.id)).toEqual(['real']);
-    expect(s.myListings.map((l) => l.sales)).toEqual([2, 1]);
+    expect(s.myListings[0]).toEqual({ id: 'l1', projectId: 'p1', title: 'Planner', seller: { name: 'Me' } });
+    expect(s.myListings[1]).toEqual({ id: 'l2', projectId: 'p1', title: 'Clean', seller: { name: 'Me' } });
     expect(s.projects[0].marketing.subscribers.map((x) => x.id)).toEqual(['s2']);
     expect(s.projects[0].marketing.plan?.summary).toEqual({ total: 3 });
-    expect(s.notices).toEqual([]);
-    expect('marketActivity' in s.settings).toBe(false);
+    expect(s.notices.map((n) => n.title)).toEqual(['Your brand is ready']);
+    expect('marketActivity' in s.settings || 'showSampleListings' in s.settings).toBe(false);
     expect('simulateLatency' in s.settings.ai).toBe(false);
     expect(cleanWorkspace()).toBe(false);
   });

@@ -225,7 +225,7 @@ function Accounts() {
 
 // ───────────────────────── Projects & data ─────────────────────────
 
-const EXPORT_KEYS = ['projects', 'activeProjectId', 'posts', 'ads', 'skills', 'genLog', 'myListings', 'cart', 'orders', 'sales', 'notices', 'settings'] as const;
+const EXPORT_KEYS = ['projects', 'activeProjectId', 'posts', 'ads', 'skills', 'genLog', 'myListings', 'notices', 'settings'] as const;
 
 function ProjectsData() {
   const signedIn = useAuth((s) => s.phase === 'ready');
@@ -373,7 +373,7 @@ function Preferences() {
   const set = (patch: Partial<AppSettings>) => updateSettings((s) => ({ ...s, ...patch }));
   return (
     <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-      <Card title="Profile" desc="Used to pre-fill checkout, opt-in tests and email sign-offs.">
+      <Card title="Profile" desc="Used to pre-fill opt-in tests and email sign-offs.">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Your name" htmlFor="pf-name">
             <input id="pf-name" className="input" autoComplete="name" value={settings.profile.name} onChange={(e) => set({ profile: { ...settings.profile, name: e.target.value } })} />
@@ -394,20 +394,19 @@ function Preferences() {
           ]}
         />
       </Card>
-      <Card title="Marketplace" desc={community === 'live' ? 'This app is shared: listings sync between everyone who opens it.' : 'Listings stay on this device unless the app is opened as a shared page.'}>
-        <div className="flex flex-col gap-4">
+      {community === 'live' && (
+        <Card title="Marketplace" desc="This app is shared: listings you publish are visible to everyone who uses it. People buy through your own links; this app takes no payments.">
           <Toggle
             checked={settings.shareToCommunity}
             onChange={(v) => {
               set({ shareToCommunity: v });
               setTimeout(() => pushMyListings(), 0);
             }}
-            label="Share my listings with other viewers"
-            description="Other people who open this app can browse and buy what you publish."
+            label="Show my listings to other people"
+            description="Turn off to keep your listings visible only to you."
           />
-          <Toggle checked={settings.showSampleListings} onChange={(v) => set({ showSampleListings: v })} label="Show sample listings" description="Example products and local businesses, labelled “Sample”, so the store never looks empty." />
-        </div>
-      </Card>
+        </Card>
+      )}
       <Card title="About">
         <p className="flex items-center gap-2 text-[13px] text-ink-2">
           <Users size={15} className="text-primary" /> {signedIn ? 'Yourlocalbusiness saves your workspace to your account.' : 'Yourlocalbusiness keeps your data in this browser.'} AI runs on your server’s keys when they’re set up, otherwise on the built-in engine.

@@ -37,6 +37,23 @@ describe('saving the workspace to the account', () => {
     supa.tables.set('user_docs', []);
   });
 
+  it('removes the pretend checkout’s orders and sales from the account, and never downloads them', async () => {
+    const now = new Date().toISOString();
+    supa.tables.set('user_docs', [
+      { user_id: userId, kind: 'order', id: 'order_1', data: { id: 'order_1', number: 'YLB-123456' }, updated_at: now },
+      { user_id: userId, kind: 'sale', id: 'sale_1', data: { id: 'sale_1', source: 'checkout' }, updated_at: now },
+      { user_id: userId, kind: 'notice', id: 'note_1', data: { id: 'note_1', title: 'Your brand is ready', kind: 'info', createdAt: 1, read: false }, updated_at: now },
+    ]);
+    const a = newDevice();
+    const r = await a.pull();
+    expect(r.remoteEmpty).toBe(false);
+    expect(r.downloaded).toBe(1);
+    expect(rows().map((x) => `${x.kind}:${x.id}`)).toEqual(['notice:note_1']);
+    expect(useStore.getState().notices.map((n) => n.id)).toEqual(['note_1']);
+    expect('orders' in useStore.getState()).toBe(false);
+    a.forget();
+  });
+
   it('saves each change as its own row and opens it on another device', async () => {
     const a = newDevice();
     expect((await a.pull()).remoteEmpty).toBe(true);

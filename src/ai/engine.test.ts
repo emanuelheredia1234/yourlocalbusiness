@@ -11,7 +11,6 @@ import { composePost, defaultCampaign, generateCampaignPlan, generateContentBatc
 import { generateCode, modifyCode } from './local/code';
 import { applyBanned, learnFromFeedback, mergeDirectives, newSkill, parseDirectives, polishText } from './brain';
 import { conform, parseJsonLoose } from './claude';
-import { luhnValid, cardBrand } from '@/lib/utils';
 
 function productProject(): Project {
   const p = newProject('product', 'new');
@@ -182,10 +181,3 @@ describe('claude helpers', () => {
   });
 });
 
-describe('payments', () => {
-  it('validates cards', () => {
-    expect(luhnValid('4242 4242 4242 4242')).toBe(true);
-    expect(luhnValid('4242 4242 4242 4241')).toBe(false);
-    expect(cardBrand('3782 822463 10005')).toBe('amex');
-  });
-});

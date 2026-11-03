@@ -1,37 +1,32 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, ExternalLink, Map as MapIcon, Package, Pencil, Search, Store as StoreIcon, Users, X } from 'lucide-react';
+import { ExternalLink, Map as MapIcon, Package, Pencil, Search, Store as StoreIcon, Users, X } from 'lucide-react';
 import type { Listing, ListingKind } from '@/lib/types';
-import { cn, fmtDateTime, fmtMoney, slugify } from '@/lib/utils';
+import { cn, fmtDateTime } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { useRuntime } from '@/lib/platform';
 import { pushMyListings, startCommunitySync } from '@/lib/community';
 import { BUSINESS_CATEGORIES, distanceMi, FORMAT_LIST, FORMATS } from '@/ai/knowledge';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
-import { Empty, Segmented, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
+import { Empty, Segmented, Tabs, confirmAction } from '@/components/ui/primitives';
 import { Icon } from '@/components/ui/Icon';
-import { download } from '@/components/ui/download';
-import { ListingCard, ListingCover, priceLabel, Stars, UsMap } from './ListingParts';
+import { ListingCard, ListingCover, priceLabel, UsMap } from './ListingParts';
 import { useAllListings } from './useListings';
-import { accessFile, addListingToCart } from './actions';
+import { listingActions } from './actions';
 
 type Kind = 'all' | ListingKind;
-type Sort = 'recommended' | 'newest' | 'price-asc' | 'price-desc' | 'rating';
+type Sort = 'recommended' | 'newest' | 'price-asc' | 'price-desc';
 
 
 export default function Marketplace() {
   const project = useActiveProject();
   const listings = useAllListings();
   const myListings = useStore((s) => s.myListings);
-  const orders = useStore((s) => s.orders);
-  const sales = useStore((s) => s.sales);
-  const showSamples = useStore((s) => s.settings.showSampleListings);
-  const updateSettings = useStore((s) => s.updateSettings);
   const unpublish = useStore((s) => s.unpublishListing);
   const updateStudio = useStore((s) => s.updateProject);
   const community = useRuntime((s) => s.community);
   const openListing = useUI((s) => s.openListing);
-  const [tab, setTab] = useState<'browse' | 'mine' | 'purchases'>('browse');
+  const [tab, setTab] = useState<'browse' | 'mine'>('browse');
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<Kind>('all');
   const [cat, setCat] = useState('');
@@ -70,7 +65,8 @@ export default function Marketplace() {
       }
       return true;
     });
-    const score = (l: Listing) => l.rating * Math.log10(10 + l.reviews) + (l.origin === 'mine' ? 1000 : l.origin === 'community' ? 100 : 0);
+    // yours first, then the newest (there are no ratings or sales to rank by)
+    const score = (l: Listing) => (l.origin === 'mine' ? 1e15 : 0) + l.createdAt;
     out = out.slice().sort((a, b) => {
       switch (sort) {
         case 'newest':
@@ -79,8 +75,6 @@ export default function Marketplace() {
           return a.price - b.price;
         case 'price-desc':
           return b.price - a.price;
-        case 'rating':
-          return b.rating - a.rating || b.reviews - a.reviews;
         default:
           return score(b) - score(a);
       }
@@ -96,21 +90,23 @@ export default function Marketplace() {
 
   const pills = kind === 'business' ? BUSINESS_CATEGORIES.map((c) => ({ id: c, label: c })) : kind === 'product' ? FORMAT_LIST.map((f) => ({ id: f.id as string, label: f.label })) : [...FORMAT_LIST.slice(0, 5).map((f) => ({ id: f.id as string, label: f.label })), ...BUSINESS_CATEGORIES.slice(0, 4).map((c) => ({ id: c, label: c }))];
 
-  const myRevenue = (id: string) => sales.filter((s) => s.listingId === id).reduce((n, s) => n + s.amount, 0);
 
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <h1 className="page-title">Marketplace</h1>
-          <p className="mt-1 max-w-[62ch] text-[14px] text-muted">Digital products from creators and services from local businesses. Anyone can buy from anyone, and everything you publish from the Studio appears here instantly.</p>
+          <p className="mt-1 max-w-[66ch] text-[14px] text-muted">
+            Digital products and local businesses. You buy, book or get in touch on each seller’s own site, email or phone: this app takes no payments.{' '}
+            {community === 'live' ? 'Listings here are shared with everyone who uses this app.' : 'Right now only you can see your listings here.'}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className={cn('badge h-7 px-2.5', community === 'live' ? 'bg-good-soft text-good' : 'bg-surface-2 text-muted')} title={community === 'live' ? 'Listings sync with everyone this workspace is shared with' : 'Listings are stored on this device'}>
-            <Users size={12} /> {community === 'live' ? 'Shared marketplace: live' : 'Local marketplace'}
+          <span className={cn('badge h-7 px-2.5', community === 'live' ? 'bg-good-soft text-good' : 'bg-surface-2 text-muted')} title={community === 'live' ? 'Everyone who uses this app sees the listings' : 'Only you see your listings'}>
+            <Users size={12} /> {community === 'live' ? 'Shared marketplace' : 'Only you can see this'}
           </span>
           <button className="btn btn-primary" onClick={() => navigate('studio')}>
-            <StoreIcon size={16} /> Sell on the marketplace
+            <StoreIcon size={16} /> List on the marketplace
           </button>
         </div>
       </div>
@@ -119,7 +115,6 @@ export default function Marketplace() {
         tabs={[
           { id: 'browse', label: 'Browse', count: filtered.length },
           { id: 'mine', label: 'My listings', count: myListings.length },
-          { id: 'purchases', label: 'Purchases', count: orders.length },
         ]}
         value={tab}
         onChange={setTab}
@@ -152,7 +147,6 @@ export default function Marketplace() {
               <select className="select w-auto" value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort listings">
                 <option value="recommended">Recommended</option>
                 <option value="newest">Newest</option>
-                <option value="rating">Top rated</option>
                 <option value="price-asc">Price: low to high</option>
                 <option value="price-desc">Price: high to low</option>
               </select>
@@ -225,9 +219,6 @@ export default function Marketplace() {
                     <X size={14} /> Clear location
                   </button>
                 )}
-                <span className="ml-auto">
-                  <Toggle checked={showSamples} onChange={(v) => updateSettings((s) => ({ ...s, showSampleListings: v }))} label="Show sample listings" />
-                </span>
               </div>
             )}
             {showMap && kind !== 'product' && (
@@ -243,12 +234,14 @@ export default function Marketplace() {
             )}
           </div>
 
-          {filtered.length === 0 ? (
+          {listings.length === 0 ? (
+            <Empty icon={<StoreIcon size={20} />} title="No listings yet" body="Publish yours from the Studio and it shows up here." action={<button className="btn btn-primary btn-sm" onClick={() => navigate('studio')}>Open Studio</button>} />
+          ) : filtered.length === 0 ? (
             <Empty icon={<Search size={20} />} title="No listings match" body="Try another search, category or location." action={<button className="btn btn-secondary btn-sm" onClick={() => { setQ(''); setCat(''); setCity(''); setNear(0); setKind('all'); }}>Reset filters</button>} />
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
               {filtered.map((l) => (
-                <ListingCard key={l.id} listing={l} onOpen={() => openListing(l.id)} onAdd={() => addListingToCart(l)} />
+                <ListingCard key={l.id} listing={l} onOpen={() => openListing(l.id)} />
               ))}
             </div>
           )}
@@ -268,9 +261,8 @@ export default function Marketplace() {
                   <p className="truncate text-[13px] text-muted">{l.tagline}</p>
                   <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-muted">
                     <span className="num font-semibold text-ink">{priceLabel(l.price, l.priceModel)}</span>
-                    <Stars rating={l.rating} reviews={l.reviews} />
-                    <span className="num">{l.sales} sold · {fmtMoney(myRevenue(l.id))} revenue</span>
                     <span>Listed {fmtDateTime(l.createdAt)}</span>
+                    {!listingActions(l).length && <span className="text-warn">No buy link or contact yet</span>}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -299,55 +291,6 @@ export default function Marketplace() {
         </div>
       )}
 
-      {tab === 'purchases' && (
-        <div className="flex flex-col gap-3">
-          {orders.length === 0 ? (
-            <Empty icon={<Package size={20} />} title="No purchases yet" body="Products you buy and services you book show up here." action={<button className="btn btn-secondary btn-sm" onClick={() => setTab('browse')}>Browse the marketplace</button>} />
-          ) : (
-            orders.map((o) => (
-              <div key={o.id} className="panel p-4">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="font-display text-[15px] font-semibold">Order {o.number}</p>
-                    <p className="text-xs text-muted">
-                      {fmtDateTime(o.createdAt)} · {o.paymentMethod}
-                      {o.last4 ? ` •••• ${o.last4}` : ''}
-                    </p>
-                  </div>
-                  <span className="num text-[15px] font-bold">{fmtMoney(o.total, { cents: true })}</span>
-                </div>
-                <ul className="flex flex-col divide-y divide-line">
-                  {o.items.map((it) => (
-                    <li key={it.id} className="flex flex-wrap items-center gap-3 py-2">
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13.5px] font-semibold">{it.title}</span>
-                        <span className="block text-xs text-muted">
-                          {it.sellerName}
-                          {it.option ? ` · ${it.option}` : ''}
-                          {it.bookingAt ? ` · ${fmtDateTime(it.bookingAt)}` : ''}
-                        </span>
-                      </span>
-                      <span className="num text-[13px]">
-                        {it.qty} × {fmtMoney(it.price)}
-                      </span>
-                      {it.kind === 'product' && (
-                        <button
-                          className="btn btn-secondary btn-xs"
-                          onClick={async () => {
-                            await download(`${slugify(it.title)}-access.md`, accessFile(o, it));
-                          }}
-                        >
-                          <Download size={12} /> Access file
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))
-          )}
-        </div>
-      )}
     </div>
   );
 }

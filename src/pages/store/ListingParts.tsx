@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
-import { BadgeCheck, CalendarCheck, MapPin, MessageSquare, ShoppingCart, Star } from 'lucide-react';
+import { ArrowRight, MapPin } from 'lucide-react';
 import type { Listing, ServicePriceModel } from '@/lib/types';
-import { cn, darken, fmtCompact, fmtMoney, lighten, readableOn, withAlpha } from '@/lib/utils';
+import { cn, darken, fmtMoney, lighten, readableOn, withAlpha } from '@/lib/utils';
 import { CITIES, FORMATS } from '@/ai/knowledge';
 import { Icon } from '@/components/ui/Icon';
 import { MiniMark } from '@/components/brand/Logo';
@@ -60,18 +60,7 @@ export function ListingCover({ listing, className, big }: { listing: Listing; cl
   );
 }
 
-export function Stars({ rating, reviews, size = 13 }: { rating: number; reviews?: number; size?: number }) {
-  if (!rating && !reviews) return <span className="badge bg-accent/20 text-ink">New</span>;
-  return (
-    <span className="inline-flex items-center gap-1 text-xs text-muted" aria-label={`${rating.toFixed(1)} out of 5 stars${reviews ? `, ${reviews} reviews` : ''}`}>
-      <Star size={size} className="fill-[rgb(var(--accent))] text-[rgb(var(--accent))]" />
-      <b className="num text-ink">{rating.toFixed(1)}</b>
-      {reviews !== undefined && <span className="num">({fmtCompact(reviews)})</span>}
-    </span>
-  );
-}
-
-export function ListingCard({ listing, onOpen, onAdd }: { listing: Listing; onOpen: () => void; onAdd: () => void }) {
+export function ListingCard({ listing, onOpen }: { listing: Listing; onOpen: () => void }) {
   const isBiz = listing.kind === 'business';
   return (
     <article className="panel group flex min-w-0 flex-col overflow-hidden transition-shadow hover:shadow-pop">
@@ -80,7 +69,6 @@ export function ListingCard({ listing, onOpen, onAdd }: { listing: Listing; onOp
         <span className="absolute left-2 top-2 flex gap-1">
           {listing.origin === 'mine' && <span className="badge bg-accent text-on-accent">Your listing</span>}
           {listing.origin === 'community' && <span className="badge bg-info text-white">Community</span>}
-          {listing.origin === 'sample' && <span className="badge bg-black/45 text-white backdrop-blur">Sample</span>}
         </span>
         <span className="absolute bottom-2 left-2 badge bg-surface/95 text-ink-2 shadow-card">
           {isBiz ? (
@@ -98,30 +86,19 @@ export function ListingCard({ listing, onOpen, onAdd }: { listing: Listing; onOp
         <div className="flex items-center gap-2">
           <MiniMark logo={listing.seller.logo} name={listing.seller.name} size={20} />
           <span className="min-w-0 truncate text-xs font-semibold text-ink-2">{listing.seller.name}</span>
-          {listing.seller.verified && <BadgeCheck size={13} className="shrink-0 text-info" aria-label="Verified seller" />}
         </div>
         <button className="text-left" onClick={onOpen}>
           <h3 className="clamp-2 font-display text-[15.5px] font-semibold leading-snug text-ink group-hover:underline">{listing.title}</h3>
         </button>
         <p className="clamp-2 text-[12.5px] text-muted">{listing.tagline}</p>
         <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-          <div className="flex flex-col">
-            <span className="num text-[15px] font-bold text-ink">
-              {priceLabel(listing.price, listing.priceModel)}
-              {listing.compareAt && listing.compareAt > listing.price && <s className="ml-1.5 text-xs font-medium text-faint">{fmtMoney(listing.compareAt)}</s>}
-            </span>
-            <Stars rating={listing.rating} reviews={listing.reviews} />
-          </div>
-          {isBiz ? (
-            <button className="btn btn-secondary btn-sm" onClick={onOpen}>
-              {listing.bookingType === 'inquire' ? <MessageSquare size={14} /> : <CalendarCheck size={14} />}
-              {listing.bookingType === 'inquire' ? 'Inquire' : listing.bookingType === 'book' ? 'Book' : 'Order'}
-            </button>
-          ) : (
-            <button className="btn btn-primary btn-sm" onClick={onAdd} aria-label={`Add ${listing.title} to cart`}>
-              <ShoppingCart size={14} /> Add
-            </button>
-          )}
+          <span className="num text-[15px] font-bold text-ink">
+            {priceLabel(listing.price, listing.priceModel)}
+            {listing.compareAt && listing.compareAt > listing.price && <s className="ml-1.5 text-xs font-medium text-faint">{fmtMoney(listing.compareAt)}</s>}
+          </span>
+          <button className="btn btn-secondary btn-sm" onClick={onOpen} aria-label={`View ${listing.title}`}>
+            View <ArrowRight size={14} />
+          </button>
         </div>
       </div>
     </article>
