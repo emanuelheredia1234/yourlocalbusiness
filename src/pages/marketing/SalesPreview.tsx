@@ -1,7 +1,9 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
-import { Check, ChevronDown, Plus, ShieldCheck, Star, X } from 'lucide-react';
-import type { Brand, ProofStat, SalesPage, SalesSection, Testimonial } from '@/lib/types';
+import { useId, useState, type CSSProperties, type ReactNode } from 'react';
+import { Check, ChevronDown, ImageOff, Plus, ShieldCheck, Star, X } from 'lucide-react';
+import type { Brand, GalleryData, HeroData, PromptImage, ProofStat, SalesPage, SalesSection, Testimonial } from '@/lib/types';
 import { cn, lighten, readableOn, withAlpha } from '@/lib/utils';
+import { imageKeyNumber } from '@/lib/promptImages';
+import { useMediaUrl } from '@/lib/media';
 import { priceText, publishableProof, showsCompareAt, showsGuarantee } from '@/ai/local/seo';
 import { Editable } from '@/components/ui/Editable';
 import { Icon } from '@/components/ui/Icon';
@@ -43,18 +45,38 @@ interface Ctx {
   set: (data: SalesSection['data']) => void;
   /** a business: no price set reads “Ask for a quote” */
   business?: boolean;
+  /** one of the page's images, by media id (undefined: it was removed from the page's images) */
+  image: (mediaId: string) => PromptImage | undefined;
 }
 
 /** The sales page as visitors see it, with click-to-edit text when `editing` is on. Preview shows exactly
  *  what the export publishes: no unconfirmed proof, no guarantee the owner hasn't turned on. */
-export function SalesPreview({ page, brand, editing, device, onData, business }: { page: SalesPage; brand: Brand; editing: boolean; device: Device; onData: (id: string, data: SalesSection['data']) => void; business?: boolean }) {
+export function SalesPreview({
+  page,
+  brand,
+  editing,
+  device,
+  onData,
+  business,
+  images = [],
+}: {
+  page: SalesPage;
+  brand: Brand;
+  editing: boolean;
+  device: Device;
+  onData: (id: string, data: SalesSection['data']) => void;
+  business?: boolean;
+  /** the page's images (marketing.seoImages) */
+  images?: PromptImage[];
+}) {
   const t = salesTokens(page, brand);
+  const image = (id: string) => images.find((i) => i.media.id === id && i.media.kind === 'image');
   return (
     <div className="overflow-hidden rounded-md border border-line shadow-card" style={{ background: t.bg, color: t.ink, fontFamily: t.font, width: device === 'mobile' ? 390 : '100%', maxWidth: '100%' }}>
       {page.sections
         .filter((s) => s.visible)
         .map((s) => (
-          <SectionView key={s.id} s={s} ctx={{ t, editing, device, business, set: (d) => onData(s.id, d) }} />
+          <SectionView key={s.id} s={s} ctx={{ t, editing, device, business, image, set: (d) => onData(s.id, d) }} />
         ))}
       <footer className="px-6 py-6 text-center text-[12px]" style={{ color: t.muted, borderTop: `1px solid ${withAlpha(t.ink, 0.08)}` }}>
         © {new Date().getFullYear()} {brand.name}
@@ -129,6 +151,82 @@ function Cta({ ctx, value, onChange, block }: { ctx: Ctx; value: string; onChang
   );
 }
 
+/** The hero's data without its image. */
+function noHeroImage(d: HeroData): HeroData {
+  const { imageId: _id, imageAlt: _alt, ...rest } = d;
+  return rest;
+}
+
+/**
+ * One of the page's images. Editing, it has Remove and its alt text (what it shows, for people who can't
+ * see it and for search engines), and says so when the image is no longer among the page's images.
+ */
+function PageImage({ img, alt, ctx, name, onAlt, onRemove, cover, priority, children }: { img?: PromptImage; alt: string; ctx: Ctx; name: string; onAlt: (alt: string) => void; onRemove: () => void; cover?: boolean; priority?: boolean; children?: ReactNode }) {
+  const url = useMediaUrl(img?.media);
+  const altId = useId();
+  if (!img && !ctx.editing) return null;
+  const n = img ? imageKeyNumber(img.key) : 0;
+  return (
+    <figure className="group relative m-0 min-w-0">
+      {!img ? (
+        <div className="flex aspect-[4/3] flex-col items-center justify-center gap-2 border border-dashed p-4 text-center text-[13px]" style={{ borderColor: withAlpha(ctx.t.ink, 0.25), color: ctx.t.muted, borderRadius: ctx.t.radius }}>
+          <ImageOff size={20} aria-hidden="true" />
+          This image was removed from your page’s images.
+        </div>
+      ) : url ? (
+        <img src={url} alt={alt} className={cn('block w-full', cover ? 'aspect-[4/3] object-cover' : 'h-auto max-h-[460px] object-cover')} style={{ borderRadius: ctx.t.radius }} loading={priority ? 'eager' : 'lazy'} />
+      ) : (
+        <div className="aspect-[4/3] w-full animate-pulse" style={{ background: ctx.t.soft, borderRadius: ctx.t.radius }} role="img" aria-label={alt || 'Image loading'} />
+      )}
+      {ctx.editing && (
+        <button type="button" onClick={onRemove} className="absolute right-2 top-2 rounded-full bg-black/60 p-1.5 text-white opacity-80 transition-opacity hover:bg-black/80 hover:opacity-100 focus-visible:opacity-100" aria-label={`Remove ${name} from the page`} title="Remove from the page">
+          <X size={13} />
+        </button>
+      )}
+      {children}
+      {ctx.editing && img && (
+        <div className="mt-2 flex items-center gap-2 text-[12px]" style={{ color: ctx.t.muted }}>
+          <label htmlFor={altId} className="shrink-0 font-semibold">
+            Image {n} alt text
+          </label>
+          <input id={altId} className="min-w-0 flex-1 rounded border bg-transparent px-2 py-1 text-[12.5px]" style={{ borderColor: withAlpha(ctx.t.ink, 0.2), color: ctx.t.ink }} value={alt} maxLength={150} placeholder="What the image shows" onChange={(e) => onAlt(e.target.value)} />
+        </div>
+      )}
+    </figure>
+  );
+}
+
+function GallerySection({ d, ctx }: { d: GalleryData; ctx: Ctx }) {
+  const { t, editing } = ctx;
+  const set = (p: Partial<GalleryData>) => ctx.set({ ...d, ...p });
+  const setItem = (imageId: string, p: Partial<GalleryData['items'][number]>) => set({ items: d.items.map((it) => (it.imageId === imageId ? { ...it, ...p } : it)) });
+  // the preview shows what the published page does: photos it still has, and nothing when there are none
+  const items = editing ? d.items : d.items.filter((it) => !!ctx.image(it.imageId));
+  if (!editing && !items.length) return null;
+  const cols = ctx.device === 'mobile' ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+  return (
+    <section>
+      <Wrap>
+        <Editable editing={editing} value={d.heading} onChange={(v) => set({ heading: v })} label="Gallery heading" tag="h2" className={h2} />
+        {(editing || !!d.intro.trim()) && <Editable editing={editing} value={d.intro} onChange={(v) => set({ intro: v })} label="Gallery intro" placeholder="A line about these photos (optional)" tag="p" multiline className="mt-3 max-w-[680px] text-[16px] leading-relaxed" style={{ color: t.muted }} />}
+        {items.length ? (
+          <div className={cn('mt-6 grid gap-5', cols)}>
+            {items.map((it, i) => (
+              <PageImage key={it.imageId} img={ctx.image(it.imageId)} alt={it.alt} ctx={ctx} name={`photo ${i + 1}`} cover onAlt={(alt) => setItem(it.imageId, { alt })} onRemove={() => set({ items: d.items.filter((x) => x.imageId !== it.imageId) })}>
+                {(editing || !!it.caption.trim()) && <Editable editing={editing} value={it.caption} onChange={(v) => setItem(it.imageId, { caption: v })} label={`Photo ${i + 1} caption`} placeholder="Caption (optional)" tag="figcaption" className="mt-2 block text-[14px]" style={{ color: t.muted }} />}
+              </PageImage>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-5 rounded-md border border-dashed p-5 text-center text-[14px]" style={{ borderColor: withAlpha(t.ink, 0.25), color: t.muted }}>
+            No photos here yet. Add images under “Guide the AI”, then choose “Add to the page”, or add them with Edit with AI.
+          </p>
+        )}
+      </Wrap>
+    </section>
+  );
+}
+
 function SectionView({ s, ctx }: { s: SalesSection; ctx: Ctx }) {
   const { t, editing } = ctx;
   const cols = (n: 2 | 3) => (ctx.device === 'mobile' ? 'grid-cols-1' : n === 3 ? 'grid-cols-1 md:grid-cols-3' : 'grid-cols-1 md:grid-cols-2');
@@ -136,19 +234,34 @@ function SectionView({ s, ctx }: { s: SalesSection; ctx: Ctx }) {
     case 'hero': {
       const d = s.data;
       const set = (p: Partial<typeof d>) => ctx.set({ ...d, ...p });
+      const img = d.imageId ? ctx.image(d.imageId) : undefined;
+      // beside the copy on a wide screen; a removed image only shows (as a note) while editing
+      const withImage = !!img || (editing && !!d.imageId);
+      const copy = (
+        <>
+          <Editable editing={editing} value={d.eyebrow} onChange={(v) => set({ eyebrow: v })} label="Eyebrow" tag="p" className="mb-3 text-[12.5px] font-bold uppercase tracking-[0.12em]" style={{ color: t.primary }} />
+          <Editable editing={editing} value={d.headline} onChange={(v) => set({ headline: v })} label="Headline (H1)" tag="h1" className="max-w-[760px] text-[32px] font-extrabold leading-[1.08] tracking-[-0.02em] sm:text-[44px]" />
+          <Editable editing={editing} value={d.subheadline} onChange={(v) => set({ subheadline: v })} label="Subheadline" tag="p" multiline className="mt-4 max-w-[640px] text-[17px] leading-relaxed" style={{ color: t.muted }} />
+          <div className="mt-6 max-w-[560px] text-[15px]">
+            <Ticks items={d.bullets} ctx={ctx} onChange={(v) => set({ bullets: v })} label="bullet" />
+          </div>
+          <div className="mt-7 flex flex-col items-start gap-2">
+            <Cta ctx={ctx} value={d.ctaLabel} onChange={(v) => set({ ctaLabel: v })} />
+            {(editing || !!d.ctaSubtext.trim()) && <Editable editing={editing} value={d.ctaSubtext} onChange={(v) => set({ ctaSubtext: v })} label="Fine print" placeholder="Fine print (optional)" tag="p" className="text-[12.5px]" style={{ color: t.muted }} />}
+          </div>
+        </>
+      );
       return (
         <header style={{ background: `radial-gradient(90% 70% at 15% 0%, ${withAlpha(t.primary, 0.14)}, transparent 70%), ${t.bg}` }}>
           <Wrap style={{ paddingTop: 64, paddingBottom: 64 }}>
-            <Editable editing={editing} value={d.eyebrow} onChange={(v) => set({ eyebrow: v })} label="Eyebrow" tag="p" className="mb-3 text-[12.5px] font-bold uppercase tracking-[0.12em]" style={{ color: t.primary }} />
-            <Editable editing={editing} value={d.headline} onChange={(v) => set({ headline: v })} label="Headline (H1)" tag="h1" className="max-w-[760px] text-[32px] font-extrabold leading-[1.08] tracking-[-0.02em] sm:text-[44px]" />
-            <Editable editing={editing} value={d.subheadline} onChange={(v) => set({ subheadline: v })} label="Subheadline" tag="p" multiline className="mt-4 max-w-[640px] text-[17px] leading-relaxed" style={{ color: t.muted }} />
-            <div className="mt-6 max-w-[560px] text-[15px]">
-              <Ticks items={d.bullets} ctx={ctx} onChange={(v) => set({ bullets: v })} label="bullet" />
-            </div>
-            <div className="mt-7 flex flex-col items-start gap-2">
-              <Cta ctx={ctx} value={d.ctaLabel} onChange={(v) => set({ ctaLabel: v })} />
-              {(editing || !!d.ctaSubtext.trim()) && <Editable editing={editing} value={d.ctaSubtext} onChange={(v) => set({ ctaSubtext: v })} label="Fine print" placeholder="Fine print (optional)" tag="p" className="text-[12.5px]" style={{ color: t.muted }} />}
-            </div>
+            {withImage ? (
+              <div className={cn('grid items-center gap-8', ctx.device === 'mobile' ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]')}>
+                <div className="min-w-0">{copy}</div>
+                <PageImage img={img} alt={d.imageAlt ?? ''} ctx={ctx} name="the main image" priority onAlt={(imageAlt) => set({ imageAlt })} onRemove={() => ctx.set(noHeroImage(d))} />
+              </div>
+            ) : (
+              copy
+            )}
           </Wrap>
         </header>
       );
@@ -414,6 +527,8 @@ function SectionView({ s, ctx }: { s: SalesSection; ctx: Ctx }) {
         </section>
       );
     }
+    case 'gallery':
+      return <GallerySection d={s.data} ctx={ctx} />;
   }
 }
 

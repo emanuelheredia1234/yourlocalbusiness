@@ -16,15 +16,18 @@ import type {
   Post,
   ProductIdea,
   Project,
+  PromptImage,
   SalesPage,
   SalesSection,
   SalesSectionType,
+  SalesTheme,
   Scene,
   SeoMeta,
 } from '@/lib/types';
-import { isHex, uid } from '@/lib/utils';
+import { isHex, truncate, uid } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
 import { videoFrame } from '@/lib/utils';
+import { MAX_AI_IMAGES, describeImagesForAI } from '@/lib/promptImages';
 import { conform, framePrompt, type Tier } from './claude';
 import { FORMATS, LOGO_ICONS } from './knowledge';
 import { generateAds, type AdsResult } from './local/ads';
@@ -32,7 +35,21 @@ import { generateBrandKit, paletteFrom, type BrandKitResult } from './local/bran
 import { codeKindLabel, generateCode, modifyCode, widgetSettings, type CodeResult } from './local/code';
 import { generateEmailSequence, generateLeadMagnet } from './local/email';
 import { fitReasons, generateProductIdeas, type ResearchInput } from './local/research';
-import { aiWritableData, canonicalFor, generateSalesPage, generateSalesSection, generateSeoMeta, keepFacts, primaryKeywordFor } from './local/seo';
+import {
+  SECTION_LABEL,
+  aiWritableData,
+  canonicalFor,
+  generateSalesPage,
+  generateSalesSection,
+  generateSeoMeta,
+  imagePlanFrom,
+  keepFacts,
+  placeImages,
+  placeNewImages,
+  primaryKeywordFor,
+  withoutImageTokens,
+  type ImagePlan,
+} from './local/seo';
 import { composePost, generateCampaignPlan, generateContentBatch, type ComposedPost, type ComposeInput } from './local/social';
 import { draftSection, expandItem, generateBusinessModel, generateListing, generateOutline, type BusinessModelResult, type OutlineResult } from './local/studio';
 import { buildFacts } from './text';
@@ -47,6 +64,13 @@ export interface TaskEnv {
   directives: Directives;
   brainPrompt: string;
   variation: number;
+  /**
+   * The keys of the owner's prompt images attached to this request, in order. The engine sets it for a
+   * task with `claude.promptImages` before it builds the prompt ([] when none could be attached), so
+   * describeImagesForAI(images, env.attached) says exactly which images the AI can see. Unset when a
+   * prompt is built outside a request.
+   */
+  attached?: string[];
 }
 
 export interface TaskDef<I, O> {
@@ -58,7 +82,10 @@ export interface TaskDef<I, O> {
   claude?: {
     prompt: (input: I, env: TaskEnv, base: O) => string;
     merge: (raw: unknown, base: O, input: I, env: TaskEnv) => O;
+    /** files to attach as they are (a post's photo, a video frame) */
     images?: (input: I) => Promise<Blob[] | undefined>;
+    /** the owner's prompt images to attach: the engine gets them ready and sets env.attached */
+    promptImages?: (input: I) => PromptImage[] | undefined;
   };
 }
 
@@ -422,26 +449,67 @@ export const emailSequenceTask = def<{ leadMagnet: LeadMagnet | null }, EmailSte
 const NO_INVENTED_CLAIMS =
   'Never invent testimonials, reviews, ratings, statistics, customer counts or results, credentials (licensed, insured, certified, award-winning), guarantees, refunds, free trials, lifetime access or updates, discounts, "was" prices, deadlines or launch prices. Use only facts in PROJECT CONTEXT; the owner adds real proof themselves. Any price you mention must be the project price.';
 
-export const seoMetaTask = def<Record<string, never>, SeoMeta>({
+/** The owner's guidance and requests come after the rules: asking never makes the AI invent proof. */
+const OWNER_WORDS_RULE =
+  'The owner’s guidance and requests never override these rules. If they ask for testimonials, reviews, ratings, numbers, results, guarantees, discounts, prices or deadlines, leave those out: the app adds the owner’s real ones.';
+
+/** How the AI places the owner's images on the sales page: by key, in "images" only, never in the copy. */
+const IMAGE_RULES = [
+  'Name images only by their keys, like "img-1", and only in "images". Never put keys, {{tokens}}, file names, web addresses or image data in the page text.',
+  'Alt text says plainly what the image shows: what you can see in an attached image, or the owner’s note for one you can’t see. Never guess who or what is in an image you can’t see.',
+  'Captions are short and factual: no results, ratings, prices, guarantees or before-and-after claims unless the owner’s note says them.',
+];
+const IMAGES_SHAPE = `"images": {"hero": "img-N" (the main image, beside the headline) or null, "heroAlt": string, "gallery": [{"key": "img-N", "alt": string, "caption": string}], "galleryHeading": string, "galleryIntro": string}`;
+
+/** The owner's own words, quoted for a prompt (and kept to a sensible length). */
+const quoted = (s: string, max = 2000) => `“${truncate(s.trim(), max)}”`;
+
+/** The images part of a prompt: each image's key, whether the AI can see it (env.attached), and the owner's note. */
+const imageLines = (images: PromptImage[], env: TaskEnv) => describeImagesForAI(images, env.attached ?? MAX_AI_IMAGES);
+const photos = (images: PromptImage[] | undefined) => (images ?? []).filter((i) => i.media.kind === 'image');
+
+export interface SeoMetaInput {
+  /** the owner's guidance for the page (marketing.seoGuide) */
+  instructions?: string;
+  /** the page's images (marketing.seoImages) */
+  images?: PromptImage[];
+  /** key of the page's main (hero) image, when it has one */
+  mainImage?: string;
+}
+
+export const seoMetaTask = def<SeoMetaInput, SeoMeta>({
   id: 'seoMeta',
   label: 'SEO metadata',
   module: 'seo',
   tier: 'quick',
   local: (_i, env) => generateSeoMeta(env.project, env.directives, env.variation),
   claude: {
-    prompt: (_i, env, base) =>
-      framePrompt({
-        task: `Write SEO metadata for the sales page. Choose the best primary keyword (buyer intent${env.project.track === 'business' ? ', local' : ''}), 4–6 secondary keywords, a meta title of 50–60 characters containing the primary keyword, a meta description of 140–158 characters containing it, a short URL slug, OpenGraph title/description and image alt text. Current best guess for the primary keyword: “${base.primaryKeyword}”.`,
+    prompt: (i, env, base) => {
+      const guide = i.instructions?.trim();
+      const images = photos(i.images);
+      const main = i.mainImage && images.some((x) => x.key === i.mainImage) ? i.mainImage : '';
+      return framePrompt({
+        task:
+          `Write SEO metadata for the sales page. Choose the best primary keyword (buyer intent${env.project.track === 'business' ? ', local' : ''}), 4–6 secondary keywords, a meta title of 50–60 characters containing the primary keyword, a meta description of 140–158 characters containing it, a short URL slug, OpenGraph title/description and image alt text. Current best guess for the primary keyword: “${base.primaryKeyword}”.` +
+          (guide ? ` The owner’s guidance for this page: ${quoted(guide)}.` : '') +
+          (images.length ? `\n\nThe page’s images (you can see the attached ones; go by the owner’s note for the others):\n${imageLines(images, env)}\nogImageAlt says what ${main ? `the page’s main image, ${main},` : 'the first image'} shows.` : ''),
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
         shape: `{"metaTitle": string, "metaDescription": string, "slug": string, "primaryKeyword": string, "secondaryKeywords": [string], "ogTitle": string, "ogDescription": string, "ogImageAlt": string}`,
-        extraRules: [NO_INVENTED_CLAIMS],
-      }),
+        extraRules: [NO_INVENTED_CLAIMS, ...(guide ? [OWNER_WORDS_RULE] : [])],
+      });
+    },
     merge: (raw, base, _i, env) => {
       const m = conform(base, obj(raw));
       const slug = m.slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '');
       return { ...m, slug, canonical: canonicalFor(env.project, slug) };
+    },
+    // the share image's alt text needs only that one image
+    promptImages: (i) => {
+      const images = photos(i.images);
+      const main = images.find((x) => x.key === i.mainImage) ?? images[0];
+      return main ? [main] : undefined;
     },
   },
 });
@@ -449,52 +517,218 @@ export const seoMetaTask = def<Record<string, never>, SeoMeta>({
 // Testimonials, stats, prices and any guarantee are the owner's facts: the AI writes copy around them, never the facts.
 const SALES_SHAPE = `{"hero": {"eyebrow": string, "headline": string, "subheadline": string, "ctaLabel": string, "bullets": [string, string, string]}, "problem": {"heading": string, "intro": string, "points": [{"title": string, "body": string}] (3), "agitation": string}, "solution": {"heading": string, "intro": string, "features": [{"title": string, "body": string}] (4-6)}, "proof": {"heading": string}, "pricing": {"heading": string, "planName": string, "includes": [string], "ctaLabel": string}, "faq": {"heading": string, "items": [{"q": string, "a": string}] (4-5)}, "guarantee": {"finalHeading": string, "finalCta": string}}`;
 
-export const salesPageTask = def<{ primaryKeyword?: string }, SalesPage>({
+export interface SalesPageInput {
+  primaryKeyword?: string;
+  /** the owner's guidance for the page (marketing.seoGuide) */
+  instructions?: string;
+  /** the page's images (marketing.seoImages): all of them go on the new page */
+  images?: PromptImage[];
+}
+
+export const salesPageTask = def<SalesPageInput, SalesPage>({
   id: 'salesPage',
   label: 'SEO sales page',
   module: 'seo',
   tier: 'default',
-  local: (_i, env) => generateSalesPage(env.project, env.directives, env.variation),
+  local: (i, env) => {
+    const page = generateSalesPage(env.project, env.directives, env.variation);
+    const images = photos(i.images);
+    return images.length ? placeNewImages(page, env.project, images, images.map((x) => x.key)) : page;
+  },
   claude: {
     prompt: (i, env) => {
       const kw = i.primaryKeyword || primaryKeywordFor(buildFacts(env.project));
+      const guide = i.instructions?.trim();
+      const images = photos(i.images);
       return framePrompt({
-        task: `Write a conversion-optimized, SEO-ready one-page sales page. Primary keyword: “${kw}” — use it in the hero headline and subheadline naturally and 2–4 more times on the page. Sections: hero with hook & CTA, problem/agitation, solution & features, a heading for the customer quotes the owner will add, pricing card copy, FAQ (4–5 questions) and a closing heading with CTA. The app fills in testimonials, stats, prices and any guarantee from the owner's own inputs: do not write them.`,
+        task:
+          `Write a conversion-optimized, SEO-ready one-page sales page. Primary keyword: “${kw}” — use it in the hero headline and subheadline naturally and 2–4 more times on the page. Sections: hero with hook & CTA, problem/agitation, solution & features, a heading for the customer quotes the owner will add, pricing card copy, FAQ (4–5 questions) and a closing heading with CTA. The app fills in testimonials, stats, prices and any guarantee from the owner's own inputs: do not write them.` +
+          (guide ? ` The owner’s guidance for this page: ${quoted(guide)}.` : '') +
+          (images.length
+            ? `\n\nThe owner’s images for the page (you can see the attached ones; go by the owner’s note for the others):\n${imageLines(images, env)}\nPut every image on the page in "images": the one that suits it best in the hero, beside the headline, and the others in the gallery, in the order that works best. Also write the gallery’s heading and a one-line intro.`
+            : ''),
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
-        shape: SALES_SHAPE,
-        extraRules: [NO_INVENTED_CLAIMS, 'Pricing "includes" lists only what PROJECT CONTEXT says the offer contains. FAQ answers must not promise refunds, guarantees, response times or payment terms.'],
+        shape: images.length ? `${SALES_SHAPE.slice(0, -1)}, ${IMAGES_SHAPE}}` : SALES_SHAPE,
+        extraRules: [
+          NO_INVENTED_CLAIMS,
+          'Pricing "includes" lists only what PROJECT CONTEXT says the offer contains. FAQ answers must not promise refunds, guarantees, response times or payment terms.',
+          ...(guide ? [OWNER_WORDS_RULE] : []),
+          ...(images.length ? IMAGE_RULES : []),
+        ],
       });
     },
-    merge: (raw, base) => {
+    merge: (raw, base, i, env) => {
       const r = obj(raw);
-      return {
+      const copy: SalesPage = {
         ...base,
         sections: base.sections.map((s) => (r[s.type] ? keepFacts({ ...s, data: conform(s.data as never, r[s.type]) } as SalesSection, s) : s)),
       };
+      // Every image goes on the page: where the AI put it, else where the built-in engine did (in base).
+      const images = photos(i.images);
+      const plan = images.length ? imagePlanFrom(r.images) : null;
+      return withoutImageTokens(plan ? placeImages(copy, env.project, images, plan, images.map((x) => x.key)) : copy);
     },
+    promptImages: (i) => i.images,
   },
 });
 
-export const salesSectionTask = def<{ type: SalesSectionType }, SalesSection>({
+export interface SalesSectionInput {
+  type: SalesSectionType;
+  /** the section as it is now: the AI works from the owner's own copy, and its facts are kept */
+  current?: SalesSection;
+  /** what the owner wants changed; without it, a fresh take */
+  instruction?: string;
+}
+
+export const salesSectionTask = def<SalesSectionInput, SalesSection>({
   id: 'salesSection',
   label: 'Sales page section',
   module: 'seo',
   tier: 'quick',
-  local: (i, env) => generateSalesSection(env.project, i.type, env.directives, env.variation),
+  local: (i, env) => {
+    // A change the owner asked for needs the AI: without it, the section stays as it is.
+    if (i.current && i.instruction?.trim()) return i.current;
+    const fresh = generateSalesSection(env.project, i.type, env.directives, env.variation);
+    return i.current ? keepFacts({ ...fresh, id: i.current.id, visible: i.current.visible } as SalesSection, i.current) : fresh;
+  },
   claude: {
-    prompt: (i, env, base) =>
-      framePrompt({
-        task: `Rewrite the “${i.type}” section of the sales page with a fresh angle.`,
+    prompt: (i, env, base) => {
+      const ask = i.instruction?.trim();
+      return framePrompt({
+        task: ask ? `Rewrite the “${SECTION_LABEL[i.type]}” section of the sales page as the owner asks: ${quoted(ask, 1000)}. Change only what the request is about.` : `Rewrite the “${i.type}” section of the sales page with a fresh angle.`,
         project: env.project,
         brainPrompt: env.brainPrompt,
-        variation: env.variation,
-        input: { current: aiWritableData(base) },
+        // a change the owner asked for isn't a "fresh take"
+        variation: ask ? 0 : env.variation,
+        input: { current: aiWritableData(i.current ?? base) },
         shape: `the same JSON object shape as INPUT.current`,
-        extraRules: [NO_INVENTED_CLAIMS],
-      }),
-    merge: (raw, base) => keepFacts({ ...base, data: conform(base.data as never, obj(raw)) } as SalesSection, base),
+        extraRules: [NO_INVENTED_CLAIMS, ...(ask ? [OWNER_WORDS_RULE] : [])],
+      });
+    },
+    merge: (raw, base) => withoutImageTokens(keepFacts({ ...base, data: conform(base.data as never, obj(raw)) } as SalesSection, base)),
+  },
+});
+
+export interface SalesEditInput {
+  /** the page as it is now: the base of the change (when the AI can't answer, nothing changes) */
+  page: SalesPage;
+  /** what the owner asked for */
+  instruction: string;
+  /** all of the page's images, including `newImages` */
+  images?: PromptImage[];
+  /** keys of the images added with this request: they go on the page */
+  newImages?: string[];
+  /** change only this section */
+  sectionId?: string;
+  /** the page's primary keyword, kept in the hero */
+  primaryKeyword?: string;
+}
+
+/** The summary when the AI answered an edit but changed nothing. */
+export const AI_NO_CHANGE = 'The AI made no changes.';
+
+export interface SalesEditResult {
+  page: SalesPage;
+  /** what changed, in one sentence */
+  summary: string;
+  /** false when the AI didn't answer: the built-in engine can't follow a request, so nothing changed */
+  edited: boolean;
+}
+
+const THEME_VALUES: { [K in keyof SalesTheme]: readonly SalesTheme[K][] } = { font: ['sans', 'serif', 'grotesk'], mode: ['light', 'dark'], radius: ['sharp', 'soft', 'round'] };
+
+/** The page's look with the AI's changes, only where they're values the page has. */
+function themeFrom(raw: unknown, cur: SalesTheme): SalesTheme {
+  const r = obj(raw);
+  const pick = <K extends keyof SalesTheme>(k: K): SalesTheme[K] => (THEME_VALUES[k] as readonly unknown[]).includes(r[k]) ? (r[k] as SalesTheme[K]) : cur[k];
+  return { font: pick('font'), mode: pick('mode'), radius: pick('radius') };
+}
+
+/** The sections the AI changed, by id: {"<id>": {...}} or [{"id": "<id>", ...}]. */
+function sectionChanges(raw: unknown): Map<string, Record<string, unknown>> {
+  const out = new Map<string, Record<string, unknown>>();
+  const add = (id: unknown, v: unknown) => {
+    const o = obj(v);
+    if (typeof id === 'string' && id) out.set(id, obj(o.copy ?? o.data ?? o));
+  };
+  if (Array.isArray(raw)) for (const x of raw) add(obj(x).id, x);
+  else for (const [id, v] of Object.entries(obj(raw))) add(id, v);
+  return out;
+}
+
+/** A request about the page's images: only then are they sent along (they're always listed by their notes). */
+const ABOUT_IMAGES = /\b(images?|photos?|pictures?|pics?|gallery|alt|captions?|visuals?|img-?\d+|hero image|main image)\b/i;
+
+/** Images can be placed with this change: on the whole page, or in the hero or the gallery. */
+const placesImages = (target?: SalesSection) => !target || target.type === 'hero' || target.type === 'gallery';
+
+export const salesPageEditTask = def<SalesEditInput, SalesEditResult>({
+  id: 'salesPageEdit',
+  label: 'Edit sales page with AI',
+  module: 'seo',
+  tier: 'default',
+  local: (i) => ({ page: i.page, summary: '', edited: false }),
+  claude: {
+    prompt: (i, env) => {
+      const target = i.sectionId ? i.page.sections.find((s) => s.id === i.sectionId) : undefined;
+      const images = placesImages(target) ? photos(i.images) : [];
+      const fresh = (i.newImages ?? []).filter((k) => images.some((x) => x.key === k));
+      const keyOf = new Map(images.map((x) => [x.media.id, x.key]));
+      const hero = i.page.sections.find((s) => s.type === 'hero');
+      const heroKey = hero?.type === 'hero' && hero.data.imageId ? keyOf.get(hero.data.imageId) : undefined;
+      const galleryKeys = i.page.sections.flatMap((s) => (s.type === 'gallery' ? s.data.items.map((it) => keyOf.get(it.imageId)).filter((k): k is string => !!k) : []));
+      const kw = i.primaryKeyword?.trim();
+      const sections = (target ? [target] : i.page.sections).map((s) => ({ id: s.id, section: SECTION_LABEL[s.type], ...(s.visible ? {} : { hidden: true }), copy: aiWritableData(s) }));
+      return framePrompt({
+        task:
+          `Make this change to the owner’s sales page: ${quoted(i.instruction, 1000)}. ` +
+          (target ? `Change only the “${SECTION_LABEL[target.type]}” section.` : 'Change only what the request is about and keep everything else as it is.') +
+          ` The sections, their order and which are hidden stay as they are${kw ? `, and the primary keyword “${kw}” stays in the hero headline and subheadline` : ''}.` +
+          (images.length
+            ? `\n\nThe page’s images (you can see the attached ones; go by the owner’s note for the others):\n${imageLines(images, env)}\nOn the page now: ${heroKey ? `${heroKey} in the hero` : 'no hero image'}; gallery: ${galleryKeys.length ? galleryKeys.join(', ') : 'none'}.${fresh.length ? ` Added with this request: ${fresh.join(', ')}. Put each of them on the page.` : ''}`
+            : ''),
+        project: env.project,
+        brainPrompt: env.brainPrompt,
+        input: { sections, ...(target ? {} : { theme: i.page.theme }) },
+        shape: `{"sections": {"<section id>": {the copy fields you change, each in full (a list as the whole list), with the same keys as in INPUT}}${target ? '' : ', "theme": {"font": "sans"|"serif"|"grotesk", "mode": "light"|"dark", "radius": "sharp"|"soft"|"round"} (only when the owner asks for a different look)'}${images.length ? `, ${IMAGES_SHAPE} (only when the change is about the images, or images were added: "hero" and "gallery" then say where each image goes)` : ''}, "summary": string (one sentence: what you changed)}`,
+        extraRules: [NO_INVENTED_CLAIMS, OWNER_WORDS_RULE, 'Use the section ids from INPUT exactly, and leave out the sections you don’t change.', ...(images.length ? IMAGE_RULES : [])],
+      });
+    },
+    merge: (raw, base, i, env) => {
+      const r = obj(raw);
+      const target = i.sectionId ? base.page.sections.find((s) => s.id === i.sectionId) : undefined;
+      const changes = sectionChanges(r.sections);
+      let page: SalesPage = {
+        ...base.page,
+        // ids, order and visibility come from the page as it is; facts are put back
+        sections: base.page.sections.map((s) => {
+          const change = !target || s.id === target.id ? changes.get(s.id) : undefined;
+          return change ? keepFacts({ ...s, data: conform(s.data as never, change) } as SalesSection, s) : s;
+        }),
+      };
+      if (!target && r.theme) page = { ...page, theme: themeFrom(r.theme, page.theme) };
+      const images = placesImages(target) ? photos(i.images) : [];
+      const fresh = (i.newImages ?? []).filter((k) => images.some((x) => x.key === k));
+      const plan = images.length ? imagePlanFrom(r.images) : null;
+      if (plan || fresh.length) {
+        // one section asked for: only its images move
+        const allowed: ImagePlan = !plan || !target ? plan ?? {} : target.type === 'hero' ? { hero: plan.hero, heroAlt: plan.heroAlt } : { gallery: plan.gallery, galleryHeading: plan.galleryHeading, galleryIntro: plan.galleryIntro };
+        page = placeImages(page, env.project, images, allowed, fresh);
+      }
+      page = withoutImageTokens(page);
+      const changed = JSON.stringify(page) !== JSON.stringify(base.page);
+      const said = typeof r.summary === 'string' ? truncate(r.summary.replace(/\s+/g, ' ').trim(), 300) : '';
+      return { page, summary: said || (changed ? 'Updated by the AI.' : AI_NO_CHANGE), edited: true };
+    },
+    // Sent along only when they can be placed and the request is about them; they're always listed by their notes.
+    promptImages: (i) => {
+      const target = i.sectionId ? i.page.sections.find((s) => s.id === i.sectionId) : undefined;
+      if (!placesImages(target)) return undefined;
+      const fresh = new Set(i.newImages ?? []);
+      return fresh.size || ABOUT_IMAGES.test(i.instruction) ? i.images : undefined;
+    },
   },
 });
 

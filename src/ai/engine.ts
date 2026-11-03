@@ -1,8 +1,9 @@
 import type { AppSettings, ProviderId, Project, Skill } from '@/lib/types';
 import { useRuntime } from '@/lib/platform';
+import { imagesWithKeysForAI } from '@/lib/promptImages';
 import { uid } from '@/lib/utils';
 import { polishDeep, resolveBrain } from './brain';
-import { AIError, callArtifactClaude, callServerAI, friendlyAIError } from './claude';
+import { AIError, SERVER_MAX_IMAGES, callArtifactClaude, callServerAI, fitClaudeImages, friendlyAIError } from './claude';
 import { functionForTask, routeFor } from './functions';
 import type { AIMeta } from './meta';
 import type { TaskDef, TaskEnv } from './tasks';
@@ -45,6 +46,37 @@ export function providerLabel(p: ProviderId): string {
   return p === 'claude' ? 'Claude' : p === 'server' ? 'AI' : 'Built-in engine';
 }
 
+/** What goes with a request: the files, and for the owner's prompt images which ones (their keys, in order). */
+export interface Attachments {
+  blobs?: Blob[];
+  /** set for a task with `claude.promptImages`: [] when none could be attached */
+  keys?: string[];
+}
+
+/**
+ * The files to send with a task's request. They're ready before its prompt is written, so the prompt
+ * can say exactly which images the AI gets: only those whose files could be loaded, within what the
+ * AI takes (your server keeps 4; Claude in claude.ai has its own count, types and size).
+ */
+export async function prepareAttachments<I, O>(task: TaskDef<I, O>, input: I, provider: ProviderId, onStage?: (stage: string) => void): Promise<Attachments> {
+  const c = task.claude;
+  if (!c || provider === 'local') return {};
+  const rt = useRuntime.getState();
+  const wantImages = provider === 'server' || rt.claudeImages;
+  if (c.promptImages) {
+    const list = (c.promptImages(input) ?? []).filter((i) => i.media.kind === 'image');
+    if (!wantImages || !list.length) return { keys: [] };
+    onStage?.('Getting your images ready…');
+    const ready = await imagesWithKeysForAI(list).catch(() => []);
+    const blobs = ready.map((r) => r.blob);
+    const fit = provider === 'claude' ? fitClaudeImages(blobs, rt.claudeImageLimits) : blobs.slice(0, SERVER_MAX_IMAGES);
+    const sent = ready.filter((r) => fit.includes(r.blob));
+    return { blobs: sent.length ? sent.map((r) => r.blob) : undefined, keys: sent.map((r) => r.key) };
+  }
+  if (wantImages && c.images) return { blobs: await c.images(input).catch(() => undefined) };
+  return {};
+}
+
 export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOptions): Promise<RunResult<O>> {
   const t0 = performance.now();
   const brain = resolveBrain(opts.skills, task.module, opts.settings.ai.useBrain);
@@ -70,25 +102,29 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
   }
 
   if (ask && task.claude) {
-    opts.onStage?.(provider === 'claude' ? 'Claude is thinking…' : 'Asking your AI…');
+    const asking = provider === 'claude' ? 'Claude is thinking…' : 'Asking your AI…';
+    opts.onStage?.(asking);
     try {
-      const prompt = task.claude.prompt(input, env, base);
-      const wantImages = provider === 'server' || rt.claudeImages;
-      const images = wantImages && task.claude.images ? await task.claude.images(input).catch(() => undefined) : undefined;
+      // The files first, then the prompt: it says which images the AI really gets (env.attached).
+      const files = await prepareAttachments(task, input, provider, opts.onStage);
+      if (opts.signal?.aborted) throw new AIError('Stopped.', 'cancelled');
+      if (files.keys) opts.onStage?.(asking);
+      const runEnv: TaskEnv = files.keys ? { ...env, attached: files.keys } : env;
+      const prompt = task.claude.prompt(input, runEnv, base);
       const callOpts = {
         tier: task.tier,
         signal: opts.signal,
-        images,
+        images: files.blobs,
         onText: (text: string) => {
           opts.onStage?.(provider === 'claude' ? 'Claude is writing…' : 'Writing…');
           opts.onText?.(text);
         },
       };
-      if (provider === 'claude') data = task.claude.merge(await callArtifactClaude(prompt, callOpts), base, input, env);
+      if (provider === 'claude') data = task.claude.merge(await callArtifactClaude(prompt, callOpts), base, input, runEnv);
       else {
         const out = await callServerAI(fn?.id ?? 'product', prompt, { ...callOpts, serverUrl: opts.settings.ai.serverUrl, brain: opts.settings.ai.useBrain });
         meta = out.meta ?? undefined;
-        data = task.claude.merge(out.value, base, input, env);
+        data = task.claude.merge(out.value, base, input, runEnv);
         if (meta?.attempts?.length) note = `${meta.attempts.map((a) => `${a.providerLabel} failed (${a.error})`).join(' ')} ${meta.providerLabel} answered instead.`;
       }
       used = provider;
