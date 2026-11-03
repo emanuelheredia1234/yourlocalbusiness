@@ -527,6 +527,14 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       }),
       routing: Object.fromEntries(Object.entries(store.routing()).map(([fn, list]) => [fn, list.filter((id) => !hide.has(id))])),
       };
+      // why posting with Manus does or doesn't work for this person, so the app can say what to fix
+      base.posting = hide.size
+        ? { ready: ownManus, reason: ownManus ? 'ok' : 'own_key_needed' }
+        : !store.ready('manus')
+          ? { ready: false, reason: 'no_key' }
+          : !store.powers('manus', 'facebook')
+            ? { ready: false, reason: 'not_ticked' }
+            : { ready: true, reason: 'ok' };
       if (ownManus) {
         const s = store.settings('manus');
         base.ready = true;

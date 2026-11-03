@@ -8,7 +8,7 @@ import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { Empty, Segmented, Tabs } from '@/components/ui/primitives';
 import { FormatBadge, PostCard, PostTypeTag } from '@/components/posts/PostCard';
-import { ExternalBadge, ManusPostButton, manusSetupHint, useManusPost, useManusReady } from '@/components/posts/ManusPost';
+import { ExternalBadge, ManusPostButton, manusSetupHint, useCanOfferManus, useManusPost, useManusReady } from '@/components/posts/ManusPost';
 import { DueBadge, PostedBy, PostMoreMenu, addToCalendarFlow, isDue, manusHolds, useMarkPosted } from '@/components/posts/PostActions';
 import { PlatformChip, PlatformGlyph } from '@/components/posts/PlatformIcon';
 import { PostVisual } from '@/components/visuals/PostVisual';
@@ -141,8 +141,10 @@ export default function ContentCalendar() {
 }
 
 /** Above the planned posts: what's due, and sending several to Manus at once. */
-function PlannedBar({ posts, manusReady }: { posts: Post[]; manusReady: boolean }) {
+function PlannedBar({ posts, manusReady: isReady }: { posts: Post[]; manusReady: boolean }) {
   const now = useNow(60_000);
+  // offer the buttons even when Manus isn't ready: the window explains what's missing
+  const manusReady = useCanOfferManus() || isReady;
   const due = posts.filter((p) => isDue(p, now) && notSent(p));
   const ready = posts.filter(notSent);
   if (!due.length && !(manusReady && ready.length > 1)) return null;

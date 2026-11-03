@@ -17,12 +17,13 @@ import { PlatformGlyph } from '@/components/posts/PlatformIcon';
 import { PostImagePanel } from '@/components/images/PostImagePanel';
 import { VideoPanel } from '@/components/images/VideoPanel';
 import { postVideoPrompt, releaseMedia } from '@/ai/image';
-import { manusSetupHint, useManusPost, useManusReady } from '@/components/posts/ManusPost';
+import { manusSetupHint, useCanOfferManus, useManusPost, useManusReady } from '@/components/posts/ManusPost';
 
 export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () => void; initialTopic?: string; compact?: boolean }) {
   const project = useActiveProject()!;
   const fid = useId();
   const manusReady = useManusReady();
+  const offerManus = useCanOfferManus();
   const addPosts = useStore((s) => s.addPosts);
   const schedule = useStore((s) => s.schedulePosts);
   const ai = useAI(postTask);
@@ -228,7 +229,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
               </Field>
             </div>
             <div className="flex flex-wrap gap-2">
-              {manusReady && (
+              {offerManus && (
                 <button className="btn btn-primary" onClick={() => act('manus')} title="Manus posts it on your accounts, in its own browser: right away, or scheduled for this date and time">
                   <Send size={15} /> Post with Manus
                 </button>

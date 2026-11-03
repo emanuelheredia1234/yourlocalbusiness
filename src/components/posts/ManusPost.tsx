@@ -22,6 +22,7 @@ import {
   type PostMode,
 } from '@/ai/manusPost';
 import { useStore } from '@/store/useStore';
+import { navigate } from '@/lib/router';
 import { toast, useUI } from '@/store/ui';
 import { Field, Modal, Segmented, Spinner } from '../ui/primitives';
 import { MediaThumb } from '../media/MediaUpload';
@@ -37,9 +38,25 @@ export function useManusReady(): boolean {
 
 /** What to do to post with Manus from this view. */
 export function manusSetupHint(): string {
-  return manusViaServer()
-    ? 'To post from here, add your Manus API key in Settings → AI (create a Manus account at manus.im first). If you manage the app’s keys, also tick Social posting in the key’s “Powers” list.'
-    : 'Manus is reached through your Zapier connector in claude.ai, which isn’t available in this view.';
+  if (!manusViaServer()) return 'Manus is reached through your Zapier connector in claude.ai, which isn’t available in this view.';
+  const ai = useRuntime.getState().ai;
+  if (!ai.reachable) return 'The app can’t reach its AI server right now, so it can’t send posts to Manus. Reload the page, and check that the app is running.';
+  switch (ai.posting?.reason) {
+    case 'no_key':
+      return 'No Manus API key is saved on the server. Add it in Settings → AI → Manus (create a Manus account at manus.im first). On Replit, also add the SUPABASE_SECRET_KEY Secret so keys stay saved when the app restarts.';
+    case 'not_ticked':
+      return 'Your Manus key is saved, but it isn’t set to post. In Settings → AI → Manus, open its “Powers” list and tick Social posting.';
+    case 'own_key_needed':
+      return 'The app’s Manus key is only for its owner’s accounts. Add your own Manus API key in Settings → AI → “Use your own Manus” to post on your accounts.';
+    default:
+      return 'To post from here, add your Manus API key in Settings → AI (create a Manus account at manus.im first) and tick Social posting in its “Powers” list.';
+  }
+}
+
+/** Show posting buttons even when Manus isn't ready, so pressing one explains what's missing. */
+export function useCanOfferManus(): boolean {
+  const ready = useManusReady();
+  return ready || manusViaServer();
 }
 
 /** The posts waiting for you to confirm in the "Post with Manus" window. */
@@ -215,7 +232,23 @@ export function ManusPostHost() {
           <li>{mode === 'now' ? 'Manus posts each one once, right away, on the account you name.' : 'Manus schedules each one on the network for its time; it never publishes right away.'}</li>
           {posts.some((p) => p.media?.kind === 'video') && <li>Videos go to Manus first (through your server). Big videos take a little longer.</li>}
         </ul>
-        {!ready && <p className="text-[12.5px] font-medium text-warn">{manusSetupHint()}</p>}
+        {!ready && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-warn/40 bg-warn-soft px-3 py-2 text-[12.5px]" role="alert">
+            <p className="min-w-0 flex-1 font-medium text-warn">Manus can’t post yet. {manusSetupHint()}</p>
+            {!__ARTIFACT_BUILD__ && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  close();
+                  useUI.getState().setSettingsTab('ai');
+                  navigate('workspace-settings');
+                }}
+              >
+                Open Settings → AI
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </Modal>
   );
@@ -345,8 +378,8 @@ export function ExternalBadge({ post, compact }: { post: Post; compact?: boolean
 
 /** "Post on Instagram" (or any network): Manus posts the text with its image or video. */
 export function ManusPostButton({ post, size = 'sm', primary }: { post: Post; size?: 'sm' | 'xs'; primary?: boolean }) {
-  const ready = useManusReady();
-  if (!ready || post.status === 'published') return null;
+  const offer = useCanOfferManus();
+  if (!offer || post.status === 'published') return null;
   if (post.external && post.external.state !== 'failed') return null;
   return (
     <button type="button" className={cn('btn', primary ? 'btn-primary' : 'btn-secondary', size === 'xs' ? 'btn-xs' : 'btn-sm')} onClick={() => useManusPost.getState().open(post.id)}>

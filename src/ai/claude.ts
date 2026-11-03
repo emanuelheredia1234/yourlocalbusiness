@@ -125,7 +125,7 @@ export async function pingServer(serverUrl: string): Promise<boolean> {
     const ai = body?.ai;
     useRuntime.getState().set({
       server: ok ? 'ok' : 'down',
-      ai: ok && ai ? { reachable: true, ready: ai.ready === true, providers: Array.isArray(ai.providers) ? ai.providers : [], routing: ai.routing && typeof ai.routing === 'object' ? ai.routing : {} } : { ...NO_AI_SERVER, reachable: ok },
+      ai: ok && ai ? { reachable: true, ready: ai.ready === true, providers: Array.isArray(ai.providers) ? ai.providers : [], routing: ai.routing && typeof ai.routing === 'object' ? ai.routing : {}, posting: ai.posting && typeof ai.posting === 'object' ? ai.posting : undefined } : { ...NO_AI_SERVER, reachable: ok },
     });
     return ok;
   } catch {

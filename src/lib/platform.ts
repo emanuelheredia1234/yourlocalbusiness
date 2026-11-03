@@ -138,6 +138,8 @@ export interface AIServerState {
   providers: AIServerProvider[];
   /** function id → the keys that power it, in priority order */
   routing: Record<string, string[]>;
+  /** whether Manus can post for the signed-in person, and if not, why */
+  posting?: { ready: boolean; reason: 'ok' | 'no_key' | 'not_ticked' | 'own_key_needed' };
 }
 
 export const NO_AI_SERVER: AIServerState = { reachable: false, ready: false, providers: [], routing: {} };
