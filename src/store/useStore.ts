@@ -160,7 +160,8 @@ export const useStore = create<StoreState>()(
           posts: s.posts.map((p) => (p.id === id ? { ...p, status: 'published', publishedAt: new Date().toISOString(), updatedAt: Date.now() } : p)),
         })),
       autoPublishDue: (now = Date.now()) => {
-        const due = get().posts.filter((p) => p.status === 'scheduled' && new Date(p.scheduledAt).getTime() <= now);
+        // a post handed to Manus is published by Facebook, not by this timer (unless Manus scheduled it there)
+        const due = get().posts.filter((p) => p.status === 'scheduled' && new Date(p.scheduledAt).getTime() <= now && (!p.external || p.external.state === 'scheduled'));
         if (!due.length) return [];
         const ids = new Set(due.map((d) => d.id));
         set((s) => ({

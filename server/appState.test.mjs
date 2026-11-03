@@ -358,6 +358,38 @@ describe('a post’s video for Manus', () => {
     await a.close();
   });
 
+  it('won’t use the owner’s Manus key while it’s switched off', async () => {
+    const owner = await supa.tokenFor('owner@example.com');
+    const a = await serverCopy({ env: { SUPABASE_URL: supa.url } });
+    await fetch(`${a.base}/api/ai/providers/manus`, { method: 'PUT', headers: as(owner), body: JSON.stringify({ apiKey: 'mn-owner-typed-5678', enabled: false }) });
+    const r = await fetch(`${a.base}/api/ai/manus/attach?filename=x.mp4`, { method: 'POST', headers: { ...as(owner), 'content-type': 'video/mp4' }, body: Buffer.alloc(10) });
+    expect(r.status).toBe(409);
+    expect((await r.json()).code).toBe('NO_PROVIDER');
+    await fetch(`${a.base}/api/ai/providers/manus`, { method: 'PUT', headers: as(owner), body: JSON.stringify({ enabled: true }) });
+    await a.close();
+  });
+
+  it('sends the upload without asking fetch to keep a copy (no redirects)', async () => {
+    const owner = await supa.tokenFor('owner@example.com');
+    const seen = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = (u, init) => {
+      if (String(u).includes('manus-upload')) seen.push(init?.redirect);
+      return real(u, init);
+    };
+    let a;
+    try {
+      a = await serverCopy({ env: { SUPABASE_URL: supa.url } });
+      await real(`${a.base}/api/ai/providers/manus`, { method: 'PUT', headers: as(owner), body: JSON.stringify({ apiKey: 'mn-owner-typed-5678', enabled: true, functions: ['facebook'] }) });
+      const r = await real(`${a.base}/api/ai/manus/attach?filename=x.mp4`, { method: 'POST', headers: { ...as(owner), 'content-type': 'video/mp4' }, body: Buffer.alloc(1000) });
+      expect(r.status).toBe(200);
+    } finally {
+      globalThis.fetch = real;
+    }
+    expect(seen).toEqual(['error']);
+    await a.close();
+  });
+
   it('needs the person’s own Manus key (not the owner’s) for anyone else', async () => {
     const user = await supa.tokenFor('user-no-manus@example.com');
     const a = await serverCopy({ env: { SUPABASE_URL: supa.url } });

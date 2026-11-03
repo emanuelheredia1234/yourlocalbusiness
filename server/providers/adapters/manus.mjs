@@ -58,6 +58,8 @@ export default {
         headers: { 'content-length': String(size) },
         body,
         duplex: 'half',
+        // a presigned PUT never redirects; allowing it would make fetch keep the whole body in memory
+        redirect: 'error',
         signal: AbortSignal.any([AbortSignal.timeout(15 * 60_000), ...(signal ? [signal] : [])]),
       });
     } catch (e) {

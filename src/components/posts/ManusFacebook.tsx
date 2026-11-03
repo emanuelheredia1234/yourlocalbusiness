@@ -40,6 +40,9 @@ function errorCopy(e: unknown): { title: string; body: string } {
   return z;
 }
 
+/** Posts being handed to Manus right now (outside the window, so closing and reopening it can't send twice). */
+const sending = new Set<string>();
+
 /** Confirm, then hand one post (caption plus image or video) to Manus to post on Facebook. */
 export function ManusFacebookHost() {
   const id = useManusFb((s) => s.postId);
@@ -70,6 +73,8 @@ export function ManusFacebookHost() {
   const media = post.media ?? null;
 
   const confirm = async () => {
+    if (sending.has(post.id)) return;
+    sending.add(post.id);
     setBusy(true);
     setErr(null);
     try {
@@ -81,10 +86,12 @@ export function ManusFacebookHost() {
     } catch (e) {
       setErr(errorCopy(e));
     } finally {
+      sending.delete(post.id);
       setBusy(false);
       setStage('');
     }
   };
+  const inFlight = busy || sending.has(post.id);
 
   return (
     <Modal
@@ -101,6 +108,7 @@ export function ManusFacebookHost() {
           {windowError && (
             <button
               className="btn btn-secondary btn-sm"
+              disabled={inFlight}
               onClick={() => {
                 close();
                 useUI.getState().openPostEditor(post.id);
@@ -109,7 +117,7 @@ export function ManusFacebookHost() {
               <CalendarClock size={14} /> Change the time
             </button>
           )}
-          <button className="btn btn-primary btn-sm" disabled={busy || !!windowError || !ready} onClick={confirm}>
+          <button className="btn btn-primary btn-sm" disabled={inFlight || !!windowError || !ready} onClick={confirm}>
             {busy ? <Spinner size={14} /> : <Send size={14} />} {busy && stage ? stage : resend ? 'Send to Manus again' : mode === 'now' ? 'Post now with Manus' : 'Schedule with Manus'}
           </button>
         </>
@@ -118,13 +126,13 @@ export function ManusFacebookHost() {
       <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,1fr)_220px]">
         <div className="flex min-w-0 flex-col gap-4">
           <Field label="Facebook Page" htmlFor="fb-page" hint="The Page name as it appears on Facebook. Manus asks you if it can’t tell which Page to use.">
-            <input id="fb-page" className="input" value={page} onChange={(e) => setPage(e.target.value)} placeholder="Your business Page name" />
+            <input id="fb-page" className="input" disabled={inFlight} value={page} onChange={(e) => setPage(e.target.value)} placeholder="Your business Page name" />
           </Field>
           <div>
             <p className="label">When</p>
             <Segmented<FbMode>
               value={mode}
-              onChange={setMode}
+              onChange={(m) => !inFlight && setMode(m)}
               size="sm"
               options={[
                 { id: 'now', label: 'Post now' },
@@ -240,6 +248,8 @@ export function ManusFacebookButton({ post, size = 'sm' }: { post: Post; size?: 
   if (!ready || post.platform !== 'facebook' || post.status === 'published') return null;
   // a video post needs its video first (a storyboard alone can't be posted)
   if (post.format === 'video' && post.media?.kind !== 'video') return null;
+  // videos go to Manus through your server (not available in the claude.ai version)
+  if (post.media?.kind === 'video' && !manusViaServer()) return null;
   if (post.external && post.external.state !== 'failed') return null;
   return (
     <button type="button" className={cn('btn btn-secondary', size === 'xs' ? 'btn-xs' : 'btn-sm')} onClick={() => useManusFb.getState().open(post.id)}>

@@ -129,8 +129,8 @@ export async function authHeaders(target: string): Promise<Record<string, string
 export async function signedFileUrl(id: string, seconds = 600): Promise<string | null> {
   const userId = useAuth.getState().user?.id;
   if (!client || !userId || !/^[A-Za-z0-9_-]{1,80}$/.test(id)) return null;
-  // a file saved moments ago may still be on its way up
-  await media?.settle(90_000);
+  // a file saved moments ago may still be on its way up (only this file is waited for)
+  if (media && !(await media.settleFile(id, 120_000))) return null;
   const { data, error } = await client.storage.from('media').createSignedUrl(`${userId}/${id}`, seconds);
   return error || !data?.signedUrl ? null : data.signedUrl;
 }

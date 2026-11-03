@@ -29,6 +29,7 @@ export type MediaSync = MediaCloud & {
   pending(): number;
   /** wait until the queue is empty (or the time is up); true when everything is saved */
   settle(timeoutMs: number): Promise<boolean>;
+  settleFile(id: string, timeoutMs: number): Promise<boolean>;
   forget(): void;
   /** stop for good without forgetting the queue (another tab takes over) */
   dispose(): void;
@@ -185,6 +186,25 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
       await current?.catch(() => undefined);
     },
     pending,
+    /** Wait until this one file has reached the account (true), or can't (too big, or time's up). */
+    settleFile(id, timeoutMs) {
+      const waiting = () => q.up.includes(id);
+      if (q.big.includes(id)) return Promise.resolve(false);
+      if (!waiting()) return Promise.resolve(true);
+      kick(0);
+      return new Promise((resolve) => {
+        const started = Date.now();
+        const tick = setInterval(() => {
+          if (!waiting()) {
+            clearInterval(tick);
+            resolve(!q.big.includes(id));
+          } else if (Date.now() - started > timeoutMs) {
+            clearInterval(tick);
+            resolve(false);
+          }
+        }, 500);
+      });
+    },
     settle(timeoutMs) {
       if (q.big.length) return Promise.resolve(false); // some files can only stay on this device
       if (!pending()) return Promise.resolve(true);
