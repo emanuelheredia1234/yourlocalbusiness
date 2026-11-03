@@ -399,7 +399,7 @@ async function requestMusePhoto(req: ArtRequest): Promise<ArtResult> {
  */
 export function artDirection(purpose: 'post' | 'listing'): VisualBrief {
   const s = useStore.getState();
-  return visualBrief(s.skills, purpose === 'post' ? 'social' : 'studio', s.settings.ai.useBrain);
+  return visualBrief(s.skills, purpose === 'post' ? 'social' : 'studio', s.settings.ai.useBrain, undefined, s.activeProjectId ?? undefined);
 }
 
 /** Add art direction to an image-model prompt, keeping the no-text rule last. */

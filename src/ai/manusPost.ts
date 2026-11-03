@@ -279,7 +279,8 @@ export function parseResult(text: string): { state: 'posted' | 'scheduled' | 'fa
   return { state: null, detail: '', parts: [] };
 }
 
-const WAITING_COPY: Record<string, string> = {
+/** What Manus is waiting for, in plain words (also used by brand-voice reads). */
+export const WAITING_COPY: Record<string, string> = {
   needConnectMyBrowser: 'Manus needs you to connect your browser in Manus so it can use your account.',
   messageAskUser: 'Manus has a question for you.',
   cascadeAskUser: 'Manus has a question for you.',

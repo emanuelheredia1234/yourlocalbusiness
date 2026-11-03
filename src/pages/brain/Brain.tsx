@@ -112,13 +112,14 @@ function Tile({ label, value, icon }: { label: string; value: string; icon?: Rea
   );
 }
 
-const SOURCE_LABEL: Record<Skill['source'], string> = { custom: 'Custom', library: 'Library', feedback: 'Learned', document: 'Document' };
+const SOURCE_LABEL: Record<Skill['source'], string> = { custom: 'Custom', library: 'Library', feedback: 'Learned', document: 'Document', social: 'Learned from your posts' };
 
 function SkillList({ onEdit }: { onEdit: (s: Skill) => void }) {
   const skills = useStore((s) => s.skills);
   const updateSkill = useStore((s) => s.updateSkill);
   const deleteSkill = useStore((s) => s.deleteSkill);
   const addSkill = useStore((s) => s.addSkill);
+  const projects = useStore((s) => s.projects);
   const [filter, setFilter] = useState<SkillCategory | 'all'>('all');
   const cats = [...new Set(skills.map((s) => s.category))];
   const shown = (filter === 'all' ? skills : skills.filter((s) => s.category === filter)).slice().sort((a, b) => Number(b.enabled) - Number(a.enabled) || b.priority - a.priority || b.updatedAt - a.updatedAt);
@@ -152,6 +153,7 @@ function SkillList({ onEdit }: { onEdit: (s: Skill) => void }) {
                   <p className="truncate text-[14.5px] font-semibold">{s.name}</p>
                   <p className="text-xs text-muted">
                     {CATEGORY_META[s.category].label} · {SOURCE_LABEL[s.source]} · {s.priority === 3 ? 'High' : s.priority === 1 ? 'Low' : 'Normal'} priority
+                    {s.projectId && ` · only for ${projects.find((p) => p.id === s.projectId)?.brand.name || 'one project'}`}
                   </p>
                 </div>
                 <Toggle
@@ -197,7 +199,7 @@ function SkillList({ onEdit }: { onEdit: (s: Skill) => void }) {
                   <button className="btn btn-ghost btn-xs" onClick={() => onEdit(s)}>
                     <Pencil size={12} /> Edit
                   </button>
-                  <button className="btn btn-ghost btn-icon btn-xs" aria-label={`Duplicate ${s.name}`} onClick={() => addSkill({ ...s, id: uid('skill'), name: `${s.name} (copy)`, source: s.source === 'feedback' ? 'custom' : s.source, stats: { applied: 0, up: 0, down: 0 }, createdAt: Date.now(), updatedAt: Date.now() })}>
+                  <button className="btn btn-ghost btn-icon btn-xs" aria-label={`Duplicate ${s.name}`} onClick={() => addSkill({ ...s, id: uid('skill'), name: `${s.name} (copy)`, source: s.source === 'feedback' || s.source === 'social' ? 'custom' : s.source, stats: { applied: 0, up: 0, down: 0 }, createdAt: Date.now(), updatedAt: Date.now() })}>
                     <Copy size={12} />
                   </button>
                   <button

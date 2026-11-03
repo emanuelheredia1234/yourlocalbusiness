@@ -47,7 +47,7 @@ export function providerLabel(p: ProviderId): string {
 
 export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOptions): Promise<RunResult<O>> {
   const t0 = performance.now();
-  const brain = resolveBrain(opts.skills, task.module, opts.settings.ai.useBrain);
+  const brain = resolveBrain(opts.skills, task.module, opts.settings.ai.useBrain, opts.project.id);
   const env: TaskEnv = { project: opts.project, directives: brain.directives, brainPrompt: brain.prompt, variation: opts.variation ?? 0 };
   const provider = resolveProvider(opts.settings, opts.forceLocal);
   opts.onStage?.(brain.skills.length ? `Reading ${brain.skills.length} Brain skill${brain.skills.length > 1 ? 's' : ''}…` : 'Reading your project context…');

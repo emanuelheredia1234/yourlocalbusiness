@@ -121,6 +121,56 @@ export interface Published {
 
 export type Socials = Partial<Record<SocialPlatform, string>>;
 
+/** Manus learning your brand voice from one of your social profiles (only when you turn it on for that profile). */
+export interface SocialVoice {
+  /** the switch: use what Manus learned from this profile (its Brain skill is on while this is on) */
+  learn: boolean;
+  /** the read Manus is doing, or did last */
+  task?: VoiceRead;
+  /** what the last finished read found, and the profile it read (as you had typed it) */
+  report?: VoiceReport;
+  profile?: string;
+  postsRead?: number;
+  analyzedAt?: number;
+  /** the Brain skill made from it */
+  skillId?: string;
+  /** fingerprint of the skill as the app last wrote it: a different one means you edited the skill since */
+  written?: string;
+  /** the last read finished after you'd edited the skill, so the skill was left as you had it */
+  keptEdits?: boolean;
+}
+
+export interface VoiceRead {
+  taskId: string;
+  taskUrl: string;
+  /** working · needs_input: Manus paused for you · done: it reported the voice · failed · finished: stopped without a report */
+  state: 'working' | 'needs_input' | 'done' | 'failed' | 'finished';
+  message: string;
+  /** the profile as it was when the read started */
+  profile: string;
+  /** you agreed to replace your edits to the skill with this read */
+  replace?: boolean;
+  requestedAt: number;
+  checkedAt: number;
+}
+
+/** How a profile's posts sound and look, as Manus reported it (checked and trimmed by the app). */
+export interface VoiceReport {
+  tone?: Tone;
+  adjectives: string[];
+  person?: 'i' | 'we' | 'you';
+  words: string[];
+  openings: string;
+  endings: string;
+  emoji: { level?: 'none' | 'few' | 'many'; list: string[] };
+  hashtags: { level?: 'none' | 'few' | 'many'; list: string[] };
+  length: { level?: 'short' | 'medium' | 'long'; structure: string };
+  topics: string[];
+  visuals: string;
+  /** new captions Manus wrote in that voice (style examples, not posts it copied) */
+  examples: string[];
+}
+
 export interface NameOption {
   name: string;
   rationale: string;
@@ -150,6 +200,8 @@ export interface Brand {
   banner: BannerConfig;
   images: MediaRef[];
   socials: Socials;
+  /** per profile, when you let Manus learn your brand voice from its posts */
+  voiceFrom?: Partial<Record<SocialPlatform, SocialVoice>>;
 }
 
 export interface ProductIdea {
@@ -790,8 +842,11 @@ export interface Skill {
   priority: 1 | 2 | 3;
   enabled: boolean;
   directives: Directives;
-  source: 'custom' | 'library' | 'feedback' | 'document';
+  /** social: written by the app from what Manus read on one of your social profiles */
+  source: 'custom' | 'library' | 'feedback' | 'document' | 'social';
   libraryId?: string;
+  /** only for this project (e.g. the voice learned from its posts); no projectId: every project */
+  projectId?: string;
   doc?: { name: string; size: number; keywords: string[]; excerpt: string };
   stats: { applied: number; lastApplied?: number; up: number; down: number };
   createdAt: number;

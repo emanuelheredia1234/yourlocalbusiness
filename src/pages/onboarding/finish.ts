@@ -64,6 +64,8 @@ export function finishOnboarding(projectId: string): void {
         priority: 2,
         source: 'custom',
         libraryId: voiceId,
+        // it writes as this brand: other projects have their own
+        projectId,
         directives: { tone: parseDirectives(b.personality.join(' ')).tone },
       }),
     );

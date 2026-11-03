@@ -12,6 +12,7 @@ import { PostEditorHost } from '@/components/posts/PostCard';
 import { ManusPostHost, useManusPostWatcher } from '@/components/posts/ManusPost';
 import { MarkPostedHost } from '@/components/posts/PostActions';
 import { ManusGroupsHost, useGroupShareWatcher } from '@/components/posts/ManusGroups';
+import { useVoiceReadWatcher } from '@/components/brand/SocialVoice';
 import { StoreOverlays } from '@/pages/store/StoreOverlays';
 import { Onboarding } from '@/pages/onboarding/Onboarding';
 import { Dashboard } from '@/pages/dashboard/Dashboard';
@@ -55,6 +56,7 @@ export default function App() {
   useThemeSync();
   useManusPostWatcher();
   useGroupShareWatcher();
+  useVoiceReadWatcher();
 
   useEffect(() => {
     initRuntime();

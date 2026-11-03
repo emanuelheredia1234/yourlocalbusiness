@@ -130,6 +130,8 @@ export const useStore = create<StoreState>()(
             posts: s.posts.filter((p) => p.projectId !== id),
             ads: s.ads.filter((a) => a.projectId !== id),
             myListings: s.myListings.filter((l) => l.projectId !== id),
+            // skills made for this project only (e.g. the voice learned from its posts) go with it
+            skills: s.skills.filter((k) => k.projectId !== id),
           };
         }),
 
