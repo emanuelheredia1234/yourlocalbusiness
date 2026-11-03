@@ -13,6 +13,8 @@ import { ManusPostHost, useManusPostWatcher } from '@/components/posts/ManusPost
 import { MarkPostedHost } from '@/components/posts/PostActions';
 import { ManusGroupsHost, useGroupShareWatcher } from '@/components/posts/ManusGroups';
 import { useVoiceReadWatcher } from '@/components/brand/SocialVoice';
+import { Assistant } from '@/components/assistant/Assistant';
+import { useAssistant } from '@/store/assistant';
 import { StoreOverlays } from '@/pages/store/StoreOverlays';
 import { Onboarding } from '@/pages/onboarding/Onboarding';
 import { Dashboard } from '@/pages/dashboard/Dashboard';
@@ -53,6 +55,7 @@ export default function App() {
   const route = useRoute();
   const project = useActiveProject();
   const hasListings = useStore((s) => s.myListings.length > 0);
+  const assistantOpen = useAssistant((s) => s.open);
   useThemeSync();
   useManusPostWatcher();
   useGroupShareWatcher();
@@ -142,7 +145,8 @@ export default function App() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar />
         <main id="main-scroll" className="scroll-thin min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[1320px] gutter pb-16 pt-6">
+          {/* room at the bottom for the assistant's chat button */}
+          <div className="mx-auto w-full max-w-[1320px] gutter pb-28 pt-6">
             <PageErrorBoundary key={route ?? 'dashboard'} onHome={() => void navigate('dashboard', { force: true })}>
               <Suspense fallback={<PageFallback />}>{page}</Suspense>
             </PageErrorBoundary>
@@ -156,8 +160,9 @@ export default function App() {
       <ManusGroupsHost />
       <MarkPostedHost />
       <StoreOverlays />
+      <Assistant />
       <ConfirmHost />
-      <Toaster />
+      <Toaster placement={assistantOpen ? 'beside-panel' : 'above-launcher'} />
     </div>
   );
 }

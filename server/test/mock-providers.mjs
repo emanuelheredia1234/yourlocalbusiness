@@ -24,10 +24,84 @@ const SCRIPTED = [
   // SEO page → Edit with AI: a change the app can apply (and undo)
   ['qa-dark-look', JSON.stringify({ theme: { font: 'sans', mode: 'dark', radius: 'soft' }, summary: 'Switched the page to a dark look.' })],
 ];
-const answerFor = (body) => {
+// ───────────── the in-app assistant (src/ai/assistant) ─────────────
+// Its prompts start with this marker and use these section titles (src/ai/assistant/protocol.ts).
+export const ASSISTANT_MARKER = '[ylb-assistant-protocol v1]';
+
+/** A section of an assistant prompt, by its title ('' when missing). */
+function promptSection(prompt, title) {
+  const head = `\n## ${title}\n`;
+  const at = prompt.indexOf(head);
+  if (at < 0) return '';
+  const rest = prompt.slice(at + head.length);
+  const end = rest.search(/\n## /);
+  return (end < 0 ? rest : rest.slice(0, end)).trim();
+}
+
+/** The assistant prompt in a request body (the provider's shape doesn't matter), or null. */
+function assistantPromptIn(value, depth = 0) {
+  if (typeof value === 'string') return value.includes(ASSISTANT_MARKER) ? value : null;
+  if (!value || typeof value !== 'object' || depth > 6) return null;
+  for (const v of Object.values(value)) {
+    const found = assistantPromptIn(v, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Scripted steps for browser QA, by the owner's latest message:
+ *   "calendar"   → step 1: navigate to the calendar + list_posts {due: true}; step 2: done, with the due count
+ *   "qa-confirm" → make_video for a post (P-media: a confirm card first); then done, saying what happened
+ *   "qa-delete"  → delete_posts for one real post from the prompt (D: a danger confirm first); then done
+ *   anything else → a short done answer
+ * Until a tool exists, the app answers it with an unknown-tool error, and the next step says so.
+ */
+export function mockAssistantReply(prompt) {
+  const message = promptSection(prompt, 'Latest message from the owner');
+  let results = [];
+  try {
+    results = JSON.parse(promptSection(prompt, 'Tool results so far this turn (JSON)') || '[]');
+  } catch {
+    results = [];
+  }
+  const postId = /"id":"(post_[A-Za-z0-9_-]+)"/.exec(promptSection(prompt, 'Workspace (JSON)'))?.[1] ?? '';
+  const step = (reply, actions = []) => JSON.stringify({ reply, actions, done: actions.length === 0 });
+  const outcome = (tool) => {
+    const r = [...results].reverse().find((x) => x.tool === tool) ?? results[results.length - 1];
+    if (!r) return 'nothing came back';
+    if (r.ok) return `it worked (${r.status})`;
+    return `${r.status}: ${r.error ?? 'no reason given'}`;
+  };
+  if (/qa-confirm/i.test(message)) {
+    if (!results.length) return step('QA: asking to make a short video for one of your posts.', [{ tool: 'make_video', args: { postId, seconds: 5 } }]);
+    return step(`QA: make_video → ${outcome('make_video')}.`);
+  }
+  if (/qa-delete/i.test(message)) {
+    if (!postId) return step('QA: there’s no post in this project to delete. Create one first.');
+    if (!results.length) return step('', [{ tool: 'delete_posts', args: { ids: [postId] } }]);
+    return step(`QA: delete_posts → ${outcome('delete_posts')}.`);
+  }
+  if (/calendar/i.test(message)) {
+    if (!results.length) return step('Opening your calendar and checking what’s due.', [{ tool: 'navigate', args: { route: 'calendar' } }, { tool: 'list_posts', args: { due: true } }]);
+    const listed = [...results].reverse().find((x) => x.tool === 'list_posts' && x.ok);
+    const n = Number(listed?.result?.total ?? 0);
+    return step(
+      n
+        ? `Your [content calendar](#calendar) is open. **${n} post${n === 1 ? ' is' : 's are'} due**: the time has passed and ${n === 1 ? 'it hasn’t' : 'they haven’t'} been posted. Post ${n === 1 ? 'it' : 'them'} with Manus, or post ${n === 1 ? 'it' : 'them'} yourself and mark ${n === 1 ? 'it' : 'them'} posted.`
+        : 'Your [content calendar](#calendar) is open. Nothing is due right now.',
+    );
+  }
+  return step(`QA assistant: I read your message (${message.length} characters). Try “calendar”, “qa-confirm” or “qa-delete”.`);
+}
+
+/** What a text model answers: a scripted step for an assistant prompt, a scripted QA answer for a marker, else the fixed answer. */
+function answerFor(body) {
+  const prompt = assistantPromptIn(body);
+  if (prompt) return mockAssistantReply(prompt);
   const sent = JSON.stringify(body ?? '');
   return SCRIPTED.find(([marker]) => sent.includes(marker))?.[1] ?? ANSWER;
-};
+}
 
 /** A brand-voice read (src/ai/manusVoice.ts): the profile, when the prompt is one. */
 const voiceProfile = (prompt) => (/^Read the latest posts of one .+ profile and describe how they sound and look/m.test(prompt ?? '') ? (/^The .+?(?:: | named “)(.+?)(?:”.*)?$/m.exec(prompt)?.[1] ?? '') : null);

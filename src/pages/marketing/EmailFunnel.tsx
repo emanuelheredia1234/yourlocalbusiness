@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { Eye, Gift, Mail, Users } from 'lucide-react';
 import { useActiveProject } from '@/store/useStore';
 import { Tabs } from '@/components/ui/primitives';
+import { useTabRequest } from '@/store/ui';
+import { tabsOf } from '@/lib/pageTabs';
 import { MarketingHeader } from './MarketingNav';
 import { LeadMagnetPanel } from './email/LeadMagnetPanel';
 import { SequencePanel } from './email/SequencePanel';
@@ -14,6 +16,8 @@ export default function EmailFunnel() {
   const project = useActiveProject()!;
   const m = project.marketing;
   const [tab, setTab] = useState<Tab>(() => (!m.leadMagnet ? 'magnet' : m.emails.length < 5 ? 'sequence' : 'preview'));
+  // a tab asked for from elsewhere (the assistant)
+  useTabRequest<Tab>('marketing-email', tabsOf('marketing-email') as Tab[], setTab);
 
   return (
     <div className="flex flex-col gap-5">

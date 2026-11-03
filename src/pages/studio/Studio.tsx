@@ -3,7 +3,8 @@ import { Code2, ExternalLink, ListTree, Rocket, Store } from 'lucide-react';
 import { FORMATS, matchBusinessType } from '@/ai/knowledge';
 import { navigate } from '@/lib/router';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { useUI } from '@/store/ui';
+import { useTabRequest, useUI } from '@/store/ui';
+import { tabsOf } from '@/lib/pageTabs';
 import { Tabs } from '@/components/ui/primitives';
 import { priceLabel } from '@/pages/store/ListingParts';
 import { StructureTab } from './StructureTab';
@@ -35,6 +36,8 @@ export default function Studio() {
       /* per-viewer convenience only */
     }
   };
+  // a tab asked for from elsewhere (the assistant)
+  useTabRequest<Tab>('studio', tabsOf('studio') as Tab[], setTab);
   const isBiz = project.track === 'business';
   const fmt = project.format ? FORMATS[project.format] : null;
   const bt = isBiz ? matchBusinessType(`${project.businessType} ${project.category} ${project.niche}`) : null;

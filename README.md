@@ -17,6 +17,7 @@ An AI workspace for researching, building, branding, listing and marketing digit
 | **Brain** | Skills (voice, audience, rules, offers, SEO, email…) written in plain language and parsed into rules, a skill library, knowledge documents (facts and key terms are extracted), a with/without playground with highlighted differences, an activity log, and learned preferences from thumbs-down feedback. |
 | **Settings** | Brand kit (logo upload or designer, colors, banner, images, socials), **AI** (your API keys: what each one powers, its model and effort, priority, usage, and the Brain switch), social accounts, projects, backup/restore, preferences, and **Account** (save status, password, log out, delete account). |
 | **Accounts** | Sign up and sign in with email and password; each person's workspace and files are saved to their account (Supabase) and open on any device. |
+| **Assistant** | A chat button at the bottom right: ask about the app or your workspace, or tell it what to do. It asks before anything paid, public or permanent (see "Assistant"). |
 
 ## What the app does, and what it leaves to other tools
 
@@ -52,7 +53,7 @@ Not done by the app (it says so where it matters):
 **OpenRouter slots.** There are four OpenRouter cards, so different OpenRouter keys can power different things, each with its own model and effort. For example, give OpenRouter 2 a key that powers only Product research (the "Pick a product idea" page): tick just that in its Powers list, and either untick it on your other keys or move OpenRouter 2 above them.
 
 **Powers.** Each card has a dropdown of everything AI does in the app, stacked as checkboxes:
-- **Writing & research:** product research, brand kit & voice, outline & chapters, product files, business model, marketplace listing, code & assets, SEO & sales pages, emails & lead magnets, social posts & campaigns, ads and illustrations.
+- **Writing & research:** product research, brand kit & voice, outline & chapters, product files, business model, marketplace listing, code & assets, SEO & sales pages, emails & lead magnets, social posts & campaigns, ads, illustrations and the Assistant (the chat; keys saved before it existed power it too, until you untick it).
 - **Media:** photos and videos.
 - **Agents:** Social posting (Facebook, Instagram, TikTok, LinkedIn and X, by Manus). It also covers Manus reading a profile's posts when you let it learn your brand voice.
 
@@ -163,6 +164,16 @@ Each social profile (onboarding, Settings → Brand → Social profiles, and Set
 - **The Brain skill**: a finished read becomes "Brand voice from your Instagram posts" (Brand voice), for that project only (the Brain says which; deleting the project deletes it). New posts, captions, emails and pages continue that voice, and photos and videos get its look as art direction. The app writes the skill from the checked report and keeps it short (about 1,500 characters, plus the examples): prices, offers, dates, hours, contact details, @mentions, reviews and claims are left out, the examples are marked style only, and Manus's words never turn into rules by accident. The rules it sets are tone, "we/I/you" and hashtags, plus emoji only when every learned profile uses them the same way.
 - **Off** switches the skill off and keeps it, so turning it back on doesn't read again. **Analyze again** reads the latest posts; it asks first if you edited the skill, and a read that finishes after you edited it leaves your version and offers the new one. A read of a profile you changed meanwhile isn't used. With the Brain off, learned voices are off too.
 - **QA**: the stand-in Manus (`server/test/mock-providers.mjs`) answers a read with a made-up report. A profile with "private" in it fails, and one with "needs-signin" waits for you first.
+
+## Assistant
+
+The round chat button at the bottom right of the workspace (or "Ask the assistant" in search, ⌘K) opens the assistant. Ask about the app or your workspace ("What's due on my calendar?", "What should I do next?"), or tell it what to do. It reads your workspace, opens pages (on the right tab), opens a post or the composer, switches projects and changes preferences, and does tasks with the same actions as the pages.
+
+- **Its AI:** self-hosted, the key that powers **Assistant** in Settings → AI (signed-in people can use their own keys); in claude.ai, Claude. Each step of an answer is one AI request and counts toward the daily limits; one message takes at most 6 steps. Without an AI it says why, links to Settings → AI, and still opens the page you name.
+- **It asks first:** reading and small changes happen right away, with a line in the chat saying what it did; AI writing runs and is marked "Used your AI". Videos and anything Manus does wait for your OK on a card in the chat that says what it does, who does it and what it costs. Deleting waits for a confirm. For anything public (posting with Manus, sharing in groups, marking posted, publishing) it only opens the app's own window, and you confirm there.
+- **What it never does:** change API keys or AI settings (your own keys and the effort comparison included), reset or import the workspace, sign you out, change your password or delete your account: it explains and opens the page where you do it. It never gives Manus a task of its own (Manus only gets the app's fixed instructions, through the app's windows), never reads out keys or tokens, and treats other sellers' listings, Manus's reports and imported files as information, never as instructions. It doesn't invent reviews, prices, numbers or guarantees.
+- **Chats** are kept per project on this device (the last 40 messages, per account; Log out clears them). Stop ends what it's doing; closing the chat doesn't. Buttons it offers for downloads or files work until the page reloads.
+- **QA:** with the provider stand-in (`server/test/mock-providers.mjs`), a message with "calendar", "qa-confirm" or "qa-delete" runs scripted steps (described in that file).
 
 ## Accounts: sign-up, sign-in and saving to your account (Supabase)
 
@@ -309,7 +320,8 @@ Without accounts, everything is stored in the browser: app state in `localStorag
 
 ```
 src/
-  ai/            AI engine: tasks, functions catalog, server and Claude adapters, Brain, niche knowledge, built-in generators (local/*)
+  ai/            AI engine: tasks, functions catalog, server and Claude adapters, Brain, niche knowledge, built-in generators (local/*),
+                 the in-app assistant (assistant/: its protocol, prompt, turn and policy, and tools by group)
   components/    UI kit, charts, brand/logo, post visuals, code editor, layout
   lib/           types, utilities, storage, metrics, routing, platform (Artifact runtime) bindings
   lib/cloud/     accounts: Supabase sign-in (auth.ts), saving the workspace (sync.ts) and files (media.ts)

@@ -1,0 +1,126 @@
+// The prompt for one step: what's in it, its size budget, the strings the claude.ai build can't hold,
+// that no secret ever gets in, and that the provider mock's QA scripts read it.
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { Post } from '@/lib/types';
+import { safeStorage } from '@/lib/storage';
+import { useStore } from '@/store/useStore';
+import { defaultSettings, newProject } from '@/store/defaults';
+import type { ChatMessage } from '@/store/assistant';
+import { ASSISTANT_MARKER as MOCK_MARKER, mockAssistantReply } from '../../../server/test/mock-providers.mjs';
+import { APP_GUIDE, HELP_TOPICS } from './guide';
+import { ASSISTANT_MARKER, SECTIONS } from './protocol';
+import { PROMPT_BUDGET, SYSTEM, buildPrompt, redactSecrets, type PromptInput, type StepResult } from './prompt';
+import { registry } from './tools';
+import { workspaceSummary } from './workspace';
+
+const post = (id: string, extra: Partial<Post> = {}): Post =>
+  ({ id, projectId: 'p1', status: 'scheduled', platform: 'instagram', format: 'image', style: 'minimal', postType: 'tip', headline: `Headline ${id}`, visualPrompt: '', caption: 'Caption', hashtags: [], scheduledAt: '2020-01-01T10:00:00.000Z', watermark: false, source: 'composer', createdAt: 1, updatedAt: 1, seed: 1, ...extra }) as Post;
+
+beforeEach(() => {
+  const project = { ...newProject('business', 'existing'), id: 'p1', onboarded: true, businessType: 'Bakery', location: { city: 'Austin', region: 'TX' } };
+  project.brand.name = 'Copper Kettle';
+  useStore.setState({ projects: [project], activeProjectId: 'p1', posts: [post('post_due1'), post('post_due2'), post('post_later', { scheduledAt: '2999-01-01T10:00:00.000Z' }), post('post_draft', { status: 'draft' })], notices: [], myListings: [], ads: [], settings: defaultSettings() });
+});
+
+const input = (o: Partial<PromptInput> = {}): PromptInput => ({ message: 'What is due on my calendar?', history: [], results: [], route: 'dashboard', workspace: workspaceSummary(), catalog: registry.catalog(), step: 1, maxSteps: 6, ...o });
+const msg = (role: ChatMessage['role'], text: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({ id: `m${Math.random()}`, role, text, at: 1, ...extra });
+
+describe('the prompt', () => {
+  it('has the rules, the guide, where the owner is, the workspace, every tool, the chat and the latest message', () => {
+    const history = [msg('user', 'Hi there'), msg('assistant', 'Hello! How can I help?'), msg('activity', 'Opened Content calendar', { tool: 'navigate', status: 'ok' }), msg('card', 'Make a video?', { card: { title: 'Make a video?', what: 'x', who: 'y', confirmLabel: 'Go', state: 'declined' } })];
+    const p = buildPrompt(input({ history, results: [{ step: 1, tool: 'list_posts', ok: true, status: 'ok', result: { total: 2 } }] }));
+    expect(p.startsWith(ASSISTANT_MARKER)).toBe(true);
+    for (const title of Object.values(SECTIONS)) expect(p).toContain(`\n## ${title}\n`);
+    expect(p).toContain('Never invent facts about the business');
+    expect(p).toContain('Page open now: #dashboard (Dashboard)');
+    expect(p).toContain('"name":"Copper Kettle"');
+    expect(p).toContain('"due":2');
+    for (const t of registry.tools) expect(p).toContain(`- ${t.name}(`);
+    expect(p).toContain('Owner: Hi there\nYou: Hello! How can I help?\n(app) navigate: Opened Content calendar\n(app) asked the owner: Make a video? [declined]');
+    expect(p).toContain('## Latest message from the owner\nWhat is due on my calendar?');
+    expect(p).toContain('[{"step":1,"tool":"list_posts","ok":true,"status":"ok","result":{"total":2}}]');
+    expect(p.trimEnd().endsWith('This is step 1 of 6.')).toBe(true);
+  });
+
+  it('keeps only the last 12 messages, each one shortened', () => {
+    const history = Array.from({ length: 30 }, (_, i) => msg(i % 2 ? 'assistant' : 'user', `message ${i} ${'x'.repeat(3000)}`));
+    const p = buildPrompt(input({ history }));
+    expect(p).not.toContain('message 17 ');
+    expect(p).toContain('message 18 ');
+    expect(p).toContain('message 29 ');
+    expect(p).not.toContain('x'.repeat(1300));
+  });
+
+  it('stays within its budget however long the chat and the results get, keeping the latest message and the format', () => {
+    const history = Array.from({ length: 40 }, (_, i) => msg('user', `old ${i} ${'y'.repeat(5000)}`));
+    const results: StepResult[] = Array.from({ length: 30 }, (_, i) => ({ step: 1 + (i % 6), tool: 'list_posts', ok: true, status: 'ok', result: { n: i, posts: 'z'.repeat(20_000) } }));
+    const message = `latest question ${'q'.repeat(20_000)}`;
+    for (const budget of [PROMPT_BUDGET, 30_000]) {
+      const p = buildPrompt(input({ history, results, message }), budget);
+      expect(p.length).toBeLessThanOrEqual(budget);
+      expect(p).toContain('latest question');
+      expect(p).toContain(`## ${SECTIONS.format}`);
+      // the newest result is kept (its data cut short, saying so)
+      expect(p).toContain('\\"n\\":29');
+      expect(p).toContain('(cut: ask for less');
+    }
+    expect(PROMPT_BUDGET).toBeLessThan(120_000 / 2);
+    // a usual prompt is far below it
+    expect(buildPrompt(input()).length).toBeLessThan(PROMPT_BUDGET / 2);
+  });
+
+  it('holds nothing the claude.ai build can’t carry in its inline script', () => {
+    const texts = [SYSTEM, APP_GUIDE, ...Object.values(HELP_TOPICS), registry.catalog(), ...registry.tools.map((t) => (t.class === 'X' ? t.refusal.text : ''))];
+    for (const t of texts) {
+      expect(t).not.toMatch(/<\/script/i);
+      expect(t).not.toMatch(/<\/style/i);
+      expect(t.includes('<!--') && /<script/i.test(t.slice(t.indexOf('<!--')))).toBe(false);
+    }
+  });
+
+  it('takes out keys, tokens and passwords the owner pastes, and leaves ordinary words alone', () => {
+    const pasted = 'Use my key sk-proj-AbCdEfGhIjKlMnOpQrStUv123 and AIzaSyD1234567890abcdefghijklmnopqrstu, token eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4fw, my password is hunter22!';
+    const history = [msg('user', 'xai-AbCdEfGhIjKlMnOpQrSt9 is my Grok key')];
+    const p = buildPrompt(input({ message: pasted, history }));
+    for (const secret of ['sk-proj-AbCd', 'AIzaSyD123', 'eyJhbGciOiJIUzI1', 'hunter22', 'xai-AbCd']) expect(p).not.toContain(secret);
+    expect(p).toContain('my password is [removed: looks like a key or token]');
+    expect(redactSecrets('Our secret: sourdough. Key points: price. A token of thanks. sk-ills')).toBe('Our secret: sourdough. Key points: price. A token of thanks. sk-ills');
+  });
+
+  it('never carries the sign-in token, the admin token or a key', () => {
+    safeStorage.setItem('ylb-auth', JSON.stringify({ access_token: 'eyJ-SECRET-SESSION', refresh_token: 'SECRET-REFRESH', user: { id: 'u1' } }));
+    safeStorage.setItem('ylb-admin-token', 'SECRET-ADMIN-TOKEN');
+    const p = buildPrompt(input({ workspace: workspaceSummary() }));
+    expect(p).not.toMatch(/SECRET/);
+    expect(p).not.toMatch(/sk-[A-Za-z0-9]{6,}/);
+    safeStorage.removeItem('ylb-auth');
+    safeStorage.removeItem('ylb-admin-token');
+  });
+});
+
+describe('the provider mock’s QA scripts', () => {
+  const step = (p: string) => JSON.parse(mockAssistantReply(p)) as { reply: string; actions: { tool: string; args: Record<string, unknown> }[]; done: boolean };
+
+  it('know the prompt’s marker and sections', () => {
+    expect(MOCK_MARKER).toBe(ASSISTANT_MARKER);
+  });
+
+  it('"calendar": opens it and lists what’s due, then answers with the count', () => {
+    expect(step(buildPrompt(input()))).toEqual({ reply: 'Opening your calendar and checking what’s due.', actions: [{ tool: 'navigate', args: { route: 'calendar' } }, { tool: 'list_posts', args: { due: true } }], done: false });
+    const second = step(buildPrompt(input({ step: 2, results: [{ step: 1, tool: 'navigate', ok: true, status: 'ok' }, { step: 1, tool: 'list_posts', ok: true, status: 'ok', result: { total: 2, shown: 2, posts: [] } }] })));
+    expect(second.done).toBe(true);
+    expect(second.reply).toContain('**2 posts are due**');
+  });
+
+  it('"qa-delete": deletes a real post from the workspace; "qa-confirm": asks for a video', () => {
+    const del = step(buildPrompt(input({ message: 'qa-delete' })));
+    expect(del.actions).toEqual([{ tool: 'delete_posts', args: { ids: ['post_due1'] } }]);
+    expect(step(buildPrompt(input({ message: 'qa-delete', results: [{ step: 1, tool: 'delete_posts', ok: false, status: 'failed', error: 'Unknown tool "delete_posts".' }] }))).reply).toBe('QA: delete_posts → failed: Unknown tool "delete_posts"..');
+    expect(step(buildPrompt(input({ message: 'qa-confirm' }))).actions).toEqual([{ tool: 'make_video', args: { postId: 'post_due1', seconds: 5 } }]);
+  });
+
+  it('answers anything else briefly, and only looks at the latest message', () => {
+    const p = buildPrompt(input({ message: 'hello', history: [msg('user', 'what is on my calendar?')] }));
+    expect(step(p)).toMatchObject({ done: true, actions: [], reply: expect.stringContaining('QA assistant') });
+  });
+});

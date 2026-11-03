@@ -5,7 +5,8 @@ import { addDays, cn, combineDateTime, fmtDate, fmtDateTime, isoToDateStr, isoTo
 import { PLATFORMS, POST_PLATFORMS, POST_TYPE_MAP, POST_TYPES } from '@/ai/knowledge';
 import { useNow } from '@/lib/hooks';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { toast, useUI } from '@/store/ui';
+import { toast, useTabRequest, useUI } from '@/store/ui';
+import { tabsOf } from '@/lib/pageTabs';
 import { Empty, Segmented, Tabs } from '@/components/ui/primitives';
 import { FormatBadge, PostCard, PostTypeTag, styleLabel } from '@/components/posts/PostCard';
 import { ExternalBadge, ManusPostButton, manusSetupHint, useCanOfferManus, useManusPost, useManusReady } from '@/components/posts/ManusPost';
@@ -27,6 +28,8 @@ export default function ContentCalendar() {
   const manusReady = useManusReady();
   const posts = useMemo(() => allPosts.filter((p) => p.projectId === project.id), [allPosts, project.id]);
   const [tab, setTab] = useState<Tab>('scheduled');
+  // a tab asked for from elsewhere (the assistant)
+  useTabRequest<Tab>('calendar', tabsOf('calendar') as Tab[], setTab);
   const [view, setView] = useState<'calendar' | 'list'>('calendar');
   const [platform, setPlatform] = useState<PostPlatform | 'all'>('all');
   const [type, setType] = useState<PostType | 'all'>('all');

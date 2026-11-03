@@ -7,7 +7,8 @@ import { useRuntime } from '@/lib/platform';
 import { pushMyListings, refreshCommunity, startCommunitySync } from '@/lib/community';
 import { BUSINESS_CATEGORIES, distanceMi, FORMAT_LIST, FORMATS } from '@/ai/knowledge';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { toast, useUI } from '@/store/ui';
+import { toast, useTabRequest, useUI } from '@/store/ui';
+import { tabsOf } from '@/lib/pageTabs';
 import { Empty, Segmented, Tabs, confirmAction } from '@/components/ui/primitives';
 import { Icon } from '@/components/ui/Icon';
 import { ListingCard, ListingCover, priceLabel, UsMap } from './ListingParts';
@@ -27,6 +28,8 @@ export default function Marketplace() {
   const community = useRuntime((s) => s.community);
   const openListing = useUI((s) => s.openListing);
   const [tab, setTab] = useState<'browse' | 'mine'>('browse');
+  // a tab asked for from elsewhere (the assistant)
+  useTabRequest<'browse' | 'mine'>('store', tabsOf('store') as ('browse' | 'mine')[], setTab);
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<Kind>('all');
   const [cat, setCat] = useState('');

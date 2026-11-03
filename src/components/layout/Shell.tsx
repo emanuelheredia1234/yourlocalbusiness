@@ -23,6 +23,7 @@ import { navigate, useRoute, type Route } from '@/lib/router';
 import { useRuntime } from '@/lib/platform';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
+import { useAssistant } from '@/store/assistant';
 import { FORMATS } from '@/ai/knowledge';
 import { Popover, MenuItem } from '../ui/primitives';
 import { confirmLeave } from '@/components/ui/leave';
@@ -407,6 +408,7 @@ export function CommandPalette() {
   }, [open]);
   const items = useMemo(
     () => [
+      { label: 'Ask the assistant', hint: 'Chat at the bottom right', run: () => useAssistant.getState().setOpen(true) },
       { label: 'Create individual post', hint: 'Social media engine', run: () => openComposer() },
       { label: 'Go to Dashboard', run: () => navigate('dashboard') },
       { label: 'Open Studio', hint: 'Outline, code generator, publish', run: () => navigate('studio') },
