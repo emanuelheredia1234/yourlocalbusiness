@@ -45,8 +45,8 @@ create index if not exists published_pages_domain on public.published_pages (dom
 create index if not exists published_pages_user on public.published_pages (user_id);
 
 -- updated_at is the server's clock (public.ylb_touch_updated_at is in 20261102000000_accounts.sql)
-drop trigger if exists published_pages_touch on public.published_pages;
-create trigger published_pages_touch before insert or update on public.published_pages
+-- "create or replace" (Postgres 14+) keeps this re-runnable without a drop statement
+create or replace trigger published_pages_touch before insert or update on public.published_pages
   for each row execute function public.ylb_touch_updated_at();
 
 alter table public.published_domains enable row level security;
