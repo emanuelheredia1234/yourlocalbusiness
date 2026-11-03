@@ -8,17 +8,26 @@ import { AIThinking } from '@/components/ai/AI';
 import { download } from '@/components/ui/download';
 import { Segmented, Spinner, Toggle, confirmAction } from '@/components/ui/primitives';
 import { toast } from '@/store/ui';
+import { beginBusy, busyId, endBusy } from '@/lib/busy';
 
 /** One build at a time, with progress, stop and the outcome. */
 function useBuild() {
   const [state, setState] = useState<{ running: '' | 'pdf' | 'xlsx'; stage: string; error: string; done: string; notes: string[] }>({ running: '', stage: '', error: '', done: '', notes: [] });
   const ctl = useRef<AbortController | null>(null);
-  useEffect(() => () => ctl.current?.abort(), []);
+  const jobId = useRef(busyId('file'));
+  useEffect(() => {
+    const id = jobId.current;
+    return () => {
+      ctl.current?.abort();
+      endBusy(id);
+    };
+  }, []);
   const run = async (kind: 'pdf' | 'xlsx', job: (signal: AbortSignal, onStage: (s: string) => void) => Promise<{ done: string; notes: string[]; file: ProductFile }>) => {
     ctl.current?.abort();
     const c = new AbortController();
     ctl.current = c;
     setState({ running: kind, stage: 'Starting…', error: '', done: '', notes: [] });
+    beginBusy(jobId.current, kind === 'pdf' ? 'PDF' : 'Spreadsheet');
     try {
       const r = await job(c.signal, (stage) => setState((s) => ({ ...s, stage })));
       setState({ running: '', stage: '', error: '', done: r.done, notes: r.notes });
@@ -27,7 +36,10 @@ function useBuild() {
       const code = (e as { code?: string }).code;
       setState({ running: '', stage: '', error: code === 'cancelled' || c.signal.aborted ? '' : (e as Error).message || 'Something went wrong.', done: code === 'cancelled' ? 'Stopped. Chapters written so far are saved.' : '', notes: [] });
     } finally {
-      if (ctl.current === c) ctl.current = null;
+      if (ctl.current === c) {
+        ctl.current = null;
+        endBusy(jobId.current);
+      }
     }
   };
   return { ...state, run, stop: () => ctl.current?.abort() };

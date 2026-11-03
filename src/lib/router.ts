@@ -28,15 +28,42 @@ function readHash(): Route | null {
 const listeners = new Set<() => void>();
 let current: Route | null = typeof window !== 'undefined' ? readHash() : null;
 
+/** Asked before the page changes: true lets it change (see App: it asks when something is generating). */
+type LeaveGuard = (to: Route | null) => boolean | Promise<boolean>;
+let guard: LeaveGuard | null = null;
+export function setLeaveGuard(g: LeaveGuard | null): void {
+  guard = g;
+}
+
 if (typeof window !== 'undefined') {
   window.addEventListener('hashchange', () => {
-    current = readHash();
-    listeners.forEach((l) => l());
+    const next = readHash();
+    const ok = next === current || !guard ? true : guard(next);
+    if (ok === true) {
+      current = next;
+      listeners.forEach((l) => l());
+      return;
+    }
+    // Back/Forward or an edited address while something is generating: stay put while we ask
+    const back = current;
+    try {
+      history.replaceState(null, '', back ? `#${back}` : location.pathname + location.search);
+    } catch {
+      /* ignore */
+    }
+    void Promise.resolve(ok).then((yes) => {
+      if (yes && next) void navigate(next, { force: true });
+    });
   });
 }
 
-export function navigate(route: Route): void {
-  if (current === route && location.hash === `#${route}`) return;
+/** Go to a page. Unless forced, the leave guard is asked first; resolves false when the owner stays. */
+export function navigate(route: Route, opts: { force?: boolean } = {}): Promise<boolean> {
+  if (current === route && location.hash === `#${route}`) return Promise.resolve(true);
+  if (!opts.force && guard && current !== route) {
+    const ok = guard(route);
+    if (ok !== true) return Promise.resolve(ok).then((yes) => (yes ? navigate(route, { force: true }) : false));
+  }
   current = route;
   try {
     if (location.hash !== `#${route}`) location.hash = route;
@@ -49,6 +76,7 @@ export function navigate(route: Route): void {
   } catch {
     /* ignore */
   }
+  return Promise.resolve(true);
 }
 
 export function useRoute(): Route | null {

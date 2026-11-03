@@ -49,6 +49,12 @@ export function createMockProviders({ keys = {} } = {}) {
   }
 
   function handle(req, res, raw, rawBuf = Buffer.from(raw)) {
+    // QA: a prompt containing "slow-qa" answers after 8 s (to test "leave while generating")
+    if (typeof raw === 'string' && raw.includes('slow-qa') && !req.headers['x-mock-delayed']) {
+      req.headers['x-mock-delayed'] = '1';
+      setTimeout(() => handle(req, res, raw, rawBuf), 8000);
+      return;
+    }
     const url = new URL(req.url, 'http://mock');
     const [, id, ...rest] = url.pathname.split('/');
     const p = `/${rest.join('/')}`;

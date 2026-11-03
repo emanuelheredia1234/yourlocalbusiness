@@ -72,7 +72,7 @@ export function ListingImages({ project }: { project: Project }) {
     }
     return r;
   });
-  const job = useImageJob();
+  const job = useImageJob('Listing images');
   const art = useArtDirection('listing');
   const effKind: ImageKind = kind === 'photo' && !photo.ok ? 'illustration' : kind;
   // photos from an image API come back in seconds, so a set is made all at once (Manus tasks one by one)

@@ -9,9 +9,11 @@ import { deleteAccount, setNewPassword, showSignIn, signOut, useAuth } from '@/l
 import { useSyncStatus } from '@/lib/cloud/sync';
 import { toast, useUI } from '@/store/ui';
 import { MenuItem, Popover, Spinner, confirmAction } from '@/components/ui/primitives';
+import { confirmLeave } from '@/components/ui/leave';
 
 /** Log out of this device, asking first if some changes couldn't be saved. */
 export async function logOut() {
+  if (!(await confirmLeave())) return;
   const r = await signOut();
   if (r !== 'unsaved') return;
   const go = await confirmAction({

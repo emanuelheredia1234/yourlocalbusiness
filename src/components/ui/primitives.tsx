@@ -479,13 +479,18 @@ interface ConfirmReq {
   title: string;
   body?: string;
   confirmLabel?: string;
+  cancelLabel?: string;
   danger?: boolean;
   resolve: (v: boolean) => void;
 }
 const useConfirmStore = create<{ req: ConfirmReq | null; set: (r: ConfirmReq | null) => void }>((set) => ({ req: null, set: (req) => set({ req }) }));
 
 export function confirmAction(opts: Omit<ConfirmReq, 'resolve'>): Promise<boolean> {
-  return new Promise((resolve) => useConfirmStore.getState().set({ ...opts, resolve }));
+  return new Promise((resolve) => {
+    // only one question at a time: one still open counts as "no"
+    useConfirmStore.getState().req?.resolve(false);
+    useConfirmStore.getState().set({ ...opts, resolve });
+  });
 }
 
 export function ConfirmHost() {
@@ -504,7 +509,7 @@ export function ConfirmHost() {
       footer={
         <>
           <button className="btn btn-secondary btn-sm" onClick={() => close(false)}>
-            Cancel
+            {req?.cancelLabel ?? 'Cancel'}
           </button>
           <button data-autofocus className={cn('btn btn-sm', req?.danger ? 'bg-bad text-white hover:bg-bad/90' : 'btn-primary')} onClick={() => close(true)}>
             {req?.confirmLabel ?? 'Confirm'}

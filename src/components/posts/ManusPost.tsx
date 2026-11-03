@@ -22,6 +22,7 @@ import {
   type PostMode,
 } from '@/ai/manusPost';
 import { failedOnItsNetwork } from './PostActions';
+import { beginBusy, endBusy } from '@/lib/busy';
 import { useStore } from '@/store/useStore';
 import { navigate } from '@/lib/router';
 import { toast, useUI } from '@/store/ui';
@@ -165,6 +166,7 @@ export function ManusPostHost() {
       const p = useStore.getState().posts.find((x) => x.id === queued.id);
       if (!p || sending.has(p.id)) continue;
       sending.add(p.id);
+      beginBusy(`manus-post:${p.id}`, 'Sending to Manus', 'app');
       const account = (accounts[p.platform] ?? '').trim();
       setProgress((x) => ({ ...x, [p.id]: { stage: 'Starting…' } }));
       try {
@@ -178,6 +180,7 @@ export function ManusPostHost() {
         setProgress((x) => ({ ...x, [p.id]: { error: errorCopy(e) } }));
       } finally {
         sending.delete(p.id);
+        endBusy(`manus-post:${p.id}`);
       }
     }
     setBusy(false);

@@ -25,6 +25,7 @@ import { useActiveProject, useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
 import { FORMATS } from '@/ai/knowledge';
 import { Popover, MenuItem } from '../ui/primitives';
+import { confirmLeave } from '@/components/ui/leave';
 import { LogoMark } from '../brand/Logo';
 import { AccountButton, AccountRow } from '../auth/Account';
 
@@ -99,10 +100,11 @@ function ProjectSwitcher({ onNavigate }: { onNavigate?: () => void }) {
             key={p.id}
             active={p.id === project.id}
             icon={<LogoMark colors={p.brand.colors} logo={p.brand.logo} name={p.brand.name} size={20} />}
-            onClick={() => {
-              setActive(p.id);
+            onClick={async () => {
               setOpen(false);
-              navigate(p.onboarded ? 'dashboard' : 'onboarding');
+              if (p.id !== project.id && !(await confirmLeave())) return;
+              setActive(p.id);
+              void navigate(p.onboarded ? 'dashboard' : 'onboarding', { force: true });
               onNavigate?.();
             }}
           >
@@ -113,10 +115,11 @@ function ProjectSwitcher({ onNavigate }: { onNavigate?: () => void }) {
         <div className="my-1 border-t border-line" />
         <MenuItem
           icon={<Plus size={15} />}
-          onClick={() => {
-            create();
+          onClick={async () => {
             setOpen(false);
-            navigate('onboarding');
+            if (!(await confirmLeave())) return;
+            create();
+            void navigate('onboarding', { force: true });
             onNavigate?.();
           }}
         >
@@ -420,9 +423,10 @@ export function CommandPalette() {
       {
         label: 'Start a new project',
         hint: 'Guided wizard',
-        run: () => {
+        run: async () => {
+          if (!(await confirmLeave())) return;
           create();
-          navigate('onboarding');
+          void navigate('onboarding', { force: true });
         },
       },
     ],

@@ -7,6 +7,7 @@ import { useActiveProject, useStore } from '@/store/useStore';
 import { CommandPalette, MobileNav, Sidebar, Topbar } from '@/components/layout/Shell';
 import { PageErrorBoundary } from '@/components/layout/ErrorBoundary';
 import { ConfirmHost, Spinner, Toaster } from '@/components/ui/primitives';
+import { installLeaveGuard } from '@/components/ui/leave';
 import { PostEditorHost } from '@/components/posts/PostCard';
 import { ManusPostHost, useManusPostWatcher } from '@/components/posts/ManusPost';
 import { MarkPostedHost } from '@/components/posts/PostActions';
@@ -74,9 +75,11 @@ export default function App() {
 
   const needsOnboarding = !project || !project.onboarded;
   useEffect(() => {
-    if (needsOnboarding && route !== 'onboarding') navigate('onboarding');
-    else if (!needsOnboarding && (route === 'onboarding' || route === null)) navigate('dashboard');
+    if (needsOnboarding && route !== 'onboarding') void navigate('onboarding', { force: true });
+    else if (!needsOnboarding && (route === 'onboarding' || route === null)) void navigate('dashboard', { force: true });
   }, [needsOnboarding, route]);
+  // "Leave this page?" while something is generating
+  useEffect(() => installLeaveGuard(), []);
 
   if (needsOnboarding) {
     return (
@@ -138,7 +141,7 @@ export default function App() {
         <Topbar />
         <main id="main-scroll" className="scroll-thin min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-[1320px] gutter pb-16 pt-6">
-            <PageErrorBoundary key={route ?? 'dashboard'} onHome={() => navigate('dashboard')}>
+            <PageErrorBoundary key={route ?? 'dashboard'} onHome={() => void navigate('dashboard', { force: true })}>
               <Suspense fallback={<PageFallback />}>{page}</Suspense>
             </PageErrorBoundary>
           </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Project, ProviderId, Skill } from '@/lib/types';
 import { getActiveProject, useStore } from '@/store/useStore';
+import { beginBusy, busyId, endBusy, type BusyScope } from '@/lib/busy';
 import { runTask, type RunResult } from './engine';
 import { compactMeta } from './meta';
 import type { TaskDef } from './tasks';
@@ -21,6 +22,8 @@ export interface RunExtras {
   forceLocal?: boolean;
   variation?: number;
   silent?: boolean;
+  /** how it counts for "leave this page?" (default page: it stops when the page closes; false: not listed) */
+  busy?: BusyScope | false;
 }
 
 const variations = new Map<string, number>();
@@ -30,11 +33,14 @@ export function useAI<I, O>(task: TaskDef<I, O>) {
   const [state, setState] = useState<GenState<O>>({ running: false, stage: '', chars: 0, result: null, error: null, logId: null, provider: null });
   const ctl = useRef<AbortController | null>(null);
   const mounted = useRef(true);
+  const job = useRef(busyId(task.id));
   useEffect(() => {
     mounted.current = true;
+    const id = job.current;
     return () => {
       mounted.current = false;
       ctl.current?.abort();
+      endBusy(id);
     };
   }, []);
 
@@ -50,6 +56,7 @@ export function useAI<I, O>(task: TaskDef<I, O>) {
       const variation = extras.variation ?? variations.get(key) ?? 0;
       variations.set(key, variation + 1);
       setState((st) => ({ ...st, running: true, stage: 'Starting…', chars: 0, error: null }));
+      if (extras.busy !== false) beginBusy(job.current, task.label, extras.busy || 'page');
       try {
         const res = await runTask(task, input, {
           project,
@@ -83,7 +90,10 @@ export function useAI<I, O>(task: TaskDef<I, O>) {
         if (mounted.current) setState((st) => ({ ...st, running: false, stage: '', error: code === 'cancelled' ? null : (e as Error).message || 'Something went wrong.' }));
         return null;
       } finally {
-        if (ctl.current === controller) ctl.current = null;
+        if (ctl.current === controller) {
+          ctl.current = null;
+          endBusy(job.current);
+        }
       }
     },
     [task],

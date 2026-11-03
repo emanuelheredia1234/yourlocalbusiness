@@ -9,6 +9,7 @@ import { navigate } from '@/lib/router';
 import { manusViaServer } from '@/ai/manus';
 import { postBlocker, postText, suggestedAccount } from '@/ai/manusPost';
 import { MAX_GROUPS, carriedResults, groupKey, groupLinkError, groupRecord, groupSummary, groupsAlreadyOut, groupsToRetry, parseGroups, refreshGroupShare, rememberedGroups, startGroupShare } from '@/ai/manusGroups';
+import { beginBusy, endBusy } from '@/lib/busy';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { AutoTextarea, Field, Modal, Spinner } from '../ui/primitives';
@@ -70,6 +71,7 @@ export function ManusGroupsHost() {
   const send = async () => {
     if (inFlight || problem || !ready) return;
     sending.add(post.id);
+    beginBusy(`manus-groups:${post.id}`, 'Sending to Manus', 'app');
     setBusy(true);
     setErr(null);
     try {
@@ -87,6 +89,7 @@ export function ManusGroupsHost() {
       setErr(errorCopy(e));
     } finally {
       sending.delete(post.id);
+      endBusy(`manus-groups:${post.id}`);
       setBusy(false);
       setStage('');
     }

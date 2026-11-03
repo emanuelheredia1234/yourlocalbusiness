@@ -4,6 +4,7 @@ import { imageErrorMessage, photoAvailability } from '@/ai/image';
 import type { ManusTask } from '@/ai/manus';
 import { visualBrief } from '@/ai/brain';
 import { useStore } from '@/store/useStore';
+import { beginBusy, busyId, endBusy } from '@/lib/busy';
 
 export interface ImageJobState {
   running: boolean;
@@ -16,16 +17,21 @@ export interface ImageJobState {
   task: ManusTask | null;
 }
 
-/** Runs one image generation at a time with progress, stop and error state. */
-export function useImageJob() {
+/** Runs one image generation at a time with progress, stop and error state. `label` names it in "leave this page?". */
+export function useImageJob(label = 'AI image') {
   const [state, setState] = useState<ImageJobState>({ running: false, stage: '', error: null, done: '', note: '', task: null });
   const ctl = useRef<AbortController | null>(null);
   const mounted = useRef(true);
+  const jobId = useRef(busyId('image'));
+  const name = useRef(label);
+  name.current = label;
   useEffect(() => {
     mounted.current = true;
+    const id = jobId.current;
     return () => {
       mounted.current = false;
       ctl.current?.abort();
+      endBusy(id);
     };
   }, []);
 
@@ -34,6 +40,7 @@ export function useImageJob() {
     const c = new AbortController();
     ctl.current = c;
     setState({ running: true, stage: 'Starting…', error: null, done: '', note: '', task: null });
+    beginBusy(jobId.current, name.current);
     try {
       const r = await job(
         c.signal,
@@ -49,7 +56,10 @@ export function useImageJob() {
       if (mounted.current) setState((s) => ({ running: false, stage: '', error: stopped ? null : imageErrorMessage(e), done: '', note: stopped && s.task ? 'Stopped waiting. Manus may still finish the image in your Manus account.' : '', task: s.task }));
       return null;
     } finally {
-      if (ctl.current === c) ctl.current = null;
+      if (ctl.current === c) {
+        ctl.current = null;
+        endBusy(jobId.current);
+      }
     }
   }, []);
 
