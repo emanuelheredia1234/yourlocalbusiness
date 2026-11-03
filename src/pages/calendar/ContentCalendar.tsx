@@ -148,6 +148,8 @@ function PlannedBar({ posts, manusReady: isReady }: { posts: Post[]; manusReady:
   const manusReady = useCanOfferManus() || isReady;
   const due = posts.filter((p) => isDue(p, now) && notSent(p));
   const ready = posts.filter(notSent);
+  // a failed try may still have gone out: Manus doesn't look for an earlier copy before posting
+  const failed = ready.filter((p) => p.external?.state === 'failed').length;
   if (!due.length && !(manusReady && ready.length > 1)) return null;
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-surface-2/50 px-4 py-2.5">
@@ -157,7 +159,13 @@ function PlannedBar({ posts, manusReady: isReady }: { posts: Post[]; manusReady:
             <b className="text-warn">{due.length} due:</b> {due.length > 1 ? 'their times have' : 'its time has'} passed and {due.length > 1 ? 'they haven’t' : 'it hasn’t'} been posted. {manusReady ? 'Post them with Manus, or post them yourself and mark them posted.' : 'Post them yourself and mark them posted.'}
           </>
         ) : (
-          `${ready.length} planned posts not yet sent to Manus.`
+          `${ready.length} planned posts to send with Manus.`
+        )}
+        {failed > 0 && (
+          <>
+            {' '}
+            <b className="text-warn">{failed} failed last time</b> and may already be out or scheduled: check before sending {failed === 1 ? 'it' : 'them'} again.
+          </>
         )}
       </p>
       {manusReady && due.length > 0 && (

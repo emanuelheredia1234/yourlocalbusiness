@@ -31,6 +31,8 @@ interface Network {
   schedule: string;
   checkNow: string;
   checkScheduled: string;
+  /** where the account's scheduled posts are listed (to look for a copy Manus may have scheduled) */
+  scheduledList: string;
   media: { image: string; video: string; none: string };
   rules: string;
 }
@@ -51,6 +53,7 @@ export const NETWORKS: Record<PostPlatform, Network> = {
     schedule: 'Choose Schedule (NOT "Publish now")',
     checkNow: 'Check that the post now appears on the Page',
     checkScheduled: 'Confirm the scheduled post and check that it appears in the Planner at that time.',
+    scheduledList: 'the Planner in Meta Business Suite',
     media: {
       image: 'Attach the image file provided with this task exactly as it is (no edits, no crop, no extra images or videos).',
       video:
@@ -74,6 +77,7 @@ export const NETWORKS: Record<PostPlatform, Network> = {
     schedule: 'Choose Schedule (NOT "Publish now" or "Share")',
     checkNow: 'Check that the post now appears on the account’s profile',
     checkScheduled: 'Confirm the scheduled post and check that it appears in the Planner at that time.',
+    scheduledList: 'the Planner in Meta Business Suite',
     media: {
       image: 'Add the image file provided with this task exactly as it is: no filters, no edits, no extra images. If Instagram asks how to crop it, choose "Original" (or the size that keeps the whole image).',
       video: 'Add the video file provided with this task exactly as it is (no edits, no trimming, no music, no filters). Instagram may share it as a Reel; that is fine. Wait until it has finished uploading.',
@@ -93,6 +97,7 @@ export const NETWORKS: Record<PostPlatform, Network> = {
     schedule: 'Turn on "Schedule" (NOT "Post now")',
     checkNow: 'Check that the post now appears on the account’s profile',
     checkScheduled: 'Confirm the scheduled post and check that it appears in TikTok Studio’s list of scheduled posts at that time.',
+    scheduledList: 'TikTok Studio’s list of scheduled posts',
     media: {
       image: 'Upload the image file provided with this task as a photo post, exactly as it is (no filters, no music unless TikTok requires a sound). If TikTok Studio on the web cannot post photos for this account, stop and report that.',
       video: 'Upload the video file provided with this task exactly as it is (no edits, no trimming, no filters, no added music or effects). Wait until it has finished uploading and TikTok’s checks are done.',
@@ -112,6 +117,7 @@ export const NETWORKS: Record<PostPlatform, Network> = {
     schedule: 'Choose "Schedule for later" (the clock button), NOT "Post"',
     checkNow: 'Check that the post now appears on the profile or Page',
     checkScheduled: 'Confirm the scheduled post and check that it appears in LinkedIn’s list of scheduled posts at that time.',
+    scheduledList: 'LinkedIn’s list of scheduled posts',
     media: {
       image: 'Add the image file provided with this task exactly as it is (no edits, no crop, no extra images or videos).',
       video: 'Add the video file provided with this task exactly as it is (no edits, no trimming). Wait until it has finished uploading.',
@@ -132,6 +138,7 @@ export const NETWORKS: Record<PostPlatform, Network> = {
     schedule: 'Choose the schedule button in the composer (NOT "Post" right away)',
     checkNow: 'Check that the post now appears on the account’s profile',
     checkScheduled: 'Confirm the scheduled post and check that it appears in X’s list of scheduled posts at that time.',
+    scheduledList: 'X’s list of scheduled posts',
     media: {
       image: 'Add the image file provided with this task exactly as it is (no edits, no crop, no extra images or videos).',
       video: 'Add the video file provided with this task exactly as it is (no edits, no trimming). Wait until it has finished uploading.',

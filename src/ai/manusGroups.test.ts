@@ -1,7 +1,7 @@
 // Sharing a post in Facebook groups: the list you type, Manus's exact instructions, and its per-group report.
 import { describe, expect, it } from 'vitest';
 import type { ManusState } from './manus';
-import { groupLinkError, groupStateFromManus, groupSummary, groupsPrompt, groupsToRetry, parseGroupResults, parseGroups } from './manusGroups';
+import { carriedResults, groupLinkError, groupRecord, groupStateFromManus, groupSummary, groupsAlreadyOut, groupsPrompt, groupsToRetry, parseGroupResults, parseGroups, rememberedGroups } from './manusGroups';
 
 const base: ManusState = { taskId: 't', status: 'stopped', agentStatus: 'stopped', done: true, waiting: false, waitingType: '', waitingDescription: '', error: '', title: '', taskUrl: '', creditUsage: 0, text: '', imageCount: 0, images: [] };
 
@@ -66,18 +66,45 @@ describe('Manus’s report', () => {
 });
 
 describe('sending to groups again', () => {
+  // Manus doesn't look for an earlier copy before posting, so the groups that already have the post are left out
   const groups = ['Austin Small Business', 'Candle Makers', 'Etsy Sellers'];
-  it('after a run that stopped partway, leaves out the groups it already posted in or that wait for approval', () => {
-    const results = [
-      { group: 'Austin Small Business', state: 'posted' as const, detail: '' },
-      { group: 'Candle Makers', state: 'pending' as const, detail: 'waiting for admin approval' },
-    ];
-    expect(groupsToRetry({ state: 'failed', groups, results })).toEqual(['Etsy Sellers']);
-    // skipped and failed groups are offered again
-    expect(groupsToRetry({ state: 'failed', groups, results: [{ group: 'Etsy Sellers', state: 'failed', detail: 'x' }, { group: 'Candle Makers', state: 'skipped', detail: 'no promotions' }] })).toEqual(groups);
+  const posted = (group: string) => ({ group, state: 'posted' as const, detail: '', url: `https://www.facebook.com/groups/${group.length}/posts/1` });
+  it('leaves out the groups Manus reported as posted or waiting for approval', () => {
+    const results = [posted('Austin Small Business'), { group: 'Candle Makers', state: 'pending' as const, detail: 'waiting for admin approval' }];
+    expect(groupsToRetry({ groups, results })).toEqual(['Etsy Sellers']);
+    expect(groupsAlreadyOut({ groups, results })).toEqual(['Austin Small Business', 'Candle Makers']);
   });
-  it('offers every group when nothing was reported, or when the last run finished', () => {
-    expect(groupsToRetry({ state: 'failed', groups, results: [] })).toEqual(groups);
-    expect(groupsToRetry({ state: 'done', groups, results: [{ group: 'Austin Small Business', state: 'posted', detail: '' }] })).toEqual(groups);
+  it('does so after a finished run too (a failed or unreported group is the usual reason to send again)', () => {
+    const results = [posted('Austin Small Business'), { group: 'Candle Makers', state: 'failed' as const, detail: 'couldn’t find the group' }];
+    expect(groupsToRetry({ groups, results })).toEqual(['Candle Makers', 'Etsy Sellers']);
+  });
+  it('offers skipped and failed groups again, and every group when nothing was reported', () => {
+    expect(groupsToRetry({ groups, results: [{ group: 'Etsy Sellers', state: 'failed', detail: 'x' }, { group: 'Candle Makers', state: 'skipped', detail: 'no promotions' }] })).toEqual(groups);
+    expect(groupsToRetry({ groups, results: [] })).toEqual(groups);
+  });
+  it('offers every group when all of them already have it (a new share: the window says it posts twice)', () => {
+    const results = groups.map(posted);
+    expect(groupsToRetry({ groups, results })).toEqual(groups);
+    expect(groupsAlreadyOut({ groups, results })).toEqual(groups);
+  });
+  it('keeps the earlier groups’ results on the post, and counts them', () => {
+    // run 1: Austin posted; run 2 (sent to the other two): Candle Makers posted, Etsy Sellers not reported
+    const run1 = { groups, results: [posted('Austin Small Business')] };
+    const earlier = carriedResults(run1, ['Candle Makers', 'Etsy Sellers']);
+    expect(earlier).toEqual([posted('Austin Small Business')]);
+    const run2 = { groups: ['Candle Makers', 'Etsy Sellers'], results: [posted('Candle Makers')], earlier };
+    expect(groupRecord(run2)).toEqual({ groups, results: [posted('Austin Small Business'), posted('Candle Makers')] });
+    expect(groupSummary(groupRecord(run2))).toBe('posted in 2, 1 not reported (of 3 groups)');
+    expect(groupsToRetry(run2)).toEqual(['Etsy Sellers']);
+    // a third send keeps both
+    expect(carriedResults(run2, ['Etsy Sellers'])).toEqual([posted('Austin Small Business'), posted('Candle Makers')]);
+    // a group sent again is reported by the new run, not kept
+    expect(carriedResults(run2, ['Austin Small Business', 'Etsy Sellers'])).toEqual([posted('Candle Makers')]);
+  });
+  it('remembers the list you had plus the groups you added, once each, up to 10', () => {
+    expect(rememberedGroups(groups, ['Etsy Sellers', 'https://www.facebook.com/groups/candlemakers'])).toEqual([...groups, 'https://www.facebook.com/groups/candlemakers']);
+    expect(rememberedGroups(['Candle Makers'], ['candle makers', 'Candle Makers'])).toEqual(['Candle Makers']);
+    const ten = Array.from({ length: 9 }, (_, i) => `Group ${i + 1}`);
+    expect(rememberedGroups(ten, ['New A', 'New B'])).toEqual([...ten, 'New A']);
   });
 });

@@ -8,7 +8,7 @@ import { cn, fmtRelative } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { manusViaServer } from '@/ai/manus';
 import { postBlocker, postText, suggestedAccount } from '@/ai/manusPost';
-import { MAX_GROUPS, groupLinkError, groupSummary, groupsToRetry, parseGroups, refreshGroupShare, startGroupShare } from '@/ai/manusGroups';
+import { MAX_GROUPS, carriedResults, groupLinkError, groupRecord, groupSummary, groupsAlreadyOut, groupsToRetry, parseGroups, refreshGroupShare, rememberedGroups, startGroupShare } from '@/ai/manusGroups';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { AutoTextarea, Field, Modal, Spinner } from '../ui/primitives';
@@ -54,11 +54,12 @@ export function ManusGroupsHost() {
   const linkProblem = groups.map(groupLinkError).find(Boolean) ?? null;
   const tooMany = groups.length > MAX_GROUPS ? `Up to ${MAX_GROUPS} groups at a time: posting the same thing in many groups at once can get your account limited by Facebook.` : null;
   const blocker = postBlocker({ ...post, platform: 'facebook' }, { viaServer });
-  const again = !!post.groupShare && post.groupShare.state !== 'failed';
-  // a run that stopped partway may already have posted in some groups (Manus doesn't look for an earlier copy first)
-  const stopped = post.groupShare?.state === 'failed' ? post.groupShare : null;
-  const retry = stopped ? groupsToRetry(stopped) : [];
-  const leftOut = stopped ? stopped.groups.filter((g) => !retry.includes(g)) : [];
+  // Sending it to groups again. Manus doesn't look for an earlier copy before posting, so the groups it
+  // reported as posted (or waiting for approval) are left out of the list, unless that's all of them.
+  const prev = post.groupShare ?? null;
+  const out = prev ? groupsAlreadyOut(prev) : [];
+  const allOut = !!prev && out.length > 0 && out.length === groupRecord(prev).groups.length;
+  const leftOut = allOut ? [] : out;
   const problem = blocker ?? linkProblem ?? tooMany ?? (groups.length ? null : 'Add at least one group.');
   const inFlight = busy || sending.has(post.id);
 
@@ -69,11 +70,12 @@ export function ManusGroupsHost() {
     setErr(null);
     try {
       const share = await startGroupShare(useStore.getState().posts.find((x) => x.id === post.id) ?? post, groups, postAs.trim(), setStage);
-      useStore.getState().updatePost(post.id, { groupShare: share });
-      // remembered for next time (saved with the project); sending again after a run that stopped partway
-      // keeps the groups left out of this send, so the next post still offers them
-      const remember = stopped ? [...new Set([...stopped.groups, ...groups])] : groups;
-      useStore.getState().updateProject(project.id, (p) => ({ ...p, marketing: { ...p.marketing, facebookGroups: remember } }));
+      // the groups that already have it stay on the post, with their results and links
+      const earlier = prev ? carriedResults(prev, groups) : [];
+      useStore.getState().updatePost(post.id, { groupShare: earlier.length ? { ...share, earlier } : share });
+      // remembered for the next post (saved with the project). Sending again keeps the list you had (the
+      // groups left out are still yours), plus any group you added.
+      useStore.getState().updateProject(project.id, (p) => ({ ...p, marketing: { ...p.marketing, facebookGroups: prev ? rememberedGroups(p.marketing.facebookGroups ?? groupRecord(prev).groups, groups) : groups } }));
       toast({ kind: 'success', title: 'Sent to Manus', body: `Manus is posting it in ${groups.length} group${groups.length === 1 ? '' : 's'}, a couple of minutes apart. The post card shows each group’s result.`, action: { label: 'Watch in Manus', run: () => openUrl(share.taskUrl) } });
       close();
     } catch (e) {
@@ -98,7 +100,7 @@ export function ManusGroupsHost() {
             Cancel
           </button>
           <button className="btn btn-primary btn-sm" disabled={inFlight || !!problem || !ready || !!err?.uncertain} onClick={send}>
-            {busy ? <Spinner size={14} /> : <Users size={14} />} {busy && stage ? stage : again ? 'Post to these groups again' : `Post to ${groups.length || ''} group${groups.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+            {busy ? <Spinner size={14} /> : <Users size={14} />} {busy && stage ? stage : allOut ? 'Post to these groups again' : `Post to ${groups.length || ''} group${groups.length === 1 ? '' : 's'}`.replace('  ', ' ')}
           </button>
         </>
       }
@@ -120,15 +122,20 @@ export function ManusGroupsHost() {
             <li>It reads each group’s rules first and skips groups that don’t allow this kind of post. Some groups hold posts for their admins to approve.</li>
             <li>It’s one Manus task for all the groups, on your Manus credits. The first time, sign in to Facebook inside Manus.</li>
           </ul>
-          {again && <p className="text-[12.5px] font-medium text-warn">Manus already shared this post in groups. Sending it again can post it twice in the same groups.</p>}
-          {stopped && (
+          {prev && !err?.uncertain && (
             <p className="text-[12.5px] font-medium text-warn">
-              The last try stopped before Manus finished, so it may already have posted in some of these groups.
-              {leftOut.length > 0 && ` Left out, as Manus reported ${leftOut.length === 1 ? 'it' : 'them'} posted or waiting for approval: ${leftOut.join(', ')}.`} Check{' '}
-              <a href={stopped.taskUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">
-                the last task in Manus
-              </a>{' '}
-              and remove any group that already has the post before sending again.
+              {allOut ? (
+                'Manus already posted this in these groups (or it’s waiting for their admins). Sending it again posts it twice.'
+              ) : (
+                <>
+                  {prev.state === 'failed' ? 'The last try stopped before Manus finished, so it may already have posted in some of these groups.' : 'Manus already shared this post in groups.'}
+                  {leftOut.length > 0 && ` Left out, as Manus reported ${leftOut.length === 1 ? 'it' : 'them'} posted or waiting for approval: ${leftOut.join(', ')}.`} Sending it again to a group that already has it posts it twice: check{' '}
+                  <a href={prev.taskUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">
+                    the last task in Manus
+                  </a>
+                  , or look in the groups on Facebook, first.
+                </>
+              )}
             </p>
           )}
           {blocker && <p className="text-[12.5px] font-medium text-warn">{blocker}</p>}
@@ -191,7 +198,9 @@ export function GroupShareBadge({ post, compact }: { post: Post; compact?: boole
   const [checking, setChecking] = useState(false);
   if (!share) return null;
   const ui = SHARE_UI[share.state];
-  const summary = groupSummary(share);
+  // this run's results, after those kept from an earlier run (groups it isn't sending to again)
+  const rec = groupRecord(share);
+  const summary = groupSummary(rec);
   if (compact) {
     return (
       <span className={cn('badge inline-flex items-center gap-1', ui.cls)} title={share.message}>
@@ -219,9 +228,9 @@ export function GroupShareBadge({ post, compact }: { post: Post; compact?: boole
         </span>
       </p>
       {share.state !== 'done' && share.message && <p className="mt-0.5 break-words text-ink-2">{share.message}</p>}
-      {share.results.length > 0 && (
+      {rec.results.length > 0 && (
         <ul className="mt-1 flex flex-col gap-0.5 text-ink-2">
-          {share.results.map((r) => {
+          {rec.results.map((r) => {
             const R = RESULT_UI[r.state];
             return (
               <li key={r.group} className="flex flex-wrap items-center gap-x-1.5">
@@ -280,8 +289,9 @@ async function applyGroupRefresh(postId: string) {
   if (next.state === prev.state) return;
   const action = { label: 'Open in Manus', run: () => openUrl(next.taskUrl) };
   if (next.state === 'done') {
-    toast({ kind: 'success', title: 'Manus finished the Facebook groups', body: next.message, action });
-    useStore.getState().notify({ kind: 'post', title: `Facebook groups: ${groupSummary(next) || 'done'}`, body: post.headline, route: 'calendar' });
+    const summary = groupSummary(groupRecord(next));
+    toast({ kind: 'success', title: 'Manus finished the Facebook groups', body: summary || next.message, action });
+    useStore.getState().notify({ kind: 'post', title: `Facebook groups: ${summary || 'done'}`, body: post.headline, route: 'calendar' });
   } else if (next.state === 'needs_input') {
     toast({ kind: 'info', title: 'Manus needs you', body: next.message, action });
     useStore.getState().notify({ kind: 'info', title: 'Manus needs you to continue (groups)', body: next.message, route: 'calendar' });

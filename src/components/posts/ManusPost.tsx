@@ -87,6 +87,16 @@ const sending = new Set<string>();
 
 type Progress = { stage?: string; sent?: boolean; taskUrl?: string; error?: { title: string; body: string; uncertain?: boolean } };
 
+/**
+ * The post's last Manus try on this network, when it failed. Manus doesn't look for an earlier copy before
+ * posting, so that try may still have gone out (or been scheduled) before Manus stopped. (Not once it's been
+ * sent again from this window, and not while a new try may have started: that has its own warning.)
+ */
+function failedTry(post: Post, progress?: Progress) {
+  const last = post.external;
+  return !progress?.sent && !progress?.error?.uncertain && last?.state === 'failed' && last.network === post.platform ? last : undefined;
+}
+
 /** Confirm, then hand each post (its text, and its image or video) to Manus, one after another. */
 export function ManusPostHost() {
   const ids = useManusPost((s) => s.ids);
@@ -132,6 +142,7 @@ export function ManusPostHost() {
   const pending = posts.filter((p) => !progress[p.id]?.sent);
   const sendable = pending.filter((p) => !problem(p));
   const laterNow = mode === 'now' && posts.length > 1 ? sendable.filter((p) => p.status === 'scheduled' && new Date(p.scheduledAt).getTime() > Date.now() + 3600_000).length : 0;
+  const failedBefore = posts.length > 1 ? sendable.filter((p) => failedTry(p, progress[p.id])).length : 0;
   const inFlight = busy || posts.some((p) => sending.has(p.id));
   const single = posts.length === 1;
 
@@ -220,6 +231,7 @@ export function ManusPostHost() {
             {mode === 'now' ? 'Manus posts as soon as it’s ready, usually within a few minutes.' : `Manus schedules ${single ? 'it' : 'each post'} on the network for the time on your calendar (${tz} time). Change a time in the post editor.`}
           </p>
           {laterNow > 0 && <p className="mt-1 text-[12.5px] font-medium text-warn">{laterNow} of these {laterNow === 1 ? 'is' : 'are'} planned for later: Post now sends {laterNow === 1 ? 'it' : 'them'} out right away.</p>}
+          {failedBefore > 0 && <p className="mt-1 text-[12.5px] font-medium text-warn">{failedBefore} of these failed last time and may already be out or scheduled: check {failedBefore === 1 ? 'it' : 'them'} below before sending.</p>}
         </div>
         <ul className="flex flex-col gap-3">
           {posts.map((p) => (
@@ -258,8 +270,7 @@ function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry 
   const warning = textWarning(post);
   const last = progress?.sent ? undefined : post.external;
   const resend = !!last && last.state !== 'failed';
-  // a try that failed may still have gone out before Manus stopped (it doesn't look for an earlier copy first)
-  const failedBefore = last?.state === 'failed' ? last : undefined;
+  const failedBefore = failedTry(post, progress);
   return (
     <li className="grid grid-cols-[72px_minmax(0,1fr)] gap-3 rounded-md border border-line p-2.5">
       {post.media ? <MediaThumb media={post.media} className="aspect-[4/5] w-full" /> : <div className="flex aspect-[4/5] w-full items-center justify-center rounded-md border border-dashed border-line-2 px-1 text-center text-[10.5px] text-muted">Text only</div>}
@@ -287,7 +298,7 @@ function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry 
         {resend && <p className="text-[12.5px] font-medium text-warn">Already sent to Manus. Sending it again can post it twice.</p>}
         {failedBefore && (
           <p className="text-[12.5px] font-medium text-warn">
-            The last try failed, but it may have gone out before Manus stopped. Check {networkLabel(post.platform)} or{' '}
+            {failedBefore.mode === 'now' ? `The last try failed, but it may have gone out before Manus stopped. Check ${networkLabel(post.platform)}` : `The last try failed, but Manus may have scheduled it before it stopped. Check ${NETWORKS[post.platform].scheduledList}`} or{' '}
             <a href={failedBefore.taskUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">
               the task in Manus
             </a>{' '}

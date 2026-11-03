@@ -545,6 +545,8 @@ export interface GroupShare {
   /** your profile, or the Page name to post as where the group allows it */
   postAs: string;
   results: GroupResult[];
+  /** groups an earlier run already posted in (or that wait for approval): kept when the post was sent again to the rest */
+  earlier?: GroupResult[];
   requestedAt: number;
   checkedAt: number;
 }

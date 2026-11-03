@@ -118,15 +118,43 @@ export function groupSummary(share: Pick<GroupShare, 'results' | 'groups'>): str
   return parts.length ? `${parts.join(', ')} (of ${share.groups.length} group${share.groups.length === 1 ? '' : 's'})` : '';
 }
 
+type ShareRecord = Pick<GroupShare, 'groups' | 'results' | 'earlier'>;
+
+const wentOut = (r: GroupResult) => r.state === 'posted' || r.state === 'pending';
+
+/** Everything a post's group shares reported: results kept from earlier runs, then this run's. */
+export function groupRecord(share: ShareRecord): { groups: string[]; results: GroupResult[] } {
+  const earlier = (share.earlier ?? []).filter((r) => !share.groups.includes(r.group));
+  return { groups: [...earlier.map((r) => r.group), ...share.groups], results: [...earlier, ...share.results] };
+}
+
+/** The groups a post's shares reported as posted or waiting for approval. */
+export function groupsAlreadyOut(share: ShareRecord): string[] {
+  const rec = groupRecord(share);
+  const out = new Set(rec.results.filter(wentOut).map((r) => r.group));
+  return rec.groups.filter((g) => out.has(g));
+}
+
 /**
- * The groups to offer when sending again. After a run that stopped partway, the groups Manus already
- * reported as posted (or waiting for approval) are left out: Manus no longer looks for an earlier copy
- * before posting, so sending to them again would post twice.
+ * The groups to offer when sending the post to groups again. Manus doesn't look for an earlier copy before
+ * posting, so the groups it reported as posted (or waiting for approval) are left out, unless it reported
+ * every group that way: then sending again is a new share to all of them (and the window says it posts twice).
  */
-export function groupsToRetry(share: Pick<GroupShare, 'state' | 'groups' | 'results'>): string[] {
-  if (share.state !== 'failed') return share.groups;
-  const out = new Set(share.results.filter((r) => r.state === 'posted' || r.state === 'pending').map((r) => r.group));
-  return share.groups.filter((g) => !out.has(g));
+export function groupsToRetry(share: ShareRecord): string[] {
+  const rec = groupRecord(share);
+  const out = new Set(groupsAlreadyOut(share));
+  const rest = rec.groups.filter((g) => !out.has(g));
+  return rest.length ? rest : rec.groups;
+}
+
+/** The results a new share of the post keeps: the groups that already have it and aren't being sent again. */
+export function carriedResults(share: ShareRecord, sent: string[]): GroupResult[] {
+  return groupRecord(share).results.filter((r) => wentOut(r) && !sent.includes(r.group));
+}
+
+/** The group list to remember after sending a post to groups again: the list you had, plus any group you added (once each, up to MAX_GROUPS). */
+export function rememberedGroups(current: string[], sent: string[]): string[] {
+  return parseGroups([...current, ...sent].join('\n')).slice(0, MAX_GROUPS);
 }
 
 export function groupStateFromManus(s: ManusState, groups: string[]): Pick<GroupShare, 'state' | 'message' | 'results'> {
