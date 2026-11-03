@@ -157,6 +157,7 @@ Set it up once:
    - `user_secrets`: each user's own AI keys (OpenAI, Anthropic, Google, xAI, OpenRouter, Meta, Manus), encrypted by the server. Browsers can't read or write it at all.
    - `app_state`: the server's own settings (your AI keys and their settings, the daily limits, the Manus task list, the usage log), encrypted. Browsers can't reach it either.
    - `ai_usage_daily` and the `ylb_add_ai_usage` function (`20261103030000_ai_usage_daily.sql`): each user's AI requests and dollars per day (UTC), for the daily limits. Server-only, like `user_secrets`. **Already set up before this version? Run this one file**: it also lets `user_secrets` hold keys for every provider, not just Manus. Until it's run, the counters live in the server's memory (they reset when it restarts) and only Manus keys can be saved.
+   - `published_pages` and `published_domains` (`20261103040000_published_pages.sql`): published pages and people's own domains (see "Publishing pages"). Server-only.
 3. Supabase → **Authentication** → Sign In / Providers → Email: keep **Confirm email** on. The owner check below relies on confirmed emails.
 4. Supabase → **Authentication** → **URL Configuration**:
    - Set **Site URL** to your app's address (for example `https://your-app.replit.app`).
@@ -197,6 +198,25 @@ What people get:
 - **One tab at a time:** an account works in one tab per browser. Opening it in a second tab moves it there; the first tab offers "Use it here".
 - **Optional sign-in:** `SIGN_IN_REQUIRED=false` makes signing in optional. "Continue without an account" keeps work in that browser, and AI then works without signing in. Signed-out visitors get the same daily limits, counted per network address in the server's memory (behind a proxy they share one count), so signing out never lifts a limit.
 
+## Publishing pages
+
+Signed-in people can publish their SEO page and each artifact at a public address they name, `https://<your app>/<name>`, and also show it on a domain of their own (`https://their-domain.com/<name>`, or as that domain's home page). The server keeps a copy of each published page and its images; the live page changes only when they publish again.
+
+Set it up once:
+1. Accounts on, with the `SUPABASE_SECRET_KEY` Secret (see above).
+2. Supabase → SQL Editor → run `supabase/migrations/20261103040000_published_pages.sql`. Until then, publishing says which file to run.
+
+Own domains:
+1. The person adds the domain in Settings → Domains. Each domain belongs to the first account that adds it.
+2. The app's owner links it in Replit: open the app → Deployments → Settings → Domains → "Use a domain you already own". The person then adds the A and TXT records Replit shows at their registrar (Cloudflare: DNS only, not proxied).
+3. Back in Settings → Domains, **Check**: the server asks `https://<domain>/.well-known/ylb-domain-check` for the domain's code.
+- On someone's domain, the server answers only with their published pages, a `robots.txt` and a `sitemap.xml`: never the app or `/api`.
+- If the app itself also runs on a domain of yours, add it to the `APP_HOSTS` Secret (comma-separated) so nobody can claim it.
+
+Security: published pages are other people's HTML and scripts, served from the app's own address, where the app keeps its sign-in. So on the app's address every page is sent with a `Content-Security-Policy: sandbox` header that never allows the app's origin: the page can't read the sign-in or use the API as the visitor, and SEO pages can't run scripts at all. Images are served only when they're listed with their page and are still the exact files checked when it was published (JPEG, PNG, WebP or GIF; never SVG). On a person's own domain, pages run unsandboxed on that domain's own origin.
+
+API (signed in, same site only): `GET /api/pages`, `GET /api/pages/check?slug=&pageId=`, `PUT` and `DELETE /api/pages/<pageId>`, `POST /api/domains`, `POST /api/domains/<domain>/check`, `DELETE /api/domains/<domain>`.
+
 ## Run it
 
 ```bash
@@ -223,8 +243,9 @@ Server environment:
 - `ADMIN_TOKEN`
 - `AI_PROVIDER_BASE_URLS`: a JSON map of provider id to base URL, for a proxy or the test mock
 - accounts: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `ADMIN_EMAILS`, `SIGN_IN_REQUIRED` (see "Accounts")
+- `APP_HOSTS`: other domains the app itself runs on (see "Publishing pages")
 
-`GET /api/config` tells the app whether accounts are on, and `DELETE /api/account` deletes the signed-in user, with their saved workspace and files.
+`GET /api/config` tells the app whether accounts are on and whether it can publish pages, and `DELETE /api/account` deletes the signed-in user, with their saved workspace, files and published pages.
 
 `GET /api/health` returns `{ ok, ai }`, where `ai` lists each key's readiness, model and effort, and which keys power each function.
 
@@ -247,7 +268,8 @@ Where to plug in real integrations:
 
 With accounts on, each user's workspace is saved in Supabase:
 - each project, post, ad, skill, generation, listing, order, sale and notice is a row in `user_docs`, plus one row for account-level settings;
-- their files go to Storage, under `media/<user id>/`;
+- their files go to Storage, under `media/<user id>/` (a published page's images under `media/<user id>/published/`);
+- published pages are rows in `published_pages`, and their own domains in `published_domains`;
 - each device they use keeps a copy for speed and offline work.
 
 Theme, server address and demo switches stay per device.
@@ -266,7 +288,8 @@ src/
   store/         zustand stores (persisted project context, UI state, cleanup of data older versions made up)
 shared/          ai-functions.json: what AI does in the app (used by the app and the server)
 server/          AI server (ai-server.mjs) + static server; providers/: registry, key store, adapters, router, routes, usage log;
-                 auth.mjs: checks the Supabase sign-in token; test/mock-providers.mjs: a stand-in for every provider's API;
+                 auth.mjs: checks the Supabase sign-in token; pages.mjs: published pages and people's own domains;
+                 test/mock-providers.mjs: a stand-in for every provider's API;
                  test/mock-supabase.mjs: a stand-in for Supabase Auth, the database and Storage
 supabase/        migrations: the accounts tables, bucket and row-level security
 scripts/         Artifact packaging

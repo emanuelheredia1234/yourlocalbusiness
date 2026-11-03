@@ -16,11 +16,12 @@ const SECRET = 'sb_secret_mock_456';
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 /** Primary keys per table: rows with the same values are one row (upserts replace them). */
-const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'], app_state: ['key'], market_listings: ['user_id', 'id'], ai_usage_daily: ['user_id', 'day'] };
+const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'], app_state: ['key'], market_listings: ['user_id', 'id'], ai_usage_daily: ['user_id', 'day'], published_pages: ['slug'], published_domains: ['domain'] };
 /** tables every signed-in person may read (writes stay owner-only), like the market_listings policies */
 const PUBLIC_READ = new Set(['market_listings']);
 /** tables with row-level security and no policies: only the secret key reaches them */
-const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily']);
+const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'published_pages', 'published_domains']);
+const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** the user_secrets.provider check constraint (supabase/migrations/20261103030000_ai_usage_daily.sql) */
 const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openrouter', 'meta', 'manus']);
 
@@ -191,21 +192,21 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       const keyCols = pk.length ? pk : PRIMARY_KEYS[table] ?? ['id'];
       const upsert = /resolution=merge-duplicates/.test(prefer);
       const skipExisting = /resolution=ignore-duplicates/.test(prefer); // INSERT … ON CONFLICT DO NOTHING
+      const primary = PRIMARY_KEYS[table] ?? keyCols;
       const written = [];
       for (const item of items) {
         if (table === 'user_secrets' && !secretProviders.has(item.provider)) return send(res, 400, { code: '23514', message: 'new row for relation "user_secrets" violates check constraint "user_secrets_provider_check"' });
         if (!who.service && item.user_id !== who.userId) return send(res, 403, { code: '42501', message: 'new row violates row-level security policy for table "' + table + '"' });
         const row = { ...item, updated_at: new Date().toISOString() };
         const i = rows.findIndex((r) => keyCols.every((c) => r[c] === row[c]));
-        if (i >= 0) {
-          if (skipExisting) continue;
-          if (!upsert) return send(res, 409, { code: '23505', message: 'duplicate key value violates unique constraint' });
-          rows[i] = { ...rows[i], ...row };
-          written.push(rows[i]);
-        } else {
-          rows.push(row);
-          written.push(row);
-        }
+        if (i >= 0 && skipExisting) continue;
+        if (i >= 0 && !upsert) return send(res, 409, DUPLICATE);
+        const next = i >= 0 ? { ...rows[i], ...row } : row;
+        // the primary key stays unique when an upsert matched on another unique key (a renamed slug)
+        if (rows.some((r, j) => j !== i && primary.every((c) => r[c] === next[c]))) return send(res, 409, DUPLICATE);
+        if (i >= 0) rows[i] = next;
+        else rows.push(next);
+        written.push(next);
       }
       return /return=representation/.test(prefer) ? send(res, 201, written.map((r) => project(r, url.searchParams.get('select')))) : send(res, 201, undefined);
     }
@@ -213,6 +214,12 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (req.method === 'PATCH') {
       const patch = JSON.parse(raw || '{}');
       const hit = rows.filter((r) => owned(r) && matches(r, filters));
+      // an update that would give a row another row's primary key changes nothing
+      const primary = PRIMARY_KEYS[table] ?? ['id'];
+      if (primary.some((c) => c in patch)) {
+        const keyOf = (r) => JSON.stringify(primary.map((c) => (hit.includes(r) && c in patch ? patch[c] : r[c])));
+        if (hit.some((h) => rows.some((r) => r !== h && keyOf(r) === keyOf(h)))) return send(res, 409, DUPLICATE);
+      }
       for (const r of hit) Object.assign(r, patch, { updated_at: new Date().toISOString() });
       return /return=representation/.test(prefer) ? send(res, 200, hit) : send(res, 204, undefined);
     }
@@ -282,11 +289,16 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (m && req.method === 'POST') {
       const { prefix = '', limit = 100, offset = 0 } = JSON.parse(rawBuf.toString() || '{}');
       const dir = prefix.replace(/\/+$/, '');
-      const names = [...objects.keys()]
-        .filter((k) => k.startsWith(`${m[1]}/${dir}/`) && own(k.slice(m[1].length + 1)))
-        .map((k) => k.slice(m[1].length + 1 + dir.length + 1))
-        .filter((n) => !n.includes('/'));
-      return send(res, 200, names.slice(offset, offset + limit).map((name) => ({ name, id: name, metadata: { size: objects.get(`${m[1]}/${dir}/${name}`).bytes.length } })));
+      const below = [...objects.keys()].filter((k) => k.startsWith(`${m[1]}/${dir}/`) && own(k.slice(m[1].length + 1))).map((k) => k.slice(m[1].length + 1 + dir.length + 1));
+      // like Supabase: the files in the folder, and each sub-folder once, as an entry without an id
+      const entries = new Map();
+      for (const n of below) {
+        const [first, ...deeper] = n.split('/');
+        if (deeper.length) entries.set(`folder:${first}`, { name: first, id: null, metadata: null });
+        else entries.set(`file:${n}`, { name: n, id: n, metadata: { size: objects.get(`${m[1]}/${dir}/${n}`).bytes.length } });
+      }
+      const list = [...entries.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      return send(res, 200, list.slice(offset, offset + limit));
     }
     m = /^\/object\/([^/]+)$/.exec(p);
     if (m && req.method === 'DELETE') {
