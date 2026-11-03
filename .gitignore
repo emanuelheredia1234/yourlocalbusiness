@@ -6,3 +6,6 @@ dist-artifact/
 *.zip
 .env
 .env.*
+
+# agent worktrees (Claude Code)
+.claude/worktrees/
