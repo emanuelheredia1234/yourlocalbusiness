@@ -50,16 +50,18 @@ export interface SyncBackend {
 /** The settings that belong to the account. Theme, server address and demo switches stay per device. */
 export interface AccountSettings {
   profile: AppSettings['profile'];
-  accounts: AppSettings['accounts'];
+  /** only from older versions (their pretend connections): the cleanup moves the handles and drops it */
+  accounts?: AppSettings['accounts'];
   useBrain: boolean;
   shareToCommunity: boolean;
 }
-const accountSettings = (s: AppSettings): AccountSettings => ({ profile: s.profile, accounts: s.accounts, useBrain: s.ai.useBrain, shareToCommunity: s.shareToCommunity });
+const accountSettings = (s: AppSettings): AccountSettings => ({ profile: s.profile, ...(s.accounts ? { accounts: s.accounts } : {}), useBrain: s.ai.useBrain, shareToCommunity: s.shareToCommunity });
 function withAccountSettings(s: AppSettings, a: Partial<AccountSettings>): AppSettings {
   return {
     ...s,
     profile: a.profile && typeof a.profile === 'object' ? { ...s.profile, ...a.profile } : s.profile,
-    accounts: a.accounts && typeof a.accounts === 'object' ? { ...s.accounts, ...a.accounts } : s.accounts,
+    // kept only until the cleanup has moved its handles (see store/cleanup.ts)
+    accounts: a.accounts && typeof a.accounts === 'object' ? a.accounts : s.accounts,
     shareToCommunity: typeof a.shareToCommunity === 'boolean' ? a.shareToCommunity : s.shareToCommunity,
     ai: { ...s.ai, useBrain: typeof a.useBrain === 'boolean' ? a.useBrain : s.ai.useBrain },
   };

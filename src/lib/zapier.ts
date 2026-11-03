@@ -1,5 +1,5 @@
 // Calls into the viewer's Zapier connector (claude.ai `mcp` capability).
-// Used for Manus image generation and Facebook posts; only available when the app
+// Used for Manus image generation and social posts; only available when the app
 // runs as a claude.ai Artifact whose viewer has the Zapier connector.
 
 import { getMcp, useRuntime } from './platform';

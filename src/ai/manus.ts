@@ -226,7 +226,7 @@ export interface CreateManusOptions {
   imageName?: string;
   /** files already sent to Manus (sendFileToManus), e.g. a post's video */
   files?: { file_id: string; filename: string }[];
-  /** let Manus pause to ask (e.g. to sign in to Facebook) */
+  /** let Manus pause to ask (e.g. to sign in to a network) */
   interactive?: boolean;
   hidden?: boolean;
   /** claude.ai only: self-hosted, the key's effort in Settings → AI picks the profile */

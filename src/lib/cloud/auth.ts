@@ -9,6 +9,7 @@ import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { deleteMediaDatabase, readBrowserMedia, putBlob, safeStorage, setMediaAccount } from '@/lib/storage';
 import { initial, starterSkills, useStore, type StoreState } from '@/store/useStore';
 import { defaultSettings } from '@/store/defaults';
+import { cleanWorkspace } from '@/store/cleanup';
 import { createSync, supabaseBackend, useSyncStatus, type Sync } from './sync';
 import { createMediaSync, type MediaSync } from './media';
 
@@ -56,6 +57,8 @@ const DISCARD_KEY = 'ylb-signed-out';
 const stateKey = (userId: string) => `${LEGACY_KEY}:${userId}`;
 /** per-device keys that point at a user's posts and jobs */
 const DEVICE_KEYS = ['ylb-manus-pending', 'ylb-video-pending', 'ylb-fb-page', 'ylb-admin-token'];
+/** per-device keys by prefix (the accounts Manus last posted as, per project and network) */
+const DEVICE_PREFIXES = ['ylb-post-account:'];
 
 let client: SupabaseClient | null = null;
 let sync: Sync | null = null;
@@ -209,10 +212,10 @@ export async function startAuth(): Promise<void> {
   });
   const config = await loadConfig();
   const st = useAuth.getState();
-  if (!config) return st.set({ phase: 'off', config: null });
+  if (!config) return workLocally();
   st.set({ config });
   const lib = __ARTIFACT_BUILD__ ? null : await import('@supabase/supabase-js').catch(() => null);
-  if (!lib) return st.set({ phase: 'off', config: null });
+  if (!lib) return workLocally();
   const badLink = linkError();
   const cameWithCode = new URLSearchParams(location.search).has('code');
   client = lib.createClient(config.url, config.publishableKey, {
@@ -399,12 +402,20 @@ async function openWorkspace(user: User, { force = false } = {}) {
   }
 }
 
+/** No accounts: everything stays in this browser (anything an older version made up is removed first). */
+function workLocally() {
+  cleanWorkspace();
+  useAuth.getState().set({ phase: 'off', config: null });
+}
+
 /** Start saving; a brand-new account gets the starter skills (saved like any change). */
 function begin({ seed = false } = {}) {
   const st = useAuth.getState();
   sync?.start();
   media?.start();
   if (seed) useStore.setState({ skills: starterSkills() });
+  // after start, so what it removes is removed from the account too
+  cleanWorkspace();
   if (st.user) {
     safeStorage.setItem(openedKey(st.user.id), '1');
     const url = useStore.getState().settings.ai.serverUrl;
@@ -444,7 +455,6 @@ export async function answerImport(bring: boolean) {
       ...(os ?? {}),
       ai: { ...now.ai, useBrain: os?.ai?.useBrain ?? now.ai.useBrain, serverUrl: os?.ai?.serverUrl ?? now.ai.serverUrl, simulateLatency: os?.ai?.simulateLatency ?? now.ai.simulateLatency },
       profile: { ...d.profile, ...(os?.profile ?? {}) },
-      accounts: { ...d.accounts, ...(os?.accounts ?? {}) },
     };
     useStore.setState(keep);
     // its files move into the account's store (and up to the cloud)
@@ -533,7 +543,9 @@ export async function setNewPassword(password: string): Promise<{ error?: string
 /** Carry on without an account (only when the owner made sign-in optional). */
 export function continueAsGuest() {
   const st = useAuth.getState();
-  if (st.config && !st.config.signInRequired) st.set({ phase: 'guest', notice: null });
+  if (!st.config || st.config.signInRequired) return;
+  cleanWorkspace();
+  st.set({ phase: 'guest', notice: null });
 }
 
 /** From the guest app: show the sign-in screen. */
@@ -564,6 +576,11 @@ async function forgetDevice(userId: string) {
   safeStorage.removeItem(`ylb-sync:${userId}`);
   safeStorage.removeItem(`ylb-media-sync:${userId}`);
   for (const k of DEVICE_KEYS) safeStorage.removeItem(k);
+  try {
+    for (const k of Object.keys(localStorage)) if (DEVICE_PREFIXES.some((p) => k.startsWith(p))) safeStorage.removeItem(k);
+  } catch {
+    /* storage blocked */
+  }
   await deleteMediaDatabase(userId);
   setMediaAccount(null, null);
 }

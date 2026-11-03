@@ -13,7 +13,6 @@ import type {
   Project,
   SaleRecord,
   Skill,
-  SocialPlatform,
   Studio,
   Track,
   Origin,
@@ -52,9 +51,12 @@ export interface StoreState {
   addPosts: (posts: Post[]) => void;
   updatePost: (id: string, patch: Partial<Post>) => void;
   deletePosts: (ids: string[]) => void;
+  /** put drafts on your calendar (nothing posts by itself: Manus posts them, or you do) */
   schedulePosts: (ids: string[]) => void;
-  publishPost: (id: string) => void;
-  autoPublishDue: (now?: number) => Post[];
+  /** you posted it yourself: mark it published, with its link if you have one */
+  markPosted: (id: string, o?: { url?: string; at?: string }) => void;
+  /** undo a mark you made by hand */
+  unmarkPosted: (id: string) => void;
 
   // ads
   upsertAd: (c: AdCampaign) => void;
@@ -81,8 +83,6 @@ export interface StoreState {
   notify: (n: Omit<Notice, 'id' | 'createdAt' | 'read'>) => void;
   markNoticesRead: () => void;
   updateSettings: (fn: (s: AppSettings) => AppSettings) => void;
-  connectAccount: (platform: SocialPlatform, handle: string, followers: number) => void;
-  disconnectAccount: (platform: SocialPlatform) => void;
 
   // data
   replaceState: (s: Partial<StoreState>) => void;
@@ -155,20 +155,16 @@ export const useStore = create<StoreState>()(
         set((s) => ({
           posts: s.posts.map((p) => (ids.includes(p.id) && p.status === 'draft' ? { ...p, status: 'scheduled', updatedAt: Date.now() } : p)),
         })),
-      publishPost: (id) =>
+      markPosted: (id, o = {}) =>
         set((s) => ({
-          posts: s.posts.map((p) => (p.id === id ? { ...p, status: 'published', publishedAt: new Date().toISOString(), updatedAt: Date.now() } : p)),
+          posts: s.posts.map((p) =>
+            p.id === id ? { ...p, status: 'published', publishedBy: 'manual', publishedAt: o.at ?? new Date().toISOString(), postUrl: o.url?.trim() || p.postUrl, updatedAt: Date.now() } : p,
+          ),
         })),
-      autoPublishDue: (now = Date.now()) => {
-        // a post handed to Manus is published by Facebook, not by this timer (unless Manus scheduled it there)
-        const due = get().posts.filter((p) => p.status === 'scheduled' && new Date(p.scheduledAt).getTime() <= now && (!p.external || p.external.state === 'scheduled'));
-        if (!due.length) return [];
-        const ids = new Set(due.map((d) => d.id));
+      unmarkPosted: (id) =>
         set((s) => ({
-          posts: s.posts.map((p) => (ids.has(p.id) ? { ...p, status: 'published', publishedAt: p.scheduledAt, updatedAt: Date.now() } : p)),
-        }));
-        return due;
-      },
+          posts: s.posts.map((p) => (p.id === id && p.publishedBy === 'manual' ? { ...p, status: 'scheduled', publishedBy: undefined, publishedAt: undefined, postUrl: undefined, updatedAt: Date.now() } : p)),
+        })),
 
       upsertAd: (c) => set((s) => ({ ads: s.ads.some((a) => a.id === c.id) ? s.ads.map((a) => (a.id === c.id ? c : a)) : [...s.ads, c] })),
       deleteAd: (id) => set((s) => ({ ads: s.ads.filter((a) => a.id !== id) })),
@@ -237,10 +233,6 @@ export const useStore = create<StoreState>()(
       notify: (n) => set((s) => ({ notices: [{ ...n, id: uid('note'), createdAt: Date.now(), read: false }, ...s.notices].slice(0, 60) })),
       markNoticesRead: () => set((s) => ({ notices: s.notices.map((n) => ({ ...n, read: true })) })),
       updateSettings: (fn) => set((s) => ({ settings: fn(s.settings) })),
-      connectAccount: (platform, handle, followers) =>
-        set((s) => ({ settings: { ...s.settings, accounts: { ...s.settings.accounts, [platform]: { connected: true, handle, followers, connectedAt: Date.now() } } } })),
-      disconnectAccount: (platform) =>
-        set((s) => ({ settings: { ...s.settings, accounts: { ...s.settings.accounts, [platform]: { connected: false, handle: '', followers: 0 } } } })),
 
       replaceState: (partial) => set(partial),
       resetAll: () => {
@@ -279,7 +271,6 @@ export const useStore = create<StoreState>()(
             // only the current AI settings (older versions also kept a provider choice and "creativity")
             ai: { serverUrl: p.settings?.ai?.serverUrl ?? d.ai.serverUrl, useBrain: p.settings?.ai?.useBrain ?? d.ai.useBrain, simulateLatency: p.settings?.ai?.simulateLatency ?? d.ai.simulateLatency },
             profile: { ...d.profile, ...(p.settings?.profile ?? {}) },
-            accounts: { ...d.accounts, ...(p.settings?.accounts ?? {}) },
           },
         };
       },

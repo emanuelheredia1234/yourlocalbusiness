@@ -12,6 +12,7 @@ import { StatTile } from '@/components/charts/Charts';
 import { BrandLogo } from '@/components/brand/Logo';
 import { ProgressRing } from '@/components/ui/primitives';
 import { PlatformGlyph } from '@/components/posts/PlatformIcon';
+import { DueBadge } from '@/components/posts/PostActions';
 import { QuickComposer } from './QuickComposer';
 
 export function readiness(project: Project, ctx: { scheduled: number; sales: number; listed: boolean }) {
@@ -22,7 +23,7 @@ export function readiness(project: Project, ctx: { scheduled: number; sales: num
     { label: 'Listed on the Marketplace', done: ctx.listed, route: 'studio', cta: 'Publish' },
     { label: 'Lead magnet + 5 emails', done: !!project.marketing.leadMagnet && project.marketing.emails.length >= 5, route: 'marketing-email', cta: 'Build funnel' },
     { label: 'SEO sales page', done: !!project.marketing.salesPage, route: 'marketing-seo', cta: 'Build page' },
-    { label: 'Social campaign scheduled', done: ctx.scheduled > 0, route: 'marketing-social', cta: 'Plan campaign' },
+    { label: 'Social posts on your calendar', done: ctx.scheduled > 0, route: 'marketing-social', cta: 'Plan campaign' },
     { label: 'First sale', done: ctx.sales > 0, route: 'store', cta: 'View store' },
   ];
   return { items, done: items.filter((i) => i.done).length };
@@ -208,7 +209,7 @@ export function Dashboard() {
           </div>
           {upcoming.length === 0 ? (
             <p className="rounded-md bg-surface-2 px-3 py-6 text-center text-[13px] text-muted">
-              Nothing scheduled.{' '}
+              Nothing planned.{' '}
               <button className="link" onClick={() => navigate('marketing-social')}>
                 Generate a 7-day content batch
               </button>
@@ -228,8 +229,11 @@ export function Dashboard() {
                         {POST_TYPE_MAP[p.postType].short} · {p.format}
                       </span>
                     </span>
-                    <span className="num flex shrink-0 items-center gap-1 text-xs text-muted">
-                      <CalendarClock size={12} /> {fmtDateTime(p.scheduledAt)}
+                    <span className="flex shrink-0 flex-col items-end gap-0.5">
+                      <span className="num flex items-center gap-1 text-xs text-muted">
+                        <CalendarClock size={12} /> {fmtDateTime(p.scheduledAt)}
+                      </span>
+                      <DueBadge post={p} />
                     </span>
                   </button>
                 </li>
@@ -240,7 +244,7 @@ export function Dashboard() {
         <section className="panel p-4 sm:p-5" aria-label="Recent activity">
           <h2 className="section-title mb-3">Recent activity</h2>
           {activity.length === 0 ? (
-            <p className="rounded-md bg-surface-2 px-3 py-6 text-center text-[13px] text-muted">AI generations, publishes and sales will appear here.</p>
+            <p className="rounded-md bg-surface-2 px-3 py-6 text-center text-[13px] text-muted">AI generations, posts and sales will appear here.</p>
           ) : (
             <ul className="flex flex-col gap-1">
               {activity.map((a) => (

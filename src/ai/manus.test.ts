@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ManusState } from './manus';
 import { manusImagePrompt, parseManusCreate, parseManusState } from './manus';
-import { facebookPostPrompt, facebookSchedulePrompt, fbScheduleWindowError, parseScheduleResult, stateFromManus } from './manusFacebook';
+import { parseResult, postBlocker, postPrompt, postUrlFrom, scheduleWindowError, stateFromManus, suggestedAccount, textWarning } from './manusPost';
+import { safeStorage } from '@/lib/storage';
 import { unwrapZapier, ZapierError } from '@/lib/zapier';
 
 // Shapes as Zapier returns them (values made up)
@@ -47,16 +48,23 @@ describe('Manus', () => {
   });
 });
 
-describe('Facebook scheduling with Manus', () => {
+describe('Posting with Manus', () => {
   const now = Date.parse('2026-10-28T12:00:00Z');
-  it('only schedules inside Facebook’s window', () => {
-    expect(fbScheduleWindowError('2026-10-28T12:10:00Z', now)).toMatch(/30 minutes/);
-    expect(fbScheduleWindowError('2027-02-01T12:00:00Z', now)).toMatch(/75 days/);
-    expect(fbScheduleWindowError('2026-10-29T09:00:00Z', now)).toBeNull();
+  const fb = (o: Partial<Parameters<typeof postPrompt>[0]> = {}) => postPrompt({ network: 'facebook', mode: 'schedule', account: 'Sumari', whenIso: '2026-10-29T16:00:00Z', timeZone: 'America/Chicago', text: 'Line one\n\n#tax #freelance', media: 'image', ...o });
+
+  it('only schedules inside each network’s window', () => {
+    expect(scheduleWindowError('facebook', '2026-10-28T12:10:00Z', now)).toMatch(/30 minutes/);
+    expect(scheduleWindowError('facebook', '2027-02-01T12:00:00Z', now)).toMatch(/Facebook schedules posts up to 75 days/);
+    expect(scheduleWindowError('facebook', '2026-10-29T09:00:00Z', now)).toBeNull();
+    // TikTok only schedules 10 days ahead; LinkedIn three months
+    expect(scheduleWindowError('tiktok', '2026-11-10T12:00:00Z', now)).toMatch(/TikTok schedules posts up to 10 days/);
+    expect(scheduleWindowError('tiktok', '2026-11-05T12:00:00Z', now)).toBeNull();
+    expect(scheduleWindowError('linkedin', '2027-01-20T12:00:00Z', now)).toBeNull();
+    expect(scheduleWindowError('x', 'not a date', now)).toMatch(/Pick a date/);
   });
 
-  it('writes exact instructions that never publish immediately', () => {
-    const p = facebookSchedulePrompt({ page: 'Sumari', whenIso: '2026-10-29T16:00:00Z', timeZone: 'America/Chicago', text: 'Line one\n\n#tax #freelance', hasImage: true });
+  it('writes exact Facebook instructions that never publish immediately', () => {
+    const p = fb();
     expect(p).toContain('"Sumari"');
     expect(p).toContain('Line one\n\n#tax #freelance');
     expect(p).toContain('NOT "Publish now"');
@@ -64,13 +72,13 @@ describe('Facebook scheduling with Manus', () => {
     expect(p).toContain('2026-10-29T16:00:00.000Z');
     expect(p).toContain('Thursday, October 29, 2026 at 11:00 AM');
     expect(p).toContain('RESULT: SCHEDULED');
-    expect(facebookSchedulePrompt({ page: '', whenIso: '2026-10-29T16:00:00Z', timeZone: 'UTC', text: 'x', hasImage: false })).toContain('text-only post');
+    expect(p).toContain('business.facebook.com');
+    expect(fb({ account: '', media: null })).toContain('text-only post');
   });
 
-  it('posts right away with the video attached, exactly once', () => {
-    const p = facebookPostPrompt({ mode: 'now', page: 'Sumari', whenIso: '2026-10-29T16:00:00Z', timeZone: 'America/Chicago', text: 'New candles 🕯️\n\n#handmade', media: 'video' });
+  it('posts on Facebook right away with the video attached, exactly once', () => {
+    const p = fb({ mode: 'now', text: 'New candles 🕯️\n\n#handmade', media: 'video' });
     expect(p).toMatch(/right now/);
-    expect(p).toContain('"Sumari"');
     expect(p).toContain('New candles 🕯️\n\n#handmade');
     expect(p).toContain('Attach the video file provided');
     expect(p).toMatch(/Wait until Facebook has finished uploading/);
@@ -79,18 +87,80 @@ describe('Facebook scheduling with Manus', () => {
     expect(p).toMatch(/Post exactly once/);
     expect(p).toContain('RESULT: POSTED');
     expect(p).not.toContain('RESULT: SCHEDULED');
-    const img = facebookPostPrompt({ mode: 'now', page: '', whenIso: '2026-10-29T16:00:00Z', timeZone: 'UTC', text: 'x', media: 'image' });
-    expect(img).toContain('Attach the image file provided');
-    expect(img).toMatch(/business's Facebook Page/);
-    expect(facebookPostPrompt({ mode: 'now', page: 'A', whenIso: '2026-10-29T16:00:00Z', timeZone: 'UTC', text: 'x', media: null })).toContain('text-only post');
+    expect(fb({ mode: 'now', account: '' })).toMatch(/business's Facebook Page/);
+  });
+
+  it('posts on Instagram, TikTok, LinkedIn and X the way each one works', () => {
+    const ig = postPrompt({ network: 'instagram', mode: 'now', account: '@sumari', whenIso: '', timeZone: 'UTC', text: 'Hi', media: 'image' });
+    expect(ig).toContain('Post ONE organic post on Instagram, right now.');
+    expect(ig).toContain('instagram.com');
+    expect(ig).toContain('"@sumari"');
+    expect(ig).toMatch(/choose "Original"/);
+    expect(ig).toContain('Choose "Share"');
+    const igLater = postPrompt({ network: 'instagram', mode: 'schedule', account: '@sumari', whenIso: '2026-10-29T16:00:00Z', timeZone: 'UTC', text: 'Hi', media: 'image' });
+    expect(igLater).toMatch(/Meta Business Suite/);
+    expect(igLater).toMatch(/only schedules from there/);
+    const tt = postPrompt({ network: 'tiktok', mode: 'schedule', account: '@sumari', whenIso: '2026-10-29T16:00:00Z', timeZone: 'UTC', text: 'Hi', media: 'video' });
+    expect(tt).toContain('tiktokstudio/upload');
+    expect(tt).toMatch(/Turn on "Schedule"/);
+    expect(tt).toContain('RESULT: SCHEDULED | <account name> | <date and time as TikTok shows it>');
+    const li = postPrompt({ network: 'linkedin', mode: 'now', account: 'Sumari Tax Co', whenIso: '', timeZone: 'UTC', text: 'Hi', media: null });
+    expect(li).toContain('Start a post');
+    expect(li).toContain('"Sumari Tax Co"');
+    expect(li).toContain('text-only post');
+    const x = postPrompt({ network: 'x', mode: 'now', account: '@sumari', whenIso: '', timeZone: 'UTC', text: 'Hi', media: 'image' });
+    expect(x).toContain('x.com');
+    expect(x).toMatch(/never split the text into a thread/);
+    // every network: one post, exactly as given, and a result line
+    for (const p of [ig, tt, li, x]) {
+      expect(p).toMatch(/Post exactly once/);
+      expect(p).toContain('<<<POST TEXT\nHi\nPOST TEXT>>>');
+      expect(p).toContain('RESULT: FAILED | <short reason>');
+    }
+  });
+
+  it('knows what each network needs before Manus starts', () => {
+    const video = { kind: 'video', id: 'm', name: 'v.mp4' } as never;
+    const image = { kind: 'image', id: 'm', name: 'i.png' } as never;
+    expect(postBlocker({ platform: 'instagram', format: 'image', media: undefined }, { viaServer: true })).toMatch(/Instagram needs an image or a video/);
+    expect(postBlocker({ platform: 'tiktok', format: 'image', media: undefined }, { viaServer: true })).toMatch(/TikTok needs/);
+    expect(postBlocker({ platform: 'linkedin', format: 'image', media: undefined }, { viaServer: true })).toBeNull();
+    expect(postBlocker({ platform: 'facebook', format: 'video', media: undefined }, { viaServer: true })).toMatch(/storyboard can’t be posted/);
+    expect(postBlocker({ platform: 'facebook', format: 'video', media: video }, { viaServer: false })).toMatch(/self-hosted/);
+    expect(postBlocker({ platform: 'x', format: 'image', media: image }, { viaServer: false })).toBeNull();
+    expect(textWarning({ platform: 'x', caption: 'a'.repeat(270), hashtags: ['#one', '#two'] })).toMatch(/X takes 280 characters on most accounts, and this post has 281/);
+    expect(textWarning({ platform: 'x', caption: 'short', hashtags: [] })).toBeNull();
+    expect(textWarning({ platform: 'linkedin', caption: 'a'.repeat(900), hashtags: [] })).toBeNull();
+  });
+
+  it('suggests the account last used for the project, then the brand’s handle', () => {
+    const brand = { name: 'Sumari Tax Co', socials: { instagram: '@sumari.tax' } };
+    expect(suggestedAccount('proj_a', 'instagram', brand)).toBe('@sumari.tax');
+    expect(suggestedAccount('proj_a', 'facebook', brand)).toBe('Sumari Tax Co');
+    expect(suggestedAccount('proj_a', 'x', brand)).toBe('');
+    safeStorage.setItem('ylb-post-account:proj_a:instagram', '@sumari');
+    expect(suggestedAccount('proj_a', 'instagram', brand)).toBe('@sumari');
+    expect(suggestedAccount('proj_b', 'instagram', brand)).toBe('@sumari.tax');
+    safeStorage.removeItem('ylb-post-account:proj_a:instagram');
   });
 
   it('reads Manus’s result line', () => {
-    expect(parseScheduleResult('Done.\nRESULT: POSTED | Sumari | https://facebook.com/123')).toEqual({ state: 'posted', detail: 'Sumari · https://facebook.com/123' });
-    expect(parseScheduleResult('RESULT: PUBLISHED | Sumari').state).toBe('posted');
-    expect(parseScheduleResult('Done!\nRESULT: SCHEDULED | Sumari | Oct 29, 11:00 AM')).toEqual({ state: 'scheduled', detail: 'Sumari · Oct 29, 11:00 AM' });
-    expect(parseScheduleResult('**RESULT: FAILED | Not signed in**')).toEqual({ state: 'failed', detail: 'Not signed in' });
-    expect(parseScheduleResult('All good, it is scheduled.')).toEqual({ state: null, detail: '' });
+    expect(parseResult('Done.\nRESULT: POSTED | Sumari | https://facebook.com/123')).toEqual({ state: 'posted', detail: 'Sumari · https://facebook.com/123' });
+    expect(parseResult('RESULT: PUBLISHED | Sumari').state).toBe('posted');
+    expect(parseResult('Done!\nRESULT: SCHEDULED | Sumari | Oct 29, 11:00 AM')).toEqual({ state: 'scheduled', detail: 'Sumari · Oct 29, 11:00 AM' });
+    expect(parseResult('**RESULT: FAILED | Not signed in**')).toEqual({ state: 'failed', detail: 'Not signed in' });
+    expect(parseResult('All good, it is scheduled.')).toEqual({ state: null, detail: '' });
+  });
+
+  it('keeps a reported link only when it’s on that network', () => {
+    expect(postUrlFrom('Sumari · https://www.instagram.com/p/Cx1/', 'instagram')).toBe('https://www.instagram.com/p/Cx1/');
+    expect(postUrlFrom('Sumari · https://x.com/sumari/status/1.', 'x')).toBe('https://x.com/sumari/status/1');
+    expect(postUrlFrom('Sumari · https://twitter.com/sumari/status/1', 'x')).toBe('https://twitter.com/sumari/status/1');
+    expect(postUrlFrom('https://evil.example/instagram.com/p/1', 'instagram')).toBeUndefined();
+    expect(postUrlFrom('https://instagram.com.evil.example/p/1', 'instagram')).toBeUndefined();
+    expect(postUrlFrom('http://www.instagram.com/p/1', 'instagram')).toBeUndefined();
+    expect(postUrlFrom('https://www.facebook.com/', 'facebook')).toBeUndefined();
+    expect(postUrlFrom('no link here', 'tiktok')).toBeUndefined();
   });
 
   it('maps Manus task states to post states', () => {
@@ -101,9 +171,11 @@ describe('Facebook scheduling with Manus', () => {
     expect(stateFromManus({ ...base, status: 'stopped', done: true, text: 'RESULT: FAILED | Page not found' })).toEqual({ state: 'failed', message: 'Page not found' });
     expect(stateFromManus({ ...base, status: 'stopped', done: true, text: 'I scheduled it.' }).state).toBe('finished');
     expect(stateFromManus({ ...base, status: 'error', error: 'crashed' })).toEqual({ state: 'failed', message: 'crashed' });
-    // posting right away
+    // posting right away, on any network
     expect(stateFromManus(base, 'now')).toEqual({ state: 'working', message: 'Manus is posting it on Facebook…' });
-    expect(stateFromManus({ ...base, status: 'stopped', done: true, text: 'RESULT: POSTED | Sumari | https://fb.com/1' }, 'now')).toEqual({ state: 'posted', message: 'Sumari · https://fb.com/1' });
+    expect(stateFromManus(base, 'now', 'tiktok')).toEqual({ state: 'working', message: 'Manus is posting it on TikTok…' });
+    expect(stateFromManus({ ...base, status: 'stopped', done: true, text: 'RESULT: POSTED | Sumari | https://fb.com/1' }, 'now')).toEqual({ state: 'posted', message: 'Sumari · https://fb.com/1', url: 'https://fb.com/1' });
+    expect(stateFromManus({ ...base, status: 'stopped', done: true, text: 'RESULT: POSTED | @sumari' }, 'now', 'x')).toEqual({ state: 'posted', message: '@sumari', url: undefined });
     expect(stateFromManus({ ...base, status: 'stopped', done: true, text: 'I posted it.' }, 'now').message).toBe('I posted it.');
   });
 });

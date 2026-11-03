@@ -8,7 +8,8 @@ import { navigate } from '@/lib/router';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { Empty, Segmented, confirmAction } from '@/components/ui/primitives';
-import { PostCard, schedulePostsFlow } from '@/components/posts/PostCard';
+import { PostCard } from '@/components/posts/PostCard';
+import { addToCalendarFlow } from '@/components/posts/PostActions';
 
 export function BatchView({ project, posts, covered }: { project: Project; posts: Post[]; covered: Set<string> }) {
   const plan = project.marketing.plan;
@@ -89,7 +90,7 @@ export function BatchView({ project, posts, covered }: { project: Project; posts
             }}
             options={[
               { id: 'draft', label: `Drafts (${drafts.length})` },
-              { id: 'scheduled', label: `Scheduled (${posts.filter((p) => p.status === 'scheduled').length})` },
+              { id: 'scheduled', label: `Planned (${posts.filter((p) => p.status === 'scheduled').length})` },
               { id: 'all', label: 'All upcoming' },
             ]}
           />
@@ -114,17 +115,17 @@ export function BatchView({ project, posts, covered }: { project: Project; posts
                 </button>
                 <button
                   className="btn btn-secondary btn-sm"
-                  onClick={async () => {
-                    if (await schedulePostsFlow(selDrafts)) setSelected(new Set());
+                  onClick={() => {
+                    if (addToCalendarFlow(selDrafts)) setSelected(new Set());
                   }}
                 >
-                  <CalendarClock size={14} /> Schedule selected ({selDrafts.length})
+                  <CalendarClock size={14} /> Add selected to calendar ({selDrafts.length})
                 </button>
               </>
             )}
             {drafts.length > 0 && (
-              <button className="btn btn-primary btn-sm" onClick={() => schedulePostsFlow(drafts.map((d) => d.id))}>
-                <CalendarCheck size={14} /> Schedule whole batch ({drafts.length})
+              <button className="btn btn-primary btn-sm" onClick={() => addToCalendarFlow(drafts.map((d) => d.id))}>
+                <CalendarCheck size={14} /> Add whole batch to calendar ({drafts.length})
               </button>
             )}
             {posts.some((p) => p.status === 'scheduled') && (
@@ -139,7 +140,7 @@ export function BatchView({ project, posts, covered }: { project: Project; posts
       {!posts.length && !ai.running ? (
         <Empty icon={<Layers size={20} />} title="No posts generated yet" body="Generate the first seven days of your plan: every post comes with a visual mockup, caption and hashtags you can edit inline." action={<GenerateButton running={ai.running} onClick={generate}>Generate 7-day batch</GenerateButton>} />
       ) : shown.length === 0 ? (
-        <p className="py-8 text-center text-[13px] text-muted">{filter === 'draft' ? 'No drafts left. Everything in this batch is scheduled.' : 'Nothing here yet.'}</p>
+        <p className="py-8 text-center text-[13px] text-muted">{filter === 'draft' ? 'No drafts left. Everything in this batch is on your calendar.' : 'Nothing here yet.'}</p>
       ) : (
         byDay.map(([date, list]) => (
           <section key={date} aria-label={fmtDate(date, { weekday: 'long', month: 'long', day: 'numeric' })}>

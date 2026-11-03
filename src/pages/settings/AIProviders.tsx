@@ -353,7 +353,7 @@ export function ArtifactAI() {
   return (
     <div className="flex flex-col gap-5">
       <Note icon={<KeyRound size={16} />} title="AI in claude.ai">
-        Here, Claude writes everything through your claude.ai account, photos come from Meta Muse Image and videos from HeyGen (both through OpenRouter in your Zapier connector), and Manus schedules Facebook posts. To use your own API keys (OpenRouter, Google, xAI, Anthropic, Meta, Manus and OpenAI), with what each key powers and its effort, run the self-hosted app (for example on Replit) and open Settings → AI there.
+        Here, Claude writes everything through your claude.ai account, photos come from Meta Muse Image and videos from HeyGen (both through OpenRouter in your Zapier connector), and Manus posts on your social accounts. To use your own API keys (OpenRouter, Google, xAI, Anthropic, Meta, Manus and OpenAI), with what each key powers and its effort, run the self-hosted app (for example on Replit) and open Settings → AI there.
       </Note>
       <section className="panel flex flex-col gap-4 p-4 sm:p-5" aria-label="Brain">
         <Toggle checked={settings.ai.useBrain} onChange={(v) => setAI({ useBrain: v })} label={settings.ai.useBrain ? 'Brain is on' : 'Brain is off'} description="Writing follows your Brain skills, and photos and videos get the Brain’s art direction." />
@@ -855,7 +855,7 @@ function ServerAddress() {
   );
 }
 
-/** A user's own Manus account: their photos-by-agent and Facebook posts run there, on their credits. */
+/** A user's own Manus account: their photos-by-agent and social posts run there, on their credits. */
 function OwnManus({ call, serverUrl }: { call: Call; serverUrl: string }) {
   const [info, setInfo] = useState<{ available: boolean; last4: string | null } | null>(null);
   const [key, setKey] = useState('');
@@ -874,10 +874,10 @@ function OwnManus({ call, serverUrl }: { call: Call; serverUrl: string }) {
     apply(r.json);
     setKey('');
     void pingServer(serverUrl);
-    toast({ kind: 'success', title: 'Your Manus key is saved', body: 'Manus photos and Facebook posts now run in your own Manus account.' });
+    toast({ kind: 'success', title: 'Your Manus key is saved', body: 'Manus photos and social posts now run in your own Manus account.' });
   };
   const remove = async () => {
-    if (!(await confirmAction({ title: 'Remove your Manus key?', body: 'Manus photos and Facebook posts stop until you add a key again.', confirmLabel: 'Remove key', danger: true }))) return;
+    if (!(await confirmAction({ title: 'Remove your Manus key?', body: 'Manus photos and social posts stop until you add a key again.', confirmLabel: 'Remove key', danger: true }))) return;
     const r = await call<{ available: boolean; keys: { manus: { last4: string } | null } }>('DELETE', '/api/ai/my-keys/manus');
     if (!r.ok) return toast({ kind: 'error', title: 'Couldn’t remove the key', body: r.json?.error ?? 'Please try again.' });
     apply(r.json);
@@ -889,7 +889,7 @@ function OwnManus({ call, serverUrl }: { call: Call; serverUrl: string }) {
         <KeyRound size={15} className="text-primary" /> Use your own Manus
       </h3>
       <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-muted">
-        Manus is an AI agent with its own browser. With your own Manus account it can make product photos and schedule your posts on <strong className="text-ink-2">your</strong> Facebook Page. Tasks run in your Manus account and use your Manus credits.
+        Manus is an AI agent with its own browser. With your own Manus account it can make product photos and post on <strong className="text-ink-2">your</strong> Facebook, Instagram, TikTok, LinkedIn and X accounts, right away or scheduled. Tasks run in your Manus account and use your Manus credits.
       </p>
       {info?.last4 ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -914,7 +914,7 @@ function OwnManus({ call, serverUrl }: { call: Call; serverUrl: string }) {
             </a>
           </li>
           <li>Paste it below and press Save. It’s checked with Manus, stored encrypted on the server, and never shown again (only its last 4 characters).</li>
-          <li>For Facebook posts: in Manus, sign in to Facebook once in its browser (Manus asks the first time it posts for you).</li>
+          <li>For posting: in Manus, sign in to each network once in its browser (Manus asks the first time it posts there for you).</li>
         </ol>
       )}
       {info && !info.available ? (

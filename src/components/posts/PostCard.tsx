@@ -1,46 +1,23 @@
 import { useMemo, useState } from 'react';
-import { CalendarClock, Check, ExternalLink, Eye, Heart, ImagePlus, MessageCircle, MousePointerClick, Pencil, Repeat2, Send, Share2, Trash2, Undo2, Bookmark, Zap } from 'lucide-react';
+import { CalendarClock, Check, CheckCheck, ImagePlus, Pencil, Trash2, Undo2 } from 'lucide-react';
 import type { Brand, Post, PostPlatform, PostType, StyleId } from '@/lib/types';
-import { cn, combineDateTime, fmtCompact, fmtDateTime, fmtRelative, isoToDateStr, isoToTime, stripProtocol } from '@/lib/utils';
+import { cn, combineDateTime, fmtDateTime, fmtRelative, isoToDateStr, isoToTime } from '@/lib/utils';
 import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, POST_TYPE_MAP, STYLE_LABEL, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
-import { followersFor, postLive } from '@/lib/metrics';
-import { useNow } from '@/lib/hooks';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { postTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { PostVisual, pointsFromCaption } from '../visuals/PostVisual';
 import { PlatformChip, PlatformGlyph } from './PlatformIcon';
-import { ensureConnected } from './Connect';
 import { AutoTextarea, ChipInput, Field, Modal, confirmAction } from '../ui/primitives';
 import { AIThinking, RegenerateButton } from '../ai/AI';
 import { LogoMark } from '../brand/Logo';
 import { ManusLink, PostImagePanel, aspectForPlatform } from '../images/PostImagePanel';
 import { VideoPanel } from '../images/VideoPanel';
 import { useImageJob } from '../images/useImageJob';
-import { ExternalBadge, ManusFacebookButton } from './ManusFacebook';
+import { ExternalBadge, ManusPostButton, useManusReady } from './ManusPost';
+import { DueBadge, PostMoreMenu, PostedBy, addToCalendarFlow, useMarkPosted } from './PostActions';
 import { createPostImage, defaultImageKind, postVideoPrompt } from '@/ai/image';
-
-export async function schedulePostsFlow(ids: string[]): Promise<boolean> {
-  const s = useStore.getState();
-  const posts = s.posts.filter((p) => ids.includes(p.id));
-  if (!posts.length) return false;
-  const ok = await ensureConnected(posts.map((p) => p.platform));
-  if (!ok) return false;
-  useStore.getState().schedulePosts(ids);
-  toast({ kind: 'success', title: `${posts.length} post${posts.length > 1 ? 's' : ''} scheduled`, body: 'They’ll publish automatically at their scheduled times.' });
-  return true;
-}
-
-export async function publishNowFlow(id: string): Promise<void> {
-  const post = useStore.getState().posts.find((p) => p.id === id);
-  if (!post) return;
-  const ok = await ensureConnected([post.platform]);
-  if (!ok) return;
-  useStore.getState().publishPost(id);
-  useStore.getState().notify({ kind: 'post', title: `Published to ${PLATFORMS[post.platform].label}`, body: post.headline, route: 'calendar' });
-  toast({ kind: 'success', title: `Published to ${PLATFORMS[post.platform].label}`, body: 'Live engagement is now tracking in Analytics.' });
-}
 
 export function PostTypeTag({ type, className }: { type: PostType; className?: string }) {
   const def = POST_TYPE_MAP[type];
@@ -54,32 +31,6 @@ export function PostTypeTag({ type, className }: { type: PostType; className?: s
 
 export function FormatBadge({ format }: { format: Post['format'] }) {
   return <span className={cn('badge', format === 'video' ? 'bg-ink text-surface' : 'bg-surface-2 text-ink-2')}>{format === 'video' ? 'Video' : 'Image'}</span>;
-}
-
-export function LiveMetrics({ post, compact }: { post: Post; compact?: boolean }) {
-  const now = useNow(3000);
-  const settings = useStore((s) => s.settings);
-  const m = postLive(post, now, followersFor(settings, post.platform));
-  const items = [
-    { icon: Eye, label: 'Impressions', v: m.impressions },
-    { icon: Heart, label: 'Likes', v: m.likes },
-    { icon: MessageCircle, label: 'Comments', v: m.comments },
-    { icon: Share2, label: 'Shares', v: m.shares },
-    { icon: Bookmark, label: 'Saves', v: m.saves },
-    { icon: MousePointerClick, label: 'Link clicks', v: m.clicks },
-  ];
-  return (
-    <div className={cn('grid gap-1.5', compact ? 'grid-cols-3' : 'grid-cols-3 sm:grid-cols-6')}>
-      {items.map((it) => (
-        <div key={it.label} className="rounded-md bg-surface-2 px-2 py-1.5" title={it.label}>
-          <div className="flex items-center gap-1 text-[10.5px] font-medium text-muted">
-            <it.icon size={11} /> {it.label}
-          </div>
-          <div className="num text-[14px] font-bold text-ink">{fmtCompact(it.v)}</div>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 function styleOptions(format: Post['format']) {
@@ -176,7 +127,7 @@ export function PostFields({ post, onChange }: EditableProps) {
 export function PostCard({ post, brand, selectable, selected, onSelect }: { post: Post; brand: Brand; selectable?: boolean; selected?: boolean; onSelect?: (v: boolean) => void }) {
   const [editing, setEditing] = useState(false);
   const update = useStore((s) => s.updatePost);
-  const del = useStore((s) => s.deletePosts);
+  const manusReady = useManusReady();
   const ai = useAI(postTask);
   const points = useMemo(() => pointsFromCaption(post.caption), [post.caption]);
   const [expanded, setExpanded] = useState(false);
@@ -240,17 +191,19 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
             <p className="text-xs font-medium text-info">{post.hashtags.join(' ')}</p>
           </>
         )}
-        {post.status === 'published' && <LiveMetrics post={post} compact />}
+        <DueBadge post={post} />
+        <PostedBy post={post} />
         <ExternalBadge post={post} />
         <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1">
           {post.status === 'draft' && (
-            <button className="btn btn-primary btn-sm" onClick={() => schedulePostsFlow([post.id])}>
-              <CalendarClock size={14} /> Schedule
+            <button className={cn('btn btn-sm', manusReady ? 'btn-secondary' : 'btn-primary')} onClick={() => addToCalendarFlow([post.id])}>
+              <CalendarClock size={14} /> Add to calendar
             </button>
           )}
-          {post.status === 'scheduled' && (
-            <button className="btn btn-primary btn-sm" onClick={() => publishNowFlow(post.id)}>
-              <Send size={14} /> Publish now
+          <ManusPostButton post={post} primary={post.status === 'scheduled'} />
+          {post.status === 'scheduled' && !manusReady && (
+            <button className="btn btn-secondary btn-sm" onClick={() => useMarkPosted.getState().open(post.id)}>
+              <CheckCheck size={14} /> Mark as posted
             </button>
           )}
           <button className={cn('btn btn-secondary btn-sm', editing && 'bg-surface-2')} onClick={() => setEditing((e) => !e)}>
@@ -258,31 +211,12 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
             {editing ? 'Done' : 'Edit'}
           </button>
           {post.status !== 'published' && <RegenerateButton onClick={regenerate} running={ai.running} label="Rewrite" />}
-          <ManusFacebookButton post={post} />
           {post.status !== 'published' && post.format === 'image' && !post.media && !editing && (
             <button className="btn btn-ai btn-sm" onClick={makeImage} disabled={img.running}>
               <ImagePlus size={14} className="text-accent" /> AI image
             </button>
           )}
-          {post.status === 'scheduled' && (
-            <button className="btn btn-ghost btn-sm" onClick={() => update(post.id, { status: 'draft' })} title="Move back to drafts">
-              <Undo2 size={14} />
-            </button>
-          )}
-          {post.status === 'published' && (
-            <button className="btn btn-ghost btn-sm" onClick={() => useUI.getState().openPostEditor(post.id)}>
-              <ExternalLink size={14} /> View post
-            </button>
-          )}
-          <button
-            className="btn btn-ghost btn-sm ml-auto text-muted hover:text-bad"
-            aria-label="Delete post"
-            onClick={async () => {
-              if (await confirmAction({ title: 'Delete this post?', body: 'This can’t be undone.', confirmLabel: 'Delete', danger: true })) del([post.id]);
-            }}
-          >
-            <Trash2 size={14} />
-          </button>
+          <PostMoreMenu post={post} className="ml-auto text-muted" />
         </div>
       </div>
     </article>
@@ -291,11 +225,15 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
 
 // ───────────────────────── Platform-style preview + full editor ─────────────────────────
 
+/** A handle to show in the preview: the brand's own, or one made from its name. */
+function previewHandle(brand: Brand, platform: PostPlatform): string {
+  const own = (brand.socials[platform] ?? '').trim().replace(/^https?:\/\/[^/]+\//i, '').replace(/^@/, '').replace(/\/+$/, '');
+  return own || (brand.slug || brand.name).replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
+/** How the post will look on the network (a preview: no counts, no link until it's really out). */
 export function PlatformFrame({ post, brand }: { post: Post; brand: Brand }) {
-  const now = useNow(3000);
-  const settings = useStore((s) => s.settings);
-  const m = postLive(post, now, followersFor(settings, post.platform));
-  const handle = settings.accounts[post.platform]?.handle || (brand.slug || brand.name).replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const handle = previewHandle(brand, post.platform);
   const p = PLATFORMS[post.platform];
   const points = pointsFromCaption(post.caption);
   return (
@@ -305,7 +243,7 @@ export function PlatformFrame({ post, brand }: { post: Post; brand: Brand }) {
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-bold text-ink">{post.platform === 'linkedin' || post.platform === 'facebook' ? brand.name : handle}</p>
           <p className="text-[11px] text-muted">
-            {post.status === 'published' && post.publishedAt ? fmtRelative(post.publishedAt, now) : `Scheduled · ${fmtDateTime(post.scheduledAt)}`} · {p.label}
+            {post.status === 'published' && post.publishedAt ? `Posted ${fmtRelative(post.publishedAt)}` : post.status === 'scheduled' ? `Planned · ${fmtDateTime(post.scheduledAt)}` : 'Draft'} · {p.label}
           </p>
         </div>
         <span className="flex h-6 w-6 items-center justify-center rounded-md text-white" style={{ background: p.color }}>
@@ -314,32 +252,14 @@ export function PlatformFrame({ post, brand }: { post: Post; brand: Brand }) {
       </div>
       {(post.platform === 'linkedin' || post.platform === 'facebook' || post.platform === 'x') && <p className="whitespace-pre-line px-3 pb-2.5 text-[13px] leading-relaxed text-ink">{post.caption}</p>}
       <PostVisual style={post.style} headline={post.headline} brand={brand} watermark={post.watermark} media={post.media} storyboard={post.storyboard} points={points} aspect={post.format === 'video' && post.platform === 'tiktok' ? '9/16' : '4/5'} className="rounded-none" autoPlay={post.format === 'video'} />
-      <div className="flex items-center gap-4 px-3 py-2.5 text-ink-2">
-        <span className="flex items-center gap-1 text-[13px]">
-          <Heart size={17} /> <b className="num">{fmtCompact(m.likes)}</b>
-        </span>
-        <span className="flex items-center gap-1 text-[13px]">
-          <MessageCircle size={17} /> <b className="num">{fmtCompact(m.comments)}</b>
-        </span>
-        <span className="flex items-center gap-1 text-[13px]">
-          {post.platform === 'x' || post.platform === 'linkedin' ? <Repeat2 size={17} /> : <Send size={17} />} <b className="num">{fmtCompact(m.shares)}</b>
-        </span>
-        <span className="ml-auto flex items-center gap-1 text-[13px]">
-          <Eye size={16} /> <b className="num">{fmtCompact(m.impressions)}</b>
-        </span>
-      </div>
       {(post.platform === 'instagram' || post.platform === 'tiktok') && (
-        <p className="whitespace-pre-line px-3 pb-3 text-[13px] leading-relaxed text-ink">
+        <p className="whitespace-pre-line px-3 pb-3 pt-2.5 text-[13px] leading-relaxed text-ink">
           <b className="mr-1">{handle}</b>
           {post.caption}
         </p>
       )}
-      <p className="px-3 pb-3 text-[12.5px] font-medium text-info">{post.hashtags.join(' ')}</p>
-      {post.status === 'published' && (
-        <div className="border-t border-line bg-surface-2/60 px-3 py-2 text-[11px] text-muted">
-          Post link: <span className="select-all font-mono">{`${stripProtocol(`https://${post.platform === 'x' ? 'x' : post.platform}.com`)}/${handle}/${post.id.slice(-8)}`}</span>
-        </div>
-      )}
+      <p className={cn('px-3 pb-3 text-[12.5px] font-medium text-info', post.platform !== 'instagram' && post.platform !== 'tiktok' && 'pt-2.5')}>{post.hashtags.join(' ')}</p>
+      <p className="border-t border-line bg-surface-2/60 px-3 py-2 text-[11px] text-muted">Preview: the network shows it in its own style.</p>
     </div>
   );
 }
@@ -357,14 +277,15 @@ export function PostEditorHost() {
       open
       onClose={close}
       size="xl"
-      title={post.status === 'published' ? 'Published post' : post.status === 'scheduled' ? 'Scheduled post' : 'Draft post'}
+      title={post.status === 'published' ? 'Posted' : post.status === 'scheduled' ? 'Planned post' : 'Draft post'}
       subtitle={`${PLATFORMS[post.platform].label} · ${POST_TYPE_MAP[post.postType].label} · ${STYLE_LABEL[post.style]}`}
       footer={
         <>
           <button
             className="btn btn-ghost btn-sm mr-auto text-bad"
             onClick={async () => {
-              if (await confirmAction({ title: 'Delete this post?', body: 'This can’t be undone.', confirmLabel: 'Delete', danger: true })) {
+              const extra = post.status === 'published' ? ' It stays on the network: this only removes it from the app.' : '';
+              if (await confirmAction({ title: 'Delete this post?', body: `This can’t be undone.${extra}`, confirmLabel: 'Delete', danger: true })) {
                 del([post.id]);
                 close();
               }
@@ -374,25 +295,36 @@ export function PostEditorHost() {
           </button>
           {post.status === 'draft' && (
             <button
-              className="btn btn-primary btn-sm"
-              onClick={async () => {
-                if (await schedulePostsFlow([post.id])) close();
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                if (addToCalendarFlow([post.id])) close();
               }}
             >
-              <CalendarClock size={14} /> Schedule
+              <CalendarClock size={14} /> Add to calendar
             </button>
           )}
-          <ManusFacebookButton post={post} />
           {post.status === 'scheduled' && (
-            <>
-              <button className="btn btn-secondary btn-sm" onClick={() => update(post.id, { status: 'draft' })}>
-                <Undo2 size={14} /> Unschedule
-              </button>
-              <button className="btn btn-primary btn-sm" onClick={() => publishNowFlow(post.id)}>
-                <Zap size={14} /> Publish now
-              </button>
-            </>
+            <button className="btn btn-secondary btn-sm" onClick={() => update(post.id, { status: 'draft' })}>
+              <Undo2 size={14} /> Move to drafts
+            </button>
           )}
+          {post.status !== 'published' && (
+            <button className="btn btn-secondary btn-sm" onClick={() => useMarkPosted.getState().open(post.id)}>
+              <CheckCheck size={14} /> Mark as posted
+            </button>
+          )}
+          {post.status === 'published' && post.publishedBy === 'manual' && (
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                useStore.getState().unmarkPosted(post.id);
+                toast({ kind: 'info', title: 'Back on your calendar', body: 'It’s marked as not posted.' });
+              }}
+            >
+              <Undo2 size={14} /> Mark as not posted
+            </button>
+          )}
+          <ManusPostButton post={post} primary />
           <button className="btn btn-secondary btn-sm" onClick={close}>
             Done
           </button>
@@ -401,15 +333,16 @@ export function PostEditorHost() {
     >
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_400px]">
         <div className="min-w-0">
+          {(post.status === 'published' || post.status === 'scheduled') && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <DueBadge post={post} />
+              <PostedBy post={post} />
+            </div>
+          )}
+          {post.status === 'published' && <p className="mb-3 text-[12.5px] text-muted">It’s already out: editing it here doesn’t change the post on {PLATFORMS[post.platform].label.replace(' (Twitter)', '')}.</p>}
           {post.external && (
             <div className="mb-4">
               <ExternalBadge post={post} />
-            </div>
-          )}
-          {post.status === 'published' && (
-            <div className="mb-4">
-              <p className="eyebrow mb-2">Live engagement</p>
-              <LiveMetrics post={post} />
             </div>
           )}
           <PostFields post={post} onChange={(patch) => update(post.id, patch)} />

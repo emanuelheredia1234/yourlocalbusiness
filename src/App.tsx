@@ -3,15 +3,14 @@ import { navigate, useRoute } from '@/lib/router';
 import { initRuntime } from '@/lib/platform';
 import { pingServer } from '@/ai/claude';
 import { startCommunitySync } from '@/lib/community';
-import { PLATFORMS } from '@/ai/knowledge';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { CommandPalette, MobileNav, Sidebar, Topbar } from '@/components/layout/Shell';
 import { PageErrorBoundary } from '@/components/layout/ErrorBoundary';
 import { ConfirmHost, Spinner, Toaster } from '@/components/ui/primitives';
-import { ConnectHost } from '@/components/posts/Connect';
 import { PostEditorHost } from '@/components/posts/PostCard';
-import { ManusFacebookHost, useManusScheduleWatcher } from '@/components/posts/ManusFacebook';
+import { ManusPostHost, useManusPostWatcher } from '@/components/posts/ManusPost';
+import { MarkPostedHost } from '@/components/posts/PostActions';
 import { ComposerHost } from '@/pages/dashboard/QuickComposer';
 import { StoreOverlays } from '@/pages/store/StoreOverlays';
 import { Onboarding } from '@/pages/onboarding/Onboarding';
@@ -39,21 +38,6 @@ function useThemeSync() {
       else root.removeAttribute('data-theme');
     } else root.setAttribute('data-theme', theme);
   }, [theme]);
-}
-
-function useAutoPublish() {
-  useEffect(() => {
-    const tick = () => {
-      const due = useStore.getState().autoPublishDue();
-      for (const p of due.slice(0, 3)) {
-        useStore.getState().notify({ kind: 'post', title: `Published to ${PLATFORMS[p.platform].label}`, body: p.headline, route: 'calendar' });
-      }
-      if (due.length) toast({ kind: 'success', title: `${due.length} scheduled post${due.length > 1 ? 's' : ''} just went live`, body: 'Live engagement is tracking in Analytics.' });
-    };
-    tick();
-    const t = setInterval(tick, 20_000);
-    return () => clearInterval(t);
-  }, []);
 }
 
 /** Optional demo activity: simulated buyers for the user’s own listings (Settings → Demo). */
@@ -89,9 +73,8 @@ export default function App() {
   const project = useActiveProject();
   const hasListings = useStore((s) => s.myListings.length > 0);
   useThemeSync();
-  useAutoPublish();
   useSimulatedBuyers();
-  useManusScheduleWatcher();
+  useManusPostWatcher();
 
   useEffect(() => {
     initRuntime();
@@ -186,9 +169,9 @@ export default function App() {
       <CommandPalette />
       <ComposerHost />
       <PostEditorHost />
-      <ManusFacebookHost />
+      <ManusPostHost />
+      <MarkPostedHost />
       <StoreOverlays />
-      <ConnectHost />
       <ConfirmHost />
       <Toaster />
     </div>

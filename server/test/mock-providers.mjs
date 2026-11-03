@@ -200,7 +200,9 @@ export function createMockProviders({ keys = {} } = {}) {
     }
     if (id === 'manus' && p === '/v2/task.create') {
       const taskId = `task${String(manusTasks.size + 1).padStart(6, '0')}`;
-      manusTasks.set(taskId, { polls: 0, profile: body?.agent_profile, followUps: [] });
+      const content = body?.message?.content;
+      const prompt = typeof content === 'string' ? content : ((content ?? []).find?.((c) => c?.type === 'text')?.text ?? '');
+      manusTasks.set(taskId, { polls: 0, profile: body?.agent_profile, followUps: [], prompt });
       return json(res, 200, { ok: true, request_id: 'r1', task_id: taskId, task_title: body?.title || 'Mock task', task_url: `https://manus.im/app/${taskId}` });
     }
     if (id === 'manus' && p === '/v2/task.detail') {
@@ -213,12 +215,16 @@ export function createMockProviders({ keys = {} } = {}) {
     if (id === 'manus' && p === '/v2/task.listMessages') {
       const t = manusTasks.get(url.searchParams.get('task_id'));
       const done = t && t.polls >= 2;
+      // a "post right now" task reports a post on that network, with its link
+      const postNow = /^Post ONE organic post on (Facebook|Instagram|TikTok|LinkedIn|X), right now/m.exec(t?.prompt ?? '');
+      const LINKS = { Facebook: 'https://www.facebook.com/mockpage/posts/1001', Instagram: 'https://www.instagram.com/p/MOCK1/', TikTok: 'https://www.tiktok.com/@mock/video/1001', LinkedIn: 'https://www.linkedin.com/feed/update/urn:li:activity:1001/', X: 'https://x.com/mock/status/1001' };
+      const reply = postNow ? `Posted it.\nRESULT: POSTED | Mock Account | ${LINKS[postNow[1]]}` : 'Here is your image.\nRESULT: SCHEDULED | Mock Page | Monday 9:00 AM';
       return json(res, 200, {
         ok: true,
         messages: done
           ? [
               { id: 'e3', type: 'status_update', status_update: { agent_status: 'stopped' } },
-              { id: 'e2', type: 'assistant_message', assistant_message: { content: 'Here is your image.\nRESULT: SCHEDULED | Mock Page | Monday 9:00 AM', attachments: [{ type: 'image', filename: 'photo.png', url: `${base}/files/photo.png`, content_type: 'image/png' }] } },
+              { id: 'e2', type: 'assistant_message', assistant_message: { content: reply, attachments: [{ type: 'image', filename: 'photo.png', url: `${base}/files/photo.png`, content_type: 'image/png' }] } },
               { id: 'e1', type: 'user_message', user_message: { content: 'make it' } },
             ]
           : [{ id: 'e1', type: 'user_message', user_message: { content: 'make it' } }],

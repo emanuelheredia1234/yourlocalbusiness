@@ -404,7 +404,7 @@ export class AIRouter {
 
   /** Upload a file to the Manus account behind this key (the owner's, or a user's own). */
   async manusUpload({ filename, size, body, signal, apiKey = null }) {
-    if (!apiKey && !this.store.powers('manus', 'facebook') && !this.store.powers('manus', 'photos')) throw new ProviderError('NO_PROVIDER', 'Your Manus key is off, or isn’t set to power Facebook posting. Turn it on in Settings → AI.', { status: 409 });
+    if (!apiKey && !this.store.powers('manus', 'facebook') && !this.store.powers('manus', 'photos')) throw new ProviderError('NO_PROVIDER', 'Your Manus key is off, or isn’t set to power Social posting. Turn it on in Settings → AI.', { status: 409 });
     return this.adapters.manus.uploadFile(this.manusCtx(apiKey), { filename, size, body, signal });
   }
 

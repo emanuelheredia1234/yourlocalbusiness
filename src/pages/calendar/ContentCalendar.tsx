@@ -1,24 +1,29 @@
 import { useMemo, useState } from 'react';
-import { CalendarDays, CalendarClock, ChevronLeft, ChevronRight, ExternalLink, FileEdit, List, Pencil, Plus, Search, Send, Sparkles, Undo2 } from 'lucide-react';
+import { CalendarDays, CalendarClock, CheckCheck, ChevronLeft, ChevronRight, FileEdit, List, Pencil, Plus, Search, Send, Sparkles } from 'lucide-react';
 import type { Post, PostFormat, PostPlatform, PostType } from '@/lib/types';
-import { addDays, cn, combineDateTime, fmtCompact, fmtDate, fmtDateTime, fmtRelative, isoToDateStr, isoToTime, todayStr, WEEKDAYS, weekdayIndex } from '@/lib/utils';
+import { addDays, cn, combineDateTime, fmtDate, fmtDateTime, isoToDateStr, isoToTime, todayStr, WEEKDAYS, weekdayIndex } from '@/lib/utils';
 import { PLATFORMS, POST_PLATFORMS, POST_TYPE_MAP, POST_TYPES, STYLE_LABEL } from '@/ai/knowledge';
-import { followersFor, postLive } from '@/lib/metrics';
 import { useNow } from '@/lib/hooks';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { Empty, Segmented, Tabs } from '@/components/ui/primitives';
-import { FormatBadge, LiveMetrics, PostCard, PostTypeTag, publishNowFlow, schedulePostsFlow } from '@/components/posts/PostCard';
-import { ExternalBadge, ManusFacebookButton } from '@/components/posts/ManusFacebook';
+import { FormatBadge, PostCard, PostTypeTag } from '@/components/posts/PostCard';
+import { ExternalBadge, ManusPostButton, manusSetupHint, useManusPost, useManusReady } from '@/components/posts/ManusPost';
+import { DueBadge, PostedBy, PostMoreMenu, addToCalendarFlow, isDue, useMarkPosted } from '@/components/posts/PostActions';
 import { PlatformChip, PlatformGlyph } from '@/components/posts/PlatformIcon';
 import { PostVisual } from '@/components/visuals/PostVisual';
+import { networkLabel } from '@/ai/manusPost';
 
 type Tab = 'scheduled' | 'published' | 'drafts';
+
+/** Planned posts Manus could take now (not handed over yet, or the last try failed). */
+const notSent = (p: Post) => !p.external || p.external.state === 'failed';
 
 export default function ContentCalendar() {
   const project = useActiveProject()!;
   const allPosts = useStore((s) => s.posts);
   const openComposer = useUI((s) => s.openComposer);
+  const manusReady = useManusReady();
   const posts = useMemo(() => allPosts.filter((p) => p.projectId === project.id), [allPosts, project.id]);
   const [tab, setTab] = useState<Tab>('scheduled');
   const [view, setView] = useState<'calendar' | 'list'>('calendar');
@@ -42,7 +47,7 @@ export default function ContentCalendar() {
         <div className="min-w-0">
           <p className="eyebrow mb-1">Content calendar & queue</p>
           <h1 className="page-title">Content queue</h1>
-          <p className="mt-1 text-[13.5px] text-muted">Everything scheduled, published and in draft across your platforms. Drag posts between days to reschedule; click any post to edit it.</p>
+          <p className="mt-1 text-[13.5px] text-muted">Plan posts on your calendar, then post them with Manus (it posts on your accounts for you) or post them yourself and mark them posted. Nothing goes out on its own. Drag posts between days to move them; click any post to edit it.</p>
         </div>
         <button className="btn btn-primary" onClick={() => openComposer()}>
           <Sparkles size={16} className="text-accent" /> Create post
@@ -53,8 +58,8 @@ export default function ContentCalendar() {
         value={tab}
         onChange={setTab}
         tabs={[
-          { id: 'scheduled', label: 'Scheduled', icon: <CalendarClock size={15} />, count: counts.scheduled },
-          { id: 'published', label: 'Published', icon: <Send size={15} />, count: counts.published },
+          { id: 'scheduled', label: 'Planned', icon: <CalendarClock size={15} />, count: counts.scheduled },
+          { id: 'published', label: 'Posted', icon: <Send size={15} />, count: counts.published },
           { id: 'drafts', label: 'Drafts', icon: <FileEdit size={15} />, count: counts.drafts },
         ]}
       />
@@ -101,21 +106,27 @@ export default function ContentCalendar() {
 
       {tab === 'scheduled' &&
         (counts.scheduled === 0 ? (
-          <Empty icon={<CalendarClock size={20} />} title="Nothing scheduled yet" body="Schedule posts from your 7-day batch in the Social engine, or create one with the composer." action={<button className="btn btn-primary btn-sm" onClick={() => openComposer()}><Plus size={14} /> Create post</button>} />
-        ) : view === 'calendar' ? (
-          <MonthCalendar posts={scheduled} />
+          <Empty icon={<CalendarClock size={20} />} title="Nothing planned yet" body="Add posts from your 7-day batch in the Social engine, or create one with the composer." action={<button className="btn btn-primary btn-sm" onClick={() => openComposer()}><Plus size={14} /> Create post</button>} />
         ) : (
-          <QueueList posts={scheduled} />
+          <>
+            <PlannedBar posts={scheduled} manusReady={manusReady} />
+            {view === 'calendar' ? <MonthCalendar posts={scheduled} /> : <QueueList posts={scheduled} />}
+          </>
         ))}
-      {tab === 'published' && (published.length === 0 ? <Empty icon={<Send size={20} />} title="No published posts yet" body="Posts publish automatically at their scheduled time, or press “Publish now” on any scheduled post." /> : <PublishedList posts={published} />)}
+      {tab === 'published' &&
+        (published.length === 0 ? (
+          <Empty icon={<Send size={20} />} title="Nothing posted yet" body={manusReady ? 'Posts show up here once Manus reports them posted, or once you mark a post you posted yourself.' : `Posts show up here once you mark them posted. ${manusSetupHint()}`} />
+        ) : (
+          <PublishedList posts={published} />
+        ))}
       {tab === 'drafts' &&
         (drafts.length === 0 ? (
-          <Empty icon={<FileEdit size={20} />} title="No drafts" body="Drafts from the composer and the 7-day batch wait here until you schedule them." />
+          <Empty icon={<FileEdit size={20} />} title="No drafts" body="Drafts from the composer and the 7-day batch wait here until you add them to your calendar." />
         ) : (
           <div className="flex flex-col gap-3">
             <div className="flex justify-end">
-              <button className="btn btn-primary btn-sm" onClick={() => schedulePostsFlow(drafts.map((d) => d.id))}>
-                <CalendarClock size={14} /> Schedule all {drafts.length} drafts
+              <button className="btn btn-primary btn-sm" onClick={() => addToCalendarFlow(drafts.map((d) => d.id))}>
+                <CalendarClock size={14} /> Add all {drafts.length} to calendar
               </button>
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -125,6 +136,37 @@ export default function ContentCalendar() {
             </div>
           </div>
         ))}
+    </div>
+  );
+}
+
+/** Above the planned posts: what's due, and sending several to Manus at once. */
+function PlannedBar({ posts, manusReady }: { posts: Post[]; manusReady: boolean }) {
+  const now = useNow(60_000);
+  const due = posts.filter((p) => isDue(p, now) && notSent(p));
+  const ready = posts.filter(notSent);
+  if (!due.length && !(manusReady && ready.length > 1)) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-surface-2/50 px-4 py-2.5">
+      <p className="min-w-0 flex-1 text-[13px] text-ink-2">
+        {due.length ? (
+          <>
+            <b className="text-warn">{due.length} due:</b> {due.length > 1 ? 'their times have' : 'its time has'} passed and {due.length > 1 ? 'they haven’t' : 'it hasn’t'} been posted. {manusReady ? 'Post them with Manus, or post them yourself and mark them posted.' : 'Post them yourself and mark them posted.'}
+          </>
+        ) : (
+          `${ready.length} planned posts not yet sent to Manus.`
+        )}
+      </p>
+      {manusReady && due.length > 0 && (
+        <button className="btn btn-primary btn-sm" onClick={() => useManusPost.getState().open(due.map((p) => p.id))}>
+          <Send size={14} /> Post {due.length > 1 ? `${due.length} due` : 'it'} with Manus
+        </button>
+      )}
+      {manusReady && ready.length > 1 && (
+        <button className="btn btn-secondary btn-sm" onClick={() => useManusPost.getState().open(ready.map((p) => p.id))}>
+          <Send size={14} /> Send all {ready.length} to Manus
+        </button>
+      )}
     </div>
   );
 }
@@ -148,6 +190,7 @@ const mondayOf = (date: string) => addDays(date, -weekdayIndex(date));
 /** Rolling five-week view, opening on the week of the next scheduled post. */
 function MonthCalendar({ posts }: { posts: Post[] }) {
   const openEditor = useUI((s) => s.openPostEditor);
+  const now = useNow(60_000);
   const today = todayStr();
   const first = posts[0] ? isoToDateStr(posts[0].scheduledAt) : today;
   const [start, setStart] = useState(() => mondayOf(first < today ? today : first));
@@ -227,9 +270,9 @@ function MonthCalendar({ posts }: { posts: Post[] }) {
                       e.dataTransfer.effectAllowed = 'move';
                     }}
                     onClick={() => openEditor(p.id)}
-                    className="flex cursor-grab items-center gap-1 rounded border-l-[3px] bg-surface-2 px-1.5 py-1 text-left text-[11px] leading-tight hover:bg-surface-3 active:cursor-grabbing"
+                    className={cn('flex cursor-grab items-center gap-1 rounded border-l-[3px] bg-surface-2 px-1.5 py-1 text-left text-[11px] leading-tight hover:bg-surface-3 active:cursor-grabbing', isDue(p, now) && notSent(p) && 'ring-1 ring-warn/60')}
                     style={{ borderLeftColor: `rgb(var(--${POST_TYPE_MAP[p.postType].slot}))` }}
-                    title={`${fmtDateTime(p.scheduledAt)} · ${PLATFORMS[p.platform].label} · ${p.headline}`}
+                    title={`${fmtDateTime(p.scheduledAt)} · ${PLATFORMS[p.platform].label} · ${p.headline}${isDue(p, now) && notSent(p) ? ' · Due: not posted yet' : ''}`}
                   >
                     <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm text-white" style={{ background: PLATFORMS[p.platform].color }}>
                       <PlatformGlyph platform={p.platform} size={8} />
@@ -244,7 +287,7 @@ function MonthCalendar({ posts }: { posts: Post[] }) {
           })}
         </div>
       </div>
-      <p className="border-t border-line px-4 py-2 text-[11.5px] text-muted">Tip: drag a post onto another day to reschedule it at the same time. Colors show the post type.</p>
+      <p className="border-t border-line px-4 py-2 text-[11.5px] text-muted">Tip: drag a post onto another day to move it, at the same time. Colors show the post type; an outlined post is due.</p>
     </section>
   );
 }
@@ -280,6 +323,7 @@ function QueueList({ posts }: { posts: Post[] }) {
                     <FormatBadge format={p.format} />
                     <PostTypeTag type={p.postType} />
                     <span className="text-[11px] text-muted">{STYLE_LABEL[p.style]}</span>
+                    <DueBadge post={p} />
                     <ExternalBadge post={p} compact />
                   </div>
                   <p className="truncate text-[13.5px] font-semibold">{p.headline}</p>
@@ -291,13 +335,11 @@ function QueueList({ posts }: { posts: Post[] }) {
                   <button className="btn btn-secondary btn-sm" onClick={() => openEditor(p.id)}>
                     <Pencil size={13} /> Edit
                   </button>
-                  <ManusFacebookButton post={p} />
-                  <button className="btn btn-primary btn-sm" onClick={() => publishNowFlow(p.id)}>
-                    <Send size={13} /> Publish now
+                  <ManusPostButton post={p} primary />
+                  <button className="btn btn-secondary btn-sm" onClick={() => useMarkPosted.getState().open(p.id)}>
+                    <CheckCheck size={13} /> Mark as posted
                   </button>
-                  <button className="btn btn-ghost btn-icon btn-sm" onClick={() => update(p.id, { status: 'draft' })} aria-label="Move back to drafts" title="Unschedule">
-                    <Undo2 size={14} />
-                  </button>
+                  <PostMoreMenu post={p} />
                 </div>
               </li>
             ))}
@@ -311,23 +353,17 @@ function QueueList({ posts }: { posts: Post[] }) {
 function PublishedList({ posts }: { posts: Post[] }) {
   const project = useActiveProject()!;
   const openEditor = useUI((s) => s.openPostEditor);
-  const settings = useStore((s) => s.settings);
-  const now = useNow(3000);
-  const totals = posts.reduce(
-    (t, p) => {
-      const m = postLive(p, now, followersFor(settings, p.platform));
-      return { impressions: t.impressions + m.impressions, engagements: t.engagements + m.engagements, clicks: t.clicks + m.clicks };
-    },
-    { impressions: 0, engagements: 0, clicks: 0 },
-  );
+  const byManus = posts.filter((p) => p.publishedBy === 'manus').length;
+  const networks = POST_PLATFORMS.map((n) => ({ n, count: posts.filter((p) => p.platform === n).length })).filter((x) => x.count);
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Tile label="Published posts" value={String(posts.length)} />
-        <Tile label="Impressions" value={fmtCompact(totals.impressions)} live />
-        <Tile label="Engagements" value={fmtCompact(totals.engagements)} live />
-        <Tile label="Link clicks" value={fmtCompact(totals.clicks)} live />
+        <Tile label="Posted" value={String(posts.length)} />
+        <Tile label="By Manus" value={String(byManus)} />
+        <Tile label="Marked by you" value={String(posts.length - byManus)} />
+        <Tile label="Networks" value={networks.map((x) => `${networkLabel(x.n)} ${x.count}`).join(' · ') || '–'} small />
       </div>
+      <p className="text-[12.5px] text-muted">Likes, views and clicks live on each network: this app doesn’t read them. Open a post there to see how it’s doing.</p>
       <ul className="flex flex-col gap-3">
         {posts.slice(0, 60).map((p) => (
           <li key={p.id} className="panel flex flex-col gap-3 p-3 sm:flex-row">
@@ -339,21 +375,16 @@ function PublishedList({ posts }: { posts: Post[] }) {
                 <PlatformChip platform={p.platform} />
                 <FormatBadge format={p.format} />
                 <PostTypeTag type={p.postType} />
-                {p.source === 'sample' && <span className="badge bg-warn-soft text-warn">Sample</span>}
-                <span className="num ml-auto text-xs text-muted" title={p.publishedAt ? fmtDateTime(p.publishedAt) : ''}>
-                  Published {p.publishedAt ? `${fmtDateTime(p.publishedAt)} · ${fmtRelative(p.publishedAt, now)}` : ''}
-                </span>
               </div>
               <p className="truncate text-[13.5px] font-semibold">{p.headline}</p>
-              <p className="mb-2 truncate text-[12.5px] text-muted">{p.caption.split('\n')[0]}</p>
-              <LiveMetrics post={p} />
+              <p className="mb-1.5 truncate text-[12.5px] text-muted">{p.caption.split('\n')[0]}</p>
+              <PostedBy post={p} />
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button className="btn btn-ghost btn-xs" onClick={() => openEditor(p.id)}>
-                  <ExternalLink size={12} /> View on {PLATFORMS[p.platform].label}
+                  <Pencil size={12} /> Open
                 </button>
-                <span className="font-mono text-[11px] text-faint">
-                  {p.platform === 'x' ? 'x' : p.platform}.com/…/{p.id.slice(-8)}
-                </span>
+                {p.external && <ExternalBadge post={p} compact />}
+                <PostMoreMenu post={p} className="ml-auto" />
               </div>
             </div>
           </li>
@@ -364,14 +395,11 @@ function PublishedList({ posts }: { posts: Post[] }) {
   );
 }
 
-function Tile({ label, value, live }: { label: string; value: string; live?: boolean }) {
+function Tile({ label, value, small }: { label: string; value: string; small?: boolean }) {
   return (
     <div className="panel px-4 py-3">
-      <p className="flex items-center gap-1.5 text-xs font-medium text-muted">
-        {label}
-        {live && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-good" aria-label="Live" />}
-      </p>
-      <p className="num text-[20px] font-bold">{value}</p>
+      <p className="text-xs font-medium text-muted">{label}</p>
+      <p className={cn('num font-bold', small ? 'text-[13px] leading-snug' : 'text-[20px]')}>{value}</p>
     </div>
   );
 }

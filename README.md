@@ -10,8 +10,8 @@ An AI workspace for researching, building, branding, listing and marketing digit
 | **Dashboard** | Quick composer (AI caption + **AI image**, or your own photo/video with an AI caption), project summary, KPI snapshot with sparklines, launch readiness, upcoming posts. |
 | **AI images** | Post images (portrait, square, story or landscape) and a marketplace listing set: cover mockup, in-use shot, "What's inside / What you get" checklist graphic and offer card. Choose **Photo** (made by the API key that powers Photos: OpenAI, Google, xAI, Meta, OpenRouter or a Manus task; in claude.ai, Meta Muse through Zapier) or **Illustration** (drawn by the AI as SVG). The app typesets headlines, logos, prices and lists on top, so text is always spelled right; change the headline later and the text is re-set on the same artwork without a new generation. |
 | **Product / Business Studio** | Structure builder (course curriculum, guide chapters, spreadsheet tabs… or service packages, operating model and value stack), section drafting, AI code & asset generator (calculators, quizzes, booking widgets, pricing tables, spreadsheets + Apps Script…) with a live CodeMirror editor, split-pane preview, plain-language edits with undo, HTML export, AI listing images with a buyer gallery, and one-click publishing to the Marketplace. |
-| **Marketing Hub** | Four channels: **SEO** (metadata, live 0–100 score with checklist, Google and link previews, click-to-edit sales page, section manager, HTML export with JSON-LD), **Email** (lead magnet, opt-in page, 5-email sequence with editable delays, time-compressed subscriber simulation, subscriber list + CSV), **Social** (cadence, watermark, 5 image + 5 video styles, platforms, post-type mix, 30-day plan, 7-day ready-to-publish batch with mockups, bulk scheduling), **Paid ads** (objectives, platforms, budget, targeting, A/B creatives, Google search ads, projections, simulated launch). |
-| **Content calendar** | Scheduled (5-week calendar with drag-to-reschedule, or list), Published (live engagement counters), Drafts; full inline editor with platform preview. |
+| **Marketing Hub** | Four channels: **SEO** (metadata, live 0–100 score with checklist, Google and link previews, click-to-edit sales page, section manager, HTML export with JSON-LD), **Email** (lead magnet, opt-in page, 5-email sequence with editable delays, time-compressed subscriber simulation, subscriber list + CSV), **Social** (cadence, watermark, 5 image + 5 video styles, platforms and your handles, post-type mix, 30-day plan, 7-day ready-to-post batch with mockups, add to calendar in bulk), **Paid ads** (objectives, platforms, budget, targeting, A/B creatives, Google search ads, projections, simulated launch). |
+| **Content calendar** | Planned (5-week calendar with drag-to-move, or list; posts whose time has passed are flagged **Due**), Posted (by Manus, or marked by you, with the real link when there is one), Drafts; full inline editor with a platform preview. Nothing posts on its own: Manus posts when you confirm, or you post yourself and choose **Mark as posted**. |
 | **Analytics** | Impressions, engagement rate, clicks, opt-ins and sales with period deltas, daily chart (with table view), top post types and visual styles, platform split, funnel, top posts, sales and ad delivery. |
 | **Marketplace** | Products and local businesses, search, category pills, location filter + map, listing details with booking or inquiry, cart, checkout, order history with access files. Your published listings appear instantly. |
 | **Brain** | Skills (voice, audience, rules, offers, SEO, email…) written in plain language and parsed into rules, a skill library, knowledge documents (facts and key terms are extracted), a with/without playground with highlighted differences, an activity log, and learned preferences from thumbs-down feedback. |
@@ -25,10 +25,11 @@ Real:
 - Accounts (with Supabase): sign-up, email confirmation, password reset, and saving each person's workspace and files to their account.
 - AI: Claude in the claude.ai Artifact; your own API keys in the self-hosted app (see "AI: one AI, powered by your API keys"); otherwise a built-in, niche-aware engine that works offline. Brain skills apply to all of them.
 - AI images and videos: real files you can download, schedule with posts and publish on listings. Without a key that makes photos, a built-in brand illustration is used and labelled as such.
+- Posting: Manus posts on Facebook, Instagram, TikTok, LinkedIn and X for you, in its own browser signed in as you (see "Posting with Manus"). The app itself never logs in to a network and never posts on its own. Without Manus, copy the text and download the image or video from a post's ⋯ menu, post it yourself, and mark it posted.
 - When the app is opened as a shared claude.ai Artifact, published Marketplace listings and purchases sync between everyone who opens it.
 
 Simulated (clearly labelled in the UI):
-- Social account connections and publishing: no real logins or posts, except Facebook posts you hand to Manus in the claude.ai app (see "Manus through Zapier"). Engagement numbers are modeled per platform, format, style and post type.
+- Analytics: impressions, engagement and clicks are still modeled from benchmarks (being replaced with real counts only).
 - Checkout: no payment is taken (test card `4242 4242 4242 4242`).
 - Email sending: the sequence plays in an in-app inbox; nothing is emailed.
 - Ad launches: delivery is modeled from benchmark projections; no ad account is charged.
@@ -55,7 +56,7 @@ Simulated (clearly labelled in the UI):
 **Powers.** Each card has a dropdown of everything AI does in the app, stacked as checkboxes:
 - **Writing & research:** product research, brand kit & voice, outline & chapters, product files, business model, marketplace listing, code & assets, SEO & sales pages, emails & lead magnets, social posts & campaigns, ads and illustrations.
 - **Media:** photos and videos.
-- **Agents:** Facebook posting.
+- **Agents:** Social posting (Facebook, Instagram, TikTok, LinkedIn and X, by Manus).
 
 What a provider can't do is greyed out with the reason. A new key powers everything it can until you choose.
 
@@ -69,7 +70,7 @@ What a provider can't do is greyed out with the reason. A new key powers everyth
 | xAI | `reasoning_effort`: low … xhigh | `quality`: low / medium | `resolution`: 480p / 720p / 1080p | tokens × list price |
 | Meta | `reasoning_effort`: minimal … max | `reasoning_strength`: low / high | – | Meta's reported charge |
 | OpenRouter | `reasoning.effort`: none … max | set by the model | `resolution`: 480p / 768p / 2K (HeyGen) | OpenRouter's exact cost |
-| Manus | – | `agent_profile` (photos as a task) | – | Manus credits; Facebook posting uses `agent_profile` lite … max-ultra |
+| Manus | – | `agent_profile` (photos as a task) | – | Manus credits; Social posting uses `agent_profile` lite … max-ultra |
 
 **Priority.** Keys are tried in the order shown (move them with the arrows). If the first one fails (outage, rate limit, no credit, bad key), the next key that powers the same function answers, and the result says so. A blocked prompt isn't sent elsewhere. Videos and agent tasks move on only when the first provider certainly started nothing, so a paid job is never doubled.
 
@@ -125,15 +126,24 @@ When the app runs as a claude.ai Artifact and you have the **Zapier** connector 
 
 - **Photos for posts and listings**: each image is one Manus task (usually about 3 minutes and roughly 40 Manus credits in testing). The app polls the task, brings the finished image back, adds your headline, logo and prices, and saves it. Listing sets run their four images in parallel. If you reload mid-way, the app offers to pick the task up again; "Watch it in Manus" links to the task.
 - **Image size**: Manus is asked for a JPEG under 1.5 MB at the image's final size, because its image tools otherwise save PNGs of about 5 MB, too big to come back through Zapier (the app accepts up to 2 MB). If the file is still too big, or Manus didn't attach one, the app asks once, in the same task, for a smaller JPEG (Zapier's built-in Manus **Continue Task** action).
-- **Facebook posts**: on any Facebook post with an image, a video, or text only (composer, post cards, post editor, calendar list), choose **Post on Facebook**.
-  - Confirm the Page and choose **Post now** or **Schedule** (for the post's time, 30 minutes to 75 days ahead).
-  - Manus opens Facebook in its own browser and posts exactly that post on your Page: the caption, and the image or video as they are. It posts once and never adds anything else.
-  - The post shows live status: posting or scheduling, **Manus needs you** (for example, to sign in to Facebook inside Manus the first time), posted or scheduled, or failed, with a link to the task. A post Manus has posted is marked published. The app checks every 45 seconds while it's open, or press **Check now**.
-  - Videos (self-hosted only): the video goes to Manus first, through your server, using Manus's file upload (up to 300 MB here). Signed in, the server takes the video straight from your account's storage with a private link that lasts 10 minutes, so big videos never pass through the browser. Replit's published apps refuse uploads over about 32 MB, so without accounts keep videos under that.
+- **Posting**: see "Posting with Manus" below. In claude.ai it runs through this same Zapier connection (images and text; videos need the self-hosted app).
 - Setup on the Zapier side (already done for this workspace): Manus enabled on your Zapier MCP plus two custom Manus actions, `create_task_with_image` (Manus API `task.create`, optionally with an image) and `task_output` (`task.detail` + `task.listMessages`, returning images as base64 so the page can show them; the app first lists the files without their bytes, then downloads only the first one that fits).
 - Zapier runs custom actions as "write" calls, so claude.ai may ask you to approve them. To stop the prompts during long Manus tasks, set Zapier's **execute write action** tool to **Always allow** in claude.ai connector settings.
-- Other platforms keep the in-app (simulated) scheduler.
-- Self-hosted, the same Facebook posting runs with your Manus API key (tick **Facebook posting** on the Manus card; its agent profile is the key's effort). Everyone else posts with their own Manus key, on their own Pages.
+- Self-hosted, posting runs with your Manus API key (tick **Social posting** on the Manus card; its agent profile is the key's effort). Everyone else posts with their own Manus key, on their own accounts.
+
+## Posting with Manus
+
+Manus is an AI agent with its own browser. You sign in to each network once inside Manus; after that it posts for you. This app never connects to your social accounts itself.
+
+- **Where**: Facebook (a Page, through Meta Business Suite), Instagram (instagram.com, or Meta Business Suite to schedule), TikTok (TikTok Studio), LinkedIn (your profile or a company Page) and X.
+- **How**: choose **Post on Instagram** (or any network) on a post card, in the post editor or in the calendar list, or **Post with Manus** in the composer for every network you picked at once. The calendar also offers **Post N due with Manus** and **Send all to Manus**.
+  - Confirm the account for each network (it remembers the last one per project, then uses your handles from Settings → Social accounts) and choose **Post now** or **Schedule** (for each post's own time: at least 30 minutes ahead, and up to 75 days for Facebook, Instagram and X, 90 for LinkedIn, 10 for TikTok).
+  - Posts go to Manus one after another; each is its own Manus task and uses your Manus credits. Nothing is ever sent twice by itself.
+  - Manus posts exactly that post: the text and hashtags, and the image or video as they are. It posts once, never adds anything else, never splits an X post into a thread, and stops to ask when it can't tell which account to use.
+  - Instagram and TikTok need an image or a video; X warns when text is over 280 characters (longer works only on accounts that allow it).
+- **Status**: the post shows posting or scheduling, **Manus needs you** (for example, to sign in the first time), posted or scheduled, or failed, with a link to the task. When Manus reports it posted, the post moves to **Posted** with its link, if Manus saw one (only links on that network's own website are kept). The app checks every 45 seconds while it's open, or press **Check now**. "Posted" is Manus's own report.
+- **Videos** (self-hosted only): the video goes to Manus first, through your server, using Manus's file upload (up to 300 MB here). Signed in, the server takes the video straight from your account's storage with a private link that lasts 10 minutes, so big videos never pass through the browser. Replit's published apps refuse uploads over about 32 MB, so without accounts keep videos under that.
+- **Older workspaces**: earlier versions pretended to connect accounts and publish posts. When a workspace opens, posts that version marked published (without Manus) go back on the calendar as planned, its handles move to your brand's social handles, and its "Published to …" notices are removed. Posts Manus really posted stay posted.
 
 ## Accounts: sign-up, sign-in and saving to your account (Supabase)
 
@@ -174,11 +184,11 @@ What people get:
 - **AI for everyone signed in, on your keys:**
   - Only the `ADMIN_EMAILS` account can see and change keys or read the usage log. Everyone else sees what powers each function.
   - Video jobs and Manus tasks belong to whoever started them.
-  - **Manus is yours alone.** It's an agent with its own browser, signed in to your accounts (Facebook…), so only the owner can give your Manus key a task.
+  - **Manus is yours alone.** It's an agent with its own browser, signed in to your accounts (Facebook, Instagram…), so only the owner can give your Manus key a task.
   - **Everyone else can use their own Manus.** Settings → AI → "Use your own Manus" links to manus.im and explains how to create an API key (Manus → Settings → API Integration → Create API Key).
     - The key is checked with Manus, encrypted on the server (AES-256-GCM, from `USER_KEYS_SECRET` if set, otherwise from the secret key) and kept in `user_secrets`.
     - The app only ever shows its last 4 characters.
-    - Their Manus photos and Facebook posts then run in their own Manus account, on their credits.
+    - Their Manus photos and social posts then run in their own Manus account, on their credits.
 - **A separate AI server:** if the app and the AI server run at different addresses (Settings → AI → Advanced), the sign-in is only sent to that server after you press **Test connection** there. This is remembered per account on that device and forgotten at Log out, so a half-typed address, or one from an imported backup, never receives it.
 - **One tab at a time:** an account works in one tab per browser. Opening it in a second tab moves it there; the first tab offers "Use it here".
 - **Optional sign-in:** `SIGN_IN_REQUIRED=false` makes signing in optional. "Continue without an account" keeps work in that browser, and AI then works without signing in.
@@ -223,7 +233,7 @@ npm run build:artifact      # dist-artifact/yourlocalbusiness.html (single file)
 ## Going to production
 
 The simulated integrations are isolated so they can be swapped for real ones:
-- Social publishing: `src/components/posts/Connect.tsx` (OAuth) and `schedulePostsFlow` / `publishNowFlow` in `src/components/posts/PostCard.tsx`.
+- Posting through the networks' own APIs instead of Manus: `startManusPost` in `src/ai/manusPost.ts` is the one place a post leaves the app.
 - Payments: `CheckoutModal` in `src/pages/store/StoreOverlays.tsx` (e.g. Stripe Checkout or Payment Element on your server).
 - Email delivery: export the sequence or connect an email provider where subscribers are added (`src/pages/marketing/email/shared.tsx`).
 - Ads: `src/pages/marketing/AdsEngine.tsx` launch handlers.

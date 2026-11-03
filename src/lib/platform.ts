@@ -142,7 +142,7 @@ export interface AIServerState {
 
 export const NO_AI_SERVER: AIServerState = { reachable: false, ready: false, providers: [], routing: {} };
 
-/** The Zapier connector as this page sees it (for Manus images and Facebook posts). */
+/** The Zapier connector as this page sees it (for Manus images and social posts). */
 export type ZapierStatus = 'checking' | 'ready' | 'needs_reauth' | 'missing' | 'unavailable';
 
 interface RuntimeState {

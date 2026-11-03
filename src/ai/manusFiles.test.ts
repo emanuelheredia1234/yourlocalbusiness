@@ -1,13 +1,13 @@
-// A Facebook post with a video: the video goes to Manus first (through your server), then the task
-// carries it. Signed in, the server takes it from your account's storage; otherwise the browser
-// sends the bytes.
+// A post with a video: the video goes to Manus first (through your server), then the task carries
+// it. Signed in, the server takes it from your account's storage; otherwise the browser sends the
+// bytes.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const signedFileUrl = vi.fn(async (_id: string): Promise<string | null> => null);
 vi.mock('@/lib/cloud/auth', () => ({ authHeaders: async () => ({}), signedFileUrl: (id: string) => signedFileUrl(id) }));
 
 const { manusTransport, sendFileToManus } = await import('./manus');
-const { startFacebookPost } = await import('./manusFacebook');
+const { startManusPost } = await import('./manusPost');
 const { putBlob } = await import('@/lib/storage');
 
 manusTransport.server = true;
@@ -49,7 +49,7 @@ describe('sending a file to Manus', () => {
   });
 });
 
-describe('a Facebook video post', () => {
+describe('a video post', () => {
   it('sends the video, then a task that posts it now with the caption', async () => {
     await putBlob('media_fbvid', new Blob([new Uint8Array(64)], { type: 'video/mp4' }));
     fetchMock.mockResolvedValueOnce(json({ file_id: 'file00003', filename: 'launch.mp4' }));
@@ -57,13 +57,14 @@ describe('a Facebook video post', () => {
     const stages: string[] = [];
     const post = {
       id: 'post_fb1',
+      platform: 'facebook',
       headline: 'Launch day',
       caption: 'Our new candle line is here.',
       hashtags: ['#candles'],
       scheduledAt: '2026-11-03T18:00:00.000Z',
       media: { id: 'media_fbvid', kind: 'video', name: 'launch.mp4', mime: 'video/mp4', size: 64, createdAt: 1, thumb: '' },
     } as never;
-    const ext = await startFacebookPost(post, 'Candle Co', 'now', (s) => stages.push(s));
+    const ext = await startManusPost(post, 'Candle Co', 'now', (s) => stages.push(s));
     expect(stages).toEqual(['Sending the video to Manus…', 'Starting the Manus task…']);
     const create = JSON.parse(fetchMock.mock.calls[1][1].body);
     expect(create.fn).toBe('facebook');
@@ -72,12 +73,32 @@ describe('a Facebook video post', () => {
     expect(create.prompt).toContain('Attach the video file provided');
     expect(create.prompt).toContain('Our new candle line is here.\n\n#candles');
     expect(create.prompt).toContain('RESULT: POSTED');
-    expect(ext).toMatchObject({ mode: 'now', state: 'working', taskId: 'task000009', page: 'Candle Co' });
+    expect(ext).toMatchObject({ network: 'facebook', mode: 'now', state: 'working', taskId: 'task000009', page: 'Candle Co' });
+  });
+
+  it('posts a TikTok video the TikTok way', async () => {
+    await putBlob('media_ttvid', new Blob([new Uint8Array(32)], { type: 'video/mp4' }));
+    fetchMock.mockResolvedValueOnce(json({ file_id: 'file00004', filename: 'clip.mp4' }));
+    fetchMock.mockResolvedValueOnce(json({ ok: true, task_id: 'task000010', task_url: 'https://manus.im/app/task000010', task_title: 'Post' }));
+    const post = { id: 'post_tt1', platform: 'tiktok', headline: 'Clip', caption: 'Watch this.', hashtags: [], scheduledAt: '2026-11-04T18:00:00.000Z', media: { id: 'media_ttvid', kind: 'video', name: 'clip.mp4', mime: 'video/mp4', size: 32, createdAt: 1, thumb: '' } } as never;
+    const ext = await startManusPost(post, '@candles', 'schedule');
+    const create = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(create.fn).toBe('facebook'); // the "Social posting" function, whatever the network
+    expect(create.title).toBe('Schedule TikTok post · Clip');
+    expect(create.prompt).toContain('tiktokstudio/upload');
+    expect(create.prompt).toContain('"@candles"');
+    expect(ext).toMatchObject({ network: 'tiktok', mode: 'schedule', scheduledFor: '2026-11-04T18:00:00.000Z', message: 'Manus is opening TikTok…' });
+  });
+
+  it('won’t send an Instagram post with nothing to show', async () => {
+    const post = { id: 'p', platform: 'instagram', headline: 'h', caption: 'c', hashtags: [], scheduledAt: '' } as never;
+    await expect(startManusPost(post, '@a', 'now')).rejects.toMatchObject({ message: expect.stringMatching(/Instagram needs an image or a video/) });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('refuses when the video is gone, rather than posting text only', async () => {
-    const post = { id: 'p', headline: 'h', caption: 'c', hashtags: [], scheduledAt: '', media: { id: 'media_missing', kind: 'video', name: 'v.mp4' } } as never;
-    await expect(startFacebookPost(post, 'Page', 'now')).rejects.toMatchObject({ message: expect.stringMatching(/video isn’t on this device/) });
+    const post = { id: 'p', platform: 'facebook', headline: 'h', caption: 'c', hashtags: [], scheduledAt: '', media: { id: 'media_missing', kind: 'video', name: 'v.mp4' } } as never;
+    await expect(startManusPost(post, 'Page', 'now')).rejects.toMatchObject({ message: expect.stringMatching(/video isn’t on this device/) });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

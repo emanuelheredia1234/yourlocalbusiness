@@ -46,9 +46,9 @@ export default function MarketingHub() {
       lines: [
         { label: '30-day plan', done: !!m.plan },
         { label: '7-day content batch', done: posts.some((p) => p.source === 'batch') },
-        { label: 'Posts scheduled', done: scheduled + published > 0 },
+        { label: 'Posts on your calendar', done: scheduled + published > 0 },
       ],
-      metric: `${scheduled} scheduled · ${published} published`,
+      metric: `${scheduled} planned · ${published} posted`,
     },
     ads: {
       progress: [ads.length > 0, ads.some((a) => a.creatives.length > 0), activeAds > 0].filter(Boolean).length / 3,

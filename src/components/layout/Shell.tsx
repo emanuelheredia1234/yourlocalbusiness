@@ -419,7 +419,7 @@ export function CommandPalette() {
       { label: 'Email funnel & lead magnet', run: () => navigate('marketing-email') },
       { label: 'Social campaign: 30-day plan + 7-day batch', run: () => navigate('marketing-social') },
       { label: 'Paid ads campaign', run: () => navigate('marketing-ads') },
-      { label: 'Content calendar', hint: 'Scheduled & published posts', run: () => navigate('calendar') },
+      { label: 'Content calendar', hint: 'Planned & posted posts', run: () => navigate('calendar') },
       { label: 'Analytics', run: () => navigate('analytics') },
       { label: 'Marketplace store', run: () => navigate('store') },
       { label: 'Brain: AI skills', run: () => navigate('brain') },

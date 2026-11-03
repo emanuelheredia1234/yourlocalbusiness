@@ -14,20 +14,17 @@ import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { PostVisual, pointsFromCaption } from '@/components/visuals/PostVisual';
 import { MediaDrop, MediaThumb } from '@/components/media/MediaUpload';
 import { PlatformGlyph } from '@/components/posts/PlatformIcon';
-import { ensureConnected } from '@/components/posts/Connect';
 import { PostImagePanel } from '@/components/images/PostImagePanel';
 import { VideoPanel } from '@/components/images/VideoPanel';
 import { postVideoPrompt, releaseMedia } from '@/ai/image';
-import { useManusFb, useManusReady } from '@/components/posts/ManusFacebook';
+import { manusSetupHint, useManusPost, useManusReady } from '@/components/posts/ManusPost';
 
 export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () => void; initialTopic?: string; compact?: boolean }) {
   const project = useActiveProject()!;
   const fid = useId();
   const manusReady = useManusReady();
   const addPosts = useStore((s) => s.addPosts);
-  const publish = useStore((s) => s.publishPost);
   const schedule = useStore((s) => s.schedulePosts);
-  const notify = useStore((s) => s.notify);
   const ai = useAI(postTask);
   const [topic, setTopic] = useState(initialTopic ?? '');
   const [source, setSource] = useState<'ai' | 'upload'>('ai');
@@ -78,7 +75,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
     }
   };
 
-  const build = (status: Post['status']): Post[] => {
+  const build = (): Post[] => {
     const now = Date.now();
     return platforms.map((platform) => ({
       id: uid('post'),
@@ -92,7 +89,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
       visualPrompt,
       caption: platform === 'x' && caption.length > 270 ? truncate(caption.split('\n\n')[0], 240) : caption,
       hashtags: platform === 'x' ? hashtags.slice(0, 2) : hashtags,
-      scheduledAt: status === 'published' ? new Date().toISOString() : combineDateTime(date, time),
+      scheduledAt: combineDateTime(date, time),
       media: source === 'upload' ? media ?? undefined : effFormat === 'image' ? genMedia ?? undefined : genVideo ?? undefined,
       storyboard,
       watermark,
@@ -118,35 +115,21 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
     ai.reset();
   };
 
-  const act = async (mode: 'publish' | 'schedule' | 'draft' | 'manus') => {
+  /** manus: on your calendar, then straight to Manus (it posts them, now or at their time) */
+  const act = (mode: 'calendar' | 'draft' | 'manus') => {
     if (!hasDraft) return;
     if (!platforms.length) {
       toast({ kind: 'info', title: 'Pick at least one platform' });
       return;
     }
-    // Facebook goes to Manus for real; other platforms keep the in-app scheduler
-    const simulated = mode === 'manus' ? platforms.filter((p) => p !== 'facebook') : platforms;
-    if (mode !== 'draft' && simulated.length && !(await ensureConnected(simulated))) return;
-    const posts = build(mode === 'publish' ? 'published' : 'scheduled');
+    const posts = build();
     addPosts(posts);
-    if (mode === 'manus') {
-      schedule(posts.map((p) => p.id));
-      const fb = posts.find((p) => p.platform === 'facebook');
-      reset();
-      onDone?.();
-      if (fb) useManusFb.getState().open(fb.id);
-      return;
-    }
-    if (mode === 'publish') {
-      posts.forEach((p) => publish(p.id));
-      notify({ kind: 'post', title: `Published to ${platforms.map((p) => PLATFORMS[p].label).join(', ')}`, body: posts[0].headline, route: 'calendar' });
-      toast({ kind: 'success', title: 'Published', body: 'Watch live engagement in the Calendar → Published tab.', action: { label: 'View', run: () => navigate('calendar') } });
-    } else if (mode === 'schedule') {
-      schedule(posts.map((p) => p.id));
-      toast({ kind: 'success', title: `Scheduled for ${date} at ${time}`, action: { label: 'Open calendar', run: () => navigate('calendar') } });
-    } else toast({ kind: 'success', title: 'Saved to drafts', action: { label: 'Open calendar', run: () => navigate('calendar') } });
+    if (mode !== 'draft') schedule(posts.map((p) => p.id));
     reset();
     onDone?.();
+    if (mode === 'manus') useManusPost.getState().open(posts.map((p) => p.id));
+    else if (mode === 'calendar') toast({ kind: 'success', title: posts.length > 1 ? `${posts.length} posts added to your calendar` : 'Added to your calendar', body: `For ${date} at ${time}. When it’s time, post with Manus, or post it yourself and mark it posted.`, action: { label: 'Open calendar', run: () => navigate('calendar') } });
+    else toast({ kind: 'success', title: 'Saved to drafts', action: { label: 'Open calendar', run: () => navigate('calendar') } });
   };
 
   const previewPost = { headline: headline || truncate(topic || 'Your headline appears here', 60) };
@@ -245,17 +228,14 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
               </Field>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button className="btn btn-primary" onClick={() => act('publish')}>
-                <Send size={15} /> Publish now
-              </button>
-              <button className="btn btn-secondary" onClick={() => act('schedule')}>
-                <CalendarClock size={15} /> Schedule
-              </button>
-              {manusReady && platforms.includes('facebook') && effFormat === 'image' && (
-                <button className="btn btn-secondary" onClick={() => act('manus')} title="Manus schedules the Facebook post for real, in Meta Business Suite">
-                  <Send size={15} /> Schedule on Facebook (Manus)
+              {manusReady && (
+                <button className="btn btn-primary" onClick={() => act('manus')} title="Manus posts it on your accounts, in its own browser: right away, or scheduled for this date and time">
+                  <Send size={15} /> Post with Manus
                 </button>
               )}
+              <button className={cn('btn', manusReady ? 'btn-secondary' : 'btn-primary')} onClick={() => act('calendar')}>
+                <CalendarClock size={15} /> Add to calendar
+              </button>
               <button className="btn btn-ghost" onClick={() => act('draft')}>
                 <FilePlus2 size={15} /> Save draft
               </button>
@@ -263,6 +243,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
                 <X size={15} /> Clear
               </button>
             </div>
+            <p className="text-[12px] text-muted">{manusReady ? 'Nothing posts by itself: Manus posts it when you confirm (now, or scheduled for this time), or you post it yourself and mark it posted.' : `Nothing posts by itself. ${manusSetupHint()} Until then, copy the text and post it yourself, then mark it posted.`}</p>
           </div>
         )}
       </div>

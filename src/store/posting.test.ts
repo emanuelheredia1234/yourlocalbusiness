@@ -1,0 +1,83 @@
+// Nothing in the app marks a post published by itself any more: only Manus's report, or you.
+// Workspaces saved by older versions get their made-up "published" posts back on the calendar.
+import { beforeEach, describe, expect, it } from 'vitest';
+import { useStore } from './useStore';
+import { cleanWorkspace, isInventedNotice, purgeInventedData } from './cleanup';
+import { defaultSettings, newProject } from './defaults';
+
+const post = (id: string, extra: object = {}) =>
+  ({ id, projectId: 'p1', status: 'scheduled', platform: 'facebook', format: 'image', style: 'minimal', postType: 'tip', headline: id, visualPrompt: '', caption: '', hashtags: [], scheduledAt: '2026-11-03T10:00:00.000Z', watermark: false, source: 'composer', createdAt: 1, updatedAt: 1, seed: 1, ...extra }) as never;
+const ext = (state: string) => ({ via: 'manus', network: 'facebook', mode: 'now', taskId: 't', taskUrl: 'https://manus.im/app/t', state, message: '', page: '', scheduledFor: '', requestedAt: 1, checkedAt: 1 });
+
+beforeEach(() => {
+  const project = { ...newProject('product', 'new'), id: 'p1' };
+  useStore.setState({ projects: [project], activeProjectId: 'p1', posts: [], notices: [], settings: defaultSettings() });
+});
+
+describe('marking posts posted', () => {
+  it('marks a post you posted yourself, with its link, and can undo it', () => {
+    useStore.setState({ posts: [post('a')] });
+    useStore.getState().markPosted('a', { url: 'https://www.instagram.com/p/1/', at: '2026-11-03T09:00:00.000Z' });
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'published', publishedBy: 'manual', publishedAt: '2026-11-03T09:00:00.000Z', postUrl: 'https://www.instagram.com/p/1/' });
+    useStore.getState().unmarkPosted('a');
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'scheduled', publishedBy: undefined, publishedAt: undefined, postUrl: undefined });
+  });
+
+  it('never unmarks a post Manus reported posted', () => {
+    useStore.setState({ posts: [post('m', { status: 'published', publishedBy: 'manus', publishedAt: 'x', external: ext('posted') })] });
+    useStore.getState().unmarkPosted('m');
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'published', publishedBy: 'manus' });
+  });
+
+  it('has no way to publish by itself', () => {
+    const s = useStore.getState() as unknown as Record<string, unknown>;
+    expect(s.publishPost).toBeUndefined();
+    expect(s.autoPublishDue).toBeUndefined();
+    expect(s.connectAccount).toBeUndefined();
+  });
+});
+
+describe('cleaning up what older versions made up', () => {
+  it('puts pretend-published posts back on the calendar and keeps real ones', () => {
+    useStore.setState({
+      posts: [
+        post('fake', { status: 'published', publishedAt: '2026-11-01T10:00:00.000Z' }),
+        post('fbscheduled', { status: 'published', publishedAt: '2026-11-01T10:00:00.000Z', external: { ...ext('scheduled'), mode: 'schedule' } }),
+        post('manus', { status: 'published', publishedAt: '2026-11-01T10:00:00.000Z', external: ext('posted') }),
+        post('mine', { status: 'published', publishedBy: 'manual', publishedAt: '2026-11-01T10:00:00.000Z' }),
+        post('sample', { status: 'published', source: 'sample' }),
+        post('draft', { status: 'draft' }),
+      ],
+    });
+    expect(cleanWorkspace()).toBe(true);
+    const byId = Object.fromEntries(useStore.getState().posts.map((p) => [p.id, p]));
+    expect(Object.keys(byId).sort()).toEqual(['draft', 'fake', 'fbscheduled', 'manus', 'mine']);
+    expect(byId.fake).toMatchObject({ status: 'scheduled', publishedAt: undefined });
+    expect(byId.fbscheduled).toMatchObject({ status: 'scheduled', publishedAt: undefined, external: { state: 'scheduled' } });
+    expect(byId.manus).toMatchObject({ status: 'published', publishedBy: 'manus', publishedAt: '2026-11-01T10:00:00.000Z' });
+    expect(byId.mine).toMatchObject({ status: 'published', publishedBy: 'manual' });
+    expect(byId.draft.status).toBe('draft');
+    // running it again changes nothing
+    expect(cleanWorkspace()).toBe(false);
+  });
+
+  it('keeps the handles of pretend connections in the brand, and drops the rest', () => {
+    const settings = { ...defaultSettings(), accounts: { instagram: { connected: true, handle: 'sumari', followers: 2100 }, x: { connected: true, handle: '@sumari', followers: 900 }, facebook: { connected: false, handle: '', followers: 0 }, tiktok: { connected: true, handle: 'other', followers: 5 } } } as never;
+    const p1 = useStore.getState().projects[0];
+    useStore.setState({ settings, projects: [{ ...p1, brand: { ...p1.brand, socials: { tiktok: '@mine' } } }] });
+    cleanWorkspace();
+    const s = useStore.getState();
+    expect(s.settings.accounts).toBeUndefined();
+    expect('accounts' in s.settings).toBe(false);
+    expect(s.projects[0].brand.socials).toEqual({ instagram: '@sumari', x: '@sumari', tiktok: '@mine' });
+    expect(purgeInventedData(s)).toBeNull();
+  });
+
+  it('removes notices about pretend publishing only', () => {
+    const n = (title: string) => ({ id: title, title, kind: 'post' as const, createdAt: 1, read: false });
+    useStore.setState({ notices: [n('Published to Instagram'), n('3 scheduled posts just went live'), n('Manus posted it on Facebook'), n('Your brand is ready')] });
+    cleanWorkspace();
+    expect(useStore.getState().notices.map((x) => x.title)).toEqual(['Manus posted it on Facebook', 'Your brand is ready']);
+    expect(isInventedNotice({ title: 'Manus scheduled your TikTok post' })).toBe(false);
+  });
+});

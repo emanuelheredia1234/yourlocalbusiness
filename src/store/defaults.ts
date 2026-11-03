@@ -1,4 +1,4 @@
-import type { AppSettings, Brand, Origin, Project, SocialPlatform, Studio, Track } from '@/lib/types';
+import type { AppSettings, Brand, Origin, Project, Studio, Track } from '@/lib/types';
 import { uid } from '@/lib/utils';
 import { defaultCampaign } from '@/ai/local/social';
 import { paletteFrom } from '@/ai/local/brand';
@@ -71,14 +71,11 @@ export function newProject(track: Track = 'product', origin: Origin = 'new'): Pr
   };
 }
 
-const acct = () => ({ connected: false, handle: '', followers: 0 });
-
 export function defaultSettings(): AppSettings {
   return {
     ai: { serverUrl: '', useBrain: true, simulateLatency: true },
     theme: 'system',
     profile: { name: '', email: '' },
-    accounts: { instagram: acct(), facebook: acct(), tiktok: acct(), linkedin: acct(), x: acct(), youtube: acct() } as Record<SocialPlatform, ReturnType<typeof acct>>,
     marketActivity: false,
     showSampleListings: true,
     shareToCommunity: true,

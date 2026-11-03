@@ -48,9 +48,8 @@ const STYLE_MULT: Record<StyleId, number> = {
 const PLATFORM_ER: Record<PostPlatform, number> = { instagram: 1, facebook: 0.72, tiktok: 1.28, linkedin: 0.86, x: 0.6 };
 const TAU_H: Record<PostPlatform, number> = { instagram: 6, facebook: 8, tiktok: 4, linkedin: 12, x: 2 };
 
-export function followersFor(settings: AppSettings | undefined, platform: PostPlatform): number {
-  const a = settings?.accounts?.[platform];
-  return a?.connected && a.followers > 0 ? a.followers : 1200;
+export function followersFor(_settings: AppSettings | undefined, _platform: PostPlatform): number {
+  return 1200;
 }
 
 export function postFinal(post: Post, followers = 1200): PostMetrics {

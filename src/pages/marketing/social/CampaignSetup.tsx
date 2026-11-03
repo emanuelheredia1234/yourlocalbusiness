@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
-import { AlertTriangle, CalendarDays, Check, Clapperboard, Globe, Image as ImageIcon, Link2, Users } from 'lucide-react';
+import { AlertTriangle, CalendarDays, Check, Clapperboard, Globe, Image as ImageIcon, Users } from 'lucide-react';
 import type { CampaignConfig, ImageStyleId, PostPlatform, PostType, Project, VideoStyleId } from '@/lib/types';
-import { cn, fmtCompact, stripProtocol, WEEKDAYS } from '@/lib/utils';
+import { cn, stripProtocol, WEEKDAYS } from '@/lib/utils';
 import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES } from '@/ai/knowledge';
 import { suggestTopics } from '@/ai/local/social';
 import { getActiveProject, useStore } from '@/store/useStore';
@@ -9,7 +9,7 @@ import { Field, Segmented, Toggle } from '@/components/ui/primitives';
 import { StackedBar } from '@/components/charts/Charts';
 import { PostVisual } from '@/components/visuals/PostVisual';
 import { PlatformChip } from '@/components/posts/PlatformIcon';
-import { openConnect } from '@/components/posts/Connect';
+import { NETWORKS } from '@/ai/manusPost';
 
 const WEIGHTS = [
   { id: '0', label: 'Off' },
@@ -35,7 +35,7 @@ export function cadence(cfg: CampaignConfig) {
 export function CampaignSetup({ project }: { project: Project }) {
   const cfg = project.marketing.campaign;
   const set = useCampaign();
-  const accounts = useStore((s) => s.settings.accounts);
+  const updateBrand = useStore((s) => s.updateBrand);
   const c = cadence(cfg);
   const sample = useMemo(() => suggestTopics(project)[0] ?? project.brand.tagline, [project]);
   const site = stripProtocol(project.brand.websiteUrl || `${project.brand.slug}.com`);
@@ -151,36 +151,23 @@ export function CampaignSetup({ project }: { project: Project }) {
         <h2 className="section-title mb-1 flex items-center gap-2">
           <Globe size={17} className="text-primary" /> Platforms & accounts
         </h2>
-        <p className="mb-4 text-[13px] text-muted">Choose where this campaign publishes. Connect an account to schedule and publish (demo connection, no real posting).</p>
+        <p className="mb-4 text-[13px] text-muted">Choose where this campaign posts, and add your handle on each. This app doesn’t log in to your accounts: Manus posts for you, signed in as you in its own browser, or you post yourself. The handles show in previews and tell Manus which account to use.</p>
         <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
           {POST_PLATFORMS.map((p) => {
             const on = cfg.platforms.includes(p);
-            const acct = accounts[p];
             return (
-              <li key={p} className={cn('flex items-center gap-3 rounded-md border px-3 py-2.5', on ? 'border-primary/50 bg-primary-soft/50' : 'border-line')}>
-                <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={on} onChange={() => set({ platforms: toggleIn<PostPlatform>(cfg.platforms, p) })} aria-label={`Publish to ${PLATFORMS[p].label}`} id={`pl-${p}`} />
-                <label htmlFor={`pl-${p}`} className="min-w-0 flex-1 cursor-pointer">
+              <li key={p} className={cn('flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3 py-2.5', on ? 'border-primary/50 bg-primary-soft/50' : 'border-line')}>
+                <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={on} onChange={() => set({ platforms: toggleIn<PostPlatform>(cfg.platforms, p) })} aria-label={`Post on ${PLATFORMS[p].label}`} id={`pl-${p}`} />
+                <label htmlFor={`pl-${p}`} className="min-w-[110px] cursor-pointer">
                   <PlatformChip platform={p} />
-                  <span className="mt-0.5 block truncate text-xs text-muted">
-                    {acct?.connected ? (
-                      <>
-                        {PLATFORMS[p].handlePrefix}
-                        {acct.handle} · {fmtCompact(acct.followers)} followers
-                      </>
-                    ) : (
-                      'Not connected'
-                    )}
-                  </span>
                 </label>
-                {acct?.connected ? (
-                  <span className="badge bg-good-soft text-good">
-                    <Check size={11} /> Connected
-                  </span>
-                ) : (
-                  <button className="btn btn-secondary btn-xs" onClick={() => openConnect([p])}>
-                    <Link2 size={12} /> Connect
-                  </button>
-                )}
+                <input
+                  className="input input-sm min-w-0 flex-1 basis-[160px]"
+                  value={project.brand.socials[p] ?? ''}
+                  onChange={(e) => updateBrand({ socials: { ...project.brand.socials, [p]: e.target.value } })}
+                  placeholder={NETWORKS[p].placeholder}
+                  aria-label={`Your ${NETWORKS[p].account}`}
+                />
               </li>
             );
           })}

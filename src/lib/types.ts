@@ -463,12 +463,18 @@ export interface Post {
   visualPrompt: string;
   caption: string;
   hashtags: string[];
+  /** when the post is planned on your calendar (nothing posts by itself at this time) */
   scheduledAt: string;
+  /** when it went out: set only when Manus reported it posted, or you marked it posted */
   publishedAt?: string;
+  /** who said it was posted: Manus (its own report) or you */
+  publishedBy?: 'manus' | 'manual';
+  /** the post's address on the network, when Manus reported one or you pasted it */
+  postUrl?: string;
   media?: MediaRef;
   storyboard?: Scene[];
   watermark: boolean;
-  /** a real post scheduled outside the app (Facebook, by Manus) */
+  /** the post handed to Manus, which posts it on the network in its own browser */
   external?: ExternalPublish;
   source: 'batch' | 'composer' | 'sample' | 'ads';
   planSlotId?: string;
@@ -481,7 +487,7 @@ export interface Post {
 
 export interface ExternalPublish {
   via: 'manus';
-  network: 'facebook';
+  network: PostPlatform;
   taskId: string;
   taskUrl: string;
   /** what Manus was asked to do: post right away, or schedule for scheduledFor (older posts: schedule) */
@@ -489,8 +495,11 @@ export interface ExternalPublish {
   /** working: Manus is on it · needs_input: Manus paused for you · finished: done without a clear result line */
   state: 'working' | 'needs_input' | 'posted' | 'scheduled' | 'failed' | 'finished';
   message: string;
+  /** the account Manus was asked to post as (a Page, profile or handle) */
   page: string;
   scheduledFor: string;
+  /** the post's address, when Manus reported one */
+  url?: string;
   requestedAt: number;
   checkedAt: number;
 }
@@ -764,12 +773,6 @@ export interface GenerationLog {
 }
 
 // ───────────── Settings & app ─────────────
-export interface AccountConnection {
-  connected: boolean;
-  handle: string;
-  followers: number;
-  connectedAt?: number;
-}
 
 export interface AppSettings {
   ai: {
@@ -781,7 +784,11 @@ export interface AppSettings {
   };
   theme: 'system' | 'light' | 'dark';
   profile: { name: string; email: string };
-  accounts: Record<SocialPlatform, AccountConnection>;
+  /**
+   * Left from older versions, which pretended to connect social accounts (a handle and an invented
+   * follower count). The cleanup moves any handle into the brand's social handles and removes this.
+   */
+  accounts?: Partial<Record<SocialPlatform, { handle?: string } | undefined>>;
   marketActivity: boolean;
   showSampleListings: boolean;
   shareToCommunity: boolean;

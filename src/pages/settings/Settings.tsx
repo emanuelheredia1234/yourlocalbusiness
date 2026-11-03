@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bot, CircleUserRound, Database, Download, FolderOpen, Link2, Moon, Palette, Plus, SlidersHorizontal, Sun, Trash2, Unplug, Upload, Users } from 'lucide-react';
+import { Bot, CircleUserRound, Database, Download, FolderOpen, Link2, Moon, Palette, Plus, SlidersHorizontal, Sun, Trash2, Upload, Users } from 'lucide-react';
 import type { AppSettings, Brand, Project } from '@/lib/types';
-import { cn, ensureUrl, fmtCompact, fmtRelative, readFileAsText, slugify } from '@/lib/utils';
+import { cn, ensureUrl, fmtRelative, readFileAsText, slugify } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
 import { pushMyListings } from '@/lib/community';
-import { PLATFORMS, SOCIAL_PLATFORMS, FORMATS } from '@/ai/knowledge';
+import { PLATFORMS, POST_PLATFORMS, FORMATS } from '@/ai/knowledge';
 import { brandKitTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore, type StoreState } from '@/store/useStore';
 import { defaultSettings } from '@/store/defaults';
+import { cleanWorkspace } from '@/store/cleanup';
 import { toast, useUI } from '@/store/ui';
 import { useAuth } from '@/lib/cloud/auth';
 import { AccountSettings } from '@/components/auth/Account';
@@ -17,8 +18,7 @@ import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, ChipInput, Field, Segmented, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
 import { BannerDesigner, BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
 import { BrandBanner, BrandLogo } from '@/components/brand/Logo';
-import { PlatformChip } from '@/components/posts/PlatformIcon';
-import { openConnect } from '@/components/posts/Connect';
+import { manusSetupHint, useManusReady } from '@/components/posts/ManusPost';
 import { download } from '@/components/ui/download';
 import { AIProviders, ArtifactAI } from './AIProviders';
 
@@ -40,7 +40,7 @@ export default function Settings() {
       <header>
         <p className="eyebrow mb-1">Settings</p>
         <h1 className="page-title">Workspace settings</h1>
-        <p className="mt-1 text-[13.5px] text-muted">Your brand kit, AI keys, connected accounts, projects and data. Brand changes flow into every module automatically.</p>
+        <p className="mt-1 text-[13.5px] text-muted">Your brand kit, AI keys, social handles and posting, projects and data. Brand changes flow into every module automatically.</p>
       </header>
       <Tabs<Tab>
         value={tab}
@@ -195,34 +195,32 @@ function AISettings() {
 // ───────────────────────── Accounts ─────────────────────────
 
 function Accounts() {
-  const accounts = useStore((s) => s.settings.accounts);
-  const disconnect = useStore((s) => s.disconnectAccount);
+  const project = useActiveProject()!;
+  const updateBrand = useStore((s) => s.updateBrand);
+  const ready = useManusReady();
   return (
-    <Card title="Connected accounts" desc="Connections here are a demo: they store a handle and follower count to model reach. No real login happens and nothing is posted to the networks.">
-      <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
-        {SOCIAL_PLATFORMS.map((p) => {
-          const a = accounts[p];
-          return (
-            <li key={p} className="flex items-center gap-3 rounded-md border border-line px-3 py-3">
-              <PlatformChip platform={p} showLabel={false} />
-              <span className="min-w-0 flex-1">
-                <span className="block text-[13.5px] font-semibold">{PLATFORMS[p].label}</span>
-                <span className="block truncate text-xs text-muted">{a?.connected ? `${PLATFORMS[p].handlePrefix}${a.handle} · ${fmtCompact(a.followers)} followers${a.connectedAt ? ` · connected ${fmtRelative(a.connectedAt)}` : ''}` : 'Not connected'}</span>
-              </span>
-              {a?.connected ? (
-                <button className="btn btn-ghost btn-sm text-muted hover:text-bad" onClick={() => disconnect(p)}>
-                  <Unplug size={14} /> Disconnect
-                </button>
-              ) : (
-                <button className="btn btn-secondary btn-sm" onClick={() => openConnect([p])}>
-                  <Link2 size={14} /> Connect
-                </button>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </Card>
+    <div className="flex flex-col gap-5">
+      <Card
+        title="Posting with Manus"
+        desc="This app doesn’t log in to your social accounts and never posts on its own. Manus, an AI agent, posts for you: it opens each network in its own browser, where you sign in once, and posts exactly the text and image or video you confirm, right away or scheduled."
+      >
+        <div className={cn('flex flex-wrap items-center gap-3 rounded-md border px-3 py-2.5 text-[13px]', ready ? 'border-good/40 bg-good-soft' : 'border-warn/40 bg-warn-soft')}>
+          <span className="min-w-0 flex-1">
+            <b className={ready ? 'text-good' : 'text-warn'}>{ready ? 'Manus is ready.' : 'Manus isn’t set up yet.'}</b>{' '}
+            <span className="text-ink-2">{ready ? `It can post on ${POST_PLATFORMS.map((p) => PLATFORMS[p].label.replace(' (Twitter)', '')).join(', ')}. Each post is a Manus task and uses your Manus credits.` : manusSetupHint()}</span>
+          </span>
+          {!ready && !__ARTIFACT_BUILD__ && (
+            <button className="btn btn-secondary btn-sm" onClick={() => useUI.getState().setSettingsTab('ai')}>
+              <Bot size={14} /> Open AI settings
+            </button>
+          )}
+        </div>
+        <p className="mt-3 text-[12.5px] text-muted">Without Manus, copy a post’s text and download its image or video from the post’s ⋯ menu, post it yourself, then choose Mark as posted.</p>
+      </Card>
+      <Card title="Your handles" desc={`For ${project.brand.name || 'this project'}. They show in post previews and tell Manus which account to post as.`}>
+        <SocialLinksEditor socials={project.brand.socials} onChange={(socials) => updateBrand({ socials })} />
+      </Card>
+    </div>
   );
 }
 
@@ -260,9 +258,11 @@ function ProjectsData() {
       for (const k of EXPORT_KEYS) if (k in data) (patch as Record<string, unknown>)[k] = (data as Record<string, unknown>)[k];
       // the AI server address is this device's choice: a backup (possibly from someone else) never changes it
       const serverUrl = useStore.getState().settings.ai.serverUrl;
-      patch.settings = { ...d, ...(data.settings ?? {}), ai: { ...d.ai, ...(data.settings?.ai ?? {}), serverUrl }, profile: { ...d.profile, ...(data.settings?.profile ?? {}) }, accounts: { ...d.accounts, ...(data.settings?.accounts ?? {}) } };
+      patch.settings = { ...d, ...(data.settings ?? {}), ai: { ...d.ai, ...(data.settings?.ai ?? {}), serverUrl }, profile: { ...d.profile, ...(data.settings?.profile ?? {}) } };
       if (!patch.activeProjectId || !data.projects.some((p) => p.id === patch.activeProjectId)) patch.activeProjectId = data.projects[0]?.id ?? null;
       replaceState(patch);
+      // an older backup may hold things that version made up
+      cleanWorkspace();
       toast({ kind: 'success', title: 'Backup imported' });
     } catch {
       toast({ kind: 'error', title: 'That file isn’t a Yourlocalbusiness backup' });
