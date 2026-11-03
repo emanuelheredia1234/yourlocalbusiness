@@ -1,6 +1,8 @@
-import type { Listing, Project, ServicePriceModel } from '@/lib/types';
-import { hashStr, resizeImage, uid } from '@/lib/utils';
+import type { Listing, MediaRef, Project, ServicePriceModel } from '@/lib/types';
+import { hashStr, readFileAsDataURL, uid } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
+import { loadImage } from '@/lib/imageCanvas';
+import { SHARED_GALLERY_MAX, SHARED_IMAGE_CHARS } from '@/lib/community';
 import { matchBusinessType } from '@/ai/knowledge';
 
 const PATTERNS: Listing['cover']['pattern'][] = ['blobs', 'waves', 'dots', 'grid', 'rays'];
@@ -73,39 +75,86 @@ export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, 
   };
 }
 
-/** Compress the chosen gallery images (max 4) to small data URLs for the listing. */
+// ───────────── images that travel with the listing ─────────────
+
+/** Each published image aims under this many data-URL characters, a little under what the shared Marketplace keeps. */
+export const LISTING_IMAGE_CHARS = SHARED_IMAGE_CHARS - 2_000;
+
+/** [longest side, JPEG quality] tried in turn until an image fits: as sharp as the shared Marketplace allows. */
+export const COVER_STEPS: readonly (readonly [number, number])[] = [
+  [720, 0.72],
+  [640, 0.68],
+  [560, 0.64],
+  [480, 0.6],
+  [400, 0.56],
+  [320, 0.5],
+];
+export const GALLERY_STEPS = COVER_STEPS.slice(1);
+
+/** The first encoding that fits under `limit`, trying the steps in order; undefined when none does. */
+export async function fitDataUrl(encode: (max: number, quality: number) => string | Promise<string>, steps: readonly (readonly [number, number])[], limit = LISTING_IMAGE_CHARS): Promise<string | undefined> {
+  for (const [max, quality] of steps) {
+    const url = await encode(max, quality);
+    if (url.length <= limit) return url;
+  }
+  return undefined;
+}
+
+/** One decoded copy of an image, encoded as JPEG at any size (decoding a large photo once, not once per step). */
+async function jpegEncoder(blob: Blob): Promise<(max: number, quality: number) => string> {
+  const img = await loadImage(await readFileAsDataURL(blob));
+  return (max, quality) => {
+    const scale = Math.min(1, max / Math.max(img.width, img.height, 1));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.width * scale));
+    c.height = Math.max(1, Math.round(img.height * scale));
+    const ctx = c.getContext('2d');
+    if (!ctx) throw new Error('Canvas is not available in this browser');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', quality);
+  };
+}
+
+/** A stored image as a data URL small enough to be shared, else its preview when that fits, else nothing. */
+async function sharedImage(media: MediaRef, steps: readonly (readonly [number, number])[]): Promise<string | undefined> {
+  const preview = media.thumb && media.thumb.length <= LISTING_IMAGE_CHARS ? media.thumb : undefined;
+  if (media.kind !== 'image') return preview;
+  const blob = await getBlob(media.id);
+  if (!blob) return preview;
+  try {
+    return (await fitDataUrl(await jpegEncoder(blob), steps)) ?? preview;
+  } catch {
+    return preview;
+  }
+}
+
+/** Gallery ids that still point at an image and aren't the cover, at most as many as the Marketplace shares. */
+export function cleanGallery(ids: string[] | undefined, images: MediaRef[], coverId?: string): string[] {
+  return (ids ?? []).filter((id) => id !== coverId && images.some((m) => m.id === id && m.kind === 'image')).slice(0, SHARED_GALLERY_MAX);
+}
+
+/** The images the listing's gallery shows. */
+export const galleryIds = (p: Project): string[] => cleanGallery(p.studio.listing.galleryIds, p.brand.images, p.studio.listing.coverImageId);
+
+/** The chosen gallery images as small data URLs, each small enough to be shared. */
 export async function galleryFromMedia(p: Project): Promise<string[] | undefined> {
-  const ids = (p.studio.listing.galleryIds ?? []).filter((id) => id !== p.studio.listing.coverImageId).slice(0, 4);
   const out: string[] = [];
-  for (const id of ids) {
+  for (const id of galleryIds(p)) {
     const media = p.brand.images.find((m) => m.id === id);
-    if (!media || media.kind !== 'image') continue;
-    const blob = await getBlob(id);
-    try {
-      if (!blob) throw new Error('missing');
-      // small enough to travel with the listing to other viewers (≈ 50 KB each)
-      const { dataUrl } = await resizeImage(blob, 640, 'image/jpeg', 0.68);
-      out.push(dataUrl.length < 56_000 ? dataUrl : (await resizeImage(blob, 480, 'image/jpeg', 0.62)).dataUrl);
-    } catch {
-      if (media.thumb) out.push(media.thumb);
-    }
+    const url = media && (await sharedImage(media, GALLERY_STEPS));
+    if (url) out.push(url);
   }
   return out.length ? out : undefined;
 }
 
-/** Compress the chosen cover photo to a small data URL that fits in the shared store. */
+/** The chosen cover photo as a small data URL that is shared with everyone who sees the listing. */
 export async function coverFromMedia(p: Project): Promise<string | undefined> {
   const id = p.studio.listing.coverImageId;
   if (!id) return undefined;
   const media = p.brand.images.find((m) => m.id === id);
-  if (!media || media.kind !== 'image') return media?.thumb;
-  const blob = await getBlob(id);
-  if (!blob) return media.thumb;
-  try {
-    const { dataUrl } = await resizeImage(blob, 720, 'image/jpeg', 0.72);
-    return dataUrl.length < 90_000 ? dataUrl : (await resizeImage(blob, 480, 'image/jpeg', 0.66)).dataUrl;
-  } catch {
-    return media.thumb;
-  }
+  return media ? sharedImage(media, COVER_STEPS) : undefined;
 }
 

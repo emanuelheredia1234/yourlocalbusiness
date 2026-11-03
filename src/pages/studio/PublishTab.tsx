@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Check, CircleAlert, Clock, ExternalLink, Globe2, ImagePlus, Link2, Mail, Phone, Rocket, Store, Users, X } from 'lucide-react';
-import type { BookingType, ListingDraft, PriceModel, Project } from '@/lib/types';
+import type { BookingType, ListingDraft, MediaRef, PriceModel, Project } from '@/lib/types';
 import { cn, fmtDateTime, fmtMoney } from '@/lib/utils';
 import { listingActions, safeEmail, safePhone, safeUrl } from '@/pages/store/actions';
 import { navigate } from '@/lib/router';
@@ -15,8 +15,9 @@ import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, ChipInput, Field, Segmented, Spinner, Toggle, confirmAction } from '@/components/ui/primitives';
 import { MediaDrop, MediaThumb } from '@/components/media/MediaUpload';
 import { ListingCard, ListingCover, priceLabel } from '@/pages/store/ListingParts';
-import { buildListing, coverFromMedia, galleryFromMedia, leadPrice, listingSuggestions } from './listing';
-import { ListingImages, MAX_GALLERY } from './ListingImages';
+import { buildListing, coverFromMedia, galleryFromMedia, galleryIds, leadPrice, listingSuggestions } from './listing';
+import { ListingImages, MAX_GALLERY, PhotoUploadButton } from './ListingImages';
+import { PHOTO_ACCEPT } from '@/ai/listingPhotos';
 import { VideoPanel } from '@/components/images/VideoPanel';
 
 /** A starting description for the listing's demo video. */
@@ -47,7 +48,18 @@ export function PublishTab({ project }: { project: Project }) {
   const setD = (patch: Partial<ListingDraft>) => updateStudio({ listing: { ...getActiveProject()!.studio.listing, ...patch } });
   const coverMedia = d.coverImageId ? project.brand.images.find((m) => m.id === d.coverImageId) : undefined;
   const [demoPrompt, setDemoPrompt] = useState(() => demoVideoPrompt(project));
-  const galleryMedia = (d.galleryIds ?? []).map((id) => project.brand.images.find((m) => m.id === id)).filter((m): m is NonNullable<typeof m> => !!m && m.id !== d.coverImageId);
+  const galleryMedia = galleryIds(project).map((id) => project.brand.images.find((m) => m.id === id)!);
+  const galleryChoices = project.brand.images.filter((m) => m.kind === 'image' && m.id !== d.coverImageId);
+  /** Your own photos for the gallery: added to your brand images, and to the gallery while there's room. */
+  const addGalleryPhotos = (media: MediaRef[]) => {
+    const p = getActiveProject()!;
+    updateBrand({ images: [...p.brand.images, ...media] });
+    const g = galleryIds(p);
+    const room = Math.max(0, MAX_GALLERY - g.length);
+    setD({ galleryIds: [...g, ...media.slice(0, room).map((m) => m.id)] });
+    const left = media.length - room;
+    if (left > 0) toast({ kind: 'info', title: room ? `${room} added to the gallery` : 'The gallery is full', body: `It shows up to ${MAX_GALLERY} images. ${left === 1 ? 'The other photo is' : `The other ${left} photos are`} in your brand images: remove one from the gallery to swap it in.` });
+  };
   const preview = useMemo(() => {
     const l = buildListing(project, live);
     return coverMedia?.thumb ? { ...l, cover: { ...l.cover, imageDataUrl: coverMedia.thumb } } : l;
@@ -279,8 +291,9 @@ export function PublishTab({ project }: { project: Project }) {
               ))}
             <MediaDrop
               compact
-              accept="image/*"
+              accept={PHOTO_ACCEPT}
               label="Upload"
+              sub="JPG, PNG or WebP"
               className="h-16 w-24"
               onFiles={(media) => {
                 const m = media[0];
@@ -296,38 +309,35 @@ export function PublishTab({ project }: { project: Project }) {
             )}
           </div>
         </Field>
-        {project.brand.images.some((m) => m.kind === 'image' && m.id !== d.coverImageId) && (
-          <Field label={`Gallery (${galleryMedia.length}/${MAX_GALLERY})`} hint="Extra images buyers can flip through on your listing.">
-            <div className="flex flex-wrap items-center gap-2">
-              {project.brand.images
-                .filter((m) => m.kind === 'image' && m.id !== d.coverImageId)
-                .map((m) => {
-                  const on = (d.galleryIds ?? []).includes(m.id);
-                  return (
-                    <button
-                      key={m.id}
-                      className={cn('relative h-16 w-24 overflow-hidden rounded-md ring-offset-2 ring-offset-surface', on ? 'ring-2 ring-accent' : 'ring-1 ring-line hover:ring-line-2')}
-                      onClick={() => {
-                        const g = d.galleryIds ?? [];
-                        if (on) setD({ galleryIds: g.filter((x) => x !== m.id) });
-                        else if (g.length < MAX_GALLERY) setD({ galleryIds: [...g, m.id] });
-                        else toast({ kind: 'info', title: `Up to ${MAX_GALLERY} gallery images` });
-                      }}
-                      aria-pressed={on}
-                      aria-label={`${on ? 'Remove' : 'Add'} ${m.name} ${on ? 'from' : 'to'} the gallery`}
-                    >
-                      <MediaThumb media={m} className="h-full w-full rounded-none border-0" />
-                      {on && (
-                        <span className="absolute right-1 top-1 rounded-full bg-accent p-0.5 text-on-accent">
-                          <Check size={11} />
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-            </div>
-          </Field>
-        )}
+        <Field label={`Gallery (${galleryMedia.length}/${MAX_GALLERY})`} hint={`Extra images buyers can flip through on your listing. Pick up to ${MAX_GALLERY}, or upload your own (JPG, PNG or WebP).`}>
+          <div className="flex flex-wrap items-center gap-2">
+            {galleryChoices.map((m) => {
+              const on = galleryMedia.some((x) => x.id === m.id);
+              return (
+                <button
+                  key={m.id}
+                  className={cn('relative h-16 w-24 overflow-hidden rounded-md ring-offset-2 ring-offset-surface', on ? 'ring-2 ring-accent' : 'ring-1 ring-line hover:ring-line-2')}
+                  onClick={() => {
+                    const g = galleryIds(getActiveProject()!);
+                    if (on) setD({ galleryIds: g.filter((x) => x !== m.id) });
+                    else if (g.length < MAX_GALLERY) setD({ galleryIds: [...g, m.id] });
+                    else toast({ kind: 'info', title: `Up to ${MAX_GALLERY} gallery images`, body: 'Remove one from the gallery first.' });
+                  }}
+                  aria-pressed={on}
+                  aria-label={`${on ? 'Remove' : 'Add'} ${m.name} ${on ? 'from' : 'to'} the gallery`}
+                >
+                  <MediaThumb media={m} className="h-full w-full rounded-none border-0" />
+                  {on && (
+                    <span className="absolute right-1 top-1 rounded-full bg-accent p-0.5 text-on-accent">
+                      <Check size={11} />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            <PhotoUploadButton multiple label={galleryChoices.length ? 'Upload photos' : 'Upload gallery photos'} className="btn btn-secondary btn-sm" onPhotos={addGalleryPhotos} />
+          </div>
+        </Field>
       </section>
 
       <aside className="flex min-w-0 flex-col gap-4">
@@ -339,7 +349,7 @@ export function PublishTab({ project }: { project: Project }) {
           <div className="mx-auto max-w-[340px]">
             <ListingCard listing={preview} onOpen={() => (live ? openInStore(live.id) : toast({ kind: 'info', title: 'This is a preview', body: 'Publish it first, then open it in the Marketplace.' }))} />
             {galleryMedia.length > 0 && (
-              <div className="mt-2 grid grid-cols-4 gap-1.5" aria-label="Gallery preview">
+              <div className="mt-2 grid grid-cols-3 gap-1.5" aria-label="Gallery preview">
                 {galleryMedia.map((m) => (
                   <MediaThumb key={m.id} media={m} className="aspect-square w-full" />
                 ))}

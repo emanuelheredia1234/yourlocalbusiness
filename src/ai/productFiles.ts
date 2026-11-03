@@ -12,6 +12,7 @@ import { runTask, type RunResult } from './engine';
 import { ebookExtrasTask, sectionDraftTask, workbookTask, type TaskDef } from './tasks';
 import type { EbookExtras } from './local/ebook';
 import { workbookFile, type WorkbookSummary } from './workbook';
+import { listingShotMedia } from './listingPhotos';
 
 export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const KEEP_PER_KIND = 6;
@@ -76,10 +77,10 @@ export interface EbookBuild extends EbookOptions {
   reuseCopy: boolean;
 }
 
-/** The listing cover (or the latest listing hero image), cropped for the top of the cover. */
+/** The listing cover (or what the Cover listing image shows: your photo, else the latest one made), cropped for the top of the cover. */
 export function coverMedia(p: Project) {
   const byId = p.studio.listing.coverImageId ? p.brand.images.find((m) => m.id === p.studio.listing.coverImageId && m.kind === 'image') : undefined;
-  return byId ?? p.brand.images.filter((m) => m.kind === 'image' && m.generated?.purpose === 'listing' && m.generated.shot === 'hero').sort((a, b) => b.createdAt - a.createdAt)[0];
+  return byId ?? listingShotMedia(p, 'hero');
 }
 
 async function coverBytes(p: Project, aspect: number): Promise<EbookDoc['cover']> {

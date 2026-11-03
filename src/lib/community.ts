@@ -45,12 +45,17 @@ export function fromShared(raw: unknown, sellerId: string, id: string): Listing 
   return cleanListing({ ...l, id, cover, gallery: gallery?.length ? gallery : undefined, seller: { ...l.seller, name: String(l.seller.name ?? ''), logo, ownerId: sellerId }, tags: Array.isArray(l.tags) ? l.tags.filter((t) => typeof t === 'string') : [], origin: 'community' });
 }
 
-function compact(l: Listing): Listing {
-  // keep documents small: drop large data URLs beyond ~60KB
-  const cover = l.cover.imageDataUrl && l.cover.imageDataUrl.length > 60_000 ? { ...l.cover, imageDataUrl: undefined } : l.cover;
+/** The most a shared listing image may weigh (data-URL characters); larger ones are left out. The Studio makes
+ *  cover and gallery images fit under it when you publish (src/pages/studio/listing.ts). */
+export const SHARED_IMAGE_CHARS = 60_000;
+/** Gallery images shared per listing. The Studio lets you pick this many, so buyers see what you chose. */
+export const SHARED_GALLERY_MAX = 3;
+
+/** What of your listing is shared: small enough for the shared document, without made-up numbers. */
+export function compact(l: Listing): Listing {
+  const cover = l.cover.imageDataUrl && l.cover.imageDataUrl.length > SHARED_IMAGE_CHARS ? { ...l.cover, imageDataUrl: undefined } : l.cover;
   const logo = l.seller.logo?.dataUrl && l.seller.logo.dataUrl.length > 30_000 ? { ...l.seller.logo, dataUrl: undefined } : l.seller.logo;
-  // gallery: at most 3 images, each small enough for the shared document
-  const gallery = l.gallery?.filter((g) => g.length <= 60_000).slice(0, 3);
+  const gallery = l.gallery?.filter((g) => g.length <= SHARED_IMAGE_CHARS).slice(0, SHARED_GALLERY_MAX);
   return cleanListing({ ...l, cover, gallery: gallery?.length ? gallery : undefined, seller: { ...l.seller, logo, ownerId: me ?? undefined }, origin: 'community' });
 }
 

@@ -165,10 +165,12 @@ export function parseManusState(raw: unknown): ManusState {
 // ───────────── prompts ─────────────
 
 /** Instructions for a one-image Manus task. The app adds headlines and logos itself. */
-export function manusImagePrompt(o: { subject: string; aspect: ImageAspect; styleHint?: string; colors: BrandColors; purpose: 'post' | 'listing'; textSpace: 'bottom' | 'center' | 'none' }): string {
+export function manusImagePrompt(o: { subject: string; aspect: ImageAspect; styleHint?: string; colors: BrandColors; purpose: 'post' | 'listing'; textSpace: 'bottom' | 'center' | 'none'; business?: boolean }): string {
   const [w, h] = ART_SIZE[o.aspect];
+  // a local business's listing shows its place and work, not a product
+  const what = o.purpose === 'post' ? 'social media post' : o.business ? 'local business’s marketplace listing' : 'marketplace product listing';
   return [
-    `Generate exactly ONE high-quality image for a ${o.purpose === 'post' ? 'social media post' : 'marketplace product listing'}: a polished, realistic photo unless the style below says otherwise.`,
+    `Generate exactly ONE high-quality image for a ${what}: a polished, realistic photo unless the style below says otherwise.`,
     `Subject: ${o.subject.trim().replace(/\.*$/, '.')}`,
     o.styleHint ? `Look and style: ${o.styleHint}.` : '',
     `Color palette inspired by the brand colors ${o.colors.primary}, ${o.colors.secondary} and ${o.colors.accent}.`,

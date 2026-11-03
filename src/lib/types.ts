@@ -220,6 +220,9 @@ export interface CodeAsset {
 
 export type BookingType = 'book' | 'inquire' | 'buy';
 
+/** The four marketplace listing images (src/ai/image.ts listingShots). */
+export type ListingShotId = 'hero' | 'lifestyle' | 'inside' | 'offer';
+
 export interface ListingDraft {
   title: string;
   tagline: string;
@@ -233,8 +236,12 @@ export interface ListingDraft {
   contactEmail?: string;
   phone?: string;
   coverImageId?: string;
-  /** brand images shown in the listing's gallery (max 4) */
+  /** brand images shown in the listing's gallery (max 3, what the shared Marketplace keeps) */
   galleryIds?: string[];
+  /** listing image descriptions you edited (the suggested ones are used for the rest) */
+  shotPrompts?: Partial<Record<ListingShotId, string>>;
+  /** listing images that show a photo you uploaded instead of an AI image (brand image ids) */
+  shotImageIds?: Partial<Record<ListingShotId, string>>;
   /** AI product demo video (HeyGen) */
   demoVideo?: MediaRef;
   /** template hours or a template guarantee that older versions filled in were removed: the Publish tab asks the

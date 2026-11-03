@@ -1,0 +1,77 @@
+// Images published with a listing: each one sized to what the shared Marketplace keeps, and the
+// gallery you pick is the gallery buyers see.
+import { describe, expect, it } from 'vitest';
+import { newProject } from '@/store/defaults';
+import type { MediaRef } from '@/lib/types';
+import { compact, SHARED_GALLERY_MAX, SHARED_IMAGE_CHARS } from '@/lib/community';
+import { buildListing, cleanGallery, COVER_STEPS, fitDataUrl, GALLERY_STEPS, galleryIds, LISTING_IMAGE_CHARS } from './listing';
+import { MAX_GALLERY } from './ListingImages';
+
+/** A stand-in JPEG encoder: larger and better-quality images take more characters, like real ones. */
+function fakeEncoder(weight = 0.3) {
+  const tried: [number, number][] = [];
+  const encode = (max: number, quality: number) => {
+    tried.push([max, quality]);
+    return `data:image/jpeg;base64,${'A'.repeat(Math.round(max * max * quality * weight))}`;
+  };
+  return { encode, tried };
+}
+
+describe('publishing listing images', () => {
+  it('steps down size, then quality, until the image fits what is shared', async () => {
+    const { encode, tried } = fakeEncoder();
+    const url = await fitDataUrl(encode, COVER_STEPS);
+    expect(url).toBeDefined();
+    expect(url!.length).toBeLessThanOrEqual(LISTING_IMAGE_CHARS);
+    // starts as sharp as before, and stops at the first size that fits
+    const steps = [...tried];
+    expect(steps[0]).toEqual([720, 0.72]);
+    expect(steps.length).toBeGreaterThan(1);
+    expect(url).toBe(encode(...steps[steps.length - 1]));
+    expect(encode(...steps[steps.length - 2]).length).toBeGreaterThan(LISTING_IMAGE_CHARS);
+  });
+
+  it('keeps the first size when it already fits, and gives up when nothing does', async () => {
+    const small = fakeEncoder(0.01);
+    expect(await fitDataUrl(small.encode, GALLERY_STEPS)).toBe(small.encode(...GALLERY_STEPS[0]));
+    expect(small.tried[0]).toEqual([...GALLERY_STEPS[0]]);
+    expect(await fitDataUrl(() => 'x'.repeat(LISTING_IMAGE_CHARS + 1), COVER_STEPS)).toBeUndefined();
+  });
+
+  it('only ever steps down', () => {
+    for (const steps of [COVER_STEPS, GALLERY_STEPS]) {
+      for (let i = 1; i < steps.length; i++) {
+        expect(steps[i][0]).toBeLessThan(steps[i - 1][0]);
+        expect(steps[i][1]).toBeLessThanOrEqual(steps[i - 1][1]);
+      }
+    }
+  });
+
+  it('makes images the shared Marketplace keeps, and shares the whole gallery you picked', () => {
+    expect(LISTING_IMAGE_CHARS).toBeLessThan(SHARED_IMAGE_CHARS);
+    expect(MAX_GALLERY).toBe(SHARED_GALLERY_MAX);
+    const img = `data:image/jpeg;base64,${'A'.repeat(LISTING_IMAGE_CHARS - 23)}`;
+    expect(img.length).toBe(LISTING_IMAGE_CHARS);
+    const p = newProject('business', 'new');
+    p.brand = { ...p.brand, name: 'Sparkle Co' };
+    const shared = compact(buildListing(p, undefined, img, [img, img, img]));
+    expect(shared.cover.imageDataUrl).toBe(img);
+    expect(shared.gallery).toEqual([img, img, img]);
+    // anything bigger is still left out of what is shared
+    const big = img.padEnd(SHARED_IMAGE_CHARS + 1, 'A');
+    expect(compact(buildListing(p, undefined, big)).cover.imageDataUrl).toBeUndefined();
+  });
+
+  it('shows only gallery images that still exist and aren’t the cover, up to what is shared', () => {
+    const img = (id: string, kind: MediaRef['kind'] = 'image'): MediaRef => ({ id, kind, name: id, mime: 'image/jpeg', size: 1, createdAt: 0 });
+    const images = [img('a'), img('b'), img('c'), img('d'), img('e'), img('v', 'video')];
+    expect(cleanGallery(['a', 'gone', 'cover', 'v', 'b', 'c', 'd'], [...images, img('cover')], 'cover')).toEqual(['a', 'b', 'c']);
+    expect(cleanGallery(undefined, images)).toEqual([]);
+    const p = newProject('business', 'new');
+    p.brand.images = images;
+    // older versions let you pick 4
+    p.studio.listing.galleryIds = ['a', 'b', 'c', 'd'];
+    p.studio.listing.coverImageId = 'a';
+    expect(galleryIds(p)).toEqual(['b', 'c', 'd']);
+  });
+});

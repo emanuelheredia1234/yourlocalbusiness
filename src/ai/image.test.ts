@@ -7,9 +7,11 @@ import { BIZ_SCENES, listingShots, postPhotoPrompt, postSubject } from './image'
 import { BUSINESS_TYPES, IMAGE_STYLES } from './knowledge';
 import { postIllustrationTask } from './tasks';
 import { generateBrandKit } from './local/brand';
-import { generateBusinessModel } from './local/studio';
+import { generateBusinessModel, generateListing } from './local/studio';
 import { composePost } from './local/social';
+import { manusImagePrompt } from './manus';
 import { buildListing } from '@/pages/studio/listing';
+import { listingText } from '@/pages/studio/ListingImages';
 
 function product(): Project {
   const p = newProject('product', 'new');
@@ -31,6 +33,19 @@ function business(): Project {
   const kit = generateBrandKit(p);
   p.brand = { ...p.brand, name: kit.nameOptions[0].name, colors: kit.colors };
   p.studio.packages = generateBusinessModel(p).packages;
+  return p;
+}
+
+/** A business as setup leaves it: packages and listing from the shared business-type templates. */
+function businessOf(type: string, category = ''): Project {
+  const p = newProject('business', 'new');
+  p.businessType = type;
+  p.niche = type;
+  p.category = category;
+  p.location = { city: 'Austin', region: 'TX' };
+  p.brand = { ...p.brand, name: 'Bluebonnet & Co' };
+  p.studio.packages = generateBusinessModel(p).packages;
+  p.studio.listing = generateListing(p);
   return p;
 }
 
@@ -90,16 +105,83 @@ describe('AI images', () => {
     expect(shots.filter((s) => s.layout !== 'clean').map((s) => s.aspect)).toEqual(['1:1', '1:1']);
   });
 
-  it('plans listing images for a local business from its type and city', () => {
-    const shots = listingShots(business());
+  it('plans listing images for a local business from its own details', () => {
+    const p = business();
+    const shots = listingShots(p);
+    expect(shots.map((s) => s.label)).toEqual(['Cover', 'At work', 'What you get', 'Offer card']);
+    expect(shots[0].prompt).toContain('Cover photo for a local home cleaning business in Austin');
+    // a house cleaner clearly is a home-cleaning business: the stock living room is a safe setting
     expect(shots[0].prompt).toMatch(/spotless living room/);
-    expect(shots[0].prompt).toContain('Austin');
+    expect(shots[0].prompt).toContain('Specialty: Eco-friendly house cleaning.');
+    expect(shots[0].prompt).toMatch(/What customers get \([^)]+\): Standard Clean/);
     expect(shots[1].prompt).toMatch(/cleaner/);
     expect(shots[0].scene).toBe('storefront');
+    // the backgrounds of the two graphics show this business too
+    expect(shots[2].prompt).toContain('a local home cleaning business in Austin');
+    expect(shots[3].prompt).toContain('a local home cleaning business in Austin');
+    for (const s of shots) {
+      expect(s.prompt).toMatch(NO_TEXT);
+      // no business name (or any quoted words) for the model to letter onto the photo
+      expect(s.prompt).not.toContain(p.brand.name);
+      expect(s.prompt).not.toMatch(/[“”"]/);
+      expect(s.prompt).not.toMatch(/business business/i);
+    }
+  });
+
+  it('describes a business in its own words when no stock setting fits', () => {
+    const stock = Object.values(BIZ_SCENES).flatMap((s) => [s.hero, s.work]);
+    // misfires of the shared business-type matcher, and types it has no template for
+    const types = ['Skincare studio', 'Senior home care', 'Healthcare clinic', 'Child daycare', 'Carpet installation', 'Music teacher', 'Street tacos', 'Pest control prevention', 'Tattoo shop', 'Pool cleaning', 'Dentist', 'Law firm', 'Locksmith', 'Physical therapy', 'Auto Detailing', 'Bakery'];
+    for (const type of types) {
+      const p = businessOf(type);
+      const shots = listingShots(p);
+      const all = shots.map((s) => s.prompt).join('\n');
+      for (const st of stock) expect(all, type).not.toContain(st);
+      expect(shots[0].prompt.toLowerCase(), type).toContain(type.toLowerCase());
+      expect(all, type).not.toMatch(/business business/i);
+      // package lines from another business's template (e.g. house cleaning for a pool cleaner) stay out
+      expect(all, type).not.toMatch(/Room-by-room|latte|Coffee & Pastry|kitchen cabinet|Bath & Brush|Express Detail/i);
+      for (const s of shots) expect(s.prompt, type).toMatch(NO_TEXT);
+    }
+    expect(listingShots(businessOf('Dentist'))[1].prompt).toMatch(/^A local dentist at work in Austin, serving a customer\./);
+    expect(listingShots(businessOf('Pool cleaning'))[1].prompt).toMatch(/^Someone from a local pool cleaning business at work in Austin/);
+    // a steakhouse is a restaurant (the shared matcher calls it a café)
+    expect(listingShots(businessOf('Steakhouse'))[0].prompt).toMatch(/restaurant dining room/);
+    expect(listingShots(businessOf('Steakhouse')).map((s) => s.prompt).join(' ')).not.toMatch(/latte|barista|pastr/i);
+    // nothing known about the business: still grammatical
+    expect(listingShots(businessOf(''))[0].prompt).toMatch(/^Cover photo for a local business in Austin:/);
+  });
+
+  it('words the second photo for a shop or for a service', () => {
+    const bakery = listingShots(businessOf('Bakery', 'Sourdough and pastries'));
+    expect(bakery[1]).toMatchObject({ label: 'With a customer', desc: 'Someone enjoying what you sell' });
+    expect(bakery[1].prompt).toMatch(/^A customer enjoying what a local bakery sells in Austin\./);
+    expect(bakery[0].prompt).toContain('what it sells, beautifully presented');
+    const cafe = listingShots(businessOf('Coffee Shop'));
+    expect(cafe[1].prompt).toContain('Setting: a barista pouring latte art');
+    const salon = listingShots(businessOf('Hair Salon'));
+    expect(salon[1]).toMatchObject({ label: 'At work', desc: 'Your service in action' });
+    expect(salon[1].prompt).toMatch(/^A stylist blow-drying/);
   });
 
   it('has a photo scene for every business type', () => {
     for (const bt of BUSINESS_TYPES) expect(BIZ_SCENES[bt.id], bt.id).toBeTruthy();
+  });
+
+  it('tells Manus a business listing is for a local business', () => {
+    const colors = business().brand.colors;
+    const base = { subject: 'a sparkling backyard pool', aspect: '3:2' as const, colors, purpose: 'listing' as const, textSpace: 'none' as const };
+    expect(manusImagePrompt({ ...base, business: true })).toContain('local business’s marketplace listing');
+    expect(manusImagePrompt(base)).toContain('marketplace product listing');
+  });
+
+  it('typesets only finished lines on the listing graphics', () => {
+    const p = business();
+    // the house-cleaning template's packages hold "[…]" lines for the owner to fill in
+    expect(p.studio.packages.flatMap((x) => x.includes).some((l) => /\[[^\]]+\]/.test(l))).toBe(true);
+    const text = listingText(p);
+    expect(text.items?.length).toBeGreaterThan(0);
+    for (const item of text.items ?? []) expect(item).not.toMatch(/\[[^\]]+\]/);
   });
 
   it('keeps Claude’s SVG only when it is safe and drawable', () => {
