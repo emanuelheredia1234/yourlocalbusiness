@@ -5,7 +5,7 @@ import { matchBusinessType } from '@/ai/knowledge';
 
 const PATTERNS: Listing['cover']['pattern'][] = ['blobs', 'waves', 'dots', 'grid', 'rays'];
 
-/** The price a business listing leads with: its most popular package (or the studio price). */
+/** The price a business listing leads with: the package the owner marked popular, else the first package (or the studio price). */
 export function leadPrice(p: Project): { price: number; model: ServicePriceModel } {
   if (p.track === 'business') {
     const pk = p.studio.packages.find((x) => x.popular) ?? p.studio.packages[0];
@@ -13,6 +13,14 @@ export function leadPrice(p: Project): { price: number; model: ServicePriceModel
     return { price: p.studio.price, model: 'per-session' };
   }
   return { price: p.studio.price, model: p.studio.priceModel };
+}
+
+/** The business type's typical hours and an example guarantee: offered to the owner to accept with one click,
+ *  never put in the listing for them. Empty for products. */
+export function listingSuggestions(p: Project): { hours: string; guarantee: string } {
+  if (p.track !== 'business') return { hours: '', guarantee: '' };
+  const bt = matchBusinessType(`${p.businessType} ${p.category} ${p.niche}`);
+  return { hours: bt.hours, guarantee: bt.guarantee };
 }
 
 /** Build the marketplace listing for a project from the shared Project Context (brand, studio, listing draft). */
@@ -37,13 +45,16 @@ export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, 
     price,
     priceModel: model,
     compareAt: !isBiz && p.studio.compareAt > price ? p.studio.compareAt : undefined,
-    seller: { name: p.brand.name, logo: { icon: p.brand.logo.icon, color: c.primary, shape: p.brand.logo.shape, dataUrl: logoUpload }, verified: false },
+    seller: { name: p.brand.name, logo: { icon: p.brand.logo.icon, color: c.primary, shape: p.brand.logo.shape, dataUrl: logoUpload } },
     format: isBiz ? undefined : p.format ?? undefined,
     niche: p.niche,
     category: d.category || (isBiz ? bt?.category ?? 'Professional Services' : p.category || 'Digital Products'),
     tags: d.tags,
     location: isBiz ? (p.location ? { city: p.location.city, region: p.location.region, lat: p.location.lat, lng: p.location.lng } : { city: 'Online', region: '', online: true }) : undefined,
     website: p.brand.websiteUrl || undefined,
+    buyUrl: d.buyUrl?.trim() || undefined,
+    contactEmail: d.contactEmail?.trim() || undefined,
+    phone: d.phone?.trim() || undefined,
     bookingType: isBiz ? d.bookingType : 'buy',
     hours: isBiz ? d.hours || undefined : undefined,
     services: isBiz && p.studio.packages.length ? p.studio.packages.map((x) => ({ name: x.name, price: x.price, duration: x.priceModel === 'per-session' ? 'per session' : x.priceModel === 'monthly' ? 'monthly' : undefined })) : undefined,
@@ -55,9 +66,6 @@ export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, 
       imageDataUrl: coverDataUrl ?? (d.coverImageId ? prev?.cover.imageDataUrl : undefined),
     },
     gallery: gallery ?? (d.galleryIds?.length ? prev?.gallery : undefined),
-    rating: prev?.rating ?? 0,
-    reviews: prev?.reviews ?? 0,
-    sales: prev?.sales ?? 0,
     createdAt: prev?.createdAt ?? Date.now(),
     origin: 'mine',
     projectId: p.id,

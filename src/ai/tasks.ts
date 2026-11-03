@@ -22,17 +22,17 @@ import type {
   Scene,
   SeoMeta,
 } from '@/lib/types';
-import { clamp, isHex, uid } from '@/lib/utils';
+import { isHex, uid } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
 import { videoFrame } from '@/lib/utils';
 import { conform, framePrompt, type Tier } from './claude';
 import { FORMATS, LOGO_ICONS } from './knowledge';
 import { generateAds, type AdsResult } from './local/ads';
 import { generateBrandKit, paletteFrom, type BrandKitResult } from './local/brand';
-import { codeKindLabel, generateCode, modifyCode, type CodeResult } from './local/code';
+import { codeKindLabel, generateCode, modifyCode, widgetSettings, type CodeResult } from './local/code';
 import { generateEmailSequence, generateLeadMagnet } from './local/email';
-import { generateProductIdeas, type ResearchInput } from './local/research';
-import { generateSalesPage, generateSalesSection, generateSeoMeta, primaryKeywordFor } from './local/seo';
+import { fitReasons, generateProductIdeas, type ResearchInput } from './local/research';
+import { aiWritableData, canonicalFor, generateSalesPage, generateSalesSection, generateSeoMeta, keepFacts, primaryKeywordFor } from './local/seo';
 import { composePost, generateCampaignPlan, generateContentBatch, type ComposedPost, type ComposeInput } from './local/social';
 import { draftSection, expandItem, generateBusinessModel, generateListing, generateOutline, type BusinessModelResult, type OutlineResult } from './local/studio';
 import { buildFacts } from './text';
@@ -68,7 +68,7 @@ const obj = (raw: unknown): Record<string, unknown> => (raw && typeof raw === 'o
 // ───────────────────────── Research ─────────────────────────
 export const productIdeasTask = def<ResearchInput, ProductIdea[]>({
   id: 'productIdeas',
-  label: 'Winning product research',
+  label: 'Product ideas',
   module: 'research',
   tier: 'default',
   local: (input, env) => generateProductIdeas({ ...input, variation: env.variation }, env.directives),
@@ -76,25 +76,27 @@ export const productIdeasTask = def<ResearchInput, ProductIdea[]>({
     prompt: (input, env) => {
       const fmt = FORMATS[input.format];
       return framePrompt({
-        task: `Research and propose ${input.count ?? 4} high-converting “winning product” concepts for a ${fmt.label} in the niche “${input.niche}”, specifically “${input.category}”. Each concept needs a sharp audience, a painful problem it solves, a realistic price for this format (typical range $${fmt.price[0]}–$${fmt.price[1]}${fmt.model === 'monthly' ? ' per month' : ''}), and a revenue potential score from 0–100 weighing demand, competition, price and scalability. Order them from strongest to weakest.`,
+        task: `Suggest ${input.count ?? 4} different product ideas for a ${fmt.label} in the niche “${input.niche}”, specifically “${input.category}”. Each idea needs a clear audience, a problem it solves, and a suggested starting price for this format (typical range $${fmt.price[0]}–$${fmt.price[1]}${fmt.model === 'monthly' ? ' per month' : ''}). You have no market data: do not score, rank or forecast ideas, and do not claim demand, search interest, competition, sales or revenue. For "fit", give short reasons this idea could suit this owner, drawn only from the niche, category, audience and format above.`,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
-        shape: `[{"title": string, "hook": string (one sentence), "audience": string, "pain": string, "solution": string (one sentence on what it is), "price": number, "score": number, "revenueLow": number (est. monthly USD), "revenueHigh": number, "angle": string (2-4 words), "features": [string, string, string], "signals": [string, string, string] (why it can win)}]`,
+        shape: `[{"title": string, "hook": string (one sentence), "audience": string, "pain": string, "solution": string (one sentence on what it is), "price": number (suggested), "angle": string (2-4 words), "features": [string, string, string], "fit": [string, string, string] (why it could fit this owner)}]`,
       });
     },
     merge: (raw, base, input) => {
       const arr = Array.isArray(raw) ? raw : (obj(raw).ideas as unknown[]) ?? [];
       const fmt = FORMATS[input.format];
-      return conform(base, arr).map((idea) => ({
-        ...idea,
-        id: idea.id || uid('idea'),
-        format: input.format,
-        priceModel: fmt.model,
-        price: Math.max(1, Math.round(idea.price)),
-        score: Math.round(clamp(idea.score, 1, 99)),
-        revenueLow: Math.max(0, Math.min(idea.revenueLow, idea.revenueHigh)),
-        revenueHigh: Math.max(idea.revenueLow, idea.revenueHigh),
-      }));
+      return conform(base, arr).map((idea, i) => {
+        const given = obj(arr[i]).fit;
+        const fit = Array.isArray(given) ? given.filter((x): x is string => typeof x === 'string' && !!x.trim()).map((x) => x.trim()).slice(0, 3) : [];
+        return {
+          ...idea,
+          id: idea.id || uid('idea'),
+          format: input.format,
+          priceModel: fmt.model,
+          price: Math.max(1, Math.round(idea.price)),
+          fit: fit.length ? fit : fitReasons({ niche: input.niche, category: input.category, format: input.format, audience: idea.audience, pain: idea.pain, angle: idea.angle }),
+        };
+      });
     },
   },
 });
@@ -257,6 +259,11 @@ export const workbookTask = def<Record<string, never>, WorkbookSpec>({
   },
 });
 
+/** Facts only the owner can state: the AI must not supply them for a business it knows nothing about. */
+const OWNER_FACTS_ONLY =
+  'Do not state opening hours, guarantees, warranties, refunds, licenses, insurance, reviews, ratings, customer counts, response or delivery times, "trusted by" or "lifetime updates" unless the project context or Brain notes give them.';
+const GUARANTEE_ITEM = /guarantee|promise|warrant|refund/i;
+
 export const businessModelTask = def<Record<string, never>, BusinessModelResult>({
   id: 'businessModel',
   label: 'Business model & value stack',
@@ -266,15 +273,21 @@ export const businessModelTask = def<Record<string, never>, BusinessModelResult>
   claude: {
     prompt: (_i, env) =>
       framePrompt({
-        task: 'Design the business: three good-better-best service packages with realistic local prices, an operating model (customer journey & booking, delivery standard, team & roles, tools, hours & capacity, revenue streams, cost structure, weekly KPIs) and a value stack (core offer, 3–4 bonuses with perceived values, and a guarantee).',
+        task: 'Design the business: three good-better-best service packages with suggested starting prices, an operating model (customer journey & booking, delivery standard, team & roles, tools, hours & capacity, revenue streams, cost structure, weekly KPIs) and a value stack (the core offer, then 3–4 bonus ideas).',
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
-        shape: `{"packages": [{"name": string, "price": number, "description": string, "includes": [string], "popular": boolean}] (3), "operating": [{"title": string, "items": [string]}] (8), "valueStack": [{"title": string, "value": number, "description": string}], "price": number (price of the most popular package)}`,
+        shape: `{"packages": [{"name": string, "price": number, "description": string, "includes": [string], "popular": boolean}] (3), "operating": [{"title": string, "items": [string]}] (8), "valueStack": [{"title": string, "description": string}] (core offer first, then the bonuses), "price": number (price of the most popular package)}`,
+        extraRules: [
+          OWNER_FACTS_ONLY,
+          'No guarantee in the packages or the value stack, and no dollar values for value-stack items: the owner adds their own.',
+          'For opening hours and capacity in the operating model, write placeholders such as "[your hours]" instead of numbers.',
+        ],
       }),
     merge: (raw, base) => {
       const merged = conform(base, obj(raw));
-      merged.valueStack = merged.valueStack.map((v, i, arr) => ({ ...v, kind: i === 0 ? 'core' : i === arr.length - 1 && v.value === 0 ? 'guarantee' : v.kind }));
+      // values are the owner's to fill in (0 = not set); a guarantee is only ever the owner's own
+      merged.valueStack = merged.valueStack.filter((v) => !GUARANTEE_ITEM.test(v.title)).map((v, i) => ({ ...v, kind: i === 0 ? 'core' : 'bonus', value: 0 }));
       return merged;
     },
   },
@@ -294,12 +307,17 @@ export const listingTask = def<Record<string, never>, ListingDraft>({
         brainPrompt: env.brainPrompt,
         variation: env.variation,
         shape: `{"title": string, "tagline": string, "description": string, "category": string, "tags": [string]}`,
+        extraRules: [OWNER_FACTS_ONLY],
       }),
     merge: (raw, base) => conform(base, obj(raw)),
   },
 });
 
 // ───────────────────────── Code ─────────────────────────
+/** Honesty rules every widget prompt (new or edited) carries. */
+const CODE_HONESTY =
+  ' Never invent reviews, star ratings, customer names or quotes, customer counts, stats, results, guarantees, credentials, perks, availability, deadlines, prices, price ranges or service lists, or a website or domain: use the owner\'s own facts from the context (their packages and prices, their website), or obvious [bracketed] placeholders such as "[Customer quote]", "[Your answer]" or "[Price]". With no website, links use href="#" with a TODO comment, never an empty href. Success messages never claim anything was sent, delivered, booked or confirmed unless it really was. Sample data in previews is clearly labelled as an example.';
+
 export const codeTask = def<{ kind: CodeKind; prompt: string }, CodeResult>({
   id: 'code',
   label: 'Code & asset generator',
@@ -309,13 +327,19 @@ export const codeTask = def<{ kind: CodeKind; prompt: string }, CodeResult>({
   claude: {
     prompt: (i, env) => {
       const c = env.project.brand.colors;
+      const w = widgetSettings(env.project, i.prompt);
+      const honest =
+        CODE_HONESTY +
+        ` Any form must start its JS with \`var FORM_ACTION = ${JSON.stringify(w.action)};\` (the owner's form endpoint or a mailto: address; empty = not connected) and only send there (a POST with fetch, or opening the mailto link). While FORM_ACTION is empty it shows "Not connected: submissions are not sent" and sends nothing; success text never claims anything was sent, booked or confirmed unless the POST succeeded, and a booking is only ever a request.` +
+        ` A countdown must start its JS with \`var END_DATE = ${JSON.stringify(w.endDate)};\` and stay off while it's empty; never pick a deadline.` +
+        (w.hours ? ` Booking times come only from these opening hours: “${w.hours}”; never mark times as taken.` : ' Booking widgets with no opening hours ask for a preferred day and time instead of showing slots; never mark times as taken.');
       return framePrompt({
-        task: `Build a production-quality ${codeKindLabel(i.kind)} for this ${env.project.track}. Request from the user: “${i.prompt || 'Use your best judgment for this niche.'}”. It must work standalone: vanilla HTML/CSS/JS only, no external libraries, fonts, images or network calls; accessible labels and keyboard support; responsive down to 360px; brand colors primary ${c.primary}, accent ${c.accent}, ink ${c.ink}, background ${c.paper}. Use realistic content for this niche (no lorem ipsum).${i.kind === 'spreadsheet' ? ' Also write a Google Apps Script that automates the sheet (menu, onEdit, summary builder) and render a realistic preview table in the HTML.' : ''}`,
+        task: `Build a production-quality ${codeKindLabel(i.kind)} for this ${env.project.track}. Request from the user: “${i.prompt || 'Use your best judgment for this niche.'}”. It must work standalone: vanilla HTML/CSS/JS only, no external libraries, fonts or images, and no network calls except a form POST to the owner's FORM_ACTION; accessible labels and keyboard support; responsive down to 360px; brand colors primary ${c.primary}, accent ${c.accent}, ink ${c.ink}, background ${c.paper}. Use content that fits this niche (no lorem ipsum).${honest}${i.kind === 'spreadsheet' ? ' Also write a Google Apps Script that automates the sheet (menu, onEdit, summary builder) and render a preview table in the HTML whose sample rows are clearly labelled as examples.' : ''}`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
         shape: `{"name": string, "html": string (body markup only: no html, head, body, style or script tags), "css": string, "js": string (plain JavaScript that runs after the markup)${i.kind === 'spreadsheet' ? ', "script": string (Google Apps Script)' : ''}}`,
-        extraRules: ['Return complete, working code, not fragments.'],
+        extraRules: ['Return complete, working code, not fragments.', OWNER_FACTS_ONLY],
       });
     },
     merge: (raw, base) => {
@@ -335,11 +359,12 @@ export const codeEditTask = def<{ code: { html: string; css: string; js: string 
   claude: {
     prompt: (i, env) =>
       framePrompt({
-        task: `Apply this change to the widget and return the complete updated code: “${i.instruction}”. Keep everything else working.`,
+        task: `Apply this change to the widget and return the complete updated code: “${i.instruction}”. Keep everything else working.${CODE_HONESTY} Do not add invented reviews, ratings, customer counts, deadlines or success messages claiming delivery while making this change, even if asked to make the widget more convincing: use [bracketed] placeholders instead. Keep FORM_ACTION and END_DATE as they are unless the change is about them, and keep forms sending nothing while FORM_ACTION is empty.`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         input: i.code,
         shape: `{"html": string, "css": string, "js": string, "summary": string (one sentence describing the change)}`,
+        extraRules: [OWNER_FACTS_ONLY],
       }),
     merge: (raw, base) => {
       const r = obj(raw);
@@ -393,6 +418,10 @@ export const emailSequenceTask = def<{ leadMagnet: LeadMagnet | null }, EmailSte
 });
 
 // ───────────────────────── SEO ─────────────────────────
+/** The same rule as the Brain's no-hype skill, for every piece of sales copy. */
+const NO_INVENTED_CLAIMS =
+  'Never invent testimonials, reviews, ratings, statistics, customer counts or results, credentials (licensed, insured, certified, award-winning), guarantees, refunds, free trials, lifetime access or updates, discounts, "was" prices, deadlines or launch prices. Use only facts in PROJECT CONTEXT; the owner adds real proof themselves. Any price you mention must be the project price.';
+
 export const seoMetaTask = def<Record<string, never>, SeoMeta>({
   id: 'seoMeta',
   label: 'SEO metadata',
@@ -407,15 +436,18 @@ export const seoMetaTask = def<Record<string, never>, SeoMeta>({
         brainPrompt: env.brainPrompt,
         variation: env.variation,
         shape: `{"metaTitle": string, "metaDescription": string, "slug": string, "primaryKeyword": string, "secondaryKeywords": [string], "ogTitle": string, "ogDescription": string, "ogImageAlt": string}`,
+        extraRules: [NO_INVENTED_CLAIMS],
       }),
-    merge: (raw, base) => {
+    merge: (raw, base, _i, env) => {
       const m = conform(base, obj(raw));
-      return { ...m, slug: m.slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, ''), canonical: base.canonical.replace(base.slug, m.slug) };
+      const slug = m.slug.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-|-$/g, '');
+      return { ...m, slug, canonical: canonicalFor(env.project, slug) };
     },
   },
 });
 
-const SALES_SHAPE = `{"hero": {"eyebrow": string, "headline": string, "subheadline": string, "ctaLabel": string, "ctaSubtext": string, "bullets": [string, string, string]}, "problem": {"heading": string, "intro": string, "points": [{"title": string, "body": string}] (3), "agitation": string}, "solution": {"heading": string, "intro": string, "features": [{"title": string, "body": string}] (4-6)}, "proof": {"heading": string, "stats": [{"value": string, "label": string}] (3), "testimonials": [{"quote": string, "name": string, "role": string, "rating": number}] (3)}, "pricing": {"heading": string, "planName": string, "price": number, "compareAt": number, "priceNote": string, "includes": [string], "ctaLabel": string, "badge": string}, "faq": {"heading": string, "items": [{"q": string, "a": string}] (5)}, "guarantee": {"heading": string, "body": string, "days": number, "finalHeading": string, "finalCta": string}}`;
+// Testimonials, stats, prices and any guarantee are the owner's facts: the AI writes copy around them, never the facts.
+const SALES_SHAPE = `{"hero": {"eyebrow": string, "headline": string, "subheadline": string, "ctaLabel": string, "bullets": [string, string, string]}, "problem": {"heading": string, "intro": string, "points": [{"title": string, "body": string}] (3), "agitation": string}, "solution": {"heading": string, "intro": string, "features": [{"title": string, "body": string}] (4-6)}, "proof": {"heading": string}, "pricing": {"heading": string, "planName": string, "includes": [string], "ctaLabel": string}, "faq": {"heading": string, "items": [{"q": string, "a": string}] (4-5)}, "guarantee": {"finalHeading": string, "finalCta": string}}`;
 
 export const salesPageTask = def<{ primaryKeyword?: string }, SalesPage>({
   id: 'salesPage',
@@ -427,19 +459,19 @@ export const salesPageTask = def<{ primaryKeyword?: string }, SalesPage>({
     prompt: (i, env) => {
       const kw = i.primaryKeyword || primaryKeywordFor(buildFacts(env.project));
       return framePrompt({
-        task: `Write a conversion-optimized, SEO-ready one-page sales page. Primary keyword: “${kw}” — use it in the hero headline and subheadline naturally and 2–4 more times on the page. Sections: hero with hook & CTA, problem/agitation, solution & features, social proof, pricing card, FAQ (5 questions) and final guarantee with CTA.`,
+        task: `Write a conversion-optimized, SEO-ready one-page sales page. Primary keyword: “${kw}” — use it in the hero headline and subheadline naturally and 2–4 more times on the page. Sections: hero with hook & CTA, problem/agitation, solution & features, a heading for the customer quotes the owner will add, pricing card copy, FAQ (4–5 questions) and a closing heading with CTA. The app fills in testimonials, stats, prices and any guarantee from the owner's own inputs: do not write them.`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
         shape: SALES_SHAPE,
-        extraRules: ['Stats must describe the offer itself (number of modules, delivery time, guarantee length), never invented results.', 'Testimonials are examples the owner will replace with real quotes: keep them modest and believable.'],
+        extraRules: [NO_INVENTED_CLAIMS, 'Pricing "includes" lists only what PROJECT CONTEXT says the offer contains. FAQ answers must not promise refunds, guarantees, response times or payment terms.'],
       });
     },
     merge: (raw, base) => {
       const r = obj(raw);
       return {
         ...base,
-        sections: base.sections.map((s) => (r[s.type] ? ({ ...s, data: conform(s.data as never, r[s.type]) } as SalesSection) : s)),
+        sections: base.sections.map((s) => (r[s.type] ? keepFacts({ ...s, data: conform(s.data as never, r[s.type]) } as SalesSection, s) : s)),
       };
     },
   },
@@ -458,10 +490,11 @@ export const salesSectionTask = def<{ type: SalesSectionType }, SalesSection>({
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
-        input: { current: base.data },
+        input: { current: aiWritableData(base) },
         shape: `the same JSON object shape as INPUT.current`,
+        extraRules: [NO_INVENTED_CLAIMS],
       }),
-    merge: (raw, base) => ({ ...base, data: conform(base.data as never, obj(raw)) }) as SalesSection,
+    merge: (raw, base) => keepFacts({ ...base, data: conform(base.data as never, obj(raw)) } as SalesSection, base),
   },
 });
 
@@ -484,6 +517,7 @@ export const campaignPlanTask = def<{ config: CampaignConfig }, CampaignPlan>({
           slots: base.days.flatMap((d) => d.slots.map((s) => ({ slotId: s.id, date: d.date, phase: d.phase, platform: s.platform, format: s.format, postType: s.postType, topic: s.topic }))).slice(0, 150),
         },
         shape: `{"strategy": string, "weeks": [{"week": number, "theme": string, "goal": string, "kpi": string, "keyMessage": string}] (5), "topics": [{"slotId": string, "topic": string}]}`,
+        extraRules: ['Key messages and topics claim no customer results, testimonials, popularity, launch offers or deadlines the owner has not set. Customer stories are for the owner to add from real customers.'],
       }),
     merge: (raw, base) => {
       const r = obj(raw);
@@ -508,12 +542,12 @@ export const contentBatchTask = def<{ plan: CampaignPlan; config: CampaignConfig
   claude: {
     prompt: (_i, env, base) =>
       framePrompt({
-        task: `Write ready-to-publish social posts for each slot below (the next 7 days of the campaign). Each needs: an on-image headline (max 60 chars), a caption with a hook first line, a value body and a clear call to action (respect each platform: X under 260 characters; Instagram/TikTok say “link in bio” instead of URLs), platform-appropriate hashtags, a detailed visual prompt in the slot’s style, and for video slots a 4-scene storyboard (on-screen text, shot, seconds).`,
+        task: `Write ready-to-publish social posts for each slot below (the next 7 days of the campaign). Each needs: an on-image headline (max 60 chars), a caption with a hook first line, a value body and a clear call to action (respect each platform: X under 260 characters; Instagram/TikTok say “link in bio” instead of URLs; elsewhere use only the website given below, or “link in bio” when none is given: never make up a web address), platform-appropriate hashtags, a detailed visual prompt in the slot’s style, and for video slots a 4-scene storyboard (on-screen text, shot, seconds).`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
         input: {
-          website: env.project.brand.websiteUrl,
+          website: env.project.brand.websiteUrl || undefined,
           slots: base.map((p) => ({ slotId: p.planSlotId, when: p.scheduledAt.slice(0, 16), platform: p.platform, format: p.format, style: p.style, postType: p.postType, topic: p.headline })),
         },
         shape: `{"posts": [{"slotId": string, "headline": string, "caption": string, "hashtags": [string], "visualPrompt": string, "storyboard": [{"text": string, "shot": string, "duration": number}] (video slots only)}]}`,
@@ -542,7 +576,7 @@ export const postTask = def<ComposeInput & { media?: MediaRef }, ComposedPost>({
   claude: {
     prompt: (i, env) =>
       framePrompt({
-        task: `Write one ready-to-publish ${i.platform} post (${i.format}, post type: ${i.postType}). ${i.media ? `The user is posting their own ${i.media.kind}${i.mediaDescription ? ` described as “${i.mediaDescription}”` : ''}${i.media.kind === 'image' || i.media.kind === 'video' ? '; an image of it is attached, so describe what is actually shown' : ''}.` : `Topic: “${i.topic}”.`} Caption = hook first line, value body, clear CTA. Respect the platform (X under 260 characters; Instagram/TikTok say “link in bio”).`,
+        task: `Write one ready-to-publish ${i.platform} post (${i.format}, post type: ${i.postType}). ${i.media ? `The user is posting their own ${i.media.kind}${i.mediaDescription ? ` described as “${i.mediaDescription}”` : ''}${i.media.kind === 'image' || i.media.kind === 'video' ? '; an image of it is attached, so describe what is actually shown' : ''}.` : `Topic: “${i.topic}”.`} Caption = hook first line, value body, clear CTA. Respect the platform (X under 260 characters; Instagram/TikTok say “link in bio”). Link only to the brand’s own website if one is given; otherwise say “link in bio”. Never make up a web address.`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
@@ -632,7 +666,8 @@ export const adsTask = def<{ campaign: AdCampaign }, AdsResult>({
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
-        shape: `{"interests": [string], "audiences": [{"name": string, "description": string, "size": string, "interests": [string]}] (3), "creatives": [{"variant": string, "angle": string, "primaryText": string, "headline": string, "description": string, "cta": string, "visualHeadline": string}] (3)${i.campaign.platforms.includes('google') ? ', "search": {"headlines": [string], "descriptions": [string], "keywords": [string], "sitelinks": [{"title": string, "desc": string}]}' : ''}}`,
+        shape: `{"interests": [string], "audiences": [{"name": string, "description": string, "interests": [string]}] (3), "creatives": [{"variant": string, "angle": string, "primaryText": string, "headline": string, "description": string, "cta": string, "visualHeadline": string}] (3)${i.campaign.platforms.includes('google') ? ', "search": {"headlines": [string], "descriptions": [string], "keywords": [string], "sitelinks": [{"title": string, "desc": string}]}' : ''}}`,
+        extraRules: [OWNER_FACTS_ONLY, 'No "free estimates", "instant access", social proof ("people are switching") or reviews sitelink unless the project context or Brain notes support it.'],
       }),
     merge: (raw, base) => {
       const r = obj(raw);

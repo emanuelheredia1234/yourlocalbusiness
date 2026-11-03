@@ -113,7 +113,13 @@ export interface Brand {
   audience: string;
   personality: string[];
   mission: string;
+  /** only what the owner entered; '' when they have no website (never made up from the name) */
   websiteUrl: string;
+  /** a website older versions made up from the name ("https://{slug}.com"), taken off by the cleanup:
+   *  the Dashboard asks once whether it's really yours */
+  guessedWebsite?: string;
+  /** you said the website is yours, so the cleanup leaves it alone */
+  websiteConfirmed?: boolean;
   slug: string;
   domainIdeas: string[];
   colors: BrandColors;
@@ -131,14 +137,13 @@ export interface ProductIdea {
   pain: string;
   solution: string;
   format: ProductFormat;
+  /** a suggested starting price; the owner sets the real one */
   price: number;
   priceModel: PriceModel;
-  score: number;
-  revenueLow: number;
-  revenueHigh: number;
   angle: string;
   features: string[];
-  signals: string[];
+  /** "Why this could fit you": reasons from the owner's own niche, category and format, not market data */
+  fit: string[];
 }
 
 // ───────────── Studio ─────────────
@@ -205,6 +210,10 @@ export interface CodeAsset {
   js: string;
   /** For spreadsheet assets: the Apps Script / formulas that power the preview */
   script?: string;
+  /** made by an older version that claimed sent forms, taken slots, a made-up deadline or reviews:
+   *  the Code tab shows "Outdated: regenerate" (the code itself is never rewritten automatically).
+   *  false = made by a current version, regenerated, or dismissed by the owner: never flagged again */
+  outdated?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -219,11 +228,18 @@ export interface ListingDraft {
   tags: string[];
   bookingType: BookingType;
   hours: string;
+  /** your own page where people buy or book (payment happens there, not in this app) */
+  buyUrl?: string;
+  contactEmail?: string;
+  phone?: string;
   coverImageId?: string;
   /** brand images shown in the listing's gallery (max 4) */
   galleryIds?: string[];
   /** AI product demo video (HeyGen) */
   demoVideo?: MediaRef;
+  /** template hours or a template guarantee that older versions filled in were removed: the Publish tab asks the
+   *  owner to review the listing until they dismiss it */
+  needsReview?: boolean;
 }
 
 /** A finished product file made in the Studio (PDF guide/ebook or .xlsx workbook); bytes live in IndexedDB under `id`. */
@@ -297,11 +313,8 @@ export interface Subscriber {
   name: string;
   email: string;
   joinedAt: number;
-  source: 'test' | 'optin';
-  step: number;
-  opened: number[];
-  clicked: number[];
-  converted?: boolean;
+  /** optin: signed up on your page · import: from a CSV you imported */
+  source: 'optin' | 'import';
 }
 
 export interface SeoMeta {
@@ -335,16 +348,34 @@ export interface SolutionData {
   intro: string;
   features: { title: string; body: string; icon: string }[];
 }
+/** Proof is only ever real: counts from the actual outline, or what the owner typed. `needsReview` marks
+ *  items written by AI before that rule: they stay off the exported page until the owner confirms them. */
+export interface ProofStat {
+  value: string;
+  label: string;
+  needsReview?: boolean;
+}
+export interface Testimonial {
+  quote: string;
+  name: string;
+  role: string;
+  /** 1–5 stars the customer gave; 0 = no rating */
+  rating: number;
+  needsReview?: boolean;
+}
 export interface ProofData {
   heading: string;
-  stats: { value: string; label: string }[];
-  testimonials: { quote: string; name: string; role: string; rating: number }[];
+  stats: ProofStat[];
+  testimonials: Testimonial[];
 }
 export interface PricingData {
   heading: string;
   planName: string;
   price: number;
+  /** the owner's own earlier price; 0 = none */
   compareAt: number;
+  /** a "was" price written before only the owner could set one: hidden until confirmed */
+  compareAtNeedsReview?: boolean;
   priceNote: string;
   includes: string[];
   ctaLabel: string;
@@ -357,9 +388,12 @@ export interface FaqData {
 export interface GuaranteeData {
   heading: string;
   body: string;
+  /** 0 = no time limit shown */
   days: number;
   finalHeading: string;
   finalCta: string;
+  /** the owner turned their guarantee on; otherwise only the closing heading and button show */
+  offered?: boolean;
 }
 
 export type SalesSection =
@@ -382,6 +416,8 @@ export interface SalesPage {
   sections: SalesSection[];
   theme: SalesTheme;
   updatedAt: number;
+  /** made (or cleaned) by a version that never invents proof, prices or guarantees */
+  claimsChecked?: boolean;
 }
 
 export interface CampaignConfig {
@@ -468,6 +504,8 @@ export interface Post {
   publishedAt?: string;
   /** who said it was posted: Manus (its own report) or you */
   publishedBy?: 'manus' | 'manual';
+  /** where it was before you marked it posted (so "Mark as not posted" puts it back) */
+  statusBeforePosted?: 'draft' | 'scheduled';
   /** the post's address on the network, when Manus reported one or you pasted it */
   postUrl?: string;
   media?: MediaRef;
@@ -528,24 +566,10 @@ export interface SearchAd {
   sitelinks: { title: string; desc: string }[];
 }
 
-export interface AdProjection {
-  spend: number;
-  impressions: number;
-  reach: number;
-  ctr: number;
-  cpc: number;
-  clicks: number;
-  cvr: number;
-  conversions: number;
-  cpa: number;
-  roas: number;
-}
-
 export interface AudienceSet {
   id: string;
   name: string;
   description: string;
-  size: string;
   interests: string[];
 }
 
@@ -558,7 +582,8 @@ export interface AdCampaign {
   dailyBudget: number;
   durationDays: number;
   startDate: string;
-  status: 'draft' | 'active' | 'paused' | 'completed';
+  /** always a plan: campaigns run in each platform's own ads manager, never from this app */
+  status: 'draft';
   locations: string;
   radiusMi: number;
   ageMin: number;
@@ -568,10 +593,11 @@ export interface AdCampaign {
   creatives: AdCreative[];
   selectedCreativeIds: string[];
   search: SearchAd | null;
-  projections: AdProjection;
   createdAt: number;
-  launchedAt?: number;
-  seed: number;
+  /** when you last exported it for an ads manager */
+  exportedAt?: number;
+  /** the page the ads send people to; you enter it (it starts as your website, if you added one) */
+  finalUrl?: string;
 }
 
 // ───────────── Marketplace ─────────────
@@ -600,13 +626,18 @@ export interface Listing {
   price: number;
   priceModel: ServicePriceModel;
   compareAt?: number;
-  seller: { name: string; logo?: MiniLogo; verified?: boolean; ownerId?: string };
+  seller: { name: string; logo?: MiniLogo; ownerId?: string };
   format?: ProductFormat;
   niche?: string;
   category: string;
   tags: string[];
   location?: { city: string; region: string; lat?: number; lng?: number; online?: boolean };
   website?: string;
+  /** the seller's own page to buy or book (a Stripe Payment Link, Gumroad, Etsy, Calendly…): payment happens there */
+  buyUrl?: string;
+  /** how to reach the seller */
+  contactEmail?: string;
+  phone?: string;
   bookingType?: BookingType;
   hours?: string;
   services?: { name: string; price: number; duration?: string }[];
@@ -614,53 +645,9 @@ export interface Listing {
   cover: CoverSpec;
   /** extra listing images as small data URLs (max 4) */
   gallery?: string[];
-  rating: number;
-  reviews: number;
-  sales: number;
   createdAt: number;
-  origin: 'sample' | 'mine' | 'community';
+  origin: 'mine' | 'community';
   projectId?: string;
-}
-
-export interface CartItem {
-  id: string;
-  listingId: string;
-  title: string;
-  price: number;
-  qty: number;
-  kind: ListingKind;
-  option?: string;
-  bookingAt?: string;
-  sellerName: string;
-  sellerOwnerId?: string;
-  cover: CoverSpec;
-  origin: Listing['origin'];
-}
-
-export interface Order {
-  id: string;
-  number: string;
-  createdAt: number;
-  items: CartItem[];
-  subtotal: number;
-  fees: number;
-  total: number;
-  email: string;
-  name: string;
-  paymentMethod: string;
-  last4?: string;
-}
-
-export interface SaleRecord {
-  id: string;
-  listingId: string;
-  projectId?: string;
-  title: string;
-  amount: number;
-  qty: number;
-  createdAt: number;
-  buyer: string;
-  source: 'checkout' | 'community';
 }
 
 // ───────────── Brain ─────────────
@@ -787,7 +774,6 @@ export interface AppSettings {
    * follower count). The cleanup moves any handle into the brand's social handles and removes this.
    */
   accounts?: Partial<Record<SocialPlatform, { handle?: string } | undefined>>;
-  showSampleListings: boolean;
   shareToCommunity: boolean;
 }
 
@@ -805,6 +791,8 @@ export interface Project {
   id: string;
   createdAt: number;
   updatedAt: number;
+  /** the version of the one-time cleanup of claims older versions made up (see store/cleanup.ts) */
+  legacyCleaned?: number;
   track: Track;
   origin: Origin;
   onboarded: boolean;

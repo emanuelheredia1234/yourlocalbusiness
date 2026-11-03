@@ -204,7 +204,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
           <GenerateButton running={ai.running} onClick={generate}>
             {hasDraft ? 'Regenerate' : source === 'upload' ? 'Write AI caption' : 'Generate post'}
           </GenerateButton>
-          <Toggle checked={watermark} onChange={setWatermark} label="Website watermark" />
+          <Toggle checked={watermark} onChange={setWatermark} label="Watermark" />
         </div>
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
         {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}

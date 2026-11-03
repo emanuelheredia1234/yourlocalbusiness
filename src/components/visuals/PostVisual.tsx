@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Pause, Play } from 'lucide-react';
 import type { Brand, MediaRef, Scene, StyleId } from '@/lib/types';
-import { cn, darken, lighten, mix, readableOn, stripProtocol, withAlpha } from '@/lib/utils';
+import { cn, darken, lighten, mix, readableOn, withAlpha } from '@/lib/utils';
+import { brandHandle, brandMark } from '@/lib/brandMark';
 import { isVideoStyle } from '@/ai/knowledge';
 import { useMediaUrl } from '@/lib/media';
 import { Icon } from '../ui/Icon';
@@ -29,7 +30,8 @@ export function PostVisual(props: PostVisualProps) {
   const video = isVideoStyle(style);
   const ratio = aspect ?? (video ? '9/16' : '1/1');
   const mediaUrl = useMediaUrl(props.media ?? null);
-  const url = stripProtocol(brand.websiteUrl || (brand.slug ? `${brand.slug}.com` : ''));
+  // the owner's website, else their @handle, else the brand name: never a made-up domain
+  const url = brandMark(brand);
   const finished = props.media?.kind === 'image' && props.media.generated?.final;
   if (finished) {
     // AI images already carry the headline, logo and watermark: show them exactly as they will post
@@ -448,7 +450,7 @@ function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoP
           <div className="absolute bottom-[13cqw] left-[4cqw] flex items-center gap-[2cqw]">
             <LogoMark colors={c} logo={brand.logo} name={name} size={0} className="!h-[7cqw] !w-[7cqw] rounded-full ring-2 ring-white" />
             <span className="font-bold text-white" style={{ fontSize: cq(3.2), textShadow: '0 1px 4px rgba(0,0,0,.6)' }}>
-              @{(brand.slug || name).replace(/[^a-z0-9]/gi, '').toLowerCase()}
+              {brandHandle(brand, ['tiktok', 'instagram', 'x']) || name}
             </span>
           </div>
         </div>

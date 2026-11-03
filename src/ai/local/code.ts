@@ -1,5 +1,5 @@
-import type { BrandColors, CodeKind, Directives, Project } from '@/lib/types';
-import { addDays, escapeHtml, fmtDate, hashStr, readableOn, todayStr, toDateStr, lighten, darken } from '@/lib/utils';
+import type { BrandColors, CodeKind, Directives, Project, ServicePackage } from '@/lib/types';
+import { escapeHtml, hashStr, readableOn, todayStr, toDateStr, lighten, darken } from '@/lib/utils';
 import type { CalcKind } from '../knowledge';
 import { buildFacts, verbOutcome, Voice, type Facts } from '../text';
 
@@ -76,6 +76,7 @@ function baseCss(c: BrandColors): string {
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; padding: 24px; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: calc(15px * var(--scale)); line-height: 1.5; }
 .ylb { max-width: 760px; margin: 0 auto; }
 .ylb-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; box-shadow: 0 10px 30px -18px rgba(0,0,0,.25); }
@@ -96,6 +97,188 @@ body { margin: 0; padding: 24px; background: var(--bg); color: var(--ink); font-
 const money = `function fmt$(n){return (isFinite(n)?n:0).toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0});}
 function fmtN(n,d){return (isFinite(n)?n:0).toLocaleString('en-US',{maximumFractionDigits:d==null?0:d});}`;
 
+/** The owner's website, or '#' until they add one (never a domain made up from the brand name). */
+const linkTo = (f: Facts) => escapeHtml(f.url || '#');
+/** An HTML comment flagging a '#' button link, or '' when the owner has a website. */
+const linkTodo = (f: Facts, indent = '') => (f.url ? '' : `${indent}<!-- TODO: no website set yet. Replace "#" with your booking or checkout link (or add your website in Brand settings and generate again). -->\n`);
+
+// ───────────── owner settings for widgets ─────────────
+
+/** What a widget needs from the owner. Nothing here is ever made up: empty means "not set yet". */
+export interface WidgetSettings {
+  /** where forms send: the owner's form endpoint URL or a mailto: address; '' = not connected */
+  action: string;
+  /** where `action` came from, for the note shown after generating */
+  actionFrom: 'prompt' | 'listing' | '';
+  /** when the owner's offer ends, local time "YYYY-MM-DDTHH:MM"; '' = not set */
+  endDate: string;
+  /** the owner's opening hours as typed in the listing */
+  hours: string;
+}
+
+const MONTH_NAMES = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+const MONTH_RE = /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept|sep|oct|nov|dec)\b\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?!\s*(?:[:.]\d|%|am\b|pm\b))(?:,?\s+(\d{4})\b)?/i;
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const daysIn = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+
+/**
+ * An end date the owner wrote explicitly in the request ("ends 2026-12-01", "until Dec 1", "December 1, 2026"), or ''.
+ * Only a real month name (whole word) followed by a valid day counts: "marketing 3" or "decide 2" are not dates.
+ */
+export function parseEndDate(prompt: string, today = todayStr()): string {
+  const iso = /\b(\d{4})-(\d{2})-(\d{2})\b(?:[ T](\d{1,2}):(\d{2})\b)?/.exec(prompt);
+  if (iso) {
+    const [, y, mo, d, h, mi] = iso;
+    const [yn, mn, dn] = [Number(y), Number(mo), Number(d)];
+    if (mn < 1 || mn > 12 || dn < 1 || dn > daysIn(yn, mn)) return '';
+    if (h && (Number(h) > 23 || Number(mi) > 59)) return '';
+    return `${y}-${mo}-${d}T${h ? `${pad2(Number(h))}:${mi}` : '23:59'}`;
+  }
+  const named = MONTH_RE.exec(prompt);
+  if (!named) return '';
+  const word = named[1].toLowerCase();
+  const month = MONTH_NAMES.findIndex((m) => m.startsWith(word.slice(0, 3))) + 1;
+  const day = Number(named[2]);
+  let year = named[3] ? Number(named[3]) : Number(today.slice(0, 4));
+  if (day < 1 || day > daysIn(named[3] ? year : 2024, month)) return '';
+  if (!named[3] && `${year}-${pad2(month)}-${pad2(day)}` < today) year += 1;
+  if (day > daysIn(year, month)) return ''; // Feb 29 rolled into a non-leap year
+  return `${year}-${pad2(month)}-${pad2(day)}T23:59`;
+}
+
+/** Words that say "send the form here", right before the URL or address they apply to. */
+const ACTION_CUE = String.raw`(?:\b(?:form\s+)?action|\bendpoint|\bwebhook(?:\s+url)?|\b(?:post|submit|send|deliver|forward)(?:s|ed|ing)?(?:\s+(?:it|them|the\s+form|the\s+data|form\s+data|entries|submissions?|signups?|sign-ups|leads?|requests?|bookings?|responses?))?\s+(?:to|at))\s*[:=]?\s*`;
+
+/**
+ * Where forms should send. A URL is only used when the request says it is the target ("post to https://…",
+ * "form action https://…", "endpoint https://…"); a URL merely mentioned is not. Same for an email address
+ * ("mailto:…", "send signups to me@…"). Otherwise the listing's contact email, or not connected.
+ */
+function formAction(project: Project, prompt: string): Pick<WidgetSettings, 'action' | 'actionFrom'> {
+  const url = new RegExp(`${ACTION_CUE}(https://[^\\s"'<>]+)`, 'i').exec(prompt)?.[1]?.replace(/[.,;)]+$/, '');
+  if (url) return { action: url, actionFrom: 'prompt' };
+  const email =
+    /\bmailto:([^\s@"'<>?]+@[^\s@"'<>?]+\.[a-z]{2,})\b/i.exec(prompt)?.[1] ??
+    new RegExp(`${ACTION_CUE}([^\\s@"'<>]+@[^\\s@"'<>]+\\.[a-z]{2,})\\b`, 'i').exec(prompt)?.[1];
+  if (email) return { action: `mailto:${email}`, actionFrom: 'prompt' };
+  const listed = project.studio.listing?.contactEmail?.trim();
+  if (listed && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(listed)) return { action: `mailto:${listed}`, actionFrom: 'listing' };
+  return { action: '', actionFrom: '' };
+}
+
+export function widgetSettings(project: Project, prompt = ''): WidgetSettings {
+  return { ...formAction(project, prompt), endDate: parseEndDate(prompt), hours: project.studio.listing?.hours?.trim() ?? '' };
+}
+
+const DAY_KEYS: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+const HOURS_TOKEN =
+  /\b(daily|every ?day|7 days(?: a week)?)\b|\b(weekdays?)\b|\b(weekends?)\b|\b(mon|tue|wed|thu|fri|sat|sun)(?:day|sday|nesday|rsday|urday|rs|r|s)?\b\.?(?:\s*(?:-|–|—|to|through|thru)\s*(mon|tue|wed|thu|fri|sat|sun)(?:day|sday|nesday|rsday|urday|rs|r|s)?\b\.?)?|\b(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\s*(?:-|–|—|to)\s*(\d{1,2})(?!\d)(?:[:.](\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?|\b(closed)\b/gi;
+
+const to24 = (h: number, ap: string | undefined) => {
+  const a = ap?.toLowerCase().replace(/\./g, '');
+  if (a === 'pm' && h < 12) return h + 12;
+  if (a === 'am' && h === 12) return 0;
+  return h;
+};
+const timeLabel = (mins: number) => {
+  const h = Math.floor(mins / 60);
+  return `${((h + 11) % 12) + 1}:${pad2(mins % 60)} ${h < 12 ? 'AM' : 'PM'}`;
+};
+
+/**
+ * Bookable start times per weekday (0 = Sunday), one an hour across the whole opening range, read from the owner's opening hours such as
+ * "Mon–Fri 9am–5pm, Sat 10am–2pm". Null when the hours are missing or can't be read: the widget then
+ * asks for a preferred day and time instead of showing slots.
+ */
+export function parseHours(text: string): Record<number, string[]> | null {
+  const out: Record<number, string[]> = {};
+  let pending: number[] = [];
+  for (const m of (text || '').matchAll(HOURS_TOKEN)) {
+    if (m[1]) pending = [0, 1, 2, 3, 4, 5, 6];
+    else if (m[2]) pending = [1, 2, 3, 4, 5];
+    else if (m[3]) pending = [0, 6];
+    else if (m[4]) {
+      const a = DAY_KEYS[m[4].toLowerCase()];
+      if (m[5]) {
+        const b = DAY_KEYS[m[5].toLowerCase()];
+        const span: number[] = [];
+        for (let d = a; span.length < 7; d = (d + 1) % 7) {
+          span.push(d);
+          if (d === b) break;
+        }
+        pending = [...pending, ...span];
+      } else pending = [...pending, a];
+    } else if (m[12]) pending = [];
+    else if (m[6]) {
+      if (!pending.length) continue;
+      const [sh, eh, sap, eap] = [Number(m[6]), Number(m[9]), m[8], m[11]];
+      let end24 = eap ? to24(eh, eap) : eh;
+      let start24: number;
+      if (sap) start24 = to24(sh, sap);
+      else if (eap) {
+        // "9-5pm" means 9 AM; "1-5pm" means 1 PM
+        const same = to24(sh, eap);
+        start24 = same <= end24 ? same : to24(sh, 'am');
+      } else start24 = sh;
+      if (!eap && end24 <= start24) end24 += 12;
+      const start = start24 * 60 + Number(m[7] ?? 0);
+      const end = end24 * 60 + Number(m[10] ?? 0);
+      if (end > 24 * 60 || end - start < 60) {
+        pending = [];
+        continue;
+      }
+      const slots: string[] = [];
+      // every hour the business is open, start to last full hour; nothing is dropped (24 slots at most)
+      for (let t = start; t + 60 <= end; t += 60) slots.push(timeLabel(t));
+      for (const d of pending) out[d] = slots;
+      pending = [];
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Shared form sending. FORM_ACTION sits at the top of the script so the owner can see and change it.
+ * With no action set, nothing is sent and the widget says so ("Not connected: submissions are not sent").
+ */
+function formJs(action: string): string {
+  return `// Where submissions go. Set FORM_ACTION to your own form endpoint (for example a Formspree, Basin or
+// Google Apps Script web app URL) or to "mailto:you@yourbusiness.com".
+// TODO: until it is set, this form sends nothing and shows "Not connected: submissions are not sent".
+var FORM_ACTION = ${JSON.stringify(action)};
+var notice = document.getElementById('ylb-notice');
+if (notice) notice.hidden = !!FORM_ACTION;
+function ylbSend(fields, subject) {
+  if (!FORM_ACTION) return Promise.resolve('none');
+  if (/^mailto:/i.test(FORM_ACTION)) {
+    var body = Object.keys(fields).map(function (k) { return k + ': ' + fields[k]; }).join('\\n');
+    window.location.href = FORM_ACTION + (FORM_ACTION.indexOf('?') < 0 ? '?' : '&') + 'subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    return Promise.resolve('mail');
+  }
+  var data = new FormData();
+  Object.keys(fields).forEach(function (k) { data.append(k, fields[k]); });
+  return fetch(FORM_ACTION, { method: 'POST', body: data, headers: { Accept: 'application/json' } })
+    .then(function (r) { return r.ok ? 'sent' : 'error'; }, function () { return 'error'; });
+}
+var YLB_MESSAGES = {
+  sent: 'Thanks, your details were sent.',
+  mail: 'Your email app should open with your details. Send that email to finish.',
+  none: 'This form is not connected yet, so nothing was sent.',
+  error: 'Something went wrong and nothing was sent. Please try again.'
+};`;
+}
+
+const NOTICE_HTML = `<p class="ylb-notice" id="ylb-notice" hidden>Not connected: submissions are not sent</p>`;
+const NOTICE_CSS = `.ylb-notice { margin: 0 0 14px; padding: 8px 12px; border-radius: calc(var(--radius) * .6); background: #fff4e5; color: #8a4b00; font-size: .85em; font-weight: 600; }
+`;
+
+/** The note shown in the Code tab after generating a form widget. */
+function formNote(s: WidgetSettings): string {
+  if (!s.action) return 'Not connected yet: set FORM_ACTION at the top of the JS to your form endpoint or a mailto: address. Until then nothing is sent.';
+  if (s.actionFrom === 'listing') return `Submissions open an email to ${s.action.slice(7)} (your listing's contact email). Change FORM_ACTION in the JS to use a form endpoint.`;
+  return `Submissions go to ${s.action.replace(/^mailto:/, '')}. Change FORM_ACTION in the JS to send them elsewhere.`;
+}
+
 // ───────────── calculators ─────────────
 
 interface CalcField {
@@ -115,9 +298,11 @@ interface CalcSpec {
   outputs: { id: string; label: string }[];
   compute: string;
   note: string;
+  /** shown to the owner in the Code tab, not in the widget */
+  ownerNote?: string;
 }
 
-function calcSpec(kind: CalcKind | 'roi', f: Facts): CalcSpec {
+function calcSpec(kind: CalcKind | 'roi', f: Facts, packages: ServicePackage[] = []): CalcSpec {
   switch (kind) {
     case 'tax':
       return {
@@ -342,40 +527,43 @@ set('o1','$'+price.toFixed(2));set('o2','$'+profit.toFixed(2));set('o3','$'+(cos
         note: 'Check fees for your platform.',
       };
     case 'quote': {
-      const svc = f.business?.services ?? [];
+      // only the owner's own packages and prices; no service list or price ranges from a business-type template
+      const own = packages.slice(0, 8);
+      const options: [string, string][] = own.length
+        ? own.map((p) => [String(p.price > 0 ? p.price : 0), p.price > 0 ? p.name : `${p.name} [set a price]`])
+        : [
+            ['0', '[Service 1]'],
+            ['0', '[Service 2]'],
+            ['0', '[Service 3]'],
+          ];
+      const missing = !own.length || own.some((p) => !(p.price > 0));
       return {
-        title: 'Instant Quote Estimator',
-        sub: `Get a ballpark price from ${f.brand} in seconds.`,
+        title: 'Quote Estimator',
+        sub: `Get a rough price from ${f.brand}.`,
         fields: [
-          {
-            id: 'service',
-            label: 'Service',
-            type: 'select',
-            value: String(Math.round(((svc[1]?.price[0] ?? 150) + (svc[1]?.price[1] ?? 250)) / 2)),
-            options: svc.filter((s) => s.price[1] > 0).map((s) => [String(Math.round((s.price[0] + s.price[1]) / 2)), s.name] as [string, string]),
-          },
-          { id: 'size', label: 'Home size', type: 'select', value: '1', options: [['0.85', 'Under 1,200 sq ft'], ['1', '1,200–2,400 sq ft'], ['1.3', '2,400–3,500 sq ft'], ['1.6', '3,500+ sq ft']] },
-          { id: 'freq', label: 'How often', type: 'select', value: '1', options: [['1', 'One time'], ['0.9', 'Monthly'], ['0.85', 'Every 2 weeks']] },
+          { id: 'service', label: 'Service', type: 'select', value: options[0][0], options },
+          { id: 'qty', label: 'How many', type: 'number', value: 1 },
         ],
-        outputs: [
-          { id: 'o1', label: 'Estimated price' },
-          { id: 'o2', label: 'Price range' },
-          { id: 'o3', label: 'Next available' },
-        ],
-        compute: `var p=v('service')*v('size')*v('freq');set('o1',fmt$(p));set('o2',fmt$(p*.9)+' – '+fmt$(p*1.15));var d=new Date();d.setDate(d.getDate()+2);set('o3',d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}));`,
-        note: 'Final price confirmed after a quick walkthrough.',
+        outputs: [{ id: 'o1', label: 'Estimated price' }],
+        compute: `var p=v('service')*Math.max(0,v('qty'));set('o1',v('service')>0?fmt$(p):'[Price on request]');`,
+        note: 'A rough estimate, not a quote.',
+        ownerNote: missing
+          ? own.length
+            ? 'Some of your packages have no price yet, so they show “[Price on request]”. Add prices in Studio → Packages and generate again, or edit the option values in the HTML.'
+            : 'No packages with prices yet, so the services are [bracketed] placeholders. Add your packages and prices in Studio → Packages and generate again, or replace each option’s label and value (the price) in the HTML.'
+          : undefined,
       };
     }
     case 'roi':
     default:
       return {
-        title: f.track === 'business' ? 'Savings Calculator' : 'ROI Calculator',
-        sub: `What ${f.productShort} is worth to your business.`,
+        title: f.track === 'business' ? 'Value Estimator' : 'ROI Calculator',
+        sub: `Enter your own numbers to estimate what ${f.productShort} could be worth to you.`,
         fields: [
-          { id: 'hours', label: 'Hours saved per week', type: 'number', value: 6 },
-          { id: 'value', label: 'Value of an hour', type: 'number', value: 75, prefix: '$' },
-          { id: 'team', label: 'People on the team', type: 'number', value: 3 },
-          { id: 'cost', label: `Monthly cost of ${f.productShort}`, type: 'number', value: Math.max(9, f.price), prefix: '$' },
+          { id: 'hours', label: 'Hours per week (your estimate)', type: 'number', value: 0 },
+          { id: 'value', label: 'Value of an hour', type: 'number', value: 0, prefix: '$' },
+          { id: 'team', label: 'People', type: 'number', value: 1 },
+          { id: 'cost', label: `Monthly cost of ${f.productShort}`, type: 'number', value: Math.max(0, f.price || 0), prefix: '$' },
         ],
         outputs: [
           { id: 'o1', label: 'Monthly value created' },
@@ -384,13 +572,15 @@ set('o1','$'+price.toFixed(2));set('o2','$'+profit.toFixed(2));set('o3','$'+(cos
         ],
         compute: `var monthly=v('hours')*v('value')*v('team')*4.33;var roi=v('cost')>0?(monthly-v('cost'))/v('cost')*100:0;var days=monthly>0?v('cost')/(monthly/30):0;
 set('o1',fmt$(monthly));set('o2',fmtN(roi)+'%');set('o3',fmtN(Math.max(1,days))+' days');`,
-        note: 'Projections based on your inputs.',
+        note: 'An estimate from the numbers you enter, not a promise of results.',
+        // Hours saved and what an hour is worth are the visitor's (or owner's) numbers, not a template's.
+        ownerNote: 'The hours and hourly value start at 0 so visitors enter their own numbers. Add example defaults in the HTML only if they come from your own customers.',
       };
   }
 }
 
-function calculatorCode(kind: CalcKind | 'roi', f: Facts, c: BrandColors, titleOverride?: string): CodeResult {
-  const s = calcSpec(kind, f);
+function calculatorCode(kind: CalcKind | 'roi', f: Facts, c: BrandColors, titleOverride?: string, packages: ServicePackage[] = []): CodeResult {
+  const s = calcSpec(kind, f, packages);
   const title = titleOverride || s.title;
   const field = (fl: CalcField) => {
     const input =
@@ -412,7 +602,7 @@ ${s.fields.map(field).join('\n')}
 ${s.outputs.map((o, i) => `      <div class="result${i === 0 ? ' main' : ''}"><span>${escapeHtml(o.label)}</span><strong id="${o.id}">–</strong></div>`).join('\n')}
     </div>
     <p class="note muted">${escapeHtml(s.note)}</p>
-    <a class="btn" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">Get the full ${escapeHtml(f.track === 'business' ? 'quote' : f.formatNoun.toLowerCase())} →</a>
+${linkTodo(f, '    ')}    <a class="btn" href="${linkTo(f)}" target="_blank" rel="noopener">Get the full ${escapeHtml(f.track === 'business' ? 'quote' : f.formatNoun.toLowerCase())} →</a>
   </div>
 </div>`;
   const css =
@@ -435,12 +625,12 @@ function set(id,val){var el=document.getElementById(id);if(el)el.textContent=val
 function calc(){${s.compute}}
 document.getElementById('calc-form').addEventListener('input',calc);
 calc();`;
-  return { name: title, kind: kind === 'roi' ? 'roi' : 'calculator', html, css, js };
+  return { name: title, kind: kind === 'roi' ? 'roi' : 'calculator', html, css, js, ...(s.ownerNote ? { note: s.ownerNote } : {}) };
 }
 
 // ───────────── other widgets ─────────────
 
-function leadFormCode(f: Facts, c: BrandColors, v: Voice): CodeResult {
+function leadFormCode(f: Facts, c: BrandColors, v: Voice, s: WidgetSettings): CodeResult {
   const lm = f.leadMagnet || `The ${f.topic} Starter Checklist`;
   const bullets = [
     `${v.pick(['Skip', 'Avoid', 'Stop'])} ${f.mistakes[0]}`,
@@ -451,6 +641,7 @@ function leadFormCode(f: Facts, c: BrandColors, v: Voice): CodeResult {
   <div class="ylb-card optin">
     <div class="cover" aria-hidden="true"><span>FREE</span><b>${escapeHtml(lm)}</b><em>${escapeHtml(f.brand)}</em></div>
     <div>
+      ${NOTICE_HTML}
       <span class="pill">Free download</span>
       <h2>${escapeHtml(lm)}</h2>
       <p class="sub">For ${escapeHtml(f.audience)} who want to ${escapeHtml(verbOutcome(f.outcomes[0]))}.</p>
@@ -460,19 +651,19 @@ ${bullets.map((b) => `        <li>${escapeHtml(b)}</li>`).join('\n')}
       <form id="optin" novalidate>
         <input id="fname" name="fname" placeholder="First name" autocomplete="given-name" />
         <input id="email" name="email" type="email" placeholder="you@email.com" autocomplete="email" required />
-        <button class="btn" type="submit">Send me the free guide</button>
+        <button class="btn" type="submit">Get the free guide</button>
         <p class="error" id="err" role="alert"></p>
       </form>
       <div class="success" id="ok" hidden>
-        <h3>Check your inbox 🎉</h3>
-        <p class="muted">We just sent <b>${escapeHtml(lm)}</b> to <span id="ok-email"></span>.</p>
+        <h3>Thanks</h3>
+        <p class="muted" id="ok-text"></p>
       </div>
-      <p class="fine muted">No spam. Unsubscribe anytime.</p>
     </div>
   </div>
 </div>`;
   const css =
     baseCss(c) +
+    NOTICE_CSS +
     `.optin { display: grid; gap: 24px; grid-template-columns: 200px 1fr; align-items: center; }
 @media (max-width: 560px) { .optin { grid-template-columns: 1fr; } }
 .cover { aspect-ratio: 3/4; border-radius: calc(var(--radius) * .8); background: linear-gradient(150deg, var(--brand), var(--brand-dark)); color: var(--brand-ink); padding: 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 20px 40px -20px var(--brand); transform: rotate(-3deg); }
@@ -484,48 +675,46 @@ ${bullets.map((b) => `        <li>${escapeHtml(b)}</li>`).join('\n')}
 #optin { display: grid; gap: 10px; }
 .error { color: #c0392b; font-size: .85em; min-height: 1em; margin: 0; }
 .success h3 { margin: 0 0 4px; }
-.fine { font-size: .75em; margin: 10px 0 0; }
 `;
-  const js = `var form=document.getElementById('optin');
+  const js = `${formJs(s.action)}
+var form=document.getElementById('optin');
 form.addEventListener('submit',function(e){e.preventDefault();
   var email=document.getElementById('email').value.trim();
   var err=document.getElementById('err');
   if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email)){err.textContent='Please enter a valid email address.';return;}
   err.textContent='';
-  form.hidden=true;document.getElementById('ok').hidden=false;document.getElementById('ok-email').textContent=email;
-  // Connect your email platform here, e.g. fetch('/api/subscribe',{method:'POST',body:JSON.stringify({email:email})})
+  ylbSend({name:document.getElementById('fname').value.trim(),email:email,request:${JSON.stringify(lm)}},${JSON.stringify(`Request: ${lm}`)}).then(function(status){
+    if(status==='none'||status==='error'){err.textContent=YLB_MESSAGES[status];return;}
+    form.hidden=true;document.getElementById('ok').hidden=false;document.getElementById('ok-text').textContent=YLB_MESSAGES[status];
+  });
 });`;
-  return { name: `${lm} opt-in form`, kind: 'leadform', html, css, js };
+  return { name: `${lm} opt-in form`, kind: 'leadform', html, css, js, note: formNote(s) };
 }
 
 function pricingCode(f: Facts, c: BrandColors, project: Project): CodeResult {
   const monthly = project.studio.priceModel === 'monthly' || project.format === 'software' || project.format === 'membership';
-  const tiers = project.track === 'business' && project.studio.packages.length
-    ? project.studio.packages.map((p) => ({ name: p.name, price: p.price, desc: p.description, features: p.includes.slice(0, 5), popular: !!p.popular }))
-    : [
-        { name: 'Starter', price: Math.max(5, Math.round(f.price * 0.6)), desc: `The ${f.formatNoun.toLowerCase()} on its own.`, features: [f.product, 'Instant access', 'Email support'], popular: false },
-        { name: 'Complete', price: f.price, desc: 'Everything you need to get results.', features: [f.product, 'All bonuses', 'Templates & worksheets', 'Lifetime updates'], popular: true },
-        { name: 'VIP', price: Math.round(f.price * 2.4), desc: 'Hands-on help to go faster.', features: ['Everything in Complete', '1:1 kickoff call', 'Priority support', 'Private community'], popular: false },
-      ];
+  const ownerPrice = project.studio.price > 0 ? project.studio.price : 0;
+  // the owner's packages, or their product at their price; no invented tiers, features or discounts
+  const tiers = project.studio.packages.length
+    ? project.studio.packages.map((p) => ({ name: p.name, price: p.price > 0 ? `$${p.price}` : '[Price]', desc: p.description, features: p.includes.slice(0, 5), popular: !!p.popular }))
+    : [{ name: f.productShort, price: ownerPrice ? `$${ownerPrice}` : '[Price]', desc: f.product === f.productShort ? '' : f.product, features: ['[What’s included]'], popular: false }];
   const html = `<div class="ylb wide">
   <div class="head">
     <span class="pill">Pricing</span>
-    <h2>Simple, honest pricing</h2>
-    <p class="sub">Pick the plan that fits. ${monthly ? 'Cancel anytime.' : 'Pay once, keep forever.'}</p>
-${monthly ? `    <div class="toggle" role="group" aria-label="Billing period"><button class="on" data-period="m" type="button">Monthly</button><button data-period="y" type="button">Yearly <i>save 20%</i></button></div>` : ''}
+    <h2>${escapeHtml(tiers.length > 1 ? 'Choose a plan' : `${f.productShort}`)}</h2>
   </div>
-  <div class="tiers">
+  <div class="tiers${tiers.length === 1 ? ' one' : ''}">
 ${tiers
   .map(
     (t) => `    <div class="tier${t.popular ? ' popular' : ''}">
       ${t.popular ? '<span class="badge">Most popular</span>' : ''}
       <h3>${escapeHtml(t.name)}</h3>
-      <p class="muted">${escapeHtml(t.desc)}</p>
-      <p class="price"><b data-m="${t.price}" data-y="${Math.round(t.price * 12 * 0.8)}">$${t.price}</b><span class="per">${monthly ? '/mo' : ''}</span></p>
+      ${t.desc ? `<p class="muted">${escapeHtml(t.desc)}</p>` : ''}
+      <p class="price"><b>${escapeHtml(t.price)}</b><span class="per">${monthly ? '/mo' : ''}</span></p>
       <ul>
 ${t.features.map((x) => `        <li>${escapeHtml(x)}</li>`).join('\n')}
       </ul>
-      <a class="btn${t.popular ? '' : ' ghost'}" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">Choose ${escapeHtml(t.name)}</a>
+${linkTodo(f, '      ')}      <a class="btn${t.popular || tiers.length === 1 ? '' : ' ghost'}" href="${linkTo(f)}" target="_blank" rel="noopener">Choose ${escapeHtml(t.name)}</a>
     </div>`,
   )
   .join('\n')}
@@ -535,11 +724,8 @@ ${t.features.map((x) => `        <li>${escapeHtml(x)}</li>`).join('\n')}
     baseCss(c) +
     `.ylb.wide { max-width: 980px; }
 .head { text-align: center; margin-bottom: 22px; }
-.toggle { display: inline-flex; padding: 4px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); }
-.toggle button { border: 0; background: transparent; padding: 8px 14px; border-radius: 999px; font: inherit; font-weight: 600; cursor: pointer; color: var(--muted); }
-.toggle button.on { background: var(--brand); color: var(--brand-ink); }
-.toggle i { font-style: normal; font-size: .75em; color: var(--accent); }
 .tiers { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); align-items: stretch; }
+.tiers.one { max-width: 380px; margin: 0 auto; }
 .tier { position: relative; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; }
 .tier.popular { border: 2px solid var(--brand); box-shadow: 0 18px 40px -24px var(--brand); }
 .tier h3 { margin: 0; font-size: 1.15em; }
@@ -551,30 +737,25 @@ ${t.features.map((x) => `        <li>${escapeHtml(x)}</li>`).join('\n')}
 .tier li::before { content: "✓"; color: var(--brand); font-weight: 800; margin-right: 8px; }
 .badge { position: absolute; top: -12px; left: 22px; background: var(--accent); color: #111; font-size: .72em; font-weight: 800; padding: 4px 10px; border-radius: 999px; }
 `;
-  const js = monthly
-    ? `document.querySelectorAll('.toggle button').forEach(function(b){b.addEventListener('click',function(){
-  document.querySelectorAll('.toggle button').forEach(function(x){x.classList.toggle('on',x===b);});
-  var y=b.dataset.period==='y';
-  document.querySelectorAll('.price b').forEach(function(el){el.textContent='$'+(y?el.dataset.y:el.dataset.m);});
-  document.querySelectorAll('.per').forEach(function(el){el.textContent=y?'/yr':'/mo';});
-});});`
-    : `// Static pricing: no script needed. Link each button to your checkout.`;
-  return { name: 'Pricing table', kind: 'pricing', html, css, js };
+  const js = `// Static pricing: no script needed. Link each button to your checkout.`;
+  const placeholders = tiers.some((t) => t.price === '[Price]' || t.features.includes('[What’s included]'));
+  return { name: 'Pricing table', kind: 'pricing', html, css, js, ...(placeholders ? { note: 'Replace the [bracketed] placeholders with your own price and what’s included.' } : {}) };
 }
 
-function heroCode(f: Facts, c: BrandColors, v: Voice): CodeResult {
-  const headline = f.tagline || `${verbOutcome(f.outcomes[0]).replace(/^./, (x) => x.toUpperCase())}.`;
+function heroCode(f: Facts, c: BrandColors): CodeResult {
+  // the owner's tagline, else the outcome as a question (never stated as a result the owner hasn't promised)
+  const headline = f.tagline || `Want to ${verbOutcome(f.outcomes[0])}?`;
+  const what = f.track === 'business' ? `${f.topicLower} service` : f.formatNoun.replace(/^[A-Z](?![A-Z])/, (x) => x.toLowerCase());
   const html = `<section class="hero">
   <div class="ylb wide">
     <div class="copy">
-      <span class="pill">${escapeHtml(f.local && f.city ? `Proudly serving ${f.city}` : `For ${f.audience}`)}</span>
+      <span class="pill">${escapeHtml(f.local && f.city ? `Serving ${f.city}` : `For ${f.audience}`)}</span>
       <h1>${escapeHtml(headline)}</h1>
-      <p class="lead">${escapeHtml(f.pitch || `${f.brand} helps ${f.audience} ${verbOutcome(f.outcomes[0])}, without ${f.pain}.`)}</p>
+      <p class="lead">${escapeHtml(f.pitch || `${f.track === 'business' ? f.brand : f.productShort} is ${/^[aeiou]/i.test(what) ? 'an' : 'a'} ${what} for ${f.audience}.`)}</p>
       <div class="ctas">
-        <a class="btn" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">${escapeHtml(f.track === 'business' ? 'Book now' : `Get ${f.productShort}`)} →</a>
+${linkTodo(f, '        ')}        <a class="btn" href="${linkTo(f)}" target="_blank" rel="noopener">${escapeHtml(f.track === 'business' ? 'Book now' : `Get ${f.productShort}`)} →</a>
         <a class="btn ghost" href="#how">See how it works</a>
       </div>
-      <p class="trust muted">★★★★★ Loved by ${escapeHtml(f.audience)} · ${escapeHtml(v.pick(['Instant access', 'Cancel anytime', 'Satisfaction promise']))}</p>
     </div>
     <div class="visual" aria-hidden="true">
       <div class="window">
@@ -598,7 +779,6 @@ function heroCode(f: Facts, c: BrandColors, v: Voice): CodeResult {
 h1 { font-size: clamp(2em, 5vw, 3.2em); line-height: 1.05; letter-spacing: -0.03em; margin: 14px 0; }
 .lead { font-size: 1.12em; color: var(--muted); margin: 0 0 22px; max-width: 34em; }
 .ctas { display: flex; gap: 10px; flex-wrap: wrap; }
-.trust { margin-top: 18px; font-size: .9em; }
 .window { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 30px 60px -30px rgba(0,0,0,.35); overflow: hidden; transform: rotate(1.5deg); }
 .bar { display: flex; gap: 6px; padding: 10px 12px; background: var(--brand); }
 .bar i { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,.6); }
@@ -611,41 +791,54 @@ h1 { font-size: clamp(2em, 5vw, 3.2em); line-height: 1.05; letter-spacing: -0.03
   return { name: 'Landing hero section', kind: 'hero', html, css, js };
 }
 
-function countdownCode(f: Facts, c: BrandColors): CodeResult {
-  const deadline = new Date();
-  deadline.setDate(deadline.getDate() + 7);
-  deadline.setHours(23, 59, 0, 0);
+function countdownCode(f: Facts, c: BrandColors, project: Project, s: WidgetSettings): CodeResult {
+  const ownerPrice = project.studio.price > 0 ? `$${project.studio.price}` : '';
   const html = `<div class="ylb">
   <div class="ylb-card countdown">
-    <span class="pill">Launch offer</span>
-    <h2>${escapeHtml(f.productShort)} launch pricing ends soon</h2>
-    <p class="sub">Get it for <b>${escapeHtml(f.priceStr)}</b> before the price goes up.</p>
+    <span class="pill">Offer</span>
+    <h2>${escapeHtml(f.productShort)}: offer ends in</h2>
+    <p class="sub">${ownerPrice ? `Price: <b>${escapeHtml(ownerPrice)}</b>. ` : ''}[What the offer is]</p>
+    <p class="ylb-notice" id="no-date" hidden>No end date set: the timer is off.</p>
     <div class="clock" id="clock" aria-live="polite">
       <div><b id="d">0</b><span>days</span></div>
-      <div><b id="h">0</b><span>hours</span></div>
-      <div><b id="m">0</b><span>min</span></div>
-      <div><b id="s">0</b><span>sec</span></div>
+      <div><b id="h">00</b><span>hours</span></div>
+      <div><b id="m">00</b><span>min</span></div>
+      <div><b id="s">00</b><span>sec</span></div>
     </div>
-    <a class="btn" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">Lock in launch pricing →</a>
+    <p class="muted" id="ended" hidden>This offer has ended.</p>
+${linkTodo(f, '    ')}    <a class="btn" href="${linkTo(f)}" target="_blank" rel="noopener">Get ${escapeHtml(f.productShort)} →</a>
   </div>
 </div>`;
   const css =
     baseCss(c) +
+    NOTICE_CSS +
     `.countdown { text-align: center; }
 .clock { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 20px auto 22px; max-width: 460px; }
 .clock div { background: var(--ink); color: #fff; border-radius: calc(var(--radius) * .7); padding: 14px 6px; }
 .clock b { display: block; font-size: 2em; font-variant-numeric: tabular-nums; line-height: 1; }
 .clock span { font-size: .72em; text-transform: uppercase; letter-spacing: .08em; opacity: .7; }
 `;
-  const js = `var deadline=new Date(${JSON.stringify(deadline.toISOString())}).getTime();
+  const js = `// When your offer really ends, in your local time, e.g. "2026-12-01T23:59".
+// TODO: until it is set, the timer stays off.
+var END_DATE = ${JSON.stringify(s.endDate)};
+var deadline = END_DATE ? new Date(END_DATE).getTime() : NaN;
 function pad(n){return String(n).padStart(2,'0');}
 function tick(){var ms=Math.max(0,deadline-Date.now());var s=Math.floor(ms/1000);
   document.getElementById('d').textContent=Math.floor(s/86400);
   document.getElementById('h').textContent=pad(Math.floor(s%86400/3600));
   document.getElementById('m').textContent=pad(Math.floor(s%3600/60));
-  document.getElementById('s').textContent=pad(s%60);}
-tick();setInterval(tick,1000);`;
-  return { name: 'Launch countdown', kind: 'countdown', html, css, js };
+  document.getElementById('s').textContent=pad(s%60);
+  if(ms===0){document.getElementById('ended').hidden=false;clearInterval(timer);}}
+var timer;
+if(!isFinite(deadline)){document.getElementById('no-date').hidden=false;document.getElementById('clock').hidden=true;}
+else{tick();timer=setInterval(tick,1000);}`;
+  const note = [
+    s.endDate
+      ? `Counts down to ${s.endDate.replace('T', ' ')} (from your request). Change END_DATE in the JS if that's wrong.`
+      : 'No end date yet: set END_DATE at the top of the JS (or say "ends 2026-12-01" when you generate). The timer stays off until then.',
+    'Replace “[What the offer is]” with your real offer.',
+  ].join(' ');
+  return { name: 'Offer countdown', kind: 'countdown', html, css, js, note };
 }
 
 function quizCode(f: Facts, c: BrandColors): CodeResult {
@@ -679,13 +872,13 @@ function quizCode(f: Facts, c: BrandColors): CodeResult {
   const js = `var QS=${JSON.stringify(qs)};
 var RESULTS=[
  {min:0,title:'Just getting started',text:${JSON.stringify(`You are early in your ${f.topicLower} journey. Start with the basics and one quick win: ${f.quickWins[0]}.`)}},
- {min:5,title:'Building momentum',text:${JSON.stringify(`You have the foundations. A clear system will help you ${verbOutcome(f.outcomes[0])}.`)}},
- {min:8,title:'Nearly there',text:${JSON.stringify(`You are ahead of most ${f.audience}. Fine-tune your routine to ${verbOutcome(f.outcomes[1] ?? f.outcomes[0])}.`)}}
+ {min:5,title:'Building momentum',text:${JSON.stringify(`You have some of the basics in place. Have a question about ${f.topicLower}? Ask ${f.brand}.`)}},
+ {min:8,title:'Nearly there',text:${JSON.stringify(`You have most of the basics in place. See what ${f.brand} offers below.`)}}
 ];
 var i=0,score=0;
 function render(){var box=document.getElementById('q');document.getElementById('bar').style.width=(i/QS.length*100)+'%';
  if(i>=QS.length){box.hidden=true;var r=RESULTS.filter(function(x){return score>=x.min;}).pop();var out=document.getElementById('result');out.hidden=false;
-  out.innerHTML='<p class="score">'+Math.round(score/10*100)+'</p><h3>'+r.title+'</h3><p class="muted">'+r.text+'</p><a class="btn" target="_blank" rel="noopener" href=${JSON.stringify(f.url)}>Get your plan →</a>';return;}
+  out.innerHTML='<p class="score">'+Math.round(score/10*100)+'</p><h3>'+r.title+'</h3><p class="muted">'+r.text+'</p><a class="btn" target="_blank" rel="noopener" href=${JSON.stringify(f.url || '#')}>Get your plan →</a>';return;}${f.url ? '' : ' // TODO: no website set yet. Replace "#" above with your link.'}
  var q=QS[i];box.innerHTML='<p class="muted">Question '+(i+1)+' of '+QS.length+'</p><p class="question">'+q.q+'</p><div class="answers">'+q.a.map(function(a,k){return '<button type="button" data-k="'+k+'">'+a+'</button>';}).join('')+'</div>';
  box.querySelectorAll('button').forEach(function(b){b.addEventListener('click',function(){score+=Number(b.dataset.k);i++;render();});});}
 render();`;
@@ -726,17 +919,30 @@ update();`;
   return { name: `${f.topic} checklist`, kind: 'checklist', html, css, js };
 }
 
-function testimonialsCode(f: Facts, c: BrandColors): CodeResult {
-  const quotes = [
-    { q: `I finally stopped ${f.mistakes[0]}. Within a few weeks I could ${verbOutcome(f.outcomes[0])}.`, n: 'Jordan M.', r: f.audience },
-    { q: `Clear, practical and easy to follow. ${f.brand} saved me hours every single week.`, n: 'Priya S.', r: f.audience },
-    { q: `I was skeptical, but ${f.pain} is no longer a problem for me. Worth every penny.`, n: 'Marcus L.', r: f.audience },
-  ];
+/** Testimonials the owner entered on their sales page (never ones an older version wrote that still await review). */
+export function ownerTestimonials(project: Project): { quote: string; name: string; role: string }[] {
+  const sections = project.marketing?.salesPage?.sections ?? [];
+  return sections
+    .flatMap((s) => (s.type === 'proof' ? s.data.testimonials ?? [] : []))
+    .filter((t) => !t.needsReview && t.quote?.trim())
+    .map((t) => ({ quote: t.quote.trim(), name: t.name?.trim() ?? '', role: t.role?.trim() ?? '' }));
+}
+
+const PLACEHOLDER_QUOTES = [1, 2, 3].map(() => ({ quote: '[Customer quote]', name: '[Customer name]', role: '[Who they are]' }));
+
+function testimonialsCode(c: BrandColors, project: Project): CodeResult {
+  const own = ownerTestimonials(project);
+  const quotes = own.length ? own : PLACEHOLDER_QUOTES;
   const html = `<div class="ylb">
   <div class="ylb-card carousel" aria-roledescription="carousel">
-    <span class="pill">Example reviews · replace with real customer quotes</span>
+    <span class="pill">${own.length ? 'What customers say' : 'Placeholders: replace with real customer quotes'}</span>
     <div class="slides" id="slides">
-${quotes.map((t, i) => `      <figure class="slide${i === 0 ? ' on' : ''}"><blockquote>“${escapeHtml(t.q)}”</blockquote><figcaption><b>${escapeHtml(t.n)}</b> · <span class="muted">${escapeHtml(t.r)}</span></figcaption></figure>`).join('\n')}
+${quotes
+  .map((t, i) => {
+    const who = [t.name ? `<b>${escapeHtml(t.name)}</b>` : '', t.role ? `<span class="muted">${escapeHtml(t.role)}</span>` : ''].filter(Boolean).join(' · ');
+    return `      <figure class="slide${i === 0 ? ' on' : ''}"><blockquote>“${escapeHtml(t.quote)}”</blockquote>${who ? `<figcaption>${who}</figcaption>` : ''}</figure>`;
+  })
+  .join('\n')}
     </div>
     <div class="nav"><button type="button" id="prev" aria-label="Previous">←</button><div class="dots" id="dots"></div><button type="button" id="next" aria-label="Next">→</button></div>
   </div>
@@ -758,43 +964,52 @@ slides.forEach(function(_,i){var d=document.createElement('i');d.addEventListene
 function go(i){cur=(i+slides.length)%slides.length;slides.forEach(function(s,k){s.classList.toggle('on',k===cur);});[].slice.call(dots.children).forEach(function(d,k){d.classList.toggle('on',k===cur);});}
 document.getElementById('prev').onclick=function(){go(cur-1);};document.getElementById('next').onclick=function(){go(cur+1);};
 go(0);setInterval(function(){go(cur+1);},6000);`;
-  return { name: 'Testimonial carousel', kind: 'testimonials', html, css, js };
+  const note = own.length
+    ? `Uses the ${own.length} testimonial${own.length === 1 ? '' : 's'} from your sales page.`
+    : 'Shows placeholders. Replace each [bracketed] line with a real customer quote before you publish, or add testimonials to your sales page and generate again.';
+  return { name: 'Testimonial carousel', kind: 'testimonials', html, css, js, note };
 }
 
-function bookingCode(f: Facts, c: BrandColors, project: Project): CodeResult {
-  const services = (project.studio.packages.length
-    ? project.studio.packages.map((p) => ({ name: p.name, price: p.price }))
-    : (f.business?.services ?? []).filter((s) => s.price[1] > 0).map((s) => ({ name: s.name, price: Math.round((s.price[0] + s.price[1]) / 2) }))
-  ).slice(0, 4);
-  const days: { iso: string; label: string }[] = [];
-  for (let i = 1; i <= 10; i++) {
-    const ds = addDays(todayStr(), i);
-    days.push({ iso: ds, label: fmtDate(ds, { weekday: 'short', month: 'short', day: 'numeric' }) });
-  }
+function bookingCode(f: Facts, c: BrandColors, project: Project, s: WidgetSettings): CodeResult {
+  // only the owner's own packages: no service list or prices taken from a business-type template
+  const services = project.studio.packages.slice(0, 4).map((p) => ({ name: p.name, price: p.price }));
+  const hours = parseHours(s.hours);
+  const serviceField = services.length
+    ? `      <fieldset><legend>1. Service</legend>
+        <div class="opts">
+${services.map((sv, i) => `          <label class="opt"><input type="radio" name="svc" value="${escapeHtml(sv.name)}"${i === 0 ? ' checked' : ''} /><span><b>${escapeHtml(sv.name)}</b>${sv.price > 0 ? `<em>$${sv.price}</em>` : ''}</span></label>`).join('\n')}
+        </div>
+      </fieldset>`
+    : `      <fieldset><legend>1. What do you need?</legend>
+        <input id="svc-text" placeholder="Tell us what you’d like booked" />
+      </fieldset>`;
+  const whenField = hours
+    ? `      <fieldset><legend>2. Day</legend><div class="days" id="days"></div></fieldset>
+      <fieldset><legend>3. Time</legend><div class="times" id="times"></div></fieldset>`
+    : `      <fieldset><legend>2. When suits you?</legend>
+        <div class="grid"><input id="pref-day" type="date" aria-label="Preferred day" /><input id="pref-time" placeholder="Preferred time, e.g. weekday mornings" aria-label="Preferred time" /></div>
+      </fieldset>`;
   const html = `<div class="ylb">
   <div class="ylb-card booking">
-    <span class="pill">${escapeHtml(f.city ? `${f.city} · ` : '')}Online booking</span>
+    ${NOTICE_HTML}
+    <span class="pill">${escapeHtml(f.city ? `${f.city} · ` : '')}Booking request</span>
     <h2>Book with ${escapeHtml(f.brand)}</h2>
-    <p class="sub">Pick a service and a time. You’ll get a confirmation right away.</p>
+    <p class="sub">Send a request${hours ? ' for a time within our opening hours' : ''}. It isn’t booked until ${escapeHtml(f.brand)} confirms it.</p>
     <form id="book" novalidate>
-      <fieldset><legend>1. Service</legend>
-        <div class="opts">
-${services.map((s, i) => `          <label class="opt"><input type="radio" name="svc" value="${escapeHtml(s.name)}" data-price="${s.price}"${i === 0 ? ' checked' : ''} /><span><b>${escapeHtml(s.name)}</b><em>$${s.price}</em></span></label>`).join('\n')}
-        </div>
-      </fieldset>
-      <fieldset><legend>2. Day</legend><div class="days" id="days"></div></fieldset>
-      <fieldset><legend>3. Time</legend><div class="times" id="times"></div></fieldset>
-      <fieldset><legend>4. Your details</legend>
+${serviceField}
+${whenField}
+      <fieldset><legend>${hours ? '4' : '3'}. Your details</legend>
         <div class="grid"><input id="name" placeholder="Full name" autocomplete="name" /><input id="email" type="email" placeholder="Email" autocomplete="email" /></div>
       </fieldset>
       <p class="error" id="err" role="alert"></p>
-      <button class="btn" type="submit">Confirm booking</button>
+      <button class="btn" type="submit">Send booking request</button>
     </form>
     <div id="done" hidden></div>
   </div>
 </div>`;
   const css =
     baseCss(c) +
+    NOTICE_CSS +
     `fieldset { border: 0; padding: 0; margin: 0 0 16px; }
 legend { font-weight: 700; margin-bottom: 8px; }
 .opts { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
@@ -805,39 +1020,60 @@ legend { font-weight: 700; margin-bottom: 8px; }
 .days, .times { display: flex; gap: 8px; flex-wrap: wrap; }
 .days button, .times button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: #fff; font: inherit; cursor: pointer; }
 .days button.on, .times button.on { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
-.times button:disabled { opacity: .35; text-decoration: line-through; cursor: not-allowed; }
 .error { color: #c0392b; font-size: .85em; min-height: 1em; }
 .confirm { text-align: center; padding: 10px 0; }
-.confirm .big { font-size: 2.6em; margin: 0; }
 `;
-  const js = `var DAYS=${JSON.stringify(days)};
-var TIMES=['9:00 AM','10:30 AM','12:00 PM','1:30 PM','3:00 PM','4:30 PM'];
+  const pick = hours
+    ? `// Start times come from your opening hours (0 = Sunday). They are not live availability.
+var HOURS=${JSON.stringify(hours)};
+var DAYS=[];(function(){var d=new Date();for(var i=1;i<=21&&DAYS.length<10;i++){var x=new Date(d.getFullYear(),d.getMonth(),d.getDate()+i);if(HOURS[x.getDay()]&&HOURS[x.getDay()].length){DAYS.push({iso:x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'),dow:x.getDay(),label:x.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})});}}})();
 var state={day:null,time:null};
-function seeded(s){var h=0;for(var i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))|0;}return Math.abs(h);}
-function renderDays(){var el=document.getElementById('days');el.innerHTML='';DAYS.forEach(function(d){var b=document.createElement('button');b.type='button';b.textContent=d.label;b.className=state.day===d.iso?'on':'';b.onclick=function(){state.day=d.iso;state.time=null;renderDays();renderTimes();};el.appendChild(b);});}
+function renderDays(){var el=document.getElementById('days');el.innerHTML='';DAYS.forEach(function(d){var b=document.createElement('button');b.type='button';b.textContent=d.label;b.className=state.day&&state.day.iso===d.iso?'on':'';b.onclick=function(){state.day=d;state.time=null;renderDays();renderTimes();};el.appendChild(b);});}
 function renderTimes(){var el=document.getElementById('times');el.innerHTML='';if(!state.day){el.innerHTML='<span class="muted">Choose a day first.</span>';return;}
- TIMES.forEach(function(t,i){var b=document.createElement('button');b.type='button';b.textContent=t;b.disabled=(seeded(state.day+t)%4)===0;b.className=state.time===t?'on':'';b.onclick=function(){state.time=t;renderTimes();};el.appendChild(b);});}
-document.getElementById('book').addEventListener('submit',function(e){e.preventDefault();var err=document.getElementById('err');
- var svc=document.querySelector('input[name=svc]:checked');var name=document.getElementById('name').value.trim();var email=document.getElementById('email').value.trim();
- if(!state.day||!state.time){err.textContent='Pick a day and time.';return;}
+ HOURS[state.day.dow].forEach(function(t){var b=document.createElement('button');b.type='button';b.textContent=t;b.className=state.time===t?'on':'';b.onclick=function(){state.time=t;renderTimes();};el.appendChild(b);});}
+function when(){return state.day&&state.time?state.day.label+' at '+state.time:'';}
+renderDays();renderTimes();`
+    : `function when(){var d=document.getElementById('pref-day').value;var t=document.getElementById('pref-time').value.trim();return [d,t].filter(Boolean).join(', ');}`;
+  const js = `${formJs(s.action)}
+${pick}
+document.getElementById('book').addEventListener('submit',function(e){e.preventDefault();var form=this;var err=document.getElementById('err');
+ var svcEl=document.querySelector('input[name=svc]:checked');var svcText=document.getElementById('svc-text');var svc=svcEl?svcEl.value:(svcText?svcText.value.trim():'');
+ var name=document.getElementById('name').value.trim();var email=document.getElementById('email').value.trim();
+ if(!when()){err.textContent=${JSON.stringify(hours ? 'Pick a day and time.' : 'Tell us when suits you.')};return;}
  if(!name||!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email)){err.textContent='Add your name and a valid email.';return;}
- var d=DAYS.filter(function(x){return x.iso===state.day;})[0];
- this.hidden=true;var done=document.getElementById('done');done.hidden=false;
- done.innerHTML='<div class="confirm"><p class="big">✓</p><h3>You’re booked, '+name.split(' ')[0]+'!</h3><p class="muted">'+svc.value+' · '+d.label+' at '+state.time+'</p><p class="muted">A confirmation is on its way to '+email+'.</p></div>';
- // Send to your calendar or CRM here.
-});
-renderDays();renderTimes();`;
-  return { name: 'Booking widget', kind: 'booking', html, css, js };
+ err.textContent='';
+ ylbSend({service:svc,when:when(),name:name,email:email},'Booking request: '+(svc||'appointment')).then(function(status){
+  if(status==='none'||status==='error'){err.textContent=YLB_MESSAGES[status];return;}
+  form.hidden=true;var done=document.getElementById('done');done.hidden=false;
+  done.innerHTML='<div class="confirm"><h3>Request ready</h3><p class="muted"></p><p class="muted"></p></div>';
+  var ps=done.querySelectorAll('p');ps[0].textContent=[svc,when()].filter(Boolean).join(' · ');ps[1].textContent=YLB_MESSAGES[status]+' This is a request, not a confirmed booking.';
+ });
+});`;
+  const notes = [formNote(s), hours ? 'Times come from your listing hours.' : 'No opening hours I could read in your listing, so visitors suggest a day and time.'];
+  return { name: 'Booking widget', kind: 'booking', html, css, js, note: notes.join(' ') };
 }
 
-function faqCode(f: Facts, c: BrandColors, v: Voice): CodeResult {
-  const items = [
-    ...f.objections.slice(0, 4).map((o) => ({
-      q: o.endsWith('?') ? o : `What if ${o.charAt(0).toLowerCase() + o.slice(1)}?`,
-      a: `${v.pick(['Totally fair.', 'We hear this a lot.', 'Good question.'])} ${f.brand} is built for exactly this: ${v.pick(f.quickWins)}, and ${verbOutcome(v.pick(f.outcomes))} without ${f.pain}.`,
-    })),
-    { q: f.track === 'business' ? 'How do I book?' : 'How do I get access?', a: f.track === 'business' ? `Book online at ${f.urlDisplay} or message us. We confirm within one business day.` : `Instant access after checkout. You’ll get an email with everything you need.` },
-  ];
+/** FAQ items the owner has on their sales page (question and answer both filled in). */
+export function ownerFaq(project: Project): { q: string; a: string }[] {
+  const sections = project.marketing?.salesPage?.sections ?? [];
+  return sections
+    .flatMap((s) => (s.type === 'faq' ? s.data.items ?? [] : []))
+    .filter((it) => it.q?.trim() && it.a?.trim())
+    .map((it) => ({ q: it.q.trim(), a: it.a.trim() }));
+}
+
+function faqCode(f: Facts, c: BrandColors, project: Project): CodeResult {
+  // the owner's own Q&A, or common questions with "[Your answer]": never an answer that asserts things about the business
+  const own = ownerFaq(project);
+  const site = f.urlDisplay.trim();
+  const items = own.length
+    ? own.slice(0, 8)
+    : [
+        ...f.objections.slice(0, 4).map((o) => ({ q: o.endsWith('?') ? o : `What if ${o.charAt(0).toLowerCase() + o.slice(1)}?`, a: '[Your answer]' })),
+        f.track === 'business'
+          ? { q: 'How do I book?', a: site ? `Book online at ${site}. [Other ways to book, e.g. phone or email]` : '[How customers book: your website, phone or email]' }
+          : { q: 'How do I get access?', a: '[What happens after checkout and how customers get access]' },
+      ];
   const html = `<div class="ylb">
   <div class="ylb-card">
     <span class="pill">FAQ</span>
@@ -858,7 +1094,10 @@ details p { margin: 0 0 14px; color: var(--muted); }
 `;
   const js = `// Only one item open at a time
 document.querySelectorAll('details').forEach(function(d){d.addEventListener('toggle',function(){if(d.open){document.querySelectorAll('details').forEach(function(o){if(o!==d)o.open=false;});}});});`;
-  return { name: 'FAQ accordion', kind: 'faq', html, css, js };
+  const note = own.length
+    ? `Uses the ${own.length} question${own.length === 1 ? '' : 's'} from your sales page FAQ.`
+    : 'Replace each [bracketed] answer with your own before you publish, or add an FAQ to your sales page and generate again.';
+  return { name: 'FAQ accordion', kind: 'faq', html, css, js, note };
 }
 
 function spreadsheetCode(f: Facts, c: BrandColors): CodeResult {
@@ -867,17 +1106,18 @@ function spreadsheetCode(f: Facts, c: BrandColors): CodeResult {
   const base = new Date();
   for (let i = 0; i < 8; i++) {
     const d = new Date(base.getTime() - i * 3 * 86400000);
-    rows.push([toDateStr(d), i === 0 ? 'Client payment' : `${cats[(i % (cats.length - 1)) + 1]} entry`, cats[i === 0 ? 0 : (i % (cats.length - 1)) + 1], i === 0 ? 2400 : Math.round(40 + ((i * 53) % 260)), i % 3 === 0 ? 'Done' : 'Open']);
+    rows.push([toDateStr(d), i === 0 ? 'Example: payment' : `Example: ${cats[(i % (cats.length - 1)) + 1].toLowerCase()} entry`, cats[i === 0 ? 0 : (i % (cats.length - 1)) + 1], i === 0 ? 2400 : Math.round(40 + ((i * 53) % 260)), i % 3 === 0 ? 'Done' : 'Open']);
   }
   const html = `<div class="sheet">
   <div class="toolbar"><b>${escapeHtml(f.topic)} Tracker</b><span class="muted">Google Sheets · Excel</span></div>
   <div class="tabs"><span class="on">Log</span><span>Dashboard</span><span>Monthly Summary</span><span>Settings</span></div>
+  <p class="example-note">Example rows: made-up sample data to show the layout. Delete them and enter your own.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th></th><th>A · Date</th><th>B · Description</th><th>C · Category</th><th>D · Amount</th><th>E · Status</th></tr></thead>
       <tbody>
-${rows.map((r, i) => `        <tr><td class="rn">${i + 2}</td><td>${r[0]}</td><td>${escapeHtml(r[1])}</td><td><span class="tag">${escapeHtml(r[2])}</span></td><td class="num">$${r[3].toLocaleString('en-US')}</td><td>${r[4]}</td></tr>`).join('\n')}
-        <tr class="total"><td class="rn">10</td><td colspan="3">Total (=SUM(D2:D9))</td><td class="num" id="sum"></td><td></td></tr>
+${rows.map((r, i) => `        <tr class="example"><td class="rn">${i + 2}</td><td>${r[0]}</td><td>${escapeHtml(r[1])}</td><td><span class="tag">${escapeHtml(r[2])}</span></td><td class="num">$${r[3].toLocaleString('en-US')}</td><td>${r[4]}</td></tr>`).join('\n')}
+        <tr class="total"><td class="rn">10</td><td colspan="3">Total of example rows (=SUM(D2:D9))</td><td class="num" id="sum"></td><td></td></tr>
       </tbody>
     </table>
   </div>
@@ -905,6 +1145,8 @@ th { background: #f3f6f4; font-weight: 600; color: var(--muted); font-size: 12px
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--brand-soft); color: var(--brand); font-weight: 600; font-size: 12px; }
 .total td { font-weight: 700; background: #fbfcfb; }
+.example-note { margin: 0; padding: 8px 14px; background: #fff8e6; color: #7a5200; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--line); }
+.example td:not(.rn) { color: var(--muted); font-style: italic; }
 .formulas { padding: 12px 14px; border-top: 1px solid var(--line); background: #fbfcfb; }
 .formulas p { margin: 4px 0; }
 code { background: #eef2ef; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
@@ -965,7 +1207,7 @@ function flagOverdue() {
   });
 }
 `;
-  return { name: `${f.topic} Tracker (spreadsheet)`, kind: 'spreadsheet', html, css, js, script };
+  return { name: `${f.topic} Tracker (spreadsheet)`, kind: 'spreadsheet', html, css, js, script, note: 'The preview rows are labelled examples, not your data. Start your sheet with your own entries.' };
 }
 
 // ───────────── entry points ─────────────
@@ -974,6 +1216,7 @@ export function generateCode(project: Project, kind: CodeKind, prompt: string, d
   const f = buildFacts(project);
   const v = Voice.create(f, d, hashStr(`${project.id}|code|${kind}|${variation}|${prompt}`));
   const colors = project.brand.colors;
+  const settings = widgetSettings(project, prompt);
   const titleFromPrompt = (() => {
     const m = /(?:called|named|titled)\s+["“]?([^"”\n.]+)["”]?/i.exec(prompt);
     return m ? m[1].trim() : undefined;
@@ -981,22 +1224,22 @@ export function generateCode(project: Project, kind: CodeKind, prompt: string, d
   let res: CodeResult;
   switch (kind) {
     case 'calculator':
-      res = calculatorCode(f.niche.calc, f, colors, titleFromPrompt);
+      res = calculatorCode(f.niche.calc, f, colors, titleFromPrompt, project.studio.packages);
       break;
     case 'roi':
       res = calculatorCode('roi', f, colors, titleFromPrompt);
       break;
     case 'leadform':
-      res = leadFormCode(f, colors, v);
+      res = leadFormCode(f, colors, v, settings);
       break;
     case 'pricing':
       res = pricingCode(f, colors, project);
       break;
     case 'hero':
-      res = heroCode(f, colors, v);
+      res = heroCode(f, colors);
       break;
     case 'countdown':
-      res = countdownCode(f, colors);
+      res = countdownCode(f, colors, project, settings);
       break;
     case 'quiz':
       res = quizCode(f, colors);
@@ -1005,13 +1248,13 @@ export function generateCode(project: Project, kind: CodeKind, prompt: string, d
       res = checklistCode(f, colors);
       break;
     case 'testimonials':
-      res = testimonialsCode(f, colors);
+      res = testimonialsCode(colors, project);
       break;
     case 'booking':
-      res = bookingCode(f, colors, project);
+      res = bookingCode(f, colors, project, settings);
       break;
     case 'faq':
-      res = faqCode(f, colors, v);
+      res = faqCode(f, colors, project);
       break;
     case 'spreadsheet':
     default:

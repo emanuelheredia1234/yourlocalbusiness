@@ -12,7 +12,6 @@ import {
   Plus,
   Search,
   Settings,
-  ShoppingCart,
   Sparkles,
   Store,
   Sun,
@@ -321,8 +320,6 @@ export function Topbar() {
   const setNav = useUI((s) => s.setNavOpen);
   const openComposer = useUI((s) => s.openComposer);
   const setCmd = useUI((s) => s.setCommandOpen);
-  const setCart = useUI((s) => s.setCartOpen);
-  const cartCount = useStore((s) => s.cart.reduce((n, c) => n + c.qty, 0));
   const project = useActiveProject();
   return (
     <header className="sticky z-30 flex h-[60px] shrink-0 items-center gap-2 border-b border-line bg-surface/90 backdrop-blur gutter" style={{ top: 'env(safe-area-inset-top, 0px)' }}>
@@ -344,10 +341,6 @@ export function Topbar() {
         <ThemeToggle />
       </span>
       <NotificationsButton />
-      <button className="btn btn-ghost btn-icon relative" onClick={() => setCart(true)} aria-label={`Cart, ${cartCount} items`}>
-        <ShoppingCart size={18} />
-        {cartCount > 0 && <span className="num absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-on-primary">{cartCount}</span>}
-      </button>
       <button className="btn btn-primary ml-1 hidden sm:inline-flex" onClick={() => openComposer()}>
         <Plus size={16} /> Create post
       </button>

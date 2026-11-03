@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
-import { AlertTriangle, ArrowDown, ArrowUp, Check, CircleDashed, Code2, Download, Eye, EyeOff, Monitor, PenLine, RefreshCw, Search, Smartphone, X } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUp, Check, CircleDashed, Code2, Download, Eye, EyeOff, Link2, Monitor, PenLine, RefreshCw, Search, Smartphone, X } from 'lucide-react';
 import type { Project, SalesPage, SalesSection, SalesTheme, SeoMeta } from '@/lib/types';
-import { cn, ensureUrl, moveItem, slugify, stripProtocol, truncate } from '@/lib/utils';
-import { exportSalesHtml, placeholderTestimonials, scoreSeo, SECTION_LABEL } from '@/ai/local/seo';
+import { cn, moveItem, slugify, stripProtocol, truncate } from '@/lib/utils';
+import { claimsToReview, exportSalesHtml, canonicalForSlugChange, pageLink, scoreSeo, SECTION_LABEL, siteUrl } from '@/ai/local/seo';
 import { salesPageTask, salesSectionTask, seoMetaTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { getActiveProject, useActiveProject, useStore } from '@/store/useStore';
@@ -30,7 +30,8 @@ export default function SeoSalesPage() {
   const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop');
   const [panel, setPanel] = useState<'meta' | 'score' | 'sections'>('meta');
   const result = useMemo(() => (meta ? scoreSeo(meta, page) : null), [meta, page]);
-  const example = placeholderTestimonials(page);
+  const toReview = claimsToReview(page);
+  const noLink = !pageLink(project);
 
   const setMeta = (patch: Partial<SeoMeta>) => updateMarketing({ seo: { ...marketing().seo!, ...patch } });
   const setPage = (fn: (p: SalesPage) => SalesPage) => {
@@ -39,7 +40,7 @@ export default function SeoSalesPage() {
   };
 
   const generateAll = async () => {
-    if (page && !(await confirmAction({ title: 'Rewrite the whole page?', body: 'Your current copy and edits will be replaced. Metadata is kept.', confirmLabel: 'Rewrite page' }))) return;
+    if (page && !(await confirmAction({ title: 'Rewrite the whole page?', body: 'Your current copy and edits will be replaced. Metadata, your testimonials and facts, your guarantee and your prices are kept.', confirmLabel: 'Rewrite page' }))) return;
     let m = marketing().seo;
     if (!m) {
       m = await metaAI.run({});
@@ -51,7 +52,11 @@ export default function SeoSalesPage() {
 
   const regenMeta = async () => {
     const m = await metaAI.run({});
-    if (m) updateMarketing({ seo: m });
+    if (!m) return;
+    // Only replace a canonical the app made from the slug; an address the owner pasted is kept.
+    const cur = marketing().seo;
+    const canonical = cur ? canonicalForSlugChange(getActiveProject() ?? project, cur.canonical, cur.slug, m.slug) : m.canonical;
+    updateMarketing({ seo: { ...m, canonical } });
   };
 
   const html = () => {
@@ -89,7 +94,7 @@ export default function SeoSalesPage() {
         <Empty
           icon={<Search size={20} />}
           title="Build your SEO sales page"
-          body={`The AI picks a buyer-intent keyword for ${project.brand.name}, writes the metadata and drafts every section: hero, problem, solution, proof, pricing, FAQ and guarantee.`}
+          body={`The AI picks a buyer-intent keyword for ${project.brand.name}, writes the metadata and drafts the copy: hero, problem, solution, pricing, FAQ and closing call to action. You add the real parts: customer testimonials, facts and any guarantee you offer.`}
           action={
             <GenerateButton running={running} onClick={generateAll} size="lg">
               Generate SEO sales page
@@ -167,14 +172,22 @@ export default function SeoSalesPage() {
               />
               <ThemeControls theme={page.theme} onChange={(theme) => setPage((p) => ({ ...p, theme }))} />
             </div>
-            {example && (
+            {toReview > 0 && (
               <p className="flex items-start gap-2 rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">
-                <AlertTriangle size={15} className="mt-0.5 shrink-0" /> The testimonials are examples written by AI. Replace them with real customer quotes (or hide the Social proof section) before you publish.
+                <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                <span>
+                  Check the {toReview === 1 ? 'item' : `${toReview} items`} marked on the page: testimonials, facts or an earlier price that may have been written by AI. They stay off your exported page until you confirm they’re real.
+                </span>
+              </p>
+            )}
+            {noLink && (
+              <p className="flex items-start gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-[13px] text-ink-2">
+                <Link2 size={15} className="mt-0.5 shrink-0 text-muted" /> The buttons don’t link anywhere yet. Add your buy or booking link in Studio › Publish, or your website in Settings.
               </p>
             )}
             {editing && <p className="text-xs text-muted">Click any text on the page to edit it. Changes save automatically and update your SEO score.</p>}
             <div className="dotgrid flex justify-center overflow-x-auto rounded-lg bg-surface-2 p-3 sm:p-5">
-              <SalesPreview page={page} brand={project.brand} editing={editing} device={device} example={example} onData={(id, data) => setPage((p) => ({ ...p, sections: p.sections.map((s) => (s.id === id ? ({ ...s, data } as SalesSection) : s)) }))} />
+              <SalesPreview page={page} brand={project.brand} editing={editing} device={device} onData={(id, data) => setPage((p) => ({ ...p, sections: p.sections.map((s) => (s.id === id ? ({ ...s, data } as SalesSection) : s)) }))} />
             </div>
             <details className="panel group">
               <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-semibold">
@@ -191,7 +204,9 @@ export default function SeoSalesPage() {
 }
 
 function MetaPanel({ project, meta, setMeta, onRegen, running }: { project: Project; meta: SeoMeta; setMeta: (p: Partial<SeoMeta>) => void; onRegen: () => void; running: boolean }) {
-  const domain = stripProtocol(project.brand.websiteUrl || `${project.brand.slug || 'yourbrand'}.com`).replace(/\/$/, '');
+  // The owner's own website only; until there is one, show a clear placeholder, never a guessed domain.
+  const site = siteUrl(project);
+  const domain = stripProtocol(site) || '[your website]';
   const tLen = meta.metaTitle.length;
   const dLen = meta.metaDescription.length;
   const lenHint = (n: number, lo: number, hi: number) => <span className={n >= lo && n <= hi ? 'text-good' : n > hi ? 'text-bad' : 'text-warn'}>{n}/{hi}</span>;
@@ -224,7 +239,7 @@ function MetaPanel({ project, meta, setMeta, onRegen, running }: { project: Proj
             value={meta.slug}
             onChange={(e) => {
               const slug = e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
-              setMeta({ slug, canonical: `${ensureUrl(domain)}/${slug}` });
+              setMeta({ slug, canonical: canonicalForSlugChange(project, meta.canonical, meta.slug, slug) });
             }}
           />
         </div>
@@ -261,8 +276,12 @@ function MetaPanel({ project, meta, setMeta, onRegen, running }: { project: Proj
           </div>
         </div>
       </div>
-      <Field label="Canonical URL" htmlFor="seo-can">
-        <input id="seo-can" className="input text-[12.5px]" value={meta.canonical} onChange={(e) => setMeta({ canonical: e.target.value })} />
+      <Field
+        label="Canonical URL"
+        htmlFor="seo-can"
+        hint={meta.canonical.trim() ? undefined : 'Where will this page live? Paste its full address, or add your website in Settings. Until then the export leaves it out.'}
+      >
+        <input id="seo-can" className="input text-[12.5px]" value={meta.canonical} onChange={(e) => setMeta({ canonical: e.target.value.trim() })} placeholder="https://" />
       </Field>
     </section>
   );

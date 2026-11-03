@@ -1,5 +1,6 @@
 import type { Directives, PostPlatform, PostType, Project, Tone } from '@/lib/types';
-import { capitalize, createRng, fmtMoney, hashStr, lowerFirst, stripProtocol, titleCase, type Rng } from '@/lib/utils';
+import { capitalize, createRng, ensureUrl, fmtMoney, hashStr, lowerFirst, stripProtocol, titleCase, type Rng } from '@/lib/utils';
+import { brandMark } from '@/lib/brandMark';
 import {
   BUSINESS_VOICE,
   extractAudience,
@@ -30,8 +31,11 @@ export interface Facts {
   audiences: string[];
   pain: string;
   pains: string[];
+  /** a neutral description of what is offered, built from the owner's topic and audience: safe to state */
   desire: string;
   desires: string[];
+  /** what customers in this niche often want (niche data, not the owner's words): only ever ask about it, never state it as a fact about the business */
+  wishes: string[];
   outcome: string;
   outcomes: string[];
   terms: string[];
@@ -43,8 +47,11 @@ export interface Facts {
   price: number;
   priceStr: string;
   priceSuffix: string;
+  /** the owner's website, or '' when they haven't added one (never a domain made up from the name) */
   url: string;
   urlDisplay: string;
+  /** what a watermark shows: the website, else the owner's @handle, else the brand name */
+  mark: string;
   city: string;
   region: string;
   local: boolean;
@@ -71,7 +78,7 @@ export function genericNiche(niche: string, category: string): NicheProfile {
     audiences: [aud, 'beginners', 'busy professionals'],
     pains: [`figuring out ${t} alone`, `inconsistent results with ${t}`, `conflicting advice about ${t}`, `not knowing where to start with ${t}`, `wasting money on ${t} tools that don’t fit`],
     desires: [`real progress with ${t}`, 'a simple plan that works', 'confidence and clarity', 'more time for what matters'],
-    outcomes: [`get consistent results with ${t} in 30 days`, 'save hours every week', 'build a repeatable system you trust', `avoid the most expensive ${t} mistakes`],
+    outcomes: [`get more consistent with ${t}`, `plan ${t} one week at a time`, 'build a repeatable system you trust', `avoid the most expensive ${t} mistakes`],
     terms: [...new Set([...words, 'system', 'checklist', 'routine'])].slice(0, 7),
     objections: ["I don't have time", "I've tried before and it didn't stick", "I'm not sure it will work for me", 'It seems too expensive'],
     mistakes: [`starting ${t} without a clear plan`, 'trying to do everything at once', 'copying advice meant for someone else', 'skipping the fundamentals'],
@@ -82,8 +89,6 @@ export function genericNiche(niche: string, category: string): NicheProfile {
     palettes: [['#145C43', '#0D2B22', '#F0B429'], ['#3B4CCA', '#141B4D', '#F59E0B'], ['#B4436C', '#3A1323', '#F7B32B']],
     nameRoots: [...roots, 'Bright', 'True', 'North', 'Kind', 'Bold', 'Clear', 'Peak', 'Harbor', 'Nova'].slice(0, 12),
     categories: [],
-    demand: 0.72,
-    competition: 0.6,
     priceMult: 1,
     calc: 'roi',
   };
@@ -122,7 +127,9 @@ export function buildFacts(project: Project): Facts {
   const pains = blend(bizVoice?.pains ?? niche.pains, anchoredPains(topicL), specific);
   const outcomes = blend(bizVoice?.outcomes ?? niche.outcomes, anchoredOutcomes(topicL), specific);
   const pain = project.idea?.pain ? lowerFirst(project.idea.pain) : pains[0];
-  const url = project.brand.websiteUrl || `https://${project.brand.slug || 'yourbrand'}.com`;
+  const url = ensureUrl(project.brand.websiteUrl);
+  // Niche "desires" read as service standards ("on-time, tidy professionals", "quick turnarounds"); the owner never said them.
+  const offerings = [`help with ${topicL}`, `${topicL} for ${audience}`, `a closer look at ${topicL}`];
   return {
     track: project.track,
     brand,
@@ -140,8 +147,9 @@ export function buildFacts(project: Project): Facts {
     audiences: [audience, ...niche.audiences.filter((a) => a !== audience)],
     pain,
     pains: [pain, ...pains.filter((p) => p !== pain)],
-    desire: niche.desires[0],
-    desires: niche.desires,
+    desire: offerings[0],
+    desires: offerings,
+    wishes: niche.desires,
     outcome: outcomes[0],
     outcomes,
     terms: niche.terms,
@@ -155,6 +163,7 @@ export function buildFacts(project: Project): Facts {
     priceSuffix,
     url,
     urlDisplay: stripProtocol(url),
+    mark: brandMark(project.brand) || brand,
     city: project.location?.city ?? '',
     region: project.location?.region ?? '',
     local,
@@ -178,7 +187,7 @@ export function shortAudience(a: string): string {
 
 /** Outcomes and pains phrased around the user's own topic, so niche data never drifts off-topic. */
 export function anchoredOutcomes(topicLower: string): string[] {
-  return [`see real progress with ${topicLower} in 30 days`, `build a ${topicLower} routine that sticks`, `get confident with ${topicLower}, step by step`];
+  return [`make steady progress with ${topicLower}`, `build a ${topicLower} routine that sticks`, `get confident with ${topicLower}, step by step`];
 }
 export function anchoredPains(topicLower: string): string[] {
   return [`not knowing where to start with ${topicLower}`, `conflicting advice about ${topicLower}`, `${topicLower} plans that never stick`];
@@ -361,38 +370,38 @@ export class Voice {
       stat: [
         `${n} steps to ${outcome}.`,
         `${n} ${topic} mistakes that quietly cost ${aud} the most.`,
-        `15 minutes a week is enough to ${outcome}.`,
+        `A small weekly habit for anyone who wants to ${outcome}.`,
         `The ${n} ${topic} moves that matter (and the rest you can skip).`,
-        `One habit, ${n} days, a very different ${topic} routine.`,
+        `${n} small ${topic} habits worth trying.`,
       ],
       contrarian: [
         `Unpopular opinion: “${lowerFirst(myth)}” isn’t true.`,
         `Stop ${mistake}. Do this instead.`,
         `Everyone tells ${aud} that ${lowerFirst(myth)}. I disagree.`,
-        `You don’t need more willpower to ${outcome}. You need a system.`,
-        `The most common ${topic} advice is why so many ${aud} stay stuck.`,
+        `Want to ${outcome}? Start smaller than you think.`,
+        `Is the usual ${topic} advice working for you?`,
       ],
       story: f.local
         ? [
-            `Last week a customer told ${this.we === 'I' ? 'me' : 'us'} ${pain} had been driving them crazy for months.`,
-            `A quick story from this week’s jobs (it ends well).`,
-            `Here’s what happened when a neighbor finally called about ${pain}.`,
+            // No invented anecdotes: real customer stories are the owner's to tell.
+            `Let’s talk about ${pain}.`,
+            `What ${this.we === 'I' ? 'I' : 'we'} look at first when someone asks about ${pain}.`,
+            `A behind-the-scenes look at how ${this.we} handle ${pain}.`,
           ]
         : [
-            `Last month a ${this.audienceOne()} told ${this.we === 'I' ? 'me' : 'us'} ${pain} was ruining their week.`,
-            `${capitalize(this.we)} used to struggle with ${pain} too. Here’s what changed.`,
-            `The day ${this.we} cracked ${topic}, everything got easier.`,
-            `A quick story about ${pain} (and how it ended).`,
+            `Let’s talk about ${pain}.`,
+            `How ${this.we} think about ${topic}, in plain words.`,
+            `If ${pain} sounds familiar, this one’s for you.`,
+            `A short walkthrough on ${pain}.`,
           ],
       pov: [
-        `POV: you finally ${outcome}.`,
-        `POV: you never worry about ${pain} again.`,
-        `POV: your ${topic} runs itself.`,
+        `POV: you want to ${outcome}.`,
+        `POV: ${pain} keeps coming up.`,
+        `POV: you’re looking for help with ${topic}.`,
       ],
     };
     if (f.local && f.city && this.rng.chance(0.35)) {
       lines.question.push(`${f.city}, quick question: how do you handle ${pain}?`);
-      lines.pov.push(`POV: you found the ${f.city} ${f.formatLabel.toLowerCase()} everyone keeps recommending.`);
     }
     const tonePrefix: Partial<Record<Tone, string[]>> = {
       bold: ['Listen up. ', '', ''],
@@ -406,23 +415,25 @@ export class Voice {
 
   cta(kind: 'link' | 'comment' | 'save' | 'book' | 'buy' | 'optin' | 'reply' | 'share', platform?: PostPlatform): string {
     const f = this.f;
-    const linkless = platform === 'instagram' || platform === 'tiktok';
+    // no URLs on Instagram/TikTok, and none at all until the owner adds their website
+    const linkless = platform === 'instagram' || platform === 'tiktok' || !f.urlDisplay;
     const where = linkless ? 'the link in bio' : f.urlDisplay;
     const arrow = this.emojiLevel === 'none' ? '→' : this.pick(['👉', '→', '👇']);
     if (this.d.cta && (kind === 'link' || kind === 'buy' || kind === 'book' || kind === 'optin')) {
       const c = this.d.cta.trim();
-      return c.toLowerCase().includes(f.urlDisplay.toLowerCase()) || linkless ? `${c}${linkless ? ' (link in bio)' : ''}` : `${c} ${f.urlDisplay}`;
+      if (linkless) return /link in bio/i.test(c) ? c : `${c} (link in bio)`;
+      return c.toLowerCase().includes(f.urlDisplay.toLowerCase()) ? c : `${c} ${f.urlDisplay}`;
     }
     const byTone: Record<Tone, Record<string, string[]>> = {
       friendly: {
-        link: [`Take a look at ${f.productShort} ${arrow} ${where}`, `Everything you need is here ${arrow} ${where}`],
+        link: [`Take a look at ${f.productShort} ${arrow} ${where}`, `All the details are here ${arrow} ${where}`],
         buy: [`Grab ${f.productShort} here ${arrow} ${where}`, `Ready when you are ${arrow} ${where}`],
         book: [`Book your spot ${arrow} ${where}`, `Come see us. Book at ${where}`],
       },
       professional: {
         link: [`Learn more at ${where}`, `Details at ${where}`],
         buy: [`Get ${f.productShort} at ${where}`, `Start today at ${where}`],
-        book: [`Book a consultation at ${where}`, `Schedule your appointment at ${where}`],
+        book: [`Book an appointment at ${where}`, `Schedule your appointment at ${where}`],
       },
       bold: {
         link: [`Stop scrolling. Start here ${arrow} ${where}`, `Go ${arrow} ${where}`],
@@ -432,7 +443,7 @@ export class Voice {
       playful: {
         link: [`Your future self says thanks ${arrow} ${where}`, `Go on, have a peek ${arrow} ${where}`],
         buy: [`Treat yourself ${arrow} ${where}`, `Add to cart, thank us later ${arrow} ${where}`],
-        book: [`Snag a spot before they’re gone ${arrow} ${where}`, `Book the fun part ${arrow} ${where}`],
+        book: [`Grab a spot that suits you ${arrow} ${where}`, `Book the fun part ${arrow} ${where}`],
       },
       luxury: {
         link: [`Discover more at ${where}`, `Explore at ${where}`],
@@ -441,18 +452,18 @@ export class Voice {
       },
       empathetic: {
         link: [`Whenever you’re ready, it’s here ${arrow} ${where}`, `Take the first gentle step ${arrow} ${where}`],
-        buy: [`If this sounds like you, ${f.productShort} can help ${arrow} ${where}`, `Start at your own pace ${arrow} ${where}`],
-        book: [`We’d love to help. Book at ${where}`, `Book a time that suits you ${arrow} ${where}`],
+        buy: [`If this sounds like you, take a look ${arrow} ${where}`, `Start at your own pace ${arrow} ${where}`],
+        book: [`Whenever you’re ready, book at ${where}`, `Book a time that suits you ${arrow} ${where}`],
       },
       witty: {
         link: [`Your ${f.topicLower} called. It wants an upgrade ${arrow} ${where}`, `Curiosity looks good on you ${arrow} ${where}`],
-        buy: [`Fix it for less than a fancy lunch ${arrow} ${where}`, `Cheaper than therapy, nearly as useful ${arrow} ${where}`],
-        book: [`Book now. Thank us at your next brag ${arrow} ${where}`, `Your calendar has room. We checked ${arrow} ${where}`],
+        buy: [`Treat yourself ${arrow} ${where}`, `Curious? It’s right here ${arrow} ${where}`],
+        book: [`Book now. Future you is watching ${arrow} ${where}`, `Pencil us in ${arrow} ${where}`],
       },
       authoritative: {
-        link: [`Get the framework at ${where}`, `Read the full breakdown at ${where}`],
-        buy: [`Start the program at ${where}`, `Get ${f.productShort} at ${where}`],
-        book: [`Book a strategy call at ${where}`, `Reserve a slot at ${where}`],
+        link: [`See the details at ${where}`, `Read more at ${where}`],
+        buy: [`See what’s included at ${where}`, `Get ${f.productShort} at ${where}`],
+        book: [`Book a time at ${where}`, `Reserve a slot at ${where}`],
       },
     };
     switch (kind) {
@@ -460,16 +471,16 @@ export class Voice {
         return this.pick([
           `Tell ${this.we === 'I' ? 'me' : 'us'} in the comments${this.ee('point', true)}`,
           `Drop your answer below${this.ee('point', true)}`,
-          `Comment “${f.topic.split(' ')[0].toUpperCase()}” and ${this.we} will send you the ${f.leadMagnet || 'free checklist'}.`,
+          ...(f.leadMagnet ? [`Want the ${f.leadMagnet}? It’s at ${where}.`] : []),
         ]);
       case 'save':
-        return this.pick([`Save this for your next ${f.topicLower} session${this.ee('pin', true)}`, `Bookmark this one. You’ll want it later${this.ee('pin', true)}`]);
+        return this.pick([`Save this for your next ${f.topicLower} session${this.ee('pin', true)}`, `Bookmark this one for later${this.ee('pin', true)}`]);
       case 'share':
         return this.pick([`Send this to a ${this.audienceOne()} who needs it.`, `Share with someone who’s dealing with ${f.pain}.`]);
       case 'reply':
-        return this.pick(['Hit reply and tell me where you’re stuck. I read every one.', 'Reply with one word: “ready”. I’ll send the next step.']);
+        return this.pick(['Hit reply and tell me where you’re stuck.', `Reply with your biggest question about ${f.topicLower}.`]);
       case 'optin':
-        return `Get the free ${f.leadMagnet || `${f.topic} checklist`} ${arrow} ${where}`;
+        return f.leadMagnet ? `Get the free ${f.leadMagnet} ${arrow} ${where}` : `Join the list ${arrow} ${where}`;
       default: {
         const bank = byTone[this.tone][kind] ?? byTone[this.tone].link;
         return this.pick(bank);

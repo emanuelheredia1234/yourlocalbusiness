@@ -15,7 +15,8 @@ export function finishOnboarding(projectId: string): void {
   const slug = p.brand.slug || slugify(brandName);
   const draft: Project = {
     ...p,
-    brand: { ...p.brand, name: brandName, slug, websiteUrl: p.brand.websiteUrl || `https://${slug}.com` },
+    // the website stays whatever the owner entered (empty if nothing): never a domain made up from the name
+    brand: { ...p.brand, name: brandName, slug },
   };
   const listing = generateListing(draft);
   const blank = defaultStudio().listing;

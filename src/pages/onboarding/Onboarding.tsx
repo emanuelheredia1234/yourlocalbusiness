@@ -24,7 +24,7 @@ function pathFor(p: Project): StepId[] {
 const STEP_LABEL: Record<StepId, string> = {
   goal: 'Your goal',
   start: 'Starting point',
-  research: 'Winning product research',
+  research: 'Product ideas',
   setup: 'Brand & asset setup',
   brand: 'AI brand identity',
   done: 'Launch',
@@ -116,7 +116,7 @@ function Done({ project }: { project: Project }) {
     ['Niche', [project.niche, project.category].filter(Boolean).join(' → ') || '—'],
     project.idea ? ['Product', project.idea.title] : ['Location', project.location ? `${project.location.city}${project.location.region ? `, ${project.location.region}` : ''}` : 'Online'],
     ['Price', project.studio.price ? `${fmtMoney(project.studio.price)}${project.studio.priceModel === 'monthly' ? '/mo' : ''}` : 'Set in the Studio'],
-    ['Website', stripProtocol(b.websiteUrl) || `${b.slug}.com`],
+    ['Website', stripProtocol(b.websiteUrl) || 'None yet'],
   ];
   return (
     <div className="flex flex-col gap-5">
@@ -215,9 +215,9 @@ export function Onboarding() {
     goal: { title: 'What would you like to promote today?', sub: 'Pick a track. You can run more projects later.' },
     start:
       project.track === 'product'
-        ? { title: 'Do you already have a product, or do you want to discover and create a new one?', sub: 'Existing products go straight to brand setup. New ones start with AI research.' }
+        ? { title: 'Do you already have a product, or do you want to discover and create a new one?', sub: 'Existing products go straight to brand setup. New ones start with AI product ideas.' }
         : { title: 'Do you already have an existing business, or do you want to start a new one?', sub: 'Existing businesses import their brand. New ones get an AI-generated identity.' },
-    research: { title: 'Find a winning product', sub: 'Tell the AI your niche, a specific category and the format you want to sell.' },
+    research: { title: 'Pick a product idea', sub: 'Tell the AI your niche, a specific category and the format you want to sell.' },
     setup: { title: project.track === 'product' ? 'Set up your existing product' : 'Set up your existing business', sub: 'Add your name, logo, website, images and social accounts.' },
     brand: { title: 'Generate your brand identity', sub: 'Names, logo, palette, banner and messaging, generated from your niche and fully editable.' },
     done: { title: `${project.brand.name || 'Your project'} is ready to launch`, sub: 'Here’s what the AI will use across the Studio, Marketing Hub, Store and Analytics.' },
@@ -262,7 +262,7 @@ export function Onboarding() {
             <div key={step} className="animate-rise-in">
               {step === 'goal' && (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <OptionCard selected={project.track === 'product' && project.wizardStep !== 'goal'} icon={<Package size={24} />} title="Promote a Product" body="Digital products you sell online: research a winner or launch the one you have." examples={['Courses', 'Templates', 'Ebooks', 'Spreadsheets', 'Software']} onClick={() => chooseTrack('product')} />
+                  <OptionCard selected={project.track === 'product' && project.wizardStep !== 'goal'} icon={<Package size={24} />} title="Promote a Product" body="Digital products you sell online: get AI product ideas or launch the one you have." examples={['Courses', 'Templates', 'Ebooks', 'Spreadsheets', 'Software']} onClick={() => chooseTrack('product')} />
                   <OptionCard selected={project.track === 'business' && project.wizardStep !== 'goal'} icon={<Store size={24} />} title="Promote a Business" body="Local shops, services and studios, or online businesses that sell services." examples={['Cafés', 'Salons', 'Home services', 'Agencies', 'Studios']} onClick={() => chooseTrack('business')} />
                 </div>
               )}
@@ -271,7 +271,7 @@ export function Onboarding() {
                   {project.track === 'product' ? (
                     <>
                       <OptionCard icon={<Upload size={22} />} title="I already have a product" body="Import your name, logo, website, images and social accounts, then go straight to marketing." onClick={() => chooseOrigin('existing')} />
-                      <OptionCard icon={<Search size={22} />} title="Help me find & create one" body="AI researches your niche, scores winning product ideas and builds a brand around the one you pick." onClick={() => chooseOrigin('new')} />
+                      <OptionCard icon={<Search size={22} />} title="Help me find & create one" body="AI suggests product ideas for your niche and builds a brand around the one you pick." onClick={() => chooseOrigin('new')} />
                     </>
                   ) : (
                     <>

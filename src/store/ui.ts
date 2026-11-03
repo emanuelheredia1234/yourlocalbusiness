@@ -25,11 +25,7 @@ interface UIState {
   navOpen: boolean;
   setNavOpen: (v: boolean) => void;
 
-  cartOpen: boolean;
-  setCartOpen: (v: boolean) => void;
 
-  checkoutOpen: boolean;
-  setCheckoutOpen: (v: boolean) => void;
 
   listingId: string | null;
   openListing: (id: string | null) => void;
@@ -62,11 +58,7 @@ export const useUI = create<UIState>((set) => ({
   navOpen: false,
   setNavOpen: (v) => set({ navOpen: v }),
 
-  cartOpen: false,
-  setCartOpen: (v) => set({ cartOpen: v }),
 
-  checkoutOpen: false,
-  setCheckoutOpen: (v) => set({ checkoutOpen: v }),
 
   listingId: null,
   openListing: (id) => set({ listingId: id }),

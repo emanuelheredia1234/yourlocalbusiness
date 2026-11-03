@@ -446,7 +446,7 @@ export async function answerImport(bring: boolean) {
     const now = useStore.getState().settings;
     const d = defaultSettings();
     const keep: Partial<StoreState> = {};
-    for (const k of ['projects', 'activeProjectId', 'posts', 'ads', 'skills', 'genLog', 'myListings', 'cart', 'orders', 'sales', 'notices'] as const) {
+    for (const k of ['projects', 'activeProjectId', 'posts', 'ads', 'skills', 'genLog', 'myListings', 'notices'] as const) {
       if (old[k] !== undefined) (keep as Record<string, unknown>)[k] = old[k];
     }
     const os = old.settings;

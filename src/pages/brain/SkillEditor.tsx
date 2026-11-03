@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Brain, Wand2 } from 'lucide-react';
 import type { Directives, Framework, HookStyle, ModuleScope, Skill, SkillCategory, Tone } from '@/lib/types';
 import { cn } from '@/lib/utils';
-import { CATEGORY_META, FRAMEWORKS, HOOK_STYLES, SCOPE_META, TONES, describeDirectives, newSkill, parseDirectives } from '@/ai/brain';
+import { CATEGORY_META, FRAMEWORKS, HOOK_STYLES, SCOPE_META, TONES, describeDirectives, newSkill, parseDirectives, templatePlaceholders } from '@/ai/brain';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { AutoTextarea, ChipInput, Field, Modal, Segmented } from '@/components/ui/primitives';
@@ -11,7 +11,12 @@ const TEMPLATES: { label: string; category: SkillCategory; name: string; text: s
   { label: 'Brand voice', category: 'voice', name: 'Our brand voice', text: 'Tone: warm, confident and plain-spoken.\nWrite like a helpful neighbor, not a corporation.\nUse "we" and speak directly to "you".\nNo emojis in emails; light emojis on social.\nNever use: synergy, leverage, game-changer.' },
   { label: 'Ideal customer', category: 'audience', name: 'Ideal customer profile', text: 'Audience: busy working parents aged 30–45.\nThey feel guilty about not having enough time and are skeptical of quick fixes.\nThey say things like “I just need something that works” and “I don’t have time to learn a whole system”.\nThey want: calm evenings, fewer decisions, visible progress.' },
   { label: 'Words to avoid', category: 'rules', name: 'Compliance rules', text: 'Never promise specific income or health results.\nAvoid: guaranteed, cure, overnight, get rich, miracle.\nAlways include a clear way to contact us.' },
-  { label: 'Proof points', category: 'knowledge', name: 'Proof points', text: 'Facts you can use:\n- Family-owned since 2014.\n- Over 1,200 customers served.\n- 4.9-star average from 300+ reviews.\n- Licensed and insured.' },
+  {
+    label: 'Proof points',
+    category: 'knowledge',
+    name: 'Proof points',
+    text: 'Facts you can use:\n- Founded in [Year founded].\n- [Number of customers] customers served.\n- [Average rating and where it comes from].\n- [Licences or certifications].',
+  },
 ];
 
 export function SkillEditor({ open, onClose, skill }: { open: boolean; onClose: () => void; skill: Skill | null }) {
@@ -23,6 +28,9 @@ export function SkillEditor({ open, onClose, skill }: { open: boolean; onClose: 
   }, [open, skill]);
   const parsed = useMemo(() => parseDirectives(draft.instructions), [draft.instructions]);
   const detected = describeDirectives({ ...parsed, ...draft.directives });
+  // Facts go into every generation, so a skill can't be saved with a Proof points placeholder still in it.
+  // Only the template's own placeholders count: real documents contain brackets too ("[sic]", "[1]").
+  const unfilled = templatePlaceholders(draft.instructions);
   const setD = (patch: Partial<Directives>) => setDraft((d) => ({ ...d, directives: { ...d.directives, ...patch } }));
   const toggleScope = (s: ModuleScope) =>
     setDraft((d) => {
@@ -33,6 +41,7 @@ export function SkillEditor({ open, onClose, skill }: { open: boolean; onClose: 
     });
 
   const save = () => {
+    if (unfilled.length) return;
     const name = draft.name.trim() || `${CATEGORY_META[draft.category].label} skill`;
     if (skill) {
       updateSkill(skill.id, { ...draft, name });
@@ -57,7 +66,7 @@ export function SkillEditor({ open, onClose, skill }: { open: boolean; onClose: 
           <button className="btn btn-secondary" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn btn-primary" onClick={save} disabled={!draft.instructions.trim() && !detected.length}>
+          <button className="btn btn-primary" onClick={save} disabled={(!draft.instructions.trim() && !detected.length) || unfilled.length > 0}>
             {skill ? 'Save skill' : 'Add to Brain'}
           </button>
         </>
@@ -95,6 +104,11 @@ export function SkillEditor({ open, onClose, skill }: { open: boolean; onClose: 
           <Field label="Instructions" htmlFor="sk-ins" hint="One idea per line works best. Mention words to avoid, the CTA you prefer, emoji rules, tone, facts to use…">
             <AutoTextarea id="sk-ins" value={draft.instructions} onChange={(v) => setDraft((d) => ({ ...d, instructions: v }))} minRows={7} className="text-[13.5px]" placeholder={'Tone: friendly and direct.\nNever use: “synergy”, “hustle”.\nEnd posts with: Book your free consult.'} />
           </Field>
+          {unfilled.length > 0 && (
+            <p className="-mt-2 text-[12.5px] text-warn" role="status">
+              Replace {unfilled.join(', ')} with your real details, or delete the line{unfilled.length > 1 ? 's' : ''}. The AI uses these facts as true.
+            </p>
+          )}
           <details className="rounded-md border border-line">
             <summary className="cursor-pointer px-3 py-2 text-[13px] font-semibold">Fine-tune with structured controls</summary>
             <div className="grid grid-cols-1 gap-3 border-t border-line p-3 sm:grid-cols-2">

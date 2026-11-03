@@ -145,11 +145,21 @@ describe('Posting with Manus', () => {
   });
 
   it('reads Manus’s result line', () => {
-    expect(parseResult('Done.\nRESULT: POSTED | Sumari | https://facebook.com/123')).toEqual({ state: 'posted', detail: 'Sumari · https://facebook.com/123' });
+    expect(parseResult('Done.\nRESULT: POSTED | Sumari | https://facebook.com/123')).toMatchObject({ state: 'posted', detail: 'Sumari · https://facebook.com/123' });
     expect(parseResult('RESULT: PUBLISHED | Sumari').state).toBe('posted');
-    expect(parseResult('Done!\nRESULT: SCHEDULED | Sumari | Oct 29, 11:00 AM')).toEqual({ state: 'scheduled', detail: 'Sumari · Oct 29, 11:00 AM' });
-    expect(parseResult('**RESULT: FAILED | Not signed in**')).toEqual({ state: 'failed', detail: 'Not signed in' });
-    expect(parseResult('All good, it is scheduled.')).toEqual({ state: null, detail: '' });
+    expect(parseResult('Done!\nRESULT: SCHEDULED | Sumari | Oct 29, 11:00 AM')).toMatchObject({ state: 'scheduled', detail: 'Sumari · Oct 29, 11:00 AM' });
+    expect(parseResult('**RESULT: FAILED | Not signed in**')).toMatchObject({ state: 'failed', detail: 'Not signed in' });
+    expect(parseResult('All good, it is scheduled.')).toMatchObject({ state: null, detail: '' });
+  });
+
+  it('reads the result line through Markdown, and takes the link from its own slot', () => {
+    expect(parseResult('Done.\n- **RESULT:** POSTED | @sumari | https://www.instagram.com/p/X1/').state).toBe('posted');
+    expect(parseResult('`RESULT: SCHEDULED | Sumari | Oct 29`').state).toBe('scheduled');
+    expect(parseResult('> RESULT: FAILED | Not signed in').detail).toBe('Not signed in');
+    const base: ManusState = { taskId: 't', status: 'stopped', agentStatus: 'stopped', done: true, waiting: false, waitingType: '', waitingDescription: '', error: '', title: '', taskUrl: '', creditUsage: 0, text: '', imageCount: 0, images: [] };
+    // the account's own profile address is never taken for the post's
+    expect(stateFromManus({ ...base, text: 'RESULT: POSTED | https://www.instagram.com/sumari | https://www.instagram.com/p/X1/' }, 'now', 'instagram').url).toBe('https://www.instagram.com/p/X1/');
+    expect(stateFromManus({ ...base, text: 'RESULT: POSTED | https://www.instagram.com/sumari' }, 'now', 'instagram').url).toBeUndefined();
   });
 
   it('keeps a reported link only when it’s on that network', () => {

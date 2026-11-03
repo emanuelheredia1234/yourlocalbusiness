@@ -559,48 +559,4 @@ export function fmtBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-// ───────────────────────── Payments (demo checkout validation) ─────────────────────────
-
-export function luhnValid(num: string): boolean {
-  const digits = num.replace(/\D/g, '');
-  if (digits.length < 12 || digits.length > 19) return false;
-  let sumDigits = 0;
-  let dbl = false;
-  for (let i = digits.length - 1; i >= 0; i--) {
-    let d = Number(digits[i]);
-    if (dbl) {
-      d *= 2;
-      if (d > 9) d -= 9;
-    }
-    sumDigits += d;
-    dbl = !dbl;
-  }
-  return sumDigits % 10 === 0;
-}
-
-export function cardBrand(num: string): 'visa' | 'mastercard' | 'amex' | 'discover' | 'card' {
-  const d = num.replace(/\D/g, '');
-  if (/^4/.test(d)) return 'visa';
-  if (/^(5[1-5]|2(2[2-9]|[3-6]\d|7[01]|720))/.test(d)) return 'mastercard';
-  if (/^3[47]/.test(d)) return 'amex';
-  if (/^(6011|65|64[4-9])/.test(d)) return 'discover';
-  return 'card';
-}
-
-export function formatCardNumber(num: string): string {
-  const d = num.replace(/\D/g, '').slice(0, 19);
-  if (cardBrand(d) === 'amex') return d.replace(/^(\d{0,4})(\d{0,6})(\d{0,5}).*/, (_, a, b, c) => [a, b, c].filter(Boolean).join(' '));
-  return d.replace(/(\d{4})(?=\d)/g, '$1 ');
-}
-
-export function expiryValid(mmYY: string, now = new Date()): boolean {
-  const m = /^(\d{2})\s*\/\s*(\d{2})$/.exec(mmYY.trim());
-  if (!m) return false;
-  const month = Number(m[1]);
-  const year = 2000 + Number(m[2]);
-  if (month < 1 || month > 12) return false;
-  const end = new Date(year, month, 1);
-  return end.getTime() > now.getTime();
-}
-
 export const emailValid = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test((s || '').trim());

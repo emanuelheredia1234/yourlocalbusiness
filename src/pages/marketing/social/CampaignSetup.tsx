@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { AlertTriangle, CalendarDays, Check, Clapperboard, Globe, Image as ImageIcon, Users } from 'lucide-react';
 import type { CampaignConfig, ImageStyleId, PostPlatform, PostType, Project, VideoStyleId } from '@/lib/types';
-import { cn, stripProtocol, WEEKDAYS } from '@/lib/utils';
+import { cn, WEEKDAYS } from '@/lib/utils';
+import { brandMark } from '@/lib/brandMark';
 import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES } from '@/ai/knowledge';
 import { suggestTopics } from '@/ai/local/social';
 import { getActiveProject, useStore } from '@/store/useStore';
@@ -38,7 +39,8 @@ export function CampaignSetup({ project }: { project: Project }) {
   const updateBrand = useStore((s) => s.updateBrand);
   const c = cadence(cfg);
   const sample = useMemo(() => suggestTopics(project)[0] ?? project.brand.tagline, [project]);
-  const site = stripProtocol(project.brand.websiteUrl || `${project.brand.slug}.com`);
+  // only what you entered: your website, else your @handle, else your brand name
+  const mark = brandMark(project.brand);
   const typeTotal = POST_TYPES.reduce((n, t) => n + cfg.postTypes[t.id], 0) || 1;
   const needImageStyle = c.images > 0 && cfg.imageStyles.length === 0;
   const needVideoStyle = c.videos > 0 && cfg.videoStyles.length === 0;
@@ -116,8 +118,8 @@ export function CampaignSetup({ project }: { project: Project }) {
         </div>
       </section>
 
-      <section className="panel p-4 sm:p-5" aria-label="Website watermark">
-        <Toggle checked={cfg.watermark} onChange={(v) => set({ watermark: v })} label="Add my website as a watermark" description={site ? <>Every image and video shows <b className="text-ink">{site}</b> in the corner.</> : 'Add your website in Settings → Brand to show it on every visual.'} />
+      <section className="panel p-4 sm:p-5" aria-label="Watermark">
+        <Toggle checked={cfg.watermark} onChange={(v) => set({ watermark: v })} label="Add a watermark" description={mark && mark !== project.brand.name.trim() ? <>Every image and video shows <b className="text-ink">{mark}</b> in the corner.</> : 'No website or @handle yet, so images show your brand name. Add your handles below, or your website in Settings → Brand.'} />
       </section>
 
       <section className="panel p-4 sm:p-5" aria-label="Visual styles">

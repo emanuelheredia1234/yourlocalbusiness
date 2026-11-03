@@ -8,19 +8,23 @@ import type {
   ProblemData,
   Project,
   ProofData,
+  ProofStat,
   SalesPage,
   SalesSection,
   SalesSectionType,
   SeoMeta,
+  ServicePriceModel,
   SolutionData,
 } from '@/lib/types';
-import { capitalize, escapeHtml, hashStr, lighten, darken, lowerFirst, readableOn, slugify, titleCase, truncate, uid, wordCount, ensureUrl } from '@/lib/utils';
+import { capitalize, escapeHtml, hashStr, lighten, darken, readableOn, slugify, titleCase, truncate, uid, wordCount, ensureUrl } from '@/lib/utils';
 import { FORMATS } from '../knowledge';
 import { buildFacts, singular, verbOutcome, Voice, type Facts } from '../text';
 import { SCRIPT_CLOSE } from './code';
-import { charmPrice } from './research';
 
 const LT = String.fromCharCode(60);
+
+/** "a" or "an" for the word that follows. */
+const article = (next: string) => (/^[aeiou]/i.test(next.trim()) ? 'an' : 'a');
 
 export function primaryKeywordFor(f: Facts): string {
   if (f.track === 'business') {
@@ -85,8 +89,8 @@ export function generateSeoMeta(project: Project, d: Directives = {}, variation 
   const metaTitle = fitTitle(primary, f.brand);
   const metaDescription = fitDescription(
     f.track === 'business'
-      ? `${f.brand} offers trusted ${primary}. ${capitalize(f.outcomes[0])}, upfront pricing and friendly local service. Book online today.`
-      : `${capitalize(verbOutcome(f.outcomes[0]))} with ${f.productShort}, the ${primary} built for ${f.audience}. ${v.pick(['Instant access.', 'Start today.', 'Get started in minutes.'])}`,
+      ? `${f.brand} offers ${primary} for ${f.audience}.${pageLink(project) ? ' Book today.' : ''}`
+      : `${f.productShort} is ${article(primary)} ${primary} for ${f.audience}. Want to ${verbOutcome(f.outcomes[0])}? ${v.pick(['Start today.', 'See what’s inside.'])}`,
   );
   const slug = slugify(primary).split('-').slice(0, 5).join('-');
   return {
@@ -95,36 +99,88 @@ export function generateSeoMeta(project: Project, d: Directives = {}, variation 
     slug,
     primaryKeyword: primary,
     secondaryKeywords: secondary,
-    ogTitle: truncate(f.track === 'business' ? `${f.brand}: ${titleCase(primary)}` : `${f.productShort}: ${capitalize(verbOutcome(f.outcomes[0]))}`, 70),
+    ogTitle: truncate(f.track === 'business' ? `${f.brand}: ${titleCase(primary)}` : `${f.productShort}: ${titleCase(primary)} for ${titleCase(f.audience)}`, 70),
     ogDescription: truncate(metaDescription, 200),
-    ogImageAlt: `${f.brand} ${f.track === 'business' ? 'storefront and team' : `${f.productShort} preview`}`,
-    canonical: `${ensureUrl(f.url).replace(/\/$/, '')}/${slug}`,
+    ogImageAlt: f.track === 'business' ? `${f.brand} logo and name` : `${f.productShort} preview`,
+    canonical: canonicalFor(project, slug),
   };
 }
 
-function heroData(f: Facts, v: Voice, primary: string): HeroData {
+/** The owner's own website, or '' (never a guessed domain). */
+export function siteUrl(project: Project): string {
+  return ensureUrl(project.brand.websiteUrl).replace(/\/$/, '');
+}
+
+/** Where this page will live: the owner's website plus the slug. Empty until they add a website. */
+export function canonicalFor(project: Project, slug: string): string {
+  const site = siteUrl(project);
+  return site ? `${site}/${slug}` : '';
+}
+
+/** The canonical to keep when the slug changes (typed, or new metadata generated). An address that follows
+ *  the slug (empty, or ending in the old slug) moves to the new slug; any other address the owner pasted is kept. */
+export function canonicalForSlugChange(project: Project, canonical: string, oldSlug: string, newSlug: string): string {
+  const cur = canonical.trim();
+  if (!cur) return canonicalFor(project, newSlug);
+  if (!/^https?:\/\/[^/?#]+\/[^?#]*$/i.test(cur)) return cur;
+  // Ignore one trailing slash unless that's where the (empty) old slug sits.
+  const path = oldSlug && cur.endsWith('/') ? cur.slice(0, -1) : cur;
+  const cut = path.lastIndexOf('/');
+  const base = path.slice(0, cut);
+  if (/^https?:\/?$/i.test(base) || path.slice(cut + 1) !== oldSlug) return cur;
+  return `${base}/${newSlug}`;
+}
+
+/** Where the page's buttons go: the owner's own buy or booking link, else their website, else ''. */
+export function pageLink(project: Project): string {
+  return ensureUrl(project.studio.listing.buyUrl ?? '') || siteUrl(project);
+}
+
+/** The section of this type on the page being replaced, so a rewrite keeps what the owner entered. */
+type SectionData = { [S in SalesSection as S['type']]: S['data'] };
+function previous<T extends SalesSectionType>(project: Project, type: T): SectionData[T] | null {
+  const s = project.marketing.salesPage?.sections.find((x) => x.type === type);
+  return s ? (s.data as SectionData[T]) : null;
+}
+
+/** Fine print under the hero button: only what the price model says, never a promise. */
+function finePrint(project: Project): string {
+  if (project.track === 'business') return '';
+  return project.studio.priceModel === 'monthly' ? 'Billed monthly' : project.studio.priceModel === 'yearly' ? 'Billed yearly' : 'One-time payment';
+}
+
+/** Hero bullets: only what the owner set up (their packages, chosen features or outline), never outcomes. */
+function heroBullets(project: Project): string[] {
+  const clean = (xs: string[]) => [...new Set(xs.map((x) => x.trim()).filter(Boolean))].slice(0, 3);
+  if (project.track === 'business') return clean(project.studio.packages.map((p) => p.name));
+  if (project.idea?.features?.length) return clean(project.idea.features);
+  return clean(project.studio.outline.map((s) => s.title.replace(/^(Module|Chapter|Section) \d+:\s*/i, '')));
+}
+
+function heroData(f: Facts, v: Voice, primary: string, project: Project): HeroData {
   const outcome = verbOutcome(f.outcomes[0]);
+  const label = titleCase((f.business?.label ?? 'Service').split(/[&,]/)[0].trim());
   const headline =
     f.track === 'business'
-      ? v.pick([`${titleCase(primary)} You Can Actually Count On`, `The ${f.city || 'Local'} ${titleCase((f.business?.label ?? 'Service').split(/[&,]/)[0].trim())} Neighbors Recommend`, `${capitalize(f.desire)}, From ${f.brand}`])
-      : v.pick([`The ${titleCase(primary)} That Helps ${titleCase(f.audience)} ${titleCase(outcome)}`, `${capitalize(outcome)} With the ${titleCase(primary)}`, `Finally, a ${titleCase(primary)} Built for ${titleCase(f.audience)}`]);
+      ? v.pick([`${titleCase(primary)} From ${f.brand}`, `${f.city ? `${f.city} ` : ''}${label} by ${f.brand}`, `${label} for ${titleCase(f.audience)}, From ${f.brand}`, `Looking for ${titleCase(primary)}?`])
+      : v.pick([`The ${titleCase(primary)} for ${titleCase(f.audience)}`, `Want to ${outcome}?`, `${capitalize(article(primary))} ${titleCase(primary)} Made for ${titleCase(f.audience)}`]);
   return {
     eyebrow: f.track === 'business' && f.city ? `Serving ${f.city}${f.region ? `, ${f.region}` : ''}` : `For ${f.audience}`,
     headline,
     subheadline:
       f.track === 'business'
-        ? `${f.brand} provides ${primary} that takes ${f.pain} off your plate, with upfront pricing, on-time pros and work we guarantee.`
-        : `${f.productShort} is the ${primary} that helps ${f.audience} ${outcome}, without ${f.pain}.`,
+        ? `${f.brand} provides ${primary} for ${f.audience}.`
+        : `${f.productShort} is ${article(primary)} ${primary} for ${f.audience} who want to ${outcome}.`,
     ctaLabel: f.track === 'business' ? `Book now` : `Get ${f.productShort} · ${f.priceStr}${f.priceSuffix}`,
-    ctaSubtext: f.track === 'business' ? 'Free estimates · Licensed & insured · Satisfaction promise' : 'Instant access · 30-day money-back guarantee',
-    bullets: f.outcomes.slice(0, 3).map((o) => capitalize(verbOutcome(o))),
+    ctaSubtext: finePrint(project),
+    bullets: heroBullets(project),
   };
 }
 
 function problemData(f: Facts, v: Voice): ProblemData {
   return {
     heading: v.pick(['Sound familiar?', `Why ${f.topicLower} feels so hard`, `The problem with ${f.topicLower} today`]),
-    intro: `If you’re one of the many ${f.audience} dealing with ${f.pain}, you’re not alone, and it’s not your fault.`,
+    intro: `For ${f.audience} dealing with ${f.pain}, a few things may sound familiar.`,
     points: f.pains.slice(0, 3).map((p, i) => ({
       title: capitalize(p),
       body: [
@@ -133,7 +189,8 @@ function problemData(f: Facts, v: Voice): ProblemData {
         `The advice out there contradicts itself, so you second-guess every step.`,
       ][i % 3],
     })),
-    agitation: `Left alone, it compounds: more stress, more wasted ${f.local ? 'money' : 'hours'}, and the nagging feeling that ${lowerFirst(f.desire)} is for other people. It doesn’t have to be.`,
+    // No consequences or outcomes asserted for the reader: the line points to what the offer is.
+    agitation: `Below: what ${f.local ? f.brand : f.productShort} offers, who it’s for, and how to ${f.local ? 'book' : 'get it'}.`,
   };
 }
 
@@ -142,87 +199,122 @@ function solutionData(f: Facts, project: Project): SolutionData {
   let features: SolutionData['features'];
   if (project.track === 'business' && project.studio.packages.length) {
     features = project.studio.packages.slice(0, 3).map((p, i) => ({ title: p.name, body: p.description, icon: icons[i] }));
-    features.push({ title: 'Upfront pricing', body: 'Know the price before we start. No surprise charges.', icon: 'shield-check' });
   } else if (project.studio.outline.length) {
     features = project.studio.outline.slice(0, 6).map((s, i) => ({ title: s.title.replace(/^(Module|Chapter|Section) \d+:\s*/i, ''), body: s.summary || s.items.slice(0, 2).map((x) => x.title).join(' · '), icon: icons[i % icons.length] }));
   } else {
-    const feats = project.idea?.features ?? f.terms.slice(0, 4).map((t) => `Built-in ${t}`);
-    features = feats.map((x, i) => ({ title: x, body: `Designed so ${f.audience} can ${verbOutcome(f.outcomes[i % f.outcomes.length])}.`, icon: icons[i % icons.length] }));
+    // Only features the owner chose; otherwise obvious placeholders to fill in (never invented features).
+    const feats = project.idea?.features?.length ? project.idea.features : null;
+    features = feats
+      ? feats.map((x, i) => ({ title: x, body: `[What ${x} does for ${f.audience}]`, icon: icons[i % icons.length] }))
+      : [1, 2, 3].map((n, i) => ({ title: `[Feature ${n}]`, body: `[What it does for ${f.audience}]`, icon: icons[i] }));
   }
   return {
     heading: project.track === 'business' ? `How ${f.brand} works` : `Meet ${f.productShort}`,
-    intro: project.track === 'business' ? f.pitch || `Friendly, reliable ${f.business?.label.toLowerCase()} for ${f.audience}.` : `Everything you need to ${verbOutcome(f.outcomes[0])}, organized into a clear path you can follow at your own pace.`,
+    intro: project.track === 'business' ? f.pitch || `${capitalize(f.business?.label.toLowerCase() ?? 'service')} for ${f.audience}.` : `${f.productShort} is ${article(f.formatNoun)} ${f.formatNoun.toLowerCase()} about ${f.topicLower} for ${f.audience}.`,
     features,
   };
 }
 
-function proofData(f: Facts, project: Project): ProofData {
-  const outline = project.studio.outline;
-  const itemsCount = outline.reduce((s, x) => s + x.items.length, 0);
+/** Labels of the counts taken from the real outline (current or older wording). */
+export function outlineStatLabels(project: Project): string[] {
   const fmt = project.format ? FORMATS[project.format] : null;
-  const stats =
-    project.track === 'business'
-      ? [
-          { value: '24h', label: 'Quote turnaround' },
-          { value: '100%', label: 'Satisfaction promise' },
-          { value: f.city || 'Local', label: 'Owned & operated' },
-        ]
-      : [
-          { value: String(outline.length || 6), label: fmt ? titleCase(fmt.unit) : 'Sections' },
-          { value: String(itemsCount || 24), label: 'Lessons, tools & steps' },
-          { value: '30-day', label: 'Money-back guarantee' },
-        ];
+  const unit = fmt ? titleCase(fmt.unit) : 'Sections';
+  return [unit, titleCase(singular(unit)), 'Sections', 'Section', 'Lessons, tools & steps', 'Lesson, tool or step'];
+}
+
+/** Facts counted from the product's actual outline. Nothing when there's no outline yet. */
+export function outlineStats(project: Project): ProofStat[] {
+  if (project.track === 'business') return [];
+  const outline = project.studio.outline;
+  const items = outline.reduce((s, x) => s + x.items.length, 0);
+  const fmt = project.format ? FORMATS[project.format] : null;
+  const unit = fmt ? titleCase(fmt.unit) : 'Sections';
+  const stats: ProofStat[] = [];
+  if (outline.length) stats.push({ value: String(outline.length), label: outline.length === 1 ? titleCase(singular(unit)) : unit });
+  if (items) stats.push({ value: String(items), label: items === 1 ? 'Lesson, tool or step' : 'Lessons, tools & steps' });
+  return stats;
+}
+
+/** Proof starts empty: the owner adds real quotes and facts. Counts from the real outline are refreshed;
+ *  anything the owner already entered is kept. */
+function proofData(project: Project): ProofData {
+  const prev = previous(project, 'proof');
+  const counted = new Set(outlineStatLabels(project));
+  const kept = (prev?.stats ?? []).filter((x) => !counted.has(x.label));
   return {
-    heading: 'What people are saying',
-    stats,
-    testimonials: [
-      { quote: `I stopped ${f.mistakes[0]} in the first week. Now I ${verbOutcome(f.outcomes[0])} without thinking about it.`, name: 'Jordan M.', role: capitalize(singular(f.audience)), rating: 5 },
-      { quote: `Clear, practical and easy to follow. It saved me hours every single week.`, name: 'Priya S.', role: capitalize(singular(f.audience)), rating: 5 },
-      { quote: `${capitalize(f.pain)} used to ruin my month. Not anymore.`, name: 'Marcus L.', role: capitalize(singular(f.audience)), rating: 5 },
-    ],
+    heading: 'What customers say',
+    stats: [...outlineStats(project), ...kept],
+    testimonials: prev?.testimonials ?? [],
   };
 }
+
+/** What the price model says about billing, and nothing more (no "cancel anytime"). */
+const PRICE_NOTE: Record<ServicePriceModel, string> = { 'one-time': 'one-time payment', monthly: 'per month', yearly: 'per year', 'per-session': 'per visit', project: 'per project', quote: 'starting price', free: '' };
 
 function pricingData(f: Facts, project: Project): PricingData {
-  const compare = project.studio.compareAt && project.studio.compareAt > f.price ? project.studio.compareAt : charmPrice(f.price * 1.6);
-  const includes =
-    project.track === 'business'
-      ? project.studio.packages.find((p) => p.popular)?.includes ?? f.business?.delivery.slice(0, 4) ?? []
-      : [f.product, ...(project.idea?.features ?? []), 'Lifetime updates', '30-day money-back guarantee'].slice(0, 6);
+  const prev = previous(project, 'pricing');
+  const popular = project.track === 'business' ? project.studio.packages.find((p) => p.popular) : undefined;
+  const price = popular?.price ?? f.price;
+  // A "was" price only when the owner set one (in the Studio, or on this page before).
+  const studioCompare = project.studio.compareAt > 0 ? project.studio.compareAt : 0;
+  const compare = studioCompare || prev?.compareAt || 0;
+  const review = !studioCompare && !!prev?.compareAtNeedsReview;
+  const includes = project.track === 'business' ? popular?.includes ?? [] : [f.product, ...(project.idea?.features ?? [])].slice(0, 6);
   return {
-    heading: project.track === 'business' ? 'Simple, upfront pricing' : 'Get started today',
-    planName: project.track === 'business' ? project.studio.packages.find((p) => p.popular)?.name ?? f.brand : f.productShort,
-    price: project.track === 'business' ? project.studio.packages.find((p) => p.popular)?.price ?? f.price : f.price,
-    compareAt: compare,
-    priceNote: project.studio.priceModel === 'monthly' ? 'per month · cancel anytime' : project.track === 'business' ? 'starting price' : 'one-time payment',
+    heading: project.track === 'business' ? 'Pricing' : 'Get started today',
+    planName: project.track === 'business' ? popular?.name ?? f.brand : f.productShort,
+    price,
+    compareAt: compare > price ? compare : 0,
+    ...(review && compare > price ? { compareAtNeedsReview: true } : {}),
+    priceNote: PRICE_NOTE[popular?.priceModel ?? project.studio.priceModel] ?? '',
     includes,
-    ctaLabel: project.track === 'business' ? 'Book your appointment' : `Get instant access`,
-    badge: project.track === 'business' ? 'Most popular' : 'Launch price',
+    ctaLabel: project.track === 'business' ? 'Book your appointment' : `Get ${f.productShort}`,
+    badge: prev?.badge ?? '',
   };
 }
 
-function faqData(f: Facts, primary: string): FaqData {
-  return {
-    heading: 'Frequently asked questions',
-    items: [
-      { q: `Who is this ${f.track === 'business' ? 'service' : f.formatNoun.toLowerCase()} for?`, a: `It’s built for ${f.audience} who want to ${verbOutcome(f.outcomes[0])} without ${f.pain}.` },
-      { q: `What makes this ${primary} different?`, a: `It’s practical and specific: clear steps, real examples and tools you can use the same day, not generic theory.` },
-      ...f.objections.slice(0, 2).map((o) => ({ q: o.endsWith('?') ? o : `${o}. Will this still work for me?`, a: `Yes. ${capitalize(f.quickWins[0])} is a great first step, and everything is designed to fit a busy schedule.` })),
-      {
-        q: f.track === 'business' ? 'How do I book and pay?' : 'What if it’s not right for me?',
-        a: f.track === 'business' ? `Book online in under a minute. You’ll get a confirmation right away, and you only pay once the job is done right.` : `You’re covered by our 30-day money-back guarantee. Email us and we’ll refund you, no hard feelings.`,
-      },
-    ],
-  };
+/** What's actually in it (the real outline or packages), else a placeholder for the owner to fill in. */
+function differenceAnswer(f: Facts, project: Project): string {
+  const list = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs[0]);
+  if (project.track === 'business') {
+    const names = project.studio.packages.slice(0, 4).map((p) => p.name.trim()).filter(Boolean);
+    if (names.length) return `${f.brand} offers ${list(names)}.`;
+  } else {
+    const titles = project.studio.outline.slice(0, 5).map((s) => s.title.replace(/^(Module|Chapter|Section) \d+:\s*/i, '').trim()).filter(Boolean);
+    if (titles.length) return `It covers ${list(titles)}.`;
+  }
+  return `[What makes ${project.track === 'business' ? f.brand : f.productShort} different]`;
 }
 
+function faqData(f: Facts, primary: string, project: Project): FaqData {
+  const items: FaqData['items'] = [
+    { q: `Who is this ${f.track === 'business' ? 'service' : f.formatNoun.toLowerCase()} for?`, a: f.track === 'business' ? `${f.brand} serves ${f.audience}${f.city ? ` in ${f.city}${f.region ? `, ${f.region}` : ''}` : ''}.` : `It’s for ${f.audience} who want to ${verbOutcome(f.outcomes[0])}.` },
+    { q: `What makes this ${primary} different?`, a: differenceAnswer(f, project) },
+    // The answer to an objection is the owner's to give: a placeholder, never an invented "Yes, it works".
+    ...f.objections.slice(0, 2).map((o) => ({ q: o.endsWith('?') ? o : `${o}. Will this still work for me?`, a: `[Your answer]` })),
+  ];
+  // Booking and refund answers only from what the owner told us: their phone number, their own guarantee.
+  if (f.track === 'business') {
+    const phone = project.studio.listing.phone?.trim();
+    items.push({ q: 'How do I book?', a: `Use the booking button on this page${phone ? ` or call ${phone}` : ''}.` });
+  } else {
+    const g = previous(project, 'guarantee');
+    if (g?.offered && g.body.trim()) items.push({ q: 'What if it’s not right for me?', a: g.body.trim() });
+  }
+  return { heading: 'Frequently asked questions', items };
+}
+
+/** A guarantee only when the owner turned theirs on (kept across rewrites); otherwise just the closing heading and button. */
 function guaranteeData(f: Facts, project: Project): GuaranteeData {
+  const prev = previous(project, 'guarantee');
+  const own = prev?.offered ? prev : null;
   return {
-    heading: project.track === 'business' ? 'Our promise to you' : 'Try it risk-free for 30 days',
-    body: project.track === 'business' ? f.business?.guarantee ?? 'If you’re not happy, we make it right.' : `Use ${f.productShort} for 30 days. If it doesn’t help you ${verbOutcome(f.outcomes[0])}, email us for a full refund.`,
-    days: 30,
-    finalHeading: `Ready to ${verbOutcome(f.outcomes[0])}?`,
+    heading: own?.heading ?? '',
+    body: own?.body ?? '',
+    days: own?.days ?? 0,
+    finalHeading: project.track === 'business' ? `Ready to book with ${f.brand}?` : `Ready to ${verbOutcome(f.outcomes[0])}?`,
     finalCta: project.track === 'business' ? 'Book now' : `Get ${f.productShort}`,
+    offered: !!own,
   };
 }
 
@@ -233,17 +325,17 @@ export function generateSalesSection(project: Project, type: SalesSectionType, d
   const id = uid('sec');
   switch (type) {
     case 'hero':
-      return { id, type, visible: true, data: heroData(f, v, primary) };
+      return { id, type, visible: true, data: heroData(f, v, primary, project) };
     case 'problem':
       return { id, type, visible: true, data: problemData(f, v) };
     case 'solution':
       return { id, type, visible: true, data: solutionData(f, project) };
     case 'proof':
-      return { id, type, visible: true, data: proofData(f, project) };
+      return { id, type, visible: true, data: proofData(project) };
     case 'pricing':
       return { id, type, visible: true, data: pricingData(f, project) };
     case 'faq':
-      return { id, type, visible: true, data: faqData(f, primary) };
+      return { id, type, visible: true, data: faqData(f, primary, project) };
     case 'guarantee':
     default:
       return { id, type: 'guarantee', visible: true, data: guaranteeData(f, project) };
@@ -266,7 +358,61 @@ export function generateSalesPage(project: Project, d: Directives = {}, variatio
     sections: SECTION_ORDER.map((t) => generateSalesSection(project, t, d, variation)),
     theme: { font: project.brand.logo.font === 'serif' ? 'serif' : 'grotesk', mode: 'light', radius: 'soft' },
     updatedAt: Date.now(),
+    claimsChecked: true,
   };
+}
+
+// ───────────────────────── Facts vs copy ─────────────────────────
+
+/** Fields that hold facts (the owner's inputs, or real data), never AI copy. */
+const FACT_FIELDS: Partial<Record<SalesSectionType, string[]>> = {
+  hero: ['ctaSubtext'],
+  proof: ['stats', 'testimonials'],
+  pricing: ['price', 'compareAt', 'compareAtNeedsReview', 'priceNote', 'badge'],
+  guarantee: ['heading', 'body', 'days', 'offered'],
+};
+
+/** The part of a section the AI may rewrite. */
+export function aiWritableData(s: SalesSection): Record<string, unknown> {
+  const facts = new Set(FACT_FIELDS[s.type] ?? []);
+  return Object.fromEntries(Object.entries(s.data).filter(([k]) => !facts.has(k)));
+}
+
+/** `next` with the facts put back from `base`, whatever the AI returned for them. */
+export function keepFacts(next: SalesSection, base: SalesSection): SalesSection {
+  const facts = FACT_FIELDS[base.type] ?? [];
+  if (next.type !== base.type) return base;
+  if (!facts.length) return next;
+  const data: Record<string, unknown> = { ...next.data };
+  for (const k of facts) {
+    if (k in base.data) data[k] = (base.data as unknown as Record<string, unknown>)[k];
+    else delete data[k];
+  }
+  return { ...next, data } as unknown as SalesSection;
+}
+
+const filled = (s: string) => !!s.trim();
+
+/** What of the proof section can go on the published page: confirmed, filled-in items only. */
+export function publishableProof(d: ProofData): ProofData {
+  return {
+    heading: d.heading,
+    stats: d.stats.filter((x) => !x.needsReview && filled(x.value) && filled(x.label)),
+    testimonials: d.testimonials.filter((t) => !t.needsReview && filled(t.quote) && filled(t.name)),
+  };
+}
+
+export const showsGuarantee = (d: GuaranteeData) => !!d.offered && (filled(d.heading) || filled(d.body));
+export const showsCompareAt = (d: PricingData) => !d.compareAtNeedsReview && d.compareAt > d.price;
+
+/** Items written before the app stopped inventing proof, waiting for the owner to confirm or remove them. */
+export function claimsToReview(page: SalesPage | null): number {
+  let n = 0;
+  for (const s of page?.sections ?? []) {
+    if (s.type === 'proof') n += s.data.stats.filter((x) => x.needsReview).length + s.data.testimonials.filter((t) => t.needsReview).length;
+    if (s.type === 'pricing' && s.data.compareAtNeedsReview) n += 1;
+  }
+  return n;
 }
 
 // ───────────────────────── SEO scoring ─────────────────────────
@@ -301,10 +447,16 @@ export function pageText(page: SalesPage): { all: string; h1: string; h2s: strin
         h2s.push(s.data.heading);
         parts.push(s.data.heading, s.data.intro, ...s.data.features.flatMap((x) => [x.title, x.body]));
         break;
-      case 'proof':
-        h2s.push(s.data.heading);
-        parts.push(s.data.heading, ...s.data.stats.map((x) => `${x.value} ${x.label}`), ...s.data.testimonials.map((t) => t.quote));
+      case 'proof': {
+        // Only what the published page shows: the heading goes with real testimonials.
+        const proof = publishableProof(s.data);
+        if (proof.testimonials.length) {
+          h2s.push(proof.heading);
+          parts.push(proof.heading);
+        }
+        parts.push(...proof.stats.map((x) => `${x.value} ${x.label}`), ...proof.testimonials.map((t) => t.quote));
         break;
+      }
       case 'pricing':
         h2s.push(s.data.heading);
         parts.push(s.data.heading, s.data.planName, ...s.data.includes);
@@ -314,8 +466,13 @@ export function pageText(page: SalesPage): { all: string; h1: string; h2s: strin
         parts.push(s.data.heading, ...s.data.items.flatMap((i) => [i.q, i.a]));
         break;
       case 'guarantee':
-        h2s.push(s.data.heading);
-        parts.push(s.data.heading, s.data.body, s.data.finalHeading);
+        if (showsGuarantee(s.data)) {
+          h2s.push(s.data.heading);
+          parts.push(s.data.heading, s.data.body, s.data.finalHeading);
+        } else {
+          h2s.push(s.data.finalHeading);
+          parts.push(s.data.finalHeading);
+        }
         break;
     }
   }
@@ -390,7 +547,9 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
         ? '"Helvetica Neue", Arial, system-ui, sans-serif'
         : 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
   const e = escapeHtml;
-  const url = ensureUrl(brand.websiteUrl || `https://${brand.slug || 'example'}.com`);
+  // Only the owner's own addresses: no guessed domain. Without a link, buttons stay on the page.
+  const site = ensureUrl(brand.websiteUrl).replace(/\/$/, '');
+  const link = pageLink(project) || '#pricing';
   const faq = page.sections.find((s) => s.type === 'faq');
   const pricing = page.sections.find((s) => s.type === 'pricing');
   const ld: Record<string, unknown>[] = [
@@ -400,7 +559,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
           '@type': 'LocalBusiness',
           name: brand.name,
           description: meta.metaDescription,
-          url,
+          ...(site ? { url: site } : {}),
           ...(project.location ? { address: { '@type': 'PostalAddress', addressLocality: project.location.city, addressRegion: project.location.region } } : {}),
         }
       : {
@@ -409,7 +568,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
           name: pricing && pricing.type === 'pricing' ? pricing.data.planName : brand.name,
           description: meta.metaDescription,
           brand: { '@type': 'Brand', name: brand.name },
-          offers: { '@type': 'Offer', priceCurrency: 'USD', price: pricing && pricing.type === 'pricing' ? pricing.data.price : project.studio.price, availability: 'https://schema.org/InStock', url: meta.canonical },
+          offers: { '@type': 'Offer', priceCurrency: 'USD', price: pricing && pricing.type === 'pricing' ? pricing.data.price : project.studio.price, availability: 'https://schema.org/InStock', ...(meta.canonical ? { url: meta.canonical } : {}) },
         },
   ];
   if (faq && faq.type === 'faq' && faq.visible) {
@@ -431,9 +590,9 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
       <p class="eyebrow">${e(s.data.eyebrow)}</p>
       <h1>${e(s.data.headline)}</h1>
       <p class="lead">${e(s.data.subheadline)}</p>
-      <ul class="ticks">${s.data.bullets.map((b) => `<li>${e(b)}</li>`).join('')}</ul>
+      ${s.data.bullets.length ? `<ul class="ticks">${s.data.bullets.map((b) => `<li>${e(b)}</li>`).join('')}</ul>` : ''}
       <a class="btn" href="#pricing">${e(s.data.ctaLabel)}</a>
-      <p class="fine">${e(s.data.ctaSubtext)}</p>
+      ${s.data.ctaSubtext.trim() ? `<p class="fine">${e(s.data.ctaSubtext)}</p>` : ''}
     </div>
   </header>`;
         case 'problem':
@@ -458,14 +617,22 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
         .join('')}</div>
     </div>
   </section>`;
-        case 'proof':
+        case 'proof': {
+          // Left out until there's something real to show: confirmed quotes and facts only.
+          const proof = publishableProof(s.data);
+          if (!proof.stats.length && !proof.testimonials.length) return '';
+          const stars = (n: number) => {
+            const r = Math.max(0, Math.min(5, Math.round(n)));
+            return r ? `<div class="stars" aria-label="${r} out of 5 stars">${'★'.repeat(r)}</div>` : '';
+          };
           return `  <section class="proof">
     <div class="wrap">
-      <h2>${e(s.data.heading)}</h2>
-      <div class="stats">${s.data.stats.map((x) => `<div><b>${e(x.value)}</b><span>${e(x.label)}</span></div>`).join('')}</div>
-      <div class="grid">${s.data.testimonials.map((t) => `<figure class="card"><div class="stars" aria-label="${t.rating} out of 5 stars">${'★'.repeat(t.rating)}</div><blockquote>“${e(t.quote)}”</blockquote><figcaption><b>${e(t.name)}</b> · ${e(t.role)}</figcaption></figure>`).join('')}</div>
+      ${proof.testimonials.length ? `<h2>${e(proof.heading)}</h2>` : ''}
+      ${proof.stats.length ? `<div class="stats">${proof.stats.map((x) => `<div><b>${e(x.value)}</b><span>${e(x.label)}</span></div>`).join('')}</div>` : ''}
+      ${proof.testimonials.length ? `<div class="grid">${proof.testimonials.map((t) => `<figure class="card">${stars(t.rating)}<blockquote>“${e(t.quote)}”</blockquote><figcaption><b>${e(t.name)}</b>${t.role.trim() ? ` · ${e(t.role)}` : ''}</figcaption></figure>`).join('')}</div>` : ''}
     </div>
   </section>`;
+        }
         case 'pricing':
           return `  <section class="pricing" id="pricing">
     <div class="wrap narrow">
@@ -473,9 +640,9 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
       <div class="price-card">
         ${s.data.badge ? `<span class="badge">${e(s.data.badge)}</span>` : ''}
         <h3>${e(s.data.planName)}</h3>
-        <p class="price">${s.data.compareAt > s.data.price ? `<s>$${s.data.compareAt}</s> ` : ''}<b>$${s.data.price}</b> <span>${e(s.data.priceNote)}</span></p>
+        <p class="price">${showsCompareAt(s.data) ? `<s>$${s.data.compareAt}</s> ` : ''}<b>$${s.data.price}</b> <span>${e(s.data.priceNote)}</span></p>
         <ul class="ticks">${s.data.includes.map((i) => `<li>${e(i)}</li>`).join('')}</ul>
-        <a class="btn block" href="${e(url)}">${e(s.data.ctaLabel)}</a>
+        <a class="btn block" href="${e(link)}">${e(s.data.ctaLabel)}</a>
       </div>
     </div>
   </section>`;
@@ -486,16 +653,18 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
       ${s.data.items.map((i) => `<details><summary>${e(i.q)}</summary><p>${e(i.a)}</p></details>`).join('\n      ')}
     </div>
   </section>`;
-        case 'guarantee':
+        case 'guarantee': {
+          // The owner's own guarantee, only when they turned it on; otherwise just the closing call to action.
+          const days = Math.max(0, Math.round(s.data.days));
+          const seal = days ? `<div class="seal" aria-hidden="true">${days}<small>DAY</small></div>\n      ` : '';
+          const top = showsGuarantee(s.data) ? `${seal}<h2>${e(s.data.heading)}</h2>\n      <p>${e(s.data.body)}</p>\n      <h3>${e(s.data.finalHeading)}</h3>` : `<h2>${e(s.data.finalHeading)}</h2>`;
           return `  <section class="guarantee">
     <div class="wrap narrow">
-      <div class="seal" aria-hidden="true">${s.data.days}<small>DAY</small></div>
-      <h2>${e(s.data.heading)}</h2>
-      <p>${e(s.data.body)}</p>
-      <h3>${e(s.data.finalHeading)}</h3>
-      <a class="btn" href="${e(url)}">${e(s.data.finalCta)}</a>
+      ${top}
+      <a class="btn" href="${e(link)}">${e(s.data.finalCta)}</a>
     </div>
   </section>`;
+        }
         default:
           return '';
       }
@@ -510,12 +679,10 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
 <title>${e(meta.metaTitle)}</title>
 <meta name="description" content="${e(meta.metaDescription)}" />
 <meta name="keywords" content="${e([meta.primaryKeyword, ...meta.secondaryKeywords].join(', '))}" />
-<link rel="canonical" href="${e(meta.canonical)}" />
-<meta property="og:type" content="${project.track === 'business' ? 'business.business' : 'product'}" />
+${meta.canonical ? `<link rel="canonical" href="${e(meta.canonical)}" />\n` : ''}<meta property="og:type" content="${project.track === 'business' ? 'business.business' : 'product'}" />
 <meta property="og:title" content="${e(meta.ogTitle)}" />
 <meta property="og:description" content="${e(meta.ogDescription)}" />
-<meta property="og:url" content="${e(meta.canonical)}" />
-<meta property="og:image:alt" content="${e(meta.ogImageAlt)}" />
+${meta.canonical ? `<meta property="og:url" content="${e(meta.canonical)}" />\n` : ''}<meta property="og:image:alt" content="${e(meta.ogImageAlt)}" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="${e(meta.ogTitle)}" />
 <meta name="twitter:description" content="${e(meta.ogDescription)}" />
@@ -570,11 +737,7 @@ footer { padding: 30px 0; text-align: center; color: var(--muted); font-size: 14
 </head>
 <body>
 ${sectionHtml}
-  <footer><div class="wrap">© ${new Date().getFullYear()} ${e(brand.name)} · <a href="${e(url)}">${e(url.replace(/^https?:\/\//, ''))}</a></div></footer>
+  <footer><div class="wrap">© ${new Date().getFullYear()} ${e(brand.name)}${site ? ` · <a href="${e(site)}">${e(site.replace(/^https?:\/\//, ''))}</a>` : ''}</div></footer>
 </body>
 </html>`;
-}
-
-export function placeholderTestimonials(page: SalesPage | null): boolean {
-  return !!page?.sections.some((s) => s.type === 'proof' && s.visible && s.data.testimonials.some((t) => ['Jordan M.', 'Priya S.', 'Marcus L.'].includes(t.name)));
 }

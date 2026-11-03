@@ -39,12 +39,17 @@ export function defaultStudio(): Studio {
   };
 }
 
+/** Bump to run a new one-time cleanup (store/cleanup.ts) on projects saved by older versions. */
+export const LEGACY_CLEANUP = 1;
+
 export function newProject(track: Track = 'product', origin: Origin = 'new'): Project {
   const now = Date.now();
   return {
     id: uid('proj'),
     createdAt: now,
     updatedAt: now,
+    // nothing to clean up in a project made by this version
+    legacyCleaned: LEGACY_CLEANUP,
     track,
     origin,
     onboarded: false,
@@ -76,7 +81,6 @@ export function defaultSettings(): AppSettings {
     ai: { serverUrl: '', useBrain: true },
     theme: 'system',
     profile: { name: '', email: '' },
-    showSampleListings: true,
     shareToCommunity: true,
   };
 }

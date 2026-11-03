@@ -4,14 +4,11 @@ import type {
   AdCampaign,
   AppSettings,
   Brand,
-  CartItem,
   GenerationLog,
   Listing,
   Notice,
-  Order,
   Post,
   Project,
-  SaleRecord,
   Skill,
   Studio,
   Track,
@@ -31,9 +28,6 @@ export interface StoreState {
   skills: Skill[];
   genLog: GenerationLog[];
   myListings: Listing[];
-  cart: CartItem[];
-  orders: Order[];
-  sales: SaleRecord[];
   notices: Notice[];
   settings: AppSettings;
 
@@ -72,11 +66,6 @@ export interface StoreState {
   // marketplace
   publishListing: (l: Listing) => void;
   unpublishListing: (id: string) => void;
-  addToCart: (item: Omit<CartItem, 'id'>) => void;
-  setCartQty: (id: string, qty: number) => void;
-  removeFromCart: (id: string) => void;
-  clearCart: () => void;
-  placeOrder: (o: Omit<Order, 'id' | 'number' | 'createdAt'>) => Order;
 
   // notices & settings
   notify: (n: Omit<Notice, 'id' | 'createdAt' | 'read'>) => void;
@@ -106,9 +95,6 @@ export function initial() {
     skills: starterSkills(),
     genLog: [] as GenerationLog[],
     myListings: [] as Listing[],
-    cart: [] as CartItem[],
-    orders: [] as Order[],
-    sales: [] as SaleRecord[],
     notices: [] as Notice[],
     settings: defaultSettings(),
   };
@@ -157,12 +143,26 @@ export const useStore = create<StoreState>()(
       markPosted: (id, o = {}) =>
         set((s) => ({
           posts: s.posts.map((p) =>
-            p.id === id ? { ...p, status: 'published', publishedBy: 'manual', publishedAt: o.at ?? new Date().toISOString(), postUrl: o.url?.trim() || p.postUrl, updatedAt: Date.now() } : p,
+            p.id === id
+              ? {
+                  ...p,
+                  status: 'published',
+                  publishedBy: 'manual',
+                  publishedAt: o.at ?? new Date().toISOString(),
+                  postUrl: o.url?.trim() || p.postUrl,
+                  statusBeforePosted: p.status === 'published' ? p.statusBeforePosted : p.status,
+                  // a failed Manus try no longer matters once you've posted it yourself
+                  external: p.external?.state === 'failed' ? undefined : p.external,
+                  updatedAt: Date.now(),
+                }
+              : p,
           ),
         })),
       unmarkPosted: (id) =>
         set((s) => ({
-          posts: s.posts.map((p) => (p.id === id && p.publishedBy === 'manual' ? { ...p, status: 'scheduled', publishedBy: undefined, publishedAt: undefined, postUrl: undefined, updatedAt: Date.now() } : p)),
+          posts: s.posts.map((p) =>
+            p.id === id && p.publishedBy === 'manual' ? { ...p, status: p.statusBeforePosted ?? 'scheduled', statusBeforePosted: undefined, publishedBy: undefined, publishedAt: undefined, postUrl: undefined, updatedAt: Date.now() } : p,
+          ),
         })),
 
       upsertAd: (c) => set((s) => ({ ads: s.ads.some((a) => a.id === c.id) ? s.ads.map((a) => (a.id === c.id ? c : a)) : [...s.ads, c] })),
@@ -194,36 +194,6 @@ export const useStore = create<StoreState>()(
       publishListing: (l) =>
         set((s) => ({ myListings: s.myListings.some((x) => x.id === l.id) ? s.myListings.map((x) => (x.id === l.id ? l : x)) : [l, ...s.myListings] })),
       unpublishListing: (id) => set((s) => ({ myListings: s.myListings.filter((l) => l.id !== id) })),
-      addToCart: (item) =>
-        set((s) => {
-          const existing = s.cart.find((c) => c.listingId === item.listingId && c.option === item.option && c.bookingAt === item.bookingAt);
-          if (existing) {
-            if (item.kind === 'product') return {};
-            return { cart: s.cart.map((c) => (c.id === existing.id ? { ...c, qty: c.qty + item.qty } : c)) };
-          }
-          return { cart: [...s.cart, { ...item, id: uid('cart') }] };
-        }),
-      setCartQty: (id, qty) => set((s) => ({ cart: s.cart.map((c) => (c.id === id ? { ...c, qty: Math.max(1, Math.min(20, qty)) } : c)) })),
-      removeFromCart: (id) => set((s) => ({ cart: s.cart.filter((c) => c.id !== id) })),
-      clearCart: () => set({ cart: [] }),
-      placeOrder: (o) => {
-        const order: Order = { ...o, id: uid('order'), number: `YLB-${Math.floor(100000 + Math.random() * 899999)}`, createdAt: Date.now() };
-        const mine = new Map(get().myListings.map((l) => [l.id, l]));
-        const newSales: SaleRecord[] = order.items
-          .filter((i) => mine.has(i.listingId))
-          .map((i) => ({ id: uid('sale'), listingId: i.listingId, projectId: mine.get(i.listingId)?.projectId, title: i.title, amount: i.price * i.qty, qty: i.qty, createdAt: Date.now(), buyer: order.name || 'Customer', source: 'checkout' }));
-        set((s) => ({
-          orders: [order, ...s.orders],
-          cart: [],
-          sales: [...newSales, ...s.sales],
-          myListings: s.myListings.map((l) => {
-            const q = order.items.filter((i) => i.listingId === l.id).reduce((n, i) => n + i.qty, 0);
-            return q ? { ...l, sales: l.sales + q } : l;
-          }),
-        }));
-        return order;
-      },
-
       notify: (n) => set((s) => ({ notices: [{ ...n, id: uid('note'), createdAt: Date.now(), read: false }, ...s.notices].slice(0, 60) })),
       markNoticesRead: () => set((s) => ({ notices: s.notices.map((n) => ({ ...n, read: true })) })),
       updateSettings: (fn) => set((s) => ({ settings: fn(s.settings) })),
@@ -247,9 +217,6 @@ export const useStore = create<StoreState>()(
         skills: s.skills,
         genLog: s.genLog,
         myListings: s.myListings,
-        cart: s.cart,
-        orders: s.orders,
-        sales: s.sales,
         notices: s.notices,
         settings: s.settings,
       }),

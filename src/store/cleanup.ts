@@ -1,21 +1,29 @@
 // Removes what older versions of the app made up, from workspaces saved before that was fixed:
 // posts it pretended to publish (with invented likes and links), "connected" accounts that never
-// logged in, sample data, sales by simulated buyers, an invented reach estimate, demo switches, and
-// the notices that announced them. It runs whenever a workspace opens and after a
+// logged in, sample data, a pretend checkout (orders, sales, cart) and made-up ratings, reviews and
+// sold counts on listings, an invented reach estimate, demo switches, and the notices about them. It runs whenever a workspace opens and after a
 // backup is imported. It changes only what it must, and running it again changes nothing. Signed
 // in, its changes reach your account like any other edit.
 
 import type { Notice, Project, SocialPlatform } from '@/lib/types';
 import { PLATFORMS } from '@/ai/knowledge';
+import { cleanListing } from '@/lib/community';
 import { useStore, type StoreState } from './useStore';
+import { LEGACY_CLEANUP } from './defaults';
+import { purgeResearch } from './legacy/research';
+import { purgeSalesPage } from './legacy/salespage';
+import { purgeAdClaims, purgeClaims, purgeListingClaims } from './legacy/claims';
+import { purgeListingWebsite, purgePostWebsite, purgeWebsite } from './legacy/domain';
+import { purgeCodeAssets } from './legacy/widgets';
+import { purgeSkills } from './legacy/brain';
 
-type Data = Pick<StoreState, 'posts' | 'projects' | 'notices' | 'settings' | 'activeProjectId' | 'sales' | 'myListings'>;
+type Data = Pick<StoreState, 'posts' | 'projects' | 'notices' | 'settings' | 'activeProjectId' | 'myListings' | 'ads' | 'skills'>;
 
-/** Notices about things that never happened (the pretend publisher, the simulated buyers). */
-const INVENTED_NOTICES: RegExp[] = [/^Published to /i, /just went live/i, /^Simulated sale:/i];
+/** Run each change on a value; returns the result, or the same value when nothing changed. */
+const chain = <T>(v: T, ...fns: ((x: T) => T | null)[]) => fns.reduce((x, f) => f(x) ?? x, v);
 
-/** Sales nobody made: sample data and the demo's simulated buyers. */
-const INVENTED_SALES = new Set(['sample', 'simulated']);
+/** Notices about things that never happened: the pretend publisher, simulated buyers, the pretend checkout and inquiries. */
+const INVENTED_NOTICES: RegExp[] = [/^Published to /i, /just went live/i, /^Simulated sale:/i, /^Order YLB-/i, /^New sale:/i, /^Inquiry sent to /i, / is live on the Marketplace$/i, /^Test subscriber added/i, /^New subscriber:/i, /^Ad campaign live/i];
 
 export const isInventedNotice = (n: Pick<Notice, 'title'>) => INVENTED_NOTICES.some((r) => r.test(n.title));
 
@@ -49,22 +57,33 @@ export function purgeInventedData(s: Data): Partial<Data> | null {
   }
   if (postsChanged) patch.posts = posts;
 
-  // Sales nobody made, and what they added to your listings' "sold" counts.
-  const fakeSales = s.sales.filter((x) => INVENTED_SALES.has(x.source as string));
-  if (fakeSales.length) {
-    patch.sales = s.sales.filter((x) => !INVENTED_SALES.has(x.source as string));
-    const sold = new Map<string, number>();
-    for (const x of fakeSales) sold.set(x.listingId, (sold.get(x.listingId) ?? 0) + (x.qty || 0));
-    if (s.myListings.some((l) => sold.has(l.id))) patch.myListings = s.myListings.map((l) => (sold.has(l.id) ? { ...l, sales: Math.max(0, (l.sales || 0) - (sold.get(l.id) ?? 0)) } : l));
+  // Listings: no ratings, reviews, "verified" badges or sold counts (nothing ever measured them).
+  // (Orders and sales from the pretend checkout leave the account in sync.ts: RETIRED_KINDS.)
+  const isDirty = (l: object) => 'rating' in l || 'reviews' in l || 'sales' in l || 'verified' in ((l as { seller?: object }).seller ?? {});
+  if (s.myListings.some(isDirty)) patch.myListings = s.myListings.map((l) => (isDirty(l) ? cleanListing(l) : l));
+
+  // Ads: a campaign is a plan; nothing was launched, delivered or estimated.
+  const adDirty = (a: object) => (a as { status?: string }).status !== 'draft' || 'launchedAt' in a || 'projections' in a || 'seed' in a || ((a as { audiences?: object[] }).audiences ?? []).some((x) => 'size' in x);
+  if (s.ads.some(adDirty)) {
+    patch.ads = s.ads.map((a) => {
+      if (!adDirty(a)) return a;
+      const { launchedAt: _l, projections: _p, seed: _s, ...rest } = a as typeof a & { launchedAt?: unknown; projections?: unknown; seed?: unknown };
+      return { ...rest, status: 'draft' as const, audiences: (rest.audiences ?? []).map(({ size: _z, ...x }: (typeof rest.audiences)[number] & { size?: unknown }) => x) };
+    });
   }
 
-  // Projects: sample subscribers, and the social plan's invented reach estimate.
+  // Projects: sample and test subscribers (and the simulated opens and clicks on the rest), and the
+  // social plan's invented reach estimate.
   let projects = s.projects;
+  const SIM_FIELDS = ['step', 'opened', 'clicked', 'converted'];
   const cleanProject = (p: Project): Project => {
-    const subs = p.marketing.subscribers.filter((x) => (x.source as string) !== 'sample');
+    const before = p.marketing.subscribers;
+    const kept = before.filter((x) => (x.source as string) !== 'sample' && (x.source as string) !== 'test');
+    const simulated = kept.some((x) => SIM_FIELDS.some((k) => k in x));
+    const subs = simulated ? kept.map((x) => Object.fromEntries(Object.entries(x).filter(([k]) => !SIM_FIELDS.includes(k))) as typeof x) : kept;
     const plan = p.marketing.plan;
     const hasReach = !!plan && 'estReach' in (plan.summary as object);
-    if (subs.length === p.marketing.subscribers.length && !hasReach) return p;
+    if (subs.length === before.length && !simulated && !hasReach) return p;
     const summary = hasReach ? (({ estReach: _r, ...rest }) => rest)(plan!.summary as typeof plan.summary & { estReach?: number }) : plan?.summary;
     return { ...p, marketing: { ...p.marketing, subscribers: subs, plan: plan && summary ? { ...plan, summary } : plan } };
   };
@@ -87,12 +106,42 @@ export function purgeInventedData(s: Data): Partial<Data> | null {
       if (added) projects = projects.map((p): Project => (p.id === target.id ? { ...p, brand: { ...p.brand, socials } } : p));
     }
   }
+  // Claims older versions wrote into a project (research scores, sales-page testimonials and stats,
+  // template hours and guarantees, a made-up website, widgets that pretended to send forms), and into
+  // its listings, posts and ads. Once per project: afterwards the owner's own edits are never touched,
+  // even when they happen to match a template.
+  const due = new Map(projects.filter((p) => (p.legacyCleaned ?? 0) < LEGACY_CLEANUP).map((p) => [p.id, p]));
+  if (due.size) {
+    const dueId = (id?: string) => (id ? due.get(id) : undefined);
+    const listings = (patch.myListings ?? s.myListings).map((l) => {
+      const p = dueId(l.projectId);
+      return p ? chain(l, purgeListingClaims, (x) => purgeListingWebsite(x, p)) : l;
+    });
+    if (listings.some((l, i) => l !== (patch.myListings ?? s.myListings)[i])) patch.myListings = listings;
+    const posts = (patch.posts ?? s.posts).map((x) => {
+      const p = dueId(x.projectId);
+      return p ? (purgePostWebsite(x, p) ?? x) : x;
+    });
+    if (posts.some((x, i) => x !== (patch.posts ?? s.posts)[i])) patch.posts = posts;
+    // "… Official Site" headlines go when the project has no website once the made-up one is cleared
+    const hasSite = (p: Project) => !!(purgeWebsite(p) ?? p).brand.websiteUrl?.trim();
+    const ads = (patch.ads ?? s.ads).map((a) => {
+      const p = dueId(a.projectId);
+      return p ? (purgeAdClaims(a, hasSite(p)) ?? a) : a;
+    });
+    if (ads.some((a, i) => a !== (patch.ads ?? s.ads)[i])) patch.ads = ads;
+    projects = projects.map((p) => (due.has(p.id) ? { ...chain(p, purgeResearch, purgeSalesPage, purgeClaims, purgeWebsite, purgeCodeAssets), legacyCleaned: LEGACY_CLEANUP } : p));
+  }
   if (projects !== s.projects) patch.projects = projects;
 
+  // Brain skills still holding the old made-up "proof points" (exact template lines only).
+  const skills = purgeSkills(s.skills);
+  if (skills) patch.skills = skills;
+
   // Settings: the pretend connections, the demo buyers switch, the fake "thinking" delay.
-  const legacy = s.settings as typeof s.settings & { marketActivity?: unknown; ai: { simulateLatency?: unknown } };
-  if (accounts || 'marketActivity' in legacy || 'simulateLatency' in legacy.ai) {
-    const { accounts: _a, marketActivity: _m, ...settings } = legacy;
+  const legacy = s.settings as typeof s.settings & { marketActivity?: unknown; showSampleListings?: unknown; ai: { simulateLatency?: unknown } };
+  if (accounts || 'marketActivity' in legacy || 'showSampleListings' in legacy || 'simulateLatency' in legacy.ai) {
+    const { accounts: _a, marketActivity: _m, showSampleListings: _s, ...settings } = legacy;
     const { simulateLatency: _l, ...ai } = legacy.ai;
     patch.settings = { ...settings, ai };
   }

@@ -22,9 +22,15 @@ export function addToCalendarFlow(ids: string[]): boolean {
   return true;
 }
 
+/** Manus has (or may have) the post on the network for a set time: changing it here doesn't move it there. */
+export const manusHolds = (post: Post) => !!post.external && post.external.state !== 'failed';
+
+/** When the post goes out: the time Manus scheduled it on the network, if it did, else its calendar time. */
+export const goesOutAt = (post: Post) => (post.external?.state === 'scheduled' && post.external.scheduledFor ? post.external.scheduledFor : post.scheduledAt);
+
 /** A planned post whose time has come and gone without being posted. */
 export function isDue(post: Post, now = Date.now()): boolean {
-  return post.status === 'scheduled' && new Date(post.scheduledAt).getTime() <= now;
+  return post.status === 'scheduled' && new Date(goesOutAt(post)).getTime() <= now;
 }
 
 /** "Due" on a planned post whose time has passed (or "should be live" when Manus scheduled it there). */

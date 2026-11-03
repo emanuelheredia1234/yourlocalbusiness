@@ -20,9 +20,7 @@ export default function MarketingHub() {
   const seo = m.seo ? scoreSeo(m.seo, m.salesPage) : null;
   const scheduled = posts.filter((p) => p.status === 'scheduled').length;
   const published = posts.filter((p) => p.status === 'published').length;
-  const activeAds = ads.filter((a) => a.status === 'active').length;
-  // your own test sign-ups don't count
-  const signups = m.subscribers.filter((x) => x.source === 'optin').length;
+  const signups = m.subscribers.length;
 
   const status: Record<Channel, { progress: number; lines: { label: string; done: boolean }[]; metric: string }> = {
     seo: {
@@ -39,9 +37,9 @@ export default function MarketingHub() {
       lines: [
         { label: 'Lead magnet', done: !!m.leadMagnet },
         { label: '5-email sequence', done: m.emails.length >= 5 },
-        { label: 'First real sign-up', done: signups > 0 },
+        { label: 'Subscribers imported', done: signups > 0 },
       ],
-      metric: `${signups} sign-up${signups === 1 ? '' : 's'}`,
+      metric: `${signups} subscriber${signups === 1 ? '' : 's'}`,
     },
     social: {
       progress: [!!m.plan, posts.some((p) => p.source === 'batch'), scheduled + published > 0].filter(Boolean).length / 3,
@@ -53,13 +51,13 @@ export default function MarketingHub() {
       metric: `${scheduled} planned · ${published} posted`,
     },
     ads: {
-      progress: [ads.length > 0, ads.some((a) => a.creatives.length > 0), activeAds > 0].filter(Boolean).length / 3,
+      progress: [ads.length > 0, ads.some((a) => a.creatives.length > 0), ads.some((a) => !!a.exportedAt)].filter(Boolean).length / 3,
       lines: [
         { label: 'Campaign created', done: ads.length > 0 },
         { label: 'Creatives generated', done: ads.some((a) => a.creatives.length > 0) },
-        { label: 'Campaign live (simulated)', done: activeAds > 0 },
+        { label: 'Exported to an ad platform', done: ads.some((a) => !!a.exportedAt) },
       ],
-      metric: activeAds ? `${activeAds} active campaign${activeAds > 1 ? 's' : ''}` : `${ads.length} draft${ads.length === 1 ? '' : 's'}`,
+      metric: `${ads.length} campaign plan${ads.length === 1 ? '' : 's'}`,
     },
   };
 

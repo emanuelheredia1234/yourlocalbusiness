@@ -291,7 +291,7 @@ function ProductOffer({ project }: { project: Project }) {
           <p className="font-semibold">{idea.title}</p>
           <p className="text-ink-2">{idea.hook}</p>
           <p className="text-xs text-muted">
-            For {idea.audience} · potential {fmtMoney(idea.revenueLow, { compact: true })}–{fmtMoney(idea.revenueHigh, { compact: true })}/mo
+            For {idea.audience}
           </p>
           {idea.features.length > 0 && (
             <ul className="mt-1 flex flex-col gap-1 text-xs text-ink-2">
@@ -353,7 +353,7 @@ function BusinessModel({ project }: { project: Project }) {
           <h2 className="section-title flex items-center gap-2">
             <Layers size={18} className="text-primary" /> Packages, operating model & value stack
           </h2>
-          <p className="text-[13px] text-muted">Priced for {project.location?.city || 'your market'}. Everything here feeds your listing, sales page and campaign.</p>
+          <p className="text-[13px] text-muted">Prices are suggestions: set your own. Everything here feeds your listing, sales page and campaign.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {has && (
@@ -374,7 +374,7 @@ function BusinessModel({ project }: { project: Project }) {
         <Empty
           icon={<Layers size={20} />}
           title="No business model yet"
-          body="Get three good-better-best packages with local pricing, a complete operating model and a value stack with bonuses and a guarantee."
+          body="Get three good-better-best packages with suggested prices, an operating model and bonus ideas for a value stack. You add what each item is worth and any guarantee you offer."
           action={
             <GenerateButton running={ai.running} onClick={generate}>
               Generate business model
@@ -444,10 +444,14 @@ function BusinessModel({ project }: { project: Project }) {
           <section aria-label="Value stack" className="panel overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
               <h3 className="text-[14px] font-semibold">Value stack</h3>
-              <p className="text-[13px] text-muted">
-                Total value <b className="num text-ink">{fmtMoney(stackValue)}</b> · you charge <b className="num text-ink">{fmtMoney(popular?.price ?? s.price)}</b>
-                {popular && stackValue > popular.price && <span className="ml-1 text-good">({Math.round(stackValue / Math.max(1, popular.price))}× value)</span>}
-              </p>
+              {stackValue > 0 ? (
+                <p className="text-[13px] text-muted">
+                  Total value <b className="num text-ink">{fmtMoney(stackValue)}</b> · you charge <b className="num text-ink">{fmtMoney(popular?.price ?? s.price)}</b>
+                  {popular && stackValue > popular.price && <span className="ml-1 text-good">({Math.round(stackValue / Math.max(1, popular.price))}× value)</span>}
+                </p>
+              ) : (
+                <p className="text-[13px] text-muted">Add what each item is worth to show a total. Leave it empty to show none.</p>
+              )}
             </div>
             <ul className="divide-y divide-line">
               {s.valueStack.map((v) => (
@@ -458,11 +462,11 @@ function BusinessModel({ project }: { project: Project }) {
                   </span>
                   <div className="min-w-0">
                     <input className="input input-sm font-semibold" value={v.title} onChange={(e) => setStack((x) => x.map((i) => (i.id === v.id ? { ...i, title: e.target.value } : i)))} aria-label="Value item title" />
-                    <AutoTextarea value={v.description} onChange={(t) => setStack((x) => x.map((i) => (i.id === v.id ? { ...i, description: t } : i)))} minRows={1} className="mt-1.5 text-[12.5px]" aria-label="Value item description" />
+                    <AutoTextarea value={v.description} onChange={(t) => setStack((x) => x.map((i) => (i.id === v.id ? { ...i, description: t } : i)))} minRows={1} className="mt-1.5 text-[12.5px]" aria-label="Value item description" placeholder={v.kind === 'guarantee' ? 'Describe the promise you actually make' : undefined} />
                   </div>
                   <label className="flex items-center gap-1 text-xs text-muted">
                     $
-                    <input type="number" min={0} className="input input-sm num" value={v.value} onChange={(e) => setStack((x) => x.map((i) => (i.id === v.id ? { ...i, value: Math.max(0, Number(e.target.value) || 0) } : i)))} aria-label="Perceived value" />
+                    <input type="number" min={0} className="input input-sm num" value={v.value || ''} placeholder={v.kind === 'guarantee' ? '' : 'Value'} onChange={(e) => setStack((x) => x.map((i) => (i.id === v.id ? { ...i, value: Math.max(0, Number(e.target.value) || 0) } : i)))} aria-label="Perceived value" />
                   </label>
                   <button className="btn btn-ghost btn-icon btn-xs text-muted hover:text-bad" onClick={() => setStack((x) => x.filter((i) => i.id !== v.id))} aria-label={`Remove ${v.title}`}>
                     <Trash2 size={13} />
@@ -471,11 +475,11 @@ function BusinessModel({ project }: { project: Project }) {
               ))}
             </ul>
             <div className="flex flex-wrap gap-2 border-t border-line px-4 py-3">
-              <button className="btn btn-secondary btn-sm" onClick={() => setStack((x) => [...x.filter((i) => i.kind !== 'guarantee'), { id: uid('vs'), kind: 'bonus', title: 'New bonus', value: 49, description: '' }, ...x.filter((i) => i.kind === 'guarantee')])}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setStack((x) => [...x.filter((i) => i.kind !== 'guarantee'), { id: uid('vs'), kind: 'bonus', title: 'New bonus', value: 0, description: '' }, ...x.filter((i) => i.kind === 'guarantee')])}>
                 <Gift size={14} /> Add bonus
               </button>
               {!s.valueStack.some((i) => i.kind === 'guarantee') && (
-                <button className="btn btn-secondary btn-sm" onClick={() => setStack((x) => [...x, { id: uid('vs'), kind: 'guarantee', title: 'Our promise', value: 0, description: 'If you’re not happy, we’ll make it right or refund you.' }])}>
+                <button className="btn btn-secondary btn-sm" onClick={() => setStack((x) => [...x, { id: uid('vs'), kind: 'guarantee', title: 'Our promise', value: 0, description: '' }])}>
                   <ShieldCheck size={14} /> Add guarantee
                 </button>
               )}

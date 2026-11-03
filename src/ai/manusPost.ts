@@ -245,10 +245,12 @@ const HOSTS: Record<PostPlatform, RegExp> = {
 };
 
 /** The post's own address from Manus's report, only when it is on that network's website. */
-export function postUrlFrom(text: string, network: PostPlatform): string | undefined {
+export function postUrlFrom(text: string, network: PostPlatform, account?: string): string | undefined {
+  const own = account && /^https?:\/\//i.test(account.trim()) ? account.trim().replace(/\/+$/, '').toLowerCase() : null;
   for (const m of text.matchAll(/https?:\/\/[^\s|<>"')\]]+/gi)) {
     try {
       const u = new URL(m[0].replace(/[.,;:!?*]+$/, ''));
+      if (own && u.toString().replace(/\/+$/, '').toLowerCase() === own) continue;
       if (u.protocol === 'https:' && HOSTS[network].test(u.hostname) && u.pathname.length > 1) return u.toString();
     } catch {
       /* not a link */
@@ -257,17 +259,17 @@ export function postUrlFrom(text: string, network: PostPlatform): string | undef
   return undefined;
 }
 
-export function parseResult(text: string): { state: 'posted' | 'scheduled' | 'failed' | null; detail: string } {
-  const lines = text.split(/\r?\n/).map((l) => l.trim());
+export function parseResult(text: string): { state: 'posted' | 'scheduled' | 'failed' | null; detail: string; parts: string[] } {
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/[*_`]/g, '').replace(/^[\s>#-]+/, '').trim());
   for (let i = lines.length - 1; i >= 0; i--) {
-    const m = /^\**\s*RESULT:\s*(POSTED|PUBLISHED|SCHEDULED|FAILED)\s*\**\s*(?:\|\s*(.*))?$/i.exec(lines[i]);
+    const m = /^RESULT:\s*(POSTED|PUBLISHED|SCHEDULED|FAILED)\s*(?:\|\s*(.*))?$/i.exec(lines[i]);
     if (m) {
-      const detail = (m[2] ?? '').replace(/\*+$/, '').split('|').map((x) => x.trim()).filter(Boolean).join(' · ');
+      const parts = (m[2] ?? '').split('|').map((x) => x.trim()).filter(Boolean);
       const word = m[1].toUpperCase();
-      return { state: word === 'SCHEDULED' ? 'scheduled' : word === 'FAILED' ? 'failed' : 'posted', detail };
+      return { state: word === 'SCHEDULED' ? 'scheduled' : word === 'FAILED' ? 'failed' : 'posted', detail: parts.join(' · '), parts };
     }
   }
-  return { state: null, detail: '' };
+  return { state: null, detail: '', parts: [] };
 }
 
 const WAITING_COPY: Record<string, string> = {
@@ -283,7 +285,8 @@ export function stateFromManus(s: ManusState, mode: PostMode = 'schedule', netwo
   if (s.waiting) return { state: 'needs_input', message: s.waitingDescription || WAITING_COPY[s.waitingType] || `Manus paused and needs you (for example, to sign in to ${name}). Open the task in Manus.` };
   if (s.done) {
     const r = parseResult(s.text);
-    if (r.state === 'posted') return { state: 'posted', message: r.detail || `Manus reports it posted on ${name}.`, url: postUrlFrom(r.detail, network) };
+    // the link has its own slot (account | link); the account's own profile address is never the post's
+    if (r.state === 'posted') return { state: 'posted', message: r.detail || `Manus reports it posted on ${name}.`, url: postUrlFrom(r.parts.length > 1 ? r.parts.slice(1).join(' ') : r.detail, network, r.parts[0]) };
     if (r.state === 'scheduled') return { state: 'scheduled', message: r.detail || `Manus reports it scheduled on ${name}.` };
     if (r.state === 'failed') return { state: 'failed', message: r.detail || `Manus couldn’t ${verb} the post.` };
     return { state: 'finished', message: s.text.slice(0, 280) || `Manus finished. Check the task to confirm the post was ${mode === 'now' ? 'posted' : 'scheduled'}.` };

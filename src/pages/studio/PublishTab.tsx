@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { Check, CircleAlert, Clock, ExternalLink, Globe2, ImagePlus, Rocket, Store, Users, X } from 'lucide-react';
+import { Check, CircleAlert, Clock, ExternalLink, Globe2, ImagePlus, Link2, Mail, Phone, Rocket, Store, Users, X } from 'lucide-react';
 import type { BookingType, ListingDraft, PriceModel, Project } from '@/lib/types';
 import { cn, fmtDateTime, fmtMoney } from '@/lib/utils';
+import { listingActions, safeEmail, safePhone, safeUrl } from '@/pages/store/actions';
 import { navigate } from '@/lib/router';
 import { useRuntime } from '@/lib/platform';
 import { pushMyListings, startCommunitySync } from '@/lib/community';
@@ -14,7 +15,7 @@ import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, ChipInput, Field, Segmented, Spinner, Toggle, confirmAction } from '@/components/ui/primitives';
 import { MediaDrop, MediaThumb } from '@/components/media/MediaUpload';
 import { ListingCard, ListingCover, priceLabel } from '@/pages/store/ListingParts';
-import { buildListing, coverFromMedia, galleryFromMedia, leadPrice } from './listing';
+import { buildListing, coverFromMedia, galleryFromMedia, leadPrice, listingSuggestions } from './listing';
 import { ListingImages, MAX_GALLERY } from './ListingImages';
 import { VideoPanel } from '@/components/images/VideoPanel';
 
@@ -52,6 +53,8 @@ export function PublishTab({ project }: { project: Project }) {
     return coverMedia?.thumb ? { ...l, cover: { ...l.cover, imageDataUrl: coverMedia.thumb } } : l;
   }, [project, live, coverMedia]);
   const lp = leadPrice(project);
+  // the business type's typical hours and an example guarantee: shown as suggestions, used only if the owner clicks
+  const suggest = listingSuggestions(project);
 
   const checks = [
     { ok: d.title.trim().length >= 4, label: 'Title' },
@@ -59,6 +62,9 @@ export function PublishTab({ project }: { project: Project }) {
     { ok: lp.price > 0 || lp.model === 'free' || lp.model === 'quote', label: isBiz ? 'Package pricing' : 'Price' },
     { ok: d.tags.length >= 3, label: '3+ search tags' },
     { ok: isBiz ? project.studio.packages.length > 0 : project.studio.outline.length > 0, label: isBiz ? 'Service packages (Structure tab)' : 'Product outline (Structure tab)' },
+    { ok: !d.buyUrl?.trim() || !!safeUrl(d.buyUrl), label: 'Buy or booking link is a web address' },
+    { ok: !d.contactEmail?.trim() || !!safeEmail(d.contactEmail), label: 'Email address looks right' },
+    { ok: listingActions(preview).length > 0, label: 'A way to buy or reach you (link, website, email or phone)', optional: true },
     { ok: !!d.coverImageId, label: 'Cover photo (optional: brand cover is used otherwise)', optional: true },
   ];
   const blocking = checks.filter((c) => !c.ok && !c.optional);
@@ -80,8 +86,9 @@ export function PublishTab({ project }: { project: Project }) {
       updateStudio({ publishedListingId: listing.id, publishedAt: Date.now() });
       startCommunitySync();
       await pushMyListings();
-      useStore.getState().notify({ kind: 'sale', title: live ? `Listing updated: ${listing.title}` : `${listing.title} is live on the Marketplace`, route: 'store' });
-      toast({ kind: 'success', title: live ? 'Listing updated' : 'Published to the Marketplace', body: listing.title, action: { label: 'View listing', run: () => openInStore(listing.id) } });
+      const shared = useRuntime.getState().community === 'live';
+      useStore.getState().notify({ kind: 'info', title: live ? `Listing updated: ${listing.title}` : shared ? `${listing.title} is on the shared Marketplace` : `${listing.title} is in your listings`, route: 'store' });
+      toast({ kind: 'success', title: live ? 'Listing updated' : shared ? 'Published to the Marketplace' : 'Saved to your listings', body: shared ? listing.title : `${listing.title}. Only you can see it here for now.`, action: { label: 'View listing', run: () => openInStore(listing.id) } });
     } finally {
       setBusy(false);
     }
@@ -110,6 +117,17 @@ export function PublishTab({ project }: { project: Project }) {
         </div>
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact />
         {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
+        {d.needsReview && (
+          <div className="flex flex-wrap items-start gap-2 rounded-md bg-warn-soft px-3 py-2 text-[13px]" role="status">
+            <CircleAlert size={15} className="mt-0.5 shrink-0 text-warn" />
+            <p className="min-w-0 flex-1">
+              <b>Review your listing.</b> Opening hours, a guarantee or a delivery promise had been filled in from a template, not by you, so they were removed. Add your own if you have them, then publish again.
+            </p>
+            <button className="btn btn-ghost btn-xs" onClick={() => setD({ needsReview: undefined })}>
+              Got it
+            </button>
+          </div>
+        )}
 
         <Field label="Title" htmlFor="ls-title" right={`${d.title.length}/70`}>
           <input id="ls-title" className="input" maxLength={90} value={d.title} onChange={(e) => setD({ title: e.target.value })} />
@@ -119,6 +137,15 @@ export function PublishTab({ project }: { project: Project }) {
         </Field>
         <Field label="Description" htmlFor="ls-desc" hint="Short intro, what they get (• bullets) and a closing line.">
           <AutoTextarea id="ls-desc" value={d.description} onChange={(v) => setD({ description: v })} minRows={6} className="text-[13.5px]" />
+          {suggest.guarantee && !d.description.includes(suggest.guarantee) && (
+            <p className="mt-1.5 text-xs text-muted">
+              No guarantee is shown unless you add one. Example: “{suggest.guarantee}”{' '}
+              <button type="button" className="font-semibold text-primary hover:underline" onClick={() => setD({ description: `${d.description.trimEnd()}\n\n${suggest.guarantee}` })}>
+                Add it
+              </button>{' '}
+              only if you offer it, and edit it to match.
+            </p>
+          )}
         </Field>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Category" htmlFor="ls-cat">
@@ -153,11 +180,20 @@ export function PublishTab({ project }: { project: Project }) {
             <Field label="Hours" htmlFor="ls-hours">
               <div className="relative">
                 <Clock size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-                <input id="ls-hours" className="input pl-8" value={d.hours} onChange={(e) => setD({ hours: e.target.value })} placeholder="Mon–Fri 8am–6pm" />
+                <input id="ls-hours" className="input pl-8" value={d.hours} onChange={(e) => setD({ hours: e.target.value })} placeholder="Your opening hours" />
               </div>
+              {!(d.hours ?? '').trim() && suggest.hours && (
+                <p className="mt-1.5 text-xs text-muted">
+                  Empty hours are not shown.{' '}
+                  <button type="button" className="font-semibold text-primary hover:underline" onClick={() => setD({ hours: suggest.hours })}>
+                    Use typical hours
+                  </button>{' '}
+                  ({suggest.hours}) and edit them to yours.
+                </p>
+              )}
             </Field>
             <p className="text-xs text-muted sm:col-span-2">
-              Lead price <b className="num text-ink">{priceLabel(lp.price, lp.model)}</b> comes from your most popular package. Buyers can pick any of your {project.studio.packages.length || 'service'} packages.
+              Lead price <b className="num text-ink">{priceLabel(lp.price, lp.model)}</b> comes from the package you marked popular, or your first package if none is marked. Buyers can pick any of your {project.studio.packages.length || 'service'} packages.
               {!project.location && ' No city set, so the listing shows as online.'}
             </p>
           </div>
@@ -178,6 +214,39 @@ export function PublishTab({ project }: { project: Project }) {
             </Field>
           </div>
         )}
+
+        <div className="flex flex-col gap-3 rounded-lg border border-line p-3">
+          <div>
+            <p className="text-[13.5px] font-semibold">How people buy or reach you</p>
+            <p className="text-xs text-muted">This app takes no payments and sends no messages: buyers go to your own page, email or phone. Add at least one.</p>
+          </div>
+          <Field
+            label={isBiz ? (d.bookingType === 'book' ? 'Your booking link' : d.bookingType === 'inquire' ? 'Your contact or quote page' : 'Your order page') : 'Your checkout link'}
+            htmlFor="ls-buy"
+            hint={isBiz ? 'For example Calendly, Square Appointments, Acuity, or your own site.' : 'For example a Stripe Payment Link, Gumroad, Etsy, Shopify or Lemon Squeezy page.'}
+            error={d.buyUrl?.trim() && !safeUrl(d.buyUrl) ? 'Use a web address, like https://buy.stripe.com/…' : undefined}
+          >
+            <div className="relative">
+              <Link2 size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+              <input id="ls-buy" className="input pl-8" inputMode="url" value={d.buyUrl ?? ''} onChange={(e) => setD({ buyUrl: e.target.value })} placeholder="https://" />
+            </div>
+          </Field>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Email (optional)" htmlFor="ls-email" error={d.contactEmail?.trim() && !safeEmail(d.contactEmail) ? 'That doesn’t look like an email address.' : undefined}>
+              <div className="relative">
+                <Mail size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+                <input id="ls-email" className="input pl-8" type="email" value={d.contactEmail ?? ''} onChange={(e) => setD({ contactEmail: e.target.value })} placeholder="you@yourbusiness.com" />
+              </div>
+            </Field>
+            <Field label="Phone (optional)" htmlFor="ls-phone" error={d.phone?.trim() && !safePhone(d.phone) ? 'That doesn’t look like a phone number.' : undefined}>
+              <div className="relative">
+                <Phone size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+                <input id="ls-phone" className="input pl-8" type="tel" value={d.phone ?? ''} onChange={(e) => setD({ phone: e.target.value })} placeholder="(555) 123-4567" />
+              </div>
+            </Field>
+          </div>
+          {project.brand.websiteUrl && <p className="text-xs text-muted">Your website ({project.brand.websiteUrl}) is shown too.</p>}
+        </div>
 
         <ListingImages project={project} />
 
@@ -264,11 +333,11 @@ export function PublishTab({ project }: { project: Project }) {
       <aside className="flex min-w-0 flex-col gap-4">
         <section className="panel p-4" aria-label="Preview and publish">
           <div className="mb-3 flex items-center justify-between gap-2">
-            <h3 className="text-[13px] font-semibold">Live preview</h3>
-            {live ? <span className="badge bg-good-soft text-good">● Live</span> : <span className="badge bg-surface-2 text-muted">Draft</span>}
+            <h3 className="text-[13px] font-semibold">Preview</h3>
+            {live ? <span className="badge bg-good-soft text-good">{community === 'live' ? '● Published' : 'Saved'}</span> : <span className="badge bg-surface-2 text-muted">Draft</span>}
           </div>
           <div className="mx-auto max-w-[340px]">
-            <ListingCard listing={preview} onOpen={() => (live ? openInStore(live.id) : undefined)} onAdd={() => toast({ kind: 'info', title: 'This is a preview', body: 'Publish first, then buyers can add it to their cart.' })} />
+            <ListingCard listing={preview} onOpen={() => (live ? openInStore(live.id) : toast({ kind: 'info', title: 'This is a preview', body: 'Publish it first, then open it in the Marketplace.' }))} />
             {galleryMedia.length > 0 && (
               <div className="mt-2 grid grid-cols-4 gap-1.5" aria-label="Gallery preview">
                 {galleryMedia.map((m) => (
@@ -310,17 +379,17 @@ export function PublishTab({ project }: { project: Project }) {
           </h3>
           {community === 'live' ? (
             <p className="flex gap-2 text-ink-2">
-              <Users size={15} className="mt-0.5 shrink-0 text-good" /> This app is shared: everyone who opens it can browse and buy your listing, and their purchases show up in your Analytics.
+              <Users size={15} className="mt-0.5 shrink-0 text-good" /> This app is shared: everyone who uses it can see your listing. They buy or get in touch through your own link, email or phone.
             </p>
           ) : (
             <p className="flex gap-2 text-ink-2">
-              <Store size={15} className="mt-0.5 shrink-0 text-muted" /> Listed on this device’s Marketplace. When the app is opened as a shared page, listings sync between everyone who has it.
+              <Store size={15} className="mt-0.5 shrink-0 text-muted" /> For now only you can see your listing here. Share its links (your checkout, website) wherever your customers are.
             </p>
           )}
-          <Toggle checked={share} onChange={(v) => { updateSettings((s) => ({ ...s, shareToCommunity: v })); setTimeout(() => pushMyListings(), 0); }} label="Share my listings with other viewers" />
+          {community === 'live' && <Toggle checked={share} onChange={(v) => { updateSettings((s) => ({ ...s, shareToCommunity: v })); setTimeout(() => pushMyListings(), 0); }} label="Show my listings to other people" />}
           {live && (
             <p className="text-xs text-muted">
-              Published {project.studio.publishedAt ? fmtDateTime(project.studio.publishedAt) : ''} · {live.sales} sale{live.sales === 1 ? '' : 's'} · {fmtMoney(live.price)}
+              Published {project.studio.publishedAt ? fmtDateTime(project.studio.publishedAt) : ''} · {fmtMoney(live.price)}
             </p>
           )}
         </section>
