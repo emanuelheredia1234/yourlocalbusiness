@@ -3,7 +3,7 @@
 // (JWKS); projects still on the legacy shared-secret key are checked by asking Supabase Auth.
 //
 // Env: SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY (or the legacy SUPABASE_ANON_KEY), ADMIN_EMAILS
-// (the owner's email; comma-separated for several), SIGN_IN_REQUIRED ("false" lets the app run without accounts).
+// (the owner's email; comma-separated for several; defaults to DEFAULT_ADMIN_EMAILS), SIGN_IN_REQUIRED ("false" lets the app run without accounts).
 
 import crypto from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
@@ -11,12 +11,16 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 /** jose errors that mean the token itself is bad (anything else: it couldn't be checked here). */
 const INVALID = new Set(['ERR_JWT_EXPIRED', 'ERR_JWT_CLAIM_VALIDATION_FAILED', 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED', 'ERR_JWS_INVALID', 'ERR_JWT_INVALID']);
 
+/** The app's owner when no ADMIN_EMAILS Secret is set. */
+export const DEFAULT_ADMIN_EMAILS = 'hectorheredia242@gmail.com';
+
 export function authFromEnv(env = process.env, fetchImpl = globalThis.fetch) {
   return createAuth({
     supabaseUrl: env.SUPABASE_URL || '',
     publishableKey: env.SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_ANON_KEY || '',
     secretKey: env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '',
-    adminEmails: env.ADMIN_EMAILS || '',
+    // the app owner manages the AI keys everyone uses; the ADMIN_EMAILS Secret replaces this default
+    adminEmails: env.ADMIN_EMAILS ?? DEFAULT_ADMIN_EMAILS,
     signInRequired: String(env.SIGN_IN_REQUIRED ?? 'true').toLowerCase() !== 'false',
     fetch: fetchImpl,
   });

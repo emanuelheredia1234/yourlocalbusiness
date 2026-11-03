@@ -149,7 +149,7 @@ Set it up once:
    - `SUPABASE_URL`: the Project URL (Supabase → Project Settings → API).
    - `SUPABASE_PUBLISHABLE_KEY`: the publishable key (`sb_publishable_…`). It is meant to be public; row-level security protects the data. The legacy `anon` key also works, as `SUPABASE_ANON_KEY`.
    - `SUPABASE_SECRET_KEY`: the secret key (`sb_secret_…`). It lets people delete their account and files, and save their own Manus key. It stays on the server.
-   - `ADMIN_EMAILS`: your email. You manage the AI keys, models, effort and usage log; everyone else uses your keys.
+   - `ADMIN_EMAILS` (optional): the owner's email. The owner manages the AI keys, models, effort and usage log; everyone else uses those keys. Without this Secret the owner is `hectorheredia242@gmail.com` (`DEFAULT_ADMIN_EMAILS` in `server/auth.mjs`).
 6. Press Run, or republish. The server log says `Accounts: on (Supabase), sign-in required`.
 7. Let other people sign up: add your own email sender (Supabase → Authentication → Emails → **SMTP Settings**, with a service such as Resend, Postmark, Brevo or Amazon SES). Until then, Supabase's built-in sender only emails members of your Supabase team (so only you can confirm an account) and sends a few emails an hour; anyone else sees "This app can't send emails to that address yet".
 
