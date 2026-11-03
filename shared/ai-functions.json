@@ -12,7 +12,7 @@
     { "id": "business", "label": "Business model", "group": "writing", "kind": "text", "desc": "Service packages and how the business runs.", "tasks": ["businessModel"] },
     { "id": "listing", "label": "Marketplace listing", "group": "writing", "kind": "text", "desc": "Listing title, description and tags.", "tasks": ["listing"] },
     { "id": "code", "label": "Code & assets", "group": "writing", "kind": "text", "desc": "Calculators, forms, widgets and code edits.", "tasks": ["code", "codeEdit"] },
-    { "id": "seo", "label": "SEO & sales pages", "group": "writing", "kind": "text", "desc": "SEO metadata, sales pages and page sections.", "tasks": ["seoMeta", "salesPage", "salesSection"] },
+    { "id": "seo", "label": "SEO & sales pages", "group": "writing", "kind": "text", "desc": "SEO metadata, sales pages and page sections.", "tasks": ["seoMeta", "salesPage", "salesSection", "salesPageEdit"] },
     { "id": "email", "label": "Emails & lead magnets", "group": "writing", "kind": "text", "desc": "Lead magnets and email sequences.", "tasks": ["leadMagnet", "emailSequence"] },
     { "id": "social", "label": "Social posts & campaigns", "group": "writing", "kind": "text", "desc": "Posts, captions, campaign plans and content batches.", "tasks": ["campaignPlan", "contentBatch", "post"] },
     { "id": "ads", "label": "Ads", "group": "writing", "kind": "text", "desc": "Ad copy and campaign variants.", "tasks": ["ads"] },

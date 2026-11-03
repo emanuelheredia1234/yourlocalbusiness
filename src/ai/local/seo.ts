@@ -2,11 +2,13 @@ import type {
   Brand,
   Directives,
   FaqData,
+  GalleryData,
   GuaranteeData,
   HeroData,
   PricingData,
   ProblemData,
   Project,
+  PromptImage,
   ProofData,
   ProofStat,
   SalesPage,
@@ -324,6 +326,15 @@ function guaranteeData(f: Facts, project: Project): GuaranteeData {
   };
 }
 
+/** The photos the owner added stay (they're the owner's); the heading names the brand and promises nothing. */
+function galleryData(f: Facts, project: Project): GalleryData {
+  return {
+    heading: f.track === 'business' ? `Photos from ${f.brand}` : `A closer look at ${f.productShort}`,
+    intro: '',
+    items: previous(project, 'gallery')?.items ?? [],
+  };
+}
+
 export function generateSalesSection(project: Project, type: SalesSectionType, d: Directives = {}, variation = 0): SalesSection {
   const f = buildFacts(project);
   const v = Voice.create(f, d, hashStr(`${project.id}|sales|${type}|${variation}`));
@@ -342,6 +353,8 @@ export function generateSalesSection(project: Project, type: SalesSectionType, d
       return { id, type, visible: true, data: pricingData(f, project) };
     case 'faq':
       return { id, type, visible: true, data: faqData(f, primary, project) };
+    case 'gallery':
+      return { id, type, visible: true, data: galleryData(f, project) };
     case 'guarantee':
     default:
       return { id, type: 'guarantee', visible: true, data: guaranteeData(f, project) };
@@ -371,12 +384,17 @@ export function generateSalesPage(project: Project, d: Directives = {}, variatio
 
 // ───────────────────────── Facts vs copy ─────────────────────────
 
-/** Fields that hold facts (the owner's inputs, or real data), never AI copy. */
+/**
+ * Fields that hold facts (the owner's inputs, or real data), never AI copy. The page's images are the
+ * owner's too: the AI places them, and writes their alt text and captions, only through its "images"
+ * answer (placeImages), never by rewriting a section.
+ */
 const FACT_FIELDS: Partial<Record<SalesSectionType, string[]>> = {
-  hero: ['ctaSubtext'],
+  hero: ['ctaSubtext', 'imageId', 'imageAlt'],
   proof: ['stats', 'testimonials'],
   pricing: ['price', 'compareAt', 'compareAtNeedsReview', 'priceNote', 'badge'],
   guarantee: ['heading', 'body', 'days', 'offered'],
+  gallery: ['items'],
 };
 
 /** The part of a section the AI may rewrite. */
@@ -420,6 +438,229 @@ export function claimsToReview(page: SalesPage | null): number {
     if (s.type === 'pricing' && s.data.compareAtNeedsReview) n += 1;
   }
   return n;
+}
+
+/**
+ * `next` with the owner's facts (testimonials, facts, prices, guarantee, fine print) put back from
+ * `current`, matched by section id. Used after an AI edit: the engine's last pass (banned words, emoji)
+ * runs over the whole answer, and must never change what a customer said or a price. Where the images
+ * go is the edit's own (the app placed them), so that stays as `next` has it.
+ */
+export function withOwnerFacts(next: SalesPage, current: SalesPage): SalesPage {
+  const byId = new Map(current.sections.map((s) => [s.id, s]));
+  return {
+    ...next,
+    sections: next.sections.map((s) => {
+      const cur = byId.get(s.id);
+      if (!cur || cur.type !== s.type) return s;
+      const kept = keepFacts(s, cur);
+      if (kept.type === 'hero' && s.type === 'hero') return { ...kept, data: withHeroImage(kept.data, s.data.imageId, s.data.imageAlt) };
+      if (kept.type === 'gallery' && s.type === 'gallery') return { ...kept, data: { ...kept.data, items: s.data.items } };
+      return kept;
+    }),
+  };
+}
+
+/**
+ * An AI edit (`next`, made from `base`) saved over the page as it is now (`current`): sections and the
+ * look the edit didn't change keep anything the owner changed while the AI was working, and the owner's
+ * facts are always the current ones.
+ */
+export function applyEdit(current: SalesPage, base: SalesPage, next: SalesPage): SalesPage {
+  const before = new Map(base.sections.map((s) => [s.id, JSON.stringify(s)]));
+  const now = new Map(current.sections.map((s) => [s.id, s]));
+  const sections = next.sections.map((s) => (before.get(s.id) === JSON.stringify(s) ? now.get(s.id) ?? s : s));
+  const theme = JSON.stringify(next.theme) === JSON.stringify(base.theme) ? current.theme : next.theme;
+  return withOwnerFacts({ ...next, sections, theme }, current);
+}
+
+// ───────────────────────── Images on the page ─────────────────────────
+// The owner's images (marketing.seoImages) go in two places: the hero's main image and a photo gallery.
+// The page refers to each by its media id; the AI and the prompt box by its key ({{img-2}} → "img-2").
+
+type GalleryItem = GalleryData['items'][number];
+
+/** Where the page's images go: the AI's "images" answer, or the built-in engine's choice. */
+export interface ImagePlan {
+  /** key of the hero's image; null: no image; left out: as it is */
+  hero?: string | null;
+  heroAlt?: string;
+  /** the gallery's images, in order (this replaces the gallery); left out: as it is */
+  gallery?: { key: string; alt?: string; caption?: string }[];
+  galleryHeading?: string;
+  galleryIntro?: string;
+}
+
+/** An image token ({{img-2}}): it belongs in an image slot, never in the copy. */
+const IMAGE_TOKEN = /\{\{\s*img-\d+\s*\}\}/gi;
+
+/** A line the AI wrote for an image slot: no tokens, one line, at most `max` characters. */
+function slotText(v: unknown, max: number): string {
+  return typeof v === 'string' ? truncate(v.replace(IMAGE_TOKEN, '').replace(/\s+/g, ' ').trim(), max) : '';
+}
+
+/** The copy of a page without any image token the AI may have written into it (other text is left exactly as it is). */
+export function withoutImageTokens<T>(value: T): T {
+  if (typeof value === 'string') {
+    const stripped = value.replace(IMAGE_TOKEN, '');
+    return (stripped === value ? value : stripped.replace(/[ \t]{2,}/g, ' ').trim()) as T;
+  }
+  if (Array.isArray(value)) return value.map(withoutImageTokens) as T;
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withoutImageTokens(v)])) as T;
+  return value;
+}
+
+/** "img-2" from what the AI wrote ("img-2", "{{img-2}}", "IMG-02"); '' when it isn't an image key. */
+export function imageKeyFrom(v: unknown): string {
+  const m = typeof v === 'string' ? /^\{{0,2}\s*img-?(\d{1,3})\s*\}{0,2}$/i.exec(v.trim()) : null;
+  return m && Number(m[1]) > 0 ? `img-${Number(m[1])}` : '';
+}
+
+/** The AI's "images" answer, checked: only keys, and short plain lines of text. Null when it gave none. */
+export function imagePlanFrom(raw: unknown): ImagePlan | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const plan: ImagePlan = {};
+  if ('hero' in r) plan.hero = imageKeyFrom(r.hero) || null;
+  const heroAlt = slotText(r.heroAlt, 150);
+  if (heroAlt) plan.heroAlt = heroAlt;
+  if (Array.isArray(r.gallery)) {
+    plan.gallery = r.gallery
+      .map((g) => {
+        const o: Record<string, unknown> = g && typeof g === 'object' ? (g as Record<string, unknown>) : { key: g };
+        return { key: imageKeyFrom(o.key), alt: slotText(o.alt, 150), caption: slotText(o.caption, 200) };
+      })
+      .filter((g) => g.key);
+  }
+  const heading = slotText(r.galleryHeading, 100);
+  const intro = slotText(r.galleryIntro, 400);
+  if (heading) plan.galleryHeading = heading;
+  if (intro) plan.galleryIntro = intro;
+  return plan;
+}
+
+/**
+ * Alt text from the owner's note about an image, when the note says what it shows ("Our shop front"),
+ * not where to put it ("use it at the top"). The built-in engine can't see images, so it guesses nothing.
+ */
+export function altFromNote(note?: string): string {
+  const n = (note ?? '').replace(/\s+/g, ' ').trim();
+  if (!n) return '';
+  if (/^(use|put|place|make|add|show|set|as|for|in|on|at|top|bottom|hero|header|banner|gallery|main|first|last)\b/i.test(n) || /\b(use|put|place) (it|this|me|them)\b/i.test(n)) return '';
+  return truncate(n, 150);
+}
+
+/** The hero's data with this image (or none). */
+function withHeroImage(d: HeroData, imageId?: string, imageAlt?: string): HeroData {
+  const { imageId: _id, imageAlt: _alt, ...rest } = d;
+  return imageId ? { ...rest, imageId, imageAlt: imageAlt ?? '' } : rest;
+}
+
+/** The media ids of the images on the page (the hero's first, then the gallery's), each once. */
+export function pageImageIds(page: SalesPage | null, opts: { visibleOnly?: boolean } = {}): string[] {
+  const ids: string[] = [];
+  for (const s of page?.sections ?? []) {
+    if (opts.visibleOnly && !s.visible) continue;
+    if (s.type === 'hero' && s.data.imageId) ids.push(s.data.imageId);
+    if (s.type === 'gallery') ids.push(...s.data.items.map((i) => i.imageId));
+  }
+  return [...new Set(ids)];
+}
+
+/**
+ * The page with its images placed as `plan` says. Keys the page doesn't have are ignored, each image
+ * shows once (the hero's isn't repeated in the gallery), and an image no longer among `images` is taken
+ * off. Each `fresh` image (just added by the owner) that isn't placed goes at the end of the gallery:
+ * images added to a prompt box are always on the page. The gallery section is added (visible, after
+ * the solution) the first time it has images; an existing one keeps its place and visibility.
+ */
+export function placeImages(page: SalesPage, project: Project, images: PromptImage[], plan: ImagePlan, fresh: readonly string[] = []): SalesPage {
+  const usable = images.filter((i) => i.media.kind === 'image');
+  const byKey = new Map(usable.map((i) => [i.key, i]));
+  const known = new Set(usable.map((i) => i.media.id));
+  const heroSec = page.sections.find((s): s is Extract<SalesSection, { type: 'hero' }> => s.type === 'hero');
+  const galSec = page.sections.find((s): s is Extract<SalesSection, { type: 'gallery' }> => s.type === 'gallery');
+  const wasOn = new Map<string, { alt: string; caption: string }>();
+  for (const it of galSec?.data.items ?? []) wasOn.set(it.imageId, { alt: it.alt, caption: it.caption });
+  if (heroSec?.data.imageId) wasOn.set(heroSec.data.imageId, { alt: heroSec.data.imageAlt ?? '', caption: wasOn.get(heroSec.data.imageId)?.caption ?? '' });
+
+  // the hero's image
+  let heroId = heroSec?.data.imageId && known.has(heroSec.data.imageId) ? heroSec.data.imageId : undefined;
+  let heroAlt = heroId ? heroSec?.data.imageAlt ?? '' : '';
+  if (plan.hero === null) heroId = undefined;
+  else if (plan.hero && byKey.has(plan.hero)) {
+    const img = byKey.get(plan.hero)!;
+    if (img.media.id !== heroId) {
+      heroId = img.media.id;
+      heroAlt = wasOn.get(heroId)?.alt || altFromNote(img.note);
+    }
+  }
+  if (heroId && plan.heroAlt) heroAlt = plan.heroAlt;
+  if (!heroId) heroAlt = '';
+
+  // the gallery
+  let items: GalleryItem[] = plan.gallery
+    ? plan.gallery.flatMap((g) => {
+        const img = byKey.get(g.key);
+        if (!img) return [];
+        const was = wasOn.get(img.media.id);
+        return [{ imageId: img.media.id, alt: g.alt || was?.alt || altFromNote(img.note), caption: g.caption || was?.caption || '' }];
+      })
+    : (galSec?.data.items ?? []).filter((it) => known.has(it.imageId));
+  const seen = new Set<string>(heroId ? [heroId] : []);
+  items = items.filter((it) => !seen.has(it.imageId) && !!seen.add(it.imageId));
+  for (const key of fresh) {
+    const img = byKey.get(key);
+    if (img && !seen.has(img.media.id)) {
+      seen.add(img.media.id);
+      items.push({ imageId: img.media.id, alt: altFromNote(img.note), caption: '' });
+    }
+  }
+  const words = { ...(plan.galleryHeading ? { heading: plan.galleryHeading } : {}), ...(plan.galleryIntro ? { intro: plan.galleryIntro } : {}) };
+
+  let sections = page.sections.map((s): SalesSection => {
+    if (s.type === 'hero') return { ...s, data: withHeroImage(s.data, heroId, heroAlt) };
+    if (s.type === 'gallery') return { ...s, data: { ...s.data, ...words, items } };
+    return s;
+  });
+  if (!galSec && items.length) {
+    const g = generateSalesSection(project, 'gallery');
+    const gallery: SalesSection = { id: g.id, type: 'gallery', visible: true, data: { ...(g.data as GalleryData), ...words, items } };
+    const after = sections.findIndex((s) => s.type === 'solution');
+    const at = after >= 0 ? after + 1 : sections.findIndex((s) => s.type === 'hero') + 1 || sections.length;
+    sections = [...sections.slice(0, at), gallery, ...sections.slice(at)];
+  }
+  return { ...page, sections };
+}
+
+/**
+ * The built-in engine's way to put images on the page (it can't see them): the first goes in the hero
+ * when the hero has no image, the others at the end of the gallery.
+ */
+export function placeNewImages(page: SalesPage, project: Project, images: PromptImage[], keys: readonly string[]): SalesPage {
+  const usable = keys.filter((k) => images.some((i) => i.key === k && i.media.kind === 'image'));
+  if (!usable.length) return page;
+  const hero = page.sections.find((s) => s.type === 'hero');
+  const heroHas = hero?.type === 'hero' && !!hero.data.imageId && images.some((i) => i.media.id === hero.data.imageId);
+  return placeImages(page, project, images, heroHas ? {} : { hero: usable[0] }, usable);
+}
+
+/** The page without the images that are no longer among its images (removed in the prompt box). */
+export function pruneImages(page: SalesPage, images: PromptImage[]): SalesPage {
+  const ids = new Set(images.map((i) => i.media.id));
+  let changed = false;
+  const sections = page.sections.map((s): SalesSection => {
+    if (s.type === 'hero' && s.data.imageId && !ids.has(s.data.imageId)) {
+      changed = true;
+      return { ...s, data: withHeroImage(s.data) };
+    }
+    if (s.type === 'gallery' && s.data.items.some((it) => !ids.has(it.imageId))) {
+      changed = true;
+      return { ...s, data: { ...s.data, items: s.data.items.filter((it) => ids.has(it.imageId)) } };
+    }
+    return s;
+  });
+  return changed ? { ...page, sections } : page;
 }
 
 // ───────────────────────── SEO scoring ─────────────────────────
@@ -481,9 +722,27 @@ export function pageText(page: SalesPage): { all: string; h1: string; h2s: strin
           parts.push(s.data.finalHeading);
         }
         break;
+      case 'gallery':
+        // Only what the published page shows: a gallery with no photos is left out.
+        if (s.data.items.length) {
+          if (s.data.heading.trim()) h2s.push(s.data.heading);
+          parts.push(s.data.heading, s.data.intro, ...s.data.items.map((i) => i.caption));
+        }
+        break;
     }
   }
   return { all: parts.join(' '), h1, h2s, firstPara };
+}
+
+/** The images the page shows, with their alt text (hidden sections left out). */
+function shownImages(page: SalesPage | null): { imageId: string; alt: string }[] {
+  const out: { imageId: string; alt: string }[] = [];
+  for (const s of page?.sections ?? []) {
+    if (!s.visible) continue;
+    if (s.type === 'hero' && s.data.imageId) out.push({ imageId: s.data.imageId, alt: s.data.imageAlt ?? '' });
+    if (s.type === 'gallery') out.push(...s.data.items);
+  }
+  return out;
 }
 
 function countPhrase(text: string, phrase: string): number {
@@ -506,6 +765,8 @@ export function scoreSeo(meta: SeoMeta, page: SalesPage | null): { score: number
   const hero = page?.sections.find((s) => s.type === 'hero' && s.visible);
   const tLen = meta.metaTitle.length;
   const dLen = meta.metaDescription.length;
+  const pics = shownImages(page);
+  const described = pics.filter((p) => p.alt.trim().length >= 5).length;
   const checks: SeoCheck[] = [
     { id: 'title-len', label: 'Meta title is 30–60 characters', pass: tLen >= 30 && tLen <= 60, partial: tLen > 0 && tLen < 70, weight: 10, tip: `Currently ${tLen} characters.` },
     { id: 'title-kw', label: 'Primary keyword in meta title', pass: includes(meta.metaTitle), partial: looseIncludes(meta.metaTitle), weight: 10, tip: 'Put the exact keyword near the start of the title.' },
@@ -522,6 +783,10 @@ export function scoreSeo(meta: SeoMeta, page: SalesPage | null): { score: number
     { id: 'og', label: 'OpenGraph title and description set', pass: !!meta.ogTitle && !!meta.ogDescription, weight: 5, tip: 'Controls how links look when shared.' },
     { id: 'cta', label: 'Call to action above the fold', pass: !!hero && hero.type === 'hero' && !!hero.data.ctaLabel, weight: 4, tip: 'The hero needs a clear button.' },
     { id: 'alt', label: 'Social image has alt text', pass: meta.ogImageAlt.trim().length >= 8, weight: 3, tip: 'Describe the image for screen readers.' },
+    // only for a page with images: alt text is how search engines and screen readers know what they show
+    ...(pics.length
+      ? [{ id: 'img-alt', label: 'Every image on the page has alt text', pass: described === pics.length, partial: described > 0, weight: 4, tip: `${described} of ${pics.length} described. In Edit, write what each image shows under it.` }]
+      : []),
   ];
   const max = checks.reduce((s, c) => s + c.weight, 0);
   const got = checks.reduce((s, c) => s + (c.pass ? c.weight : c.partial ? c.weight * 0.45 : 0), 0);
@@ -539,7 +804,27 @@ const ICON_SVG: Record<string, string> = {
   sparkles: '<path d="m12 3-1.9 5.8L4 10.7l6.1 1.9L12 18.4l1.9-5.8 6.1-1.9-6.1-1.9z"/>',
 };
 
-export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, project: Project): string {
+export interface SalesHtmlOptions {
+  /** an image's address, by its media id: a data URL (Copy, Export), or a {{img-N}} token (publishing). An image without one is left out. */
+  imageUrl?: (mediaId: string) => string | undefined;
+  /** an image's size, by its media id, so the page doesn't jump while its images load */
+  imageSize?: (mediaId: string) => { w: number; h: number } | undefined;
+  /** the page's address (canonical link, og:url and the offer's url), used instead of meta.canonical */
+  canonical?: string;
+  /** where the page's images are served from: a link preview needs a full image address (og:image) */
+  origin?: string;
+}
+
+/** The owner pasted this canonical address themselves: it isn't the one the app makes from their website and the slug. */
+export function ownCanonical(project: Project, meta: SeoMeta): boolean {
+  const c = meta.canonical.trim();
+  return !!c && c !== canonicalFor(project, meta.slug);
+}
+
+/** Stands for the share image in the schema markup until its address goes in (that address may hold a {{img-N}} token). */
+const SHARE_IMAGE = '__ylb_share_image__';
+
+export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, project: Project, opts: SalesHtmlOptions = {}): string {
   const c = brand.colors;
   const dark = page.theme.mode === 'dark';
   const bg = dark ? '#0f1412' : '#ffffff';
@@ -553,12 +838,29 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
       : page.theme.font === 'grotesk'
         ? '"Helvetica Neue", Arial, system-ui, sans-serif'
         : 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
-  const e = escapeHtml;
+  // Text never carries a working {{img-N}}: publishing turns those into image addresses, and copy isn't an image.
+  const e = (s: string) => escapeHtml(s).replace(/\{\{/g, '{&#123;');
   // Only the owner's own addresses: no guessed domain. Without a link, buttons stay on the page.
   const site = ensureUrl(brand.websiteUrl).replace(/\/$/, '');
   const link = pageLink(project) || '#pricing';
+  const canonical = (opts.canonical ?? meta.canonical).trim();
   const faq = page.sections.find((s) => s.type === 'faq');
   const pricing = page.sections.find((s) => s.type === 'pricing');
+
+  // Images: only those the caller has an address for. A link preview needs a full http(s) address.
+  const imageSrc = (id?: string) => (id ? opts.imageUrl?.(id) || undefined : undefined);
+  const origin = (opts.origin ?? '').replace(/\/+$/, '');
+  const fullUrl = (u?: string) => (!u ? '' : /^https?:\/\//i.test(u) ? u : origin && /^(\/|\{\{)/.test(u) ? `${origin}${u}` : '');
+  const img = (id: string, alt: string, extra: string) => {
+    const u = imageSrc(id);
+    if (!u) return '';
+    const size = opts.imageSize?.(id);
+    const wh = size && size.w > 0 && size.h > 0 ? ` width="${Math.round(size.w)}" height="${Math.round(size.h)}"` : '';
+    return `<img src="${escapeHtml(u)}" alt="${e(alt)}"${wh}${extra}>`;
+  };
+  const heroSec = page.sections.find((s) => s.type === 'hero' && s.visible);
+  const shareImage = heroSec?.type === 'hero' ? fullUrl(imageSrc(heroSec.data.imageId)) : '';
+
   const ld: Record<string, unknown>[] = [
     project.track === 'business'
       ? {
@@ -567,6 +869,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
           name: brand.name,
           description: meta.metaDescription,
           ...(site ? { url: site } : {}),
+          ...(shareImage ? { image: SHARE_IMAGE } : {}),
           ...(project.location ? { address: { '@type': 'PostalAddress', addressLocality: project.location.city, addressRegion: project.location.region } } : {}),
         }
       : {
@@ -574,8 +877,9 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
           '@type': 'Product',
           name: pricing && pricing.type === 'pricing' ? pricing.data.planName : brand.name,
           description: meta.metaDescription,
+          ...(shareImage ? { image: SHARE_IMAGE } : {}),
           brand: { '@type': 'Brand', name: brand.name },
-          offers: { '@type': 'Offer', priceCurrency: 'USD', price: pricing && pricing.type === 'pricing' ? pricing.data.price : project.studio.price, availability: 'https://schema.org/InStock', ...(meta.canonical ? { url: meta.canonical } : {}) },
+          offers: { '@type': 'Offer', priceCurrency: 'USD', price: pricing && pricing.type === 'pricing' ? pricing.data.price : project.studio.price, availability: 'https://schema.org/InStock', ...(canonical ? { url: canonical } : {}) },
         },
   ];
   if (faq && faq.type === 'faq' && faq.visible) {
@@ -585,23 +889,40 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
       mainEntity: faq.data.items.map((i) => ({ '@type': 'Question', name: i.q, acceptedAnswer: { '@type': 'Answer', text: i.a } })),
     });
   }
-  const json = JSON.stringify(ld.length === 1 ? ld[0] : ld, null, 2).replace(/</g, '\\u003c');
+  // As in the text, "{{" in the owner's words is written as "{{"; only the share image keeps its token.
+  const json = JSON.stringify(ld.length === 1 ? ld[0] : ld, null, 2)
+    .replace(/</g, '\\u003c')
+    .replace(/\{\{/g, '{\\u007b')
+    .replace(`"${SHARE_IMAGE}"`, () => JSON.stringify(shareImage).replace(/</g, '\\u003c'));
 
   const sectionHtml = page.sections
     .filter((s) => s.visible)
     .map((s) => {
       switch (s.type) {
-        case 'hero':
-          return `  <header class="hero">
-    <div class="wrap">
-      <p class="eyebrow">${e(s.data.eyebrow)}</p>
+        case 'hero': {
+          const copy = `<p class="eyebrow">${e(s.data.eyebrow)}</p>
       <h1>${e(s.data.headline)}</h1>
       <p class="lead">${e(s.data.subheadline)}</p>
       ${s.data.bullets.length ? `<ul class="ticks">${s.data.bullets.map((b) => `<li>${e(b)}</li>`).join('')}</ul>` : ''}
       <a class="btn" href="#pricing">${e(s.data.ctaLabel)}</a>
-      ${s.data.ctaSubtext.trim() ? `<p class="fine">${e(s.data.ctaSubtext)}</p>` : ''}
+      ${s.data.ctaSubtext.trim() ? `<p class="fine">${e(s.data.ctaSubtext)}</p>` : ''}`;
+          const pic = s.data.imageId ? img(s.data.imageId, s.data.imageAlt ?? '', ' fetchpriority="high" decoding="async"') : '';
+          if (!pic) {
+            return `  <header class="hero">
+    <div class="wrap">
+      ${copy}
     </div>
   </header>`;
+          }
+          return `  <header class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+      ${copy}
+      </div>
+      <figure class="hero-img">${pic}</figure>
+    </div>
+  </header>`;
+        }
         case 'problem':
           return `  <section class="problem">
     <div class="wrap">
@@ -672,11 +993,38 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
     </div>
   </section>`;
         }
+        case 'gallery': {
+          // Only photos it has an address for; left out when none are left.
+          const photos = s.data.items
+            .map((it) => {
+              const pic = img(it.imageId, it.alt, ' loading="lazy" decoding="async"');
+              return pic ? `<figure>${pic}${it.caption.trim() ? `<figcaption>${e(it.caption)}</figcaption>` : ''}</figure>` : '';
+            })
+            .filter(Boolean);
+          if (!photos.length) return '';
+          return `  <section class="gallery">
+    <div class="wrap">
+      ${s.data.heading.trim() ? `<h2>${e(s.data.heading)}</h2>\n      ` : ''}${s.data.intro.trim() ? `<p class="lead">${e(s.data.intro)}</p>\n      ` : ''}<div class="photos">${photos.join('')}</div>
+    </div>
+  </section>`;
+        }
         default:
           return '';
       }
     })
+    .filter(Boolean)
     .join('\n');
+  const imageCss = sectionHtml.includes('<img ')
+    ? `.hero-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 44px; align-items: center; }
+.hero-img { margin: 0; }
+.hero-img img { display: block; width: 100%; height: auto; max-height: 560px; object-fit: cover; border-radius: var(--radius); box-shadow: 0 24px 50px -30px rgba(0, 0, 0, .45); }
+.photos { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-top: 28px; }
+.photos figure { margin: 0; }
+.photos img { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--radius); }
+.photos figcaption { margin-top: 8px; color: var(--muted); font-size: 15px; }
+@media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; gap: 28px; } }
+`
+    : '';
 
   return `<!doctype html>
 <html lang="en">
@@ -686,14 +1034,14 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
 <title>${e(meta.metaTitle)}</title>
 <meta name="description" content="${e(meta.metaDescription)}" />
 <meta name="keywords" content="${e([meta.primaryKeyword, ...meta.secondaryKeywords].join(', '))}" />
-${meta.canonical ? `<link rel="canonical" href="${e(meta.canonical)}" />\n` : ''}<meta property="og:type" content="${project.track === 'business' ? 'business.business' : 'product'}" />
+${canonical ? `<link rel="canonical" href="${e(canonical)}" />\n` : ''}<meta property="og:type" content="${project.track === 'business' ? 'business.business' : 'product'}" />
 <meta property="og:title" content="${e(meta.ogTitle)}" />
 <meta property="og:description" content="${e(meta.ogDescription)}" />
-${meta.canonical ? `<meta property="og:url" content="${e(meta.canonical)}" />\n` : ''}<meta property="og:image:alt" content="${e(meta.ogImageAlt)}" />
+${canonical ? `<meta property="og:url" content="${e(canonical)}" />\n` : ''}${shareImage ? `<meta property="og:image" content="${escapeHtml(shareImage)}" />\n` : ''}<meta property="og:image:alt" content="${e(meta.ogImageAlt)}" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="${e(meta.ogTitle)}" />
 <meta name="twitter:description" content="${e(meta.ogDescription)}" />
-${LT}script type="application/ld+json">
+${shareImage ? `<meta name="twitter:image" content="${escapeHtml(shareImage)}" />\n` : ''}${LT}script type="application/ld+json">
 ${json}
 ${SCRIPT_CLOSE}
 <style>
@@ -739,7 +1087,7 @@ details p { margin: 0 0 18px; color: var(--muted); }
 .seal { width: 92px; height: 92px; border-radius: 50%; margin: 0 auto 16px; background: var(--brand); color: var(--on-brand); display: grid; place-content: center; font-size: 30px; font-weight: 800; line-height: 1; }
 .seal small { font-size: 11px; letter-spacing: .14em; }
 footer { padding: 30px 0; text-align: center; color: var(--muted); font-size: 14px; }
-@media (max-width: 640px) { section, header { padding: 52px 0; } .stats { grid-template-columns: 1fr; } }
+${imageCss}@media (max-width: 640px) { section, header { padding: 52px 0; } .stats { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>

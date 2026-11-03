@@ -946,6 +946,8 @@ export interface Project {
     seoGuide?: string;
     /** images added in the sales page's prompt boxes */
     seoImages?: PromptImage[];
+    /** the highest image number (img-N) the sales page has used: a removed image's number is never given to a new one, since its published file may still be cached */
+    seoImageMax?: number;
     /** where the sales page is published, if it is */
     seoPublished?: Published;
     campaign: CampaignConfig;

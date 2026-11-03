@@ -137,15 +137,18 @@ function kindLabel(m: MediaRef): string {
 
 /**
  * One line per image for a prompt: its token, whether it's attached (and which attachment it is),
- * the owner's note and its size. The first `max` images are the ones imagesForAI attaches, in order:
+ * the owner's note and its size:
  *   {{img-1}} (attached image 1): "our shop front" — 1200×800 photo
+ * `attached` is best given as the keys the request really attached, in order (the engine passes
+ * env.attached): a file that couldn't be loaded, or a limit of the AI, then never shifts the numbers.
+ * A number means "the first N images", which is what imagesForAI tries to attach.
  */
-export function describeImagesForAI(images: PromptImage[], max = MAX_AI_IMAGES): string {
+export function describeImagesForAI(images: PromptImage[], attached: number | readonly string[] = MAX_AI_IMAGES): string {
   let n = 0;
   return images
     .map((img) => {
-      const attached = img.media.kind === 'image' && n < max;
-      const where = attached ? `attached image ${++n}` : 'not attached: go by its note';
+      const at = typeof attached === 'number' ? (img.media.kind === 'image' && n < attached ? ++n : 0) : attached.indexOf(img.key) + 1;
+      const where = at ? `attached image ${at}` : 'not attached: go by its note';
       const note = img.note?.trim() ? `: ${JSON.stringify(truncate(img.note.trim().replace(/\s+/g, ' '), 300))}` : '';
       return `{{${img.key}}} (${where})${note} — ${kindLabel(img.media)}`;
     })
@@ -240,18 +243,23 @@ async function fileOf(img: PromptImage): Promise<Blob | null> {
 }
 
 /**
- * The first `max` images, ready for the AI: up to 1280 px JPEGs, in order. An image whose file can't
- * be had (or read) is skipped.
+ * The first `max` images, ready for the AI (up to 1280 px JPEGs, in order), each with its key. An image
+ * whose file can't be had (or read) is skipped, so the keys say exactly which ones are ready to attach.
  */
-export async function imagesForAI(images: PromptImage[] | undefined, max = MAX_AI_IMAGES): Promise<Blob[]> {
-  const out: Blob[] = [];
+export async function imagesWithKeysForAI(images: PromptImage[] | undefined, max = MAX_AI_IMAGES): Promise<{ key: string; blob: Blob }[]> {
+  const out: { key: string; blob: Blob }[] = [];
   for (const img of (images ?? []).filter((i) => i.media.kind === 'image').slice(0, max)) {
     const blob = await fileOf(img);
     if (!blob) continue;
     const small = await encode(blob, { steps: [[1280, 0.85]] }).catch(() => null);
-    if (small) out.push(small.blob);
+    if (small) out.push({ key: img.key, blob: small.blob });
   }
   return out;
+}
+
+/** The first `max` images, ready for the AI: up to 1280 px JPEGs, in order (see imagesWithKeysForAI). */
+export async function imagesForAI(images: PromptImage[] | undefined, max = MAX_AI_IMAGES): Promise<Blob[]> {
+  return (await imagesWithKeysForAI(images, max)).map((x) => x.blob);
 }
 
 /** Sizes to try, largest first, so each image stays under the budget. */
