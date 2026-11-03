@@ -92,14 +92,23 @@ export function CodeEditor({ value, onChange, lang, readOnly, className, ariaLab
   return <div ref={host} className={cn('h-full min-h-0 overflow-hidden', className)} />;
 }
 
-export function LivePreview({ code, title, className }: { code: { html: string; css: string; js: string }; title?: string; className?: string }) {
+type PreviewCode = { html: string; css: string; js: string };
+
+/**
+ * The page as it will look, in a sandbox like a published page's (scripts run, no storage of its own:
+ * the storage stand-in keeps code that saves things working). `images` fills in the {{img-N}} tokens
+ * (data URLs); an image that isn't there yet shows nothing rather than its token.
+ */
+const previewDoc = (c: PreviewCode, title?: string, images?: Record<string, string>) => buildDocument(c, title, { images: images ?? {}, storageShim: true });
+
+export function LivePreview({ code, title, images, className }: { code: PreviewCode; title?: string; images?: Record<string, string>; className?: string }) {
   const [device, setDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
-  const [doc, setDoc] = useState(() => buildDocument(code, title));
+  const [doc, setDoc] = useState(() => previewDoc(code, title, images));
   const [nonce, setNonce] = useState(0);
-  const update = useRef(debounce((c: { html: string; css: string; js: string }, t?: string) => setDoc(buildDocument(c, t)), 350));
+  const update = useRef(debounce((c: PreviewCode, t?: string, i?: Record<string, string>) => setDoc(previewDoc(c, t, i)), 350));
   useEffect(() => {
-    update.current(code, title);
-  }, [code, title]);
+    update.current(code, title, images);
+  }, [code, title, images]);
   const width = device === 'desktop' ? '100%' : device === 'tablet' ? '768px' : '390px';
   return (
     <div className={cn('flex h-full min-h-0 flex-col', className)}>
