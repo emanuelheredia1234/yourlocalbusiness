@@ -1,4 +1,5 @@
-// Each signed-in user's own API keys (for now: Manus), so their agent tasks run in their own account.
+// Each signed-in user's own API keys (OpenAI, Anthropic, Google, xAI, OpenRouter, Meta, Manus), so
+// their requests run in their own accounts: never limited, never on the app owner's bill.
 //
 // Keys are encrypted here (AES-256-GCM) and kept in Supabase's user_secrets table, which only the
 // server can read (row-level security with no policies; the secret key bypasses it). The browser only
@@ -7,7 +8,8 @@
 
 import { createSecretBox, serviceHeaders } from './secretBox.mjs';
 
-export const USER_KEY_PROVIDERS = ['manus'];
+/** Providers a user can add their own key for (OpenRouter: the main slot only), in routing order. */
+export const USER_KEY_PROVIDERS = ['openrouter', 'google', 'xai', 'anthropic', 'meta', 'manus', 'openai'];
 
 export function userKeysFromEnv(env = process.env, fetchImpl = globalThis.fetch) {
   return createUserKeys({
@@ -26,6 +28,7 @@ export function createUserKeys({ supabaseUrl = '', secretKey = '', encryptionSec
   const decrypt = box.open;
   const headers = serviceHeaders(secretKey);
   const cache = new Map(); // `${user}:${provider}` → { value, until }
+  const allCache = new Map(); // user → { value: { provider: key }, until }
 
   const unavailable = () => Object.assign(new Error('Your own keys need the SUPABASE_SECRET_KEY Secret on the server. Ask the app’s owner to add it.'), { status: 501, code: 'NOT_CONFIGURED' });
   const upstream = (what, status) => Object.assign(new Error(`Couldn’t ${what} your key (Supabase ${status}). Try again.`), { status: 502, code: 'UPSTREAM' });
@@ -60,12 +63,35 @@ export function createUserKeys({ supabaseUrl = '', secretKey = '', encryptionSec
       cache.set(k, { value, until: Date.now() + 5 * 60_000 });
       return value;
     },
-    /** What the browser may know: which keys are saved, and their last 4 characters. */
+    /** All of a user's keys in plain text ({ provider: key }), for routing their requests (one read, cached). */
+    async all(userId) {
+      if (!enabled || !userId) return {};
+      const hit = allCache.get(userId);
+      if (hit && hit.until > Date.now()) return { ...hit.value };
+      const value = {};
+      for (const row of await rows(userId)) {
+        if (!USER_KEY_PROVIDERS.includes(row.provider)) continue;
+        try {
+          value[row.provider] = decrypt(row.ciphertext, `${userId}:${row.provider}`);
+        } catch {
+          /* encrypted with another secret: treat as not set */
+        }
+      }
+      allCache.set(userId, { value, until: Date.now() + 5 * 60_000 });
+      if (allCache.size > 2000) allCache.delete(allCache.keys().next().value);
+      return { ...value };
+    },
+    /** What the browser may know: which keys are saved, and their last 4 characters ({ provider: {last4, updatedAt} | null }). */
     async info(userId) {
       const out = Object.fromEntries(USER_KEY_PROVIDERS.map((p) => [p, null]));
       if (!enabled) return out;
       for (const r of await rows(userId)) if (r.provider in out) out[r.provider] = { last4: r.last4, updatedAt: r.updated_at };
       return out;
+    },
+    /** The same as a list: [{ provider, last4, updatedAt }] for the saved keys only. */
+    async list(userId) {
+      const info = await this.info(userId);
+      return USER_KEY_PROVIDERS.filter((p) => info[p]).map((provider) => ({ provider, last4: info[provider].last4, updatedAt: info[provider].updatedAt }));
     },
     async set(userId, provider, plain) {
       check(provider);
@@ -78,12 +104,14 @@ export function createUserKeys({ supabaseUrl = '', secretKey = '', encryptionSec
       });
       if (!res.ok) throw upstream('save', res.status);
       cache.set(`${userId}:${provider}`, { value, until: Date.now() + 5 * 60_000 });
+      allCache.delete(userId);
     },
     async remove(userId, provider) {
       check(provider);
       const res = await fetch(`${url}/rest/v1/user_secrets?user_id=eq.${encodeURIComponent(userId)}&provider=eq.${provider}`, { method: 'DELETE', headers, signal: AbortSignal.timeout(10_000) });
       if (!res.ok) throw upstream('remove', res.status);
       cache.delete(`${userId}:${provider}`);
+      allCache.delete(userId);
     },
   };
 }

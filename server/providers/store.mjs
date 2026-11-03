@@ -2,7 +2,8 @@
 // key is set, also (encrypted) in Supabase: hosts like Replit's published apps wipe their disk on
 // restart, and several copies of the server must agree on the keys (server/appState.mjs).
 //
-//   { providers: { [id]: { apiKey?, enabled?, functions?, effort?: {kind: value}, models?: {kind: id} } }, order: [id] }
+//   { providers: { [id]: { apiKey?, enabled?, functions?, effort?: {kind: value}, models?: {kind: id} } }, order: [id],
+//     limits?: { requestsPerDay, usdPerDay } }   (daily limits for signed-in non-admin users on these keys; 0 = none)
 // Keys from Replit Secrets / env vars take precedence over keys typed into the app, and no key
 // is ever sent back to the browser (only its last 4 characters).
 
@@ -19,6 +20,19 @@ const MODEL_RE = /^[A-Za-z0-9][\w.:/@+-]{0,127}$/;
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const REMOTE_KEY = 'ai-providers';
+
+/** Daily limits for each signed-in non-admin user on the owner's keys, until the owner changes them. */
+export const DEFAULT_LIMITS = { requestsPerDay: 50, usdPerDay: 1 };
+const MAX_LIMITS = { requestsPerDay: 100_000, usdPerDay: 10_000 };
+
+function cleanLimits(raw) {
+  const out = { ...DEFAULT_LIMITS };
+  for (const k of Object.keys(DEFAULT_LIMITS)) {
+    const v = Number(raw?.[k]);
+    if (raw && raw[k] !== undefined && raw[k] !== null && Number.isFinite(v) && v >= 0) out[k] = k === 'requestsPerDay' ? Math.min(Math.floor(v), MAX_LIMITS[k]) : Math.min(Math.round(v * 100) / 100, MAX_LIMITS[k]);
+  }
+  return out;
+}
 const LOCAL_ONLY = { enabled: false };
 
 export class AIStore {
@@ -55,6 +69,7 @@ export class AIStore {
     this.state = {
       providers: raw?.providers && typeof raw.providers === 'object' ? raw.providers : {},
       order: Array.isArray(raw?.order) ? raw.order : [...PROVIDER_IDS],
+      ...(raw?.limits && typeof raw.limits === 'object' ? { limits: raw.limits } : {}),
     };
   }
 
@@ -331,6 +346,7 @@ export class AIStore {
   list() {
     return {
       order: this.order(),
+      limits: this.limits(),
       providers: this.order().map((id) => {
         const env = this.envKey(id);
         return {
@@ -384,6 +400,28 @@ export class AIStore {
     this.patched(this.state.providers[id], id, patch); // check it first: an invalid change throws here
     this.mutate((st) => {
       st.providers[id] = this.patched(st.providers[id], id, patch);
+    });
+  }
+
+  /** Daily limits for signed-in non-admin users on these keys (0 = no limit). */
+  limits() {
+    return cleanLimits(this.state.limits);
+  }
+
+  /** Change the daily limits: { requestsPerDay?, usdPerDay? } (non-negative numbers; 0 = no limit). */
+  setLimits(patch) {
+    if (!patch || typeof patch !== 'object') throw fail(400, 'Send the daily limits.');
+    const next = {};
+    for (const k of Object.keys(DEFAULT_LIMITS)) {
+      if (patch[k] === undefined) continue;
+      const v = Number(patch[k]);
+      if (patch[k] === null || patch[k] === '' || !Number.isFinite(v) || v < 0) throw fail(400, k === 'requestsPerDay' ? 'Requests per day must be 0 (no limit) or more.' : 'Dollars per day must be 0 (no limit) or more.');
+      if (v > MAX_LIMITS[k]) throw fail(400, k === 'requestsPerDay' ? `Requests per day can be at most ${MAX_LIMITS[k]}.` : `Dollars per day can be at most ${MAX_LIMITS[k]}.`);
+      next[k] = v;
+    }
+    if (!Object.keys(next).length) throw fail(400, 'Send requestsPerDay or usdPerDay.');
+    this.mutate((st) => {
+      st.limits = cleanLimits({ ...cleanLimits(st.limits), ...next });
     });
   }
 

@@ -4,11 +4,17 @@
 // Falling back to the next key: writing and photos move on after any provider failure except a
 // content-policy block or refusal (the same request would fail elsewhere too). Videos and agent
 // tasks are paid jobs, so they move on only when the provider certainly started nothing.
+//
+// A signed-in user's own keys (ownKeys: { provider: key }) go first: if any of them can do the
+// request's kind, only those are used (with the registry's default model and effort), never the
+// owner's keys. `meter` hears when a request reaches a provider (start) and what it cost (cost),
+// so the routes can count it against the owner's daily limits.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { PROVIDERS, adapterId, effortIds, effortLabel, estimateCost, fnById, kindDef } from './registry.mjs';
+import { PROVIDERS, adapterId, defaultEffort, effortIds, effortLabel, estimateCost, fnById, kindDef } from './registry.mjs';
+import { USER_KEY_PROVIDERS } from '../userKeys.mjs';
 import { ProviderError } from './http.mjs';
 import anthropic from './adapters/anthropic.mjs';
 import google from './adapters/google.mjs';
@@ -43,6 +49,9 @@ function canFallBack(err, kind) {
 }
 
 const round6 = (n) => Math.round(n * 1e6) / 1e6;
+
+/** The label a user's own key is shown with. */
+export const ownLabel = (id) => `${PROVIDERS[id].label} (your key)`;
 
 export class AIRouter {
   /** tasksFile: where the Manus tasks this app started are remembered (only those can be read or continued). */
@@ -120,9 +129,50 @@ export class AIRouter {
     return t;
   }
 
-  ctx(id) {
+  /** What an adapter needs for a key slot; apiKey: a user's own key instead of the owner's (kept only for this call). */
+  ctx(id, apiKey = null) {
     const a = adapterId(id);
-    return { fetch: this.fetch, base: String(this.baseUrls[id] || this.baseUrls[a] || this.adapters[a].base).replace(/\/+$/, ''), key: this.store.key(id), label: PROVIDERS[id].label };
+    const base = String(this.baseUrls[id] || this.baseUrls[a] || this.adapters[a].base).replace(/\/+$/, '');
+    return apiKey ? { fetch: this.fetch, base, key: apiKey, label: ownLabel(id) } : { fetch: this.fetch, base, key: this.store.key(id), label: PROVIDERS[id].label };
+  }
+
+  /** A user's own keys that can do a kind of work, in routing order (Manus works as tasks, see manusCreate). */
+  ownRoute(kind, ownKeys) {
+    if (!ownKeys) return [];
+    return USER_KEY_PROVIDERS.filter((id) => id !== 'manus' && typeof ownKeys[id] === 'string' && ownKeys[id] && kindDef(id, kind));
+  }
+
+  /**
+   * The keys a request runs on, in order: the user's own keys that can do it (default model and effort),
+   * or else the owner's keys that power the function (their saved model and effort).
+   */
+  plan(fn, kind, ownKeys = null) {
+    const own = this.ownRoute(kind, ownKeys);
+    if (own.length) {
+      return own.map((id) => {
+        const model = kindDef(id, kind).defaultModel;
+        return { id, key: ownKeys[id], model, effort: defaultEffort(id, kind, model), own: true };
+      });
+    }
+    let route = this.store.route(fn);
+    if (kind === 'image') route = route.filter((id) => id !== 'manus');
+    return route.map((id) => {
+      const s = this.store.settings(id);
+      return { id, key: null, model: s.models[kind], effort: s.effort[kind], own: false };
+    });
+  }
+
+  /** Mark what a user's own key served (shown and logged as "<Provider> (your key)"). */
+  ownMeta(meta, step) {
+    if (step.own) {
+      meta.providerLabel = ownLabel(step.id);
+      meta.ownKey = true;
+    }
+    return meta;
+  }
+
+  ownExtra(step) {
+    return step.own ? { ownKey: true, providerLabel: ownLabel(step.id) } : {};
   }
 
   /** The adapter for a key slot (extra OpenRouter slots use OpenRouter's). */
@@ -169,27 +219,27 @@ export class AIRouter {
 
   // ───────────── writing ─────────────
 
-  async text(fn, { prompt, images = [], tier = 'default', signal, brain = null, userId = null }) {
+  async text(fn, { prompt, images = [], tier = 'default', signal, brain = null, userId = null, ownKeys = null, meter = null }) {
     if (fnById[fn]?.kind !== 'text') throw new ProviderError('BAD_REQUEST', 'Unknown AI function.', { status: 400 });
-    const route = this.store.route(fn);
+    const route = this.plan(fn, 'text', ownKeys);
     if (!route.length) throw this.noProvider(fn);
     const attempts = [];
     let last = null;
-    for (const id of route) {
-      const s = this.store.settings(id);
-      const model = s.models.text;
-      const effort = s.effort.text;
+    for (const step of route) {
+      const { id, model, effort } = step;
       const t0 = Date.now();
       try {
-        const r = await this.adapter(id).text(this.ctx(id), { model, effort, system: SYSTEM, prompt, images, tier, signal });
-        const meta = this.describe(id, 'text', fn, { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits });
+        meter?.start?.();
+        const r = await this.adapter(id).text(this.ctx(id, step.key), { model, effort, system: SYSTEM, prompt, images, tier, signal });
+        const meta = this.ownMeta(this.describe(id, 'text', fn, { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits }), step);
         if (attempts.length) meta.attempts = attempts;
-        this.log(meta, { brain, userId });
+        this.log(meta, { brain, userId, ...this.ownExtra(step) });
+        meter?.cost?.(meta.cost?.usd);
         return { text: r.text, meta };
       } catch (e) {
-        last = asProviderError(e, PROVIDERS[id].label);
-        this.logFailure(id, 'text', fn, model, effort, t0, last, { brain, userId });
-        attempts.push({ provider: id, providerLabel: PROVIDERS[id].label, code: last.code, error: last.message });
+        last = asProviderError(e, step.own ? ownLabel(id) : PROVIDERS[id].label);
+        this.logFailure(id, 'text', fn, model, effort, t0, last, { brain, userId, ...this.ownExtra(step) });
+        attempts.push({ provider: id, providerLabel: step.own ? ownLabel(id) : PROVIDERS[id].label, code: last.code, error: last.message });
         if (!canFallBack(last, 'text') || signal?.aborted) break;
       }
     }
@@ -200,31 +250,31 @@ export class AIRouter {
   // ───────────── photos ─────────────
 
   /** One photo from the first key that can make it. Manus works as a task instead (see manusCreate). */
-  async image({ prompt, aspect, signal, userId = null }) {
+  async image({ prompt, aspect, signal, userId = null, ownKeys = null, meter = null }) {
     const fn = 'photos';
-    const route = this.store.route(fn).filter((id) => id !== 'manus');
+    const route = this.plan(fn, 'image', ownKeys);
     if (!route.length) {
       if (this.store.powers('manus', fn)) throw new ProviderError('USE_AGENT', 'Manus makes your photos: the app starts a Manus task.', { status: 409 });
       throw this.noProvider(fn);
     }
     const attempts = [];
     let last = null;
-    for (const id of route) {
-      const s = this.store.settings(id);
-      const model = s.models.image;
-      const effort = s.effort.image;
+    for (const step of route) {
+      const { id, model, effort } = step;
       const t0 = Date.now();
       try {
-        const r = await this.adapter(id).image(this.ctx(id), { model, effort, prompt, aspect, signal });
-        const meta = this.describe(id, 'image', fn, { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits, params: r.params });
+        meter?.start?.();
+        const r = await this.adapter(id).image(this.ctx(id, step.key), { model, effort, prompt, aspect, signal });
+        const meta = this.ownMeta(this.describe(id, 'image', fn, { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits, params: r.params }), step);
         if (attempts.length) meta.attempts = attempts;
         if (r.dropped?.length) meta.note = `${PROVIDERS[id].label} didn’t accept ${r.dropped.join(', ')}, so it was left out.`;
-        this.log(meta, { userId });
+        this.log(meta, { userId, ...this.ownExtra(step) });
+        meter?.cost?.(meta.cost?.usd);
         return { bytes: r.bytes, contentType: r.contentType, revisedPrompt: r.revisedPrompt || '', meta };
       } catch (e) {
-        last = asProviderError(e, PROVIDERS[id].label);
-        this.logFailure(id, 'image', fn, model, effort, t0, last, { userId });
-        attempts.push({ provider: id, providerLabel: PROVIDERS[id].label, code: last.code, error: last.message });
+        last = asProviderError(e, step.own ? ownLabel(id) : PROVIDERS[id].label);
+        this.logFailure(id, 'image', fn, model, effort, t0, last, { userId, ...this.ownExtra(step) });
+        attempts.push({ provider: id, providerLabel: step.own ? ownLabel(id) : PROVIDERS[id].label, code: last.code, error: last.message });
         if (!canFallBack(last, 'image') || signal?.aborted) break;
       }
     }
@@ -258,6 +308,7 @@ export class AIRouter {
       if (est != null) meta.cost = { usd: round6(est), source: 'estimate' };
     }
     if (job.attempts?.length) meta.attempts = job.attempts;
+    if (job.ownKey) this.ownMeta(meta, { id: job.provider, own: true });
     return { id: job.id, state: job.state, progress: job.progress ?? null, error: job.error || '', meta };
   }
 
@@ -265,25 +316,38 @@ export class AIRouter {
     Object.assign(job, patch, { finishedAt: Date.now() });
     const view = this.jobView(job);
     this.usage.update(job.usageId, { ok: job.state === 'done', pending: false, ms: view.meta.ms, cost: view.meta.cost, usage: view.meta.usage, ...(job.error ? { error: job.error } : {}) });
+    // the cost counts toward the user's day once it's known (only once, kept in memory with the job)
+    const onFinished = job.onFinished;
+    job.onFinished = null;
+    if (onFinished) {
+      try {
+        onFinished(view.meta.cost?.usd ?? 0, job);
+      } catch (e) {
+        console.warn(`Video job: ${e.message}`);
+      }
+    }
   }
 
-  /** owner: the user who started it (only they, or the admin, may follow it). */
-  async startVideo({ prompt, aspect = '9:16', duration = 8, firstFrame = null, signal, owner = null }) {
+  /**
+   * owner: the user who started it (only they, or the admin, may follow it). A job started with their
+   * own key remembers only that it was (ownKey): the key is looked up again by owner to poll and collect.
+   * onFinished(usd): called once when the job finishes, with its cost when known.
+   */
+  async startVideo({ prompt, aspect = '9:16', duration = 8, firstFrame = null, signal, owner = null, ownKeys = null, meter = null, onFinished = null }) {
     const fn = 'videos';
-    let route = this.store.route(fn);
+    let route = this.plan(fn, 'video', ownKeys);
     if (!route.length) throw this.noProvider(fn);
     // keys whose video model can make this shape go first
-    const fits = route.filter((id) => (kindDef(id, 'video')?.aspects ?? []).includes(aspect));
-    route = [...fits, ...route.filter((id) => !fits.includes(id))];
+    const fits = route.filter((step) => (kindDef(step.id, 'video')?.aspects ?? []).includes(aspect));
+    route = [...fits, ...route.filter((step) => !fits.includes(step))];
     const attempts = [];
     let last = null;
-    for (const id of route) {
-      const s = this.store.settings(id);
-      const model = s.models.video;
-      const effort = s.effort.video;
+    for (const step of route) {
+      const { id, model, effort } = step;
       const t0 = Date.now();
       try {
-        const started = await this.adapter(id).video.start(this.ctx(id), { model, effort, prompt, aspect, duration, firstFrame, signal });
+        meter?.start?.();
+        const started = await this.adapter(id).video.start(this.ctx(id, step.key), { model, effort, prompt, aspect, duration, firstFrame, signal });
         const job = {
           id: `vid_${crypto.randomUUID()}`,
           provider: id,
@@ -293,12 +357,14 @@ export class AIRouter {
           upstreamId: started.upstreamId,
           pollingUrl: started.pollingUrl || '',
           params: started.params ?? null,
-          note: [started.note, fits.includes(id) ? '' : `${PROVIDERS[id].label} can’t make ${aspect} videos, so it used its nearest shape.`].filter(Boolean).join(' '),
+          note: [started.note, fits.includes(step) ? '' : `${PROVIDERS[id].label} can’t make ${aspect} videos, so it used its nearest shape.`].filter(Boolean).join(' '),
           state: 'running',
           attempts,
           owner,
+          ...(step.own ? { ownKey: true } : {}),
+          onFinished,
         };
-        job.usageId = this.usage.add({ ok: true, pending: true, provider: id, fn, kind: 'video', model, effort, ms: 0, userId: owner });
+        job.usageId = this.usage.add({ ok: true, pending: true, provider: id, fn, kind: 'video', model, effort, ms: 0, userId: owner, ...this.ownExtra(step) });
         if (started.run) {
           // providers that answer in one long call: the job finishes when the call does
           started.run.then(
@@ -310,9 +376,9 @@ export class AIRouter {
         this.pruneJobs();
         return this.jobView(job);
       } catch (e) {
-        last = asProviderError(e, PROVIDERS[id].label);
-        this.logFailure(id, 'video', fn, model, effort, t0, last, { userId: owner });
-        attempts.push({ provider: id, providerLabel: PROVIDERS[id].label, code: last.code, error: last.message });
+        last = asProviderError(e, step.own ? ownLabel(id) : PROVIDERS[id].label);
+        this.logFailure(id, 'video', fn, model, effort, t0, last, { userId: owner, ...this.ownExtra(step) });
+        attempts.push({ provider: id, providerLabel: step.own ? ownLabel(id) : PROVIDERS[id].label, code: last.code, error: last.message });
         if (!canFallBack(last, 'video') || signal?.aborted) break;
       }
     }
@@ -326,13 +392,21 @@ export class AIRouter {
     return job;
   }
 
-  async videoStatus(jobId, { signal } = {}) {
+  /** The key a job is followed with: the owner's, or (ownKey jobs) the user's own key, passed in as apiKey. */
+  jobCtx(job, apiKey) {
+    if (!job.ownKey) return this.ctx(job.provider);
+    if (!apiKey) throw new ProviderError('OWN_KEY_NEEDED', `The ${PROVIDERS[job.provider].label} key this video was started with was removed. Add it again in Settings → AI.`, { status: 409 });
+    return this.ctx(job.provider, apiKey);
+  }
+
+  async videoStatus(jobId, { signal, apiKey = null } = {}) {
     const job = this.getJob(jobId);
     const adapter = this.adapter(job.provider).video;
     if (job.state === 'running' && adapter.status && Date.now() - (job.checkedAt || 0) > 2500) {
+      const ctx = this.jobCtx(job, apiKey);
       job.checkedAt = Date.now();
       try {
-        const s = await adapter.status(this.ctx(job.provider), job, { signal });
+        const s = await adapter.status(ctx, job, { signal });
         job.failures = 0;
         if (s.state === 'done') this.finishJob(job, { state: 'done', url: s.url, cost: s.cost ?? job.cost, seconds: s.seconds ?? job.seconds });
         else if (s.state === 'failed') this.finishJob(job, { state: 'failed', error: s.error, cost: s.cost ?? job.cost });
@@ -348,11 +422,11 @@ export class AIRouter {
     return this.jobView(job);
   }
 
-  async videoContent(jobId, { signal } = {}) {
+  async videoContent(jobId, { signal, apiKey = null } = {}) {
     const job = this.getJob(jobId);
     if (job.state !== 'done') throw new ProviderError('NOT_READY', 'The video isn’t ready yet.', { status: 409 });
     if (!job.bytes) {
-      const out = await this.adapter(job.provider).video.content(this.ctx(job.provider), job, { signal });
+      const out = await this.adapter(job.provider).video.content(this.jobCtx(job, apiKey), job, { signal });
       job.bytes = out.bytes;
       job.contentType = out.contentType;
     }
@@ -411,6 +485,15 @@ export class AIRouter {
   /** A free check of a user's own Manus key (lists one task). */
   async checkManusKey(apiKey, { signal } = {}) {
     await this.adapters.manus.check(this.manusCtx(apiKey), { signal });
+  }
+
+  /** A free check of a user's own key for any provider (lists its models; Manus lists one task). Throws if it fails. */
+  async checkOwnKey(id, apiKey, { signal } = {}) {
+    if (!PROVIDERS[id] || !apiKey) throw new ProviderError('BAD_REQUEST', 'Unknown provider.', { status: 400 });
+    const a = this.adapter(id);
+    const ctx = this.ctx(id, apiKey);
+    if (a.check) return void (await a.check(ctx, { signal }));
+    await a.listModels(ctx, Object.keys(PROVIDERS[id].kinds)[0], { signal });
   }
 
   // ───────────── settings helpers ─────────────
