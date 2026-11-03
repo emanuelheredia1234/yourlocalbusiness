@@ -64,7 +64,7 @@ export function groupsPrompt(o: { groups: string[]; postAs: string; text: string
     '6. Choose "Post". If the group sends it to its admins for approval, that is fine: report it as PENDING.',
     '7. Wait about 2 minutes before going to the next group (posting the same thing in many groups at once can get the account limited).',
     '',
-    'Rules: if you are not signed in to Facebook, ask me to sign in and wait. Post exactly once per group: if this exact text is already in the group (or waiting for approval) from the last day, do not post it again, report it as POSTED or PENDING. Never join groups, comment, react, message anyone, or change anything else. Never post in a group that is not on the list.',
+    'Rules: if you are not signed in to Facebook, ask me to sign in and wait. Post once in each group, straight away: don’t check whether the group already has this post. Never join groups, comment, react, message anyone, or change anything else. Never post in a group that is not on the list.',
     '',
     'When you finish, end your final message with one line per group, in the same order, then the summary line:',
     'GROUP: <group as listed> | POSTED | <link to the post, if you can see it>',

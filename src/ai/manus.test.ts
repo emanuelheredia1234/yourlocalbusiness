@@ -76,7 +76,7 @@ describe('Posting with Manus', () => {
     expect(fb({ account: '', media: null })).toContain('text-only post');
   });
 
-  it('posts on Facebook right away with the video attached, exactly once', () => {
+  it('posts on Facebook right away with the video attached, without checking for earlier copies first', () => {
     const p = fb({ mode: 'now', text: 'New candles 🕯️\n\n#handmade', media: 'video' });
     expect(p).toMatch(/right now/);
     expect(p).toContain('New candles 🕯️\n\n#handmade');
@@ -84,7 +84,7 @@ describe('Posting with Manus', () => {
     expect(p).toMatch(/Wait until Facebook has finished uploading/);
     expect(p).toContain('Choose "Publish"');
     expect(p).toContain('Never schedule it for later.');
-    expect(p).toMatch(/Post exactly once/);
+    expect(p).toContain('Go straight to posting: don’t check whether the account already has this post.');
     expect(p).toContain('RESULT: POSTED');
     expect(p).not.toContain('RESULT: SCHEDULED');
     expect(fb({ mode: 'now', account: '' })).toMatch(/business's Facebook Page/);
@@ -111,9 +111,10 @@ describe('Posting with Manus', () => {
     const x = postPrompt({ network: 'x', mode: 'now', account: '@sumari', whenIso: '', timeZone: 'UTC', text: 'Hi', media: 'image' });
     expect(x).toContain('x.com');
     expect(x).toMatch(/never split the text into a thread/);
-    // every network: one post, exactly as given, and a result line
-    for (const p of [ig, tt, li, x]) {
-      expect(p).toMatch(/Post exactly once/);
+    // every network: one post, exactly as given, straight away (no hunting for duplicates first), and a result line
+    for (const [p, step] of [[ig, 'posting'], [li, 'posting'], [x, 'posting'], [tt, 'scheduling'], [igLater, 'scheduling']]) {
+      expect(p).toContain(`Go straight to ${step}: don’t check whether the account already has this post.`);
+      expect(p).not.toMatch(/duplicate|this exact text|do not add it again|from the last hour/i);
       expect(p).toContain('<<<POST TEXT\nHi\nPOST TEXT>>>');
       expect(p).toContain('RESULT: FAILED | <short reason>');
     }

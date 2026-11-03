@@ -25,7 +25,8 @@ describe('Manus’s instructions for groups', () => {
     expect(p).toContain('<<<POST TEXT\nNew candles!\n\n#handmade\nPOST TEXT>>>');
     expect(p).toMatch(/Read the group’s rules/);
     expect(p).toMatch(/never join a group/);
-    expect(p).toMatch(/Post exactly once per group/);
+    expect(p).toContain('Post once in each group, straight away: don’t check whether the group already has this post.');
+    expect(p).not.toMatch(/duplicate|exact text is already|do not post it again/i);
     expect(p).toMatch(/Wait about 2 minutes/);
     expect(p).toContain('Post as the Facebook Page "Candle Co"');
     expect(p).toContain('Attach the image file provided');

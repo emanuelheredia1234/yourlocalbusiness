@@ -227,7 +227,7 @@ export function postPrompt(o: { network: PostPlatform; mode: PostMode; account: 
     now ? `5. ${n.publish}` : `5. ${n.schedule} for: ${fmtWhen(o.whenIso, o.timeZone)} (${o.timeZone} time; that is ${new Date(o.whenIso).toISOString()} UTC). Set ${name}'s date, time and time zone to match exactly.`,
     now ? `6. ${n.checkNow}, with the text${o.media ? ` and the ${o.media}` : ''} exactly as given.` : `6. ${n.checkScheduled}`,
     '',
-    `Rules: if you are not signed in to ${name}, ask me to sign in and wait. Post exactly once: if the account already has this exact text ${now ? 'from the last hour' : 'scheduled'}, do not add it again, just report it. ${now ? 'Never schedule it for later.' : 'Never publish immediately.'} ${n.rules}`,
+    `Rules: if you are not signed in to ${name}, ask me to sign in and wait. Go straight to ${now ? 'posting' : 'scheduling'}: don’t check whether the account already has this post. ${now ? 'Never schedule it for later.' : 'Never publish immediately.'} ${n.rules}`,
     '',
     'When you finish, end your final message with exactly one of these lines:',
     now ? 'RESULT: POSTED | <account name> | <link to the post, if you can see it>' : `RESULT: SCHEDULED | <account name> | <date and time as ${name} shows it>`,
