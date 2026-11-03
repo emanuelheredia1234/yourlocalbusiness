@@ -36,7 +36,8 @@ describe('PostVisual with your own photo', () => {
     expect(html).toContain('aspect-ratio:0.75');
     expect(html).toContain('object-cover');
     expect(html.match(/<img/g)).toHaveLength(1);
-    expect(html).toContain('aria-label="Your photo: Fresh sourdough every morning"');
+    // the headline isn't on your photo, so the photo isn't described with it
+    expect(html).toContain('aria-label="Your photo"');
   });
   it('draws no headline, brand name or watermark over it (none of them go on the photo)', () => {
     const html = render({ media: photo() });
@@ -64,5 +65,22 @@ describe('PostVisual with your own photo', () => {
   });
   it('a video plan with a photo keeps its storyboard', () => {
     expect(render({ style: 'ugc', media: photo(), aspect: '9/16' })).toContain('Play preview');
+  });
+});
+
+describe('your own photo in lists', () => {
+  it('is told apart from AI images and videos', async () => {
+    const { isOwnPhoto } = await import('@/lib/media');
+    expect(isOwnPhoto(photo())).toBe(true);
+    expect(isOwnPhoto(photo({ generated: { kind: 'photo', provider: 'x', prompt: 'p', purpose: 'post', aspect: '4:5', final: true, createdAt: 0 } }))).toBe(false);
+    expect(isOwnPhoto(photo({ kind: 'video' }))).toBe(false);
+    expect(isOwnPhoto(undefined)).toBe(false);
+  });
+  it('shows "Your photo" instead of a visual style it never gets', async () => {
+    const { styleLabel } = await import('@/components/posts/PostCard');
+    const post = { format: 'image', style: 'minimal', media: photo() } as unknown as Parameters<typeof styleLabel>[0];
+    expect(styleLabel(post)).toBe('Your photo');
+    expect(styleLabel({ ...post, media: undefined })).not.toBe('Your photo');
+    expect(styleLabel({ ...post, format: 'video', style: 'ugc' })).not.toBe('Your photo');
   });
 });

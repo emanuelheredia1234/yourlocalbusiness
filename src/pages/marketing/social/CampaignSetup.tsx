@@ -119,7 +119,7 @@ export function CampaignSetup({ project }: { project: Project }) {
       </section>
 
       <section className="panel p-4 sm:p-5" aria-label="Watermark">
-        <Toggle checked={cfg.watermark} onChange={(v) => set({ watermark: v })} label="Add a watermark" description={mark && mark !== project.brand.name.trim() ? <>Every image and video shows <b className="text-ink">{mark}</b> in the corner.</> : 'No website or @handle yet, so images show your brand name. Add your handles below, or your website in Settings → Brand.'} />
+        <Toggle checked={cfg.watermark} onChange={(v) => set({ watermark: v })} label="Add a watermark" description={mark && mark !== project.brand.name.trim() ? <>AI images show <b className="text-ink">{mark}</b> in the corner. Your own photos post as they are.</> : 'No website or @handle yet, so AI images show your brand name. Add your handles below, or your website in Settings → Brand.'} />
       </section>
 
       <section className="panel p-4 sm:p-5" aria-label="Visual styles">

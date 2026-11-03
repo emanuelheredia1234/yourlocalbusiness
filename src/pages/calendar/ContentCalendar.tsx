@@ -2,12 +2,12 @@ import { useMemo, useState } from 'react';
 import { CalendarDays, CalendarClock, CheckCheck, ChevronLeft, ChevronRight, FileEdit, List, Pencil, Plus, Search, Send, Sparkles } from 'lucide-react';
 import type { Post, PostFormat, PostPlatform, PostType } from '@/lib/types';
 import { addDays, cn, combineDateTime, fmtDate, fmtDateTime, isoToDateStr, isoToTime, todayStr, WEEKDAYS, weekdayIndex } from '@/lib/utils';
-import { PLATFORMS, POST_PLATFORMS, POST_TYPE_MAP, POST_TYPES, STYLE_LABEL } from '@/ai/knowledge';
+import { PLATFORMS, POST_PLATFORMS, POST_TYPE_MAP, POST_TYPES } from '@/ai/knowledge';
 import { useNow } from '@/lib/hooks';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { Empty, Segmented, Tabs } from '@/components/ui/primitives';
-import { FormatBadge, PostCard, PostTypeTag } from '@/components/posts/PostCard';
+import { FormatBadge, PostCard, PostTypeTag, styleLabel } from '@/components/posts/PostCard';
 import { ExternalBadge, ManusPostButton, manusSetupHint, useCanOfferManus, useManusPost, useManusReady } from '@/components/posts/ManusPost';
 import { GroupShareBadge, PostToGroupsButton } from '@/components/posts/ManusGroups';
 import { DueBadge, PostedBy, PostMoreMenu, addToCalendarFlow, isDue, manusHolds, useMarkPosted } from '@/components/posts/PostActions';
@@ -329,7 +329,7 @@ function QueueList({ posts }: { posts: Post[] }) {
                     <PlatformChip platform={p.platform} />
                     <FormatBadge format={p.format} />
                     <PostTypeTag type={p.postType} />
-                    <span className="text-[11px] text-muted">{STYLE_LABEL[p.style]}</span>
+                    <span className="text-[11px] text-muted">{styleLabel(p)}</span>
                     <DueBadge post={p} />
                     <ExternalBadge post={p} compact />
                     <GroupShareBadge post={p} compact />

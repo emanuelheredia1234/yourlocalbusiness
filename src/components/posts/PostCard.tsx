@@ -20,6 +20,7 @@ import { GroupShareBadge, PostToGroupsButton } from './ManusGroups';
 import { DueBadge, PostMoreMenu, PostedBy, addToCalendarFlow, manusHolds, useMarkPosted } from './PostActions';
 import { createPostImage, defaultImageKind, postVideoPrompt } from '@/ai/image';
 import { brandHandle } from '@/lib/brandMark';
+import { isOwnPhoto } from '@/lib/media';
 
 export function PostTypeTag({ type, className }: { type: PostType; className?: string }) {
   const def = POST_TYPE_MAP[type];
@@ -39,6 +40,12 @@ function styleOptions(format: Post['format']) {
   return format === 'video' ? VIDEO_STYLES : IMAGE_STYLES;
 }
 
+/** An image post with your own photo: it posts as it is, so no visual style applies to it. */
+const ownPhotoPost = (post: Post) => post.format === 'image' && isOwnPhoto(post.media);
+
+/** The post's look, as lists show it: "Your photo" for your own photo, else its visual style. */
+export const styleLabel = (post: Post) => (ownPhotoPost(post) ? 'Your photo' : STYLE_LABEL[post.style]);
+
 interface EditableProps {
   post: Post;
   onChange: (patch: Partial<Post>) => void;
@@ -46,7 +53,7 @@ interface EditableProps {
 
 export function PostFields({ post, onChange }: EditableProps) {
   const project = useStore((s) => s.projects.find((p) => p.id === post.projectId));
-  const ownPhoto = post.media?.kind === 'image' && !post.media.generated;
+  const ownPhoto = ownPhotoPost(post);
   return (
     <div className="grid gap-3">
       <Field label={ownPhoto ? 'Headline' : 'On-image headline'} htmlFor={`h-${post.id}`} right={`${post.headline.length}/70`} hint={ownPhoto ? 'Names the post in your lists. It isn’t added to your photo.' : undefined}>
@@ -114,7 +121,7 @@ export function PostFields({ post, onChange }: EditableProps) {
             <option value="video">Video</option>
           </select>
         </Field>
-        <Field label="Visual style" htmlFor={`s-${post.id}`} className="col-span-1 sm:col-span-3">
+        <Field label="Visual style" htmlFor={`s-${post.id}`} className="col-span-1 sm:col-span-3" hint={ownPhoto ? 'Only used if you replace your photo with an AI image. Your photo posts as it is.' : undefined}>
           <select id={`s-${post.id}`} className="select" value={post.style} onChange={(e) => onChange({ style: e.target.value as StyleId })}>
             {styleOptions(post.format).map((s) => (
               <option key={s.id} value={s.id}>
@@ -172,7 +179,7 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
       <div className="flex flex-1 flex-col gap-2 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <PostTypeTag type={post.postType} />
-          <span className="text-[11px] text-muted">{STYLE_LABEL[post.style]}</span>
+          <span className="text-[11px] text-muted">{styleLabel(post)}</span>
         </div>
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact />
         <AIThinking running={img.running} stage={img.stage} onStop={img.stop} compact />
@@ -283,7 +290,7 @@ export function PostEditorHost() {
       onClose={close}
       size="xl"
       title={post.status === 'published' ? 'Posted' : post.status === 'scheduled' ? 'Planned post' : 'Draft post'}
-      subtitle={`${PLATFORMS[post.platform].label} · ${POST_TYPE_MAP[post.postType].label} · ${STYLE_LABEL[post.style]}`}
+      subtitle={`${PLATFORMS[post.platform].label} · ${POST_TYPE_MAP[post.postType].label} · ${styleLabel(post)}`}
       footer={
         <>
           <button

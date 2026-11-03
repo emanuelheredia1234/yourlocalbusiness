@@ -46,7 +46,8 @@ export function PostVisual(props: PostVisualProps) {
     // A photo posts exactly as it is (your own untouched; AI images already carry their headline, logo and
     // watermark), so show it alone, filling the preview, instead of inside a style mockup. (A video plan
     // with a photo still shows its storyboard over the photo: it can't post until it has a real video.)
-    return <PhotoAsPosted key={m.id} media={m} src={mediaUrl} fallback={ratio} className={className} label={label ?? (m.generated ? `AI image: ${props.headline}` : `Your photo: ${props.headline}`)} />;
+    // (the headline is in an AI image, but never on your own photo)
+    return <PhotoAsPosted key={m.id} media={m} src={mediaUrl} fallback={ratio} className={className} label={label ?? (m.generated ? `AI image: ${props.headline}` : 'Your photo')} />;
   }
   return (
     <div className={cn('pv relative w-full overflow-hidden rounded-md bg-surface-3', className)} style={{ aspectRatio: ratio, maxWidth: '100%' }} role="img" aria-label={label ?? `${video ? 'Video' : 'Image'} mockup: ${props.headline}`}>

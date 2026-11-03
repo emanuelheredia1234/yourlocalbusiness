@@ -5,6 +5,9 @@ import { readFileAsDataURL } from './utils';
 
 const urlCache = new Map<string, string>();
 
+/** A photo you added yourself (not made with AI). It posts exactly as it is: no style, headline or watermark goes on it. */
+export const isOwnPhoto = (m: MediaRef | null | undefined): boolean => m?.kind === 'image' && !m.generated;
+
 /** Object URL for a stored upload (IndexedDB), falling back to its thumbnail. */
 export function useMediaUrl(ref: MediaRef | null | undefined): string | null {
   const [url, setUrl] = useState<string | null>(() => (ref ? urlCache.get(ref.id) ?? ref.thumb ?? null : null));

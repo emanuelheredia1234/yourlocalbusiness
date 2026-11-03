@@ -9,6 +9,7 @@ import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { navigate } from '@/lib/router';
+import { isOwnPhoto } from '@/lib/media';
 import { AutoTextarea, ChipInput, Field, Modal, Segmented, Toggle } from '@/components/ui/primitives';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { PostVisual, pointsFromCaption } from '@/components/visuals/PostVisual';
@@ -52,7 +53,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
   const suggestions = useMemo(() => suggestTopics(project), [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const effFormat: PostFormat = source === 'upload' && media ? (media.kind === 'video' ? 'video' : 'image') : format;
   // your own photo posts untouched: a visual style, watermark or on-image headline never goes on it
-  const ownPhoto = source === 'upload' && media?.kind === 'image';
+  const ownPhoto = source === 'upload' && isOwnPhoto(media);
   const styles = effFormat === 'video' ? VIDEO_STYLES : IMAGE_STYLES;
   useEffect(() => {
     if (isVideoStyle(style) !== (effFormat === 'video')) setStyle(effFormat === 'video' ? project.marketing.campaign.videoStyles[0] ?? 'ugc' : project.marketing.campaign.imageStyles[0] ?? 'minimal');
