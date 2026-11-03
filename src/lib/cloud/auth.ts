@@ -62,6 +62,12 @@ const DEVICE_PREFIXES = ['ylb-post-account:'];
 
 let client: SupabaseClient | null = null;
 let sync: Sync | null = null;
+
+/** The signed-in account's Supabase client, for the shared Marketplace (null when signed out). */
+export function marketAccess(): { client: SupabaseClient; userId: string } | null {
+  const st = useAuth.getState();
+  return client && st.phase === 'ready' && st.user ? { client, userId: st.user.id } : null;
+}
 let media: MediaSync | null = null;
 
 /** Prevent a session token from being sent to an unrelated server URL. */

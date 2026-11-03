@@ -4,7 +4,7 @@ import type { Listing, ListingKind } from '@/lib/types';
 import { cn, fmtDateTime } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { useRuntime } from '@/lib/platform';
-import { pushMyListings, startCommunitySync } from '@/lib/community';
+import { pushMyListings, refreshCommunity, startCommunitySync } from '@/lib/community';
 import { BUSINESS_CATEGORIES, distanceMi, FORMAT_LIST, FORMATS } from '@/ai/knowledge';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
@@ -36,7 +36,8 @@ export default function Marketplace() {
   const [sort, setSort] = useState<Sort>('recommended');
 
   useEffect(() => {
-    startCommunitySync();
+    // first visit starts sharing; later visits fetch the newest listings
+    void startCommunitySync().then(() => refreshCommunity());
   }, []);
 
   const origin = project?.location?.lat !== undefined && project.location.lng !== undefined ? { lat: project.location.lat, lng: project.location.lng } : null;

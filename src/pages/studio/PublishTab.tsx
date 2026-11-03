@@ -84,7 +84,7 @@ export function PublishTab({ project }: { project: Project }) {
       const listing = { ...buildListing(p, live, cover, gallery), gallery };
       publishListing(listing);
       updateStudio({ publishedListingId: listing.id, publishedAt: Date.now() });
-      startCommunitySync();
+      await startCommunitySync();
       await pushMyListings();
       const shared = useRuntime.getState().community === 'live';
       useStore.getState().notify({ kind: 'info', title: live ? `Listing updated: ${listing.title}` : shared ? `${listing.title} is on the shared Marketplace` : `${listing.title} is in your listings`, route: 'store' });

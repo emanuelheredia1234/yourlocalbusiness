@@ -26,7 +26,7 @@ Real:
 - AI: Claude in the claude.ai Artifact; your own API keys in the self-hosted app (see "AI: one AI, powered by your API keys"); otherwise a built-in, niche-aware engine that works offline. Brain skills apply to all of them.
 - AI images and videos: real files you can download, schedule with posts and publish on listings. Without a key that makes photos, a built-in brand illustration is used and labelled as such.
 - Posting: Manus posts on Facebook, Instagram, TikTok, LinkedIn and X for you, in its own browser signed in as you (see "Posting with Manus"). The app itself never logs in to a network and never posts on its own. Without Manus, copy the text and download the image or video from a post's ⋯ menu, post it yourself, and mark it posted.
-- When the app is opened as a shared claude.ai Artifact, published Marketplace listings sync between everyone who opens it. Elsewhere, only you see your listings for now.
+- Shared Marketplace: with accounts (Supabase), everyone signed in sees every published listing (`market_listings` table: anyone signed in can read, each seller can only add, change or remove their own; signed-out visitors see nothing). In claude.ai as a shared Artifact, listings sync between everyone who opens it. Without either, listings stay in your browser. Buyers pay on each seller's own link.
 
 Not done by the app (it says so where it matters):
 - Sending email: you export the sequence to your email provider (Kit, Mailchimp, MailerLite…), which collects sign-ups and sends it.

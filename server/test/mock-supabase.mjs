@@ -16,7 +16,9 @@ const SECRET = 'sb_secret_mock_456';
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 /** Primary keys per table: rows with the same values are one row (upserts replace them). */
-const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'], app_state: ['key'] };
+const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'], app_state: ['key'], market_listings: ['user_id', 'id'] };
+/** tables every signed-in person may read (writes stay owner-only), like the market_listings policies */
+const PUBLIC_READ = new Set(['market_listings']);
 /** tables with row-level security and no policies: only the secret key reaches them */
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state']);
 
@@ -143,7 +145,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (who.anon || (SERVICE_ONLY.has(table) && !who.service)) return send(res, 401, { code: '42501', message: 'permission denied for table ' + table });
     const rows = tables.get(table) ?? [];
     tables.set(table, rows);
-    const visible = (r) => who.service || r.user_id === who.userId;
+    const owned = (r) => who.service || r.user_id === who.userId;
+    const visible = (r) => owned(r) || PUBLIC_READ.has(table);
     const filters = [];
     for (const [k, v] of url.searchParams) if (!['select', 'order', 'limit', 'offset', 'on_conflict', 'columns'].includes(k)) filters.push([k, parseFilter(v)]);
     const prefer = String(req.headers.prefer || '');
@@ -206,7 +209,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
 
     if (req.method === 'PATCH') {
       const patch = JSON.parse(raw || '{}');
-      const hit = rows.filter((r) => visible(r) && matches(r, filters));
+      const hit = rows.filter((r) => owned(r) && matches(r, filters));
       for (const r of hit) Object.assign(r, patch, { updated_at: new Date().toISOString() });
       return /return=representation/.test(prefer) ? send(res, 200, hit) : send(res, 204, undefined);
     }
@@ -214,7 +217,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (req.method === 'DELETE') {
       const keep = [];
       const gone = [];
-      for (const r of rows) (visible(r) && matches(r, filters) ? gone : keep).push(r);
+      for (const r of rows) (owned(r) && matches(r, filters) ? gone : keep).push(r);
       tables.set(table, keep);
       return /return=representation/.test(prefer) ? send(res, 200, gone) : send(res, 204, undefined);
     }
