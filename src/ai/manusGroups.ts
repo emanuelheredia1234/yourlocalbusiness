@@ -118,6 +118,17 @@ export function groupSummary(share: Pick<GroupShare, 'results' | 'groups'>): str
   return parts.length ? `${parts.join(', ')} (of ${share.groups.length} group${share.groups.length === 1 ? '' : 's'})` : '';
 }
 
+/**
+ * The groups to offer when sending again. After a run that stopped partway, the groups Manus already
+ * reported as posted (or waiting for approval) are left out: Manus no longer looks for an earlier copy
+ * before posting, so sending to them again would post twice.
+ */
+export function groupsToRetry(share: Pick<GroupShare, 'state' | 'groups' | 'results'>): string[] {
+  if (share.state !== 'failed') return share.groups;
+  const out = new Set(share.results.filter((r) => r.state === 'posted' || r.state === 'pending').map((r) => r.group));
+  return share.groups.filter((g) => !out.has(g));
+}
+
 export function groupStateFromManus(s: ManusState, groups: string[]): Pick<GroupShare, 'state' | 'message' | 'results'> {
   const { results, done } = parseGroupResults(s.text || '', groups);
   if (s.status === 'error' || s.status === 'deleted') return { state: 'failed', message: s.error || 'Manus reported an error.', results };

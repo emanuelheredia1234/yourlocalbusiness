@@ -256,7 +256,10 @@ export function ManusPostHost() {
 
 function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry }: { post: Post; mode: PostMode; tz: string; problem: string | null; progress?: Progress; disabled: boolean; onEdit: () => void; onRetry?: () => void }) {
   const warning = textWarning(post);
-  const resend = !!post.external && post.external.state !== 'failed' && !progress?.sent;
+  const last = progress?.sent ? undefined : post.external;
+  const resend = !!last && last.state !== 'failed';
+  // a try that failed may still have gone out before Manus stopped (it doesn't look for an earlier copy first)
+  const failedBefore = last?.state === 'failed' ? last : undefined;
   return (
     <li className="grid grid-cols-[72px_minmax(0,1fr)] gap-3 rounded-md border border-line p-2.5">
       {post.media ? <MediaThumb media={post.media} className="aspect-[4/5] w-full" /> : <div className="flex aspect-[4/5] w-full items-center justify-center rounded-md border border-dashed border-line-2 px-1 text-center text-[10.5px] text-muted">Text only</div>}
@@ -282,6 +285,15 @@ function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry 
         )}
         {!problem && warning && <p className="text-[12.5px] text-warn">{warning}</p>}
         {resend && <p className="text-[12.5px] font-medium text-warn">Already sent to Manus. Sending it again can post it twice.</p>}
+        {failedBefore && (
+          <p className="text-[12.5px] font-medium text-warn">
+            The last try failed, but it may have gone out before Manus stopped. Check {networkLabel(post.platform)} or{' '}
+            <a href={failedBefore.taskUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">
+              the task in Manus
+            </a>{' '}
+            before sending it again.
+          </p>
+        )}
         {progress?.stage && (
           <p className="flex items-center gap-1.5 text-[12.5px] text-info">
             <Spinner size={12} /> {progress.stage}

@@ -8,7 +8,7 @@ import { cn, fmtRelative } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { manusViaServer } from '@/ai/manus';
 import { postBlocker, postText, suggestedAccount } from '@/ai/manusPost';
-import { MAX_GROUPS, groupLinkError, groupSummary, parseGroups, refreshGroupShare, startGroupShare } from '@/ai/manusGroups';
+import { MAX_GROUPS, groupLinkError, groupSummary, groupsToRetry, parseGroups, refreshGroupShare, startGroupShare } from '@/ai/manusGroups';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { AutoTextarea, Field, Modal, Spinner } from '../ui/primitives';
@@ -42,7 +42,7 @@ export function ManusGroupsHost() {
     const s = useStore.getState();
     const p = s.posts.find((x) => x.id === id);
     const proj = s.projects.find((x) => x.id === p?.projectId);
-    setRaw((p?.groupShare?.groups ?? proj?.marketing.facebookGroups ?? []).join('\n'));
+    setRaw((p?.groupShare ? groupsToRetry(p.groupShare) : proj?.marketing.facebookGroups ?? []).join('\n'));
     setPostAs(p?.groupShare?.postAs ?? (proj ? suggestedAccount(proj.id, 'facebook', proj.brand) : ''));
     setBusy(false);
     setStage('');
@@ -55,6 +55,10 @@ export function ManusGroupsHost() {
   const tooMany = groups.length > MAX_GROUPS ? `Up to ${MAX_GROUPS} groups at a time: posting the same thing in many groups at once can get your account limited by Facebook.` : null;
   const blocker = postBlocker({ ...post, platform: 'facebook' }, { viaServer });
   const again = !!post.groupShare && post.groupShare.state !== 'failed';
+  // a run that stopped partway may already have posted in some groups (Manus doesn't look for an earlier copy first)
+  const stopped = post.groupShare?.state === 'failed' ? post.groupShare : null;
+  const retry = stopped ? groupsToRetry(stopped) : [];
+  const leftOut = stopped ? stopped.groups.filter((g) => !retry.includes(g)) : [];
   const problem = blocker ?? linkProblem ?? tooMany ?? (groups.length ? null : 'Add at least one group.');
   const inFlight = busy || sending.has(post.id);
 
@@ -66,8 +70,10 @@ export function ManusGroupsHost() {
     try {
       const share = await startGroupShare(useStore.getState().posts.find((x) => x.id === post.id) ?? post, groups, postAs.trim(), setStage);
       useStore.getState().updatePost(post.id, { groupShare: share });
-      // remembered for next time (saved with the project)
-      useStore.getState().updateProject(project.id, (p) => ({ ...p, marketing: { ...p.marketing, facebookGroups: groups } }));
+      // remembered for next time (saved with the project); sending again after a run that stopped partway
+      // keeps the groups left out of this send, so the next post still offers them
+      const remember = stopped ? [...new Set([...stopped.groups, ...groups])] : groups;
+      useStore.getState().updateProject(project.id, (p) => ({ ...p, marketing: { ...p.marketing, facebookGroups: remember } }));
       toast({ kind: 'success', title: 'Sent to Manus', body: `Manus is posting it in ${groups.length} group${groups.length === 1 ? '' : 's'}, a couple of minutes apart. The post card shows each group’s result.`, action: { label: 'Watch in Manus', run: () => openUrl(share.taskUrl) } });
       close();
     } catch (e) {
@@ -115,6 +121,16 @@ export function ManusGroupsHost() {
             <li>It’s one Manus task for all the groups, on your Manus credits. The first time, sign in to Facebook inside Manus.</li>
           </ul>
           {again && <p className="text-[12.5px] font-medium text-warn">Manus already shared this post in groups. Sending it again can post it twice in the same groups.</p>}
+          {stopped && (
+            <p className="text-[12.5px] font-medium text-warn">
+              The last try stopped before Manus finished, so it may already have posted in some of these groups.
+              {leftOut.length > 0 && ` Left out, as Manus reported ${leftOut.length === 1 ? 'it' : 'them'} posted or waiting for approval: ${leftOut.join(', ')}.`} Check{' '}
+              <a href={stopped.taskUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">
+                the last task in Manus
+              </a>{' '}
+              and remove any group that already has the post before sending again.
+            </p>
+          )}
           {blocker && <p className="text-[12.5px] font-medium text-warn">{blocker}</p>}
           {!ready && (
             <div className="flex flex-wrap items-center gap-2 rounded-md border border-warn/40 bg-warn-soft px-3 py-2 text-[12.5px]" role="alert">

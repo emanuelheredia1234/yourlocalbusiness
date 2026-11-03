@@ -1,7 +1,7 @@
 // Sharing a post in Facebook groups: the list you type, Manus's exact instructions, and its per-group report.
 import { describe, expect, it } from 'vitest';
 import type { ManusState } from './manus';
-import { groupLinkError, groupStateFromManus, groupSummary, groupsPrompt, parseGroupResults, parseGroups } from './manusGroups';
+import { groupLinkError, groupStateFromManus, groupSummary, groupsPrompt, groupsToRetry, parseGroupResults, parseGroups } from './manusGroups';
 
 const base: ManusState = { taskId: 't', status: 'stopped', agentStatus: 'stopped', done: true, waiting: false, waitingType: '', waitingDescription: '', error: '', title: '', taskUrl: '', creditUsage: 0, text: '', imageCount: 0, images: [] };
 
@@ -62,5 +62,22 @@ describe('Manus’s report', () => {
     expect(groupStateFromManus({ ...base, done: false, waiting: true, status: 'waiting' }, groups).state).toBe('needs_input');
     expect(groupStateFromManus({ ...base, text: 'I posted them.' }, groups).state).toBe('finished');
     expect(groupStateFromManus({ ...base, status: 'error', error: 'boom' }, groups)).toMatchObject({ state: 'failed', message: 'boom' });
+  });
+});
+
+describe('sending to groups again', () => {
+  const groups = ['Austin Small Business', 'Candle Makers', 'Etsy Sellers'];
+  it('after a run that stopped partway, leaves out the groups it already posted in or that wait for approval', () => {
+    const results = [
+      { group: 'Austin Small Business', state: 'posted' as const, detail: '' },
+      { group: 'Candle Makers', state: 'pending' as const, detail: 'waiting for admin approval' },
+    ];
+    expect(groupsToRetry({ state: 'failed', groups, results })).toEqual(['Etsy Sellers']);
+    // skipped and failed groups are offered again
+    expect(groupsToRetry({ state: 'failed', groups, results: [{ group: 'Etsy Sellers', state: 'failed', detail: 'x' }, { group: 'Candle Makers', state: 'skipped', detail: 'no promotions' }] })).toEqual(groups);
+  });
+  it('offers every group when nothing was reported, or when the last run finished', () => {
+    expect(groupsToRetry({ state: 'failed', groups, results: [] })).toEqual(groups);
+    expect(groupsToRetry({ state: 'done', groups, results: [{ group: 'Austin Small Business', state: 'posted', detail: '' }] })).toEqual(groups);
   });
 });
