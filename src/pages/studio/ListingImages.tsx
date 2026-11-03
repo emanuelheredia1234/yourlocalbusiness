@@ -1,16 +1,16 @@
 import { useMemo, useRef, useState } from 'react';
 import { Camera, Check, ChevronDown, Download, ImagePlus, Images, Palette, RefreshCw, Square, Star, Type, Upload, WandSparkles } from 'lucide-react';
-import type { ImageKind, ListingDraft, ListingShotId, MediaRef, Project } from '@/lib/types';
-import { cn, fmtMoney } from '@/lib/utils';
-import { getBlob, saveMediaFile } from '@/lib/storage';
+import type { ImageKind, ListingShotId, MediaRef, Project } from '@/lib/types';
+import { cn } from '@/lib/utils';
+import { getBlob } from '@/lib/storage';
 import { isOwnPhoto } from '@/lib/media';
 import { navigate } from '@/lib/router';
-import { SHARED_GALLERY_MAX } from '@/lib/community';
-import { composeOwnListingPhoto, createListingImage, defaultImageKind, listingShots, photoLabel, photoRoute, photoSourceNote, releaseMedia, type ListingShot } from '@/ai/image';
-import { fromOwnPhoto, listingShotMedia, offerEyebrow, PHOTO_ACCEPT, photoFileProblem, withoutPlaceholders } from '@/ai/listingPhotos';
+import { galleryIds, MAX_GALLERY } from '@/lib/listing';
+import { composeOwnListingPhoto, defaultImageKind, listingShots, photoLabel, photoRoute, photoSourceNote, type ListingShot } from '@/ai/image';
+import { fromOwnPhoto, listingShotMedia, PHOTO_ACCEPT } from '@/ai/listingPhotos';
+import { ALL_SHOTS, listingPendingKey, makeListingShot, ownPhotoPlaced, placeListingShot, savePhotoFile, shotText } from '@/ai/listingImages';
 import { pendingManus, type ManusTask } from '@/ai/manus';
 import { ManusLink } from '@/components/images/PostImagePanel';
-import type { ListingText } from '@/lib/imageCanvas';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { AIThinking } from '@/components/ai/AI';
@@ -18,36 +18,7 @@ import { download } from '@/components/ui/download';
 import { AutoTextarea, Segmented, Spinner } from '@/components/ui/primitives';
 import { MediaThumb } from '@/components/media/MediaUpload';
 import { artDirectionLabel, useArtDirection, useImageJob, usePhotoAvailability } from '@/components/images/useImageJob';
-import { priceLabel } from '@/pages/store/ListingParts';
-import { buildListing, cleanGallery, galleryIds } from './listing';
 
-/** As many gallery images as the shared Marketplace keeps, so buyers see the ones you picked. */
-export const MAX_GALLERY = SHARED_GALLERY_MAX;
-
-/** The words typeset on the listing graphics, from the same data the listing uses. */
-export function listingText(project: Project): ListingText {
-  const l = buildListing(project);
-  const isBiz = project.track === 'business';
-  // lines a template left for you to fill in ("[your checklist]") never go on an image
-  const includes = withoutPlaceholders(l.includes ?? []);
-  return {
-    eyebrow: isBiz ? 'What you get' : 'What’s inside',
-    title: l.title,
-    tagline: l.tagline,
-    items: includes.length ? includes : withoutPlaceholders(l.services?.map((s) => s.name) ?? []),
-    price: l.price || l.priceModel === 'free' ? priceLabel(l.price, l.priceModel) : undefined,
-    compareAt: l.compareAt ? fmtMoney(l.compareAt) : undefined,
-    cta: isBiz ? (l.bookingType === 'book' ? 'Book your visit' : l.bookingType === 'inquire' ? 'Request a quote' : 'Order now') : 'Get it now',
-  };
-}
-
-/** The text a shot's graphic carries (the offer card leads with what and where). */
-const shotText = (p: Project, shot: ListingShot): ListingText => {
-  const text = listingText(p);
-  return shot.layout === 'offer' ? { ...text, eyebrow: offerEyebrow(p) } : text;
-};
-
-const ALL_SHOTS: ListingShotId[] = ['hero', 'lifestyle', 'inside', 'offer'];
 const andList = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
 /**
@@ -62,16 +33,10 @@ export function PhotoUploadButton({ onPhotos, multiple, label, ariaLabel, classN
     setBusy(true);
     const out: MediaRef[] = [];
     for (const f of files.slice(0, multiple ? 12 : 1)) {
-      const problem = photoFileProblem(f);
-      if (problem) {
-        toast({ kind: 'error', title: `Couldn’t add ${f.name}`, body: problem });
-        continue;
-      }
       try {
-        out.push(await saveMediaFile(f));
+        out.push(await savePhotoFile(f));
       } catch (e) {
-        const msg = (e as Error)?.message || 'The photo couldn’t be read.';
-        toast({ kind: 'error', title: `Couldn’t add ${f.name}`, body: /read|load/i.test(msg) ? `${msg} Try a JPG, PNG or WebP photo.` : msg });
+        toast({ kind: 'error', title: `Couldn’t add ${f.name}`, body: (e as Error).message });
       }
     }
     setBusy(false);
@@ -102,7 +67,6 @@ export function PhotoUploadButton({ onPhotos, multiple, label, ariaLabel, classN
 }
 
 export function ListingImages({ project }: { project: Project }) {
-  const updateBrand = useStore((s) => s.updateBrand);
   const updateStudio = useStore((s) => s.updateStudio);
   const photo = usePhotoAvailability();
   const shots = useMemo(() => listingShots(project), [project]);
@@ -113,12 +77,12 @@ export function ListingImages({ project }: { project: Project }) {
   const [composing, setComposing] = useState<ListingShotId | null>(null);
   const [progress, setProgress] = useState('');
   const [tasks, setTasks] = useState<Partial<Record<ListingShotId, ManusTask>>>({});
-  const pendingKey = (shot: ListingShotId) => `listing:${project.id}:${shot}`;
+  const pendingKey = (shot: ListingShotId) => listingPendingKey(project.id, shot);
   // Manus images started before a reload, still on their way
   const [resumable, setResumable] = useState<Partial<Record<ListingShotId, ManusTask>>>(() => {
     const r: Partial<Record<ListingShotId, ManusTask>> = {};
     for (const id of ALL_SHOTS) {
-      const t = pendingManus.get(`listing:${project.id}:${id}`);
+      const t = pendingManus.get(listingPendingKey(project.id, id));
       if (t) r[id] = t;
     }
     return r;
@@ -145,54 +109,8 @@ export function ListingImages({ project }: { project: Project }) {
     updateStudio({ listing: { ...draft, shotPrompts: Object.keys(next).length ? next : undefined } });
   };
 
-  /**
-   * Show a new image on a shot (an AI image, your photo, or your photo with your details); the cover and
-   * gallery follow it. An AI image it replaces is swapped out of your brand images and freed; your own
-   * photos always stay in your brand images.
-   */
-  const place = (shot: ListingShot, media: MediaRef): { cover: boolean; gallery: boolean } => {
-    const p = getActiveProject()!;
-    const prev = listingShotMedia(p, shot.id);
-    const own = isOwnPhoto(media);
-    const swap = !!prev?.generated && prev.id !== media.id;
-    let images = swap ? p.brand.images.map((m) => (m.id === prev!.id ? media : m)) : p.brand.images;
-    if (!images.some((m) => m.id === media.id)) images = [...images, media];
-    if (images !== p.brand.images) updateBrand({ images });
-    const draft = p.studio.listing;
-    const patch: Partial<ListingDraft> = {};
-    // a photo you put on the Cover card is your cover; a new AI cover only takes over from the old one (or none)
-    if (shot.id === 'hero' && (own || !draft.coverImageId || draft.coverImageId === prev?.id)) patch.coverImageId = media.id;
-    else if (prev && draft.coverImageId === prev.id) patch.coverImageId = media.id;
-    const g = cleanGallery(draft.galleryIds, images, patch.coverImageId ?? draft.coverImageId);
-    if (prev && g.includes(prev.id)) patch.galleryIds = g.map((id) => (id === prev.id ? media.id : id));
-    else if (shot.id !== 'hero' && g.length < MAX_GALLERY && !g.includes(media.id)) patch.galleryIds = [...g, media.id];
-    // which shots show a photo you uploaded (an AI image or your details on your photo shows by itself)
-    const mine = { ...draft.shotImageIds };
-    if (own) mine[shot.id] = media.id;
-    else delete mine[shot.id];
-    patch.shotImageIds = Object.keys(mine).length ? mine : undefined;
-    updateStudio({ listing: { ...draft, ...patch } });
-    if (swap) setTimeout(() => releaseMedia(prev), 0);
-    return { cover: (patch.coverImageId ?? draft.coverImageId) === media.id, gallery: (patch.galleryIds ?? g).includes(media.id) };
-  };
-
-  const makeOne = async (shot: ListingShot, signal: AbortSignal, onStage: (s: string) => void, resume?: ManusTask) => {
-    const p = getActiveProject()!;
-    const r = await createListingImage({
-      project: p,
-      kind: resume ? 'photo' : effKind,
-      shot,
-      prompt: p.studio.listing.shotPrompts?.[shot.id] ?? shot.prompt,
-      text: shotText(p, shot),
-      signal,
-      onStage,
-      onTask: (t) => setTasks((x) => ({ ...x, [shot.id]: t })),
-      pendingKey: pendingKey(shot.id),
-      resume,
-    });
-    place(shot, r.media);
-    return r;
-  };
+  const makeOne = (shot: ListingShot, signal: AbortSignal, onStage: (s: string) => void, resume?: ManusTask) =>
+    makeListingShot({ shot, kind: effKind, signal, onStage, onTask: (t) => setTasks((x) => ({ ...x, [shot.id]: t })), resume });
 
   const generate = async (ids: ListingShotId[], resume?: Partial<Record<ListingShotId, ManusTask>>) => {
     const list = shots.filter((s) => ids.includes(s.id));
@@ -243,11 +161,7 @@ export function ListingImages({ project }: { project: Project }) {
 
   /** Put a photo you uploaded on a shot. */
   const putOwnPhoto = (shot: ListingShot, media: MediaRef) => {
-    const r = place(shot, media);
-    const body = 'Publish or update the listing to show it to buyers.';
-    if (r.cover) toast({ kind: 'success', title: 'Your photo is the listing cover', body });
-    else if (r.gallery) toast({ kind: 'success', title: `Your photo is on ${shot.label} and in the gallery`, body });
-    else toast({ kind: 'success', title: `Your photo is on ${shot.label}`, body: `The gallery already has ${MAX_GALLERY} images, so it isn’t in it. Remove one to add this photo.` });
+    toast({ kind: 'success', ...ownPhotoPlaced(shot.label, placeListingShot(shot.id, media)) });
   };
 
   /** Typeset your title, checklist or price on your own photo (no AI); the photo itself stays as it is. */
@@ -256,7 +170,7 @@ export function ListingImages({ project }: { project: Project }) {
     try {
       const p = getActiveProject()!;
       const media = await composeOwnListingPhoto({ project: p, shot, photoId, text: shotText(p, shot) });
-      place(shot, media);
+      placeListingShot(shot.id, media);
       toast({ kind: 'success', title: 'Your details are on your photo', body: 'Your original photo stays in your brand images.' });
     } catch (e) {
       toast({ kind: 'error', title: 'Couldn’t add your details', body: (e as Error)?.message || 'Please try again.' });

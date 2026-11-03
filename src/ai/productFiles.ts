@@ -8,6 +8,8 @@ import { readFileAsDataURL, slugify, uid } from '@/lib/utils';
 import { canvasBlob, loadImage } from '@/lib/imageCanvas';
 import { buildEbookPdf, type EbookDoc, type EbookOptions } from '@/lib/ebook';
 import { getActiveProject, useStore } from '@/store/useStore';
+import { toast } from '@/store/ui';
+import { download } from '@/components/ui/download';
 import { runTask, type RunResult } from './engine';
 import { ebookExtrasTask, sectionDraftTask, workbookTask, type TaskDef } from './tasks';
 import type { EbookExtras } from './local/ebook';
@@ -20,6 +22,8 @@ const KEEP_PER_KIND = 6;
 export interface BuildHooks {
   signal: AbortSignal;
   onStage: (stage: string) => void;
+  /** the project to build for (the open one by default); what's written goes to it even if the owner switches projects meanwhile */
+  projectId?: string;
 }
 
 const stopped = () => Object.assign(new Error('Stopped.'), { code: 'cancelled' });
@@ -30,10 +34,19 @@ function project(): Project {
   return p;
 }
 
-/** Run an AI task for the open project and log it like any other generation. */
-async function runLogged<I, O>(task: TaskDef<I, O>, input: I, h: BuildHooks, stage?: (s: string) => void): Promise<RunResult<O>> {
+/** The project a build is for, as it is now. */
+function projectOf(id: string): Project {
+  const p = useStore.getState().projects.find((x) => x.id === id);
+  if (!p) throw Object.assign(new Error('That project isn’t here any more.'), { code: 'NO_PROJECT' });
+  return p;
+}
+
+const updateStudioOf = (id: string, patch: (s: Project['studio']) => Partial<Project['studio']>) => useStore.getState().updateProject(id, (p) => ({ ...p, studio: { ...p.studio, ...patch(p.studio) } }));
+
+/** Run an AI task for the build's project and log it like any other generation. */
+async function runLogged<I, O>(pid: string, task: TaskDef<I, O>, input: I, h: BuildHooks, stage?: (s: string) => void): Promise<RunResult<O>> {
   const s = useStore.getState();
-  const p = project();
+  const p = projectOf(pid);
   const res = await runTask(task, input, { project: p, skills: s.skills, settings: s.settings, signal: h.signal, onStage: stage });
   s.recordGeneration({ id: res.id, task: task.id, label: task.label, module: task.module, provider: res.provider, skillIds: res.skills.map((k) => k.id), createdAt: Date.now(), ms: res.ms, projectId: p.id });
   return res;
@@ -41,15 +54,15 @@ async function runLogged<I, O>(task: TaskDef<I, O>, input: I, h: BuildHooks, sta
 
 const website = (p: Project) => p.brand.websiteUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '') || undefined;
 
-async function saveProductFile(f: { kind: ProductFile['kind']; name: string; bytes: Uint8Array; mime: string; pages?: number; sheets?: string[]; engine: ProviderId }): Promise<ProductFile> {
+async function saveProductFile(pid: string, f: { kind: ProductFile['kind']; name: string; bytes: Uint8Array; mime: string; pages?: number; sheets?: string[]; engine: ProviderId }): Promise<ProductFile> {
   const id = uid('file');
   await putBlob(id, new Blob([f.bytes as BlobPart], { type: f.mime }));
   const file: ProductFile = { id, kind: f.kind, name: f.name, size: f.bytes.length, createdAt: Date.now(), pages: f.pages, sheets: f.sheets, engine: f.engine };
-  const all = [file, ...(project().studio.productFiles ?? [])];
+  const all = [file, ...(projectOf(pid).studio.productFiles ?? [])];
   // keep the newest few of each kind
   const drop = all.filter((x) => x.kind === f.kind).slice(KEEP_PER_KIND);
   await Promise.all(drop.map((d) => deleteBlob(d.id)));
-  useStore.getState().updateStudio({ productFiles: all.filter((x) => !drop.includes(x)) });
+  updateStudioOf(pid, () => ({ productFiles: all.filter((x) => !drop.includes(x)) }));
   return file;
 }
 
@@ -60,6 +73,14 @@ export async function deleteProductFile(id: string): Promise<void> {
 
 export async function productFileBlob(f: ProductFile): Promise<Blob | null> {
   return getBlob(f.id);
+}
+
+/** Save a product file to the device (from a click); says so when this device doesn't have it any more. */
+export async function downloadProductFile(f: ProductFile): Promise<boolean> {
+  const blob = await productFileBlob(f);
+  if (blob) return download(f.name, blob);
+  toast({ kind: 'error', title: 'That file isn’t stored on this device any more', body: 'Create it again.' });
+  return false;
 }
 
 // ───────────── PDF ─────────────
@@ -124,7 +145,8 @@ export function ebookDoc(p: Project, extras: EbookExtras, o: { workbookPages: bo
 }
 
 export async function createEbookFile(o: EbookBuild, h: BuildHooks): Promise<{ file: ProductFile; notes: string[]; drafted: number }> {
-  let p = project();
+  const pid = h.projectId ?? project().id;
+  let p = projectOf(pid);
   if (!p.studio.outline.length) throw Object.assign(new Error('Generate your outline first: the file is built from it.'), { code: 'NO_OUTLINE' });
   const notes: string[] = [];
   let drafted = 0;
@@ -135,24 +157,25 @@ export async function createEbookFile(o: EbookBuild, h: BuildHooks): Promise<{ f
       if (h.signal.aborted) throw stopped();
       const label = `Writing chapter ${k + 1} of ${missing.length}: ${sec.title}`;
       h.onStage(`${label}…`);
-      const res = await runLogged(sectionDraftTask, { section: sec }, h, (s) => h.onStage(/thinking|writing/i.test(s) ? `${label} · ${s}` : `${label}…`));
+      const res = await runLogged(pid, sectionDraftTask, { section: sec }, h, (s) => h.onStage(/thinking|writing/i.test(s) ? `${label} · ${s}` : `${label}…`));
       if (res.provider !== 'local') engine = res.provider;
       if (res.note) notes.push(res.note);
       // saved as it goes, so stopping keeps what's written
-      useStore.getState().updateStudio({ outline: project().studio.outline.map((x) => (x.id === sec.id ? { ...x, draft: res.data.markdown } : x)) });
+      updateStudioOf(pid, (st) => ({ outline: st.outline.map((x) => (x.id === sec.id ? { ...x, draft: res.data.markdown } : x)) }));
       drafted++;
     }
-    p = project();
+    p = projectOf(pid);
   }
   let extras = p.studio.ebookExtras;
   if (!o.reuseCopy || !extras || extras.data.worksheets.length !== p.studio.outline.length) {
     if (h.signal.aborted) throw stopped();
     h.onStage('Writing the welcome page, workbook pages and next steps…');
-    const res = await runLogged(ebookExtrasTask, {}, h, () => h.onStage('Writing the welcome page, workbook pages and next steps…'));
+    const res = await runLogged(pid, ebookExtrasTask, {}, h, () => h.onStage('Writing the welcome page, workbook pages and next steps…'));
     if (res.note) notes.push(res.note);
-    extras = { data: res.data, at: Date.now(), engine: res.provider };
-    useStore.getState().updateStudio({ ebookExtras: extras });
-    p = project();
+    const made = { data: res.data, at: Date.now(), engine: res.provider };
+    extras = made;
+    updateStudioOf(pid, () => ({ ebookExtras: made }));
+    p = projectOf(pid);
   }
   if (engine === 'local') engine = extras.engine;
   if (h.signal.aborted) throw stopped();
@@ -162,27 +185,29 @@ export async function createEbookFile(o: EbookBuild, h: BuildHooks): Promise<{ f
   const doc = ebookDoc(p, extras.data, { workbookPages: o.workbookPages, cover });
   const { bytes, pages } = await buildEbookPdf(doc, { ...o, fillable: o.workbookPages });
   if (h.signal.aborted) throw stopped();
-  const file = await saveProductFile({ kind: 'pdf', name: `${slugify(doc.title, 60) || 'guide'}.pdf`, bytes, mime: 'application/pdf', pages, engine });
+  const file = await saveProductFile(pid, { kind: 'pdf', name: `${slugify(doc.title, 60) || 'guide'}.pdf`, bytes, mime: 'application/pdf', pages, engine });
   return { file, notes: [...new Set(notes)], drafted };
 }
 
 // ───────────── XLSX ─────────────
 
 export async function createWorkbookFile(o: { redesign: boolean }, h: BuildHooks): Promise<{ file: ProductFile; summary: WorkbookSummary; notes: string[] }> {
-  let p = project();
+  const pid = h.projectId ?? project().id;
+  let p = projectOf(pid);
   let wb = p.studio.workbook;
   const notes: string[] = [];
   if (!wb || o.redesign) {
     h.onStage('Designing your workbook from the outline…');
-    const res = await runLogged(workbookTask, {}, h, (s) => h.onStage(/thinking|writing/i.test(s) ? `Designing your workbook · ${s}` : s));
+    const res = await runLogged(pid, workbookTask, {}, h, (s) => h.onStage(/thinking|writing/i.test(s) ? `Designing your workbook · ${s}` : s));
     if (res.note) notes.push(res.note);
-    wb = { spec: res.data, at: Date.now(), engine: res.provider };
-    useStore.getState().updateStudio({ workbook: wb });
-    p = project();
+    const made = { spec: res.data, at: Date.now(), engine: res.provider };
+    wb = made;
+    updateStudioOf(pid, () => ({ workbook: made }));
+    p = projectOf(pid);
   }
   if (h.signal.aborted) throw stopped();
   h.onStage('Building the spreadsheet…');
   const { bytes, summary } = workbookFile(wb.spec, { name: p.brand.name || 'Your brand', website: website(p), colors: p.brand.colors });
-  const file = await saveProductFile({ kind: 'xlsx', name: `${slugify(wb.spec.title, 60) || 'workbook'}.xlsx`, bytes, mime: XLSX_MIME, sheets: summary.sheets.map((s) => s.name), engine: wb.engine });
+  const file = await saveProductFile(pid, { kind: 'xlsx', name: `${slugify(wb.spec.title, 60) || 'workbook'}.xlsx`, bytes, mime: XLSX_MIME, sheets: summary.sheets.map((s) => s.name), engine: wb.engine });
   return { file, summary, notes: [...notes, ...summary.dropped] };
 }

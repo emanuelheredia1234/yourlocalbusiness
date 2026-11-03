@@ -1,6 +1,6 @@
 // Buyers go to the seller's own page, email or phone; only safe links are ever offered.
 import { describe, expect, it } from 'vitest';
-import { listingActions, safeEmail, safePhone, safeUrl } from './actions';
+import { listingActions, safeEmail, safePhone, safeUrl } from './listingActions';
 
 const base = { id: 'l', kind: 'product', title: 'Budget Planner', origin: 'community', seller: { name: 'S' } } as never as Parameters<typeof listingActions>[0];
 

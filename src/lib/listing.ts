@@ -1,11 +1,33 @@
+// A project's Marketplace listing, built from the shared Project Context: its price, the listing itself,
+// and the images that travel with it. Used by Studio → Listing & publish, the Marketplace and the assistant.
+
 import type { Listing, MediaRef, Project, ServicePriceModel } from '@/lib/types';
-import { hashStr, readFileAsDataURL, uid } from '@/lib/utils';
+import { fmtMoney, hashStr, readFileAsDataURL, uid } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
 import { loadImage } from '@/lib/imageCanvas';
 import { SHARED_GALLERY_MAX, SHARED_IMAGE_CHARS } from '@/lib/community';
 import { matchBusinessType } from '@/ai/knowledge';
 
 const PATTERNS: Listing['cover']['pattern'][] = ['blobs', 'waves', 'dots', 'grid', 'rays'];
+
+/** A listing's price as buyers read it: "$49/mo", "From $300", "Get a quote" (a business with no price set). */
+export function priceLabel(price: number, model: ServicePriceModel): string {
+  if (model === 'quote') return 'Get a quote';
+  if (model === 'free' || price === 0) return 'Free';
+  const p = fmtMoney(price);
+  switch (model) {
+    case 'monthly':
+      return `${p}/mo`;
+    case 'yearly':
+      return `${p}/yr`;
+    case 'per-session':
+      return `${p}/session`;
+    case 'project':
+      return `From ${p}`;
+    default:
+      return p;
+  }
+}
 
 /** The price a business listing leads with: the package the owner marked popular, else the first package (or the studio price). */
 export function leadPrice(p: Project): { price: number; model: ServicePriceModel } {
@@ -60,7 +82,7 @@ export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, 
     phone: d.phone?.trim() || undefined,
     bookingType: isBiz ? d.bookingType : 'buy',
     hours: isBiz ? d.hours || undefined : undefined,
-    services: isBiz && p.studio.packages.length ? p.studio.packages.map((x) => ({ name: x.name, price: x.price, duration: x.priceModel === 'per-session' ? 'per session' : x.priceModel === 'monthly' ? 'monthly' : undefined })) : undefined,
+    services: isBiz && p.studio.packages.length ? p.studio.packages.map((x) => ({ name: x.name, price: x.price, duration: x.priceModel === 'per-session' ? 'per session' : x.priceModel === 'monthly' ? 'monthly' : undefined, ...(x.priceModel === 'quote' || x.priceModel === 'free' ? { priceModel: x.priceModel } : {}) })) : undefined,
     includes: includes.slice(0, 8),
     cover: {
       colors: [c.primary, c.secondary, c.accent],
@@ -131,9 +153,12 @@ async function sharedImage(media: MediaRef, steps: readonly (readonly [number, n
   }
 }
 
+/** As many gallery images as the shared Marketplace keeps, so buyers see the ones you picked. */
+export const MAX_GALLERY = SHARED_GALLERY_MAX;
+
 /** Gallery ids that still point at an image and aren't the cover, at most as many as the Marketplace shares. */
 export function cleanGallery(ids: string[] | undefined, images: MediaRef[], coverId?: string): string[] {
-  return (ids ?? []).filter((id) => id !== coverId && images.some((m) => m.id === id && m.kind === 'image')).slice(0, SHARED_GALLERY_MAX);
+  return (ids ?? []).filter((id) => id !== coverId && images.some((m) => m.id === id && m.kind === 'image')).slice(0, MAX_GALLERY);
 }
 
 /** The images the listing's gallery shows. */

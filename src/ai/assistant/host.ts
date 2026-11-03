@@ -6,6 +6,7 @@ import { confirmAction } from '@/components/ui/primitives';
 import { useManusPost } from '@/components/posts/ManusPost';
 import { useManusGroups } from '@/components/posts/ManusGroups';
 import { useMarkPosted } from '@/components/posts/PostActions';
+import { openListingWindow } from '@/components/studio/ListingWindowHost';
 import type { DangerSpec, PubWindow } from './registry';
 import { assistantAvailability, askAssistantModel, promptBudget, type Availability } from './transport';
 import { openPage } from './nav';
@@ -40,6 +41,8 @@ export const host: AssistantHost = {
       case 'mark-posted':
         useMarkPosted.getState().open(w.postId);
         return true;
+      case 'listing':
+        return openListingWindow(w.action);
       case 'page':
         return openPage(w.route, w.tab);
     }

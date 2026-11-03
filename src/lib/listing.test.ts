@@ -4,8 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { newProject } from '@/store/defaults';
 import type { MediaRef } from '@/lib/types';
 import { compact, SHARED_GALLERY_MAX, SHARED_IMAGE_CHARS } from '@/lib/community';
-import { buildListing, cleanGallery, COVER_STEPS, fitDataUrl, GALLERY_STEPS, galleryIds, LISTING_IMAGE_CHARS } from './listing';
-import { MAX_GALLERY } from './ListingImages';
+import { buildListing, cleanGallery, COVER_STEPS, fitDataUrl, GALLERY_STEPS, galleryIds, LISTING_IMAGE_CHARS, MAX_GALLERY } from './listing';
 
 /** A stand-in JPEG encoder: larger and better-quality images take more characters, like real ones. */
 function fakeEncoder(weight = 0.3) {
