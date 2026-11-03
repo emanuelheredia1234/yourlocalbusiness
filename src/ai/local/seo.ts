@@ -357,6 +357,7 @@ export const SECTION_LABEL: Record<SalesSectionType, string> = {
   pricing: 'Pricing card',
   faq: 'FAQ',
   guarantee: 'Guarantee & final CTA',
+  gallery: 'Gallery',
 };
 
 export function generateSalesPage(project: Project, d: Directives = {}, variation = 0): SalesPage {

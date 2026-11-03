@@ -20,6 +20,7 @@ import { BrandBanner, BrandLogo } from '@/components/brand/Logo';
 import { manusSetupHint, useManusReady } from '@/components/posts/ManusPost';
 import { download } from '@/components/ui/download';
 import { AIProviders, ArtifactAI } from './AIProviders';
+import { DomainsCard } from './Domains';
 
 type Tab = 'brand' | 'ai' | 'accounts' | 'projects' | 'prefs' | 'account';
 
@@ -28,10 +29,15 @@ export default function Settings() {
   const signedIn = useAuth((s) => s.phase === 'ready');
   const wanted = useUI((s) => s.settingsTab);
   const [tab, setTab] = useState<Tab>(() => (wanted === 'account' && signedIn ? 'account' : 'brand'));
+  // "domains" (from a page's Publish panel): the Domains card on the Brand tab
+  const [focusDomains, setFocusDomains] = useState(wanted === 'domains');
   // the account menu asks for a tab
   useEffect(() => {
     if (!wanted) return;
-    if (wanted === 'account' ? signedIn : ['brand', 'ai', 'accounts', 'projects', 'prefs'].includes(wanted)) setTab(wanted as Tab);
+    if (wanted === 'domains') {
+      setTab('brand');
+      setFocusDomains(true);
+    } else if (wanted === 'account' ? signedIn : ['brand', 'ai', 'accounts', 'projects', 'prefs'].includes(wanted)) setTab(wanted as Tab);
     useUI.getState().setSettingsTab(null);
   }, [wanted, signedIn]);
   return (
@@ -53,7 +59,7 @@ export default function Settings() {
           ...(signedIn ? [{ id: 'account' as const, label: 'Account', icon: <CircleUserRound size={15} /> }] : []),
         ]}
       />
-      {tab === 'brand' && <BrandSettings project={project} />}
+      {tab === 'brand' && <BrandSettings project={project} focusDomains={focusDomains} onDomainsFocused={() => setFocusDomains(false)} />}
       {tab === 'ai' && <AISettings />}
       {tab === 'accounts' && <Accounts />}
       {tab === 'projects' && <ProjectsData />}
@@ -80,7 +86,7 @@ function Card({ title, desc, children, action }: { title: string; desc?: string;
 
 // ───────────────────────── Brand ─────────────────────────
 
-function BrandSettings({ project }: { project: Project }) {
+function BrandSettings({ project, focusDomains, onDomainsFocused }: { project: Project; focusDomains?: boolean; onDomainsFocused?: () => void }) {
   const updateBrand = useStore((s) => s.updateBrand);
   const brand = project.brand;
   const ai = useAI(brandKitTask);
@@ -152,6 +158,8 @@ function BrandSettings({ project }: { project: Project }) {
             </div>
           )}
         </Card>
+
+        <DomainsCard focus={focusDomains} onFocused={onDomainsFocused} />
 
         <Card title="Logo & colors" desc="Upload your own logo or design one from an icon, shape and font.">
           <LogoDesigner brand={brand} onChange={set} paletteOptions={palettes} />

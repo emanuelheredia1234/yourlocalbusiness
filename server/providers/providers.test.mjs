@@ -514,6 +514,20 @@ describe('HTTP routes', () => {
     expect(usage.recent[0]).toMatchObject({ provider: 'openai', fn: 'research', brain: true });
   });
 
+  it('passes up to 4 images with a writing request, and only real image data URLs', async () => {
+    const png = `data:image/png;base64,${PNG.toString('base64')}`;
+    const svg = `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString('base64')}`;
+    let r = await call('/api/ai/generate', { method: 'POST', body: JSON.stringify({ fn: 'research', prompt: 'ideas', images: [png, png, png, png, png] }) });
+    expect(r.status).toBe(200);
+    let content = mock.last('openai', '/responses').body.input[0].content;
+    expect(content.filter((c) => c.type === 'input_image')).toHaveLength(4);
+    expect(content.at(-1)).toMatchObject({ type: 'input_text' });
+    r = await call('/api/ai/generate', { method: 'POST', body: JSON.stringify({ fn: 'research', prompt: 'ideas', images: [svg, 'https://example.com/a.png', png] }) });
+    expect(r.status).toBe(200);
+    content = mock.last('openai', '/responses').body.input[0].content;
+    expect(content.filter((c) => c.type === 'input_image').map((c) => c.image_url)).toEqual([png]);
+  });
+
   it('returns photo bytes with the meta in a header', async () => {
     const r = await call('/api/ai/image', { method: 'POST', body: JSON.stringify({ prompt: 'a desk', aspect: '1:1' }) });
     expect(r.status).toBe(200);

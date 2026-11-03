@@ -73,9 +73,12 @@ const MAX_MEDIA_PROMPT = 4000;
 const VIDEO_ASPECTS = new Set(['9:16', '1:1', '16:9', '3:4', '4:3']);
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
+/** Images sent with a writing request: the first 4 (the app resizes them first, so they fit in the body limit). */
+const MAX_TEXT_IMAGES = 4;
+
 const cleanImages = (list) =>
   (Array.isArray(list) ? list : [])
-    .slice(0, 2)
+    .slice(0, MAX_TEXT_IMAGES)
     .filter((u) => {
       const d = parseDataUrl(u);
       return d && IMAGE_TYPES.has(d.mime);

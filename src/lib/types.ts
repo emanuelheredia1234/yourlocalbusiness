@@ -96,6 +96,29 @@ export interface GeneratedInfo {
   watermark?: boolean;
 }
 
+/** An image the owner added to a prompt box. The page or artifact refers to it as {{img-1}}, {{img-2}}… */
+export interface PromptImage {
+  /** 'img-1', 'img-2', … (unique within its page/artifact, never reused) */
+  key: string;
+  media: MediaRef;
+  /** what it shows, or where to use it (the owner's words; optional) */
+  note?: string;
+}
+
+/** A page published at a public address. */
+export interface Published {
+  /** its name on the app's address: https://<app>/<slug> */
+  slug: string;
+  /** one of the owner's own domains it also shows on (https://<domain>/<slug>), and whether it's that domain's home page (https://<domain>/) */
+  domain?: string;
+  home?: boolean;
+  url: string;
+  domainUrl?: string;
+  publishedAt: number;
+  /** fingerprint of what was published (html + image keys), to show "changes not published yet" */
+  hash: string;
+}
+
 export type Socials = Partial<Record<SocialPlatform, string>>;
 
 export interface NameOption {
@@ -214,6 +237,10 @@ export interface CodeAsset {
    *  the Code tab shows "Outdated: regenerate" (the code itself is never rewritten automatically).
    *  false = made by a current version, regenerated, or dismissed by the owner: never flagged again */
   outdated?: boolean;
+  /** images added in the prompt boxes; the code uses them as {{img-N}} */
+  images?: PromptImage[];
+  /** where it's published, if it is */
+  published?: Published;
   createdAt: number;
   updatedAt: number;
 }
@@ -336,6 +363,9 @@ export interface HeroData {
   ctaLabel: string;
   ctaSubtext: string;
   bullets: string[];
+  /** media id of one of the page's prompt images (an owner fact: the AI never sets it) */
+  imageId?: string;
+  imageAlt?: string;
 }
 export interface ProblemData {
   heading: string;
@@ -395,6 +425,12 @@ export interface GuaranteeData {
   /** the owner turned their guarantee on; otherwise only the closing heading and button show */
   offered?: boolean;
 }
+/** Photos the owner added (by media id: an owner fact). The AI may write the heading, intro, alt text and captions. */
+export interface GalleryData {
+  heading: string;
+  intro: string;
+  items: { imageId: string; alt: string; caption: string }[];
+}
 
 export type SalesSection =
   | { id: string; type: 'hero'; visible: boolean; data: HeroData }
@@ -403,7 +439,9 @@ export type SalesSection =
   | { id: string; type: 'proof'; visible: boolean; data: ProofData }
   | { id: string; type: 'pricing'; visible: boolean; data: PricingData }
   | { id: string; type: 'faq'; visible: boolean; data: FaqData }
-  | { id: string; type: 'guarantee'; visible: boolean; data: GuaranteeData };
+  | { id: string; type: 'guarantee'; visible: boolean; data: GuaranteeData }
+  /** not on a new page: added (after the solution) once the page has images for it */
+  | { id: string; type: 'gallery'; visible: boolean; data: GalleryData };
 export type SalesSectionType = SalesSection['type'];
 
 export interface SalesTheme {
@@ -842,6 +880,12 @@ export interface Project {
     subscribers: Subscriber[];
     seo: SeoMeta | null;
     salesPage: SalesPage | null;
+    /** the owner's standing guidance for the AI when it writes or edits the sales page */
+    seoGuide?: string;
+    /** images added in the sales page's prompt boxes */
+    seoImages?: PromptImage[];
+    /** where the sales page is published, if it is */
+    seoPublished?: Published;
     campaign: CampaignConfig;
     plan: CampaignPlan | null;
     batchId?: string;

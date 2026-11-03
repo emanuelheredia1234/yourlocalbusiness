@@ -147,9 +147,18 @@ export const NO_AI_SERVER: AIServerState = { reachable: false, ready: false, pro
 /** The Zapier connector as this page sees it (for Manus images and social posts). */
 export type ZapierStatus = 'checking' | 'ready' | 'needs_reauth' | 'missing' | 'unavailable';
 
+/** What Claude in claude.ai takes with one request: how many images, how large, which types. */
+export interface ClaudeImageLimits {
+  maxCount: number;
+  maxInputBytes: number;
+  mediaTypes: string[];
+}
+
 interface RuntimeState {
   claude: ClaudeStatus;
   claudeImages: boolean;
+  /** set with claudeImages: Claude's own limits for images, so a request never asks for more */
+  claudeImageLimits: ClaudeImageLimits | null;
   server: 'unknown' | 'ok' | 'down';
   ai: AIServerState;
   zapier: ZapierStatus;
@@ -163,6 +172,7 @@ interface RuntimeState {
 export const useRuntime = create<RuntimeState>((set) => ({
   claude: 'checking',
   claudeImages: false,
+  claudeImageLimits: null,
   server: 'unknown',
   ai: NO_AI_SERVER,
   zapier: 'checking',
@@ -181,14 +191,14 @@ export function initRuntime(): void {
       useRuntime.getState().set({ claude: 'unavailable' });
       return;
     }
-    let images = false;
+    let limits: ClaudeImageLimits | null = null;
     try {
       const lim = await sample.limits();
-      images = !!lim?.images;
+      if (lim?.images) limits = { maxCount: Number(lim.images.maxCount) || 0, maxInputBytes: Number(lim.images.maxInputBytes) || 0, mediaTypes: Array.isArray(lim.images.mediaTypes) ? lim.images.mediaTypes.filter((t): t is string => typeof t === 'string') : [] };
     } catch {
-      images = false;
+      limits = null;
     }
-    useRuntime.getState().set({ claude: 'available', claudeImages: images });
+    useRuntime.getState().set({ claude: 'available', claudeImages: !!limits, claudeImageLimits: limits });
   });
   getMcp().then(async (mcp) => {
     if (!mcp) {

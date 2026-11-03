@@ -1,5 +1,5 @@
 import type { Project } from '@/lib/types';
-import { NO_AI_SERVER, getSample, useRuntime, type AIServerState, type SampleError, type SampleOptions } from '@/lib/platform';
+import { NO_AI_SERVER, getSample, useRuntime, type AIServerState, type ClaudeImageLimits, type SampleError, type SampleOptions } from '@/lib/platform';
 import { readFileAsDataURL, uid } from '@/lib/utils';
 import { FORMATS } from './knowledge';
 import { isAIMeta, type AIMeta } from './meta';
@@ -26,6 +26,20 @@ export interface CallOptions {
   images?: Blob[];
 }
 
+/** Images per request to your server (it keeps the first 4). */
+export const SERVER_MAX_IMAGES = 4;
+
+/**
+ * The images Claude in claude.ai takes with one request: its types, its size limit, at most its count,
+ * in order. The rest are left out rather than failing the whole request (none when it takes no images).
+ */
+export function fitClaudeImages(images: Blob[], limits: ClaudeImageLimits | null): Blob[] {
+  if (!limits) return [];
+  const types = limits.mediaTypes.length ? new Set(limits.mediaTypes.map((t) => t.toLowerCase())) : null;
+  const count = limits.maxCount > 0 ? limits.maxCount : 1;
+  return images.filter((b) => (!types || types.has(b.type.toLowerCase())) && (!limits.maxInputBytes || b.size <= limits.maxInputBytes)).slice(0, count);
+}
+
 /** Ask Claude through the claude.ai Artifact runtime (`sample` capability). */
 export async function callArtifactClaude(prompt: string, opts: CallOptions): Promise<unknown> {
   const sample = await getSample();
@@ -37,7 +51,8 @@ export async function callArtifactClaude(prompt: string, opts: CallOptions): Pro
     const cb = opts.onText;
     o.onText = ({ text }) => cb(text);
   }
-  if (opts.images?.length) o.images = opts.images;
+  const images = opts.images?.length ? fitClaudeImages(opts.images, useRuntime.getState().claudeImageLimits) : [];
+  if (images.length) o.images = images;
   try {
     const value = await sample.json(prompt, o);
     useRuntime.getState().set({ claude: 'available' });
@@ -76,7 +91,7 @@ const SERVER_CODES: Record<string, string> = {
  * function, with each key's model and effort, and says which one answered and what it used.
  */
 export async function callServerAI(fn: string, prompt: string, opts: ServerCallOptions): Promise<{ value: unknown; meta: AIMeta | null }> {
-  const images = opts.images?.length ? await Promise.all(opts.images.slice(0, 2).map((b) => readFileAsDataURL(b))) : undefined;
+  const images = opts.images?.length ? await Promise.all(opts.images.slice(0, SERVER_MAX_IMAGES).map((b) => readFileAsDataURL(b))) : undefined;
   let res: Response;
   try {
     res = await serverFetch(opts.serverUrl, '/api/ai/generate', {
@@ -332,6 +347,11 @@ export function friendlyAIError(code: string, message = ''): string {
     case 'unavailable':
     case 'sampling_disabled':
       return 'Claude isn’t available here. The built-in engine answered.';
+    case 'image_rejected':
+    case 'images_unavailable':
+      return 'Claude couldn’t take the images with this request. The built-in engine answered instead; try again with fewer or smaller images.';
+    case 'prompt_too_large':
+      return 'This request was too long for Claude. The built-in engine answered instead; try a shorter description or fewer images.';
     default:
       return message ? `${message} ${fallback}` : 'The AI hit a temporary problem. The built-in engine answered instead.';
   }
