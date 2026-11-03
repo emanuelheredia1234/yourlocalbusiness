@@ -9,14 +9,15 @@
 // The artwork never carries text; headlines, prices and lists are typeset on top by the
 // canvas compositor so they read exactly right.
 
-import type { GeneratedInfo, ImageAspect, ImageKind, MediaRef, ProviderId, Project, StyleId } from '@/lib/types';
+import type { GeneratedInfo, ImageAspect, ImageKind, ListingShotId, MediaRef, ProviderId, Project, StyleId } from '@/lib/types';
 import { useRuntime } from '@/lib/platform';
 import { deleteBlob, getBlob, putBlob } from '@/lib/storage';
 import { hashStr, slugify, uid } from '@/lib/utils';
 import { svgDataUrl } from '@/lib/svg';
 import { canvasBlob, canvasThumb, composeListing, composePost, loadImage, type ListingLayout, type ListingText } from '@/lib/imageCanvas';
 import { useStore } from '@/store/useStore';
-import { FORMATS, IMAGE_STYLES, VIDEO_STYLES, matchBusinessType } from './knowledge';
+import { FORMATS, IMAGE_STYLES, VIDEO_STYLES } from './knowledge';
+import { businessBrief, OWN_PHOTO_PROVIDER } from './listingPhotos';
 import { heroScene, sceneForStyle, type ArtScene } from './local/art';
 import { runTask } from './engine';
 import { visualBrief, type VisualBrief } from './brain';
@@ -138,6 +139,7 @@ export function postVideoPrompt(project: Project, visualPrompt: string, style: S
   return [subject.replace(/\.*$/, '.'), shots ? `Shots: ${shots}.` : '', 'No on-screen text, captions, letters or logos.'].filter(Boolean).join(' ');
 }
 
+/** Stock settings for business listing photos, used only when the business clearly is that kind (listingPhotos.ts sceneTypeFor). */
 export const BIZ_SCENES: Record<string, { hero: string; work: string }> = {
   cleaning: { hero: 'a bright, spotless living room with sunlight, fresh flowers and neatly folded throws', work: 'a friendly professional cleaner wiping a kitchen counter in a sunlit home' },
   'home-repair': { hero: 'a neatly organized tool wall and workbench in a clean workshop', work: 'a skilled handyman fixing a kitchen cabinet in a modern home' },
@@ -169,7 +171,7 @@ const FORMAT_MOCKUP: Record<string, { hero: string; life: string }> = {
   membership: { hero: 'a phone and laptop showing a friendly community feed and member area', life: 'joining a lively online community call from a laptop' },
 };
 
-export type ListingShotId = 'hero' | 'lifestyle' | 'inside' | 'offer';
+export type { ListingShotId };
 
 export interface ListingShot {
   id: ListingShotId;
@@ -182,23 +184,85 @@ export interface ListingShot {
   prompt: string;
 }
 
+const capFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** Sentences of a prompt: empty parts dropped, each ending in a full stop. */
+const sentences = (...parts: (string | false | null | undefined)[]) =>
+  parts
+    .filter((x): x is string => !!x && !!x.trim())
+    .map((x) => (/[.!?]$/.test(x.trim()) ? x.trim() : `${x.trim()}.`))
+    .join(' ');
+
+/**
+ * A business's four listing images, described from the owner's own details first (business type,
+ * specialty, top package, listing title, summary, audience, city). A stock setting is added only when
+ * the business clearly is that kind; the business name is left out so no lettering is drawn.
+ */
+function businessShots(project: Project, palette: string): ListingShot[] {
+  const b = businessBrief(project);
+  const scene = b.sceneId ? BIZ_SCENES[b.sceneId] : undefined;
+  const where = b.city ? ` in ${b.city}` : '';
+  const show = b.shop ? 'what it sells, beautifully presented, and the place where customers buy it' : 'the finished result or the place where the work happens';
+  const specialty = b.specialty && `Specialty: ${b.specialty}`;
+  const offer = b.offerItems.length ? `What customers get${b.offerName ? ` (${b.offerName})` : ''}: ${b.offerItems.join('; ')}` : b.offerName && `What customers get: ${b.offerName}`;
+  const audience = b.audience && `Customers: ${b.audience}`;
+  const backdrop = scene?.hero ?? (b.shop ? 'what it sells and the place where customers buy it' : 'the place where the work happens');
+  const inSpecialty = b.specialty ? ` (${b.specialty})` : '';
+  const lifestyle = b.shop
+    ? sentences(`A customer enjoying what ${b.business} sells${where}`, scene && `Setting: ${scene.work}`)
+    : scene
+      ? sentences(`${capFirst(scene.work)}${where}`)
+      : sentences(`${b.person ? capFirst(b.business) : `Someone from ${b.business}`} at work${where}, serving a customer`);
+  return [
+    {
+      id: 'hero',
+      label: 'Cover',
+      desc: b.shop ? 'Your shop and what you sell, used as the listing cover' : 'Your space or result, used as the listing cover',
+      aspect: '3:2',
+      layout: 'clean',
+      scene: 'storefront',
+      textArea: 'none',
+      prompt: sentences(`Cover photo for ${b.business}${where}: ${scene?.hero ?? show}`, specialty, offer, b.title && `Listing: ${b.title}`, b.summary && `About: ${b.summary}`, 'Inviting, premium editorial photo, natural light, sharp focus', palette, NO_TEXT),
+    },
+    {
+      id: 'lifestyle',
+      label: b.shop ? 'With a customer' : 'At work',
+      desc: b.shop ? 'Someone enjoying what you sell' : 'Your service in action',
+      aspect: '3:2',
+      layout: 'clean',
+      scene: 'people',
+      textArea: 'none',
+      prompt: sentences(lifestyle, specialty, offer, audience, 'Candid, warm, authentic documentary-style photo, natural light', palette, NO_TEXT),
+    },
+    {
+      id: 'inside',
+      label: 'What you get',
+      desc: 'Package highlights as a branded checklist',
+      aspect: '1:1',
+      layout: 'inside',
+      scene: 'soft',
+      textArea: 'center',
+      prompt: sentences(`Soft, out-of-focus background photo for ${b.business}${where}, suggesting ${backdrop}${inSpecialty}`, 'Gentle bokeh, lots of calm space', palette, NO_TEXT),
+    },
+    {
+      id: 'offer',
+      label: 'Offer card',
+      desc: 'Price and call to action',
+      aspect: '1:1',
+      layout: 'offer',
+      scene: 'storefront',
+      textArea: 'center',
+      prompt: sentences(`Background photo for ${b.business}${where}: ${scene?.hero ?? show}${inSpecialty}`, 'Moody and slightly dark so white text reads clearly on top', palette, NO_TEXT),
+    },
+  ];
+}
+
 /** The four standard marketplace images for this project, with prompts built from its context. */
 export function listingShots(project: Project): ListingShot[] {
   const c = project.brand.colors;
   const palette = `Brand colors ${c.primary}, ${c.secondary} and ${c.accent}.`;
   const name = project.studio.listing.title.trim() || project.idea?.title || project.brand.name;
   const audience = project.idea?.audience || project.brand.audience || 'the ideal customer';
-  if (project.track === 'business') {
-    const bt = matchBusinessType(`${project.businessType} ${project.category} ${project.niche}`);
-    const scene = BIZ_SCENES[bt.id] ?? { hero: `the welcoming space of a professional ${bt.label.toLowerCase()} business`, work: `a friendly ${bt.label.toLowerCase()} professional serving a happy customer` };
-    const where = project.location?.city ? ` in ${project.location.city}` : '';
-    return [
-      { id: 'hero', label: 'Cover', desc: 'Your space or result, used as the listing cover', aspect: '3:2', layout: 'clean', scene: 'storefront', textArea: 'none', prompt: `${scene.hero}${where}, for “${project.brand.name}”. Inviting, premium real-estate-style photo, natural light, sharp focus. ${palette} ${NO_TEXT}` },
-      { id: 'lifestyle', label: 'At work', desc: 'Your service in action', aspect: '3:2', layout: 'clean', scene: 'people', textArea: 'none', prompt: `${scene.work}${where}. Candid, warm, authentic documentary-style photo, natural light. ${palette} ${NO_TEXT}` },
-      { id: 'inside', label: 'What you get', desc: 'Package highlights as a branded checklist', aspect: '1:1', layout: 'inside', scene: 'soft', textArea: 'center', prompt: `Soft, out-of-focus background suggesting ${scene.hero}, gentle bokeh, lots of calm space. ${palette} ${NO_TEXT}` },
-      { id: 'offer', label: 'Offer card', desc: 'Price and call to action', aspect: '1:1', layout: 'offer', scene: 'storefront', textArea: 'center', prompt: `${scene.hero}, moody and slightly dark so white text reads clearly on top. ${palette} ${NO_TEXT}` },
-    ];
-  }
+  if (project.track === 'business') return businessShots(project, palette);
   const fmt = project.format ? FORMATS[project.format] : null;
   const mock = FORMAT_MOCKUP[project.format ?? ''] ?? { hero: 'a premium digital product shown on a laptop and tablet', life: 'using the product at a bright desk' };
   const what = `${fmt ? fmt.label.replace(/s$/, '').toLowerCase() : 'digital product'} “${name}”`;
@@ -262,7 +326,7 @@ async function requestManusPhoto(req: ArtRequest): Promise<ArtResult> {
     task = await createManusTask({
       fn: 'photos',
       // the clean subject: manusImagePrompt adds the style, palette, framing and no-text rules itself
-      prompt: manusImagePrompt({ subject: req.subject, aspect: req.aspect, styleHint: req.styleHint, colors: req.project.brand.colors, purpose: req.purpose, textSpace: req.textArea }),
+      prompt: manusImagePrompt({ subject: req.subject, aspect: req.aspect, styleHint: req.styleHint, colors: req.project.brand.colors, purpose: req.purpose, textSpace: req.textArea, business: req.project.track === 'business' }),
       title: `${req.purpose === 'post' ? 'Post' : 'Listing'} image · ${req.project.brand.name || 'Yourlocalbusiness'}`,
       hidden: true,
     });
@@ -438,8 +502,7 @@ export async function generateArt(req: ArtRequest): Promise<ArtResult> {
   return requestIllustration(req);
 }
 
-async function saveGenerated(canvas: HTMLCanvasElement, art: Pick<ArtResult, 'kind' | 'provider' | 'source' | 'taskUrl'>, info: Omit<GeneratedInfo, 'kind' | 'provider' | 'createdAt'>, name: string): Promise<MediaRef> {
-  const jpeg = art.kind === 'photo';
+async function saveGenerated(canvas: HTMLCanvasElement, art: Pick<ArtResult, 'kind' | 'provider' | 'source' | 'taskUrl'>, info: Omit<GeneratedInfo, 'kind' | 'provider' | 'createdAt'>, name: string, jpeg = art.kind === 'photo'): Promise<MediaRef> {
   const blob = await canvasBlob(canvas, jpeg ? 'image/jpeg' : 'image/png', 0.9);
   const id = uid('media');
   await putBlob(id, blob);
@@ -587,6 +650,19 @@ export async function createListingImage(o: ListingImageOptions): Promise<{ medi
   const base = slugify(o.project.studio.listing.title || o.project.brand.name, 36) || 'listing';
   const media = await saveGenerated(canvas, art, { prompt: o.prompt, purpose: 'listing', shot: o.shot.id, aspect: o.shot.aspect, final: o.shot.layout !== 'clean' }, `${base}-${o.shot.id}`);
   return { media, art };
+}
+
+/**
+ * Typeset the listing details (checklist or offer) on a photo you uploaded, with no AI. It is saved as a
+ * new image that points back at your photo (artId), and your photo itself stays as it is.
+ */
+export async function composeOwnListingPhoto(o: { project: Project; shot: ListingShot; photoId: string; text: ListingText }): Promise<MediaRef> {
+  const photo = await loadArt(o.photoId).catch(() => null);
+  if (!photo) throw new ImageGenError('Your photo couldn’t be opened on this device. Upload it again and try once more.', 'NO_FILE');
+  const canvas = await composeListing({ art: photo.image, brand: o.project.brand, aspect: o.shot.aspect, layout: o.shot.layout, text: o.text });
+  const base = slugify(o.project.studio.listing.title || o.project.brand.name, 36) || 'listing';
+  // JPEG: it is a photo, and a PNG of one is several times larger
+  return saveGenerated(canvas, { kind: 'design', provider: OWN_PHOTO_PROVIDER, source: photo.source }, { prompt: '', purpose: 'listing', shot: o.shot.id, aspect: o.shot.aspect, final: true, artId: o.photoId }, `${base}-${o.shot.id}`, true);
 }
 
 /** Friendly copy for an image error code. */

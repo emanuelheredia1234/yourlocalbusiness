@@ -1,11 +1,13 @@
-import { useMemo, useState } from 'react';
-import { Camera, Check, ChevronDown, Download, ImagePlus, Images, Palette, RefreshCw, Square, Star, WandSparkles } from 'lucide-react';
-import type { ImageKind, ListingDraft, MediaRef, Project } from '@/lib/types';
+import { useMemo, useRef, useState } from 'react';
+import { Camera, Check, ChevronDown, Download, ImagePlus, Images, Palette, RefreshCw, Square, Star, Type, Upload, WandSparkles } from 'lucide-react';
+import type { ImageKind, ListingDraft, ListingShotId, MediaRef, Project } from '@/lib/types';
 import { cn, fmtMoney } from '@/lib/utils';
-import { getBlob } from '@/lib/storage';
+import { getBlob, saveMediaFile } from '@/lib/storage';
+import { isOwnPhoto } from '@/lib/media';
 import { navigate } from '@/lib/router';
-import { FORMATS, matchBusinessType } from '@/ai/knowledge';
-import { createListingImage, defaultImageKind, listingShots, photoLabel, photoRoute, photoSourceNote, releaseMedia, type ListingShot, type ListingShotId } from '@/ai/image';
+import { SHARED_GALLERY_MAX } from '@/lib/community';
+import { composeOwnListingPhoto, createListingImage, defaultImageKind, listingShots, photoLabel, photoRoute, photoSourceNote, releaseMedia, type ListingShot } from '@/ai/image';
+import { fromOwnPhoto, listingShotMedia, offerEyebrow, PHOTO_ACCEPT, photoFileProblem, withoutPlaceholders } from '@/ai/listingPhotos';
 import { pendingManus, type ManusTask } from '@/ai/manus';
 import { ManusLink } from '@/components/images/PostImagePanel';
 import type { ListingText } from '@/lib/imageCanvas';
@@ -17,38 +19,87 @@ import { AutoTextarea, Segmented, Spinner } from '@/components/ui/primitives';
 import { MediaThumb } from '@/components/media/MediaUpload';
 import { artDirectionLabel, useArtDirection, useImageJob, usePhotoAvailability } from '@/components/images/useImageJob';
 import { priceLabel } from '@/pages/store/ListingParts';
-import { buildListing } from './listing';
+import { buildListing, cleanGallery, galleryIds } from './listing';
 
-export const MAX_GALLERY = 4;
+/** As many gallery images as the shared Marketplace keeps, so buyers see the ones you picked. */
+export const MAX_GALLERY = SHARED_GALLERY_MAX;
 
 /** The words typeset on the listing graphics, from the same data the listing uses. */
 export function listingText(project: Project): ListingText {
   const l = buildListing(project);
   const isBiz = project.track === 'business';
+  // lines a template left for you to fill in ("[your checklist]") never go on an image
+  const includes = withoutPlaceholders(l.includes ?? []);
   return {
     eyebrow: isBiz ? 'What you get' : 'What’s inside',
     title: l.title,
     tagline: l.tagline,
-    items: l.includes?.length ? l.includes : l.services?.map((s) => s.name) ?? [],
+    items: includes.length ? includes : withoutPlaceholders(l.services?.map((s) => s.name) ?? []),
     price: l.price || l.priceModel === 'free' ? priceLabel(l.price, l.priceModel) : undefined,
     compareAt: l.compareAt ? fmtMoney(l.compareAt) : undefined,
     cta: isBiz ? (l.bookingType === 'book' ? 'Book your visit' : l.bookingType === 'inquire' ? 'Request a quote' : 'Order now') : 'Get it now',
   };
 }
 
-/** Offer card eyebrow: what it is, and where for a local business. */
-function offerEyebrow(project: Project): string {
-  if (project.track === 'business') {
-    const label = matchBusinessType(`${project.businessType} ${project.category} ${project.niche}`).label;
-    return project.location?.city ? `${label} · ${project.location.city}` : label;
-  }
-  return project.format ? FORMATS[project.format].label.replace(/s$/, '') : 'Digital product';
-}
+/** The text a shot's graphic carries (the offer card leads with what and where). */
+const shotText = (p: Project, shot: ListingShot): ListingText => {
+  const text = listingText(p);
+  return shot.layout === 'offer' ? { ...text, eyebrow: offerEyebrow(p) } : text;
+};
 
-const latestFor = (project: Project, shot: ListingShotId): MediaRef | undefined =>
-  project.brand.images
-    .filter((m) => m.generated?.purpose === 'listing' && m.generated.shot === shot)
-    .sort((a, b) => b.createdAt - a.createdAt)[0];
+const ALL_SHOTS: ListingShotId[] = ['hero', 'lifestyle', 'inside', 'offer'];
+const andList = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
+/**
+ * Adds your own photos. Only JPG, PNG and WebP: HEIC (the iPhone default) can't be opened in most
+ * browsers, so it is turned away with a note instead of failing later.
+ */
+export function PhotoUploadButton({ onPhotos, multiple, label, ariaLabel, className, disabled }: { onPhotos: (media: MediaRef[]) => void; multiple?: boolean; label: string; ariaLabel?: string; className?: string; disabled?: boolean }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const add = async (files: File[]) => {
+    if (!files.length) return;
+    setBusy(true);
+    const out: MediaRef[] = [];
+    for (const f of files.slice(0, multiple ? 12 : 1)) {
+      const problem = photoFileProblem(f);
+      if (problem) {
+        toast({ kind: 'error', title: `Couldn’t add ${f.name}`, body: problem });
+        continue;
+      }
+      try {
+        out.push(await saveMediaFile(f));
+      } catch (e) {
+        const msg = (e as Error)?.message || 'The photo couldn’t be read.';
+        toast({ kind: 'error', title: `Couldn’t add ${f.name}`, body: /read|load/i.test(msg) ? `${msg} Try a JPG, PNG or WebP photo.` : msg });
+      }
+    }
+    setBusy(false);
+    if (out.length) onPhotos(out);
+  };
+  return (
+    <>
+      <button type="button" className={className ?? 'btn btn-ghost btn-xs'} disabled={disabled || busy} aria-label={ariaLabel} onClick={() => input.current?.click()}>
+        {busy ? <Spinner size={12} /> : <Upload size={12} />} {label}
+      </button>
+      <input
+        ref={input}
+        type="file"
+        accept={PHOTO_ACCEPT}
+        multiple={multiple}
+        className="hidden"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          // let the same file be picked again later
+          e.target.value = '';
+          void add(files);
+        }}
+      />
+    </>
+  );
+}
 
 export function ListingImages({ project }: { project: Project }) {
   const updateBrand = useStore((s) => s.updateBrand);
@@ -56,17 +107,17 @@ export function ListingImages({ project }: { project: Project }) {
   const photo = usePhotoAvailability();
   const shots = useMemo(() => listingShots(project), [project]);
   const [kind, setKind] = useState<ImageKind>(() => defaultImageKind());
-  const [prompts, setPrompts] = useState<Partial<Record<ListingShotId, string>>>({});
-  const [selected, setSelected] = useState<ListingShotId[]>(['hero', 'lifestyle', 'inside', 'offer']);
+  const [selected, setSelected] = useState<ListingShotId[]>(ALL_SHOTS);
   const [open, setOpen] = useState<ListingShotId | null>(null);
   const [busy, setBusy] = useState<ListingShotId[]>([]);
+  const [composing, setComposing] = useState<ListingShotId | null>(null);
   const [progress, setProgress] = useState('');
   const [tasks, setTasks] = useState<Partial<Record<ListingShotId, ManusTask>>>({});
   const pendingKey = (shot: ListingShotId) => `listing:${project.id}:${shot}`;
   // Manus images started before a reload, still on their way
   const [resumable, setResumable] = useState<Partial<Record<ListingShotId, ManusTask>>>(() => {
     const r: Partial<Record<ListingShotId, ManusTask>> = {};
-    for (const id of ['hero', 'lifestyle', 'inside', 'offer'] as ListingShotId[]) {
+    for (const id of ALL_SHOTS) {
       const t = pendingManus.get(`listing:${project.id}:${id}`);
       if (t) r[id] = t;
     }
@@ -78,34 +129,61 @@ export function ListingImages({ project }: { project: Project }) {
   // photos from an image API come back in seconds, so a set is made all at once (Manus tasks one by one)
   const fastPhotos = effKind === 'photo' && (photoRoute() === 'muse' || photoRoute() === 'server');
   const d = project.studio.listing;
-  const gallery = d.galleryIds ?? [];
+  const gallery = galleryIds(project);
+  const isBiz = project.track === 'business';
+  // "Generate full set" leaves the shots that show your own photo alone
+  const keepOwn = selected.filter((id) => fromOwnPhoto(listingShotMedia(project, id)));
+  const toMake = selected.filter((id) => !keepOwn.includes(id));
+  const labelOf = (id: ListingShotId) => shots.find((s) => s.id === id)?.label ?? id;
 
-  /** Put a new image in place of the shot's previous one (cover and gallery follow it). */
-  const place = (shot: ListingShot, media: MediaRef) => {
+  /** Keep an edited image description with the listing; the suggested one when it matches again. */
+  const setPrompt = (shot: ListingShot, v: string | undefined) => {
+    const draft = getActiveProject()!.studio.listing;
+    const next = { ...draft.shotPrompts };
+    if (v === undefined || v === shot.prompt) delete next[shot.id];
+    else next[shot.id] = v;
+    updateStudio({ listing: { ...draft, shotPrompts: Object.keys(next).length ? next : undefined } });
+  };
+
+  /**
+   * Show a new image on a shot (an AI image, your photo, or your photo with your details); the cover and
+   * gallery follow it. An AI image it replaces is swapped out of your brand images and freed; your own
+   * photos always stay in your brand images.
+   */
+  const place = (shot: ListingShot, media: MediaRef): { cover: boolean; gallery: boolean } => {
     const p = getActiveProject()!;
-    const prev = latestFor(p, shot.id);
-    const images = prev ? p.brand.images.map((m) => (m.id === prev.id ? media : m)) : [...p.brand.images, media];
-    updateBrand({ images });
+    const prev = listingShotMedia(p, shot.id);
+    const own = isOwnPhoto(media);
+    const swap = !!prev?.generated && prev.id !== media.id;
+    let images = swap ? p.brand.images.map((m) => (m.id === prev!.id ? media : m)) : p.brand.images;
+    if (!images.some((m) => m.id === media.id)) images = [...images, media];
+    if (images !== p.brand.images) updateBrand({ images });
     const draft = p.studio.listing;
     const patch: Partial<ListingDraft> = {};
-    if (shot.id === 'hero' && (!draft.coverImageId || draft.coverImageId === prev?.id)) patch.coverImageId = media.id;
+    // a photo you put on the Cover card is your cover; a new AI cover only takes over from the old one (or none)
+    if (shot.id === 'hero' && (own || !draft.coverImageId || draft.coverImageId === prev?.id)) patch.coverImageId = media.id;
     else if (prev && draft.coverImageId === prev.id) patch.coverImageId = media.id;
-    const g = (draft.galleryIds ?? []).filter((id) => images.some((m) => m.id === id));
+    const g = cleanGallery(draft.galleryIds, images, patch.coverImageId ?? draft.coverImageId);
     if (prev && g.includes(prev.id)) patch.galleryIds = g.map((id) => (id === prev.id ? media.id : id));
     else if (shot.id !== 'hero' && g.length < MAX_GALLERY && !g.includes(media.id)) patch.galleryIds = [...g, media.id];
+    // which shots show a photo you uploaded (an AI image or your details on your photo shows by itself)
+    const mine = { ...draft.shotImageIds };
+    if (own) mine[shot.id] = media.id;
+    else delete mine[shot.id];
+    patch.shotImageIds = Object.keys(mine).length ? mine : undefined;
     updateStudio({ listing: { ...draft, ...patch } });
-    if (prev) setTimeout(() => releaseMedia(prev), 0);
+    if (swap) setTimeout(() => releaseMedia(prev), 0);
+    return { cover: (patch.coverImageId ?? draft.coverImageId) === media.id, gallery: (patch.galleryIds ?? g).includes(media.id) };
   };
 
   const makeOne = async (shot: ListingShot, signal: AbortSignal, onStage: (s: string) => void, resume?: ManusTask) => {
     const p = getActiveProject()!;
-    const text = listingText(p);
     const r = await createListingImage({
       project: p,
       kind: resume ? 'photo' : effKind,
       shot,
-      prompt: prompts[shot.id] ?? shot.prompt,
-      text: shot.layout === 'offer' ? { ...text, eyebrow: offerEyebrow(p) } : text,
+      prompt: p.studio.listing.shotPrompts?.[shot.id] ?? shot.prompt,
+      text: shotText(p, shot),
       signal,
       onStage,
       onTask: (t) => setTasks((x) => ({ ...x, [shot.id]: t })),
@@ -157,15 +235,39 @@ export function ListingImages({ project }: { project: Project }) {
     setProgress('');
     if (made) {
       const p = getActiveProject()!;
-      const hero = latestFor(p, 'hero');
+      const hero = listingShotMedia(p, 'hero');
       const heroIsCover = list.some((s) => s.id === 'hero') && !!hero && p.studio.listing.coverImageId === hero.id;
       toast({ kind: 'success', title: `${made} listing image${made === 1 ? '' : 's'} ready`, body: heroIsCover ? 'The new cover image is set. Publish or update the listing to show it to buyers.' : 'Publish or update the listing to show them to buyers.' });
     }
   };
 
+  /** Put a photo you uploaded on a shot. */
+  const putOwnPhoto = (shot: ListingShot, media: MediaRef) => {
+    const r = place(shot, media);
+    const body = 'Publish or update the listing to show it to buyers.';
+    if (r.cover) toast({ kind: 'success', title: 'Your photo is the listing cover', body });
+    else if (r.gallery) toast({ kind: 'success', title: `Your photo is on ${shot.label} and in the gallery`, body });
+    else toast({ kind: 'success', title: `Your photo is on ${shot.label}`, body: `The gallery already has ${MAX_GALLERY} images, so it isn’t in it. Remove one to add this photo.` });
+  };
+
+  /** Typeset your title, checklist or price on your own photo (no AI); the photo itself stays as it is. */
+  const addDetails = async (shot: ListingShot, photoId: string) => {
+    setComposing(shot.id);
+    try {
+      const p = getActiveProject()!;
+      const media = await composeOwnListingPhoto({ project: p, shot, photoId, text: shotText(p, shot) });
+      place(shot, media);
+      toast({ kind: 'success', title: 'Your details are on your photo', body: 'Your original photo stays in your brand images.' });
+    } catch (e) {
+      toast({ kind: 'error', title: 'Couldn’t add your details', body: (e as Error)?.message || 'Please try again.' });
+    } finally {
+      setComposing(null);
+    }
+  };
+
   const toggleGallery = (id: string) => {
     const p = getActiveProject()!;
-    const g = p.studio.listing.galleryIds ?? [];
+    const g = galleryIds(p);
     if (g.includes(id)) updateStudio({ listing: { ...p.studio.listing, galleryIds: g.filter((x) => x !== id) } });
     else if (g.length >= MAX_GALLERY) toast({ kind: 'info', title: `Up to ${MAX_GALLERY} gallery images`, body: 'Remove one from the gallery first.' });
     else updateStudio({ listing: { ...p.studio.listing, galleryIds: [...g, id] } });
@@ -183,7 +285,9 @@ export function ListingImages({ project }: { project: Project }) {
           <h3 className="flex items-center gap-1.5 text-[14px] font-semibold text-ink">
             <Images size={16} className="text-primary" /> Listing images
           </h3>
-          <p className="text-[12.5px] text-muted">A cover mockup, an in-use shot and two branded graphics, made from your {project.track === 'business' ? 'services' : 'product'} details.</p>
+          <p className="text-[12.5px] text-muted">
+            {isBiz ? 'A cover photo, a photo of your business in action and two branded graphics, made from your business details.' : 'A cover mockup, an in-use shot and two branded graphics, made from your product details.'} Or upload your own photos (JPG, PNG or WebP).
+          </p>
         </div>
         <Segmented<ImageKind>
           size="sm"
@@ -208,11 +312,15 @@ export function ListingImages({ project }: { project: Project }) {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {shots.map((shot) => {
-          const m = latestFor(project, shot.id);
+          const m = listingShotMedia(project, shot.id);
+          const own = fromOwnPhoto(m);
           const isCover = !!m && d.coverImageId === m.id;
           const inGallery = !!m && gallery.includes(m.id);
           const on = selected.includes(shot.id);
-          const isBusy = busy.includes(shot.id) && job.running;
+          const isBusy = (busy.includes(shot.id) && job.running) || composing === shot.id;
+          const saved = d.shotPrompts?.[shot.id];
+          // your details can go on your own photo (checklist and offer graphics only)
+          const detailsFrom = shot.layout === 'clean' || !m ? undefined : isOwnPhoto(m) ? m.id : own ? m.generated?.artId : undefined;
           return (
             <article key={shot.id} className={cn('flex min-w-0 flex-col overflow-hidden rounded-lg border bg-surface', on ? 'border-line-2' : 'border-line opacity-80')}>
               <div className={cn('relative w-full bg-surface-3', shot.aspect === '1:1' ? 'aspect-square' : 'aspect-[3/2]')}>
@@ -230,9 +338,10 @@ export function ListingImages({ project }: { project: Project }) {
                     {tasks[shot.id] && <ManusLink url={tasks[shot.id]!.taskUrl} label="Watch in Manus" />}
                   </div>
                 )}
-                <div className="absolute left-2 top-2 flex gap-1">
+                <div className="absolute left-2 top-2 flex flex-wrap gap-1">
                   {isCover && <span className="badge bg-primary text-on-primary"><Star size={10} className="fill-current" /> Cover</span>}
                   {inGallery && <span className="badge bg-black/55 text-white">In gallery</span>}
+                  {own && <span className="badge bg-black/55 text-white">Your photo</span>}
                 </div>
               </div>
               <div className="flex flex-1 flex-col gap-2 p-2.5">
@@ -250,19 +359,27 @@ export function ListingImages({ project }: { project: Project }) {
                 </div>
                 {open === shot.id && (
                   <div className="flex flex-col gap-1">
-                    <AutoTextarea aria-label={`${shot.label} image description`} value={prompts[shot.id] ?? shot.prompt} onChange={(v) => setPrompts((x) => ({ ...x, [shot.id]: v }))} minRows={3} className="text-[12.5px]" />
-                    {prompts[shot.id] !== undefined && prompts[shot.id] !== shot.prompt && (
-                      <button type="button" className="self-start text-[11.5px] font-semibold text-primary hover:underline" onClick={() => setPrompts((x) => ({ ...x, [shot.id]: undefined }))}>
+                    <AutoTextarea aria-label={`${shot.label} image description`} value={saved ?? shot.prompt} onChange={(v) => setPrompt(shot, v)} minRows={3} className="text-[12.5px]" />
+                    {saved !== undefined && saved !== shot.prompt && (
+                      <button type="button" className="self-start text-[11.5px] font-semibold text-primary hover:underline" onClick={() => setPrompt(shot, undefined)}>
                         Reset to suggested
                       </button>
                     )}
-                    {shot.layout !== 'clean' && <p className="text-[11px] text-muted">Your title, {shot.layout === 'offer' ? 'price and button' : 'checklist and price'} are typeset on top.</p>}
+                    <p className="text-[11px] text-muted">
+                      Saved with your listing.{shot.layout !== 'clean' && ` Your title, ${shot.layout === 'offer' ? 'price and button' : 'checklist and price'} are typeset on top.`}
+                    </p>
                   </div>
                 )}
                 <div className="mt-auto flex flex-wrap items-center gap-1.5">
-                  <button type="button" className="btn btn-secondary btn-xs" disabled={job.running} onClick={() => generate([shot.id])}>
-                    {m ? <RefreshCw size={12} /> : <WandSparkles size={12} />} {m ? 'Regenerate' : 'Generate'}
+                  <button type="button" className="btn btn-secondary btn-xs" disabled={job.running || isBusy} onClick={() => generate([shot.id])} title={own ? 'Your photo stays in your brand images.' : undefined}>
+                    {m && !own ? <RefreshCw size={12} /> : <WandSparkles size={12} />} {own ? 'Generate instead' : m ? 'Regenerate' : 'Generate'}
                   </button>
+                  <PhotoUploadButton label="Upload my photo" ariaLabel={`Upload my photo for ${shot.label}`} disabled={isBusy} onPhotos={(ms) => putOwnPhoto(shot, ms[0])} />
+                  {detailsFrom && (
+                    <button type="button" className="btn btn-ghost btn-xs" disabled={isBusy} onClick={() => addDetails(shot, detailsFrom)}>
+                      <Type size={12} /> {isOwnPhoto(m) ? 'Add my details' : 'Update my details'}
+                    </button>
+                  )}
                   {m && !isCover && (
                     <button type="button" className="btn btn-ghost btn-xs" onClick={() => updateStudio({ listing: { ...getActiveProject()!.studio.listing, coverImageId: m.id } })}>
                       <Star size={12} /> Make cover
@@ -325,9 +442,9 @@ export function ListingImages({ project }: { project: Project }) {
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn btn-ai btn-sm" disabled={job.running || !selected.length} onClick={() => generate(selected)}>
+        <button type="button" className="btn btn-ai btn-sm" disabled={job.running || !toMake.length} onClick={() => generate(toMake)}>
           {job.running ? <Spinner size={14} /> : <WandSparkles size={14} className="text-accent" />}
-          {selected.length === shots.length ? 'Generate full set' : `Generate ${selected.length} selected`}
+          {toMake.length === shots.length ? 'Generate full set' : `Generate ${toMake.length} image${toMake.length === 1 ? '' : 's'}`}
         </button>
         {job.running && (
           <button type="button" className="btn btn-secondary btn-sm" onClick={job.stop}>
@@ -335,6 +452,11 @@ export function ListingImages({ project }: { project: Project }) {
           </button>
         )}
         <span className="text-[11.5px] text-muted">{effKind === 'photo' ? photoSourceNote() : __ARTIFACT_BUILD__ ? 'Illustrations are drawn by Claude in your brand colors.' : 'Illustrations are drawn by your AI in your brand colors.'}</span>
+        {keepOwn.length > 0 && (
+          <span className="w-full text-[11.5px] text-muted" role="note">
+            {keepOwn.length === 1 ? 'Your photo stays' : 'Your photos stay'} on {andList(keepOwn.map(labelOf))}. To replace {keepOwn.length === 1 ? 'it' : 'one'}, use “Generate instead” on its card.
+          </span>
+        )}
         {effKind === 'photo' && art.skills.length > 0 && (
           <span className="w-full text-[11.5px] text-muted" title={art.text}>
             {artDirectionLabel(art.skills.map((k) => k.name))}
