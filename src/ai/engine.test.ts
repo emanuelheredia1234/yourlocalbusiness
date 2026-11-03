@@ -44,12 +44,18 @@ describe('local AI engine', () => {
     const ideas = generateProductIdeas({ niche: 'Fitness', category: 'Postpartum Mobility', format: 'course', count: 5 });
     expect(ideas).toHaveLength(5);
     for (const i of ideas) {
-      expect(i.score).toBeGreaterThan(40);
-      expect(i.score).toBeLessThan(100);
+      // no invented market numbers: no score, revenue range or "signals"
+      for (const k of ['score', 'revenueLow', 'revenueHigh', 'signals']) expect(i).not.toHaveProperty(k);
       expect(i.price).toBeGreaterThan(50);
       expect(i.title.toLowerCase()).toContain('postpartum mobility');
+      // "Why this could fit you" is reasoned from the inputs, not from market claims
+      expect(i.fit.length).toBeGreaterThanOrEqual(2);
+      expect(i.fit.join(' ')).toContain('Postpartum Mobility');
+      expect(i.fit.join(' ')).not.toMatch(/search interest|demand|competition|revenue|sell well|\d+%/i);
+      // suggested contents carry no made-up counts
+      expect(i.features.join(' ')).not.toMatch(/\d/);
     }
-    console.log(ideas.map((i) => `${i.score} · ${i.title} · $${i.price}\n   ${i.hook}\n   ${i.audience} | ${i.pain}`).join('\n'));
+    console.log(ideas.map((i) => `${i.angle} · ${i.title} · $${i.price}\n   ${i.hook}\n   ${i.audience} | ${i.pain}\n   ${i.fit.join(' / ')}`).join('\n'));
   });
 
   it('builds a brand kit, outline, funnel, sales page and campaign for a product', () => {

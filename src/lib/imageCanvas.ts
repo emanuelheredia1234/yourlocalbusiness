@@ -6,7 +6,8 @@ import { createElement } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import type { Brand, ImageAspect, StyleId } from './types';
-import { darken, readableOn, stripProtocol, withAlpha } from './utils';
+import { darken, readableOn, withAlpha } from './utils';
+import { brandMark } from './brandMark';
 import { ART_SIZE } from '@/ai/local/art';
 import { LogoMark } from '@/components/brand/Logo';
 
@@ -225,8 +226,11 @@ function websitePill(ctx: CanvasRenderingContext2D, url: string, W: number, H: n
   ctx.fillText(url, x + padX, y + h / 2 + 1);
 }
 
-export function brandUrl(brand: Brand): string {
-  return stripProtocol(brand.websiteUrl || (brand.slug ? `${brand.slug}.com` : ''));
+/** The watermark: the owner's website, else their @handle, else the brand name (left off when the
+ *  overlay already shows the name). Never a domain made up from the name. */
+export function watermarkText(brand: Brand, nameShown = false): string {
+  const mark = brandMark(brand);
+  return nameShown && mark === brand.name.trim() ? '' : mark;
 }
 
 // ───────────── social post ─────────────
@@ -269,7 +273,7 @@ export async function composePost(o: PostComposeOptions): Promise<HTMLCanvasElem
     const logo = await logoImage(o.brand);
     brandChip(ctx, logo, o.brand.name, pad, pad, Math.min(W, H) * 0.075, '#ffffff', W - pad * 2);
 
-    const reserve = o.watermark && brandUrl(o.brand) ? Math.min(W, H) * 0.09 : 0;
+    const reserve = o.watermark && watermarkText(o.brand, true) ? Math.min(W, H) * 0.09 : 0;
     const boxW = W - pad * 2 - (wide ? W * 0.3 : 0);
     const boxH = (wide ? H * 0.5 : H * 0.36) - reserve * 0.3;
     const fit = fitText(ctx, o.headline.trim(), font, { width: boxW, height: boxH, maxLines: wide ? 3 : 4, max: Math.round(Math.min(W, H) * (wide ? 0.1 : 0.095)), min: Math.round(Math.min(W, H) * 0.045) });
@@ -289,10 +293,10 @@ export async function composePost(o: PostComposeOptions): Promise<HTMLCanvasElem
     ctx.shadowBlur = 0;
     ctx.shadowOffsetY = 0;
   }
-  const url = brandUrl(o.brand);
-  if (o.watermark && url) {
+  const mark = watermarkText(o.brand, o.overlay && !!o.headline.trim());
+  if (o.watermark && mark) {
     await ensureFonts([BODY_FONT]);
-    websitePill(ctx, url, W, H);
+    websitePill(ctx, mark, W, H);
   }
   return canvas;
 }

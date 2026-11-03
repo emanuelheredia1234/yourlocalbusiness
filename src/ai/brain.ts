@@ -140,8 +140,9 @@ export function parseDirectives(text: string): Directives {
   if (aud) d.audience = aud[1].trim().slice(0, 120);
 
   const facts: string[] = [];
-  const factBlock = /(?:facts?|proof(?: points)?|about us)\s*:\s*\n?((?:[-•*].+\n?)+)/i.exec(t);
-  if (factBlock) facts.push(...factBlock[1].split('\n').map((l) => l.replace(/^[-•*]\s*/, '').trim()).filter(Boolean));
+  const factBlock = /(?:facts?(?: you can use)?|proof(?: points)?|about us)\s*:\s*\n?((?:[-•*].+\n?)+)/i.exec(t);
+  // a template line the owner never filled in ("Founded in [Year founded].") is not a fact
+  if (factBlock) facts.push(...factBlock[1].split('\n').map((l) => l.replace(/^[-•*]\s*/, '').trim()).filter((l) => l && !hasTemplatePlaceholder(l)));
   if (facts.length) d.facts = facts.slice(0, 8);
 
   return d;
@@ -227,7 +228,8 @@ export function brainPrompt(skills: Skill[], d: Directives): string {
   const lines: string[] = ['BRAIN SKILLS — follow these. When two conflict, the higher priority wins.'];
   for (const s of skills.slice().sort((a, b) => b.priority - a.priority)) {
     lines.push(`\n### ${s.name} [${PRIORITY_LABEL[s.priority]} priority · ${CATEGORY_META[s.category].label}]`);
-    if (s.instructions.trim()) lines.push(s.instructions.trim().slice(0, 1800));
+    const instructions = withoutTemplateLines(s.instructions).trim();
+    if (instructions) lines.push(instructions.slice(0, 1800));
     if (s.doc?.excerpt) lines.push(`Reference excerpt from "${s.doc.name}":\n${s.doc.excerpt.slice(0, 2500)}`);
   }
   const summary = describeDirectives(d);
@@ -296,7 +298,8 @@ const SOFTER: Record<string, string> = {
   secret: 'method',
   secrets: 'methods',
   'buy now': 'get yours',
-  'limited time': 'this week',
+  // No deadline: the owner never set one. "Limited time offer" becomes "current offer".
+  'limited time': 'current',
   synergy: 'teamwork',
   leverage: 'use',
   unlock: 'open up',
@@ -339,6 +342,7 @@ export function applyBanned(s: string, banned: string[] | undefined): string {
     if (!w) continue;
     const re = new RegExp(`(^|[^\\p{L}\\p{N}#])(${escapeRe(w)})(?=$|[^\\p{L}\\p{N}])`, 'giu');
     const repl = SOFTER[w.toLowerCase()];
+    if (w.toLowerCase() === 'limited time') out = out.replace(/\bfor a limited time\b/gi, (m) => (m[0] === 'F' ? 'Now' : 'now'));
     out = out.replace(re, (_m, pre: string, word: string) => {
       if (!repl) return pre;
       const cased = word[0] === word[0].toUpperCase() ? repl.charAt(0).toUpperCase() + repl.slice(1) : repl;
@@ -407,6 +411,35 @@ export function newSkill(partial: Partial<Skill> & Pick<Skill, 'name'>): Skill {
     updatedAt: now,
     ...partial,
   };
+}
+
+/** The placeholders in the Proof points template (SkillEditor). A line still holding one is never sent as a fact. */
+export const TEMPLATE_PLACEHOLDERS = ['[Year founded]', '[Number of customers]', '[Average rating and where it comes from]', '[Licences or certifications]'] as const;
+
+/** The Proof points template placeholders still left in `text`, in template order. */
+export function templatePlaceholders(text: string): string[] {
+  return TEMPLATE_PLACEHOLDERS.filter((p) => text.includes(p));
+}
+
+export function hasTemplatePlaceholder(text: string): boolean {
+  return TEMPLATE_PLACEHOLDERS.some((p) => text.includes(p));
+}
+
+/** `text` without the lines that still hold a template placeholder. */
+export function withoutTemplateLines(text: string): string {
+  return text
+    .split('\n')
+    .filter((l) => !hasTemplatePlaceholder(l))
+    .join('\n');
+}
+
+/**
+ * Bracketed placeholders like "[Year founded]" that a template left for the owner to fill in.
+ * Markdown links ("[site](https://…)") and numbered references ("[1]") are not placeholders.
+ */
+export function unfilledPlaceholders(text: string): string[] {
+  const found = text.match(/\[[^\]\n]+\](?!\()/g) || [];
+  return uniq(found.filter((m) => !/^\[\d+\]$/.test(m)));
 }
 
 /** Merge a feedback patch into the learned-preferences skill (creating it if needed). */
@@ -494,7 +527,7 @@ export function extractFacts(text: string, n = 6): string[] {
   const sentences = text.replace(/\s+/g, ' ').match(/[^.!?]+[.!?]/g) || [];
   return sentences
     .map((s) => s.trim())
-    .filter((s) => s.length > 30 && s.length < 220 && /(\d|since|founded|award|certified|licensed|guarantee|customers|clients|years)/i.test(s))
+    .filter((s) => s.length > 30 && s.length < 220 && !hasTemplatePlaceholder(s) && /(\d|since|founded|award|certified|licensed|guarantee|customers|clients|years)/i.test(s))
     .slice(0, n);
 }
 
@@ -570,9 +603,9 @@ export const SKILL_LIBRARY: LibrarySkill[] = [
     libraryId: 'value-stack',
     name: 'Irresistible value stack',
     category: 'offer',
-    description: 'Stack bonuses, remove risk and anchor price against value.',
+    description: 'Stack real bonuses, state any guarantee you offer, and anchor price against value.',
     instructions:
-      'Present offers as a value stack: core offer, 3–4 bonuses that remove the next obstacle, and a strong guarantee.\nAlways show total value next to the price.\nBonuses should be fast to deliver and specific to the buyer’s next problem.\nPhrase guarantees as a confident promise, not legal fine print.',
+      'Present offers as a value stack: the core offer, then the bonuses the business actually includes, each tied to the buyer’s next problem.\nMention a guarantee only if the business offers one, in its own terms, as a plain promise rather than legal fine print.\nShow a total value only from real prices the business gave. Never make up bonuses, dollar values or guarantees.',
     scope: ['studio', 'seo', 'email', 'store'],
     priority: 2,
     directives: {},
@@ -613,7 +646,7 @@ export const SKILL_LIBRARY: LibrarySkill[] = [
     name: 'Data-led B2B voice',
     category: 'voice',
     description: 'Credible, specific, numbers-first for business buyers.',
-    instructions: 'Write for busy decision makers. Lead with a number or outcome. No emojis. Prefer concrete metrics, timelines and process over adjectives. One idea per paragraph.',
+    instructions: 'Write for busy decision makers. Lead with a number or outcome. No emojis. Prefer concrete metrics, timelines and process over adjectives, using only figures the business has given. One idea per paragraph.',
     scope: ['all'],
     priority: 2,
     directives: { tone: 'authoritative', emoji: 'none', hookStyle: 'stat', readingLevel: 'expert' },

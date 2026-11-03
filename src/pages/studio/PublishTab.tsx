@@ -15,7 +15,7 @@ import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, ChipInput, Field, Segmented, Spinner, Toggle, confirmAction } from '@/components/ui/primitives';
 import { MediaDrop, MediaThumb } from '@/components/media/MediaUpload';
 import { ListingCard, ListingCover, priceLabel } from '@/pages/store/ListingParts';
-import { buildListing, coverFromMedia, galleryFromMedia, leadPrice } from './listing';
+import { buildListing, coverFromMedia, galleryFromMedia, leadPrice, listingSuggestions } from './listing';
 import { ListingImages, MAX_GALLERY } from './ListingImages';
 import { VideoPanel } from '@/components/images/VideoPanel';
 
@@ -53,6 +53,8 @@ export function PublishTab({ project }: { project: Project }) {
     return coverMedia?.thumb ? { ...l, cover: { ...l.cover, imageDataUrl: coverMedia.thumb } } : l;
   }, [project, live, coverMedia]);
   const lp = leadPrice(project);
+  // the business type's typical hours and an example guarantee: shown as suggestions, used only if the owner clicks
+  const suggest = listingSuggestions(project);
 
   const checks = [
     { ok: d.title.trim().length >= 4, label: 'Title' },
@@ -115,6 +117,17 @@ export function PublishTab({ project }: { project: Project }) {
         </div>
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact />
         {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
+        {d.needsReview && (
+          <div className="flex flex-wrap items-start gap-2 rounded-md bg-warn-soft px-3 py-2 text-[13px]" role="status">
+            <CircleAlert size={15} className="mt-0.5 shrink-0 text-warn" />
+            <p className="min-w-0 flex-1">
+              <b>Review your listing.</b> Opening hours, a guarantee or a delivery promise had been filled in from a template, not by you, so they were removed. Add your own if you have them, then publish again.
+            </p>
+            <button className="btn btn-ghost btn-xs" onClick={() => setD({ needsReview: undefined })}>
+              Got it
+            </button>
+          </div>
+        )}
 
         <Field label="Title" htmlFor="ls-title" right={`${d.title.length}/70`}>
           <input id="ls-title" className="input" maxLength={90} value={d.title} onChange={(e) => setD({ title: e.target.value })} />
@@ -124,6 +137,15 @@ export function PublishTab({ project }: { project: Project }) {
         </Field>
         <Field label="Description" htmlFor="ls-desc" hint="Short intro, what they get (• bullets) and a closing line.">
           <AutoTextarea id="ls-desc" value={d.description} onChange={(v) => setD({ description: v })} minRows={6} className="text-[13.5px]" />
+          {suggest.guarantee && !d.description.includes(suggest.guarantee) && (
+            <p className="mt-1.5 text-xs text-muted">
+              No guarantee is shown unless you add one. Example: “{suggest.guarantee}”{' '}
+              <button type="button" className="font-semibold text-primary hover:underline" onClick={() => setD({ description: `${d.description.trimEnd()}\n\n${suggest.guarantee}` })}>
+                Add it
+              </button>{' '}
+              only if you offer it, and edit it to match.
+            </p>
+          )}
         </Field>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Category" htmlFor="ls-cat">
@@ -158,11 +180,20 @@ export function PublishTab({ project }: { project: Project }) {
             <Field label="Hours" htmlFor="ls-hours">
               <div className="relative">
                 <Clock size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-                <input id="ls-hours" className="input pl-8" value={d.hours} onChange={(e) => setD({ hours: e.target.value })} placeholder="Mon–Fri 8am–6pm" />
+                <input id="ls-hours" className="input pl-8" value={d.hours} onChange={(e) => setD({ hours: e.target.value })} placeholder="Your opening hours" />
               </div>
+              {!(d.hours ?? '').trim() && suggest.hours && (
+                <p className="mt-1.5 text-xs text-muted">
+                  Empty hours are not shown.{' '}
+                  <button type="button" className="font-semibold text-primary hover:underline" onClick={() => setD({ hours: suggest.hours })}>
+                    Use typical hours
+                  </button>{' '}
+                  ({suggest.hours}) and edit them to yours.
+                </p>
+              )}
             </Field>
             <p className="text-xs text-muted sm:col-span-2">
-              Lead price <b className="num text-ink">{priceLabel(lp.price, lp.model)}</b> comes from your most popular package. Buyers can pick any of your {project.studio.packages.length || 'service'} packages.
+              Lead price <b className="num text-ink">{priceLabel(lp.price, lp.model)}</b> comes from the package you marked popular, or your first package if none is marked. Buyers can pick any of your {project.studio.packages.length || 'service'} packages.
               {!project.location && ' No city set, so the listing shows as online.'}
             </p>
           </div>

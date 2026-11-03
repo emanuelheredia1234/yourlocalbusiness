@@ -51,21 +51,24 @@ export const useManusPost = create<{ ids: string[]; open: (ids: string | string[
 
 const open = (url: string) => window.open(url, '_blank', 'noopener,noreferrer');
 
-function errorCopy(e: unknown): { title: string; body: string } {
+/** Failures after which the task may exist anyway (sending again could post twice). */
+const UNCERTAIN = new Set(['MANUS_CREATE_UNKNOWN', 'server_unavailable', 'upstream_error', 'cancelled']);
+
+function errorCopy(e: unknown): { title: string; body: string; uncertain?: boolean } {
   const code = (e as { code?: string })?.code ?? 'upstream_error';
   const msg = (e as Error)?.message ?? '';
   const m = manusErrorMessage(code, msg);
-  if (m) return m;
+  if (m) return { ...m, uncertain: UNCERTAIN.has(code) };
   const z = zapierErrorMessage(code, msg);
   // a write that failed ambiguously may still have reached Manus
-  if (code === 'server_unavailable' || code === 'upstream_error' || code === 'cancelled') return { title: z.title, body: `${z.body} The task may still have started: check your Manus tasks before trying again.` };
+  if (UNCERTAIN.has(code)) return { title: z.title, body: `${z.body} The task may still have started: check your Manus tasks before trying again.`, uncertain: true };
   return z;
 }
 
 /** Posts being handed to Manus right now (outside the window, so closing and reopening it can't send twice). */
 const sending = new Set<string>();
 
-type Progress = { stage?: string; sent?: boolean; taskUrl?: string; error?: { title: string; body: string } };
+type Progress = { stage?: string; sent?: boolean; taskUrl?: string; error?: { title: string; body: string; uncertain?: boolean } };
 
 /** Confirm, then hand each post (its text, and its image or video) to Manus, one after another. */
 export function ManusPostHost() {
@@ -93,16 +96,25 @@ export function ManusPostHost() {
       for (const p of list) a[p.platform] ??= suggestedAccount(proj.id, p.platform, proj.brand);
       setAccounts(a);
     }
-    // posts already on the calendar at a time each network can schedule start on Schedule; anything else posts now
-    setMode(list.length && list.every((p) => p.status === 'scheduled' && !scheduleWindowError(p.platform, p.scheduledAt)) ? 'schedule' : 'now');
+    // one post: Schedule when it's on the calendar at a time its network can schedule, else Post now.
+    // several: Schedule whenever any is planned for later (the due ones wait for you), so one overdue post never
+    // sends next month's posts out right away
+    const later = (p: Post) => p.status === 'scheduled' && new Date(p.scheduledAt).getTime() > Date.now();
+    setMode(list.length === 1 ? (later(list[0]) && !scheduleWindowError(list[0].platform, list[0].scheduledAt) ? 'schedule' : 'now') : list.some(later) ? 'schedule' : 'now');
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!ids.length || !posts.length || !project) return null;
 
   const tz = localTimeZone();
   const networks = [...new Set(posts.map((p) => p.platform))];
-  const problem = (p: Post) => postBlocker(p, { viaServer }) ?? (mode === 'schedule' ? scheduleWindowError(p.platform, p.scheduledAt) : null);
+  const problem = (p: Post) =>
+    p.status === 'published'
+      ? 'It’s already marked as posted.'
+      : progress[p.id]?.error?.uncertain
+        ? 'Check your Manus tasks first: this one may have started.'
+        : (postBlocker(p, { viaServer }) ?? (mode === 'schedule' ? scheduleWindowError(p.platform, p.scheduledAt) : null));
   const pending = posts.filter((p) => !progress[p.id]?.sent);
   const sendable = pending.filter((p) => !problem(p));
+  const laterNow = mode === 'now' && posts.length > 1 ? sendable.filter((p) => p.status === 'scheduled' && new Date(p.scheduledAt).getTime() > Date.now() + 3600_000).length : 0;
   const inFlight = busy || posts.some((p) => sending.has(p.id));
   const single = posts.length === 1;
 
@@ -190,10 +202,11 @@ export function ManusPostHost() {
           <p className="mt-2 text-[12.5px] text-muted">
             {mode === 'now' ? 'Manus posts as soon as it’s ready, usually within a few minutes.' : `Manus schedules ${single ? 'it' : 'each post'} on the network for the time on your calendar (${tz} time). Change a time in the post editor.`}
           </p>
+          {laterNow > 0 && <p className="mt-1 text-[12.5px] font-medium text-warn">{laterNow} of these {laterNow === 1 ? 'is' : 'are'} planned for later: Post now sends {laterNow === 1 ? 'it' : 'them'} out right away.</p>}
         </div>
         <ul className="flex flex-col gap-3">
           {posts.map((p) => (
-            <PostRow key={p.id} post={p} mode={mode} tz={tz} problem={problem(p)} progress={progress[p.id]} disabled={inFlight} onEdit={() => { close(); useUI.getState().openPostEditor(p.id); }} />
+            <PostRow key={p.id} post={p} mode={mode} tz={tz} problem={problem(p)} progress={progress[p.id]} disabled={inFlight} onEdit={() => { close(); useUI.getState().openPostEditor(p.id); }} onRetry={() => setProgress((x) => ({ ...x, [p.id]: {} }))} />
           ))}
         </ul>
         <ul className="flex list-disc flex-col gap-1 pl-5 text-[12.5px] text-muted">
@@ -208,7 +221,7 @@ export function ManusPostHost() {
   );
 }
 
-function PostRow({ post, mode, tz, problem, progress, disabled, onEdit }: { post: Post; mode: PostMode; tz: string; problem: string | null; progress?: Progress; disabled: boolean; onEdit: () => void }) {
+function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry }: { post: Post; mode: PostMode; tz: string; problem: string | null; progress?: Progress; disabled: boolean; onEdit: () => void; onRetry?: () => void }) {
   const warning = textWarning(post);
   const resend = !!post.external && post.external.state !== 'failed' && !progress?.sent;
   return (
@@ -255,6 +268,11 @@ function PostRow({ post, mode, tz, problem, progress, disabled, onEdit }: { post
           <div className="rounded-md border border-bad/30 bg-bad-soft px-2.5 py-1.5 text-[12.5px]" role="alert">
             <p className="font-semibold text-bad">{progress.error.title}</p>
             <p className="text-ink-2">{progress.error.body}</p>
+            {progress.error.uncertain && onRetry && (
+              <button type="button" className="mt-1 font-semibold text-primary hover:underline disabled:opacity-60" disabled={disabled} onClick={onRetry}>
+                I checked Manus: it didn’t start. Allow sending again
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -314,7 +332,7 @@ export function ExternalBadge({ post, compact }: { post: Post; compact?: boolean
             <RefreshCw size={11} className={cn(checking && 'animate-spin')} /> Check now
           </button>
         )}
-        {ext.state === 'failed' && (
+        {ext.state === 'failed' && post.status !== 'published' && (
           <button type="button" className="font-semibold text-primary hover:underline" onClick={() => useManusPost.getState().open(post.id)}>
             Try again
           </button>
@@ -344,7 +362,9 @@ async function applyRefresh(postId: string) {
   const next = await refreshManusPost(prev);
   const name = networkLabel(next.network ?? 'facebook');
   // Manus reports it posted: the post is published (by Manus, on the network)
-  if (next.state === 'posted' && prev.state !== 'posted') useStore.getState().updatePost(postId, { external: next, status: 'published', publishedBy: 'manus', publishedAt: new Date().toISOString(), postUrl: next.url ?? post.postUrl });
+  // when it went out: right after the request for "post now", at its time for a scheduled one (never later than now)
+  const wentOut = () => new Date(Math.min(Date.now(), next.mode === 'now' ? next.requestedAt : new Date(next.scheduledFor).getTime() || Date.now())).toISOString();
+  if (next.state === 'posted' && prev.state !== 'posted' && post.status !== 'published') useStore.getState().updatePost(postId, { external: next, status: 'published', publishedBy: 'manus', publishedAt: wentOut(), postUrl: next.url ?? post.postUrl });
   else useStore.getState().updatePost(postId, { external: next });
   if (next.state !== prev.state) {
     const action = { label: 'Open in Manus', run: () => open(next.taskUrl) };
@@ -374,7 +394,9 @@ export function useManusPostWatcher() {
       if (busy || (typeof document !== 'undefined' && document.hidden)) return;
       const ids = useStore
         .getState()
-        .posts.filter((p) => p.external && (p.external.state === 'working' || p.external.state === 'needs_input') && Date.now() - p.external.requestedAt < 3 * 24 * 3600_000)
+        .posts.filter((p) => p.status !== 'published' && p.external && (p.external.state === 'working' || p.external.state === 'needs_input') && Date.now() - p.external.requestedAt < 3 * 24 * 3600_000)
+        // least recently checked first, so a batch never starves behind tasks waiting on you
+        .sort((a, b) => (a.external?.checkedAt ?? 0) - (b.external?.checkedAt ?? 0))
         .map((p) => p.id)
         .slice(0, 3);
       if (!ids.length) return;

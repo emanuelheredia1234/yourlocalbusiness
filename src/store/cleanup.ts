@@ -9,8 +9,18 @@ import type { Notice, Project, SocialPlatform } from '@/lib/types';
 import { PLATFORMS } from '@/ai/knowledge';
 import { cleanListing } from '@/lib/community';
 import { useStore, type StoreState } from './useStore';
+import { LEGACY_CLEANUP } from './defaults';
+import { purgeResearch } from './legacy/research';
+import { purgeSalesPage } from './legacy/salespage';
+import { purgeAdClaims, purgeClaims, purgeListingClaims } from './legacy/claims';
+import { purgeListingWebsite, purgePostWebsite, purgeWebsite } from './legacy/domain';
+import { purgeCodeAssets } from './legacy/widgets';
+import { purgeSkills } from './legacy/brain';
 
-type Data = Pick<StoreState, 'posts' | 'projects' | 'notices' | 'settings' | 'activeProjectId' | 'myListings' | 'ads'>;
+type Data = Pick<StoreState, 'posts' | 'projects' | 'notices' | 'settings' | 'activeProjectId' | 'myListings' | 'ads' | 'skills'>;
+
+/** Run each change on a value; returns the result, or the same value when nothing changed. */
+const chain = <T>(v: T, ...fns: ((x: T) => T | null)[]) => fns.reduce((x, f) => f(x) ?? x, v);
 
 /** Notices about things that never happened: the pretend publisher, simulated buyers, the pretend checkout and inquiries. */
 const INVENTED_NOTICES: RegExp[] = [/^Published to /i, /just went live/i, /^Simulated sale:/i, /^Order YLB-/i, /^New sale:/i, /^Inquiry sent to /i, / is live on the Marketplace$/i, /^Test subscriber added/i, /^New subscriber:/i, /^Ad campaign live/i];
@@ -96,7 +106,37 @@ export function purgeInventedData(s: Data): Partial<Data> | null {
       if (added) projects = projects.map((p): Project => (p.id === target.id ? { ...p, brand: { ...p.brand, socials } } : p));
     }
   }
+  // Claims older versions wrote into a project (research scores, sales-page testimonials and stats,
+  // template hours and guarantees, a made-up website, widgets that pretended to send forms), and into
+  // its listings, posts and ads. Once per project: afterwards the owner's own edits are never touched,
+  // even when they happen to match a template.
+  const due = new Map(projects.filter((p) => (p.legacyCleaned ?? 0) < LEGACY_CLEANUP).map((p) => [p.id, p]));
+  if (due.size) {
+    const dueId = (id?: string) => (id ? due.get(id) : undefined);
+    const listings = (patch.myListings ?? s.myListings).map((l) => {
+      const p = dueId(l.projectId);
+      return p ? chain(l, purgeListingClaims, (x) => purgeListingWebsite(x, p)) : l;
+    });
+    if (listings.some((l, i) => l !== (patch.myListings ?? s.myListings)[i])) patch.myListings = listings;
+    const posts = (patch.posts ?? s.posts).map((x) => {
+      const p = dueId(x.projectId);
+      return p ? (purgePostWebsite(x, p) ?? x) : x;
+    });
+    if (posts.some((x, i) => x !== (patch.posts ?? s.posts)[i])) patch.posts = posts;
+    // "… Official Site" headlines go when the project has no website once the made-up one is cleared
+    const hasSite = (p: Project) => !!(purgeWebsite(p) ?? p).brand.websiteUrl?.trim();
+    const ads = (patch.ads ?? s.ads).map((a) => {
+      const p = dueId(a.projectId);
+      return p ? (purgeAdClaims(a, hasSite(p)) ?? a) : a;
+    });
+    if (ads.some((a, i) => a !== (patch.ads ?? s.ads)[i])) patch.ads = ads;
+    projects = projects.map((p) => (due.has(p.id) ? { ...chain(p, purgeResearch, purgeSalesPage, purgeClaims, purgeWebsite, purgeCodeAssets), legacyCleaned: LEGACY_CLEANUP } : p));
+  }
   if (projects !== s.projects) patch.projects = projects;
+
+  // Brain skills still holding the old made-up "proof points" (exact template lines only).
+  const skills = purgeSkills(s.skills);
+  if (skills) patch.skills = skills;
 
   // Settings: the pretend connections, the demo buyers switch, the fake "thinking" delay.
   const legacy = s.settings as typeof s.settings & { marketActivity?: unknown; showSampleListings?: unknown; ai: { simulateLatency?: unknown } };

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Check, Download, ExternalLink, Globe, MoreHorizontal, Plus, Search, Target, ThumbsUp, Trash2, Users } from 'lucide-react';
 import type { AdCampaign, AdCreative, AdObjective, AdPlatform, Project, SearchAd, StyleId } from '@/lib/types';
-import { cn, fmtMoney, fmtRelative, slugify, stripProtocol } from '@/lib/utils';
+import { cn, ensureUrl, fmtMoney, fmtRelative, slugify, stripProtocol } from '@/lib/utils';
 import { IMAGE_STYLES, STYLE_LABEL, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
 import { AD_OBJECTIVES, AD_PLATFORMS, newAdCampaign, suggestInterests } from '@/ai/local/ads';
 import { buildFacts } from '@/ai/text';
@@ -72,6 +72,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
     upsertAd({ ...live(), ...patch });
   };
   const setCreative = (id: string, patch: Partial<AdCreative>) => set({ creatives: live().creatives.map((x) => (x.id === id ? { ...x, ...patch } : x)) });
+  const finalUrl = adFinalUrl(c, project);
 
   const generate = async () => {
     if (c.creatives.length && !(await confirmAction({ title: 'Regenerate creatives and audiences?', body: 'Your edited ad copy will be replaced.', confirmLabel: 'Regenerate' }))) return;
@@ -174,7 +175,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
           {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
         </section>
 
-        <ExportPanel c={c} onExported={() => set({ exportedAt: Date.now() })} />
+        <ExportPanel c={c} finalUrl={finalUrl} onFinalUrl={(v) => set({ finalUrl: v })} onExported={() => set({ exportedAt: Date.now() })} />
       </div>
 
       {c.creatives.length > 0 && (
@@ -187,13 +188,13 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
           </div>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {c.creatives.map((cr) => (
-              <CreativeCard key={cr.id} project={project} cr={cr} selected={c.selectedCreativeIds.includes(cr.id)} onSelect={(v) => set({ selectedCreativeIds: v ? [...c.selectedCreativeIds, cr.id] : c.selectedCreativeIds.filter((x) => x !== cr.id) })} onChange={(p) => setCreative(cr.id, p)} />
+              <CreativeCard key={cr.id} project={project} site={finalUrl} cr={cr} selected={c.selectedCreativeIds.includes(cr.id)} onSelect={(v) => set({ selectedCreativeIds: v ? [...c.selectedCreativeIds, cr.id] : c.selectedCreativeIds.filter((x) => x !== cr.id) })} onChange={(p) => setCreative(cr.id, p)} />
             ))}
           </div>
         </section>
       )}
 
-      {c.search && <SearchAds project={project} search={c.search} onChange={(search) => set({ search })} />}
+      {c.search && <SearchAds project={project} site={finalUrl} search={c.search} onChange={(search) => set({ search })} />}
 
       {c.audiences.length > 0 && (
         <section aria-label="Audiences">
@@ -232,10 +233,19 @@ const AD_MANAGERS: Record<AdPlatform, { label: string; url: string }> = {
 
 const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 
+/** Where the ads send people: the URL you entered for this campaign, else your website or your own buy/book
+ *  link. '' until there is one (never made up). */
+export function adFinalUrl(c: AdCampaign, p: Project): string {
+  return ensureUrl(c.finalUrl ?? (p.brand.websiteUrl || p.studio.listing.buyUrl || ''));
+}
+
+/** A URL as an ad shows it: "sparkle.co/offer". */
+const displayUrl = (url: string) => stripProtocol(url).replace(/\/+$/, '');
+
 /** Everything to paste into an ads manager, as plain text. */
-export function adsText(c: AdCampaign): string {
+export function adsText(c: AdCampaign, finalUrl = ''): string {
   const picked = c.creatives.filter((x) => c.selectedCreativeIds.includes(x.id));
-  const lines = [`${c.name}`, `Objective: ${AD_OBJECTIVES.find((o) => o.id === c.objective)?.label ?? c.objective}`, `Budget: ${fmtMoney(c.dailyBudget)}/day for ${c.durationDays} days (${fmtMoney(c.dailyBudget * c.durationDays)} total)`, `Location: ${c.locations}${c.radiusMi ? ` (+${c.radiusMi} mi)` : ''} · Ages ${c.ageMin}–${c.ageMax}`, c.interests.length ? `Interests: ${c.interests.join(', ')}` : '', ''];
+  const lines = [`${c.name}`, `Objective: ${AD_OBJECTIVES.find((o) => o.id === c.objective)?.label ?? c.objective}`, `Final URL: ${finalUrl || '[add the page your ads link to]'}`, `Budget: ${fmtMoney(c.dailyBudget)}/day for ${c.durationDays} days (${fmtMoney(c.dailyBudget * c.durationDays)} total)`, `Location: ${c.locations}${c.radiusMi ? ` (+${c.radiusMi} mi)` : ''} · Ages ${c.ageMin}–${c.ageMax}`, c.interests.length ? `Interests: ${c.interests.join(', ')}` : '', ''];
   for (const a of c.audiences) lines.push(`Audience: ${a.name}`, `  ${a.description}`, a.interests.length ? `  ${a.interests.join(', ')}` : '', '');
   for (const cr of picked) lines.push(`Ad ${cr.variant}: ${cr.angle}`, `  Primary text: ${cr.primaryText}`, `  Headline: ${cr.headline}`, `  Description: ${cr.description}`, `  Button: ${cr.cta}`, '');
   if (c.search) lines.push('Google search ads', ...c.search.headlines.map((h) => `  Headline: ${h}`), ...c.search.descriptions.map((d) => `  Description: ${d}`), `  Keywords: ${c.search.keywords.join(', ')}`, ...c.search.sitelinks.map((l) => `  Sitelink: ${l.title}: ${l.desc}`), '');
@@ -243,20 +253,21 @@ export function adsText(c: AdCampaign): string {
 }
 
 /** The ads as a CSV: one row per creative (and per search headline and description). */
-export function adsCsv(c: AdCampaign): string {
-  const rows = [['type', 'variant', 'angle', 'primary_text', 'headline', 'description', 'button']];
-  for (const cr of c.creatives.filter((x) => c.selectedCreativeIds.includes(x.id))) rows.push(['social', cr.variant, cr.angle, cr.primaryText, cr.headline, cr.description, cr.cta]);
+export function adsCsv(c: AdCampaign, finalUrl = ''): string {
+  const rows = [['type', 'variant', 'angle', 'primary_text', 'headline', 'description', 'button', 'final_url']];
+  for (const cr of c.creatives.filter((x) => c.selectedCreativeIds.includes(x.id))) rows.push(['social', cr.variant, cr.angle, cr.primaryText, cr.headline, cr.description, cr.cta, finalUrl]);
   if (c.search) {
-    for (const h of c.search.headlines) rows.push(['search headline', '', '', '', h, '', '']);
-    for (const d of c.search.descriptions) rows.push(['search description', '', '', '', '', d, '']);
-    for (const k of c.search.keywords) rows.push(['keyword', '', '', '', k, '', '']);
+    for (const h of c.search.headlines) rows.push(['search headline', '', '', '', h, '', '', finalUrl]);
+    for (const d of c.search.descriptions) rows.push(['search description', '', '', '', '', d, '', finalUrl]);
+    for (const k of c.search.keywords) rows.push(['keyword', '', '', '', k, '', '', '']);
   }
   return rows.map((r) => r.map(csvCell).join(',')).join('\n');
 }
 
 /** Budget (your own numbers), and taking the plan to each platform's ads manager. */
-function ExportPanel({ c, onExported }: { c: AdCampaign; onExported: () => void }) {
-  const ready = c.creatives.length > 0 && c.selectedCreativeIds.length > 0;
+function ExportPanel({ c, finalUrl, onFinalUrl, onExported }: { c: AdCampaign; finalUrl: string; onFinalUrl: (v: string) => void; onExported: () => void }) {
+  const hasCreatives = c.creatives.length > 0 && c.selectedCreativeIds.length > 0;
+  const ready = hasCreatives && !!finalUrl;
   return (
     <aside className="flex min-w-0 flex-col gap-4">
       <section className="panel p-4" aria-label="Budget">
@@ -269,12 +280,15 @@ function ExportPanel({ c, onExported }: { c: AdCampaign; onExported: () => void 
       <section className="panel flex flex-col gap-3 p-4" aria-label="Run it">
         <h2 className="text-[14px] font-semibold">Run it on the platforms</h2>
         <p className="text-xs text-muted">This app doesn’t run or pay for ads. Copy the plan into each platform’s ads manager, where you set the budget and launch it.</p>
+        <Field label="Final URL" htmlFor="ad-final" hint="The page people land on when they click your ad.">
+          <input id="ad-final" className="input" placeholder="https://yourbusiness.com/offer" value={c.finalUrl ?? finalUrl} onChange={(e) => onFinalUrl(e.target.value)} onBlur={(e) => onFinalUrl(ensureUrl(e.target.value))} />
+        </Field>
         <div className="flex flex-wrap gap-2">
           <CopyButton
             label="Copy the plan"
             text={() => {
               onExported();
-              return adsText(c);
+              return adsText(c, finalUrl);
             }}
           />
           <button
@@ -282,13 +296,13 @@ function ExportPanel({ c, onExported }: { c: AdCampaign; onExported: () => void 
             disabled={!ready}
             onClick={() => {
               onExported();
-              void download(`${slugify(c.name)}-ads.csv`, adsCsv(c));
+              void download(`${slugify(c.name)}-ads.csv`, adsCsv(c, finalUrl));
             }}
           >
             <Download size={14} /> Ads CSV
           </button>
         </div>
-        {!ready && <p className="text-xs text-muted">Generate creatives first.</p>}
+        {!hasCreatives ? <p className="text-xs text-muted">Generate creatives first.</p> : !finalUrl && <p className="text-xs text-warn">Add the page your ads link to before you export them.</p>}
         <ul className="flex flex-col gap-1.5 text-[13px]">
           {(c.platforms.length ? c.platforms : (['meta'] as AdPlatform[])).map((p) => (
             <li key={p}>
@@ -304,9 +318,10 @@ function ExportPanel({ c, onExported }: { c: AdCampaign; onExported: () => void 
   );
 }
 
-function CreativeCard({ project, cr, selected, onSelect, onChange }: { project: Project; cr: AdCreative; selected: boolean; onSelect: (v: boolean) => void; onChange: (p: Partial<AdCreative>) => void }) {
+function CreativeCard({ project, site: finalUrl, cr, selected, onSelect, onChange }: { project: Project; site: string; cr: AdCreative; selected: boolean; onSelect: (v: boolean) => void; onChange: (p: Partial<AdCreative>) => void }) {
   const [editing, setEditing] = useState(false);
-  const site = stripProtocol(project.brand.websiteUrl || `${project.brand.slug}.com`).toUpperCase();
+  // the final URL's domain, as Meta shows it; a clear placeholder until you add one
+  const site = (displayUrl(finalUrl).split('/')[0] || '[Final URL]').toUpperCase();
   return (
     <article className={cn('panel flex min-w-0 flex-col overflow-hidden', selected ? 'ring-2 ring-primary' : 'opacity-80')}>
       <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
@@ -398,8 +413,8 @@ function CreativeCard({ project, cr, selected, onSelect, onChange }: { project: 
   );
 }
 
-function SearchAds({ project, search, onChange }: { project: Project; search: SearchAd; onChange: (s: SearchAd) => void }) {
-  const domain = stripProtocol(project.brand.websiteUrl || `${project.brand.slug}.com`).replace(/\/$/, '');
+function SearchAds({ project, site, search, onChange }: { project: Project; site: string; search: SearchAd; onChange: (s: SearchAd) => void }) {
+  const domain = displayUrl(site).split('/')[0] || '[Final URL]';
   return (
     <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" aria-label="Google search ads">
       <div className="panel flex flex-col gap-3 p-4">

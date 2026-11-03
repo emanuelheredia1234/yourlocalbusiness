@@ -225,20 +225,15 @@ export function proceduralSvg(colors: BrandColors, opts: ArtOptions): string {
       };
       person(cx - s * 0.17, 0.92, c.primary, '#e9b48f');
       person(cx + s * 0.17, 1, c.accent, '#a8714f');
-      // rating card
-      const kx = cx - s * 0.16;
-      const ky = cy - s * 0.38;
-      parts.push(`<rect x="${n(kx)}" y="${n(ky)}" width="${n(s * 0.32)}" height="${n(s * 0.1)}" rx="${n(s * 0.03)}" fill="#ffffff"/>`);
-      for (let i = 0; i < 5; i++) {
-        const sx = kx + s * 0.045 + i * s * 0.058;
-        const sy = ky + s * 0.05;
-        const r = s * 0.022;
-        const pts = Array.from({ length: 10 }, (_, k) => {
-          const ang = -Math.PI / 2 + (k * Math.PI) / 5;
-          const rr = k % 2 ? r * 0.45 : r;
-          return `${n(sx + rr * Math.cos(ang))},${n(sy + rr * Math.sin(ang))}`;
-        }).join(' ');
-        parts.push(`<polygon points="${pts}" fill="${c.accent}"/>`);
+      // a speech bubble between the two people (a conversation; never a star rating or review the business doesn't have)
+      const kx = cx - s * 0.12;
+      const ky = cy - s * 0.4;
+      const kw = s * 0.24;
+      const kh = s * 0.1;
+      parts.push(`<rect x="${n(kx)}" y="${n(ky)}" width="${n(kw)}" height="${n(kh)}" rx="${n(s * 0.04)}" fill="#ffffff"/>`);
+      parts.push(`<path d="M${n(cx - s * 0.02)} ${n(ky + kh - 1)}l${n(s * 0.02)} ${n(s * 0.035)} ${n(s * 0.02)} ${n(-s * 0.035)}Z" fill="#ffffff"/>`);
+      for (let i = 0; i < 3; i++) {
+        parts.push(`<circle cx="${n(cx + (i - 1) * s * 0.05)}" cy="${n(ky + kh / 2)}" r="${n(s * 0.014)}" fill="${c.accent}"/>`);
       }
       break;
     }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowRight, Check, Lightbulb, TrendingUp } from 'lucide-react';
+import { ArrowRight, Check, Lightbulb } from 'lucide-react';
 import type { ProductFormat, ProductIdea, Project } from '@/lib/types';
 import { cn, fmtMoney } from '@/lib/utils';
 import { FORMAT_LIST, FORMATS, matchNiche, NICHE_SUGGESTIONS } from '@/ai/knowledge';
@@ -7,7 +7,7 @@ import { productIdeasTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useStore } from '@/store/useStore';
 import { Icon } from '@/components/ui/Icon';
-import { Field, ProgressRing, Segmented } from '@/components/ui/primitives';
+import { Field, Segmented } from '@/components/ui/primitives';
 import { AIResultBar, AIThinking, GenerateButton, RegenerateButton } from '@/components/ai/AI';
 
 export function StepResearch({ project, onNext }: { project: Project; onNext: () => void }) {
@@ -101,12 +101,12 @@ export function StepResearch({ project, onNext }: { project: Project; onNext: ()
       <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface-2/60 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="font-display text-[16px] font-semibold">AI Winning Product Finder</p>
-            <p className="text-xs text-muted">Scores demand, competition, price and scalability for your exact niche and format.</p>
+            <p className="font-display text-[16px] font-semibold">AI product ideas</p>
+            <p className="text-xs text-muted">Ideas built from your niche, category and format. They’re suggestions, not market research.</p>
           </div>
           <div className="flex items-center gap-2">
             <Segmented size="sm" options={[{ id: '3', label: '3 ideas' }, { id: '4', label: '4' }, { id: '5', label: '5' }]} value={count} onChange={setCount} />
-            {ideas.length > 0 ? <RegenerateButton onClick={find} running={ai.running} label="New ideas" /> : <GenerateButton running={ai.running} onClick={find} disabled={!ready}>Find winning products</GenerateButton>}
+            {ideas.length > 0 ? <RegenerateButton onClick={find} running={ai.running} label="New ideas" /> : <GenerateButton running={ai.running} onClick={find} disabled={!ready}>Suggest product ideas</GenerateButton>}
           </div>
         </div>
         {!ready && !ideas.length && <p className="text-xs text-muted">Add a niche, a category and a format to start.</p>}
@@ -115,19 +115,16 @@ export function StepResearch({ project, onNext }: { project: Project; onNext: ()
       </section>
 
       {ideas.length > 0 && (
-        <section className="grid grid-cols-1 gap-3 lg:grid-cols-2" aria-label="Winning product ideas">
+        <section className="grid grid-cols-1 gap-3 lg:grid-cols-2" aria-label="Product ideas">
           {ideas.map((idea, i) => (
             <article key={idea.id} className={cn('panel flex flex-col gap-3 p-4', project.idea?.id === idea.id && 'ring-2 ring-primary')} style={{ animationDelay: `${i * 60}ms` }}>
-              <div className="flex items-start gap-3">
-                <ProgressRing value={idea.score / 100} size={52} stroke={5} label={String(idea.score)} color={idea.score >= 75 ? 'rgb(var(--good))' : idea.score >= 60 ? 'rgb(var(--primary))' : 'rgb(var(--warn))'} />
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                    <span className="badge bg-accent-soft text-on-accent">{idea.angle}</span>
-                    <span className="badge bg-surface-2 text-ink-2">{FORMATS[idea.format].short}</span>
-                  </div>
-                  <h3 className="font-display text-[17px] font-semibold leading-snug">{idea.title}</h3>
-                  <p className="mt-1 text-[13px] text-ink-2">{idea.hook}</p>
+              <div className="min-w-0">
+                <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                  <span className="badge bg-accent-soft text-on-accent">{idea.angle}</span>
+                  <span className="badge bg-surface-2 text-ink-2">{FORMATS[idea.format].short}</span>
                 </div>
+                <h3 className="font-display text-[17px] font-semibold leading-snug">{idea.title}</h3>
+                <p className="mt-1 text-[13px] text-ink-2">{idea.hook}</p>
               </div>
               <dl className="grid grid-cols-2 gap-2 text-[12.5px]">
                 <div className="rounded-md bg-surface-2 p-2.5">
@@ -138,18 +135,14 @@ export function StepResearch({ project, onNext }: { project: Project; onNext: ()
                   <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted">Pain solved</dt>
                   <dd className="mt-0.5 font-medium text-ink">{idea.pain}</dd>
                 </div>
-                <div className="rounded-md bg-surface-2 p-2.5">
+                <div className="col-span-2 rounded-md bg-surface-2 p-2.5">
                   <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted">Suggested price</dt>
-                  <dd className="num mt-0.5 text-[15px] font-bold text-ink">
-                    {fmtMoney(idea.price)}
-                    {idea.priceModel === 'monthly' ? '/mo' : ''}
-                  </dd>
-                </div>
-                <div className="rounded-md bg-surface-2 p-2.5">
-                  <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted">Revenue potential</dt>
-                  <dd className="num mt-0.5 font-bold text-ink">
-                    {fmtMoney(idea.revenueLow, { compact: true })}–{fmtMoney(idea.revenueHigh, { compact: true })}
-                    <span className="font-normal text-muted">/mo</span>
+                  <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-2">
+                    <span className="num text-[15px] font-bold text-ink">
+                      {fmtMoney(idea.price)}
+                      {idea.priceModel === 'monthly' ? '/mo' : ''}
+                    </span>
+                    <span className="text-[11.5px] text-muted">A starting point. You set the price in the Studio.</span>
                   </dd>
                 </div>
               </dl>
@@ -160,18 +153,20 @@ export function StepResearch({ project, onNext }: { project: Project; onNext: ()
                   </li>
                 ))}
               </ul>
-              <div className="rounded-md border border-dashed border-line-2 p-2.5">
-                <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                  <TrendingUp size={12} /> Why it can win
-                </p>
-                <ul className="flex flex-col gap-0.5 text-xs text-ink-2">
-                  {idea.signals.map((s) => (
-                    <li key={s} className="flex gap-1.5">
-                      <Lightbulb size={12} className="mt-0.5 shrink-0 text-accent" /> {s}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              {(idea.fit ?? []).length > 0 && (
+                <div className="rounded-md border border-dashed border-line-2 p-2.5">
+                  <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                    <Lightbulb size={12} /> Why this could fit you
+                  </p>
+                  <ul className="flex flex-col gap-0.5 text-xs text-ink-2">
+                    {idea.fit.map((s) => (
+                      <li key={s} className="flex gap-1.5">
+                        <Check size={12} className="mt-0.5 shrink-0 text-accent" /> {s}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <button className="btn btn-primary mt-auto" onClick={() => select(idea)}>
                 Select &amp; build this product <ArrowRight size={16} />
               </button>

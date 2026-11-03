@@ -45,7 +45,6 @@ export function StepBrand({ project }: { project: Project }) {
         personality: r.personality,
         mission: r.mission,
         domainIdeas: r.domainIdeas.map((d) => d.replace(/^[a-z0-9-]+/, slug.replace(/-/g, ''))).filter((v, i, a) => a.indexOf(v) === i),
-        websiteUrl: p.brand.websiteUrl && p.origin === 'existing' ? p.brand.websiteUrl : `https://${slug.replace(/-/g, '')}.com`,
         colors: r.colors,
         logo: { ...p.brand.logo, mode: 'generated', icon: r.icon, shape: r.shape, font: r.font },
         banner: { ...p.brand.banner, style: r.bannerStyle },
@@ -69,7 +68,8 @@ export function StepBrand({ project }: { project: Project }) {
 
   const pickName = (name: string) => {
     const slug = slugify(name);
-    setBrand({ name, slug, websiteUrl: `https://${slug.replace(/-/g, '')}.com`, domainIdeas: [`${slug.replace(/-/g, '')}.com`, `get${slug.replace(/-/g, '')}.com`, `${slug.replace(/-/g, '')}.co`] });
+    // domain ideas only: the website stays what the owner typed
+    setBrand({ name, slug, domainIdeas: [`${slug.replace(/-/g, '')}.com`, `get${slug.replace(/-/g, '')}.com`, `${slug.replace(/-/g, '')}.co`] });
   };
 
   return (
@@ -101,7 +101,7 @@ export function StepBrand({ project }: { project: Project }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="font-display text-[16px] font-semibold">AI Brand Identity Generator</p>
-            <p className="text-xs text-muted">Names, logo concept, palette, cover banner, pitch and website, all editable.</p>
+            <p className="text-xs text-muted">Names, logo concept, palette, cover banner, pitch and domain ideas, all editable.</p>
           </div>
           {generated ? (
             <button className="btn btn-secondary btn-sm" onClick={generate} disabled={ai.running}>
@@ -174,18 +174,18 @@ export function StepBrand({ project }: { project: Project }) {
             </div>
           </Section>
 
-          <Section n={5} title="Website" desc="Suggested from your name. Use your own domain if you have one.">
+          <Section n={5} title="Website" desc="Add your website if you have one. Leave it empty if not: posts then say “link in bio”.">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-              <Field label="Website URL" htmlFor="web">
-                <input id="web" className="input" value={brand.websiteUrl} onChange={(e) => setBrand({ websiteUrl: e.target.value })} onBlur={(e) => e.target.value && setBrand({ websiteUrl: ensureUrl(e.target.value) })} />
+              <Field label="Website URL (optional)" htmlFor="web">
+                <input id="web" className="input" placeholder="https://yourbusiness.com" value={brand.websiteUrl} onChange={(e) => setBrand({ websiteUrl: e.target.value })} onBlur={(e) => e.target.value && setBrand({ websiteUrl: ensureUrl(e.target.value) })} />
               </Field>
-              <Field label="URL slug" htmlFor="slug" hint={`Store page: yourlocalbusiness.app/s/${brand.slug || 'your-brand'}`}>
+              <Field label="URL slug" htmlFor="slug" hint="Used in the names of files you download.">
                 <input id="slug" className="input font-mono" value={brand.slug} onChange={(e) => setBrand({ slug: slugify(e.target.value, 40) })} />
               </Field>
             </div>
             {brand.domainIdeas.length > 0 && (
               <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                <span className="text-xs text-muted">Domain ideas:</span>
+                <span className="text-xs text-muted">Domain ideas (availability not checked). Use one once you own it:</span>
                 {brand.domainIdeas.map((d) => (
                   <button key={d} className={cn('chip font-mono', stripProtocol(brand.websiteUrl) === d && 'chip-active')} onClick={() => setBrand({ websiteUrl: `https://${d}` })}>
                     {d}

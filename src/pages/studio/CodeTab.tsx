@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Code2, CopyPlus, Download, FileCode2, Sparkles, Trash2, Undo2, Wand2, Columns2, Eye, SquareCode } from 'lucide-react';
+import { Code2, CopyPlus, Download, FileCode2, RefreshCw, Sparkles, Trash2, Undo2, Wand2, Columns2, Eye, SquareCode } from 'lucide-react';
 import type { CodeAsset, CodeKind, Project } from '@/lib/types';
 import { cn, fmtRelative, slugify, uid } from '@/lib/utils';
 import { buildDocument, CODE_KINDS, codeKindLabel, detectKind } from '@/ai/local/code';
@@ -71,10 +71,20 @@ export function CodeTab({ project }: { project: Project }) {
     const r = await gen.run({ kind, prompt: prompt.trim() });
     if (!r) return;
     const now = Date.now();
-    const asset: CodeAsset = { id: uid('code'), name: r.name, kind: r.kind, prompt: prompt.trim(), html: r.html, css: r.css, js: r.js, script: r.script, createdAt: now, updatedAt: now };
+    const asset: CodeAsset = { id: uid('code'), name: r.name, kind: r.kind, prompt: prompt.trim(), html: r.html, css: r.css, js: r.js, script: r.script, outdated: false, createdAt: now, updatedAt: now };
     updateStudio({ codeAssets: [asset, ...assets()] });
     setActiveId(asset.id);
     setLang('html');
+    setApplied(r.note ? [r.note] : []);
+  };
+
+  /** Rebuild an outdated asset in place with the current templates (same kind and request). */
+  const regenerate = async (a: CodeAsset) => {
+    if (!(await confirmAction({ title: `Regenerate “${a.name}”?`, body: 'This replaces its code with a new version. Any changes you made to this code are lost.', confirmLabel: 'Regenerate' }))) return;
+    const r = await gen.run({ kind: a.kind, prompt: a.prompt });
+    if (!r) return;
+    setHistory((h) => ({ ...h, [a.id]: [...(h[a.id] ?? []), { html: a.html, css: a.css, js: a.js }].slice(-15) }));
+    patchAsset(a.id, { html: r.html, css: r.css, js: r.js, script: r.script, outdated: false });
     setApplied(r.note ? [r.note] : []);
   };
 
@@ -184,6 +194,7 @@ export function CodeTab({ project }: { project: Project }) {
                       <span className="block truncate text-[13px] font-semibold">{a.name}</span>
                       <span className="block text-[11px] text-muted">
                         {codeKindLabel(a.kind)} · {fmtRelative(a.updatedAt)}
+                        {a.outdated && <span className="ml-1 font-semibold text-warn">· Outdated: regenerate</span>}
                       </span>
                     </span>
                   </button>
@@ -231,6 +242,20 @@ export function CodeTab({ project }: { project: Project }) {
                 </button>
               </div>
             </div>
+
+            {active.outdated && (
+              <div className="panel flex flex-wrap items-center gap-2 border-warn/40 bg-warn-soft px-3 py-2.5 text-[13px]" role="status">
+                <p className="min-w-0 flex-1">
+                  <b>Outdated: regenerate.</b> An older version made this code. It may tell visitors a form was sent when nothing was, show made-up taken times, reviews or a deadline. Check it before you use it, or regenerate it.
+                </p>
+                <button className="btn btn-secondary btn-sm" onClick={() => regenerate(active)} disabled={gen.running}>
+                  {gen.running ? <Spinner size={14} /> : <RefreshCw size={14} />} Regenerate
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => patchAsset(active.id, { outdated: false })}>
+                  Dismiss
+                </button>
+              </div>
+            )}
 
             <div className="panel p-3">
               <form

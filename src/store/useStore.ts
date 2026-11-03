@@ -143,12 +143,26 @@ export const useStore = create<StoreState>()(
       markPosted: (id, o = {}) =>
         set((s) => ({
           posts: s.posts.map((p) =>
-            p.id === id ? { ...p, status: 'published', publishedBy: 'manual', publishedAt: o.at ?? new Date().toISOString(), postUrl: o.url?.trim() || p.postUrl, updatedAt: Date.now() } : p,
+            p.id === id
+              ? {
+                  ...p,
+                  status: 'published',
+                  publishedBy: 'manual',
+                  publishedAt: o.at ?? new Date().toISOString(),
+                  postUrl: o.url?.trim() || p.postUrl,
+                  statusBeforePosted: p.status === 'published' ? p.statusBeforePosted : p.status,
+                  // a failed Manus try no longer matters once you've posted it yourself
+                  external: p.external?.state === 'failed' ? undefined : p.external,
+                  updatedAt: Date.now(),
+                }
+              : p,
           ),
         })),
       unmarkPosted: (id) =>
         set((s) => ({
-          posts: s.posts.map((p) => (p.id === id && p.publishedBy === 'manual' ? { ...p, status: 'scheduled', publishedBy: undefined, publishedAt: undefined, postUrl: undefined, updatedAt: Date.now() } : p)),
+          posts: s.posts.map((p) =>
+            p.id === id && p.publishedBy === 'manual' ? { ...p, status: p.statusBeforePosted ?? 'scheduled', statusBeforePosted: undefined, publishedBy: undefined, publishedAt: undefined, postUrl: undefined, updatedAt: Date.now() } : p,
+          ),
         })),
 
       upsertAd: (c) => set((s) => ({ ads: s.ads.some((a) => a.id === c.id) ? s.ads.map((a) => (a.id === c.id ? c : a)) : [...s.ads, c] })),

@@ -9,7 +9,7 @@ import { toast, useUI } from '@/store/ui';
 import { Empty, Segmented, Tabs } from '@/components/ui/primitives';
 import { FormatBadge, PostCard, PostTypeTag } from '@/components/posts/PostCard';
 import { ExternalBadge, ManusPostButton, manusSetupHint, useManusPost, useManusReady } from '@/components/posts/ManusPost';
-import { DueBadge, PostedBy, PostMoreMenu, addToCalendarFlow, isDue, useMarkPosted } from '@/components/posts/PostActions';
+import { DueBadge, PostedBy, PostMoreMenu, addToCalendarFlow, isDue, manusHolds, useMarkPosted } from '@/components/posts/PostActions';
 import { PlatformChip, PlatformGlyph } from '@/components/posts/PlatformIcon';
 import { PostVisual } from '@/components/visuals/PostVisual';
 import { networkLabel } from '@/ai/manusPost';
@@ -175,6 +175,10 @@ function reschedule(id: string, date: string) {
   const s = useStore.getState();
   const p = s.posts.find((x) => x.id === id);
   if (!p || isoToDateStr(p.scheduledAt) === date) return;
+  if (manusHolds(p)) {
+    toast({ kind: 'info', title: 'Manus already has this post', body: `Moving it here won’t change it on ${PLATFORMS[p.platform].label}. Change it there, or wait for Manus’s result.` });
+    return;
+  }
   const at = combineDateTime(date, isoToTime(p.scheduledAt));
   if (new Date(at).getTime() < Date.now() - 60_000) {
     toast({ kind: 'error', title: 'That time has already passed', body: 'Pick today or a future day.' });

@@ -26,37 +26,40 @@ export interface EbookExtras {
 }
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const joinList = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
 /** One or two sentences that fit the niche: never a promise of results. */
 export function disclaimerFor(text: string): string {
   if (/tax|financ|money|invest|budget|debt|account|bookkeep/i.test(text)) return 'This guide shares general information and practical tips. It is not tax, legal or financial advice; check your own situation with a qualified professional. Results vary.';
   if (/fitness|workout|health|diet|nutrition|meal|weight|wellness|yoga|sleep|mental/i.test(text)) return 'This guide shares general information, not medical advice. Check with your doctor before starting a new exercise, diet or wellness plan. Results vary.';
   if (/legal|law|contract|immigration/i.test(text)) return 'This guide shares general information, not legal advice. Talk to a qualified lawyer about your situation.';
-  return 'This guide shares general information and practical tips based on experience. Results vary with your situation and the effort you put in.';
+  return 'This guide shares general information and practical tips. Results vary with your situation.';
 }
 
 export function localEbookExtras(project: Project): EbookExtras {
   const f = buildFacts(project);
   const noun = (f.formatNoun || 'Guide').toLowerCase();
   const outline = project.studio.outline;
+  const chapters = outline.map((s) => s.title.replace(/^(Module|Chapter|Section|Day|Week|Tab|Part) \d+:\s*/i, '').trim()).filter(Boolean).slice(0, 6);
   const title = project.idea?.title || project.studio.listing.title || `${f.topic} ${f.formatNoun || 'Guide'}`;
   return {
     title,
-    subtitle: project.idea?.hook || project.brand.valueProp || `A practical ${noun} to help ${f.audience} ${f.outcomes[1] ?? f.outcome}.`,
+    subtitle: project.idea?.hook || project.brand.valueProp || `A ${noun} about ${f.topicLower} for ${f.audience}.`,
     welcome: [
       `Welcome! This ${noun} is for **${f.audience}** who are done with ${f.pain}.`,
-      `Inside you'll find a simple, step-by-step path to ${f.desire}. Every chapter ends with a workbook page, so you finish with a plan of your own, not just notes.`,
-      `Start small: ${f.quickWins[0] ?? 'pick one idea and try it this week'}. Small steps add up faster than you think.`,
+      // what the file actually contains (its chapters and workbook pages), never what it will do for the reader
+      chapters.length ? `Inside: ${joinList(chapters)}. Each chapter ends with a workbook page for your own notes and plan.` : 'Each chapter ends with a workbook page for your own notes and plan.',
+      `One place to start: ${f.quickWins[0] ?? 'pick one idea and try it this week'}.`,
     ].join('\n\n'),
     howToUse: [
-      'Read the chapters in order: each one builds on the last.',
+      'Read the chapters in order, or jump to the one you need first.',
       'Do the workbook page at the end of each chapter before moving on.',
       'Tick off the action checklists as you go, and come back to them each week.',
       'Use the contents page to jump straight back to any chapter.',
     ],
     conclusion: [
-      `You made it to the end, and that already puts you ahead. You now have a clear way to ${f.outcomes[1] ?? f.outcome}.`,
-      'Keep it simple: come back to your workbook pages once a week, adjust what isn’t working, and keep what is.',
+      `You've reached the end of this ${noun}. Look back over your workbook pages and pick the one step you want to try first.`,
+      'Come back to your workbook pages whenever you like, adjust what isn’t working for you, and keep what is.',
     ].join('\n\n'),
     nextSteps: [cap(f.quickWins[0] ?? 'Pick your first action today'), cap(f.quickWins[1] ?? 'Put a weekly check-in on your calendar'), cap(f.quickWins[2] ?? 'Share what you learned with a friend')].map((s) => s.replace(/\.?$/, '.')),
     disclaimer: disclaimerFor(`${project.niche} ${project.category} ${title}`),

@@ -127,7 +127,7 @@ function BrandSettings({ project }: { project: Project }) {
             <Field label="Personality" className="sm:col-span-2">
               <ChipInput values={brand.personality} onChange={(v) => set({ personality: v })} placeholder="e.g. warm, expert, playful" max={8} />
             </Field>
-            <Field label="URL slug" htmlFor="b-slug" hint="Used for page URLs and handles.">
+            <Field label="URL slug" htmlFor="b-slug" hint="Used in the names of files you download.">
               <input id="b-slug" className="input" value={brand.slug} onChange={(e) => set({ slug: slugify(e.target.value) })} />
             </Field>
           </div>

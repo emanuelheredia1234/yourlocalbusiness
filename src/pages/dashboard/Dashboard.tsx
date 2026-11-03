@@ -28,6 +28,46 @@ export function readiness(project: Project, ctx: { scheduled: number; posted: nu
   return { items, done: items.filter((i) => i.done).length };
 }
 
+/** Your website as you entered it. One that older versions made up from your name is asked about once. */
+function WebsiteLink({ project }: { project: Project }) {
+  const updateProject = useStore((s) => s.updateProject);
+  const b = project.brand;
+  const answer = (mine: boolean) =>
+    updateProject(project.id, (p) => {
+      const { guessedWebsite, ...brand } = p.brand;
+      return { ...p, brand: mine && guessedWebsite ? { ...brand, websiteUrl: guessedWebsite, websiteConfirmed: true } : brand };
+    });
+  if (b.websiteUrl) {
+    return (
+      <a href={ensureUrl(b.websiteUrl)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-[13px] font-medium text-primary hover:underline">
+        <Globe size={13} /> {stripProtocol(b.websiteUrl)} <ExternalLink size={11} />
+      </a>
+    );
+  }
+  if (b.guessedWebsite) {
+    return (
+      <div className="rounded-md border border-line bg-surface-2/60 p-2.5 text-[12.5px]">
+        <p>
+          Is <b className="font-semibold">{stripProtocol(b.guessedWebsite)}</b> your website? It was filled in from your brand name, not by you, so it’s no longer shown on your posts, ads or listing.
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button className="btn btn-secondary btn-sm" onClick={() => answer(true)}>
+            Yes, it’s mine
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => answer(false)}>
+            No
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <button className="link inline-flex items-center gap-1.5 text-[13px]" onClick={() => navigate('workspace-settings')}>
+      <Globe size={13} /> Add your website
+    </button>
+  );
+}
+
 /** Who made it: the AI that answered (its provider and model when known), or the built-in templates. */
 function madeBy(g: GenerationLog): string {
   if (g.provider === 'local') return 'Built-in templates';
@@ -140,11 +180,7 @@ export function Dashboard() {
                   <dd className="font-semibold">{project.studio.price ? fmtMoney(project.studio.price) : '—'}</dd>
                 </div>
               </dl>
-              {project.brand.websiteUrl && (
-                <a href={ensureUrl(project.brand.websiteUrl)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-[13px] font-medium text-primary hover:underline">
-                  <Globe size={13} /> {stripProtocol(project.brand.websiteUrl)} <ExternalLink size={11} />
-                </a>
-              )}
+              <WebsiteLink project={project} />
             </div>
           </section>
 

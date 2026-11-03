@@ -71,10 +71,10 @@ function topicBank(f: Facts, v: Voice): Record<PostType, string[]> {
       `3 steps to ${o(0)}`,
       `The ${f.terms[0]} framework, explained simply`,
       `A beginner’s guide to ${f.terms[1] ?? f.topicLower}`,
-      `How ${f.audience} ${o(1)}`,
+      `How to ${o(1)}`,
       `What to do when ${f.pains[1] ?? f.pain}`,
       `${f.topic}: the 80/20 version`,
-      `How to set up ${f.terms[2] ?? f.terms[0]} in 15 minutes`,
+      `How to set up ${f.terms[2] ?? f.terms[0]}, step by step`,
     ],
     tip: [
       capitalize(f.quickWins[1] ?? f.quickWins[0]),
@@ -87,7 +87,7 @@ function topicBank(f: Facts, v: Voice): Record<PostType, string[]> {
     question: [
       `What’s your biggest struggle with ${f.topicLower}?`,
       `“${f.myths[0]}”: agree or disagree?`,
-      `What would you do with an extra 5 hours a week?`,
+      `What does a good ${f.topicLower} week look like for you?`,
       `Which matters more: ${f.terms[0]} or ${f.terms[1] ?? 'consistency'}?`,
       `What’s one ${f.topicLower} win you had this month?`,
     ],
@@ -95,20 +95,27 @@ function topicBank(f: Facts, v: Voice): Record<PostType, string[]> {
       `Introducing ${f.productShort}`,
       `What’s inside ${f.productShort}`,
       `Who ${f.productShort} is for (and who it isn’t)`,
-      `${f.productShort}: launch offer`,
-      `Last chance: launch bonus ends soon`,
-      f.track === 'business' ? `Book your ${f.business?.tiers[1] ?? 'first'} visit` : `Why ${f.productShort} costs less than ${f.pain}`,
+      `${f.productShort}: price and what’s included`,
+      `Questions about ${f.productShort}, answered`,
+      f.track === 'business' ? `Book your ${f.business?.tiers[1] ?? 'first'} visit` : `Is ${f.productShort} right for you?`,
     ],
     bts: [
       f.track === 'business' ? `A day at ${f.brand}` : `How we built ${f.productShort}`,
       `Meet the ${f.brand} team`,
-      `Customer spotlight: a ${singular(f.audience)}’s win`,
+      `What to expect from ${f.brand}`,
       `Why ${v.we === 'I' ? 'I' : 'we'} started ${f.brand}`,
       `Our process, start to finish`,
       f.local && f.city ? `Proud to serve ${f.city}` : `What ${v.we === 'I' ? 'I' : 'we'} learned this month`,
     ],
   };
 }
+
+export const TRUST_GOAL = 'Show your process, the people behind it, and real customer words when you have them.';
+export const RECAP_MESSAGE = 'Here is what’s included, and how to get it.';
+export const trustMessage = (brand: string) => `Here is how ${brand} works, and who is behind it.`;
+/** What the business or product does for people is the owner's to say: the key message only describes the offer. */
+export const offerKeyMessage = (product: string) => `${product}: what it is, who it’s for, and what it costs.`;
+export const recapGoal = (track: Project['track']) => `Recap the month and remind people how to ${track === 'business' ? 'book' : 'buy'}.`;
 
 export function generateCampaignPlan(project: Project, config: CampaignConfig, d: Directives = {}, variation = 0): CampaignPlan {
   const f = buildFacts(project);
@@ -191,11 +198,12 @@ export function generateCampaignPlan(project: Project, config: CampaignConfig, d
     byPlatform[s.platform] = (byPlatform[s.platform] ?? 0) + 1;
   }
   const weeks = [
-    { week: 1, theme: 'Awareness: name the problem', goal: `Make ${f.audience} feel seen around ${f.pain}.`, kpi: 'Reach, profile visits, follows', keyMessage: `${capitalize(f.pain)} is common and fixable.` },
-    { week: 2, theme: 'Authority: teach the method', goal: `Show the steps to ${verbOutcome(f.outcomes[0])}.`, kpi: 'Saves, shares, lead magnet opt-ins', keyMessage: `There is a simple system for ${f.topicLower}.` },
-    { week: 3, theme: 'Trust: proof & community', goal: 'Show real people, process and results.', kpi: 'Comments, DMs, email replies', keyMessage: `People like you are already getting results with ${f.brand}.` },
-    { week: 4, theme: 'Conversion: open the offer', goal: `Drive ${f.track === 'business' ? 'bookings' : 'sales'} of ${f.productShort}.`, kpi: 'Link clicks, conversions, revenue', keyMessage: `${f.productShort} is the fastest way to ${verbOutcome(f.outcomes[0])}.` },
-    { week: 5, theme: 'Final push & recap', goal: 'Create urgency and recap the month.', kpi: 'Conversions, retargeting audience size', keyMessage: 'The launch offer ends soon.' },
+    { week: 1, theme: 'Awareness: name the problem', goal: `Make ${f.audience} feel seen around ${f.pain}.`, kpi: 'Reach, profile visits, follows', keyMessage: `${capitalize(f.pain)} is worth talking about.` },
+    { week: 2, theme: 'Authority: teach the method', goal: `Show the steps to ${verbOutcome(f.outcomes[0])}.`, kpi: 'Saves, shares, lead magnet opt-ins', keyMessage: `Here is how ${f.brand} approaches ${f.topicLower}.` },
+    // Key messages claim no results, popularity or deadlines: customer words and offers come from the owner.
+    { week: 3, theme: 'Trust: proof & community', goal: TRUST_GOAL, kpi: 'Comments, DMs, email replies', keyMessage: trustMessage(f.brand) },
+    { week: 4, theme: 'Conversion: open the offer', goal: `Drive ${f.track === 'business' ? 'bookings' : 'sales'} of ${f.productShort}.`, kpi: 'Link clicks, conversions, revenue', keyMessage: offerKeyMessage(f.productShort) },
+    { week: 5, theme: 'Final push & recap', goal: recapGoal(f.track), kpi: 'Conversions, retargeting audience size', keyMessage: RECAP_MESSAGE },
   ];
   const strategy = `A 30-day ${config.goal === 'sales' ? 'launch' : config.goal === 'leads' ? 'list-building' : 'awareness'} campaign for ${f.brand} on ${platforms.map((p) => PLATFORMS[p].label).join(', ')}. ${all.length} posts across ${days.filter((x) => x.posting).length} posting days move ${f.audience} from awareness (week 1) to authority (week 2), trust (week 3) and conversion (week 4). ${videos ? `${videos} of ${perDay} daily posts are short videos to maximize reach;` : 'Static posts carry the plan;'} sales posts ramp up in the final ten days${f.leadMagnet ? `, and educational posts point to the free “${f.leadMagnet}”` : ''}.`;
   return {
@@ -237,7 +245,7 @@ function shortHeadline(input: ComposeInput, f: Facts, v: Voice): string {
     case 'question':
       return truncate(t, 70);
     case 'sales':
-      return truncate(v.pick([t, `${f.productShort} is here`, capitalize(verbOutcome(f.outcomes[0]))]), 64);
+      return truncate(v.pick([t, `${f.productShort} is here`, `Want to ${verbOutcome(f.outcomes[0])}?`]), 64);
     case 'bts':
       return truncate(t, 60);
     case 'tip':
@@ -245,6 +253,15 @@ function shortHeadline(input: ComposeInput, f: Facts, v: Voice): string {
     default:
       return truncate(t, 62);
   }
+}
+
+/** What the business or product is, from the owner's inputs only. */
+function whatItIs(f: Facts): string {
+  if (f.track === 'business') {
+    const label = (f.business?.label ?? f.topic).toLowerCase();
+    return `${f.brand} offers ${label}${f.city ? ` in ${f.city}` : ''}`;
+  }
+  return `${f.productShort} is a ${f.formatLabel.toLowerCase()} about ${f.topicLower} for ${f.audience}`;
 }
 
 export function composePost(project: Project, input: ComposeInput, d: Directives = {}, seed: string | number = 0): ComposedPost {
@@ -270,29 +287,29 @@ export function composePost(project: Project, input: ComposeInput, d: Directives
       const steps = rng.shuffle([...f.quickWins, ...f.terms.slice(0, 3).map((t, k) => `${verbs[k % verbs.length]} ${t}`)]).slice(0, n);
       if (!isX) lines.push(hook.startsWith(capitalize(topicLower)) ? 'Here’s the simple version:' : `${capitalize(topicLower)}. Here’s the simple version:`);
       steps.forEach((s, i) => lines.push(`${i + 1}. ${capitalize(s)}`));
-      if (v.length !== 'short' && !isX) lines.push(`Do this for two weeks and you’ll ${verbOutcome(rng.pick(f.outcomes))}.`);
+      if (v.length !== 'short' && !isX) lines.push(`Want to ${verbOutcome(rng.pick(f.outcomes))}? Start with step 1.`);
       break;
     }
     case 'tip': {
       const tip = rng.pick(f.quickWins);
       lines.push(`Try this today: ${tip}.`);
-      if (!isX) lines.push(`Why it works: it removes ${lowerFirst(rng.pick(f.pains))} before it starts.${v.ee('idea')}`);
+      if (!isX) lines.push(`Worth a try if ${lowerFirst(rng.pick(f.pains))} sounds familiar.${v.ee('idea')}`);
       if (v.length === 'long') lines.push(`Bonus: pair it with a weekly ${f.terms[0]} check-in.`);
       break;
     }
     case 'question': {
-      if (!isX) lines.push(`${capitalize(v.we)}’re curious.${v.ee('wave')} Every ${singular(f.audience)} we talk to handles ${f.topicLower} differently.`);
+      if (!isX) lines.push(`${capitalize(v.we)}’re curious.${v.ee('wave')} How do you handle ${f.topicLower}?`);
       if (v.length !== 'short' && !isX) lines.push(`A) ${capitalize(f.quickWins[0])}\nB) ${capitalize(f.quickWins[1] ?? f.quickWins[0])}\nC) Something else entirely`);
       break;
     }
     case 'sales': {
       const fw = d.framework ?? rng.pick(['PAS', 'AIDA', 'BAB'] as const);
       if (fw === 'BAB') {
-        lines.push(`Before: ${f.pain}.`, `After: ${lowerFirst(f.desire)}.`, `The bridge: ${f.productShort}.`);
+        lines.push(`Dealing with ${f.pain}?`, `Looking for ${lowerFirst(rng.pick(f.wishes))}?`, `${whatItIs(f)}.`);
       } else if (fw === 'AIDA') {
-        lines.push(`${f.productShort} helps ${f.audience} ${verbOutcome(f.outcomes[0])}.`, `Imagine next month without ${f.pain}.`);
+        lines.push(`${whatItIs(f)}.`, `Want to ${verbOutcome(f.outcomes[0])}? Take a look.`);
       } else {
-        lines.push(`${capitalize(f.pain)} costs more than you think: time, money and headspace.`, `${f.productShort} fixes it with ${f.terms.slice(0, 2).join(' + ')}.`);
+        lines.push(`Is ${f.pain} on your mind?`, `${whatItIs(f)}.`);
       }
       if (!isX && v.length !== 'short') lines.push(`${f.track === 'business' ? 'Starting at' : 'Just'} ${f.priceStr}${f.priceSuffix}.${v.ee('fire')}`);
       break;
@@ -300,13 +317,13 @@ export function composePost(project: Project, input: ComposeInput, d: Directives
     case 'bts': {
       lines.push(
         v.pick([
-          'Most people never see this part, but it’s where the quality comes from.',
-          `${capitalize(v.we)} don’t share this often: here’s what really goes into it.`,
-          `This is the unglamorous part ${v.we} love most.`,
+          'Here’s a look behind the scenes.',
+          `A quick look at how ${f.brand} works.`,
+          `This is the part most people never see.`,
         ]),
       );
-      const lessons = f.local ? ['details are the difference', 'small touches add up', 'every customer deserves our best, every visit'] : ['systems beat willpower', 'small steps compound', 'listening to customers changes everything', 'details are the difference'];
-      if (!isX) lines.push(`The lesson: ${v.pick(lessons)}.${v.ee('heart')}`);
+      const asks = ['What would you like to see next?', `Any questions about ${f.topicLower}? Ask below.`, `What do you want to know about ${f.brand}?`];
+      if (!isX) lines.push(`${v.pick(asks)}${v.ee('heart')}`);
       break;
     }
   }
@@ -347,7 +364,7 @@ export function composePost(project: Project, input: ComposeInput, d: Directives
     : f.track === 'business'
       ? `${f.business?.label ?? 'local business'} scene with real people, ${f.city || 'neighborhood'} setting`
       : `${f.productShort} (${f.formatLabel.toLowerCase()}) shown in use by ${singular(f.audience)}`;
-  const visualPrompt = `${styleDef.prompt}. Subject: ${subject}. On-image text: “${headline}”. Brand colors ${project.brand.colors.primary} and ${project.brand.colors.accent}${input.watermark ? `, small watermark “${f.urlDisplay}” bottom-right` : ''}.`;
+  const visualPrompt = `${styleDef.prompt}. Subject: ${subject}. On-image text: “${headline}”. Brand colors ${project.brand.colors.primary} and ${project.brand.colors.accent}${input.watermark ? `, small watermark “${f.mark}” bottom-right` : ''}.`;
 
   let storyboard: Scene[] | undefined;
   if (input.format === 'video' || isVideoStyle(input.style)) {
@@ -364,8 +381,8 @@ export function composePost(project: Project, input: ComposeInput, d: Directives
     storyboard = [
       { id: uid('sc'), text: truncate(hook.replace(/\n/g, ' '), 64), shot: shots[0], duration: 2 },
       { id: uid('sc'), text: truncate(input.postType === 'sales' ? `${capitalize(f.pain)}?` : capitalize(steps[0] ?? topicLower), 56), shot: shots[1], duration: 4 },
-      { id: uid('sc'), text: truncate(input.postType === 'sales' ? `${f.productShort} fixes it` : capitalize(steps[1] ?? verbOutcome(f.outcomes[0])), 56), shot: shots[2], duration: 5 },
-      { id: uid('sc'), text: truncate(input.postType === 'question' ? 'Tell us below ↓' : input.postType === 'sales' ? `${f.urlDisplay}` : 'Save this for later', 48), shot: shots[3], duration: 3 },
+      { id: uid('sc'), text: truncate(input.postType === 'sales' ? `Meet ${f.productShort}` : capitalize(steps[1] ?? verbOutcome(f.outcomes[0])), 56), shot: shots[2], duration: 5 },
+      { id: uid('sc'), text: truncate(input.postType === 'question' ? 'Tell us below ↓' : input.postType === 'sales' ? f.urlDisplay || f.mark || 'link in bio' : 'Save this for later', 48), shot: shots[3], duration: 3 },
     ];
   }
 

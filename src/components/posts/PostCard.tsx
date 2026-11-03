@@ -16,8 +16,9 @@ import { ManusLink, PostImagePanel, aspectForPlatform } from '../images/PostImag
 import { VideoPanel } from '../images/VideoPanel';
 import { useImageJob } from '../images/useImageJob';
 import { ExternalBadge, ManusPostButton, useManusReady } from './ManusPost';
-import { DueBadge, PostMoreMenu, PostedBy, addToCalendarFlow, useMarkPosted } from './PostActions';
+import { DueBadge, PostMoreMenu, PostedBy, addToCalendarFlow, manusHolds, useMarkPosted } from './PostActions';
 import { createPostImage, defaultImageKind, postVideoPrompt } from '@/ai/image';
+import { brandHandle } from '@/lib/brandMark';
 
 export function PostTypeTag({ type, className }: { type: PostType; className?: string }) {
   const def = POST_TYPE_MAP[type];
@@ -71,6 +72,7 @@ export function PostFields({ post, onChange }: EditableProps) {
           <AutoTextarea id={`v-${post.id}`} value={post.visualPrompt} onChange={(v) => onChange({ visualPrompt: v })} minRows={2} className="text-[13px]" />
         </Field>
       )}
+      {manusHolds(post) && <p className="text-[12.5px] text-warn">Manus already has this post: changing the date or time here doesn’t change it on {PLATFORMS[post.platform].label}.</p>}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Field label="Date" htmlFor={`d-${post.id}`}>
           <input id={`d-${post.id}`} type="date" className="input" value={isoToDateStr(post.scheduledAt)} onChange={(e) => e.target.value && onChange({ scheduledAt: combineDateTime(e.target.value, isoToTime(post.scheduledAt)) })} />
@@ -225,10 +227,9 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
 
 // ───────────────────────── Platform-style preview + full editor ─────────────────────────
 
-/** A handle to show in the preview: the brand's own, or one made from its name. */
+/** The name to show in the preview: the brand's own handle on that network, else the brand name (never a made-up handle). */
 function previewHandle(brand: Brand, platform: PostPlatform): string {
-  const own = (brand.socials[platform] ?? '').trim().replace(/^https?:\/\/[^/]+\//i, '').replace(/^@/, '').replace(/\/+$/, '');
-  return own || (brand.slug || brand.name).replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return brandHandle(brand, [platform]).replace(/^@/, '') || brand.name;
 }
 
 /** How the post will look on the network (a preview: no counts, no link until it's really out). */

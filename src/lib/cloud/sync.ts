@@ -58,11 +58,13 @@ export interface AccountSettings {
 }
 const accountSettings = (s: AppSettings): AccountSettings => ({ profile: s.profile, ...(s.accounts ? { accounts: s.accounts } : {}), useBrain: s.ai.useBrain, shareToCommunity: s.shareToCommunity });
 function withAccountSettings(s: AppSettings, a: Partial<AccountSettings>): AppSettings {
+  // Old pretend connections: the account's row decides. Once one device's cleanup has moved the handles
+  // and saved the row without them, other devices drop their stale copy instead of moving them again.
+  const { accounts: _local, ...rest } = s;
   return {
-    ...s,
+    ...rest,
+    ...(a.accounts && typeof a.accounts === 'object' ? { accounts: a.accounts } : {}),
     profile: a.profile && typeof a.profile === 'object' ? { ...s.profile, ...a.profile } : s.profile,
-    // kept only until the cleanup has moved its handles (see store/cleanup.ts)
-    accounts: a.accounts && typeof a.accounts === 'object' ? a.accounts : s.accounts,
     shareToCommunity: typeof a.shareToCommunity === 'boolean' ? a.shareToCommunity : s.shareToCommunity,
     ai: { ...s.ai, useBrain: typeof a.useBrain === 'boolean' ? a.useBrain : s.ai.useBrain },
   };

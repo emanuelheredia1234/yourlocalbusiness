@@ -5,7 +5,7 @@ import { matchBusinessType } from '@/ai/knowledge';
 
 const PATTERNS: Listing['cover']['pattern'][] = ['blobs', 'waves', 'dots', 'grid', 'rays'];
 
-/** The price a business listing leads with: its most popular package (or the studio price). */
+/** The price a business listing leads with: the package the owner marked popular, else the first package (or the studio price). */
 export function leadPrice(p: Project): { price: number; model: ServicePriceModel } {
   if (p.track === 'business') {
     const pk = p.studio.packages.find((x) => x.popular) ?? p.studio.packages[0];
@@ -13,6 +13,14 @@ export function leadPrice(p: Project): { price: number; model: ServicePriceModel
     return { price: p.studio.price, model: 'per-session' };
   }
   return { price: p.studio.price, model: p.studio.priceModel };
+}
+
+/** The business type's typical hours and an example guarantee: offered to the owner to accept with one click,
+ *  never put in the listing for them. Empty for products. */
+export function listingSuggestions(p: Project): { hours: string; guarantee: string } {
+  if (p.track !== 'business') return { hours: '', guarantee: '' };
+  const bt = matchBusinessType(`${p.businessType} ${p.category} ${p.niche}`);
+  return { hours: bt.hours, guarantee: bt.guarantee };
 }
 
 /** Build the marketplace listing for a project from the shared Project Context (brand, studio, listing draft). */

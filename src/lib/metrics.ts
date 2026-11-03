@@ -8,6 +8,8 @@ export interface DayPoint {
   date: string;
   /** posts that went out that day */
   posted: number;
+  /** of those, posted by Manus */
+  byManus: number;
   /** posts on your calendar for that day */
   planned: number;
   /** things made with AI that day */
@@ -19,14 +21,17 @@ export function dailySeries(input: { posts: Post[]; genLog: GenerationLog[] }, d
   const index = new Map<string, DayPoint>();
   for (let i = days - 1; i >= 0; i--) {
     const date = toDateStr(new Date(now - i * DAY_MS));
-    const pt: DayPoint = { date, posted: 0, planned: 0, made: 0 };
+    const pt: DayPoint = { date, posted: 0, byManus: 0, planned: 0, made: 0 };
     out.push(pt);
     index.set(date, pt);
   }
   for (const post of input.posts) {
     if (post.status === 'published' && post.publishedAt) {
       const pt = index.get(toDateStr(new Date(post.publishedAt)));
-      if (pt) pt.posted += 1;
+      if (pt) {
+        pt.posted += 1;
+        if (post.publishedBy === 'manus') pt.byManus += 1;
+      }
     } else if (post.status === 'scheduled') {
       const pt = index.get(toDateStr(new Date(post.scheduledAt)));
       if (pt) pt.planned += 1;

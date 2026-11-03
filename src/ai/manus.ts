@@ -32,6 +32,9 @@ export function manusImageLimit(): number {
   return manusViaServer() ? MANUS_SERVER_IMAGE_LIMIT : MANUS_IMAGE_LIMIT;
 }
 
+/** Server error codes after which a created task may exist even though the request failed. */
+const UNCERTAIN_CODES = new Set(['TIMEOUT', 'NETWORK', 'UPSTREAM', 'CUT_OFF']);
+
 /** One call to your server's Manus routes; errors come back as ManusErrors. */
 async function serverManus(action: 'create' | 'output' | 'continue', body: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
   let res: Response;
@@ -39,6 +42,8 @@ async function serverManus(action: 'create' | 'output' | 'continue', body: Recor
     res = await serverFetch(useStore.getState().settings.ai.serverUrl, `/api/ai/manus/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw new ManusError('Stopped.', 'cancelled');
+    // the request may have reached Manus before the connection dropped
+    if (action === 'create') throw new ManusError('The connection to your AI server dropped while starting the task.', 'MANUS_CREATE_UNKNOWN');
     throw new ManusError('Couldn’t reach your AI server.', 'MANUS_NETWORK');
   }
   const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
@@ -46,6 +51,8 @@ async function serverManus(action: 'create' | 'output' | 'continue', body: Recor
     const code = String(json?.code ?? '');
     const message = String(json?.error ?? `Manus request failed (${res.status}).`);
     if (code === 'NO_PROVIDER') throw new ManusError(message, 'MANUS_SETUP');
+    // timed out or cut off on the way to Manus (or a proxy error page): the task may exist anyway
+    if (action === 'create' && (UNCERTAIN_CODES.has(code) || (!json && res.status >= 500))) throw new ManusError(message, 'MANUS_CREATE_UNKNOWN');
     if (res.status >= 500 && action !== 'create') throw new ManusError(message, 'MANUS_NETWORK');
     throw new ManusError(message, action === 'create' ? 'MANUS_CREATE' : 'MANUS_ERROR');
   }
@@ -438,6 +445,8 @@ export function manusErrorMessage(code: string, message = ''): { title: string; 
         : { title: 'Manus isn’t set up in Zapier', body: 'The custom Manus actions are missing from your Zapier account. Ask Claude to set up Manus in Zapier again.' };
     case 'MANUS_CREATE':
       return { title: 'Manus couldn’t start the task', body: message || (manusViaServer() ? 'Check your Manus key and credits in Settings → AI.' : 'Check your Manus connection and credits in Zapier.') };
+    case 'MANUS_CREATE_UNKNOWN':
+      return { title: 'Not sure the task started', body: `${message ? `${message} ` : ''}The task may have started anyway: check your Manus tasks before sending it again, or it could be posted twice.` };
     case 'MANUS_NETWORK':
       return { title: 'Couldn’t reach your AI server', body: 'Check that the server is running (npm run server), then try again.' };
     case 'MANUS_ERROR':

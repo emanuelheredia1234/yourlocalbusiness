@@ -70,6 +70,9 @@ function complementary(base: string): [string, string, string] {
   return [hslToHex(h + 165, Math.min(0.75, s + 0.1), Math.min(0.48, Math.max(0.32, l))), hslToHex(h + 165, 0.45, 0.14), hslToHex(h + 30, 0.85, 0.6)];
 }
 
+/** "a" or "an" for the word that follows. */
+const article = (next: string) => (/^[aeiou]/i.test(next.trim()) ? 'an' : 'a');
+
 export function generateBrandKit(project: Project, d: Directives = {}, variation = 0): BrandKitResult {
   const f = buildFacts(project);
   const v = Voice.create(f, d, hashStr(`${project.id}|brand|${variation}|${project.niche}|${project.category}`));
@@ -110,7 +113,7 @@ export function generateBrandKit(project: Project, d: Directives = {}, variation
     add(`${r3} ${typeWord === 'Co.' ? 'House' : typeWord}`, 'Short, memorable and signage-ready.');
   } else {
     add(joined, `Short and ownable. The “-${suffix}” ending feels modern and app-friendly.`);
-    add(`${rng.pick(adjectives)} ${r2}`, `Two plain words that promise ${lowerFirst(f.desire)}.`);
+    add(`${rng.pick(adjectives)} ${r2}`, 'Two plain words, easy to say and remember.');
     add(`${r3}${rng.pick(['Path', 'Nest', 'Base', 'Field', 'Works', 'Kit', 'Labs'])}`, 'A compound name that feels like a tool you rely on.');
     add(`${r1.slice(0, Math.max(3, Math.min(5, r1.length - 1)))}${rng.pick(endings)}`, 'Invented and distinctive, easy to trademark and find in search.');
     add(`${r2}${rng.pick(['ly', 'wise', 'hub'])}`, 'Brandable and short, works as a handle on every platform.');
@@ -128,37 +131,38 @@ export function generateBrandKit(project: Project, d: Directives = {}, variation
   const shortWhat = what.replace(/ &.*/, '');
   const taglines = isLocal
     ? [
-        f.city ? `${f.city}’s most dependable ${shortWhat}.` : `Your neighborhood ${shortWhat}, done right.`,
-        `${capitalize(desire)}, close to home.`,
-        `Local people. Real care. Work we stand behind.`,
-        f.city ? `Proudly serving ${f.city}, one happy customer at a time.` : `Friendly ${shortWhat} you can count on.`,
+        f.city ? `Your local ${shortWhat} in ${f.city}.` : `Your neighborhood ${shortWhat}.`,
+        `${capitalize(shortWhat)} for ${f.audience}.`,
+        f.city ? `${capitalize(shortWhat)} in ${f.city}.` : `${capitalize(shortWhat)} in your neighborhood.`,
+        f.city ? `Serving ${f.city}.` : `A local ${shortWhat}.`,
       ]
     : [
-        `${capitalize(desire)}, made simple.`,
-        `Your ${f.topicLower}, finally sorted.`,
-        `${capitalize(outcome)}. Without the stress.`,
-        `The smarter way to ${outcome.split(' ').slice(0, 5).join(' ')}.`,
+        `${capitalize(article(what))} ${what} for ${f.audience}.`,
+        `${capitalize(f.topicLower)}, for ${f.audience}.`,
+        `Want to ${outcome}?`,
+        `${capitalize(article(what))} ${what} about ${f.topicLower}.`,
       ];
   const tagline = rng.pick(taglines).replace(/\.\./g, '.');
 
   const formatPhrase =
     f.track === 'business'
       ? `${f.business?.label ?? 'service'} team`
-      : `${f.formatNoun.toLowerCase()}${f.product && f.product !== brandName ? ` “${f.productShort}”` : ''}`;
+      : `${f.formatNoun.toLowerCase()}${f.product && f.product !== brandName && f.product !== 'Your Brand' ? ` “${f.productShort}”` : ''}`;
   const pitchBank: Record<string, string[]> = {
     default: [
-      `${brandName} helps ${f.audience} ${outcome} without ${pain}. Our ${formatPhrase} turns ${f.topicLower} into a clear, repeatable routine, so you get ${lowerFirst(desire)}.`,
-      `For ${f.audience} tired of ${pain}, ${brandName} is the ${formatPhrase} that makes it simple to ${outcome}. Practical, specific and built for real life.`,
+      `${brandName} is ${article(formatPhrase)} ${formatPhrase} about ${f.topicLower}, made for ${f.audience}.`,
+      `For ${f.audience} who want to ${outcome}, ${brandName} is ${article(formatPhrase)} ${formatPhrase} about ${f.topicLower}.`,
+      `${brandName} is ${article(formatPhrase)} ${formatPhrase} for ${f.audience} dealing with ${pain}.`,
     ],
     local: [
-      `${brandName} is a ${f.city ? `${f.city}-based ` : ''}${what} that helps ${f.audience} get ${lowerFirst(desire)}. We show up on time, quote upfront and treat every customer like a neighbor.`,
-      `${f.city ? `Serving ${f.city} and nearby neighborhoods, ` : ''}${brandName} takes ${pain} off your plate. Clear pricing, friendly people and work we stand behind.`,
+      `${brandName} is ${article(f.city || what)} ${f.city ? `${f.city}-based ` : ''}${what} for ${f.audience}.`,
+      `${f.city ? `Serving ${f.city}, ` : ''}${brandName} is ${article(what)} ${what} for ${f.audience} dealing with ${pain}.`,
     ],
   };
   const pitch = rng.pick(isLocal ? pitchBank.local : pitchBank.default);
   const valueProp = isLocal
-    ? `The ${what} for ${f.audience} who want ${lowerFirst(desire)}, with upfront pricing and a satisfaction promise.`
-    : `The only ${f.formatNoun.toLowerCase()} built specifically for ${f.audience} who want to ${outcome}.`;
+    ? `${capitalize(article(f.city || 'local'))} ${f.city ? `${f.city} ` : 'local '}${what} for ${f.audience}.`
+    : `${capitalize(article(f.formatNoun))} ${f.formatNoun.toLowerCase()} for ${f.audience} who want to ${outcome}.`;
   const audience = d.audience
     ? d.audience
     : `${capitalize(f.audience)} who are tired of ${pain} and want ${lowerFirst(desire)}. They value ${rng.pick(['clear steps over theory', 'saving time', 'trustworthy advice', 'results they can see quickly', 'a personal touch'])} and are ready to invest in a solution that fits their routine.`;

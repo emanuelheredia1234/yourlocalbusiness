@@ -8,6 +8,8 @@ import { useNow } from './hooks';
 export interface Kpis {
   series: DayPoint[];
   prev: DayPoint[];
+  /** start of the first day counted (local midnight): every count uses this same boundary */
+  since: number;
   /** went out in the period (Manus reported it, or you marked it) */
   posted: number;
   /** of those, posted by Manus */
@@ -31,14 +33,16 @@ export function useKpis(project: Project | null, days: number): Kpis {
     const all = dailySeries({ posts: mine, genLog: genLog.filter((g) => g.projectId === pid) }, days * 2, now);
     const prev = all.slice(0, days);
     const series = all.slice(days);
-    const since = now - days * 24 * 3600_000;
+    const [y, m, d] = series[0].date.split('-').map(Number);
+    const since = new Date(y, m - 1, d).getTime();
     const posted = sumSeries(series, 'posted');
     const made = sumSeries(series, 'made');
     return {
       series,
       prev,
+      since,
       posted,
-      byManus: mine.filter((p) => p.status === 'published' && p.publishedBy === 'manus' && p.publishedAt && new Date(p.publishedAt).getTime() >= since).length,
+      byManus: sumSeries(series, 'byManus'),
       upcoming: mine.filter((p) => p.status === 'scheduled' && new Date(p.scheduledAt).getTime() > now).length,
       due: mine.filter((p) => p.status === 'scheduled' && new Date(p.scheduledAt).getTime() <= now && (!p.external || p.external.state === 'failed')).length,
       made,

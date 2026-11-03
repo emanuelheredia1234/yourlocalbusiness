@@ -23,6 +23,14 @@ describe('marking posts posted', () => {
     expect(useStore.getState().posts[0]).toMatchObject({ status: 'scheduled', publishedBy: undefined, publishedAt: undefined, postUrl: undefined });
   });
 
+  it('puts an unmarked post back where it was, and forgets a failed Manus try once you posted it', () => {
+    useStore.setState({ posts: [post('d', { status: 'draft', external: { ...ext('failed') } })] });
+    useStore.getState().markPosted('d');
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'published', statusBeforePosted: 'draft', external: undefined });
+    useStore.getState().unmarkPosted('d');
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'draft', statusBeforePosted: undefined });
+  });
+
   it('never unmarks a post Manus reported posted', () => {
     useStore.setState({ posts: [post('m', { status: 'published', publishedBy: 'manus', publishedAt: 'x', external: ext('posted') })] });
     useStore.getState().unmarkPosted('m');
@@ -100,6 +108,21 @@ describe('cleaning up what older versions made up', () => {
     expect(s.notices.map((n) => n.title)).toEqual(['Your brand is ready']);
     expect('marketActivity' in s.settings || 'showSampleListings' in s.settings).toBe(false);
     expect('simulateLatency' in s.settings.ai).toBe(false);
+    expect(cleanWorkspace()).toBe(false);
+  });
+
+  it('cleans claims an older version made up once per project, and never a project made now', () => {
+    const p1 = useStore.getState().projects[0];
+    const old = { ...p1, id: 'old', legacyCleaned: undefined, idea: { title: 'Planner', score: 91, revenueLow: 900, revenueHigh: 4000, signals: ['Steady search interest'] } } as never;
+    const fresh = { ...p1, id: 'new', idea: { title: 'Kept as is', score: 77 } } as never;
+    useStore.setState({ projects: [old, fresh] });
+    cleanWorkspace();
+    const [a, b] = useStore.getState().projects as unknown as Record<string, unknown>[];
+    expect(a.legacyCleaned).toBe(1);
+    expect(a.idea).not.toHaveProperty('score');
+    expect(a.idea).not.toHaveProperty('signals');
+    // a project made by this version is the owner's own work: untouched
+    expect(b.idea).toHaveProperty('score', 77);
     expect(cleanWorkspace()).toBe(false);
   });
 });

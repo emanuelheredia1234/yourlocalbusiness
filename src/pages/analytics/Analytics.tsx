@@ -1,10 +1,9 @@
 import { useMemo, useState } from 'react';
 import { CalendarClock, CircleAlert, Info, Send, Sparkles } from 'lucide-react';
 import type { PostPlatform, PostType } from '@/lib/types';
-import { DAY_MS, fmtDate, fmtDateTime } from '@/lib/utils';
+import { fmtDate, fmtDateTime } from '@/lib/utils';
 import { PLATFORMS, POST_TYPE_MAP } from '@/ai/knowledge';
 import { useKpis } from '@/lib/kpis';
-import { useNow } from '@/lib/hooks';
 import { navigate } from '@/lib/router';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
@@ -36,10 +35,9 @@ export default function Analytics() {
   const [metric, setMetric] = useState<Metric>('posted');
   const days = Number(range);
   const k = useKpis(project, days);
-  const now = useNow(60_000);
   const allPosts = useStore((s) => s.posts);
   const openEditor = useUI((s) => s.openPostEditor);
-  const since = now - days * DAY_MS;
+  const since = k.since;
 
   const posted = useMemo(
     () => allPosts.filter((p) => p.projectId === project.id && p.status === 'published' && p.publishedAt && new Date(p.publishedAt).getTime() >= since).sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? '')),

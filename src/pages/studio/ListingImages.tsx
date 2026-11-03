@@ -32,7 +32,7 @@ export function listingText(project: Project): ListingText {
     items: l.includes?.length ? l.includes : l.services?.map((s) => s.name) ?? [],
     price: l.price || l.priceModel === 'free' ? priceLabel(l.price, l.priceModel) : undefined,
     compareAt: l.compareAt ? fmtMoney(l.compareAt) : undefined,
-    cta: isBiz ? (l.bookingType === 'book' ? 'Book your visit' : l.bookingType === 'inquire' ? 'Request a quote' : 'Order now') : 'Get instant access',
+    cta: isBiz ? (l.bookingType === 'book' ? 'Book your visit' : l.bookingType === 'inquire' ? 'Request a quote' : 'Order now') : 'Get it now',
   };
 }
 

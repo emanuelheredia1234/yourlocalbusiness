@@ -28,16 +28,51 @@ interface Angle {
   id: string;
   label: string;
   priceFactor: number;
-  scoreBonus: number;
 }
 
 const ANGLES: Angle[] = [
-  { id: 'system', label: 'Done-for-you system', priceFactor: 1.05, scoreBonus: 6 },
-  { id: 'sprint', label: 'Fast-start sprint', priceFactor: 0.9, scoreBonus: 4 },
-  { id: 'foundation', label: 'Beginner foundation', priceFactor: 0.85, scoreBonus: 2 },
-  { id: 'pro', label: 'Advanced playbook', priceFactor: 1.35, scoreBonus: 3 },
-  { id: 'micro', label: 'Underserved micro-niche', priceFactor: 1.1, scoreBonus: 5 },
+  { id: 'system', label: 'Done-for-you system', priceFactor: 1.05 },
+  { id: 'sprint', label: 'Fast-start sprint', priceFactor: 0.9 },
+  { id: 'foundation', label: 'Beginner foundation', priceFactor: 0.85 },
+  { id: 'pro', label: 'Advanced playbook', priceFactor: 1.35 },
+  { id: 'micro', label: 'Focused micro-niche', priceFactor: 1.1 },
 ];
+
+export interface FitInput {
+  niche: string;
+  category: string;
+  format: ProductFormat;
+  audience: string;
+  pain: string;
+  /** the angle's label, e.g. "Beginner foundation" (AI angles fall back to a general reason) */
+  angle: string;
+}
+
+/**
+ * "Why this could fit you": reasons drawn only from what the owner told us (niche, category,
+ * format) and the idea itself. No market data, so no claims about demand or competition.
+ */
+export function fitReasons(x: FitInput): string[] {
+  const niche = x.niche.trim();
+  const category = x.category.trim();
+  const topic = category || niche;
+  const audience = x.audience.trim() || 'your buyers';
+  const short = FORMATS[x.format]?.short.toLowerCase() ?? 'product';
+  const angleId = ANGLES.find((a) => a.label.toLowerCase() === x.angle.trim().toLowerCase())?.id ?? (/micro-niche$/i.test(x.angle.trim()) ? 'micro' : '');
+  const byAngle: Record<string, string> = {
+    system: 'Done-for-you: buyers get something ready to use, not just advice.',
+    sprint: 'Short and time-boxed, with a clear finish line.',
+    foundation: `Starts from the basics, for ${audience} who are new to this.`,
+    pro: `Goes deeper, for ${audience} who already know the basics.`,
+    micro: `Speaks to one group (${audience}) instead of everyone in ${niche || 'your niche'}.`,
+  };
+  const reasons = [
+    byAngle[angleId],
+    x.pain.trim() ? `Made for ${audience}, around one problem: ${lowerFirst(x.pain.trim())}.` : `Made for ${audience}.`,
+    topic ? `A ${short} on “${topic}”: the topic and format you chose.` : `A ${short}: the format you chose.`,
+  ];
+  return reasons.filter((r): r is string => !!r);
+}
 
 export function generateProductIdeas(input: ResearchInput, d: Directives = {}): ProductIdea[] {
   const { niche, category, format } = input;
@@ -52,8 +87,6 @@ export function generateProductIdeas(input: ResearchInput, d: Directives = {}): 
   const outcomes = specific ? [anchoredOutcomes(topicLower)[0], prof.outcomes[0], anchoredOutcomes(topicLower)[1], prof.outcomes[1], anchoredOutcomes(topicLower)[2]] : prof.outcomes;
   const baseAudience = d.audience || extractAudience(`${category} ${niche}`) || prof.audiences[0];
   const angles = rng.shuffle(ANGLES).slice(0, count);
-  // keep the strongest angle first so the list reads as ranked
-  angles.sort((a, b) => b.scoreBonus - a.scoreBonus);
   const usedNouns = new Set<string>();
   const nounFor = () => {
     const pool = fmt.nouns.filter((n) => !usedNouns.has(n));
@@ -81,7 +114,7 @@ export function generateProductIdeas(input: ResearchInput, d: Directives = {}): 
 
     const hookBank = [
       `Stop ${lowerFirst(pain)}. ${capitalize(verbOutcome(outcome))} with a ${noun.toLowerCase()} built for ${audience}.`,
-      `The shortcut ${audience} use to ${verbOutcome(outcome)}, without ${lowerFirst(pain)}.`,
+      `A shortcut for ${audience} to ${verbOutcome(outcome)}, without ${lowerFirst(pain)}.`,
       `Everything you need to ${verbOutcome(outcome)}, in one ${noun.toLowerCase()}.`,
       `${capitalize(verbOutcome(outcome))}. No guesswork, no ${lowerFirst(pain)}.`,
     ];
@@ -91,7 +124,7 @@ export function generateProductIdeas(input: ResearchInput, d: Directives = {}): 
       pdf: `A step-by-step ${noun.toLowerCase()} with checklists, worked examples and a one-page action plan.`,
       course: `Bite-sized video lessons, worksheets and weekly milestones that walk ${audience} from zero to ${lowerFirst(outcome)}.`,
       template: `Ready-to-use templates with instructions, examples and a quick-start video. Duplicate and go.`,
-      spreadsheet: `A plug-and-play spreadsheet with auto-calculating dashboards, built-in formulas and a 5-minute setup guide.`,
+      spreadsheet: `A plug-and-play spreadsheet with auto-calculating dashboards, built-in formulas and a short setup guide.`,
       software: `A focused web app that automates the busywork and shows exactly what to do next.`,
       design: `A pack of on-brand, editable assets in Canva, Figma and PNG formats.`,
       audio: `Short, guided audio sessions to use on the go, with transcripts and a progress tracker.`,
@@ -99,46 +132,23 @@ export function generateProductIdeas(input: ResearchInput, d: Directives = {}): 
       ebook: `A practical book with real examples, exercises at the end of every chapter and a printable summary.`,
     };
 
+    // Suggested contents only: counts (chapters, lessons, templates…) are the owner's to decide in the outline.
     const featureBank: Record<ProductFormat, string[]> = {
-      pdf: [`${rng.int(7, 12)} focused chapters with action steps`, `Printable ${prof.terms[0]} checklist`, `Real-world examples for ${audience}`, 'One-page quick-start plan'],
-      course: [`${rng.int(5, 8)} modules, ${rng.int(20, 36)} short lessons`, 'Worksheets and templates for every module', `Live Q&A replay library`, 'Certificate and lifetime updates'],
-      template: [`${rng.int(8, 15)} ready-to-duplicate templates`, `Pre-built ${prof.terms[0]} dashboard`, 'Video walkthrough for setup', 'Free updates'],
+      pdf: ['Focused chapters with action steps', `Printable ${prof.terms[0]} checklist`, `Real-world examples for ${audience}`, 'One-page quick-start plan'],
+      course: ['Modules of short video lessons', 'Worksheets and templates for every module', 'Live Q&A replay library', 'Completion certificate'],
+      template: ['Ready-to-duplicate templates', `Pre-built ${prof.terms[0]} dashboard`, 'Video walkthrough for setup', 'A filled-in example of each template'],
       spreadsheet: [`Auto-calculating ${prof.terms[0]} dashboard`, `Pre-filled ${prof.terms[1] ?? 'category'} tabs`, 'Works in Google Sheets and Excel', 'Monthly progress charts'],
       software: [`One-click ${prof.terms[0]} setup`, 'Smart reminders and weekly reports', 'Mobile-friendly dashboard', 'Export to CSV and PDF'],
-      design: [`${rng.int(60, 180)} editable assets`, 'Canva + Figma source files', 'Commercial license included', 'Color and font guide'],
-      audio: [`${rng.int(8, 15)} guided tracks`, 'Under 15 minutes each', 'Transcripts and worksheets', 'Offline listening'],
+      design: ['A pack of editable assets', 'Canva + Figma source files', 'A clear usage license', 'Color and font guide'],
+      audio: ['Short guided tracks', 'Each track under 15 minutes', 'Transcripts and worksheets', 'Offline listening'],
       membership: ['New playbook every month', 'Live monthly Q&A', 'Private member community', 'Template vault access'],
-      ebook: [`${rng.int(8, 14)} chapters with exercises`, 'Kindle, ePub and PDF formats', 'Printable summary sheet', 'Bonus resource list'],
+      ebook: ['Chapters that end with exercises', 'Kindle, ePub and PDF formats', 'Printable summary sheet', 'Bonus resource list'],
     };
 
+    // A suggestion, not a forecast: the middle of the format's usual range, adjusted for the niche and angle.
     const [lo, hi] = fmt.price;
-    const raw = rng.float(lo, hi) * prof.priceMult * angle.priceFactor;
-    const price = charmPrice(raw);
+    const price = charmPrice(((lo + hi) / 2) * prof.priceMult * angle.priceFactor);
     const priceModel: PriceModel = fmt.model;
-    const priceScore = clamp((price - lo) / Math.max(1, hi - lo), 0, 1);
-    const specificity = clamp((category.trim().split(/\s+/).length - 1) * 4, 0, 10);
-    const score = Math.round(
-      clamp(
-        prof.demand * 34 + (1 - prof.competition) * 16 + priceScore * 12 + fmt.scalability * 14 + specificity + angle.scoreBonus + rng.float(-4, 6),
-        41,
-        97,
-      ),
-    );
-    const monthly = Math.max(3, Math.round(Math.pow(score / 100, 2.2) * fmt.volume * (angle.id === 'pro' ? 0.7 : 1)));
-    const revenueLow = Math.round((price * monthly * 0.55) / 10) * 10;
-    const revenueHigh = Math.round((price * monthly * 1.45) / 10) * 10;
-
-    const signals = rng.pickN(
-      [
-        `Steady search interest for “${topicLower} ${fmt.short.toLowerCase()}” style queries`,
-        `${capitalize(audience)} regularly ask about ${lowerFirst(pain)} in online communities`,
-        `Few ${fmt.label.toLowerCase()} target ${audience} specifically`,
-        `The problem costs ${audience} real time or money, so willingness to pay is high`,
-        `${fmt.label} sell well at ${price < 30 ? 'impulse-buy' : price < 120 ? 'mid-ticket' : 'premium'} prices in this niche`,
-        `Easy to bundle with a free ${prof.terms[0]} checklist as a lead magnet`,
-      ],
-      3,
-    );
 
     return {
       id: uid('idea'),
@@ -150,12 +160,9 @@ export function generateProductIdeas(input: ResearchInput, d: Directives = {}): 
       format,
       price,
       priceModel,
-      score,
-      revenueLow,
-      revenueHigh,
       angle: angle.label,
       features: rng.pickN(featureBank[format], 3),
-      signals,
+      fit: fitReasons({ niche, category, format, audience, pain, angle: angle.label }),
     };
   });
 }

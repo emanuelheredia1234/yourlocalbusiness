@@ -11,7 +11,6 @@ import type {
 import { capitalize, hashStr, lowerFirst, titleCase, uid } from '@/lib/utils';
 import { FORMATS, PRODUCT_CATEGORIES } from '../knowledge';
 import { buildFacts, singular, verbOutcome, Voice, type Facts } from '../text';
-import { charmPrice } from './research';
 
 const item = (title: string, meta?: string, detail?: string): OutlineItem => ({ id: uid('it'), title, meta, detail });
 const section = (title: string, summary: string, items: OutlineItem[]): OutlineSection => ({ id: uid('sec'), title, summary, items });
@@ -31,8 +30,10 @@ export function generateOutline(project: Project, d: Directives = {}, variation 
   const term = (i: number) => f.terms[i % f.terms.length];
   const Term = (i: number) => titleCase(term(i));
   const outcome = (i: number) => verbOutcome(f.outcomes[i % f.outcomes.length]);
-  const min = () => `${rng.int(5, 14)} min`;
-  const pages = () => `${rng.int(3, 9)} pages`;
+  // Lengths, page counts and how-many are the owner's to set: the outline names the kind of item and leaves the
+  // number as a placeholder (it is quoted to buyers as contents, so a made-up "12 min" or "40 templates" would be a claim).
+  const vid = 'Video · [length]';
+  const pages = () => '[pages]';
   const longer = d.length === 'long';
   const shorter = d.length === 'short';
 
@@ -40,61 +41,61 @@ export function generateOutline(project: Project, d: Directives = {}, variation 
     case 'course': {
       const modules: OutlineSection[] = [
         section(`Foundations: Why ${T} Feels Hard`, `Reset expectations and measure where ${f.audience} are starting from.`, [
-          item('Welcome & how to get the most from this course', `Video · ${min()}`),
-          item(`The real reason behind ${f.pain}`, `Video · ${min()}`),
+          item('Welcome & how to get the most from this course', vid),
+          item(`The real reason behind ${f.pain}`, vid),
           item(`Your ${t} baseline audit`, 'Worksheet'),
-          item('Set your 30-day target', `Video · ${min()}`),
+          item('Set your 30-day target', vid),
         ]),
         section(`Set Up Your ${Term(0)} System`, `Build the simple setup everything else runs on.`, [
-          item(`Build your ${term(0)}`, `Video · ${min()}`),
-          item(`Configure ${term(1)} in under 20 minutes`, `Video · ${min()}`),
-          item('Templates & tools walkthrough', `Screen recording · ${min()}`),
+          item(`Build your ${term(0)}`, vid),
+          item(`Configure ${term(1)}`, vid),
+          item('Templates & tools walkthrough', 'Screen recording · [length]'),
           item(`Quick win: ${f.quickWins[0]}`, 'Action step'),
         ]),
-        section('The Core Method, Step by Step', `The repeatable process to ${outcome(0)}.`, [
-          item(`Step 1: ${capitalize(f.quickWins[1] ?? 'get organized')}`, `Video · ${min()}`),
-          item(`Step 2: Build momentum with ${term(2)}`, `Video · ${min()}`),
-          item(`Step 3: Review, adjust, repeat`, `Video · ${min()}`),
-          item(`Avoid this: ${f.mistakes[0]}`, `Video · ${min()}`),
-          item('Module quiz', '5 questions'),
+        section('The Core Method, Step by Step', `A step-by-step method for ${f.audience} who want to ${outcome(0)}.`, [
+          item(`Step 1: ${capitalize(f.quickWins[1] ?? 'get organized')}`, vid),
+          item(`Step 2: Build momentum with ${term(2)}`, vid),
+          item(`Step 3: Review, adjust, repeat`, vid),
+          item(`Avoid this: ${f.mistakes[0]}`, vid),
+          item('Module quiz', '[how many] questions'),
         ]),
-        section('Make It Stick: Routines That Run Themselves', 'Turn the method into a weekly habit.', [
-          item(`The 15-minute weekly ${t} routine`, `Video · ${min()}`),
-          item('Automations that save hours', `Video · ${min()}`),
+        section('Make It a Routine', 'Turn the method into a weekly habit.', [
+          item(`A weekly ${t} routine`, vid),
+          item('Automations worth setting up', vid),
           item(`Track progress with ${term(3)}`, 'Worksheet'),
         ]),
         section(`Level Up: ${capitalize(outcome(1))}`, `Advanced moves once the basics are automatic.`, [
-          item(`${capitalize(outcome(1))}`, `Video · ${min()}`),
-          item(`Scaling up: ${outcome(2)}`, `Video · ${min()}`),
-          item(`Case study: a ${singular(f.audience)} start to finish`, `Video · ${min()}`),
+          item(`${capitalize(outcome(1))}`, vid),
+          item(`Scaling up: ${outcome(2)}`, vid),
+          item(`Case study: a ${singular(f.audience)} start to finish`, vid),
         ]),
         section('Troubleshooting & Common Objections', 'What to do when life gets in the way.', [
-          item(`When “${lowerFirst(f.objections[0])}”`, `Video · ${min()}`),
-          item(`When “${lowerFirst(f.objections[1])}”`, `Video · ${min()}`),
-          item(`Myth vs. fact: ${lowerFirst(f.myths[0])}`, `Video · ${min()}`),
+          item(`When “${lowerFirst(f.objections[0])}”`, vid),
+          item(`When “${lowerFirst(f.objections[1])}”`, vid),
+          item(`Myth vs. fact: ${lowerFirst(f.myths[0])}`, vid),
         ]),
       ];
-      if (!shorter) modules.push(section('Bonus: Your Next 90 Days', 'Keep the results compounding.', [item('Your 90-day plan template', 'Template'), item('Community, coaching & next steps', `Video · ${min()}`)]));
+      if (!shorter) modules.push(section('Bonus: Your Next 90 Days', 'Plan what comes after the course.', [item('Your 90-day plan template', 'Template'), item('Next steps [and any community or coaching you offer]', vid)]));
       return { label: fmt.outlineLabel, sections: longer ? modules : modules.slice(0, shorter ? 5 : 7) };
     }
     case 'pdf':
     case 'ebook': {
       const chapters: OutlineSection[] = [
-        section(`Introduction: ${capitalize(f.desire)} Is Possible`, 'Who this is for and how to use it.', [item('Who this guide is for', pages()), item('How to read this in a weekend', pages()), item('Your promise to yourself', '1 page')]),
-        section(`Why ${capitalize(f.pain)} Happens`, 'The root causes nobody talks about.', [item('The three hidden causes', pages()), item(`Myth: ${f.myths[0]}`, pages()), item('Self-assessment quiz', '2 pages')]),
+        section(`Introduction: ${capitalize(f.desire)}`, 'Who this is for and how to use it.', [item('Who this guide is for', pages()), item('How to use this guide', pages()), item('Your starting point', pages())]),
+        section(`Why ${capitalize(f.pain)} Happens`, 'The root causes nobody talks about.', [item('Common causes', pages()), item(`Myth: ${f.myths[0]}`, pages()), item('Self-assessment quiz', pages())]),
         section(`${T} Fundamentals`, 'The few concepts that matter most.', f.terms.slice(0, 4).map((x) => item(capitalize(x), pages()))),
-        section(`Step by Step: Build Your ${Term(0)} System`, `The exact process to ${outcome(0)}.`, [
+        section(`Step by Step: Build Your ${Term(0)} System`, `A step-by-step process for ${f.audience} who want to ${outcome(0)}.`, [
           item(`Step 1: ${capitalize(f.quickWins[0])}`, pages()),
           item(`Step 2: Set up ${term(1)}`, pages()),
           item(`Step 3: Make ${term(2)} automatic`, pages()),
           item('Step 4: Review weekly', pages()),
         ]),
-        section(`${f.mistakes.length} Mistakes to Avoid`, 'Learn from what trips most people up.', f.mistakes.map((m) => item(capitalize(m), '1–2 pages'))),
+        section(`${f.mistakes.length} Mistakes to Avoid`, 'Learn from what trips most people up.', f.mistakes.map((m) => item(capitalize(m), pages()))),
         section(`Real-World Examples for ${titleCase(f.audience)}`, 'See the method applied.', [item(`Example 1: ${capitalize(outcome(1))}`, pages()), item(`Example 2: ${capitalize(outcome(2))}`, pages()), item('Before & after templates', pages())]),
-        section('Your 30-Day Action Plan', 'Day-by-day checklist.', [item('Week 1: Setup', '2 pages'), item('Week 2: Momentum', '2 pages'), item('Week 3: Routines', '2 pages'), item('Week 4: Review & level up', '2 pages')]),
-        section('Troubleshooting & FAQ', 'Answers to the questions readers ask most.', f.objections.slice(0, 3).map((o) => item(`“${o}”`, '1 page'))),
+        section('Your 30-Day Action Plan', 'Day-by-day checklist.', [item('Week 1: Setup', pages()), item('Week 2: Momentum', pages()), item('Week 3: Routines', pages()), item('Week 4: Review & level up', pages())]),
+        section('Troubleshooting & FAQ', 'Answers to the questions readers ask most.', f.objections.slice(0, 3).map((o) => item(`“${o}”`, pages()))),
       ];
-      if (project.format === 'ebook' || longer) chapters.push(section('Resources & Templates', 'Everything referenced in this book.', [item('Printable checklists', pages()), item('Recommended tools', '2 pages'), item('Glossary', '2 pages')]));
+      if (project.format === 'ebook' || longer) chapters.push(section('Resources & Templates', 'Everything referenced in this book.', [item('Printable checklists', pages()), item('Recommended tools', pages()), item('Glossary', pages())]));
       return { label: fmt.outlineLabel, sections: shorter ? chapters.slice(0, 6) : chapters };
     }
     case 'template': {
@@ -104,11 +105,11 @@ export function generateOutline(project: Project, d: Directives = {}, variation 
         sections: [
           section('Core Templates', `The everyday templates ${f.audience} use most.`, [
             item(`${T} Dashboard`, platform, `One home base that shows ${term(0)}, ${term(1)} and this week’s priorities.`),
-            item(`${Term(0)} Tracker`, platform, `Log entries in seconds; totals and status update automatically.`),
+            item(`${Term(0)} Tracker`, platform, `A place to log ${term(0)} entries.`),
             item(`${Term(1)} Template`, platform),
-            item('Quick-Start Checklist', platform, 'Get set up in 10 minutes.'),
+            item('Quick-Start Checklist', platform, 'Step-by-step setup for each template.'),
           ]),
-          section('Planning & Review', 'Weekly and monthly rhythms that keep results compounding.', [
+          section('Planning & Review', 'Weekly and monthly planning and review.', [
             item('Weekly Planner', platform),
             item('Monthly Review', platform, 'Prompts to review what worked and plan next month.'),
             item('Goal Setting Worksheet', platform),
@@ -116,7 +117,7 @@ export function generateOutline(project: Project, d: Directives = {}, variation 
           section('Bonus Templates', 'Extras that remove the next obstacle.', [
             item(`${Term(2)} Swipe File`, platform),
             item(`${capitalize(f.quickWins[0])}: Checklist`, platform),
-            item('Video walkthrough', 'Loom · 12 min'),
+            item('[Video walkthrough, if you record one]', 'Video · [length]'),
           ]),
         ],
       };
@@ -146,9 +147,9 @@ export function generateOutline(project: Project, d: Directives = {}, variation 
         label: fmt.outlineLabel,
         sections: [
           section('MVP Features', `Only what ${f.audience} need to ${outcome(0)}.`, [
-            item(`Guided ${term(0)} setup`, 'Must-have', `As a ${singular(f.audience)}, I can set up my ${term(0)} in under 5 minutes so I start seeing value on day one.`),
-            item(`${Term(1)} tracking`, 'Must-have', `As a ${singular(f.audience)}, I can log ${term(1)} in seconds from my phone.`),
-            item('Smart reminders', 'Must-have', `Nudges at the right time so ${f.pain} never sneaks up again.`),
+            item(`Guided ${term(0)} setup`, 'Must-have', `As a ${singular(f.audience)}, I can set up my ${term(0)} with a guided, step-by-step flow.`),
+            item(`${Term(1)} tracking`, 'Must-have', `As a ${singular(f.audience)}, I can log ${term(1)} from my phone.`),
+            item('Reminders', 'Must-have', `Reminders about ${term(0)} at times the user chooses.`),
             item('Weekly progress report', 'Should-have', 'Email + in-app summary of wins and next actions.'),
             item('Export to CSV / PDF', 'Should-have'),
             item('Team / partner sharing', 'Could-have'),
@@ -156,13 +157,13 @@ export function generateOutline(project: Project, d: Directives = {}, variation 
           section('Tech Stack & Architecture', 'Lean, cheap to run, easy to iterate.', [
             item('Frontend: React + TypeScript', 'Web app, mobile-first'),
             item('Backend: serverless API + Postgres', 'Auth, data, scheduled jobs'),
-            item('Payments: subscription billing', `${f.priceStr}/mo plan + annual discount`),
+            item('Payments: subscription billing', `${f.priceStr}/mo plan [annual option, if you offer one]`),
             item('Analytics: product events + activation funnel', 'Track time-to-first-value'),
           ]),
           section('Launch Roadmap', 'Ship in phases and learn from real users.', [
-            item('Phase 1 (weeks 1–4): private beta with 20 users', 'Validate core loop'),
-            item('Phase 2 (weeks 5–8): public launch + onboarding emails', 'Activation focus'),
-            item('Phase 3 (weeks 9–12): integrations + referral program', 'Growth focus'),
+            item('Phase 1: private beta with [how many] users', 'Validate core loop'),
+            item('Phase 2: public launch + onboarding emails', 'Activation focus'),
+            item('Phase 3: [integrations or a referral program, if you plan them]', 'Growth focus'),
           ]),
         ],
       };
@@ -171,36 +172,37 @@ export function generateOutline(project: Project, d: Directives = {}, variation 
       return {
         label: fmt.outlineLabel,
         sections: [
-          section('Social Media Pack', 'Ready-to-post templates.', [item(`${rng.int(30, 60)} feed post templates`, 'Canva + Figma'), item(`${rng.int(20, 40)} story templates`, 'Canva + Figma'), item('Carousel templates', '10 layouts')]),
-          section('Brand Essentials', 'Make everything look consistent.', [item('Logo variations & usage guide', 'SVG / PNG'), item('Color palettes', '6 palettes'), item('Font pairings', '5 pairings')]),
-          section('Graphics & Icons', 'Drop-in visual elements.', [item(`${rng.int(60, 150)} icons in 3 styles`, 'SVG'), item('Illustrated spot graphics', 'PNG / SVG'), item('Textures & backgrounds', 'JPG')]),
-          section('Mockups', 'Show your work professionally.', [item('Device mockups', 'PSD / Figma'), item('Print mockups', 'PSD'), item('Bonus: video tutorial', '15 min')]),
+          section('Social Media Pack', 'Ready-to-post templates.', [item('[How many] feed post templates', 'Canva + Figma'), item('[How many] story templates', 'Canva + Figma'), item('Carousel templates', '[how many] layouts')]),
+          section('Brand Essentials', 'Make everything look consistent.', [item('Logo variations & usage guide', 'SVG / PNG'), item('Color palettes', '[how many] palettes'), item('Font pairings', '[how many] pairings')]),
+          section('Graphics & Icons', 'Drop-in visual elements.', [item('Icon set', '[how many] icons · SVG'), item('Illustrated spot graphics', 'PNG / SVG'), item('Textures & backgrounds', 'JPG')]),
+          section('Mockups', 'Show your work professionally.', [item('Device mockups', 'PSD / Figma'), item('Print mockups', 'PSD'), item('[Video tutorial, if you include one]', 'Video · [length]')]),
         ],
       };
     }
     case 'audio': {
+      const aud = 'Audio · [length]';
       return {
         label: fmt.outlineLabel,
         sections: [
-          section('Series 1: Foundations', 'Start here.', [item(`Welcome: how to use these sessions`, '4 min'), item(`Understanding ${t}`, '9 min'), item(`Releasing ${f.pain}`, '12 min')]),
-          section('Series 2: Daily Sessions', 'Short sessions for every day of the week.', ['Morning reset', 'Midday focus', 'Evening wind-down', 'Weekend reflection'].map((x) => item(x, `${rng.int(6, 12)} min`))),
-          section('Series 3: Deep Dives', 'Longer sessions for real breakthroughs.', [item(capitalize(outcome(0)), '18 min'), item(capitalize(outcome(1)), '20 min'), item('Bonus: guided Q&A', '25 min')]),
+          section('Series 1: Foundations', 'Start here.', [item(`Welcome: how to use these sessions`, aud), item(`Understanding ${t}`, aud), item(`On ${f.pain}`, aud)]),
+          section('Series 2: Daily Sessions', 'Short sessions for every day of the week.', ['Morning reset', 'Midday focus', 'Evening wind-down', 'Weekend reflection'].map((x) => item(x, aud))),
+          section('Series 3: Deep Dives', 'Longer sessions on one theme each.', [item(capitalize(outcome(0)), aud), item(capitalize(outcome(1)), aud), item('[Bonus: guided Q&A, if you include one]', aud)]),
         ],
       };
     }
     case 'membership': {
-      const p = f.price || 19;
+      // One tier at the owner's price. Extra tiers, perks and anything live are the owner's to add.
+      const owner = project.studio?.price || project.idea?.price;
+      const price = owner ? `$${owner}/mo` : '[your price]/mo';
       return {
         label: fmt.outlineLabel,
         sections: [
-          section(`Community · $${p}/mo`, 'The core membership.', [item('Private community space'), item('Monthly playbook (new every month)'), item('Template vault access')]),
-          section(`Pro · $${charmPrice(p * 2.2)}/mo`, 'For members who want accountability.', [item('Everything in Community'), item('Monthly live Q&A + replays'), item('Quarterly goal-setting workshop')]),
-          section(`VIP · $${charmPrice(p * 5)}/mo`, 'Hands-on support.', [item('Everything in Pro'), item('1:1 monthly review call'), item('Priority support')]),
+          section(`Membership · ${price}`, 'What members get.', [item('[What members get every month]'), item('[Community space, if you run one]'), item('[Templates or resources included]')]),
           section('Monthly Content Calendar', 'What members get each week.', [
-            item('Week 1: New playbook drop', `Topic: ${capitalize(outcome(0))}`),
-            item('Week 2: Live Q&A', 'Members bring their questions'),
+            item('Week 1: [New content drop]', `Topic: ${capitalize(outcome(0))}`),
+            item('Week 2: [Your choice: live session, Q&A or tutorial]'),
             item('Week 3: Template or tool release', `${Term(0)} toolkit`),
-            item('Week 4: Wins & review thread', 'Accountability check-in'),
+            item('Week 4: Wins & review thread', 'Members share progress'),
           ]),
         ],
       };
@@ -241,7 +243,7 @@ export function expandItem(project: Project, it: OutlineItem, d: Directives = {}
   const v = Voice.create(f, d, hashStr(`${it.id}|expand|${variation}`));
   const parts = [
     `Talking points: ${v.pick(f.terms)}, ${v.pick(f.quickWins)}, and how to avoid ${v.pick(f.mistakes)}.`,
-    `Example: a ${singular(f.audience)} who ${v.pick(['started from zero', 'was stuck for months', 'tried everything else first'])} and used this to ${verbOutcome(v.pick(f.outcomes))}.`,
+    `Example (hypothetical): walk through how a ${singular(f.audience)} ${v.pick(['starting from zero', 'who feels stuck', 'trying this for the first time'])} could use this to ${verbOutcome(v.pick(f.outcomes))}.`,
     `Deliverable: ${v.pick(['a one-page worksheet', 'a short checklist', 'a fill-in template', 'a 3-question reflection'])}.`,
   ];
   return parts.slice(0, v.count(2, 3, 3)).join(' ');
@@ -265,15 +267,18 @@ export function generateBusinessModel(project: Project, d: Directives = {}, vari
   const sorted = services.slice().sort((a, b) => a.price[0] - b.price[0]);
   const mid = (r: [number, number]) => Math.round((r[0] + r[1]) / 2);
   const tierServices = [sorted[0], sorted[Math.min(1, sorted.length - 1)], sorted[Math.min(2, sorted.length - 1)]];
+  // "Most popular" is the owner's call: keep the flag only on a tier the owner already marked.
+  const ownerPopular = new Set((project.studio?.packages ?? []).filter((p) => p.popular).map((p) => p.name.trim().toLowerCase()));
   const packages: ServicePackage[] = bt.tiers.map((name, i) => {
     const svc = tierServices[i] ?? sorted[0];
     const base = mid(svc.price);
     const price = i === 0 ? base : i === 1 ? Math.max(base, Math.round(mid(tierServices[0].price) * 1.8)) : Math.max(base, Math.round(mid(tierServices[0].price) * 3.1));
+    // No guarantee or perks here: only the owner can promise those (Structure tab value stack, listing description).
+    // Includes describe the service itself; anything extra is a bracketed slot for the owner.
     const includes = [
       svc.name + (svc.duration ? ` (${svc.duration})` : ''),
       ...rng.pickN(bt.delivery, i === 0 ? 2 : 3),
-      ...(i >= 1 ? [rng.pick(bt.bonuses)] : []),
-      ...(i === 2 ? ['Priority scheduling', bt.guarantee.split(':')[0]] : []),
+      ...(i >= 1 ? ['[Anything extra this package includes]'] : []),
     ];
     return {
       id: uid('pkg'),
@@ -282,37 +287,53 @@ export function generateBusinessModel(project: Project, d: Directives = {}, vari
       priceModel: svc.unit === 'monthly' ? 'monthly' : svc.unit,
       description:
         i === 0
-          ? `The essentials, done right. Ideal for ${f.audience} trying ${f.brand} for the first time.`
+          ? `The starting package: ${lowerFirst(svc.name)} for ${f.audience} trying ${f.brand} for the first time.`
           : i === 1
-            ? `Our most popular option: everything you need for ${lowerFirst(f.desire)}.`
-            : `White-glove, done-for-you service for clients who want the very best.`,
+            ? `The middle package: ${lowerFirst(svc.name)} with more included.`
+            : `The most complete package: ${lowerFirst(svc.name)} with the most included.`,
       includes: [...new Set(includes)],
-      popular: i === 1,
+      popular: ownerPopular.has(name.trim().toLowerCase()),
     };
   });
 
-  const capacity = rng.int(18, 40);
   const operating: OperatingBlock[] = [
     { id: uid('op'), title: 'Customer journey & booking', items: bt.bookingFlow },
     { id: uid('op'), title: 'Service delivery standard', items: bt.delivery },
-    { id: uid('op'), title: 'Team & roles', items: bt.roles },
+    // Role names only: a credential ("licensed", "certified") is the owner's to state.
+    { id: uid('op'), title: 'Team & roles', items: teamRoles(bt.roles) },
     { id: uid('op'), title: 'Tools & tech stack', items: bt.tools },
-    { id: uid('op'), title: 'Hours & capacity', items: [bt.hours, `Target capacity: ~${capacity} appointments or jobs per week`, f.city ? `Service area: ${f.city}${f.region ? `, ${f.region}` : ''} and nearby neighborhoods` : 'Service area: local + online'] },
+    // Hours and capacity are the owner's to fill in, not a template's.
+    { id: uid('op'), title: 'Hours & capacity', items: ['Opening hours: [your hours]', 'Weekly capacity: [how many jobs or appointments you can take]', f.city ? `Service area: ${f.city}${f.region ? `, ${f.region}` : ''}` : 'Service area: [where you work]'] },
     { id: uid('op'), title: 'Revenue streams', items: bt.revenue },
     { id: uid('op'), title: 'Cost structure', items: bt.costs },
     { id: uid('op'), title: 'KPIs to track weekly', items: bt.kpis },
   ];
 
+  // The core offer plus a bracketed bonus slot. Bonuses, what each is worth (0 = not set) and any guarantee are the owner's to add.
   const core = packages[1];
   const valueStack: ValueStackItem[] = [
-    { id: uid('vs'), kind: 'core', title: `${core.name} package`, value: Math.round(core.price * 1.25), description: core.description },
-    ...bt.bonuses.map((b, i) => ({ id: uid('vs'), kind: 'bonus' as const, title: b, value: [49, 79, 99, 129][i % 4] * (f.price > 300 ? 3 : 1), description: `Removes the next obstacle for ${f.audience}.` })),
-    { id: uid('vs'), kind: 'guarantee', title: 'Our promise', value: 0, description: bt.guarantee },
+    { id: uid('vs'), kind: 'core', title: `${core.name} package`, value: 0, description: core.description },
+    { id: uid('vs'), kind: 'bonus', title: '[A bonus you actually include]', value: 0, description: '[What it is and why it helps]' },
   ];
   return { packages, operating, valueStack, price: core.price };
 }
 
+/** Template role names with any claimed credential left out; never empty. */
+export function teamRoles(roles: string[]): string[] {
+  const kept = roles.filter((r) => !CLAIM_TERM.test(r));
+  return kept.length ? kept : ['Owner / operator', '[Other roles on your team]'];
+}
+
+/** The guarantee the owner added to their value stack, or '' when they haven't added one. */
+export function ownerGuarantee(project: Project): string {
+  return project.studio.valueStack.find((v) => v.kind === 'guarantee')?.description.trim() ?? '';
+}
+
 // ───────────────────────── Listing copy ─────────────────────────
+
+/** Niche terms that would claim a credential, review or offer the owner hasn't stated ("licensed and insured",
+ *  "free estimate"): kept out of listing tags and ad keywords. */
+export const CLAIM_TERM = /licen[sc]ed|insured|bonded|certified|free estimate|guarantee|warranty|review|rated/i;
 
 export function generateListing(project: Project, d: Directives = {}, variation = 0): ListingDraft {
   const f = buildFacts(project);
@@ -322,28 +343,52 @@ export function generateListing(project: Project, d: Directives = {}, variation 
   const tagline = project.brand.tagline || (isBiz ? `${f.business?.label ?? 'Local business'} in ${f.city || 'your area'}` : project.idea?.hook ?? `${capitalize(verbOutcome(f.outcome))}.`);
   const highlights = isBiz
     ? f.business!.delivery.slice(0, 3)
-    : (project.idea?.features ?? f.terms.slice(0, 3).map((t) => `Built-in ${t}`));
+    : // the owner's chosen features, else what their outline covers, else the topics it is about (never invented "Built-in …" features)
+      (project.idea?.features?.length
+        ? project.idea.features
+        : outlineTopics(project).length
+          ? outlineTopics(project).slice(0, 3)
+          : f.terms.slice(0, 3).map((t) => `Covers ${t}`));
+  // Opening hours and any guarantee are the owner's to add (Publish tab offers the business type's as a suggestion).
+  // The closing line states only what is true: how to book, or the product file that really exists.
+  const booking = isBiz ? f.business?.booking ?? 'book' : 'buy';
+  const closing = isBiz ? (booking === 'inquire' ? 'Get in touch for a quote.' : booking === 'buy' ? 'Order today.' : 'Book a time that suits you.') : productClosing(project);
   const description = [
     isBiz
-      ? `${f.brand} ${f.city ? `serves ${f.city}${f.region ? `, ${f.region}` : ''}` : 'serves customers locally and online'} with ${f.business?.label.toLowerCase()} that ${f.audience} can count on. ${v.pick([`No more ${f.pain}.`, `Say goodbye to ${f.pain}.`])}`
-      : `${f.product} helps ${f.audience} ${verbOutcome(f.outcome)}, without ${f.pain}.`,
+      ? `${f.brand} ${f.city ? `${v.pick(['serves', 'works with'])} ${f.audience} in ${f.city}${f.region ? `, ${f.region}` : ''}` : `${v.pick(['serves', 'works with'])} ${f.audience} locally and online`}, offering ${f.business?.label.toLowerCase()}.`
+      : `${f.product} is ${/^[aeiou]/i.test(f.formatNoun) ? 'an' : 'a'} ${f.formatNoun.replace(/^[A-Z](?![A-Z])/, (x) => x.toLowerCase())} for ${f.audience} who want to ${verbOutcome(f.outcome)}.`,
     '',
     `What you get:`,
     ...highlights.map((h) => `• ${h}`),
     '',
-    isBiz ? f.business!.guarantee : `Instant digital delivery. ${v.pick(['Lifetime updates included.', 'Works on any device.', 'Built from real-world experience.'])}`,
+    closing,
   ].join('\n');
   const category = isBiz ? f.business?.category ?? 'Professional Services' : PRODUCT_CATEGORIES.includes(f.nicheLabel) ? f.nicheLabel : f.nicheLabel;
-  const tags = [...new Set([f.topicLower, ...f.terms.slice(0, 3), isBiz ? f.city.toLowerCase() : FORMATS[project.format ?? 'pdf'].short.toLowerCase()].filter(Boolean))].slice(0, 6);
+  const tags = [...new Set([f.topicLower, ...f.terms.filter((t) => !CLAIM_TERM.test(t)).slice(0, 3), isBiz ? f.city.toLowerCase() : FORMATS[project.format ?? 'pdf'].short.toLowerCase()].filter(Boolean))].slice(0, 6);
   return {
     title,
     tagline,
     description,
     category,
     tags,
-    bookingType: isBiz ? f.business?.booking ?? 'book' : 'buy',
-    hours: isBiz ? f.business?.hours ?? '' : '',
+    bookingType: booking,
+    hours: '',
   };
+}
+
+/** The owner's outline section titles without "Module 1:"-style prefixes. */
+function outlineTopics(project: Project): string[] {
+  return (project.studio.outline ?? []).map((s) => s.title.replace(/^(Module|Chapter|Section|Day|Week|Tab|Part|Series) \d+:\s*/i, '').trim()).filter(Boolean);
+}
+
+/** The listing's closing line for a product: the finished file when there is one, otherwise just the format. */
+function productClosing(project: Project): string {
+  const files = project.studio.productFiles ?? [];
+  const pdf = files.find((x) => x.kind === 'pdf');
+  const xlsx = files.find((x) => x.kind === 'xlsx');
+  if (pdf) return `Comes as a PDF${pdf.pages ? ` (${pdf.pages} pages)` : ''}.`;
+  if (xlsx) return `Comes as an Excel workbook${xlsx.sheets?.length ? ` (${xlsx.sheets.length} tabs)` : ''}.`;
+  return `Format: ${FORMATS[project.format ?? 'pdf'].short}.`;
 }
 
 export function facts(project: Project): Facts {

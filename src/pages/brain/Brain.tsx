@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Activity, BookOpen, Brain as BrainIcon, Check, Copy, FileUp, FlaskConical, Library, Pencil, Plus, Sparkles, ThumbsDown, ThumbsUp, Trash2, Upload } from 'lucide-react';
 import type { Skill, SkillCategory } from '@/lib/types';
 import { cn, fmtBytes, fmtRelative, readFileAsText, uid } from '@/lib/utils';
-import { CATEGORY_META, SCOPE_META, SKILL_LIBRARY, brainStrength, describeDirectives, effectiveDirectives, extractFacts, extractKeywords, newSkill, skillFromLibrary } from '@/ai/brain';
+import { CATEGORY_META, SCOPE_META, SKILL_LIBRARY, brainStrength, describeDirectives, effectiveDirectives, extractFacts, extractKeywords, newSkill, skillFromLibrary, templatePlaceholders } from '@/ai/brain';
 import { providerLabel } from '@/ai/engine';
 import { compactMeta, metaLine } from '@/ai/meta';
 import { skillTestTask } from '@/ai/tasks';
@@ -154,7 +154,16 @@ function SkillList({ onEdit }: { onEdit: (s: Skill) => void }) {
                     {CATEGORY_META[s.category].label} · {SOURCE_LABEL[s.source]} · {s.priority === 3 ? 'High' : s.priority === 1 ? 'Low' : 'Normal'} priority
                   </p>
                 </div>
-                <Toggle checked={s.enabled} onChange={(v) => updateSkill(s.id, { enabled: v })} label={<span className="sr-only">{s.enabled ? 'Disable' : 'Enable'} {s.name}</span>} />
+                <Toggle
+                  checked={s.enabled}
+                  onChange={(v) => {
+                    const unfilled = v ? templatePlaceholders(s.instructions) : [];
+                    if (unfilled.length) {
+                      toast({ kind: 'error', title: 'Fill in this skill first', body: `Replace ${unfilled.join(', ')} with your real details, or delete those lines. The AI uses these facts as true.` });
+                      return;
+                    }
+                    updateSkill(s.id, { enabled: v });
+                  }} label={<span className="sr-only">{s.enabled ? 'Disable' : 'Enable'} {s.name}</span>} />
               </div>
               {s.description && <p className="text-[13px] text-ink-2">{s.description}</p>}
               {s.doc && (
