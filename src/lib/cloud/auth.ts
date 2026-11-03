@@ -70,12 +70,41 @@ export function isSameOriginAuthTarget(target: string, appOrigin: string): boole
   }
 }
 
-/** Where the sign-in token may go: this app's own server, or the server address set on this device. */
+/** http(s) origin of an absolute address, or null (relative, protocol-relative, malformed or other schemes). */
+function httpOrigin(url: string): string | null {
+  try {
+    if (!/^https?:\/\//i.test(url)) return null;
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where the sign-in token may go: the app's own server, or a separate server this account chose on
+ * this device (Settings → AI → Test connection). Never just what's in the server address field: a
+ * half-typed host or an address from an imported backup must not receive it.
+ */
+export function tokenAllowed(target: string, appOrigin: string, trustedOrigin: string | null): boolean {
+  if (isSameOriginAuthTarget(target, appOrigin)) return true;
+  return !!trustedOrigin && httpOrigin(target) === trustedOrigin;
+}
+
+const trustedServerKey = (userId: string) => `ylb-trusted-server:${userId}`;
+
+/** The signed-in person chose this server: their sign-in may be sent there (until they log out). */
+export function trustServer(url: string): boolean {
+  const userId = useAuth.getState().user?.id;
+  const origin = httpOrigin(url);
+  if (!userId || !origin) return false;
+  safeStorage.setItem(trustedServerKey(userId), origin);
+  return true;
+}
+
 function mayCarryToken(target: string): boolean {
   if (typeof location === 'undefined') return false;
-  if (isSameOriginAuthTarget(target, location.origin)) return true;
-  const configured = serverBaseNow();
-  return !!configured && /^https?:\/\//.test(configured) && isSameOriginAuthTarget(target, new URL(configured).origin);
+  const userId = useAuth.getState().user?.id;
+  return tokenAllowed(target, location.origin, userId ? safeStorage.getItem(trustedServerKey(userId)) : null);
 }
 
 /**
@@ -517,6 +546,7 @@ async function forgetDevice(userId: string) {
   useStore.persist.setOptions({ name: DISCARD_KEY });
   safeStorage.removeItem(stateKey(userId));
   safeStorage.removeItem(openedKey(userId));
+  safeStorage.removeItem(trustedServerKey(userId));
   // a tab that stepped aside may have left save marks in storage: they belong to this account too
   safeStorage.removeItem(`ylb-sync:${userId}`);
   safeStorage.removeItem(`ylb-media-sync:${userId}`);

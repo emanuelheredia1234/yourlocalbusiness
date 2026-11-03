@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
 import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
-import { appStateFromEnv } from './appState.mjs';
+import { MIGRATION, appStateFromEnv } from './appState.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(here, '..', 'dist');
@@ -135,7 +135,8 @@ function serveStatic(req, res) {
 const auth = authFromEnv();
 const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv(), appState: appStateFromEnv() });
 // keys and settings saved in Supabase (when its secret key is set) before the first request
-const settingsFrom = await ai.init();
+// (never more than a few seconds: a slow Supabase must not keep the app from starting)
+const settingsFrom = await Promise.race([ai.init(), new Promise((r) => setTimeout(() => r('slow'), 5000))]);
 
 /** DELETE /api/account: the signed-in user's account and files go for good (their saved data is removed with the account). */
 async function deleteAccount(req, res) {
@@ -190,8 +191,17 @@ server.listen(PORT, HOST, async () => {
   console.log(auth.enabled ? `Accounts: on (Supabase)${auth.signInRequired ? ', sign-in required' : ''}` : 'Accounts: off (add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to turn them on).');
   console.log(
     ai.store.storage === 'supabase'
-      ? `AI keys and settings: kept in Supabase, encrypted (${settingsFrom === 'unreachable' ? 'Supabase couldn’t be reached; using this server’s copy for now' : settingsFrom}).`
-      : 'AI keys and settings: kept on this server’s disk. Add the SUPABASE_SECRET_KEY Secret to keep them in Supabase (published Replit apps wipe the disk when they restart).',
+      ? {
+          loaded: 'AI keys and settings: kept in Supabase, encrypted (loaded).',
+          uploaded: 'AI keys and settings: kept in Supabase, encrypted (this server’s keys were uploaded).',
+          empty: 'AI keys and settings: kept in Supabase, encrypted (none saved yet).',
+          'no-table': `AI keys and settings: NOT kept yet. Run ${MIGRATION} in Supabase → SQL Editor, then restart.`,
+          unreadable: 'AI keys and settings: the copy in Supabase was encrypted with a different secret and can’t be read (see Settings → AI).',
+          slow: 'AI keys and settings: Supabase is slow to answer; using this server’s copy until it does.',
+        }[settingsFrom] ?? 'AI keys and settings: Supabase couldn’t be reached; using this server’s copy for now.'
+      : process.env.SUPABASE_URL
+        ? 'AI keys and settings: kept on this server’s disk. Add the SUPABASE_SECRET_KEY Secret to keep them in Supabase (published Replit apps wipe the disk when they restart).'
+        : 'AI keys and settings: kept on this server’s disk. To keep them in Supabase, add the SUPABASE_URL and SUPABASE_SECRET_KEY Secrets (published Replit apps wipe the disk when they restart).',
   );
   if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
   if (!fs.existsSync(DIST)) console.log('No ./dist yet: run `npm run build` to serve the app from here, or use `npm run dev` (it proxies /api to this server).');

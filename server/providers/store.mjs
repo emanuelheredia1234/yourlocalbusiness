@@ -30,10 +30,12 @@ export class AIStore {
     this.file = file;
     this.env = env;
     this.remote = remote;
-    this.remoteVersion = null; // updated_at of the copy in Supabase this server has
+    this.remoteVersion = null; // updated_at of the Supabase copy this server's settings are based on
     this.lastCheck = 0;
     this.checking = null;
     this.pending = Promise.resolve();
+    this.unsynced = []; // changes made here that Supabase doesn't have yet (re-applied on top of newer settings)
+    this.problem = null; // what went wrong the last time Supabase was asked: { code, message }
     this.state = { providers: {}, order: [...PROVIDER_IDS] };
     this.imported = false;
     let loaded = false;
@@ -61,62 +63,159 @@ export class AIStore {
     return this.remote.enabled ? 'supabase' : 'disk';
   }
 
+  /** Why Supabase isn't keeping the settings right now (null when it is, or isn't used). */
+  get storageProblem() {
+    return this.remote.enabled ? this.problem : null;
+  }
+
+  noteProblem(e) {
+    this.problem = { code: e?.code || 'UNREACHABLE', message: e?.message || 'Couldn’t reach Supabase.' };
+  }
+
+  /** Re-apply this server's changes that Supabase doesn't have yet, on top of the settings just read. */
+  reapply() {
+    for (const change of this.unsynced) {
+      try {
+        change(this.state);
+      } catch {
+        /* no longer applies to the newer settings */
+      }
+    }
+  }
+
+  /** Settings from Supabase this server can't decrypt: say so, and never write over them on its own. */
+  unreadable(got) {
+    this.remoteVersion = got.updatedAt;
+    this.problem = {
+      code: 'UNREADABLE',
+      message: 'The AI settings saved in Supabase were encrypted with a different secret (SUPABASE_SECRET_KEY or USER_KEYS_SECRET changed), so this server can’t read them. Put the old secret back to get them, or save a change here to replace them.',
+    };
+  }
+
   /**
    * At start-up: take the settings saved in Supabase. If Supabase has none yet, upload this server's
-   * (keys typed into the app before the secret key was added). Never throws.
+   * (keys typed into the app before Supabase kept them). Never throws.
    */
   async loadRemote() {
     if (!this.remote.enabled) return 'disk';
     try {
       const got = await this.remote.get(REMOTE_KEY);
       this.lastCheck = Date.now();
+      if (got?.unreadable) {
+        this.unreadable(got);
+        console.warn(`AI settings: ${this.problem.message}`);
+        return 'unreadable';
+      }
       if (got) {
         this.adopt(got.value);
         this.remoteVersion = got.updatedAt;
+        this.reapply();
         this.saveLocal();
+        this.problem = null;
+        if (this.unsynced.length) await this.push();
         return 'loaded';
       }
-      if (Object.keys(this.state.providers).length) {
-        this.remoteVersion = await this.remote.put(REMOTE_KEY, this.state);
-        return 'uploaded';
-      }
-      return 'empty';
+      this.problem = null;
+      this.remoteVersion = null;
+      if (!Object.keys(this.state.providers).length) return 'empty';
+      // created only if no other copy of the server created it meanwhile (then theirs is taken)
+      this.unsynced.push(() => {});
+      await this.push();
+      return 'uploaded';
     } catch (e) {
+      this.noteProblem(e);
       console.warn(`AI settings: ${e.message} Using this server’s copy for now.`);
-      return 'unreachable';
+      return e.code === 'NO_TABLE' ? 'no-table' : 'unreachable';
     }
   }
 
   /** Pick up changes saved by another copy of the server (looked up at most every `every` ms). */
   async refresh({ force = false, every = 10_000 } = {}) {
     if (!this.remote.enabled) return;
-    if (!force && Date.now() - this.lastCheck < every) return;
-    if (!this.checking) {
-      this.checking = (async () => {
-        try {
-          const version = await this.remote.version(REMOTE_KEY);
-          if (version && version !== this.remoteVersion) {
-            const got = await this.remote.get(REMOTE_KEY);
-            if (got) {
-              this.adopt(got.value);
-              this.remoteVersion = got.updatedAt;
-              this.saveLocal();
-            }
+    if (this.checking) {
+      // a forced look must start after any change that's being saved, so wait for the one under way
+      if (!force) return this.checking;
+      await this.checking;
+    } else if (!force && Date.now() - this.lastCheck < every) return;
+    this.checking = (async () => {
+      try {
+        const version = await this.remote.version(REMOTE_KEY);
+        if (version && version !== this.remoteVersion) {
+          const got = await this.remote.get(REMOTE_KEY);
+          if (got?.unreadable) this.unreadable(got);
+          else if (got) {
+            this.adopt(got.value);
+            this.remoteVersion = got.updatedAt;
+            this.reapply();
+            this.saveLocal();
+            this.problem = null;
           }
-        } catch (e) {
-          console.warn(`AI settings: ${e.message}`);
-        } finally {
-          this.lastCheck = Date.now();
-          this.checking = null;
-        }
-      })();
-    }
+        } else if (this.problem?.code !== 'UNREADABLE' && !this.unsynced.length) this.problem = null;
+      } catch (e) {
+        this.noteProblem(e);
+        console.warn(`AI settings: ${e.message}`);
+      } finally {
+        this.lastCheck = Date.now();
+        this.checking = null;
+      }
+    })();
     return this.checking;
   }
 
-  /** Resolves when the last change reached Supabase; rejects (NOT_SAVED) if it couldn't. */
+  /** Resolves when the last change reached Supabase; rejects (NOT_SAVED…) if it couldn't. */
   persisted() {
     return this.pending;
+  }
+
+  /**
+   * Send this server's settings to Supabase, but only over the version they're based on. If another
+   * copy saved first, start from its settings, re-apply this server's changes and try again.
+   */
+  async push() {
+    if (!this.unsynced.length) return;
+    for (let attempt = 0; ; attempt++) {
+      const sending = this.unsynced.length;
+      try {
+        const version = await this.remote.put(REMOTE_KEY, this.state, { ifVersion: this.remoteVersion ?? null });
+        this.remoteVersion = version;
+        this.lastCheck = Date.now();
+        this.unsynced.splice(0, sending);
+        this.problem = null;
+        return;
+      } catch (e) {
+        if (e?.code === 'CONFLICT' && attempt < 3) {
+          const got = await this.remote.get(REMOTE_KEY);
+          if (got?.unreadable) {
+            this.unreadable(got);
+            throw Object.assign(new Error(this.problem.message), { code: 'UNREADABLE', status: 502 });
+          }
+          if (!got) {
+            // the saved settings were deleted meanwhile: save this server's again (never lose keys silently)
+            this.remoteVersion = null;
+            continue;
+          }
+          this.adopt(got.value);
+          this.remoteVersion = got.updatedAt;
+          this.reapply();
+          this.saveLocal();
+          continue;
+        }
+        this.noteProblem(e);
+        throw e;
+      }
+    }
+  }
+
+  /** Apply a change here (and on disk), then queue it for Supabase. */
+  mutate(change) {
+    change(this.state);
+    this.saveLocal();
+    if (!this.remote.enabled) return;
+    this.unsynced.push(change);
+    // one save at a time, so an older one can never land after a newer one
+    const p = this.pending.catch(() => undefined).then(() => this.push());
+    p.catch((e) => console.warn(`AI settings: ${e.message}`));
+    this.pending = p;
   }
 
   /** Bring over image keys saved by the old Settings → Image generation page (photos only). */
@@ -128,14 +227,20 @@ export class AIStore {
       return;
     }
     const old = raw?.providers && typeof raw.providers === 'object' ? raw.providers : {};
+    const found = {};
     for (const id of ['meta', 'openai']) {
       const key = typeof old[id]?.apiKey === 'string' ? old[id].apiKey.trim() : '';
-      if (key) {
-        this.state.providers[id] = { apiKey: key, enabled: true, functions: ['photos'] };
-        this.imported = true;
-      }
+      if (key) found[id] = { apiKey: key, enabled: true, functions: ['photos'] };
     }
-    if (this.imported) this.save();
+    if (!Object.keys(found).length) return;
+    this.imported = true;
+    // never over a key already saved (in Supabase too: this is re-applied there by loadRemote)
+    const change = (st) => {
+      for (const [id, v] of Object.entries(found)) if (!st.providers[id]?.apiKey) st.providers[id] = { ...v };
+    };
+    change(this.state);
+    this.saveLocal();
+    if (this.remote.enabled) this.unsynced.push(change);
   }
 
   saveLocal() {
@@ -149,22 +254,6 @@ export class AIStore {
       if (!this.remote.enabled) throw e;
       console.warn(`AI settings: couldn’t write ${this.file} (${e.message}).`);
     }
-  }
-
-  save() {
-    this.saveLocal();
-    if (!this.remote.enabled) return;
-    // saves go to Supabase one after another, so an older one can never land after a newer one
-    const snapshot = structuredClone(this.state);
-    const p = this.pending
-      .catch(() => undefined)
-      .then(() => this.remote.put(REMOTE_KEY, snapshot))
-      .then((version) => {
-        this.remoteVersion = version;
-        this.lastCheck = Date.now();
-      });
-    p.catch((e) => console.warn(`AI settings: ${e.message}`));
-    this.pending = p;
   }
 
   /** The Secret (env var) holding this provider's key, if one is set. */
@@ -258,9 +347,9 @@ export class AIStore {
     };
   }
 
-  update(id, patch = {}) {
-    if (!PROVIDERS[id]) throw fail(404, 'Unknown provider');
-    const cur = structuredClone(this.state.providers[id] || {});
+  /** The provider's saved entry with a change applied (throws on an invalid change). */
+  patched(prev, id, patch) {
+    const cur = structuredClone(prev || {});
     if (patch.removeKey === true) delete cur.apiKey;
     if (typeof patch.apiKey === 'string' && patch.apiKey.trim()) {
       const k = patch.apiKey.trim();
@@ -287,14 +376,22 @@ export class AIStore {
         cur.effort[kind] = value;
       }
     }
-    this.state.providers[id] = cur;
-    this.save();
+    return cur;
+  }
+
+  update(id, patch = {}) {
+    if (!PROVIDERS[id]) throw fail(404, 'Unknown provider');
+    this.patched(this.state.providers[id], id, patch); // check it first: an invalid change throws here
+    this.mutate((st) => {
+      st.providers[id] = this.patched(st.providers[id], id, patch);
+    });
   }
 
   setOrder(order) {
     if (!Array.isArray(order)) throw fail(400, 'Send the providers in priority order.');
     const ids = order.filter((id) => typeof id === 'string' && PROVIDERS[id]);
-    this.state.order = [...new Set([...ids, ...PROVIDER_IDS])];
-    this.save();
+    this.mutate((st) => {
+      st.order = [...new Set([...ids, ...PROVIDER_IDS])];
+    });
   }
 }

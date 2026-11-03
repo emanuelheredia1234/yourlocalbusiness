@@ -10,11 +10,17 @@ const MAX_ENTRIES = 500;
 const REMOTE_KEY = 'ai-usage';
 const REMOTE_EVERY = 15_000;
 
-/** Both logs, newest first; for an entry in both, this server's copy (it may have been updated since). */
+/**
+ * Both logs, newest first. For an entry in both, the most updated copy wins (each update bumps its
+ * rev), and this server's on a tie: so a copy that never saw an update can't undo it.
+ */
 export function mergeEntries(mine, theirs) {
   const byId = new Map();
   for (const e of Array.isArray(theirs) ? theirs : []) if (e && typeof e.id === 'string') byId.set(e.id, e);
-  for (const e of mine) byId.set(e.id, e);
+  for (const e of mine) {
+    const other = byId.get(e.id);
+    if (!other || (e.rev ?? 0) >= (other.rev ?? 0)) byId.set(e.id, e);
+  }
   return [...byId.values()].sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).slice(0, MAX_ENTRIES);
 }
 
@@ -26,6 +32,8 @@ export class UsageLog {
     this.timer = null;
     this.remoteTimer = null;
     this.remoteChain = Promise.resolve();
+    // updates for entries another copy of the server logged (applied once its entry arrives)
+    this.orphans = new Map(); // id → { patch, at }
     try {
       const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
       if (Array.isArray(raw?.entries)) this.entries = raw.entries.slice(0, MAX_ENTRIES);
@@ -36,7 +44,7 @@ export class UsageLog {
 
   add(entry) {
     const id = crypto.randomUUID();
-    this.entries.unshift({ id, at: Date.now(), ...entry });
+    this.entries.unshift({ id, at: Date.now(), rev: 0, ...entry });
     if (this.entries.length > MAX_ENTRIES) this.entries.length = MAX_ENTRIES;
     this.scheduleSave();
     return id;
@@ -44,9 +52,28 @@ export class UsageLog {
 
   update(id, patch) {
     const e = this.entries.find((x) => x.id === id);
-    if (!e) return;
-    Object.assign(e, patch);
+    if (!e) {
+      // logged by another copy of the server: apply it when that entry arrives from Supabase
+      if (this.remote.enabled && id) {
+        const prev = this.orphans.get(id);
+        this.orphans.set(id, { patch: { ...(prev?.patch ?? {}), ...patch }, at: Date.now() });
+        this.scheduleSave();
+      }
+      return;
+    }
+    Object.assign(e, patch, { rev: (e.rev ?? 0) + 1 });
     this.scheduleSave();
+  }
+
+  /** Apply waiting updates to entries that have arrived; drop ones waiting over an hour. */
+  adoptOrphans() {
+    for (const [id, o] of this.orphans) {
+      const e = this.entries.find((x) => x.id === id);
+      if (e) {
+        Object.assign(e, o.patch, { rev: (e.rev ?? 0) + 1 });
+        this.orphans.delete(id);
+      } else if (Date.now() - o.at > 3600_000) this.orphans.delete(id);
+    }
   }
 
   scheduleSave() {
@@ -70,7 +97,8 @@ export class UsageLog {
     if (!this.remote.enabled) return;
     try {
       const got = await this.remote.get(REMOTE_KEY);
-      if (got) this.entries = mergeEntries(this.entries, got.value?.entries);
+      if (got && !got.unreadable) this.entries = mergeEntries(this.entries, got.value?.entries);
+      this.adoptOrphans();
     } catch (e) {
       console.warn(`Usage log: ${e.message}`);
     }
@@ -86,7 +114,9 @@ export class UsageLog {
     this.remoteChain = this.remoteChain.then(async () => {
       try {
         const got = await this.remote.get(REMOTE_KEY);
-        this.entries = mergeEntries(this.entries, got?.value?.entries);
+        // a log saved under another secret can't be read: it's replaced (it holds no keys)
+        this.entries = mergeEntries(this.entries, got?.unreadable ? [] : got?.value?.entries);
+        this.adoptOrphans();
         await this.remote.put(REMOTE_KEY, { entries: this.entries });
       } catch (e) {
         console.warn(`Usage log: ${e.message}`);

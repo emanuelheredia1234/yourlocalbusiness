@@ -70,7 +70,8 @@ export class AIRouter {
     if (!this.remote.enabled) return;
     try {
       const got = await this.remote.get('ai-tasks');
-      for (const [id, t] of Object.entries(got?.value?.tasks ?? {})) {
+      // (a list saved under another secret can't be read: it's replaced at the next save; tasks expire anyway)
+      for (const [id, t] of Object.entries(got?.unreadable ? {} : (got?.value?.tasks ?? {}))) {
         if (!this.manusTasks.has(id) && Date.now() - (t?.at ?? 0) < TASK_TTL) this.manusTasks.set(id, t);
       }
     } catch (e) {

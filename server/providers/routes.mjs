@@ -89,9 +89,28 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     try {
       await store.persisted();
     } catch (e) {
-      return reply(req, res, 502, { error: `${e.message} The change works until this server restarts; try saving again.`, code: 'NOT_SAVED', state: state(req, who) });
+      return reply(req, res, 502, { error: `${e.message} The change works on this server for now, but may be lost when the app restarts.`, code: 'NOT_SAVED', cause: e.code || 'UNREACHABLE', state: state(req, who) });
     }
     return reply(req, res, 200, { state: state(req, who) });
+  };
+
+  /** Wait for a look at Supabase, but never long: a slow Supabase mustn't hold up the app. */
+  const freshEnough = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(r, ms).unref?.())]);
+
+  /**
+   * Run an AI request; if this copy of the server knows no key for it, look in Supabase once and try
+   * again (a key may have just been added through another copy). "No key" is decided before anything
+   * is sent to a provider, so the second try can't start paid work twice.
+   */
+  const withFreshKeys = async (run) => {
+    try {
+      return await run();
+    } catch (e) {
+      if (e?.code !== 'NO_PROVIDER' && e?.code !== 'USE_AGENT') throw e;
+      if (!store.remote.enabled) throw e;
+      await freshEnough(store.refresh({ force: true }), 2500);
+      return run();
+    }
   };
 
   const reply = (req, res, status, body, headers) => send(res, status, body, { ...corsHeaders(req), ...headers });
@@ -170,7 +189,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     return c.signal;
   };
 
-  const state = (req, who) => ({ ...store.list(), canManage: isAdmin(req, who), adminTokenSet: !!adminToken, imported: store.imported, storage: store.storage, ephemeralDisk, accounts: auth.enabled });
+  const state = (req, who) => ({ ...store.list(), canManage: isAdmin(req, who), adminTokenSet: !!adminToken, imported: store.imported, storage: store.storage, storageProblem: store.storageProblem, ephemeralDisk, accounts: auth.enabled, supabaseUrlSet: !!env.SUPABASE_URL });
 
   /** The signed-in user behind a request (null when signed out, or accounts are off). */
   async function whoIs(req, res) {
@@ -189,11 +208,14 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     const ident = await whoIs(req, res);
     if (!ident) return;
     const { who } = ident;
-    // keys or settings changed through another copy of the server (looked up every few seconds)
-    await store.refresh();
+    // keys or settings changed through another copy of the server: looked up every few seconds,
+    // in the background (AI requests never wait for Supabase)
+    const looked = store.refresh();
 
     if (p === '/api/ai/providers' && m === 'GET') {
       if (!signedIn(req, res, who)) return;
+      // the settings page shows the newest settings (but doesn't wait long for them)
+      await freshEnough(looked, 2500);
       // with accounts on, only the owner sees the keys' settings
       const show = !auth.enabled || isAdmin(req, who);
       return reply(req, res, 200, { catalog: describeProviders(), functions: FUNCTIONS, groups: FUNCTION_GROUPS, state: show ? state(req, who) : null, role: show ? 'admin' : 'user' });
@@ -263,7 +285,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (fnById[fn]?.kind !== 'text') return reply(req, res, 400, { error: 'Unknown AI function.', code: 'BAD_REQUEST' });
       const signal = abortOnClose(res);
       try {
-        const out = await router.text(fn, { prompt, images: cleanImages(b.images), tier: b.tier === 'quick' ? 'quick' : 'default', brain: typeof b.brain === 'boolean' ? b.brain : null, signal, userId: who?.id });
+        const out = await withFreshKeys(() => router.text(fn, { prompt, images: cleanImages(b.images), tier: b.tier === 'quick' ? 'quick' : 'default', brain: typeof b.brain === 'boolean' ? b.brain : null, signal, userId: who?.id }));
         return reply(req, res, 200, out);
       } catch (e) {
         if (signal.aborted) return;
@@ -280,7 +302,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (prompt.length > MAX_MEDIA_PROMPT) return reply(req, res, 413, { error: 'Image prompt too long', code: 'BAD_REQUEST' });
       const signal = abortOnClose(res);
       try {
-        const out = await router.image({ prompt, aspect: ASPECTS[b.aspect] ? b.aspect : '1:1', signal, userId: who?.id });
+        const out = await withFreshKeys(() => router.image({ prompt, aspect: ASPECTS[b.aspect] ? b.aspect : '1:1', signal, userId: who?.id }));
         res.writeHead(200, {
           'content-type': out.contentType,
           'cache-control': 'no-store',
@@ -306,7 +328,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       const firstFrame = typeof b.firstFrame === 'string' && parseDataUrl(b.firstFrame) && IMAGE_TYPES.has(parseDataUrl(b.firstFrame).mime) ? b.firstFrame : null;
       try {
         // one-shot paid job: started once, never retried
-        const job = await router.startVideo({ prompt, aspect: VIDEO_ASPECTS.has(b.aspect) ? b.aspect : '9:16', duration: Math.max(1, Math.min(15, Number(b.duration) || 8)), firstFrame, owner: who?.id ?? null });
+        const job = await withFreshKeys(() => router.startVideo({ prompt, aspect: VIDEO_ASPECTS.has(b.aspect) ? b.aspect : '9:16', duration: Math.max(1, Math.min(15, Number(b.duration) || 8)), firstFrame, owner: who?.id ?? null }));
         return reply(req, res, 200, { job });
       } catch (e) {
         return fail(req, res, e);
@@ -379,7 +401,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           }
           const image = typeof b.image_data_url === 'string' && parseDataUrl(b.image_data_url) ? { dataUrl: b.image_data_url, filename: typeof b.image_filename === 'string' ? b.image_filename.slice(0, 120) : 'image.jpg' } : null;
           // one-shot write: never retried
-          const created = await router.manusCreate({ fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null, apiKey: ownKey });
+          const created = await withFreshKeys(() => router.manusCreate({ fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null, apiKey: ownKey }));
           // the task list must reach Supabase before the app asks another copy of the server about it
           await router.tasksSaved();
           return reply(req, res, 200, created);
@@ -393,6 +415,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         // a task started with someone's own key is read and continued with that key
         const apiKey = task?.ownKey ? await userKeys.get(task.owner, 'manus') : null;
         if (task?.ownKey && !apiKey) return reply(req, res, 409, { error: 'The Manus key this task was started with was removed. Add it again in Settings → AI.', code: 'OWN_KEY_NEEDED' });
+        // the owner's task, on a copy of the server that hasn't picked up the owner's Manus key yet
+        if (!apiKey && !store.key('manus') && store.remote.enabled) await freshEnough(store.refresh({ force: true }), 2500);
         if (mt[1] === 'output') {
           const out = await router.manusOutput({ apiKey, taskId, maxImages: Math.max(0, Math.min(8, Number(b.max_images) || 0)), maxImageBytes: Math.max(1, Math.min(30_000_000, Number(b.max_image_bytes) || 15_000_000)), signal: abortOnClose(res) });
           return reply(req, res, 200, out);
@@ -427,7 +451,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     },
     health: async (who = null) => {
       if (auth.signInRequired && !who) return { ready: false, providers: [], routing: {}, signedIn: false };
-      await store.refresh();
+      // the app routes on this answer: a key just saved through another copy must show up here
+      await freshEnough(store.refresh({ every: 1000 }), 2000);
       // with accounts on, the owner's Manus is the owner's alone; others can add their own Manus key
       const hide = auth.enabled && !who?.isAdmin ? new Set(['manus']) : new Set();
       const ownManus = hide.size && who?.id ? !!(await userKeys.get(who.id, 'manus').catch(() => null)) : false;

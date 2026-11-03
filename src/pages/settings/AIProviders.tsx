@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, Brain, ChevronDown, CircleAlert, ExternalLink, Flas
 import { cn, fmtRelative } from '@/lib/utils';
 import { safeStorage } from '@/lib/storage';
 import { useRuntime } from '@/lib/platform';
-import { authHeaders, useAuth } from '@/lib/cloud/auth';
+import { authHeaders, trustServer, useAuth } from '@/lib/cloud/auth';
 import { pingServer, serverBase } from '@/ai/claude';
 import { AI_FUNCTIONS, AI_FUNCTION_GROUPS, type AIKind } from '@/ai/functions';
 import { fmtTokens, fmtUsdSmall } from '@/ai/meta';
@@ -59,6 +59,9 @@ interface AIState {
   /** the host wipes its files when the app restarts (Replit's published apps, Vercel) */
   ephemeralDisk?: boolean;
   accounts?: boolean;
+  /** why Supabase isn't keeping the settings right now */
+  storageProblem?: { code: string; message: string } | null;
+  supabaseUrlSet?: boolean;
 }
 interface CompareResult {
   provider: string;
@@ -197,15 +200,18 @@ export function AIProviders() {
     setState((s) => (s ? optimistic(s, id, body) : s));
     const n = ++saves.current;
     const r = await call<{ state: AIState }>('PUT', id ? `/api/ai/providers/${id}` : '/api/ai/settings', body);
-    if (!r.ok || !r.json?.state) {
+    // the server applied it, but couldn't keep it in Supabase: it works now, and may not last
+    const notKept = r.status === 502 && r.json?.code === 'NOT_SAVED' && !!r.json?.state;
+    if ((!r.ok || !r.json?.state) && !notKept) {
       toast({ kind: 'error', title: 'Couldn’t save', body: r.json?.error ?? 'Please try again.' });
       void load();
       return false;
     }
     // quick clicks: only the newest answer counts, so an older one can't undo a newer change
-    if (n === saves.current) setState(r.json.state);
+    if (n === saves.current && r.json?.state) setState(r.json.state);
     void pingServer(serverUrl);
-    if (success) toast({ kind: 'success', title: success });
+    if (notKept) toast({ kind: 'error', title: 'Working now, but not kept in Supabase', body: r.json?.error ?? '' });
+    else if (success) toast({ kind: 'success', title: success });
     return true;
   };
 
@@ -273,10 +279,25 @@ export function AIProviders() {
           {!state.canManage && !accounts && <AdminAccess adminTokenSet={state.adminTokenSet} token={adminToken} onToken={setAdminToken} onCheck={() => void load()} />}
           {state.canManage && state.storage === 'disk' && (state.ephemeralDisk || state.accounts) && (
             <Note icon={<CircleAlert size={16} />} title="Keys you add here can disappear">
-              They’re kept in this server’s files, which {state.ephemeralDisk ? 'this host wipes' : 'hosts like Replit’s published apps wipe'} when the app restarts or sleeps. Add the <code className="rounded bg-surface-2 px-1">SUPABASE_SECRET_KEY</code> Secret (Supabase → Project Settings → API Keys, the <code className="rounded bg-surface-2 px-1">sb_secret_…</code> key) and republish: your keys and settings are then kept in Supabase, encrypted. Keys added as Secrets (like <code className="rounded bg-surface-2 px-1">OPENAI_API_KEY</code>) always stay.
+              They’re kept in this server’s files, which {state.ephemeralDisk ? 'this host wipes' : 'hosts like Replit’s published apps wipe'} when the app restarts or sleeps. To keep them in Supabase, encrypted:{' '}
+              {state.supabaseUrlSet ? (
+                <>
+                  add the <code className="rounded bg-surface-2 px-1">SUPABASE_SECRET_KEY</code> Secret (Supabase → Project Settings → API Keys, the <code className="rounded bg-surface-2 px-1">sb_secret_…</code> key)
+                </>
+              ) : (
+                <>
+                  add the <code className="rounded bg-surface-2 px-1">SUPABASE_URL</code> and <code className="rounded bg-surface-2 px-1">SUPABASE_SECRET_KEY</code> Secrets (Supabase → Project Settings → API)
+                </>
+              )}
+              , run the files in <code className="rounded bg-surface-2 px-1">supabase/migrations</code> in Supabase → SQL Editor if you haven’t, and republish. Keys added as Secrets (like <code className="rounded bg-surface-2 px-1">OPENAI_API_KEY</code>) always stay.
             </Note>
           )}
-          {state.canManage && state.storage === 'supabase' && (
+          {state.canManage && state.storage === 'supabase' && state.storageProblem && (
+            <Note icon={<CircleAlert size={16} />} title="Your keys aren’t being kept in Supabase right now">
+              {state.storageProblem.message} Until then they live in this server’s files{state.ephemeralDisk ? ', which this host wipes when the app restarts' : ''}.
+            </Note>
+          )}
+          {state.canManage && state.storage === 'supabase' && !state.storageProblem && (
             <p className="flex items-center gap-1.5 text-[12.5px] text-muted">
               <ShieldCheck size={14} className="text-good" /> Keys and settings are saved in your Supabase project, encrypted, so they stay through restarts.
             </p>
@@ -812,7 +833,7 @@ function ServerAddress() {
     <details className="panel p-4 text-[13px]">
       <summary className="cursor-pointer font-semibold text-ink">Advanced: AI server address</summary>
       <div className="mt-3 flex flex-wrap items-end gap-2">
-        <Field label="Server URL" htmlFor="ai-url" hint="Leave blank when the app and the server run together (the usual setup, including Replit)." className="min-w-[240px] flex-1">
+        <Field label="Server URL" htmlFor="ai-url" hint="Leave blank when the app and the server run together (the usual setup, including Replit). For a separate server, press Test connection: that lets it know who’s signed in." className="min-w-[240px] flex-1">
           <input id="ai-url" className="input" value={serverUrl} onChange={(e) => updateSettings((s) => ({ ...s, ai: { ...s.ai, serverUrl: e.target.value.trim() } }))} placeholder="https://your-server.example.com" />
         </Field>
         <button
@@ -820,6 +841,8 @@ function ServerAddress() {
           disabled={testing}
           onClick={async () => {
             setTesting(true);
+            // choosing this server: it may now receive your sign-in (only this account, on this device)
+            if (serverUrl) trustServer(serverUrl);
             const ok = await pingServer(serverUrl);
             setTesting(false);
             toast(ok ? { kind: 'success', title: 'Server is reachable' } : { kind: 'error', title: 'Couldn’t reach the server', body: 'Check the URL and that the server is running.' });

@@ -65,8 +65,8 @@ describe('server settings in Supabase', () => {
     const { token } = await supa.tokenFor('reader@example.com');
     const asUser = await fetch(`${supa.url}/rest/v1/app_state?select=*`, { headers: { apikey: supa.PUBLISHABLE, authorization: `Bearer ${token}` } });
     expect(asUser.status).toBe(401);
-    // a different secret can't open it (treated as nothing saved)
-    expect(await createAppState({ supabaseUrl: supa.url, secretKey: supa.SECRET, encryptionSecret: 'other' }).get('probe')).toBeNull();
+    // a different secret can't open it: reported as unreadable, never as "nothing saved"
+    expect(await createAppState({ supabaseUrl: supa.url, secretKey: supa.SECRET, encryptionSecret: 'other' }).get('probe')).toEqual({ unreadable: true, value: null, updatedAt: at });
   });
 
   it('keeps the owner’s keys through a restart with an empty disk, and shares them between copies', async () => {
@@ -126,7 +126,10 @@ describe('server settings in Supabase', () => {
       const body = await r.json();
       expect(r.status).toBe(502);
       expect(body.code).toBe('NOT_SAVED');
-      expect(body.error).toMatch(/until this server restarts/);
+      expect(body.error).toMatch(/may be lost when the app restarts/);
+      // the change still applies on this server, and the page can say why it isn't kept
+      expect(body.state.providers.find((p) => p.id === 'openai').effort.text).toBe('low');
+      expect(body.state.storageProblem.code).toBeTruthy();
     } finally {
       supa.behavior.down = false;
     }
@@ -164,6 +167,138 @@ describe('server settings in Supabase', () => {
     const mine = [{ id: 'a', at: 3, credits: 9 }];
     const theirs = [{ id: 'a', at: 3, credits: null }, { id: 'b', at: 5 }, { id: 'c', at: 1 }, { bad: true }];
     expect(mergeEntries(mine, theirs)).toEqual([{ id: 'b', at: 5 }, { id: 'a', at: 3, credits: 9 }, { id: 'c', at: 1 }]);
+  });
+});
+
+describe('the review’s fixes', () => {
+  it('saves only over the version it started from; creating twice is a conflict', async () => {
+    const at = await appState.put('cas', { n: 1 }, { ifVersion: null });
+    await expect(appState.put('cas', { n: 2 }, { ifVersion: null })).rejects.toMatchObject({ code: 'CONFLICT' });
+    const next = await appState.put('cas', { n: 3 }, { ifVersion: at });
+    await expect(appState.put('cas', { n: 4 }, { ifVersion: at })).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect((await appState.get('cas')).value).toEqual({ n: 3 });
+    expect(next).not.toBe(at);
+  });
+
+  it('two copies saving at once keep both changes, and a removed key stays removed', async () => {
+    const st = createAppState({ supabaseUrl: supa.url, secretKey: supa.SECRET });
+    const seed = new AIStore(path.join(tmpDir(), 'ai-providers.json'), { env: {}, remote: st });
+    seed.update('xai', { apiKey: 'xai-to-remove-1111' });
+    seed.update('anthropic', { apiKey: 'sk-ant-stays-2222' });
+    await seed.persisted();
+    const a = new AIStore(path.join(tmpDir(), 'ai-providers.json'), { env: {}, remote: st });
+    const b = new AIStore(path.join(tmpDir(), 'ai-providers.json'), { env: {}, remote: st });
+    await a.loadRemote();
+    await b.loadRemote();
+    a.update('xai', { removeKey: true });
+    await a.persisted();
+    // b hasn't looked since: its save conflicts, so it starts from a's settings and re-applies its change
+    b.update('anthropic', { effort: { text: 'high' } });
+    await b.persisted();
+    const fresh = new AIStore(path.join(tmpDir(), 'ai-providers.json'), { env: {}, remote: st });
+    await fresh.loadRemote();
+    expect(fresh.key('xai')).toBe('');
+    expect(fresh.key('anthropic')).toBe('sk-ant-stays-2222');
+    expect(fresh.settings('anthropic').effort.text).toBe('high');
+  });
+
+  it('never overwrites settings it can’t read on its own; an explicit save replaces them', async () => {
+    const owners = await (await createMockSupabase()).start();
+    try {
+      const mine = createAppState({ supabaseUrl: owners.url, secretKey: owners.SECRET });
+      const saved = new AIStore(path.join(tmpDir(), 'ai-providers.json'), { env: {}, remote: mine });
+      saved.update('openai', { apiKey: 'sk-precious-3333' });
+      await saved.persisted();
+      const before = JSON.stringify(owners.tables.get('app_state'));
+      // a copy started with another secret, and keys of its own on disk
+      const dir = tmpDir();
+      new AIStore(path.join(dir, 'ai-providers.json'), { env: {} }).update('google', { apiKey: 'AIza-other-4444' });
+      const other = new AIStore(path.join(dir, 'ai-providers.json'), { env: {}, remote: createAppState({ supabaseUrl: owners.url, secretKey: owners.SECRET, encryptionSecret: 'rotated' }) });
+      expect(await other.loadRemote()).toBe('unreadable');
+      expect(other.storageProblem.code).toBe('UNREADABLE');
+      await other.refresh({ force: true });
+      expect(JSON.stringify(owners.tables.get('app_state'))).toBe(before); // untouched
+      other.update('google', { effort: { text: 'low' } }); // the owner saves on purpose
+      await other.persisted();
+      expect(other.storageProblem).toBeNull();
+      expect(JSON.stringify(owners.tables.get('app_state'))).not.toBe(before);
+    } finally {
+      await owners.close();
+    }
+  });
+
+  it('names the missing table and its SQL file, and says keys aren’t kept yet', async () => {
+    const bare = await (await createMockSupabase({ missingTables: ['app_state'] })).start();
+    try {
+      const st = createAppState({ supabaseUrl: bare.url, secretKey: bare.SECRET });
+      await expect(st.version('ai-providers')).rejects.toMatchObject({ code: 'NO_TABLE' });
+      const store = new AIStore(path.join(tmpDir(), 'ai-providers.json'), { env: {}, remote: st });
+      expect(await store.loadRemote()).toBe('no-table');
+      expect(store.storageProblem.message).toMatch(/20261103010000_app_state\.sql/);
+      store.update('openai', { apiKey: 'sk-works-for-now-5555' });
+      await expect(store.persisted()).rejects.toMatchObject({ code: 'NO_TABLE' });
+      expect(store.key('openai')).toBe('sk-works-for-now-5555'); // still works on this server
+    } finally {
+      await bare.close();
+    }
+  });
+
+  it('a key saved through one copy works on another right away', async () => {
+    const owner = await supa.tokenFor('owner@example.com');
+    const user = await supa.tokenFor('user@example.com');
+    const a = await serverCopy();
+    const b = await serverCopy();
+    await b.ai.init();
+    // b just looked (its periodic check isn't due), then the owner adds a key through a
+    expect((await fetch(`${b.base}/api/ai/providers`, { headers: as(owner) })).status).toBe(200);
+    await fetch(`${a.base}/api/ai/providers/anthropic`, { method: 'PUT', headers: as(owner), body: JSON.stringify({ apiKey: 'sk-ant-fresh-6666', functions: ['seo'] }) });
+    // an AI request on b finds no key for SEO, looks in Supabase once, and uses the new key
+    const r = await fetch(`${b.base}/api/ai/generate`, { method: 'POST', headers: as(user), body: JSON.stringify({ fn: 'seo', prompt: 'title tags' }) });
+    expect(r.status).toBe(200);
+    expect((await r.json()).meta.provider).toBe('anthropic');
+    // and the health answer the app routes on is never more than a second behind
+    await fetch(`${a.base}/api/ai/providers/anthropic`, { method: 'PUT', headers: as(owner), body: JSON.stringify({ functions: ['seo', 'email'] }) });
+    await new Promise((r2) => setTimeout(r2, 1100));
+    expect((await b.ai.health({ id: owner.user.id, isAdmin: true })).routing.email).toContain('anthropic');
+    await Promise.all([a.close(), b.close()]);
+  });
+
+  it('a slow Supabase doesn’t hold up AI requests', async () => {
+    const user = await supa.tokenFor('user@example.com');
+    const a = await serverCopy({ env: { OPENAI_API_KEY: 'sk-owner-typed-1234' } });
+    await fetch(`${a.base}/api/ai/generate`, { method: 'POST', headers: as(user), body: JSON.stringify({ fn: 'research', prompt: 'warm up' }) });
+    supa.behavior.restDelayMs = 4000;
+    try {
+      a.ai.store.lastCheck = 0; // its periodic check is due now
+      const t0 = Date.now();
+      const r = await fetch(`${a.base}/api/ai/generate`, { method: 'POST', headers: as(user), body: JSON.stringify({ fn: 'research', prompt: 'ideas' }) });
+      expect(r.status).toBe(200);
+      expect(Date.now() - t0).toBeLessThan(1500);
+      const t1 = Date.now();
+      await a.ai.health({ id: user.user.id });
+      expect(Date.now() - t1).toBeLessThan(2600);
+    } finally {
+      supa.behavior.restDelayMs = 0;
+    }
+    await a.close();
+  }, 15_000);
+
+  it('usage updates made on another copy aren’t undone, and updates for entries not seen yet wait for them', async () => {
+    const mine = [{ id: 'm', at: 2, rev: 0, pending: true }];
+    const theirs = [{ id: 'm', at: 2, rev: 1, pending: false, credits: 41 }];
+    expect(mergeEntries(mine, theirs)[0]).toMatchObject({ pending: false, credits: 41 });
+    const st = createAppState({ supabaseUrl: supa.url, secretKey: supa.SECRET });
+    const { UsageLog } = await import('./providers/usage.mjs');
+    const a = new UsageLog('', { remote: st });
+    const b = new UsageLog('', { remote: st });
+    const id = a.add({ provider: 'manus', pending: true });
+    b.update(id, { pending: false, credits: 12 }); // b never saw it yet
+    await a.flushRemote();
+    await b.flushRemote();
+    await a.flushRemote();
+    const c = new UsageLog('', { remote: st });
+    await c.loadRemote();
+    expect(c.recent(50).find((e) => e.id === id)).toMatchObject({ pending: false, credits: 12 });
   });
 });
 

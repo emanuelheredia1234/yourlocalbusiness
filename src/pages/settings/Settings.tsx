@@ -258,7 +258,9 @@ function ProjectsData() {
       const d = defaultSettings();
       const patch: Partial<StoreState> = {};
       for (const k of EXPORT_KEYS) if (k in data) (patch as Record<string, unknown>)[k] = (data as Record<string, unknown>)[k];
-      patch.settings = { ...d, ...(data.settings ?? {}), ai: { ...d.ai, ...(data.settings?.ai ?? {}) }, profile: { ...d.profile, ...(data.settings?.profile ?? {}) }, accounts: { ...d.accounts, ...(data.settings?.accounts ?? {}) } };
+      // the AI server address is this device's choice: a backup (possibly from someone else) never changes it
+      const serverUrl = useStore.getState().settings.ai.serverUrl;
+      patch.settings = { ...d, ...(data.settings ?? {}), ai: { ...d.ai, ...(data.settings?.ai ?? {}), serverUrl }, profile: { ...d.profile, ...(data.settings?.profile ?? {}) }, accounts: { ...d.accounts, ...(data.settings?.accounts ?? {}) } };
       if (!patch.activeProjectId || !data.projects.some((p) => p.id === patch.activeProjectId)) patch.activeProjectId = data.projects[0]?.id ?? null;
       replaceState(patch);
       toast({ kind: 'success', title: 'Backup imported' });

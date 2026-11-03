@@ -20,7 +20,7 @@ const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['use
 /** tables with row-level security and no policies: only the secret key reaches them */
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state']);
 
-export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 } = {}) {
+export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600, missingTables = [] } = {}) {
   const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true });
   const kid = 'mock-key-1';
   const jwk = { ...(await exportJWK(publicKey)), kid, alg: 'ES256', use: 'sig' };
@@ -31,7 +31,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
   const tables = new Map(); // table → rows[]
   const objects = new Map(); // `${bucket}/${path}` → { bytes, type, created }
   const calls = [];
-  const behavior = { down: false };
+  // down: every request fails; restDelayMs: the database answers this slowly (auth stays quick)
+  const behavior = { down: false, restDelayMs: 0 };
   let server;
   let base = '';
 
@@ -135,6 +136,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
   }
 
   async function rest(req, res, url, table, raw) {
+    // like PostgREST before a migration has created the table
+    if (missingTables.includes(table)) return send(res, 404, { code: 'PGRST205', details: null, hint: null, message: `Could not find the table 'public.${table}' in the schema cache` });
     const who = await caller(req);
     if (!who) return send(res, 401, { code: 'PGRST301', message: 'JWT expired or invalid' });
     if (who.anon || (SERVICE_ONLY.has(table) && !who.service)) return send(res, 401, { code: '42501', message: 'permission denied for table ' + table });
@@ -182,12 +185,14 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
       const pk = (url.searchParams.get('on_conflict') || '').split(',').filter(Boolean);
       const keyCols = pk.length ? pk : PRIMARY_KEYS[table] ?? ['id'];
       const upsert = /resolution=merge-duplicates/.test(prefer);
+      const skipExisting = /resolution=ignore-duplicates/.test(prefer); // INSERT … ON CONFLICT DO NOTHING
       const written = [];
       for (const item of items) {
         if (!who.service && item.user_id !== who.userId) return send(res, 403, { code: '42501', message: 'new row violates row-level security policy for table "' + table + '"' });
         const row = { ...item, updated_at: new Date().toISOString() };
         const i = rows.findIndex((r) => keyCols.every((c) => r[c] === row[c]));
         if (i >= 0) {
+          if (skipExisting) continue;
           if (!upsert) return send(res, 409, { code: '23505', message: 'duplicate key value violates unique constraint' });
           rows[i] = { ...rows[i], ...row };
           written.push(rows[i]);
@@ -405,6 +410,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600 
     if (behavior.down) return send(res, 503, { message: 'mock outage' });
     if (url.pathname.startsWith('/auth/v1/')) return void authRoute(req, res, url, raw);
     const t = /^\/rest\/v1\/([a-z_]+)$/.exec(url.pathname);
+    if (t && behavior.restDelayMs) return void setTimeout(() => rest(req, res, url, t[1], raw), behavior.restDelayMs);
     if (t) return void rest(req, res, url, t[1], raw);
     if (url.pathname.startsWith('/storage/v1/')) return void storage(req, res, url, rawBuf);
     return send(res, 404, { message: 'mock: no route ' + url.pathname });
