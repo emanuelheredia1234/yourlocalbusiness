@@ -76,8 +76,12 @@ export default {
     throw new ProviderError('UPSTREAM', 'Manus is still processing the file. Try again in a minute.', { provider: ctx.label });
   },
 
-  /** Start a task (a paid, one-shot write: never retried). `files`: [{ file_id, filename }] from uploadFile. */
-  async create(ctx, { prompt, title, profile, interactive, hidden, image, files = [], signal }) {
+  /**
+   * Start a task (a paid, one-shot write: never retried). `files`: [{ file_id, filename }] from uploadFile.
+   * structuredOutputSchema: Manus fills it in when the task ends (structured_output in output());
+   * clearConnectors: the task runs without the account's connected apps (Gmail and so on).
+   */
+  async create(ctx, { prompt, title, profile, interactive, hidden, image, files = [], structuredOutputSchema = null, clearConnectors = false, signal }) {
     const file = image ? parseDataUrl(image.dataUrl) : null;
     const parts = [
       ...(file ? [{ type: 'file', file_data: `data:${file.mime};base64,${file.base64}`, filename: image.filename || 'image.jpg', mime_type: file.mime }] : []),
@@ -86,6 +90,8 @@ export default {
     const content = parts.length ? [{ type: 'text', text: prompt }, ...parts] : prompt;
     const body = { message: { content }, agent_profile: profile || 'standard', interactive_mode: !!interactive, hide_in_task_list: !!hidden };
     if (title) body.title = String(title).slice(0, 120);
+    if (structuredOutputSchema) body.structured_output_schema = structuredOutputSchema;
+    if (clearConnectors) body.clear_connectors = true;
     const p = await call(ctx, '/v2/task.create', { method: 'POST', body, signal, timeoutMs: 60_000 });
     const taskId = String(p.task_id ?? '');
     if (!taskId) throw new ProviderError('UPSTREAM', 'Manus didn’t return a task.', { provider: ctx.label });
@@ -149,6 +155,8 @@ export default {
       text: String(answer?.assistant_message?.content ?? ''),
       image_count: attachments.length,
       images,
+      // what Manus filled in for a task created with a structured_output_schema (the router reads it; never sent to the app)
+      structured_output: events.find((e) => e?.type === 'structured_output_result')?.structured_output_result ?? null,
     };
   },
 

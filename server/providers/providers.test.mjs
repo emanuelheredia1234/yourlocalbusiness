@@ -625,7 +625,8 @@ describe('the Assistant function', () => {
     const dir = tmpDir();
     fs.writeFileSync(path.join(dir, 'ai.json'), JSON.stringify({ providers: { openai: { functions: ['research', 'photos'] }, manus: { functions: ['facebook'] } }, order: [...PROVIDER_IDS] }));
     const store = new AIStore(path.join(dir, 'ai.json'), { env: { OPENAI_API_KEY: 'o', MANUS_API_KEY: 'm' } });
-    expect(store.settings('openai').functions).toEqual(['research', 'assistant', 'photos']);
+    // (Strategy was added later too: store.mjs ADDED_LATER)
+    expect(store.settings('openai').functions).toEqual(['strategy', 'research', 'assistant', 'photos']);
     expect(store.route('assistant')).toEqual(['openai']);
     // Manus doesn't write, so it never powers the Assistant
     expect(store.settings('manus').functions).toEqual(['facebook']);

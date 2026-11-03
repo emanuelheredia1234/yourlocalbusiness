@@ -5,11 +5,15 @@
 //   PUT  /api/ai/settings                  { order }                                                         (admin)
 //   GET  /api/ai/providers/:id/models?kind → built-in models plus the account's live list                   (admin)
 //   POST /api/ai/providers/:id/test        { compare?: string[] } → free key check, or a paid effort comparison (admin)
-//   POST /api/ai/generate                  { fn, prompt, images?, tier?, brain? } → { text, meta }
+//   POST /api/ai/generate                  { fn, prompt, images?, tier?, brain?, research? } → { text, meta }
+//                                          (research: { web: true, maxSearches?, location? } for functions marked
+//                                          "research", Strategy: a web search with sources in meta.research)
 //   POST /api/ai/image                     { prompt, aspect } → image bytes (meta in the x-ai-meta header)
 //   POST /api/ai/video                     { prompt, aspect, duration, firstFrame? } → job
 //   GET  /api/ai/video/:id                 → job;  GET /api/ai/video/:id/content → video bytes
-//   POST /api/ai/manus/create | /output | /continue   (Manus tasks, same shapes as the Zapier actions)
+//   POST /api/ai/manus/create | /output | /continue   (Manus tasks, same shapes as the Zapier actions;
+//                                          fn "marketResearch" sends { research: { niche, category, kind, typeLabel,
+//                                          city, region } } and the server writes the task itself)
 //   GET  /api/ai/usage                     → recent requests and totals                                      (admin)
 //   GET  /api/ai/limits | PUT { requestsPerDay?, usdPerDay? } → daily limits for signed-in users             (admin)
 //   GET  /api/ai/usage/users?days=7        → each user's daily counters                                     (admin)
@@ -36,6 +40,8 @@ import { USER_KEY_PROVIDERS } from '../userKeys.mjs';
 import { createLimits, utcDay } from '../limits.mjs';
 import { ASPECTS } from './adapters/images.mjs';
 import { ProviderError, parseDataUrl } from './http.mjs';
+import { researchFromBody, researchInfo } from './research.mjs';
+import { marketResearchFacts, marketResearchPrompt, marketResearchTitle } from './marketResearch.mjs';
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
@@ -234,9 +240,10 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
    * opts.estimateUsd: what the request will likely cost on the owner's keys. It's reserved (with the
    * request) before the counters are read, so parallel requests can't all pass. opts.charge: videos
    * add the estimate to the day as soon as they start (their real cost is known only when the job
-   * finishes); later(usd) then records the difference.
+   * finishes); later(usd) then records the difference. opts.strict (videos, and web research): refuse
+   * when the estimate alone would take the day over the dollar limit ("too costly"), before anything runs.
    */
-  async function gate(req, res, who, kind, { estimateUsd = 0, charge = false } = {}) {
+  async function gate(req, res, who, kind, { estimateUsd = 0, charge = false, strict = charge } = {}) {
     const noop = { ownKeys: null, meter: null, done: async () => {}, later: null };
     if (!isMetered(req, who)) return noop;
     const m = meterId(req, who);
@@ -247,7 +254,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     if (!own) {
       // reserve first (no await in between), then read: requests ahead of this one count against it
       release = limits.reserve(m.id, { usd: estimateUsd });
-      const st = await limits.status(m.id, store.limits(), { reservation: release, strict: charge });
+      const st = await limits.status(m.id, store.limits(), { reservation: release, strict });
       if (st.reached && who?.id && !st.unavailable) {
         // a key just added through another copy of the server may not be cached here yet
         ownKeys = await ownKeysOf(who, { fresh: true });
@@ -507,11 +514,19 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (prompt.length > MAX_PROMPT_CHARS) return reply(req, res, 413, { error: 'Prompt too long', code: 'BAD_REQUEST' });
       const fn = typeof b.fn === 'string' ? b.fn : '';
       if (fnById[fn]?.kind !== 'text') return reply(req, res, 400, { error: 'Unknown AI function.', code: 'BAD_REQUEST' });
-      const g = await gate(req, res, who, 'text', { estimateUsd: router.estimate('text', { fn }) });
+      // web research: only for functions marked "research"; clients choose how many searches and the place, nothing else
+      let research = null;
+      try {
+        research = researchFromBody(b, fn);
+      } catch (e) {
+        return reply(req, res, e.status || 400, { error: e.message, code: 'BAD_REQUEST' });
+      }
+      // a research request reserves what searching and reading pages may cost, and is refused up front when that's too much
+      const g = await gate(req, res, who, 'text', { estimateUsd: router.estimate('text', { fn, research }), strict: !!research });
       if (!g) return;
       const signal = abortOnClose(res);
       try {
-        const out = await withFreshKeys(() => router.text(fn, { prompt, images: cleanImages(b.images), tier: b.tier === 'quick' ? 'quick' : 'default', brain: typeof b.brain === 'boolean' ? b.brain : null, signal, userId: who?.id, ownKeys: g.ownKeys, meter: g.meter }));
+        const out = await withFreshKeys(() => router.text(fn, { prompt, images: cleanImages(b.images), tier: b.tier === 'quick' ? 'quick' : 'default', brain: typeof b.brain === 'boolean' ? b.brain : null, signal, userId: who?.id, ownKeys: g.ownKeys, meter: g.meter, research }));
         await g.done();
         return reply(req, res, 200, out);
       } catch (e) {
@@ -695,8 +710,10 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (!b) return;
       try {
         if (mt[1] === 'create') {
+          // deep research (Strategy): the server writes the task from the owner's facts; a client prompt is ignored
+          const research = b.fn === 'marketResearch';
           const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
-          if (!prompt) return reply(req, res, 400, { error: 'Missing prompt', code: 'BAD_REQUEST' });
+          if (!research && !prompt) return reply(req, res, 400, { error: 'Missing prompt', code: 'BAD_REQUEST' });
           // Manus is an agent with its own browser, signed in to the owner's accounts (Facebook…), and the
           // prompt is written by the caller: with accounts on, only the owner may give it tasks
           // …unless they've added their own Manus key: then it's their own account and credits
@@ -704,14 +721,23 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           if (auth.enabled && !isAdmin(req, who) && !ownKey) {
             return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings → AI.', code: 'OWN_KEY_NEEDED' });
           }
-          const image = typeof b.image_data_url === 'string' && parseDataUrl(b.image_data_url) ? { dataUrl: b.image_data_url, filename: typeof b.image_filename === 'string' ? b.image_filename.slice(0, 120) : 'image.jpg' } : null;
-          // one-shot write: never retried
-          // files already sent to Manus with /api/ai/manus/attach
-          const files = (Array.isArray(b.files) ? b.files : [])
-            .filter((f) => f && typeof f.file_id === 'string' && /^[A-Za-z0-9_-]{4,128}$/.test(f.file_id))
-            .slice(0, 3)
-            .map((f) => ({ file_id: f.file_id, filename: typeof f.filename === 'string' ? f.filename.slice(0, 120) : 'file' }));
-          const created = await withFreshKeys(() => router.manusCreate({ files, fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null, apiKey: ownKey }));
+          let created;
+          if (research) {
+            // only the six facts, each one line without quotes, angle brackets or URLs; no image, files or client title
+            const facts = marketResearchFacts(b.research);
+            if (!facts.niche && !facts.category) return reply(req, res, 400, { error: 'Missing market details', code: 'BAD_REQUEST' });
+            // one-shot write: never retried
+            created = await withFreshKeys(() => router.manusCreate({ fn: 'marketResearch', prompt: marketResearchPrompt(facts), title: marketResearchTitle(facts), interactive: false, hidden: false, image: null, files: [], owner: who?.id ?? null, apiKey: ownKey }));
+          } else {
+            const image = typeof b.image_data_url === 'string' && parseDataUrl(b.image_data_url) ? { dataUrl: b.image_data_url, filename: typeof b.image_filename === 'string' ? b.image_filename.slice(0, 120) : 'image.jpg' } : null;
+            // one-shot write: never retried
+            // files already sent to Manus with /api/ai/manus/attach
+            const files = (Array.isArray(b.files) ? b.files : [])
+              .filter((f) => f && typeof f.file_id === 'string' && /^[A-Za-z0-9_-]{4,128}$/.test(f.file_id))
+              .slice(0, 3)
+              .map((f) => ({ file_id: f.file_id, filename: typeof f.filename === 'string' ? f.filename.slice(0, 120) : 'file' }));
+            created = await withFreshKeys(() => router.manusCreate({ files, fn: b.fn, prompt: prompt.slice(0, 20_000), title: typeof b.title === 'string' ? b.title : '', interactive: b.interactive_mode === true || b.interactive_mode === 'true', hidden: b.hide_in_task_list === true || b.hide_in_task_list === 'true', image, owner: who?.id ?? null, apiKey: ownKey }));
+          }
           // the task list must reach Supabase before the app asks another copy of the server about it
           await router.tasksSaved();
           return reply(req, res, 200, created);
@@ -778,6 +804,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           ready: store.ready(id),
           models: s.models,
           effort: Object.fromEntries(Object.entries(s.effort).map(([kind, value]) => [kind, { id: value, label: value ? effortLabel(id, kind, value) : 'Set by the model' }])),
+          // can search the web for Strategy with its writing model, and the list price per search
+          research: researchInfo(id, s.models.text),
         };
       }),
       routing: Object.fromEntries(Object.entries(store.routing()).map(([fn, list]) => [fn, list.filter((id) => !hide.has(id))])),
@@ -793,8 +821,9 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (ownManus) {
         const s = store.settings('manus');
         base.ready = true;
-        base.providers.push({ id: 'manus', label: 'Manus (your key)', ready: true, own: true, models: s.models, effort: Object.fromEntries(Object.entries(s.effort).map(([kind, value]) => [kind, { id: value, label: value ? effortLabel('manus', kind, value) : 'Set by the model' }])) });
+        base.providers.push({ id: 'manus', label: 'Manus (your key)', ready: true, own: true, models: s.models, effort: Object.fromEntries(Object.entries(s.effort).map(([kind, value]) => [kind, { id: value, label: value ? effortLabel('manus', kind, value) : 'Set by the model' }])), research: null });
         base.routing.facebook = ['manus'];
+        base.routing.marketResearch = ['manus'];
         base.routing.photos = [...(base.routing.photos ?? []), 'manus'];
       }
       // a signed-in user's own keys: functions of a kind they can do run on them (and only them)
@@ -812,7 +841,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           }
           // the owner's key with the same id is never used for this user: theirs replaces it
           base.providers = base.providers.filter((x) => x.id !== id);
-          base.providers.push({ id, label: ownLabel(id), ready: true, own: true, models, effort });
+          base.providers.push({ id, label: ownLabel(id), ready: true, own: true, models, effort, research: researchInfo(id, PROVIDERS[id].kinds.text?.defaultModel) });
         }
         if (ownIds.length) base.ready = true;
         for (const f of FUNCTIONS) {

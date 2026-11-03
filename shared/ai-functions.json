@@ -5,6 +5,7 @@
     { "id": "agents", "label": "Agents" }
   ],
   "functions": [
+    { "id": "strategy", "label": "Strategy", "group": "writing", "kind": "text", "research": true, "desc": "Research and a plan to get clients and sales: where to promote, what to post and make, which page to build, and guides for outreach emails and your SEO page. Can search the web.", "tasks": ["strategyResearch", "strategyPromote", "strategyContent", "strategyAssets", "strategyOutreach", "strategyPlan"] },
     { "id": "research", "label": "Product research", "group": "writing", "kind": "text", "desc": "Product ideas, demand signals and pricing.", "tasks": ["productIdeas"] },
     { "id": "brand", "label": "Brand kit & voice", "group": "writing", "kind": "text", "desc": "Names, taglines, colors and Brain skill tests.", "tasks": ["brandKit", "skillTest"] },
     { "id": "product", "label": "Product outline & chapters", "group": "writing", "kind": "text", "desc": "Outlines, chapter drafts and item details.", "tasks": ["outline", "sectionDraft", "expandItem"] },
@@ -20,6 +21,7 @@
     { "id": "assistant", "label": "Assistant", "group": "writing", "kind": "text", "desc": "The chat at the bottom right: answers questions and does things in the app when you ask.", "tasks": [] },
     { "id": "photos", "label": "Photos", "group": "media", "kind": "image", "desc": "AI photos for posts and listings.", "tasks": [] },
     { "id": "videos", "label": "Videos", "group": "media", "kind": "video", "desc": "AI videos for posts and product demos.", "tasks": [] },
+    { "id": "marketResearch", "label": "Deep research (Manus)", "group": "agents", "kind": "agent", "desc": "For Strategy: Manus opens public web pages about your market and reports what each one says, with its link. Uses Manus credits and takes several minutes.", "tasks": [] },
     { "id": "facebook", "label": "Social posting", "group": "agents", "kind": "agent", "desc": "An agent posts on your Facebook, Instagram, TikTok, LinkedIn and X accounts (right away or scheduled), with the post’s image or video.", "tasks": [] }
   ]
 }

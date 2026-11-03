@@ -1,18 +1,70 @@
 // xAI: Grok chat (effort in top-level `reasoning_effort`), Grok Imagine photos (`quality`) and
 // Grok Imagine video (`resolution`; asynchronous: start, then poll /videos/{request_id}).
+// Web research (Strategy) runs on xAI's Responses API, the only one with its web_search tool.
 
 import { ProviderError, downloadBytes, errorFromResponse, num, requestJson, sniffVideo } from '../http.mjs';
 import { chatText, listModelIds } from './chat.mjs';
 import { imagesGenerations, nearestRatio } from './images.mjs';
+import { noTextError, responsesOutput, responsesUsage } from './responses.mjs';
+import { RESEARCH_TIMEOUT_MS, TOOL_REFUSED } from '../research.mjs';
 
 const auth = (key) => ({ authorization: `Bearer ${key}` });
 const IMAGE_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '2:1', '1:2', '20:9', '9:20', '21:9', '5:2'];
 
+const chat = (ctx, { model, effort, system, prompt, images, signal, timeoutMs }) =>
+  chatText(ctx, { url: `${ctx.base}/chat/completions`, headers: auth(ctx.key), model, system, prompt, images, effortBody: effort ? { reasoning_effort: effort } : {}, signal, timeoutMs });
+
+/** A research request on /responses: web_search only (X search is billed per post, so it's left out). */
+async function researchText(ctx, { model, effort, system, prompt, images, signal, timeoutMs, research }) {
+  const body = {
+    model,
+    instructions: system,
+    input: [{ role: 'user', content: [...(images ?? []).map((url) => ({ type: 'input_image', image_url: url })), { type: 'input_text', text: prompt }] }],
+    tools: [{ type: 'web_search' }],
+    // keeps [[1]](url) links out of the answer (they would land outside the JSON)
+    include: ['no_inline_citations'],
+    max_turns: Math.min(4, research.maxSearches),
+    store: false,
+  };
+  if (effort) body.reasoning = { effort };
+  const t = timeoutMs ?? RESEARCH_TIMEOUT_MS;
+  const r = await requestJson(ctx.fetch, `${ctx.base}/responses`, { method: 'POST', headers: auth(ctx.key), body, timeoutMs: t, signal, label: ctx.label });
+  if (!r.ok) {
+    const err = errorFromResponse(r.status, r.payload, ctx.label);
+    // the search tool itself was refused (a 400 isn't billed): answer through chat, without searching
+    if (r.status === 400 && err.code === 'BAD_REQUEST' && TOOL_REFUSED.test(err.message)) {
+      return { ...(await chat(ctx, { model, effort, system, prompt, images, signal, timeoutMs: t })), research: { searches: 0, sources: [], queries: [], errors: [], refused: true } };
+    }
+    throw err;
+  }
+  const p = r.payload && typeof r.payload === 'object' ? r.payload : {};
+  const o = responsesOutput(p);
+  const text = o.text || o.allText;
+  if (!text) throw noTextError(p, o.refusal, ctx.label);
+  const u = p.usage ?? {};
+  // xAI reports the exact cost, searches included: 10,000,000,000 ticks per dollar
+  const ticks = num(u.cost_in_usd_ticks);
+  const nano = num(u.cost_in_nano_usd);
+  return {
+    text,
+    model: typeof p.model === 'string' && p.model ? p.model : model,
+    usage: responsesUsage(u),
+    cost: ticks !== null ? ticks / 1e10 : nano !== null ? nano / 1e9 : null,
+    research: {
+      searches: num(u.server_side_tool_usage_details?.web_search_calls) ?? o.searchCalls,
+      sources: [...o.sources, ...(Array.isArray(p.citations) ? p.citations.filter((url) => typeof url === 'string').map((url) => ({ url })) : [])],
+      queries: o.queries,
+      errors: o.errors,
+    },
+  };
+}
+
 export default {
   base: 'https://api.x.ai/v1',
 
-  text(ctx, { model, effort, system, prompt, images, signal, timeoutMs }) {
-    return chatText(ctx, { url: `${ctx.base}/chat/completions`, headers: auth(ctx.key), model, system, prompt, images, effortBody: effort ? { reasoning_effort: effort } : {}, signal, timeoutMs });
+  text(ctx, opts) {
+    if (opts.research) return researchText(ctx, opts);
+    return chat(ctx, opts);
   },
 
   async image(ctx, { model, effort, prompt, aspect, signal }) {
