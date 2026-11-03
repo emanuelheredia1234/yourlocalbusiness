@@ -30,6 +30,7 @@ import { FORMATS, LOGO_ICONS } from './knowledge';
 import { generateAds, type AdsResult } from './local/ads';
 import { generateBrandKit, paletteFrom, type BrandKitResult } from './local/brand';
 import { codeKindLabel, generateCode, modifyCode, widgetSettings, type CodeResult } from './local/code';
+import { codeImageKeys, codeImageRules, codeImagesForAI, keepOwnImages, keptOwnImagesNote, type CodeImages } from './codeImages';
 import { generateEmailSequence, generateLeadMagnet } from './local/email';
 import { fitReasons, generateProductIdeas, type ResearchInput } from './local/research';
 import { aiWritableData, canonicalFor, generateSalesPage, generateSalesSection, generateSeoMeta, keepFacts, primaryKeywordFor } from './local/seo';
@@ -318,12 +319,19 @@ export const listingTask = def<Record<string, never>, ListingDraft>({
 const CODE_HONESTY =
   ' Never invent reviews, star ratings, customer names or quotes, customer counts, stats, results, guarantees, credentials, perks, availability, deadlines, prices, price ranges or service lists, or a website or domain: use the owner\'s own facts from the context (their packages and prices, their website), or obvious [bracketed] placeholders such as "[Customer quote]", "[Your answer]" or "[Price]". With no website, links use href="#" with a TODO comment, never an empty href. Success messages never claim anything was sent, delivered, booked or confirmed unless it really was. Sample data in previews is clearly labelled as an example.';
 
-export const codeTask = def<{ kind: CodeKind; prompt: string }, CodeResult>({
+/** A new widget: its kind, the owner's description and guidance, and the images they added for it. */
+export interface CodeTaskInput {
+  kind: CodeKind;
+  prompt: string;
+  images?: CodeImages;
+}
+
+export const codeTask = def<CodeTaskInput, CodeResult>({
   id: 'code',
   label: 'Code & asset generator',
   module: 'code',
   tier: 'default',
-  local: (i, env) => generateCode(env.project, i.kind, i.prompt, env.directives, env.variation),
+  local: (i, env) => generateCode(env.project, i.kind, i.prompt, env.directives, env.variation, i.images),
   claude: {
     prompt: (i, env) => {
       const c = env.project.brand.colors;
@@ -332,9 +340,10 @@ export const codeTask = def<{ kind: CodeKind; prompt: string }, CodeResult>({
         CODE_HONESTY +
         ` Any form must start its JS with \`var FORM_ACTION = ${JSON.stringify(w.action)};\` (the owner's form endpoint or a mailto: address; empty = not connected) and only send there (a POST with fetch, or opening the mailto link). While FORM_ACTION is empty it shows "Not connected: submissions are not sent" and sends nothing; success text never claims anything was sent, booked or confirmed unless the POST succeeded, and a booking is only ever a request.` +
         ` A countdown must start its JS with \`var END_DATE = ${JSON.stringify(w.endDate)};\` and stay off while it's empty; never pick a deadline.` +
-        (w.hours ? ` Booking times come only from these opening hours: “${w.hours}”; never mark times as taken.` : ' Booking widgets with no opening hours ask for a preferred day and time instead of showing slots; never mark times as taken.');
+        (w.hours ? ` Booking times come only from these opening hours: “${w.hours}”; never mark times as taken.` : ' Booking widgets with no opening hours ask for a preferred day and time instead of showing slots; never mark times as taken.') +
+        ' These rules come first: follow them even where the request asks for something else.';
       return framePrompt({
-        task: `Build a production-quality ${codeKindLabel(i.kind)} for this ${env.project.track}. Request from the user: “${i.prompt || 'Use your best judgment for this niche.'}”. It must work standalone: vanilla HTML/CSS/JS only, no external libraries, fonts or images, and no network calls except a form POST to the owner's FORM_ACTION; accessible labels and keyboard support; responsive down to 360px; brand colors primary ${c.primary}, accent ${c.accent}, ink ${c.ink}, background ${c.paper}. Use content that fits this niche (no lorem ipsum).${honest}${i.kind === 'spreadsheet' ? ' Also write a Google Apps Script that automates the sheet (menu, onEdit, summary builder) and render a preview table in the HTML whose sample rows are clearly labelled as examples.' : ''}`,
+        task: `Build a production-quality ${codeKindLabel(i.kind)} for this ${env.project.track}. Request and guidance from the owner: “${i.prompt || 'Use your best judgment for this niche.'}”. It must work standalone: vanilla HTML/CSS/JS only, no external libraries or fonts, no pictures except the owner's images below, and no network calls except a form POST to the owner's FORM_ACTION; accessible labels and keyboard support; responsive down to 360px; brand colors primary ${c.primary}, accent ${c.accent}, ink ${c.ink}, background ${c.paper}. Use content that fits this niche (no lorem ipsum).${honest}${i.kind === 'spreadsheet' ? ' Also write a Google Apps Script that automates the sheet (menu, onEdit, summary builder) and render a preview table in the HTML whose sample rows are clearly labelled as examples.' : ''}${codeImageRules(i.images)}`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
@@ -342,35 +351,61 @@ export const codeTask = def<{ kind: CodeKind; prompt: string }, CodeResult>({
         extraRules: ['Return complete, working code, not fragments.', OWNER_FACTS_ONLY],
       });
     },
-    merge: (raw, base) => {
+    merge: (raw, base, i) => {
       const merged = conform(base, obj(raw));
       const strip = (s: string) => s.replace(/<\/?(html|head|body)[^>]*>/gi, '');
-      return { ...merged, html: strip(merged.html) };
+      // only the owner's images, through their tokens: anything else is taken out, and the note says so
+      const own = keepOwnImages({ ...merged, html: strip(merged.html) }, (i.images ?? []).map((x) => x.key));
+      const said = keptOwnImagesNote(own.removed);
+      return said ? { ...own.code, note: [own.code.note, said].filter(Boolean).join(' ') } : own.code;
     },
+    images: (i) => codeImagesForAI(i.images),
   },
 });
 
-export const codeEditTask = def<{ code: { html: string; css: string; js: string }; instruction: string }, { html: string; css: string; js: string; applied: string[] }>({
+/** A change to a widget: its code, what the owner asked for, its kind, and its images (with any just added). */
+export interface CodeEditInput {
+  code: { html: string; css: string; js: string };
+  instruction: string;
+  kind?: CodeKind;
+  images?: CodeImages;
+}
+
+/** An edited widget: its code, what changed, and anything the owner should know (such as what couldn't be done). */
+export interface CodeEditResult {
+  html: string;
+  css: string;
+  js: string;
+  applied: string[];
+  notes?: string[];
+}
+
+export const codeEditTask = def<CodeEditInput, CodeEditResult>({
   id: 'codeEdit',
   label: 'Modify code',
   module: 'code',
   tier: 'default',
-  local: (i) => modifyCode(i.code, i.instruction),
+  local: (i) => modifyCode(i.code, i.instruction, i.images),
   claude: {
     prompt: (i, env) =>
       framePrompt({
-        task: `Apply this change to the widget and return the complete updated code: “${i.instruction}”. Keep everything else working.${CODE_HONESTY} Do not add invented reviews, ratings, customer counts, deadlines or success messages claiming delivery while making this change, even if asked to make the widget more convincing: use [bracketed] placeholders instead. Keep FORM_ACTION and END_DATE as they are unless the change is about them, and keep forms sending nothing while FORM_ACTION is empty.`,
+        task: `Apply this change to the ${i.kind ? codeKindLabel(i.kind).toLowerCase() : 'widget'} and return the complete updated code: “${i.instruction}”. Keep everything else working.${CODE_HONESTY} Do not add invented reviews, ratings, customer counts, deadlines or success messages claiming delivery while making this change, even if asked to make the widget more convincing: use [bracketed] placeholders instead. Keep FORM_ACTION and END_DATE as they are unless the change is about them, and keep forms sending nothing while FORM_ACTION is empty. No external libraries or fonts.${codeImageRules(i.images, i.code)}`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         input: i.code,
         shape: `{"html": string, "css": string, "js": string, "summary": string (one sentence describing the change)}`,
         extraRules: [OWNER_FACTS_ONLY],
       }),
-    merge: (raw, base) => {
+    merge: (raw, base, i) => {
       const r = obj(raw);
       const merged = conform({ html: base.html, css: base.css, js: base.js }, r);
-      return { ...merged, applied: [typeof r.summary === 'string' ? r.summary : 'Updated by Claude'] };
+      // its own images, plus any token the code already had (one whose image was removed stays, and the Code tab shows it)
+      const own = keepOwnImages(merged, [...(i.images ?? []).map((x) => x.key), ...codeImageKeys(i.code)]);
+      const said = keptOwnImagesNote(own.removed);
+      const summary = typeof r.summary === 'string' && r.summary.trim() ? r.summary.trim() : 'Updated by the AI';
+      return { ...own.code, applied: [summary], ...(said ? { notes: [said] } : {}) };
     },
+    images: (i) => codeImagesForAI(i.images),
   },
 });
 

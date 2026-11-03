@@ -1,5 +1,6 @@
-import type { BrandColors, CodeKind, Directives, Project, ServicePackage } from '@/lib/types';
-import { escapeHtml, hashStr, readableOn, todayStr, toDateStr, lighten, darken } from '@/lib/utils';
+import type { BrandColors, CodeKind, Directives, Project, PromptImage, ServicePackage } from '@/lib/types';
+import { escapeHtml, hashStr, readableOn, todayStr, toDateStr, lighten, darken, listJoin, truncate } from '@/lib/utils';
+import { imageKeyNumber, imageTokens, resolveImageTokens } from '@/lib/promptImages';
 import type { CalcKind } from '../knowledge';
 import { buildFacts, verbOutcome, Voice, type Facts } from '../text';
 
@@ -34,23 +35,40 @@ export const CODE_KINDS: { id: CodeKind; label: string; desc: string; icon: stri
   { id: 'roi', label: 'ROI / savings calculator', desc: 'Shows the money or time your offer saves', icon: 'trending-up' },
 ];
 
-export function detectKind(prompt: string, project: Project): CodeKind {
+// Words that name a kind of widget. Whole words where a part would mislead: "ebook", "bookkeeping" and
+// "Facebook" aren't bookings, "preview" isn't a review, "information" isn't a form.
+const KIND_WORDS: [RegExp, CodeKind][] = [
+  [/\broi\b|return on|savings calc|how much (?:time|money)/, 'roi'],
+  [/spreadsheet|google sheets?|excel|formula|apps ?script/, 'spreadsheet'],
+  [/calculat|estimat|cost of|compute/, 'calculator'],
+  [/countdown|timer|deadline|launch clock/, 'countdown'],
+  [/quiz|assessment|score yourself|personality test/, 'quiz'],
+  [/testimonial|\breviews?\b|carousel|slider/, 'testimonials'],
+  [/\bbook(?:ings?|s|ed)?\b|appointment|schedul|reserv/, 'booking'],
+  [/pricing|\bplans\b|\btiers\b|\bpackages\b/, 'pricing'],
+  [/\bfaqs?\b|\bquestions\b|accordion/, 'faq'],
+  [/checklist|to-?do|habit tracker|task list/, 'checklist'],
+  [/\bhero\b|landing|\bheader\b|above the fold|homepage/, 'hero'],
+  [/\bforms?\b|opt-?in|sign ?up|subscribe|\bleads?\b|waitlist|email capture|newsletter/, 'leadform'],
+];
+
+/**
+ * The kind of widget a request names, or null when it names none. When it names several, the first one
+ * wins: people say what it is first ("a FAQ that answers pricing questions" is a FAQ, not a pricing table).
+ */
+export function matchKind(prompt: string): CodeKind | null {
   const p = prompt.toLowerCase();
-  const tests: [RegExp, CodeKind][] = [
-    [/\broi\b|return on|savings calc|how much (?:time|money)/, 'roi'],
-    [/spreadsheet|google sheets?|excel|formula|apps ?script/, 'spreadsheet'],
-    [/calculat|estimat|cost of|compute/, 'calculator'],
-    [/countdown|timer|deadline|launch clock/, 'countdown'],
-    [/quiz|assessment|score yourself|personality test/, 'quiz'],
-    [/testimonial|review|carousel|slider/, 'testimonials'],
-    [/book|appointment|schedul|reserv/, 'booking'],
-    [/pricing|plans|tiers|packages/, 'pricing'],
-    [/faq|questions|accordion/, 'faq'],
-    [/checklist|to-?do|habit tracker|task list/, 'checklist'],
-    [/hero|landing|header|above the fold|homepage/, 'hero'],
-    [/form|opt-?in|sign ?up|subscribe|lead|waitlist|email capture|newsletter/, 'leadform'],
-  ];
-  for (const [re, kind] of tests) if (re.test(p)) return kind;
+  let best: { at: number; kind: CodeKind } | null = null;
+  for (const [re, kind] of KIND_WORDS) {
+    const m = re.exec(p);
+    if (m && (!best || m.index < best.at)) best = { at: m.index, kind };
+  }
+  return best?.kind ?? null;
+}
+
+export function detectKind(prompt: string, project: Project): CodeKind {
+  const named = matchKind(prompt);
+  if (named) return named;
   if (project.track === 'business') return 'booking';
   if (project.format === 'spreadsheet') return 'spreadsheet';
   return 'calculator';
@@ -1210,9 +1228,108 @@ function flagOverdue() {
   return { name: `${f.topic} Tracker (spreadsheet)`, kind: 'spreadsheet', html, css, js, script, note: 'The preview rows are labelled examples, not your data. Start your sheet with your own entries.' };
 }
 
+// ───────────── the owner's images ─────────────
+// The code refers to the owner's images only as {{img-N}} tokens; each place that shows it fills in the
+// address (see buildDocument). Without an AI, an image goes where the template has a natural spot.
+
+type Code = { html: string; css: string; js: string };
+
+/** Where an image went: in place of the hero's sample window, the lead form's cover, as a sheet's logo, or at the top. */
+export type ImageSpot = 'hero' | 'cover' | 'logo' | 'top';
+
+const IMAGE_CSS: Record<ImageSpot, string> = {
+  hero: '.hero-img { display: block; width: 100%; height: auto; max-height: 520px; object-fit: cover; border-radius: var(--radius); box-shadow: 0 30px 60px -30px rgba(0,0,0,.35); }\n',
+  cover: '.cover-img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: calc(var(--radius) * .8); box-shadow: 0 20px 40px -20px rgba(0,0,0,.35); }\n',
+  logo: '.sheet-logo { height: 28px; width: auto; max-width: 120px; object-fit: contain; vertical-align: middle; margin-right: 8px; }\n',
+  top: '.ylb-photo { display: block; width: 100%; height: auto; max-height: 280px; object-fit: cover; border-radius: calc(var(--radius) * .7); margin: 0 0 16px; }\n',
+};
+
+const SPOT_LABEL: Record<ImageSpot, string> = { hero: 'in place of the sample window', cover: 'as the cover', logo: 'next to the title', top: 'at the top' };
+
+/** The CSS rule an image spot needs ('' when the code already has it). */
+function spotCss(css: string, spot: ImageSpot): string {
+  const rule = IMAGE_CSS[spot];
+  return css.includes(rule.slice(0, rule.indexOf('{'))) ? '' : rule;
+}
+
+/**
+ * An <img> for one of the owner's images. Its alt text is the owner's note; without one it's left empty
+ * (nothing is made up about what the picture shows) with a TODO saying so.
+ */
+function imgTag(img: PromptImage, cls: string): string {
+  const note = img.note?.trim().replace(/\s+/g, ' ') ?? '';
+  const todo = note ? '' : `<!-- TODO: describe image ${imageKeyNumber(img.key)} in alt="" (what it shows), or leave it empty if it's only decoration. -->`;
+  return `${todo}<img class="${cls}" src="{{${img.key}}}" alt="${escapeHtml(truncate(note, 140))}" />`;
+}
+
+/** [start, end) of the <div> that opens at `start`, nested divs included; null when it never closes. */
+function divSpan(html: string, start: number): [number, number] | null {
+  const tags = /<(\/?)div\b[^>]*>/gi;
+  tags.lastIndex = start;
+  let depth = 0;
+  for (let m = tags.exec(html); m; m = tags.exec(html)) {
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) return [start, m.index + m[0].length];
+  }
+  return null;
+}
+
+/**
+ * Put one of the owner's images where the widget has a natural spot: in place of the hero's sample
+ * window or the lead form's cover, as the logo of a sheet, else at the top (before its first label pill,
+ * or at the very start). Returns the new HTML, the spot, and the CSS rule the spot needs ('' if present).
+ */
+export function placeImage(code: Pick<Code, 'html' | 'css'>, img: PromptImage): { html: string; spot: ImageSpot; css: string } {
+  let html = code.html;
+  let spot: ImageSpot = 'top';
+  const swap = (at: number, cls: string) => {
+    const span = at >= 0 ? divSpan(html, at) : null;
+    if (!span) return false;
+    html = html.slice(0, span[0]) + imgTag(img, cls) + html.slice(span[1]);
+    return true;
+  };
+  if (swap(html.search(/<div class="window"[\s>]/), 'hero-img')) {
+    spot = 'hero';
+    // the sample window was decoration; the owner's picture is content
+    html = html.replace(/(<div class="visual") aria-hidden="true"/, '$1');
+  } else if (swap(html.search(/<div class="cover"[\s>]/), 'cover-img')) spot = 'cover';
+  else if (html.includes('<div class="toolbar"><b>')) {
+    html = html.replace('<div class="toolbar"><b>', `<div class="toolbar"><b>${imgTag(img, 'sheet-logo')}`);
+    spot = 'logo';
+  } else {
+    const pill = html.indexOf('<span class="pill">');
+    const tag = imgTag(img, 'ylb-photo');
+    if (pill >= 0) {
+      const indent = /[ \t]*$/.exec(html.slice(0, pill))?.[0] ?? '';
+      html = `${html.slice(0, pill)}${tag}\n${indent}${html.slice(pill)}`;
+    } else html = `${tag}\n${html}`;
+  }
+  return { html, spot, css: spotCss(code.css, spot) };
+}
+
+const keyRe = (keys: string[]) => keys.map((k) => String(imageKeyNumber(k))).filter((n) => n !== '0').join('|');
+
+/**
+ * The code without these images: their <img> (and <source>) tags go, CSS backgrounds that use them
+ * become `none`, and any other use of their token is blanked. Nothing else changes.
+ */
+export function removeImages<T extends Code>(code: T, keys: string[]): T {
+  const nums = keyRe(keys);
+  if (!nums) return code;
+  const token = `\\{\\{\\s*img-(?:${nums})\\s*\\}\\}`;
+  const tag = new RegExp(`(?:<!-- TODO: describe image (?:${nums}) [^>]*?-->\\s*)?<(?:img|source)\\b[^>]*?${token}[^>]*>\\s*`, 'gi');
+  const url = new RegExp(`url\\(\\s*(["']?)${token}\\1\\s*\\)`, 'gi');
+  const any = new RegExp(token, 'gi');
+  const clean = (s: string) => s.replace(url, 'none').replace(any, '');
+  return { ...code, html: clean(code.html.replace(tag, '')), css: clean(code.css), js: code.js.replace(any, '') };
+}
+
+/** Images by number, for the owner: "image 2", "images 1 and 3". */
+const imageNames = (keys: string[]) => `${keys.length === 1 ? 'image' : 'images'} ${listJoin(keys.map((k) => String(imageKeyNumber(k))))}`;
+
 // ───────────── entry points ─────────────
 
-export function generateCode(project: Project, kind: CodeKind, prompt: string, d: Directives = {}, variation = 0): CodeResult {
+export function generateCode(project: Project, kind: CodeKind, prompt: string, d: Directives = {}, variation = 0, images: PromptImage[] = []): CodeResult {
   const f = buildFacts(project);
   const v = Voice.create(f, d, hashStr(`${project.id}|code|${kind}|${variation}|${prompt}`));
   const colors = project.brand.colors;
@@ -1261,6 +1378,13 @@ export function generateCode(project: Project, kind: CodeKind, prompt: string, d
       res = spreadsheetCode(f, colors);
   }
   if (titleFromPrompt) res.name = titleFromPrompt;
+  // the template can't tell what the pictures show, so only the first goes in, where it fits best; the
+  // Code tab says which others aren't used yet
+  const first = images.find((i) => i.media.kind === 'image');
+  if (first) {
+    const placed = placeImage(res, first);
+    res = { ...res, html: placed.html, css: res.css + placed.css };
+  }
   return res;
 }
 
@@ -1279,10 +1403,67 @@ const COLOR_WORDS: Record<string, string> = {
   brown: '#7C4A2D',
 };
 
-/** Built-in editor for code: understands common design requests. */
-export function modifyCode(code: { html: string; css: string; js: string }, instruction: string): { html: string; css: string; js: string; applied: string[] } {
+/** A request about the owner's pictures ("put image 2 at the top"); "logo colors" is about colors. */
+const IMAGE_WORDS = /\b(?:images?|photos?|pictures?|pics?|logo)\b(?!\s*colou?rs?)|\bimg-\d+\b|\{\{\s*img-\d+\s*\}\}/;
+const PICTURE = String.raw`(?:images?|photos?|pictures?|pics?|logo|img-\d+|\{\{\s*img-\d+\s*\}\})\b(?!\s*colou?rs?)`;
+/**
+ * Adding or taking out a picture: the verb acts on the picture itself, a few words at most before it
+ * ("put the shop photo at the top", "remove image 2"), so "use my accent color for the image border",
+ * "add a drop shadow to image 1" or "remove the shadow from the photo" aren't about adding or removing one.
+ */
+const ADD_PICTURE = new RegExp(String.raw`\b(?:add|use|put|place|show|insert|include|display)\b(?:\s+[\w’'-]+){0,3}?\s+${PICTURE}`);
+const REMOVE_PICTURE = new RegExp(String.raw`\b(?:remove|delete|drop(?!\s*-?shadows?)|take out|get rid of)\b(?:\s+[\w’'-]+){0,2}?\s+${PICTURE}`);
+/** Images the request names by number: "image 2", "photo #3", "img-4", "{{img-5}}". */
+const NAMED_IMAGE = /\b(?:images?|photos?|pictures?|pics?|img)[\s#-]*(\d{1,2})\b|\{\{\s*img-(\d{1,2})\s*\}\}/gi;
+
+/**
+ * The built-in editor's part for the owner's images: add one where the widget has a natural spot (the
+ * one named, else the first not used yet), or take one out (the one named, or the only one shown).
+ */
+function editImages(code: Code, instruction: string, images: PromptImage[]): { code: Code; css: string; applied: string[]; notes: string[] } {
   const ins = instruction.toLowerCase();
-  const applied: string[] = [];
+  const out = { code, css: '', applied: [] as string[], notes: [] as string[] };
+  if (!IMAGE_WORDS.test(ins)) return out;
+  const named = [...new Set([...instruction.matchAll(NAMED_IMAGE)].map((m) => `img-${Number(m[1] ?? m[2])}`))];
+  const own = images.filter((i) => i.media.kind === 'image');
+  const used = imageTokens(`${code.html}\n${code.css}\n${code.js}`);
+  if (REMOVE_PICTURE.test(ins)) {
+    const gone = named.length ? named.filter((k) => used.includes(k)) : used.length === 1 ? used : [];
+    if (gone.length) {
+      out.code = removeImages(code, gone);
+      out.applied.push(`Took out ${imageNames(gone)}`);
+    } else out.notes.push(!used.length ? 'It doesn’t show any of your images.' : named.length ? `It doesn’t show ${imageNames(named)}.` : 'Say which image to take out, e.g. “remove image 2”.');
+    return out;
+  }
+  if (!ADD_PICTURE.test(ins)) return out;
+  if (!own.length) {
+    out.notes.push('Add the image first (Add images, or paste it into the box), then ask again.');
+    return out;
+  }
+  const wanted = named.find((k) => !used.includes(k));
+  const unused = own.filter((i) => !used.includes(i.key));
+  // "this photo" or "the new photo" is the one just added: the last not shown yet
+  const pick = named.length ? own.find((i) => i.key === wanted) : /\b(?:this|new|newest|latest|last)\b/.test(ins) ? unused[unused.length - 1] : unused[0];
+  if (!pick) {
+    const missing = named.filter((k) => !own.some((i) => i.key === k));
+    out.notes.push(missing.length ? `There’s no ${imageNames(missing)} in this asset.` : named.length ? `It already shows ${imageNames(named)}.` : 'All your images are in it already. Add another one, or say which to use, e.g. “use image 2”.');
+    return out;
+  }
+  const placed = placeImage(code, pick);
+  out.code = { ...code, html: placed.html };
+  out.css = placed.css;
+  out.applied.push(`Added image ${imageKeyNumber(pick.key)} ${SPOT_LABEL[placed.spot]}`);
+  return out;
+}
+
+/** Built-in editor for code: understands common design requests, and adding or taking out the owner's images. */
+export function modifyCode(code: Code, instruction: string, images: PromptImage[] = []): Code & { applied: string[]; notes: string[] } {
+  const ins = instruction.toLowerCase();
+  const pictures = editImages(code, instruction, images);
+  code = pictures.code;
+  const applied: string[] = [...pictures.applied];
+  // "make image 1 bigger" is about the picture, which this editor can't resize: not the text size
+  const aboutText = !IMAGE_WORDS.test(ins) || /\b(?:text|font|type|words?|letters?)\b/.test(ins);
   let css = code.css.replace(/\n\/\* ylb-overrides \*\/[\s\S]*$/, '');
   const prior = /\/\* ylb-overrides \*\/\n:root \{([^}]*)\}/.exec(code.css)?.[1] ?? '';
   const vars = new Map<string, string>();
@@ -1294,7 +1475,8 @@ export function modifyCode(code: { html: string; css: string; js: string }, inst
       const [k, ...rest] = pair.split(':');
       vars.set(k.trim(), rest.join(':').trim());
     });
-  let extra = '';
+  // a rule an added image needs goes with the other additions, which later edits keep
+  let extra = pictures.css;
   if (/\bdark\b/.test(ins)) {
     vars.set('--bg', '#0f1412');
     vars.set('--card', '#18201c');
@@ -1307,7 +1489,8 @@ export function modifyCode(code: { html: string; css: string; js: string }, inst
     ['--bg', '--card', '--ink', '--muted', '--line'].forEach((k) => vars.delete(k));
     applied.push('Light theme');
   }
-  if (/round|pill|soft/.test(ins)) {
+  // whole words: "background" and "around" aren't asking for rounder corners
+  if (/\bround|\bpill|\bsoft(?:er)?\b/.test(ins)) {
     vars.set('--radius', '22px');
     applied.push('Rounder corners');
   }
@@ -1315,11 +1498,11 @@ export function modifyCode(code: { html: string; css: string; js: string }, inst
     vars.set('--radius', '4px');
     applied.push('Sharper corners');
   }
-  if (/bigger|larger|increase (?:the )?(?:font|text)|more readable/.test(ins)) {
+  if (aboutText && /bigger|larger|increase (?:the )?(?:font|text)|more readable/.test(ins)) {
     vars.set('--scale', '1.12');
     applied.push('Larger text');
   }
-  if (/smaller|compact|tighter/.test(ins)) {
+  if (aboutText && /smaller|compact|tighter/.test(ins)) {
     vars.set('--scale', '0.92');
     applied.push('Compact text');
   }
@@ -1352,37 +1535,74 @@ export function modifyCode(code: { html: string; css: string; js: string }, inst
     extra += '.ylb, .ylb-card { text-align: center; }\n';
     applied.push('Centered layout');
   }
-  if (/shadow|depth|pop/.test(ins)) {
-    extra += '.ylb-card, .tier, .window { box-shadow: 0 28px 60px -24px rgba(0,0,0,.45) !important; }\n';
-    applied.push('Stronger shadows');
-  }
-  if (/flat|no shadow/.test(ins)) {
+  // "remove the shadow" or "no shadows" asks for less, not more ("pop-up" isn't "make it pop")
+  if (/\bflat\b|\b(?:no|without|remove|delete|get rid of)\b(?:\s+[\w’'-]+){0,2}?\s+shadows?\b/.test(ins)) {
     extra += '.ylb-card, .tier, .window { box-shadow: none !important; }\n';
     applied.push('Flat style');
+  } else if (/shadow|depth|\bpop\b(?!-)/.test(ins)) {
+    extra += '.ylb-card, .tier, .window { box-shadow: 0 28px 60px -24px rgba(0,0,0,.45) !important; }\n';
+    applied.push('Stronger shadows');
   }
   const priorExtra = /\/\* ylb-extra \*\/\n([\s\S]*)$/.exec(code.css)?.[1] ?? '';
   const block = vars.size ? `\n/* ylb-overrides */\n:root {${[...vars.entries()].map(([k, val]) => ` ${k}: ${val};`).join('')} }\n` : '';
   const extraBlock = extra || priorExtra ? `/* ylb-extra */\n${priorExtra}${extra}` : '';
   css = css.replace(/\n?\/\* ylb-extra \*\/[\s\S]*$/, '') + block + extraBlock;
-  return { html: code.html, css, js: code.js, applied };
+  return { html: code.html, css, js: code.js, applied, notes: pictures.notes };
 }
 
-/** Full standalone document for preview/export. */
-export function buildDocument(code: { html: string; css: string; js: string }, title = 'Widget'): string {
+/**
+ * In-memory localStorage and sessionStorage for a page that has no storage of its own. Published
+ * artifacts (and the live preview) run in a sandbox without their own origin, where even reading
+ * localStorage throws, so code that saves something (a checklist's ticks) would stop with an error.
+ * With this it works while the page is open. Where storage works (the owner's own site) it changes nothing.
+ */
+export const STORAGE_SHIM = `(function () {
+  function memory() {
+    var data = {};
+    return {
+      get length() { return Object.keys(data).length; },
+      key: function (i) { var keys = Object.keys(data); return i < keys.length ? keys[i] : null; },
+      getItem: function (k) { k = String(k); return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      setItem: function (k, v) { data[String(k)] = String(v); },
+      removeItem: function (k) { delete data[String(k)]; },
+      clear: function () { data = {}; }
+    };
+  }
+  ['localStorage', 'sessionStorage'].forEach(function (name) {
+    try { var s = window[name]; if (s) { s.getItem('ylb'); return; } } catch (e) {}
+    try { Object.defineProperty(window, name, { value: memory(), configurable: true }); } catch (e) {}
+  });
+})();`;
+
+export interface DocumentOptions {
+  /**
+   * key → address of each image the code uses as {{img-N}} (data URLs for the preview and downloads).
+   * A key it doesn't have shows nothing. Without it the tokens stay as they are, for publishing to fill in.
+   */
+  images?: Record<string, string>;
+  /** start with STORAGE_SHIM (published pages and the preview run in a sandbox without storage) */
+  storageShim?: boolean;
+}
+
+/** Full standalone document for preview, export and publishing. */
+export function buildDocument(code: { html: string; css: string; js: string }, title = 'Widget', opts: DocumentOptions = {}): string {
+  const fill = (text: string) => (opts.images ? resolveImageTokens(text, opts.images) : text);
+  // in <head>, so it runs before any script in the page
+  const shim = opts.storageShim ? `${SCRIPT_OPEN}\n${STORAGE_SHIM}\n${SCRIPT_CLOSE}\n` : '';
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(title)}</title>
-<style>
-${code.css}
+${shim}<style>
+${fill(code.css)}
 </style>
 </head>
 <body>
-${code.html}
+${fill(code.html)}
 ${SCRIPT_OPEN}
-${code.js}
+${fill(code.js)}
 ${SCRIPT_CLOSE}
 </body>
 </html>`;
