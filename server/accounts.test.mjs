@@ -165,10 +165,10 @@ describe('AI routes with accounts on', () => {
     expect(r.status).toBe(400);
     r = await call('/api/ai/my-keys/manus', { method: 'PUT', headers: as(alice), body: JSON.stringify({ key: 'mn-alice-own-0001' }) });
     expect(r.status).toBe(200);
-    expect(await r.json()).toMatchObject({ available: true, keys: { manus: { last4: '0001' } } });
+    expect(await r.json()).toMatchObject({ available: true, keys: [{ provider: 'manus', last4: '0001' }], byProvider: { manus: { last4: '0001' } } });
     const stored = supa.tables.get('user_secrets').find((x) => x.user_id === alice.user.id);
     expect(stored.ciphertext).not.toContain('mn-alice');
-    expect((await call('/api/ai/my-keys', { headers: as(bob) }).then((x) => x.json())).keys.manus).toBeNull();
+    expect((await call('/api/ai/my-keys', { headers: as(bob) }).then((x) => x.json())).byProvider.manus).toBeNull();
     const h = await app.ai.health({ id: alice.user.id, isAdmin: false });
     expect(h.routing.facebook).toEqual(['manus']);
     expect(h.providers.find((p) => p.id === 'manus')).toMatchObject({ label: 'Manus (your key)', own: true });

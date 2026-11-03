@@ -16,13 +16,15 @@ const SECRET = 'sb_secret_mock_456';
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 /** Primary keys per table: rows with the same values are one row (upserts replace them). */
-const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'], app_state: ['key'], market_listings: ['user_id', 'id'] };
+const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'], app_state: ['key'], market_listings: ['user_id', 'id'], ai_usage_daily: ['user_id', 'day'] };
 /** tables every signed-in person may read (writes stay owner-only), like the market_listings policies */
 const PUBLIC_READ = new Set(['market_listings']);
 /** tables with row-level security and no policies: only the secret key reaches them */
-const SERVICE_ONLY = new Set(['user_secrets', 'app_state']);
+const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily']);
+/** the user_secrets.provider check constraint (supabase/migrations/20261103030000_ai_usage_daily.sql) */
+const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openrouter', 'meta', 'manus']);
 
-export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600, missingTables = [] } = {}) {
+export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600, missingTables = [], secretProviders = SECRET_PROVIDERS } = {}) {
   const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true });
   const kid = 'mock-key-1';
   const jwk = { ...(await exportJWK(publicKey)), kid, alg: 'ES256', use: 'sig' };
@@ -191,6 +193,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       const skipExisting = /resolution=ignore-duplicates/.test(prefer); // INSERT … ON CONFLICT DO NOTHING
       const written = [];
       for (const item of items) {
+        if (table === 'user_secrets' && !secretProviders.has(item.provider)) return send(res, 400, { code: '23514', message: 'new row for relation "user_secrets" violates check constraint "user_secrets_provider_check"' });
         if (!who.service && item.user_id !== who.userId) return send(res, 403, { code: '42501', message: 'new row violates row-level security policy for table "' + table + '"' });
         const row = { ...item, updated_at: new Date().toISOString() };
         const i = rows.findIndex((r) => keyCols.every((c) => r[c] === row[c]));
@@ -222,6 +225,37 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       return /return=representation/.test(prefer) ? send(res, 200, gone) : send(res, 204, undefined);
     }
     return send(res, 405, { message: 'method not allowed' });
+  }
+
+  /** POST /rest/v1/rpc/<fn>: the database functions the server calls (execute revoked from browsers). */
+  async function rpc(req, res, fn, raw) {
+    if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    let b;
+    try {
+      b = JSON.parse(raw || '{}');
+    } catch {
+      return send(res, 400, { message: 'invalid json' });
+    }
+    if (!users.has(b.p_user)) return send(res, 409, { code: '23503', message: 'insert or update on table "ai_usage_daily" violates foreign key constraint' });
+    const rows = tables.get('ai_usage_daily') ?? [];
+    tables.set('ai_usage_daily', rows);
+    const r6 = (n) => Math.round(n * 1e6) / 1e6;
+    let row = rows.find((r) => r.user_id === b.p_user && r.day === b.p_day);
+    if (!row) {
+      row = { user_id: b.p_user, day: b.p_day, email: '', requests: 0, usd: 0, own_requests: 0, own_usd: 0 };
+      rows.push(row);
+    }
+    row.requests += Math.max(0, Number(b.p_requests) || 0);
+    // like the SQL: a negative p_usd corrects an earlier estimate, the total never goes below 0
+    row.usd = Math.max(0, r6(row.usd + (Number(b.p_usd) || 0)));
+    row.own_requests += Math.max(0, Number(b.p_own_requests) || 0);
+    row.own_usd = r6(row.own_usd + Math.max(0, Number(b.p_own_usd) || 0));
+    if (b.p_email) row.email = b.p_email;
+    row.updated_at = new Date().toISOString();
+    return send(res, 200, { ...row });
   }
 
   // ───────────── Storage subset ─────────────
@@ -435,6 +469,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (url.pathname === '/__mock/emails') return send(res, 200, emails.filter((e) => !url.searchParams.get('to') || e.to === url.searchParams.get('to')));
     if (behavior.down) return send(res, 503, { message: 'mock outage' });
     if (url.pathname.startsWith('/auth/v1/')) return void authRoute(req, res, url, raw);
+    const fn = /^\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url.pathname);
+    if (fn && req.method === 'POST') return void rpc(req, res, fn[1], raw);
     const t = /^\/rest\/v1\/([a-z_]+)$/.exec(url.pathname);
     if (t && behavior.restDelayMs) return void setTimeout(() => rest(req, res, url, t[1], raw), behavior.restDelayMs);
     if (t) return void rest(req, res, url, t[1], raw);

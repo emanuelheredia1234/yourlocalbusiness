@@ -152,8 +152,9 @@ Set it up once:
 2. Supabase → **SQL Editor** → paste and **Run** each file in [`supabase/migrations`](supabase/migrations), oldest first. If your Supabase project is linked to this GitHub repository, it can apply the migration for you. It creates:
    - `user_docs`: one row per project, post, listing, etc.; each user can only read and change their own rows.
    - a private `media` bucket: each user can only use their own folder.
-   - `user_secrets`: each user's own Manus key, encrypted by the server. Browsers can't read or write it at all.
-   - `app_state`: the server's own settings (your AI keys and their settings, the Manus task list, the usage log), encrypted. Browsers can't reach it either.
+   - `user_secrets`: each user's own AI keys (OpenAI, Anthropic, Google, xAI, OpenRouter, Meta, Manus), encrypted by the server. Browsers can't read or write it at all.
+   - `app_state`: the server's own settings (your AI keys and their settings, the daily limits, the Manus task list, the usage log), encrypted. Browsers can't reach it either.
+   - `ai_usage_daily` and the `ylb_add_ai_usage` function (`20261103030000_ai_usage_daily.sql`): each user's AI requests and dollars per day (UTC), for the daily limits. Server-only, like `user_secrets`. **Already set up before this version? Run this one file**: it also lets `user_secrets` hold keys for every provider, not just Manus. Until it's run, the counters live in the server's memory (they reset when it restarts) and only Manus keys can be saved.
 3. Supabase → **Authentication** → Sign In / Providers → Email: keep **Confirm email** on. The owner check below relies on confirmed emails.
 4. Supabase → **Authentication** → **URL Configuration**:
    - Set **Site URL** to your app's address (for example `https://your-app.replit.app`).
@@ -164,7 +165,7 @@ Set it up once:
    - `SUPABASE_SECRET_KEY`: the secret key (`sb_secret_…`). It stays on the server. It lets the server:
      - keep the AI keys and settings you type into Settings → AI in Supabase, encrypted. Without it they live in the server's files, which Replit's published apps wipe when they restart or sleep;
      - let people delete their account and files;
-     - let people save their own Manus key.
+     - let people save their own AI keys, and keep everyone's daily AI counters.
    - `ADMIN_EMAILS` (optional): the owner's email. You can also make an account the owner in Supabase (SQL Editor): `update auth.users set raw_app_meta_data = raw_app_meta_data || '{"ylb_role": "admin"}'::jsonb where lower(email) = 'you@example.com';` (it applies at that account's next sign-in, or within the hour). The owner manages the AI keys, models, effort and usage log; everyone else uses those keys. Without this Secret the owner is `hectorheredia242@gmail.com` (`DEFAULT_ADMIN_EMAILS` in `server/auth.mjs`).
 6. Press Run, or republish. The server log says `Accounts: on (Supabase), sign-in required`.
 7. Let other people sign up: add your own email sender (Supabase → Authentication → Emails → **SMTP Settings**, with a service such as Resend, Postmark, Brevo or Amazon SES). Until then, Supabase's built-in sender only emails members of your Supabase team (so only you can confirm an account) and sends a few emails an hour; anyone else sees "This app can't send emails to that address yet".
@@ -181,6 +182,9 @@ What people get:
 - **Moving an older workspace in:** the first time an account is opened in a browser that has a workspace from before accounts, the app offers to add it to the account, with its images and files.
 - **AI for everyone signed in, on your keys:**
   - Only the `ADMIN_EMAILS` account can see and change keys or read the usage log. Everyone else sees what powers each function.
+  - **Daily limits:** each signed-in person (not the owner) gets, by default, 50 requests and $1 a day on your keys (writing, photos and videos), counted per UTC day. Over the limit they get "You've reached today's limit on the app's AI keys… It resets at midnight UTC" and a pointer to add their own keys. A request counts once it reaches a provider, and requests running at the same time count against each other, so parallel requests can't slip past a limit. Its cost is added when known; a video's estimated cost (price per second × length, or $0.05 a second when the price list doesn't say) counts as soon as it starts, so a video that alone would go over the dollar limit is refused, and is corrected to the real cost when the job finishes (the server checks on it even if nobody asks). If Supabase can't be read for a moment, the last count read is used, and someone not counted yet is asked to try again in a minute. Change or turn off either limit (0 = no limit) with `PUT /api/ai/limits` (owner only). The owner is never limited.
+  - **Their own keys:** anyone can add their own OpenAI, Anthropic, Google, xAI, OpenRouter, Meta or Manus key in Settings → AI. Each key is checked with the provider for free first (it lists the account's models), encrypted, and shown only by its last 4 characters. Their writing, photos and videos then run on their own key whenever it can do that kind of work (with that provider's default model and effort), never on yours and never limited; only what their keys can't do falls back to your keys, within the limits. A failing own key doesn't fall back to yours.
+  - **Usage:** each person sees today's counts and the last 7 days (`GET /api/ai/my-usage`, own-key requests counted apart); the owner sees everyone's per day with their email (`GET /api/ai/usage/users?days=7`).
   - Video jobs and Manus tasks belong to whoever started them.
   - **Manus is yours alone.** It's an agent with its own browser, signed in to your accounts (Facebook, Instagram…), so only the owner can give your Manus key a task.
   - **Everyone else can use their own Manus.** Settings → AI → "Use your own Manus" links to manus.im and explains how to create an API key (Manus → Settings → API Integration → Create API Key).
@@ -189,7 +193,7 @@ What people get:
     - Their Manus photos and social posts then run in their own Manus account, on their credits.
 - **A separate AI server:** if the app and the AI server run at different addresses (Settings → AI → Advanced), the sign-in is only sent to that server after you press **Test connection** there. This is remembered per account on that device and forgotten at Log out, so a half-typed address, or one from an imported backup, never receives it.
 - **One tab at a time:** an account works in one tab per browser. Opening it in a second tab moves it there; the first tab offers "Use it here".
-- **Optional sign-in:** `SIGN_IN_REQUIRED=false` makes signing in optional. "Continue without an account" keeps work in that browser, and AI then works without signing in.
+- **Optional sign-in:** `SIGN_IN_REQUIRED=false` makes signing in optional. "Continue without an account" keeps work in that browser, and AI then works without signing in. Signed-out visitors get the same daily limits, counted per network address in the server's memory (behind a proxy they share one count), so signing out never lifts a limit.
 
 ## Run it
 

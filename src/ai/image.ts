@@ -20,7 +20,7 @@ import { FORMATS, IMAGE_STYLES, VIDEO_STYLES, matchBusinessType } from './knowle
 import { heroScene, sceneForStyle, type ArtScene } from './local/art';
 import { runTask } from './engine';
 import { visualBrief, type VisualBrief } from './brain';
-import { serverFetch } from './claude';
+import { dailyLimitText, serverFetch } from './claude';
 import { primaryProvider, routeFor } from './functions';
 import { compactMeta, isAIMeta, metaLine, type AIMeta } from './meta';
 import { listingIllustrationTask, postIllustrationTask, type IllustrationInput } from './tasks';
@@ -604,6 +604,8 @@ export function imageErrorMessage(e: unknown): { title: string; body: string; co
       return { code, title: 'The image API key was rejected', body: 'Check or replace it in Settings → Image generation.' };
     case 'CONTENT_POLICY':
       return { code, title: 'The image provider blocked this description', body: 'Rephrase the image description and try again.' };
+    case 'DAILY_LIMIT':
+      return { code, title: 'Today’s AI limit is reached', body: dailyLimitText(msg) };
     case 'RATE_LIMIT':
       return { code, title: 'The image provider is busy or out of credit', body: 'Wait a minute, or check your account balance.' };
     case 'NETWORK':

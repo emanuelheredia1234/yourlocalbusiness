@@ -13,6 +13,7 @@
 //   AI_PROVIDER_BASE_URLS (JSON map of provider id → base URL, for a proxy or a test server).
 // Accounts (Supabase): SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY (account deletion), ADMIN_EMAILS
 //   (the owner's email: manages the AI keys), SIGN_IN_REQUIRED (default true). See server/auth.mjs.
+//   With the secret key, users' own keys (server/userKeys.mjs) and their daily AI counters (server/limits.mjs) live in Supabase.
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -21,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
 import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
+import { limitsFromEnv } from './limits.mjs';
 import { MIGRATION, appStateFromEnv } from './appState.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -133,7 +135,7 @@ function serveStatic(req, res) {
 // ───────────── router ─────────────
 
 const auth = authFromEnv();
-const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv(), appState: appStateFromEnv() });
+const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv(), appState: appStateFromEnv(), limits: limitsFromEnv() });
 // keys and settings saved in Supabase (when its secret key is set) before the first request
 // (never more than a few seconds: a slow Supabase must not keep the app from starting)
 const settingsFrom = await Promise.race([ai.init(), new Promise((r) => setTimeout(() => r('slow'), 5000))]);

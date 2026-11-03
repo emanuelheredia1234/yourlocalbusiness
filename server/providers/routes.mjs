@@ -11,18 +11,31 @@
 //   GET  /api/ai/video/:id                 → job;  GET /api/ai/video/:id/content → video bytes
 //   POST /api/ai/manus/create | /output | /continue   (Manus tasks, same shapes as the Zapier actions)
 //   GET  /api/ai/usage                     → recent requests and totals                                      (admin)
+//   GET  /api/ai/limits | PUT { requestsPerDay?, usdPerDay? } → daily limits for signed-in users             (admin)
+//   GET  /api/ai/usage/users?days=7        → each user's daily counters                                     (admin)
+//   GET  /api/ai/my-usage                  → the signed-in user's counters: today, the last 7 days, limits
+//   GET  /api/ai/my-keys | PUT /api/ai/my-keys/:provider { apiKey } | DELETE …   the signed-in user's own keys
 //
-// "admin" = this machine, or the ADMIN_TOKEN header. Generation routes refuse other sites' pages.
+// "admin" = this machine, or the ADMIN_TOKEN header (with accounts on: the owner's account).
+// Generation routes refuse other sites' pages.
+//
+// With accounts on, a signed-in non-admin user's requests run on their own keys when they've added one
+// that can do the job (never limited); otherwise on the owner's keys, within the owner's daily limits
+// (429 DAILY_LIMIT once today's requests or dollars reach them; counters reset at midnight UTC).
+// With accounts on but sign-in not required, signed-out visitors share the same limits, counted per
+// network address in this server's memory (so signing out never lifts a limit).
 
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { Readable } from 'node:stream';
-import { FUNCTIONS, FUNCTION_GROUPS, PROVIDERS, describeProviders, effortLabel, fnById } from './registry.mjs';
+import { FUNCTIONS, FUNCTION_GROUPS, PROVIDERS, defaultEffort, describeProviders, effortLabel, fnById } from './registry.mjs';
 import { AIStore } from './store.mjs';
 import { UsageLog } from './usage.mjs';
-import { AIRouter, asProviderError } from './router.mjs';
+import { AIRouter, asProviderError, ownLabel } from './router.mjs';
+import { USER_KEY_PROVIDERS } from '../userKeys.mjs';
+import { createLimits, utcDay } from '../limits.mjs';
 import { ASPECTS } from './adapters/images.mjs';
-import { parseDataUrl } from './http.mjs';
+import { ProviderError, parseDataUrl } from './http.mjs';
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
@@ -70,13 +83,18 @@ const cleanImages = (list) =>
 
 const NO_ACCOUNTS = { enabled: false, signInRequired: false, identify: async () => null };
 const LOCAL_ONLY = { enabled: false, get: async () => null, version: async () => null, put: async () => null };
-const NO_USER_KEYS = { enabled: false, get: async () => null, info: async () => ({ manus: null }), set: async () => {}, remove: async () => {} };
+const NO_USER_KEYS = { enabled: false, get: async () => null, all: async () => ({}), info: async () => Object.fromEntries(USER_KEY_PROVIDERS.map((p) => [p, null])), list: async () => [], set: async () => {}, remove: async () => {} };
+
+/** What the browser is told about the providers a user can add their own key for. */
+const OWN_KEY_PROVIDERS = USER_KEY_PROVIDERS.map((id) => ({ id, label: PROVIDERS[id].label, kinds: Object.keys(PROVIDERS[id].kinds), keyUrl: PROVIDERS[id].keyUrl }));
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * auth (server/auth.mjs): with accounts on, AI needs a signed-in user, the owner (ADMIN_EMAILS) manages
  * the keys, and each video job or Manus task can only be read by whoever started it.
  */
-export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS, userKeys = NO_USER_KEYS, appState = LOCAL_ONLY }) {
+export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS, userKeys = NO_USER_KEYS, appState = LOCAL_ONLY, limits = createLimits() }) {
   // appState (server/appState.mjs): with Supabase's secret key, the owner's keys and settings, the
   // Manus task list and the usage log are also kept in Supabase, so they survive restarts
   const store = new AIStore(path.join(dataDir, 'ai-providers.json'), { env, legacyFile: path.join(dataDir, 'image-providers.json'), remote: appState });
@@ -172,6 +190,154 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
   const mayUse = (req, owner, who) => !owner || owner === who?.id || isAdmin(req, who);
   const notFound = (req, res) => reply(req, res, 404, { error: 'Not found.', code: 'NOT_FOUND' });
 
+  /**
+   * Accounts on and not the owner: requests use their own keys, or the owner's within the daily limits.
+   * Signed-out visitors (allowed when sign-in isn't required) are metered too, by network address.
+   */
+  const isMetered = (req, who) => auth.enabled && !isAdmin(req, who);
+  /** Who a metered request is counted for: the user, or `anon:<address>` (memory only). */
+  const meterId = (req, who) => (who?.id ? { id: who.id, email: who.email || '' } : { id: `anon:${req.socket.remoteAddress || 'unknown'}`, email: '' });
+
+  /** A metered user's own keys in plain text ({ provider: key }); never sent anywhere but to that provider. */
+  const ownKeysOf = async (who, opts) => {
+    if (!who?.id || !UUID.test(who.id) || !userKeys.all) return {};
+    try {
+      return await userKeys.all(who.id, opts);
+    } catch (e) {
+      console.warn(`Own keys: ${e.message}`);
+      return {};
+    }
+  };
+
+  const dailyLimitError = (st, who) => {
+    const parts = [st.requestsPerDay > 0 ? `${st.requestsPerDay} request${st.requestsPerDay === 1 ? '' : 's'}` : '', st.usdPerDay > 0 ? `$${st.usdPerDay.toFixed(2)}` : ''].filter(Boolean).join(' or ');
+    const next = who ? 'To keep going now, add your own API keys in Settings → AI.' : 'Sign in, and add your own API keys in Settings → AI, to keep going now.';
+    const left = Math.max(0, st.usdPerDay - st.usedUsd - (st.pendingUsd || 0));
+    return {
+      error: st.tooCostly
+        ? `This would cost about $${st.estimateUsd.toFixed(2)} on the app’s AI keys, more than what’s left of today’s $${st.usdPerDay.toFixed(2)} limit ($${left.toFixed(2)}). It resets at midnight UTC. ${next}`
+        : `You’ve reached today’s limit on the app’s AI keys${parts ? ` (${parts} a day)` : ''}. It resets at midnight UTC. ${next}`,
+      code: 'DAILY_LIMIT',
+      limits: st,
+    };
+  };
+
+  /**
+   * Before an AI request: which keys it runs on, and whether the user may run it.
+   * Returns null (after replying 429 DAILY_LIMIT) when they're over the limit, else
+   * { ownKeys, meter, done }: pass ownKeys and meter to the router, then await done() once it finishes.
+   * meter.start() marks the request as having reached a provider (only then is it counted).
+   *
+   * opts.estimateUsd: what the request will likely cost on the owner's keys. It's reserved (with the
+   * request) before the counters are read, so parallel requests can't all pass. opts.charge: videos
+   * add the estimate to the day as soon as they start (their real cost is known only when the job
+   * finishes); later(usd) then records the difference.
+   */
+  async function gate(req, res, who, kind, { estimateUsd = 0, charge = false } = {}) {
+    const noop = { ownKeys: null, meter: null, done: async () => {}, later: null };
+    if (!isMetered(req, who)) return noop;
+    const m = meterId(req, who);
+    let ownKeys = await ownKeysOf(who);
+    let own = router.ownRoute(kind, ownKeys).length > 0;
+    let release = () => {};
+    const day = utcDay();
+    if (!own) {
+      // reserve first (no await in between), then read: requests ahead of this one count against it
+      release = limits.reserve(m.id, { usd: estimateUsd });
+      const st = await limits.status(m.id, store.limits(), { reservation: release, strict: charge });
+      if (st.reached && who?.id && !st.unavailable) {
+        // a key just added through another copy of the server may not be cached here yet
+        ownKeys = await ownKeysOf(who, { fresh: true });
+        own = router.ownRoute(kind, ownKeys).length > 0;
+        if (own) {
+          release();
+          release = () => {};
+        }
+      }
+      if (!own && st.reached) {
+        release();
+        if (st.unavailable) {
+          reply(req, res, 503, { error: 'Couldn’t check today’s AI usage right now (Supabase didn’t answer). Try again in a minute, or add your own API keys in Settings → AI.', code: 'LIMITS_UNAVAILABLE' });
+          return null;
+        }
+        reply(req, res, 429, dailyLimitError(st, who));
+        return null;
+      }
+    }
+    const meter = {
+      started: false,
+      usd: 0,
+      start() {
+        this.started = true;
+      },
+      cost(usd) {
+        if (typeof usd === 'number' && Number.isFinite(usd) && usd > 0) this.usd += usd;
+      },
+    };
+    let settled = false;
+    let early = null; // later() heard before done(): applied once done() has recorded the start
+    // what was added to the day up front (videos on the owner's keys), corrected by later()
+    let charged = 0;
+    const add = (d) => limits.add(m.id, m.email, d, { day });
+    return {
+      ownKeys: own ? ownKeys : null,
+      meter,
+      own,
+      /** Record the request (if it reached a provider) and its cost so far. failed: a video that never started. */
+      done: async ({ failed = false } = {}) => {
+        if (settled) return;
+        settled = true;
+        try {
+          if (!meter.started) return;
+          if (own) await add({ ownRequests: 1, ownUsd: meter.usd });
+          else {
+            const usd = charge && !failed ? Math.max(meter.usd, estimateUsd) : meter.usd;
+            charged = charge && !failed ? usd : 0;
+            await add({ requests: 1, usd });
+          }
+        } finally {
+          release();
+          if (early) await later(...early);
+        }
+      },
+      /**
+       * A cost that's known later (a video's, when it finishes): usd is the cost, or null when it
+       * isn't known; failed: the job made nothing (an unknown cost then means none).
+       */
+      later,
+    };
+    function later(usd, { failed = false } = {}) {
+      if (!settled) {
+        early = [usd, { failed }];
+        return Promise.resolve();
+      }
+      early = null;
+      const known = typeof usd === 'number' && Number.isFinite(usd);
+      let d;
+      if (own) d = known && usd > 0 ? { ownUsd: usd } : null;
+      else {
+        const real = known ? Math.max(0, usd) : failed ? 0 : charged;
+        d = real !== charged ? { usd: real - charged } : null;
+        charged = real;
+      }
+      return d ? add(d).catch((e) => console.warn(`AI limits: ${e.message}`)) : Promise.resolve();
+    }
+  }
+
+  /**
+   * The user's own key a video job was started with (looked up again by owner, never stored on the job).
+   * null only when the key is gone; a Supabase hiccup is an error to try again after, not a removed key.
+   */
+  const jobKey = async (job) => {
+    if (!job?.ownKey || !job.owner) return null;
+    try {
+      return await userKeys.get(job.owner, job.provider);
+    } catch (e) {
+      console.warn(`Own keys: ${e.message}`);
+      throw new ProviderError('UPSTREAM', 'Couldn’t read your key to check on this video right now. Try again in a moment.', { status: 502 });
+    }
+  };
+
   async function body(req, res) {
     try {
       return await readJson(req);
@@ -189,6 +355,9 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     });
     return c.signal;
   };
+
+  /** Where the daily counters are kept, and why Supabase isn't keeping them (if it isn't). */
+  const countersWhere = () => ({ storage: limits.storage, storageProblem: limits.problem ?? null });
 
   const state = (req, who) => ({ ...store.list(), canManage: isAdmin(req, who), adminTokenSet: !!adminToken, imported: store.imported, storage: store.storage, storageProblem: store.storageProblem, ephemeralDisk, accounts: auth.enabled, supabaseUrlSet: !!env.SUPABASE_URL });
 
@@ -269,6 +438,57 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       }
     }
 
+    if (p === '/api/ai/limits') {
+      if (!admin(req, res, who)) return;
+      if (m === 'GET') {
+        await limits.probe?.();
+        return reply(req, res, 200, { limits: store.limits(), ...countersWhere() });
+      }
+      if (m !== 'PUT') return reply(req, res, 405, { error: 'Method not allowed', code: 'METHOD' });
+      const b = await body(req, res);
+      if (!b) return;
+      try {
+        await store.refresh({ force: true });
+        store.setLimits(b);
+      } catch (e) {
+        return reply(req, res, e.status || 400, { error: e.message, code: 'BAD_REQUEST' });
+      }
+      try {
+        await store.persisted();
+      } catch (e) {
+        return reply(req, res, 502, { error: `${e.message} The change works on this server for now, but may be lost when the app restarts.`, code: 'NOT_SAVED', limits: store.limits() });
+      }
+      await limits.probe?.();
+      return reply(req, res, 200, { limits: store.limits(), ...countersWhere() });
+    }
+
+    if (p === '/api/ai/usage/users' && m === 'GET') {
+      if (!admin(req, res, who)) return;
+      const days = Math.max(1, Math.min(90, Math.floor(Number(url.searchParams.get('days')) || 7)));
+      const rows = await limits.usageByUser({ days });
+      const per = new Map();
+      for (const r of rows) {
+        const t = per.get(r.userId) ?? { userId: r.userId, email: r.email, requests: 0, usd: 0, ownRequests: 0, ownUsd: 0 };
+        if (!t.email && r.email) t.email = r.email;
+        t.requests += r.requests;
+        t.usd = Math.round((t.usd + r.usd) * 1e6) / 1e6;
+        t.ownRequests += r.ownRequests;
+        t.ownUsd = Math.round((t.ownUsd + r.ownUsd) * 1e6) / 1e6;
+        per.set(r.userId, t);
+      }
+      const users = [...per.values()].sort((a, b) => b.usd - a.usd || b.requests - a.requests);
+      return reply(req, res, 200, { days, rows, users, limits: store.limits(), ...countersWhere() });
+    }
+
+    if (p === '/api/ai/my-usage' && m === 'GET') {
+      if (!sameOrigin(req, allowedOrigin)) return reply(req, res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
+      if (!auth.enabled || !who) return reply(req, res, 401, { error: 'Sign in to see your AI usage.', code: 'AUTH_REQUIRED' });
+      const days = await limits.history(who.id, { days: 7 });
+      const today = days[0];
+      const st = isAdmin(req, who) ? { unlimited: true } : { ...(await limits.status(who.id, store.limits())), unlimited: false };
+      return reply(req, res, 200, { day: today.day, today: { requests: today.requests, usd: today.usd, ownRequests: today.ownRequests, ownUsd: today.ownUsd }, days, limits: st, ...countersWhere() });
+    }
+
     if (p === '/api/ai/usage' && m === 'GET') {
       // errors and task ids can reveal the owner's account details
       if (!admin(req, res, who)) return;
@@ -284,11 +504,15 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (prompt.length > MAX_PROMPT_CHARS) return reply(req, res, 413, { error: 'Prompt too long', code: 'BAD_REQUEST' });
       const fn = typeof b.fn === 'string' ? b.fn : '';
       if (fnById[fn]?.kind !== 'text') return reply(req, res, 400, { error: 'Unknown AI function.', code: 'BAD_REQUEST' });
+      const g = await gate(req, res, who, 'text', { estimateUsd: router.estimate('text', { fn }) });
+      if (!g) return;
       const signal = abortOnClose(res);
       try {
-        const out = await withFreshKeys(() => router.text(fn, { prompt, images: cleanImages(b.images), tier: b.tier === 'quick' ? 'quick' : 'default', brain: typeof b.brain === 'boolean' ? b.brain : null, signal, userId: who?.id }));
+        const out = await withFreshKeys(() => router.text(fn, { prompt, images: cleanImages(b.images), tier: b.tier === 'quick' ? 'quick' : 'default', brain: typeof b.brain === 'boolean' ? b.brain : null, signal, userId: who?.id, ownKeys: g.ownKeys, meter: g.meter }));
+        await g.done();
         return reply(req, res, 200, out);
       } catch (e) {
+        await g.done();
         if (signal.aborted) return;
         return fail(req, res, e);
       }
@@ -301,9 +525,12 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
       if (!prompt) return reply(req, res, 400, { error: 'Missing prompt', code: 'BAD_REQUEST' });
       if (prompt.length > MAX_MEDIA_PROMPT) return reply(req, res, 413, { error: 'Image prompt too long', code: 'BAD_REQUEST' });
+      const g = await gate(req, res, who, 'image', { estimateUsd: router.estimate('image') });
+      if (!g) return;
       const signal = abortOnClose(res);
       try {
-        const out = await withFreshKeys(() => router.image({ prompt, aspect: ASPECTS[b.aspect] ? b.aspect : '1:1', signal, userId: who?.id }));
+        const out = await withFreshKeys(() => router.image({ prompt, aspect: ASPECTS[b.aspect] ? b.aspect : '1:1', signal, userId: who?.id, ownKeys: g.ownKeys, meter: g.meter }));
+        await g.done();
         res.writeHead(200, {
           'content-type': out.contentType,
           'cache-control': 'no-store',
@@ -314,6 +541,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         });
         return res.end(out.bytes);
       } catch (e) {
+        await g.done();
         if (signal.aborted) return;
         return fail(req, res, e);
       }
@@ -327,11 +555,20 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (!prompt) return reply(req, res, 400, { error: 'Missing prompt', code: 'BAD_REQUEST' });
       if (prompt.length > MAX_MEDIA_PROMPT) return reply(req, res, 413, { error: 'Video prompt too long', code: 'BAD_REQUEST' });
       const firstFrame = typeof b.firstFrame === 'string' && parseDataUrl(b.firstFrame) && IMAGE_TYPES.has(parseDataUrl(b.firstFrame).mime) ? b.firstFrame : null;
+      const aspect = VIDEO_ASPECTS.has(b.aspect) ? b.aspect : '9:16';
+      const duration = Math.max(1, Math.min(15, Number(b.duration) || 8));
+      // on the owner's keys, the video's estimated cost counts toward the day as soon as it starts
+      const g = await gate(req, res, who, 'video', { estimateUsd: router.estimate('video', { duration }), charge: true });
+      if (!g) return;
       try {
-        // one-shot paid job: started once, never retried
-        const job = await withFreshKeys(() => router.startVideo({ prompt, aspect: VIDEO_ASPECTS.has(b.aspect) ? b.aspect : '9:16', duration: Math.max(1, Math.min(15, Number(b.duration) || 8)), firstFrame, owner: who?.id ?? null }));
+        // one-shot paid job: started once, never retried (withFreshKeys retries only when no key was found,
+        // before anything was sent). When it finishes (the server checks on it even if nobody asks), the
+        // estimate is corrected to its real cost.
+        const job = await withFreshKeys(() => router.startVideo({ prompt, aspect, duration, firstFrame, owner: who?.id ?? null, ownKeys: g.ownKeys, meter: g.meter, onFinished: g.later ? (usd, j) => g.later(usd, { failed: j?.state === 'failed' }) : null }));
+        await g.done();
         return reply(req, res, 200, { job });
       } catch (e) {
+        await g.done({ failed: true });
         return fail(req, res, e);
       }
     }
@@ -339,10 +576,13 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     const vid = /^\/api\/ai\/video\/(vid_[0-9a-f-]{36})(\/content)?$/.exec(p);
     if (vid && m === 'GET') {
       if (!signedIn(req, res, who)) return;
-      if (!mayUse(req, router.jobs.get(vid[1])?.owner, who)) return notFound(req, res);
+      const job = router.jobs.get(vid[1]);
+      if (!mayUse(req, job?.owner, who)) return notFound(req, res);
       try {
-        if (!vid[2]) return reply(req, res, 200, { job: await router.videoStatus(vid[1], { signal: abortOnClose(res) }) });
-        const out = await router.videoContent(vid[1], { signal: abortOnClose(res) });
+        // a job started with the user's own key is followed with that same key
+        const apiKey = await jobKey(job);
+        if (!vid[2]) return reply(req, res, 200, { job: await router.videoStatus(vid[1], { signal: abortOnClose(res), apiKey }) });
+        const out = await router.videoContent(vid[1], { signal: abortOnClose(res), apiKey });
         res.writeHead(200, { 'content-type': out.contentType, 'content-length': out.bytes.length, 'cache-control': 'no-store', ...corsHeaders(req) });
         return res.end(out.bytes);
       } catch (e) {
@@ -351,32 +591,44 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     }
 
     // the signed-in user's own keys: GET lists (last 4 only), PUT saves after a free check, DELETE removes
-    const mk = /^\/api\/ai\/my-keys(?:\/([a-z]+))?$/.exec(p);
+    const mk = /^\/api\/ai\/my-keys(?:\/([a-z0-9]+))?$/.exec(p);
     if (mk) {
       if (!sameOrigin(req, allowedOrigin)) return reply(req, res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
       if (!auth.enabled || !who) return reply(req, res, 401, { error: 'Sign in to add your own keys.', code: 'AUTH_REQUIRED' });
+      const keysReply = async () => {
+        const byProvider = await userKeys.info(who.id);
+        const keys = USER_KEY_PROVIDERS.filter((id) => byProvider[id]).map((provider) => ({ provider, last4: byProvider[provider].last4, updatedAt: byProvider[provider].updatedAt }));
+        return reply(req, res, 200, { available: userKeys.enabled, keys, byProvider, providers: OWN_KEY_PROVIDERS });
+      };
       try {
-        if (m === 'GET' && !mk[1]) return reply(req, res, 200, { available: userKeys.enabled, keys: await userKeys.info(who.id) });
-        if (mk[1] !== 'manus') return notFound(req, res);
+        if (!mk[1]) return m === 'GET' ? await keysReply() : reply(req, res, 405, { error: 'Method not allowed', code: 'METHOD' });
+        const id = mk[1];
+        if (!USER_KEY_PROVIDERS.includes(id)) return reply(req, res, 404, { error: 'You can’t add your own key for that provider.', code: 'NOT_FOUND' });
+        const label = PROVIDERS[id].label;
         if (m === 'DELETE') {
-          await userKeys.remove(who.id, 'manus');
-          return reply(req, res, 200, { available: true, keys: await userKeys.info(who.id) });
+          if (!userKeys.enabled) return reply(req, res, 501, { error: 'Your own keys need the SUPABASE_SECRET_KEY Secret on the server. Ask the app’s owner to add it.', code: 'NOT_CONFIGURED' });
+          await userKeys.remove(who.id, id);
+          return await keysReply();
         }
         if (m === 'PUT') {
           if (rateLimited(`my-keys:${who.id}`)) return reply(req, res, 429, { error: 'Too many requests. Try again in a minute.', code: 'RATE_LIMIT' });
           const b = await body(req, res);
           if (!b) return;
-          const key = typeof b.key === 'string' ? b.key.trim() : '';
-          if (key.length < 16 || key.length > 400 || /\s/.test(key)) return reply(req, res, 400, { error: 'That doesn’t look like a Manus API key. Copy it again from Manus → Settings → API Integration.', code: 'BAD_REQUEST' });
+          const raw = typeof b.apiKey === 'string' ? b.apiKey : typeof b.key === 'string' ? b.key : '';
+          const key = raw.trim();
+          if (key.length < 16 || key.length > 400 || /\s/.test(key)) {
+            return reply(req, res, 400, { error: id === 'manus' ? 'That doesn’t look like a Manus API key. Copy it again from Manus → Settings → API Integration.' : `That doesn’t look like a ${label} API key. Copy it again from ${PROVIDERS[id].keyUrl}.`, code: 'BAD_REQUEST' });
+          }
           if (!userKeys.enabled) return reply(req, res, 501, { error: 'Your own keys need the SUPABASE_SECRET_KEY Secret on the server. Ask the app’s owner to add it.', code: 'NOT_CONFIGURED' });
           try {
-            await router.checkManusKey(key);
+            // free check: lists the account's models (Manus: one task)
+            await router.checkOwnKey(id, key, { signal: abortOnClose(res) });
           } catch (e) {
-            const err = asProviderError(e, 'Manus');
-            return reply(req, res, 400, { error: err.code === 'AUTH' ? 'Manus didn’t accept that key. Check you copied all of it, or create a new one.' : `Couldn’t check the key with Manus: ${err.message}`, code: 'BAD_KEY' });
+            const err = asProviderError(e, label);
+            return reply(req, res, 400, { error: err.code === 'AUTH' ? `${label} didn’t accept that key. Check you copied all of it, or create a new one.` : `Couldn’t check the key with ${label}: ${err.message}`, code: 'BAD_KEY', cause: err.code });
           }
-          await userKeys.set(who.id, 'manus', key);
-          return reply(req, res, 200, { available: true, keys: await userKeys.info(who.id) });
+          await userKeys.set(who.id, id, key);
+          return await keysReply();
         }
         return reply(req, res, 405, { error: 'Method not allowed', code: 'METHOD' });
       } catch (e) {
@@ -541,6 +793,38 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         base.providers.push({ id: 'manus', label: 'Manus (your key)', ready: true, own: true, models: s.models, effort: Object.fromEntries(Object.entries(s.effort).map(([kind, value]) => [kind, { id: value, label: value ? effortLabel('manus', kind, value) : 'Set by the model' }])) });
         base.routing.facebook = ['manus'];
         base.routing.photos = [...(base.routing.photos ?? []), 'manus'];
+      }
+      // a signed-in user's own keys: functions of a kind they can do run on them (and only them)
+      const metered = auth.enabled && !!who?.id && !who.isAdmin && UUID.test(who.id);
+      if (metered) {
+        const ownKeys = await ownKeysOf(who);
+        const ownIds = USER_KEY_PROVIDERS.filter((id) => id !== 'manus' && ownKeys[id]);
+        for (const id of ownIds) {
+          const models = {};
+          const effort = {};
+          for (const [kind, k] of Object.entries(PROVIDERS[id].kinds)) {
+            models[kind] = k.defaultModel;
+            const e = defaultEffort(id, kind, k.defaultModel);
+            effort[kind] = { id: e, label: e ? effortLabel(id, kind, e) : 'Set by the model' };
+          }
+          // the owner's key with the same id is never used for this user: theirs replaces it
+          base.providers = base.providers.filter((x) => x.id !== id);
+          base.providers.push({ id, label: ownLabel(id), ready: true, own: true, models, effort });
+        }
+        if (ownIds.length) base.ready = true;
+        for (const f of FUNCTIONS) {
+          if (f.kind === 'agent') continue;
+          const own = router.ownRoute(f.kind, ownKeys);
+          if (!own.length) continue;
+          // photos made by their own Manus stay listed after their own photo keys
+          base.routing[f.id] = [...own, ...(f.id === 'photos' && ownManus ? ['manus'] : [])];
+        }
+        const st = await limits.status(who.id, store.limits());
+        base.limits = { unlimited: false, requestsPerDay: st.requestsPerDay, usdPerDay: st.usdPerDay, usedRequests: st.usedRequests, usedUsd: st.usedUsd, resetsAt: st.resetsAt, reached: st.reached };
+        // functions that run on their own keys (never limited); the rest use the owner's keys within the limits
+        base.ownKeyFunctions = FUNCTIONS.filter((f) => f.kind !== 'agent' && router.ownRoute(f.kind, ownKeys).length).map((f) => f.id);
+      } else if (auth.enabled && who?.isAdmin) {
+        base.limits = { unlimited: true };
       }
       return base;
     },

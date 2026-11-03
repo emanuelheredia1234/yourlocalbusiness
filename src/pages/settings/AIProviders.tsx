@@ -7,6 +7,7 @@ import { authHeaders, trustServer, useAuth } from '@/lib/cloud/auth';
 import { pingServer, serverBase } from '@/ai/claude';
 import { AI_FUNCTIONS, AI_FUNCTION_GROUPS, type AIKind } from '@/ai/functions';
 import { fmtTokens, fmtUsdSmall } from '@/ai/meta';
+import { countersNote, limitPercent, ownKeyCapability, parseMyKeys, requestsInUse, resetLabel, type CountersProblem, type MyKeys, type OwnKeyProvider } from '@/ai/usageLimits';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { Field, Popover, Spinner, Toggle, confirmAction } from '@/components/ui/primitives';
@@ -166,6 +167,7 @@ export function AIProviders() {
   const [usage, setUsage] = useState<{ recent: UsageEntry[]; totals: UsageTotals } | null>(null);
   const [usageLocked, setUsageLocked] = useState(false);
   const saves = useRef(0);
+  const [usageTick, setUsageTick] = useState(0);
 
   const loadUsage = useCallback(async () => {
     const r = await call<{ recent: UsageEntry[]; totals: UsageTotals }>('GET', '/api/ai/usage?limit=25');
@@ -268,7 +270,10 @@ export function AIProviders() {
 
       {status === 'ready' && role === 'user' && (
         <>
-          <OwnManus call={call} serverUrl={serverUrl} />
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <OwnKeys call={call} serverUrl={serverUrl} onChange={() => setUsageTick((n) => n + 1)} />
+            <MyUsageCard call={call} refresh={usageTick} />
+          </div>
           <OwnerManaged />
         </>
       )}
@@ -336,6 +341,12 @@ export function AIProviders() {
               <UsageCard usage={usage} locked={usageLocked} catalog={catalog} onRefresh={() => void loadUsage()} />
             </div>
           </div>
+          {state.accounts && state.canManage && (
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+              <DailyLimitsCard call={call} />
+              <PeopleUsageCard call={call} />
+            </div>
+          )}
         </>
       )}
 
@@ -853,90 +864,445 @@ function ServerAddress() {
   );
 }
 
-/** A user's own Manus account: their photos-by-agent and social posts run there, on their credits. */
-function OwnManus({ call, serverUrl }: { call: Call; serverUrl: string }) {
-  const [info, setInfo] = useState<{ available: boolean; last4: string | null } | null>(null);
+// ───────────── signed-in users: their own keys and usage ─────────────
+
+interface DayRow {
+  day: string;
+  requests: number;
+  usd: number;
+  ownRequests: number;
+  ownUsd: number;
+}
+type LimitStatus = { unlimited: true } | { unlimited: false; requestsPerDay: number; usdPerDay: number; usedRequests: number; usedUsd: number; running?: number; resetsAt?: string; reached: boolean };
+interface MyUsage {
+  day: string;
+  today: Omit<DayRow, 'day'>;
+  days: DayRow[];
+  limits: LimitStatus;
+  storage?: 'supabase' | 'memory';
+  storageProblem?: CountersProblem | null;
+}
+
+/** A signed-in user's own API keys: work their keys can do runs in their own accounts, without the daily limit. */
+function OwnKeys({ call, serverUrl, onChange }: { call: Call; serverUrl: string; onChange: () => void }) {
+  const [info, setInfo] = useState<MyKeys | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const apply = (j: unknown) => setInfo(parseMyKeys(j));
+  useEffect(() => {
+    void call<MyKeys>('GET', '/api/ai/my-keys').then((r) => (r.ok ? apply(r.json) : setFailed(r.json?.error ?? 'Couldn’t load your keys.')));
+  }, [call]);
+  const changed = (j: MyKeys | null) => {
+    apply(j);
+    void pingServer(serverUrl);
+    onChange();
+  };
+  return (
+    <section className="panel p-4 sm:p-5" aria-label="Your own keys">
+      <h3 className="flex items-center gap-2 text-[14px] font-semibold">
+        <KeyRound size={15} className="text-primary" /> Your own keys
+      </h3>
+      <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-muted">
+        Optional. Writing, photos and videos one of your keys can do run in <strong className="text-ink-2">your own account</strong>, on your credits, and aren’t limited. Everything else uses the app’s keys, within the daily limit. A Manus key is only for Manus tasks (agent photos and social posts). Keys are checked with the provider, stored encrypted on the server and never shown again (only their last 4 characters).
+      </p>
+      {failed && !info && (
+        <p role="alert" className="mt-3 text-[13px] text-bad">
+          {failed}
+        </p>
+      )}
+      {!info && !failed && (
+        <p className="mt-3 flex items-center gap-2 text-[13px] text-muted">
+          <Spinner size={14} /> Loading your keys…
+        </p>
+      )}
+      {info && !info.available && <p className="mt-3 text-[12.5px] text-warn">The app’s owner needs to add the SUPABASE_SECRET_KEY Secret before you can save your own keys.</p>}
+      {info && (
+        <ul className="mt-3 flex flex-col">
+          {info.providers.map((p) => (
+            <OwnKeyRow key={p.id} p={p} saved={info.byProvider[p.id] ?? null} available={info.available} call={call} onSaved={changed} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function OwnKeyRow({ p, saved, available, call, onSaved }: { p: OwnKeyProvider; saved: { last4: string } | null; available: boolean; call: Call; onSaved: (j: MyKeys | null) => void }) {
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const apply = (j: { available?: boolean; keys?: { manus?: { last4: string } | null } } | null) => setInfo({ available: j?.available !== false, last4: j?.keys?.manus?.last4 ?? null });
-  useEffect(() => {
-    void call<{ available: boolean; keys: { manus: { last4: string } | null } }>('GET', '/api/ai/my-keys').then((r) => (r.ok ? apply(r.json) : setInfo({ available: false, last4: null })));
-  }, [call]);
+  const inputId = `own-key-${p.id}`;
   const save = async () => {
     setBusy(true);
     setError(null);
-    const r = await call<{ available: boolean; keys: { manus: { last4: string } | null } }>('PUT', '/api/ai/my-keys/manus', { key: key.trim() });
+    const r = await call<MyKeys>('PUT', `/api/ai/my-keys/${p.id}`, { apiKey: key.trim() });
     setBusy(false);
     if (!r.ok) return setError(r.json?.error ?? 'Couldn’t save the key.');
-    apply(r.json);
     setKey('');
-    void pingServer(serverUrl);
-    toast({ kind: 'success', title: 'Your Manus key is saved', body: 'Manus photos and social posts now run in your own Manus account.' });
+    onSaved(r.json);
+    toast({ kind: 'success', title: `Your ${p.label} key is saved`, body: ownKeyCapability(p).saved });
   };
   const remove = async () => {
-    if (!(await confirmAction({ title: 'Remove your Manus key?', body: 'Manus photos and social posts stop until you add a key again.', confirmLabel: 'Remove key', danger: true }))) return;
-    const r = await call<{ available: boolean; keys: { manus: { last4: string } | null } }>('DELETE', '/api/ai/my-keys/manus');
+    if (!(await confirmAction({ title: `Remove your ${p.label} key?`, body: p.id === 'manus' ? 'Manus photos and social posts stop until you add a key again.' : 'The app’s keys take over again, within the daily limit.', confirmLabel: 'Remove key', danger: true }))) return;
+    setBusy(true);
+    const r = await call<MyKeys>('DELETE', `/api/ai/my-keys/${p.id}`);
+    setBusy(false);
     if (!r.ok) return toast({ kind: 'error', title: 'Couldn’t remove the key', body: r.json?.error ?? 'Please try again.' });
-    apply(r.json);
-    void pingServer(serverUrl);
+    onSaved(r.json);
+    toast({ kind: 'success', title: `Your ${p.label} key was removed` });
   };
   return (
-    <section className="panel p-4 sm:p-5" aria-label="Your own Manus">
-      <h3 className="flex items-center gap-2 text-[14px] font-semibold">
-        <KeyRound size={15} className="text-primary" /> Use your own Manus
-      </h3>
-      <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-muted">
-        Manus is an AI agent with its own browser. With your own Manus account it can make product photos and post on <strong className="text-ink-2">your</strong> Facebook, Instagram, TikTok, LinkedIn and X accounts, right away or scheduled. Tasks run in your Manus account and use your Manus credits.
-      </p>
-      {info?.last4 ? (
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <span className="rounded-md bg-good-soft px-2.5 py-1 text-[12.5px] font-semibold text-good">Your Manus key ending in {info.last4} is saved</span>
-          <button className="btn btn-ghost btn-sm" onClick={() => void remove()}>
-            <Trash2 size={14} /> Remove
-          </button>
-        </div>
-      ) : (
-        <ol className="mt-3 flex list-decimal flex-col gap-1.5 pl-5 text-[13px] text-ink-2">
-          <li>
-            Create a Manus account at{' '}
-            <a className="font-semibold text-primary hover:underline" href="https://manus.im" target="_blank" rel="noreferrer">
-              manus.im <ExternalLink size={12} className="inline" />
-            </a>{' '}
-            (free to start; tasks use Manus credits).
-          </li>
-          <li>
-            In Manus, open <strong>Settings → API Integration</strong>, press <strong>Create API Key</strong>, name it (for example “Yourlocalbusiness”) and copy it. Manus shows it only once.{' '}
-            <a className="text-primary hover:underline" href="https://open.manus.ai/docs/v2/authentication" target="_blank" rel="noreferrer">
-              Manus’s guide <ExternalLink size={12} className="inline" />
-            </a>
-          </li>
-          <li>Paste it below and press Save. It’s checked with Manus, stored encrypted on the server, and never shown again (only its last 4 characters).</li>
-          <li>For posting: in Manus, sign in to each network once in its browser (Manus asks the first time it posts there for you).</li>
-        </ol>
-      )}
-      {info && !info.available ? (
-        <p className="mt-3 text-[12.5px] text-warn">The app’s owner needs to add the SUPABASE_SECRET_KEY Secret before you can save your own key.</p>
-      ) : (
+    <li className="flex flex-col gap-2 border-t border-line py-3 first:border-t-0 first:pt-0" aria-label={`Your ${p.label} key`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[13.5px] font-semibold text-ink">{p.label}</span>
+        <span className="text-[12px] text-muted">{ownKeyCapability(p).short}</span>
+        {saved ? <span className="badge bg-good-soft text-good">Key ending in {saved.last4}</span> : <span className="badge bg-surface-2 text-muted">No key</span>}
+        <a href={p.id === 'manus' ? 'https://manus.im' : p.keyUrl} target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline">
+          Get a key <ExternalLink size={11} />
+        </a>
+      </div>
+      {p.id === 'manus' && <ManusExplainer />}
+      {available && (
         <form
-          className="mt-3 flex flex-wrap items-end gap-2"
+          className="flex flex-wrap items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             if (key.trim()) void save();
           }}
         >
-          <Field label={info?.last4 ? 'Replace with a new key' : 'Your Manus API key'} htmlFor="own-manus-key" className="min-w-[240px] flex-1">
-            <input id="own-manus-key" className="input" type="password" autoComplete="off" spellCheck={false} placeholder="Paste your Manus API key" value={key} onChange={(e) => setKey(e.target.value)} />
+          <Field label={saved ? `Replace your ${p.label} key` : `Your ${p.label} API key`} htmlFor={inputId} className="min-w-[220px] flex-1">
+            <input id={inputId} className="input" type="password" autoComplete="off" spellCheck={false} placeholder={saved ? 'Paste a new key to replace it' : `Paste your ${p.label} key`} value={key} onChange={(e) => setKey(e.target.value)} />
           </Field>
-          <button type="submit" className="btn btn-primary" disabled={busy || !key.trim()}>
-            {busy && <Spinner size={14} />} Save key
+          <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !key.trim()}>
+            {busy && <Spinner size={14} />} {saved ? 'Replace key' : 'Save key'}
           </button>
+          {saved && (
+            <button type="button" className="btn btn-ghost btn-sm text-muted hover:text-bad" disabled={busy} aria-label={`Remove your ${p.label} key`} onClick={() => void remove()}>
+              <Trash2 size={14} /> Remove
+            </button>
+          )}
         </form>
       )}
       {error && (
+        <p role="alert" className="text-[12.5px] text-bad">
+          {error}
+        </p>
+      )}
+    </li>
+  );
+}
+
+/** What Manus does with your own account, and how to get its key. */
+function ManusExplainer() {
+  return (
+    <details className="rounded-md bg-surface-2/60 px-3 py-2 text-[12.5px]">
+      <summary className="cursor-pointer font-semibold text-ink-2">Manus: your photos and social posts, in your own account</summary>
+      <p className="mt-1.5 leading-relaxed text-muted">
+        Manus is an AI agent with its own browser. With your own Manus account it can make product photos and post on <strong className="text-ink-2">your</strong> Facebook, Instagram, TikTok, LinkedIn and X accounts, right away or scheduled. Tasks run in your Manus account and use your Manus credits.
+      </p>
+      <ol className="mt-2 flex list-decimal flex-col gap-1 pl-5 text-ink-2">
+        <li>
+          Create a Manus account at{' '}
+          <a className="font-semibold text-primary hover:underline" href="https://manus.im" target="_blank" rel="noreferrer">
+            manus.im <ExternalLink size={11} className="inline" />
+          </a>{' '}
+          (free to start; tasks use Manus credits).
+        </li>
+        <li>
+          In Manus, open <strong>Settings → API Integration</strong>, press <strong>Create API Key</strong>, name it (for example “Yourlocalbusiness”) and copy it. Manus shows it only once.{' '}
+          <a className="text-primary hover:underline" href="https://open.manus.ai/docs/v2/authentication" target="_blank" rel="noreferrer">
+            Manus’s guide <ExternalLink size={11} className="inline" />
+          </a>
+        </li>
+        <li>Paste it below and press Save.</li>
+        <li>For posting: in Manus, sign in to each network once in its browser (Manus asks the first time it posts there for you).</li>
+      </ol>
+    </details>
+  );
+}
+
+function Meter({ label, used, limit, text }: { label: string; used: number; limit: number; text: string }) {
+  const pct = limitPercent(used, limit);
+  const full = limit > 0 && used >= limit;
+  return (
+    <div>
+      <p className="flex items-baseline justify-between gap-2 text-[12.5px]">
+        <span className="font-semibold text-ink-2">{label}</span>
+        <span className={cn('num', full ? 'font-semibold text-bad' : 'text-muted')}>{text}</span>
+      </p>
+      {limit > 0 && (
+        <div className="mt-1 h-2 overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+          <div className={cn('h-full rounded-full', full ? 'bg-bad' : pct >= 80 ? 'bg-warn' : 'bg-primary')} style={{ width: `${pct}%` }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Today's use of the app's keys against the daily limit, and the last 7 days. */
+function MyUsageCard({ call, refresh }: { call: Call; refresh: number }) {
+  const [u, setU] = useState<MyUsage | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const r = await call<MyUsage>('GET', '/api/ai/my-usage');
+    if (r.ok && r.json?.today) {
+      setU(r.json);
+      setError(null);
+    } else setError(r.json?.error ?? 'Couldn’t load your usage.');
+  }, [call]);
+  useEffect(() => {
+    void load();
+  }, [load, refresh]);
+  const lim = u?.limits;
+  const own = (u?.days ?? []).some((d) => d.ownRequests > 0);
+  return (
+    <section className="panel p-4 sm:p-5" aria-label="Your usage">
+      <div className="flex items-center gap-2">
+        <h3 className="flex items-center gap-2 text-[14px] font-semibold">
+          <ListChecks size={15} className="text-primary" /> Your usage
+        </h3>
+        <button className="btn btn-ghost btn-xs ml-auto" onClick={() => void load()}>
+          <RefreshCw size={12} /> Refresh
+        </button>
+      </div>
+      {error && !u && (
         <p role="alert" className="mt-2 text-[13px] text-bad">
           {error}
         </p>
+      )}
+      {!u && !error && (
+        <p className="mt-2 flex items-center gap-2 text-[13px] text-muted">
+          <Spinner size={14} /> Loading…
+        </p>
+      )}
+      {u && lim && (
+        <>
+          <p className="mt-0.5 text-[12.5px] text-muted">
+            {lim.unlimited
+              ? 'You have no daily limit.'
+              : `Today on the app’s keys. Resets ${resetLabel(lim.resetsAt)} (midnight UTC).`}
+          </p>
+          {!lim.unlimited && (
+            <div className="mt-3 flex flex-col gap-3">
+              <Meter
+                label="Requests"
+                used={requestsInUse(lim)}
+                limit={lim.requestsPerDay}
+                text={`${requestsInUse(lim)}${lim.requestsPerDay > 0 ? ` of ${lim.requestsPerDay}` : ' · no limit'}${lim.running ? ` (${lim.running} running)` : ''}`}
+              />
+              <Meter label="Cost" used={lim.usedUsd} limit={lim.usdPerDay} text={lim.usdPerDay > 0 ? `${fmtUsdSmall(lim.usedUsd)} of ${fmtUsdSmall(lim.usdPerDay)}` : `${fmtUsdSmall(lim.usedUsd)} · no limit`} />
+              {lim.reached && (
+                <p role="status" className="rounded-md bg-warn-soft/60 px-3 py-2 text-[12.5px] text-ink-2">
+                  You’ve reached today’s limit on the app’s keys. Add your own key above to keep going now, or wait until it resets.
+                </p>
+              )}
+            </div>
+          )}
+          {u.today.ownRequests > 0 && (
+            <p className="mt-2 text-[12.5px] text-muted">
+              Plus <span className="num font-semibold text-ink-2">{u.today.ownRequests}</span> request{u.today.ownRequests === 1 ? '' : 's'} on your own keys today
+              {u.today.ownUsd > 0 ? ` (${fmtUsdSmall(u.today.ownUsd)}, billed to your accounts)` : ''}, not limited.
+            </p>
+          )}
+          <table className="mt-3 w-full text-left text-[12.5px]">
+            <caption className="pb-1 text-left text-[11.5px] text-muted">Last 7 days (UTC)</caption>
+            <thead className="text-[11px] uppercase tracking-wide text-muted">
+              <tr>
+                <th className="py-1 pr-3 font-semibold">Day</th>
+                <th className="py-1 pr-3 text-right font-semibold">App’s keys</th>
+                {own && <th className="py-1 text-right font-semibold">Your keys</th>}
+              </tr>
+            </thead>
+            <tbody className="num">
+              {u.days.map((d) => (
+                <tr key={d.day} className="border-t border-line">
+                  <td className="py-1.5 pr-3 text-ink-2">{dayName(d.day, u.day)}</td>
+                  <td className="py-1.5 pr-3 text-right">
+                    {d.requests} · {fmtUsdSmall(d.usd)}
+                  </td>
+                  {own && (
+                    <td className="py-1.5 text-right">
+                      {d.ownRequests} · {fmtUsdSmall(d.ownUsd)}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {countersNote(u.storage, u.storageProblem) && <p className="mt-2 text-[11.5px] text-muted">{countersNote(u.storage, u.storageProblem)}</p>}
+        </>
+      )}
+    </section>
+  );
+}
+
+/** "Today", "Yesterday" or "Mon, Nov 2" for a UTC day like 2026-11-02. */
+function dayName(day: string, today: string): string {
+  if (day === today) return 'Today';
+  const t = Date.parse(`${today}T00:00:00Z`);
+  const d = Date.parse(`${day}T00:00:00Z`);
+  if (Number.isFinite(t) && t - d === 86_400_000) return 'Yesterday';
+  return Number.isFinite(d) ? new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }) : day;
+}
+
+// ───────────── the owner: limits for everyone else, and who used what ─────────────
+
+interface Limits {
+  requestsPerDay: number;
+  usdPerDay: number;
+}
+
+function DailyLimitsCard({ call }: { call: Call }) {
+  const [limits, setLimits] = useState<Limits | null>(null);
+  const [storage, setStorage] = useState<string>('');
+  const [problem, setProblem] = useState<CountersProblem | null>(null);
+  const [reqs, setReqs] = useState('');
+  const [usd, setUsd] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const show = (l: Limits) => {
+    setLimits(l);
+    setReqs(String(l.requestsPerDay));
+    setUsd(String(l.usdPerDay));
+  };
+  useEffect(() => {
+    void call<{ limits: Limits; storage: string; storageProblem?: CountersProblem | null }>('GET', '/api/ai/limits').then((r) => {
+      if (r.ok && r.json?.limits) {
+        show(r.json.limits);
+        setStorage(r.json.storage);
+        setProblem(r.json.storageProblem ?? null);
+      } else setError(r.json?.error ?? 'Couldn’t load the limits.');
+    });
+  }, [call]);
+  const n = (v: string) => (v.trim() === '' ? NaN : Number(v));
+  const valid = Number.isFinite(n(reqs)) && n(reqs) >= 0 && Number.isFinite(n(usd)) && n(usd) >= 0;
+  const dirty = !!limits && valid && (n(reqs) !== limits.requestsPerDay || n(usd) !== limits.usdPerDay);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    const r = await call<{ limits: Limits; storage: string; storageProblem?: CountersProblem | null }>('PUT', '/api/ai/limits', { requestsPerDay: Math.floor(n(reqs)), usdPerDay: n(usd) });
+    setBusy(false);
+    if (r.status === 502 && r.json?.code === 'NOT_SAVED' && r.json.limits) {
+      show(r.json.limits);
+      return toast({ kind: 'error', title: 'Working now, but not kept in Supabase', body: r.json.error ?? '' });
+    }
+    if (!r.ok || !r.json?.limits) return setError(r.json?.error ?? 'Couldn’t save the limits.');
+    show(r.json.limits);
+    if (r.json.storage) setStorage(r.json.storage);
+    setProblem(r.json.storageProblem ?? null);
+    toast({ kind: 'success', title: 'Daily limits saved' });
+  };
+  return (
+    <section className="panel p-4 sm:p-5" aria-label="Daily limits for other people">
+      <h3 className="flex items-center gap-2 text-[14px] font-semibold">
+        <ShieldCheck size={15} className="text-primary" /> Daily limits for other people
+      </h3>
+      <p className="mt-1 text-[12.5px] leading-relaxed text-muted">
+        How much each signed-in person can use your keys per day (UTC). Requests on their own keys don’t count, and you’re never limited. 0 means no limit.
+      </p>
+      <form
+        className="mt-3 flex flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (dirty) void save();
+        }}
+      >
+        <Field label="Requests per day" htmlFor="limit-requests" className="w-[150px]">
+          <input id="limit-requests" className="input num" type="number" min={0} max={100000} step={1} inputMode="numeric" value={reqs} disabled={!limits} onChange={(e) => setReqs(e.target.value)} />
+        </Field>
+        <Field label="Cost per day ($)" htmlFor="limit-usd" className="w-[150px]">
+          <input id="limit-usd" className="input num" type="number" min={0} max={10000} step={0.01} inputMode="decimal" value={usd} disabled={!limits} onChange={(e) => setUsd(e.target.value)} />
+        </Field>
+        <button type="submit" className="btn btn-primary btn-sm mb-0.5" disabled={busy || !dirty}>
+          {busy && <Spinner size={14} />} Save limits
+        </button>
+      </form>
+      {!valid && limits && <p className="mt-1.5 text-[12px] text-bad">Use numbers of 0 or more.</p>}
+      {error && (
+        <p role="alert" className="mt-2 text-[12.5px] text-bad">
+          {error}
+        </p>
+      )}
+      {countersNote(storage, problem, { owner: true }) && (
+        <p role={problem ? 'alert' : undefined} className={cn('mt-2 text-[11.5px]', problem ? 'text-warn' : 'text-muted')}>
+          {countersNote(storage, problem, { owner: true })}
+        </p>
+      )}
+    </section>
+  );
+}
+
+interface PersonRow {
+  userId: string;
+  email: string;
+  day?: string;
+  requests: number;
+  usd: number;
+  ownRequests: number;
+  ownUsd: number;
+}
+
+function PeopleUsageCard({ call }: { call: Call }) {
+  const [data, setData] = useState<{ rows: PersonRow[]; users: PersonRow[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const r = await call<{ rows: PersonRow[]; users: PersonRow[] }>('GET', '/api/ai/usage/users?days=7');
+    if (r.ok && r.json?.users) {
+      setData({ rows: r.json.rows ?? [], users: r.json.users });
+      setError(null);
+    } else setError(r.json?.error ?? 'Couldn’t load usage by person.');
+  }, [call]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  const today = new Date().toISOString().slice(0, 10);
+  const todayOf = (id: string) => data?.rows.find((r) => r.userId === id && r.day === today);
+  return (
+    <section className="panel p-4 sm:p-5" aria-label="Usage by person">
+      <div className="flex items-center gap-2">
+        <h3 className="flex items-center gap-2 text-[14px] font-semibold">
+          <ListChecks size={15} className="text-primary" /> Usage by person
+        </h3>
+        <button className="btn btn-ghost btn-xs ml-auto" onClick={() => void load()}>
+          <RefreshCw size={12} /> Refresh
+        </button>
+      </div>
+      <p className="mt-0.5 text-[12.5px] text-muted">Requests and cost on your keys. Requests on their own keys are shown separately; they pay for those.</p>
+      {error && (
+        <p role="alert" className="mt-2 text-[12.5px] text-bad">
+          {error}
+        </p>
+      )}
+      {data && !data.users.length && <p className="mt-3 text-[12.5px] text-muted">Nobody else has used the AI in the last 7 days.</p>}
+      {data && data.users.length > 0 && (
+        <div className="mt-3 w-full overflow-x-auto">
+          <table className="w-full min-w-[480px] text-left text-[12.5px]">
+            <thead className="text-[11px] uppercase tracking-wide text-muted">
+              <tr>
+                <th className="py-1 pr-3 font-semibold">Person</th>
+                <th className="py-1 pr-3 text-right font-semibold">Today</th>
+                <th className="py-1 pr-3 text-right font-semibold">Last 7 days</th>
+                <th className="py-1 text-right font-semibold">Own keys (7 days)</th>
+              </tr>
+            </thead>
+            <tbody className="num">
+              {data.users.map((u) => {
+                const t = todayOf(u.userId);
+                return (
+                  <tr key={u.userId} className="border-t border-line">
+                    <td className="max-w-[220px] truncate py-1.5 pr-3 font-semibold text-ink" title={u.email || u.userId}>
+                      {u.email || `${u.userId.slice(0, 8)}…`}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right">{t ? `${t.requests} · ${fmtUsdSmall(t.usd)}` : '0'}</td>
+                    <td className="py-1.5 pr-3 text-right">
+                      {u.requests} · {fmtUsdSmall(u.usd)}
+                    </td>
+                    <td className="py-1.5 text-right text-muted">{u.ownRequests ? `${u.ownRequests} · ${fmtUsdSmall(u.ownUsd)}` : '–'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

@@ -172,6 +172,8 @@ export function createMockProviders({ keys = {} } = {}) {
       if (n < 2) return json(res, 200, { id: jobId, status: 'in_progress' });
       return json(res, 200, { id: jobId, status: 'completed', unsigned_urls: [`${base}/files/or_video.mp4`], usage: { cost: 0.16 } });
     }
+    // the key's own details: answers only with a valid key (the model list above is public on the real API)
+    if (id === 'openrouter' && p === '/key') return json(res, 200, { data: { label: 'mock key', usage: 0, limit: null } });
     if (id === 'openrouter' && p === '/videos/models') return json(res, 200, { data: [{ id: 'heygen/heygen-video-1' }] });
 
     // ── xAI video ──

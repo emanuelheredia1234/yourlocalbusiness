@@ -97,6 +97,15 @@ export default {
     },
   },
 
+  /**
+   * A free check that the key works. OpenRouter's model list is public (it answers without a key),
+   * so it can't tell a good key from a typo: GET /key needs a valid one (401 otherwise).
+   */
+  async checkAuth(ctx, { signal } = {}) {
+    const r = await requestJson(ctx.fetch, `${ctx.base}/key`, { headers: headers(ctx.key), timeoutMs: 20_000, signal, label: ctx.label });
+    if (!r.ok) throw errorFromResponse(r.status, r.payload, ctx.label);
+  },
+
   async listModels(ctx, kind, { signal } = {}) {
     if (kind === 'video') {
       const r = await requestJson(ctx.fetch, `${ctx.base}/videos/models`, { headers: headers(ctx.key), timeoutMs: 20_000, signal, label: ctx.label });

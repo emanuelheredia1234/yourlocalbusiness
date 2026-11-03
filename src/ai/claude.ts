@@ -68,6 +68,7 @@ const SERVER_CODES: Record<string, string> = {
   CONTENT_POLICY: 'refused',
   REFUSAL: 'refused',
   CUT_OFF: 'cut_off',
+  DAILY_LIMIT: 'daily_limit',
 };
 
 /**
@@ -296,6 +297,15 @@ export function conform<T>(base: T, raw: unknown, allow: ReadonlySet<string> = n
   return base;
 }
 
+/**
+ * Today's limit on the app's keys was reached (server code DAILY_LIMIT). The server's message says
+ * the limit and when it resets; this makes sure it always points to Settings → AI.
+ */
+export function dailyLimitText(message = ''): string {
+  const m = message.trim() || 'You’ve reached today’s limit on the app’s AI keys. It resets at midnight UTC.';
+  return /Settings\s*→\s*AI/.test(m) ? m : `${m} To keep going now, add your own API keys in Settings → AI.`;
+}
+
 /** Why the built-in engine answered instead. `message` is the server's own explanation, when there is one. */
 export function friendlyAIError(code: string, message = ''): string {
   const fallback = 'The built-in engine answered instead.';
@@ -317,6 +327,8 @@ export function friendlyAIError(code: string, message = ''): string {
     case 'auth':
     case 'cut_off':
       return message ? `${message} ${fallback}` : fallback;
+    case 'daily_limit':
+      return `${dailyLimitText(message)} ${fallback}`;
     case 'unavailable':
     case 'sampling_disabled':
       return 'Claude isn’t available here. The built-in engine answered.';

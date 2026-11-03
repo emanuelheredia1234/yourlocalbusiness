@@ -11,7 +11,7 @@ import { saveMediaFile, safeStorage } from '@/lib/storage';
 import { readFileAsDataURL } from '@/lib/utils';
 import { ZapierError, zapierCall } from '@/lib/zapier';
 import { useStore } from '@/store/useStore';
-import { serverFetch } from './claude';
+import { dailyLimitText, serverFetch } from './claude';
 import { fmtElapsed } from './manus';
 import { isAIMeta, type AIMeta } from './meta';
 import { OPENROUTER_API } from './openrouter';
@@ -126,7 +126,7 @@ async function serverVideo(path: string, init: RequestInit = {}): Promise<Respon
   }
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string; code?: string } | null;
-    const code = body?.code === 'NO_PROVIDER' ? 'VIDEO_SETUP' : body?.code === 'CREDITS' ? 'VIDEO_CREDITS' : body?.code === 'NOT_FOUND' ? 'VIDEO_LOST' : res.status >= 500 && init.method !== 'POST' ? 'VIDEO_NETWORK' : 'VIDEO_ERROR';
+    const code = body?.code === 'DAILY_LIMIT' ? 'VIDEO_DAILY_LIMIT' : body?.code === 'NO_PROVIDER' ? 'VIDEO_SETUP' : body?.code === 'CREDITS' ? 'VIDEO_CREDITS' : body?.code === 'NOT_FOUND' ? 'VIDEO_LOST' : res.status >= 500 && init.method !== 'POST' ? 'VIDEO_NETWORK' : 'VIDEO_ERROR';
     throw new VideoError(body?.error || `Video request failed (${res.status}).`, code);
   }
   return res;
@@ -323,6 +323,8 @@ export function videoErrorMessage(code: string, message = ''): { title: string; 
       return { title: 'No key makes videos yet', body: message || 'In Settings → AI, tick Videos for an OpenRouter, Google or xAI key.' };
     case 'VIDEO_NETWORK':
       return { title: 'Couldn’t reach your AI server', body: 'Check that the server is running (npm run server), then try again.' };
+    case 'VIDEO_DAILY_LIMIT':
+      return { title: 'Today’s AI limit is reached', body: dailyLimitText(message) };
     case 'VIDEO_LOST':
       return { title: 'The video job was lost', body: message || 'The server restarted while the video was being made. Start it again.' };
     default:
