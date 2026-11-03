@@ -16,6 +16,83 @@ export const reasoningFor = (effort) => EFFORT_TOKENS[effort] ?? 300;
 
 const ANSWER = JSON.stringify({ ok: true, note: 'mock answer' });
 
+// ───────────── the in-app assistant (src/ai/assistant) ─────────────
+// Its prompts start with this marker and use these section titles (src/ai/assistant/protocol.ts).
+export const ASSISTANT_MARKER = '[ylb-assistant-protocol v1]';
+
+/** A section of an assistant prompt, by its title ('' when missing). */
+function promptSection(prompt, title) {
+  const head = `\n## ${title}\n`;
+  const at = prompt.indexOf(head);
+  if (at < 0) return '';
+  const rest = prompt.slice(at + head.length);
+  const end = rest.search(/\n## /);
+  return (end < 0 ? rest : rest.slice(0, end)).trim();
+}
+
+/** The assistant prompt in a request body (the provider's shape doesn't matter), or null. */
+function assistantPromptIn(value, depth = 0) {
+  if (typeof value === 'string') return value.includes(ASSISTANT_MARKER) ? value : null;
+  if (!value || typeof value !== 'object' || depth > 6) return null;
+  for (const v of Object.values(value)) {
+    const found = assistantPromptIn(v, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Scripted steps for browser QA, by the owner's latest message:
+ *   "calendar"   → step 1: navigate to the calendar + list_posts {due: true}; step 2: done, with the due count
+ *   "qa-confirm" → make_video for a post (P-media: a confirm card first); then done, saying what happened
+ *   "qa-delete"  → delete_posts for one real post from the prompt (D: a danger confirm first); then done
+ *   anything else → a short done answer
+ * Until a tool exists, the app answers it with an unknown-tool error, and the next step says so.
+ */
+export function mockAssistantReply(prompt) {
+  const message = promptSection(prompt, 'Latest message from the owner');
+  let results = [];
+  try {
+    results = JSON.parse(promptSection(prompt, 'Tool results so far this turn (JSON)') || '[]');
+  } catch {
+    results = [];
+  }
+  const postId = /"id":"(post_[A-Za-z0-9_-]+)"/.exec(promptSection(prompt, 'Workspace (JSON)'))?.[1] ?? '';
+  const step = (reply, actions = []) => JSON.stringify({ reply, actions, done: actions.length === 0 });
+  const outcome = (tool) => {
+    const r = [...results].reverse().find((x) => x.tool === tool) ?? results[results.length - 1];
+    if (!r) return 'nothing came back';
+    if (r.ok) return `it worked (${r.status})`;
+    return `${r.status}: ${r.error ?? 'no reason given'}`;
+  };
+  if (/qa-confirm/i.test(message)) {
+    if (!results.length) return step('QA: asking to make a short video for one of your posts.', [{ tool: 'make_video', args: { postId, seconds: 5 } }]);
+    return step(`QA: make_video → ${outcome('make_video')}.`);
+  }
+  if (/qa-delete/i.test(message)) {
+    if (!postId) return step('QA: there’s no post in this project to delete. Create one first.');
+    if (!results.length) return step('', [{ tool: 'delete_posts', args: { ids: [postId] } }]);
+    return step(`QA: delete_posts → ${outcome('delete_posts')}.`);
+  }
+  if (/calendar/i.test(message)) {
+    if (!results.length) return step('Opening your calendar and checking what’s due.', [{ tool: 'navigate', args: { route: 'calendar' } }, { tool: 'list_posts', args: { due: true } }]);
+    const listed = [...results].reverse().find((x) => x.tool === 'list_posts' && x.ok);
+    const n = Number(listed?.result?.total ?? 0);
+    return step(
+      n
+        ? `Your [content calendar](#calendar) is open. **${n} post${n === 1 ? ' is' : 's are'} due**: the time has passed and ${n === 1 ? 'it hasn’t' : 'they haven’t'} been posted. Post ${n === 1 ? 'it' : 'them'} with Manus, or post ${n === 1 ? 'it' : 'them'} yourself and mark ${n === 1 ? 'it' : 'them'} posted.`
+        : 'Your [content calendar](#calendar) is open. Nothing is due right now.',
+    );
+  }
+  return step(`QA assistant: I read your message (${message.length} characters). Try “calendar”, “qa-confirm” or “qa-delete”.`);
+}
+
+/** What a text model answers: a scripted step for an assistant prompt, otherwise the fixed answer. */
+function answerFor(body) {
+  const prompt = assistantPromptIn(body);
+  return prompt ? mockAssistantReply(prompt) : ANSWER;
+}
+
 /** A brand-voice read (src/ai/manusVoice.ts): the profile, when the prompt is one. */
 const voiceProfile = (prompt) => (/^Read the latest posts of one .+ profile and describe how they sound and look/m.test(prompt ?? '') ? (/^The .+?(?:: | named “)(.+?)(?:”.*)?$/m.exec(prompt)?.[1] ?? '') : null);
 /** A read of a "needs-signin" profile waits for you to sign in for its first two checks. */
@@ -136,7 +213,7 @@ export function createMockProviders({ keys = {} } = {}) {
       return sse(res, [
         { type: 'message_start', message: { id: 'msg_mock', type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 200, output_tokens: 1 } } },
         { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
-        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ANSWER } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: answerFor(body) } },
         { type: 'content_block_stop', index: 0 },
         { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: out } },
         { type: 'message_stop' },
@@ -153,7 +230,7 @@ export function createMockProviders({ keys = {} } = {}) {
         status: 'completed',
         output: [
           { type: 'reasoning', summary: [] },
-          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: ANSWER }] },
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: answerFor(body) }] },
         ],
         usage: { input_tokens: 200, output_tokens: 150 + r, output_tokens_details: { reasoning_tokens: r } },
       });
@@ -173,7 +250,7 @@ export function createMockProviders({ keys = {} } = {}) {
       }
       if (rf?.type === 'video') return json(res, 200, { id: 'int_vid', status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'video', mime_type: 'video/mp4', data: MP4.toString('base64') }] }], usage: { total_input_tokens: 30, total_output_tokens: 9000 } });
       const t = reasoningFor(body?.generation_config?.thinking_level);
-      return json(res, 200, { id: 'int_txt', status: 'completed', steps: [{ type: 'thought' }, { type: 'model_output', content: [{ type: 'text', text: ANSWER }] }], usage: { total_input_tokens: 200, total_output_tokens: 150, total_thought_tokens: t, total_tokens: 350 + t } });
+      return json(res, 200, { id: 'int_txt', status: 'completed', steps: [{ type: 'thought' }, { type: 'model_output', content: [{ type: 'text', text: answerFor(body) }] }], usage: { total_input_tokens: 200, total_output_tokens: 150, total_thought_tokens: t, total_tokens: 350 + t } });
     }
     if (id === 'google' && p === '/models') return json(res, 200, { models: [{ name: 'models/gemini-3.8-flash' }, { name: 'models/gemini-nano-banana-2.1' }, { name: 'models/gemini-omni-1.1-flash' }] });
 
@@ -188,7 +265,7 @@ export function createMockProviders({ keys = {} } = {}) {
         id === 'xai'
           ? { prompt_tokens: 200, completion_tokens: 150, completion_tokens_details: { reasoning_tokens: r }, total_tokens: 350 + r }
           : { prompt_tokens: 200, completion_tokens: 150 + r, completion_tokens_details: { reasoning_tokens: r }, total_tokens: 350 + r, ...(id === 'openrouter' ? { cost: Math.round((200 * 0.8 + (150 + r) * 4) / 1000) / 1000 } : {}) };
-      return json(res, 200, { id: 'chat_mock', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: ANSWER }, finish_reason: 'stop' }], usage });
+      return json(res, 200, { id: 'chat_mock', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: answerFor(body) }, finish_reason: 'stop' }], usage });
     }
     if ((id === 'xai' || id === 'meta' || id === 'openrouter') && p === '/models') {
       return json(res, 200, { data: [{ id: id === 'xai' ? 'grok-4.6' : id === 'meta' ? 'muse-spark-1.3' : 'google/gemini-3.8-flash', architecture: { output_modalities: ['text'] } }, { id: 'extra-model-1', architecture: { output_modalities: ['text'] } }] });

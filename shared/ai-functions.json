@@ -17,6 +17,7 @@
     { "id": "social", "label": "Social posts & campaigns", "group": "writing", "kind": "text", "desc": "Posts, captions, campaign plans and content batches.", "tasks": ["campaignPlan", "contentBatch", "post"] },
     { "id": "ads", "label": "Ads", "group": "writing", "kind": "text", "desc": "Ad copy and campaign variants.", "tasks": ["ads"] },
     { "id": "illustrations", "label": "Illustrations", "group": "writing", "kind": "text", "desc": "Brand illustrations drawn as SVG.", "tasks": ["postImage", "listingImage"] },
+    { "id": "assistant", "label": "Assistant", "group": "writing", "kind": "text", "desc": "The chat at the bottom right: answers questions and does things in the app when you ask.", "tasks": [] },
     { "id": "photos", "label": "Photos", "group": "media", "kind": "image", "desc": "AI photos for posts and listings.", "tasks": [] },
     { "id": "videos", "label": "Videos", "group": "media", "kind": "video", "desc": "AI videos for posts and product demos.", "tasks": [] },
     { "id": "facebook", "label": "Social posting", "group": "agents", "kind": "agent", "desc": "An agent posts on your Facebook, Instagram, TikTok, LinkedIn and X accounts (right away or scheduled), with the post’s image or video.", "tasks": [] }

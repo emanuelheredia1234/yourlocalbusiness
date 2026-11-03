@@ -8,7 +8,8 @@ import { compactMeta, metaLine } from '@/ai/meta';
 import { skillTestTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { toast } from '@/store/ui';
+import { toast, useTabRequest } from '@/store/ui';
+import { tabsOf } from '@/lib/pageTabs';
 import { AIThinking, GenerateButton, ProviderBadge } from '@/components/ai/AI';
 import { AutoTextarea, Empty, Field, ProgressRing, Segmented, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
 import { Icon } from '@/components/ui/Icon';
@@ -22,6 +23,8 @@ export default function Brain() {
   const useBrain = useStore((s) => s.settings.ai.useBrain);
   const updateSettings = useStore((s) => s.updateSettings);
   const [tab, setTab] = useState<Tab>('skills');
+  // a tab asked for from elsewhere (the assistant)
+  useTabRequest<Tab>('brain', tabsOf('brain') as Tab[], setTab);
   const [editing, setEditing] = useState<Skill | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const strength = useMemo(() => brainStrength(skills), [skills]);

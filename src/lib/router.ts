@@ -79,6 +79,11 @@ export function navigate(route: Route, opts: { force?: boolean } = {}): Promise<
   return Promise.resolve(true);
 }
 
+/** The page showing now, outside React (the assistant reads it; components use useRoute). */
+export function currentRoute(): Route | null {
+  return current;
+}
+
 export function useRoute(): Route | null {
   return useSyncExternalStore(
     (cb) => {

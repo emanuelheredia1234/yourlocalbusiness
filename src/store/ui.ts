@@ -1,6 +1,7 @@
+import { useEffect } from 'react';
 import { create } from 'zustand';
 import { uid } from '@/lib/utils';
-import { navigate } from '@/lib/router';
+import { navigate, type Route } from '@/lib/router';
 
 /** The Social media engine's tabs (create = Create individual post). */
 export type SocialTab = 'setup' | 'plan' | 'batch' | 'create';
@@ -43,6 +44,10 @@ interface UIState {
   /** a Settings tab to open next (e.g. "account" from the account menu) */
   settingsTab: string | null;
   setSettingsTab: (t: string | null) => void;
+
+  /** a tab to show next on another tabbed page (Studio, Brain, Calendar, Email, Marketplace): the page takes it (see useTabRequest) */
+  pageTab: { route: Route; tab: string } | null;
+  requestTab: (route: Route, tab: string) => void;
 }
 
 export const useUI = create<UIState>((set) => ({
@@ -85,6 +90,22 @@ export const useUI = create<UIState>((set) => ({
 
   settingsTab: null,
   setSettingsTab: (t) => set({ settingsTab: t }),
+
+  pageTab: null,
+  requestTab: (route, tab) => set({ pageTab: { route, tab } }),
 }));
 
 export const toast = (t: Omit<Toast, 'id'>) => useUI.getState().toast(t);
+
+/**
+ * A tabbed page takes a tab asked for from elsewhere (the assistant, a link): once, and only when it's
+ * one of its own tabs. `show` is the page's own tab setter.
+ */
+export function useTabRequest<T extends string>(route: Route, tabs: readonly T[], show: (tab: T) => void): void {
+  const wanted = useUI((s) => s.pageTab);
+  useEffect(() => {
+    if (!wanted || wanted.route !== route) return;
+    useUI.setState({ pageTab: null });
+    if ((tabs as readonly string[]).includes(wanted.tab)) show(wanted.tab as T);
+  }, [wanted]); // eslint-disable-line react-hooks/exhaustive-deps
+}

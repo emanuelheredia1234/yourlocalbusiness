@@ -426,13 +426,24 @@ export function CopyButton({ text, label = 'Copy', size = 'sm', className }: { t
   );
 }
 
-export function Toaster() {
+/**
+ * Where toasts go: the corner, above the assistant's chat button (so they don't cover it), or, while its
+ * panel is open, beside the panel on wide screens and at the top on smaller ones.
+ */
+export type ToastPlacement = 'corner' | 'above-launcher' | 'beside-panel';
+
+export function Toaster({ placement = 'corner' }: { placement?: ToastPlacement }) {
   const toasts = useUI((s) => s.toasts);
   const dismiss = useUI((s) => s.dismissToast);
+  const safeBottom = 'max(16px, env(safe-area-inset-bottom, 0px))';
   return createPortal(
     <div
-      className="pointer-events-none fixed bottom-0 right-0 z-[80] flex w-full max-w-[380px] flex-col gap-2 p-4"
-      style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom, 0px))', paddingRight: 'max(16px, env(safe-area-inset-right, 0px))' }}
+      className={cn('pointer-events-none fixed right-0 z-[80] flex w-full max-w-[380px] flex-col gap-2 p-4', placement === 'beside-panel' ? 'top-0 lg:bottom-0 lg:right-[416px] lg:top-auto' : 'bottom-0')}
+      style={{
+        paddingBottom: placement === 'above-launcher' ? `calc(${safeBottom} + 72px)` : safeBottom,
+        paddingRight: 'max(16px, env(safe-area-inset-right, 0px))',
+        ...(placement === 'beside-panel' ? { paddingTop: 'max(16px, env(safe-area-inset-top, 0px))' } : {}),
+      }}
       aria-live="polite"
     >
       {toasts.map((t) => (

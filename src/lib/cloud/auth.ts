@@ -57,8 +57,18 @@ const DISCARD_KEY = 'ylb-signed-out';
 const stateKey = (userId: string) => `${LEGACY_KEY}:${userId}`;
 /** per-device keys that point at a user's posts and jobs */
 const DEVICE_KEYS = ['ylb-manus-pending', 'ylb-video-pending', 'ylb-fb-page', 'ylb-admin-token'];
-/** per-device keys by prefix (the accounts Manus last posted as, per project and network) */
-const DEVICE_PREFIXES = ['ylb-post-account:'];
+/** per-device keys by prefix (the accounts Manus last posted as, per project and network; the assistant's chats, per account) */
+const DEVICE_PREFIXES = ['ylb-post-account:', 'ylb-assistant:'];
+
+/** Remove this device's keys that point at an account's posts and jobs, and its assistant chats (at Log out). */
+export function clearDeviceKeys(): void {
+  for (const k of DEVICE_KEYS) safeStorage.removeItem(k);
+  try {
+    for (const k of Object.keys(localStorage)) if (DEVICE_PREFIXES.some((p) => k.startsWith(p))) safeStorage.removeItem(k);
+  } catch {
+    /* storage blocked */
+  }
+}
 
 let client: SupabaseClient | null = null;
 let sync: Sync | null = null;
@@ -581,12 +591,7 @@ async function forgetDevice(userId: string) {
   // a tab that stepped aside may have left save marks in storage: they belong to this account too
   safeStorage.removeItem(`ylb-sync:${userId}`);
   safeStorage.removeItem(`ylb-media-sync:${userId}`);
-  for (const k of DEVICE_KEYS) safeStorage.removeItem(k);
-  try {
-    for (const k of Object.keys(localStorage)) if (DEVICE_PREFIXES.some((p) => k.startsWith(p))) safeStorage.removeItem(k);
-  } catch {
-    /* storage blocked */
-  }
+  clearDeviceKeys();
   await deleteMediaDatabase(userId);
   setMediaAccount(null, null);
 }

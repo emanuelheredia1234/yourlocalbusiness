@@ -9,7 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { FUNCTION_IDS, PROVIDERS, PROVIDER_IDS, adapterId, defaultEffort, effortIds, kindDef, supportedFunctions, supports } from './registry.mjs';
+import { FUNCTION_IDS, PROVIDERS, PROVIDER_IDS, adapterId, defaultEffort, effortIds, fnById, kindDef, supportedFunctions, supports } from './registry.mjs';
 
 export function maskKey(key) {
   if (!key) return '';
@@ -20,6 +20,14 @@ const MODEL_RE = /^[A-Za-z0-9][\w.:/@+-]{0,127}$/;
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const REMOTE_KEY = 'ai-providers';
+
+/**
+ * Writing functions added after keys could already have a saved "Powers" list: such a key powers them
+ * too (as a new key would) until the owner unticks them. Saving the list records which functions
+ * existed then (`seen`), so later ones are told apart from ones the owner unticked.
+ */
+const ADDED_LATER = ['assistant'];
+const isNewFor = (saved, fn) => (Array.isArray(saved.seen) ? !saved.seen.includes(fn) && fnById[fn]?.kind === 'text' : ADDED_LATER.includes(fn));
 
 /** Daily limits for each signed-in non-admin user on the owner's keys, until the owner changes them. */
 export const DEFAULT_LIMITS = { requestsPerDay: 50, usdPerDay: 1 };
@@ -245,7 +253,7 @@ export class AIStore {
     const found = {};
     for (const id of ['meta', 'openai']) {
       const key = typeof old[id]?.apiKey === 'string' ? old[id].apiKey.trim() : '';
-      if (key) found[id] = { apiKey: key, enabled: true, functions: ['photos'] };
+      if (key) found[id] = { apiKey: key, enabled: true, functions: ['photos'], seen: [...FUNCTION_IDS] };
     }
     if (!Object.keys(found).length) return;
     this.imported = true;
@@ -301,7 +309,7 @@ export class AIStore {
   settings(id) {
     const saved = this.state.providers[id] || {};
     const supported = supportedFunctions(id);
-    const functions = Array.isArray(saved.functions) ? supported.filter((f) => saved.functions.includes(f)) : supported;
+    const functions = Array.isArray(saved.functions) ? supported.filter((f) => saved.functions.includes(f) || isNewFor(saved, f)) : supported;
     const models = {};
     const effort = {};
     for (const kind of Object.keys(PROVIDERS[id].kinds)) {
@@ -373,7 +381,10 @@ export class AIStore {
       cur.apiKey = k;
     }
     if (typeof patch.enabled === 'boolean') cur.enabled = patch.enabled;
-    if (Array.isArray(patch.functions)) cur.functions = [...new Set(patch.functions.filter((f) => typeof f === 'string' && supports(id, f).ok))];
+    if (Array.isArray(patch.functions)) {
+      cur.functions = [...new Set(patch.functions.filter((f) => typeof f === 'string' && supports(id, f).ok))];
+      cur.seen = [...FUNCTION_IDS];
+    }
     if (patch.models && typeof patch.models === 'object') {
       cur.models = { ...(cur.models || {}) };
       for (const [kind, model] of Object.entries(patch.models)) {

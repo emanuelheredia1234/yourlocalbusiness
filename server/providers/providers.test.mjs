@@ -619,3 +619,55 @@ describe('ai-server.mjs', () => {
     }
   }, 20_000);
 });
+
+describe('the Assistant function', () => {
+  it('is on for keys whose Powers list was saved before it existed, until unticked', () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, 'ai.json'), JSON.stringify({ providers: { openai: { functions: ['research', 'photos'] }, manus: { functions: ['facebook'] } }, order: [...PROVIDER_IDS] }));
+    const store = new AIStore(path.join(dir, 'ai.json'), { env: { OPENAI_API_KEY: 'o', MANUS_API_KEY: 'm' } });
+    expect(store.settings('openai').functions).toEqual(['research', 'assistant', 'photos']);
+    expect(store.route('assistant')).toEqual(['openai']);
+    // Manus doesn't write, so it never powers the Assistant
+    expect(store.settings('manus').functions).toEqual(['facebook']);
+    store.update('openai', { functions: ['research', 'photos'] });
+    expect(store.settings('openai').functions).toEqual(['research', 'photos']);
+    expect(new AIStore(store.file, { env: { OPENAI_API_KEY: 'o' } }).route('assistant')).toEqual([]);
+    store.update('openai', { functions: ['research', 'assistant'] });
+    expect(store.route('assistant')).toEqual(['openai']);
+  });
+
+  it('is on for a new key, like everything a key can do', () => {
+    const store = new AIStore(path.join(tmpDir(), 'ai.json'), { env: { ANTHROPIC_API_KEY: 'a' } });
+    expect(store.settings('anthropic').functions).toContain('assistant');
+    expect(store.route('assistant')).toEqual(['anthropic']);
+  });
+
+  it('gets scripted steps from the provider mock, while other prompts get the usual answer', async () => {
+    const { router } = setup(['openai']);
+    const prompt = ['[ylb-assistant-protocol v1]', 'You are the assistant.', '', '## Workspace (JSON)', '{"project":{"id":"proj_1"},"somePosts":[{"id":"post_abc123","platform":"x"}]}', '', '## Latest message from the owner', 'What is due on my calendar?', '', '## Tool results so far this turn (JSON)', '[]', '', '## Reply format', 'JSON'].join('\n');
+    const first = JSON.parse((await router.text('assistant', { prompt })).text);
+    expect(first).toMatchObject({ done: false, actions: [{ tool: 'navigate', args: { route: 'calendar' } }, { tool: 'list_posts', args: { due: true } }] });
+    const second = JSON.parse((await router.text('assistant', { prompt: prompt.replace('\n[]\n', '\n[{"step":1,"tool":"list_posts","ok":true,"status":"ok","result":{"total":2}}]\n') })).text);
+    expect(second).toMatchObject({ done: true, actions: [] });
+    expect(second.reply).toMatch(/2 posts are due/);
+    const del = JSON.parse((await router.text('assistant', { prompt: prompt.replace('What is due on my calendar?', 'qa-delete please') })).text);
+    expect(del.actions).toEqual([{ tool: 'delete_posts', args: { ids: ['post_abc123'] } }]);
+    const plain = await router.text('research', { prompt: 'Find winning products' });
+    expect(JSON.parse(plain.text)).toEqual({ ok: true, note: 'mock answer' });
+  });
+
+  it('is a text function /api/ai/generate accepts, routed in /api/health', async () => {
+    const app = await startApp();
+    try {
+      const prompt = '[ylb-assistant-protocol v1]\n\n## Latest message from the owner\nhello\n\n## Tool results so far this turn (JSON)\n[]';
+      const r = await fetch(`${app.base}/api/ai/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fn: 'assistant', prompt }) });
+      expect(r.status).toBe(200);
+      const j = await r.json();
+      expect(JSON.parse(j.text)).toMatchObject({ done: true, actions: [], reply: expect.stringContaining('QA assistant') });
+      expect(j.meta.fn).toBe('assistant');
+      expect((await app.ai.health()).routing.assistant.length).toBeGreaterThan(0);
+    } finally {
+      app.server.close();
+    }
+  });
+});
