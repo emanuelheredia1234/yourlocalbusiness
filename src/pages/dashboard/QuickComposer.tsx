@@ -51,6 +51,8 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
   const [time, setTime] = useState(PLATFORMS[platforms[0] ?? 'instagram'].times[1]);
   const suggestions = useMemo(() => suggestTopics(project), [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const effFormat: PostFormat = source === 'upload' && media ? (media.kind === 'video' ? 'video' : 'image') : format;
+  // your own photo posts untouched: a visual style, watermark or on-image headline never goes on it
+  const ownPhoto = source === 'upload' && media?.kind === 'image';
   const styles = effFormat === 'video' ? VIDEO_STYLES : IMAGE_STYLES;
   useEffect(() => {
     if (isVideoStyle(style) !== (effFormat === 'video')) setStyle(effFormat === 'video' ? project.marketing.campaign.videoStyles[0] ?? 'ugc' : project.marketing.campaign.imageStyles[0] ?? 'minimal');
@@ -191,27 +193,29 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
               <Segmented options={[{ id: 'image', label: 'Image' }, { id: 'video', label: 'Video' }]} value={format} onChange={setFormat} size="sm" />
             </Field>
           )}
-          <Field label="Visual style" htmlFor={`${fid}-style`}>
-            <select id={`${fid}-style`} className="select" value={style} onChange={(e) => setStyle(e.target.value as StyleId)}>
-              {styles.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          </Field>
+          {!ownPhoto && (
+            <Field label="Visual style" htmlFor={`${fid}-style`}>
+              <select id={`${fid}-style`} className="select" value={style} onChange={(e) => setStyle(e.target.value as StyleId)}>
+                {styles.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <GenerateButton running={ai.running} onClick={generate}>
             {hasDraft ? 'Regenerate' : source === 'upload' ? 'Write AI caption' : 'Generate post'}
           </GenerateButton>
-          <Toggle checked={watermark} onChange={setWatermark} label="Watermark" />
+          {!ownPhoto && <Toggle checked={watermark} onChange={setWatermark} label="Watermark" />}
         </div>
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
         {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
         {hasDraft && (
           <div className="flex flex-col gap-3 rounded-lg border border-line bg-surface-2/50 p-3">
-            <Field label="On-image headline" htmlFor={`${fid}-h`}>
+            <Field label={ownPhoto ? 'Headline' : 'On-image headline'} htmlFor={`${fid}-h`} hint={ownPhoto ? 'Names the post in your lists. It isn’t added to your photo.' : undefined}>
               <input id={`${fid}-h`} className="input" value={headline} onChange={(e) => setHeadline(e.target.value)} />
             </Field>
             <Field label="Caption" htmlFor={`${fid}-c`} right={`${caption.length} chars`}>

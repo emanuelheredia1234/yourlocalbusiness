@@ -46,9 +46,10 @@ interface EditableProps {
 
 export function PostFields({ post, onChange }: EditableProps) {
   const project = useStore((s) => s.projects.find((p) => p.id === post.projectId));
+  const ownPhoto = post.media?.kind === 'image' && !post.media.generated;
   return (
     <div className="grid gap-3">
-      <Field label="On-image headline" htmlFor={`h-${post.id}`} right={`${post.headline.length}/70`}>
+      <Field label={ownPhoto ? 'Headline' : 'On-image headline'} htmlFor={`h-${post.id}`} right={`${post.headline.length}/70`} hint={ownPhoto ? 'Names the post in your lists. It isn’t added to your photo.' : undefined}>
         <input id={`h-${post.id}`} className="input" value={post.headline} maxLength={90} onChange={(e) => onChange({ headline: e.target.value })} />
       </Field>
       <Field label="Caption" htmlFor={`c-${post.id}`} right={`${post.caption.length}/${PLATFORMS[post.platform].limit}`}>

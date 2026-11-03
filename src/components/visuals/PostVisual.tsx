@@ -25,6 +25,15 @@ export interface PostVisualProps {
 
 const cq = (n: number) => `${n}cqw`;
 
+/** Tallest and widest shapes a photo preview takes (9:16 and 1.91:1, the range feeds show); beyond them it's cropped to fit. */
+const TALLEST = 9 / 16;
+const WIDEST = 1.91;
+
+/** The width/height ratio a photo shows at: its own, kept within 9:16 to 1.91:1. */
+export function photoShape(w: number, h: number): number {
+  return Math.min(WIDEST, Math.max(TALLEST, w / h));
+}
+
 export function PostVisual(props: PostVisualProps) {
   const { style, brand, watermark, aspect, className, label } = props;
   const video = isVideoStyle(style);
@@ -32,15 +41,12 @@ export function PostVisual(props: PostVisualProps) {
   const mediaUrl = useMediaUrl(props.media ?? null);
   // the owner's website, else their @handle, else the brand name: never a made-up domain
   const url = brandMark(brand);
-  const finished = props.media?.kind === 'image' && props.media.generated?.final;
-  if (finished) {
-    // AI images already carry the headline, logo and watermark: show them exactly as they will post
-    const m = props.media!;
-    return (
-      <div className={cn('pv relative w-full overflow-hidden rounded-md bg-surface-3', className)} style={{ aspectRatio: m.w && m.h ? `${m.w}/${m.h}` : ratio, maxWidth: '100%' }} role="img" aria-label={label ?? `AI image: ${props.headline}`}>
-        {mediaUrl && <img src={mediaUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />}
-      </div>
-    );
+  const m = props.media;
+  if (m?.kind === 'image' && (m.generated?.final || !video)) {
+    // A photo posts exactly as it is (your own untouched; AI images already carry their headline, logo and
+    // watermark), so show it alone, filling the preview, instead of inside a style mockup. (A video plan
+    // with a photo still shows its storyboard over the photo: it can't post until it has a real video.)
+    return <PhotoAsPosted key={m.id} media={m} src={mediaUrl} fallback={ratio} className={className} label={label ?? (m.generated ? `AI image: ${props.headline}` : `Your photo: ${props.headline}`)} />;
   }
   return (
     <div className={cn('pv relative w-full overflow-hidden rounded-md bg-surface-3', className)} style={{ aspectRatio: ratio, maxWidth: '100%' }} role="img" aria-label={label ?? `${video ? 'Video' : 'Image'} mockup: ${props.headline}`}>
@@ -66,18 +72,37 @@ export function PostVisual(props: PostVisualProps) {
   );
 }
 
+/** A photo filling the whole preview, at its own shape. AI images keep their exact shape (their text is part of them). */
+function PhotoAsPosted({ media, src, fallback, className, label }: { media: MediaRef; src: string | null; fallback: string; className?: string; label: string }) {
+  // older uploads may not know their size: read it from the photo once it loads
+  const [measured, setMeasured] = useState<{ w: number; h: number } | null>(null);
+  const w = media.w || measured?.w;
+  const h = media.h || measured?.h;
+  const shape = w && h ? (media.generated?.final ? `${w}/${h}` : String(photoShape(w, h))) : fallback;
+  return (
+    <div className={cn('pv relative w-full overflow-hidden rounded-md bg-surface-3', className)} style={{ aspectRatio: shape, maxWidth: '100%' }} role="img" aria-label={label}>
+      {src && (
+        <img
+          src={src}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          onLoad={(e) => {
+            const { naturalWidth: nw, naturalHeight: nh } = e.currentTarget;
+            if (!(media.w && media.h) && nw && nh) setMeasured({ w: nw, h: nh });
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 // ───────────────────────── Image styles ─────────────────────────
 
 function ImageStage({ style, headline, brand, media, mediaUrl, points }: PostVisualProps & { mediaUrl: string | null }) {
   const c = brand.colors;
   const name = brand.name || 'Your Brand';
-  const isImg = media?.kind === 'image' && mediaUrl;
-  const isVid = media?.kind === 'video' && mediaUrl;
-  const mediaEl = isImg ? (
-    <img src={mediaUrl!} alt="" className="h-full w-full object-cover" />
-  ) : isVid ? (
-    <video src={mediaUrl!} muted loop playsInline autoPlay className="h-full w-full object-cover" />
-  ) : null;
+  // photos never get here (PostVisual shows them as they post); a video in an image style plays inside it
+  const mediaEl = media?.kind === 'video' && mediaUrl ? <video src={mediaUrl} muted loop playsInline autoPlay className="h-full w-full object-cover" /> : null;
 
   switch (style) {
     case 'neon':
