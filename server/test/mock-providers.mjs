@@ -16,6 +16,19 @@ export const reasoningFor = (effort) => EFFORT_TOKENS[effort] ?? 300;
 
 const ANSWER = JSON.stringify({ ok: true, note: 'mock answer' });
 
+/**
+ * Scripted answers for browser QA: a marker in the owner's words picks one; anything else gets ANSWER (a
+ * stub the app's merges ignore, so the built-in engine's result stands).
+ */
+const SCRIPTED = [
+  // SEO page → Edit with AI: a change the app can apply (and undo)
+  ['qa-dark-look', JSON.stringify({ theme: { font: 'sans', mode: 'dark', radius: 'soft' }, summary: 'Switched the page to a dark look.' })],
+];
+const answerFor = (body) => {
+  const sent = JSON.stringify(body ?? '');
+  return SCRIPTED.find(([marker]) => sent.includes(marker))?.[1] ?? ANSWER;
+};
+
 /** A brand-voice read (src/ai/manusVoice.ts): the profile, when the prompt is one. */
 const voiceProfile = (prompt) => (/^Read the latest posts of one .+ profile and describe how they sound and look/m.test(prompt ?? '') ? (/^The .+?(?:: | named “)(.+?)(?:”.*)?$/m.exec(prompt)?.[1] ?? '') : null);
 /** A read of a "needs-signin" profile waits for you to sign in for its first two checks. */
@@ -136,7 +149,7 @@ export function createMockProviders({ keys = {} } = {}) {
       return sse(res, [
         { type: 'message_start', message: { id: 'msg_mock', type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 200, output_tokens: 1 } } },
         { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
-        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ANSWER } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: answerFor(body) } },
         { type: 'content_block_stop', index: 0 },
         { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: out } },
         { type: 'message_stop' },
@@ -153,7 +166,7 @@ export function createMockProviders({ keys = {} } = {}) {
         status: 'completed',
         output: [
           { type: 'reasoning', summary: [] },
-          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: ANSWER }] },
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: answerFor(body) }] },
         ],
         usage: { input_tokens: 200, output_tokens: 150 + r, output_tokens_details: { reasoning_tokens: r } },
       });
@@ -173,7 +186,7 @@ export function createMockProviders({ keys = {} } = {}) {
       }
       if (rf?.type === 'video') return json(res, 200, { id: 'int_vid', status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'video', mime_type: 'video/mp4', data: MP4.toString('base64') }] }], usage: { total_input_tokens: 30, total_output_tokens: 9000 } });
       const t = reasoningFor(body?.generation_config?.thinking_level);
-      return json(res, 200, { id: 'int_txt', status: 'completed', steps: [{ type: 'thought' }, { type: 'model_output', content: [{ type: 'text', text: ANSWER }] }], usage: { total_input_tokens: 200, total_output_tokens: 150, total_thought_tokens: t, total_tokens: 350 + t } });
+      return json(res, 200, { id: 'int_txt', status: 'completed', steps: [{ type: 'thought' }, { type: 'model_output', content: [{ type: 'text', text: answerFor(body) }] }], usage: { total_input_tokens: 200, total_output_tokens: 150, total_thought_tokens: t, total_tokens: 350 + t } });
     }
     if (id === 'google' && p === '/models') return json(res, 200, { models: [{ name: 'models/gemini-3.8-flash' }, { name: 'models/gemini-nano-banana-2.1' }, { name: 'models/gemini-omni-1.1-flash' }] });
 
@@ -188,7 +201,7 @@ export function createMockProviders({ keys = {} } = {}) {
         id === 'xai'
           ? { prompt_tokens: 200, completion_tokens: 150, completion_tokens_details: { reasoning_tokens: r }, total_tokens: 350 + r }
           : { prompt_tokens: 200, completion_tokens: 150 + r, completion_tokens_details: { reasoning_tokens: r }, total_tokens: 350 + r, ...(id === 'openrouter' ? { cost: Math.round((200 * 0.8 + (150 + r) * 4) / 1000) / 1000 } : {}) };
-      return json(res, 200, { id: 'chat_mock', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: ANSWER }, finish_reason: 'stop' }], usage });
+      return json(res, 200, { id: 'chat_mock', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content: answerFor(body) }, finish_reason: 'stop' }], usage });
     }
     if ((id === 'xai' || id === 'meta' || id === 'openrouter') && p === '/models') {
       return json(res, 200, { data: [{ id: id === 'xai' ? 'grok-4.6' : id === 'meta' ? 'muse-spark-1.3' : 'google/gemini-3.8-flash', architecture: { output_modalities: ['text'] } }, { id: 'extra-model-1', architecture: { output_modalities: ['text'] } }] });
