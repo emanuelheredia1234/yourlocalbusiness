@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import type { Brand, BrandColors, LogoConfig, LogoFont, LogoShape, MiniLogo } from '@/lib/types';
 import { cn, darken, initials, lighten, readableOn } from '@/lib/utils';
 import { useMediaUrl } from '@/lib/media';
@@ -124,7 +124,32 @@ function hashCode(s: string): number {
 
 // ───────────────────────── Banner ─────────────────────────
 
+/**
+ * How big the banner can set the business name so the whole of it fits `width` px (measured in the
+ * logo's font); under `min` px it wraps onto more lines instead. Never cut.
+ */
+export function bannerNameSize(name: string, font: (typeof LOGO_FONTS)[LogoFont], { max = 84, min = 44, width = 860 } = {}): { size: number; wrap: boolean } {
+  const ctx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
+  if (!ctx) return { size: max, wrap: name.length > 18 };
+  const text = font.transform === 'uppercase' ? name.toUpperCase() : name;
+  ctx.font = `${font.weight} ${max}px ${font.family}`;
+  const em = Number.parseFloat(font.spacing) || 0; // letter spacing, in em
+  const w = ctx.measureText(text).width + text.length * em * max;
+  if (w <= width) return { size: max, wrap: false };
+  const size = Math.floor((max * width) / w);
+  return size >= min ? { size, wrap: false } : { size: min, wrap: true };
+}
+
 export function BrandBanner({ brand, className, rounded = true }: { brand: Brand; className?: string; rounded?: boolean }) {
+  // measure again once the logo's web font has loaded (its width differs from the fallback's)
+  const [, setFontsReady] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    void document.fonts?.ready.then(() => alive && setFontsReady((n) => n + 1));
+    return () => {
+      alive = false;
+    };
+  }, []);
   const c = brand.colors;
   const style = brand.banner.style;
   const imgUrl = useMediaUrl(brand.banner.imageId ? brand.images.find((m) => m.id === brand.banner.imageId) ?? null : null);
@@ -133,6 +158,7 @@ export function BrandBanner({ brand, className, rounded = true }: { brand: Brand
   const ink = dark ? '#ffffff' : c.ink;
   const name = brand.name || 'Your Brand';
   const id = `b${Math.abs(hashCode(name + c.primary + style))}`;
+  const nameFit = bannerNameSize(name, font);
   return (
     <svg viewBox="0 0 1500 500" className={cn('block h-auto w-full', rounded && 'rounded-lg', className)} role="img" aria-label={`${name} cover banner`} preserveAspectRatio="xMidYMid slice">
       <defs>
@@ -200,12 +226,12 @@ export function BrandBanner({ brand, className, rounded = true }: { brand: Brand
           <rect width="1500" height="500" fill={`url(#${id}-shade)`} />
         </>
       )}
-      <g transform="translate(110 150)">
-        <foreignObject x="0" y="0" width="1000" height="230">
+      <g transform={nameFit.wrap ? 'translate(110 95)' : 'translate(110 150)'}>
+        <foreignObject x="0" y="0" width="1000" height={nameFit.wrap ? 320 : 230}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18, color: ink, fontFamily: '"Instrument Sans", system-ui, sans-serif' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
               <LogoMark colors={style === 'blobs' ? c : { ...c, primary: style === 'split' || style === 'waves' ? '#ffffff' : c.primary }} logo={style === 'split' || style === 'waves' ? { ...brand.logo, shape: brand.logo.shape } : brand.logo} name={name} size={104} />
-              <span style={{ fontFamily: font.family, fontWeight: font.weight, letterSpacing: font.spacing, textTransform: font.transform, fontSize: 84, lineHeight: 1, whiteSpace: 'nowrap' }}>{name}</span>
+              <span style={{ fontFamily: font.family, fontWeight: font.weight, letterSpacing: font.spacing, textTransform: font.transform, fontSize: nameFit.size, lineHeight: nameFit.wrap ? 1.05 : 1, whiteSpace: nameFit.wrap ? 'normal' : 'nowrap', overflowWrap: 'anywhere', maxWidth: 860 }}>{name}</span>
             </div>
             {brand.banner.showTagline && brand.tagline && <span style={{ fontSize: 34, opacity: 0.92, maxWidth: 760, lineHeight: 1.25 }}>{brand.tagline}</span>}
           </div>

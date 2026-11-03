@@ -60,6 +60,8 @@ const HEADLINE_FONTS: Partial<Record<StyleId, FontSpec>> = {
 };
 export const DISPLAY_FONT: FontSpec = { family: '"Bricolage Grotesque", system-ui, sans-serif', weight: 800, tracking: -0.02 };
 export const BODY_FONT: FontSpec = { family: '"Instrument Sans", system-ui, sans-serif', weight: 600 };
+/** The business name next to the logo. */
+export const BRAND_FONT: FontSpec = { family: '"Bricolage Grotesque", system-ui, sans-serif', weight: 700 };
 
 export const headlineFont = (style?: StyleId): FontSpec => (style && HEADLINE_FONTS[style]) || DISPLAY_FONT;
 
@@ -117,6 +119,41 @@ export function fitText(ctx: CanvasRenderingContext2D, raw: string, f: FontSpec,
   return { lines, size: box.min, lineHeight: box.min * lh };
 }
 
+/**
+ * The whole business name, never shortened: the largest size (from `size` down) that fits `maxWidth`
+ * on one line; then on two or three lines (words kept whole) within `maxHeight`; and if a single word
+ * is still too wide, smaller until it fits.
+ */
+export function fitName(ctx: CanvasRenderingContext2D, raw: string, f: FontSpec, size: number, maxWidth: number, maxHeight: number) {
+  const name = raw.trim().replace(/\s+/g, ' ');
+  const lh = 1.1;
+  const step = Math.max(0.5, size / 48);
+  const widest = (lines: string[]) => Math.max(0, ...lines.map((l) => ctx.measureText(l).width));
+  // one line, down to a little over half size
+  for (let s2 = size; s2 >= size * 0.55; s2 -= step) {
+    applyFont(ctx, f, s2);
+    if (ctx.measureText(name).width <= maxWidth) return { lines: [name], size: s2, lineHeight: s2 * lh };
+  }
+  // two, then three lines
+  for (const maxLines of [2, 3]) {
+    for (let s2 = size * 0.8; s2 >= size * 0.3; s2 -= step) {
+      applyFont(ctx, f, s2);
+      const lines = wrapText(ctx, name, maxWidth);
+      if (lines.length <= maxLines && widest(lines) <= maxWidth && lines.length * s2 * lh <= maxHeight) return { lines, size: s2, lineHeight: s2 * lh };
+    }
+  }
+  // very long: keep shrinking until every line fits the width (nothing is ever cut)
+  let s2 = size * 0.3;
+  applyFont(ctx, f, s2);
+  let lines = wrapText(ctx, name, maxWidth);
+  while (s2 > 4 && (widest(lines) > maxWidth || lines.length * s2 * lh > Math.max(maxHeight, s2 * lh * 3))) {
+    s2 *= 0.92;
+    applyFont(ctx, f, s2);
+    lines = wrapText(ctx, name, maxWidth);
+  }
+  return { lines, size: s2, lineHeight: s2 * lh };
+}
+
 function drawLines(ctx: CanvasRenderingContext2D, lines: string[], x: number, y: number, lineHeight: number, align: CanvasTextAlign = 'left') {
   ctx.textAlign = align;
   ctx.textBaseline = 'alphabetic';
@@ -153,19 +190,22 @@ export async function logoImage(brand: Brand): Promise<HTMLImageElement | null> 
   }
 }
 
-function brandChip(ctx: CanvasRenderingContext2D, logo: HTMLImageElement | null, name: string, x: number, y: number, size: number, color: string) {
+/** Logo plus the whole business name, fitted into `width` (from x): smaller or on more lines, never cut. */
+function brandChip(ctx: CanvasRenderingContext2D, logo: HTMLImageElement | null, name: string, x: number, y: number, size: number, color: string, width: number) {
   let tx = x;
   if (logo) {
     ctx.drawImage(logo, x, y, size, size);
     tx = x + size * 1.25;
   }
-  if (name) {
-    applyFont(ctx, { family: '"Bricolage Grotesque", system-ui, sans-serif', weight: 700 }, size * 0.5);
-    ctx.fillStyle = color;
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left';
-    ctx.fillText(name.slice(0, 32), tx, y + size / 2);
-  }
+  if (!name.trim()) return;
+  const fit = fitName(ctx, name, BRAND_FONT, size * 0.5, Math.max(size, x + width - tx), size * 1.5);
+  applyFont(ctx, BRAND_FONT, fit.size);
+  ctx.fillStyle = color;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  // centered on the logo, however many lines
+  const first = y + size / 2 - ((fit.lines.length - 1) * fit.lineHeight) / 2;
+  fit.lines.forEach((l, i) => ctx.fillText(l, tx, first + i * fit.lineHeight));
 }
 
 function websitePill(ctx: CanvasRenderingContext2D, url: string, W: number, H: number) {
@@ -211,7 +251,7 @@ export async function composePost(o: PostComposeOptions): Promise<HTMLCanvasElem
   const wide = W / H > 1.2;
   if (o.overlay && o.headline.trim()) {
     const font = headlineFont(o.style);
-    await ensureFonts([font, DISPLAY_FONT]);
+    await ensureFonts([font, DISPLAY_FONT, BRAND_FONT]);
     // legibility scrims: a gentle one at the top for the brand, a stronger one under the headline
     const top = ctx.createLinearGradient(0, 0, 0, H * 0.2);
     top.addColorStop(0, 'rgba(0,0,0,0.38)');
@@ -227,7 +267,7 @@ export async function composePost(o: PostComposeOptions): Promise<HTMLCanvasElem
     ctx.fillRect(0, startY, W, H - startY);
 
     const logo = await logoImage(o.brand);
-    brandChip(ctx, logo, o.brand.name, pad, pad, Math.min(W, H) * 0.075, '#ffffff');
+    brandChip(ctx, logo, o.brand.name, pad, pad, Math.min(W, H) * 0.075, '#ffffff', W - pad * 2);
 
     const reserve = o.watermark && brandUrl(o.brand) ? Math.min(W, H) * 0.09 : 0;
     const boxW = W - pad * 2 - (wide ? W * 0.3 : 0);
@@ -303,7 +343,7 @@ export async function composeListing(o: ListingComposeOptions): Promise<HTMLCanv
   if (o.layout === 'clean') return canvas;
   const c = o.brand.colors;
   const S = Math.min(W, H);
-  await ensureFonts([DISPLAY_FONT, BODY_FONT, { ...BODY_FONT, weight: 500 }]);
+  await ensureFonts([DISPLAY_FONT, BODY_FONT, { ...BODY_FONT, weight: 500 }, BRAND_FONT]);
   const logo = await logoImage(o.brand);
 
   if (o.layout === 'inside') {
@@ -357,7 +397,10 @@ export async function composeListing(o: ListingComposeOptions): Promise<HTMLCanv
     });
     // footer: logo + brand, price on the right
     const fy = py + ph - ip - footer * 0.45;
-    brandChip(ctx, logo, o.brand.name, px + ip, fy - S * 0.03, S * 0.06, ink);
+    // the name gets the footer's width, minus the price on the right
+    applyFont(ctx, DISPLAY_FONT, S * 0.042);
+    const priceW = o.text.price ? ctx.measureText(o.text.price).width + S * 0.04 : 0;
+    brandChip(ctx, logo, o.brand.name, px + ip, fy - S * 0.03, S * 0.06, ink, pw - ip * 2 - priceW);
     if (o.text.price) {
       applyFont(ctx, DISPLAY_FONT, S * 0.042);
       ctx.fillStyle = c.primary;
