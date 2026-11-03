@@ -4,7 +4,6 @@ import { initRuntime } from '@/lib/platform';
 import { pingServer } from '@/ai/claude';
 import { startCommunitySync } from '@/lib/community';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { toast } from '@/store/ui';
 import { CommandPalette, MobileNav, Sidebar, Topbar } from '@/components/layout/Shell';
 import { PageErrorBoundary } from '@/components/layout/ErrorBoundary';
 import { ConfirmHost, Spinner, Toaster } from '@/components/ui/primitives';
@@ -40,26 +39,6 @@ function useThemeSync() {
   }, [theme]);
 }
 
-/** Optional demo activity: simulated buyers for the user’s own listings (Settings → Demo). */
-function useSimulatedBuyers() {
-  const enabled = useStore((s) => s.settings.marketActivity);
-  useEffect(() => {
-    if (!enabled) return;
-    const names = ['Maya', 'Jordan', 'Priya', 'Luis', 'Hannah', 'Theo', 'Ava', 'Marcus', 'Elena', 'Sam'];
-    const cities = ['Austin', 'Denver', 'Portland', 'Nashville', 'Chicago', 'Tampa', 'Raleigh', 'Boise'];
-    const t = setInterval(() => {
-      const s = useStore.getState();
-      if (!s.myListings.length || Math.random() > 0.45) return;
-      const l = s.myListings[Math.floor(Math.random() * s.myListings.length)];
-      const buyer = `${names[Math.floor(Math.random() * names.length)]} from ${cities[Math.floor(Math.random() * cities.length)]}`;
-      s.addSale({ listingId: l.id, projectId: l.projectId, title: l.title, amount: l.price, qty: 1, createdAt: Date.now(), buyer, source: 'simulated' });
-      s.notify({ kind: 'sale', title: `Simulated sale: ${l.title}`, body: `${buyer} · $${l.price}`, route: 'analytics' });
-      toast({ kind: 'success', title: 'Simulated sale (demo mode)', body: `${buyer} bought ${l.title}` });
-    }, 50_000);
-    return () => clearInterval(t);
-  }, [enabled]);
-}
-
 function PageFallback() {
   return (
     <div className="flex h-64 items-center justify-center text-muted">
@@ -73,7 +52,6 @@ export default function App() {
   const project = useActiveProject();
   const hasListings = useStore((s) => s.myListings.length > 0);
   useThemeSync();
-  useSimulatedBuyers();
   useManusPostWatcher();
 
   useEffect(() => {

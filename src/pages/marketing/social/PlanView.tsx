@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { CalendarDays, Clapperboard, Image as ImageIcon, List, Megaphone, Target } from 'lucide-react';
 import type { CampaignPlan, PlanDay, PlanSlot, PostPlatform } from '@/lib/types';
-import { cn, fmtCompact, fmtDate, fmtTime, WEEKDAYS, weekdayIndex } from '@/lib/utils';
+import { cn, fmtDate, fmtTime, WEEKDAYS, weekdayIndex } from '@/lib/utils';
 import { PLATFORMS, POST_TYPE_MAP, POST_TYPES, STYLE_LABEL } from '@/ai/knowledge';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { StackedBar } from '@/components/charts/Charts';
@@ -42,7 +42,7 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
             <Stat label="Posts" value={String(s.total)} icon={<Megaphone size={12} />} />
             <Stat label="Videos" value={String(s.videos)} icon={<Clapperboard size={12} />} />
             <Stat label="Images" value={String(s.images)} icon={<ImageIcon size={12} />} />
-            <Stat label="Est. reach" value={fmtCompact(s.estReach)} icon={<Target size={12} />} />
+            <Stat label="Platforms" value={String(Object.keys(s.byPlatform).length)} icon={<Target size={12} />} />
           </dl>
         </div>
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">

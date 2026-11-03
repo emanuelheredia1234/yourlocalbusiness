@@ -1,13 +1,12 @@
 import { useMemo } from 'react';
-import { ArrowRight, Brain, CalendarClock, Check, ExternalLink, Globe, Mail, Megaphone, MousePointerClick, Search, ShoppingBag, Sparkles, Store, TrendingUp, Users, WandSparkles, Eye, Heart, Database } from 'lucide-react';
-import type { Project } from '@/lib/types';
-import { cn, ensureUrl, fmtCompact, fmtDateTime, fmtMoney, fmtPct, fmtRelative, greeting, stripProtocol } from '@/lib/utils';
+import { ArrowRight, Brain, CalendarClock, Check, CircleAlert, ExternalLink, Globe, Mail, Megaphone, Search, Send, ShoppingBag, Sparkles, Store, TrendingUp, WandSparkles } from 'lucide-react';
+import type { GenerationLog, Project } from '@/lib/types';
+import { cn, ensureUrl, fmtDateTime, fmtMoney, fmtRelative, greeting, stripProtocol } from '@/lib/utils';
 import { navigate, type Route } from '@/lib/router';
 import { FORMATS, PLATFORMS, POST_TYPE_MAP } from '@/ai/knowledge';
 import { useKpis } from '@/lib/kpis';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
-import { loadSampleData } from '@/store/sample';
 import { StatTile } from '@/components/charts/Charts';
 import { BrandLogo } from '@/components/brand/Logo';
 import { ProgressRing } from '@/components/ui/primitives';
@@ -15,7 +14,7 @@ import { PlatformGlyph } from '@/components/posts/PlatformIcon';
 import { DueBadge } from '@/components/posts/PostActions';
 import { QuickComposer } from './QuickComposer';
 
-export function readiness(project: Project, ctx: { scheduled: number; sales: number; listed: boolean }) {
+export function readiness(project: Project, ctx: { scheduled: number; posted: number; listed: boolean }) {
   const items: { label: string; done: boolean; route: Route; cta: string }[] = [
     { label: 'Brand kit', done: !!project.brand.name && project.onboarded, route: 'workspace-settings', cta: 'Edit brand' },
     { label: project.track === 'business' ? 'Packages & operating model' : 'Product outline', done: project.studio.outline.length > 0 || project.studio.packages.length > 0, route: 'studio', cta: 'Open Studio' },
@@ -24,16 +23,22 @@ export function readiness(project: Project, ctx: { scheduled: number; sales: num
     { label: 'Lead magnet + 5 emails', done: !!project.marketing.leadMagnet && project.marketing.emails.length >= 5, route: 'marketing-email', cta: 'Build funnel' },
     { label: 'SEO sales page', done: !!project.marketing.salesPage, route: 'marketing-seo', cta: 'Build page' },
     { label: 'Social posts on your calendar', done: ctx.scheduled > 0, route: 'marketing-social', cta: 'Plan campaign' },
-    { label: 'First sale', done: ctx.sales > 0, route: 'store', cta: 'View store' },
+    { label: 'First post out', done: ctx.posted > 0, route: 'calendar', cta: 'Open calendar' },
   ];
   return { items, done: items.filter((i) => i.done).length };
+}
+
+/** Who made it: the AI that answered (its provider and model when known), or the built-in templates. */
+function madeBy(g: GenerationLog): string {
+  if (g.provider === 'local') return 'Built-in templates';
+  if (g.meta?.providerLabel) return g.meta.model ? `${g.meta.providerLabel} · ${g.meta.model}` : g.meta.providerLabel;
+  return g.provider === 'claude' ? 'Claude' : 'AI';
 }
 
 export function Dashboard() {
   const project = useActiveProject()!;
   const profile = useStore((s) => s.settings.profile);
   const posts = useStore((s) => s.posts);
-  const sales = useStore((s) => s.sales);
   const listed = useStore((s) => s.myListings.some((l) => l.projectId === project.id));
   const genLog = useStore((s) => s.genLog);
   const notices = useStore((s) => s.notices);
@@ -41,16 +46,12 @@ export function Dashboard() {
   const k = useKpis(project, 7);
   const projectPosts = posts.filter((p) => p.projectId === project.id);
   const upcoming = projectPosts.filter((p) => p.status === 'scheduled').sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)).slice(0, 5);
-  const projectSales = sales.filter((s) => s.projectId === project.id);
-  const ready = readiness(project, { scheduled: projectPosts.filter((p) => p.status !== 'draft').length, sales: projectSales.length, listed });
+  const ready = readiness(project, { scheduled: projectPosts.filter((p) => p.status !== 'draft').length, posted: projectPosts.filter((p) => p.status === 'published').length, listed });
   const nextStep = ready.items.find((i) => !i.done);
-  const noData = projectPosts.every((p) => p.status !== 'published') && projectSales.length === 0 && project.marketing.subscribers.length === 0;
-  const trend = (key: 'impressions' | 'clicks' | 'optins' | 'revenue') => k.series.map((d) => d[key]);
-  const erTrend = k.series.map((d) => (d.impressions ? d.engagements / d.impressions : 0));
   const activity = useMemo(
     () =>
       [
-        ...genLog.filter((g) => g.projectId === project.id).slice(0, 6).map((g) => ({ id: g.id, at: g.createdAt, text: `${g.label}`, sub: g.provider === 'local' ? 'Built-in engine' : 'Claude', icon: <Sparkles size={14} /> })),
+        ...genLog.filter((g) => g.projectId === project.id).slice(0, 6).map((g) => ({ id: g.id, at: g.createdAt, text: `${g.label}`, sub: madeBy(g), icon: <Sparkles size={14} /> })),
         ...notices.slice(0, 6).map((n) => ({ id: n.id, at: n.createdAt, text: n.title, sub: n.body ?? '', icon: n.kind === 'sale' ? <ShoppingBag size={14} /> : n.kind === 'post' ? <Megaphone size={14} /> : <Sparkles size={14} /> })),
       ]
         .sort((a, b) => b.at - a.at)
@@ -61,7 +62,7 @@ export function Dashboard() {
   const shortcuts: { route: Route; title: string; desc: string; icon: React.ReactNode; status: string }[] = [
     { route: 'studio', title: project.track === 'business' ? 'Business Studio' : 'Product Studio', desc: 'Outline, code assets, publish', icon: <WandSparkles size={18} />, status: project.studio.outline.length || project.studio.packages.length ? 'In progress' : 'Start here' },
     { route: 'marketing-seo', title: 'SEO sales page', desc: 'Meta, score, HTML export', icon: <Search size={18} />, status: project.marketing.salesPage ? 'Drafted' : 'Not started' },
-    { route: 'marketing-email', title: 'Email funnel', desc: 'Lead magnet + 5 emails', icon: <Mail size={18} />, status: project.marketing.emails.length ? `${project.marketing.subscribers.length} subscribers` : 'Not started' },
+    { route: 'marketing-email', title: 'Email funnel', desc: 'Lead magnet + 5 emails', icon: <Mail size={18} />, status: project.marketing.emails.length ? 'Drafted' : 'Not started' },
     { route: 'marketing-social', title: 'Social campaign', desc: '30-day plan, 7-day batch', icon: <Megaphone size={18} />, status: project.marketing.plan ? `${project.marketing.plan.summary.total} posts planned` : 'Not started' },
     { route: 'store', title: 'Marketplace', desc: 'Browse, sell, buy', icon: <Store size={18} />, status: listed ? 'Listed' : 'Not listed' },
     { route: 'brain', title: 'Brain', desc: 'Skills that shape the AI', icon: <Brain size={18} />, status: 'Train it' },
@@ -85,7 +86,7 @@ export function Dashboard() {
                 </button>
               </>
             ) : (
-              <>Everything is launched. Keep the campaign running and watch Analytics.</>
+              <>Everything is set up. Keep posting, and check how each post does on its network.</>
             )}
           </p>
         </div>
@@ -99,22 +100,11 @@ export function Dashboard() {
         </div>
       </div>
 
-      {noData && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-line-2 bg-surface px-4 py-3">
-          <Database size={18} className="text-muted" />
-          <p className="min-w-0 flex-1 text-[13px] text-ink-2">No performance data yet. Publish your first post, or load clearly labelled sample data to explore Analytics.</p>
-          <button className="btn btn-secondary btn-sm" onClick={() => loadSampleData(project)}>
-            Load sample data
-          </button>
-        </div>
-      )}
-
-      <section aria-label="Key metrics, last 7 days" className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-        <StatTile label="Impressions" value={fmtCompact(k.impressions)} delta={k.delta.impressions} deltaLabel="vs prior 7d" trend={trend('impressions')} icon={<Eye size={13} />} />
-        <StatTile label="Engagement rate" value={fmtPct(k.er)} delta={k.delta.er} deltaLabel="vs prior 7d" trend={erTrend} icon={<Heart size={13} />} />
-        <StatTile label="Link clicks" value={fmtCompact(k.clicks)} delta={k.delta.clicks} deltaLabel="vs prior 7d" trend={trend('clicks')} icon={<MousePointerClick size={13} />} />
-        <StatTile label="Lead opt-ins" value={fmtCompact(k.optins)} delta={k.delta.optins} deltaLabel="vs prior 7d" trend={trend('optins')} icon={<Users size={13} />} />
-        <StatTile label="Store sales" value={fmtMoney(k.revenue, { compact: true })} delta={k.delta.revenue} deltaLabel={`${k.salesCount} orders`} trend={trend('revenue')} icon={<ShoppingBag size={13} />} />
+      <section aria-label="This week" className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile label="Posted, last 7 days" value={String(k.posted)} delta={k.delta.posted} deltaLabel="vs prior 7d" trend={k.series.map((d) => d.posted)} icon={<Send size={13} />} />
+        <StatTile label="Planned" value={String(k.upcoming)} hint="Coming up on your calendar" icon={<CalendarClock size={13} />} />
+        <StatTile label="Due" value={String(k.due)} hint={k.due ? 'Past their time, not posted' : 'Nothing overdue'} icon={<CircleAlert size={13} />} />
+        <StatTile label="Made with AI, last 7 days" value={String(k.made)} delta={k.delta.made} deltaLabel="vs prior 7d" trend={k.series.map((d) => d.made)} icon={<Sparkles size={13} />} />
       </section>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -244,7 +234,7 @@ export function Dashboard() {
         <section className="panel p-4 sm:p-5" aria-label="Recent activity">
           <h2 className="section-title mb-3">Recent activity</h2>
           {activity.length === 0 ? (
-            <p className="rounded-md bg-surface-2 px-3 py-6 text-center text-[13px] text-muted">AI generations, posts and sales will appear here.</p>
+            <p className="rounded-md bg-surface-2 px-3 py-6 text-center text-[13px] text-muted">What you make with AI, and posts going out, appear here.</p>
           ) : (
             <ul className="flex flex-col gap-1">
               {activity.map((a) => (

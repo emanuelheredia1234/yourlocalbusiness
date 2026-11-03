@@ -73,10 +73,9 @@ export function newProject(track: Track = 'product', origin: Origin = 'new'): Pr
 
 export function defaultSettings(): AppSettings {
   return {
-    ai: { serverUrl: '', useBrain: true, simulateLatency: true },
+    ai: { serverUrl: '', useBrain: true },
     theme: 'system',
     profile: { name: '', email: '' },
-    marketActivity: false,
     showSampleListings: true,
     shareToCommunity: true,
   };

@@ -356,7 +356,7 @@ function blankWorkspace(): Partial<StoreState> {
   const now = useStore.getState().settings;
   const d = defaultSettings();
   const { version: _v, ...fresh } = initial();
-  return { ...fresh, skills: [], settings: { ...d, theme: now.theme, ai: { ...d.ai, serverUrl: serverBaseNow(), simulateLatency: now.ai.simulateLatency } } };
+  return { ...fresh, skills: [], settings: { ...d, theme: now.theme, ai: { ...d.ai, serverUrl: serverBaseNow() } } };
 }
 
 /** Set once this device has fully opened the account (its copy is then trustworthy). */
@@ -453,7 +453,7 @@ export async function answerImport(bring: boolean) {
     keep.settings = {
       ...now,
       ...(os ?? {}),
-      ai: { ...now.ai, useBrain: os?.ai?.useBrain ?? now.ai.useBrain, serverUrl: os?.ai?.serverUrl ?? now.ai.serverUrl, simulateLatency: os?.ai?.simulateLatency ?? now.ai.simulateLatency },
+      ai: { ...now.ai, useBrain: os?.ai?.useBrain ?? now.ai.useBrain, serverUrl: os?.ai?.serverUrl ?? now.ai.serverUrl },
       profile: { ...d.profile, ...(os?.profile ?? {}) },
     };
     useStore.setState(keep);

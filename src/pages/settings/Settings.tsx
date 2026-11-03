@@ -13,7 +13,6 @@ import { cleanWorkspace } from '@/store/cleanup';
 import { toast, useUI } from '@/store/ui';
 import { useAuth } from '@/lib/cloud/auth';
 import { AccountSettings } from '@/components/auth/Account';
-import { clearSampleData, hasSampleData, loadSampleData } from '@/store/sample';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, ChipInput, Field, Segmented, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
 import { BannerDesigner, BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
@@ -237,9 +236,7 @@ function ProjectsData() {
   const createProject = useStore((s) => s.createProject);
   const replaceState = useStore((s) => s.replaceState);
   const resetAll = useStore((s) => s.resetAll);
-  const active = projects.find((p) => p.id === activeId) ?? null;
   const fileRef = useRef<HTMLInputElement>(null);
-  const [sample, setSample] = useState(hasSampleData());
 
   const exportJson = () => {
     const s = useStore.getState();
@@ -321,35 +318,6 @@ function ProjectsData() {
       </Card>
 
       <div className="flex min-w-0 flex-col gap-5">
-        <Card title="Sample data" desc="Clearly labelled demo posts, subscribers and sales so you can explore Analytics before real data exists.">
-          <div className="flex flex-wrap gap-2">
-            {sample ? (
-              <button
-                className="btn btn-secondary"
-                onClick={() => {
-                  clearSampleData();
-                  setSample(false);
-                  toast({ kind: 'info', title: 'Sample data cleared' });
-                }}
-              >
-                <Trash2 size={15} /> Clear sample data
-              </button>
-            ) : (
-              <button
-                className="btn btn-secondary"
-                disabled={!active}
-                onClick={() => {
-                  if (!active) return;
-                  loadSampleData(active);
-                  setSample(true);
-                  toast({ kind: 'info', title: 'Sample data loaded', body: 'It’s labelled “Sample” everywhere.' });
-                }}
-              >
-                <Database size={15} /> Load sample data for {active?.brand.name || 'this project'}
-              </button>
-            )}
-          </div>
-        </Card>
         <Card title="Backup & restore" desc={signedIn ? 'Your workspace is saved to your account. Export a backup to keep your own copy (uploaded images and videos aren’t included).' : 'Everything lives in this browser. Export a backup to move it or keep it safe (uploaded images and videos aren’t included).'}>
           <div className="flex flex-wrap gap-2">
             <button className="btn btn-secondary" onClick={exportJson}>
@@ -438,7 +406,6 @@ function Preferences() {
             description="Other people who open this app can browse and buy what you publish."
           />
           <Toggle checked={settings.showSampleListings} onChange={(v) => set({ showSampleListings: v })} label="Show sample listings" description="Example products and local businesses, labelled “Sample”, so the store never looks empty." />
-          <Toggle checked={settings.marketActivity} onChange={(v) => set({ marketActivity: v })} label="Demo mode: simulated buyers" description="Every minute or so, a simulated buyer may purchase one of your listings. These sales are labelled “Simulated”." />
         </div>
       </Card>
       <Card title="About">

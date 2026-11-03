@@ -31,7 +31,7 @@ interface SimRun {
 export function SimulatePanel({ project, initialSubId, onWrite }: { project: Project; initialSubId: string | null; onWrite: () => void }) {
   const emails = project.marketing.emails;
   const profile = useStore((s) => s.settings.profile);
-  const subs = project.marketing.subscribers.filter((s) => s.source !== 'sample');
+  const subs = project.marketing.subscribers;
   const [subId, setSubId] = useState<string>(initialSubId ?? subs[0]?.id ?? 'new');
   const [name, setName] = useState(profile.name);
   const [email, setEmail] = useState(profile.email);

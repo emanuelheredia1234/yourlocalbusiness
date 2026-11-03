@@ -54,7 +54,6 @@ export interface TaskDef<I, O> {
   label: string;
   module: ModuleScope;
   tier: Tier;
-  stages: string[];
   local: (input: I, env: TaskEnv) => O;
   claude?: {
     prompt: (input: I, env: TaskEnv, base: O) => string;
@@ -72,7 +71,6 @@ export const productIdeasTask = def<ResearchInput, ProductIdea[]>({
   label: 'Winning product research',
   module: 'research',
   tier: 'default',
-  stages: ['Scanning demand signals in the niche…', 'Mapping audience pains and buying triggers…', 'Matching concepts to the format…', 'Scoring revenue potential…'],
   local: (input, env) => generateProductIdeas({ ...input, variation: env.variation }, env.directives),
   claude: {
     prompt: (input, env) => {
@@ -107,7 +105,6 @@ export const brandKitTask = def<Record<string, never>, BrandKitResult>({
   label: 'Brand identity kit',
   module: 'brand',
   tier: 'default',
-  stages: ['Studying the audience and category…', 'Brainstorming names and checking domains…', 'Choosing palette, icon and type…', 'Writing the pitch and value proposition…'],
   local: (_i, env) => generateBrandKit(env.project, env.directives, env.variation),
   claude: {
     prompt: (_i, env, base) =>
@@ -147,7 +144,6 @@ export const outlineTask = def<Record<string, never>, OutlineResult>({
   label: 'Product structure & outline',
   module: 'studio',
   tier: 'default',
-  stages: ['Mapping the transformation from start to finish…', 'Sequencing modules and quick wins…', 'Adding worksheets and deliverables…'],
   local: (_i, env) => generateOutline(env.project, env.directives, env.variation),
   claude: {
     prompt: (_i, env, base) =>
@@ -167,7 +163,6 @@ export const sectionDraftTask = def<{ section: OutlineSection }, { markdown: str
   label: 'Section draft',
   module: 'studio',
   tier: 'default',
-  stages: ['Outlining the key points…', 'Writing the draft…', 'Adding action steps…'],
   local: (i, env) => ({ markdown: draftSection(env.project, i.section, env.directives, env.variation) }),
   claude: {
     prompt: (i, env) =>
@@ -188,7 +183,6 @@ export const expandItemTask = def<{ item: OutlineItem; section: OutlineSection }
   label: 'Expand outline item',
   module: 'studio',
   tier: 'quick',
-  stages: ['Adding talking points…'],
   local: (i, env) => ({ detail: expandItem(env.project, i.item, env.directives, env.variation) }),
   claude: {
     prompt: (i, env) =>
@@ -209,7 +203,6 @@ export const ebookExtrasTask = def<Record<string, never>, EbookExtras>({
   label: 'Product file: welcome, workbook pages & next steps',
   module: 'studio',
   tier: 'default',
-  stages: ['Writing the welcome page…', 'Writing a workbook page for each chapter…', 'Writing the next steps…'],
   local: (_i, env) => localEbookExtras(env.project),
   claude: {
     prompt: (_i, env) =>
@@ -240,7 +233,6 @@ export const workbookTask = def<Record<string, never>, WorkbookSpec>({
   label: 'Spreadsheet product (.xlsx)',
   module: 'studio',
   tier: 'default',
-  stages: ['Planning the tabs from your outline…', 'Designing columns, dropdowns and formulas…', 'Writing example rows and the dashboard…'],
   local: (_i, env) => localWorkbook(env.project),
   claude: {
     prompt: (_i, env) =>
@@ -270,7 +262,6 @@ export const businessModelTask = def<Record<string, never>, BusinessModelResult>
   label: 'Business model & value stack',
   module: 'studio',
   tier: 'default',
-  stages: ['Pricing three service tiers…', 'Designing the operating model…', 'Stacking bonuses and the guarantee…'],
   local: (_i, env) => generateBusinessModel(env.project, env.directives, env.variation),
   claude: {
     prompt: (_i, env) =>
@@ -294,7 +285,6 @@ export const listingTask = def<Record<string, never>, ListingDraft>({
   label: 'Store listing copy',
   module: 'store',
   tier: 'quick',
-  stages: ['Writing the listing…'],
   local: (_i, env) => generateListing(env.project, env.directives, env.variation),
   claude: {
     prompt: (_i, env) =>
@@ -315,7 +305,6 @@ export const codeTask = def<{ kind: CodeKind; prompt: string }, CodeResult>({
   label: 'Code & asset generator',
   module: 'code',
   tier: 'default',
-  stages: ['Planning the component…', 'Writing HTML structure…', 'Styling with your brand colors…', 'Wiring up the interactivity…'],
   local: (i, env) => generateCode(env.project, i.kind, i.prompt, env.directives, env.variation),
   claude: {
     prompt: (i, env) => {
@@ -342,7 +331,6 @@ export const codeEditTask = def<{ code: { html: string; css: string; js: string 
   label: 'Modify code',
   module: 'code',
   tier: 'default',
-  stages: ['Reading your change request…', 'Editing the code…'],
   local: (i) => modifyCode(i.code, i.instruction),
   claude: {
     prompt: (i, env) =>
@@ -367,7 +355,6 @@ export const leadMagnetTask = def<{ type: LeadMagnetType }, LeadMagnet>({
   label: 'Lead magnet',
   module: 'email',
   tier: 'default',
-  stages: ['Choosing the highest-value quick win…', 'Writing the freebie…', 'Crafting the opt-in…'],
   local: (i, env) => generateLeadMagnet(env.project, i.type, env.directives, env.variation),
   claude: {
     prompt: (i, env) =>
@@ -387,7 +374,6 @@ export const emailSequenceTask = def<{ leadMagnet: LeadMagnet | null }, EmailSte
   label: '5-part email sequence',
   module: 'email',
   tier: 'default',
-  stages: ['Mapping the nurture arc…', 'Writing subject lines that get opened…', 'Drafting all five emails…', 'Building the final pitch…'],
   local: (i, env) => generateEmailSequence(env.project, i.leadMagnet, env.directives, env.variation),
   claude: {
     prompt: (i, env) =>
@@ -412,7 +398,6 @@ export const seoMetaTask = def<Record<string, never>, SeoMeta>({
   label: 'SEO metadata',
   module: 'seo',
   tier: 'quick',
-  stages: ['Researching keywords…', 'Writing meta tags…'],
   local: (_i, env) => generateSeoMeta(env.project, env.directives, env.variation),
   claude: {
     prompt: (_i, env, base) =>
@@ -437,7 +422,6 @@ export const salesPageTask = def<{ primaryKeyword?: string }, SalesPage>({
   label: 'SEO sales page',
   module: 'seo',
   tier: 'default',
-  stages: ['Writing a hook that matches search intent…', 'Agitating the problem…', 'Structuring features, proof and pricing…', 'Answering objections in the FAQ…'],
   local: (_i, env) => generateSalesPage(env.project, env.directives, env.variation),
   claude: {
     prompt: (i, env) => {
@@ -466,7 +450,6 @@ export const salesSectionTask = def<{ type: SalesSectionType }, SalesSection>({
   label: 'Sales page section',
   module: 'seo',
   tier: 'quick',
-  stages: ['Rewriting the section…'],
   local: (i, env) => generateSalesSection(env.project, i.type, env.directives, env.variation),
   claude: {
     prompt: (i, env, base) =>
@@ -488,7 +471,6 @@ export const campaignPlanTask = def<{ config: CampaignConfig }, CampaignPlan>({
   label: '30-day campaign plan',
   module: 'social',
   tier: 'default',
-  stages: ['Mapping your posting cadence…', 'Balancing formats, styles and post types…', 'Sequencing awareness → authority → trust → conversion…', 'Writing weekly themes and KPIs…'],
   local: (i, env) => generateCampaignPlan(env.project, i.config, env.directives, env.variation),
   claude: {
     prompt: (i, env, base) =>
@@ -522,7 +504,6 @@ export const contentBatchTask = def<{ plan: CampaignPlan; config: CampaignConfig
   label: '7-day content batch',
   module: 'social',
   tier: 'default',
-  stages: ['Writing hooks for each slot…', 'Drafting captions and CTAs…', 'Choosing hashtags per platform…', 'Storyboarding the videos…', 'Rendering visual mockups…'],
   local: (i, env) => generateContentBatch(env.project, i.plan, i.config, env.directives, env.variation, i.days ?? 7),
   claude: {
     prompt: (_i, env, base) =>
@@ -557,7 +538,6 @@ export const postTask = def<ComposeInput & { media?: MediaRef }, ComposedPost>({
   label: 'Post caption & visual',
   module: 'social',
   tier: 'quick',
-  stages: ['Finding the hook…', 'Writing the caption…', 'Picking hashtags…'],
   local: (i, env) => composePost(env.project, i, env.directives, `${env.variation}|${Date.now() >> 16}`),
   claude: {
     prompt: (i, env) =>
@@ -607,7 +587,6 @@ const illustrationDef = (id: string, label: string, module: 'social' | 'studio')
     label,
     module,
     tier: 'default',
-    stages: ['Sketching the composition…', 'Laying in brand colors…', 'Adding depth and light…'],
     local: (i, env) => ({ svg: proceduralSvg(env.project.brand.colors, { aspect: i.aspect, scene: i.scene, seed: i.seed }), drawnBy: 'builtin' }),
     claude: {
       prompt: (i, env) => {
@@ -645,7 +624,6 @@ export const adsTask = def<{ campaign: AdCampaign }, AdsResult>({
   label: 'Paid ads campaign',
   module: 'ads',
   tier: 'default',
-  stages: ['Defining audiences and interests…', 'Writing three creative angles…', 'Building search ads…', 'Projecting reach, CPC and ROAS…'],
   local: (i, env) => generateAds(env.project, i.campaign, env.directives, env.variation),
   claude: {
     prompt: (i, env) =>
@@ -675,7 +653,6 @@ export const skillTestTask = def<{ sample: 'caption' | 'email' | 'headline' | 'a
   label: 'Brain playground',
   module: 'all',
   tier: 'quick',
-  stages: ['Applying Brain skills…', 'Writing a sample…'],
   local: (i, env) => {
     const p = env.project;
     if (i.sample === 'caption') {

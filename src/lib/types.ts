@@ -297,7 +297,7 @@ export interface Subscriber {
   name: string;
   email: string;
   joinedAt: number;
-  source: 'test' | 'optin' | 'sample';
+  source: 'test' | 'optin';
   step: number;
   opened: number[];
   clicked: number[];
@@ -440,7 +440,6 @@ export interface CampaignPlan {
     images: number;
     byType: Record<PostType, number>;
     byPlatform: Partial<Record<PostPlatform, number>>;
-    estReach: number;
   };
 }
 
@@ -476,7 +475,7 @@ export interface Post {
   watermark: boolean;
   /** the post handed to Manus, which posts it on the network in its own browser */
   external?: ExternalPublish;
-  source: 'batch' | 'composer' | 'sample' | 'ads';
+  source: 'batch' | 'composer' | 'ads';
   planSlotId?: string;
   batchId?: string;
   skills?: string[];
@@ -661,7 +660,7 @@ export interface SaleRecord {
   qty: number;
   createdAt: number;
   buyer: string;
-  source: 'checkout' | 'community' | 'simulated' | 'sample';
+  source: 'checkout' | 'community';
 }
 
 // ───────────── Brain ─────────────
@@ -780,7 +779,6 @@ export interface AppSettings {
     serverUrl: string;
     /** the Brain: skills and art direction for every key that's on */
     useBrain: boolean;
-    simulateLatency: boolean;
   };
   theme: 'system' | 'light' | 'dark';
   profile: { name: string; email: string };
@@ -789,7 +787,6 @@ export interface AppSettings {
    * follower count). The cleanup moves any handle into the brand's social handles and removes this.
    */
   accounts?: Partial<Record<SocialPlatform, { handle?: string } | undefined>>;
-  marketActivity: boolean;
   showSampleListings: boolean;
   shareToCommunity: boolean;
 }

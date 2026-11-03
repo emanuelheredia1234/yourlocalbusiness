@@ -10,7 +10,6 @@ import { addSubscriber } from './shared';
 const SOURCE: Record<string, { label: string; cls: string }> = {
   test: { label: 'Test', cls: 'bg-surface-2 text-ink-2' },
   optin: { label: 'Opt-in', cls: 'bg-good-soft text-good' },
-  sample: { label: 'Sample', cls: 'bg-warn-soft text-warn' },
 };
 
 export function Subscribers({ project }: { project: Project }) {
@@ -18,7 +17,7 @@ export function Subscribers({ project }: { project: Project }) {
   const subs = project.marketing.subscribers;
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [filter, setFilter] = useState<'all' | 'test' | 'optin' | 'sample'>('all');
+  const [filter, setFilter] = useState<'all' | 'test' | 'optin'>('all');
   const delivered = subs.reduce((n, s) => n + s.step, 0);
   const opens = subs.reduce((n, s) => n + s.opened.length, 0);
   const clicks = subs.reduce((n, s) => n + s.clicked.length, 0);
@@ -40,7 +39,7 @@ export function Subscribers({ project }: { project: Project }) {
       <section className="panel overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
           <div className="flex flex-wrap gap-1">
-            {(['all', 'optin', 'test', 'sample'] as const).map((f) => (
+            {(['all', 'optin', 'test'] as const).map((f) => (
               <button key={f} className={cn('chip', filter === f && 'chip-active')} onClick={() => setFilter(f)}>
                 {f === 'all' ? `All (${subs.length})` : `${SOURCE[f].label} (${subs.filter((s) => s.source === f).length})`}
               </button>

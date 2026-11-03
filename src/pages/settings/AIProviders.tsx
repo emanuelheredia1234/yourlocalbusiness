@@ -229,7 +229,6 @@ export function AIProviders() {
             description="One switch for every key that’s on: writing follows your Brain skills, and photos and videos get the Brain’s art direction."
           />
         </div>
-        <Toggle checked={settings.ai.simulateLatency} onChange={(v) => setAI({ simulateLatency: v })} label="Show thinking steps" description="For the built-in engine." />
       </div>
     </section>
   );
@@ -357,7 +356,6 @@ export function ArtifactAI() {
       </Note>
       <section className="panel flex flex-col gap-4 p-4 sm:p-5" aria-label="Brain">
         <Toggle checked={settings.ai.useBrain} onChange={(v) => setAI({ useBrain: v })} label={settings.ai.useBrain ? 'Brain is on' : 'Brain is off'} description="Writing follows your Brain skills, and photos and videos get the Brain’s art direction." />
-        <Toggle checked={settings.ai.simulateLatency} onChange={(v) => setAI({ simulateLatency: v })} label="Show thinking steps" description="For the built-in engine." />
       </section>
     </div>
   );

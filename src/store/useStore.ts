@@ -77,7 +77,6 @@ export interface StoreState {
   removeFromCart: (id: string) => void;
   clearCart: () => void;
   placeOrder: (o: Omit<Order, 'id' | 'number' | 'createdAt'>) => Order;
-  addSale: (s: Omit<SaleRecord, 'id'>) => void;
 
   // notices & settings
   notify: (n: Omit<Notice, 'id' | 'createdAt' | 'read'>) => void;
@@ -224,11 +223,6 @@ export const useStore = create<StoreState>()(
         }));
         return order;
       },
-      addSale: (sale) =>
-        set((s) => ({
-          sales: [{ ...sale, id: uid('sale') }, ...s.sales],
-          myListings: s.myListings.map((l) => (l.id === sale.listingId ? { ...l, sales: l.sales + sale.qty } : l)),
-        })),
 
       notify: (n) => set((s) => ({ notices: [{ ...n, id: uid('note'), createdAt: Date.now(), read: false }, ...s.notices].slice(0, 60) })),
       markNoticesRead: () => set((s) => ({ notices: s.notices.map((n) => ({ ...n, read: true })) })),
@@ -269,7 +263,7 @@ export const useStore = create<StoreState>()(
             ...d,
             ...(p.settings ?? {}),
             // only the current AI settings (older versions also kept a provider choice and "creativity")
-            ai: { serverUrl: p.settings?.ai?.serverUrl ?? d.ai.serverUrl, useBrain: p.settings?.ai?.useBrain ?? d.ai.useBrain, simulateLatency: p.settings?.ai?.simulateLatency ?? d.ai.simulateLatency },
+            ai: { serverUrl: p.settings?.ai?.serverUrl ?? d.ai.serverUrl, useBrain: p.settings?.ai?.useBrain ?? d.ai.useBrain },
             profile: { ...d.profile, ...(p.settings?.profile ?? {}) },
           },
         };

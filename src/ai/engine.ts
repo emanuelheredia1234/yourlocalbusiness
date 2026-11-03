@@ -1,6 +1,6 @@
 import type { AppSettings, ProviderId, Project, Skill } from '@/lib/types';
 import { useRuntime } from '@/lib/platform';
-import { sleep, uid } from '@/lib/utils';
+import { uid } from '@/lib/utils';
 import { polishDeep, resolveBrain } from './brain';
 import { AIError, callArtifactClaude, callServerAI, friendlyAIError } from './claude';
 import { functionForTask, routeFor } from './functions';
@@ -96,13 +96,6 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
       const err = e as AIError;
       if (err?.code === 'cancelled' || opts.signal?.aborted) throw new AIError('Stopped.', 'cancelled');
       note = friendlyAIError(err?.code ?? 'upstream_error', provider === 'server' ? err?.message : '');
-    }
-  } else if (opts.settings.ai.simulateLatency) {
-    for (const stage of task.stages) {
-      opts.onStage?.(stage);
-      await sleep(260 + Math.random() * 260, opts.signal).catch(() => {
-        throw new AIError('Stopped.', 'cancelled');
-      });
     }
   }
 

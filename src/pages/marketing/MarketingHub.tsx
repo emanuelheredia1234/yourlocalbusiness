@@ -1,11 +1,11 @@
 import { useMemo } from 'react';
 import { ArrowRight, Check, Circle } from 'lucide-react';
 import type { Channel } from '@/lib/types';
-import { cn, fmtCompact, fmtMoney, fmtPct } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { scoreSeo } from '@/ai/local/seo';
 import { useKpis } from '@/lib/kpis';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { ChartCard, Funnel } from '@/components/charts/Charts';
+
 import { ProgressRing } from '@/components/ui/primitives';
 import { CHANNELS, MarketingHeader, goChannel } from './MarketingNav';
 
@@ -21,6 +21,8 @@ export default function MarketingHub() {
   const scheduled = posts.filter((p) => p.status === 'scheduled').length;
   const published = posts.filter((p) => p.status === 'published').length;
   const activeAds = ads.filter((a) => a.status === 'active').length;
+  // your own test sign-ups don't count
+  const signups = m.subscribers.filter((x) => x.source === 'optin').length;
 
   const status: Record<Channel, { progress: number; lines: { label: string; done: boolean }[]; metric: string }> = {
     seo: {
@@ -33,13 +35,13 @@ export default function MarketingHub() {
       metric: seo ? `SEO score ${seo.score}/100` : 'Not started',
     },
     email: {
-      progress: [!!m.leadMagnet, m.emails.length >= 5, m.subscribers.length > 0].filter(Boolean).length / 3,
+      progress: [!!m.leadMagnet, m.emails.length >= 5, signups > 0].filter(Boolean).length / 3,
       lines: [
         { label: 'Lead magnet', done: !!m.leadMagnet },
         { label: '5-email sequence', done: m.emails.length >= 5 },
-        { label: 'First subscriber', done: m.subscribers.length > 0 },
+        { label: 'First real sign-up', done: signups > 0 },
       ],
-      metric: `${m.subscribers.length} subscriber${m.subscribers.length === 1 ? '' : 's'}`,
+      metric: `${signups} sign-up${signups === 1 ? '' : 's'}`,
     },
     social: {
       progress: [!!m.plan, posts.some((p) => p.source === 'batch'), scheduled + published > 0].filter(Boolean).length / 3,
@@ -92,31 +94,16 @@ export default function MarketingHub() {
         })}
       </section>
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <ChartCard
-          title="Funnel, last 30 days"
-          subtitle="From impressions to paying customers across every channel"
-          table={{ columns: ['Stage', 'Count'], rows: [['Impressions', k.impressions], ['Link clicks', k.clicks], ['Lead opt-ins', k.optins], ['Sales', k.salesCount]] }}
-        >
-          <Funnel
-            stages={[
-              { label: 'Impressions', value: k.impressions },
-              { label: 'Link clicks', value: k.clicks },
-              { label: 'Lead opt-ins', value: k.optins },
-              { label: 'Sales', value: k.salesCount },
-            ]}
-          />
-        </ChartCard>
-        <section className="panel grid grid-cols-2 gap-3 p-5" aria-label="Channel totals">
-          <h3 className="col-span-2 font-display text-[15px] font-semibold">Totals, last 30 days</h3>
-          <Tile label="Impressions" value={fmtCompact(k.impressions)} />
-          <Tile label="Engagement rate" value={fmtPct(k.er)} />
-          <Tile label="Click-through" value={k.impressions ? fmtPct(k.clicks / k.impressions) : '—'} />
-          <Tile label="Opt-ins" value={fmtCompact(k.optins)} />
-          <Tile label="Orders" value={fmtCompact(k.salesCount)} />
-          <Tile label="Revenue" value={fmtMoney(k.revenue, { compact: true })} />
-        </section>
-      </div>
+      <section className="panel p-5" aria-label="Last 30 days">
+        <h3 className="font-display text-[15px] font-semibold">Last 30 days</h3>
+        <p className="mb-3 text-[12.5px] text-muted">Real counts only. Reach, likes and clicks live on each network, and sales on your own checkout: open them there.</p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Tile label="Posted" value={String(k.posted)} />
+          <Tile label="Posted by Manus" value={String(k.byManus)} />
+          <Tile label="Planned" value={String(k.upcoming)} />
+          <Tile label="Made with AI" value={String(k.made)} />
+        </div>
+      </section>
     </div>
   );
 }

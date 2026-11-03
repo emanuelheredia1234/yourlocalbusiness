@@ -12,10 +12,10 @@ An AI workspace for researching, building, branding, listing and marketing digit
 | **Product / Business Studio** | Structure builder (course curriculum, guide chapters, spreadsheet tabs… or service packages, operating model and value stack), section drafting, AI code & asset generator (calculators, quizzes, booking widgets, pricing tables, spreadsheets + Apps Script…) with a live CodeMirror editor, split-pane preview, plain-language edits with undo, HTML export, AI listing images with a buyer gallery, and one-click publishing to the Marketplace. |
 | **Marketing Hub** | Four channels: **SEO** (metadata, live 0–100 score with checklist, Google and link previews, click-to-edit sales page, section manager, HTML export with JSON-LD), **Email** (lead magnet, opt-in page, 5-email sequence with editable delays, time-compressed subscriber simulation, subscriber list + CSV), **Social** (cadence, watermark, 5 image + 5 video styles, platforms and your handles, post-type mix, 30-day plan, 7-day ready-to-post batch with mockups, add to calendar in bulk), **Paid ads** (objectives, platforms, budget, targeting, A/B creatives, Google search ads, projections, simulated launch). |
 | **Content calendar** | Planned (5-week calendar with drag-to-move, or list; posts whose time has passed are flagged **Due**), Posted (by Manus, or marked by you, with the real link when there is one), Drafts; full inline editor with a platform preview. Nothing posts on its own: Manus posts when you confirm, or you post yourself and choose **Mark as posted**. |
-| **Analytics** | Impressions, engagement rate, clicks, opt-ins and sales with period deltas, daily chart (with table view), top post types and visual styles, platform split, funnel, top posts, sales and ad delivery. |
+| **Analytics** | Real counts only: posts that went out (reported by Manus or marked by you) with period deltas, posts planned and due, things made with AI, a daily chart (with table view), posts by network, type and format, and the posted list with links. Likes, views, clicks and sales live on each network and on your own checkout, so the app doesn't show or estimate them. |
 | **Marketplace** | Products and local businesses, search, category pills, location filter + map, listing details with booking or inquiry, cart, checkout, order history with access files. Your published listings appear instantly. |
 | **Brain** | Skills (voice, audience, rules, offers, SEO, email…) written in plain language and parsed into rules, a skill library, knowledge documents (facts and key terms are extracted), a with/without playground with highlighted differences, an activity log, and learned preferences from thumbs-down feedback. |
-| **Settings** | Brand kit (logo upload or designer, colors, banner, images, socials), **AI** (your API keys: what each one powers, its model and effort, priority, usage, and the Brain switch), social accounts, projects, backup/restore, sample data, preferences, and **Account** (save status, password, log out, delete account). |
+| **Settings** | Brand kit (logo upload or designer, colors, banner, images, socials), **AI** (your API keys: what each one powers, its model and effort, priority, usage, and the Brain switch), social accounts, projects, backup/restore, preferences, and **Account** (save status, password, log out, delete account). |
 | **Accounts** | Sign up and sign in with email and password; each person's workspace and files are saved to their account (Supabase) and open on any device. |
 
 ## What is real and what is simulated
@@ -29,11 +29,10 @@ Real:
 - When the app is opened as a shared claude.ai Artifact, published Marketplace listings and purchases sync between everyone who opens it.
 
 Simulated (clearly labelled in the UI):
-- Analytics: impressions, engagement and clicks are still modeled from benchmarks (being replaced with real counts only).
 - Checkout: no payment is taken (test card `4242 4242 4242 4242`).
 - Email sending: the sequence plays in an in-app inbox; nothing is emailed.
 - Ad launches: delivery is modeled from benchmark projections; no ad account is charged.
-- Sample data and sample Marketplace listings are labelled "Sample" and can be cleared or hidden.
+- Sample Marketplace listings are labelled "Sample" and can be hidden.
 
 ## AI: one AI, powered by your API keys
 
@@ -143,7 +142,7 @@ Manus is an AI agent with its own browser. You sign in to each network once insi
   - Instagram and TikTok need an image or a video; X warns when text is over 280 characters (longer works only on accounts that allow it).
 - **Status**: the post shows posting or scheduling, **Manus needs you** (for example, to sign in the first time), posted or scheduled, or failed, with a link to the task. When Manus reports it posted, the post moves to **Posted** with its link, if Manus saw one (only links on that network's own website are kept). The app checks every 45 seconds while it's open, or press **Check now**. "Posted" is Manus's own report.
 - **Videos** (self-hosted only): the video goes to Manus first, through your server, using Manus's file upload (up to 300 MB here). Signed in, the server takes the video straight from your account's storage with a private link that lasts 10 minutes, so big videos never pass through the browser. Replit's published apps refuse uploads over about 32 MB, so without accounts keep videos under that.
-- **Older workspaces**: earlier versions pretended to connect accounts and publish posts. When a workspace opens, posts that version marked published (without Manus) go back on the calendar as planned, its handles move to your brand's social handles, and its "Published to …" notices are removed. Posts Manus really posted stay posted.
+- **Older workspaces**: earlier versions pretended to connect accounts and publish posts, and offered sample data and simulated buyers. When a workspace opens, posts that version marked published (without Manus) go back on the calendar as planned, its handles move to your brand's social handles, and sample posts, subscribers and sales, simulated sales (and what they added to your listings' sold counts), the social plan's invented reach estimate and the notices about them are removed. Posts Manus really posted stay posted.
 
 ## Accounts: sign-up, sign-in and saving to your account (Supabase)
 
@@ -259,7 +258,7 @@ src/
   lib/           types, utilities, storage, metrics, routing, platform (Artifact runtime) bindings
   lib/cloud/     accounts: Supabase sign-in (auth.ts), saving the workspace (sync.ts) and files (media.ts)
   pages/         onboarding, dashboard, studio, marketing (seo/email/social/ads), calendar, analytics, store, brain, settings
-  store/         zustand stores (persisted project context, UI state, sample data)
+  store/         zustand stores (persisted project context, UI state, cleanup of data older versions made up)
 shared/          ai-functions.json: what AI does in the app (used by the app and the server)
 server/          AI server (ai-server.mjs) + static server; providers/: registry, key store, adapters, router, routes, usage log;
                  auth.mjs: checks the Supabase sign-in token; test/mock-providers.mjs: a stand-in for every provider's API;

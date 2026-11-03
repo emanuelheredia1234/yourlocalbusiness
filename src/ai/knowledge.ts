@@ -1408,17 +1408,16 @@ export interface PlatformDef {
   limit: number;
   hashtags: number;
   handlePrefix: string;
-  reachMult: number;
   b2b: number;
 }
 
 export const PLATFORMS: Record<SocialPlatform, PlatformDef> = {
-  instagram: { id: 'instagram', label: 'Instagram', color: '#D6297A', times: ['09:00', '12:00', '17:30', '19:30', '21:00'], limit: 2200, hashtags: 8, handlePrefix: '@', reachMult: 1, b2b: 0.6 },
-  facebook: { id: 'facebook', label: 'Facebook', color: '#1877F2', times: ['09:00', '13:00', '15:00', '19:00', '20:30'], limit: 2000, hashtags: 3, handlePrefix: '', reachMult: 0.7, b2b: 0.7 },
-  tiktok: { id: 'tiktok', label: 'TikTok', color: '#111111', times: ['07:00', '12:00', '16:00', '19:00', '22:00'], limit: 2200, hashtags: 5, handlePrefix: '@', reachMult: 1.6, b2b: 0.5 },
-  linkedin: { id: 'linkedin', label: 'LinkedIn', color: '#0A66C2', times: ['08:00', '10:00', '12:00', '17:00', '18:30'], limit: 3000, hashtags: 3, handlePrefix: '', reachMult: 0.75, b2b: 1.6 },
-  x: { id: 'x', label: 'X (Twitter)', color: '#111111', times: ['08:00', '12:00', '15:00', '18:00', '21:00'], limit: 280, hashtags: 2, handlePrefix: '@', reachMult: 0.6, b2b: 1.1 },
-  youtube: { id: 'youtube', label: 'YouTube', color: '#E62117', times: ['12:00', '15:00', '18:00', '20:00', '21:00'], limit: 5000, hashtags: 3, handlePrefix: '@', reachMult: 1.2, b2b: 0.8 },
+  instagram: { id: 'instagram', label: 'Instagram', color: '#D6297A', times: ['09:00', '12:00', '17:30', '19:30', '21:00'], limit: 2200, hashtags: 8, handlePrefix: '@', b2b: 0.6 },
+  facebook: { id: 'facebook', label: 'Facebook', color: '#1877F2', times: ['09:00', '13:00', '15:00', '19:00', '20:30'], limit: 2000, hashtags: 3, handlePrefix: '', b2b: 0.7 },
+  tiktok: { id: 'tiktok', label: 'TikTok', color: '#111111', times: ['07:00', '12:00', '16:00', '19:00', '22:00'], limit: 2200, hashtags: 5, handlePrefix: '@', b2b: 0.5 },
+  linkedin: { id: 'linkedin', label: 'LinkedIn', color: '#0A66C2', times: ['08:00', '10:00', '12:00', '17:00', '18:30'], limit: 3000, hashtags: 3, handlePrefix: '', b2b: 1.6 },
+  x: { id: 'x', label: 'X (Twitter)', color: '#111111', times: ['08:00', '12:00', '15:00', '18:00', '21:00'], limit: 280, hashtags: 2, handlePrefix: '@', b2b: 1.1 },
+  youtube: { id: 'youtube', label: 'YouTube', color: '#E62117', times: ['12:00', '15:00', '18:00', '20:00', '21:00'], limit: 5000, hashtags: 3, handlePrefix: '@', b2b: 0.8 },
 };
 
 export const POST_PLATFORMS: PostPlatform[] = ['instagram', 'facebook', 'tiktok', 'linkedin', 'x'];

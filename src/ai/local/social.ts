@@ -186,11 +186,9 @@ export function generateCampaignPlan(project: Project, config: CampaignConfig, d
   const all = days.flatMap((d) => d.slots);
   const byType: Record<PostType, number> = { educational: 0, tip: 0, question: 0, sales: 0, bts: 0 };
   const byPlatform: Partial<Record<PostPlatform, number>> = {};
-  let estReach = 0;
   for (const s of all) {
     byType[s.postType]++;
     byPlatform[s.platform] = (byPlatform[s.platform] ?? 0) + 1;
-    estReach += 650 * PLATFORMS[s.platform].reachMult * (s.format === 'video' ? 1.6 : 1);
   }
   const weeks = [
     { week: 1, theme: 'Awareness: name the problem', goal: `Make ${f.audience} feel seen around ${f.pain}.`, kpi: 'Reach, profile visits, follows', keyMessage: `${capitalize(f.pain)} is common and fixable.` },
@@ -207,7 +205,7 @@ export function generateCampaignPlan(project: Project, config: CampaignConfig, d
     strategy,
     days,
     weeks,
-    summary: { total: all.length, videos: all.filter((s) => s.format === 'video').length, images: all.filter((s) => s.format === 'image').length, byType, byPlatform, estReach: Math.round(estReach) },
+    summary: { total: all.length, videos: all.filter((s) => s.format === 'video').length, images: all.filter((s) => s.format === 'image').length, byType, byPlatform },
   };
 }
 
