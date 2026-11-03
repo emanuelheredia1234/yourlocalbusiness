@@ -187,8 +187,18 @@ export function MenuItem({ icon, children, onClick, danger, active }: { icon?: R
 // ───────────────────────── Controls ─────────────────────────
 
 export function Tabs<T extends string>({ tabs, value, onChange, className, size = 'md' }: { tabs: { id: T; label: ReactNode; icon?: ReactNode; count?: number }[]; value: T; onChange: (v: T) => void; className?: string; size?: 'sm' | 'md' }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  // on narrow screens the tab row scrolls sideways: keep the selected tab in view
+  useEffect(() => {
+    const sel = listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+    try {
+      sel?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    } catch {
+      /* old browsers */
+    }
+  }, [value]);
   return (
-    <div role="tablist" className={cn('scroll-thin flex gap-1 overflow-x-auto border-b border-line', className)}>
+    <div ref={listRef} role="tablist" className={cn('scroll-thin flex gap-1 overflow-x-auto border-b border-line', className)}>
       {tabs.map((t) => (
         <button
           key={t.id}
@@ -283,8 +293,23 @@ export function AutoTextarea({ value, onChange, minRows = 3, className, ...rest 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.max(el.scrollHeight + 2, minRows * 22 + 18)}px`;
+    const fit = () => {
+      // not rendered (e.g. on a hidden tab): measure once it shows
+      if (!el.offsetParent && el.getClientRects().length === 0) return;
+      el.style.height = 'auto';
+      el.style.height = `${Math.max(el.scrollHeight + 2, minRows * 22 + 18)}px`;
+    };
+    fit();
+    if (typeof ResizeObserver === 'undefined') return;
+    let width = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth !== width) {
+        width = el.clientWidth;
+        fit();
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [value, minRows]);
   return <textarea ref={ref} value={value} onChange={(e) => onChange(e.target.value)} className={cn('textarea min-h-0 resize-none overflow-hidden', className)} {...rest} />;
 }

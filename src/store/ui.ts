@@ -58,6 +58,11 @@ export const useUI = create<UIState>((set) => ({
   openComposer: (preset) => {
     set((s) => ({ socialTab: 'create', composerPreset: preset?.topic ? { topic: preset.topic, n: (s.composerPreset?.n ?? 0) + 1 } : s.composerPreset }));
     navigate('marketing-social');
+    try {
+      document.getElementById('main-scroll')?.scrollTo({ top: 0 });
+    } catch {
+      /* not in a browser */
+    }
   },
   socialTab: null,
   setSocialTab: (t) => set({ socialTab: t }),

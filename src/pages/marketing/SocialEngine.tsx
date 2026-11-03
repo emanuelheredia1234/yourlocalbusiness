@@ -29,11 +29,16 @@ export default function SocialEngine() {
     setTab(requested);
     useUI.getState().setSocialTab(null);
   }, [requested]);
-  // once opened, the composer stays mounted while you switch tabs: your draft (and anything it's generating) stays
-  const [composerShown, setComposerShown] = useState(tab === 'create');
+  // Once opened, the 7-day batch and the composer stay mounted while you switch tabs, so what they're
+  // generating (and your draft) isn't lost.
+  const [shown, setShown] = useState<Set<Tab>>(() => new Set([tab]));
   useEffect(() => {
-    if (tab === 'create') setComposerShown(true);
+    setShown((s) => (s.has(tab) ? s : new Set([...s, tab])));
   }, [tab]);
+  // a topic from elsewhere starts one new draft: once the composer has it, it isn't offered again
+  useEffect(() => {
+    if (preset?.topic) useUI.setState({ composerPreset: { n: preset.n } });
+  }, [preset]);
   const planAI = useAI(campaignPlanTask);
   const batchPosts = useMemo(() => allPosts.filter((p) => p.projectId === project.id && p.source === 'batch').sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)), [allPosts, project.id]);
   const covered = useMemo(() => new Set(batchPosts.map((p) => p.planSlotId).filter((x): x is string => !!x)), [batchPosts]);
@@ -57,7 +62,7 @@ export default function SocialEngine() {
 
   return (
     <div className="flex flex-col gap-5">
-      <MarketingHeader eyebrow="Marketing Hub · Social" title="Social media engine" desc="Set your cadence, visual styles, platforms and post mix. The AI writes a 30-day campaign plan, then a 7-day batch of ready-to-publish posts you can edit and schedule." actions={tab === 'setup' || (!plan && tab !== 'create') ? planButton : undefined} />
+      <MarketingHeader eyebrow="Marketing Hub · Social" title="Social media engine" desc="Set your cadence, visual styles, platforms and post mix. The AI writes a 30-day campaign plan, then a 7-day batch of ready-to-publish posts you can edit and schedule. Or create individual posts, one at a time." actions={tab === 'setup' || (!plan && tab !== 'create') ? planButton : undefined} />
       <Tabs<Tab>
         value={tab}
         onChange={setTab}
@@ -94,8 +99,12 @@ export default function SocialEngine() {
         ) : (
           <Empty icon={<CalendarDays size={20} />} title="No plan yet" body="Finish the setup, then generate a 30-day plan that moves people from awareness to purchase." action={planButton} />
         ))}
-      {tab === 'batch' && <BatchView project={project} posts={batchPosts} covered={covered} />}
-      {composerShown && (
+      {shown.has('batch') && (
+        <div hidden={tab !== 'batch'}>
+          <BatchView project={project} posts={batchPosts} covered={covered} />
+        </div>
+      )}
+      {shown.has('create') && (
         <section hidden={tab !== 'create'} aria-label="Create individual post" className="panel p-4 sm:p-5">
           <p className="mb-4 text-[13.5px] text-muted">One post at a time, outside your campaign: generate it with AI, or upload your own photo or video and let AI write the caption.</p>
           <QuickComposer key={`${project.id}:${preset?.n ?? 0}`} initialTopic={preset?.topic} />

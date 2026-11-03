@@ -107,7 +107,7 @@ export default function ContentCalendar() {
 
       {tab === 'scheduled' &&
         (counts.scheduled === 0 ? (
-          <Empty icon={<CalendarClock size={20} />} title="Nothing planned yet" body="Add posts from your 7-day batch in the Social engine, or create one with the composer." action={<button className="btn btn-primary btn-sm" onClick={() => openComposer()}><Plus size={14} /> Create post</button>} />
+          <Empty icon={<CalendarClock size={20} />} title="Nothing planned yet" body="Add posts from your 7-day batch in the Social media engine, or create one with “Create individual post”." action={<button className="btn btn-primary btn-sm" onClick={() => openComposer()}><Plus size={14} /> Create post</button>} />
         ) : (
           <>
             <PlannedBar posts={scheduled} manusReady={manusReady} />
@@ -122,7 +122,7 @@ export default function ContentCalendar() {
         ))}
       {tab === 'drafts' &&
         (drafts.length === 0 ? (
-          <Empty icon={<FileEdit size={20} />} title="No drafts" body="Drafts from the composer and the 7-day batch wait here until you add them to your calendar." />
+          <Empty icon={<FileEdit size={20} />} title="No drafts" body="Drafts from “Create individual post” and the 7-day batch wait here until you add them to your calendar." />
         ) : (
           <div className="flex flex-col gap-3">
             <div className="flex justify-end">

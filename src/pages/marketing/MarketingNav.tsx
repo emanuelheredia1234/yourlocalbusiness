@@ -8,7 +8,7 @@ import { useStore } from '@/store/useStore';
 export const CHANNELS: { id: Channel; label: string; short: string; icon: ReactNode; desc: string }[] = [
   { id: 'seo', label: 'SEO sales page', short: 'SEO', icon: <Search size={15} />, desc: 'Metadata, live SEO score and a visual page editor with HTML export.' },
   { id: 'email', label: 'Email funnel', short: 'Email', icon: <Mail size={15} />, desc: 'Lead magnet, opt-in page and a 5-email nurture sequence you can simulate.' },
-  { id: 'social', label: 'Social media', short: 'Social', icon: <Megaphone size={15} />, desc: '30-day campaign plan and a 7-day batch of ready-to-publish posts.' },
+  { id: 'social', label: 'Social media', short: 'Social', icon: <Megaphone size={15} />, desc: '30-day campaign plan, a 7-day batch of ready-to-publish posts, and individual posts.' },
   { id: 'ads', label: 'Paid ads', short: 'Ads', icon: <Target size={15} />, desc: 'Audiences, A/B creatives, search ads and budget projections.' },
 ];
 

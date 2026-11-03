@@ -229,7 +229,7 @@ const TITLES: Record<Route, string> = {
   marketing: 'Marketing Hub',
   'marketing-seo': 'SEO Sales Page',
   'marketing-email': 'Email Funnel',
-  'marketing-social': 'Social Campaign',
+  'marketing-social': 'Social media engine',
   'marketing-ads': 'Paid Ads',
   calendar: 'Content Calendar',
   analytics: 'Analytics',
