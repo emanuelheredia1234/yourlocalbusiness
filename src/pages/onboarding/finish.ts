@@ -1,7 +1,7 @@
 import type { PostPlatform, Project } from '@/lib/types';
 import { slugify } from '@/lib/utils';
 import { newSkill, parseDirectives } from '@/ai/brain';
-import { FORMATS, matchBusinessType, POST_PLATFORMS } from '@/ai/knowledge';
+import { FORMATS, POST_PLATFORMS } from '@/ai/knowledge';
 import { generateListing } from '@/ai/local/studio';
 import { useStore } from '@/store/useStore';
 import { defaultStudio } from '@/store/defaults';
@@ -21,8 +21,8 @@ export function finishOnboarding(projectId: string): void {
   const listing = generateListing(draft);
   const blank = defaultStudio().listing;
   const fmt = p.format ? FORMATS[p.format] : null;
-  const bt = p.track === 'business' ? matchBusinessType(`${p.businessType} ${p.category} ${p.niche}`) : null;
-  const price = p.studio.price || p.idea?.price || (fmt ? Math.round((fmt.price[0] + fmt.price[1]) / 2) : bt ? Math.round((bt.services[1].price[0] + bt.services[1].price[1]) / 2) : 49);
+  // a business's price only when the owner set one (setup doesn't ask; packages in the Studio carry prices)
+  const price = p.studio.price || p.idea?.price || (p.track === 'business' ? 0 : fmt ? Math.round((fmt.price[0] + fmt.price[1]) / 2) : 49);
   const socialPlatforms = (Object.keys(p.brand.socials) as PostPlatform[]).filter((k) => POST_PLATFORMS.includes(k) && (p.brand.socials[k] ?? '').trim());
   const platforms: PostPlatform[] = socialPlatforms.length ? socialPlatforms.slice(0, 3) : p.track === 'business' ? ['instagram', 'facebook'] : ['instagram', 'tiktok'];
 

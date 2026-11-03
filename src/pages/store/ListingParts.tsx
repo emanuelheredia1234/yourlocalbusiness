@@ -7,8 +7,8 @@ import { Icon } from '@/components/ui/Icon';
 import { MiniMark } from '@/components/brand/Logo';
 
 export function priceLabel(price: number, model: ServicePriceModel): string {
-  if (model === 'free' || price === 0) return 'Free';
   if (model === 'quote') return 'Get a quote';
+  if (model === 'free' || price === 0) return 'Free';
   const p = fmtMoney(price);
   switch (model) {
     case 'monthly':

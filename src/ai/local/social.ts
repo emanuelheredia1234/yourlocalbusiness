@@ -311,7 +311,7 @@ export function composePost(project: Project, input: ComposeInput, d: Directives
       } else {
         lines.push(`Is ${f.pain} on your mind?`, `${whatItIs(f)}.`);
       }
-      if (!isX && v.length !== 'short') lines.push(`${f.track === 'business' ? 'Starting at' : 'Just'} ${f.priceStr}${f.priceSuffix}.${v.ee('fire')}`);
+      if (!isX && v.length !== 'short' && f.price > 0) lines.push(`${f.track === 'business' ? 'Starting at' : 'Just'} ${f.priceStr}${f.priceSuffix}.${v.ee('fire')}`);
       break;
     }
     case 'bts': {

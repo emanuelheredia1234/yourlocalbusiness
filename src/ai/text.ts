@@ -119,7 +119,10 @@ export function buildFacts(project: Project): Facts {
     project.studio.listing.title ||
     (project.track === 'product' ? project.idea?.title || brand : brand);
   const productShort = product.split(/[:—–]/)[0].trim();
-  const price = project.studio.price || project.idea?.price || (business ? Math.round((business.services[1]?.price[0] ?? 99)) : fmt ? fmt.price[0] : 49);
+  // A business's price only when the owner set one (its studio price, or its popular or first package);
+  // never a template's. 0 = not set: generated text then leaves the price out.
+  const lead = business ? ((project.studio.packages.find((x) => x.popular) ?? project.studio.packages[0])?.price ?? 0) : 0;
+  const price = project.studio.price || lead || project.idea?.price || (business ? 0 : fmt ? fmt.price[0] : 49);
   const priceSuffix = project.studio.priceModel === 'monthly' ? '/mo' : project.studio.priceModel === 'yearly' ? '/yr' : '';
   const specific = isSpecificCategory(niche, project.category) && project.track === 'product';
   const topicL = topic.toLowerCase();

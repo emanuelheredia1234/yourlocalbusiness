@@ -232,7 +232,7 @@ export function generateEmailSequence(project: Project, lm: LeadMagnet | null, d
       `Hi {{first_name}},`,
       ...frameworkBody(),
       `What you get:\n• ${f.product}${contents.map((x) => `\n• ${x}`).join('')}\n• [Anything else you include]`,
-      `Investment: ${f.priceStr}${f.priceSuffix}.`,
+      f.price > 0 ? `Investment: ${f.priceStr}${f.priceSuffix}.` : 'Investment: [your price].',
       `→ ${capitalize(offerLine)}: {{product_link}}`,
       sign,
       `P.S. ${v.pick([`Not sure? Reply with any questions you have.`, `Questions about what’s included? Just reply and ask.`])}`,

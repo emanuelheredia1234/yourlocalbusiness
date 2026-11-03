@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Sparkles } from 'lucide-react';
 import type { Brand, ProductFormat, Project } from '@/lib/types';
 import { cn, ensureUrl, slugify } from '@/lib/utils';
-import { BUSINESS_NICHE_SUGGESTIONS, CITIES, findCity, FORMAT_LIST, matchBusinessType, matchNiche, NICHE_SUGGESTIONS } from '@/ai/knowledge';
+import { BUSINESS_NICHE_SUGGESTIONS, CITIES, findCity, FORMAT_LIST, matchNiche, NICHE_SUGGESTIONS } from '@/ai/knowledge';
 import { brandKitTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useStore } from '@/store/useStore';
@@ -123,9 +123,12 @@ export function StepSetup({ project }: { project: Project }) {
               </select>
             </Field>
           )}
-          <Field label={isBiz ? 'Starting price (USD)' : 'Price (USD)'} htmlFor="bprice">
-            <input id="bprice" type="number" min={0} className="input num" value={project.studio.price || ''} placeholder={isBiz ? String(Math.round(matchBusinessType(project.businessType).services[1].price[0])) : '29'} onChange={(e) => update(project.id, (p) => ({ ...p, studio: { ...p.studio, price: Number(e.target.value) || 0 } }))} />
-          </Field>
+          {/* a business sets its prices on its packages in the Studio, when it wants to show them */}
+          {!isBiz && (
+            <Field label="Price (USD)" htmlFor="bprice">
+              <input id="bprice" type="number" min={0} className="input num" value={project.studio.price || ''} placeholder="29" onChange={(e) => update(project.id, (p) => ({ ...p, studio: { ...p.studio, price: Number(e.target.value) || 0 } }))} />
+            </Field>
+          )}
           <Field label="Short description" htmlFor="bdesc" className="sm:col-span-2">
             <AutoTextarea id="bdesc" value={project.summary} onChange={(v) => set({ summary: v })} minRows={2} placeholder={isBiz ? 'What you offer, who you serve and where.' : 'What it is, who it’s for and the result it delivers.'} />
           </Field>

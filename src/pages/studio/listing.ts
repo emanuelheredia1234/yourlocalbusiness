@@ -10,7 +10,8 @@ export function leadPrice(p: Project): { price: number; model: ServicePriceModel
   if (p.track === 'business') {
     const pk = p.studio.packages.find((x) => x.popular) ?? p.studio.packages[0];
     if (pk) return { price: pk.price, model: pk.priceModel };
-    return { price: p.studio.price, model: 'per-session' };
+    // no price set yet: buyers are asked to get a quote (never "Free")
+    return p.studio.price > 0 ? { price: p.studio.price, model: 'per-session' } : { price: 0, model: 'quote' };
   }
   return { price: p.studio.price, model: p.studio.priceModel };
 }

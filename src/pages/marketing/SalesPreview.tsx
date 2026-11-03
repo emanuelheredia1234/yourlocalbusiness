@@ -2,7 +2,7 @@ import { useState, type CSSProperties, type ReactNode } from 'react';
 import { Check, ChevronDown, Plus, ShieldCheck, Star, X } from 'lucide-react';
 import type { Brand, ProofStat, SalesPage, SalesSection, Testimonial } from '@/lib/types';
 import { cn, lighten, readableOn, withAlpha } from '@/lib/utils';
-import { publishableProof, showsCompareAt, showsGuarantee } from '@/ai/local/seo';
+import { priceText, publishableProof, showsCompareAt, showsGuarantee } from '@/ai/local/seo';
 import { Editable } from '@/components/ui/Editable';
 import { Icon } from '@/components/ui/Icon';
 
@@ -41,18 +41,20 @@ interface Ctx {
   editing: boolean;
   device: Device;
   set: (data: SalesSection['data']) => void;
+  /** a business: no price set reads “Ask for a quote” */
+  business?: boolean;
 }
 
 /** The sales page as visitors see it, with click-to-edit text when `editing` is on. Preview shows exactly
  *  what the export publishes: no unconfirmed proof, no guarantee the owner hasn't turned on. */
-export function SalesPreview({ page, brand, editing, device, onData }: { page: SalesPage; brand: Brand; editing: boolean; device: Device; onData: (id: string, data: SalesSection['data']) => void }) {
+export function SalesPreview({ page, brand, editing, device, onData, business }: { page: SalesPage; brand: Brand; editing: boolean; device: Device; onData: (id: string, data: SalesSection['data']) => void; business?: boolean }) {
   const t = salesTokens(page, brand);
   return (
     <div className="overflow-hidden rounded-md border border-line shadow-card" style={{ background: t.bg, color: t.ink, fontFamily: t.font, width: device === 'mobile' ? 390 : '100%', maxWidth: '100%' }}>
       {page.sections
         .filter((s) => s.visible)
         .map((s) => (
-          <SectionView key={s.id} s={s} ctx={{ t, editing, device, set: (d) => onData(s.id, d) }} />
+          <SectionView key={s.id} s={s} ctx={{ t, editing, device, business, set: (d) => onData(s.id, d) }} />
         ))}
       <footer className="px-6 py-6 text-center text-[12px]" style={{ color: t.muted, borderTop: `1px solid ${withAlpha(t.ink, 0.08)}` }}>
         © {new Date().getFullYear()} {brand.name}
@@ -309,10 +311,14 @@ function SectionView({ s, ctx }: { s: SalesSection; ctx: Ctx }) {
                     {editing ? <input type="number" min={0} placeholder="—" className="w-16 bg-transparent text-[18px] outline-none ylb-editable" value={d.compareAt || ''} onChange={(e) => set({ compareAt: Math.max(0, Number(e.target.value) || 0), compareAtNeedsReview: undefined })} aria-label="Earlier price (optional)" /> : d.compareAt}
                   </s>
                 )}
-                <b className="text-[44px] font-extrabold leading-none">
-                  $
-                  {editing ? <input type="number" min={0} className="w-24 bg-transparent text-[44px] font-extrabold outline-none ylb-editable" value={d.price} onChange={(e) => set({ price: Math.max(0, Number(e.target.value) || 0) })} aria-label="Price" /> : d.price}
-                </b>
+                {editing ? (
+                  <b className="text-[44px] font-extrabold leading-none">
+                    $
+                    <input type="number" min={0} placeholder="—" className="w-24 bg-transparent text-[44px] font-extrabold outline-none ylb-editable" value={d.price || ''} onChange={(e) => set({ price: Math.max(0, Number(e.target.value) || 0) })} aria-label={ctx.business ? 'Price (empty: “Ask for a quote”)' : 'Price'} />
+                  </b>
+                ) : (
+                  <b className={cn('font-extrabold leading-none', d.price > 0 ? 'text-[44px]' : 'text-[28px]')}>{priceText(d.price, !!ctx.business)}</b>
+                )}
                 <Editable editing={editing} value={d.priceNote} onChange={(v) => set({ priceNote: v })} label="Price note" className="text-[13px]" style={{ color: t.muted }} />
               </p>
               {editing && d.compareAtNeedsReview && d.compareAt > 0 && (

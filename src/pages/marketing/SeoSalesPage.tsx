@@ -187,7 +187,7 @@ export default function SeoSalesPage() {
             )}
             {editing && <p className="text-xs text-muted">Click any text on the page to edit it. Changes save automatically and update your SEO score.</p>}
             <div className="dotgrid flex justify-center overflow-x-auto rounded-lg bg-surface-2 p-3 sm:p-5">
-              <SalesPreview page={page} brand={project.brand} editing={editing} device={device} onData={(id, data) => setPage((p) => ({ ...p, sections: p.sections.map((s) => (s.id === id ? ({ ...s, data } as SalesSection) : s)) }))} />
+              <SalesPreview page={page} brand={project.brand} business={project.track === 'business'} editing={editing} device={device} onData={(id, data) => setPage((p) => ({ ...p, sections: p.sections.map((s) => (s.id === id ? ({ ...s, data } as SalesSection) : s)) }))} />
             </div>
             <details className="panel group">
               <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-semibold">

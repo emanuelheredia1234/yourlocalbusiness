@@ -248,12 +248,18 @@ function proofData(project: Project): ProofData {
   };
 }
 
+/** The price as the page shows it: a business with no price set asks for a quote (never "$0"). */
+export function priceText(price: number, business: boolean): string {
+  return price > 0 ? `$${price}` : business ? 'Ask for a quote' : 'Free';
+}
+
 /** What the price model says about billing, and nothing more (no "cancel anytime"). */
 const PRICE_NOTE: Record<ServicePriceModel, string> = { 'one-time': 'one-time payment', monthly: 'per month', yearly: 'per year', 'per-session': 'per visit', project: 'per project', quote: 'starting price', free: '' };
 
 function pricingData(f: Facts, project: Project): PricingData {
   const prev = previous(project, 'pricing');
-  const popular = project.track === 'business' ? project.studio.packages.find((p) => p.popular) : undefined;
+  // a business leads with the package it marked popular, else its first one (as its listing does)
+  const popular = project.track === 'business' ? (project.studio.packages.find((p) => p.popular) ?? project.studio.packages[0]) : undefined;
   const price = popular?.price ?? f.price;
   // A "was" price only when the owner set one (in the Studio, or on this page before).
   const studioCompare = project.studio.compareAt > 0 ? project.studio.compareAt : 0;
@@ -640,7 +646,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
       <div class="price-card">
         ${s.data.badge ? `<span class="badge">${e(s.data.badge)}</span>` : ''}
         <h3>${e(s.data.planName)}</h3>
-        <p class="price">${showsCompareAt(s.data) ? `<s>$${s.data.compareAt}</s> ` : ''}<b>$${s.data.price}</b> <span>${e(s.data.priceNote)}</span></p>
+        <p class="price">${showsCompareAt(s.data) ? `<s>$${s.data.compareAt}</s> ` : ''}<b>${e(priceText(s.data.price, project.track === 'business'))}</b> <span>${e(s.data.priceNote)}</span></p>
         <ul class="ticks">${s.data.includes.map((i) => `<li>${e(i)}</li>`).join('')}</ul>
         <a class="btn block" href="${e(link)}">${e(s.data.ctaLabel)}</a>
       </div>
