@@ -32,11 +32,20 @@
 // value is that account's code for the domain. The check is a DNS lookup, never a request to the domain
 // (which this server may answer itself). A verified domain is looked at again every few hours and stops
 // showing pages once the record is gone. Another account can take a domain over only the same way; the
-// previous owner keeps their pages, on the app's address.
+// previous owner keeps their pages, on the app's address. Only the owner's pages are ever on a domain: the
+// database refuses any other (published_pages_domain_owner), and whenever the owner publishes to it or
+// checks it, anything of another account's still there comes off.
+//
+// Visitors: this copy of the server keeps the names that exist (published pages, verified domains), so
+// any other name is "not found" without a database lookup. Lookups that miss the cache are limited per
+// minute, by count and by bytes, in all and per client (the address the platform's proxy saw: see clientOf).
+// A page's HTML is kept apart from its row (a big page's apart from the rest); when the row is read again it's
+// read without the HTML, which is read only when the page changed. HEAD never needs the HTML.
 //
 // Needs accounts and SUPABASE_SECRET_KEY (GET /api/config says pages: { enabled } either way).
 // Env: APP_HOSTS (comma-separated: other hosts the app itself runs on, which nobody can claim);
-// PAGES_DNS_SERVERS (optional, comma-separated: the DNS servers the domain check asks; default the system's).
+// PAGES_DNS_SERVERS (optional, comma-separated: the DNS servers the domain check asks; default the system's);
+// TRUSTED_PROXY_HOPS (optional: how many X-Forwarded-For addresses the platform's proxies add; default 2).
 
 import crypto from 'node:crypto';
 import dns from 'node:dns';
@@ -103,22 +112,50 @@ const STALE_HOLD = 5000;
 /** A verified domain's TXT record is looked at again after this long; when the DNS couldn't answer, after RECHECK_RETRY. */
 const RECHECK_AFTER = 6 * 60 * 60_000;
 const RECHECK_RETRY = 10 * 60_000;
+const MB = 1024 * 1024;
 /**
- * Reads for visitors (database rows, stored images) per minute on this copy of the server: in all, and
- * per client (their address). Answers from the cache don't count. Pages, domains and images each have their own.
+ * Reads for visitors per minute on this copy of the server, in all and per client (clientOf): how many
+ * (database rows, stored images) and, for pages and images, how many bytes they bring from Supabase.
+ * Answers from the cache don't count, and neither do names that don't exist (they're never looked up).
+ * Pages, domains and images each have their own.
  */
-export const LOOKUP_LIMITS = Object.freeze({ page: { perMin: 1200, perClient: 120 }, domain: { perMin: 600, perClient: 60 }, image: { perMin: 1200, perClient: 240 } });
+export const LOOKUP_LIMITS = Object.freeze({
+  page: { perMin: 1200, perClient: 120, bytesPerMin: 200 * MB, bytesPerClient: 20 * MB },
+  domain: { perMin: 600, perClient: 60 },
+  image: { perMin: 1200, perClient: 240, bytesPerMin: 300 * MB, bytesPerClient: 60 * MB },
+});
 /** The cache sizes and times (tests make them small). */
 const TUNING = Object.freeze({
   pageTtl: 30_000,
   domainTtl: 60_000,
-  /** visitors' pages: in all (the least recently used go first) */
-  pageCacheBytes: 64 * 1024 * 1024,
-  /** a page with more HTML than this is kept without it (it's read again for each visit) */
+  /** visitors' pages' HTML, up to pageHtmlMax each: in all (the least recently used go first) */
+  pageCacheBytes: 64 * MB,
+  /** HTML bigger than this is kept apart, within bigPageCacheBytes, so big pages can't push the others out */
   pageHtmlMax: 256 * 1024,
+  bigPageCacheBytes: 32 * MB,
+  /** HTML nobody asked for in this long goes (it's only ever sent with its page's row, read within pageTtl) */
+  htmlIdle: 10 * 60_000,
   recheckAfter: RECHECK_AFTER,
+  /** a name this copy doesn't know is looked for among the latest changes at most this often (knownNames) */
+  namesCheck: 1000,
+  /** the whole list of names is read again this often (names removed through other copies go) */
+  namesReload: 10 * 60_000,
+  /** with more names than this, none are kept: each is looked up, within the limits */
+  namesMax: 100_000,
 });
 const MAX_CLIENTS = 10_000;
+/** What a page's row brings besides its HTML (the other columns), for the byte limits. */
+const ROW_BYTES = 4096;
+/** How many X-Forwarded-For addresses the platform's proxies add at its end (clientOf; env TRUSTED_PROXY_HOPS). */
+export const TRUSTED_PROXY_HOPS = 2;
+/** Names are read 1000 at a time (Supabase's usual most rows per request). */
+const NAMES_PAGE = 1000;
+/** Changes from this long before the latest one seen are read again (a write can land a little after its time). */
+const NAMES_OVERLAP = 60_000;
+/** After the list of names couldn't be read, names are looked up one by one for this long before it's tried again. */
+const NAMES_RETRY = 5000;
+/** A request waits at most this long for the list of names to be read. */
+const NAMES_WAIT = 2000;
 
 // Never allow-same-origin: the app's sign-in tokens live in localStorage on the app's origin.
 const ARTIFACT_CSP = 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads';
@@ -287,15 +324,32 @@ function addressKey(input) {
 }
 
 /**
- * Who a visitor is, for the lookup limits: the client address the platform's proxy puts first in
- * X-Forwarded-For (browsers don't send one), else the connection's address. A client that sends its own
- * X-Forwarded-For can spread its lookups over several keys; the limits in all still cap them, and running
- * out never brings back an old answer.
+ * Who a visitor is, for the lookup limits: the address the platform's proxies saw it connect from. They
+ * add addresses at the end of X-Forwarded-For, after whatever the client sent (anyone can make that up), so
+ * it's read from the right: the address `hops` from the end. On Replit's Autoscale that's 2: Google's front
+ * end adds the client's address, then its own ('<sent by the client>, <client>, <load balancer>'). With fewer
+ * addresses than that, the first (the client of the only proxy, like Vite's in development); without the
+ * header, or with hops 0, the connection's own address.
  */
-export function clientOf(req) {
+export function clientOf(req, hops = TRUSTED_PROXY_HOPS) {
   const fwd = req.headers['x-forwarded-for'];
-  const first = typeof fwd === 'string' ? fwd.slice(0, 200).split(',')[0] : '';
-  return addressKey(first) || addressKey(req.socket?.remoteAddress) || 'unknown';
+  if (hops > 0 && typeof fwd === 'string' && fwd) {
+    // only the end counts (a client can send kilobytes before it)
+    const list = fwd.slice(-1024).split(',');
+    const key = addressKey(list[Math.max(0, list.length - hops)]);
+    if (key) return key;
+  }
+  return addressKey(req.socket?.remoteAddress) || 'unknown';
+}
+
+/** TRUSTED_PROXY_HOPS as set: a whole number from 0 to 10 (else the default, with a warning). */
+export function hopsFrom(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return TRUSTED_PROXY_HOPS;
+  const n = Number(s);
+  if (Number.isInteger(n) && n >= 0 && n <= 10) return n;
+  console.warn(`TRUSTED_PROXY_HOPS must be a whole number from 0 to 10 (it’s “${s.slice(0, 40)}”); using ${TRUSTED_PROXY_HOPS}.`);
+  return TRUSTED_PROXY_HOPS;
 }
 
 /** resolveTxt for the domain check: the system's DNS servers, or these ("1.1.1.1, 8.8.8.8", "127.0.0.1:5353"). */
@@ -387,64 +441,214 @@ function rowCache(name, { ttl, maxBytes, maxEntries, sizeOf, keep = (v) => v }) 
   };
 }
 
-/** Image bytes, least recently used out first, up to maxBytes in all. */
-function byteCache(maxBytes, ttl) {
-  const m = new Map();
+/**
+ * Bytes by key (images, pages' HTML), least recently used out first, within maxBytes in all; an entry
+ * nobody asked for in `idle` goes. An entry's tag says which version of something it is.
+ */
+function byteCache(maxBytes, idle) {
+  const m = new Map(); // key → { bytes, tag, until }
   let total = 0;
   const drop = (k) => {
     const e = m.get(k);
-    if (e) total -= e.bytes.length;
+    if (!e) return;
+    total -= e.bytes.length;
     m.delete(k);
   };
+  /** the entry as it is (its place in line unchanged), or null */
+  const peek = (k) => {
+    const e = m.get(k);
+    if (e && e.until <= Date.now()) {
+      drop(k);
+      return null;
+    }
+    return e ?? null;
+  };
   return {
-    get(k) {
-      const e = m.get(k);
-      if (!e) return null;
-      drop(k);
-      if (e.until <= Date.now()) return null;
+    /** the entry, now the most recently used, or null; with a tag, only that version */
+    get(k, tag) {
+      const e = peek(k);
+      if (!e || (tag !== undefined && e.tag !== tag)) return null;
+      m.delete(k);
       m.set(k, e);
-      total += e.bytes.length;
-      return e.bytes;
+      e.until = Date.now() + idle;
+      return e;
     },
-    set(k, bytes) {
-      if (bytes.length > maxBytes) return;
+    peek,
+    set(k, bytes, tag) {
       drop(k);
-      m.set(k, { bytes, until: Date.now() + ttl });
+      if (bytes.length > maxBytes) return;
+      m.set(k, { bytes, tag, until: Date.now() + idle });
       total += bytes.length;
       while (total > maxBytes) drop(m.keys().next().value);
     },
+    delete: drop,
     dropPrefix(prefix) {
       for (const k of [...m.keys()]) if (k.startsWith(prefix)) drop(k);
+    },
+    deleteWhere(test) {
+      for (const [k, e] of [...m]) if (test(e)) drop(k);
+    },
+    /** drop every entry nobody asked for in time */
+    sweep() {
+      const now = Date.now();
+      for (const [k, e] of [...m]) if (e.until <= now) drop(k);
+    },
+    stats: () => ({ entries: m.size, bytes: total }),
+  };
+}
+
+/**
+ * Reads for visitors within the limits: per minute, in all and per client, for each kind (page, domain,
+ * image), by count and (with bytesPerMin, bytesPerClient) by what they bring from Supabase.
+ *   take(kind, client, bytes) → a ticket when the read may go ahead (it's counted, with the bytes it may
+ *     bring), or null; settle(ticket, bytes) → what it really brought (a ticket from an earlier minute
+ *     changes nothing). A read is never refused for its size alone: the first of a minute always fits.
+ */
+function lookupBudget(limits, { onClientLimit } = {}) {
+  let start = 0;
+  let minute = 0;
+  const all = new Map(); // kind → { n, bytes }
+  const perClient = new Map(); // `${kind} ${client}` → { n, bytes }
+  const over = (used, bytes, limit) => !!limit && used > 0 && used + bytes > limit;
+  return {
+    take(kind, client, bytes = 0) {
+      const now = Date.now();
+      if (now - start >= 60_000) {
+        start = now;
+        minute++;
+        all.clear();
+        perClient.clear();
+      }
+      const limit = limits[kind];
+      if (!limit) return { minute, bytes, mine: null, total: null };
+      // a flood of made-up addresses shares one count once there are too many to keep apart
+      let key = `${kind} ${client}`;
+      if (!perClient.has(key) && perClient.size >= MAX_CLIENTS) key = `${kind} (others)`;
+      const mine = perClient.get(key) ?? { n: 0, bytes: 0 };
+      const total = all.get(kind) ?? { n: 0, bytes: 0 };
+      if (total.n >= limit.perMin || over(total.bytes, bytes, limit.bytesPerMin)) return null;
+      if (mine.n >= limit.perClient || over(mine.bytes, bytes, limit.bytesPerClient)) {
+        onClientLimit?.(kind, client);
+        return null;
+      }
+      mine.n++;
+      mine.bytes += bytes;
+      total.n++;
+      total.bytes += bytes;
+      perClient.set(key, mine);
+      all.set(kind, total);
+      return { minute, bytes, mine, total };
+    },
+    settle(ticket, bytes) {
+      if (!ticket?.mine || ticket.minute !== minute) return;
+      const more = bytes - ticket.bytes;
+      ticket.mine.bytes = Math.max(0, ticket.mine.bytes + more);
+      ticket.total.bytes = Math.max(0, ticket.total.bytes + more);
+      ticket.bytes = bytes;
     },
   };
 }
 
 /**
- * Reads for visitors within the limits: per minute, in all and per client, for each kind (page,
- * domain, image). take(kind, client) → whether this one may go ahead (it's counted if so).
+ * The names that exist (published pages' names, verified domains), so a request for any other is "not
+ * found" without a lookup: made-up names cost nothing, from however many addresses they come. The whole
+ * list is read now and then (every `reload`); in between, a name this copy doesn't know is looked for among
+ * the changes since the last look (at most every `check`, one look at a time), so a page published or a
+ * domain verified through another copy shows up here within about that long.
+ *   all(max) → { names, latest } or { tooMany: true }; since(latest) → { names, latest, full }. latest: the
+ *   time of the newest change seen (ms); full: there may be more than one read brings.
+ * With more than `max` names, none are kept, and has() says null (look it up) for every name.
  */
-function lookupBudget(limits) {
-  let start = 0;
-  const used = new Map(); // kind → count
-  const perClient = new Map(); // `${kind} ${client}` → count
-  return (kind, client) => {
-    const now = Date.now();
-    if (now - start >= 60_000) {
-      start = now;
-      used.clear();
-      perClient.clear();
+function knownNames(label, { all, since, check, reload, max }) {
+  const names = new Map(); // name → when it was last known to exist
+  let loaded = false;
+  let tooMany = false;
+  let latest = 0;
+  let loadedAt = 0;
+  let lookedAt = 0;
+  let failedAt = 0;
+  let warnedAt = 0;
+  let running = null;
+  async function wholeList(t) {
+    const got = await all(max);
+    loadedAt = t;
+    if (got.tooMany) {
+      if (!tooMany) console.warn(`Published pages: there are more than ${max} ${label}, so they aren’t kept in memory; each is looked up when it’s asked for.`);
+      tooMany = true;
+      loaded = false;
+      names.clear();
+      return;
     }
-    const limit = limits[kind];
-    if (!limit) return true;
-    // a flood of made-up addresses shares one count once there are too many to keep apart
-    let key = `${kind} ${client}`;
-    if (!perClient.has(key) && perClient.size >= MAX_CLIENTS) key = `${kind} (others)`;
-    const mine = perClient.get(key) ?? 0;
-    const all = used.get(kind) ?? 0;
-    if (mine >= limit.perClient || all >= limit.perMin) return false;
-    perClient.set(key, mine + 1);
-    used.set(kind, all + 1);
-    return true;
+    // names this copy added since the list was asked for stay
+    const added = [...names].filter(([, seen]) => seen > t);
+    names.clear();
+    for (const n of got.names) names.set(n, t);
+    for (const [n, seen] of added) names.set(n, seen);
+    tooMany = false;
+    loaded = true;
+    latest = got.latest;
+  }
+  function look() {
+    running ??= (async () => {
+      const t = Date.now();
+      try {
+        if (!loaded || Date.now() - loadedAt >= reload) await wholeList(t);
+        else {
+          const got = await since(latest);
+          for (const n of got.names) if (!(names.get(n) >= t)) names.set(n, t);
+          latest = Math.max(latest, got.latest);
+          if (got.full) await wholeList(t);
+        }
+      } catch (e) {
+        if (e?.code === 'PAGES_TABLES') {
+          // the migration wasn't run: nothing is published
+          if (!tooMany) loaded = true;
+        } else {
+          failedAt = Date.now();
+          if (Date.now() - warnedAt > 60_000) {
+            warnedAt = Date.now();
+            console.warn(`Published pages: couldn’t read the ${label} (${e?.message || e}).`);
+          }
+        }
+      } finally {
+        lookedAt = t;
+      }
+    })().finally(() => {
+      running = null;
+    });
+    return running;
+  }
+  return {
+    /** true: it exists; false: it doesn't (no need to look it up); null: this copy can't say (look it up) */
+    async has(name) {
+      const now = Date.now();
+      if (tooMany) {
+        if (now - loadedAt >= reload) void look();
+        return null;
+      }
+      if (loaded && names.has(name)) {
+        if (now - loadedAt >= reload) void look();
+        return true;
+      }
+      if (loaded && now - lookedAt < check) return false;
+      if (!loaded && now - failedAt < NAMES_RETRY) return null;
+      // a long list can take a while to read: meanwhile the name is looked up (or, once there's a list, isn't there yet)
+      let timer;
+      await Promise.race([look(), new Promise((r) => (timer = setTimeout(r, NAMES_WAIT)))]);
+      clearTimeout(timer);
+      if (tooMany || !loaded) return null;
+      return names.has(name);
+    },
+    /** it exists now (published, verified, through this copy) */
+    add(name) {
+      if (!tooMany) names.set(name, Date.now());
+    },
+    /** it's gone, as a read that started at `since` found (unless it was seen after that) */
+    drop(name, since = Date.now()) {
+      const seen = names.get(name);
+      if (seen !== undefined && seen <= since) names.delete(name);
+    },
+    stats: () => ({ names: names.size, loaded, tooMany }),
   };
 }
 
@@ -454,6 +658,7 @@ export function pagesFromEnv(env = process.env, deps = {}) {
     secretKey: env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '',
     appHosts: env.APP_HOSTS || '',
     resolveTxt: txtResolver(env.PAGES_DNS_SERVERS || ''),
+    trustedHops: hopsFrom(env.TRUSTED_PROXY_HOPS),
     ...deps,
   });
 }
@@ -462,7 +667,7 @@ export function pagesFromEnv(env = process.env, deps = {}) {
  * auth: server/auth.mjs (publishing needs accounts on). whoIs, send, readJson, rateLimited and
  * corsHeaders: the server's own (see ai-server.mjs). distDir: the built app, whose top-level names
  * can't be page names. resolveTxt: dns.promises.resolveTxt's shape (tests give their own).
- * lookupLimits and tuning: see LOOKUP_LIMITS and TUNING.
+ * trustedHops: see clientOf. lookupLimits and tuning: see LOOKUP_LIMITS and TUNING.
  */
 export function createPages({
   supabaseUrl = '',
@@ -477,11 +682,14 @@ export function createPages({
   distDir = '',
   appHosts = '',
   resolveTxt = txtResolver(),
+  trustedHops = TRUSTED_PROXY_HOPS,
   lookupLimits = LOOKUP_LIMITS,
   tuning = {},
   fetch = globalThis.fetch,
 } = {}) {
   const tune = { ...TUNING, ...tuning };
+  const hops = trustedHops;
+  const visitor = (req) => clientOf(req, hops);
   const url = String(supabaseUrl).replace(/\/+$/, '');
   const enabled = !!(auth?.enabled && url && secretKey);
   const headers = secretKey ? serviceHeaders(secretKey) : {};
@@ -530,15 +738,22 @@ export function createPages({
   };
   const accountGone = () => fail(401, 'ACCOUNT_GONE', 'This account doesn’t exist anymore. Sign in again.');
 
-  /** Supabase's REST API with the secret key: the parsed answer, or an error with status and code. */
-  async function rest(query, { method = 'GET', body, prefer, timeout = 10_000 } = {}) {
+  /**
+   * Supabase's REST API with the secret key: the parsed answer, or an error with status and code.
+   * meter: what the answer brought is added to meter.bytes (the visitors' byte limits).
+   */
+  async function rest(query, { method = 'GET', body, prefer, timeout = 10_000, meter } = {}) {
     let res;
+    let raw;
     try {
       res = await fetch(`${url}/rest/v1/${query}`, { method, headers: { ...headers, ...(prefer ? { prefer } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(timeout) });
+      // an answer cut off halfway is no answer (not "no rows")
+      raw = Buffer.from(await res.arrayBuffer());
     } catch (e) {
       throw unreachable(e);
     }
-    const text = await res.text().catch(() => '');
+    if (meter) meter.bytes += raw.length;
+    const text = raw.toString('utf8');
     let data = null;
     try {
       data = text ? JSON.parse(text) : null;
@@ -548,13 +763,14 @@ export function createPages({
     if (res.ok) return data;
     const code = String(data?.code ?? '');
     const message = String(data?.message ?? '');
+    const about = `${message} ${data?.details ?? ''}`;
     if (res.status === 404 && (code === 'PGRST205' || code === '42P01' || /published_(pages|domains)/.test(message))) throw tablesMissing();
-    // a unique key: the address (or the domain's home page) was just taken
-    if (code === '23505') throw fail(409, 'CONFLICT', 'That changed just now. Try again.');
-    // a row this one points at is gone: the account (deleted), or the domain (removed)
+    // a unique key: the address was just taken, or the domain's home page (published_pages_domain_home)
+    if (code === '23505') throw fail(409, 'CONFLICT', 'That changed just now. Try again.', { constraint: /published_pages_domain_home/.test(about) ? 'home' : '' });
+    // a row this one points at is gone, or isn't the same account's: the account (deleted), or the domain
+    // (removed, or another account's now: published_pages_domain_owner, whose key is (domain, user_id))
     if (code === '23503') {
-      const about = `${message} ${data?.details ?? ''}`;
-      throw fail(409, 'REFERENCE', 'Something this refers to was just removed. Try again.', { ref: /user_id/.test(about) ? 'user' : /domain/.test(about) ? 'domain' : '' });
+      throw fail(409, 'REFERENCE', 'Something this refers to was just removed. Try again.', { ref: /published_pages_domain|Key \(domain/.test(about) ? 'domain' : /user_id/.test(about) ? 'user' : '' });
     }
     logUpstream(`${res.status}${code ? ` ${code}` : ''}: ${message.slice(0, 200)}`);
     throw fail(502, 'UPSTREAM', `Supabase refused that (error ${res.status}). Try again.`);
@@ -590,13 +806,32 @@ export function createPages({
     await res.arrayBuffer().catch(() => null);
     if (!res.ok) throw fail(502, 'UPSTREAM', `Couldn’t store ${img.name} in Supabase (error ${res.status}). Try again.`);
   }
-  /** The stored file, or null when it isn't there (Supabase answers 400 or 404 for that). */
-  async function getImage(folder, name) {
+  /**
+   * The stored file, or null when it isn't there (Supabase answers 400 or 404 for that) or is bigger than
+   * maxBytes: the file checked when the page was published was that size, and the owner can put anything in
+   * their folder, so no more than that is ever read. What was read is added to meter.bytes.
+   */
+  async function getImage(folder, name, maxBytes, meter) {
     const res = await storage(`object/authenticated/media/${objectPath(`${folder}/${name}`)}`, { method: 'GET', headers: {} }, LOOKUP_TIMEOUT);
-    if (res.ok) return Buffer.from(await res.arrayBuffer());
-    await res.arrayBuffer().catch(() => null);
-    if (res.status === 400 || res.status === 404) return null;
-    throw fail(502, 'UPSTREAM', `Supabase didn’t send an image (error ${res.status}).`);
+    if (!res.ok) {
+      await res.arrayBuffer().catch(() => null);
+      if (res.status === 400 || res.status === 404) return null;
+      throw fail(502, 'UPSTREAM', `Supabase didn’t send an image (error ${res.status}).`);
+    }
+    const chunks = [];
+    let size = 0;
+    try {
+      // (leaving the loop early stops the download)
+      for await (const chunk of res.body ?? []) {
+        size += chunk.length;
+        meter.bytes += chunk.length;
+        if (size > maxBytes) return null;
+        chunks.push(chunk);
+      }
+    } catch (e) {
+      throw unreachable(e);
+    }
+    return Buffer.concat(chunks);
   }
   async function listFolder(prefix) {
     const res = await storage('object/list/media', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prefix, limit: 1000, offset: 0 }) });
@@ -640,38 +875,57 @@ export function createPages({
 
   // ── lookups for visitors: cached, one request at a time per key, within the limits ──
   const DOMAIN_COLUMNS = 'domain,user_id,token,verified_at';
-  const PAGE_ROW = 'slug,user_id,page_id,kind,title,html,images,domain,home,updated_at';
-  const domainCache = rowCache('domain', { ttl: tune.domainTtl, maxBytes: 4 * 1024 * 1024, maxEntries: 5000, sizeOf: () => 300 }); // host → domain row | null
-  const pageCache = rowCache('page', {
-    ttl: tune.pageTtl,
-    maxBytes: tune.pageCacheBytes,
-    maxEntries: 5000,
-    // a big page is kept without its HTML (withHtml reads it for each visit)
-    keep: (row) => (row && typeof row.html === 'string' && Buffer.byteLength(row.html) > tune.pageHtmlMax ? { ...row, html: undefined, htmlLater: true } : row),
-    sizeOf: (row) => (row ? 1000 + (typeof row.html === 'string' ? Buffer.byteLength(row.html) : 0) : 0),
-  }); // slug → page row | null
-  const onDomainCache = rowCache('on-domain', { ttl: tune.pageTtl, maxBytes: 8 * 1024 * 1024, maxEntries: 2000, sizeOf: (rows) => 120 * (Array.isArray(rows) ? rows.length : 0) }); // domain → [{ slug, user_id, home, updated_at }]
+  /** A page's row without its HTML: what's kept per page (its HTML is kept apart, by version). */
+  const PAGE_HEAD = 'slug,user_id,page_id,kind,title,images,domain,home,updated_at';
+  const PAGE_ROW = `${PAGE_HEAD},html`;
+  const domainCache = rowCache('domain', { ttl: tune.domainTtl, maxBytes: 4 * MB, maxEntries: 5000, sizeOf: () => 300 }); // host → domain row | null
+  // slug → the page's row without its HTML, with htmlBytes (the HTML's size) | null
+  const pageCache = rowCache('page', { ttl: tune.pageTtl, maxBytes: 16 * MB, maxEntries: 5000, sizeOf: (row) => (row ? 1000 + JSON.stringify(row.images ?? []).length + 2 * String(row.title ?? '').length : 0) });
+  // slug → the page's HTML (UTF-8), tagged with the version of the row it came with; big pages' apart
+  const htmlCache = byteCache(tune.pageCacheBytes, tune.htmlIdle);
+  const bigHtmlCache = byteCache(tune.bigPageCacheBytes, tune.htmlIdle);
+  const onDomainCache = rowCache('on-domain', { ttl: tune.pageTtl, maxBytes: 8 * MB, maxEntries: 2000, sizeOf: (rows) => 120 * (Array.isArray(rows) ? rows.length : 0) }); // domain → [{ slug, user_id, home, updated_at }]
   const imageCache = byteCache(IMAGE_CACHE_BYTES, IMAGE_TTL);
+  // stored images that weren't there, or weren't the file published: not read again for a while
+  const imageMisses = rowCache('image-miss', { ttl: tune.pageTtl, maxBytes: 2 * MB, maxEntries: 5000, sizeOf: () => 200 });
   const inflight = new Map();
-  // random paths or Host names (scanners) must not turn into a flood of database requests
-  const mayLookUp = lookupBudget(lookupLimits);
+  // a few clients (or pages) must not turn into a flood of database requests, or of bytes
+  let warnedClientAt = 0;
+  const budget = lookupBudget(lookupLimits, {
+    // (if every visitor shows up as the same address, a proxy's, they all share one client's limits)
+    onClientLimit: (kind, client) => {
+      if (Date.now() - warnedClientAt < 10 * 60_000) return;
+      warnedClientAt = Date.now();
+      console.warn(`Published pages: a visitor (${client}) used up its ${kind} lookups for this minute, so it gets 503 until the minute is over. If every visitor shows up as the same address (a proxy’s), set TRUSTED_PROXY_HOPS (now ${hops}).`);
+    },
+  });
   const busy = () => fail(503, 'BUSY', 'Too many lookups right now.');
-  // answers past their maximum age go, HTML and all, even when nothing else comes in
+  // answers past their maximum age go, and HTML and images nobody asked for in a while, even when nothing else comes in
   const sweeper = setInterval(() => {
     domainCache.sweep();
     pageCache.sweep();
     onDomainCache.sweep();
+    imageMisses.sweep();
+    htmlCache.sweep();
+    bigHtmlCache.sweep();
+    imageCache.sweep();
   }, tune.pageTtl);
   sweeper.unref?.();
 
-  function lookUp(store, key, load, kind, client) {
+  /**
+   * An answer from store, or load(meter) once for everyone asking at the same time, within the limits:
+   * `expect` is what it may bring (bytes), settled with what it did bring (meter.bytes).
+   */
+  function lookUp(store, key, load, kind, client, expect = 0) {
     const hit = store.fresh(key);
     if (hit) return Promise.resolve(hit.value);
     const id = `${store.name}:${key}`;
     if (inflight.has(id)) return inflight.get(id);
     // over the limits: no answer (an old one would keep a removed page up for as long as the limits are spent)
-    if (!mayLookUp(kind, client)) return Promise.reject(busy());
-    const p = load()
+    const ticket = budget.take(kind, client, expect);
+    if (!ticket) return Promise.reject(busy());
+    const meter = { bytes: 0 };
+    const p = load(meter)
       .then(
         (value) => {
           store.set(key, value);
@@ -692,31 +946,86 @@ export function createPages({
           throw e;
         },
       )
-      .finally(() => inflight.delete(id));
+      .finally(() => {
+        inflight.delete(id);
+        budget.settle(ticket, meter.bytes);
+      });
     inflight.set(id, p);
     return p;
   }
-  const domainRow = (host, client) => lookUp(domainCache, host, async () => (await rest(`published_domains?domain=eq.${encodeURIComponent(host)}&select=${DOMAIN_COLUMNS}`, { timeout: LOOKUP_TIMEOUT }))?.[0] ?? null, 'domain', client);
-  const pageRow = (slug, client) => lookUp(pageCache, slug, async () => (await rest(`published_pages?slug=eq.${slug}&select=${PAGE_ROW}`, { timeout: LOOKUP_TIMEOUT }))?.[0] ?? null, 'page', client);
-  const pagesOnDomain = (domain, client) => lookUp(onDomainCache, domain, async () => (await rest(`published_pages?domain=eq.${encodeURIComponent(domain)}&select=slug,user_id,home,updated_at&order=updated_at.desc&limit=1000`, { timeout: LOOKUP_TIMEOUT })) ?? [], 'domain', client);
-  /** The page with its HTML: as cached, or read again when it was too big to keep. null: it's gone. */
+  const domainRow = (host, client) => lookUp(domainCache, host, async (meter) => (await rest(`published_domains?domain=eq.${encodeURIComponent(host)}&select=${DOMAIN_COLUMNS}`, { timeout: LOOKUP_TIMEOUT, meter }))?.[0] ?? null, 'domain', client);
+  const pagesOnDomain = (domain, client) => lookUp(onDomainCache, domain, async (meter) => (await rest(`published_pages?domain=eq.${encodeURIComponent(domain)}&select=slug,user_id,home,updated_at&order=updated_at.desc&limit=1000`, { timeout: LOOKUP_TIMEOUT, meter })) ?? [], 'domain', client);
+
+  /** Which version of a page a row is (any change to a row changes its updated_at): its HTML is kept under that. */
+  const versionOf = (row) => `${row.user_id} ${row.page_id} ${row.updated_at}`;
+  const htmlStore = (bytes) => (bytes > tune.pageHtmlMax ? bigHtmlCache : htmlCache);
+  /** A row read with its HTML: the HTML is kept apart (by its size), the row without it. */
+  function keepHtml(row) {
+    const html = Buffer.from(typeof row.html === 'string' ? row.html : '', 'utf8');
+    htmlCache.delete(row.slug);
+    bigHtmlCache.delete(row.slug);
+    htmlStore(html.length).set(row.slug, html, versionOf(row));
+    const page = { ...row, htmlBytes: html.length };
+    delete page.html;
+    return { page, html };
+  }
+  /**
+   * A published page by its name: its row without the HTML (htmlBytes: the HTML's size), or null. While its
+   * HTML is still kept, the row is read again without it, and the HTML only when the page has changed since.
+   */
+  function pageRow(slug, client) {
+    const kept = htmlCache.peek(slug) ?? bigHtmlCache.peek(slug);
+    const last = pageCache.stale(slug)?.value;
+    const load = async (meter) => {
+      if (kept) {
+        const head = (await rest(`published_pages?slug=eq.${slug}&select=${PAGE_HEAD}`, { timeout: LOOKUP_TIMEOUT, meter }))?.[0] ?? null;
+        if (!head) return null;
+        if (versionOf(head) === kept.tag) return { ...head, htmlBytes: kept.bytes.length };
+      }
+      const row = (await rest(`published_pages?slug=eq.${slug}&select=${PAGE_ROW}`, { timeout: LOOKUP_TIMEOUT, meter }))?.[0] ?? null;
+      return row ? keepHtml(row).page : null;
+    };
+    // what it may bring: little while the HTML is kept, else the HTML (as big as it was, or as big as a page can be)
+    return lookUp(pageCache, slug, load, 'page', client, ROW_BYTES + (kept ? 0 : (last?.htmlBytes ?? MAX_HTML_BYTES)));
+  }
+  /** The page with its HTML: as kept, or read again (with its row: it may have changed). null: it's gone. */
   async function withHtml(page, client) {
-    if (!page?.htmlLater) return page;
+    const kept = htmlStore(page.htmlBytes).get(page.slug, versionOf(page));
+    if (kept) return { page, html: kept.bytes };
     const id = `html:${page.slug}`;
     if (!inflight.has(id)) {
-      if (!mayLookUp('page', client)) throw busy();
+      const ticket = budget.take('page', client, ROW_BYTES + (page.htmlBytes ?? MAX_HTML_BYTES));
+      if (!ticket) throw busy();
+      const meter = { bytes: 0 };
       inflight.set(
         id,
-        rest(`published_pages?slug=eq.${page.slug}&select=${PAGE_ROW}`, { timeout: LOOKUP_TIMEOUT })
-          .then((rows) => rows?.[0] ?? null)
-          .finally(() => inflight.delete(id)),
+        rest(`published_pages?slug=eq.${page.slug}&select=${PAGE_ROW}`, { timeout: LOOKUP_TIMEOUT, meter })
+          .then((rows) => {
+            const row = rows?.[0] ?? null;
+            if (!row) {
+              pageCache.set(page.slug, null);
+              return null;
+            }
+            const got = keepHtml(row);
+            pageCache.set(row.slug, got.page);
+            return got;
+          })
+          .finally(() => {
+            inflight.delete(id);
+            budget.settle(ticket, meter.bytes);
+          }),
       );
     }
     return inflight.get(id);
   }
   /** Drop what this copy of the server remembers about pages that just changed. */
   const forget = ({ slugs = [], domains = [] }) => {
-    for (const s of slugs) if (s) pageCache.delete(s);
+    for (const s of slugs) {
+      if (!s) continue;
+      pageCache.delete(s);
+      htmlCache.delete(s);
+      bigHtmlCache.delete(s);
+    }
     for (const d of domains) if (d) onDomainCache.delete(d);
   };
   /** …and about a domain whose owner or verification just changed. */
@@ -724,6 +1033,35 @@ export function createPages({
     domainCache.delete(domain);
     onDomainCache.delete(domain);
   };
+
+  // ── the names that exist (knownNames): any other is "not found" without a lookup ──
+  /** Every name in a table, read 1000 at a time: { names, latest } or { tooMany: true }. */
+  async function allNames(table, column, time, filter, max) {
+    const names = [];
+    let latest = 0;
+    let after = null;
+    for (;;) {
+      const rows = (await rest(`${table}?select=${column},${time}${filter}&order=${column}.asc&limit=${NAMES_PAGE}${after === null ? '' : `&${column}=gt.${encodeURIComponent(after)}`}`, { timeout: LOOKUP_TIMEOUT })) ?? [];
+      for (const r of rows) {
+        if (typeof r?.[column] === 'string') names.push(r[column]);
+        latest = Math.max(latest, Date.parse(r?.[time]) || 0);
+      }
+      if (names.length > max) return { tooMany: true };
+      if (rows.length < NAMES_PAGE) return { names, latest };
+      after = rows[rows.length - 1][column];
+    }
+  }
+  /** The names of the rows changed since `latest` (and in the minute before it): { names, latest, full }. */
+  async function namesSince(table, column, time, latest) {
+    const from = new Date(Math.max(0, latest - NAMES_OVERLAP)).toISOString();
+    const rows = (await rest(`${table}?select=${column},${time}&${time}=gte.${encodeURIComponent(from)}&order=${time}.asc&limit=${NAMES_PAGE}`, { timeout: LOOKUP_TIMEOUT })) ?? [];
+    let newest = 0;
+    for (const r of rows) newest = Math.max(newest, Date.parse(r?.[time]) || 0);
+    return { names: rows.map((r) => r?.[column]).filter((n) => typeof n === 'string'), latest: newest, full: rows.length >= NAMES_PAGE };
+  }
+  const listing = { check: tune.namesCheck, reload: tune.namesReload, max: tune.namesMax };
+  const pageNames = knownNames('published pages', { ...listing, all: (max) => allNames('published_pages', 'slug', 'updated_at', '', max), since: (latest) => namesSince('published_pages', 'slug', 'updated_at', latest) });
+  const domainNames = knownNames('verified domains', { ...listing, all: (max) => allNames('published_domains', 'domain', 'verified_at', '&verified_at=not.is.null', max), since: (latest) => namesSince('published_domains', 'domain', 'verified_at', latest) });
 
   const distHas = (name) => !!distDir && fs.existsSync(path.join(distDir, name));
   const reserved = (slug) => RESERVED_SLUGS.has(slug) || distHas(slug);
@@ -744,26 +1082,52 @@ export function createPages({
     }
     write(req, res, 503, { ...COMMON, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '60', 'content-security-policy': NOTICE_CSP }, UNAVAILABLE_PAGE);
   };
-  const sendPage = (req, res, page, { sandbox }) =>
-    write(req, res, 200, { ...COMMON, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60', ...(sandbox ? { 'content-security-policy': page.kind === 'artifact' ? ARTIFACT_CSP : SEO_CSP } : {}) }, page.html);
+  /** A published page with its HTML; with html null (HEAD), its headers only: the row says how big it is. */
+  function sendPage(req, res, page, html, { sandbox }) {
+    const hdrs = { ...COMMON, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60', ...(sandbox ? { 'content-security-policy': page.kind === 'artifact' ? ARTIFACT_CSP : SEO_CSP } : {}) };
+    if (html) return write(req, res, 200, hdrs, html);
+    res.writeHead(200, { ...hdrs, 'content-length': page.htmlBytes });
+    res.end();
+  }
+  /** Whether a request for the page can be answered without its HTML (HEAD: the row has its size). */
+  const headOnly = (req, page) => req.method === 'HEAD' && Number.isInteger(page.htmlBytes);
 
   async function sendImage(req, res, page, name, client) {
     const img = IMAGE_NAME_RE.test(name) && Array.isArray(page.images) ? page.images.find((i) => i?.name === name) : null;
     if (!img || !IMAGE_TYPES[img.mime]) return notFound(req, res);
     const folder = imageFolder(page, img);
     const key = `${folder}/${name}@${img.sha256 || ''}`;
-    let bytes = imageCache.get(key);
+    let bytes = imageCache.get(key)?.bytes;
     if (!bytes) {
+      if (imageMisses.fresh(key)) return notFound(req, res);
       const id = `image:${key}`;
       if (!inflight.has(id)) {
-        if (!mayLookUp('image', client)) throw busy();
-        inflight.set(id, getImage(folder, name).finally(() => inflight.delete(id)));
+        // never more than the file that was checked when the page was published (its size was noted then)
+        const size = Number.isInteger(img.size) && img.size > 0 && img.size <= MAX_IMAGE_BYTES ? img.size : MAX_IMAGE_BYTES;
+        const ticket = budget.take('image', client, size);
+        if (!ticket) throw busy();
+        const meter = { bytes: 0 };
+        inflight.set(
+          id,
+          getImage(folder, name, size, meter)
+            .then((got) => {
+              // only the exact file checked when the page was published: the owner can also change their
+              // folder directly, and nothing but an image of the listed type may go out from here
+              if (!got || imageTypeOf(got) !== img.mime || (img.sha256 && sha256(got) !== img.sha256)) {
+                imageMisses.set(key, true);
+                return null;
+              }
+              imageCache.set(key, got);
+              return got;
+            })
+            .finally(() => {
+              inflight.delete(id);
+              budget.settle(ticket, meter.bytes);
+            }),
+        );
       }
       bytes = await inflight.get(id);
-      // only the exact file checked when the page was published: the owner can also change their
-      // folder directly, and nothing but an image of the listed type may go out from here
-      if (!bytes || imageTypeOf(bytes) !== img.mime || (img.sha256 && sha256(bytes) !== img.sha256)) return notFound(req, res);
-      imageCache.set(key, bytes);
+      if (!bytes) return notFound(req, res);
     }
     return write(req, res, 200, { ...COMMON, 'content-type': img.mime, 'cache-control': 'public, max-age=86400', 'content-security-policy': IMAGE_CSP }, bytes);
   }
@@ -778,6 +1142,11 @@ export function createPages({
       `The app and /api answer on *.replit.app, *.replit.dev, *.repl.co, localhost and IP addresses${ownHosts.size ? `, and on ${[...ownHosts].join(', ')} (APP_HOSTS, ALLOWED_ORIGIN)` : ''}.`,
       `Any other host shows only the published pages of a verified domain ("Page not found" otherwise). If the app has a custom domain of its own, list it in the APP_HOSTS Secret${ownHosts.size ? '' : ' (it’s empty now)'}.`,
     ].join('\n');
+  /** For the server's log: how visitors are told apart (their lookups are limited per client). */
+  const visitorsNote = () =>
+    hops > 0
+      ? `Visitors’ lookups are limited per address: the one ${hops === 1 ? 'at the end' : `${hops} from the end`} of X-Forwarded-For, where the platform’s proxies add it (TRUSTED_PROXY_HOPS=${hops}).`
+      : 'Visitors’ lookups are limited per address: the connection’s own (TRUSTED_PROXY_HOPS=0: X-Forwarded-For isn’t read).';
   // a browser visit (or a check of /) on a host that's nobody's: it may be the app's own custom domain,
   // missing from APP_HOSTS (said once in a while: scanners send any Host)
   let hintedAt = 0;
@@ -859,6 +1228,7 @@ export function createPages({
     console.warn(`Published pages: ${site.domain} no longer has its TXT record (${txtName(site.domain)}), so it stops showing pages until it's checked again.`);
     await rest(`${same}&verified_at=eq.${encodeURIComponent(site.verified_at)}`, { method: 'PATCH', body: { verified_at: null }, prefer: 'return=minimal' });
     dropDomain(site.domain);
+    domainNames.drop(site.domain);
     rechecks.delete(site.domain);
   }
 
@@ -874,7 +1244,13 @@ export function createPages({
       hintAppHosts(req, host, url);
       return notFound(req, res);
     }
-    const client = clientOf(req);
+    const client = visitor(req);
+    // not a verified domain (any made-up Host): nothing to look up either
+    if ((await domainNames.has(host)) === false) {
+      hintAppHosts(req, host, url);
+      return notFound(req, res);
+    }
+    const asked = Date.now();
     let site;
     try {
       site = await domainRow(host, client);
@@ -883,6 +1259,7 @@ export function createPages({
       return unavailable(req, res, e);
     }
     if (!verifiedRow(site)) {
+      domainNames.drop(host, asked);
       if (!site) hintAppHosts(req, host, url);
       return notFound(req, res);
     }
@@ -902,15 +1279,35 @@ export function createPages({
         const slug = p === '/' ? (await listed()).find((r) => r.home)?.slug : m?.[1];
         // only this domain's own pages (and, at /, its home page)
         const shows = (page) => !!page && page.domain === host && page.user_id === site.user_id && (p !== '/' || !!page.home);
-        let page = slug ? await pageRow(slug, client) : null;
+        const page = await findPage(slug, client);
         if (!shows(page)) notFound(req, res);
         else if (m?.[3] !== undefined) await sendImage(req, res, page, m[3], client);
-        else if (!shows((page = await withHtml(page, client)))) notFound(req, res);
-        else sendPage(req, res, page, { sandbox: false });
+        else if (headOnly(req, page)) sendPage(req, res, page, null, { sandbox: false });
+        else {
+          const got = await pageWithHtml(page, client);
+          if (!got || !shows(got.page)) notFound(req, res);
+          else sendPage(req, res, got.page, got.html, { sandbox: false });
+        }
       }
     } catch (e) {
       if (!res.headersSent) unavailable(req, res, e);
     }
+  }
+
+  /** A published page by its name, or null. A name nobody published costs no lookup; one found gone is forgotten. */
+  async function findPage(slug, client) {
+    if (!slug || (await pageNames.has(slug)) === false) return null;
+    const asked = Date.now();
+    const page = await pageRow(slug, client);
+    if (!page) pageNames.drop(slug, asked);
+    return page;
+  }
+  /** withHtml, forgetting the name when the page turns out to be gone. */
+  async function pageWithHtml(page, client) {
+    const asked = Date.now();
+    const got = await withHtml(page, client);
+    if (!got) pageNames.drop(page.slug, asked);
+    return got;
   }
 
   /** GET|HEAD /<slug>, /<slug>/ and /<slug>/img/<name> on the app's host (call servePage for them). */
@@ -922,13 +1319,17 @@ export function createPages({
     if (!enabled || !m) return false;
     const [, slug, , image] = m;
     if (reserved(slug)) return false;
-    const client = clientOf(req);
+    const client = visitor(req);
     try {
-      let page = await pageRow(slug, client);
+      const page = await findPage(slug, client);
       if (!page) notFound(req, res);
       else if (image !== undefined) await sendImage(req, res, page, image, client);
-      else if (!(page = await withHtml(page, client))) notFound(req, res);
-      else sendPage(req, res, page, { sandbox: true });
+      else if (headOnly(req, page)) sendPage(req, res, page, null, { sandbox: true });
+      else {
+        const got = await pageWithHtml(page, client);
+        if (!got) notFound(req, res);
+        else sendPage(req, res, got.page, got.html, { sandbox: true });
+      }
     } catch (e) {
       if (!res.headersSent) unavailable(req, res, e);
     }
@@ -1040,11 +1441,21 @@ export function createPages({
     const version = images.length ? `${Date.now().toString(36)}-${crypto.randomBytes(5).toString('hex')}` : '';
     const uploads = images.map((img) => `${base}/${version}/${img.name}`);
     let demoted = [];
+    let swept = [];
     let saved;
     try {
       const sent = await Promise.allSettled(images.map((img) => putImage(`${base}/${version}`, img)));
       const failed = sent.find((s) => s.status === 'rejected');
       if (failed) throw failed.reason;
+      if (domain) {
+        // the domain may have changed hands while the images went up: it must still be this account's…
+        const still = await rest(`published_domains?domain=eq.${d}&user_id=eq.${uid}&select=domain`);
+        if (!still?.length) throw fail(400, 'DOMAIN_NOT_YOURS', 'That domain isn’t in your account anymore. Add it again in Settings → Domains.');
+        // …and nothing of another account's stays on it: a publish of its previous owner's that was under way
+        // when it changed hands can land after that, and keep the domain's one home page (they stay published
+        // at their own names on the app's address)
+        swept = (await rest(`published_pages?domain=eq.${d}&user_id=neq.${uid}&select=slug`, { method: 'PATCH', body: { domain: null, home: false }, prefer: 'return=representation' })) ?? [];
+      }
       // one home page per domain: the domain's other home page stays published at its own name
       if (home) demoted = await rest(`published_pages?domain=eq.${d}&user_id=eq.${uid}&home=is.true&page_id=neq.${pid}&select=slug`, { method: 'PATCH', body: { home: false }, prefer: 'return=representation' });
       // one row per page: a new name moves the page (its old name stops working)
@@ -1061,12 +1472,19 @@ export function createPages({
       // (and when that can't be told, they stay: the next publish of the page removes leftovers)
       const landed = uploads.length && e.code === 'UPSTREAM' ? await usesVersion(uid, pid, version) : false;
       if (uploads.length && landed === false) await deleteObjects(uploads).catch((err) => console.warn(`Published pages: couldn’t remove the images of a publish that failed (${err.message}).`));
+      // the domain's one home page went to another page of this account's just now (not the name)
+      if (e.code === 'CONFLICT' && e.constraint === 'home') throw fail(409, 'HOME_TAKEN', `Another page just became the home page of ${domain}. Publish again to make this page its home page.`);
       if (e.code === 'CONFLICT') throw fail(409, 'SLUG_TAKEN', 'That name was just taken. Choose another.');
       if (e.code === 'REFERENCE' && e.ref === 'user') throw accountGone();
       if (e.code === 'REFERENCE' && e.ref === 'domain') throw fail(400, 'DOMAIN_NOT_YOURS', 'That domain isn’t in your account anymore. Add it again in Settings → Domains.');
       throw e;
+    } finally {
+      // (what was swept stays swept: none of it belonged on this account's domain)
+      forget({ slugs: swept.map((x) => x.slug), domains: [domain] });
     }
     forget({ slugs: [slug, current?.slug, ...(demoted ?? []).map((x) => x.slug)], domains: [domain, current?.domain] });
+    pageNames.add(slug);
+    if (current?.slug && current.slug !== slug) pageNames.drop(current.slug);
     imageCache.dropPrefix(`${base}/`);
     // the images it had before go (and leftovers of publishes that stopped halfway)
     const previous = Array.isArray(current?.images) ? String(current.images.find((i) => typeof i?.v === 'string' && i.v)?.v ?? '') : '';
@@ -1078,6 +1496,7 @@ export function createPages({
   async function unpublish(who, pageId) {
     const gone = await rest(`published_pages?user_id=eq.${who.id}&page_id=eq.${encodeURIComponent(pageId)}&select=slug,domain`, { method: 'DELETE', prefer: 'return=representation' });
     forget({ slugs: (gone ?? []).map((g) => g.slug), domains: (gone ?? []).map((g) => g.domain) });
+    for (const g of gone ?? []) pageNames.drop(g.slug);
     const folder = pageFolder(who.id, pageId);
     imageCache.dropPrefix(`${folder}/`);
     await removeImages(folder);
@@ -1131,29 +1550,41 @@ export function createPages({
       if (mine && row.verified_at && !r.error) {
         await rest(`published_domains?domain=eq.${d}&user_id=eq.${who.id}`, { method: 'PATCH', body: { verified_at: null }, prefer: 'return=minimal' });
         dropDomain(domain);
+        domainNames.drop(domain);
       }
       return { verified: false, error: txtProblem(domain, r) };
     }
     const now = new Date().toISOString();
-    // another account's: its pages come off the domain first (they stay published, on the app's address
-    // only), so nothing of theirs is left there, its home page included (a domain has one)
-    const off = mine ? [] : ((await rest(`published_pages?domain=eq.${d}&user_id=eq.${row.user_id}&select=slug`, { method: 'PATCH', body: { domain: null, home: false }, prefer: 'return=representation' })) ?? []);
-    forget({ slugs: off.map((x) => x.slug), domains: [domain] });
-    // then it changes hands in one step, unless it changed meanwhile
-    const rows = mine
-      ? await rest(`published_domains?domain=eq.${d}&user_id=eq.${who.id}&select=${DOMAIN_COLUMNS}`, { method: 'PATCH', body: { token, verified_at: now }, prefer: 'return=representation' })
-      : await rest(`published_domains?domain=eq.${d}&user_id=eq.${row.user_id}&token=eq.${encodeURIComponent(row.token)}&select=${DOMAIN_COLUMNS}`, { method: 'PATCH', body: { user_id: who.id, token, verified_at: now, created_at: now }, prefer: 'return=representation' });
-    const saved = rows?.[0];
-    if (!saved) throw fail(409, 'CONFLICT', 'That domain changed while it was being checked. Check again.');
-    if (!mine) {
-      // and anything the previous owner published to it in between
-      const late = await rest(`published_pages?domain=eq.${d}&user_id=neq.${who.id}&select=slug`, { method: 'PATCH', body: { domain: null, home: false }, prefer: 'return=representation' }).catch((e) => {
-        console.warn(`Published pages: couldn’t take the previous owner’s pages off ${domain} (${e.message}).`);
-        return [];
-      });
-      forget({ slugs: (late ?? []).map((x) => x.slug), domains: [domain] });
+    const changed = () => fail(409, 'CONFLICT', 'That domain changed while it was being checked. Check again.');
+    let saved;
+    if (mine) saved = (await rest(`published_domains?domain=eq.${d}&user_id=eq.${who.id}&select=${DOMAIN_COLUMNS}`, { method: 'PATCH', body: { token, verified_at: now }, prefer: 'return=representation' }))?.[0];
+    else {
+      for (let tries = 1; ; tries++) {
+        // another account's: its pages come off the domain first (they stay published, on the app's address
+        // only), so nothing of theirs is left there, its home page included (a domain has one)
+        const off = (await rest(`published_pages?domain=eq.${d}&user_id=eq.${row.user_id}&select=slug`, { method: 'PATCH', body: { domain: null, home: false }, prefer: 'return=representation' })) ?? [];
+        forget({ slugs: off.map((x) => x.slug), domains: [domain] });
+        // then it changes hands in one step, unless it changed meanwhile (and the database refuses that step
+        // while a page of theirs is still on it: one that landed in between, so once more)
+        try {
+          saved = (await rest(`published_domains?domain=eq.${d}&user_id=eq.${row.user_id}&token=eq.${encodeURIComponent(row.token)}&select=${DOMAIN_COLUMNS}`, { method: 'PATCH', body: { user_id: who.id, token, verified_at: now, created_at: now }, prefer: 'return=representation' }))?.[0];
+          break;
+        } catch (e) {
+          if (e.code !== 'REFERENCE') throw e;
+          if (tries >= 2) throw changed();
+        }
+      }
     }
+    if (!saved) throw changed();
+    // nothing of another account's stays on it: the previous owner's pages, a publish of theirs that was under
+    // way when it changed hands and landed after included (it would keep the domain's one home page)
+    const late = await rest(`published_pages?domain=eq.${d}&user_id=neq.${who.id}&select=slug`, { method: 'PATCH', body: { domain: null, home: false }, prefer: 'return=representation' }).catch((e) => {
+      console.warn(`Published pages: couldn’t take other accounts’ pages off ${domain} (${e.message}).`);
+      return [];
+    });
+    forget({ slugs: (late ?? []).map((x) => x.slug), domains: [domain] });
     dropDomain(domain);
+    domainNames.add(domain);
     rechecks.delete(domain);
     return { verified: true, domain: describeDomain(saved) };
   }
@@ -1167,6 +1598,7 @@ export function createPages({
     await rest(`published_domains?domain=eq.${d}&user_id=eq.${who.id}`, { method: 'DELETE', prefer: 'return=minimal' });
     forget({ slugs: (moved ?? []).map((m) => m.slug), domains: [domain] });
     dropDomain(domain);
+    domainNames.drop(domain);
     rechecks.delete(domain);
     return { ok: true };
   }
@@ -1262,6 +1694,9 @@ export function createPages({
     pageCache.deleteWhere(theirs);
     onDomainCache.deleteWhere(theirs);
     domainCache.deleteWhere(theirs);
+    const theirHtml = (e) => String(e.tag ?? '').startsWith(`${userId} `);
+    htmlCache.deleteWhere(theirHtml);
+    bigHtmlCache.deleteWhere(theirHtml);
     imageCache.dropPrefix(`${userId}/`);
   }
 
@@ -1272,13 +1707,14 @@ export function createPages({
     forgetUser,
     isAppHost,
     appHostsNote,
+    visitorsNote,
     serveDomain,
     matchApi,
     handleApi,
     matchPage,
     servePage,
-    /** What the visitors' caches hold (tests, diagnostics). */
-    cacheStats: () => ({ pages: pageCache.stats(), domains: domainCache.stats(), onDomain: onDomainCache.stats() }),
+    /** What the visitors' caches hold (tests, diagnostics): pages' rows, their HTML (big pages' apart), domains, names. */
+    cacheStats: () => ({ pages: pageCache.stats(), html: htmlCache.stats(), bigHtml: bigHtmlCache.stats(), domains: domainCache.stats(), onDomain: onDomainCache.stats(), names: { pages: pageNames.stats(), domains: domainNames.stats() } }),
     close: () => clearInterval(sweeper),
   };
 }

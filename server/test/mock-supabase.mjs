@@ -27,7 +27,11 @@ const USER_FK = new Set(['published_pages', 'published_domains']);
 /** the user_secrets.provider check constraint (supabase/migrations/20261103030000_ai_usage_daily.sql) */
 const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openrouter', 'meta', 'manus']);
 
-export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600, missingTables = [], secretProviders = SECRET_PROVIDERS } = {}) {
+/**
+ * domainOwnerCheck: the published_pages_domain_owner foreign key (a page only on a domain its owner has);
+ * false is a database where the migration was last run before it was added.
+ */
+export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600, missingTables = [], secretProviders = SECRET_PROVIDERS, domainOwnerCheck = true } = {}) {
   const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true });
   const kid = 'mock-key-1';
   const jwk = { ...(await exportJWK(publicKey)), kid, alg: 'ES256', use: 'sig' };
@@ -126,6 +130,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
   function matches(row, filters) {
     return filters.every(([col, f]) => {
       const v = row[col];
+      if (f.op === 'not') return !matches(row, [[col, parseFilter(f.value)]]);
       if (f.op === 'eq') return String(v) === f.value;
       if (f.op === 'neq') return String(v) !== f.value;
       if (f.op === 'in') return f.value.includes(String(v));
@@ -134,6 +139,20 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       if (f.op === 'is') return f.value === 'null' ? v == null : String(v) === f.value;
       return true;
     });
+  }
+
+  /**
+   * What Postgres refuses in published_pages besides its keys (supabase/migrations/20261103040000_published_pages.sql):
+   * a second home page on a domain (the published_pages_domain_home index), and a page on a domain its owner
+   * doesn't have (the published_pages_domain_owner foreign key). `changed`: the columns the write sets.
+   */
+  function pageRefusal(row, others, changed) {
+    const sets = (c) => !changed || changed.includes(c);
+    if ((sets('home') || sets('domain')) && row.home && row.domain != null && others.some((r) => r.home && r.domain === row.domain))
+      return { code: '23505', details: `Key (domain)=(${row.domain}) already exists.`, hint: null, message: 'duplicate key value violates unique constraint "published_pages_domain_home"' };
+    if (domainOwnerCheck && (sets('domain') || sets('user_id')) && row.domain != null && !(tables.get('published_domains') ?? []).some((d) => d.domain === row.domain && d.user_id === row.user_id))
+      return { code: '23503', details: `Key (domain, user_id)=(${row.domain}, ${row.user_id}) is not present in table "published_domains".`, hint: null, message: 'insert or update on table "published_pages" violates foreign key constraint "published_pages_domain_owner"' };
+    return null;
   }
 
   function project(row, select) {
@@ -208,6 +227,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
         const next = i >= 0 ? { ...rows[i], ...row } : row;
         // the primary key stays unique when an upsert matched on another unique key (a renamed slug)
         if (rows.some((r, j) => j !== i && primary.every((c) => r[c] === next[c]))) return send(res, 409, DUPLICATE);
+        const refused = table === 'published_pages' ? pageRefusal(next, rows.filter((_, j) => j !== i), null) : null;
+        if (refused) return send(res, 409, refused);
         if (i >= 0) rows[i] = next;
         else rows.push(next);
         written.push(next);
@@ -224,6 +245,21 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
         const keyOf = (r) => JSON.stringify(primary.map((c) => (hit.includes(r) && c in patch ? patch[c] : r[c])));
         if (hit.some((h) => rows.some((r) => r !== h && keyOf(r) === keyOf(h)))) return send(res, 409, DUPLICATE);
       }
+      if (table === 'published_pages') {
+        const after = rows.map((r) => (hit.includes(r) ? { ...r, ...patch } : r));
+        for (let j = 0; j < rows.length; j++) {
+          if (!hit.includes(rows[j])) continue;
+          const refused = pageRefusal(after[j], after.filter((_, k) => k !== j), Object.keys(patch));
+          if (refused) return send(res, 409, refused);
+        }
+      }
+      // a domain changes hands only once its previous owner's pages are off it (published_pages_domain_owner,
+      // checked when the change is saved)
+      if (table === 'published_domains' && domainOwnerCheck && 'user_id' in patch) {
+        const pages = tables.get('published_pages') ?? [];
+        const held = hit.find((d) => d.user_id !== patch.user_id && pages.some((p) => p.domain === d.domain && p.user_id === d.user_id));
+        if (held) return send(res, 409, { code: '23503', details: `Key (domain, user_id)=(${held.domain}, ${held.user_id}) is still referenced from table "published_pages".`, hint: null, message: 'update or delete on table "published_domains" violates foreign key constraint "published_pages_domain_owner" on table "published_pages"' });
+      }
       for (const r of hit) Object.assign(r, patch, { updated_at: new Date().toISOString() });
       return /return=representation/.test(prefer) ? send(res, 200, hit) : send(res, 204, undefined);
     }
@@ -233,6 +269,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       const gone = [];
       for (const r of rows) (owned(r) && matches(r, filters) ? gone : keep).push(r);
       tables.set(table, keep);
+      // a removed domain's pages lose it (published_pages.domain: on delete set null)
+      if (table === 'published_domains') for (const p of tables.get('published_pages') ?? []) if (gone.some((d) => d.domain === p.domain)) p.domain = null;
       return /return=representation/.test(prefer) ? send(res, 200, gone) : send(res, 204, undefined);
     }
     return send(res, 405, { message: 'method not allowed' });
@@ -468,7 +506,10 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       const who = await caller(req);
       if (!who?.service) return authError(res, 403, 'not_admin', 'User not allowed');
       users.delete(adminUser[1]);
+      const theirDomains = new Set((tables.get('published_domains') ?? []).filter((d) => d.user_id === adminUser[1]).map((d) => d.domain));
       for (const [t, rows] of tables) tables.set(t, rows.filter((r) => r.user_id !== adminUser[1])); // on delete cascade
+      // other accounts' pages on a domain that went with it lose it (on delete set null)
+      for (const p of tables.get('published_pages') ?? []) if (theirDomains.has(p.domain)) p.domain = null;
       return send(res, 200, {});
     }
 

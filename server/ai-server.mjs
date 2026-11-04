@@ -14,7 +14,8 @@
 // Accounts (Supabase): SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY (account deletion), ADMIN_EMAILS
 //   (the owner's email: manages the AI keys), SIGN_IN_REQUIRED (default true). See server/auth.mjs.
 //   With the secret key, users' own keys (server/userKeys.mjs) and their daily AI counters (server/limits.mjs) live in Supabase,
-//   and people can publish pages at https://<app>/<name> and on their own domains (server/pages.mjs; env APP_HOSTS, PAGES_DNS_SERVERS).
+//   and people can publish pages at https://<app>/<name> and on their own domains (server/pages.mjs; env APP_HOSTS,
+//   PAGES_DNS_SERVERS, TRUSTED_PROXY_HOPS).
 // Hosts: the app and /api answer only on the app's own hosts (*.replit.app, localhost, IP addresses, ALLOWED_ORIGIN's host,
 //   APP_HOSTS). Any other host shows only published pages of a verified domain, so the app's own custom domain goes in APP_HOSTS.
 
@@ -248,6 +249,7 @@ server.listen(PORT, HOST, async () => {
   console.log(auth.enabled ? `Accounts: on (Supabase)${auth.signInRequired ? ', sign-in required' : ''}` : 'Accounts: off (add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to turn them on).');
   if (auth.enabled) console.log(pages.enabled ? 'Publishing pages: on (needs supabase/migrations/20261103040000_published_pages.sql in Supabase). Own domains are proven with a TXT record, _ylb-domain.<domain>.' : 'Publishing pages: off (add the SUPABASE_SECRET_KEY Secret to turn it on).');
   console.log(pages.appHostsNote());
+  if (pages.enabled) console.log(pages.visitorsNote());
   console.log(
     ai.store.storage === 'supabase'
       ? {

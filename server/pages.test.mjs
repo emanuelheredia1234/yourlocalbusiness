@@ -3,7 +3,7 @@
 // taken, renamed), unpublishing, the limits, people's own domains (proven by a TXT record, served on
 // their Host without the sandbox, home page, robots.txt, sitemap.xml, looked at again, taken over only
 // with the DNS's say-so), hosts that aren't the app's (never the app or /api), and requests built to hurt.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -12,13 +12,18 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createAuth } from './auth.mjs';
-import { claimable, clientOf, createPages, hostOf, imageTypeOf, normalizeDomain, txtResolver } from './pages.mjs';
+import { claimable, clientOf, createPages, hopsFrom, hostOf, imageTypeOf, normalizeDomain, txtResolver } from './pages.mjs';
 import { createMockDns } from './test/mock-dns.mjs';
 import { createMockSupabase } from './test/mock-supabase.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ylb-pages-'));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Waits (up to 3 s) for test() to hold. */
+const until = async (test) => {
+  for (let i = 0; i < 150 && !(await test()); i++) await sleep(20);
+  return test();
+};
 
 // small files with the right first bytes (what the server checks; it never decodes the picture)
 const PNG = Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'), Buffer.alloc(40, 7)]);
@@ -113,8 +118,8 @@ async function startServer(env = {}) {
   proc.stderr.on('data', (d) => (out += d));
   await new Promise((resolve, reject) => {
     const t = setInterval(() => {
-      // the line after "Publishing pages: on" says where the app answers
-      if (/Publishing pages: on[^\n]*\n[^\n]*\n[^\n]*\n/.test(out)) {
+      // the lines after "Publishing pages: on" say where the app answers, and how visitors are told apart
+      if (/Publishing pages: on[^\n]*\n[^\n]*\n[^\n]*\nVisitors’ lookups[^\n]*\n/.test(out)) {
         clearInterval(t);
         resolve();
       }
@@ -386,6 +391,26 @@ describe('publishing on the app’s address', () => {
     // a domain that isn't one isn't quietly left off
     r = await publish(alice, 'seo:dom0', { slug: 'alice-dom0', domain: 'not a domain at all' });
     expect(r.status).toBe(400);
+  });
+
+  it('reads a page of 1 MB from Supabase once for 200 HEAD requests and its visits', async () => {
+    const html = `<!doctype html><title>Menu</title><p>${'menu item, '.repeat(100_000)}</p>`;
+    expect((await publish(alice, 'seo:menu1', { slug: 'alice-menu', html })).status).toBe(200);
+    const reads = () => supa.calls.filter((c) => c.method === 'GET' && c.path === '/rest/v1/published_pages' && c.query.slug === 'eq.alice-menu').length;
+    const before = reads();
+    // from one address behind the platform's proxy, each with a made-up address of its own in front of it
+    for (let i = 0; i < 200; i += 25) {
+      const heads = await Promise.all(Array.from({ length: 25 }, (_, j) => get('/alice-menu', { method: 'HEAD', headers: { 'x-forwarded-for': `10.7.0.${i + j}, 203.0.113.7, 34.117.33.233` } })));
+      for (const h of heads) {
+        expect(h.status).toBe(200);
+        expect(Number(h.headers['content-length'])).toBe(Buffer.byteLength(html));
+        expect(h.buf.length).toBe(0);
+      }
+    }
+    const visit = await get('/alice-menu');
+    expect(visit.text).toBe(html);
+    expect(visit.headers['content-security-policy']).toBe(SEO_CSP);
+    expect(reads() - before).toBe(1);
   });
 });
 
@@ -660,9 +685,21 @@ describe('which host gets what', () => {
     }
   });
 
-  it('says at startup where the app answers, and that its own domain goes in APP_HOSTS', () => {
+  it('says at startup where the app answers, that its own domain goes in APP_HOSTS, and how visitors are told apart', async () => {
     expect(serverLog).toContain('The app and /api answer on *.replit.app, *.replit.dev, *.repl.co, localhost and IP addresses.');
     expect(serverLog).toContain('If the app has a custom domain of its own, list it in the APP_HOSTS Secret (it’s empty now).');
+    expect(serverLog).toContain('Visitors’ lookups are limited per address: the one 2 from the end of X-Forwarded-For, where the platform’s proxies add it (TRUSTED_PROXY_HOPS=2).');
+    for (const [hops, line] of [
+      ['1', 'Visitors’ lookups are limited per address: the one at the end of X-Forwarded-For, where the platform’s proxies add it (TRUSTED_PROXY_HOPS=1).'],
+      ['0', 'Visitors’ lookups are limited per address: the connection’s own (TRUSTED_PROXY_HOPS=0: X-Forwarded-For isn’t read).'],
+    ]) {
+      const s = await startServer({ TRUSTED_PROXY_HOPS: hops });
+      try {
+        expect(s.log()).toContain(line);
+      } finally {
+        s.proc.kill();
+      }
+    }
   });
 
   it('says in its log when a host that’s nobody’s is opened (it may be the app’s own domain, missing from APP_HOSTS)', async () => {
@@ -769,6 +806,38 @@ describe('requests built to hurt', () => {
     expect(host.text).toContain('Page not found');
     expect(Date.now() - t0).toBeLessThan(2000);
   });
+
+  it('answers made-up names and hosts without a lookup, so under made-up X-Forwarded-For addresses they can’t make real pages 503', async () => {
+    // another copy of the server, which has looked up nothing yet
+    const s = await startServer();
+    try {
+      const calls = supa.calls.length;
+      const at2 = (host, pathname, i) => request(s.base, pathname, { host, headers: { 'x-forwarded-for': `10.${(i >> 16) & 255}.${(i >> 8) & 255}.${i & 255}, 203.0.113.99, 34.117.33.233` } });
+      const random = () => Math.random().toString(36).slice(2, 10);
+      // more made-up names than the copy's 1,200 page lookups a minute, and more made-up hosts than its 600
+      // domain lookups, each with a first X-Forwarded-For address of its own (the client can write anything there)
+      for (let i = 0; i < 1300; i += 50) {
+        const batch = await Promise.all(Array.from({ length: 50 }, (_, j) => at2('yourlocalbusiness.replit.app', `/rnd-${random()}`, i + j)));
+        expect(batch.every((r) => r.status === 404)).toBe(true);
+      }
+      for (let i = 0; i < 700; i += 50) {
+        const batch = await Promise.all(Array.from({ length: 50 }, (_, j) => at2(`h${random()}.example.net`, '/', i + j)));
+        expect(batch.every((r) => r.status === 404)).toBe(true);
+      }
+      // none of them was looked up
+      const after = supa.calls.slice(calls);
+      expect(after.filter((c) => c.path === '/rest/v1/published_pages' && /^eq\.rnd-/.test(c.query.slug ?? '')).length).toBe(0);
+      expect(after.filter((c) => c.path === '/rest/v1/published_domains' && /\.example\.net$/.test(c.query.domain ?? '')).length).toBe(0);
+      // a page and a verified domain this copy has never looked up show, to anyone
+      const visitor = { headers: { 'x-forwarded-for': '198.51.100.20' } };
+      expect((await request(s.base, '/alice-widget', visitor)).status).toBe(200);
+      const home = await request(s.base, '/', { ...visitor, host: 'kept.example.com' });
+      expect(home.status).toBe(200);
+      expect(home.text).toContain('kept-page');
+    } finally {
+      s.proc.kill();
+    }
+  });
 });
 
 describe('deleting an account', () => {
@@ -855,12 +924,25 @@ async function startPages({ mock, secretKey, distDir = '', resolveTxt = noDns, l
   };
 }
 
-/** A published row straight into the stand-in (as if published through another copy of the server). */
-const putRow = (mock, row) => {
-  if (!mock.tables.has('published_pages')) mock.tables.set('published_pages', []);
-  mock.tables.get('published_pages').push({ user_id: alice.user.id, kind: 'seo', title: 't', images: [], domain: null, home: false, updated_at: new Date().toISOString(), ...row });
+/** A table of the stand-in, made if it isn't there yet. */
+const tableOf = (mock, name) => {
+  if (!mock.tables.has(name)) mock.tables.set(name, []);
+  return mock.tables.get(name);
 };
+/** The stored files under a prefix in a stand-in. */
+const objectsIn = (mock, prefix) => [...mock.objects.keys()].filter((k) => k.startsWith(prefix));
+/** A published row straight into the stand-in (as if published through another copy of the server). */
+const putRow = (mock, row) => tableOf(mock, 'published_pages').push({ user_id: alice.user.id, kind: 'seo', title: 't', images: [], domain: null, home: false, updated_at: new Date().toISOString(), ...row });
+/** A verified domain straight into the stand-in (as if verified through another copy). */
+const putDomain = (mock, row) => tableOf(mock, 'published_domains').push({ token: `ylb-${'0'.repeat(40)}`, verified_at: new Date().toISOString(), created_at: new Date().toISOString(), ...row });
 const from = (ip) => ({ headers: { 'x-forwarded-for': ip } });
+/** resolveTxt over a Map of TXT records (name → values). */
+const txtFrom = (records) => async (name) => {
+  if (!records.has(name)) throw Object.assign(new Error('no such name'), { code: 'ENOTFOUND' });
+  return records.get(name).map((v) => [v]);
+};
+/** GET requests to published_pages for this name: with its HTML, or without (the row read again to see if it changed). */
+const rowReads = (mock, slug, withHtml) => mock.calls.filter((c) => c.method === 'GET' && c.path === '/rest/v1/published_pages' && c.query.slug === `eq.${slug}` && /(^|,)html(,|$)/.test(c.query.select ?? '') === withHtml).length;
 
 describe('without the setup', () => {
   it('is off without the secret key, and says so', async () => {
@@ -918,28 +1000,53 @@ describe('without the setup', () => {
 
 describe('visitors’ lookups', () => {
   it('limits what each client can look up, apart from everyone else, with domains counted apart from pages', async () => {
-    const s = await startPages({ mock: supa, secretKey: supa.SECRET, lookupLimits: { page: { perMin: 100, perClient: 5 }, domain: { perMin: 100, perClient: 3 }, image: { perMin: 100, perClient: 5 } } });
+    const mock = await (await createMockSupabase()).start();
+    const s = await startPages({ mock, secretKey: mock.SECRET, lookupLimits: { page: { perMin: 100, perClient: 5 }, domain: { perMin: 100, perClient: 3 }, image: { perMin: 100, perClient: 5 } } });
     try {
-      putRow(supa, { slug: 'limits-page', page_id: 'seo:lim1', html: '<h1>Limits</h1>' });
+      const uid = (await mock.tokenFor('lima@pages.test')).user.id;
+      for (let i = 0; i < 14; i++) putRow(mock, { user_id: uid, slug: `lima-page-${i}`, page_id: `seo:l${i}`, html: `<h1>Lima ${i}</h1>` });
+      for (let i = 0; i < 4; i++) putDomain(mock, { domain: `lima-${i}.example.net`, user_id: uid });
       const a = from('203.0.113.7');
-      for (let i = 0; i < 5; i++) expect((await request(s.base, `/random-a-${i}`, a)).status).toBe(404);
-      // a's lookups are spent: a name nobody asked about yet can't be looked up for a
-      expect((await request(s.base, '/limits-page', a)).status).toBe(503);
-      // answers already known cost nothing
-      expect((await request(s.base, '/random-a-0', a)).status).toBe(404);
+      for (let i = 0; i < 5; i++) expect((await request(s.base, `/lima-page-${i}`, a)).status).toBe(200);
+      // a's lookups are spent: a page nobody asked about yet can't be looked up for a…
+      expect((await request(s.base, '/lima-page-5', a)).status).toBe(503);
+      // …while answers already known cost nothing, and names nobody published never cost a lookup
+      expect((await request(s.base, '/lima-page-0', a)).status).toBe(200);
+      for (let i = 0; i < 20; i++) expect((await request(s.base, `/random-a-${i}`, a)).status).toBe(404);
       // other clients aren't affected
-      expect((await request(s.base, '/limits-page', from('198.51.100.2'))).status).toBe(200);
+      expect((await request(s.base, '/lima-page-5', from('198.51.100.2'))).status).toBe(200);
       // (an IPv6 client is one client for its whole /64)
-      expect((await request(s.base, '/random-v6-1', from('2001:db8:5:6::1'))).status).toBe(404);
-      for (let i = 2; i <= 5; i++) await request(s.base, `/random-v6-${i}`, from(`2001:db8:5:6::${i}`));
-      expect((await request(s.base, '/random-v6-6', from('2001:db8:5:6:ffff::9'))).status).toBe(503);
-      // random hosts spend the domain lookups, not the pages'
+      for (let i = 6; i <= 10; i++) expect((await request(s.base, `/lima-page-${i}`, from(`2001:db8:5:6::${i}`))).status).toBe(200);
+      expect((await request(s.base, '/lima-page-11', from('2001:db8:5:6:ffff::9'))).status).toBe(503);
+      // domains are counted apart from pages (and hosts that aren't a verified domain cost nothing)
       const c = from('192.0.2.10');
-      for (let i = 0; i < 3; i++) expect((await request(s.base, '/', { ...c, host: `random-${i}.example.net` })).status).toBe(404);
-      expect((await request(s.base, '/', { ...c, host: 'random-3.example.net' })).status).toBe(503);
-      expect((await request(s.base, '/random-c-1', c)).status).toBe(404);
+      for (let i = 0; i < 20; i++) expect((await request(s.base, '/', { ...c, host: `random-${i}.example.net` })).status).toBe(404);
+      for (let i = 0; i < 3; i++) expect((await request(s.base, '/robots.txt', { ...c, host: `lima-${i}.example.net` })).status).toBe(200);
+      expect((await request(s.base, '/robots.txt', { ...c, host: 'lima-3.example.net' })).status).toBe(503);
+      expect((await request(s.base, '/lima-page-12', c)).status).toBe(200);
+      // the made-up names and hosts were never looked up
+      expect(mock.calls.filter((c2) => /^eq\.random-/.test(c2.query.slug ?? '') || /^random-/.test(c2.query.domain?.slice(3) ?? '')).length).toBe(0);
     } finally {
       await s.close();
+      await mock.close();
+    }
+  });
+
+  it('counts a client’s lookups by the address its platform’s proxy saw, whatever X-Forwarded-For it sends', async () => {
+    const mock = await (await createMockSupabase()).start();
+    const s = await startPages({ mock, secretKey: mock.SECRET, lookupLimits: { page: { perMin: 100, perClient: 3 }, domain: { perMin: 100, perClient: 3 }, image: { perMin: 100, perClient: 3 } } });
+    try {
+      const uid = (await mock.tokenFor('mona@pages.test')).user.id;
+      for (let i = 0; i < 6; i++) putRow(mock, { user_id: uid, slug: `mona-page-${i}`, page_id: `seo:m${i}`, html: `<h1>Mona ${i}</h1>` });
+      // as Google's front end sends it: whatever the client wrote, then the client's address, then the load balancer's
+      const via = (made, real) => from(`${made}, ${real}, 34.117.33.233`);
+      for (let i = 0; i < 3; i++) expect((await request(s.base, `/mona-page-${i}`, via(`10.0.${i}.1`, '203.0.113.80'))).status).toBe(200);
+      // a new made-up address in front doesn't make it another client
+      expect((await request(s.base, '/mona-page-3', via('10.0.9.1, 10.0.9.2', '203.0.113.80'))).status).toBe(503);
+      expect((await request(s.base, '/mona-page-3', via('10.0.0.1', '203.0.113.81'))).status).toBe(200);
+    } finally {
+      await s.close();
+      await mock.close();
     }
   });
 
@@ -965,10 +1072,12 @@ describe('visitors’ lookups', () => {
     const mock = await (await createMockSupabase()).start();
     const s = await startPages({ mock, secretKey: mock.SECRET, tuning: { pageTtl: 300 }, lookupLimits: { page: { perMin: 100, perClient: 2 }, domain: { perMin: 100, perClient: 2 }, image: { perMin: 100, perClient: 2 } } });
     try {
-      putRow(mock, { user_id: (await mock.tokenFor('finn@pages.test')).user.id, slug: 'finn-page', page_id: 'seo:f1', html: '<h1>Finn</h1>' });
+      const uid = (await mock.tokenFor('finn@pages.test')).user.id;
+      putRow(mock, { user_id: uid, slug: 'finn-page', page_id: 'seo:f1', html: '<h1>Finn</h1>' });
+      putRow(mock, { user_id: uid, slug: 'finn-other', page_id: 'seo:f2', html: '<h1>Other</h1>' });
       const y = from('203.0.113.50');
       expect((await request(s.base, '/finn-page', y)).status).toBe(200);
-      expect((await request(s.base, '/random-y-1', y)).status).toBe(404);
+      expect((await request(s.base, '/finn-other', y)).status).toBe(200);
       // unpublished meanwhile (on another copy of the server)
       mock.tables.set('published_pages', []);
       await sleep(350);
@@ -980,34 +1089,193 @@ describe('visitors’ lookups', () => {
     }
   });
 
-  it('keeps pages within its bytes, a big page without its HTML, and drops answers past their time', async () => {
+  it('keeps pages’ HTML within its bytes, big pages’ apart (they can’t push the others out), and drops it in time', async () => {
     const mock = await (await createMockSupabase()).start();
-    const s = await startPages({ mock, secretKey: mock.SECRET, tuning: { pageTtl: 300, pageHtmlMax: 1000, pageCacheBytes: 12_000 } });
+    const s = await startPages({ mock, secretKey: mock.SECRET, tuning: { pageTtl: 300, htmlIdle: 600, pageHtmlMax: 1000, pageCacheBytes: 6000, bigPageCacheBytes: 12_000 } });
     try {
       const uid = (await mock.tokenFor('gale@pages.test')).user.id;
-      const bigHtml = `<h1>Big</h1><p>${'b'.repeat(5000)}</p>`;
-      putRow(mock, { user_id: uid, slug: 'gale-big', page_id: 'artifact:g0', html: bigHtml });
-      for (let i = 1; i <= 12; i++) putRow(mock, { user_id: uid, slug: `gale-small-${i}`, page_id: `seo:g${i}`, html: `<h1>Small ${i}</h1><p>${'s'.repeat(600)}</p>` });
-      const reads = () => mock.calls.filter((c) => c.path === '/rest/v1/published_pages' && c.method === 'GET').length;
-      // a big page: served whole each time, its HTML read again rather than kept
-      expect((await request(s.base, '/gale-big')).text).toBe(bigHtml);
-      expect(s.pages.cacheStats().pages.bytes).toBeLessThan(1500);
-      const before = reads();
-      expect((await request(s.base, '/gale-big')).text).toBe(bigHtml);
-      expect(reads()).toBe(before + 1);
-      // small pages: kept, within the bytes (the least recently used go first)
+      const big = (i) => `<h1>Big ${i}</h1><p>${'b'.repeat(5000)}</p>`;
+      for (let i = 1; i <= 3; i++) putRow(mock, { user_id: uid, slug: `gale-big-${i}`, page_id: `artifact:g${i}`, html: big(i) });
+      for (let i = 1; i <= 12; i++) putRow(mock, { user_id: uid, slug: `gale-small-${i}`, page_id: `seo:g${i}`, html: `<h1>Small ${i}</h1><p>${'s'.repeat(880)}</p>` });
+      // small pages: their HTML is kept within its bytes (the least recently used go first)
       for (let i = 1; i <= 12; i++) expect((await request(s.base, `/gale-small-${i}`)).status).toBe(200);
-      const { bytes, entries } = s.pages.cacheStats().pages;
-      expect(bytes).toBeLessThanOrEqual(12_000);
-      expect(entries).toBeLessThan(13);
-      const now = reads();
+      const { html } = s.pages.cacheStats();
+      expect(html.bytes).toBeLessThanOrEqual(6000);
+      expect(html.entries).toBeLessThan(12);
+      expect(rowReads(mock, 'gale-small-12', true)).toBe(1);
       expect((await request(s.base, '/gale-small-12')).status).toBe(200);
-      expect(reads()).toBe(now); // the most recent is still there
-      // past twice their time, answers go (with their HTML), even with nothing else coming in
-      await sleep(1000);
-      expect(s.pages.cacheStats().pages).toEqual({ entries: 0, bytes: 0 });
+      expect(rowReads(mock, 'gale-small-12', true)).toBe(1); // the most recent is still there
+      // big pages are kept too, apart (two fit), and the small pages' HTML stays
+      for (let i = 1; i <= 3; i++) expect((await request(s.base, `/gale-big-${i}`)).text).toBe(big(i));
+      expect(s.pages.cacheStats().bigHtml.entries).toBe(2);
+      expect((await request(s.base, '/gale-big-3')).text).toBe(big(3));
+      expect(rowReads(mock, 'gale-big-3', true)).toBe(1);
+      expect((await request(s.base, '/gale-small-12')).status).toBe(200);
+      expect(rowReads(mock, 'gale-small-12', true)).toBe(1);
+      // past their time, rows and HTML go, even with nothing else coming in
+      await sleep(1300);
+      const stats = s.pages.cacheStats();
+      expect(stats.pages).toEqual({ entries: 0, bytes: 0 });
+      expect(stats.html).toEqual({ entries: 0, bytes: 0 });
+      expect(stats.bigHtml).toEqual({ entries: 0, bytes: 0 });
     } finally {
       await s.close();
+      await mock.close();
+    }
+  });
+
+  it('reads a big page’s HTML at most once while it’s unchanged, its row once per cache time, and answers HEAD without the HTML', async () => {
+    const mock = await (await createMockSupabase()).start();
+    const s = await startPages({ mock, secretKey: mock.SECRET, tuning: { pageTtl: 400 } });
+    try {
+      const uid = (await mock.tokenFor('hugo@pages.test')).user.id;
+      const html = `<!doctype html><h1>Menu</h1><p>${'menu item, '.repeat(100_000)}</p>`; // 1.1 MB
+      putRow(mock, { user_id: uid, slug: 'hugo-menu', page_id: 'artifact:h1', kind: 'artifact', html });
+      // 200 HEAD requests, each from a client of its own, 20 at a time: one read in all
+      for (let i = 0; i < 200; i += 20) {
+        const heads = await Promise.all(Array.from({ length: 20 }, () => request(s.base, '/hugo-menu', { method: 'HEAD' })));
+        for (const h of heads) {
+          expect(h.status).toBe(200);
+          expect(Number(h.headers['content-length'])).toBe(Buffer.byteLength(html));
+          expect(h.headers['content-security-policy']).toBe(ARTIFACT_CSP);
+          expect(h.buf.length).toBe(0);
+        }
+      }
+      expect(rowReads(mock, 'hugo-menu', true)).toBe(1);
+      // visits are served from what's kept
+      expect((await request(s.base, '/hugo-menu')).text).toBe(html);
+      expect(rowReads(mock, 'hugo-menu', true)).toBe(1);
+      // past its time: its row is read again, without the HTML (unchanged), once for everyone asking
+      await sleep(450);
+      const again = await Promise.all(Array.from({ length: 50 }, (_, i) => request(s.base, '/hugo-menu', { method: i % 2 ? 'HEAD' : 'GET' })));
+      expect(again.every((r) => r.status === 200)).toBe(true);
+      expect(again.filter((_, i) => !(i % 2)).every((r) => r.text === html)).toBe(true);
+      expect(rowReads(mock, 'hugo-menu', true)).toBe(1);
+      expect(rowReads(mock, 'hugo-menu', false)).toBe(1);
+      // republished (through another copy): its new HTML, once its row has been read again
+      Object.assign(
+        mock.tables.get('published_pages').find((p) => p.slug === 'hugo-menu'),
+        { html: '<h1>New menu</h1>', updated_at: new Date(Date.now() + 5).toISOString() },
+      );
+      await sleep(450);
+      expect((await request(s.base, '/hugo-menu')).text).toBe('<h1>New menu</h1>');
+      expect(Number((await request(s.base, '/hugo-menu', { method: 'HEAD' })).headers['content-length'])).toBe(Buffer.byteLength('<h1>New menu</h1>'));
+      expect(rowReads(mock, 'hugo-menu', true)).toBe(2);
+      // and taken down: "not found" once its row is read again
+      mock.tables.set('published_pages', []);
+      await sleep(450);
+      expect((await request(s.base, '/hugo-menu', { method: 'HEAD' })).status).toBe(404);
+      expect((await request(s.base, '/hugo-menu')).status).toBe(404);
+    } finally {
+      await s.close();
+      await mock.close();
+    }
+  });
+
+  it('limits the bytes each client’s lookups bring from Supabase, and all of them together', async () => {
+    const mock = await (await createMockSupabase()).start();
+    const MiB = 1024 * 1024;
+    const s = await startPages({ mock, secretKey: mock.SECRET, lookupLimits: { page: { perMin: 1000, perClient: 1000, bytesPerClient: 3 * MiB, bytesPerMin: 6 * MiB }, domain: { perMin: 1000, perClient: 1000 }, image: { perMin: 1000, perClient: 1000 } } });
+    try {
+      const uid = (await mock.tokenFor('iris@pages.test')).user.id;
+      for (let i = 1; i <= 6; i++) putRow(mock, { user_id: uid, slug: `iris-big-${i}`, page_id: `seo:i${i}`, html: `<p>${String(i).repeat(1_000_000)}</p>` });
+      const a = from('203.0.113.70');
+      expect((await request(s.base, '/iris-big-1', a)).status).toBe(200);
+      expect((await request(s.base, '/iris-big-2', a)).status).toBe(200);
+      // a has brought 2 MB this minute: another page, which may be as big as 1.5 MB, would be over its 3 MiB
+      expect((await request(s.base, '/iris-big-3', a)).status).toBe(503);
+      // what's kept costs nothing, and other clients aren't affected…
+      expect((await request(s.base, '/iris-big-1', a)).status).toBe(200);
+      expect((await request(s.base, '/iris-big-3', from('203.0.113.71'))).status).toBe(200);
+      expect((await request(s.base, '/iris-big-4', from('203.0.113.72'))).status).toBe(200);
+      expect((await request(s.base, '/iris-big-5', from('203.0.113.73'))).status).toBe(200);
+      // …until the copy's 6 MiB a minute are spent, for everyone
+      expect((await request(s.base, '/iris-big-6', from('203.0.113.74'))).status).toBe(503);
+      expect((await request(s.base, '/iris-big-5', from('203.0.113.74'))).status).toBe(200);
+    } finally {
+      await s.close();
+      await mock.close();
+    }
+  });
+
+  it('never reads more of a stored image than the file that was published, and doesn’t read a wrong one again for a while', async () => {
+    const mock = await (await createMockSupabase()).start();
+    let read = 0;
+    // counts what the server takes of each stored image it asks for
+    const counting = async (input, init) => {
+      const res = await fetch(input, init);
+      if (!String(input).includes('/storage/v1/object/authenticated/') || !res.body) return res;
+      const body = res.body.pipeThrough(
+        new TransformStream({
+          transform(chunk, c) {
+            read += chunk.length;
+            c.enqueue(chunk);
+          },
+        }),
+      );
+      return new Response(body, { status: res.status, headers: res.headers });
+    };
+    const s = await startPages({ mock, secretKey: mock.SECRET, fetch: counting });
+    try {
+      const jo = await mock.tokenFor('jo@pages.test');
+      const put = await s.api(`/api/pages/${encodeURIComponent('seo:jo1')}`, { who: jo, method: 'PUT', body: { kind: 'seo', slug: 'jo-page', title: 'Jo', html: '<img src="/jo-page/img/img-1.png" alt="">', images: [image('img-1.png', 'image/png', PNG)] } });
+      expect(put.status).toBe(200);
+      const { v } = mock.tables.get('published_pages').find((p) => p.slug === 'jo-page').images[0];
+      // the owner puts 20 MB in its place, straight into their folder
+      mock.objects.set(`media/${jo.user.id}/published/seo-jo1/${v}/img-1.png`, { bytes: Buffer.concat([PNG, Buffer.alloc(20 * 1024 * 1024, 1)]), type: 'image/png', created: Date.now() });
+      const t0 = Date.now();
+      expect((await request(s.base, '/jo-page/img/img-1.png')).status).toBe(404);
+      expect(read).toBeLessThan(1024 * 1024);
+      expect(Date.now() - t0).toBeLessThan(2000);
+      const asked = () => mock.calls.filter((c) => c.method === 'GET' && c.path.startsWith('/storage/v1/object/authenticated/')).length;
+      const n = asked();
+      for (let i = 0; i < 5; i++) expect((await request(s.base, '/jo-page/img/img-1.png')).status).toBe(404);
+      expect(asked()).toBe(n);
+    } finally {
+      await s.close();
+      await mock.close();
+    }
+  });
+
+  it('shows a page published, or a domain verified, through another copy within about a second', async () => {
+    const mock = await (await createMockSupabase()).start();
+    const records = new Map();
+    const a = await startPages({ mock, secretKey: mock.SECRET, resolveTxt: txtFrom(records) });
+    const b = await startPages({ mock, secretKey: mock.SECRET, resolveTxt: txtFrom(records), tuning: { namesCheck: 300, pageTtl: 300 } });
+    try {
+      const kim = await mock.tokenFor('kim@pages.test');
+      const put = (pageId, fields) => a.api(`/api/pages/${encodeURIComponent(pageId)}`, { who: kim, method: 'PUT', body: { kind: 'seo', title: 'Kim', html: `<h1>${pageId}</h1>`, ...fields } });
+      const verify = async (domain) => {
+        const { token } = await (await a.api('/api/domains', { who: kim, method: 'POST', body: { domain } })).json();
+        records.set(`_ylb-domain.${domain}`, [token]);
+        expect(await (await a.api(`/api/domains/${domain}/check`, { who: kim, method: 'POST' })).json()).toMatchObject({ verified: true });
+      };
+      expect((await put('seo:k1', { slug: 'kim-first' })).status).toBe(200);
+      await verify('kim-one.example.com');
+      expect((await put('seo:k2', { slug: 'kim-one-home', domain: 'kim-one.example.com', home: true })).status).toBe(200);
+      // b reads the names when it's first asked
+      expect((await request(b.base, '/kim-first')).status).toBe(200);
+      expect((await request(b.base, '/', { host: 'kim-one.example.com' })).text).toContain('seo:k2');
+      expect((await request(b.base, '/kim-nothing')).status).toBe(404);
+      // published and verified through a since: b finds them among the latest changes (at most every 300 ms here)
+      expect((await put('seo:k3', { slug: 'kim-second' })).status).toBe(200);
+      await verify('kim-two.example.com');
+      expect((await put('seo:k4', { slug: 'kim-two-home', domain: 'kim-two.example.com', home: true })).status).toBe(200);
+      await sleep(350);
+      expect((await request(b.base, '/kim-second')).status).toBe(200);
+      expect((await request(b.base, '/', { host: 'kim-two.example.com' })).text).toContain('seo:k4');
+      // renamed through a: on b, the old name is "not found" once its row is read again, and then without a lookup
+      expect((await put('seo:k3', { slug: 'kim-renamed' })).status).toBe(200);
+      await sleep(350);
+      expect((await request(b.base, '/kim-renamed')).status).toBe(200);
+      expect((await request(b.base, '/kim-second')).status).toBe(404);
+      const asked = () => rowReads(mock, 'kim-second', true) + rowReads(mock, 'kim-second', false);
+      const n = asked();
+      for (let i = 0; i < 5; i++) expect((await request(b.base, '/kim-second')).status).toBe(404);
+      expect(asked()).toBe(n);
+    } finally {
+      await a.close();
+      await b.close();
       await mock.close();
     }
   });
@@ -1116,6 +1384,170 @@ describe('domains, in the module', () => {
   });
 });
 
+describe('a domain changing hands, in the module', () => {
+  const D = 'alicebakery.test';
+  /**
+   * mallory added alice's domain first; alice adds it too and puts her TXT record in the DNS. hold(method,
+   * url, body) → a promise a request to Supabase waits for before it goes (or nothing). domainOwnerCheck
+   * false: a database whose migration was last run before published_pages_domain_owner.
+   */
+  async function squatted({ domainOwnerCheck = true } = {}) {
+    const mock = await (await createMockSupabase({ domainOwnerCheck })).start();
+    const records = new Map();
+    const hooks = { hold: null };
+    const fetchImpl = async (input, init = {}) => {
+      const wait = hooks.hold?.(init.method ?? 'GET', String(input), typeof init.body === 'string' ? init.body : '');
+      if (wait) await wait;
+      return fetch(input, init);
+    };
+    const s = await startPages({ mock, secretKey: mock.SECRET, resolveTxt: txtFrom(records), fetch: fetchImpl });
+    const mallory = await mock.tokenFor('mallory@race.test');
+    const alice = await mock.tokenFor('alice@race.test');
+    const put = (who, pageId, fields) => s.api(`/api/pages/${encodeURIComponent(pageId)}`, { who, method: 'PUT', body: { kind: pageId.split(':')[0], title: 't', html: `<h1>${pageId}</h1>`, ...fields } });
+    const check = async (who) => (await s.api(`/api/domains/${D}/check`, { who, method: 'POST' })).json();
+    expect((await s.api('/api/domains', { who: mallory, method: 'POST', body: { domain: D } })).status).toBe(200);
+    const claim = await (await s.api('/api/domains', { who: alice, method: 'POST', body: { domain: D } })).json();
+    expect(claim.code).toBe('DOMAIN_TAKEN');
+    records.set(`_ylb-domain.${D}`, [claim.domain.record.value]);
+    const row = (slug) => tableOf(mock, 'published_pages').find((p) => p.slug === slug);
+    const owner = () => tableOf(mock, 'published_domains').find((d) => d.domain === D)?.user_id;
+    /** Holds the first request test() picks: resolves once it's waiting; release() lets it go. */
+    const holdOne = (test) => {
+      let release;
+      const held = new Promise((r) => (release = r));
+      let reached;
+      const waiting = new Promise((r) => (reached = r));
+      hooks.hold = (...args) => {
+        if (!test(...args)) return null;
+        hooks.hold = null;
+        reached();
+        return held;
+      };
+      return { waiting, release: () => release() };
+    };
+    return { mock, s, mallory, alice, put, check, row, owner, hooks, holdOne, close: async () => (await s.close(), await mock.close()) };
+  }
+  const latePage = (t, slug) => ({ slug, user_id: t.mallory.user.id, page_id: `artifact:${slug}`, kind: 'artifact', title: 't', html: '<p>mallory</p>', images: [], domain: D, home: true, updated_at: new Date().toISOString() });
+
+  it('refuses a publish of the previous owner’s whose images were still going up when the domain changed hands', async () => {
+    for (const domainOwnerCheck of [true, false]) {
+      const t = await squatted({ domainOwnerCheck });
+      try {
+        // mallory's home page there, with an image: it's still being stored when alice takes the domain over
+        const upload = t.holdOne((method, u) => method === 'POST' && u.includes(`/storage/v1/object/media/${t.mallory.user.id}/`));
+        const pending = t.put(t.mallory, 'artifact:m1', { slug: 'mallory-home', domain: D, home: true, images: [image('img-1.png', 'image/png', PNG)] });
+        await upload.waiting;
+        expect(await t.check(t.alice)).toMatchObject({ verified: true });
+        upload.release();
+        const r = await pending;
+        expect(r.status, `domainOwnerCheck ${domainOwnerCheck}`).toBe(400);
+        expect((await r.json()).code).toBe('DOMAIN_NOT_YOURS');
+        expect(t.row('mallory-home')).toBeUndefined();
+        expect(objectsIn(t.mock, `media/${t.mallory.user.id}/`)).toEqual([]);
+        // alice's home page
+        expect((await t.put(t.alice, 'seo:a1', { slug: 'alice-home', domain: D, home: true })).status).toBe(200);
+        expect((await request(t.s.base, '/', { host: D })).text).toContain('seo:a1');
+      } finally {
+        await t.close();
+      }
+    }
+  });
+
+  it('refuses a write of the previous owner’s that reaches the database after the domain changed hands, or clears it when the owner publishes there', async () => {
+    for (const domainOwnerCheck of [true, false]) {
+      const t = await squatted({ domainOwnerCheck });
+      try {
+        // mallory's publish gets through every check; its write reaches the database only after alice's takeover
+        const write = t.holdOne((method, u, body) => method === 'POST' && u.includes('/rest/v1/published_pages?on_conflict=') && body.includes(t.mallory.user.id));
+        const pending = t.put(t.mallory, 'artifact:m1', { slug: 'mallory-home', domain: D, home: true });
+        await write.waiting;
+        expect(await t.check(t.alice)).toMatchObject({ verified: true });
+        expect(t.owner()).toBe(t.alice.user.id);
+        write.release();
+        const r = await pending;
+        if (domainOwnerCheck) {
+          // the database refuses it: the domain isn't hers anymore
+          expect(r.status).toBe(400);
+          expect((await r.json()).code).toBe('DOMAIN_NOT_YOURS');
+          expect(t.row('mallory-home')).toBeUndefined();
+        } else {
+          // a database without that check takes it: her page has the domain's one home page
+          expect(r.status).toBe(200);
+          expect(t.row('mallory-home')).toMatchObject({ domain: D, home: true });
+        }
+        // either way alice can make her page its home page: anything of another account's comes off the domain first
+        const mine = await t.put(t.alice, 'seo:a1', { slug: 'alice-home', domain: D, home: true });
+        expect(mine.status).toBe(200);
+        expect(await mine.json()).toMatchObject({ domainUrl: `https://${D}/` });
+        expect((await request(t.s.base, '/', { host: D })).text).toContain('seo:a1');
+        if (!domainOwnerCheck) {
+          expect(t.row('mallory-home')).toMatchObject({ domain: null, home: false });
+          // mallory's page stays published, on the app's address only
+          expect((await request(t.s.base, '/mallory-home')).status).toBe(200);
+        }
+      } finally {
+        await t.close();
+      }
+    }
+  });
+
+  it('takes anything of another account’s off the domain when its owner checks it again', async () => {
+    const t = await squatted({ domainOwnerCheck: false });
+    try {
+      expect(await t.check(t.alice)).toMatchObject({ verified: true });
+      // a page of mallory's on it (a late write of hers, in a database without the check)
+      tableOf(t.mock, 'published_pages').push(latePage(t, 'mallory-late'));
+      expect(await t.check(t.alice)).toMatchObject({ verified: true });
+      expect(t.row('mallory-late')).toMatchObject({ domain: null, home: false });
+      expect((await t.put(t.alice, 'seo:a1', { slug: 'alice-home', domain: D, home: true })).status).toBe(200);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('hands the domain over once the previous owner’s pages are off it, even when one of theirs lands in between', async () => {
+    const t = await squatted();
+    try {
+      // just before the hand-over, a page of mallory's lands on the domain: the database refuses the hand-over
+      // while it's there, so her pages come off once more, and then it goes through
+      let landed = 0;
+      t.hooks.hold = (method, u) => {
+        if (method === 'PATCH' && u.includes('/rest/v1/published_domains?') && !landed++) tableOf(t.mock, 'published_pages').push(latePage(t, 'mallory-late'));
+        return null;
+      };
+      expect(await t.check(t.alice)).toMatchObject({ verified: true });
+      expect(t.owner()).toBe(t.alice.user.id);
+      expect(t.row('mallory-late')).toMatchObject({ domain: null, home: false });
+      expect((await t.put(t.alice, 'seo:a1', { slug: 'alice-home', domain: D, home: true })).status).toBe(200);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('says the home page went to another page just now (not that the name is taken) when that’s what happened', async () => {
+    const t = await squatted();
+    try {
+      expect(await t.check(t.alice)).toMatchObject({ verified: true });
+      expect((await t.put(t.alice, 'seo:a1', { slug: 'alice-home', domain: D, home: true })).status).toBe(200);
+      const refuse = (body) => (t.mock.behavior.fail = (method, pathname) => (method === 'POST' && pathname === '/rest/v1/published_pages' ? { status: 409, body } : null));
+      // another page of hers became the home page between this publish's steps
+      refuse({ code: '23505', details: `Key (domain)=(${D}) already exists.`, message: 'duplicate key value violates unique constraint "published_pages_domain_home"' });
+      let r = await t.put(t.alice, 'seo:a2', { slug: 'alice-other', domain: D, home: true });
+      expect(r.status).toBe(409);
+      expect(await r.json()).toEqual({ error: `Another page just became the home page of ${D}. Publish again to make this page its home page.`, code: 'HOME_TAKEN' });
+      // the domain keeps the home page it had
+      expect(t.row('alice-home')).toMatchObject({ home: true });
+      // a name taken just now is still that
+      refuse({ code: '23505', details: 'Key (slug)=(alice-other) already exists.', message: 'duplicate key value violates unique constraint "published_pages_pkey"' });
+      r = await t.put(t.alice, 'seo:a2', { slug: 'alice-other' });
+      expect((await r.json()).code).toBe('SLUG_TAKEN');
+    } finally {
+      t.mock.behavior.fail = null;
+      await t.close();
+    }
+  });
+});
+
 describe('helpers', () => {
   it('reads a domain the way people type it', () => {
     expect(normalizeDomain(' HTTPS://Shop.Example.com:8443/about?x=1#top ')).toBe('shop.example.com');
@@ -1143,16 +1575,37 @@ describe('helpers', () => {
     expect(hostOf({ headers: { host: 'shop.example.com', 'x-forwarded-host': 'app.replit.app' }, socket: { remoteAddress: '203.0.113.9' } })).toBe('shop.example.com');
   });
 
-  it('tells clients apart by the address the platform reports', () => {
+  it('tells clients apart by the address the platform’s proxies add, counted from the right of X-Forwarded-For', () => {
     const req = (fwd, remoteAddress = '10.0.0.5') => ({ headers: fwd === undefined ? {} : { 'x-forwarded-for': fwd }, socket: { remoteAddress } });
+    const LB = '34.117.33.233';
+    // Google's front end (Replit's Autoscale): '<whatever the client sent>, <client>, <load balancer>'
+    expect(clientOf(req(`1.2.3.4, 203.0.113.9, ${LB}`))).toBe('203.0.113.9');
+    expect(clientOf(req(`1.2.3.4, 5.6.7.8,203.0.113.9,${LB}`))).toBe('203.0.113.9');
+    expect(clientOf(req(`203.0.113.9, ${LB}`))).toBe('203.0.113.9');
+    expect(clientOf(req(`${'9.9.9.9, '.repeat(2000)}203.0.113.9, ${LB}`))).toBe('203.0.113.9');
+    // fewer than that: the first (Vite's proxy, in development, adds one)
     expect(clientOf(req('203.0.113.9'))).toBe('203.0.113.9');
-    expect(clientOf(req('203.0.113.9, 10.0.0.2'))).toBe('203.0.113.9');
     expect(clientOf(req('203.0.113.9:4711'))).toBe('203.0.113.9');
-    expect(clientOf(req('2001:db8:1:2:3:4:5:6'))).toBe('2001:db8:1:2::/64');
-    expect(clientOf(req('[2001:db8:1:2::9]:443'))).toBe('2001:db8:1:2::/64');
-    expect(clientOf(req('::ffff:198.51.100.4'))).toBe('198.51.100.4');
-    expect(clientOf(req('nonsense'))).toBe('10.0.0.5');
+    // other platforms: TRUSTED_PROXY_HOPS
+    expect(clientOf(req('1.2.3.4, 203.0.113.9'), 1)).toBe('203.0.113.9');
+    expect(clientOf(req('1.2.3.4, 203.0.113.9, 10.1.1.1, 10.2.2.2'), 3)).toBe('203.0.113.9');
+    expect(clientOf(req('1.2.3.4, 203.0.113.9'), 0)).toBe('10.0.0.5');
+    // addresses as keys: IPv6 by its /64, IPv4 in IPv6 as IPv4
+    expect(clientOf(req(`2001:db8:1:2:3:4:5:6, ${LB}`))).toBe('2001:db8:1:2::/64');
+    expect(clientOf(req(`[2001:db8:1:2::9]:443, ${LB}`))).toBe('2001:db8:1:2::/64');
+    expect(clientOf(req(`::ffff:198.51.100.4, ${LB}`))).toBe('198.51.100.4');
+    // not an address: the connection's
+    expect(clientOf(req(`nonsense, ${LB}`))).toBe('10.0.0.5');
     expect(clientOf(req(undefined, '::ffff:192.0.2.1'))).toBe('192.0.2.1');
+    // the setting: a whole number from 0 to 10, else the default (said in the log)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect([undefined, '', ' ', '0', '1', '3', '10'].map(hopsFrom)).toEqual([2, 2, 2, 0, 1, 3, 10]);
+      expect(['-1', '11', '1.5', 'two'].map(hopsFrom)).toEqual([2, 2, 2, 2]);
+      expect(warn).toHaveBeenCalledTimes(4);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('asks the DNS for a TXT record and reads every answer it can give', async () => {

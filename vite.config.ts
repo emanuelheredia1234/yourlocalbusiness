@@ -34,7 +34,8 @@ function publishedPages(): Plugin {
         if (!isPage && !image.test(pathname)) return next();
         if (/^\/(@|src\/|node_modules\/)/.test(pathname) || isFile(path.join(root, pathname)) || (publicDir && isFile(path.join(publicDir, pathname)))) return next();
         const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() || 'http';
-        // as the /api proxy does: the server tells visitors apart (its lookup limits) by the first address
+        // as the /api proxy does: the client's address goes at the end, where the server reads it from
+        // (its lookup limits tell visitors apart by the addresses proxies add, counted from the right)
         const forwardedFor = [req.headers['x-forwarded-for'], req.socket.remoteAddress].filter(Boolean).join(', ');
         let up: http.ClientRequest;
         try {
