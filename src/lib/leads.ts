@@ -83,6 +83,23 @@ export async function listLeads(opts: { before?: string; limit?: number; pageId?
   return (Array.isArray(j.leads) ? j.leads : []).map(toLead).filter((l): l is Lead => !!l);
 }
 
+/** The most a CSV export takes, newest first. */
+export const LEADS_EXPORT_MAX = 5000;
+
+/** Your leads, newest first, page after page up to `max`: all your pages, or one (pageId). `capped`: it stopped at `max`. Throws LeadsError. */
+export async function allLeads(opts: { pageId?: string; max?: number; signal?: AbortSignal } = {}): Promise<{ leads: Lead[]; capped: boolean }> {
+  const max = opts.max ?? LEADS_EXPORT_MAX;
+  const all: Lead[] = [];
+  let before: string | undefined;
+  while (all.length < max) {
+    const batch = await listLeads({ pageId: opts.pageId, before, limit: 100, signal: opts.signal });
+    all.push(...batch);
+    if (batch.length < 100) break;
+    before = batch[batch.length - 1].createdAt;
+  }
+  return { leads: all.slice(0, max), capped: all.length >= max };
+}
+
 /** Delete one lead (already gone counts as done). Throws LeadsError. Never retried by itself. */
 export async function deleteLead(id: string): Promise<void> {
   try {
@@ -92,7 +109,7 @@ export async function deleteLead(id: string): Promise<void> {
   }
 }
 
-/** The SEO page's id for a project: the same rule as seoPageId() in pages/marketing/seoPage.ts (a test keeps them equal). */
+/** The SEO page's id for a project: the same rule as seoPageId() in lib/seoPage.ts (a test keeps them equal). */
 export function seoPageIdOf(projectId: string): string {
   return `seo:${projectId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80)}`;
 }

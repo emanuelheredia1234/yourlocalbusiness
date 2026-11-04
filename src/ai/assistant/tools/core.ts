@@ -12,6 +12,7 @@ import { useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
 import { serverFetch } from '../../claude';
 import { AI_FUNCTIONS, routeFor } from '../../functions';
+import { listTools } from '../catalog';
 import { HELP_TOPICS, HELP_TOPIC_IDS } from '../guide';
 import { host } from '../host';
 import { activeProject, findPost, missingPost, postSummary, postWhen, projectPosts } from '../lookup';
@@ -322,4 +323,4 @@ const setPreferences = defineTool({
   },
 });
 
-export const coreTools: AnyTool[] = [getWorkspace, listProjects, getProject, listPosts, getPost, getReadiness, getAIStatus, listNotifications, help, navigateTool, openPost, openComposer, switchProjectTool, setPreferences];
+export const coreTools: AnyTool[] = [getWorkspace, listProjects, getProject, listPosts, getPost, getReadiness, getAIStatus, listNotifications, help, listTools, navigateTool, openPost, openComposer, switchProjectTool, setPreferences];

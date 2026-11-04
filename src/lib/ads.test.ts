@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { newProject } from '@/store/defaults';
 import type { AdCampaign, Project } from '@/lib/types';
-import { adFinalUrl, adsCsv, adsText } from './AdsEngine';
+import { adFinalUrl, adsCsv, adsText } from './ads';
 
 function project(websiteUrl = ''): Project {
   const p = newProject('business', 'new');

@@ -1,68 +1,27 @@
 import { useRef } from 'react';
 import { Download, Trash2, Upload, Users } from 'lucide-react';
 import type { Project } from '@/lib/types';
-import { emailValid, fmtRelative, readFileAsText, slugify } from '@/lib/utils';
+import { fmtRelative, readFileAsText, slugify } from '@/lib/utils';
+import { importSubscribers, parseSubscriberCsv, subscribersCsv } from '@/lib/emailFunnel';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { Empty, confirmAction } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
-import { importSubscribers } from './shared';
 
 const SOURCE: Record<string, string> = { optin: 'Signed up', import: 'Imported', lead: 'From your page' };
-
-/** Split one CSV line (quotes and doubled quotes supported). */
-function cells(line: string): string[] {
-  const out: string[] = [];
-  let cur = '';
-  let q = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (q) {
-      if (ch === '"' && line[i + 1] === '"') {
-        cur += '"';
-        i++;
-      } else if (ch === '"') q = false;
-      else cur += ch;
-    } else if (ch === '"') q = true;
-    else if (ch === ',' || ch === ';' || ch === '\t') {
-      out.push(cur);
-      cur = '';
-    } else cur += ch;
-  }
-  out.push(cur);
-  return out.map((c) => c.trim());
-}
-
-/** Name and email from a CSV export (any provider's): finds the email column, and a name column if there is one. */
-export function parseSubscriberCsv(text: string): { name: string; email: string }[] {
-  const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim());
-  if (!lines.length) return [];
-  const head = cells(lines[0]).map((h) => h.toLowerCase());
-  const hasHeader = head.some((h) => /e-?mail/.test(h));
-  const emailCol = hasHeader ? head.findIndex((h) => /e-?mail/.test(h)) : -1;
-  const nameCol = hasHeader ? head.findIndex((h) => /^(first[ _]?name|name|full[ _]?name)$/.test(h)) : -1;
-  const out: { name: string; email: string }[] = [];
-  for (const line of hasHeader ? lines.slice(1) : lines) {
-    const c = cells(line);
-    const email = emailCol >= 0 ? c[emailCol] : c.find((x) => emailValid(x));
-    if (!email || !emailValid(email)) continue;
-    out.push({ name: nameCol >= 0 ? c[nameCol] ?? '' : '', email });
-  }
-  return out;
-}
 
 export function Subscribers({ project }: { project: Project }) {
   const updateMarketing = useStore((s) => s.updateMarketing);
   const subs = project.marketing.subscribers;
   const fileRef = useRef<HTMLInputElement>(null);
-  const csv = () => ['name,email,source,joined', ...subs.map((s) => [s.name, s.email, s.source, new Date(s.joinedAt).toISOString()].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n');
+  const csv = () => subscribersCsv(subs);
   const importFile = async (file: File) => {
     const rows = parseSubscriberCsv(await readFileAsText(file));
     if (!rows.length) {
       toast({ kind: 'error', title: 'No email addresses found', body: 'Use a CSV with an email column (exports from Mailchimp, Kit, MailerLite and others work).' });
       return;
     }
-    const n = importSubscribers(rows);
+    const n = importSubscribers(rows, project.id);
     toast({ kind: 'success', title: n ? `Imported ${n} subscriber${n === 1 ? '' : 's'}` : 'Everyone in that file is already on your list', body: n < rows.length ? `${rows.length - n} already on the list were skipped.` : undefined });
   };
 

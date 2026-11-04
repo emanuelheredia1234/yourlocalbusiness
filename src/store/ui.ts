@@ -29,8 +29,12 @@ interface UIState {
   setSocialTab: (t: SocialTab | null) => void;
   /** a page type to open the SEO page builder with (n changes with each request); the builder takes it once */
   seoPreset?: { pageType: PageType; n: number };
-  /** Open the SEO page builder, with a page type chosen. Nothing is written by itself: the owner presses Write page, or confirms a switch. */
-  openSeoBuilder: (preset?: { pageType?: PageType }) => void;
+  /**
+   * Open the SEO page builder, with a page type chosen. Nothing is written by itself: the owner presses Write
+   * page, or confirms a switch. `open` opens the page (default: navigate, through the leave guard). Resolves
+   * false when the owner chose to stay where they were.
+   */
+  openSeoBuilder: (preset?: { pageType?: PageType }, open?: (route: Route) => Promise<boolean>) => Promise<boolean>;
 
   commandOpen: boolean;
   setCommandOpen: (v: boolean) => void;
@@ -53,7 +57,14 @@ interface UIState {
   /** a tab to show next on another tabbed page (Studio, Brain, Calendar, Email, Marketplace): the page takes it (see useTabRequest) */
   pageTab: { route: Route; tab: string } | null;
   requestTab: (route: Route, tab: string) => void;
+
+  /** a Publish panel to bring into view (the SEO page's, or a code asset's), asked for from elsewhere (the assistant); n changes with each request, and the page takes it once */
+  publishRequest: PublishRequest | null;
+  /** Ask the open page to show this Publish panel. Nothing is published: the owner chooses the address and presses Publish there. */
+  requestPublish: (r: { page: 'seo' } | { page: 'asset'; assetId: string }) => void;
 }
+
+export type PublishRequest = { page: 'seo'; n: number } | { page: 'asset'; assetId: string; n: number };
 
 export const useUI = create<UIState>((set) => ({
   toasts: [],
@@ -79,17 +90,17 @@ export const useUI = create<UIState>((set) => ({
   socialTab: null,
   setSocialTab: (t) => set({ socialTab: t }),
   seoPreset: undefined,
-  openSeoBuilder: (preset) => {
-    void navigate('marketing-seo').then((ok) => {
-      const pageType = preset?.pageType;
-      if (!ok || !pageType) return;
-      set((s) => ({ seoPreset: { pageType, n: (s.seoPreset?.n ?? 0) + 1 } }));
-      try {
-        document.getElementById('main-scroll')?.scrollTo({ top: 0 });
-      } catch {
-        /* not in a browser */
-      }
-    });
+  openSeoBuilder: async (preset, open = (route) => navigate(route)) => {
+    const ok = await open('marketing-seo');
+    const pageType = preset?.pageType;
+    if (!ok || !pageType) return ok;
+    set((s) => ({ seoPreset: { pageType, n: (s.seoPreset?.n ?? 0) + 1 } }));
+    try {
+      document.getElementById('main-scroll')?.scrollTo({ top: 0 });
+    } catch {
+      /* not in a browser */
+    }
+    return true;
   },
 
   commandOpen: false,
@@ -111,6 +122,9 @@ export const useUI = create<UIState>((set) => ({
 
   pageTab: null,
   requestTab: (route, tab) => set({ pageTab: { route, tab } }),
+
+  publishRequest: null,
+  requestPublish: (r) => set((s) => ({ publishRequest: { ...r, n: (s.publishRequest?.n ?? 0) + 1 } })),
 }));
 
 export const toast = (t: Omit<Toast, 'id'>) => useUI.getState().toast(t);

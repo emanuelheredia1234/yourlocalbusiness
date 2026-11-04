@@ -16,7 +16,7 @@ const { generateBrandKit } = await import('@/ai/local/brand');
 const { generateSalesPage, generateSeoMeta, placeImages } = await import('@/ai/local/seo');
 const { preparePublish, publishTarget } = await import('@/lib/publish');
 const { highestImageNumber, joinImages, seoFileHtml, seoPageId, seoPublishBuild, seoSourceHtml, shownPromptImages } = await import('./seoPage');
-const { UNDO_LIMIT, useSeoUndo } = await import('./seoUndo');
+const { UNDO_LIMIT, useSeoUndo } = await import('@/store/seoUndo');
 
 const media = (id: string): MediaRef => ({ id, kind: 'image', name: `${id}.jpg`, mime: 'image/jpeg', size: 1, createdAt: 0, w: 1200, h: 800 });
 const img = (n: number, id = `m${n}`): PromptImage => ({ key: `img-${n}`, media: media(id) });

@@ -4,7 +4,7 @@ import type { Project } from '@/lib/types';
 import { cn, fmtDateTime, fmtRelative, slugify } from '@/lib/utils';
 import { showSignIn } from '@/lib/cloud/auth';
 import { usePublishAccess } from '@/lib/publish';
-import { LEADS_PAGE_SIZE, MAX_EMAIL, deleteLead, leadEmail, leadTime, leadsCsv, listLeads, seoPageIdOf, type Lead } from '@/lib/leads';
+import { LEADS_EXPORT_MAX, LEADS_PAGE_SIZE, MAX_EMAIL, allLeads, deleteLead, leadEmail, leadTime, leadsCsv, listLeads, seoPageIdOf, type Lead } from '@/lib/leads';
 import { addLeadToSubscribers, leadProject, markLeadsSeen, useLeads } from '@/store/leads';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
@@ -14,8 +14,6 @@ import { safeEmail, safePhone } from '@/lib/listingActions';
 
 type Scope = 'page' | 'all';
 
-/** the most a CSV export takes, newest first */
-const EXPORT_MAX = 5000;
 /** a message longer than this shows its first lines, with Show all */
 const LONG_LINES = 6;
 const LONG_CHARS = 360;
@@ -205,19 +203,11 @@ function LeadList({ project }: { project: Project }) {
   const exportCsv = async () => {
     setExporting(true);
     try {
-      const all: Lead[] = [];
-      let before: string | undefined;
-      while (all.length < EXPORT_MAX) {
-        const batch = await listLeads({ pageId, before, limit: 100 });
-        all.push(...batch);
-        if (batch.length < 100) break;
-        before = batch[batch.length - 1].createdAt;
-      }
-      const list = all.slice(0, EXPORT_MAX);
+      const { leads: list, capped } = await allLeads({ pageId, max: LEADS_EXPORT_MAX });
       const name = scope === 'page' ? `${slugify(project.brand.name) || 'your'}-leads.csv` : 'leads-all-pages.csv';
       // a byte-order mark, so spreadsheets read names with accents right
       await download(name, String.fromCharCode(0xfeff) + leadsCsv(list, pageLabel));
-      if (all.length >= EXPORT_MAX) toast({ kind: 'info', title: 'Exported the newest 5,000 leads.' });
+      if (capped) toast({ kind: 'info', title: 'Exported the newest 5,000 leads.' });
     } catch (e) {
       toast({ kind: 'error', title: 'Couldn’t export your leads', body: (e as Error)?.message });
     } finally {
@@ -276,7 +266,7 @@ function LeadList({ project }: { project: Project }) {
             body="When someone sends the form on your published page, it shows here. Lead form pages have a form, and so do booking pages without a booking link."
             action={
               scope === 'page' ? (
-                <button type="button" className="btn btn-primary btn-sm" onClick={() => useUI.getState().openSeoBuilder({ pageType: 'lead' })}>
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => void useUI.getState().openSeoBuilder({ pageType: 'lead' })}>
                   Build a lead form page
                 </button>
               ) : undefined

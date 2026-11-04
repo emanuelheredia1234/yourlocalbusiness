@@ -2,9 +2,10 @@ import { Download, ExternalLink, Mail } from 'lucide-react';
 import type { Project } from '@/lib/types';
 import { slugify } from '@/lib/utils';
 import { renderTokens } from '@/ai/local/email';
+import { delayLabel, sequenceCsv } from '@/lib/emailFunnel';
 import { CopyButton, Empty } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
-import { EmailView, delayLabel, emailTokens } from './shared';
+import { EmailView, emailTokens } from './shared';
 
 const PROVIDERS = [
   { name: 'Kit (ConvertKit)', url: 'https://kit.com' },
@@ -12,13 +13,6 @@ const PROVIDERS = [
   { name: 'MailerLite', url: 'https://www.mailerlite.com' },
   { name: 'Brevo', url: 'https://www.brevo.com' },
 ];
-
-const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
-
-/** The sequence as a CSV: one row per email, ready to copy into an email provider. */
-export function sequenceCsv(p: Project): string {
-  return ['step,send,subject,preview,body,button,button_link', ...p.marketing.emails.map((e, i) => [i + 1, delayLabel(e, i), e.subject, e.preview ?? '', e.body, e.ctaLabel ?? '', e.ctaUrl ?? ''].map(csvCell).join(','))].join('\n');
-}
 
 /** See each email the way subscribers will, then take the sequence to your email provider. */
 export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: () => void }) {

@@ -17,7 +17,8 @@ export function appLink(href: string): { route: Route; tab?: string } | null {
   return { route: m[1] as Route, ...(m[2] ? { tab: m[2] } : {}) };
 }
 
-const TOKEN = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_)/g;
+// _italic_ only as a whole word: a merge tag ({{lead_magnet_link}}) or a name like ads_text stays as it is
+const TOKEN = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|\*[^*\s][^*\n]*\*|(?<![\p{L}\p{N}_])_[^_\s][^_\n]*_(?![\p{L}\p{N}_]))/gu;
 
 function inline(text: string, key: string, open: OpenPage): ReactNode[] {
   const out: ReactNode[] = [];

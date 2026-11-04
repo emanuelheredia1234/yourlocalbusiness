@@ -1,9 +1,10 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowDown, ArrowUp, Check, CircleDashed, Code2, Copy, Download, Eye, EyeOff, ImagePlus, Inbox, Link2, Monitor, PenLine, RefreshCw, Search, Smartphone, Sparkles, Undo2, Wand2, X } from 'lucide-react';
 import type { MediaRef, PageType, Project, PromptImage, Published, SalesPage, SalesSection, SalesTheme, SeoMeta } from '@/lib/types';
 import { cn, listJoin, moveItem, plural, slugify, stripProtocol, truncate } from '@/lib/utils';
-import { applyEdit, claimsToReview, canonicalForSlugChange, ctaLink, ownCanonical, pageImageIds, pageTargets, placeNewImages, pruneImages, scoreSeo, SECTION_LABEL, sectionsKeptHidden, siteUrl, withKeptSections, withOwnerFacts } from '@/ai/local/seo';
+import { claimsToReview, canonicalForSlugChange, ctaLink, ownCanonical, pageImageIds, pageTargets, placeNewImages, pruneImages, scoreSeo, SECTION_LABEL, sectionsKeptHidden, siteUrl } from '@/ai/local/seo';
 import { AI_NO_CHANGE, salesPageEditTask, salesPageTask, salesSectionTask, seoMetaTask, type SalesEditInput, type SalesEditResult, type SalesSectionInput } from '@/ai/tasks';
+import { applySalesPageEdit, applySalesSection, applySeoMeta, undoSeo, writeSeoPage, type SeoWriters } from '@/ai/seoBuilder';
 import { useAI } from '@/ai/useAI';
 import { copyText } from '@/lib/platform';
 import { deleteBlob } from '@/lib/storage';
@@ -23,8 +24,8 @@ import { download } from '@/components/ui/download';
 import { MarketingHeader } from './MarketingNav';
 import { PageTypeLinks, PageTypePicker } from './PageTypePicker';
 import { SalesPreview } from './SalesPreview';
-import { highestImageNumber, joinImages, seoFileHtml, seoPageId, seoPublishBuild, seoSourceHtml, shownPromptImages } from './seoPage';
-import { useSeoUndo, type SeoSnapshot } from './seoUndo';
+import { highestImageNumber, joinImages, seoFileHtml, seoPageId, seoPublishBuild, seoSourceHtml, shownPromptImages } from '@/lib/seoPage';
+import { useSeoUndo, type SeoSnapshot } from '@/store/seoUndo';
 
 type Marketing = Project['marketing'];
 type AIHook<I, O> = ReturnType<typeof useAI<I, O>>;
@@ -85,6 +86,15 @@ export default function SeoSalesPage() {
     setSuggested(preset.pageType);
     if (current().salesPage) setTypeOpen(true);
   }, [preset]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the Publish panel asked for from elsewhere (the assistant): brought into view and focused, once. Nothing is published by itself.
+  const publishReq = useUI((s) => s.publishRequest);
+  const publishRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (publishReq?.page !== 'seo') return;
+    useUI.setState({ publishRequest: null });
+    publishRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    publishRef.current?.focus({ preventScroll: true });
+  }, [publishReq]);
 
   // AI changes land in the project they were asked for, even if another one is opened meanwhile.
   const projectNow = (): Project => useStore.getState().projects.find((p) => p.id === projectId) ?? project;
@@ -98,18 +108,11 @@ export default function SeoSalesPage() {
     if (cur) updateMarketing({ salesPage: { ...fn(cur), updatedAt: Date.now() } });
   };
 
-  /** Keep the page, its metadata and its type as they are now, so the AI change about to be saved can be undone. */
-  const remember = () => {
-    const m = current();
-    if (m.salesPage || m.seo) useSeoUndo.getState().push(projectId, { salesPage: m.salesPage, seo: m.seo, pageType: m.pageType });
-  };
   const undo = () => {
-    const snap = useSeoUndo.getState().pop(projectId);
-    if (!snap) return;
-    // an image removed from the page's images since then stays off the page
-    save({ seo: snap.seo, salesPage: snap.salesPage ? { ...pruneImages(snap.salesPage, current().seoImages ?? []), updatedAt: Date.now() } : null, pageType: snap.pageType });
-    toast({ kind: 'info', title: 'Undone', body: 'Your page is back to how it was before the last AI change.' });
+    if (undoSeo(projectId) === 'undone') toast({ kind: 'info', title: 'Undone', body: 'Your page is back to how it was before the last AI change.' });
   };
+  // the page's own AI runs (null when stopped or failed)
+  const writers: SeoWriters = { meta: (i) => metaAI.run(i), page: (i) => pageAI.run(i) };
 
   /** The page's images changed in a prompt box: an image taken out of the list comes off the page too. */
   const setImages = (next: PromptImage[]) => {
@@ -144,24 +147,8 @@ export default function SeoSalesPage() {
       }))
     )
       return;
-    const instructions = (m.seoGuide ?? '').trim();
-    const imgs = m.seoImages ?? [];
-    let first = true;
-    const put = (patch: Partial<Marketing>) => {
-      if (first) remember();
-      first = false;
-      save(patch);
-    };
-    let seo = m.seo;
-    if (!seo) {
-      seo = await metaAI.run({ instructions, images: imgs, pageType: t });
-      // stopped (or failed): the page needs its metadata, so don't go on without it
-      if (!seo) return;
-      put({ seo });
-    }
-    const p = await pageAI.run({ primaryKeyword: seo?.primaryKeyword, instructions, images: imgs, pageType: t });
-    // sections the new page doesn't have that hold what the owner entered stay, hidden
-    if (p) put({ salesPage: { ...withKeptSections(p, current().salesPage), updatedAt: Date.now() }, pageType: t });
+    // metadata first when there's none; sections the new page doesn't have that hold what the owner entered stay, hidden
+    await writeSeoPage(projectId, t, writers);
   };
 
   /** Page type → Change: the AI writes the page again for the new type (after the owner confirms). Stopped or failed: nothing changes. */
@@ -177,11 +164,7 @@ export default function SeoSalesPage() {
       confirmLabel: `Rewrite as ${PAGE_TYPE_LABEL[next].toLowerCase()}`,
     });
     if (!ok) return;
-    const cur = current();
-    const p = await pageAI.run({ primaryKeyword: cur.seo?.primaryKeyword, instructions: (cur.seoGuide ?? '').trim(), images: cur.seoImages ?? [], pageType: next });
-    if (!p) return;
-    remember();
-    save({ salesPage: { ...withKeptSections(p, current().salesPage), updatedAt: Date.now() }, pageType: next });
+    if (!(await writeSeoPage(projectId, next, writers))) return;
     setChoice(next);
     setTypeOpen(false);
     setSuggested(null);
@@ -193,38 +176,15 @@ export default function SeoSalesPage() {
     const imgs = m.seoImages ?? [];
     const mainImage = imgs.find((i) => i.media.id === heroImageId(m.salesPage))?.key;
     const next = await metaAI.run({ instructions: (m.seoGuide ?? '').trim(), images: imgs, ...(mainImage ? { mainImage } : {}), pageType: pageTypeOf(projectNow()) });
-    if (!next) return;
-    // Only replace a canonical the app made from the slug; an address the owner pasted is kept.
-    const cur = current().seo;
-    const canonical = cur ? canonicalForSlugChange(projectNow(), cur.canonical, cur.slug, next.slug) : next.canonical;
-    remember();
-    save({ seo: { ...next, canonical } });
+    // only a canonical the app made from the slug is replaced; an address the owner pasted is kept
+    if (next) applySeoMeta(projectId, next);
   };
 
   /** A rewritten section, saved where it is now (its place, visibility and facts as they are now). */
-  const applySection = (id: string, next: SalesSection) => {
-    const cur = current().salesPage;
-    if (!cur?.sections.some((x) => x.id === id)) return;
-    remember();
-    save({ salesPage: { ...withOwnerFacts({ ...cur, sections: cur.sections.map((x) => (x.id === id ? ({ ...next, id, visible: x.visible } as SalesSection) : x)) }, cur), updatedAt: Date.now() } });
-  };
+  const applySection = (id: string, next: SalesSection) => applySalesSection(projectId, id, next);
 
-  /**
-   * An AI edit made from `base`, saved over the page as it is now, with the images it added joined to the
-   * page's images as they are now (others may have been added or removed meanwhile). False when it changed nothing.
-   */
-  const applyPageEdit = (next: SalesPage, base: SalesPage, added: PromptImage[] = []): boolean => {
-    const m = current();
-    const cur = m.salesPage;
-    if (!cur) return false;
-    const imgs = added.length ? joinImages(m.seoImages ?? [], added, m.seoImageMax).images : undefined;
-    const merged = pruneImages(applyEdit(cur, base, next), imgs ?? m.seoImages ?? []);
-    const same = JSON.stringify(merged.sections) === JSON.stringify(cur.sections) && JSON.stringify(merged.theme) === JSON.stringify(cur.theme);
-    if (same && !imgs) return false;
-    remember();
-    save({ salesPage: { ...merged, updatedAt: Date.now() }, ...(imgs ? imagesPatch(imgs) : {}) });
-    return true;
-  };
+  /** An AI edit made from `base`, saved over the page as it is now (see applySalesPageEdit). False when it changed nothing. */
+  const applyPageEdit = (next: SalesPage, base: SalesPage, added: PromptImage[] = []): boolean => !!applySalesPageEdit(projectId, next, base, added);
 
   // Get the page's images ready as data in the background, so Copy HTML is quick.
   const shownKey = page ? shownPromptImages(page, images).map((i) => i.media.id).join(',') : '';
@@ -383,7 +343,7 @@ export default function SeoSalesPage() {
               )}
             </section>
 
-            <div className="panel p-4">
+            <div className="panel p-4 outline-none focus:shadow-focus" ref={publishRef} tabIndex={-1}>
               <PublishPanel
                 pageId={seoPageId(project)}
                 kind="seo"

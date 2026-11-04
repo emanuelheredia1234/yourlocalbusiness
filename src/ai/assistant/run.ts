@@ -16,7 +16,8 @@ import { addMessage, askCard, beginTurn, chatOf, clearChat, endTurn, registerBut
 import { parseStep, type Action } from './protocol';
 import { buildPrompt, type StepResult } from './prompt';
 import { checkArgs, type AnyTool, type ArgProps, type ChatButton, type ConfirmCardSpec, type MediaKind, type PubWindow, type Registry, type ToolContext, type ToolResult } from './registry';
-import { registry } from './tools';
+import { TOOL_GROUPS, registry } from './tools';
+import { toolCatalog } from './catalog';
 import { host } from './host';
 import { matchPageIntent } from './intents';
 import { workspaceSummary } from './workspace';
@@ -63,6 +64,8 @@ function windowNote(w: PubWindow): string {
       return 'Opened “Mark as posted”: add the link if you have one, then confirm there';
     case 'listing':
       return w.action === 'publish' ? 'Opened “Publish listing”: check what goes public, then confirm there' : `Opened “${w.action === 'show' ? 'Show' : 'Hide'} my listings”: confirm there`;
+    case 'publish':
+      return `Opened the Publish panel for ${w.page === 'seo' ? 'your SEO page' : `“${w.name}”`}: check the address, then publish there`;
     case 'page':
       return `Opened ${pageName(w.route, w.tab)}: confirm there`;
   }
@@ -214,7 +217,10 @@ async function runTurn(projectId: string, message: string, history: ReturnType<t
     if (signal.aborted) return;
     if (!stillActive(projectId)) return switched();
     setStage(step === 1 ? 'Thinking…' : 'Reading the results…');
-    const prompt = buildPrompt({ message, history, results, route: currentRoute(), workspace: workspaceSummary(), catalog: registry.catalog(), step, maxSteps: MAX_STEPS }, host.budget());
+    const route = currentRoute();
+    // the core tools and the groups this step needs in full, the others by name (list_tools brings one in)
+    const tools = toolCatalog(TOOL_GROUPS, { route, message, results, history });
+    const prompt = buildPrompt({ message, history, results, route, workspace: workspaceSummary(), catalog: tools.full, catalogFallbacks: tools.fallbacks, step, maxSteps: MAX_STEPS }, host.budget());
     let raw: unknown;
     try {
       raw = await host.ask(prompt, signal);

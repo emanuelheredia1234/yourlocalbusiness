@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { create } from 'zustand';
 import { Check, Code2, Copy, CopyPlus, Download, FileCode2, Globe, Info, RefreshCw, Sparkles, Trash2, Undo2, Wand2, Columns2, Eye, SquareCode } from 'lucide-react';
 import type { CodeAsset, CodeKind, MediaRef, Project, PromptImage, Published } from '@/lib/types';
 import { cn, fmtRelative, listJoin, slugify, uid } from '@/lib/utils';
@@ -11,7 +10,7 @@ import { unpublishPage } from '@/lib/publish';
 import { copyText } from '@/lib/platform';
 import { deleteBlob } from '@/lib/storage';
 import { getActiveProject, useStore } from '@/store/useStore';
-import { toast } from '@/store/ui';
+import { toast, useUI } from '@/store/ui';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { PromptImages, usePasteImages } from '@/components/ai/PromptImages';
 import { PublishPanel } from '@/components/publish/PublishPanel';
@@ -20,6 +19,9 @@ import { AutoTextarea, Empty, Segmented, Spinner, confirmAction } from '@/compon
 import { Icon } from '@/components/ui/Icon';
 import { download } from '@/components/ui/download';
 import {
+  NO_DRAFT,
+  addCodeAsset,
+  applyCodeEdit,
   artifactPageId,
   codeOf,
   defaultKind,
@@ -31,13 +33,15 @@ import {
   missingImagesNote,
   promptIdeas,
   publishBuild,
-  pushSnapshot,
   readyDocument,
+  rememberCodeUndo as remember,
   reservedImageKeys,
+  setUndoStack,
   snapshotOf,
-  undoPatch,
-  type Snapshot,
-} from './codeAssets';
+  undoCodeAsset,
+  useCodeTabMemory,
+  type Draft,
+} from '@/lib/codeAssets';
 
 type Lang = CodeLang | 'script';
 
@@ -71,23 +75,6 @@ const ABOUT_IMAGES = /\b(?:images?|photos?|pictures?|pics?|logo|img-\d+)\b/i;
 const MOD_KEY = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? '⌘' : 'Ctrl';
 
 const assets = () => getActiveProject()!.studio.codeAssets;
-
-interface Draft {
-  prompt: string;
-  images: PromptImage[];
-  /** the type picked (the project's usual one until then) */
-  kind?: CodeKind;
-}
-const NO_DRAFT: Draft = { prompt: '', images: [] };
-
-/**
- * Kept while the app is open, so switching Studio tabs loses neither (not saved): each asset's undo
- * stack, and each project's creation box (the type picked, what was typed and the images added).
- */
-const useCodeTabMemory = create<{ undo: Record<string, Snapshot[]>; drafts: Record<string, Draft> }>(() => ({ undo: {}, drafts: {} }));
-const setUndoStack = (assetId: string, stack: Snapshot[]) => useCodeTabMemory.setState((s) => ({ undo: { ...s.undo, [assetId]: stack } }));
-/** Keep `snap` so Undo can put it back. */
-const remember = (assetId: string, snap: Snapshot) => setUndoStack(assetId, pushSnapshot(useCodeTabMemory.getState().undo[assetId] ?? [], snap));
 
 /** What happened last, for the asset it happened to: what changed (✓) and what the owner should know. */
 interface Outcome {
@@ -233,6 +220,26 @@ export function CodeTab({ project }: { project: Project }) {
     onDragOver: editPaste.onDragOver,
   };
 
+  // an asset's Publish panel asked for from elsewhere (the assistant): that asset opens with its panel in view, once.
+  // Nothing is published by itself: the owner chooses the address and presses Publish there.
+  const publishReq = useUI((s) => s.publishRequest);
+  const focusPublish = useRef(false);
+  useEffect(() => {
+    if (publishReq?.page !== 'asset') return;
+    useUI.setState({ publishRequest: null });
+    if (__ARTIFACT_BUILD__ || !assets().some((a) => a.id === publishReq.assetId)) return;
+    focusPublish.current = true;
+    setActiveId(publishReq.assetId);
+    setPublishOpen(true);
+  }, [publishReq]);
+  useEffect(() => {
+    if (!focusPublish.current || !publishOpen) return;
+    focusPublish.current = false;
+    const el = document.getElementById('code-publish');
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el?.focus({ preventScroll: true });
+  }, [publishOpen, active?.id]);
+
   // a description that names another kind ("a booking widget…") suggests it; the owner picks
   const named = useMemo(() => matchKind(draft.prompt), [draft.prompt]);
   const suggested = named && named !== kind && kinds.some((k) => k.id === named) ? named : null;
@@ -243,9 +250,7 @@ export function CodeTab({ project }: { project: Project }) {
     const images = draft.images;
     const r = await gen.run({ kind, prompt: text, ...(images.length ? { images } : {}) });
     if (!r) return;
-    const now = Date.now();
-    const asset: CodeAsset = { id: uid('code'), name: r.name, kind: r.kind, prompt: text, html: r.html, css: r.css, js: r.js, script: r.script, ...(images.length ? { images } : {}), outdated: false, createdAt: now, updatedAt: now };
-    updateStudio({ codeAssets: [asset, ...assets()] });
+    const asset = addCodeAsset(project.id, r, text, images);
     setActiveId(asset.id);
     setLang('html');
     setOutcome({ assetId: asset.id, run: 'gen', done: [], notes: [...(r.note ? [r.note] : []), ...imageUseNotes(asset)], guided: !!text });
@@ -268,28 +273,22 @@ export function CodeTab({ project }: { project: Project }) {
     if (!a || !ask || edit.running) return;
     const before = snapshotOf(a);
     const r = await edit.run({ code: codeOf(a), instruction: ask, kind: a.kind, ...(before.images.length ? { images: before.images } : {}) });
-    const now = r && assets().find((x) => x.id === a.id);
-    if (!r || !now) return;
-    if (r.html === before.html && r.css === before.css && r.js === before.js) {
+    if (!r) return;
+    const saved = applyCodeEdit(project.id, a.id, before, r);
+    if (saved === 'gone') return;
+    if (saved === 'unchanged') {
       // nothing changed: nothing to undo, and what was typed stays so it can be put another way
       setOutcome({ assetId: a.id, run: 'edit', done: [], notes: r.notes ?? [], unchanged: true });
       return;
     }
-    remember(a.id, before);
-    patchAsset(a.id, codeOf(r));
-    const unused = ABOUT_IMAGES.test(ask) ? imageUseNotes({ ...codeOf(r), images: now.images }) : [];
+    const unused = ABOUT_IMAGES.test(ask) ? imageUseNotes(saved.asset) : [];
     setOutcome({ assetId: a.id, run: 'edit', done: r.applied, notes: [...(r.notes ?? []), ...unused] });
     // a quick edit leaves what the owner typed; an applied instruction is cleared (unless it was changed meanwhile)
     setInstruction((cur) => (cur.trim() === ask ? '' : cur));
   };
 
   const undo = () => {
-    if (!active) return;
-    const stack = useCodeTabMemory.getState().undo[active.id] ?? [];
-    const prev = stack[stack.length - 1];
-    if (!prev) return;
-    setUndoStack(active.id, stack.slice(0, -1));
-    patchAsset(active.id, undoPatch(active.images ?? [], prev));
+    if (!active || undoCodeAsset(project.id, active.id) !== 'undone') return;
     setOutcome({ assetId: active.id, run: null, done: ['Put back the version from before your last change'], notes: [] });
   };
 
@@ -536,7 +535,7 @@ export function CodeTab({ project }: { project: Project }) {
             </div>
 
             {publishOpen && !__ARTIFACT_BUILD__ && (
-              <div id="code-publish" className="panel p-4">
+              <div id="code-publish" className="panel p-4 outline-none focus:shadow-focus" tabIndex={-1}>
                 <PublishPanel
                   key={active.id}
                   pageId={artifactPageId(active.id)}

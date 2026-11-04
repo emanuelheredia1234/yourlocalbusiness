@@ -16,8 +16,8 @@ vi.mock('@/store/useStore', async (original) => {
   const real = await original<typeof import('@/store/useStore')>();
   return { ...real, useStore: live(real.useStore), useActiveProject: () => real.getActiveProject() };
 });
-vi.mock('./seoUndo', async (original) => {
-  const real = await original<typeof import('./seoUndo')>();
+vi.mock('@/store/seoUndo', async (original) => {
+  const real = await original<typeof import('@/store/seoUndo')>();
   return { ...real, useSeoUndo: live(real.useSeoUndo) };
 });
 
@@ -25,7 +25,7 @@ const { useStore } = await import('@/store/useStore');
 const { newProject, defaultSettings } = await import('@/store/defaults');
 const { generateBrandKit } = await import('@/ai/local/brand');
 const { generateSalesPage, generateSeoMeta, pageTargets, placeImages } = await import('@/ai/local/seo');
-const { useSeoUndo } = await import('./seoUndo');
+const { useSeoUndo } = await import('@/store/seoUndo');
 const { SalesPreview } = await import('./SalesPreview');
 const { default: SeoSalesPage } = await import('./SeoSalesPage');
 

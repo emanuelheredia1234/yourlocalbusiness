@@ -3,6 +3,7 @@ import { Check, Download, FileText, Gift, Plus, Trash2 } from 'lucide-react';
 import type { LeadMagnet, LeadMagnetType, Project } from '@/lib/types';
 import { cn, emailValid, readableOn, slugify, withAlpha } from '@/lib/utils';
 import { LEAD_MAGNET_TYPES, leadMagnetMarkdown } from '@/ai/local/email';
+import { applyLeadMagnet } from '@/lib/emailFunnel';
 import { leadMagnetTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { getActiveProject, useStore } from '@/store/useStore';
@@ -22,7 +23,7 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
   const generate = async () => {
     if (lm && !(await confirmAction({ title: 'Replace your lead magnet?', body: 'The current freebie and opt-in copy will be replaced.', confirmLabel: 'Replace' }))) return;
     const r = await ai.run({ type });
-    if (r) updateMarketing({ leadMagnet: r });
+    if (r) applyLeadMagnet(r, project.id);
   };
 
   return (

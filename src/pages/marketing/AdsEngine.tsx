@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Check, Download, ExternalLink, Globe, MoreHorizontal, Plus, Search, Target, ThumbsUp, Trash2, Users } from 'lucide-react';
 import type { AdCampaign, AdCreative, AdObjective, AdPlatform, Project, SearchAd, StyleId } from '@/lib/types';
 import { cn, ensureUrl, fmtMoney, fmtRelative, slugify, stripProtocol } from '@/lib/utils';
+import { AD_CTAS as CTAS, adFinalUrl, adsCsv, adsText, applyAds } from '@/lib/ads';
 import { IMAGE_STYLES, STYLE_LABEL, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
 import { AD_OBJECTIVES, AD_PLATFORMS, newAdCampaign, suggestInterests } from '@/ai/local/ads';
 import { buildFacts } from '@/ai/text';
@@ -14,8 +15,6 @@ import { download } from '@/components/ui/download';
 import { PostVisual } from '@/components/visuals/PostVisual';
 import { LogoMark } from '@/components/brand/Logo';
 import { MarketingHeader } from './MarketingNav';
-
-const CTAS = ['Learn More', 'Shop Now', 'Book Now', 'Sign Up', 'Download', 'Get Quote', 'Contact Us', 'Get Offer'];
 
 export default function AdsEngine() {
   const project = useActiveProject()!;
@@ -77,7 +76,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
   const generate = async () => {
     if (c.creatives.length && !(await confirmAction({ title: 'Regenerate creatives and audiences?', body: 'Your edited ad copy will be replaced.', confirmLabel: 'Regenerate' }))) return;
     const r = await ai.run({ campaign: live() });
-    if (r) set({ audiences: r.audiences, interests: c.interests.length ? c.interests : r.interests, creatives: r.creatives, search: r.search, selectedCreativeIds: r.creatives.map((x) => x.id) });
+    if (r) applyAds(c.id, r);
   };
 
   return (
@@ -231,38 +230,8 @@ const AD_MANAGERS: Record<AdPlatform, { label: string; url: string }> = {
   linkedin: { label: 'LinkedIn Campaign Manager', url: 'https://www.linkedin.com/campaignmanager/' },
 };
 
-const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
-
-/** Where the ads send people: the URL you entered for this campaign, else your website or your own buy/book
- *  link. '' until there is one (never made up). */
-export function adFinalUrl(c: AdCampaign, p: Project): string {
-  return ensureUrl(c.finalUrl ?? (p.brand.websiteUrl || p.studio.listing.buyUrl || ''));
-}
-
 /** A URL as an ad shows it: "sparkle.co/offer". */
 const displayUrl = (url: string) => stripProtocol(url).replace(/\/+$/, '');
-
-/** Everything to paste into an ads manager, as plain text. */
-export function adsText(c: AdCampaign, finalUrl = ''): string {
-  const picked = c.creatives.filter((x) => c.selectedCreativeIds.includes(x.id));
-  const lines = [`${c.name}`, `Objective: ${AD_OBJECTIVES.find((o) => o.id === c.objective)?.label ?? c.objective}`, `Final URL: ${finalUrl || '[add the page your ads link to]'}`, `Budget: ${fmtMoney(c.dailyBudget)}/day for ${c.durationDays} days (${fmtMoney(c.dailyBudget * c.durationDays)} total)`, `Location: ${c.locations}${c.radiusMi ? ` (+${c.radiusMi} mi)` : ''} · Ages ${c.ageMin}–${c.ageMax}`, c.interests.length ? `Interests: ${c.interests.join(', ')}` : '', ''];
-  for (const a of c.audiences) lines.push(`Audience: ${a.name}`, `  ${a.description}`, a.interests.length ? `  ${a.interests.join(', ')}` : '', '');
-  for (const cr of picked) lines.push(`Ad ${cr.variant}: ${cr.angle}`, `  Primary text: ${cr.primaryText}`, `  Headline: ${cr.headline}`, `  Description: ${cr.description}`, `  Button: ${cr.cta}`, '');
-  if (c.search) lines.push('Google search ads', ...c.search.headlines.map((h) => `  Headline: ${h}`), ...c.search.descriptions.map((d) => `  Description: ${d}`), `  Keywords: ${c.search.keywords.join(', ')}`, ...c.search.sitelinks.map((l) => `  Sitelink: ${l.title}: ${l.desc}`), '');
-  return lines.filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n').trim();
-}
-
-/** The ads as a CSV: one row per creative (and per search headline and description). */
-export function adsCsv(c: AdCampaign, finalUrl = ''): string {
-  const rows = [['type', 'variant', 'angle', 'primary_text', 'headline', 'description', 'button', 'final_url']];
-  for (const cr of c.creatives.filter((x) => c.selectedCreativeIds.includes(x.id))) rows.push(['social', cr.variant, cr.angle, cr.primaryText, cr.headline, cr.description, cr.cta, finalUrl]);
-  if (c.search) {
-    for (const h of c.search.headlines) rows.push(['search headline', '', '', '', h, '', '', finalUrl]);
-    for (const d of c.search.descriptions) rows.push(['search description', '', '', '', '', d, '', finalUrl]);
-    for (const k of c.search.keywords) rows.push(['keyword', '', '', '', k, '', '', '']);
-  }
-  return rows.map((r) => r.map(csvCell).join(',')).join('\n');
-}
 
 /** Budget (your own numbers), and taking the plan to each platform's ads manager. */
 function ExportPanel({ c, finalUrl, onFinalUrl, onExported }: { c: AdCampaign; finalUrl: string; onFinalUrl: (v: string) => void; onExported: () => void }) {

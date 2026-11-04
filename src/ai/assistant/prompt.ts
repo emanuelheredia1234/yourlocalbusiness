@@ -1,10 +1,12 @@
 // The prompt for one step of a chat turn. Providers here take one prompt per request (no chat
 // history, no native tools), so each step carries: who the assistant is and its rules, a short app
-// guide, the page the owner is on, the workspace in brief, the tool catalog, the recent conversation,
-// the owner's latest message, this turn's tool results so far, and the reply format.
+// guide, the page the owner is on, the workspace in brief, the tool catalog (catalog.ts: the core tools
+// and the groups this step needs in full, the others by name only), the recent conversation, the owner's
+// latest message, this turn's tool results so far, and the reply format.
 //
 // Kept well under the server's 120,000-character cap and Claude's limit in claude.ai: when it runs
-// long, tool results, then older messages, then the guide are cut first. Never contains keys or tokens.
+// long, tool results, then older messages, then the guide, then the tool groups in full are cut first.
+// Never contains keys or tokens.
 
 import type { Route } from '@/lib/router';
 import type { ChatMessage } from '@/store/assistant';
@@ -40,7 +42,10 @@ export interface PromptInput {
   results: StepResult[];
   route: Route | null;
   workspace: unknown;
+  /** the tool list (catalog.ts: the core and the groups this step needs in full, the others by name) */
   catalog: string;
+  /** shorter tool lists for when the prompt runs long, longest first (catalog.ts: only the groups the model asked for in full, then none) */
+  catalogFallbacks?: string[];
   step: number;
   maxSteps: number;
   now?: Date;
@@ -138,14 +143,14 @@ export function buildPrompt(input: PromptInput, budget = PROMPT_BUDGET): string 
 
 function buildPromptText(input: PromptInput, budget: number): string {
   const workspace = JSON.stringify(input.workspace ?? null);
-  const parts = { guide: APP_GUIDE, workspace, history: input.history.slice(-HISTORY_MESSAGES), results: input.results, perResult: RESULT_CHARS };
+  const parts = { guide: APP_GUIDE, workspace, catalog: input.catalog, history: input.history.slice(-HISTORY_MESSAGES), results: input.results, perResult: RESULT_CHARS };
   const render = () =>
     [
       SYSTEM,
       `## ${SECTIONS.guide}\n${parts.guide}`,
       `## ${SECTIONS.now}\n${nowText(input)}`,
       `## ${SECTIONS.workspace}\n${parts.workspace}`,
-      `## ${SECTIONS.tools}\n${CLASS_LEGEND}\n${input.catalog}`,
+      `## ${SECTIONS.tools}\n${CLASS_LEGEND}\n${parts.catalog}`,
       `## ${SECTIONS.history}\n${parts.history.length ? parts.history.map(historyLine).join('\n') : '(none)'}`,
       `## ${SECTIONS.message}\n${squeeze(input.message, LATEST_CHARS)}`,
       `## ${SECTIONS.results}\n${parts.results.length ? resultsText(parts.results, parts.perResult) : '[]'}`,
@@ -153,13 +158,18 @@ function buildPromptText(input: PromptInput, budget: number): string {
     ].join('\n\n');
   let text = render();
   const fits = () => (text = render()).length <= budget;
-  // over budget: shorter results, then fewer messages, then a shorter guide and workspace, then only the latest results
+  // over budget: shorter results, then fewer messages, then a shorter guide and workspace, then fewer tool
+  // groups in full (only the ones the model asked for, then none), then only the latest results
   while (!fits() && parts.perResult > 600) parts.perResult = Math.floor(parts.perResult / 2);
   while (!fits() && parts.history.length) parts.history = parts.history.slice(Math.max(1, Math.floor(parts.history.length / 3)));
   if (!fits()) {
     parts.guide = squeeze(APP_GUIDE.split('\nPosting:')[0], 1500);
     parts.workspace = squeeze(workspace, 2000);
     parts.perResult = 300;
+  }
+  for (const shorter of input.catalogFallbacks ?? []) {
+    if (fits()) break;
+    parts.catalog = shorter;
   }
   while (!fits() && parts.results.length > 1) parts.results = parts.results.slice(1);
   return text.length > budget ? text.slice(0, budget) : text;
