@@ -530,6 +530,40 @@ describe('people’s own domains', () => {
     expect(rowsOf('published_domains').find((d) => d.domain === 'bobs-bakery.example.com').user_id).toBe(bob.user.id);
   });
 
+  it('takes the previous owner’s pages off a domain before it changes hands, so nothing of theirs stays on it', async () => {
+    const trent = await supa.tokenFor('trent@pages.test');
+    const peggy = await supa.tokenFor('peggy@pages.test');
+    // trent added peggy's domain first and made a page its home page (he never had its TXT record)
+    expect((await addDomain(trent, 'peggys-pies.example.com')).status).toBe(200);
+    expect((await publish(trent, 'seo:t1', { slug: 'trent-pies', domain: 'peggys-pies.example.com', home: true })).status).toBe(200);
+    const claim = await (await addDomain(peggy, 'peggys-pies.example.com')).json();
+    txt('peggys-pies.example.com', claim.domain.record.value);
+    const failing = (test) => (method, pathname, q) => (method === 'PATCH' && pathname === '/rest/v1/published_pages' && test(String(q.get('user_id'))) ? { status: 500, body: { message: 'boom' } } : null);
+    // Supabase won't take trent's pages off it: nothing changes hands
+    supa.behavior.fail = failing((u) => u === `eq.${trent.user.id}`);
+    let r;
+    try {
+      r = await api('/api/domains/peggys-pies.example.com/check', { who: peggy, method: 'POST' });
+    } finally {
+      supa.behavior.fail = null;
+    }
+    expect(r.status).toBe(502);
+    expect(rowsOf('published_domains').find((d) => d.domain === 'peggys-pies.example.com').user_id).toBe(trent.user.id);
+    expect(rowsOf('published_pages').find((p) => p.slug === 'trent-pies')).toMatchObject({ domain: 'peggys-pies.example.com', home: true });
+    // the sweep after the move fails: it moves all the same, with nothing of trent's left on it
+    supa.behavior.fail = failing((u) => u.startsWith('neq.'));
+    try {
+      expect(await checkDomain(peggy, 'peggys-pies.example.com')).toMatchObject({ verified: true });
+    } finally {
+      supa.behavior.fail = null;
+    }
+    expect(rowsOf('published_domains').find((d) => d.domain === 'peggys-pies.example.com').user_id).toBe(peggy.user.id);
+    expect(rowsOf('published_pages').find((p) => p.slug === 'trent-pies')).toMatchObject({ domain: null, home: false });
+    // so peggy's page can be its home page (a domain has one)
+    expect((await publish(peggy, 'seo:p1', { slug: 'peggys-pies', domain: 'peggys-pies.example.com', home: true, html: '<h1>Peggy’s pies</h1>' })).status).toBe(200);
+    expect((await at('peggys-pies.example.com', '/')).text).toContain('Peggy’s pies');
+  });
+
   it('counts a check from before TXT records only once the domain has one', async () => {
     // verified by the old check (an answer from the domain itself, which this server gave)
     rowsOf('published_domains').push({ domain: 'older.example.com', user_id: alice.user.id, token: 'a1b2c3d4e5f60718293a4b5c6d7e8f90', verified_at: new Date().toISOString(), created_at: new Date().toISOString() });
@@ -600,7 +634,8 @@ describe('which host gets what', () => {
   const asJson = (res) => /application\/json/.test(String(res.headers['content-type']));
 
   it('answers with the app only on its own hosts', async () => {
-    for (const host of ['yourlocalbusiness.replit.app', 'x-1.picard.replit.dev', 'old.repl.co', 'localhost:8787', '127.0.0.1', '[::1]:8787', 'printer.local']) {
+    // (and names that are never a public domain: one label, *.local)
+    for (const host of ['yourlocalbusiness.replit.app', 'x-1.picard.replit.dev', 'old.repl.co', 'localhost:8787', '127.0.0.1', '[::1]:8787', 'printer.local', 'my-machine:8787']) {
       const res = await at(host, '/api/config');
       expect(res.status, host).toBe(200);
       expect(asJson(res), host).toBe(true);
@@ -608,9 +643,10 @@ describe('which host gets what', () => {
   });
 
   it('shows "not found" on any other host, whether or not anyone has claimed it, and never the app or /api', async () => {
-    // unverified (added, no record) and never added at all
+    // unverified (added, no record) and never added at all, and real names nobody can add here (an
+    // internationalized top-level domain, an underscore): a list decides, not what can be claimed
     expect((await addDomain(alice, 'pending.example.com')).status).toBe(200);
-    for (const host of ['pending.example.com', 'nobody-claimed.example.org', 'app.mybiz.test']) {
+    for (const host of ['pending.example.com', 'nobody-claimed.example.org', 'app.mybiz.test', 'shop.xn--p1ai', 'my_shop.example.com']) {
       for (const p of ['/', '/api/config', '/api/pages', '/assets/index.js', '/login']) {
         const res = await at(host, p, { headers: { authorization: `Bearer ${alice.token}` } });
         expect(res.status, `${host}${p}`).toBe(404);
@@ -627,6 +663,38 @@ describe('which host gets what', () => {
   it('says at startup where the app answers, and that its own domain goes in APP_HOSTS', () => {
     expect(serverLog).toContain('The app and /api answer on *.replit.app, *.replit.dev, *.repl.co, localhost and IP addresses.');
     expect(serverLog).toContain('If the app has a custom domain of its own, list it in the APP_HOSTS Secret (it’s empty now).');
+  });
+
+  it('says in its log when a host that’s nobody’s is opened (it may be the app’s own domain, missing from APP_HOSTS)', async () => {
+    const hint = 'isn’t one of the app’s hosts or anyone’s verified domain, so it shows “Page not found”. If it’s the app’s own custom domain, add it to the APP_HOSTS Secret.';
+    const said = async (s, text) => {
+      for (let i = 0; i < 50 && !s.log().includes(text); i++) await sleep(20);
+      return s.log().includes(text);
+    };
+    // a browser opening a page there
+    let s = await startServer();
+    try {
+      // (a scanner's guess, neither / nor a page a browser opens, isn't worth a line)
+      await request(s.base, '/wp-login.php', { host: 'scanner.example.net' });
+      await sleep(100);
+      expect(s.log()).not.toContain(hint);
+      expect((await request(s.base, '/menu', { host: 'www.mybiz.test', headers: { accept: 'text/html,application/xhtml+xml' } })).status).toBe(404);
+      expect(await said(s, `Published pages: www.mybiz.test ${hint}`)).toBe(true);
+      // once in a while, not for every visit
+      await request(s.base, '/', { host: 'www2.mybiz.test', headers: { accept: 'text/html' } });
+      await sleep(100);
+      expect(s.log().split(hint).length - 1).toBe(1);
+    } finally {
+      s.proc.kill();
+    }
+    // a check of / (a platform's health check sends no Accept)
+    s = await startServer();
+    try {
+      expect((await request(s.base, '/', { host: 'health.mybiz.test' })).status).toBe(404);
+      expect(await said(s, `Published pages: health.mybiz.test ${hint}`)).toBe(true);
+    } finally {
+      s.proc.kill();
+    }
   });
 
   it('answers with the app on the hosts in APP_HOSTS and ALLOWED_ORIGIN, and nobody can claim them', async () => {
@@ -722,10 +790,20 @@ describe('deleting an account', () => {
     const there = await at('carol-bakes.example.com', '/api/config');
     expect(there.status).toBe(404);
     expect(there.text).toContain('Page not found');
-    // the same access token still checks out until it expires, but nothing is stored for it
-    const again = await publish(carol, 'seo:ghost1', { slug: 'ghost-page', images: [image('img-1.png', 'image/png', PNG), image('img-2.png', 'image/png', PNG)] });
+    // the same access token is still signed and unexpired: this copy of the server knows the account is gone…
+    const ghost = { slug: 'ghost-page', images: [image('img-1.png', 'image/png', PNG), image('img-2.png', 'image/png', PNG)] };
+    const again = await publish(carol, 'seo:ghost1', ghost);
     expect(again.status).toBe(401);
-    expect(await again.json()).toEqual({ error: 'This account doesn’t exist anymore. Sign in again.', code: 'ACCOUNT_GONE' });
+    expect((await again.json()).code).toBe('AUTH_REQUIRED');
+    // …and another copy, which only checks the token's signature, asks Supabase before it stores anything
+    const other = await startServer();
+    try {
+      const elsewhere = await fetch(`${other.base}/api/pages/${encodeURIComponent('seo:ghost1')}`, { method: 'PUT', headers: { 'content-type': 'application/json', authorization: `Bearer ${carol.token}` }, body: JSON.stringify({ kind: 'seo', title: 'Ghost', html: '<p>ghost</p>', ...ghost }) });
+      expect(elsewhere.status).toBe(401);
+      expect(await elsewhere.json()).toEqual({ error: 'This account doesn’t exist anymore. Sign in again.', code: 'ACCOUNT_GONE' });
+    } finally {
+      other.proc.kill();
+    }
     expect(objectsUnder(`media/${carol.user.id}/`)).toEqual([]);
     expect(rowsOf('published_pages').some((p) => p.slug === 'ghost-page')).toBe(false);
   });
@@ -928,6 +1006,43 @@ describe('visitors’ lookups', () => {
       // past twice their time, answers go (with their HTML), even with nothing else coming in
       await sleep(1000);
       expect(s.pages.cacheStats().pages).toEqual({ entries: 0, bytes: 0 });
+    } finally {
+      await s.close();
+      await mock.close();
+    }
+  });
+});
+
+describe('publishing, in the module', () => {
+  it('keeps the images of a publish whose answer was lost after it landed (the live page shows them)', async () => {
+    const mock = await (await createMockSupabase()).start();
+    let lose = false;
+    // Supabase saves the page, but its answer never arrives
+    const fetchImpl = async (input, init = {}) => {
+      const res = await fetch(input, init);
+      if (lose && init.method === 'POST' && String(input).includes('/rest/v1/published_pages?on_conflict=')) {
+        await res.arrayBuffer();
+        throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+      }
+      return res;
+    };
+    const s = await startPages({ mock, secretKey: mock.SECRET, fetch: fetchImpl });
+    try {
+      const ivy = await mock.tokenFor('ivy@pages.test');
+      const put = (bytes) => s.api(`/api/pages/${encodeURIComponent('seo:ivy1')}`, { who: ivy, method: 'PUT', body: { kind: 'seo', slug: 'ivy-page', title: 'Ivy', html: '<img src="/ivy-page/img/img-1.png" alt="">', images: [image('img-1.png', 'image/png', bytes)] } });
+      expect((await put(PNG)).status).toBe(200);
+      const second = Buffer.concat([PNG, Buffer.from('second')]);
+      lose = true;
+      const r = await put(second);
+      lose = false;
+      expect(r.status).toBe(502);
+      expect(await r.json()).toEqual({ error: 'Supabase took too long to answer. Try again.', code: 'UPSTREAM' });
+      // the row points at the new images, and they're still there
+      const { v } = mock.tables.get('published_pages').find((p) => p.slug === 'ivy-page').images[0];
+      expect(mock.objects.has(`media/${ivy.user.id}/published/seo-ivy1/${v}/img-1.png`)).toBe(true);
+      const pic = await request(s.base, '/ivy-page/img/img-1.png');
+      expect(pic.status).toBe(200);
+      expect(pic.buf.equals(second)).toBe(true);
     } finally {
       await s.close();
       await mock.close();

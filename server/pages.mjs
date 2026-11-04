@@ -21,11 +21,12 @@
 // storage or to the API as the visitor, and SEO pages can't run scripts at all. On someone's own
 // domain the page has the origin to itself, so it isn't sandboxed; the app and /api never answer there.
 //
-// Hosts: the app and /api answer only on hosts nobody can ever claim (isAppHost): the app's address on
-// Replit (*.replit.app, *.replit.dev, *.repl.co), localhost, IP addresses, ALLOWED_ORIGIN's host and
-// APP_HOSTS. Every other host goes to serveDomain, whatever the database holds and whether publishing
-// is on or not: a verified domain shows its owner's pages, any other host a plain "not found" page
-// (503 when that can't be told right now). So the app's own custom domain must be in APP_HOSTS.
+// Hosts: the app and /api answer only on the app's own hosts, a fixed list (appHost): its address on
+// Replit (*.replit.app, *.replit.dev, *.repl.co), localhost, IP addresses, names that are never a public
+// domain (one label, *.local, *.internal, *.home.arpa), ALLOWED_ORIGIN's host and APP_HOSTS. Every other
+// host goes to serveDomain, whatever the database holds and whether publishing is on or not: a verified
+// domain shows its owner's pages, any other host a plain "not found" page (503 when that can't be told
+// right now). So the app's own custom domain must be in APP_HOSTS.
 //
 // Own domains: a domain is someone's only while its DNS says so: a TXT record _ylb-domain.<domain> whose
 // value is that account's code for the domain. The check is a DNS lookup, never a request to the domain
@@ -199,6 +200,20 @@ export function normalizeDomain(input) {
 /** Whether a host could be someone's own domain (a name with a real top-level domain, not the app's host). */
 export function claimable(host, appHosts = new Set()) {
   return typeof host === 'string' && host.length <= 253 && DOMAIN_RE.test(host) && !NEVER_CLAIMED.some((re) => re.test(host)) && !appHosts.has(host);
+}
+
+/**
+ * Whether the app (and /api) answers on a host (as hostOf gives it): a list, never what the database
+ * holds. IP addresses, a name of one label (localhost, a machine's own name), the NEVER_CLAIMED names and
+ * the app's own hosts (APP_HOSTS, ALLOWED_ORIGIN's). Any other host, a name nobody may claim included
+ * (e.g. under a top-level domain the domain check doesn't take), only ever shows verified pages.
+ */
+export function appHost(host, appHosts = new Set()) {
+  if (typeof host !== 'string' || !host || host.length > 253) return false;
+  if (appHosts.has(host)) return true;
+  if (net.isIP(host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host)) return true;
+  if (!host.includes('.')) return true;
+  return NEVER_CLAIMED.some((re) => re.test(host));
 }
 
 /** "host:port" → [host, ':port'] (['host', ''] without a port; an IPv6 address in brackets keeps its colons). */
@@ -755,17 +770,22 @@ export function createPages({
 
   // ── which host gets what ──
 
-  /** Whether the app (and /api) may answer this request: a host nobody can ever claim. Anything else goes to serveDomain. */
-  function isAppHost(req) {
-    const host = hostOf(req);
-    return host !== '' && !claimable(host, ownHosts);
-  }
+  /** Whether the app (and /api) may answer this request: one of the app's own hosts (appHost). Anything else goes to serveDomain. */
+  const isAppHost = (req) => appHost(hostOf(req), ownHosts);
   /** For the server's log: where the app answers, and what every other host shows. */
   const appHostsNote = () =>
     [
       `The app and /api answer on *.replit.app, *.replit.dev, *.repl.co, localhost and IP addresses${ownHosts.size ? `, and on ${[...ownHosts].join(', ')} (APP_HOSTS, ALLOWED_ORIGIN)` : ''}.`,
       `Any other host shows only the published pages of a verified domain ("Page not found" otherwise). If the app has a custom domain of its own, list it in the APP_HOSTS Secret${ownHosts.size ? '' : ' (it’s empty now)'}.`,
     ].join('\n');
+  // a browser visit (or a check of /) on a host that's nobody's: it may be the app's own custom domain,
+  // missing from APP_HOSTS (said once in a while: scanners send any Host)
+  let hintedAt = 0;
+  function hintAppHosts(req, host, url) {
+    if (!host || req.method !== 'GET' || (url.pathname !== '/' && !/text\/html/.test(String(req.headers.accept || '').slice(0, 300))) || Date.now() - hintedAt < 10 * 60_000) return;
+    hintedAt = Date.now();
+    console.warn(`Published pages: ${host.replace(/[^a-z0-9.:[\]_-]/g, '?')} isn’t one of the app’s hosts or anyone’s verified domain, so it shows “Page not found”. If it’s the app’s own custom domain, add it to the APP_HOSTS Secret.`);
+  }
 
   // ── own domains: proven by a TXT record, looked at again every few hours ──
   const rechecks = new Map(); // domain → { running, confirmedAt, retryAt }
@@ -850,7 +870,10 @@ export function createPages({
   async function serveDomain(req, res, url) {
     const host = hostOf(req);
     // nobody's domain, or publishing is off: nothing to look up
-    if (!enabled || !claimable(host, ownHosts)) return notFound(req, res);
+    if (!enabled || !claimable(host, ownHosts)) {
+      hintAppHosts(req, host, url);
+      return notFound(req, res);
+    }
     const client = clientOf(req);
     let site;
     try {
@@ -859,7 +882,10 @@ export function createPages({
       // can't tell whose domain this is right now
       return unavailable(req, res, e);
     }
-    if (!verifiedRow(site)) return notFound(req, res);
+    if (!verifiedRow(site)) {
+      if (!site) hintAppHosts(req, host, url);
+      return notFound(req, res);
+    }
     recheckSoon(site);
     if (req.method !== 'GET' && req.method !== 'HEAD') return write(req, res, 405, { ...COMMON, 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', allow: 'GET, HEAD' }, 'Method not allowed');
     const p = url.pathname;
@@ -956,6 +982,17 @@ export function createPages({
     });
   }
 
+  /** Whether the page's row lists the images of this publish (version); null when Supabase can't say. */
+  async function usesVersion(uid, pid, version) {
+    try {
+      const rows = await rest(`published_pages?user_id=eq.${uid}&page_id=eq.${pid}&select=images`, { timeout: LOOKUP_TIMEOUT });
+      const images = rows?.[0]?.images;
+      return Array.isArray(images) && images.some((i) => i?.v === version);
+    } catch {
+      return null;
+    }
+  }
+
   async function publish(req, who, pageId, b, origin) {
     const kind = pageId.slice(0, pageId.indexOf(':'));
     if (b.kind !== undefined && b.kind !== kind) throw fail(400, 'BAD_REQUEST', 'The page’s kind doesn’t match its id.');
@@ -1020,7 +1057,10 @@ export function createPages({
     } catch (e) {
       // nothing changed: the domain keeps the home page it had, and the new images go
       if (demoted?.length) await rest(`published_pages?slug=eq.${demoted[0].slug}&user_id=eq.${uid}&domain=eq.${d}`, { method: 'PATCH', body: { home: true }, prefer: 'return=minimal' }).catch(() => {});
-      if (uploads.length) await deleteObjects(uploads).catch((err) => console.warn(`Published pages: couldn’t remove the images of a publish that failed (${err.message}).`));
+      // …unless the page already points at them: a write whose answer was lost may still have landed
+      // (and when that can't be told, they stay: the next publish of the page removes leftovers)
+      const landed = uploads.length && e.code === 'UPSTREAM' ? await usesVersion(uid, pid, version) : false;
+      if (uploads.length && landed === false) await deleteObjects(uploads).catch((err) => console.warn(`Published pages: couldn’t remove the images of a publish that failed (${err.message}).`));
       if (e.code === 'CONFLICT') throw fail(409, 'SLUG_TAKEN', 'That name was just taken. Choose another.');
       if (e.code === 'REFERENCE' && e.ref === 'user') throw accountGone();
       if (e.code === 'REFERENCE' && e.ref === 'domain') throw fail(400, 'DOMAIN_NOT_YOURS', 'That domain isn’t in your account anymore. Add it again in Settings → Domains.');
@@ -1095,18 +1135,24 @@ export function createPages({
       return { verified: false, error: txtProblem(domain, r) };
     }
     const now = new Date().toISOString();
-    // another account's: it changes hands in one step, unless it changed meanwhile
+    // another account's: its pages come off the domain first (they stay published, on the app's address
+    // only), so nothing of theirs is left there, its home page included (a domain has one)
+    const off = mine ? [] : ((await rest(`published_pages?domain=eq.${d}&user_id=eq.${row.user_id}&select=slug`, { method: 'PATCH', body: { domain: null, home: false }, prefer: 'return=representation' })) ?? []);
+    forget({ slugs: off.map((x) => x.slug), domains: [domain] });
+    // then it changes hands in one step, unless it changed meanwhile
     const rows = mine
       ? await rest(`published_domains?domain=eq.${d}&user_id=eq.${who.id}&select=${DOMAIN_COLUMNS}`, { method: 'PATCH', body: { token, verified_at: now }, prefer: 'return=representation' })
       : await rest(`published_domains?domain=eq.${d}&user_id=eq.${row.user_id}&token=eq.${encodeURIComponent(row.token)}&select=${DOMAIN_COLUMNS}`, { method: 'PATCH', body: { user_id: who.id, token, verified_at: now, created_at: now }, prefer: 'return=representation' });
     const saved = rows?.[0];
     if (!saved) throw fail(409, 'CONFLICT', 'That domain changed while it was being checked. Check again.');
-    // pages another account put on it stay published, on the app's address only
-    const moved = await rest(`published_pages?domain=eq.${d}&user_id=neq.${who.id}&select=slug`, { method: 'PATCH', body: { domain: null, home: false }, prefer: 'return=representation' }).catch((e) => {
-      console.warn(`Published pages: couldn’t take the previous owner’s pages off ${domain} (${e.message}).`);
-      return [];
-    });
-    forget({ slugs: (moved ?? []).map((x) => x.slug), domains: [domain] });
+    if (!mine) {
+      // and anything the previous owner published to it in between
+      const late = await rest(`published_pages?domain=eq.${d}&user_id=neq.${who.id}&select=slug`, { method: 'PATCH', body: { domain: null, home: false }, prefer: 'return=representation' }).catch((e) => {
+        console.warn(`Published pages: couldn’t take the previous owner’s pages off ${domain} (${e.message}).`);
+        return [];
+      });
+      forget({ slugs: (late ?? []).map((x) => x.slug), domains: [domain] });
+    }
     dropDomain(domain);
     rechecks.delete(domain);
     return { verified: true, domain: describeDomain(saved) };

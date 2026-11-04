@@ -34,17 +34,25 @@ function publishedPages(): Plugin {
         if (!isPage && !image.test(pathname)) return next();
         if (/^\/(@|src\/|node_modules\/)/.test(pathname) || isFile(path.join(root, pathname)) || (publicDir && isFile(path.join(publicDir, pathname)))) return next();
         const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() || 'http';
-        const up = http.request({ host: 'localhost', port: 8787, path: req.url, method: req.method, headers: { ...req.headers, 'x-forwarded-host': req.headers.host ?? '', 'x-forwarded-proto': proto } }, (r) => {
-          // the server's pages, images and "not found" page all carry a CSP; anything else (its copy of
-          // the built app, for one of the app's own names) is Vite's to answer, and so is a page it doesn't have
-          if (!r.headers['content-security-policy'] || (isPage && r.statusCode === 404)) {
-            r.resume();
-            return next();
-          }
-          res.writeHead(r.statusCode ?? 502, r.headers);
-          r.on('error', () => res.destroy());
-          r.pipe(res);
-        });
+        // as the /api proxy does: the server tells visitors apart (its lookup limits) by the first address
+        const forwardedFor = [req.headers['x-forwarded-for'], req.socket.remoteAddress].filter(Boolean).join(', ');
+        let up: http.ClientRequest;
+        try {
+          up = http.request({ host: 'localhost', port: 8787, path: req.url, method: req.method, headers: { ...req.headers, 'x-forwarded-host': req.headers.host ?? '', 'x-forwarded-proto': proto, 'x-forwarded-for': forwardedFor } }, (r) => {
+            // the server's pages, images and "not found" page all carry a CSP; anything else (its copy of
+            // the built app, for one of the app's own names) is Vite's to answer, and so is a page it doesn't have
+            if (!r.headers['content-security-policy'] || (isPage && r.statusCode === 404)) {
+              r.resume();
+              return next();
+            }
+            res.writeHead(r.statusCode ?? 502, r.headers);
+            r.on('error', () => res.destroy());
+            r.pipe(res);
+          });
+        } catch {
+          // a request the server can't be asked about (Node refused its address or headers) is Vite's
+          return next();
+        }
         // the server isn't running (or stopped halfway through)
         up.on('error', () => (res.headersSent ? res.destroy() : next()));
         up.end();

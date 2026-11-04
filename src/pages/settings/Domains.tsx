@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Globe, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { showSignIn } from '@/lib/cloud/auth';
-import { addDomain, checkDomain, isValidDomain, listPublished, normalizeDomain, removeDomain, usePublishAccess, type DomainInfo, type DomainRecord, type PublishedList } from '@/lib/publish';
+import { PublishError, addDomain, checkDomain, isValidDomain, listPublished, normalizeDomain, removeDomain, usePublishAccess, type DomainInfo, type DomainRecord, type PublishedList } from '@/lib/publish';
 import { CopyButton, Field, Spinner, confirmAction } from '@/components/ui/primitives';
 import { toast } from '@/store/ui';
 
@@ -50,11 +50,24 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
     setClaims((c) => c.filter((d) => d.domain !== info.domain));
   };
 
+  /** Keep a domain another account added first (or update it), with the TXT record that moves it here. */
+  const keepClaim = (info: DomainInfo) => setClaims((c) => [...c.filter((d) => d.domain !== info.domain), info]);
+
   const check = async (domain: string, claim = false) => {
     checkedOnce.current.add(domain);
     setChecking((s) => new Set(s).add(domain));
     try {
-      const r = await checkDomain(domain);
+      let r: Awaited<ReturnType<typeof checkDomain>>;
+      try {
+        r = await checkDomain(domain);
+      } catch (e) {
+        // the other account removed it meanwhile: it's free, so it's added here (its TXT record is the same)
+        if (!(claim && e instanceof PublishError && e.code === 'NOT_FOUND')) throw e;
+        const info = await addDomain(domain);
+        if (info.takenByOther) keepClaim(info);
+        else keepDomain(info);
+        r = await checkDomain(domain);
+      }
       if (r.verified && r.domain) {
         keepDomain(r.domain);
         if (claim) toast({ kind: 'success', title: `${domain} is in your account now`, body: 'Choose it when you publish a page.' });
@@ -98,7 +111,7 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
       const info = await addDomain(domain);
       setDraft('');
       if (info.takenByOther) {
-        setClaims((c) => [...c.filter((d) => d.domain !== info.domain), info]);
+        keepClaim(info);
         setProblems((p) => ({ ...p, [info.domain]: '' }));
         toast({ kind: 'info', title: `Another account added ${info.domain} first`, body: 'If it’s yours, add the TXT record shown below to move it to your account.' });
         return;
@@ -285,7 +298,7 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
 }
 
 /** What to do for a domain that isn't verified yet: its TXT record, and linking it in Replit. */
-function ConnectSteps({ record }: { record: DomainRecord }) {
+export function ConnectSteps({ record }: { record: DomainRecord }) {
   return (
     <ol className="flex list-decimal flex-col gap-2 pl-5 text-[12.5px] leading-relaxed text-ink-2">
       <li>
@@ -299,7 +312,7 @@ function ConnectSteps({ record }: { record: DomainRecord }) {
 }
 
 /** A TXT record, its name and value each with a Copy button. */
-function TxtRecord({ record, className = '' }: { record: DomainRecord; className?: string }) {
+export function TxtRecord({ record, className = '' }: { record: DomainRecord; className?: string }) {
   const rows: [string, string][] = [
     ['Name', record.name],
     ['Value', record.value],
@@ -316,6 +329,7 @@ function TxtRecord({ record, className = '' }: { record: DomainRecord; className
           <CopyButton text={text} size="xs" label={`Copy ${label.toLowerCase()}`} />
         </div>
       ))}
+      <p className="text-xs text-muted">Some registrars add your domain to the end of the name by themselves. If yours does, type the name without it.</p>
     </div>
   );
 }

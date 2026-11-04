@@ -237,6 +237,8 @@ const server = http.createServer((req, res) => {
     crashed(req, res, e);
   }
 });
+// a promise that fails with nothing waiting for it is logged, not the end of every request this copy is serving
+process.on('unhandledRejection', (e) => console.error('Unhandled rejection:', e));
 
 server.listen(PORT, HOST, async () => {
   const h = await ai.health({ id: 'startup' });
