@@ -11,6 +11,7 @@ import { StackedBar } from '@/components/charts/Charts';
 import { PostVisual } from '@/components/visuals/PostVisual';
 import { PlatformChip } from '@/components/posts/PlatformIcon';
 import { NETWORKS } from '@/ai/manusPost';
+import { LinkPlacementCard } from './LinkPlacementCard';
 
 const WEIGHTS = [
   { id: '0', label: 'Off' },
@@ -176,6 +177,8 @@ export function CampaignSetup({ project }: { project: Project }) {
         </ul>
         {cfg.platforms.length === 0 && <Warn>Pick at least one platform.</Warn>}
       </section>
+
+      <LinkPlacementCard project={project} />
 
       <section className="panel p-4 sm:p-5" aria-label="Post type mix">
         <h2 className="section-title mb-1 flex items-center gap-2">

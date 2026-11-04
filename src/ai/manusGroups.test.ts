@@ -1,7 +1,7 @@
 // Sharing a post in Facebook groups: the list you type, Manus's exact instructions, and its per-group report.
 import { describe, expect, it } from 'vitest';
 import type { ManusState } from './manus';
-import { carriedResults, groupLinkError, groupRecord, groupStateFromManus, groupSummary, groupsAlreadyOut, groupsPrompt, groupsToRetry, parseGroupResults, parseGroups, rememberedGroups } from './manusGroups';
+import { carriedResults, groupLinkError, groupPostText, groupRecord, groupStateFromManus, groupSummary, groupsAlreadyOut, groupsPrompt, groupsToRetry, parseGroupResults, parseGroups, rememberedGroups } from './manusGroups';
 
 const base: ManusState = { taskId: 't', status: 'stopped', agentStatus: 'stopped', done: true, waiting: false, waitingType: '', waitingDescription: '', error: '', title: '', taskUrl: '', creditUsage: 0, text: '', imageCount: 0, images: [] };
 
@@ -34,6 +34,22 @@ describe('Manus’s instructions for groups', () => {
   });
   it('posts as your profile when no Page is given', () => {
     expect(groupsPrompt({ groups: ['A'], postAs: '', text: 'x', media: null })).toContain('Post as the signed-in profile.');
+  });
+  it('puts the link in the text: Manus never comments in groups, and a bio there is the poster’s own', () => {
+    const page = 'https://app.example/candle-co';
+    const post = (caption: string) => ({ caption, hashtags: ['#candles'] });
+    expect(groupPostText(post('New scents are in.\n\nGrab yours 👉 the link in the first comment'), page)).toBe(`New scents are in.\n\nGrab yours 👉 ${page}\n\n#candles`);
+    expect(groupPostText(post('New scents are in.\n\nLink in bio 👆'), page)).toBe(`New scents are in.\n\n${page} 👆\n\n#candles`);
+    expect(groupPostText(post('Visit candleco.com for more'), page, ['candleco.com'])).toBe(`Visit ${page} for more\n\n#candles`);
+    // without a link, the text is the post's, as before
+    expect(groupPostText(post('Grab yours 👉 the link in bio'), null)).toBe('Grab yours 👉 the link in bio\n\n#candles');
+    // the link was going in the first comment, and the caption doesn't say so: the comment ends the text instead
+    const comment = { linkPlacement: 'comment' as const, firstComment: `Shop here: ${page}` };
+    expect(groupPostText({ ...post('Which scent should we make next? Tell us below.'), ...comment }, page)).toBe(`Which scent should we make next? Tell us below.\n\nShop here: ${page}\n\n#candles`);
+    // once is enough: a caption that pointed to the comment gets the link in its place, with no comment added
+    expect(groupPostText({ ...post('Grab yours 👉 the link in the first comment'), ...comment }, page)).toBe(`Grab yours 👉 ${page}\n\n#candles`);
+    // a comment only counts while the link goes there
+    expect(groupPostText({ ...post('Tell us below.'), linkPlacement: 'post', firstComment: `Shop here: ${page}` }, page)).toBe('Tell us below.\n\n#candles');
   });
 });
 

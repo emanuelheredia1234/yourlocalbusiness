@@ -13,6 +13,7 @@ import { ExternalBadge, ManusPostButton, manusSetupHint, useCanOfferManus, useMa
 import { GroupShareBadge, PostToGroupsButton } from '@/components/posts/ManusGroups';
 import { DueBadge, PostedBy, PostMoreMenu, addToCalendarFlow, failedOnItsNetwork, isDue, manusHolds, useMarkPosted } from '@/components/posts/PostActions';
 import { PlatformChip, PlatformGlyph } from '@/components/posts/PlatformIcon';
+import { PostLinkNote } from '@/components/posts/PostLinkNote';
 import { PostVisual } from '@/components/visuals/PostVisual';
 import { networkLabel } from '@/ai/manusPost';
 
@@ -347,6 +348,7 @@ function QueueList({ posts }: { posts: Post[] }) {
                   </div>
                   <p className="truncate text-[13.5px] font-semibold">{p.headline}</p>
                   <p className="clamp-2 text-[12.5px] text-muted">{p.caption}</p>
+                  <PostLinkNote post={p} compact className="mt-1.5" />
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <input type="date" className="input input-sm w-[136px]" value={isoToDateStr(p.scheduledAt)} min={todayStr()} onChange={(e) => e.target.value && update(p.id, { scheduledAt: combineDateTime(e.target.value, isoToTime(p.scheduledAt)) })} aria-label="Reschedule date" />
@@ -399,6 +401,7 @@ function PublishedList({ posts }: { posts: Post[] }) {
               <p className="truncate text-[13.5px] font-semibold">{p.headline}</p>
               <p className="mb-1.5 truncate text-[12.5px] text-muted">{p.caption.split('\n')[0]}</p>
               <PostedBy post={p} />
+              <PostLinkNote post={p} compact className="mt-1.5" />
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button className="btn btn-ghost btn-xs" onClick={() => openEditor(p.id)}>
                   <Pencil size={12} /> Open

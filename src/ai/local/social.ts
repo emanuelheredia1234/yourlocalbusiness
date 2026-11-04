@@ -17,6 +17,7 @@ import type {
 import { addDays, capitalize, combineDateTime, createRng, hashStr, lowerFirst, truncate, uid, weekdayIndex } from '@/lib/utils';
 import { IMAGE_STYLES, PLATFORMS, POST_TYPE_MAP, VIDEO_STYLES, isVideoStyle } from '../knowledge';
 import { buildFacts, singular, verbOutcome, Voice, type Facts } from '../text';
+import { fitForX, firstCommentFor, knownLinks, linkText, placeLink, postLinkFor, type PostLink } from '@/lib/pageLink';
 
 const PHASES: { until: number; name: string; weights: Record<PostType, number> }[] = [
   { until: 6, name: 'Awareness', weights: { educational: 1.2, tip: 1.1, question: 1.4, sales: 0.35, bts: 0.9 } },
@@ -229,6 +230,8 @@ export interface ComposeInput {
   mediaDescription?: string;
   hasMedia?: boolean;
   watermark?: boolean;
+  /** the post's link and where it goes (postLinkFor); without one, the caption keeps today's wording */
+  link?: PostLink | null;
 }
 
 export interface ComposedPost {
@@ -350,12 +353,8 @@ export function composePost(project: Project, input: ComposeInput, d: Directives
   const tagCount = Math.min(PLATFORMS[input.platform].hashtags, v.length === 'short' ? 3 : PLATFORMS[input.platform].hashtags);
   const hashtags = v.hashtags(tagCount);
 
-  let caption = [hook, ...lines, cta].filter(Boolean).join('\n\n');
-  if (isX && caption.length > 270 - hashtags.join(' ').length) {
-    caption = [hook, cta].join('\n\n');
-    if (caption.length > 270) caption = truncate(hook, 200) + '\n\n' + truncate(cta, 60);
-  }
-  caption = v.includeMust(caption);
+  // the link where it goes on this network; on X the opening is shortened, never the link or the call to action
+  const caption = v.includeMust(finishCaption(project, [hook, ...lines, cta].filter(Boolean).join('\n\n'), input.platform, input.link ?? null, hashtags));
 
   const styleDef = [...IMAGE_STYLES, ...VIDEO_STYLES].find((s) => s.id === input.style) ?? IMAGE_STYLES[0];
   const headline = shortHeadline(input, f, v);
@@ -389,13 +388,31 @@ export function composePost(project: Project, input: ComposeInput, d: Directives
   return { headline, caption, hashtags, visualPrompt, storyboard };
 }
 
+/** A caption as it goes out: its link where it goes on this network, and short enough for X. */
+export function finishCaption(project: Project, caption: string, platform: PostPlatform, link: PostLink | null, hashtags: string[]): string {
+  const placed = placeLink(caption, link, platform, knownLinks(project));
+  return platform === 'x' ? fitForX(placed, hashtags) : placed;
+}
+
+/** What the AI is told about a post's link. The app places the link again afterwards, so a slip doesn't stay. */
+export function linkRule(link: PostLink | null, platform: PostPlatform): string {
+  const where = platform === 'x' ? 'reply' : 'comment';
+  if (!link) return 'There is no link yet: write no web address; if the call to action needs a link, say “link in bio”.';
+  if (link.placement === 'post') return `End the call to action with this exact link: ${linkText(link.url)}. Write no other web address.`;
+  if (link.placement === 'comment') return `Write no web address: the link goes in the first ${where}, so the call to action says “link in the first ${where}”.`;
+  return 'Write no web address: the call to action says “link in bio”.';
+}
+
 export function generateContentBatch(project: Project, plan: CampaignPlan, config: CampaignConfig, d: Directives = {}, variation = 0, days = 7): Post[] {
   const batchId = uid('batch');
   const now = Date.now();
   const posts: Post[] = [];
   for (const day of plan.days.slice(0, days)) {
     for (const slot of day.slots) {
-      const c = composePost(project, { topic: slot.topic, postType: slot.postType, platform: slot.platform, format: slot.format, style: slot.style, goal: config.goal, watermark: config.watermark }, d, `${slot.id}|${variation}`);
+      // the link where this network's setting puts it (the post keeps that choice, and the comment's text when it goes there)
+      const link = postLinkFor(project, slot.platform);
+      const c = composePost(project, { topic: slot.topic, postType: slot.postType, platform: slot.platform, format: slot.format, style: slot.style, goal: config.goal, watermark: config.watermark, link }, d, `${slot.id}|${variation}`);
+      const firstComment = firstCommentFor(project, link);
       posts.push({
         id: uid('post'),
         projectId: project.id,
@@ -408,6 +425,8 @@ export function generateContentBatch(project: Project, plan: CampaignPlan, confi
         visualPrompt: c.visualPrompt,
         caption: c.caption,
         hashtags: c.hashtags,
+        ...(link ? { linkPlacement: link.placement } : {}),
+        ...(firstComment ? { firstComment } : {}),
         scheduledAt: combineDateTime(day.date, slot.time),
         storyboard: c.storyboard,
         watermark: config.watermark,

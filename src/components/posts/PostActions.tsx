@@ -2,11 +2,12 @@
 // it yourself, copy its text, download its image or video, open it on the network.
 import { useEffect, useRef, useState } from 'react';
 import { create } from 'zustand';
-import { CalendarClock, CheckCheck, Copy, Download, ExternalLink, MoreHorizontal, Trash2, Undo2 } from 'lucide-react';
+import { CalendarClock, CheckCheck, Copy, Download, ExternalLink, MessageSquare, MoreHorizontal, Trash2, Undo2 } from 'lucide-react';
 import type { Post } from '@/lib/types';
 import { cn, fmtDateTime } from '@/lib/utils';
 import { copyText } from '@/lib/platform';
 import { getBlob } from '@/lib/storage';
+import { firstCommentOf } from '@/lib/pageLink';
 import { networkLabel, postText } from '@/ai/manusPost';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
@@ -109,7 +110,10 @@ export function MarkPostedHost() {
   const save = () => {
     if (clean === null || future || Number.isNaN(at.getTime())) return;
     useStore.getState().markPosted(post.id, { url: clean || undefined, at: at.toISOString() });
-    toast({ kind: 'success', title: 'Marked as posted', body: `On ${networkLabel(post.platform)}, ${fmtDateTime(at.toISOString())}.` });
+    // the link goes in the first comment: that's the owner's to add (the app never comments by itself)
+    const comment = firstCommentOf(post);
+    const word = post.platform === 'x' ? 'reply' : 'comment';
+    toast({ kind: 'success', title: 'Marked as posted', body: `On ${networkLabel(post.platform)}, ${fmtDateTime(at.toISOString())}.${comment ? ` Now add the first ${word}.` : ''}`, ...(comment ? { action: { label: `Copy the ${word}`, run: () => void copyText(comment).then((ok) => toast(ok ? { kind: 'success', title: `First ${word} copied` } : { kind: 'error', title: 'Copy was blocked', body: 'Open the post and copy it from there.' })) } } : {}) });
     close();
   };
   return (
@@ -194,6 +198,17 @@ export function PostMoreMenu({ post, onDeleted, className }: { post: Post; onDel
         >
           Copy text and hashtags
         </MenuItem>
+        {firstCommentOf(post) && (
+          <MenuItem
+            icon={<MessageSquare size={15} />}
+            onClick={run(async () => {
+              if (await copyText(firstCommentOf(post)!)) toast({ kind: 'success', title: post.platform === 'x' ? 'First reply copied' : 'First comment copied' });
+              else toast({ kind: 'error', title: 'Copy was blocked', body: 'Open the post and copy it from there.' });
+            })}
+          >
+            Copy the first {post.platform === 'x' ? 'reply' : 'comment'}
+          </MenuItem>
+        )}
         {post.media && (
           <MenuItem icon={<Download size={15} />} onClick={run(() => downloadPostMedia(post))}>
             Download the {post.media.kind}

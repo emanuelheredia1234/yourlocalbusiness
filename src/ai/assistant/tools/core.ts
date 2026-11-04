@@ -7,6 +7,7 @@ import { fmtRelative, toDateStr } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
 import { readiness } from '@/lib/readiness';
 import { POST_PLATFORMS } from '@/ai/knowledge';
+import { firstCommentOf, postPlacement } from '@/lib/pageLink';
 import { useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
 import { serverFetch } from '../../claude';
@@ -132,19 +133,22 @@ const listPosts = defineTool({
 const getPost = defineTool({
   name: 'get_post',
   class: 'R',
-  summary: 'One post in full: text, hashtags, media, when, and what Manus reported for it.',
+  summary: 'One post in full: text, hashtags, where its link goes (post, first comment or bio) and its first comment, media, when, and what Manus reported for it.',
   args: { id: arg.string({ desc: 'a post id' }) },
   validate: ({ id }) => (findPost(id) ? null : missingPost(id)),
   run: ({ id }) => {
     const p = findPost(id)!;
     const ext = p.external;
     const gs = p.groupShare;
+    const comment = firstCommentOf(p);
     return {
       data: {
         ...postSummary(p),
         style: p.style,
         caption: clip(p.caption, 2200),
         hashtags: p.hashtags,
+        linkPlacement: postPlacement(p),
+        firstComment: comment ? clip(comment, 500) : null,
         visualPrompt: clip(p.visualPrompt, 300),
         planned: p.scheduledAt,
         postedAt: p.publishedAt ?? null,
@@ -153,7 +157,7 @@ const getPost = defineTool({
         media: p.media ? { kind: p.media.kind, name: p.media.name, madeBy: p.media.generated?.provider ?? 'uploaded' } : null,
         watermark: p.watermark,
         source: p.source,
-        manus: ext ? { state: ext.state, network: ext.network, mode: ext.mode ?? 'schedule', account: ext.page, scheduledFor: ext.scheduledFor, link: ext.url ?? null, report: untrusted(ext.message) } : null,
+        manus: ext ? { state: ext.state, network: ext.network, mode: ext.mode ?? 'schedule', account: ext.page, scheduledFor: ext.scheduledFor, link: ext.url ?? null, report: untrusted(ext.message), comment: ext.comment ? { state: ext.comment.state, report: untrusted(ext.comment.detail, 160) ?? null } : null } : null,
         facebookGroups: gs ? { state: gs.state, groups: gs.groups.length, results: gs.results.map((r) => ({ group: clip(r.group, 80), state: r.state, link: r.url ?? null, detail: untrusted(r.detail, 160) })) } : null,
       },
       note: `Read the post “${clip(p.headline, 60) || 'Untitled'}”`,
