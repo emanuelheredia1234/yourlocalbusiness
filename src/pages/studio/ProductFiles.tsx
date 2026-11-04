@@ -2,10 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { BookOpenText, Download, FileSpreadsheet, FileText, PackageCheck, RefreshCw, Trash2, Wand2 } from 'lucide-react';
 import type { ProductFile, Project } from '@/lib/types';
 import { cn, fmtBytes, fmtRelative } from '@/lib/utils';
-import { coverMedia, createEbookFile, createWorkbookFile, deleteProductFile, productFileBlob } from '@/ai/productFiles';
+import { coverMedia, createEbookFile, createWorkbookFile, deleteProductFile, downloadProductFile } from '@/ai/productFiles';
 import type { EbookPageSize, EbookTheme } from '@/lib/ebook';
 import { AIThinking } from '@/components/ai/AI';
-import { download } from '@/components/ui/download';
 import { Segmented, Spinner, Toggle, confirmAction } from '@/components/ui/primitives';
 import { toast } from '@/store/ui';
 import { beginBusy, busyId, endBusy } from '@/lib/busy';
@@ -73,11 +72,7 @@ export function ProductFiles({ project }: { project: Project }) {
       return { file: r.file, notes: r.notes, done: `${r.file.name} · ${r.summary.sheets.length} tab${r.summary.sheets.length > 1 ? 's' : ''} + dashboard · ${r.summary.formulas} formulas` };
     });
 
-  const save = async (f: ProductFile) => {
-    const blob = await productFileBlob(f);
-    if (blob) await download(f.name, blob);
-    else toast({ kind: 'error', title: 'That file isn’t stored on this device any more', body: 'Create it again.' });
-  };
+  const save = (f: ProductFile) => downloadProductFile(f);
 
   const remove = async (f: ProductFile) => {
     if (await confirmAction({ title: `Delete ${f.name}?`, body: 'The file is removed from this workspace. Copies you downloaded stay where you saved them.', confirmLabel: 'Delete', danger: true })) await deleteProductFile(f.id);

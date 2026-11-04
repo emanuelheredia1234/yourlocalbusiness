@@ -1,22 +1,22 @@
 import { useMemo, useState } from 'react';
 import { Check, CircleAlert, Clock, ExternalLink, Globe2, ImagePlus, Link2, Mail, Phone, Rocket, Store, Users, X } from 'lucide-react';
 import type { BookingType, ListingDraft, MediaRef, PriceModel, Project } from '@/lib/types';
-import { cn, fmtDateTime, fmtMoney } from '@/lib/utils';
-import { listingActions, safeEmail, safePhone, safeUrl } from '@/pages/store/actions';
-import { navigate } from '@/lib/router';
+import { cn, fmtDateTime } from '@/lib/utils';
+import { safeEmail, safePhone, safeUrl } from '@/lib/listingActions';
 import { useRuntime } from '@/lib/platform';
-import { pushMyListings, startCommunitySync } from '@/lib/community';
 import { BUSINESS_CATEGORIES, PRODUCT_CATEGORIES } from '@/ai/knowledge';
 import { listingTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
+import { applyListingCopy } from '@/ai/listingCopy';
 import { getActiveProject, useStore } from '@/store/useStore';
-import { toast, useUI } from '@/store/ui';
+import { toast } from '@/store/ui';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, ChipInput, Field, Segmented, Spinner, Toggle, confirmAction } from '@/components/ui/primitives';
 import { MediaDrop, MediaThumb } from '@/components/media/MediaUpload';
-import { ListingCard, ListingCover, priceLabel } from '@/pages/store/ListingParts';
-import { buildListing, coverFromMedia, galleryFromMedia, galleryIds, leadPrice, listingSuggestions } from './listing';
-import { ListingImages, MAX_GALLERY, PhotoUploadButton } from './ListingImages';
+import { ListingCard, ListingCover } from '@/pages/store/ListingParts';
+import { buildListing, galleryIds, leadPrice, listingSuggestions, MAX_GALLERY, priceLabel } from '@/lib/listing';
+import { listingChanged, listingChecks, openInStore, publishProjectListing, setListingsShared, UNPUBLISH_CONFIRM, unpublishProjectListing } from '@/lib/listingPublish';
+import { ListingImages, PhotoUploadButton } from './ListingImages';
 import { PHOTO_ACCEPT } from '@/ai/listingPhotos';
 import { VideoPanel } from '@/components/images/VideoPanel';
 
@@ -35,10 +35,7 @@ function demoVideoPrompt(project: Project): string {
 export function PublishTab({ project }: { project: Project }) {
   const updateStudio = useStore((s) => s.updateStudio);
   const updateBrand = useStore((s) => s.updateBrand);
-  const publishListing = useStore((s) => s.publishListing);
-  const unpublishListing = useStore((s) => s.unpublishListing);
   const share = useStore((s) => s.settings.shareToCommunity);
-  const updateSettings = useStore((s) => s.updateSettings);
   const live = useStore((s) => s.myListings.find((l) => l.id === project.studio.publishedListingId));
   const community = useRuntime((s) => s.community);
   const ai = useAI(listingTask);
@@ -68,39 +65,19 @@ export function PublishTab({ project }: { project: Project }) {
   // the business type's typical hours and an example guarantee: shown as suggestions, used only if the owner clicks
   const suggest = listingSuggestions(project);
 
-  const checks = [
-    { ok: d.title.trim().length >= 4, label: 'Title' },
-    { ok: d.description.trim().length >= 80, label: 'Description (80+ characters)' },
-    { ok: lp.price > 0 || lp.model === 'free' || lp.model === 'quote', label: isBiz ? 'Package pricing' : 'Price' },
-    { ok: d.tags.length >= 3, label: '3+ search tags' },
-    { ok: isBiz ? project.studio.packages.length > 0 : project.studio.outline.length > 0, label: isBiz ? 'Service packages (Structure tab)' : 'Product outline (Structure tab)' },
-    { ok: !d.buyUrl?.trim() || !!safeUrl(d.buyUrl), label: 'Buy or booking link is a web address' },
-    { ok: !d.contactEmail?.trim() || !!safeEmail(d.contactEmail), label: 'Email address looks right' },
-    { ok: listingActions(preview).length > 0, label: 'A way to buy or reach you (link, website, email or phone)', optional: true },
-    { ok: !!d.coverImageId, label: 'Cover photo (optional: brand cover is used otherwise)', optional: true },
-  ];
+  const checks = listingChecks(project, preview);
   const blocking = checks.filter((c) => !c.ok && !c.optional);
-  const changed = !!live && (JSON.stringify({ ...buildListing(project, live), cover: null, gallery: null }) !== JSON.stringify({ ...live, cover: null, gallery: null }) || galleryMedia.length !== (live.gallery?.length ?? 0));
+  const changed = listingChanged(project, live);
 
   const write = async () => {
     const r = await ai.run({});
-    if (r) setD({ title: r.title, tagline: r.tagline, description: r.description, category: r.category || d.category, tags: r.tags.length ? r.tags : d.tags });
+    if (r) applyListingCopy(r);
   };
 
   const publish = async () => {
     setBusy(true);
     try {
-      const p = getActiveProject()!;
-      const cover = await coverFromMedia(p);
-      const gallery = await galleryFromMedia(p);
-      const listing = { ...buildListing(p, live, cover, gallery), gallery };
-      publishListing(listing);
-      updateStudio({ publishedListingId: listing.id, publishedAt: Date.now() });
-      await startCommunitySync();
-      await pushMyListings();
-      const shared = useRuntime.getState().community === 'live';
-      useStore.getState().notify({ kind: 'info', title: live ? `Listing updated: ${listing.title}` : shared ? `${listing.title} is on the shared Marketplace` : `${listing.title} is in your listings`, route: 'store' });
-      toast({ kind: 'success', title: live ? 'Listing updated' : shared ? 'Published to the Marketplace' : 'Saved to your listings', body: shared ? listing.title : `${listing.title}. Only you can see it here for now.`, action: { label: 'View listing', run: () => openInStore(listing.id) } });
+      await publishProjectListing();
     } finally {
       setBusy(false);
     }
@@ -108,11 +85,8 @@ export function PublishTab({ project }: { project: Project }) {
 
   const unpublish = async () => {
     if (!live) return;
-    if (!(await confirmAction({ title: 'Unpublish this listing?', body: 'It disappears from the Marketplace. Your Studio work stays intact and you can republish anytime.', confirmLabel: 'Unpublish', danger: true }))) return;
-    unpublishListing(live.id);
-    updateStudio({ publishedListingId: undefined, publishedAt: undefined });
-    pushMyListings();
-    toast({ kind: 'info', title: 'Listing unpublished' });
+    if (!(await confirmAction({ ...UNPUBLISH_CONFIRM, danger: true }))) return;
+    unpublishProjectListing();
   };
 
   return (
@@ -396,10 +370,10 @@ export function PublishTab({ project }: { project: Project }) {
               <Store size={15} className="mt-0.5 shrink-0 text-muted" /> For now only you can see your listing here. Share its links (your checkout, website) wherever your customers are.
             </p>
           )}
-          {community === 'live' && <Toggle checked={share} onChange={(v) => { updateSettings((s) => ({ ...s, shareToCommunity: v })); setTimeout(() => pushMyListings(), 0); }} label="Show my listings to other people" />}
+          {community === 'live' && <Toggle checked={share} onChange={setListingsShared} label="Show my listings to other people" />}
           {live && (
             <p className="text-xs text-muted">
-              Published {project.studio.publishedAt ? fmtDateTime(project.studio.publishedAt) : ''} · {fmtMoney(live.price)}
+              Published {project.studio.publishedAt ? fmtDateTime(project.studio.publishedAt) : ''} · {priceLabel(live.price, live.priceModel)}
             </p>
           )}
         </section>
@@ -415,9 +389,4 @@ export function PublishTab({ project }: { project: Project }) {
       </aside>
     </div>
   );
-}
-
-function openInStore(id: string) {
-  navigate('store');
-  setTimeout(() => useUI.getState().openListing(id), 60);
 }

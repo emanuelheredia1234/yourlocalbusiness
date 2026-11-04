@@ -6,11 +6,10 @@ import { useActiveProject, useStore } from '@/store/useStore';
 import { useTabRequest, useUI } from '@/store/ui';
 import { tabsOf } from '@/lib/pageTabs';
 import { Tabs } from '@/components/ui/primitives';
-import { priceLabel } from '@/pages/store/ListingParts';
 import { StructureTab } from './StructureTab';
 import { CodeTab } from './CodeTab';
 import { PublishTab } from './PublishTab';
-import { leadPrice } from './listing';
+import { leadPrice, priceLabel } from '@/lib/listing';
 
 type Tab = 'structure' | 'code' | 'publish';
 const KEY = 'ylb-studio-tab';

@@ -766,7 +766,8 @@ export interface Listing {
   phone?: string;
   bookingType?: BookingType;
   hours?: string;
-  services?: { name: string; price: number; duration?: string }[];
+  /** priceModel only when a package has no price to show: 'quote' (Get a quote) or 'free' */
+  services?: { name: string; price: number; duration?: string; priceModel?: 'quote' | 'free' }[];
   includes?: string[];
   cover: CoverSpec;
   /** extra listing images as small data URLs (max 4) */

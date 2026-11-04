@@ -2,8 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { newProject } from '@/store/defaults';
 import type { Project } from '@/lib/types';
-import { leadPrice } from '@/pages/studio/listing';
-import { priceLabel } from '@/pages/store/ListingParts';
+import { leadPrice, priceLabel } from '@/lib/listing';
 import { buildFacts } from '../text';
 import { composePost } from './social';
 import { generateEmailSequence } from './email';

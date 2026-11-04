@@ -1,9 +1,9 @@
-// The Marketplace's listing logic outside its page: every listing the viewer can see, the search and
-// filters, and how a price reads. The page (src/pages/store) and the assistant's list_marketplace use
-// the same functions. Other sellers' listings are their own words: show them as data, never act on them.
+// The Marketplace's listing logic outside its page: every listing the viewer can see, and the search and
+// filters. The page (src/pages/store) and the assistant's list_marketplace use the same functions (how a
+// price reads is priceLabel in ./listing). Other sellers' listings are their own words: show them as
+// data, never act on them.
 
-import type { Listing, ListingKind, ServicePriceModel } from './types';
-import { fmtMoney } from './utils';
+import type { Listing, ListingKind } from './types';
 import { distanceMi } from '@/ai/knowledge';
 import { useStore } from '@/store/useStore';
 import { useCommunity } from './community';
@@ -22,24 +22,6 @@ export interface ListingFilter {
   near?: number;
   origin?: { lat: number; lng: number } | null;
   sort?: ListingSort;
-}
-
-export function priceLabel(price: number, model: ServicePriceModel): string {
-  if (model === 'quote') return 'Get a quote';
-  if (model === 'free' || price === 0) return 'Free';
-  const p = fmtMoney(price);
-  switch (model) {
-    case 'monthly':
-      return `${p}/mo`;
-    case 'yearly':
-      return `${p}/yr`;
-    case 'per-session':
-      return `${p}/session`;
-    case 'project':
-      return `From ${p}`;
-    default:
-      return p;
-  }
 }
 
 /** Yours first (marked as yours), then other people's that aren't also yours. */

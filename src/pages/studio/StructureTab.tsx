@@ -4,6 +4,7 @@ import type { OperatingBlock, OutlineItem, OutlineSection, PriceModel, Project, 
 import { cn, fmtMoney, moveItem, slugify, uid } from '@/lib/utils';
 import { FORMATS } from '@/ai/knowledge';
 import { businessModelTask, expandItemTask, outlineTask, sectionDraftTask } from '@/ai/tasks';
+import { applyBusinessModel, applyItemDetail, applyOutline, applySectionDraft, businessMarkdown, outlineMarkdown, PACKAGE_PRICE_MODELS as PRICE_MODELS } from '@/ai/structure';
 import { useAI } from '@/ai/useAI';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
@@ -19,20 +20,6 @@ export function StructureTab({ project }: { project: Project }) {
 }
 
 // ───────────────────────── Product outline ─────────────────────────
-
-function outlineMarkdown(p: Project): string {
-  const s = p.studio;
-  const lines = [`# ${p.idea?.title ?? p.brand.name}`, '', `${s.outlineLabel}`, ''];
-  s.outline.forEach((sec, i) => {
-    lines.push(`## ${i + 1}. ${sec.title}`);
-    if (sec.summary) lines.push('', sec.summary);
-    lines.push('');
-    sec.items.forEach((it) => lines.push(`- **${it.title}**${it.meta ? ` (${it.meta})` : ''}${it.detail ? `: ${it.detail}` : ''}`));
-    if (sec.draft) lines.push('', sec.draft);
-    lines.push('');
-  });
-  return lines.join('\n');
-}
 
 function totals(sections: OutlineSection[]) {
   let minutes = 0;
@@ -61,7 +48,7 @@ function OutlineBuilder({ project }: { project: Project }) {
   const generate = async () => {
     if (outline.length && !(await confirmAction({ title: 'Replace the current outline?', body: 'A fresh AI draft will replace your current sections and edits.', confirmLabel: 'Replace outline' }))) return;
     const r = await ai.run({});
-    if (r) updateStudio({ outline: r.sections, outlineLabel: r.label });
+    if (r) applyOutline(r);
   };
 
   return (
@@ -171,7 +158,7 @@ function SectionCard({ section, index, total, onChange, onMove, onRemove }: { se
   const draft = async () => {
     const r = await draftAI.run({ section: live() });
     if (r) {
-      onChange({ draft: r.markdown });
+      applySectionDraft(section.id, r.markdown);
       setOpen(true);
     }
   };
@@ -179,7 +166,7 @@ function SectionCard({ section, index, total, onChange, onMove, onRemove }: { se
     setExpanding(item.id);
     const r = await expandAI.run({ item, section: live() });
     setExpanding(null);
-    if (r) patchItem(item.id, { detail: r.detail });
+    if (r) applyItemDetail(section.id, item.id, r.detail);
   };
 
   return (
@@ -310,26 +297,6 @@ function ProductOffer({ project }: { project: Project }) {
 
 // ───────────────────────── Business model ─────────────────────────
 
-const PRICE_MODELS: { id: ServicePriceModel; label: string }[] = [
-  { id: 'per-session', label: 'per session' },
-  { id: 'project', label: 'per project' },
-  { id: 'monthly', label: 'per month' },
-  { id: 'one-time', label: 'one-time' },
-  { id: 'quote', label: 'quote' },
-  { id: 'free', label: 'free' },
-];
-
-function businessMarkdown(p: Project): string {
-  const s = p.studio;
-  const out = [`# ${p.brand.name}: business model`, '', '## Service packages', ''];
-  s.packages.forEach((pk) => out.push(`### ${pk.name}: ${fmtMoney(pk.price)} ${PRICE_MODELS.find((m) => m.id === pk.priceModel)?.label ?? ''}${pk.popular ? ' (most popular)' : ''}`, pk.description, ...pk.includes.map((i) => `- ${i}`), ''));
-  out.push('## Operating model', '');
-  s.operating.forEach((b) => out.push(`### ${b.title}`, ...b.items.map((i) => `- ${i}`), ''));
-  out.push('## Value stack', '');
-  s.valueStack.forEach((v) => out.push(`- **${v.title}**${v.value ? ` (${fmtMoney(v.value)} value)` : ''}: ${v.description}`));
-  return out.join('\n');
-}
-
 function BusinessModel({ project }: { project: Project }) {
   const updateStudio = useStore((s) => s.updateStudio);
   const ai = useAI(businessModelTask);
@@ -341,7 +308,7 @@ function BusinessModel({ project }: { project: Project }) {
   const generate = async () => {
     if (has && !(await confirmAction({ title: 'Replace your business model?', body: 'Packages, operating model and value stack will be replaced with a fresh AI draft.', confirmLabel: 'Replace' }))) return;
     const r = await ai.run({});
-    if (r) updateStudio({ packages: r.packages, operating: r.operating, valueStack: r.valueStack, price: r.price });
+    if (r) applyBusinessModel(r);
   };
   const stackValue = s.valueStack.reduce((n, v) => n + (v.value || 0), 0);
   const popular = s.packages.find((p) => p.popular) ?? s.packages[0];

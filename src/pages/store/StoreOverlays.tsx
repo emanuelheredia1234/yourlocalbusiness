@@ -5,9 +5,10 @@ import { FORMATS } from '@/ai/knowledge';
 import { useUI } from '@/store/ui';
 import { Modal } from '@/components/ui/primitives';
 import { MiniMark } from '@/components/brand/Logo';
-import { ListingCover, priceLabel } from './ListingParts';
+import { ListingCover } from './ListingParts';
+import { priceLabel } from '@/lib/listing';
 import { findListing } from './useListings';
-import { listingActions, type ListingAction } from './actions';
+import { listingActions, type ListingAction } from '@/lib/listingActions';
 
 function ListingModal() {
   const id = useUI((s) => s.listingId);
@@ -112,7 +113,7 @@ function ListingModal() {
                   <li key={s.name} className="flex justify-between gap-2">
                     <span className="min-w-0">{s.name}</span>
                     <span className="num shrink-0 text-ink-2">
-                      {s.price ? fmtMoney(s.price) : 'Free'}
+                      {s.priceModel === 'quote' ? 'Get a quote' : s.price && s.priceModel !== 'free' ? fmtMoney(s.price) : 'Free'}
                       {s.duration ? ` · ${s.duration}` : ''}
                     </span>
                   </li>

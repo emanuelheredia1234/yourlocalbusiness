@@ -2,13 +2,10 @@ import { useMemo, useState } from 'react';
 import { ArrowRight, MapPin } from 'lucide-react';
 import type { Listing } from '@/lib/types';
 import { cn, darken, fmtMoney, lighten, readableOn, withAlpha } from '@/lib/utils';
+import { priceLabel } from '@/lib/listing';
 import { CITIES, FORMATS } from '@/ai/knowledge';
 import { Icon } from '@/components/ui/Icon';
 import { MiniMark } from '@/components/brand/Logo';
-import { priceLabel } from '@/lib/marketplace';
-
-// the price as buyers read it lives with the Marketplace logic (the assistant uses it too)
-export { priceLabel };
 
 export function ListingCover({ listing, className, big }: { listing: Listing; className?: string; big?: boolean }) {
   const [a, b, c] = listing.cover.colors;

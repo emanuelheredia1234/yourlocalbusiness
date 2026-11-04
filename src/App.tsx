@@ -12,6 +12,7 @@ import { PostEditorHost } from '@/components/posts/PostCard';
 import { ManusPostHost, useManusPostWatcher } from '@/components/posts/ManusPost';
 import { MarkPostedHost } from '@/components/posts/PostActions';
 import { ManusGroupsHost, useGroupShareWatcher } from '@/components/posts/ManusGroups';
+import { ListingWindowHost } from '@/components/studio/ListingWindowHost';
 import { useVoiceReadWatcher } from '@/components/brand/SocialVoice';
 import { Assistant } from '@/components/assistant/Assistant';
 import { useAssistant } from '@/store/assistant';
@@ -159,6 +160,7 @@ export default function App() {
       <ManusPostHost />
       <ManusGroupsHost />
       <MarkPostedHost />
+      <ListingWindowHost />
       <StoreOverlays />
       <Assistant />
       <ConfirmHost />
