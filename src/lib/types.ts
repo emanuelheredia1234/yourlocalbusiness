@@ -1,5 +1,6 @@
 import type { EbookExtras } from '@/ai/local/ebook';
 import type { WorkbookSpec } from '@/ai/workbook';
+import type { StrategyState } from './strategyTypes';
 // ───────────────────────── Domain model: the Project Context Store ─────────────────────────
 
 export type Track = 'product' | 'business';
@@ -855,6 +856,7 @@ export type SkillCategory =
 
 export type ModuleScope =
   | 'all'
+  | 'strategy'
   | 'research'
   | 'brand'
   | 'studio'
@@ -934,6 +936,8 @@ export interface GenMeta {
   costUsd?: number | null;
   costEstimated?: boolean;
   credits?: number | null;
+  /** web searches the request ran (Strategy's research) */
+  searches?: number;
 }
 
 export interface GenerationLog {
@@ -1030,4 +1034,6 @@ export interface Project {
     /** Facebook groups you share posts in (names or links), remembered for next time */
     facebookGroups?: string[];
   };
+  /** the Strategy tab (src/lib/strategy.ts reads it through readStrategy) */
+  strategy?: StrategyState;
 }

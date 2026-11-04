@@ -6,6 +6,9 @@
 
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { QA_SOURCES, STRATEGY_SCRIPTED } from './strategy-qa.mjs';
+
+export { QA_SOURCES, STRATEGY_QA, STRATEGY_SCRIPTED } from './strategy-qa.mjs';
 
 // 1×1 PNG, and the start of an MP4 (an `ftyp` box) padded to look like a file
 export const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
@@ -23,6 +26,8 @@ const ANSWER = JSON.stringify({ ok: true, note: 'mock answer' });
 const SCRIPTED = [
   // SEO page → Edit with AI: a change the app can apply (and undo)
   ['qa-dark-look', JSON.stringify({ theme: { font: 'sans', mode: 'dark', radius: 'soft' }, summary: 'Switched the page to a dark look.' })],
+  // Strategy: each step's prompt starts with its marker, [ylb-strategy:<step> v1] (server/test/strategy-qa.mjs)
+  ...STRATEGY_SCRIPTED,
 ];
 // ───────────── the in-app assistant (src/ai/assistant) ─────────────
 // Its prompts start with this marker and use these section titles (src/ai/assistant/protocol.ts).
@@ -103,6 +108,52 @@ function answerFor(body) {
   return SCRIPTED.find(([marker]) => sent.includes(marker))?.[1] ?? ANSWER;
 }
 
+// ───────────── web research (Strategy) ─────────────
+// A request carrying its provider's search tool gets that provider's search-shaped answer: made-up
+// sources (QA_SOURCES, reserved example domains) and the scripted JSON as the final text. Markers in
+// the request (the owner types them in Strategy → Your details → "Anything else"):
+//   qa-research-none     the tool is there but the model doesn't search (the plain answer)
+//   qa-research-error    the search fails (Anthropic: a tool-result error; OpenAI, xAI, Meta: a failed search call)
+//   qa-research-refused  400 "web search is not enabled": the request sent again without the tool answers as usual
+//   qa-pause-turn        Anthropic: the first answer pauses (pause_turn) after one search; the continuation finishes
+//   qa-research-slow     the answer waits 1.5 s (tests time research out sooner than that)
+
+/** The provider's web search tool is in the request (Google: none, the app doesn't search with Gemini). */
+function searchToolIn(id, p, body) {
+  const tools = Array.isArray(body?.tools) ? body.tools : [];
+  if (id === 'anthropic') return p === '/v1/messages' && tools.some((t) => /^web_search_/.test(String(t?.type ?? '')));
+  if (id === 'openai' || id === 'xai' || id === 'meta') return p === '/responses' && tools.some((t) => t?.type === 'web_search');
+  if (id === 'openrouter') return p === '/chat/completions' && tools.some((t) => t?.type === 'openrouter:web_search');
+  return false;
+}
+
+/** A deep research task (server/providers/marketResearch.mjs writes the prompt). */
+const RESEARCH_TASK = /^Research how businesses in one market find clients/;
+
+/** The stand-in Manus's research report, in the lines the server reads; and what it fills in for the schema. */
+export function mockResearchReport(prompt) {
+  if (/qa-research-failed/i.test(prompt ?? '')) {
+    return { text: 'I tried, but the pages wouldn’t open.\nRESULT: FAILED | QA: couldn\'t open the pages.', value: { pages_read: 0, failed_reason: "QA: couldn't open the pages.", findings: [] } };
+  }
+  return {
+    text: [
+      'I opened 3 public pages.',
+      `FINDING: buyers | QA: a directory page lists local businesses with photos and opening hours. | ${QA_SOURCES[0].url}`,
+      'FINDING: social | QA: a guide says behind-the-scenes clips get comments. | https://example.org/qa-research/content-that-works',
+      'FINDING: promote | QA: a finding without an address (it must be dropped). | not-a-url',
+      'RESULT: RESEARCH DONE | 3',
+    ].join('\n'),
+    value: {
+      pages_read: 3,
+      failed_reason: null,
+      findings: [
+        { topic: 'buyers', finding: 'QA: a directory page lists local businesses with photos and opening hours.', url: QA_SOURCES[0].url, quote: null },
+        { topic: 'social', finding: 'QA: a guide says behind-the-scenes clips get comments.', url: 'https://example.org/qa-research/content-that-works', quote: 'QA stand-in quote.' },
+      ],
+    },
+  };
+}
+
 /** A brand-voice read (src/ai/manusVoice.ts): the profile, when the prompt is one. */
 const voiceProfile = (prompt) => (/^Read the latest posts of one .+ profile and describe how they sound and look/m.test(prompt ?? '') ? (/^The .+?(?:: | named “)(.+?)(?:”.*)?$/m.exec(prompt)?.[1] ?? '') : null);
 /** A read of a "needs-signin" profile waits for you to sign in for its first two checks. */
@@ -167,6 +218,116 @@ export function createMockProviders({ keys = {} } = {}) {
     res.end();
   }
 
+  /** Anthropic's streamed answer with one web search (pause: it stops after the search, as pause_turn). */
+  function anthropicSearch(res, body, answer, { error = false, pause = false } = {}) {
+    const S = QA_SOURCES;
+    // a continuation carries the paused turn back as an assistant message: its tool ids must be new
+    const n = (body?.messages ?? []).filter((m) => m?.role === 'assistant').length + 1;
+    const events = [{ type: 'message_start', message: { id: `msg_qa_r${n}`, type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 4200, output_tokens: 1 } } }];
+    let index = 0;
+    const block = (start, deltas = []) => {
+      events.push({ type: 'content_block_start', index, content_block: start });
+      for (const delta of deltas) events.push({ type: 'content_block_delta', index, delta });
+      events.push({ type: 'content_block_stop', index });
+      index += 1;
+    };
+    // narration before the search: not part of the answer
+    if (!pause) block({ type: 'text', text: '' }, [{ type: 'text_delta', text: 'Let me look that up.' }]);
+    block({ type: 'server_tool_use', id: `srvtoolu_qa${n}`, name: 'web_search', input: {} }, [{ type: 'input_json_delta', partial_json: '{"query":"qa stand-in search"}' }]);
+    block({
+      type: 'web_search_tool_result',
+      tool_use_id: `srvtoolu_qa${n}`,
+      content: error ? { type: 'web_search_tool_result_error', error_code: 'too_many_requests' } : S.map((s) => ({ type: 'web_search_result', url: s.url, title: s.title, page_age: s.page_age ?? null, encrypted_content: 'qa-encrypted-content' })),
+    });
+    if (!pause) {
+      const cite = error ? [] : [{ type: 'citations_delta', citation: { type: 'web_search_result_location', url: S[0].url, title: S[0].title, cited_text: 'QA stand-in text.', encrypted_index: 'qa-encrypted-index' } }];
+      block({ type: 'text', text: '' }, [...cite, { type: 'text_delta', text: answer }]);
+    }
+    events.push({ type: 'message_delta', delta: { stop_reason: pause ? 'pause_turn' : 'end_turn', stop_sequence: null }, usage: { output_tokens: pause ? 120 : 900, server_tool_use: { web_search_requests: error ? 0 : 1 } } });
+    events.push({ type: 'message_stop' });
+    sse(res, events);
+  }
+
+  /**
+   * A request carrying its provider's search tool: the search-shaped answer (see the markers above).
+   * Returns false for other requests, and for qa-research-none (the plain answer routes below reply).
+   */
+  function research(req, res, id, p, body, raw) {
+    if (!searchToolIn(id, p, body)) return false;
+    const sent = typeof raw === 'string' ? raw : '';
+    if (sent.includes('qa-research-none')) return false;
+    const S = QA_SOURCES;
+    const answer = answerFor(body);
+    const error = sent.includes('qa-research-error');
+    const has = (name) => Array.isArray(body?.include) && body.include.includes(name);
+    const reply = () => {
+      if (sent.includes('qa-research-refused')) return json(res, 400, { error: { type: 'invalid_request_error', message: 'web search is not enabled for this organization' } });
+      if (id === 'anthropic') {
+        const continued = (body?.messages ?? []).some((m) => m?.role === 'assistant');
+        return anthropicSearch(res, body, answer, { error, pause: sent.includes('qa-pause-turn') && !continued });
+      }
+      if (id === 'openai') {
+        return json(res, 200, {
+          id: 'resp_qa_r',
+          model: body.model,
+          status: 'completed',
+          output: [
+            { type: 'reasoning', summary: [] },
+            { type: 'web_search_call', id: 'ws_qa1', status: error ? 'failed' : 'completed', action: { type: 'search', query: 'qa stand-in search', ...(!error && has('web_search_call.action.sources') ? { sources: S.map((s) => ({ type: 'url', url: s.url })) } : {}) } },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: answer, annotations: error ? [] : [{ type: 'url_citation', url: S[0].url, title: S[0].title, start_index: 0, end_index: 1 }] }] },
+          ],
+          usage: { input_tokens: 4200, output_tokens: 900, output_tokens_details: { reasoning_tokens: 300 } },
+          tool_usage: { web_search: { num_requests: error ? 0 : 1 } },
+        });
+      }
+      if (id === 'xai') {
+        // without include no_inline_citations, xAI puts [[1]](url) links in the text (here after the JSON)
+        const inline = has('no_inline_citations') ? '' : ` [[1]](${S[0].url})`;
+        return json(res, 200, {
+          id: 'xai_qa_r',
+          object: 'response',
+          model: body.model,
+          status: 'completed',
+          output: [
+            { type: 'web_search_call', id: 'ws_x1', status: error ? 'failed' : 'completed' },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `${answer}${inline}`, annotations: error ? [] : S.slice(0, 2).map((s, i) => ({ type: 'url_citation', url: s.url, title: String(i + 1), start_index: 0, end_index: 0 })) }] },
+          ],
+          usage: { input_tokens: 9000, output_tokens: 900, output_tokens_details: { reasoning_tokens: 300 }, num_server_side_tools_used: error ? 0 : 2, server_side_tool_usage_details: { web_search_calls: error ? 0 : 2, x_search_calls: 0 }, cost_in_usd_ticks: 1_234_000_000 },
+        });
+      }
+      if (id === 'meta') {
+        return json(res, 200, {
+          id: 'meta_qa_r',
+          object: 'response',
+          model: body.model,
+          status: 'completed',
+          output: [
+            { type: 'web_search_call', id: 'ws_m1', status: error ? 'failed' : 'completed', ...(!error && has('web_search_call.results') ? { results: S.map((s) => ({ type: 'text_result', title: s.title, url: s.url, snippet: 'QA stand-in snippet.' })) } : {}) },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: answer, annotations: error ? [] : [{ type: 'url_citation', url: S[0].url, title: S[0].title, start_index: 0, end_index: 1 }] }] },
+          ],
+          usage: { input_tokens: 4200, output_tokens: 900, output_tokens_details: { reasoning_tokens: 300 }, total_tokens: 5100 },
+        });
+      }
+      // OpenRouter: its citations carry page excerpts, which must never reach the browser
+      return json(res, 200, {
+        id: 'chat_qa_r',
+        model: body.model,
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: answer, annotations: error ? [] : S.slice(0, 2).map((s) => ({ type: 'url_citation', url_citation: { url: s.url, title: s.title, content: 'QA stand-in excerpt (must not reach the browser).', start_index: 0, end_index: 0 } })) } }],
+        usage: { prompt_tokens: 4200, completion_tokens: 900, cost: 0.0421, server_tool_use_details: { web_search_requests: error ? 0 : 2 } },
+      });
+    };
+    if (!sent.includes('qa-research-slow')) {
+      reply();
+      return true;
+    }
+    // a slow search: the caller may have given up by then
+    res.on('error', () => {});
+    setTimeout(() => {
+      if (!res.writableEnded && !res.destroyed && !req.socket?.destroyed) reply();
+    }, 1500).unref?.();
+    return true;
+  }
+
   function handle(req, res, raw, rawBuf = Buffer.from(raw)) {
     // QA: a prompt containing "slow-qa" answers after 8 s (to test "leave while generating")
     if (typeof raw === 'string' && raw.includes('slow-qa') && !req.headers['x-mock-delayed']) {
@@ -215,6 +376,8 @@ export function createMockProviders({ keys = {} } = {}) {
     const want = keys[id];
     if (want && ![want].flat().some((k) => String(auth).includes(k))) return json(res, 401, { error: { message: 'Invalid API key' } });
     if (failFor(id, res)) return;
+    // ── web research (Strategy): requests carrying a search tool ──
+    if (research(req, res, id, p, body, raw)) return;
 
     // ── Anthropic (streamed Messages API) ──
     if (id === 'anthropic' && p === '/v1/messages') {
@@ -263,6 +426,15 @@ export function createMockProviders({ keys = {} } = {}) {
       return json(res, 200, { id: 'int_txt', status: 'completed', steps: [{ type: 'thought' }, { type: 'model_output', content: [{ type: 'text', text: answerFor(body) }] }], usage: { total_input_tokens: 200, total_output_tokens: 150, total_thought_tokens: t, total_tokens: 350 + t } });
     }
     if (id === 'google' && p === '/models') return json(res, 200, { models: [{ name: 'models/gemini-3.8-flash' }, { name: 'models/gemini-nano-banana-2.1' }, { name: 'models/gemini-omni-1.1-flash' }] });
+
+    // ── xAI and Meta Responses API (the app uses it for web research; this is the answer without a search) ──
+    if ((id === 'xai' || id === 'meta') && p === '/responses') {
+      const r = reasoningFor(body?.reasoning?.effort);
+      const usage = { input_tokens: 200, output_tokens: 150 + r, output_tokens_details: { reasoning_tokens: r }, total_tokens: 350 + r };
+      // xAI reports the cost (grok-4.6 list prices), in ticks of 1e-10 dollars
+      if (id === 'xai') usage.cost_in_usd_ticks = Math.round(((200 * 2 + (150 + r) * 6) / 1e6) * 1e10);
+      return json(res, 200, { id: `${id}_resp_mock`, object: 'response', model: body.model, status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: answerFor(body), annotations: [] }] }], usage });
+    }
 
     // ── Chat Completions: xAI (reasoning beside completion), Meta, OpenRouter (reasoning inside) ──
     if ((id === 'xai' || id === 'meta' || id === 'openrouter') && p === '/chat/completions') {
@@ -329,7 +501,8 @@ export function createMockProviders({ keys = {} } = {}) {
       const taskId = `task${String(manusTasks.size + 1).padStart(6, '0')}`;
       const content = body?.message?.content;
       const prompt = typeof content === 'string' ? content : ((content ?? []).find?.((c) => c?.type === 'text')?.text ?? '');
-      manusTasks.set(taskId, { polls: 0, profile: body?.agent_profile, followUps: [], prompt });
+      // deep research (Strategy): the schema it fills in at the end, and whether it runs without connected apps
+      manusTasks.set(taskId, { polls: 0, profile: body?.agent_profile, followUps: [], prompt, research: RESEARCH_TASK.test(prompt), schema: body?.structured_output_schema ?? null, clearConnectors: body?.clear_connectors === true });
       return json(res, 200, { ok: true, request_id: 'r1', task_id: taskId, task_title: body?.title || 'Mock task', task_url: `https://manus.im/app/${taskId}` });
     }
     if (id === 'manus' && p === '/v2/task.detail') {
@@ -338,7 +511,8 @@ export function createMockProviders({ keys = {} } = {}) {
       t.polls += 1;
       const done = t.polls >= (signInFirst(t) ? 4 : 2);
       if (signInFirst(t) && t.polls < 3) return json(res, 200, { ok: true, task: { id: url.searchParams.get('task_id'), status: 'waiting', title: 'Mock task', task_url: `https://manus.im/app/${url.searchParams.get('task_id')}` } });
-      return json(res, 200, { ok: true, task: { id: url.searchParams.get('task_id'), status: done ? 'stopped' : 'running', title: 'Mock task', task_url: `https://manus.im/app/${url.searchParams.get('task_id')}`, ...(done ? { credit_usage: t.profile === 'lite' ? 12 : 41 } : {}) } });
+      // made-up credit counts for QA only (a research task reads more pages, so it reports more)
+      return json(res, 200, { ok: true, task: { id: url.searchParams.get('task_id'), status: done ? 'stopped' : 'running', title: 'Mock task', task_url: `https://manus.im/app/${url.searchParams.get('task_id')}`, ...(done ? { credit_usage: t.research ? 120 : t.profile === 'lite' ? 12 : 41 } : {}) } });
     }
     if (id === 'manus' && p === '/v2/task.listMessages') {
       const t = manusTasks.get(url.searchParams.get('task_id'));
@@ -346,6 +520,19 @@ export function createMockProviders({ keys = {} } = {}) {
       const done = t && t.polls >= (signInFirst(t) ? 4 : 2);
       if (t && signInFirst(t) && t.polls < 3) {
         return json(res, 200, { ok: true, messages: [{ id: 'e2', type: 'status_update', status_update: { agent_status: 'waiting', status_detail: { waiting_for_event_type: 'needConnectMyBrowser', waiting_description: 'Please sign in to the network in my browser so I can see the posts.' } } }, { id: 'e1', type: 'user_message', user_message: { content: 'read it' } }] });
+      }
+      // a deep research task reports its findings (no attachments), and fills in the schema when it was sent one
+      if (t?.research && done) {
+        const report = mockResearchReport(t.prompt);
+        return json(res, 200, {
+          ok: true,
+          messages: [
+            ...(t.schema ? [{ id: 'e4', type: 'structured_output_result', structured_output_result: { success: true, value: report.value, error: null } }] : []),
+            { id: 'e3', type: 'status_update', status_update: { agent_status: 'stopped' } },
+            { id: 'e2', type: 'assistant_message', assistant_message: { content: report.text, attachments: [] } },
+            { id: 'e1', type: 'user_message', user_message: { content: 'research it' } },
+          ],
+        });
       }
       // a "post right now" task reports a post on that network, with its link
       const postNow = /^Post ONE organic post on (Facebook|Instagram|TikTok|LinkedIn|X), right now/m.exec(t?.prompt ?? '');

@@ -5,6 +5,10 @@
 // content-policy block or refusal (the same request would fail elsewhere too). Videos and agent
 // tasks are paid jobs, so they move on only when the provider certainly started nothing.
 //
+// Web research (Strategy, research.mjs): keys that can search go first. Once a key was asked to
+// search, a failure moves on only when the provider certainly started nothing (a 4xx): after a
+// timeout or a cut-off answer the searches may already be billed, so the owner decides.
+//
 // A signed-in user's own keys (ownKeys: { provider: key }) go first: if any of them can do the
 // request's kind, only those are used (with the registry's default model and effort), never the
 // owner's keys. `meter` hears when a request reaches a provider (start) and what it cost (cost),
@@ -16,6 +20,8 @@ import path from 'node:path';
 import { PROVIDERS, adapterId, defaultEffort, effortIds, effortLabel, estimateCost, fnById, kindDef } from './registry.mjs';
 import { USER_KEY_PROVIDERS } from '../userKeys.mjs';
 import { ProviderError } from './http.mjs';
+import { RESEARCH_TIMEOUT_MS, canResearch, researchMeta, searchPrice } from './research.mjs';
+import { MARKET_RESEARCH_SCHEMA, parseMarketResearch } from './marketResearch.mjs';
 import anthropic from './adapters/anthropic.mjs';
 import google from './adapters/google.mjs';
 import manus from './adapters/manus.mjs';
@@ -58,12 +64,24 @@ export const FALLBACK_ESTIMATE = { text: 0.02, image: 0.08, videoPerSecond: 0.05
 /** How often the server checks on a video running on the owner's keys, so its cost is counted even if nobody asks. */
 const WATCH_MS = 15_000;
 
+/** A research request's size for the daily-limit estimate: the pages it reads arrive as input tokens. */
+const RESEARCH_TOKENS = { input: 40_000, output: 6_000 };
+/** …and what it's assumed to cost when the price list can't say. */
+const RESEARCH_FALLBACK = 0.15;
+
 /** The label a user's own key is shown with. */
 export const ownLabel = (id) => `${PROVIDERS[id].label} (your key)`;
 
+/** Manus tasks the app may start, by function. */
+const MANUS_FUNCTIONS = new Set(['photos', 'facebook', 'marketResearch']);
+
 export class AIRouter {
-  /** tasksFile: where the Manus tasks this app started are remembered (only those can be read or continued). */
-  constructor({ store, usage, fetch = globalThis.fetch, baseUrls = {}, adapters = ADAPTERS, tasksFile = '', remote = { enabled: false } }) {
+  /**
+   * tasksFile: where the Manus tasks this app started are remembered (only those can be read or continued).
+   * researchTimeoutMs: how long a web research request may take (tests make it short).
+   */
+  constructor({ store, usage, fetch = globalThis.fetch, baseUrls = {}, adapters = ADAPTERS, tasksFile = '', remote = { enabled: false }, researchTimeoutMs = RESEARCH_TIMEOUT_MS }) {
+    this.researchTimeoutMs = researchTimeoutMs;
     this.remote = remote;
     this.taskChain = Promise.resolve();
     this.store = store;
@@ -187,10 +205,12 @@ export class AIRouter {
   /**
    * What a request on the owner's keys will likely cost (the most expensive key it could run on),
    * for the daily dollar limit. Videos: the price per second at the key's effort, times the length.
+   * Web research (research: { maxSearches }): a research-sized request plus its searches at list price.
    */
-  estimate(kind, { fn = kind === 'video' ? 'videos' : kind === 'image' ? 'photos' : '', duration = 8 } = {}) {
+  estimate(kind, { fn = kind === 'video' ? 'videos' : kind === 'image' ? 'photos' : '', duration = 8, research = null } = {}) {
     let route = fn ? this.store.route(fn) : [];
     if (kind === 'image') route = route.filter((id) => id !== 'manus');
+    const searching = kind === 'text' && !!research;
     let best = 0;
     for (const id of route) {
       const s = this.store.settings(id);
@@ -198,10 +218,11 @@ export class AIRouter {
       let usd = null;
       if (kind === 'video') usd = estimateCost(id, 'video', model, null, { seconds: duration, effort: s.effort?.[kind] }) ?? FALLBACK_ESTIMATE.videoPerSecond * duration;
       else if (kind === 'image') usd = estimateCost(id, 'image', model, null) ?? FALLBACK_ESTIMATE.image;
+      else if (searching && canResearch(id, model)) usd = (estimateCost(id, 'text', model, RESEARCH_TOKENS) ?? RESEARCH_FALLBACK) + searchPrice(id) * research.maxSearches;
       else usd = FALLBACK_ESTIMATE.text;
       best = Math.max(best, usd);
     }
-    if (!route.length) best = kind === 'video' ? FALLBACK_ESTIMATE.videoPerSecond * duration : FALLBACK_ESTIMATE[kind] ?? 0;
+    if (!route.length) best = kind === 'video' ? FALLBACK_ESTIMATE.videoPerSecond * duration : searching ? RESEARCH_FALLBACK + 0.01 * research.maxSearches : FALLBACK_ESTIMATE[kind] ?? 0;
     return round6(best);
   }
 
@@ -215,10 +236,15 @@ export class AIRouter {
     return new ProviderError('NO_PROVIDER', `No API key powers ${label} yet. Add one in Settings → AI and tick ${label} in its “Powers” list.`, { status: 409 });
   }
 
-  /** What served a request, with the effort it ran at and what it used. */
-  describe(id, kind, fn, { model, effort, ms, usage, cost, credits, params, note }) {
+  /**
+   * What served a request, with the effort it ran at and what it used. searches: web searches it ran;
+   * without a cost from the provider, they're added to the estimate at the list price.
+   */
+  describe(id, kind, fn, { model, effort, ms, usage, cost, credits, params, note, searches = 0 }) {
     const k = kindDef(id, kind);
-    const estimate = cost == null && usage ? estimateCost(id, kind, model, usage) : null;
+    const tokenUsd = cost == null && usage ? estimateCost(id, kind, model, usage) : null;
+    const searchUsd = cost == null && searches > 0 ? searches * searchPrice(id) : 0;
+    const estimate = tokenUsd == null && !searchUsd ? null : (tokenUsd ?? 0) + searchUsd;
     const usd = cost ?? estimate;
     return {
       provider: id,
@@ -231,6 +257,7 @@ export class AIRouter {
       effortField: k?.field || '',
       ms,
       usage: usage ? { input: usage.input ?? 0, output: usage.output ?? 0, reasoning: usage.reasoning ?? null } : null,
+      ...(searches ? { searches } : {}),
       cost: usd != null ? { usd: round6(usd), source: cost != null ? 'provider' : 'estimate' } : null,
       credits: credits ?? null,
       params: params ?? null,
@@ -238,9 +265,10 @@ export class AIRouter {
     };
   }
 
+  /** Logs what a request used (never its sources or queries: the log is synced and holds no research). */
   log(meta, extra = {}) {
     const { provider, fn, kind, model, effort, ms, usage, cost, credits } = meta;
-    return this.usage.add({ ok: true, provider, fn, kind, model, effort, ms, usage, cost, credits, ...extra });
+    return this.usage.add({ ok: true, provider, fn, kind, model, effort, ms, usage, cost, credits, searches: meta.searches ?? 0, ...extra });
   }
 
   logFailure(id, kind, fn, model, effort, t0, err, extra = {}) {
@@ -249,28 +277,45 @@ export class AIRouter {
 
   // ───────────── writing ─────────────
 
-  async text(fn, { prompt, images = [], tier = 'default', signal, brain = null, userId = null, ownKeys = null, meter = null }) {
+  /**
+   * research: { maxSearches, location } (research.mjs researchFromBody) asks the key to search the web.
+   * Keys that can search go first; the reply's meta then says what the searches found (meta.research).
+   */
+  async text(fn, { prompt, images = [], tier = 'default', signal, brain = null, userId = null, ownKeys = null, meter = null, research = null }) {
     if (fnById[fn]?.kind !== 'text') throw new ProviderError('BAD_REQUEST', 'Unknown AI function.', { status: 400 });
-    const route = this.plan(fn, 'text', ownKeys);
+    let route = this.plan(fn, 'text', ownKeys);
     if (!route.length) throw this.noProvider(fn);
+    if (research) {
+      // keys that can search go first, in their order; the others stay after them
+      const can = route.filter((s) => canResearch(s.id, s.model));
+      route = [...can, ...route.filter((s) => !can.includes(s))];
+    }
+    const flag = research ? { research: true } : {};
     const attempts = [];
     let last = null;
     for (const step of route) {
       const { id, model, effort } = step;
+      const web = research && canResearch(id, model) ? research : null;
       const t0 = Date.now();
       try {
         meter?.start?.();
-        const r = await this.adapter(id).text(this.ctx(id, step.key), { model, effort, system: SYSTEM, prompt, images, tier, signal });
-        const meta = this.ownMeta(this.describe(id, 'text', fn, { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits }), step);
+        const r = await this.adapter(id).text(this.ctx(id, step.key), { model, effort, system: SYSTEM, prompt, images, tier, signal, ...(web ? { research: web, timeoutMs: this.researchTimeoutMs } : {}) });
+        const meta = this.ownMeta(this.describe(id, 'text', fn, { model: r.model || model, effort, ms: Date.now() - t0, usage: r.usage, cost: r.cost, credits: r.credits, searches: web ? (r.research?.searches ?? 0) : 0 }), step);
+        if (research) {
+          meta.research = researchMeta(!!web, web ? (r.research ?? {}) : {});
+          meta.searches = meta.research.searches;
+        }
         if (attempts.length) meta.attempts = attempts;
-        this.log(meta, { brain, userId, ...this.ownExtra(step) });
+        this.log(meta, { brain, userId, ...this.ownExtra(step), ...flag });
         meter?.cost?.(meta.cost?.usd);
         return { text: r.text, meta };
       } catch (e) {
         last = asProviderError(e, step.own ? ownLabel(id) : PROVIDERS[id].label);
-        this.logFailure(id, 'text', fn, model, effort, t0, last, { brain, userId, ...this.ownExtra(step) });
+        this.logFailure(id, 'text', fn, model, effort, t0, last, { brain, userId, ...this.ownExtra(step), ...flag });
         attempts.push({ provider: id, providerLabel: step.own ? ownLabel(id) : PROVIDERS[id].label, code: last.code, error: last.message });
-        if (!canFallBack(last, 'text') || signal?.aborted) break;
+        // a key asked to search may have run (and billed) searches: move on only if it certainly started nothing
+        const next = web ? last.notStarted && !['CONTENT_POLICY', 'REFUSAL', 'ABORTED'].includes(last.code) : canFallBack(last, 'text');
+        if (!next || signal?.aborted) break;
       }
     }
     last.attempts = attempts;
@@ -499,21 +544,28 @@ export class AIRouter {
     return { bytes: job.bytes, contentType: job.contentType || 'video/mp4' };
   }
 
-  // ───────────── Manus tasks (photos and Facebook posts) ─────────────
+  // ───────────── Manus tasks (photos, Facebook posts and deep research) ─────────────
 
   /** The owner's Manus key, or a user's own (apiKey): their task runs in their Manus account. */
   manusCtx(apiKey) {
     return apiKey ? { ...this.ctx('manus'), key: apiKey, label: 'Manus (your key)' } : this.ctx('manus');
   }
 
+  /**
+   * Deep research (fn 'marketResearch'): the prompt is the server's fixed template (marketResearch.mjs);
+   * it never asks questions, stays in the task list, fills in the research schema and runs without the
+   * account's connected apps.
+   */
   async manusCreate({ fn, prompt, title, interactive, hidden, image, files = [], signal, owner = null, apiKey = null }) {
     const kind = fnById[fn]?.kind;
-    if (fn !== 'photos' && fn !== 'facebook') throw new ProviderError('BAD_REQUEST', 'Unknown Manus task.', { status: 400 });
+    if (!MANUS_FUNCTIONS.has(fn)) throw new ProviderError('BAD_REQUEST', 'Unknown Manus task.', { status: 400 });
     if (!apiKey && !this.store.powers('manus', fn)) throw new ProviderError('NO_PROVIDER', `Your Manus key isn’t set to power ${fnById[fn].label}. Turn it on in Settings → AI.`, { status: 409 });
     const profile = this.store.settings('manus').effort[kind];
+    const research = fn === 'marketResearch';
+    const task = research ? { interactive: false, hidden: false, image: null, files: [], structuredOutputSchema: MARKET_RESEARCH_SCHEMA, clearConnectors: true } : { interactive, hidden, image, files };
     const t0 = Date.now();
     try {
-      const out = await this.adapters.manus.create(this.manusCtx(apiKey), { prompt, title, profile, interactive, hidden, image, files, signal });
+      const out = await this.adapters.manus.create(this.manusCtx(apiKey), { prompt, title, profile, ...task, signal });
       const meta = this.describe('manus', kind, fn, { model: 'manus', effort: profile, ms: Date.now() - t0 });
       if (apiKey) meta.providerLabel = 'Manus (your key)';
       const usageId = this.usage.add({ ok: true, pending: true, provider: 'manus', fn, kind, model: 'manus', effort: profile, ms: meta.ms, taskId: out.task_id, userId: owner, ...(apiKey ? { ownKey: true } : {}) });
@@ -533,6 +585,9 @@ export class AIRouter {
     const out = await this.adapters.manus.output(this.manusCtx(apiKey), { taskId, maxImages, maxImageBytes, signal });
     this.usage.update(t.usageId, { credits: out.credit_usage || null, pending: !out.done, ok: out.status !== 'error' });
     out.meta = this.describe('manus', t.kind, t.fn, { model: 'manus', effort: t.profile, ms: 0, credits: out.credit_usage || null });
+    // a deep research report, checked and capped (the raw structured output never goes to the app)
+    if (t.fn === 'marketResearch' && out.done) out.research = parseMarketResearch(out.text, out.structured_output);
+    delete out.structured_output;
     return out;
   }
 

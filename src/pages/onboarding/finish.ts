@@ -71,4 +71,5 @@ export function finishOnboarding(projectId: string): void {
     );
   }
   s.notify({ kind: 'ai', title: `${brandName} is ready`, body: 'Your Brain now knows your brand voice.', route: 'brain' });
+  s.notify({ kind: 'ai', title: `Plan how ${brandName} gets clients`, body: 'Strategy researches where to promote, what to post and which page to build first.', route: 'strategy' });
 }

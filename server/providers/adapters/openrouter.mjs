@@ -1,8 +1,10 @@
 // OpenRouter: chat for any model (effort in `reasoning.effort`; OpenRouter reports the real cost),
 // image models (/images, or chat for chat-based image models) and video models (/videos, polled).
+// Web research (Strategy): OpenRouter's openrouter:web_search server tool (in beta at OpenRouter).
 
 import { ProviderError, downloadBytes, errorFromResponse, imageFromValue, num, requestJson, sniffImage, sniffVideo } from '../http.mjs';
 import { chatText, listModelIds } from './chat.mjs';
+import { RESEARCH_TIMEOUT_MS, TOOL_REFUSED, userLocation } from '../research.mjs';
 
 const headers = (key) => ({ authorization: `Bearer ${key}`, 'x-title': 'Yourlocalbusiness', 'http-referer': 'https://yourlocalbusiness.app' });
 
@@ -21,21 +23,44 @@ const VIDEO_URL_KEYS = (p) => [p?.unsigned_urls?.[0], p?.urls?.[0], p?.video?.ur
 export default {
   base: 'https://openrouter.ai/api/v1',
 
-  async text(ctx, { model, effort, system, prompt, images, tier, signal, timeoutMs }) {
-    const out = await chatText(ctx, {
-      url: `${ctx.base}/chat/completions`,
-      headers: headers(ctx.key),
-      model,
-      system,
-      prompt,
-      images,
-      // OpenRouter turns effort into a share of max_tokens for budget-based models
-      extraBody: { max_tokens: tier === 'quick' ? 16_000 : 32_000, usage: { include: true } },
-      effortBody: effort ? { reasoning: { effort } } : {},
-      signal,
-      timeoutMs,
-    });
-    return out;
+  async text(ctx, { model, effort, system, prompt, images, tier, signal, timeoutMs, research = null }) {
+    const send = (search) =>
+      chatText(ctx, {
+        url: `${ctx.base}/chat/completions`,
+        headers: headers(ctx.key),
+        model,
+        system,
+        prompt,
+        images,
+        // OpenRouter turns effort into a share of max_tokens for budget-based models
+        extraBody: { max_tokens: tier === 'quick' ? 16_000 : 32_000, usage: { include: true }, ...search },
+        effortBody: effort ? { reasoning: { effort } } : {},
+        signal,
+        timeoutMs: research ? (timeoutMs ?? RESEARCH_TIMEOUT_MS) : timeoutMs,
+      });
+    if (!research) {
+      const { annotations, serverToolUse, ...out } = await send({});
+      return out;
+    }
+    // `auto` would use Google's own grounding for google/* models, whose terms don't fit Strategy: Exa instead
+    const engine = /^google\//.test(model) ? 'exa' : 'auto';
+    const parameters = { engine, max_uses: research.maxSearches, max_total_results: research.maxSearches * 5, ...(engine === 'auto' && research.location ? { user_location: userLocation(research.location) } : {}) };
+    let refused = false;
+    let got;
+    try {
+      got = await send({ tools: [{ type: 'openrouter:web_search', parameters }], max_tool_calls: research.maxSearches });
+    } catch (e) {
+      // the search tool itself was refused (a 400 or 404 isn't billed): answer without searching
+      if (!['BAD_REQUEST', 'NOT_FOUND'].includes(e?.code) || !TOOL_REFUSED.test(e.message)) throw e;
+      refused = true;
+      got = await send({});
+    }
+    const { annotations, serverToolUse, ...out } = got;
+    // the URL and title of each cited page; never url_citation.content (page excerpts)
+    const sources = annotations.filter((a) => a?.type === 'url_citation' && typeof a.url_citation?.url === 'string').map((a) => ({ url: a.url_citation.url, title: a.url_citation.title, cited: true }));
+    // OpenRouter counts the searches; citations without a count mean it searched at least once
+    const searches = num(serverToolUse?.web_search_requests) ?? (sources.length ? 1 : 0);
+    return { ...out, research: { searches, sources, queries: [], errors: [], refused } };
   },
 
   async image(ctx, { model, prompt, aspect, signal }) {

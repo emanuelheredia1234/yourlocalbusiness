@@ -142,6 +142,7 @@ function Done({ project }: { project: Project }) {
               [Wand2, project.track === 'product' ? 'Build the product in the Studio: AI outline, drafts and interactive code assets.' : 'Shape your packages, operating model and booking widget in the Studio.'],
               [Store, 'Publish your listing to the Marketplace in one click.'],
               [Rocket, 'Launch marketing: SEO sales page, email funnel and a 30-day social campaign.'],
+              [Compass, 'Plan how you’ll get clients: Strategy researches where your buyers are, what to post and which page to build first.'],
             ].map(([I, t], i) => {
               const Ico = I as typeof Wand2;
               return (

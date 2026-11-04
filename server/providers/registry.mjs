@@ -81,6 +81,8 @@ export const PROVIDERS = {
         efforts: ALL_REASONING,
         defaultEffort: 'medium',
         defaultModel: 'google/gemini-3.8-flash',
+        // web search for Strategy (server/providers/research.mjs): list price per search, for estimates
+        research: { perSearch: 0.01, how: 'openrouter:web_search', note: 'OpenRouter reports the exact cost, searches included.' },
         models: [
           m('google/gemini-3.8-flash', 'Gemini 3.8 Flash'),
           m('anthropic/claude-sonnet-5.5', 'Claude Sonnet 5.5'),
@@ -165,6 +167,8 @@ export const PROVIDERS = {
         efforts: ['low', 'medium', 'high', 'xhigh'],
         defaultEffort: 'medium',
         defaultModel: 'grok-4.6',
+        // search runs only on xAI's Responses API, and not on Grok 1-3 models
+        research: { perSearch: 0.005, how: 'web_search (Responses API)', except: /^grok-[123](\b|[.-])/ },
         models: [
           m('grok-4.6', 'Grok 4.6', ['low', 'medium', 'high', 'xhigh'], 'medium', { input: 2, output: 6 }),
           m('grok-4.5', 'Grok 4.5', ['low', 'medium', 'high'], 'medium', { input: 2, output: 6 }),
@@ -207,6 +211,7 @@ export const PROVIDERS = {
         efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
         defaultEffort: 'medium',
         defaultModel: 'claude-opus-5-5',
+        research: { perSearch: 0.01, how: 'web_search' },
         models: [
           m('claude-opus-5-5', 'Claude Opus 5.5', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium', { input: 4, output: 20 }, { fallbacks: true }),
           m('claude-sonnet-5-5', 'Claude Sonnet 5.5', ['low', 'medium', 'high', 'xhigh', 'max'], 'high', { input: 2, output: 10 }, { fallbacks: true }),
@@ -229,6 +234,8 @@ export const PROVIDERS = {
         efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
         defaultEffort: 'medium',
         defaultModel: 'muse-spark-1.3',
+        // search grounding runs only on Meta's Responses API
+        research: { perSearch: 0.0025, how: 'web_search (Responses API)' },
         models: [
           m('muse-spark-1.3', 'Muse Spark 1.3', ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], 'medium', { input: 1.25, output: 4.25 }),
           m('muse-spark-1.3-contributor', 'Muse Spark 1.3 Contributor', ['minimal', 'low', 'medium', 'high', 'xhigh'], 'medium', { input: 0.1, output: 0.2 }),
@@ -281,6 +288,7 @@ export const PROVIDERS = {
         efforts: ALL_REASONING,
         defaultEffort: 'medium',
         defaultModel: 'gpt-6.1-sol',
+        research: { perSearch: 0.01, how: 'web_search', except: /^(gpt-3|gpt-4o|gpt-4-)/ },
         models: [
           m('gpt-6.1-sol', 'GPT-6.1 Sol', ['low', 'medium', 'high', 'xhigh', 'max'], 'medium', { input: 2, output: 10 }),
           m('gpt-6-astra', 'GPT-6 Astra', ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], 'medium', { input: 10, output: 50 }),
@@ -344,7 +352,7 @@ export function supports(providerId, fnId) {
   const label = PROVIDERS[providerId].label;
   if (fn.kind === 'video') return { ok: false, reason: providerId === 'openai' ? 'OpenAI shut down its video API (Sora) in September 2026.' : `${label} has no video API.` };
   if (fn.kind === 'image') return { ok: false, reason: `${label} doesn’t make photos.` };
-  if (fn.kind === 'agent') return { ok: false, reason: 'Only the Manus agent can use a browser to schedule posts.' };
+  if (fn.kind === 'agent') return { ok: false, reason: 'Only the Manus agent can do this: it works in its own browser.' };
   if (providerId === 'manus') return { ok: false, reason: 'Manus is an agent: it schedules posts and makes photos, but doesn’t write the app’s content.' };
   return { ok: false, reason: `${label} can’t do this.` };
 }
@@ -420,6 +428,8 @@ export function describeProviders() {
             efforts: effortOptions(id, kind, ''),
             aspects: k.aspects ?? null,
             durations: k.durations ?? null,
+            // can search the web for Strategy, and the list price per search (null: can't)
+            research: k.research ? { perSearch: k.research.perSearch } : null,
           },
         ]),
       ),

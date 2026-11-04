@@ -5,6 +5,7 @@
 import type { Post, Project } from '@/lib/types';
 import { useRuntime } from '@/lib/platform';
 import { readiness } from '@/lib/readiness';
+import { strategySummary } from '@/lib/strategy';
 import { FORMATS } from '@/ai/knowledge';
 import { manusViaServer } from '@/ai/manus';
 import { photoAvailability, photoRoute } from '@/ai/image';
@@ -81,6 +82,7 @@ export function workspaceSummary(now = Date.now()) {
   const ready = readiness(p, { scheduled: posts.filter((x) => x.status !== 'draft').length, posted: count('published'), listed });
   const m = p.marketing;
   const batch = posts.filter((x) => x.source === 'batch' && x.status !== 'published').length;
+  const strategy = strategySummary(p, { posts: s.posts, ads: s.ads, myListings: s.myListings, now });
   return {
     project: {
       id: p.id,
@@ -116,6 +118,8 @@ export function workspaceSummary(now = Date.now()) {
     ads: { campaigns: s.ads.filter((a) => a.projectId === p.id).length },
     brain: { on: s.settings.ai.useBrain, skillsOn: s.skills.filter((k) => k.enabled && (!k.projectId || k.projectId === p.id)).length },
     readiness: { done: ready.done, of: ready.items.length, next: ready.items.find((i) => !i.done)?.label ?? null },
+    // the Strategy tab in brief, once something is written
+    ...(strategy ? { strategy } : {}),
     unreadNotifications: s.notices.filter((n) => !n.read).length,
     ai: aiSummary(),
   };

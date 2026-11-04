@@ -13,6 +13,8 @@ export interface AIFunction {
   kind: AIKind;
   desc: string;
   tasks: string[];
+  /** may ask your server to search the web (Strategy) */
+  research?: boolean;
 }
 
 export const AI_FUNCTIONS = catalog.functions as AIFunction[];

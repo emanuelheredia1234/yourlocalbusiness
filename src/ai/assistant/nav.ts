@@ -14,6 +14,7 @@ export const OPENABLE_ROUTES = ROUTES.filter((r) => r !== 'onboarding') as Exclu
 export const PAGE_LABELS: Record<Route, string> = {
   onboarding: 'Setup',
   dashboard: 'Dashboard',
+  strategy: 'Strategy',
   studio: 'Studio',
   marketing: 'Marketing Hub',
   'marketing-seo': 'SEO page',
