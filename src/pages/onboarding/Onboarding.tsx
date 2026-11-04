@@ -254,7 +254,7 @@ export function Onboarding() {
           )}
           <AccountChip />
         </div>
-        <div id="wizard-scroll" className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        <div id="wizard-scroll" className="scroll-thin relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <div className="mx-auto w-full max-w-[1000px] gutter pb-10 pt-8">
             <div className="mb-6 animate-rise-in">
               <h1 className="page-title max-w-[28ch]">{header[step].title}</h1>

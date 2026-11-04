@@ -157,7 +157,8 @@ export default function App() {
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar />
-        <main id="main-scroll" className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        {/* relative: absolutely positioned bits inside (sr-only labels) stay in this scroll area instead of stretching the page behind the shell; overscroll-contain: scrolling never moves the page itself */}
+        <main id="main-scroll" className="scroll-thin relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {/* room at the bottom for the assistant's chat button */}
           <div className="mx-auto w-full max-w-[1320px] gutter pb-28 pt-6">
             <PageErrorBoundary key={route ?? 'dashboard'} onHome={() => void navigate('dashboard', { force: true })}>
