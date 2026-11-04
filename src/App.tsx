@@ -15,6 +15,7 @@ import { MarkPostedHost } from '@/components/posts/PostActions';
 import { ManusGroupsHost, useGroupShareWatcher } from '@/components/posts/ManusGroups';
 import { ListingWindowHost } from '@/components/studio/ListingWindowHost';
 import { useVoiceReadWatcher } from '@/components/brand/SocialVoice';
+import { useStrategyManusWatcher } from '@/ai/strategyManus';
 import { Assistant } from '@/components/assistant/Assistant';
 import { useAssistant } from '@/store/assistant';
 import { StoreOverlays } from '@/pages/store/StoreOverlays';
@@ -32,6 +33,7 @@ const AnalyticsPage = lazy(() => import('@/pages/analytics/Analytics'));
 const StorePage = lazy(() => import('@/pages/store/Marketplace'));
 const BrainPage = lazy(() => import('@/pages/brain/Brain'));
 const SettingsPage = lazy(() => import('@/pages/settings/Settings'));
+const StrategyPage = lazy(() => import('@/pages/strategy/Strategy'));
 
 function useThemeSync() {
   const theme = useStore((s) => s.settings.theme);
@@ -63,6 +65,7 @@ export default function App() {
   useLeadsWatcher();
   useGroupShareWatcher();
   useVoiceReadWatcher();
+  useStrategyManusWatcher();
 
   useEffect(() => {
     initRuntime();
@@ -101,6 +104,9 @@ export default function App() {
 
   let page: JSX.Element;
   switch (route) {
+    case 'strategy':
+      page = <StrategyPage />;
+      break;
     case 'studio':
       page = <Studio />;
       break;

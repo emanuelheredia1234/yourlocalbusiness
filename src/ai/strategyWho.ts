@@ -62,24 +62,33 @@ export function strategyWho(o: WhoOptions = {}): StrategyWho {
   const route = routeFor('strategy');
   if (!route.length) return { mode: 'builtin', who: 'No API key powers Strategy yet, so the built-in engine writes a starter plan: free, general guidance, not research.', cost: '', settings: true, deep };
   const providerOf = (id: string) => rt.ai.providers.find((x) => x.id === id);
+  // the research step goes to the first key that can search (the server puts those first for it);
+  // the other steps are ordinary requests, so the first key in the route answers them
   const searchId = route.find((id) => !!providerOf(id)?.research);
-  const writerId = searchId ?? route[0];
-  const w = providerOf(writerId);
-  const own = !!w?.own;
-  const baseLabel = w?.label || writerId;
-  const label = own && !/\(your key\)/.test(baseLabel) ? `${baseLabel} (your key)` : baseLabel;
-  const model = w?.models?.text || 'its default model';
-  const effort = w?.effort?.text;
-  const effortText = effort?.id ? `effort ${effort.label}` : 'effort set by the model';
-  const who = `${label} writes your strategy with ${model} (${effortText}): ${requestsText(n)}.`;
-  if (searchId && w?.research) {
-    const perSearch = w.research.perSearch;
-    const cost = research
-      ? `Step 1 searches the web: up to ${maxSearches} searches at ${searchPriceText(perSearch)} each (list price), plus the pages it reads, billed as tokens.${/^openrouter\d*$/.test(searchId) ? ' OpenRouter reports the exact cost after.' : ''}${own ? ' Billed to your own key.' : ' Billed to the key that powers Strategy; if you have a daily AI limit, it counts toward it.'}`
-      : own
-        ? 'Billed to your own key.'
-        : 'Billed to the key that powers Strategy; if you have a daily AI limit, it counts toward it.';
-    return { mode: 'web', who, cost, settings: false, searchKey: { id: searchId, label, model, perSearch, own }, deep };
+  const firstId = route[0];
+  const writerId = searchId ?? firstId;
+  const describe = (id: string) => {
+    const k = providerOf(id);
+    const baseLabel = k?.label || id;
+    const label = k?.own && !/\(your key\)/.test(baseLabel) ? `${baseLabel} (your key)` : baseLabel;
+    const effort = k?.effort?.text;
+    return { label, model: k?.models?.text || 'its default model', effort: effort?.id ? `effort ${effort.label}` : 'effort set by the model', own: !!k?.own };
+  };
+  const w = describe(writerId);
+  const first = describe(firstId);
+  const own = research && n > 1 ? w.own && first.own : research ? w.own : first.own;
+  const who = !research
+    ? `${first.label} writes your strategy with ${first.model} (${first.effort}): ${requestsText(n)}.`
+    : n === 1 || writerId === firstId
+      ? `${w.label} writes your strategy with ${w.model} (${w.effort}): ${requestsText(n)}.`
+      : `${w.label} does the research with ${w.model} (${w.effort}), and ${first.label} writes the other ${n - 1} steps with ${first.model} (${first.effort}): ${requestsText(n)}.`;
+  const label = w.label;
+  if (searchId) {
+    const perSearch = providerOf(searchId)!.research!.perSearch;
+    const two = research && n > 1 && writerId !== firstId;
+    const billed = own ? ` Billed to your own key${two ? 's' : ''}.` : ` Billed to the key${two ? 's' : ''} that power${two ? '' : 's'} Strategy; if you have a daily AI limit, it counts toward it.`;
+    const cost = research ? `Step 1 searches the web: up to ${maxSearches} searches at ${searchPriceText(perSearch)} each (list price), plus the pages it reads, billed as tokens.${/^openrouter\d*$/.test(searchId) ? ' OpenRouter reports the exact cost after.' : ''}${billed}` : billed.trim();
+    return { mode: 'web', who, cost, settings: false, searchKey: { id: searchId, label: w.label, model: w.model, perSearch, own: w.own }, deep };
   }
   return { mode: 'general', who, cost: research ? `${label} can’t search the web for Strategy, so the research comes from its general knowledge (no sources). For sources, tick Strategy for a key that can search (${SEARCH_KEYS}) in Settings → AI.` : '', settings: research, deep };
 }

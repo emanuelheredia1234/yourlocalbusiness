@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { ArrowRight, Brain, CalendarClock, Check, CircleAlert, ExternalLink, Globe, Mail, Megaphone, PenSquare, Search, Send, ShoppingBag, Sparkles, Store, TrendingUp, WandSparkles } from 'lucide-react';
+import { ArrowRight, Brain, CalendarClock, Check, CircleAlert, Compass, ExternalLink, Globe, Mail, Megaphone, PenSquare, Search, Send, ShoppingBag, Sparkles, Store, TrendingUp, WandSparkles } from 'lucide-react';
 import type { GenerationLog, Project } from '@/lib/types';
 import { cn, ensureUrl, fmtDateTime, fmtMoney, fmtRelative, greeting, stripProtocol } from '@/lib/utils';
 import { navigate, type Route } from '@/lib/router';
@@ -9,11 +9,15 @@ import { useActiveProject, useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
 import { StatTile } from '@/components/charts/Charts';
 import { BrandLogo } from '@/components/brand/Logo';
-import { ProgressRing } from '@/components/ui/primitives';
+import { ProgressRing, Spinner } from '@/components/ui/primitives';
 import { PlatformGlyph } from '@/components/posts/PlatformIcon';
 import { DueBadge } from '@/components/posts/PostActions';
 import { suggestTopics } from '@/ai/local/social';
 import { readiness } from '@/lib/readiness';
+import { currentWeek, readStrategy, strategyNextSteps, strategyProgress, strategyStatusLine, type ActionCtx } from '@/lib/strategy';
+import { actionTarget, runTarget } from '@/lib/strategyActions';
+import { openPage } from '@/ai/assistant/nav';
+import { useStrategyJob } from '@/ai/strategyJob';
 
 /** Your website as you entered it. One that older versions made up from your name is asked about once. */
 function WebsiteLink({ project }: { project: Project }) {
@@ -86,7 +90,11 @@ export function Dashboard() {
     [genLog, notices, project.id],
   );
 
+  const ads = useStore((s) => s.ads);
+  const myListings = useStore((s) => s.myListings);
+  const actx: ActionCtx = { posts, ads, myListings, now: Date.now() };
   const shortcuts: { route: Route; title: string; desc: string; icon: React.ReactNode; status: string }[] = [
+    { route: 'strategy', title: 'Strategy', desc: 'Where to find clients, what to post, your plan', icon: <Compass size={18} />, status: strategyStatusLine(project, actx) },
     { route: 'studio', title: project.track === 'business' ? 'Business Studio' : 'Product Studio', desc: 'Outline, code assets, publish', icon: <WandSparkles size={18} />, status: project.studio.outline.length || project.studio.packages.length ? 'In progress' : 'Start here' },
     { route: 'marketing-seo', title: 'SEO sales page', desc: 'Meta, score, HTML export', icon: <Search size={18} />, status: project.marketing.salesPage ? 'Drafted' : 'Not started' },
     { route: 'marketing-email', title: 'Email funnel', desc: 'Lead magnet + 5 emails', icon: <Mail size={18} />, status: project.marketing.emails.length ? 'Drafted' : 'Not started' },
@@ -162,6 +170,8 @@ export function Dashboard() {
               <WebsiteLink project={project} />
             </div>
           </section>
+
+          <StrategyCard project={project} ctx={actx} />
 
           <section className="panel p-4" aria-label="Launch readiness">
             <div className="mb-3 flex items-center gap-3">
@@ -267,6 +277,71 @@ export function Dashboard() {
         </section>
       </div>
     </div>
+  );
+}
+
+/** This week in the plan from Strategy: the next open steps, each with the button that does it. */
+function StrategyCard({ project, ctx }: { project: Project; ctx: ActionCtx }) {
+  const job = useStrategyJob(project.id);
+  const s = useMemo(() => readStrategy(project), [project]);
+  const biz = project.track === 'business';
+  if (job) {
+    return (
+      <section className="panel flex items-center gap-3 p-4" aria-label="Your plan this week">
+        <Spinner size={18} className="text-primary" />
+        <p className="text-[13px] font-medium text-ink">
+          Writing your strategy… step {job.index + 1} of {job.steps.length}
+        </p>
+      </section>
+    );
+  }
+  if (!s.plan) {
+    return (
+      <section className="panel p-4" aria-label="Your plan this week">
+        <h2 className="section-title">{biz ? 'Your plan to win clients' : 'Your plan to make sales'}</h2>
+        <p className="mt-1 text-[13px] text-muted">Strategy researches where your buyers are and plans what to do each week.</p>
+        <button className="btn btn-secondary btn-sm mt-3" onClick={() => void openPage('strategy', 'plan')}>
+          <Compass size={14} /> Open Strategy
+        </button>
+      </section>
+    );
+  }
+  const pr = strategyProgress(project, s, ctx);
+  const w = currentWeek(s.plan, ctx.now);
+  const week = s.plan.weeks.find((x) => x.week === w);
+  const next = strategyNextSteps(project, s, ctx, 3);
+  return (
+    <section className="panel p-4" aria-label="Your plan this week">
+      <div className="mb-3 flex items-center gap-3">
+        <ProgressRing value={pr.total ? pr.done / pr.total : 0} size={46} label={`${pr.done}/${pr.total}`} />
+        <div className="min-w-0">
+          <h2 className="section-title">Your plan this week</h2>
+          <p className="truncate text-xs text-muted">{w <= 4 && week ? `Week ${w}: ${week.focus}` : 'Your 4 weeks are up: keep going with the steps still open.'}</p>
+        </div>
+      </div>
+      {next.length > 0 ? (
+        <ul className="flex flex-col gap-2">
+          {next.map((a) => {
+            const t = actionTarget(a, project, s);
+            return (
+              <li key={a.id} className="flex flex-wrap items-center gap-2 text-[13px]">
+                <span className="min-w-0 flex-1 font-medium text-ink">{a.title}</span>
+                {t && (
+                  <button className="btn btn-ghost btn-xs" onClick={() => void runTarget(t.target)}>
+                    {t.label}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="text-[13px] text-muted">Every step is done. Keep the habits going.</p>
+      )}
+      <button className="link mt-3 text-[13px]" onClick={() => void openPage('strategy', 'plan')}>
+        Open plan →
+      </button>
+    </section>
   );
 }
 

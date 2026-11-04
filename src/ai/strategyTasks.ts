@@ -7,6 +7,7 @@ import { PAGE_TYPES, bookingLink, pageTypeOf, paymentLink } from '@/lib/pageType
 import { LINK_PLACEMENTS } from '@/lib/pageLink';
 import { ownerFacts } from '@/lib/strategy';
 import {
+  clip,
   normalizeAssets,
   normalizeContent,
   normalizeOutreach,
@@ -185,12 +186,37 @@ export function stepInput(step: StrategyStep, p: Project, s: StrategyState, rt: 
   }
   const findings = [...(s.research?.findings ?? []), ...(s.manus?.state === 'done' ? s.manus.findings ?? [] : [])].map((f) => ({ topic: f.topic, text: f.text, sources: f.sources ?? [] }));
   const earlier = earlierFor(step, s);
-  return {
+  return fitInput({
     ...base,
     research: { summary: s.research?.summary ?? '', findings },
     sources: s.sources.map((x) => ({ n: x.n, title: x.title, domain: x.domain })),
     ...(earlier ? { earlier } : {}),
+  });
+}
+
+/** The most a step's INPUT takes in its prompt (as framePrompt prints it): with the rest, a prompt stays within 24,000 characters. */
+export const INPUT_BUDGET = 15_000;
+const inputSize = (x: unknown) => JSON.stringify(x, null, 1).length;
+
+/**
+ * A later step's INPUT within INPUT_BUDGET: when the research is long (many findings, Manus's too), the
+ * findings and source titles are shortened, then the last findings dropped (Manus's come last), and only
+ * the sources the kept findings cite are listed. The owner's own words are never cut.
+ */
+export function fitInput(input: LaterInput): LaterInput {
+  if (inputSize(input) <= INPUT_BUDGET) return input;
+  let findings = input.research.findings.map((f) => ({ ...f, text: clip(f.text, 200) }));
+  const sources = input.sources.map((x) => ({ ...x, title: clip(x.title, 80) }));
+  const make = (): LaterInput => {
+    const cited = new Set(findings.flatMap((f) => f.sources));
+    return { ...input, research: { summary: clip(input.research.summary, 400), findings }, sources: sources.filter((x) => cited.has(x.n)) };
   };
+  let out = make();
+  while (inputSize(out) > INPUT_BUDGET && findings.length) {
+    findings = findings.slice(0, -1);
+    out = make();
+  }
+  return out;
 }
 
 // ───────────── reading the answers ─────────────

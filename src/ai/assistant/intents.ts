@@ -23,6 +23,7 @@ const RULES: { re: RegExp; route: Route; tab?: string }[] = [
   { re: /\b(posted|went out)\b/i, route: 'calendar', tab: 'published' },
   { re: /\b(calendar|queue|due|scheduled|planned)\b/i, route: 'calendar' },
   { re: /\b(create|write|new|make)\b.*\bpost\b/i, route: 'marketing-social', tab: 'create' },
+  { re: /\b(strateg\w*|get (more )?clients|find (more )?clients|marketing plan|sales plan|where (to|should i|do i|can i) promote|promote my (business|product|shop|services?)|grow my business)\b/i, route: 'strategy' },
   { re: /\b(30-day|plan)\b/i, route: 'marketing-social', tab: 'plan' },
   { re: /\b(batch|social|instagram|facebook|tiktok|linkedin|campaign)\b/i, route: 'marketing-social' },
   { re: /\b(subscribers?)\b/i, route: 'marketing-email', tab: 'subscribers' },
