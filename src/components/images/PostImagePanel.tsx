@@ -4,7 +4,7 @@ import type { ImageAspect, ImageKind, MediaRef, PostPlatform, Project, StyleId }
 import { cn } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
 import { navigate } from '@/lib/router';
-import { artMetaLine, createPostImage, defaultImageKind, photoLabel, photoSourceNote, postSubject, releaseMedia, retypesetPostImage } from '@/ai/image';
+import { artMetaLine, aspectForPlatform, createPostImage, defaultImageKind, photoLabel, photoSourceNote, postSubject, releaseMedia, retypesetPostImage } from '@/ai/image';
 import { pendingManus, type ManusTask } from '@/ai/manus';
 import { AIThinking } from '@/components/ai/AI';
 import { download } from '@/components/ui/download';
@@ -18,11 +18,8 @@ export const POST_ASPECTS: { id: ImageAspect; label: string; hint: string }[] = 
   { id: '1.91:1', label: 'Landscape', hint: '1.91:1 · LinkedIn & X' },
 ];
 
-export function aspectForPlatform(p: PostPlatform | undefined): ImageAspect {
-  if (p === 'tiktok') return '9:16';
-  if (p === 'linkedin' || p === 'x') return '1.91:1';
-  return '4:5';
-}
+// a post image's shape on its network (moved to the image module, where the post card and the assistant use it too)
+export { aspectForPlatform };
 
 const KIND_LABEL: Record<string, string> = { photo: 'photo', illustration: 'illustration', design: 'brand design' };
 

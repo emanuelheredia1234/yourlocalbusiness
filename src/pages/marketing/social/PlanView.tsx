@@ -3,7 +3,7 @@ import { CalendarDays, Clapperboard, Image as ImageIcon, List, Megaphone, Target
 import type { CampaignPlan, PlanDay, PlanSlot, PostPlatform } from '@/lib/types';
 import { cn, fmtDate, fmtTime, WEEKDAYS, weekdayIndex } from '@/lib/utils';
 import { PLATFORMS, POST_TYPE_MAP, POST_TYPES, STYLE_LABEL } from '@/ai/knowledge';
-import { getActiveProject, useStore } from '@/store/useStore';
+import { setSlotTopic } from '@/ai/socialPlan';
 import { StackedBar } from '@/components/charts/Charts';
 import { Modal, Segmented } from '@/components/ui/primitives';
 import { PlatformChip, PlatformGlyph } from '@/components/posts/PlatformIcon';
@@ -15,12 +15,6 @@ const PHASE_TONE: Record<string, string> = {
   Conversion: 'rgb(var(--c4))',
   'Final push': 'rgb(var(--c4))',
 };
-
-export function setSlotTopic(slotId: string, topic: string) {
-  const plan = getActiveProject()!.marketing.plan;
-  if (!plan) return;
-  useStore.getState().updateMarketing({ plan: { ...plan, days: plan.days.map((d) => ({ ...d, slots: d.slots.map((s) => (s.id === slotId ? { ...s, topic } : s)) })) } });
-}
 
 export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<string> }) {
   const [view, setView] = useState<'calendar' | 'list'>('calendar');

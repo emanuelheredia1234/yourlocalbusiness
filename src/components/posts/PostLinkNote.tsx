@@ -4,7 +4,7 @@
 import { Link2, MessageSquare } from 'lucide-react';
 import type { LinkPlacement, Post } from '@/lib/types';
 import { cn, truncate } from '@/lib/utils';
-import { LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, firstCommentFor, knownLinks, linkText, pageLink, placeLink, postPlacement } from '@/lib/pageLink';
+import { LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, linkMovePatch, linkText, pageLink, postPlacement } from '@/lib/pageLink';
 import { networkLabel } from '@/ai/manusPost';
 import { useStore } from '@/store/useStore';
 import { AutoTextarea, CopyButton, Field } from '../ui/primitives';
@@ -77,15 +77,8 @@ export function LinkFields({ post, onChange }: { post: Post; onChange: (patch: P
   if (!project) return null;
   const link = pageLink(project);
   const placement = postPlacement(post);
-  const move = (next: LinkPlacement) => {
-    const to = link ? { url: link.url, placement: next } : null;
-    onChange({
-      linkPlacement: next,
-      caption: placeLink(post.caption, to, post.platform, knownLinks(project)),
-      // the comment's text stays when you switch away and back (it's only used while the link goes there)
-      ...(next === 'comment' && !post.firstComment?.trim() ? { firstComment: firstCommentFor(project, to) } : {}),
-    });
-  };
+  // the comment's text stays when you switch away and back (it's only used while the link goes there)
+  const move = (next: LinkPlacement) => onChange(linkMovePatch(project, post, next));
   const label = (id: LinkPlacement) => (id === 'comment' && post.platform === 'x' ? 'First reply' : LINK_PLACEMENT_LABEL[id]);
   return (
     <>

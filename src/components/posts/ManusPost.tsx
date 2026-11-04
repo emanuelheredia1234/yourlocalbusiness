@@ -14,7 +14,6 @@ import {
   networkLabel,
   postBlocker,
   postText,
-  refreshManusPost,
   rememberAccount,
   scheduleWindowError,
   startManusPost,
@@ -23,6 +22,7 @@ import {
   type PostMode,
 } from '@/ai/manusPost';
 import { failedOnItsNetwork } from './PostActions';
+import { refreshPostFromManus } from '@/ai/manusStatus';
 import { beginBusy, endBusy } from '@/lib/busy';
 import { useStore } from '@/store/useStore';
 import { navigate } from '@/lib/router';
@@ -399,7 +399,7 @@ export function ExternalBadge({ post, compact }: { post: Post; compact?: boolean
   const check = async () => {
     setChecking(true);
     try {
-      await applyRefresh(post.id);
+      await refreshPostFromManus(post.id);
     } catch (e) {
       toast({ kind: 'error', ...errorCopy(e) });
     } finally {
@@ -451,39 +451,6 @@ export function ManusPostButton({ post, size = 'sm', primary }: { post: Post; si
   );
 }
 
-async function applyRefresh(postId: string) {
-  const post = useStore.getState().posts.find((p) => p.id === postId);
-  if (!post?.external) return;
-  const prev = post.external;
-  const next = await refreshManusPost(prev);
-  const name = networkLabel(next.network ?? 'facebook');
-  // Manus reports it posted: the post is published (by Manus, on the network)
-  // when it went out: right after the request for "post now", at its time for a scheduled one (never later than now)
-  const wentOut = () => new Date(Math.min(Date.now(), next.mode === 'now' ? next.requestedAt : new Date(next.scheduledFor).getTime() || Date.now())).toISOString();
-  if (next.state === 'posted' && prev.state !== 'posted' && post.status !== 'published') useStore.getState().updatePost(postId, { external: next, status: 'published', publishedBy: 'manus', publishedAt: wentOut(), postUrl: next.url ?? post.postUrl });
-  else useStore.getState().updatePost(postId, { external: next });
-  if (next.state !== prev.state) {
-    const action = { label: 'Open in Manus', run: () => open(next.taskUrl) };
-    if (next.state === 'posted') {
-      // the first comment didn't go on (or Manus didn't say): the owner adds it, from the post card
-      const missed = next.comment?.state === 'failed' || next.comment?.state === 'unknown';
-      const check = `Check the first ${next.network === 'x' ? 'reply' : 'comment'}: the post card has it to copy.`;
-      toast({ kind: 'success', title: `Manus posted it on ${name}`, body: missed ? `${next.message}${/[.!?…]$/.test(next.message) ? '' : '.'} ${check}` : next.message, action });
-      useStore.getState().notify({ kind: 'post', title: `Manus posted it on ${name}`, body: post.headline, route: 'calendar' });
-    } else if (next.state === 'scheduled') {
-      toast({ kind: 'success', title: `Manus scheduled it on ${name}`, body: next.message, action });
-      useStore.getState().notify({ kind: 'post', title: `Manus scheduled your ${name} post`, body: post.headline, route: 'calendar' });
-    } else if (next.state === 'needs_input') {
-      toast({ kind: 'info', title: 'Manus needs you', body: next.message, action });
-      useStore.getState().notify({ kind: 'info', title: 'Manus needs you to continue', body: next.message, route: 'calendar' });
-    } else if (next.state === 'failed') {
-      toast({ kind: 'error', title: `The ${name} post didn’t go through`, body: next.message, action });
-    } else if (next.state === 'finished') {
-      toast({ kind: 'info', title: 'Manus finished', body: `Open the task to confirm the post was ${next.mode === 'now' ? 'posted' : 'scheduled'}.`, action });
-    }
-  }
-}
-
 /** Checks posts that Manus is still working on, every 45 seconds while the app is open. */
 export function useManusPostWatcher() {
   useEffect(() => {
@@ -504,7 +471,7 @@ export function useManusPostWatcher() {
         for (const id of ids) {
           if (!alive) return;
           try {
-            await applyRefresh(id);
+            await refreshPostFromManus(id);
           } catch {
             /* transient: try again on the next tick */
           }

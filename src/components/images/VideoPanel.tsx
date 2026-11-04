@@ -5,14 +5,14 @@ import { cn } from '@/lib/utils';
 import { deleteBlob, getBlob } from '@/lib/storage';
 import { useRuntime } from '@/lib/platform';
 import { useMediaUrl } from '@/lib/media';
-import { createVideo, fmtUsd, pendingVideos, VIDEO_DURATIONS, VIDEO_RESOLUTIONS, videoCost, videoTransport, type VideoAspect, type VideoJob, type VideoResolution } from '@/ai/video';
+import { fmtUsd, pendingVideos, VIDEO_DURATIONS, VIDEO_RESOLUTIONS, videoCost, videoTransport, type VideoAspect, type VideoJob, type VideoResolution } from '@/ai/video';
 import { primaryProvider } from '@/ai/functions';
 import { metaLine } from '@/ai/meta';
 import { AIThinking } from '@/components/ai/AI';
 import { download } from '@/components/ui/download';
 import { AutoTextarea, Field, Segmented, Spinner, Toggle } from '@/components/ui/primitives';
 import { artDirectionLabel, useArtDirection, useImageJob } from './useImageJob';
-import { artDirection, recordVisualSkills } from '@/ai/image';
+import { videoWithArtDirection } from '@/ai/socialPosts';
 
 const ASPECTS: { id: VideoAspect; label: string; hint: string }[] = [
   { id: '9:16', label: 'Vertical', hint: '9:16 · Reels, TikTok, Stories' },
@@ -91,10 +91,7 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
     return job.run(
       async (signal, onStage) => {
         const first = fromImage && startImage && !resume ? await getBlob(startImage.id) : null;
-        const brief = artDirection(purpose);
-        const r = await createVideo({ prompt: brief.text ? `${text.trim()} Art direction: ${brief.text}` : text, aspect, duration, resolution, firstFrame: first, name, signal, onStage, pendingKey, resume });
-        recordVisualSkills(brief, { task: 'video', label: purpose === 'post' ? 'Post video' : 'Listing demo video', purpose, ms: r.ms });
-        return r;
+        return videoWithArtDirection({ prompt: text, aspect, duration, resolution, firstFrame: first, name, purpose, signal, onStage, pendingKey, resume });
       },
       (r) => {
         const old = current.current;

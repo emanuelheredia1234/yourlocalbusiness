@@ -8,7 +8,7 @@ import { cn, fmtRelative } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { manusViaServer } from '@/ai/manus';
 import { postBlocker, suggestedAccount } from '@/ai/manusPost';
-import { MAX_GROUPS, carriedResults, groupKey, groupLinkError, groupPostText, groupRecord, groupSummary, groupsAlreadyOut, groupsToRetry, parseGroups, refreshGroupShare, rememberedGroups, startGroupShare } from '@/ai/manusGroups';
+import { MAX_GROUPS, carriedResults, groupKey, groupLinkError, groupPostText, groupRecord, groupSummary, groupsAlreadyOut, groupsToRetry, parseGroups, rememberedGroups, startGroupShare } from '@/ai/manusGroups';
 import { knownLinks, linkText, pageLink, postPlacement } from '@/lib/pageLink';
 import { beginBusy, endBusy } from '@/lib/busy';
 import { useStore } from '@/store/useStore';
@@ -16,6 +16,7 @@ import { toast, useUI } from '@/store/ui';
 import { AutoTextarea, Field, Modal, Spinner } from '../ui/primitives';
 import { MediaThumb } from '../media/MediaUpload';
 import { errorCopy, manusSetupHint, useCanOfferManus, useManusReady } from './ManusPost';
+import { refreshGroupsFromManus } from '@/ai/manusStatus';
 
 export const useManusGroups = create<{ id: string | null; open: (id: string) => void; close: () => void }>((set) => ({
   id: null,
@@ -224,7 +225,7 @@ export function GroupShareBadge({ post, compact }: { post: Post; compact?: boole
   const check = async () => {
     setChecking(true);
     try {
-      await applyGroupRefresh(post.id);
+      await refreshGroupsFromManus(post.id);
     } catch (e) {
       toast({ kind: 'error', ...errorCopy(e) });
     } finally {
@@ -293,28 +294,6 @@ export function PostToGroupsButton({ post, size = 'sm' }: { post: Post; size?: '
   );
 }
 
-async function applyGroupRefresh(postId: string) {
-  const post = useStore.getState().posts.find((p) => p.id === postId);
-  if (!post?.groupShare) return;
-  const prev = post.groupShare;
-  const next = await refreshGroupShare(prev);
-  useStore.getState().updatePost(postId, { groupShare: next });
-  if (next.state === prev.state) return;
-  const action = { label: 'Open in Manus', run: () => openUrl(next.taskUrl) };
-  if (next.state === 'done') {
-    const summary = groupSummary(groupRecord(next));
-    toast({ kind: 'success', title: 'Manus finished the Facebook groups', body: summary || next.message, action });
-    useStore.getState().notify({ kind: 'post', title: `Facebook groups: ${summary || 'done'}`, body: post.headline, route: 'calendar' });
-  } else if (next.state === 'needs_input') {
-    toast({ kind: 'info', title: 'Manus needs you', body: next.message, action });
-    useStore.getState().notify({ kind: 'info', title: 'Manus needs you to continue (groups)', body: next.message, route: 'calendar' });
-  } else if (next.state === 'failed') {
-    toast({ kind: 'error', title: 'Group posting didn’t go through', body: next.message, action });
-  } else if (next.state === 'finished') {
-    toast({ kind: 'info', title: 'Manus finished the groups', body: 'Open the task to see what it posted.', action });
-  }
-}
-
 /** Checks group shares Manus is still working on, every 45 seconds while the app is open. */
 export function useGroupShareWatcher() {
   useEffect(() => {
@@ -334,7 +313,7 @@ export function useGroupShareWatcher() {
         for (const id of ids) {
           if (!alive) return;
           try {
-            await applyGroupRefresh(id);
+            await refreshGroupsFromManus(id);
           } catch {
             /* transient: try again on the next tick */
           }

@@ -12,16 +12,17 @@ import { PlatformChip, PlatformGlyph } from './PlatformIcon';
 import { AutoTextarea, ChipInput, Field, Modal, confirmAction } from '../ui/primitives';
 import { AIThinking, RegenerateButton } from '../ai/AI';
 import { LogoMark } from '../brand/Logo';
-import { ManusLink, PostImagePanel, aspectForPlatform } from '../images/PostImagePanel';
+import { ManusLink, PostImagePanel } from '../images/PostImagePanel';
 import { VideoPanel } from '../images/VideoPanel';
 import { useImageJob } from '../images/useImageJob';
 import { ExternalBadge, ManusPostButton, useManusReady } from './ManusPost';
 import { GroupShareBadge, PostToGroupsButton } from './ManusGroups';
 import { DueBadge, PostMoreMenu, PostedBy, addToCalendarFlow, manusHolds, useMarkPosted } from './PostActions';
-import { createPostImage, defaultImageKind, postVideoPrompt } from '@/ai/image';
+import { postVideoPrompt } from '@/ai/image';
+import { makePostImage, rewriteInput, rewritePatch } from '@/ai/socialPosts';
 import { brandHandle } from '@/lib/brandMark';
 import { isOwnPhoto } from '@/lib/media';
-import { firstCommentFor, firstCommentOf, knownLinks, placeLink, postLinkFor, postLinkOf, xLength } from '@/lib/pageLink';
+import { firstCommentOf, networkMovePatch, xLength } from '@/lib/pageLink';
 import { postText } from '@/ai/manusPost';
 import { LinkFields, PostLinkNote } from './PostLinkNote';
 
@@ -99,13 +100,8 @@ export function PostFields({ post, onChange }: EditableProps) {
             id={`p-${post.id}`}
             className="select"
             value={post.platform}
-            onChange={(e) => {
-              // the link moves to where it goes on the new network (its own setting), in the caption too
-              const platform = e.target.value as PostPlatform;
-              const link = project ? postLinkFor(project, platform) : null;
-              const firstComment = project && link && !post.firstComment?.trim() ? firstCommentFor(project, link) : undefined;
-              onChange({ platform, ...(project && link ? { linkPlacement: link.placement, caption: placeLink(post.caption, link, platform, knownLinks(project)), ...(firstComment ? { firstComment } : {}) } : {}) });
-            }}
+            // the link moves to where it goes on the new network (its own setting), in the caption too
+            onChange={(e) => onChange(networkMovePatch(project, post, e.target.value as PostPlatform))}
           >
             {POST_PLATFORMS.map((p) => (
               <option key={p} value={p}>
@@ -163,7 +159,7 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
   const makeImage = () =>
     project &&
     img.run(
-      (signal, onStage, onTask) => createPostImage({ project, kind: defaultImageKind(), prompt: post.visualPrompt || post.headline, aspect: aspectForPlatform(post.platform), style: post.style, headline: post.headline, overlay: true, watermark: post.watermark, signal, onStage, onTask, pendingKey: `post:${post.id}` }),
+      (signal, onStage, onTask) => makePostImage(project, post, { signal, onStage, onTask }),
       (r) => {
         update(post.id, { media: r.media });
         if (r.art.note) toast({ kind: 'info', title: 'Made with the built-in designer', body: r.art.note });
@@ -172,12 +168,9 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
     );
   const regenerate = async () => {
     // written for where this post's link goes; the app places the link itself afterwards
-    const link = project ? postLinkOf(project, post) : null;
-    const r = await ai.run({ topic: post.headline, postType: post.postType, platform: post.platform, format: post.format, style: post.style, watermark: post.watermark, media: post.media, link });
-    if (r) {
-      const firstComment = project && !post.firstComment?.trim() ? firstCommentFor(project, link) : undefined;
-      update(post.id, { headline: r.headline, caption: r.caption, hashtags: r.hashtags, visualPrompt: r.visualPrompt, storyboard: r.storyboard ?? post.storyboard, ...(link ? { linkPlacement: link.placement } : {}), ...(firstComment ? { firstComment } : {}) });
-    }
+    const input = rewriteInput(project, post);
+    const r = await ai.run(input);
+    if (r) update(post.id, rewritePatch(project, post, r, input.link ?? null));
   };
   return (
     <article className={cn('panel flex min-w-0 flex-col overflow-hidden', selected && 'ring-2 ring-primary')}>

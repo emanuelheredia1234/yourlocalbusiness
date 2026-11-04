@@ -10,21 +10,16 @@ import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { Empty, Segmented, confirmAction } from '@/components/ui/primitives';
 import { PostCard } from '@/components/posts/PostCard';
 import { addToCalendarFlow } from '@/components/posts/PostActions';
+import { applyWeekBatch, batchStart, weekBatchInput } from '@/ai/socialPlan';
 
 export function BatchView({ project, posts, covered }: { project: Project; posts: Post[]; covered: Set<string> }) {
   const plan = project.marketing.plan;
-  const addPosts = useStore((s) => s.addPosts);
   const deletePosts = useStore((s) => s.deletePosts);
-  const updateMarketing = useStore((s) => s.updateMarketing);
   const ai = useAI(contentBatchTask);
   const [filter, setFilter] = useState<'draft' | 'scheduled' | 'all'>('draft');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const offset = useMemo(() => {
-    if (!plan) return 0;
-    const i = plan.days.findIndex((d) => d.slots.some((s) => !covered.has(s.id)));
-    return i === -1 ? plan.days.length : i;
-  }, [plan, covered]);
+  const offset = useMemo(() => (plan ? batchStart(plan, covered) : 0), [plan, covered]);
   const complete = !!plan && offset >= plan.days.length;
   const shown = posts.filter((p) => (filter === 'all' ? p.status !== 'published' : p.status === filter));
   const drafts = posts.filter((p) => p.status === 'draft');
@@ -38,12 +33,12 @@ export function BatchView({ project, posts, covered }: { project: Project; posts
   }, [shown]);
 
   const generate = async () => {
-    const p = getActiveProject()!;
-    if (!p.marketing.plan) return;
-    const r = await ai.run({ plan: { ...p.marketing.plan, days: p.marketing.plan.days.slice(offset) }, config: p.marketing.campaign, days: 7 });
+    // the plan from its first day without posts (the batch's own posts say which slots have one)
+    const input = weekBatchInput(getActiveProject()!, covered);
+    if (!input) return;
+    const r = await ai.run(input);
     if (r && r.length) {
-      addPosts(r);
-      updateMarketing({ batchId: r[0].batchId });
+      applyWeekBatch(r);
       setFilter('draft');
       setSelected(new Set());
     }

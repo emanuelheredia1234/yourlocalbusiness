@@ -1,10 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { CalendarClock, FilePlus2, ImageUp, Send, Sparkles, X } from 'lucide-react';
 import type { LinkPlacement, MediaRef, Post, PostFormat, PostPlatform, PostType, StyleId } from '@/lib/types';
-import { addDays, cn, combineDateTime, hashStr, todayStr, truncate, uid } from '@/lib/utils';
+import { addDays, cn, todayStr, truncate } from '@/lib/utils';
 import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
-import { finishCaption, suggestTopics } from '@/ai/local/social';
-import { LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, firstCommentFor, linkText, pageLink, postLinkFor } from '@/lib/pageLink';
+import { suggestTopics } from '@/ai/local/social';
+import { buildComposerPosts, composerTaskInput } from '@/ai/socialPosts';
+import { LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, linkText, pageLink, postLinkFor } from '@/lib/pageLink';
 import { networkLabel } from '@/ai/manusPost';
 import { postTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
@@ -75,7 +76,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
       toast({ kind: 'info', title: 'Add your photo or video first' });
       return;
     }
-    const r = await ai.run({ topic: topic.trim() || desc || 'Behind the scenes', postType, platform: platforms[0] ?? 'instagram', format: effFormat, style, watermark, media: source === 'upload' ? media ?? undefined : undefined, mediaDescription: source === 'upload' ? desc || topic : undefined, hasMedia: source === 'upload', link: linkFor(platforms[0] ?? 'instagram') });
+    const r = await ai.run(composerTaskInput(project, { topic, description: desc, upload: source === 'upload' ? media : null, postType, platforms, format: effFormat, style, watermark, linkWhere }));
     if (r) {
       setHeadline(r.headline);
       setCaption(r.caption);
@@ -85,38 +86,25 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
     }
   };
 
-  const build = (): Post[] => {
-    const now = Date.now();
-    return platforms.map((platform) => {
-      const pl = linkFor(platform);
-      const tags = platform === 'x' ? hashtags.slice(0, 2) : hashtags;
-      const firstComment = firstCommentFor(project, pl);
-      return {
-        id: uid('post'),
-        projectId: project.id,
-        status: 'draft',
-        platform,
-        format: effFormat,
-        style,
-        postType,
-        headline: headline || truncate(topic, 60),
-        visualPrompt,
-        // the link where it goes on this network; on X the opening is shortened, never the link
-        caption: finishCaption(project, caption, platform, pl, tags),
-        hashtags: tags,
-        ...(pl ? { linkPlacement: pl.placement } : {}),
-        ...(firstComment ? { firstComment } : {}),
-        scheduledAt: combineDateTime(date, time),
-        media: source === 'upload' ? media ?? undefined : effFormat === 'image' ? genMedia ?? undefined : genVideo ?? undefined,
-        storyboard,
-        watermark,
-        source: 'composer',
-        createdAt: now,
-        updatedAt: now,
-        seed: hashStr(uid('s')),
-      };
+  // one draft per network, each with its link where it goes there (and short enough for X)
+  const build = (): Post[] =>
+    buildComposerPosts(project, {
+      platforms,
+      format: effFormat,
+      style,
+      postType,
+      headline,
+      topic,
+      caption,
+      hashtags,
+      visualPrompt,
+      storyboard,
+      watermark,
+      date,
+      time,
+      media: source === 'upload' ? media ?? undefined : effFormat === 'image' ? genMedia ?? undefined : genVideo ?? undefined,
+      linkWhere,
     });
-  };
 
   const reset = (discard = false) => {
     if (discard) void releaseMedia(genMedia);

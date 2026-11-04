@@ -6,9 +6,10 @@ import { getActiveProject, useActiveProject, useStore } from '@/store/useStore';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { Empty, Tabs, confirmAction } from '@/components/ui/primitives';
 import { useUI, type SocialTab } from '@/store/ui';
+import { applyCampaignPlan, campaignProblem, coveredSlots } from '@/ai/socialPlan';
 import { QuickComposer } from '@/pages/dashboard/QuickComposer';
 import { MarketingHeader } from './MarketingNav';
-import { CampaignSetup, cadence } from './social/CampaignSetup';
+import { CampaignSetup } from './social/CampaignSetup';
 import { PlanView } from './social/PlanView';
 import { BatchView } from './social/BatchView';
 
@@ -17,7 +18,6 @@ type Tab = SocialTab;
 export default function SocialEngine() {
   const project = useActiveProject()!;
   const allPosts = useStore((s) => s.posts);
-  const updateMarketing = useStore((s) => s.updateMarketing);
   const plan = project.marketing.plan;
   const cfg = project.marketing.campaign;
   // "Create post" elsewhere in the app asks for a tab (see useUI.openComposer)
@@ -41,15 +41,14 @@ export default function SocialEngine() {
   }, [preset]);
   const planAI = useAI(campaignPlanTask);
   const batchPosts = useMemo(() => allPosts.filter((p) => p.projectId === project.id && p.source === 'batch').sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)), [allPosts, project.id]);
-  const covered = useMemo(() => new Set(batchPosts.map((p) => p.planSlotId).filter((x): x is string => !!x)), [batchPosts]);
-  const c = cadence(cfg);
-  const invalid = c.days === 0 || cfg.platforms.length === 0 || (c.images > 0 && !cfg.imageStyles.length) || (c.videos > 0 && !cfg.videoStyles.length);
+  const covered = useMemo(() => coveredSlots(batchPosts, project.id), [batchPosts, project.id]);
+  const invalid = !!campaignProblem(cfg);
 
   const generatePlan = async () => {
     if (plan && !(await confirmAction({ title: 'Replace the 30-day plan?', body: 'A new plan is generated from your current setup. Posts you already generated stay in your batch and queue.', confirmLabel: 'Generate new plan' }))) return;
     const r = await planAI.run({ config: getActiveProject()!.marketing.campaign });
     if (r) {
-      updateMarketing({ plan: r });
+      applyCampaignPlan(r);
       setTab('plan');
     }
   };

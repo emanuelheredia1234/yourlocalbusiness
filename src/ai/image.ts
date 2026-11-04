@@ -9,7 +9,7 @@
 // The artwork never carries text; headlines, prices and lists are typeset on top by the
 // canvas compositor so they read exactly right.
 
-import type { GeneratedInfo, ImageAspect, ImageKind, ListingShotId, MediaRef, ProviderId, Project, StyleId } from '@/lib/types';
+import type { GeneratedInfo, ImageAspect, ImageKind, ListingShotId, MediaRef, PostPlatform, ProviderId, Project, StyleId } from '@/lib/types';
 import { useRuntime } from '@/lib/platform';
 import { deleteBlob, getBlob, putBlob } from '@/lib/storage';
 import { hashStr, slugify, uid } from '@/lib/utils';
@@ -539,6 +539,13 @@ async function loadArt(artId: string): Promise<{ image: HTMLImageElement; source
 }
 
 const postFileName = (headline: string, project: Project, aspect: ImageAspect) => `${slugify(headline || project.brand.name, 40) || 'post'}-${aspect.replace(/[:.]/g, 'x')}`;
+
+/** A post image's shape on its network: a story for TikTok, landscape for LinkedIn and X, portrait elsewhere. */
+export function aspectForPlatform(p: PostPlatform | undefined): ImageAspect {
+  if (p === 'tiktok') return '9:16';
+  if (p === 'linkedin' || p === 'x') return '1.91:1';
+  return '4:5';
+}
 
 export interface PostImageOptions {
   project: Project;

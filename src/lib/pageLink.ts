@@ -137,6 +137,28 @@ export function placeLink(caption: string, link: PostLink | null, platform: Post
   return placed.replace(twice, (_m, first: string) => first);
 }
 
+/**
+ * A post's link moved to another place (the post editor's "Where the link goes"): its caption follows, and a
+ * first comment is written when the link goes there and the post has none (one it has stays, even while the
+ * link is elsewhere, so switching back finds it).
+ */
+export function linkMovePatch(project: Project, post: Pick<Post, 'caption' | 'platform' | 'firstComment'>, placement: LinkPlacement): Pick<Post, 'linkPlacement' | 'caption'> & Partial<Pick<Post, 'firstComment'>> {
+  const l = pageLink(project);
+  const to = l ? { url: l.url, placement } : null;
+  return {
+    linkPlacement: placement,
+    caption: placeLink(post.caption, to, post.platform, knownLinks(project)),
+    ...(placement === 'comment' && !post.firstComment?.trim() ? { firstComment: firstCommentFor(project, to) } : {}),
+  };
+}
+
+/** A post moved to another network (the post editor's Platform): its link goes where that network's setting puts it, in the caption too. */
+export function networkMovePatch(project: Project | undefined, post: Pick<Post, 'caption' | 'firstComment'>, platform: PostPlatform): Partial<Post> {
+  const link = project ? postLinkFor(project, platform) : null;
+  const firstComment = project && link && !post.firstComment?.trim() ? firstCommentFor(project, link) : undefined;
+  return { platform, ...(project && link ? { linkPlacement: link.placement, caption: placeLink(post.caption, link, platform, knownLinks(project)), ...(firstComment ? { firstComment } : {}) } : {}) };
+}
+
 // X counts a link as 23 characters whatever its length, an emoji as 2, most Latin text as 1 and other scripts as 2.
 const X_URL = /(?:https?:\/\/)?(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,63}(?:\/[^\s]*)?/gi;
 const X_ONE: [number, number][] = [[0, 4351], [8192, 8205], [8208, 8223], [8242, 8247]];
