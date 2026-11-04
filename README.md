@@ -245,15 +245,32 @@ Signed-in people can publish their SEO page and each artifact at a public addres
 Set it up once:
 1. Accounts on, with the `SUPABASE_SECRET_KEY` Secret (see above).
 2. Supabase → SQL Editor → run `supabase/migrations/20261103040000_published_pages.sql`. Until then, publishing says which file to run.
+3. **If the app itself also runs on a custom domain** (not only its `*.replit.app` address), list that domain in the `APP_HOSTS` Secret, comma-separated (for example `app.mybiz.com,www.mybiz.com`). Without it, that domain shows "Page not found" instead of the app. When the server starts, its log says which hosts the app answers on.
+
+What answers where:
+- **The app's own hosts**: `*.replit.app`, `*.replit.dev`, `*.repl.co`, `localhost`, IP addresses, the host of `ALLOWED_ORIGIN` and the hosts in `APP_HOSTS` (and names nobody can register, like `*.local` or `*.internal`). The app, `/api` and the published pages at `/<name>` (sandboxed, see Security) answer there. Nobody can add these as their own domain.
+- **Every other host**: only the published pages of a verified domain (`/` for its home page, `/<name>`, their images, `robots.txt` and `sitemap.xml`). Any other host gets a plain "Page not found" page (503 when the server can't tell right now), whether or not publishing is on and whatever the database holds. It never gets the app or `/api`.
 
 Own domains:
-1. The person adds the domain in Settings → Domains. Each domain belongs to the first account that adds it.
-2. The app's owner links it in Replit: open the app → Deployments → Settings → Domains → "Use a domain you already own". The person then adds the A and TXT records Replit shows at their registrar (Cloudflare: DNS only, not proxied).
-3. Back in Settings → Domains, **Check**: the server asks `https://<domain>/.well-known/ylb-domain-check` for the domain's code.
-- On someone's domain, the server answers only with their published pages, a `robots.txt` and a `sitemap.xml`: never the app or `/api`.
-- If the app itself also runs on a domain of yours, add it to the `APP_HOSTS` Secret (comma-separated) so nobody can claim it.
+1. The person adds the domain in Settings → Domains. The card shows the TXT record to add at their domain registrar, each part with a Copy button:
+   - name `_ylb-domain.<domain>`
+   - value the account's own code for that domain (`ylb-…`)
+   The record shows the domain is theirs.
+2. The app's owner links the domain to the deployment in Replit: Deployments → Settings → Link a domain. The person adds the records Replit shows as well (Cloudflare: DNS only, not proxied).
+3. Back in Settings → Domains, **Check again**: the server looks the TXT record up in the DNS. It never asks the domain itself, which could be this same server answering. Once the record is there, the domain shows the person's pages.
 
-Security: published pages are other people's HTML and scripts, served from the app's own address, where the app keeps its sign-in. So on the app's address every page is sent with a `Content-Security-Policy: sandbox` header that never allows the app's origin: the page can't read the sign-in or use the API as the visitor, and SEO pages can't run scripts at all. Images are served only when they're listed with their page and are still the exact files checked when it was published (JPEG, PNG, WebP or GIF; never SVG). On a person's own domain, pages run unsandboxed on that domain's own origin.
+Good to know:
+- **The record has to stay.** The server looks at it again every 6 hours (in the background, when the domain gets a visit). Once it's gone, the domain stops showing pages until it's back and checked again. If the DNS doesn't answer, nothing changes and it tries again later.
+- **A domain is whoever's TXT record it has.** If another account added it first, adding it shows a record with your own value. Once that record is in the DNS, **Check again** moves the domain to your account in one step. The other account's pages stay published at their app address.
+- **Domains checked before TXT records** (the old check asked the domain itself) show "Not verified yet" until their TXT record is added and checked.
+- `PAGES_DNS_SERVERS` (optional): the DNS servers the check asks, comma-separated, like `1.1.1.1,8.8.8.8` (default: the system's).
+
+Visitors' lookups:
+- Published pages and domains are cached for 30 and 60 seconds. The page cache holds up to 64 MB, least recently used out first. Pages over 256 KB are kept without their HTML, which is read again for each visit.
+- Lookups that miss the cache are limited per minute: per client (the first `X-Forwarded-For` address the platform sends) and in all. Domains and images are counted apart from pages.
+- If Supabase fails, the last answer is used for up to twice its cache time, and never because a limit ran out (so a page taken down elsewhere stops showing).
+
+Security: published pages are other people's HTML and scripts, served from the app's own address, where the app keeps its sign-in. So on the app's address every page is sent with a `Content-Security-Policy: sandbox` header that never allows the app's origin: the page can't read the sign-in or use the API as the visitor, and SEO pages can't run scripts at all. Images are served only when they're listed with their page and are still the exact files checked when it was published (JPEG, PNG, WebP or GIF; never SVG). Each publish stores its images in a new folder, and the page moves to them only once it's saved; nothing is stored for an account that no longer exists. On a person's own domain, pages run unsandboxed on that domain's own origin. That's why the app never answers there, and why a domain needs its TXT record.
 
 API (signed in, same site only): `GET /api/pages`, `GET /api/pages/check?slug=&pageId=`, `PUT` and `DELETE /api/pages/<pageId>`, `POST /api/domains`, `POST /api/domains/<domain>/check`, `DELETE /api/domains/<domain>`.
 
@@ -283,7 +300,8 @@ Server environment:
 - `ADMIN_TOKEN`
 - `AI_PROVIDER_BASE_URLS`: a JSON map of provider id to base URL, for a proxy or the test mock
 - accounts: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `ADMIN_EMAILS`, `SIGN_IN_REQUIRED` (see "Accounts")
-- `APP_HOSTS`: other domains the app itself runs on (see "Publishing pages")
+- `APP_HOSTS`: the app's own custom domains, comma-separated. The app and `/api` answer only on the app's own hosts (see "Publishing pages")
+- `PAGES_DNS_SERVERS` (optional): the DNS servers the domain check asks (see "Publishing pages")
 
 `GET /api/config` tells the app whether accounts are on and whether it can publish pages, and `DELETE /api/account` deletes the signed-in user, with their saved workspace, files and published pages.
 

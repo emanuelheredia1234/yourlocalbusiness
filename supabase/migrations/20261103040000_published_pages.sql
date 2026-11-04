@@ -7,7 +7,7 @@
 -- A page's images are kept in the private media bucket, at media/<user id>/published/<page>/<name>,
 -- so deleting an account removes them with the user's other files. Safe to run again.
 
--- ── Domains: claimed by one account; verified once the domain answers with this app ──
+-- ── Domains: added by one account; verified once its TXT record _ylb-domain.<domain> has that account's token ──
 create table if not exists public.published_domains (
   domain text primary key,
   user_id uuid not null references auth.users (id) on delete cascade,

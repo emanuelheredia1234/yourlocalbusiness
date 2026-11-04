@@ -22,6 +22,8 @@ const PUBLIC_READ = new Set(['market_listings']);
 /** tables with row-level security and no policies: only the secret key reaches them */
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'published_pages', 'published_domains']);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
+/** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
+const USER_FK = new Set(['published_pages', 'published_domains']);
 /** the user_secrets.provider check constraint (supabase/migrations/20261103030000_ai_usage_daily.sql) */
 const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openrouter', 'meta', 'manus']);
 
@@ -36,8 +38,9 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
   const tables = new Map(); // table → rows[]
   const objects = new Map(); // `${bucket}/${path}` → { bytes, type, created }
   const calls = [];
-  // down: every request fails; restDelayMs: the database answers this slowly (auth stays quick)
-  const behavior = { down: false, restDelayMs: 0 };
+  // down: every request fails; restDelayMs: the database answers this slowly (auth stays quick);
+  // fail(method, pathname, searchParams): { status, body } to answer one request with instead (or nothing)
+  const behavior = { down: false, restDelayMs: 0, fail: null };
   let server;
   let base = '';
 
@@ -197,6 +200,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       for (const item of items) {
         if (table === 'user_secrets' && !secretProviders.has(item.provider)) return send(res, 400, { code: '23514', message: 'new row for relation "user_secrets" violates check constraint "user_secrets_provider_check"' });
         if (!who.service && item.user_id !== who.userId) return send(res, 403, { code: '42501', message: 'new row violates row-level security policy for table "' + table + '"' });
+        if (USER_FK.has(table) && !users.has(item.user_id)) return send(res, 409, { code: '23503', details: `Key (user_id)=(${item.user_id}) is not present in table "users".`, hint: null, message: `insert or update on table "${table}" violates foreign key constraint "${table}_user_id_fkey"` });
         const row = { ...item, updated_at: new Date().toISOString() };
         const i = rows.findIndex((r) => keyCols.every((c) => r[c] === row[c]));
         if (i >= 0 && skipExisting) continue;
@@ -454,6 +458,12 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (p === '/logout' && req.method === 'POST') return send(res, 204, undefined);
 
     const adminUser = /^\/admin\/users\/([0-9a-f-]{36})$/.exec(p);
+    if (adminUser && req.method === 'GET') {
+      const who = await caller(req);
+      if (!who?.service) return authError(res, 403, 'not_admin', 'User not allowed');
+      const u = users.get(adminUser[1]);
+      return u ? send(res, 200, userJson(u)) : authError(res, 404, 'user_not_found', 'User not found');
+    }
     if (adminUser && req.method === 'DELETE') {
       const who = await caller(req);
       if (!who?.service) return authError(res, 403, 'not_admin', 'User not allowed');
@@ -480,6 +490,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     }
     if (url.pathname === '/__mock/emails') return send(res, 200, emails.filter((e) => !url.searchParams.get('to') || e.to === url.searchParams.get('to')));
     if (behavior.down) return send(res, 503, { message: 'mock outage' });
+    const injected = behavior.fail?.(req.method, url.pathname, url.searchParams);
+    if (injected) return send(res, injected.status, injected.body);
     if (url.pathname.startsWith('/auth/v1/')) return void authRoute(req, res, url, raw);
     const fn = /^\/rest\/v1\/rpc\/([a-z_]+)$/.exec(url.pathname);
     if (fn && req.method === 'POST') return void rpc(req, res, fn[1], raw);

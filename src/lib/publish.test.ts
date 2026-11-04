@@ -172,7 +172,10 @@ describe('the publishing API', () => {
           { pageId: 'artifact:code_1', kind: 'artifact', slug: 'calc', title: 'Calc', domain: 'mybakery.com', home: true, updatedAt: 1700000000000, url: 'https://app.example/calc', domainUrl: 'https://mybakery.com/' },
           { pageId: 'bad id', slug: 'x' },
         ],
-        domains: [{ domain: 'mybakery.com', token: 't0k', verified: true, verifiedAt: '2026-11-02T00:00:00Z' }, { domain: 'new.example', token: 't1', verified: false, verifiedAt: null }],
+        domains: [
+          { domain: 'mybakery.com', token: 't0k', verified: true, verifiedAt: '2026-11-02T00:00:00Z', record: { type: 'TXT', name: '_ylb-domain.mybakery.com', value: 't0k' } },
+          { domain: 'new.example', token: 't1', verified: false, verifiedAt: null },
+        ],
         appOrigin: 'https://app.example/',
       });
     const list = await pub.listPublished();
@@ -183,8 +186,9 @@ describe('the publishing API', () => {
       { pageId: 'artifact:code_1', kind: 'artifact', slug: 'calc', title: 'Calc', domain: 'mybakery.com', home: true, updatedAt: 1700000000000, url: 'https://app.example/calc', domainUrl: 'https://mybakery.com/' },
     ]);
     expect(list.domains).toEqual([
-      { domain: 'mybakery.com', token: 't0k', verified: true, verifiedAt: Date.parse('2026-11-02T00:00:00Z') },
-      { domain: 'new.example', token: 't1', verified: false, verifiedAt: null },
+      { domain: 'mybakery.com', token: 't0k', verified: true, verifiedAt: Date.parse('2026-11-02T00:00:00Z'), record: { name: '_ylb-domain.mybakery.com', value: 't0k' } },
+      // an answer without the record: the same name and the token
+      { domain: 'new.example', token: 't1', verified: false, verifiedAt: null, record: { name: '_ylb-domain.new.example', value: 't1' } },
     ]);
   });
 
@@ -255,14 +259,21 @@ describe('the publishing API', () => {
   it('adds, checks and removes domains', async () => {
     await expect(pub.addDomain('not a domain')).rejects.toMatchObject({ code: 'BAD_DOMAIN' });
     expect(calls).toHaveLength(0);
-    answer = () => json(200, { domain: 'mybakery.com', token: 'tok', verified: false });
-    expect(await pub.addDomain('https://MyBakery.com/menu')).toEqual({ domain: 'mybakery.com', token: 'tok', verified: false, verifiedAt: null });
+    const record = { type: 'TXT', name: '_ylb-domain.mybakery.com', value: 'ylb-tok' };
+    answer = () => json(200, { domain: 'mybakery.com', token: 'ylb-tok', verified: false, record });
+    expect(await pub.addDomain('https://MyBakery.com/menu')).toEqual({ domain: 'mybakery.com', token: 'ylb-tok', verified: false, verifiedAt: null, record: { name: '_ylb-domain.mybakery.com', value: 'ylb-tok' } });
     expect(calls[0]).toMatchObject({ url: '/api/domains', method: 'POST', body: { domain: 'mybakery.com' } });
+    // another account added it first: its TXT record (with this account's value) moves it here
+    answer = () => json(409, { error: 'Taken', code: 'DOMAIN_TAKEN', domain: { domain: 'mybakery.com', token: 'ylb-mine', verified: false, verifiedAt: null, record: { ...record, value: 'ylb-mine' } } });
+    expect(await pub.addDomain('mybakery.com')).toEqual({ domain: 'mybakery.com', token: 'ylb-mine', verified: false, verifiedAt: null, record: { name: '_ylb-domain.mybakery.com', value: 'ylb-mine' }, takenByOther: true });
+    // (an older server says only that it's taken)
     answer = () => json(409, { error: 'Taken', code: 'DOMAIN_TAKEN' });
-    await expect(pub.addDomain('mybakery.com')).rejects.toMatchObject({ message: 'Someone else has already added that domain to their account.' });
-    answer = () => json(200, { verified: false, error: 'It didn’t answer.' });
-    expect(await pub.checkDomain('mybakery.com')).toEqual({ verified: false, error: 'It didn’t answer.' });
+    await expect(pub.addDomain('mybakery.com')).rejects.toMatchObject({ code: 'DOMAIN_TAKEN', message: expect.stringContaining('Another account added that domain first') });
+    answer = () => json(200, { verified: false, error: 'There’s no TXT record yet.' });
+    expect(await pub.checkDomain('mybakery.com')).toEqual({ verified: false, error: 'There’s no TXT record yet.' });
     expect(calls.at(-1)).toMatchObject({ url: '/api/domains/mybakery.com/check', method: 'POST' });
+    answer = () => json(200, { verified: true, domain: { domain: 'mybakery.com', token: 'ylb-mine', verified: true, verifiedAt: '2026-11-03T00:00:00Z', record: { ...record, value: 'ylb-mine' } } });
+    expect(await pub.checkDomain('mybakery.com')).toEqual({ verified: true, domain: { domain: 'mybakery.com', token: 'ylb-mine', verified: true, verifiedAt: Date.parse('2026-11-03T00:00:00Z'), record: { name: '_ylb-domain.mybakery.com', value: 'ylb-mine' } } });
     answer = () => json(200, { verified: true });
     expect(await pub.checkDomain('mybakery.com')).toEqual({ verified: true });
     answer = () => json(404, {});
