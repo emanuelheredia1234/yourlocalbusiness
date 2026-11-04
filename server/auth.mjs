@@ -42,6 +42,10 @@ export function createAuth({ supabaseUrl = '', publishableKey = '', secretKey = 
   const issuer = `${url}/auth/v1`;
   const jwks = enabled ? createRemoteJWKSet(new URL(`${url}/auth/v1/.well-known/jwks.json`), { cooldownDuration: 30_000, cacheMaxAge: 10 * 60_000, timeoutDuration: 8000 }) : null;
   const remembered = new Map(); // sha256(token) → { user, until }: answers from Supabase Auth, kept a minute
+  // accounts deleted through this server: their sign-in is checked here without asking Supabase, so it
+  // would still check out until it expires (another copy of the server asks Supabase before storing anything)
+  const deleted = new Map(); // user id → until
+  const DELETED_FOR = 7 * 24 * 60 * 60_000; // the longest an access token can last in Supabase
 
   // An email only proves who someone is when the project makes people confirm it.
   let confirmation = null;
@@ -94,6 +98,11 @@ export function createAuth({ supabaseUrl = '', publishableKey = '', secretKey = 
       user = await viaAuthServer(token);
     }
     if (!user) return null;
+    const gone = deleted.get(user.id);
+    if (gone !== undefined) {
+      if (gone > Date.now()) return null;
+      deleted.delete(user.id);
+    }
     const { roleAdmin, ...who } = user;
     const isAdmin = roleAdmin || (admins.has(who.email) && !!who.email && (await emailsAreConfirmed()) && (await provedEmail(token, who)));
     return { ...who, isAdmin };
@@ -150,6 +159,9 @@ export function createAuth({ supabaseUrl = '', publishableKey = '', secretKey = 
     await clearFolder();
     const res = await fetch(`${url}/auth/v1/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE', headers });
     if (!res.ok) throw Object.assign(new Error(`Supabase didn’t delete the account (${res.status}).`), { status: 502, code: 'UPSTREAM' });
+    // its sign-in no longer counts here
+    deleted.set(userId, Date.now() + DELETED_FOR);
+    if (deleted.size > 10_000) deleted.delete(deleted.keys().next().value);
     // an upload that was still running when we started may have landed meanwhile
     await clearFolder().catch((e) => console.warn(`Deleted account ${userId}, but some files remain: ${e.message}`));
   }

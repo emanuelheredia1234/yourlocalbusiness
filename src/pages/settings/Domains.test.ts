@@ -7,7 +7,7 @@ import type { PublishAccess } from '@/lib/publish';
 const state: { access: PublishAccess } = { access: 'ready' };
 vi.mock('@/lib/publish', async (original) => ({ ...(await original<typeof import('@/lib/publish')>()), usePublishAccess: () => ({ access: state.access, retry: () => {} }) }));
 
-const { DomainsCard } = await import('./Domains');
+const { ConnectSteps, DomainsCard, TxtRecord } = await import('./Domains');
 const render = (access: PublishAccess) => {
   state.access = access;
   return renderToStaticMarkup(createElement(DomainsCard, {}));
@@ -31,8 +31,26 @@ describe('the Domains card', () => {
     expect(html).toContain('placeholder="yourbrand.com"');
     expect(html).toContain('Add domain');
     expect(html).toContain('Loading your domains…');
-    expect(html).toContain('“Use a domain you already own”');
+    // the TXT record proves it's theirs; the domain is also linked to the app in Replit
+    expect(html).toContain('add that TXT record');
+    expect(html).toContain('Deployments → Settings → Link a domain');
     expect(html).toContain('DNS only, not proxied');
     expect(html).toContain('press “Check again”');
+  });
+
+  it('shows a domain’s TXT record, its name and value each with a Copy button, next to linking it in Replit', () => {
+    const record = { name: '_ylb-domain.mybakery.com', value: 'ylb-0123456789abcdef0123456789abcdef01234567' };
+    const txt = renderToStaticMarkup(createElement(TxtRecord, { record }));
+    expect(txt).toContain('TXT');
+    expect(txt).toContain(`<code class="min-w-0 flex-1 break-all font-mono text-[12.5px] text-ink">${record.name}</code>`);
+    expect(txt).toContain(`<code class="min-w-0 flex-1 break-all font-mono text-[12.5px] text-ink">${record.value}</code>`);
+    expect(txt.match(/<button type="button"[^>]*>/g)).toHaveLength(2);
+    expect(txt).toContain('Copy name');
+    expect(txt).toContain('Copy value');
+    expect(txt).toContain('type the name without it');
+    const steps = renderToStaticMarkup(createElement(ConnectSteps, { record }));
+    expect(steps).toContain(record.value);
+    expect(steps).toContain('Link the domain to this app in Replit: Deployments → Settings → Link a domain.');
+    expect(steps).toContain('Press “Check again”.');
   });
 });

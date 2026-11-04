@@ -235,12 +235,17 @@ describe('ai-server.mjs with accounts', () => {
       const leaving = await supa.tokenFor('leaving@example.com');
       supa.tables.set('user_docs', [...(supa.tables.get('user_docs') ?? []), { user_id: leaving.user.id, kind: 'project', id: 'proj_1', data: {} }]);
       supa.objects.set(`media/${leaving.user.id}/media_1`, { bytes: Buffer.from('x'), type: 'image/png', created: Date.now() });
+      const signedIn = async () => (await (await fetch(`${base}/api/health`, { headers: { authorization: `Bearer ${leaving.token}` } })).json()).ai.signedIn;
+      expect(await signedIn()).toBe(true);
       const r = await fetch(`${base}/api/account`, { method: 'DELETE', headers: { authorization: `Bearer ${leaving.token}` } });
       expect(r.status).toBe(200);
       expect(supa.users.has(leaving.user.id)).toBe(false);
       expect((supa.tables.get('user_docs') ?? []).some((x) => x.user_id === leaving.user.id)).toBe(false);
       expect(supa.objects.has(`media/${leaving.user.id}/media_1`)).toBe(false);
       expect((await fetch(`${base}/api/account`, { method: 'DELETE' })).status).toBe(401);
+      // the access token itself is still unexpired and signed, but this server no longer takes it
+      expect(await signedIn()).toBe(false);
+      expect((await fetch(`${base}/api/account`, { method: 'DELETE', headers: { authorization: `Bearer ${leaving.token}` } })).status).toBe(401);
     } finally {
       child.kill();
     }

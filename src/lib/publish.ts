@@ -25,14 +25,27 @@ export interface ServerPage {
   domainUrl?: string;
 }
 
-/** One of the owner's own domains. */
+/** The DNS record that proves a domain is yours: a TXT record with this name and value. */
+export interface DomainRecord {
+  name: string;
+  value: string;
+}
+
+/** One of the owner's own domains (or, with takenByOther, one another account added first). */
 export interface DomainInfo {
   domain: string;
   token: string;
-  /** it reached this app the last time it was checked */
+  /** its TXT record was found the last time it was checked */
   verified: boolean;
   verifiedAt: number | null;
+  /** the TXT record to add at the domain's registrar */
+  record: DomainRecord;
+  /** another account added it first: the TXT record moves it to this account */
+  takenByOther?: boolean;
 }
+
+/** The name of a domain's TXT record (the server says it too; this is in case it didn't). */
+export const txtRecordName = (domain: string) => `_ylb-domain.${domain}`;
 
 export interface PublishedList {
   pages: ServerPage[];
@@ -68,6 +81,8 @@ export class PublishError extends Error {
     message: string,
     readonly code: string,
     readonly status = 0,
+    /** the server's answer, when it sent one */
+    readonly data: unknown = null,
   ) {
     super(message);
   }
@@ -278,7 +293,8 @@ const MESSAGES: Record<string, string> = {
   SLUG_TAKEN: 'That name is already taken. Try another one.',
   TOO_LARGE: 'This page is too big to publish. Try fewer or smaller images.',
   DOMAIN_NOT_YOURS: 'That domain isn’t in your account anymore. Add it again in Settings → Domains.',
-  DOMAIN_TAKEN: 'Someone else has already added that domain to their account.',
+  DOMAIN_TAKEN: 'Another account added that domain first. If it’s yours, add its TXT record in Settings → Domains to move it to your account.',
+  ACCOUNT_GONE: 'This account doesn’t exist anymore. Sign in again.',
   RATE_LIMIT: 'That’s a lot of changes at once. Wait a minute, then try again.',
   FORBIDDEN: 'This request was refused because it didn’t come from the app’s own page.',
 };
@@ -294,7 +310,7 @@ async function api<T>(method: 'GET' | 'PUT' | 'POST' | 'DELETE', path: string, b
   const json = (await res.json().catch(() => null)) as (T & { error?: string; code?: string }) | null;
   if (!res.ok) {
     const code = json?.code || (res.status === 429 ? 'RATE_LIMIT' : res.status === 401 ? 'AUTH_REQUIRED' : res.status === 413 ? 'TOO_LARGE' : `HTTP_${res.status}`);
-    throw new PublishError(MESSAGES[code] ?? (json?.error || `The server couldn’t do that (error ${res.status}). Try again.`), code, res.status);
+    throw new PublishError(MESSAGES[code] ?? (json?.error || `The server couldn’t do that (error ${res.status}). Try again.`), code, res.status, json);
   }
   return (json ?? {}) as T;
 }
@@ -323,7 +339,10 @@ function toServerPage(raw: unknown): ServerPage | null {
 function toDomainInfo(raw: unknown): DomainInfo | null {
   const r = raw as Record<string, unknown> | null;
   if (!r || typeof r !== 'object' || !str(r.domain)) return null;
-  return { domain: str(r.domain), token: str(r.token), verified: r.verified === true, verifiedAt: time(r.verifiedAt) || null };
+  const domain = str(r.domain);
+  const token = str(r.token);
+  const rec = (r.record && typeof r.record === 'object' ? r.record : {}) as Record<string, unknown>;
+  return { domain, token, verified: r.verified === true, verifiedAt: time(r.verifiedAt) || null, record: { name: str(rec.name) || txtRecordName(domain), value: str(rec.value) || token } };
 }
 
 /** Your published pages and your domains. */
@@ -412,19 +431,32 @@ export async function unpublishPage(pageId: string): Promise<void> {
   }
 }
 
-/** Add one of your domains (normalised first). */
+/**
+ * Add one of your domains (normalised first). When another account added it first, this resolves to
+ * it with `takenByOther` and the TXT record that moves it to your account (see checkDomain).
+ */
 export async function addDomain(domain: string): Promise<DomainInfo> {
   const d = normalizeDomain(domain);
   if (!isValidDomain(d)) throw new PublishError('Enter a domain like yourbrand.com.', 'BAD_DOMAIN');
-  const j = await api<unknown>('POST', '/api/domains', JSON.stringify({ domain: d }));
-  return toDomainInfo(j) ?? { domain: d, token: '', verified: false, verifiedAt: null };
+  try {
+    const j = await api<unknown>('POST', '/api/domains', JSON.stringify({ domain: d }));
+    return toDomainInfo(j) ?? { domain: d, token: '', verified: false, verifiedAt: null, record: { name: txtRecordName(d), value: '' } };
+  } catch (e) {
+    const claim = e instanceof PublishError && e.code === 'DOMAIN_TAKEN' ? toDomainInfo((e.data as { domain?: unknown } | null)?.domain) : null;
+    if (claim?.token) return { ...claim, verified: false, takenByOther: true };
+    throw e;
+  }
 }
 
-/** Ask the server to check that the domain reaches this app now. */
-export async function checkDomain(domain: string): Promise<{ verified: boolean; error?: string }> {
-  const j = await api<{ verified?: unknown; error?: unknown }>('POST', `/api/domains/${encodeURIComponent(domain)}/check`);
+/**
+ * Ask the server to look up the domain's TXT record now. verified: it's yours (one another account
+ * had moves to yours); `domain` is how it is now.
+ */
+export async function checkDomain(domain: string): Promise<{ verified: boolean; error?: string; domain?: DomainInfo }> {
+  const j = await api<{ verified?: unknown; error?: unknown; domain?: unknown }>('POST', `/api/domains/${encodeURIComponent(domain)}/check`);
   const error = str(j.error);
-  return { verified: j.verified === true, ...(error ? { error } : {}) };
+  const info = toDomainInfo(j.domain);
+  return { verified: j.verified === true, ...(error ? { error } : {}), ...(info ? { domain: info } : {}) };
 }
 
 /** Remove one of your domains: pages on it keep their address on this app. Already gone counts as done. */

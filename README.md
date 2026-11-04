@@ -259,16 +259,36 @@ Signed-in people can publish their SEO page and each artifact at a public addres
 
 Set it up once:
 1. Accounts on, with the `SUPABASE_SECRET_KEY` Secret (see above).
-2. Supabase → SQL Editor → run `supabase/migrations/20261103040000_published_pages.sql`. Until then, publishing says which file to run.
+2. Supabase → SQL Editor → run `supabase/migrations/20261103040000_published_pages.sql`. Until then, publishing says which file to run. It's safe to run again, and worth doing after updating the app: it now also makes the database refuse a page on a domain its account doesn't have (see "Own domains"), and adds the indexes the server reads recent changes with.
+3. **If the app itself also runs on a custom domain** (not only its `*.replit.app` address), list that domain in the `APP_HOSTS` Secret, comma-separated (for example `app.mybiz.com,www.mybiz.com`). Without it, that domain shows "Page not found" instead of the app. When the server starts, its log says which hosts the app answers on, and when a browser opens a host that's on neither list, the log says that too (at most once every 10 minutes).
+
+What answers where:
+- **The app's own hosts**, a fixed list: `*.replit.app`, `*.replit.dev`, `*.repl.co`, `localhost`, IP addresses, the host of `ALLOWED_ORIGIN`, the hosts in `APP_HOSTS`, and names that are never a public domain (a single name like `my-machine`, `*.local`, `*.internal`, `*.home.arpa`). The app, `/api` and the published pages at `/<name>` (sandboxed, see Security) answer there. Nobody can add these as their own domain.
+- **Every other host**: only the published pages of a verified domain (`/` for its home page, `/<name>`, their images, `robots.txt` and `sitemap.xml`). Any other host gets a plain "Page not found" page (503 when the server can't tell right now), whether or not publishing is on, whatever the database holds, and even when it's a name nobody could add as a domain. It never gets the app or `/api`.
 
 Own domains:
-1. The person adds the domain in Settings → Domains. Each domain belongs to the first account that adds it.
-2. The app's owner links it in Replit: open the app → Deployments → Settings → Domains → "Use a domain you already own". The person then adds the A and TXT records Replit shows at their registrar (Cloudflare: DNS only, not proxied).
-3. Back in Settings → Domains, **Check**: the server asks `https://<domain>/.well-known/ylb-domain-check` for the domain's code.
-- On someone's domain, the server answers only with their published pages, a `robots.txt` and a `sitemap.xml`: never the app or `/api`.
-- If the app itself also runs on a domain of yours, add it to the `APP_HOSTS` Secret (comma-separated) so nobody can claim it.
+1. The person adds the domain in Settings → Domains. The card shows the TXT record to add at their domain registrar, each part with a Copy button:
+   - name `_ylb-domain.<domain>`
+   - value the account's own code for that domain (`ylb-…`)
+   The record shows the domain is theirs.
+2. The app's owner links the domain to the deployment in Replit: Deployments → Settings → Link a domain. The person adds the records Replit shows as well (Cloudflare: DNS only, not proxied).
+3. Back in Settings → Domains, **Check again**: the server looks the TXT record up in the DNS. It never asks the domain itself, which could be this same server answering. Once the record is there, the domain shows the person's pages.
 
-Security: published pages are other people's HTML and scripts, served from the app's own address, where the app keeps its sign-in. So on the app's address every page is sent with a `Content-Security-Policy: sandbox` header that never allows the app's origin: the page can't read the sign-in or use the API as the visitor, and SEO pages can't run scripts at all. Images are served only when they're listed with their page and are still the exact files checked when it was published (JPEG, PNG, WebP or GIF; never SVG). On a person's own domain, pages run unsandboxed on that domain's own origin.
+Good to know:
+- **The record has to stay.** The server looks at it again every 6 hours (in the background, when the domain gets a visit). Once it's gone, the domain stops showing pages until it's back and checked again. If the DNS doesn't answer, nothing changes and it tries again later.
+- **A domain is whoever's TXT record it has.** If another account added it first, adding it shows a record with your own value. Once that record is in the DNS, **Check again** moves the domain to your account in one step. The other account's pages come off the domain first (its home page included) and stay published at their app address.
+- **Only the owner's pages are ever on a domain.** The database refuses a page on a domain its account doesn't have, so a publish of the previous owner's that was still under way when the domain changed hands is refused, and a domain changes hands only once the previous owner's pages are off it. A publish also checks again, just before it's saved, that the domain is still the account's. And whenever the owner publishes to the domain or presses **Check again**, anything of another account's still on it comes off (for a database where the migration hasn't been run again yet).
+- **Domains checked before TXT records** (the old check asked the domain itself) show "Not verified yet" until their TXT record is added and checked.
+- `PAGES_DNS_SERVERS` (optional): the DNS servers the check asks, comma-separated, like `1.1.1.1,8.8.8.8` (default: the system's).
+
+Visitors' lookups:
+- **Only real names are looked up.** Each copy of the server keeps the names of the published pages and the verified domains in memory: the whole list every 10 minutes, and in between what changed, read when someone asks for a name it doesn't know (at most once a second). Any other name, or any other host, gets "Page not found" with no database lookup, so made-up names cost nothing however many addresses they come from. A page published, or a domain verified, through another copy of the server shows up within about a second. (With more than 100,000 names, they aren't kept, and each name is looked up within the limits below.)
+- Published pages and domains are cached for 30 and 60 seconds. A page's HTML is kept apart from its row, up to 64 MB in all, least recently used out first; pages over 256 KB have 32 MB of their own, so a few big pages can't push the others out. When a page's row is read again, it's read without the HTML, and the HTML is read again only if the page changed. A `HEAD` request never needs the HTML.
+- Lookups that miss the cache are limited per minute, per client and in all: pages to 120 per client and 1,200 in all, and to 20 MB and 200 MB of what they bring from Supabase; domains to 60 and 600; images to 240 and 1,200, and 60 MB and 300 MB. A stored image is never read past the size it was published with (the owner can replace the file in their folder, but only the file that was checked is shown).
+- **A client is the address the platform's proxies saw it connect from.** Proxies add addresses at the end of `X-Forwarded-For`, after anything the client sent itself, so the server counts from the right: the address `TRUSTED_PROXY_HOPS` from the end (default 2, which is right for Replit's Autoscale: Google's front end adds the client's address, then its own). Use 1 behind a proxy that adds only the client's address, or 0 to use the connection's own address when nothing is in front of the server. The startup log says which address it uses, and the log says so when a visitor uses up its lookups; if every visitor shows up as the same address, the setting is too low.
+- If Supabase fails, the last answer is used for up to twice its cache time, and never because a limit ran out (so a page taken down elsewhere stops showing).
+
+Security: published pages are other people's HTML and scripts, served from the app's own address, where the app keeps its sign-in. So on the app's address every page is sent with a `Content-Security-Policy: sandbox` header that never allows the app's origin: the page can't read the sign-in or use the API as the visitor, and SEO pages can't run scripts at all. Images are served only when they're listed with their page and are still the exact files checked when it was published (JPEG, PNG, WebP or GIF; never SVG). Each publish stores its images in a new folder, and the page moves to them only once it's saved (a publish that fails removes them, unless the page was saved after all and its answer got lost). Nothing is stored for an account that no longer exists: once someone deletes their account, the server that deleted it stops taking their sign-in, and every copy of the server checks with Supabase that the account is still there before it stores anything. On a person's own domain, pages run unsandboxed on that domain's own origin. That's why the app never answers there, and why a domain needs its TXT record.
 
 API (signed in, same site only): `GET /api/pages`, `GET /api/pages/check?slug=&pageId=`, `PUT` and `DELETE /api/pages/<pageId>`, `POST /api/domains`, `POST /api/domains/<domain>/check`, `DELETE /api/domains/<domain>`, `GET /api/leads?before=&limit=&pageId=`, `DELETE /api/leads/<id>`. Public: `POST /<name>/lead`.
 
@@ -305,7 +325,9 @@ Server environment:
 - `AI_PROVIDER_BASE_URLS`: a JSON map of provider id to base URL, for a proxy or the test mock
 - `LEADS_PER_IP_PER_HOUR` (default 10) and `LEADS_PER_PAGE_PER_HOUR` (default 30): lead form limits (see "Publishing pages")
 - accounts: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `ADMIN_EMAILS`, `SIGN_IN_REQUIRED` (see "Accounts")
-- `APP_HOSTS`: other domains the app itself runs on (see "Publishing pages")
+- `APP_HOSTS`: the app's own custom domains, comma-separated. The app and `/api` answer only on the app's own hosts (see "Publishing pages")
+- `PAGES_DNS_SERVERS` (optional): the DNS servers the domain check asks (see "Publishing pages")
+- `TRUSTED_PROXY_HOPS` (optional, default 2): how many `X-Forwarded-For` addresses the platform's proxies add at its end, so visitors are told apart by the address they connected from (see "Publishing pages")
 
 `GET /api/config` tells the app whether accounts are on and whether it can publish pages, and `DELETE /api/account` deletes the signed-in user, with their saved workspace, files, published pages and leads.
 
