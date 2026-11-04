@@ -4,6 +4,7 @@
 import type { Route } from './router';
 
 export const PAGE_TABS = {
+  strategy: { plan: 'Plan', research: 'Research', promote: 'Where to promote', content: 'Social content', assets: 'Assets to create', outreach: 'Email outreach', seo: 'SEO page' },
   studio: { structure: 'Structure & outline (Business model for a business)', code: 'Code & assets', publish: 'Listing & publish' },
   'workspace-settings': { brand: 'Brand', ai: 'AI', accounts: 'Social accounts', projects: 'Projects & data', prefs: 'Preferences', account: 'Account', domains: 'Domains' },
   'marketing-social': { setup: 'Campaign setup', plan: '30-day plan', batch: '7-day batch', create: 'Create individual post' },

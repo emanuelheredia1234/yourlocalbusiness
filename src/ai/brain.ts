@@ -19,6 +19,7 @@ export const CATEGORY_META: Record<SkillCategory, { label: string; icon: string;
 
 export const SCOPE_META: Record<ModuleScope, string> = {
   all: 'Everywhere',
+  strategy: 'Strategy',
   research: 'Product research',
   brand: 'Brand identity',
   studio: 'Creation studio',

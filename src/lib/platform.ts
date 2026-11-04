@@ -127,6 +127,10 @@ export interface AIServerProvider {
   /** model per kind (text, image, video, agent) */
   models: Record<string, string>;
   effort: Record<string, { id: string; label: string }>;
+  /** can search the web for Strategy, and the list price per search */
+  research?: { perSearch: number } | null;
+  /** a signed-in person's own key (health already sends it) */
+  own?: boolean;
 }
 
 /** What your own server can do: which keys are ready and which ones power each function. */

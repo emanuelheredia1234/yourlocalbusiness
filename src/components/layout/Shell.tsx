@@ -5,6 +5,7 @@ import {
   CalendarDays,
   ChartColumn,
   ChevronsUpDown,
+  Compass,
   LayoutDashboard,
   Megaphone,
   Menu,
@@ -58,6 +59,7 @@ function useNav(): { group: string; items: NavItem[] }[] {
       group: 'Workspace',
       items: [
         { route: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
+        { route: 'strategy', label: 'Strategy', icon: <Compass size={18} /> },
         { route: 'studio', label: studioLabel, icon: <WandSparkles size={18} /> },
         { route: 'marketing', label: 'Marketing Hub', icon: <Megaphone size={18} />, match: ['marketing', 'marketing-seo', 'marketing-email', 'marketing-social', 'marketing-ads'] },
         { route: 'calendar', label: 'Content Calendar', icon: <CalendarDays size={18} /> },
@@ -226,6 +228,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 const TITLES: Record<Route, string> = {
   onboarding: 'Setup',
   dashboard: 'Dashboard',
+  strategy: 'Strategy',
   studio: 'Studio',
   marketing: 'Marketing Hub',
   'marketing-seo': 'SEO Sales Page',
@@ -407,6 +410,7 @@ export function CommandPalette() {
       { label: 'Ask the assistant', hint: 'Chat at the bottom right', run: () => useAssistant.getState().setOpen(true) },
       { label: 'Create individual post', hint: 'Social media engine', run: () => openComposer() },
       { label: 'Go to Dashboard', run: () => navigate('dashboard') },
+      { label: 'Strategy: get clients and make sales', hint: 'Research, where to promote, your plan', run: () => navigate('strategy') },
       { label: 'Open Studio', hint: 'Outline, code generator, publish', run: () => navigate('studio') },
       { label: 'Marketing Hub', run: () => navigate('marketing') },
       { label: 'SEO sales page builder', run: () => navigate('marketing-seo') },

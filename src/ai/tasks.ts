@@ -30,7 +30,8 @@ import { getBlob } from '@/lib/storage';
 import { videoFrame } from '@/lib/utils';
 import { MAX_AI_IMAGES, describeImagesForAI } from '@/lib/promptImages';
 import { PAGE_TYPE_LABEL, pageTypeNoun, pageTypeOf, sectionPlan } from '@/lib/pageTypes';
-import { conform, framePrompt, type Tier } from './claude';
+import { conform, framePrompt, type ResearchRequest, type Tier } from './claude';
+import type { AIMeta } from './meta';
 import { FORMATS, LOGO_ICONS } from './knowledge';
 import { generateAds, type AdsResult } from './local/ads';
 import { generateBrandKit, paletteFrom, type BrandKitResult } from './local/brand';
@@ -75,6 +76,8 @@ export interface TaskEnv {
    * prompt is built outside a request.
    */
   attached?: string[];
+  /** set only for merge on your server's path: what served the request (sources, for web research) */
+  meta?: AIMeta;
 }
 
 export interface TaskDef<I, O> {
@@ -90,6 +93,8 @@ export interface TaskDef<I, O> {
     images?: (input: I) => Promise<Blob[] | undefined>;
     /** the owner's prompt images to attach: the engine gets them ready and sets env.attached */
     promptImages?: (input: I) => PromptImage[] | undefined;
+    /** ask your server to search the web for this request (functions marked "research" in shared/ai-functions.json only) */
+    research?: (input: I, env: TaskEnv) => ResearchRequest | null;
   };
 }
 
@@ -1054,3 +1059,5 @@ export const skillTestTask = def<{ sample: 'caption' | 'email' | 'headline' | 'a
 });
 
 export type AnyTask = TaskDef<never, unknown>;
+
+export * from './strategyTasks';

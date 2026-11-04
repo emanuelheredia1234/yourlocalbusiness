@@ -36,7 +36,7 @@ export function manusImageLimit(): number {
 const UNCERTAIN_CODES = new Set(['TIMEOUT', 'NETWORK', 'UPSTREAM', 'CUT_OFF']);
 
 /** One call to your server's Manus routes; errors come back as ManusErrors. */
-async function serverManus(action: 'create' | 'output' | 'continue', body: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
+export async function serverManus(action: 'create' | 'output' | 'continue', body: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
   let res: Response;
   try {
     res = await serverFetch(useStore.getState().settings.ai.serverUrl, `/api/ai/manus/${action}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });

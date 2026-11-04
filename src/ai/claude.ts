@@ -67,10 +67,19 @@ export async function callArtifactClaude(prompt: string, opts: CallOptions): Pro
   }
 }
 
+/** Ask your server to search the web for one request (Strategy's research): how many searches, and the place. */
+export interface ResearchRequest {
+  web: true;
+  maxSearches?: number;
+  location?: { city: string; region: string } | null;
+}
+
 export interface ServerCallOptions extends CallOptions {
   serverUrl: string;
   /** the Brain switch, recorded with the request */
   brain?: boolean;
+  /** web research: only for functions marked "research" (the server answers 400 otherwise) */
+  research?: ResearchRequest | null;
 }
 
 /** Server error codes → the app's codes (friendlyAIError explains them). */
@@ -97,7 +106,7 @@ export async function callServerAI(fn: string, prompt: string, opts: ServerCallO
     res = await serverFetch(opts.serverUrl, '/api/ai/generate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ fn, prompt, tier: opts.tier, images, brain: opts.brain }),
+      body: JSON.stringify({ fn, prompt, tier: opts.tier, images, brain: opts.brain, ...(opts.research ? { research: opts.research } : {}) }),
       signal: opts.signal,
     });
   } catch (e) {

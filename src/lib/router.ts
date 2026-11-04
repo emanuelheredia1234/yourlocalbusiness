@@ -5,6 +5,7 @@ import { useSyncExternalStore } from 'react';
 export const ROUTES = [
   'onboarding',
   'dashboard',
+  'strategy',
   'studio',
   'marketing',
   'marketing-seo',

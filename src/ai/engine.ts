@@ -28,6 +28,8 @@ export interface RunResult<O> {
   id: string;
   /** which key, model and effort answered on your server, and what it used */
   meta?: AIMeta;
+  /** why the built-in engine answered: 'no_provider', 'server_down' or an AIError code (unset when your AI answered, or none was asked) */
+  code?: string;
 }
 
 /**
@@ -89,6 +91,7 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
   let used: ProviderId = 'local';
   let note: string | undefined;
   let meta: AIMeta | undefined;
+  let code: string | undefined;
   const fn = functionForTask(task.id);
   const rt = useRuntime.getState();
   let ask = provider !== 'local' && !!task.claude;
@@ -96,8 +99,10 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
   if (provider === 'server' && ask && fn && rt.ai.reachable && routeFor(fn.id).length === 0) {
     // no request to make: say what to set up
     ask = false;
+    code = 'no_provider';
     note = `No API key powers ${fn.label} yet, so the built-in engine answered. In Settings → AI, tick ${fn.label} for one of your keys.`;
   } else if (!__ARTIFACT_BUILD__ && provider === 'local' && !opts.forceLocal && task.claude && rt.server === 'down') {
+    code = 'server_down';
     note = 'Your AI server isn’t running (npm run server), so the built-in engine answered.';
   }
 
@@ -122,19 +127,22 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
       };
       if (provider === 'claude') data = task.claude.merge(await callArtifactClaude(prompt, callOpts), base, input, runEnv);
       else {
-        const out = await callServerAI(fn?.id ?? 'product', prompt, { ...callOpts, serverUrl: opts.settings.ai.serverUrl, brain: opts.settings.ai.useBrain });
+        // web research only on your server, for tasks that ask for it (claude.ai has no search)
+        const research = task.claude.research?.(input, runEnv) ?? null;
+        const out = await callServerAI(fn?.id ?? 'product', prompt, { ...callOpts, serverUrl: opts.settings.ai.serverUrl, brain: opts.settings.ai.useBrain, ...(research ? { research } : {}) });
         meta = out.meta ?? undefined;
-        data = task.claude.merge(out.value, base, input, runEnv);
+        data = task.claude.merge(out.value, base, input, { ...runEnv, meta });
         if (meta?.attempts?.length) note = `${meta.attempts.map((a) => `${a.providerLabel} failed (${a.error})`).join(' ')} ${meta.providerLabel} answered instead.`;
       }
       used = provider;
     } catch (e) {
       const err = e as AIError;
       if (err?.code === 'cancelled' || opts.signal?.aborted) throw new AIError('Stopped.', 'cancelled');
-      note = friendlyAIError(err?.code ?? 'upstream_error', provider === 'server' ? err?.message : '');
+      code = err?.code ?? 'upstream_error';
+      note = friendlyAIError(code, provider === 'server' ? err?.message : '');
     }
   }
 
   data = polishDeep(data, brain.directives);
-  return { data, provider: used, skills: brain.skills, ms: Math.round(performance.now() - t0), note, id: uid('gen'), meta: used === 'server' ? meta : undefined };
+  return { data, provider: used, skills: brain.skills, ms: Math.round(performance.now() - t0), note, id: uid('gen'), meta: used === 'server' ? meta : undefined, ...(code ? { code } : {}) };
 }
