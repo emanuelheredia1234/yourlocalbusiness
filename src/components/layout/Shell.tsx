@@ -27,6 +27,7 @@ import { useAssistant } from '@/store/assistant';
 import { FORMATS } from '@/ai/knowledge';
 import { Popover, MenuItem } from '../ui/primitives';
 import { confirmLeave } from '@/components/ui/leave';
+import { startNewProject } from '@/lib/projectActions';
 import { LogoMark } from '../brand/Logo';
 import { AccountButton, AccountRow } from '../auth/Account';
 
@@ -77,7 +78,6 @@ function ProjectSwitcher({ onNavigate }: { onNavigate?: () => void }) {
   const project = useActiveProject();
   const projects = useStore((s) => s.projects);
   const setActive = useStore((s) => s.setActiveProject);
-  const create = useStore((s) => s.createProject);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
   if (!project) return null;
@@ -118,10 +118,7 @@ function ProjectSwitcher({ onNavigate }: { onNavigate?: () => void }) {
           icon={<Plus size={15} />}
           onClick={async () => {
             setOpen(false);
-            if (!(await confirmLeave())) return;
-            create();
-            void navigate('onboarding', { force: true });
-            onNavigate?.();
+            if (await startNewProject()) onNavigate?.();
           }}
         >
           New project
@@ -385,7 +382,6 @@ export function CommandPalette() {
   const open = useUI((s) => s.commandOpen);
   const setOpen = useUI((s) => s.setCommandOpen);
   const openComposer = useUI((s) => s.openComposer);
-  const create = useStore((s) => s.createProject);
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -426,13 +422,11 @@ export function CommandPalette() {
         label: 'Start a new project',
         hint: 'Guided wizard',
         run: async () => {
-          if (!(await confirmLeave())) return;
-          create();
-          void navigate('onboarding', { force: true });
+          await startNewProject();
         },
       },
     ],
-    [openComposer, create],
+    [openComposer],
   );
   const filtered = items.filter((i) => (i.label + ' ' + (i.hint ?? '')).toLowerCase().includes(q.toLowerCase()));
   if (!open) return null;

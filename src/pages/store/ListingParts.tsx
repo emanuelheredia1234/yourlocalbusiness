@@ -1,28 +1,14 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight, MapPin } from 'lucide-react';
-import type { Listing, ServicePriceModel } from '@/lib/types';
+import type { Listing } from '@/lib/types';
 import { cn, darken, fmtMoney, lighten, readableOn, withAlpha } from '@/lib/utils';
 import { CITIES, FORMATS } from '@/ai/knowledge';
 import { Icon } from '@/components/ui/Icon';
 import { MiniMark } from '@/components/brand/Logo';
+import { priceLabel } from '@/lib/marketplace';
 
-export function priceLabel(price: number, model: ServicePriceModel): string {
-  if (model === 'quote') return 'Get a quote';
-  if (model === 'free' || price === 0) return 'Free';
-  const p = fmtMoney(price);
-  switch (model) {
-    case 'monthly':
-      return `${p}/mo`;
-    case 'yearly':
-      return `${p}/yr`;
-    case 'per-session':
-      return `${p}/session`;
-    case 'project':
-      return `From ${p}`;
-    default:
-      return p;
-  }
-}
+// the price as buyers read it lives with the Marketplace logic (the assistant uses it too)
+export { priceLabel };
 
 export function ListingCover({ listing, className, big }: { listing: Listing; className?: string; big?: boolean }) {
   const [a, b, c] = listing.cover.colors;
