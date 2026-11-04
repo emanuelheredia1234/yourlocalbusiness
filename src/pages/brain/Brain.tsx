@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react';
 import { Activity, BookOpen, Brain as BrainIcon, Check, Copy, FileUp, FlaskConical, Library, Pencil, Plus, Sparkles, ThumbsDown, ThumbsUp, Trash2, Upload } from 'lucide-react';
 import type { Skill, SkillCategory } from '@/lib/types';
 import { cn, fmtBytes, fmtRelative, readFileAsText, uid } from '@/lib/utils';
-import { CATEGORY_META, SCOPE_META, SKILL_LIBRARY, brainStrength, describeDirectives, effectiveDirectives, extractFacts, extractKeywords, newSkill, skillFromLibrary, templatePlaceholders } from '@/ai/brain';
+import { CATEGORY_META, SCOPE_META, SKILL_LIBRARY, brainStrength, describeDirectives, effectiveDirectives, skillFromLibrary, templatePlaceholders } from '@/ai/brain';
+import { MAX_DOC, knowledgeDocSkill, playgroundSets } from '@/ai/brainSkills';
 import { providerLabel } from '@/ai/engine';
 import { compactMeta, metaLine } from '@/ai/meta';
 import { skillTestTask } from '@/ai/tasks';
@@ -272,8 +273,6 @@ function LibraryGrid() {
   );
 }
 
-const MAX_DOC = 2_000_000;
-
 function KnowledgeDocs() {
   const skills = useStore((s) => s.skills);
   const addSkill = useStore((s) => s.addSkill);
@@ -283,28 +282,13 @@ function KnowledgeDocs() {
   const [busy, setBusy] = useState(false);
 
   const ingest = (docName: string, body: string, size: number) => {
-    const clean = body.replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').trim();
-    if (clean.length < 40) {
+    const skill = knowledgeDocSkill(docName, body, size);
+    if (!skill) {
       toast({ kind: 'error', title: 'That document is too short', body: 'Paste at least a few sentences.' });
       return;
     }
-    const keywords = extractKeywords(clean, 12);
-    const facts = extractFacts(clean, 8);
-    const excerpt = clean.slice(0, 1500);
-    addSkill(
-      newSkill({
-        name: docName || 'Knowledge document',
-        category: 'knowledge',
-        description: `Reference document with ${facts.length} proof point${facts.length === 1 ? '' : 's'} and ${keywords.length} key terms.`,
-        instructions: [`Use this document as the source of truth. Prefer its facts over generic claims.`, facts.length ? `Proof points:\n${facts.map((f) => `- ${f}`).join('\n')}` : '', `Key terms: ${keywords.join(', ')}`, `Excerpt:\n${excerpt}`].filter(Boolean).join('\n\n'),
-        scope: ['all'],
-        priority: 2,
-        source: 'document',
-        directives: { facts },
-        doc: { name: docName || 'Pasted text', size, keywords, excerpt: excerpt.slice(0, 280) },
-      }),
-    );
-    toast({ kind: 'ai', title: 'Document added to the Brain', body: `${facts.length} proof points · ${keywords.length} key terms` });
+    addSkill(skill);
+    toast({ kind: 'ai', title: 'Document added to the Brain', body: `${skill.directives.facts?.length ?? 0} proof points · ${skill.doc?.keywords.length ?? 0} key terms` });
     setName('');
     setText('');
   };
@@ -398,10 +382,7 @@ function Playground() {
   const [compare, setCompare] = useState<string>('__none');
   const withAI = useAI(skillTestTask);
   const withoutAI = useAI(skillTestTask);
-  const enabled = skills.filter((s) => s.enabled);
-  const target = skills.find((s) => s.id === compare);
-  const baseline = compare === '__none' ? [] : enabled.filter((s) => s.id !== compare);
-  const withSet = target && !target.enabled ? [...enabled, { ...target, enabled: true }] : enabled;
+  const { withSet, baseline, target } = playgroundSets(skills, compare === '__none' ? null : compare);
 
   const run = async () => {
     const variation = Math.floor(Math.random() * 1000);

@@ -3,7 +3,7 @@ import { CalendarClock, CircleAlert, Info, Send, Sparkles } from 'lucide-react';
 import type { PostPlatform, PostType } from '@/lib/types';
 import { fmtDate, fmtDateTime } from '@/lib/utils';
 import { PLATFORMS, POST_TYPE_MAP } from '@/ai/knowledge';
-import { useKpis } from '@/lib/kpis';
+import { countBy, postedSince, useKpis } from '@/lib/kpis';
 import { navigate } from '@/lib/router';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
@@ -22,13 +22,6 @@ const METRICS: { id: Metric; label: string }[] = [
   { id: 'made', label: 'Made with AI' },
 ];
 
-/** Counts per key, biggest first. */
-function countBy<K extends string>(items: K[]) {
-  const map = new Map<K, number>();
-  for (const k of items) map.set(k, (map.get(k) ?? 0) + 1);
-  return [...map.entries()].map(([key, n]) => ({ key, n })).sort((a, b) => b.n - a.n);
-}
-
 export default function Analytics() {
   const project = useActiveProject()!;
   const [range, setRange] = useState<Range>('30');
@@ -39,10 +32,7 @@ export default function Analytics() {
   const openEditor = useUI((s) => s.openPostEditor);
   const since = k.since;
 
-  const posted = useMemo(
-    () => allPosts.filter((p) => p.projectId === project.id && p.status === 'published' && p.publishedAt && new Date(p.publishedAt).getTime() >= since).sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? '')),
-    [allPosts, project.id, since],
-  );
+  const posted = useMemo(() => postedSince(allPosts, project.id, since), [allPosts, project.id, since]);
   const byPlatform = countBy(posted.map((p) => p.platform));
   const byType = countBy(posted.map((p) => p.postType));
   const byFormat = countBy(posted.map((p) => p.format));

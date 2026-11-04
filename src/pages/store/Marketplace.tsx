@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ExternalLink, Map as MapIcon, Package, Pencil, Search, Store as StoreIcon, Users, X } from 'lucide-react';
-import type { Listing, ListingKind } from '@/lib/types';
+import type { ListingKind } from '@/lib/types';
 import { cn, fmtDateTime } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { useRuntime } from '@/lib/platform';
 import { pushMyListings, refreshCommunity, startCommunitySync } from '@/lib/community';
-import { BUSINESS_CATEGORIES, distanceMi, FORMAT_LIST, FORMATS } from '@/ai/knowledge';
+import { BUSINESS_CATEGORIES, FORMAT_LIST, FORMATS } from '@/ai/knowledge';
+import { filterListings, listingCities, type ListingSort } from '@/lib/marketplace';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useTabRequest, useUI } from '@/store/ui';
 import { tabsOf } from '@/lib/pageTabs';
@@ -17,7 +18,7 @@ import { useAllListings } from './useListings';
 import { listingActions } from '@/lib/listingActions';
 
 type Kind = 'all' | ListingKind;
-type Sort = 'recommended' | 'newest' | 'price-asc' | 'price-desc';
+type Sort = ListingSort;
 
 
 export default function Marketplace() {
@@ -46,52 +47,9 @@ export default function Marketplace() {
 
   const origin = project?.location?.lat !== undefined && project.location.lng !== undefined ? { lat: project.location.lat, lng: project.location.lng } : null;
 
-  const filtered = useMemo(() => {
-    const ql = q.trim().toLowerCase();
-    let out = listings.filter((l) => {
-      if (kind !== 'all' && l.kind !== kind) return false;
-      if (cat) {
-        if (l.kind === 'product' && !(l.format === cat || l.category === cat)) return false;
-        if (l.kind === 'business' && l.category !== cat) return false;
-      }
-      if (city) {
-        if (l.kind !== 'business') return false;
-        if (city === 'Online') {
-          if (!l.location?.online) return false;
-        } else if (`${l.location?.city}, ${l.location?.region}` !== city) return false;
-      }
-      if (near && origin) {
-        if (l.kind !== 'business' || l.location?.lat === undefined || l.location.lng === undefined) return false;
-        if (distanceMi(origin, { lat: l.location.lat, lng: l.location.lng }) > near) return false;
-      }
-      if (ql) {
-        const hay = `${l.title} ${l.tagline} ${l.description} ${l.seller.name} ${l.category} ${l.tags.join(' ')} ${l.location?.city ?? ''}`.toLowerCase();
-        if (!hay.includes(ql)) return false;
-      }
-      return true;
-    });
-    // yours first, then the newest (there are no ratings or sales to rank by)
-    const score = (l: Listing) => (l.origin === 'mine' ? 1e15 : 0) + l.createdAt;
-    out = out.slice().sort((a, b) => {
-      switch (sort) {
-        case 'newest':
-          return b.createdAt - a.createdAt;
-        case 'price-asc':
-          return a.price - b.price;
-        case 'price-desc':
-          return b.price - a.price;
-        default:
-          return score(b) - score(a);
-      }
-    });
-    return out;
-  }, [listings, kind, cat, city, near, origin, q, sort]);
+  const filtered = useMemo(() => filterListings(listings, { q, kind, cat, city, near, origin, sort }), [listings, kind, cat, city, near, origin, q, sort]);
 
-  const cities = useMemo(() => {
-    const set = new Set<string>();
-    listings.forEach((l) => l.kind === 'business' && l.location && set.add(l.location.city === 'Online' || l.location.online && !l.location.lat ? 'Online' : `${l.location.city}, ${l.location.region}`));
-    return [...set].sort();
-  }, [listings]);
+  const cities = useMemo(() => listingCities(listings), [listings]);
 
   const pills = kind === 'business' ? BUSINESS_CATEGORIES.map((c) => ({ id: c, label: c })) : kind === 'product' ? FORMAT_LIST.map((f) => ({ id: f.id as string, label: f.label })) : [...FORMAT_LIST.slice(0, 5).map((f) => ({ id: f.id as string, label: f.label })), ...BUSINESS_CATEGORIES.slice(0, 4).map((c) => ({ id: c, label: c }))];
 

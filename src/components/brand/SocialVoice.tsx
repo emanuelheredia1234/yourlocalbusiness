@@ -15,7 +15,7 @@ import { errorCopy, manusSetupHint, useCanOfferManus, useManusReady } from '../p
 type ErrorCopy = { title: string; body: string; uncertain?: boolean };
 
 /** Why a read couldn't start. A read never posts, so an uncertain start can only cost credits twice, not post twice. */
-function voiceErrorCopy(e: unknown): ErrorCopy {
+export function voiceErrorCopy(e: unknown): ErrorCopy {
   const c = errorCopy(e);
   return c.uncertain ? { title: 'Not sure the read started', body: 'The connection dropped while starting it, so Manus may be reading anyway. Check your Manus tasks before trying again: another read uses more credits.', uncertain: true } : c;
 }

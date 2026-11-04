@@ -4,6 +4,9 @@ import type { AppSettings, Brand, Project } from '@/lib/types';
 import { cn, ensureUrl, fmtRelative, readFileAsText, slugify } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
 import { pushMyListings } from '@/lib/community';
+import { saveBrand, brandCopyFrom } from '@/lib/brandSave';
+import { EXPORT_KEYS, backupFileName, backupJson } from '@/lib/backup';
+import { deleteProjectEverywhere } from '@/lib/projectActions';
 import { PLATFORMS, POST_PLATFORMS, FORMATS } from '@/ai/knowledge';
 import { brandKitTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
@@ -87,20 +90,17 @@ function Card({ title, desc, children, action }: { title: string; desc?: string;
 // ───────────────────────── Brand ─────────────────────────
 
 function BrandSettings({ project, focusDomains, onDomainsFocused }: { project: Project; focusDomains?: boolean; onDomainsFocused?: () => void }) {
-  const updateBrand = useStore((s) => s.updateBrand);
   const brand = project.brand;
   const ai = useAI(brandKitTask);
   const [palettes, setPalettes] = useState<Brand['colors'][] | undefined>(undefined);
-  const set = (patch: Partial<Brand>) => {
-    updateBrand(patch);
-    if (useStore.getState().myListings.some((l) => l.projectId === project.id)) pushMyListings();
-  };
+  // the active project's brand, and its shared Marketplace listing when it's listed
+  const set = (patch: Partial<Brand>) => saveBrand(patch);
 
   const refreshCopy = async () => {
     const r = await ai.run({});
     if (!r) return;
     setPalettes(r.paletteOptions);
-    set({ tagline: r.tagline, pitch: r.pitch, valueProp: r.valueProp, audience: r.audience, personality: r.personality, mission: r.mission, nameOptions: r.nameOptions, domainIdeas: r.domainIdeas });
+    set(brandCopyFrom(r));
     toast({ kind: 'ai', title: 'Brand copy refreshed', body: 'Your name, logo and colors were kept.' });
   };
 
@@ -233,24 +233,17 @@ function Accounts() {
 
 // ───────────────────────── Projects & data ─────────────────────────
 
-const EXPORT_KEYS = ['projects', 'activeProjectId', 'posts', 'ads', 'skills', 'genLog', 'myListings', 'notices', 'settings'] as const;
-
 function ProjectsData() {
   const signedIn = useAuth((s) => s.phase === 'ready');
   const projects = useStore((s) => s.projects);
   const activeId = useStore((s) => s.activeProjectId);
   const setActive = useStore((s) => s.setActiveProject);
-  const deleteProject = useStore((s) => s.deleteProject);
   const createProject = useStore((s) => s.createProject);
   const replaceState = useStore((s) => s.replaceState);
   const resetAll = useStore((s) => s.resetAll);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const exportJson = () => {
-    const s = useStore.getState();
-    const data = Object.fromEntries(EXPORT_KEYS.map((k) => [k, s[k]]));
-    download(`yourlocalbusiness-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ app: 'yourlocalbusiness', version: 1, exportedAt: new Date().toISOString(), data }, null, 2));
-  };
+  const exportJson = () => download(backupFileName(), backupJson());
 
   const importJson = async (file: File) => {
     try {
@@ -312,10 +305,7 @@ function ProjectsData() {
                 className="btn btn-ghost btn-icon btn-xs text-muted hover:text-bad"
                 aria-label={`Delete ${p.brand.name || 'project'}`}
                 onClick={async () => {
-                  if (await confirmAction({ title: `Delete ${p.brand.name || 'this project'}?`, body: 'Its posts, campaigns and Marketplace listing are removed too. This can’t be undone.', confirmLabel: 'Delete project', danger: true })) {
-                    deleteProject(p.id);
-                    pushMyListings();
-                  }
+                  if (await confirmAction({ title: `Delete ${p.brand.name || 'this project'}?`, body: 'Its posts, campaigns and Marketplace listing are removed too. This can’t be undone.', confirmLabel: 'Delete project', danger: true })) deleteProjectEverywhere(p.id);
                 }}
               >
                 <Trash2 size={13} />
