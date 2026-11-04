@@ -266,7 +266,7 @@ function LeadList({ project }: { project: Project }) {
             body="When someone sends the form on your published page, it shows here. Lead form pages have a form, and so do booking pages without a booking link."
             action={
               scope === 'page' ? (
-                <button type="button" className="btn btn-primary btn-sm" onClick={() => useUI.getState().openSeoBuilder({ pageType: 'lead' })}>
+                <button type="button" className="btn btn-primary btn-sm" onClick={() => void useUI.getState().openSeoBuilder({ pageType: 'lead' })}>
                   Build a lead form page
                 </button>
               ) : undefined

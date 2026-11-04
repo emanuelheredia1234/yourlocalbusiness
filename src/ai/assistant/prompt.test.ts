@@ -10,7 +10,7 @@ import { ASSISTANT_MARKER as MOCK_MARKER, mockAssistantReply } from '../../../se
 import { APP_GUIDE, HELP_TOPICS } from './guide';
 import { ASSISTANT_MARKER, SECTIONS } from './protocol';
 import { PROMPT_BUDGET, SYSTEM, buildPrompt, redactSecrets, type PromptInput, type StepResult } from './prompt';
-import { GROUP_ABOUT, toolCatalog } from './catalog';
+import { GROUP_ABOUT, GROUP_BUDGET, toolCatalog } from './catalog';
 import { OPENABLE_ROUTES } from './nav';
 import { catalogLine } from './registry';
 import { TOOL_GROUPS, registry } from './tools';
@@ -29,7 +29,7 @@ beforeEach(() => {
 const input = (o: Partial<PromptInput> = {}): PromptInput => {
   const base = { message: 'What is due on my calendar?', history: [], results: [], route: 'dashboard' as const, workspace: workspaceSummary(), step: 1, maxSteps: 6, ...o };
   const tools = toolCatalog(TOOL_GROUPS, base);
-  return { catalog: tools.full, catalogCompact: tools.compact, ...base };
+  return { catalog: tools.full, catalogFallbacks: tools.fallbacks, ...base };
 };
 const msg = (role: ChatMessage['role'], text: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({ id: `m${Math.random()}`, role, text, at: 1, ...extra });
 
@@ -81,29 +81,45 @@ describe('the prompt', () => {
   });
 
   it('lists the tools at two levels, so a usual prompt stays under half its budget on every page', () => {
-    for (const route of OPENABLE_ROUTES) {
-      expect(buildPrompt(input({ route })).length, route).toBeLessThan(PROMPT_BUDGET / 2);
-      expect(buildPrompt(input({ route, message: 'Write my lead magnet, then plan an ad campaign' })).length, route).toBeLessThan(PROMPT_BUDGET / 2);
-    }
+    const messages = ['What is due on my calendar?', 'hello', 'Write my lead magnet, then plan an ad campaign', 'Make my calculator dark', 'Update my brand colors'];
+    for (const route of OPENABLE_ROUTES) for (const message of messages) expect(buildPrompt(input({ route, message })).length, `${route}: ${message}`).toBeLessThan(PROMPT_BUDGET / 2);
+    // a usual prompt is the core, the groups that fit GROUP_BUDGET and the others' names, however many tools there are
+    const bare = buildPrompt(input({ route: null, message: 'hello' })).length;
+    for (const route of OPENABLE_ROUTES) expect(buildPrompt(input({ route, message: 'hello' })).length - bare, route).toBeLessThanOrEqual(GROUP_BUDGET);
     // every tool in full would be most of it: that's what the two levels avoid
     expect(registry.catalog().length).toBeGreaterThan(20_000);
+    expect(PROMPT_BUDGET).toBeLessThanOrEqual(0.4 * 120_000);
   });
 
-  it('falls back to every group by name when the prompt runs long, and keeps the latest message and the format', () => {
-    const results: StepResult[] = [{ step: 1, tool: 'list_tools', ok: true, status: 'ok', result: { group: 'brand' } }];
-    const message = `please ${'q'.repeat(5000)}`;
-    const full = input({ route: 'marketing-email', message, results });
-    expect(full.catalog).toContain('- update_brand(');
-    const p = buildPrompt(full, 20_000);
-    expect(p.length).toBeLessThanOrEqual(20_000);
-    expect(p).not.toContain('- update_brand(');
-    expect(p).toContain('- brand (');
+  it('when the prompt runs long, the groups in full go by name, the one the model asked for last, keeping the latest message and the format', () => {
+    // the model asked for the studio tools; the dashboard's own group (social) is in full too
+    const results: StepResult[] = [{ step: 1, tool: 'list_tools', ok: true, status: 'ok', result: { group: 'studio' } }];
+    const base = { message: `please ${'q'.repeat(5000)}`, history: [], results, route: 'dashboard' as const, workspace: workspaceSummary(), step: 2, maxSteps: 6 };
+    const tools = toolCatalog(TOOL_GROUPS, base, Infinity);
+    const full: PromptInput = { ...base, catalog: tools.full, catalogFallbacks: tools.fallbacks };
+    expect(full.catalog).toContain('- update_studio(');
+    expect(full.catalog).toContain('- create_post_drafts(');
+    let budget = buildPrompt(full, 100_000).length;
+    let askedOnly = false;
+    for (; budget > 8000; budget -= 250) {
+      const p = buildPrompt(full, budget);
+      expect(p.length).toBeLessThanOrEqual(budget);
+      const studio = p.includes('- update_studio(');
+      const social = p.includes('- create_post_drafts(');
+      // the page's group goes first; the asked-for one stays while it can
+      expect(social && !studio, String(budget)).toBe(false);
+      if (studio && !social) askedOnly = true;
+      if (!studio) break;
+    }
+    expect(askedOnly).toBe(true);
+    const p = buildPrompt(full, budget);
+    expect(p).toContain('- studio (');
     expect(p).toContain('please q');
     expect(p).toContain(`## ${SECTIONS.format}`);
   });
 
   it('holds nothing the claude.ai build can’t carry in its inline script', () => {
-    const texts = [SYSTEM, APP_GUIDE, ...Object.values(HELP_TOPICS), registry.catalog(), toolCatalog(TOOL_GROUPS, { route: null }).compact, ...registry.tools.map((t) => (t.class === 'X' ? t.refusal.text : ''))];
+    const texts = [SYSTEM, APP_GUIDE, ...Object.values(HELP_TOPICS), registry.catalog(), ...toolCatalog(TOOL_GROUPS, { route: null }).fallbacks, ...registry.tools.map((t) => (t.class === 'X' ? t.refusal.text : ''))];
     for (const t of texts) {
       expect(t).not.toMatch(/<\/script/i);
       expect(t).not.toMatch(/<\/style/i);

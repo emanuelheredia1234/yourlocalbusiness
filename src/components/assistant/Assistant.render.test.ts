@@ -63,6 +63,12 @@ describe('a reply', () => {
     expect(appLink('#nowhere')).toBeNull();
   });
 
+  it('keeps merge tags and snake_case names as they are; _a word_ is italic', () => {
+    const html = text('Set the button link to {{lead_magnet_link}} (export_file ads_text), and *one* _last_ thing.');
+    expect(html).toContain('{{lead_magnet_link}} (export_file ads_text)');
+    expect(html).toContain('<em>one</em> <em>last</em> thing');
+  });
+
   it('never renders HTML or script links from a reply', () => {
     const html = text('<img src=x onerror=alert(1)> [click](javascript:alert(1)) [data](data:text/html,hi)');
     expect(html).not.toContain('<img');

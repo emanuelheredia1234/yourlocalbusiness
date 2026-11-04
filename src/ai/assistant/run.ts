@@ -220,7 +220,7 @@ async function runTurn(projectId: string, message: string, history: ReturnType<t
     const route = currentRoute();
     // the core tools and the groups this step needs in full, the others by name (list_tools brings one in)
     const tools = toolCatalog(TOOL_GROUPS, { route, message, results, history });
-    const prompt = buildPrompt({ message, history, results, route, workspace: workspaceSummary(), catalog: tools.full, catalogCompact: tools.compact, step, maxSteps: MAX_STEPS }, host.budget());
+    const prompt = buildPrompt({ message, history, results, route, workspace: workspaceSummary(), catalog: tools.full, catalogFallbacks: tools.fallbacks, step, maxSteps: MAX_STEPS }, host.budget());
     let raw: unknown;
     try {
       raw = await host.ask(prompt, signal);
