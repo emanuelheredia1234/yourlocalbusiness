@@ -76,7 +76,7 @@ export function SkillEditor({ open, onClose, skill }: { open: boolean; onClose: 
         <div className="flex min-w-0 flex-col gap-4">
           {!skill && (
             <div className="flex flex-wrap gap-1.5">
-              <span className="mr-1 self-center text-xs text-muted">Start from:</span>
+              <span className="mr-1 self-center text-caption text-muted">Start from:</span>
               {TEMPLATES.map((t) => (
                 <button key={t.label} className="chip" onClick={() => setDraft((d) => ({ ...d, name: d.name || t.name, category: t.category, instructions: t.text }))}>
                   {t.label}
@@ -102,15 +102,15 @@ export function SkillEditor({ open, onClose, skill }: { open: boolean; onClose: 
             <input id="sk-desc" className="input" value={draft.description} onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))} placeholder="What this skill teaches the AI" />
           </Field>
           <Field label="Instructions" htmlFor="sk-ins" hint="One idea per line works best. Mention words to avoid, the CTA you prefer, emoji rules, tone, facts to use…">
-            <AutoTextarea id="sk-ins" value={draft.instructions} onChange={(v) => setDraft((d) => ({ ...d, instructions: v }))} minRows={7} className="text-[13.5px]" placeholder={'Tone: friendly and direct.\nNever use: “synergy”, “hustle”.\nEnd posts with: Book your free consult.'} />
+            <AutoTextarea id="sk-ins" value={draft.instructions} onChange={(v) => setDraft((d) => ({ ...d, instructions: v }))} minRows={7} className="text-small" placeholder={'Tone: friendly and direct.\nNever use: “synergy”, “hustle”.\nEnd posts with: Book your free consult.'} />
           </Field>
           {unfilled.length > 0 && (
-            <p className="-mt-2 text-[12.5px] text-warn" role="status">
+            <p className="-mt-2 text-small text-warn" role="status">
               Replace {unfilled.join(', ')} with your real details, or delete the line{unfilled.length > 1 ? 's' : ''}. The AI uses these facts as true.
             </p>
           )}
           <details className="rounded-md border border-line">
-            <summary className="cursor-pointer px-3 py-2 text-[13px] font-semibold">Fine-tune with structured controls</summary>
+            <summary className="cursor-pointer px-3 py-2 text-small font-semibold">Fine-tune with structured controls</summary>
             <div className="grid grid-cols-1 gap-3 border-t border-line p-3 sm:grid-cols-2">
               <Field label="Tone">
                 <select className="select" value={draft.directives.tone ?? ''} onChange={(e) => setD({ tone: (e.target.value || undefined) as Tone | undefined })}>
@@ -184,25 +184,25 @@ export function SkillEditor({ open, onClose, skill }: { open: boolean; onClose: 
 
         <aside className="flex flex-col gap-4">
           <div className="rounded-lg border border-line bg-surface-2/50 p-3">
-            <p className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold">
+            <p className="mb-2 flex items-center gap-1.5 text-small font-semibold">
               <Wand2 size={14} className="text-primary" /> Detected rules
             </p>
             {detected.length ? (
               <ul className="flex flex-wrap gap-1.5">
                 {detected.map((d) => (
-                  <li key={d} className="rounded bg-surface px-2 py-1 text-[11.5px] font-medium text-ink-2 ring-1 ring-line">
+                  <li key={d} className="rounded bg-surface px-2 py-1 text-caption font-medium text-ink-2 ring-1 ring-line">
                     {d}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-xs text-muted">Nothing structured yet. The full text is still sent to Claude as guidance.</p>
+              <p className="text-caption text-muted">Nothing structured yet. The full text is still sent to Claude as guidance.</p>
             )}
           </div>
           <Field label="Applies to">
             <div className="flex flex-wrap gap-1.5">
               {(Object.keys(SCOPE_META) as ModuleScope[]).map((s) => (
-                <button key={s} className={cn('chip text-[12px]', draft.scope.includes(s) && 'chip-active')} onClick={() => toggleScope(s)} aria-pressed={draft.scope.includes(s)}>
+                <button key={s} className={cn('chip text-caption', draft.scope.includes(s) && 'chip-active')} onClick={() => toggleScope(s)} aria-pressed={draft.scope.includes(s)}>
                   {SCOPE_META[s]}
                 </button>
               ))}

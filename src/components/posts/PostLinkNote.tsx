@@ -46,7 +46,7 @@ export function PostLinkNote({ post, compact, className }: { post: Post; compact
     const word = commentWord(post);
     const title = ownerAdds(post) ? `Add this as the first ${word}` : post.platform === 'x' ? 'First reply' : 'First comment';
     return (
-      <div role="note" aria-label={title} className={cn('rounded-md border border-line bg-surface-2/60 px-2.5 py-2 text-[12.5px]', className)}>
+      <div role="note" aria-label={title} className={cn('rounded-md border border-line bg-surface-2/60 px-2.5 py-2 text-small', className)}>
         <p className="flex items-center gap-1.5 font-semibold text-ink-2">
           <MessageSquare size={13} aria-hidden="true" /> {title}
         </p>
@@ -61,7 +61,7 @@ export function PostLinkNote({ post, compact, className }: { post: Post; compact
   const link = pageLink(project);
   if (!link) return null;
   return (
-    <div role="note" aria-label="Link in bio" className={cn('flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-2/60 px-2.5 py-1.5 text-[12.5px]', className)}>
+    <div role="note" aria-label="Link in bio" className={cn('flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-2/60 px-2.5 py-1.5 text-small', className)}>
       <Link2 size={13} aria-hidden="true" className="shrink-0 text-muted" />
       <span className="min-w-[11rem] flex-1 text-ink-2">
         Link in bio: keep <span className="font-medium [overflow-wrap:anywhere]">{linkText(link.url)}</span> in your {networkLabel(post.platform)} bio.

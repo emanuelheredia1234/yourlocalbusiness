@@ -45,7 +45,7 @@ export default function Brain() {
         <div className="min-w-0">
           <p className="eyebrow mb-1">Brain</p>
           <h1 className="page-title">The Brain</h1>
-          <p className="mt-1 max-w-[700px] text-[13.5px] text-muted">Skills the AI reads before every generation: your voice, your customer, your rules and your facts. Add them once and every caption, email, page and ad gets sharper.</p>
+          <p className="mt-1 max-w-[700px] text-small text-muted">Skills the AI reads before every generation: your voice, your customer, your rules and your facts. Add them once and every caption, email, page and ad gets sharper.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <Toggle checked={useBrain} onChange={(v) => updateSettings((s) => ({ ...s, ai: { ...s.ai, useBrain: v } }))} label={useBrain ? 'Brain on' : 'Brain off'} />
@@ -55,13 +55,13 @@ export default function Brain() {
         </div>
       </header>
 
-      {!useBrain && <p className="rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">The Brain is off: generations ignore every skill until you turn it back on.</p>}
+      {!useBrain && <p className="rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-small text-warn">The Brain is off: generations ignore every skill until you turn it back on.</p>}
 
       <section className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]" aria-label="Brain strength">
         <div className="panel flex flex-wrap items-start gap-4 p-4">
-          <ProgressRing value={strength.score / 100} size={72} stroke={7} label={<span className="text-[18px]">{strength.score}</span>} />
+          <ProgressRing value={strength.score / 100} size={72} stroke={7} label={<span className="text-h3">{strength.score}</span>} />
           <div className="min-w-[200px] flex-1">
-            <p className="text-[15px] font-semibold">Brain strength</p>
+            <p className="text-h3 font-semibold">Brain strength</p>
             <div className="mt-1.5 flex flex-wrap gap-1">
               {(['voice', 'audience', 'copywriting', 'offer', 'rules', 'knowledge'] as SkillCategory[]).map((c) => (
                 <span key={c} className={cn('badge', strength.covered.includes(c) ? 'bg-good-soft text-good' : 'bg-surface-2 text-muted')}>
@@ -70,7 +70,7 @@ export default function Brain() {
                 </span>
               ))}
             </div>
-            {strength.tips.length > 0 && <p className="mt-2 text-[12.5px] text-ink-2">Next: {strength.tips[0]}</p>}
+            {strength.tips.length > 0 && <p className="mt-2 text-small text-ink-2">Next: {strength.tips[0]}</p>}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -107,11 +107,11 @@ export default function Brain() {
 function Tile({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
   return (
     <div className="panel px-4 py-3">
-      <p className="flex items-center gap-1.5 text-xs font-medium text-muted">
+      <p className="flex items-center gap-1.5 text-caption font-medium text-muted">
         {icon}
         {label}
       </p>
-      <p className="num text-[20px] font-bold">{value}</p>
+      <p className="num text-h2 font-semibold">{value}</p>
     </div>
   );
 }
@@ -154,8 +154,8 @@ function SkillList({ onEdit }: { onEdit: (s: Skill) => void }) {
                   <Icon name={CATEGORY_META[s.category].icon} size={17} />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[14.5px] font-semibold">{s.name}</p>
-                  <p className="text-xs text-muted">
+                  <p className="truncate text-body font-semibold">{s.name}</p>
+                  <p className="text-caption text-muted">
                     {CATEGORY_META[s.category].label} · {SOURCE_LABEL[s.source]} · {s.priority === 3 ? 'High' : s.priority === 1 ? 'Low' : 'Normal'} priority
                     {s.projectId && ` · only for ${projects.find((p) => p.id === s.projectId)?.brand.name || 'one project'}`}
                   </p>
@@ -171,27 +171,27 @@ function SkillList({ onEdit }: { onEdit: (s: Skill) => void }) {
                     updateSkill(s.id, { enabled: v });
                   }} label={<span className="sr-only">{s.enabled ? 'Disable' : 'Enable'} {s.name}</span>} />
               </div>
-              {s.description && <p className="text-[13px] text-ink-2">{s.description}</p>}
+              {s.description && <p className="text-small text-ink-2">{s.description}</p>}
               {s.doc && (
-                <p className="flex items-center gap-1.5 text-xs text-muted">
+                <p className="flex items-center gap-1.5 text-caption text-muted">
                   <BookOpen size={12} /> {s.doc.name} · {fmtBytes(s.doc.size)} · {s.doc.keywords.slice(0, 4).join(', ')}
                 </p>
               )}
               {rules.length > 0 && (
                 <ul className="flex flex-wrap gap-1">
                   {rules.slice(0, 8).map((r) => (
-                    <li key={r} className="rounded bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-ink-2">
+                    <li key={r} className="rounded bg-surface-2 px-1.5 py-0.5 text-caption font-medium text-ink-2">
                       {r}
                     </li>
                   ))}
                 </ul>
               )}
-              <p className="text-[11.5px] text-muted">Applies to: {s.scope.map((x) => SCOPE_META[x]).join(', ')}</p>
+              <p className="text-caption text-muted">Applies to: {s.scope.map((x) => SCOPE_META[x]).join(', ')}</p>
               <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-line pt-3">
-                <span className="num text-xs text-muted">
+                <span className="num text-caption text-muted">
                   Used {s.stats.applied}× {s.stats.lastApplied ? `· last ${fmtRelative(s.stats.lastApplied)}` : ''}
                 </span>
-                <span className="num flex items-center gap-2 text-xs text-muted">
+                <span className="num flex items-center gap-2 text-caption text-muted">
                   <span className="flex items-center gap-0.5">
                     <ThumbsUp size={11} /> {s.stats.up}
                   </span>
@@ -240,14 +240,14 @@ function LibraryGrid() {
                 <Icon name={CATEGORY_META[l.category].icon} size={15} />
               </span>
               <div className="min-w-0">
-                <p className="truncate text-[14px] font-semibold">{l.name}</p>
-                <p className="text-[11.5px] text-muted">
+                <p className="truncate text-body font-semibold">{l.name}</p>
+                <p className="text-caption text-muted">
                   {CATEGORY_META[l.category].label} · {l.scope.map((x) => SCOPE_META[x]).join(', ')}
                 </p>
               </div>
             </div>
-            <p className="text-[13px] text-ink-2">{l.description}</p>
-            <p className="clamp-3 whitespace-pre-line rounded bg-surface-2 px-2.5 py-2 text-[12px] text-muted">{l.instructions}</p>
+            <p className="text-small text-ink-2">{l.description}</p>
+            <p className="clamp-3 whitespace-pre-line rounded bg-surface-2 px-2.5 py-2 text-caption text-muted">{l.instructions}</p>
             <button
               className={cn('btn btn-sm mt-auto', has ? 'btn-secondary' : 'btn-primary')}
               disabled={has}
@@ -297,11 +297,11 @@ function KnowledgeDocs() {
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <section className="panel flex flex-col gap-3 p-4 sm:p-5" aria-label="Add a document">
         <h2 className="section-title">Teach the Brain your facts</h2>
-        <p className="text-[13px] text-muted">Upload FAQs, product notes, reviews, service menus or policies (.txt, .md, .csv, .json), or paste text. The Brain extracts proof points and key terms and uses them in every output.</p>
+        <p className="text-small text-muted">Upload FAQs, product notes, reviews, service menus or policies (.txt, .md, .csv, .json), or paste text. The Brain extracts proof points and key terms and uses them in every output.</p>
         <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line-2 px-4 py-6 text-center hover:border-primary hover:bg-primary-soft/40">
           <FileUp size={22} className="text-primary" />
-          <span className="text-[13px] font-semibold">{busy ? 'Reading…' : 'Choose a text file'}</span>
-          <span className="text-xs text-muted">Up to 2 MB</span>
+          <span className="text-small font-semibold">{busy ? 'Reading…' : 'Choose a text file'}</span>
+          <span className="text-caption text-muted">Up to 2 MB</span>
           <input
             type="file"
             accept=".txt,.md,.markdown,.csv,.json,text/plain,text/markdown,text/csv,application/json"
@@ -326,14 +326,14 @@ function KnowledgeDocs() {
             }}
           />
         </label>
-        <div className="flex items-center gap-3 text-xs text-muted">
+        <div className="flex items-center gap-3 text-caption text-muted">
           <span className="h-px flex-1 bg-line" /> or paste text <span className="h-px flex-1 bg-line" />
         </div>
         <Field label="Document name" htmlFor="doc-name">
           <input id="doc-name" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Customer reviews, Service FAQ" />
         </Field>
         <Field label="Text" htmlFor="doc-text" right={`${text.length.toLocaleString()} chars`}>
-          <AutoTextarea id="doc-text" value={text} onChange={setText} minRows={6} className="text-[13px]" placeholder="Paste reviews, FAQs, product details…" />
+          <AutoTextarea id="doc-text" value={text} onChange={setText} minRows={6} className="text-small" placeholder="Paste reviews, FAQs, product details…" />
         </Field>
         <button className="btn btn-primary self-start" disabled={text.trim().length < 40} onClick={() => ingest(name.trim(), text, new Blob([text]).size)}>
           <Upload size={15} /> Add to Brain
@@ -345,22 +345,22 @@ function KnowledgeDocs() {
         ) : (
           docs.map((d) => (
             <article key={d.id} className="panel flex flex-col gap-2 p-4">
-              <p className="flex items-center gap-2 text-[14px] font-semibold">
+              <p className="flex items-center gap-2 text-body font-semibold">
                 <BookOpen size={15} className="text-primary" /> {d.name}
-                <span className="ml-auto text-xs font-normal text-muted">{d.doc ? fmtBytes(d.doc.size) : ''}</span>
+                <span className="ml-auto text-caption font-normal text-muted">{d.doc ? fmtBytes(d.doc.size) : ''}</span>
               </p>
               {d.directives.facts?.length ? (
-                <ul className="flex list-disc flex-col gap-1 pl-5 text-[12.5px] text-ink-2">
+                <ul className="flex list-disc flex-col gap-1 pl-5 text-small text-ink-2">
                   {d.directives.facts.slice(0, 4).map((f) => (
                     <li key={f}>{f}</li>
                   ))}
                 </ul>
               ) : (
-                <p className="text-xs text-muted">No numeric proof points found; key terms and the excerpt are still used.</p>
+                <p className="text-caption text-muted">No numeric proof points found; key terms and the excerpt are still used.</p>
               )}
               <div className="flex flex-wrap gap-1">
                 {d.doc?.keywords.slice(0, 10).map((k) => (
-                  <span key={k} className="rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-ink-2">
+                  <span key={k} className="rounded bg-surface-2 px-1.5 py-0.5 text-caption text-ink-2">
                     {k}
                   </span>
                 ))}
@@ -425,7 +425,7 @@ function Playground() {
         </GenerateButton>
       </section>
       {same && (
-        <p className="rounded-md border border-line bg-surface-2 px-3 py-2 text-[13px] text-ink-2">
+        <p className="rounded-md border border-line bg-surface-2 px-3 py-2 text-small text-ink-2">
           Same result: {compare === '__none' ? 'your active skills' : `“${target?.name ?? 'this skill'}”`} didn’t change this sample. Rules such as words to avoid only show when the AI would have used those words. Voice, hook, emoji and call-to-action skills from the Skill library make the clearest difference.
         </p>
       )}
@@ -433,7 +433,7 @@ function Playground() {
         <Output title={`With your Brain (${withSet.length} skill${withSet.length === 1 ? '' : 's'})`} ai={withAI} highlight compareTo={withoutAI.result?.data.text} />
         <Output title={compare === '__none' ? 'Without any skills' : `Without “${target?.name ?? ''}”`} ai={withoutAI} />
       </div>
-      <p className="text-xs text-muted">Highlighted words are what your skills changed. Playground runs aren’t saved to your project or the activity log.</p>
+      <p className="text-caption text-muted">Highlighted words are what your skills changed. Playground runs aren’t saved to your project or the activity log.</p>
     </div>
   );
 }
@@ -468,7 +468,7 @@ function Output({ title, ai, highlight, compareTo }: { title: string; ai: Return
   return (
     <section className={cn('panel flex min-h-[220px] flex-col p-4', highlight && 'ring-2 ring-primary/40')}>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="flex items-center gap-1.5 text-[13px] font-semibold">
+        <h3 className="flex items-center gap-1.5 text-small font-semibold">
           {highlight ? <Sparkles size={14} className="text-accent" /> : null}
           {title}
         </h3>
@@ -476,7 +476,7 @@ function Output({ title, ai, highlight, compareTo }: { title: string; ai: Return
       </div>
       <AIThinking running={ai.running} stage={ai.stage} compact />
       {ai.result && !ai.running ? (
-        <p className="whitespace-pre-line text-[13.5px] leading-relaxed text-ink-2">
+        <p className="whitespace-pre-line text-small leading-relaxed text-ink-2">
           {parts
             ? parts.map((t, k) =>
                 t.added ? (
@@ -490,7 +490,7 @@ function Output({ title, ai, highlight, compareTo }: { title: string; ai: Return
             : text}
         </p>
       ) : (
-        !ai.running && <p className="m-auto text-[13px] text-muted">Run a comparison to see the difference.</p>
+        !ai.running && <p className="m-auto text-small text-muted">Run a comparison to see the difference.</p>
       )}
     </section>
   );
@@ -505,14 +505,14 @@ function ActivityLog() {
     <section className="panel overflow-hidden">
       <ul className="divide-y divide-line">
         {genLog.slice(0, 80).map((g) => (
-          <li key={g.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[13px]">
+          <li key={g.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-small">
             <span className="min-w-[160px] flex-1">
               <span className="block font-semibold">{g.label}</span>
-              <span className="block text-xs text-muted">
+              <span className="block text-caption text-muted">
                 {SCOPE_META[g.module] ?? g.module} · {fmtRelative(g.createdAt)} · {(g.ms / 1000).toFixed(1)}s
               </span>
             </span>
-            <span className="max-w-[340px] truncate text-xs text-muted" title={g.skillIds.map((id) => names.get(id) ?? 'Deleted skill').join(', ')}>
+            <span className="max-w-[340px] truncate text-caption text-muted" title={g.skillIds.map((id) => names.get(id) ?? 'Deleted skill').join(', ')}>
               {g.skillIds.length ? `${g.skillIds.length} skill${g.skillIds.length > 1 ? 's' : ''}: ${g.skillIds.map((id) => names.get(id) ?? 'deleted').join(', ')}` : 'No skills'}
             </span>
             <span className={cn('badge', g.provider === 'local' ? 'bg-surface-2 text-ink-2' : 'bg-ink text-surface')} title={g.meta ? metaLine(g.meta) : undefined}>

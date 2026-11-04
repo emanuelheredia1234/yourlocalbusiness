@@ -29,7 +29,7 @@ import { LinkFields, PostLinkNote } from './PostLinkNote';
 export function PostTypeTag({ type, className }: { type: PostType; className?: string }) {
   const def = POST_TYPE_MAP[type];
   return (
-    <span className={cn('inline-flex items-center gap-1.5 text-xs font-medium text-ink-2', className)}>
+    <span className={cn('inline-flex items-center gap-1.5 text-caption font-medium text-ink-2', className)}>
       <span className="inline-block h-2 w-2 rounded-full" style={{ background: `rgb(var(--${def.slot}))` }} />
       {def.short}
     </span>
@@ -84,10 +84,10 @@ export function PostFields({ post, onChange }: EditableProps) {
         />
       ) : (
         <Field label="Visual prompt" htmlFor={`v-${post.id}`} hint="Used to plan the shots for your video.">
-          <AutoTextarea id={`v-${post.id}`} value={post.visualPrompt} onChange={(v) => onChange({ visualPrompt: v })} minRows={2} className="text-[13px]" />
+          <AutoTextarea id={`v-${post.id}`} value={post.visualPrompt} onChange={(v) => onChange({ visualPrompt: v })} minRows={2} className="text-small" />
         </Field>
       )}
-      {manusHolds(post) && <p className="text-[12.5px] text-warn">Manus already has this post: changing the date or time here doesn’t change it on {PLATFORMS[post.platform].label}.</p>}
+      {manusHolds(post) && <p className="text-small text-warn">Manus already has this post: changing the date or time here doesn’t change it on {PLATFORMS[post.platform].label}.</p>}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Field label="Date" htmlFor={`d-${post.id}`}>
           <input id={`d-${post.id}`} type="date" className="input" value={isoToDateStr(post.scheduledAt)} onChange={(e) => e.target.value && onChange({ scheduledAt: combineDateTime(e.target.value, isoToTime(post.scheduledAt)) })} />
@@ -179,7 +179,7 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
           {selectable && <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={!!selected} onChange={(e) => onSelect?.(e.target.checked)} aria-label="Select post" />}
           <PlatformChip platform={post.platform} />
         </div>
-        <span className="num flex shrink-0 items-center gap-1 text-xs text-muted">
+        <span className="num flex shrink-0 items-center gap-1 text-caption text-muted">
           <CalendarClock size={12} />
           {fmtDateTime(post.status === 'published' && post.publishedAt ? post.publishedAt : post.scheduledAt)}
         </span>
@@ -193,13 +193,13 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
       <div className="flex flex-1 flex-col gap-2 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <PostTypeTag type={post.postType} />
-          <span className="text-[11px] text-muted">{styleLabel(post)}</span>
+          <span className="text-caption text-muted">{styleLabel(post)}</span>
         </div>
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact />
         <AIThinking running={img.running} stage={img.stage} onStop={img.stop} compact />
         {img.running && img.task && <ManusLink url={img.task.taskUrl} label="Watch it in Manus" />}
         {img.error && (
-          <p className="rounded-md bg-bad-soft px-2.5 py-1.5 text-xs text-bad" role="alert">
+          <p className="rounded-md bg-bad-soft px-2.5 py-1.5 text-caption text-bad" role="alert">
             <b>{img.error.title}.</b> {img.error.body} <ManusLink url={img.error.taskUrl} label="Open in Manus" />
           </p>
         )}
@@ -207,13 +207,13 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
           <PostFields post={post} onChange={(patch) => update(post.id, patch)} />
         ) : (
           <>
-            <p className={cn('whitespace-pre-line text-[13px] leading-relaxed text-ink-2', !expanded && 'clamp-3')}>{post.caption}</p>
+            <p className={cn('whitespace-pre-line text-small leading-relaxed text-ink-2', !expanded && 'clamp-3')}>{post.caption}</p>
             {post.caption.length > 160 && (
-              <button className="self-start text-xs font-semibold text-primary hover:underline" onClick={() => setExpanded((x) => !x)}>
+              <button className="self-start text-caption font-semibold text-primary hover:underline" onClick={() => setExpanded((x) => !x)}>
                 {expanded ? 'Show less' : 'Show more'}
               </button>
             )}
-            <p className="text-xs font-medium text-info">{post.hashtags.join(' ')}</p>
+            <p className="text-caption font-medium text-info">{post.hashtags.join(' ')}</p>
             <PostLinkNote post={post} />
           </>
         )}
@@ -268,8 +268,8 @@ export function PlatformFrame({ post, brand }: { post: Post; brand: Brand }) {
       <div className="flex items-center gap-2.5 px-3 py-2.5">
         <LogoMark colors={brand.colors} logo={brand.logo} name={brand.name} size={34} />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] font-bold text-ink">{post.platform === 'linkedin' || post.platform === 'facebook' ? brand.name : handle}</p>
-          <p className="text-[11px] text-muted">
+          <p className="truncate text-small font-semibold text-ink">{post.platform === 'linkedin' || post.platform === 'facebook' ? brand.name : handle}</p>
+          <p className="text-caption text-muted">
             {post.status === 'published' && post.publishedAt ? `Posted ${fmtRelative(post.publishedAt)}` : post.status === 'scheduled' ? `Planned · ${fmtDateTime(post.scheduledAt)}` : 'Draft'} · {p.label}
           </p>
         </div>
@@ -277,25 +277,25 @@ export function PlatformFrame({ post, brand }: { post: Post; brand: Brand }) {
           <PlatformGlyph platform={post.platform} size={13} />
         </span>
       </div>
-      {(post.platform === 'linkedin' || post.platform === 'facebook' || post.platform === 'x') && <p className="whitespace-pre-line px-3 pb-2.5 text-[13px] leading-relaxed text-ink">{post.caption}</p>}
+      {(post.platform === 'linkedin' || post.platform === 'facebook' || post.platform === 'x') && <p className="whitespace-pre-line px-3 pb-2.5 text-small leading-relaxed text-ink">{post.caption}</p>}
       <PostVisual style={post.style} headline={post.headline} brand={brand} watermark={post.watermark} media={post.media} storyboard={post.storyboard} points={points} aspect={post.format === 'video' && post.platform === 'tiktok' ? '9/16' : '4/5'} className="rounded-none" autoPlay={post.format === 'video'} />
       {(post.platform === 'instagram' || post.platform === 'tiktok') && (
-        <p className="whitespace-pre-line px-3 pb-3 pt-2.5 text-[13px] leading-relaxed text-ink">
+        <p className="whitespace-pre-line px-3 pb-3 pt-2.5 text-small leading-relaxed text-ink">
           <b className="mr-1">{handle}</b>
           {post.caption}
         </p>
       )}
-      <p className={cn('px-3 pb-3 text-[12.5px] font-medium text-info', post.platform !== 'instagram' && post.platform !== 'tiktok' && 'pt-2.5')}>{post.hashtags.join(' ')}</p>
+      <p className={cn('px-3 pb-3 text-small font-medium text-info', post.platform !== 'instagram' && post.platform !== 'tiktok' && 'pt-2.5')}>{post.hashtags.join(' ')}</p>
       {firstCommentOf(post) && (
-        <div className="border-t border-line px-3 py-2.5 text-[12.5px] leading-relaxed text-ink">
-          <p className="mb-0.5 text-[11px] font-semibold text-muted">{post.platform === 'x' ? 'First reply' : 'First comment'}</p>
+        <div className="border-t border-line px-3 py-2.5 text-small leading-relaxed text-ink">
+          <p className="mb-0.5 text-caption font-semibold text-muted">{post.platform === 'x' ? 'First reply' : 'First comment'}</p>
           <p className="whitespace-pre-line break-words">
             <b className="mr-1">{post.platform === 'linkedin' || post.platform === 'facebook' ? brand.name : handle}</b>
             {firstCommentOf(post)}
           </p>
         </div>
       )}
-      <p className="border-t border-line bg-surface-2/60 px-3 py-2 text-[11px] text-muted">Preview: the network shows it in its own style.</p>
+      <p className="border-t border-line bg-surface-2/60 px-3 py-2 text-caption text-muted">Preview: the network shows it in its own style.</p>
     </div>
   );
 }
@@ -376,7 +376,7 @@ export function PostEditorHost() {
               <PostedBy post={post} />
             </div>
           )}
-          {post.status === 'published' && <p className="mb-3 text-[12.5px] text-muted">It’s already out: editing it here doesn’t change the post on {PLATFORMS[post.platform].label.replace(' (Twitter)', '')}.</p>}
+          {post.status === 'published' && <p className="mb-3 text-small text-muted">It’s already out: editing it here doesn’t change the post on {PLATFORMS[post.platform].label.replace(' (Twitter)', '')}.</p>}
           {post.external && (
             <div className="mb-4">
               <ExternalBadge post={post} />

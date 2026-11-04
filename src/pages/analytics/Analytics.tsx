@@ -46,7 +46,7 @@ export default function Analytics() {
         <div className="min-w-0">
           <p className="eyebrow mb-1">Analytics</p>
           <h1 className="page-title">Your activity</h1>
-          <p className="mt-1 max-w-[760px] text-[13.5px] text-muted">Real counts only: posts that went out (Manus reported them posted, or you marked them posted), posts on your calendar, and what you made with AI.</p>
+          <p className="mt-1 max-w-[760px] text-small text-muted">Real counts only: posts that went out (Manus reported them posted, or you marked them posted), posts on your calendar, and what you made with AI.</p>
         </div>
         <Segmented
           size="sm"
@@ -60,7 +60,7 @@ export default function Analytics() {
         />
       </header>
 
-      <p className="flex items-start gap-2 rounded-md border border-line bg-surface-2/60 px-3 py-2 text-[13px] text-ink-2">
+      <p className="flex items-start gap-2 rounded-md border border-line bg-surface-2/60 px-3 py-2 text-small text-ink-2">
         <Info size={15} className="mt-0.5 shrink-0 text-muted" />
         <span>Likes, views, clicks and followers live on each network, and sales on your own checkout: this app doesn’t read them, so it doesn’t show or guess them. Open a post on its network to see how it’s doing.</span>
       </p>
@@ -68,7 +68,7 @@ export default function Analytics() {
       {nothing && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-dashed border-line-2 bg-surface px-4 py-3">
           <CalendarClock size={18} className="text-muted" />
-          <p className="min-w-0 flex-1 text-[13px] text-ink-2">Nothing in this range yet. Plan posts on your calendar, then post them with Manus or post them yourself and mark them posted.</p>
+          <p className="min-w-0 flex-1 text-small text-ink-2">Nothing in this range yet. Plan posts on your calendar, then post them with Manus or post them yourself and mark them posted.</p>
           <button className="btn btn-secondary btn-sm" onClick={() => navigate('calendar')}>
             Open calendar
           </button>
@@ -83,7 +83,7 @@ export default function Analytics() {
       </section>
 
       {k.due > 0 && (
-        <p className="flex flex-wrap items-center gap-2 rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">
+        <p className="flex flex-wrap items-center gap-2 rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-small text-warn">
           <CircleAlert size={15} /> {k.due} planned post{k.due > 1 ? 's are' : ' is'} past {k.due > 1 ? 'their' : 'its'} time and not posted.{' '}
           <button className="font-semibold underline" onClick={() => navigate('calendar')}>
             Open the calendar
@@ -114,15 +114,15 @@ export default function Analytics() {
 
       <section className="panel overflow-hidden" aria-label="Posted in this range">
         <div className="border-b border-line px-4 py-3">
-          <h3 className="font-display text-[15px] font-semibold">Posted</h3>
-          <p className="text-xs text-muted">Last {days} days, newest first.</p>
+          <h3 className="text-h3 font-semibold">Posted</h3>
+          <p className="text-caption text-muted">Last {days} days, newest first.</p>
         </div>
         {posted.length === 0 ? (
-          <p className="px-4 py-8 text-center text-[13px] text-muted">Nothing posted in this range.</p>
+          <p className="px-4 py-8 text-center text-small text-muted">Nothing posted in this range.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-left text-[13px]">
-              <thead className="border-b border-line text-xs text-muted">
+            <table className="w-full min-w-[640px] text-left text-small">
+              <thead className="border-b border-line text-caption text-muted">
                 <tr>
                   <th className="px-4 py-2 font-medium">Post</th>
                   <th className="px-2 py-2 font-medium">Type</th>
@@ -161,5 +161,5 @@ export default function Analytics() {
 }
 
 function NoData() {
-  return <p className="py-8 text-center text-[13px] text-muted">Nothing posted in this range.</p>;
+  return <p className="py-8 text-center text-small text-muted">Nothing posted in this range.</p>;
 }

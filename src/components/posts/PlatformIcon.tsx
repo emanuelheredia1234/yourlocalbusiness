@@ -50,7 +50,7 @@ export function PlatformGlyph({ platform, size = 16, className }: { platform: So
 export function PlatformChip({ platform, className, showLabel = true }: { platform: SocialPlatform; className?: string; showLabel?: boolean }) {
   const p = PLATFORMS[platform];
   return (
-    <span className={cn('inline-flex items-center gap-1.5 text-xs font-semibold text-ink-2', className)}>
+    <span className={cn('inline-flex items-center gap-1.5 text-caption font-semibold text-ink-2', className)}>
       <span className="flex h-5 w-5 items-center justify-center rounded-md text-white" style={{ background: p.color }}>
         <PlatformGlyph platform={platform} size={12} />
       </span>

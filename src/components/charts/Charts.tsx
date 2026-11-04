@@ -77,14 +77,14 @@ export function AreaChart({ data, height = 220, color = 'rgb(var(--primary))', f
           {ticks.map((t) => (
             <g key={t}>
               <line x1={pad.l} x2={w - pad.r} y1={y(t)} y2={y(t)} stroke="rgb(var(--line))" strokeWidth="1" />
-              <text x={pad.l - 8} y={y(t)} dy="0.32em" textAnchor="end" className="num fill-muted text-[10.5px]">
+              <text x={pad.l - 8} y={y(t)} dy="0.32em" textAnchor="end" className="num fill-muted text-micro">
                 {format(t)}
               </text>
             </g>
           ))}
           {data.map((d, i) =>
             i % labelEvery === 0 || i === last ? (
-              <text key={d.x} x={x(i)} y={height - 6} textAnchor={i === 0 ? 'start' : i === last ? 'end' : 'middle'} className="num fill-muted text-[10.5px]">
+              <text key={d.x} x={x(i)} y={height - 6} textAnchor={i === 0 ? 'start' : i === last ? 'end' : 'middle'} className="num fill-muted text-micro">
                 {fmtDate(d.x)}
               </text>
             ) : null,
@@ -94,7 +94,7 @@ export function AreaChart({ data, height = 220, color = 'rgb(var(--primary))', f
           {last >= 0 && (
             <g>
               <circle cx={x(last)} cy={y(data[last].y)} r="4.5" fill={color} stroke="rgb(var(--surface))" strokeWidth="2" />
-              <text x={x(last) + 8} y={y(data[last].y)} dy="0.32em" className="num fill-ink text-[11px] font-semibold">
+              <text x={x(last) + 8} y={y(data[last].y)} dy="0.32em" className="num fill-ink text-micro font-semibold">
                 {format(data[last].y)}
               </text>
             </g>
@@ -109,8 +109,8 @@ export function AreaChart({ data, height = 220, color = 'rgb(var(--primary))', f
       )}
       {active !== null && data[active] && (
         <div className="pointer-events-none absolute z-10 rounded-md border border-line bg-surface px-2.5 py-1.5 shadow-pop" style={{ left: Math.min(w - 140, Math.max(0, x(active) - 60)), top: 0 }}>
-          <p className="num text-[13px] font-bold text-ink">{format(data[active].y)}</p>
-          <p className="flex items-center gap-1.5 text-[11px] text-muted">
+          <p className="num text-small font-semibold text-ink">{format(data[active].y)}</p>
+          <p className="flex items-center gap-1.5 text-caption text-muted">
             <span className="inline-block h-[2px] w-3 rounded" style={{ background: color }} />
             {label} · {fmtDate(data[active].x, { weekday: 'short', month: 'short', day: 'numeric' })}
           </p>
@@ -127,7 +127,7 @@ export function BarList({ rows, format = (n: number) => fmtCompact(n), color = '
     <div className="flex flex-col gap-2.5">
       {rows.map((r) => (
         <div key={r.key} className="group" onMouseEnter={() => setHover(r.key)} onMouseLeave={() => setHover(null)} tabIndex={0} onFocus={() => setHover(r.key)} onBlur={() => setHover(null)}>
-          <div className="mb-1 flex items-baseline justify-between gap-3 text-[13px]">
+          <div className="mb-1 flex items-baseline justify-between gap-3 text-small">
             <span className="min-w-0 truncate font-medium text-ink-2">{r.label}</span>
             <span className="num shrink-0 font-semibold text-ink">
               {format(r.value)}
@@ -167,7 +167,7 @@ export function StatTile({ label, value, delta, deltaLabel = 'vs previous period
   return (
     <div className="panel flex min-w-0 flex-col gap-2 p-4">
       <div className="flex items-center justify-between gap-2">
-        <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] font-semibold text-muted" title={label}>
+        <span className="flex min-w-0 items-center gap-1.5 text-small font-semibold text-muted" title={label}>
           {icon}
           <span className="truncate">{label}</span>
         </span>
@@ -177,8 +177,8 @@ export function StatTile({ label, value, delta, deltaLabel = 'vs previous period
           </span>
         )}
       </div>
-      <span className="font-display text-[26px] font-bold leading-none tracking-[-0.02em] text-ink">{value}</span>
-      <span className="flex items-center gap-1 text-xs text-muted" title={hint}>
+      <span className="text-h1 font-semibold leading-none tracking-[-0.02em] text-ink">{value}</span>
+      <span className="flex items-center gap-1 text-caption text-muted" title={hint}>
         {delta === undefined ? (
           hint
         ) : delta === null ? (
@@ -202,14 +202,14 @@ export function StackedBar({ parts, height = 14 }: { parts: { key: string; label
   const visible = parts.filter((p) => p.value > 0);
   return (
     <div>
-      <div className="flex w-full overflow-hidden rounded-[4px]" style={{ height, gap: 2 }}>
+      <div className="flex w-full overflow-hidden rounded-xs" style={{ height, gap: 2 }}>
         {visible.map((p) => (
           <div key={p.key} title={`${p.label}: ${p.value}`} style={{ width: `${(p.value / total) * 100}%`, background: p.color }} />
         ))}
       </div>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
         {parts.map((p) => (
-          <span key={p.key} className="inline-flex items-center gap-1.5 text-xs text-ink-2">
+          <span key={p.key} className="inline-flex items-center gap-1.5 text-caption text-ink-2">
             <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: p.color }} />
             {p.label}
             <span className="num font-semibold text-ink">{p.value}</span>
@@ -231,14 +231,14 @@ export function Funnel({ stages }: { stages: { label: string; value: number }[] 
         const prev = i ? stages[i - 1].value : 0;
         const rate = i && prev ? s.value / prev : null;
         return (
-          <div key={s.label} className="grid grid-cols-[110px_1fr_auto] items-center gap-3 text-[13px] sm:grid-cols-[140px_1fr_auto]">
+          <div key={s.label} className="grid grid-cols-[110px_1fr_auto] items-center gap-3 text-small sm:grid-cols-[140px_1fr_auto]">
             <span className="truncate font-medium text-ink-2">{s.label}</span>
-            <div className="h-[22px] w-full rounded-[4px] bg-surface-2">
-              <div className="h-full rounded-[4px] transition-all duration-500" style={{ width: `${Math.max(1.5, (s.value / max) * 100)}%`, background: shades[i % shades.length] }} />
+            <div className="h-[22px] w-full rounded-xs bg-surface-2">
+              <div className="h-full rounded-xs transition-all duration-500" style={{ width: `${Math.max(1.5, (s.value / max) * 100)}%`, background: shades[i % shades.length] }} />
             </div>
             <span className="num w-[92px] text-right">
               <b className="text-ink">{fmtCompact(s.value)}</b>
-              {rate !== null && <span className="ml-1.5 text-xs text-muted">{(rate * 100).toFixed(rate < 0.1 ? 1 : 0)}%</span>}
+              {rate !== null && <span className="ml-1.5 text-caption text-muted">{(rate * 100).toFixed(rate < 0.1 ? 1 : 0)}%</span>}
             </span>
           </div>
         );
@@ -254,8 +254,8 @@ export function ChartCard({ title, subtitle, children, table, action, className 
     <section className={cn('panel flex min-w-0 flex-col p-4 sm:p-5', className)}>
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="font-display text-[15px] font-semibold text-ink">{title}</h3>
-          {subtitle && <p className="text-xs text-muted">{subtitle}</p>}
+          <h3 className="text-h3 font-semibold text-ink">{title}</h3>
+          {subtitle && <p className="text-caption text-muted">{subtitle}</p>}
         </div>
         <div className="flex min-w-0 max-w-full items-center gap-1.5">
           {action}
@@ -271,11 +271,11 @@ export function ChartCard({ title, subtitle, children, table, action, className 
         children
       ) : (
         <div className="scroll-thin max-h-[300px] overflow-auto">
-          <table className="w-full text-left text-[13px]">
+          <table className="w-full text-left text-small">
             <thead className="sticky top-0 bg-surface">
               <tr>
                 {table.columns.map((c) => (
-                  <th key={c} className="border-b border-line py-1.5 pr-3 text-xs font-semibold text-muted">
+                  <th key={c} className="border-b border-line py-1.5 pr-3 text-caption font-semibold text-muted">
                     {c}
                   </th>
                 ))}

@@ -52,7 +52,7 @@ export default function ContentCalendar() {
         <div className="min-w-0">
           <p className="eyebrow mb-1">Content calendar & queue</p>
           <h1 className="page-title">Content queue</h1>
-          <p className="mt-1 text-[13.5px] text-muted">Plan posts on your calendar, then post them with Manus (it posts on your accounts for you) or post them yourself and mark them posted. Nothing goes out on its own. Drag posts between days to move them; click any post to edit it.</p>
+          <p className="mt-1 text-small text-muted">Plan posts on your calendar, then post them with Manus (it posts on your accounts for you) or post them yourself and mark them posted. Nothing goes out on its own. Drag posts between days to move them; click any post to edit it.</p>
         </div>
         <button className="btn btn-primary" onClick={() => openComposer()}>
           <Sparkles size={16} className="text-accent" /> Create post
@@ -157,7 +157,7 @@ function PlannedBar({ posts, manusReady: isReady }: { posts: Post[]; manusReady:
   if (!due.length && !(manusReady && ready.length > 1)) return null;
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-surface-2/50 px-4 py-2.5">
-      <p className="min-w-0 flex-1 text-[13px] text-ink-2">
+      <p className="min-w-0 flex-1 text-small text-ink-2">
         {due.length ? (
           <>
             <b className="text-warn">{due.length} due:</b> {due.length > 1 ? 'their times have' : 'its time has'} passed and {due.length > 1 ? 'they haven’t' : 'it hasn’t'} been posted. {manusReady ? 'Post them with Manus, or post them yourself and mark them posted.' : 'Post them yourself and mark them posted.'}
@@ -232,9 +232,9 @@ function MonthCalendar({ posts }: { posts: Post[] }) {
   return (
     <section className="panel overflow-hidden" aria-label="Scheduled posts calendar">
       <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-        <h2 className="min-w-0 flex-1 font-display text-[16px] font-semibold">
+        <h2 className="min-w-0 flex-1 text-h3 font-semibold">
           {fmtDate(start, { month: 'short', day: 'numeric' })} – {fmtDate(end, { month: 'short', day: 'numeric', year: 'numeric' })}
-          <span className="ml-2 text-[12.5px] font-normal text-muted">
+          <span className="ml-2 text-small font-normal text-muted">
             {inView} post{inView === 1 ? '' : 's'} in view
           </span>
         </h2>
@@ -251,7 +251,7 @@ function MonthCalendar({ posts }: { posts: Post[] }) {
       <div className="overflow-x-auto">
         <div className="grid min-w-[760px] grid-cols-7">
           {WEEKDAYS.map((d) => (
-            <div key={d} className="border-b border-line px-2 py-1.5 text-center text-[11px] font-semibold uppercase tracking-wide text-muted">
+            <div key={d} className="border-b border-line px-2 py-1.5 text-center text-caption font-semibold uppercase tracking-wide text-muted">
               {d}
             </div>
           ))}
@@ -277,7 +277,7 @@ function MonthCalendar({ posts }: { posts: Post[] }) {
                   if (id) reschedule(id, date);
                 }}
               >
-                <span className={cn('num flex h-6 min-w-6 items-center justify-center self-end rounded-full px-1.5 text-[12px] font-semibold', date === today ? 'bg-primary text-on-primary' : past ? 'text-faint' : 'text-ink-2')}>
+                <span className={cn('num flex h-6 min-w-6 items-center justify-center self-end rounded-full px-1.5 text-caption font-semibold', date === today ? 'bg-primary text-on-primary' : past ? 'text-faint' : 'text-ink-2')}>
                   {dayNum === 1 || i === 0 ? fmtDate(date, { month: 'short', day: 'numeric' }) : dayNum}
                 </span>
                 {list.slice(0, 4).map((p) => (
@@ -289,7 +289,7 @@ function MonthCalendar({ posts }: { posts: Post[] }) {
                       e.dataTransfer.effectAllowed = 'move';
                     }}
                     onClick={() => openEditor(p.id)}
-                    className={cn('flex cursor-grab items-center gap-1 rounded border-l-[3px] bg-surface-2 px-1.5 py-1 text-left text-[11px] leading-tight hover:bg-surface-3 active:cursor-grabbing', isDue(p, now) && notSent(p) && 'ring-1 ring-warn/60')}
+                    className={cn('flex cursor-grab items-center gap-1 rounded border-l-[3px] bg-surface-2 px-1.5 py-1 text-left text-caption leading-tight hover:bg-surface-3 active:cursor-grabbing', isDue(p, now) && notSent(p) && 'ring-1 ring-warn/60')}
                     style={{ borderLeftColor: `rgb(var(--${POST_TYPE_MAP[p.postType].slot}))` }}
                     title={`${fmtDateTime(p.scheduledAt)} · ${PLATFORMS[p.platform].label} · ${p.headline}${isDue(p, now) && notSent(p) ? ' · Due: not posted yet' : ''}`}
                   >
@@ -300,13 +300,13 @@ function MonthCalendar({ posts }: { posts: Post[] }) {
                     <span className="min-w-0 truncate font-medium">{p.headline}</span>
                   </button>
                 ))}
-                {list.length > 4 && <span className="px-1 text-[11px] font-semibold text-muted">+{list.length - 4} more</span>}
+                {list.length > 4 && <span className="px-1 text-caption font-semibold text-muted">+{list.length - 4} more</span>}
               </div>
             );
           })}
         </div>
       </div>
-      <p className="border-t border-line px-4 py-2 text-[11.5px] text-muted">Tip: drag a post onto another day to move it, at the same time. Colors show the post type; an outlined post is due.</p>
+      <p className="border-t border-line px-4 py-2 text-caption text-muted">Tip: drag a post onto another day to move it, at the same time. Colors show the post type; an outlined post is due.</p>
     </section>
   );
 }
@@ -327,7 +327,7 @@ function QueueList({ posts }: { posts: Post[] }) {
     <div className="flex flex-col gap-4">
       {groups.map(([date, list]) => (
         <section key={date} className="panel overflow-hidden" aria-label={fmtDate(date, { weekday: 'long', month: 'long', day: 'numeric' })}>
-          <h3 className="border-b border-line bg-surface-2/50 px-4 py-2 text-[13px] font-semibold">
+          <h3 className="border-b border-line bg-surface-2/50 px-4 py-2 text-small font-semibold">
             {fmtDate(date, { weekday: 'long', month: 'short', day: 'numeric' })} <span className="font-normal text-muted">· {list.length} post{list.length > 1 ? 's' : ''}</span>
           </h3>
           <ul className="divide-y divide-line">
@@ -341,13 +341,13 @@ function QueueList({ posts }: { posts: Post[] }) {
                     <PlatformChip platform={p.platform} />
                     <FormatBadge format={p.format} />
                     <PostTypeTag type={p.postType} />
-                    <span className="text-[11px] text-muted">{styleLabel(p)}</span>
+                    <span className="text-caption text-muted">{styleLabel(p)}</span>
                     <DueBadge post={p} />
                     <ExternalBadge post={p} compact />
                     <GroupShareBadge post={p} compact />
                   </div>
-                  <p className="truncate text-[13.5px] font-semibold">{p.headline}</p>
-                  <p className="clamp-2 text-[12.5px] text-muted">{p.caption}</p>
+                  <p className="truncate text-small font-semibold">{p.headline}</p>
+                  <p className="clamp-2 text-small text-muted">{p.caption}</p>
                   <PostLinkNote post={p} compact className="mt-1.5" />
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -385,7 +385,7 @@ function PublishedList({ posts }: { posts: Post[] }) {
         <Tile label="Marked by you" value={String(posts.length - byManus)} />
         <Tile label="Networks" value={networks.map((x) => `${networkLabel(x.n)} ${x.count}`).join(' · ') || '–'} small />
       </div>
-      <p className="text-[12.5px] text-muted">Likes, views and clicks live on each network: this app doesn’t read them. Open a post there to see how it’s doing.</p>
+      <p className="text-small text-muted">Likes, views and clicks live on each network: this app doesn’t read them. Open a post there to see how it’s doing.</p>
       <ul className="flex flex-col gap-3">
         {posts.slice(0, 60).map((p) => (
           <li key={p.id} className="panel flex flex-col gap-3 p-3 sm:flex-row">
@@ -398,8 +398,8 @@ function PublishedList({ posts }: { posts: Post[] }) {
                 <FormatBadge format={p.format} />
                 <PostTypeTag type={p.postType} />
               </div>
-              <p className="truncate text-[13.5px] font-semibold">{p.headline}</p>
-              <p className="mb-1.5 truncate text-[12.5px] text-muted">{p.caption.split('\n')[0]}</p>
+              <p className="truncate text-small font-semibold">{p.headline}</p>
+              <p className="mb-1.5 truncate text-small text-muted">{p.caption.split('\n')[0]}</p>
               <PostedBy post={p} />
               <PostLinkNote post={p} compact className="mt-1.5" />
               <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -415,7 +415,7 @@ function PublishedList({ posts }: { posts: Post[] }) {
           </li>
         ))}
       </ul>
-      {posts.length > 60 && <p className="text-center text-xs text-muted">Showing the 60 most recent posts.</p>}
+      {posts.length > 60 && <p className="text-center text-caption text-muted">Showing the 60 most recent posts.</p>}
     </div>
   );
 }
@@ -423,8 +423,8 @@ function PublishedList({ posts }: { posts: Post[] }) {
 function Tile({ label, value, small }: { label: string; value: string; small?: boolean }) {
   return (
     <div className="panel px-4 py-3">
-      <p className="text-xs font-medium text-muted">{label}</p>
-      <p className={cn('num font-bold', small ? 'text-[13px] leading-snug' : 'text-[20px]')}>{value}</p>
+      <p className="text-caption font-medium text-muted">{label}</p>
+      <p className={cn('num font-semibold', small ? 'text-small leading-snug' : 'text-h2')}>{value}</p>
     </div>
   );
 }

@@ -51,7 +51,7 @@ export function PostedBy({ post, className }: { post: Post; className?: string }
   if (post.status !== 'published') return null;
   const by = post.publishedBy === 'manus' ? `Posted by Manus (its report)` : post.publishedBy === 'manual' ? 'Marked as posted by you' : 'Posted';
   return (
-    <p className={cn('flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted', className)}>
+    <p className={cn('flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted', className)}>
       <span>
         {by}
         {post.publishedAt ? ` · ${fmtDateTime(post.publishedAt)}` : ''}

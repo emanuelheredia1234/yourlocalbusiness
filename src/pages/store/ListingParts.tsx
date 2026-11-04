@@ -68,16 +68,16 @@ export function ListingCard({ listing, onOpen }: { listing: Listing; onOpen: () 
       <div className="flex flex-1 flex-col gap-2 p-3.5">
         <div className="flex items-center gap-2">
           <MiniMark logo={listing.seller.logo} name={listing.seller.name} size={20} />
-          <span className="min-w-0 truncate text-xs font-semibold text-ink-2">{listing.seller.name}</span>
+          <span className="min-w-0 truncate text-caption font-semibold text-ink-2">{listing.seller.name}</span>
         </div>
         <button className="text-left" onClick={onOpen}>
-          <h3 className="clamp-2 font-display text-[15.5px] font-semibold leading-snug text-ink group-hover:underline">{listing.title}</h3>
+          <h3 className="clamp-2 text-h3 font-semibold leading-snug text-ink group-hover:underline">{listing.title}</h3>
         </button>
-        <p className="clamp-2 text-[12.5px] text-muted">{listing.tagline}</p>
+        <p className="clamp-2 text-small text-muted">{listing.tagline}</p>
         <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-          <span className="num text-[15px] font-bold text-ink">
+          <span className="num text-h3 font-semibold text-ink">
             {priceLabel(listing.price, listing.priceModel)}
-            {listing.compareAt && listing.compareAt > listing.price && <s className="ml-1.5 text-xs font-medium text-faint">{fmtMoney(listing.compareAt)}</s>}
+            {listing.compareAt && listing.compareAt > listing.price && <s className="ml-1.5 text-caption font-medium text-faint">{fmtMoney(listing.compareAt)}</s>}
           </span>
           <button className="btn btn-secondary btn-sm" onClick={onOpen} aria-label={`View ${listing.title}`}>
             View <ArrowRight size={14} />
@@ -152,7 +152,7 @@ export function UsMap({ listings, selected, onSelect }: { listings: Listing[]; s
           );
         })}
       </svg>
-      <p className="absolute bottom-2 left-3 text-[11px] text-muted">Click a pin to filter by city</p>
+      <p className="absolute bottom-2 left-3 text-caption text-muted">Click a pin to filter by city</p>
     </div>
   );
 }

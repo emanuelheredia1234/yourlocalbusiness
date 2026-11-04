@@ -59,7 +59,7 @@ export default function Marketplace() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <h1 className="page-title">Marketplace</h1>
-          <p className="mt-1 max-w-[66ch] text-[14px] text-muted">
+          <p className="mt-1 max-w-[66ch] text-body text-muted">
             Digital products and local businesses. You buy, book or get in touch on each seller’s own site, email or phone: this app takes no payments.{' '}
             {community === 'live' ? 'Listings here are shared with everyone who uses this app.' : 'Right now only you can see your listings here.'}
           </p>
@@ -127,7 +127,7 @@ export default function Marketplace() {
             </div>
             {kind !== 'product' && (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-semibold text-muted">Location</span>
+                <span className="text-caption font-semibold text-muted">Location</span>
                 <select
                   className="select input-sm w-auto"
                   value={city}
@@ -220,9 +220,9 @@ export default function Marketplace() {
               <div key={l.id} className="panel flex flex-col gap-3 p-3 sm:flex-row sm:items-center">
                 <ListingCover listing={l} className="aspect-[16/10] w-full shrink-0 rounded-md sm:w-40" />
                 <div className="min-w-0 flex-1">
-                  <p className="font-display text-[16px] font-semibold">{l.title}</p>
-                  <p className="truncate text-[13px] text-muted">{l.tagline}</p>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs text-muted">
+                  <p className="text-h3 font-semibold">{l.title}</p>
+                  <p className="truncate text-small text-muted">{l.tagline}</p>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-3 text-caption text-muted">
                     <span className="num font-semibold text-ink">{priceLabel(l.price, l.priceModel)}</span>
                     <span>Listed {fmtDateTime(l.createdAt)}</span>
                     {!listingActions(l).length && <span className="text-warn">No buy link or contact yet</span>}
