@@ -9,7 +9,7 @@ Pages (#route, tabs):
 - #dashboard: next step, launch readiness, this week's counts, upcoming posts, post ideas.
 - #studio (Product or Business Studio; tabs structure, code, publish): outline and chapter drafts (a business: packages, operating model, value stack), product files (designed PDF, Excel workbook), code & assets (calculators, quizzes, booking widgets… with an editor and preview), listing copy and images, and publishing the listing to the Marketplace.
 - #marketing: the Marketing Hub, linking the four channels.
-- #marketing-seo: the SEO page: the owner picks its type (lead form, booking, website, landing, showcase or checkout page), with metadata and a 0-100 score, click-to-edit sections, HTML export and publishing at a public address. Lead form, booking and website pages have a form that works once the page is published.
+- #marketing-seo: the SEO page, of one type the owner picks (lead form, booking, website, landing, showcase, checkout): metadata, a 0-100 score, click-to-edit sections, HTML export, publishing. Lead form, booking and website pages have a form that works once published.
 - #marketing-email (tabs magnet, sequence, preview, subscribers): lead magnet and opt-in page, a 5-email welcome sequence, CSV export for the owner's email provider, subscribers with CSV import and export. The app never sends email.
 - #marketing-social (tabs setup, plan, batch, create): campaign setup (cadence, styles, platforms, post mix), a 30-day plan, a 7-day ready-to-post batch, and "Create individual post" for one post at a time.
 - #marketing-ads: ad campaign plans (objective, platforms, budget, targeting, creatives, Google search ads), copied or exported as CSV to each ads manager. The app never runs or pays for ads.

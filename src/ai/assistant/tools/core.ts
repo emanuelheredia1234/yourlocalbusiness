@@ -227,7 +227,8 @@ const listNotifications = defineTool({
 const help = defineTool({
   name: 'help',
   class: 'R',
-  summary: `How a part of the app works, in more detail than the guide. Topics: ${HELP_TOPIC_IDS.join(', ')}.`,
+  // the topics are listed once, by the enum in args
+  summary: 'How a part of the app works, in more detail than the guide.',
   args: { topic: arg.enum(HELP_TOPIC_IDS) },
   run: ({ topic }) => ({ data: { topic, text: HELP_TOPICS[topic] }, note: `Looked up how ${topic === 'ai' ? 'AI' : topic} works` }),
 });

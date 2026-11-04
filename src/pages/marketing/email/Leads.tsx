@@ -10,7 +10,7 @@ import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { Empty, Segmented, Spinner, confirmAction } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
-import { safeEmail, safePhone } from '@/pages/store/actions';
+import { safeEmail, safePhone } from '@/lib/listingActions';
 
 type Scope = 'page' | 'all';
 
