@@ -8,7 +8,8 @@ import { POST_PLATFORMS } from '@/ai/knowledge';
 import { networkLabel } from '@/ai/manusPost';
 import { DEFAULT_LINK_PLACEMENT, LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, linkText, pageLink, placementFor } from '@/lib/pageLink';
 import { navigate } from '@/lib/router';
-import { getActiveProject, useStore } from '@/store/useStore';
+import { useStore } from '@/store/useStore';
+import { setLinkPlacement } from '@/ai/socialPlan';
 import { CopyButton } from '@/components/ui/primitives';
 import { PlatformChip } from '@/components/posts/PlatformIcon';
 
@@ -24,7 +25,7 @@ export function LinkPlacementCard({ project }: { project: Project }) {
   const rows = [...POST_PLATFORMS.filter((p) => inCampaign.includes(p)), ...POST_PLATFORMS.filter((p) => !inCampaign.includes(p))];
   const changed = POST_PLATFORMS.some((p) => placementFor(project, p) !== DEFAULT_LINK_PLACEMENT[p]);
   // the latest saved settings, so two quick changes never undo each other
-  const setPlacement = (p: PostPlatform, v: LinkPlacement) => updateMarketing({ linkPlacement: { ...(getActiveProject()?.marketing.linkPlacement ?? {}), [p]: v } });
+  const setPlacement = (p: PostPlatform, v: LinkPlacement) => setLinkPlacement(p, v);
   return (
     <section className="panel p-4 sm:p-5" aria-labelledby={titleId}>
       <h2 id={titleId} className="section-title mb-1 flex items-center gap-2">

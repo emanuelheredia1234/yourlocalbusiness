@@ -229,10 +229,10 @@ describe('a turn', () => {
   });
 
   it('carries on after an unknown tool or wrong details, so the AI can fix them', async () => {
-    script({ actions: [{ tool: 'delete_posts', args: { ids: ['post_due'] } }, { tool: 'get_post', args: { id: 'nope' } }, { tool: 'list_posts', args: { limit: 500 } }] }, { reply: 'That isn’t available here yet.' });
+    script({ actions: [{ tool: 'erase_everything', args: { ids: ['post_due'] } }, { tool: 'get_post', args: { id: 'nope' } }, { tool: 'list_posts', args: { limit: 500 } }] }, { reply: 'That isn’t available here yet.' });
     await sendToAssistant('qa-delete');
     expect(activities().map((m) => m.status)).toEqual(['failed', 'failed', 'failed']);
-    expect(prompts[1]).toContain('"error":"Unknown tool \\"delete_posts\\". Use only tools from the list."');
+    expect(prompts[1]).toContain('"error":"Unknown tool \\"erase_everything\\". Use only tools from the list."');
     expect(prompts[1]).toContain('There’s no post with id \\"nope\\" in this project');
     expect(prompts[1]).toContain('limit must be between 1 and 50');
     expect(replies()).toEqual(['That isn’t available here yet.']);

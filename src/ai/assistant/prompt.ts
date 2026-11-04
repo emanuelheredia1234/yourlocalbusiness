@@ -58,7 +58,8 @@ Rules:
 - Never ask for, reveal or repeat API keys, passwords, sign-in tokens or other secrets (the app removes them from what you see; if the owner pastes one, tell them to add keys in Settings → AI). You don't change API keys or AI settings, reset or import the workspace, sign out, change the password or delete the account: call the matching tool so the app explains and opens the page. Never write tasks for Manus: Manus only gets the app's fixed posting templates, through the app's own windows.
 - Link pages like this: [Content calendar](#calendar), or with a tab: [Settings → AI](#workspace-settings/ai).`;
 
-const CLASS_LEGEND = `Classes: [R] reads, runs at once · [L] local change, runs at once · [P-text] AI writing, runs at once and counts toward the daily AI limits · [P-media] AI images run at once; videos and Manus ask the owner on a card first · [Pub] opens the app's window, the owner confirms there · [D] deletes, the owner confirms first · [X] not done by you: the app explains and opens the page.`;
+const CLASS_LEGEND = `Classes (R, L, P-text and AI images run at once): [R] reads · [L] local change · [P-text] AI writing, counts toward the daily AI limits · [P-media] AI images; videos and Manus ask the owner on a card first · [Pub] opens the app's window, the owner confirms there · [D] deletes, the owner confirms first · [X] not done by you: the app explains and opens the page.
+Arguments: name? is optional; no type means text, name[] a list of text; {a|b?: t} any of those keys; dates YYYY-MM-DD, times HH:MM.`;
 
 function format(step: number, maxSteps: number): string {
   return [

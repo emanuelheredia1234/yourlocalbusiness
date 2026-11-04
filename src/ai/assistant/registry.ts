@@ -316,15 +316,19 @@ export function defineTool<const P extends SpecMap>(tool: ToolDef<P>): ToolDef<P
 }
 
 // ───────────── the catalog the model reads ─────────────
+// Every line goes into every prompt, so the schema is written compactly: an argument that is plain text
+// shows only its name ("caption", "date? (YYYY-MM-DD)"), a list of text adds [] ("ids[]", "tags[]?"),
+// the others show their type ("limit?: 1-50", "due?: bool", "kind?: photo|illustration"). The prompt's
+// legend says so.
 
 function typeText(spec: ArgSpec): string {
   switch (spec.type) {
     case 'string':
       return 'text';
     case 'number':
-      return spec.min !== undefined && spec.max !== undefined ? `number ${spec.min}-${spec.max}` : 'number';
+      return spec.min !== undefined && spec.max !== undefined ? `${spec.min}-${spec.max}` : 'number';
     case 'boolean':
-      return 'true|false';
+      return 'bool';
     case 'enum':
       return spec.values.join('|');
     case 'array':
@@ -334,15 +338,29 @@ function typeText(spec: ArgSpec): string {
   }
 }
 
+/** Several keys that take the very same argument read as one: {educational|tip|question?: 0-3}. */
+function sharedSpec(props: ArgProps): string | null {
+  const entries = Object.entries(props);
+  const [first] = entries;
+  if (entries.length < 3 || entries.some(([, s]) => s !== first[1])) return null;
+  return propsText({ [entries.map(([k]) => k).join('|')]: first[1] });
+}
+
 function propsText(props: ArgProps): string {
+  const shared = sharedSpec(props);
+  if (shared) return shared;
   return Object.entries(props)
-    .map(([k, s]) => `${k}${s.optional ? '?' : ''}: ${typeText(s)}${s.desc ? ` (${s.desc})` : ''}`)
+    .map(([k, s]) => {
+      const texts = s.type === 'array' && s.items.type === 'string';
+      const type = s.type === 'string' || texts ? '' : `: ${typeText(s)}`;
+      return `${k}${texts ? '[]' : ''}${s.optional ? '?' : ''}${type}${s.desc ? ` (${s.desc})` : ''}`;
+    })
     .join(', ');
 }
 
-/** One catalog line: `name(args) [class] summary`. */
+/** One catalog line: `name(args) [class] summary`. An excluded tool lists no arguments: it only explains and opens a page. */
 export function catalogLine(t: AnyTool): string {
-  return `- ${t.name}(${propsText(t.args as ArgProps)}) [${t.class}] ${t.summary}`;
+  return `- ${t.name}(${t.class === 'X' ? '' : propsText(t.args as ArgProps)}) [${t.class}] ${t.summary}`;
 }
 
 export interface Registry {

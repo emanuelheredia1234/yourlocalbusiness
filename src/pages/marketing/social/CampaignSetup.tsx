@@ -5,7 +5,8 @@ import { cn, WEEKDAYS } from '@/lib/utils';
 import { brandMark } from '@/lib/brandMark';
 import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES } from '@/ai/knowledge';
 import { suggestTopics } from '@/ai/local/social';
-import { getActiveProject, useStore } from '@/store/useStore';
+import { useStore } from '@/store/useStore';
+import { cadence, patchCampaign } from '@/ai/socialPlan';
 import { Field, Segmented, Toggle } from '@/components/ui/primitives';
 import { StackedBar } from '@/components/charts/Charts';
 import { PostVisual } from '@/components/visuals/PostVisual';
@@ -21,17 +22,7 @@ const WEIGHTS = [
 ] as const;
 
 export function useCampaign() {
-  const updateMarketing = useStore((s) => s.updateMarketing);
-  return (patch: Partial<CampaignConfig>) => updateMarketing({ campaign: { ...getActiveProject()!.marketing.campaign, ...patch } });
-}
-
-export function cadence(cfg: CampaignConfig) {
-  const days = cfg.days.filter(Boolean).length;
-  const perWeek = days * cfg.postsPerDay;
-  const videos = days * Math.min(cfg.videosPerDay, cfg.postsPerDay);
-  // approx. posts over 30 days
-  const month = Math.round((perWeek * 30) / 7);
-  return { days, perWeek, videos, images: perWeek - videos, month };
+  return (patch: Partial<CampaignConfig>) => patchCampaign(patch);
 }
 
 export function CampaignSetup({ project }: { project: Project }) {

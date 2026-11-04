@@ -54,11 +54,16 @@ describe('checking a tool’s arguments', () => {
 });
 
 describe('the catalog', () => {
-  it('lists each tool as name(args) [class] summary', () => {
+  it('lists each tool as name(args) [class] summary, compactly (plain text shows only its name)', () => {
     const t = defineTool({ name: 'list_things', class: 'R', summary: 'Things, filtered.', args: props, run: () => ({}) });
-    expect(catalogLine(t)).toBe(
-      '- list_things(id: text (a post id), status?: draft|scheduled, limit?: number 1-50, due?: true|false, ids?: [text], when?: text (YYYY-MM-DD), patch?: {headline?: text, caption?: text}) [R] Things, filtered.',
-    );
+    expect(catalogLine(t)).toBe('- list_things(id (a post id), status?: draft|scheduled, limit?: 1-50, due?: bool, ids[]?, when? (YYYY-MM-DD), patch?: {headline?, caption?}) [R] Things, filtered.');
+    // keys that take the very same argument read as one; lists of choices keep their brackets
+    const w = arg.number({ optional: true, int: true, min: 0, max: 3 });
+    const u = defineTool({ name: 'weigh', class: 'L', summary: 'Weights.', args: { by: arg.object({ a: w, b: w, c: w }), on: arg.array(arg.enum(['x', 'y'])) }, run: () => ({}) });
+    expect(catalogLine(u)).toBe('- weigh(by: {a|b|c?: 0-3}, on: [x|y]) [L] Weights.');
+    // an excluded tool only explains, so it lists no arguments
+    const x = defineTool({ name: 'nope', class: 'X', summary: 'Never done here.', args: { what: arg.string({ optional: true }) }, refusal: { text: 'No.' } });
+    expect(catalogLine(x)).toBe('- nope() [X] Never done here.');
   });
 
   it('refuses two tools with one name, or a name that isn’t snake_case', () => {
