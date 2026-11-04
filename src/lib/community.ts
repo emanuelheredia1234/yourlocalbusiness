@@ -46,7 +46,7 @@ export function fromShared(raw: unknown, sellerId: string, id: string): Listing 
 }
 
 /** The most a shared listing image may weigh (data-URL characters); larger ones are left out. The Studio makes
- *  cover and gallery images fit under it when you publish (src/pages/studio/listing.ts). */
+ *  cover and gallery images fit under it when you publish (src/lib/listing.ts). */
 export const SHARED_IMAGE_CHARS = 60_000;
 /** Gallery images shared per listing. The Studio lets you pick this many, so buyers see what you chose. */
 export const SHARED_GALLERY_MAX = 3;

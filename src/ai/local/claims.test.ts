@@ -3,7 +3,7 @@ import { newProject } from '@/store/defaults';
 import type { Project } from '@/lib/types';
 import { BUSINESS_TYPES, GENERIC_BUSINESS, matchBusinessType } from '../knowledge';
 import { businessModelTask, type TaskEnv } from '../tasks';
-import { listingSuggestions } from '@/pages/studio/listing';
+import { listingSuggestions } from '@/lib/listing';
 import { generateBusinessModel, generateListing, generateOutline, ownerGuarantee } from './studio';
 import { generateAds, newAdCampaign } from './ads';
 import { generateEmailSequence, generateLeadMagnet, LEAD_MAGNET_TYPES } from './email';

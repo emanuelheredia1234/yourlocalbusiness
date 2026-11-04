@@ -3,7 +3,8 @@
 // Every tool has a class. The app enforces what each class may do, whatever the model asks (policy.ts):
 //   R        reads only: runs right away
 //   L        a local change (nothing leaves the app, nothing is paid): runs right away
-//   P-text   an AI text task (counts toward the daily AI limits): runs right away, noted "Used your AI"
+//   P-text   an AI text task (counts toward the daily AI limits): runs right away, noted "Used your AI";
+//            one that makes many requests (a whole PDF) can ask on a card first (its `card`)
 //   P-media  AI images run right away; videos and anything done by Manus first wait for the owner's OK on
 //            a card in the chat (what it does, who does it, what it costs)
 //   Pub      goes public: the tool only names one of the app's own windows, the app opens it and the
@@ -243,6 +244,8 @@ export type PubWindow =
   | { kind: 'manus-post'; postIds: string[] }
   | { kind: 'manus-groups'; postId: string }
   | { kind: 'mark-posted'; postId: string }
+  /** the open project's Marketplace listing: publish it (the window shows exactly what goes public), or show or hide your listings to other people */
+  | { kind: 'listing'; action: 'publish' | 'show' | 'hide' }
   | { kind: 'page'; route: Route; tab?: string };
 
 /** Why an excluded tool isn't done by the assistant, and the page where the owner does it. */
@@ -275,6 +278,8 @@ interface ToolBase<P extends SpecMap> {
 
 export interface RunTool<P extends SpecMap = ArgProps> extends ToolBase<P> {
   class: 'R' | 'L' | 'P-text';
+  /** P-text only: a card the owner confirms in the chat first, for work that makes many AI requests (null: none needed this time) */
+  card?: (args: InferArgs<P>, ctx: ToolContext) => ConfirmCardSpec | null;
   run: Run<P>;
 }
 export interface MediaTool<P extends SpecMap = ArgProps> extends ToolBase<P> {

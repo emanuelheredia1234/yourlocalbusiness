@@ -4,9 +4,10 @@
 // between pages carries on and a reload warns first.
 //
 // The policy (runAction) is what keeps the assistant safe, whatever the model says: reads and local
-// changes run; AI writing runs and is noted; videos and Manus wait for a card the owner confirms in the
-// chat; deletes wait for a danger confirm; public actions only open the app's own window; excluded
-// tools are refused with the reason and the page where the owner does it.
+// changes run; AI writing runs and is noted (writing that makes many requests, like a whole PDF, asks on
+// a card first); videos and Manus wait for a card the owner confirms in the chat; deletes wait for a
+// danger confirm; public actions only open the app's own window; excluded tools are refused with the
+// reason and the page where the owner does it.
 
 import { currentRoute } from '@/lib/router';
 import { beginBusy, endBusy } from '@/lib/busy';
@@ -60,12 +61,27 @@ function windowNote(w: PubWindow): string {
       return 'Opened “Post to groups”: choose the groups, then confirm there';
     case 'mark-posted':
       return 'Opened “Mark as posted”: add the link if you have one, then confirm there';
+    case 'listing':
+      return w.action === 'publish' ? 'Opened “Publish listing”: check what goes public, then confirm there' : `Opened “${w.action === 'show' ? 'Show' : 'Hide'} my listings”: confirm there`;
     case 'page':
       return `Opened ${pageName(w.route, w.tab)}: confirm there`;
   }
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** Show a card in the chat and wait for the owner: null once they said yes, else what the step reports. */
+async function askFirst(spec: ConfirmCardSpec, turn: Turn, tool: string): Promise<StepResult | null> {
+  const base = { step: turn.step, tool };
+  setStage('Waiting for you to confirm…');
+  // the card is in the chat: show it, even if the owner closed the chat meanwhile
+  useAssistant.getState().setOpen(true);
+  const { answer } = askCard(turn.projectId, spec);
+  const yes = await answer;
+  if (!yes) return { ...base, ok: false, status: turn.signal.aborted ? 'cancelled' : 'declined', error: turn.signal.aborted ? 'Stopped by the owner.' : 'The owner said no on the card: nothing was started.' };
+  if (turn.signal.aborted) return { ...base, ok: false, status: 'cancelled', error: 'Stopped by the owner.' };
+  return null;
+}
 
 /** Run the tool, and note in the chat what it did (and whether AI wrote it). */
 async function execute(tool: AnyTool & { run: (a: never, c: ToolContext) => ToolResult | Promise<ToolResult> }, args: Record<string, unknown>, ctx: ToolContext, turn: Turn): Promise<StepResult> {
@@ -154,13 +170,17 @@ export async function runAction(action: Action, turn: Turn, tools: Registry = re
       // AI images run; videos and anything Manus wait for the owner's OK on a card
       const kind = typeof tool.media === 'function' ? tool.media(args as never) : tool.media;
       if (kind !== 'image') {
-        setStage('Waiting for you to confirm…');
-        // the card is in the chat: show it, even if the owner closed the chat meanwhile
-        useAssistant.getState().setOpen(true);
-        const { answer } = askCard(turn.projectId, tool.card?.(args as never, ctx) ?? plainCard(tool, kind));
-        const yes = await answer;
-        if (!yes) return { ...base, ok: false, status: turn.signal.aborted ? 'cancelled' : 'declined', error: turn.signal.aborted ? 'Stopped by the owner.' : 'The owner said no on the card: nothing was started.' };
-        if (turn.signal.aborted) return { ...base, ok: false, status: 'cancelled', error: 'Stopped by the owner.' };
+        const stopped = await askFirst(tool.card?.(args as never, ctx) ?? plainCard(tool, kind), turn, tool.name);
+        if (stopped) return stopped;
+      }
+      return execute(tool, args, ctx, turn);
+    }
+    case 'P-text': {
+      // AI writing runs; writing that makes many requests (a whole PDF) asks on a card first
+      const spec = tool.card?.(args as never, ctx);
+      if (spec) {
+        const stopped = await askFirst(spec, turn, tool.name);
+        if (stopped) return stopped;
       }
       return execute(tool, args, ctx, turn);
     }

@@ -10,8 +10,8 @@ import { generateBrandKit } from './local/brand';
 import { generateBusinessModel, generateListing } from './local/studio';
 import { composePost } from './local/social';
 import { manusImagePrompt } from './manus';
-import { buildListing } from '@/pages/studio/listing';
-import { listingText } from '@/pages/studio/ListingImages';
+import { buildListing } from '@/lib/listing';
+import { listingText } from './listingImages';
 
 function product(): Project {
   const p = newProject('product', 'new');
