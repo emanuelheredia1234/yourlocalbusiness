@@ -10,13 +10,18 @@ export const MAX_DOC = 2_000_000;
 /** Shorter than this (after cleaning) and a document has too little to learn from. */
 export const MIN_DOC_CHARS = 40;
 
+/** A document's text as the Brain reads it: line endings and trailing spaces tidied. */
+export function docText(body: string): string {
+  return body.replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').trim();
+}
+
 /**
  * A knowledge document as a Brain skill (Brain → Knowledge docs): its proof points, key terms and an
  * excerpt, used as the source of truth. null when the text is too short to use. `projectId`: only for
  * that project (the Brain page's documents apply to every project).
  */
 export function knowledgeDocSkill(docName: string, body: string, size: number, projectId?: string): Skill | null {
-  const clean = body.replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').trim();
+  const clean = docText(body);
   if (clean.length < MIN_DOC_CHARS) return null;
   const keywords = extractKeywords(clean, 12);
   const facts = extractFacts(clean, 8);

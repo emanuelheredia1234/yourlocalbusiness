@@ -4,7 +4,7 @@
 // does, through the same functions (src/lib/brandSave, kpis, marketplace, backup, projectActions;
 // src/ai/brainSkills; src/store/voice).
 
-import type { Brand, ModuleScope, Project, Skill, SkillCategory, SocialPlatform } from '@/lib/types';
+import type { Brand, BrandColors, ModuleScope, Project, Skill, SkillCategory, SocialPlatform } from '@/lib/types';
 import { beginBusy, busyId, busyJobs, endBusy } from '@/lib/busy';
 import { ensureUrl, fmtRelative, listJoin, plural, readFileAsText, uniq } from '@/lib/utils';
 import { backupFileName, backupJson } from '@/lib/backup';
@@ -12,11 +12,12 @@ import { brandCopyFrom, saveBrand } from '@/lib/brandSave';
 import { refreshCommunity, startCommunitySync } from '@/lib/community';
 import { computeKpis, countBy, postedSince } from '@/lib/kpis';
 import { priceLabel } from '@/lib/listing';
+import { listingChanged, liveListing } from '@/lib/listingPublish';
 import { allListings, filterListings, listingCities } from '@/lib/marketplace';
 import { useRuntime } from '@/lib/platform';
 import { deleteProjectEverywhere, startNewProject } from '@/lib/projectActions';
 import { CATEGORY_META, FEEDBACK_REASONS, SCOPE_META, SKILL_LIBRARY, describeDirectives, effectiveDirectives, newSkill, skillFromLibrary, templatePlaceholders, unfilledPlaceholders } from '@/ai/brain';
-import { MAX_DOC, knowledgeDocSkill, playgroundSets } from '@/ai/brainSkills';
+import { MAX_DOC, MIN_DOC_CHARS, docText, knowledgeDocSkill, playgroundSets } from '@/ai/brainSkills';
 import { runTask, type RunResult } from '@/ai/engine';
 import { FORMATS, FORMAT_LIST, PLATFORMS, SOCIAL_PLATFORMS } from '@/ai/knowledge';
 import { paletteFrom } from '@/ai/local/brand';
@@ -53,19 +54,35 @@ const openInNewTab = (url: string) => {
 // ───────────── the brand kit ─────────────
 
 const PROFILE = arg.string({ optional: true, allowEmpty: true, max: 200 });
-const HEX = /^#[0-9a-f]{6}$/i;
+const COLOR = arg.string({ optional: true, pattern: /^#[0-9a-f]{6}$/i, desc: '#RRGGBB' });
 const COPY_FIELDS = ['name', 'tagline', 'pitch', 'valueProp', 'audience', 'mission'] as const;
 const FIELD_LABEL: Record<(typeof COPY_FIELDS)[number], string> = { name: 'name', tagline: 'tagline', pitch: 'pitch', valueProp: 'value proposition', audience: 'audience', mission: 'mission' };
 
-/** A listed project's Marketplace listing is what was published: brand changes show there once it's updated. */
-function listingLine(p: Project): string | undefined {
-  return s().myListings.some((l) => l.projectId === p.id) ? 'The Marketplace listing still shows what was published: update it in Studio → Listing & publish to show these changes.' : undefined;
+/**
+ * After a brand change: the shared listing was re-shared as it is (saveBrand), but a published listing shows
+ * what was published until it's published again, so say so when the change would show there.
+ */
+function liveNote(): { marketplace?: string } {
+  const p = getActiveProject();
+  return p && listingChanged(p, liveListing(p)) ? { marketplace: 'The Marketplace shows the old listing until it’s updated (publish_listing).' } : {};
+}
+
+/** New colors as the color pickers set them (Settings → Brand): a new primary recolors the palette, a new secondary its ink. */
+function withColors(c: BrandColors, patch: { primary?: string; secondary?: string; accent?: string }): BrandColors {
+  let out = c;
+  // the pickers write lowercase #rrggbb
+  const [primary, secondary, accent] = [patch.primary, patch.secondary, patch.accent].map((x) => x?.toLowerCase());
+  const differs = (v: string | undefined, now: string): v is string => !!v && v !== now.toLowerCase();
+  if (differs(primary, out.primary)) out = paletteFrom([primary, out.secondary, out.accent]);
+  if (differs(secondary, out.secondary)) out = { ...out, secondary, ink: paletteFrom([out.primary, secondary, out.accent]).ink };
+  if (differs(accent, out.accent)) out = { ...out, accent };
+  return out;
 }
 
 const updateBrand = defineTool({
   name: 'update_brand',
   class: 'L',
-  summary: 'Change the brand kit: name, tagline, pitch, value proposition, audience, mission, personality, the owner’s own website, social profiles, colors.',
+  summary: 'Change the brand kit with what the owner gave (only their own website and profiles). Socials: link or @handle, "" removes it.',
   args: {
     patch: arg.object({
       name: arg.string({ optional: true, min: 2, max: 80 }),
@@ -75,9 +92,9 @@ const updateBrand = defineTool({
       audience: arg.string({ optional: true, max: 400, allowEmpty: true }),
       mission: arg.string({ optional: true, max: 300, allowEmpty: true }),
       personality: arg.array(arg.string({ max: 40 }), { optional: true, max: 8 }),
-      website: arg.string({ optional: true, max: 200, allowEmpty: true, desc: 'only a site the owner gave' }),
-      socials: arg.object({ instagram: PROFILE, facebook: PROFILE, tiktok: PROFILE, linkedin: PROFILE, x: PROFILE, youtube: PROFILE }, { optional: true, desc: 'link or @handle; "" removes' }),
-      colors: arg.object({ primary: arg.string({ optional: true, pattern: HEX }), secondary: arg.string({ optional: true, pattern: HEX }), accent: arg.string({ optional: true, pattern: HEX }) }, { optional: true, desc: '#RRGGBB' }),
+      website: arg.string({ optional: true, max: 200, allowEmpty: true }),
+      socials: arg.object({ instagram: PROFILE, facebook: PROFILE, tiktok: PROFILE, linkedin: PROFILE, x: PROFILE, youtube: PROFILE }, { optional: true }),
+      colors: arg.object({ primary: COLOR, secondary: COLOR, accent: COLOR }, { optional: true }),
     }),
   },
   validate: ({ patch: p }) => {
@@ -91,8 +108,7 @@ const updateBrand = defineTool({
     return null;
   },
   run: ({ patch: p }) => {
-    const project = activeProject();
-    const b = project.brand;
+    const b = activeProject().brand;
     const next: Partial<Brand> = {};
     const changed: string[] = [];
     for (const k of COPY_FIELDS) {
@@ -101,27 +117,35 @@ const updateBrand = defineTool({
         changed.push(FIELD_LABEL[k]);
       }
     }
-    if (p.personality) {
-      next.personality = uniq(p.personality.filter(Boolean)).slice(0, 8);
+    const personality = p.personality && uniq(p.personality.filter(Boolean)).slice(0, 8);
+    if (personality && personality.join('|') !== b.personality.join('|')) {
+      next.personality = personality;
       changed.push('personality');
     }
-    if (p.website !== undefined) {
-      next.websiteUrl = p.website ? ensureUrl(p.website) : '';
+    const website = p.website === undefined ? undefined : p.website ? ensureUrl(p.website) : '';
+    if (website !== undefined && website !== b.websiteUrl) {
+      next.websiteUrl = website;
       changed.push('website');
     }
     const voiceNotes: string[] = [];
-    const socials = Object.entries(p.socials ?? {}) as [SocialPlatform, string][];
+    const socials = (Object.entries(p.socials ?? {}) as [SocialPlatform, string][]).filter(([platform, raw]) => raw !== (b.socials[platform] ?? '').trim());
     if (socials.length) {
-      next.socials = { ...b.socials, ...p.socials };
+      next.socials = { ...b.socials, ...Object.fromEntries(socials) };
       for (const [platform, raw] of socials) {
         changed.push(`${PLATFORMS[platform].label} profile`);
         const v = b.voiceFrom?.[platform];
-        if (v?.report && !sameProfile(platform, v.profile, raw)) voiceNotes.push(`The ${voiceNetworkName(platform)} voice was learned from ${profileLabel(platform, v.profile)}: read the new profile to learn from it.`);
-        if (voiceReadRunning(v)) voiceNotes.push(`Manus is reading the old ${voiceNetworkName(platform)} profile: nothing is learned from that read now.`);
+        const name = voiceNetworkName(platform);
+        // a read of the old profile is dropped when it finishes (store/voice refreshVoice)
+        if (voiceReadRunning(v) && !sameProfile(platform, v!.task!.profile, raw)) voiceNotes.push(`Manus is reading the old ${name} profile: nothing is learned from that read now.`);
+        else if (v?.report && !sameProfile(platform, v.profile, raw)) {
+          const from = profileLabel(platform, v.profile);
+          voiceNotes.push(raw ? `The ${name} voice was learned from ${from}. To learn from the new profile, Manus reads it (${v.learn ? 'read_voice_now' : 'set_voice_learning on'}; it asks first).` : `The ${name} voice learned from ${from} stays in the Brain${v.learn ? ' and is still used while learning is on' : ''}.`);
+        }
       }
     }
-    if (p.colors && Object.keys(p.colors).length) {
-      next.colors = paletteFrom([p.colors.primary ?? b.colors.primary, p.colors.secondary ?? b.colors.secondary, p.colors.accent ?? b.colors.accent]);
+    const colors = p.colors ? withColors(b.colors, p.colors) : b.colors;
+    if (colors !== b.colors) {
+      next.colors = colors;
       changed.push('colors');
     }
     if (!changed.length) return { data: { changed: [] }, note: 'Your brand already says that' };
@@ -132,7 +156,7 @@ const updateBrand = defineTool({
         changed,
         brand: { name: now.name, tagline: clip(now.tagline, 120) || undefined, website: now.websiteUrl || null, socials: Object.fromEntries(Object.entries(now.socials).filter(([, v]) => v)), colors: next.colors ? { primary: now.colors.primary, secondary: now.colors.secondary, accent: now.colors.accent } : undefined },
         ...(voiceNotes.length ? { voice: voiceNotes } : {}),
-        listing: listingLine(project),
+        ...liveNote(),
       },
       note: `Updated your brand’s ${listJoin(changed)}`,
     };
@@ -173,7 +197,7 @@ const refreshBrandCopy = defineTool({
         nameIdeas: copy.nameOptions.map((n) => n.name),
         kept: 'name, logo and colors',
         logId: r.logId,
-        listing: listingLine(project),
+        ...liveNote(),
       },
       note: 'Refreshed your brand copy (name, logo and colors kept)',
       buttons: [undo],
@@ -188,16 +212,26 @@ const missingSkill = (id: string) => `There’s no skill with id "${id}". Use li
 const skillsExist = ({ ids }: { ids: string[] }) => ids.map((id) => (findSkill(id) ? '' : missingSkill(id))).find(Boolean) || null;
 
 /**
- * Blanks a skill's text must not keep: the Proof points template's placeholders (the skill editor refuses
- * those too), and any other [fill-in] left in text the AI wrote. Skill text goes into every output as true.
+ * Blanks a skill's text must not keep, since skill text goes into every output as true: the Proof points
+ * template's placeholders (the skill editor refuses to save those too), and any other [fill-in] the AI's text
+ * adds. Brackets the skill already had (a document's "[1]" or "[sic]") are the owner's and stay.
  */
-function blanksIn(text: string | undefined): string | null {
+function blanksIn(text: string | undefined, before = ''): string | null {
   if (!text) return null;
   const template = templatePlaceholders(text);
   if (template.length) return `Replace ${listJoin(template)} with the owner’s real details, or leave those lines out: the AI uses skill text as true.`;
-  const other = unfilledPlaceholders(text);
-  if (other.length) return `The text still has blanks to fill in: ${listJoin(other.slice(0, 4))}. Ask the owner for the real details, or leave those lines out.`;
+  const added = unfilledPlaceholders(text).filter((x) => !before.includes(x));
+  if (added.length) return `The text still has blanks to fill in: ${listJoin(added.slice(0, 4))}. Ask the owner for the real details, or leave those lines out.`;
   return null;
+}
+
+/** Skills whose text came from outside the chat: a document the owner added, or what Manus read from their posts. */
+const fromOutside = (k: Skill) => k.source === 'document' || k.source === 'social';
+
+/** The rules the Brain reads from a skill; from an outside text they're data, like the text itself. */
+function skillRules(k: Skill) {
+  const rules = describeDirectives(effectiveDirectives(k));
+  return fromOutside(k) ? untrusted(rules.join('; '), 400) ?? [] : rules;
 }
 
 const normScope = (scope: ModuleScope[] | undefined): ModuleScope[] => (!scope?.length || scope.includes('all') ? ['all'] : uniq(scope));
@@ -217,14 +251,13 @@ function skillLine(k: Skill, pid: string) {
 
 function skillDetail(k: Skill, pid: string) {
   // documents and what Manus read come from outside the chat: shown as data
-  const outside = k.source === 'document' || k.source === 'social';
   return {
     ...skillLine(k, pid),
     priority: PRIORITY_NAME[k.priority],
     appliesTo: k.scope,
     description: clip(k.description, 200) || undefined,
-    instructions: outside ? untrusted(k.instructions, 1500) : cut(k.instructions, 1500),
-    rules: describeDirectives(effectiveDirectives(k)),
+    instructions: fromOutside(k) ? untrusted(k.instructions, 1500) : cut(k.instructions, 1500),
+    rules: skillRules(k),
     doc: k.doc ? { name: clip(k.doc.name, 80), keyTerms: k.doc.keywords.slice(0, 8) } : undefined,
     ratings: { up: k.stats.up, down: k.stats.down },
     lastUsed: k.stats.lastApplied ? fmtRelative(k.stats.lastApplied) : null,
@@ -343,7 +376,7 @@ const updateSkill = defineTool({
     if (!k) return missingSkill(a.id);
     const { id: _id, ...change } = a;
     if (!Object.keys(change).length) return 'Say what to change.';
-    const blanks = blanksIn(a.instructions) ?? blanksIn(a.description);
+    const blanks = blanksIn(a.instructions, k.instructions) ?? blanksIn(a.description, k.description);
     if (blanks) return blanks;
     // as the Brain's switch: a skill still holding the template's placeholders stays off
     const unfilled = a.on ? templatePlaceholders(a.instructions ?? k.instructions) : [];
@@ -366,7 +399,7 @@ const updateSkill = defineTool({
     const onlyToggle = changed.length === 1 && a.on !== undefined;
     const voice = k.source === 'social' && (a.instructions !== undefined || a.description !== undefined) ? 'This is a brand voice Manus learned: since the owner edited it, a new read asks before replacing it.' : undefined;
     return {
-      data: { ...skillLine(now, p.id), changed, rules: describeDirectives(effectiveDirectives(now)), ...(voice ? { voice } : {}) },
+      data: { ...skillLine(now, p.id), changed, rules: skillRules(now), ...(voice ? { voice } : {}) },
       note: onlyToggle ? `Turned ${a.on ? 'on' : 'off'} the skill “${clip(now.name, 60)}”` : `Updated the skill “${clip(now.name, 60)}”: ${listJoin(changed)}`,
     };
   },
@@ -398,7 +431,7 @@ const addKnowledgeDoc = defineTool({
     text: arg.string({ optional: true, max: 8000, desc: 'the owner’s text, unchanged' }),
     onlyThisProject: arg.boolean({ optional: true }),
   },
-  validate: ({ text }) => (text !== undefined && !knowledgeDocSkill('', text, 0) ? 'That text is too short: the Brain needs at least a few sentences.' : null),
+  validate: ({ text }) => (text !== undefined && docText(text).length < MIN_DOC_CHARS ? 'That text is too short: the Brain needs at least a few sentences.' : null),
   run: ({ name, text, onlyThisProject }) => {
     const p = activeProject();
     const forProject = onlyThisProject ? p.id : undefined;
@@ -719,12 +752,16 @@ function cityValues(input: string, cities: string[]): string[] {
   return cities.filter((c) => c.split(',')[0].trim().toLowerCase() === t);
 }
 
+/** Another seller's listing id, only when it's a plain id (it comes from their data: never words for the model). */
+const SAFE_ID = /^[\w-]{1,64}$/;
+
 /** Wait for the shared Marketplace to load, as opening its page does (a few seconds at most). */
 async function loadCommunity(signal: AbortSignal): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, 5000);
-    signal.addEventListener('abort', () => resolve(), { once: true });
+    if (signal.aborted) resolve();
+    else signal.addEventListener('abort', () => resolve(), { once: true });
   });
   try {
     await Promise.race([startCommunitySync().then(() => refreshCommunity()), late]);
@@ -733,6 +770,7 @@ async function loadCommunity(signal: AbortSignal): Promise<void> {
   } finally {
     clearTimeout(timer);
   }
+  if (signal.aborted) throw Object.assign(new Error('Stopped.'), { code: 'cancelled' });
 }
 
 const listMarketplace = defineTool({
@@ -764,7 +802,7 @@ const listMarketplace = defineTool({
       const place = l.kind === 'business' && l.location ? (l.location.online && !l.location.lat ? 'Online' : `${l.location.city}${l.location.region ? `, ${l.location.region}` : ''}`) : undefined;
       if (l.origin === 'mine') return { id: l.id, yours: true, kind: l.kind, title: clip(l.title, 90), category: l.category, place, price: priceLabel(l.price, l.priceModel), project: l.projectId === p.id ? 'this project' : projectName(l.projectId) };
       const text = [`${l.title}${l.tagline ? ` — ${l.tagline}` : ''}`, clip(l.description, 160), `Seller: ${l.seller.name}`, `Category: ${l.category}`, place ? `Where: ${place}` : '', `Price: ${priceLabel(l.price, l.priceModel)}`].filter(Boolean).join('. ');
-      return { id: clip(l.id, 64), yours: false, kind: l.kind === 'business' ? 'business' : 'product', listing: untrusted(text, 360) };
+      return { ...(SAFE_ID.test(l.id) ? { id: l.id } : {}), yours: false, kind: l.kind === 'business' ? 'business' : 'product', listing: untrusted(text, 360) };
     });
     return {
       data: {
@@ -773,7 +811,8 @@ const listMarketplace = defineTool({
         shown: shown.length,
         listings: shown,
         ...(cat === null ? { categoryNotFound: `No listing has the category “${a.category}”. Formats: ${FORMAT_IDS.join(', ')}.` } : {}),
-        ...(places && !places.length ? { cityNotFound: `No business is listed in “${a.city}”. Places with listings: ${cities.slice(0, 15).join('; ') || 'none'}.` } : {}),
+        // the places come from sellers' own listings: data, like their text
+        ...(places && !places.length ? { cityNotFound: `No business is listed in “${a.city}”.`, placesWithListings: untrusted(cities.slice(0, 15).join('; '), 400) ?? 'none' } : {}),
       },
       note: `Looked at the Marketplace: ${words(found.length, 'listing')} found`,
     };
@@ -847,7 +886,10 @@ const deleteProject = defineTool({
     if (id === st.activeProjectId) return `“${projectName(id)}” is the project this chat is in. To delete it, the owner switches to another project first, or deletes it in Settings → Projects & data.`;
     return null;
   },
-  danger: ({ id }) => deleteConfirm({ thing: 'project', names: [projectName(id)], extra: 'Its posts, campaigns and Marketplace listing are removed too.' }),
+  danger: ({ id }) => {
+    const own = s().skills.filter((k) => k.projectId === id).length;
+    return deleteConfirm({ thing: 'project', names: [projectName(id)], extra: `Its posts, campaigns${own ? `, ${own === 1 ? 'the Brain skill' : `the ${own} Brain skills`} made only for it` : ''} and Marketplace listing are removed too.` });
+  },
   run: ({ id }) => {
     const name = projectName(id);
     deleteProjectEverywhere(id);
