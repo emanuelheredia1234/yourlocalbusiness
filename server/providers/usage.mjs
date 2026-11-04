@@ -42,9 +42,17 @@ export class UsageLog {
     }
   }
 
+  /**
+   * One request. A web research request also has `research: true` and `searches` (how many web
+   * searches it ran); what they found (sources, queries) is never logged: the log is synced and kept.
+   */
   add(entry) {
     const id = crypto.randomUUID();
-    this.entries.unshift({ id, at: Date.now(), rev: 0, ...entry });
+    const { searches, research, sources: _sources, queries: _queries, ...rest } = entry ?? {};
+    const e = { id, at: Date.now(), rev: 0, ...rest };
+    if (typeof searches === 'number' && Number.isFinite(searches) && searches >= 0) e.searches = Math.round(searches);
+    if (typeof research === 'boolean') e.research = research;
+    this.entries.unshift(e);
     if (this.entries.length > MAX_ENTRIES) this.entries.length = MAX_ENTRIES;
     this.scheduleSave();
     return id;
@@ -141,13 +149,13 @@ export class UsageLog {
     return this.entries.slice(0, limit);
   }
 
-  /** Totals per day (last 14 days) and per provider. */
+  /** Totals per day (last 14 days) and per provider, web searches included. */
   totals(now = Date.now()) {
     const since = now - 14 * 24 * 3600_000;
     const days = new Map();
     const providers = new Map();
     const add = (map, key, e) => {
-      const t = map.get(key) ?? { requests: 0, failed: 0, costUsd: 0, credits: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0 };
+      const t = map.get(key) ?? { requests: 0, failed: 0, costUsd: 0, credits: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, searches: 0 };
       t.requests += 1;
       if (!e.ok) t.failed += 1;
       t.costUsd += e.cost?.usd ?? 0;
@@ -155,6 +163,7 @@ export class UsageLog {
       t.inputTokens += e.usage?.input ?? 0;
       t.outputTokens += e.usage?.output ?? 0;
       t.reasoningTokens += e.usage?.reasoning ?? 0;
+      t.searches += typeof e.searches === 'number' && Number.isFinite(e.searches) ? e.searches : 0;
       map.set(key, t);
     };
     for (const e of this.entries) {

@@ -26,7 +26,7 @@ const REMOTE_KEY = 'ai-providers';
  * too (as a new key would) until the owner unticks them. Saving the list records which functions
  * existed then (`seen`), so later ones are told apart from ones the owner unticked.
  */
-const ADDED_LATER = ['assistant'];
+const ADDED_LATER = ['assistant', 'strategy'];
 const isNewFor = (saved, fn) => (Array.isArray(saved.seen) ? !saved.seen.includes(fn) && fnById[fn]?.kind === 'text' : ADDED_LATER.includes(fn));
 
 /** Daily limits for each signed-in non-admin user on the owner's keys, until the owner changes them. */

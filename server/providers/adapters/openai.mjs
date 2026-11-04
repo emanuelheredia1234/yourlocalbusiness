@@ -1,33 +1,62 @@
 // OpenAI: GPT through the Responses API (effort in `reasoning.effort`) and GPT Image (effort in `quality`).
+// Web research (Strategy): the Responses API's web_search tool (see ../research.mjs).
 
 import { ProviderError, errorFromResponse, num, requestJson } from '../http.mjs';
 import { listModelIds } from './chat.mjs';
 import { exactSize, imagesGenerations, nearestRatio } from './images.mjs';
+import { responsesOutput } from './responses.mjs';
 import { modelDef } from '../registry.mjs';
+import { RESEARCH_TIMEOUT_MS, TOOL_REFUSED, userLocation } from '../research.mjs';
 
 const auth = (key) => ({ authorization: `Bearer ${key}` });
 
 export default {
   base: 'https://api.openai.com/v1',
 
-  async text(ctx, { model, effort, system, prompt, images = [], signal, timeoutMs = 300_000 }) {
+  async text(ctx, { model, effort, system, prompt, images = [], signal, timeoutMs, research = null }) {
     const body = {
       model,
       instructions: system,
       input: [{ role: 'user', content: [...images.map((url) => ({ type: 'input_image', image_url: url })), { type: 'input_text', text: prompt }] }],
       store: false,
     };
-    if (effort) body.reasoning = { effort };
-    const r = await requestJson(ctx.fetch, `${ctx.base}/responses`, { method: 'POST', headers: auth(ctx.key), body, timeoutMs, signal, label: ctx.label });
+    // web search doesn't take `minimal` reasoning
+    if (effort) body.reasoning = { effort: research && effort === 'minimal' ? 'low' : effort };
+    if (research) {
+      // user_location always: without it, OpenAI assumes the United States
+      body.tools = [{ type: 'web_search', search_context_size: 'medium', user_location: userLocation(research.location) }];
+      body.include = ['web_search_call.action.sources'];
+      body.max_tool_calls = research.maxSearches;
+    }
+    const send = () => requestJson(ctx.fetch, `${ctx.base}/responses`, { method: 'POST', headers: auth(ctx.key), body, timeoutMs: research ? (timeoutMs ?? RESEARCH_TIMEOUT_MS) : (timeoutMs ?? 300_000), signal, label: ctx.label });
+    let r = await send();
+    let refused = false;
+    if (!r.ok && research) {
+      const err = errorFromResponse(r.status, r.payload, ctx.label);
+      // the search tool itself was refused (a 400 isn't billed): answer without searching
+      if (r.status !== 400 || err.code !== 'BAD_REQUEST' || !TOOL_REFUSED.test(err.message)) throw err;
+      delete body.tools;
+      delete body.include;
+      delete body.max_tool_calls;
+      refused = true;
+      r = await send();
+    }
     if (!r.ok) throw errorFromResponse(r.status, r.payload, ctx.label);
     const p = r.payload && typeof r.payload === 'object' ? r.payload : {};
     let text = '';
     let refusal = '';
-    for (const item of Array.isArray(p.output) ? p.output : []) {
-      if (item?.type !== 'message') continue;
-      for (const c of Array.isArray(item.content) ? item.content : []) {
-        if (c?.type === 'output_text' && typeof c.text === 'string') text += c.text;
-        if (c?.type === 'refusal') refusal += String(c.refusal ?? '');
+    const o = research ? responsesOutput(p) : null;
+    if (o) {
+      // the last message: narration before the searches isn't the answer
+      text = o.text || o.allText;
+      refusal = o.refusal;
+    } else {
+      for (const item of Array.isArray(p.output) ? p.output : []) {
+        if (item?.type !== 'message') continue;
+        for (const c of Array.isArray(item.content) ? item.content : []) {
+          if (c?.type === 'output_text' && typeof c.text === 'string') text += c.text;
+          if (c?.type === 'refusal') refusal += String(c.refusal ?? '');
+        }
       }
     }
     if (!text && typeof p.output_text === 'string') text = p.output_text;
@@ -46,6 +75,8 @@ export default {
       text,
       model: typeof p.model === 'string' && p.model ? p.model : model,
       usage: { input: num(u.input_tokens) ?? 0, output: num(u.output_tokens) ?? 0, reasoning: num(u.output_tokens_details?.reasoning_tokens) },
+      // billable searches as OpenAI counts them, else the search calls in the answer
+      ...(o ? { research: { searches: num(p.tool_usage?.web_search?.num_requests) ?? o.searchCalls, sources: o.sources, queries: o.queries, errors: o.errors, refused } } : {}),
     };
   },
 

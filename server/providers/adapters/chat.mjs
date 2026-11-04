@@ -16,7 +16,8 @@ function messageText(message) {
 
 /**
  * One chat completion. `effortBody` is merged into the request (e.g. { reasoning_effort: 'high' }).
- * Resolves { text, model, usage: { input, output, reasoning }, cost?, credits?, finishReason }.
+ * Resolves { text, model, usage: { input, output, reasoning }, cost?, credits?, finishReason,
+ * annotations, serverToolUse } (the last two for OpenRouter's web search: its adapter reads them).
  */
 export async function chatText(ctx, { url, headers, model, system, prompt, images, effortBody = {}, extraBody = {}, signal, timeoutMs = 300_000 }) {
   const body = {
@@ -48,6 +49,8 @@ export async function chatText(ctx, { url, headers, model, system, prompt, image
     usage: chatUsage(p.usage),
     cost: num(p.usage?.cost),
     credits: num(p.usage?.credits),
+    annotations: Array.isArray(choice?.message?.annotations) ? choice.message.annotations : [],
+    serverToolUse: p.usage?.server_tool_use_details ?? null,
   };
 }
 
