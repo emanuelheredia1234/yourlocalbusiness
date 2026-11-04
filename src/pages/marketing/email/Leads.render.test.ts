@@ -29,6 +29,7 @@ const { useLeads } = await import('@/store/leads');
 const { seoPageIdOf } = await import('@/lib/leads');
 const { Leads } = await import('./Leads');
 const { default: EmailFunnel } = await import('../EmailFunnel');
+const { Sidebar } = await import('@/components/layout/Shell');
 
 function project(): Project {
   const p = { ...newProject('business', 'new'), id: 'proj_leads1', onboarded: true };
@@ -141,13 +142,14 @@ describe('the list', () => {
   });
 });
 
-describe('Email funnel', () => {
+describe('Email', () => {
   it('has a Leads tab with the count of new leads, opens on it, and the Email channel shows a badge', () => {
     const p = project();
     use(p, [lead(), lead({ id: 'l2', name: 'Cy' })]);
     let html = renderToStaticMarkup(createElement(EmailFunnel));
-    expect(html).toMatch(/<button role="tab" aria-selected="true"[^>]*>.*Leads<span class="num rounded-full px-1\.5 text-2xs bg-primary-soft text-primary">2<\/span><\/button>/);
-    expect(html).toContain('<span class="sr-only">, 2 new leads</span>');
+    expect(html).toMatch(/<button role="tab" aria-selected="true"[^>]*>.*Leads<span class="num font-mono text-caption text-muted">2<\/span><\/button>/);
+    // the Email channel's badge sits in the sidebar's Marketing group now (it replaced the channel switcher)
+    expect(renderToStaticMarkup(createElement(Sidebar))).toMatch(/>Email<\/span><span class="nav-count">2<span class="sr-only">, 2 new leads<\/span><\/span><\/button>/);
     expect(html).toContain('Messages from your published page’s form show under Leads.');
     expect(html).toContain('aria-label="Delete the lead from Cy"');
     // seen: no count, and the funnel opens where it always did
@@ -156,6 +158,7 @@ describe('Email funnel', () => {
     html = renderToStaticMarkup(createElement(EmailFunnel));
     expect(html).toMatch(/<button role="tab" aria-selected="false"[^>]*>.*Leads<\/button>/);
     expect(html).not.toContain('new lead');
+    expect(renderToStaticMarkup(createElement(Sidebar))).not.toContain('new lead');
     expect(html).toMatch(/<button role="tab" aria-selected="true"[^>]*>.*Lead magnet &amp; opt-in<\/button>/);
   });
 });

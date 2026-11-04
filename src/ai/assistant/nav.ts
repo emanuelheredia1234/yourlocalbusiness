@@ -16,11 +16,11 @@ export const PAGE_LABELS: Record<Route, string> = {
   dashboard: 'Dashboard',
   strategy: 'Strategy',
   studio: 'Studio',
-  marketing: 'Marketing Hub',
+  marketing: 'Marketing',
   'marketing-seo': 'SEO page',
-  'marketing-email': 'Email funnel',
-  'marketing-social': 'Social media engine',
-  'marketing-ads': 'Paid ads',
+  'marketing-email': 'Email',
+  'marketing-social': 'Social',
+  'marketing-ads': 'Ads',
   calendar: 'Content calendar',
   analytics: 'Analytics',
   store: 'Marketplace',
@@ -28,7 +28,7 @@ export const PAGE_LABELS: Record<Route, string> = {
   'workspace-settings': 'Settings',
 };
 
-/** "Settings → AI", "Content calendar". */
+/** "Settings → AI keys", "Content calendar". */
 export function pageName(route: Route, tab?: string): string {
   const t = tab ? tabLabel(route, tab) : '';
   return t ? `${PAGE_LABELS[route]} → ${t}` : PAGE_LABELS[route];

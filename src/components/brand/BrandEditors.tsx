@@ -70,7 +70,7 @@ export function LogoDesigner({ brand, onChange, iconOptions, paletteOptions }: {
                 <button
                   type="button"
                   onClick={() => setLogo({ monogram: !logo.monogram })}
-                  className={cn('flex h-10 min-w-10 items-center justify-center rounded-md border px-2 font-display text-[13px] font-bold', logo.monogram ? 'border-primary bg-primary-soft text-primary' : 'border-line text-ink-2 hover:bg-surface-2')}
+                  className={cn('flex h-10 min-w-10 items-center justify-center rounded-md border px-2 font-brand text-[13px] font-bold', logo.monogram ? 'border-primary bg-primary-soft text-primary' : 'border-line text-ink-2 hover:bg-surface-2')}
                   aria-pressed={logo.monogram}
                 >
                   Aa

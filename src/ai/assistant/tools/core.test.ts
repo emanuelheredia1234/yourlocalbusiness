@@ -99,7 +99,7 @@ describe('moving around', () => {
     const r = await run('navigate', { route: 'workspace-settings', tab: 'ai' });
     expect(openPage).toHaveBeenCalledWith('workspace-settings', 'ai');
     expect(r).toMatchObject({ ok: true, result: { opened: '#workspace-settings/ai' } });
-    expect(lastNote()).toBe('Opened Settings → AI');
+    expect(lastNote()).toBe('Opened Settings → AI keys');
     const bad = await run('navigate', { route: 'analytics', tab: 'ai' });
     expect(bad).toMatchObject({ ok: false, error: 'Analytics has no tabs.' });
     expect((await run('navigate', { route: 'calendar', tab: 'week' })).error).toBe('Content calendar has these tabs: scheduled, published, drafts.');

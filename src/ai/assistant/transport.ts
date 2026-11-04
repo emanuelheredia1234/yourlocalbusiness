@@ -14,7 +14,7 @@ export interface Availability {
   checking?: boolean;
   /** what's missing, in plain words ('' when ok) */
   reason: string;
-  /** Settings → AI is where to fix it */
+  /** Settings → AI keys is where to fix it */
   settings: boolean;
 }
 
@@ -39,12 +39,12 @@ export function assistantAvailability(): Availability {
   if (!rt.ai.reachable) return { ok: true, checking: true, reason: '', settings: false };
   if (!routeFor(ASSISTANT_FN).length) {
     const label = aiFunction(ASSISTANT_FN)?.label ?? 'Assistant';
-    return { ok: false, reason: `No API key powers the ${label} yet. In Settings → AI, tick ${label} for one of your keys, or add your own key there.`, settings: true };
+    return { ok: false, reason: `No API key powers the ${label} yet. In Settings → AI keys, tick ${label} for one of your keys, or add your own key there.`, settings: true };
   }
   return { ok: true, reason: '', settings: false };
 }
 
-/** A failed request, said plainly (Settings → AI when that's where to fix it). */
+/** A failed request, said plainly (Settings → AI keys when that's where to fix it). */
 export class AssistantError extends Error {
   constructor(
     message: string,
@@ -66,7 +66,7 @@ function explain(e: unknown): AssistantError {
     case 'daily_limit':
       return new AssistantError(dailyLimitText(msg), code, true);
     case 'no_provider':
-      return new AssistantError('No API key powers the Assistant yet. In Settings → AI, tick Assistant for one of your keys, or add your own key there.', code, true);
+      return new AssistantError('No API key powers the Assistant yet. In Settings → AI keys, tick Assistant for one of your keys, or add your own key there.', code, true);
     case 'network':
       return new AssistantError('Your AI server could not be reached (is it running?). Try again in a moment.', code, true);
     case 'rate_limited':

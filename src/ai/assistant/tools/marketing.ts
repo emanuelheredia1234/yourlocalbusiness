@@ -3,7 +3,7 @@
 // undo, publishing), code & assets, the owner's published pages, and file exports (download buttons).
 //
 // Each tool does what its page's button does, through the same code: src/lib/emailFunnel.ts (Email),
-// src/lib/leads.ts and src/store/leads.ts (Leads), src/lib/ads.ts (Paid ads), src/ai/seoBuilder.ts and
+// src/lib/leads.ts and src/store/leads.ts (Leads), src/lib/ads.ts (Ads), src/ai/seoBuilder.ts and
 // src/lib/seoPage.ts (SEO page), src/lib/codeAssets.ts (Code & assets), src/lib/publish.ts (publishing).
 // Nothing goes public by itself: publishing only opens the page's own Publish panel, where the owner
 // chooses the address and presses Publish. The app never sends email and never runs or pays for ads.
@@ -223,7 +223,7 @@ const generateEmailSequence = defineTool({
   summary: 'AI writes the 5-email welcome sequence that delivers the lead magnet (1 AI request). Rewriting them: replace: true after asking.',
   args: { replace: arg.boolean({ optional: true }) },
   validate: ({ replace }) => {
-    if (busyWith(emailSequenceTask.label)) return 'The emails are being written on Email → Email sequence right now. Wait for it to finish.';
+    if (busyWith(emailSequenceTask.label)) return 'The emails are being written on Email → Sequence right now. Wait for it to finish.';
     return activeProject().marketing.emails.length && !replace ? 'There are already emails (with any edits the owner made). Ask the owner, then call again with replace: true.' : null;
   },
   run: async (_a, ctx) => {
@@ -556,7 +556,7 @@ const listAds = defineTool({
       const data =
         JSON.stringify(full).length <= RESULT_ROOM
           ? full
-          : { ...full, audiences: c.audiences.map((a) => a.name), search: c.search ? { headlines: c.search.headlines.slice(0, 5), keywords: c.search.keywords.slice(0, 5), more: 'the rest are on Paid ads' } : null };
+          : { ...full, audiences: c.audiences.map((a) => a.name), search: c.search ? { headlines: c.search.headlines.slice(0, 5), keywords: c.search.keywords.slice(0, 5), more: 'the rest are on Ads' } : null };
       return { data, note: `Read your ad plan ${named(c.name)}` };
     }
     const ads = projectAds();
@@ -638,7 +638,7 @@ const generateAds = defineTool({
     const c = findAd(campaignId);
     if (!c) return missingAd(campaignId);
     if (!c.platforms.length) return 'Pick at least one platform first (update_ad_campaign platforms).';
-    if (busyWith(adsTask.label)) return 'Ads are being written on Paid ads right now. Wait for it to finish.';
+    if (busyWith(adsTask.label)) return 'Ads are being written on the Ads page right now. Wait for it to finish.';
     return c.creatives.length && !replace ? `${named(c.name)} already has creatives (with any edits the owner made). Ask the owner, then call again with replace: true.` : null;
   },
   run: async ({ campaignId }, ctx) => {

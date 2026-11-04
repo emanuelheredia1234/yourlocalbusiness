@@ -1,13 +1,16 @@
 import { lazy, Suspense, useEffect, useRef } from 'react';
+import { cn } from '@/lib/utils';
+import { useMediaQuery } from '@/lib/hooks';
 import { navigate, useRoute } from '@/lib/router';
 import { initRuntime } from '@/lib/platform';
 import { pingServer } from '@/ai/claude';
 import { startCommunitySync } from '@/lib/community';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { useLeadsWatcher } from '@/store/leads';
-import { CommandPalette, MobileNav, Sidebar, Topbar } from '@/components/layout/Shell';
+import { MobileNav, PageSkeleton, Sidebar, Topbar } from '@/components/layout/Shell';
+import { CommandPalette } from '@/components/layout/CommandPalette';
 import { PageErrorBoundary } from '@/components/layout/ErrorBoundary';
-import { ConfirmHost, Spinner, Toaster } from '@/components/ui/primitives';
+import { ConfirmHost, Toaster } from '@/components/ui/primitives';
 import { installLeaveGuard } from '@/components/ui/leave';
 import { PostEditorHost } from '@/components/posts/PostCard';
 import { ManusPostHost, useManusPostWatcher } from '@/components/posts/ManusPost';
@@ -38,31 +41,52 @@ const BrainPage = lazy(() => import('@/pages/brain/Brain'));
 const SettingsPage = lazy(() => import('@/pages/settings/Settings'));
 const StrategyPage = lazy(() => import('@/pages/strategy/Strategy'));
 
+/**
+ * Keeps <html data-theme> in step with Settings → Theme. The boot script in index.html sets it before
+ * the first paint (and marks it data-theme-source="app"); a theme the host set (claude.ai) wins for
+ * "System". The choice is saved under ylb-theme so the next load paints right away.
+ */
 function useThemeSync() {
   const theme = useStore((s) => s.settings.theme);
-  const hostTheme = useRef<string | null>(typeof document !== 'undefined' ? document.documentElement.getAttribute('data-theme') : null);
+  const hostTheme = useRef<string | null>(
+    typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme-source') !== 'app' ? document.documentElement.getAttribute('data-theme') : null,
+  );
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === 'system') {
-      if (hostTheme.current) root.setAttribute('data-theme', hostTheme.current);
-      else root.removeAttribute('data-theme');
-    } else root.setAttribute('data-theme', theme);
+    try {
+      localStorage.setItem('ylb-theme', theme);
+    } catch {
+      /* storage blocked: the boot script falls back to System */
+    }
+    if (theme === 'light' || theme === 'dark') {
+      root.setAttribute('data-theme', theme);
+      root.setAttribute('data-theme-source', 'app');
+      return;
+    }
+    if (hostTheme.current) {
+      root.setAttribute('data-theme', hostTheme.current);
+      return;
+    }
+    const mq = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    const apply = () => root.setAttribute('data-theme', mq?.matches ? 'dark' : 'light');
+    apply();
+    root.setAttribute('data-theme-source', 'app');
+    mq?.addEventListener?.('change', apply);
+    return () => mq?.removeEventListener?.('change', apply);
   }, [theme]);
 }
 
-function PageFallback() {
-  return (
-    <div className="flex h-64 items-center justify-center text-muted">
-      <Spinner size={22} />
-    </div>
-  );
-}
+/** The pages that use the wide container. */
+const WIDE: string[] = ['calendar', 'marketing-seo', 'studio'];
 
 export default function App() {
   const route = useRoute();
   const project = useActiveProject();
   const hasListings = useStore((s) => s.myListings.length > 0);
   const assistantOpen = useAssistant((s) => s.open);
+  const wide = useMediaQuery('(min-width: 1440px)');
+  // the assistant docks beside the stage at 1440px and wider
+  const docked = assistantOpen && wide;
   useThemeSync();
   useManusPostWatcher();
   useLeadsWatcher();
@@ -149,20 +173,19 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-full">
-      <aside className="hidden w-[260px] shrink-0 border-r border-line lg:block" style={{ paddingLeft: 'env(safe-area-inset-left, 0px)' }}>
-        <div className="sticky top-0 h-full">
-          <Sidebar />
-        </div>
+    // the shell clips itself (html and body are not clipped: the sign-in pages and the published-page preview scroll the document)
+    <div className="flex h-full overflow-hidden bg-bg">
+      <aside className="hidden w-[232px] shrink-0 lg:flex xl:w-[248px]" style={{ paddingLeft: 'env(safe-area-inset-left, 0px)' }}>
+        <Sidebar />
       </aside>
-      <div className="flex min-w-0 flex-1 flex-col">
+      {/* the stage: a rounded white panel inset 8px on wide screens, full-bleed below 1024; its right margin makes room for the docked assistant */}
+      <div className={cn('flex min-w-0 flex-1 flex-col overflow-hidden bg-surface transition-[margin] duration-320 ease-out', 'lg:my-2 lg:rounded-stage lg:border lg:border-line lg:shadow-xs', docked ? 'lg:mr-[416px]' : 'lg:mr-2')}>
         <Topbar />
         {/* relative: absolutely positioned bits inside (sr-only labels) stay in this scroll area instead of stretching the page behind the shell; overscroll-contain: scrolling never moves the page itself */}
         <main id="main-scroll" className="scroll-thin relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {/* room at the bottom for the assistant's chat button */}
-          <div className="mx-auto w-full max-w-[1320px] gutter pb-28 pt-6">
+          <div className={cn('mx-auto w-full gutter pb-24 pt-6 md:pb-12', route && WIDE.includes(route) ? 'max-w-[1600px]' : 'max-w-[1200px]')}>
             <PageErrorBoundary key={route ?? 'dashboard'} onHome={() => void navigate('dashboard', { force: true })}>
-              <Suspense fallback={<PageFallback />}>{page}</Suspense>
+              <Suspense fallback={<PageSkeleton />}>{page}</Suspense>
             </PageErrorBoundary>
           </div>
         </main>

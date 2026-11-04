@@ -93,7 +93,7 @@ export function LinkFields({ post, onChange }: { post: Post; onChange: (patch: P
           ) : __ARTIFACT_BUILD__ ? (
             'No link yet: add your website in Settings → Brand.'
           ) : (
-            'No link yet: publish your page (Marketing Hub → SEO page), or add your website in Settings → Brand.'
+            'No link yet: publish your page (Marketing → SEO page), or add your website in Settings → Brand.'
           )
         }
       >

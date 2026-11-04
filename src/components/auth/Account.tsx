@@ -1,14 +1,27 @@
 // Who's signed in, with Log out: the account button in the top bar, a row at the bottom of the
 // sidebar, a chip during setup, and Settings → Account.
 
-import { useRef, useState, type FormEvent } from 'react';
-import { CircleUserRound, Cloud, CloudOff, LogIn, LogOut, Settings as SettingsIcon, Trash2 } from 'lucide-react';
+import { useState, type FormEvent } from 'react';
+import { CircleUserRound, Cloud, CloudOff, LogIn, LogOut, Monitor, Moon, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react';
 import { cn, fmtRelative } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { deleteAccount, setNewPassword, showSignIn, signOut, useAuth } from '@/lib/cloud/auth';
 import { useSyncStatus } from '@/lib/cloud/sync';
+import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
-import { MenuItem, Popover, Spinner, confirmAction } from '@/components/ui/primitives';
+import { Spinner, confirmAction } from '@/components/ui/primitives';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '@/components/ui/shadcn/dropdown-menu';
 import { confirmLeave } from '@/components/ui/leave';
 
 /** Log out of this device, asking first if some changes couldn't be saved. */
@@ -39,7 +52,7 @@ export function useSyncLine(): { text: string; tone: 'good' | 'muted' | 'warn' }
 
 function Avatar({ email, size = 32 }: { email: string; size?: number }) {
   return (
-    <span className="flex shrink-0 items-center justify-center rounded-full bg-primary font-display font-bold text-on-primary" style={{ width: size, height: size, fontSize: size * 0.44 }} aria-hidden="true">
+    <span className="flex shrink-0 items-center justify-center rounded-full bg-surface-3 font-semibold text-ink-2" style={{ width: size, height: size, fontSize: Math.max(12, Math.round(size * 0.42)) }} aria-hidden="true">
       {initialOf(email)}
     </span>
   );
@@ -50,57 +63,63 @@ function openAccountSettings() {
   navigate('workspace-settings');
 }
 
-/** Top bar: the signed-in person, with Account settings and Log out. */
+type Theme = 'system' | 'light' | 'dark';
+
+/** Top bar: the signed-in person's menu (the one account entry): Settings, Theme, Log out. */
 export function AccountButton() {
   const phase = useAuth((s) => s.phase);
   const email = useAuth((s) => s.user?.email ?? '');
   const sync = useSyncLine();
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLButtonElement>(null);
+  const theme = useStore((s) => s.settings.theme);
+  const update = useStore((s) => s.updateSettings);
   if (phase === 'guest') {
     return (
-      <button className="btn btn-secondary btn-sm ml-1" onClick={showSignIn}>
-        <LogIn size={15} /> Sign in
+      <button type="button" className="btn btn-secondary btn-sm ml-1" onClick={showSignIn}>
+        <LogIn /> Sign in
       </button>
     );
   }
   if (phase !== 'ready') return null;
   return (
-    <>
-      <button ref={ref} className="ml-1 rounded-full ring-offset-2 ring-offset-surface hover:ring-2 hover:ring-line-2 focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setOpen(true)} aria-label={`Account: ${email}`} aria-haspopup="menu">
-        <Avatar email={email} />
-      </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={ref} className="w-[270px]">
-        <div className="flex items-center gap-2.5 px-2.5 pb-2 pt-1.5">
-          <Avatar email={email} size={36} />
-          <div className="min-w-0">
-            <p className="truncate text-[13px] font-semibold text-ink">{email}</p>
-            <p className={cn('flex items-center gap-1 truncate text-[11.5px]', sync.tone === 'warn' ? 'text-warn' : sync.tone === 'good' ? 'text-good' : 'text-muted')}>
-              {sync.tone === 'warn' ? <CloudOff size={12} /> : <Cloud size={12} />} {sync.text}
-            </p>
-          </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" className="ml-1 shrink-0 rounded-full transition-shadow duration-120 hover:ring-2 hover:ring-line-2" aria-label={`Account: ${email}`}>
+          <Avatar email={email} size={28} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" collisionPadding={8} className="w-[260px]">
+        <div className="px-2 pb-2 pt-1.5">
+          <p className="truncate text-small text-ink">{email}</p>
+          <p className="mt-0.5 flex items-center gap-1.5 truncate text-caption text-muted">
+            <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', sync.tone === 'warn' ? 'bg-warn-solid' : sync.tone === 'good' ? 'bg-good-solid' : 'bg-faint')} aria-hidden="true" />
+            {sync.text}
+          </p>
         </div>
-        <div className="my-1 border-t border-line" />
-        <MenuItem
-          icon={<SettingsIcon size={15} />}
-          onClick={() => {
-            setOpen(false);
-            openAccountSettings();
-          }}
-        >
-          Account settings
-        </MenuItem>
-        <MenuItem
-          icon={<LogOut size={15} />}
-          onClick={() => {
-            setOpen(false);
-            void logOut();
-          }}
-        >
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={openAccountSettings}>
+          <SettingsIcon />
+          Settings
+        </DropdownMenuItem>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            {theme === 'dark' ? <Moon /> : theme === 'light' ? <Sun /> : <Monitor />}
+            Theme
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DropdownMenuRadioGroup value={theme} onValueChange={(v) => update((s) => ({ ...s, theme: v as Theme }))}>
+              <DropdownMenuRadioItem value="system">System</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="light">Light</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => void logOut()}>
+          <LogOut />
           Log out
-        </MenuItem>
-      </Popover>
-    </>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

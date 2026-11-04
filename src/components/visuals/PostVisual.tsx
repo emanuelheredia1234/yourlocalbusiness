@@ -255,7 +255,7 @@ function ImageStage({ style, headline, brand, media, mediaUrl, points }: PostVis
               {mediaEl ?? <Icon name={brand.logo.icon} width="46%" height="46%" color={readableOn(c.primary)} strokeWidth={1.6} />}
             </div>
           </div>
-          <h3 className="text-center font-display font-bold leading-[1.08] tracking-[-0.02em]" style={{ fontSize: cq(headline.length > 48 ? 5.4 : 6.6), color: c.ink }}>
+          <h3 className="text-center font-brand font-bold leading-[1.08] tracking-[-0.02em]" style={{ fontSize: cq(headline.length > 48 ? 5.4 : 6.6), color: c.ink }}>
             {headline}
           </h3>
         </div>
@@ -333,7 +333,7 @@ function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoP
   const caption = (text: string, extra?: CSSProperties) => (
     <p
       key={sceneKey}
-      className="text-center font-display font-extrabold leading-[1.08] text-white"
+      className="text-center font-brand font-extrabold leading-[1.08] text-white"
       style={{ fontSize: cq(text.length > 40 ? 6.4 : 8), textShadow: '0 0.4cqw 0 #000, 0 -0.4cqw 0 #000, 0.4cqw 0 0 #000, -0.4cqw 0 0 #000, 0 0.8cqw 2cqw rgba(0,0,0,.4)', animation: 'pv-pop .35s ease-out both', ...extra }}
     >
       {text}
@@ -371,7 +371,7 @@ function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoP
             <span className="relative rounded font-bold uppercase text-white" style={{ fontSize: cq(3), letterSpacing: '0.18em', padding: `${cq(0.6)} ${cq(1.6)}`, background: 'rgba(0,0,0,.5)' }}>
               Before
             </span>
-            <p className="relative text-center font-display font-bold text-white" style={{ fontSize: cq(5.2), padding: `0 ${cq(6)}`, marginTop: cq(2) }}>
+            <p className="relative text-center font-brand font-bold text-white" style={{ fontSize: cq(5.2), padding: `0 ${cq(6)}`, marginTop: cq(2) }}>
               {idx === 0 ? scene.text : before}
             </p>
           </div>
@@ -381,7 +381,7 @@ function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoP
             <span className="relative rounded font-bold uppercase" style={{ fontSize: cq(3), letterSpacing: '0.18em', padding: `${cq(0.6)} ${cq(1.6)}`, background: c.accent, color: readableOn(c.accent) }}>
               After
             </span>
-            <p className="relative text-center font-display font-bold" style={{ fontSize: cq(5.2), padding: `0 ${cq(6)}`, marginTop: cq(2), color: readableOn(c.primary), opacity: showAfter ? 1 : 0.35, transition: 'opacity .4s' }}>
+            <p className="relative text-center font-brand font-bold" style={{ fontSize: cq(5.2), padding: `0 ${cq(6)}`, marginTop: cq(2), color: readableOn(c.primary), opacity: showAfter ? 1 : 0.35, transition: 'opacity .4s' }}>
               {idx >= 3 ? scene.text : after}
             </p>
           </div>
@@ -448,7 +448,7 @@ function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoP
           <div className="absolute inset-x-[5cqw] bottom-[13cqw] overflow-hidden rounded-[2cqw]" style={{ background: c.primary, boxShadow: `0 ${cq(2)} ${cq(5)} rgba(0,0,0,.25)` }}>
             <div className="flex items-center gap-[2cqw]" style={{ padding: `${cq(2.4)} ${cq(3)}` }}>
               <span className="shrink-0 rounded-full" style={{ width: cq(2.4), height: cq(2.4), background: c.accent }} />
-              <p key={sceneKey} className="font-display font-bold leading-tight" style={{ fontSize: cq(scene.text.length > 40 ? 4.4 : 5.2), color: readableOn(c.primary), animation: 'pv-slide-up .35s ease-out both' }}>
+              <p key={sceneKey} className="font-brand font-bold leading-tight" style={{ fontSize: cq(scene.text.length > 40 ? 4.4 : 5.2), color: readableOn(c.primary), animation: 'pv-slide-up .35s ease-out both' }}>
                 {scene.text}
               </p>
             </div>

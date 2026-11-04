@@ -1,41 +1,58 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
-import { Check, CircleAlert, Copy, Info, Loader2, Sparkles, X } from 'lucide-react';
+// The design system's building blocks ("Ink & Aura"). Every export that existed before keeps its props,
+// so pages keep working; the look comes from the tokens and classes in src/index.css. Overlays, menus,
+// select, checkbox, radio group, accordion and the calendar run on Radix (src/components/ui/shadcn);
+// Tabs, Segmented and Toggle stay hand-made because tests assert their exact ARIA markup.
+//
+// The app's cn() only joins strings; where a caller may override a default (Modal body, PageHeader,
+// Section, Empty, Tabs, Segmented), the merging cn from ./shadcn/utils (mergeCn) composes them.
+
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import { CalendarClock, Check, ChevronLeft, CircleAlert, CircleCheck, CircleHelp, Copy, Ellipsis, Info, Loader2, TriangleAlert, X } from 'lucide-react';
 import { create } from 'zustand';
+import * as RadioGroupPrimitive from '@radix-ui/react-radio-group';
 import { cn, hexToRgb, isHex } from '@/lib/utils';
 import { copyText } from '@/lib/platform';
+import { useMediaQuery } from '@/lib/hooks';
 import { useUI } from '@/store/ui';
+import { cn as mergeCn } from './shadcn/utils';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from './shadcn/dialog';
+import { Sheet, SheetContent, SheetTitle } from './shadcn/sheet';
+import { Popover as PopoverRoot, PopoverAnchor, PopoverContent, PopoverTrigger } from './shadcn/popover';
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from './shadcn/alert-dialog';
+import { Tooltip as TooltipRoot, TooltipContent, TooltipTrigger } from './shadcn/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from './shadcn/dropdown-menu';
+import { Select as SelectRoot, SelectContent, SelectItem, SelectTrigger, SelectValue } from './shadcn/select';
+import { Checkbox as CheckboxRoot } from './shadcn/checkbox';
+import { Calendar } from './shadcn/calendar';
+import { Spark } from '../ai/Spark';
+
+export { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from './shadcn/accordion';
+export { Toaster, type ToastPlacement } from './toaster';
 
 // ───────────────────────── Overlay primitives ─────────────────────────
 
-function useEscape(open: boolean, onClose: () => void) {
-  useEffect(() => {
-    if (!open) return;
-    const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', h);
-    return () => window.removeEventListener('keydown', h);
-  }, [open, onClose]);
-}
-
-function useFocusReturn(open: boolean, panel: React.RefObject<HTMLElement>) {
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.activeElement as HTMLElement | null;
-    const t = setTimeout(() => {
-      const el = panel.current?.querySelector<HTMLElement>('[data-autofocus], input:not([type=hidden]), textarea, select, button:not([data-close])');
-      (el ?? panel.current)?.focus({ preventScroll: true });
-    }, 30);
-    return () => {
-      clearTimeout(t);
-      prev?.focus?.({ preventScroll: true });
-    };
-  }, [open, panel]);
+/** Clicks on a toast never dismiss the dialog underneath it. */
+function keepForToasts(e: { target: EventTarget | null; preventDefault: () => void }) {
+  const t = e.target as Element | null;
+  if (t && typeof t.closest === 'function' && t.closest('[data-sonner-toaster]')) e.preventDefault();
 }
 
 const SIZES = { sm: 'max-w-[440px]', md: 'max-w-[600px]', lg: 'max-w-[820px]', xl: 'max-w-[1080px]', full: 'max-w-[1280px]' } as const;
 
+/**
+ * A dialog: centred on wide screens, a bottom sheet on phones. `open=false` renders nothing; closing
+ * (Esc, a click outside, the ✕) calls onClose unless `persistent`. The first [data-autofocus] element
+ * takes the focus when there is one.
+ */
 export function Modal({
   open,
   onClose,
@@ -60,109 +77,115 @@ export function Modal({
   icon?: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
-  const titleId = useId();
-  useEscape(open && !persistent, onClose);
-  useFocusReturn(open, panel);
   if (!open) return null;
-  return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-end justify-center sm:items-center sm:p-6" role="presentation">
-      <div className="absolute inset-0 animate-fade-in bg-[rgb(var(--shadow)/0.45)] backdrop-blur-[2px]" onClick={() => !persistent && onClose()} />
-      <div
+  const header = !!(title || subtitle);
+  return (
+    <Dialog open onOpenChange={(v) => !v && !persistent && onClose()}>
+      <DialogContent
         ref={panel}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={title ? titleId : undefined}
-        tabIndex={-1}
+        {...(subtitle ? {} : { 'aria-describedby': undefined })}
+        onOpenAutoFocus={(e) => {
+          const el = panel.current?.querySelector<HTMLElement>('[data-autofocus]');
+          if (el) {
+            e.preventDefault();
+            el.focus({ preventScroll: true });
+          }
+        }}
+        onEscapeKeyDown={(e) => persistent && e.preventDefault()}
+        onPointerDownOutside={(e) => (persistent ? e.preventDefault() : keepForToasts(e))}
+        onInteractOutside={(e) => (persistent ? e.preventDefault() : keepForToasts(e))}
         className={cn(
-          'relative flex max-h-[calc(100%-12px)] w-full animate-rise-in flex-col overflow-hidden rounded-t-xl border border-line bg-surface shadow-pop outline-none sm:max-h-[calc(100%-24px)] sm:rounded-xl',
+          'flex flex-col overflow-hidden border border-line bg-elevated text-ink shadow-dialog',
+          'inset-x-0 bottom-0 max-h-[92dvh] w-full rounded-t-xl',
+          'sm:inset-0 sm:m-auto sm:h-fit sm:max-h-[calc(100dvh-48px)] sm:w-[calc(100%-48px)] sm:rounded-xl',
+          'data-[state=open]:animate-in data-[state=open]:fade-in-0 max-sm:data-[state=open]:slide-in-from-bottom sm:data-[state=open]:zoom-in-[0.97] data-[state=open]:duration-240 max-sm:data-[state=open]:duration-320',
           SIZES[size],
         )}
         style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
-        {(title || subtitle) && (
-          <div className="flex items-start gap-3 border-b border-line px-5 py-4">
-            {icon && <div className="mt-0.5 shrink-0">{icon}</div>}
+        {header ? (
+          <div className="flex items-start gap-3 px-6 pr-14 pt-6">
+            {icon && <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-pop bg-surface-3 text-ink-2">{icon}</div>}
             <div className="min-w-0 flex-1">
-              {title && (
-                <h2 id={titleId} className="font-display text-[19px] font-semibold leading-tight tracking-[-0.01em]">
-                  {title}
-                </h2>
-              )}
-              {subtitle && <p className="mt-1 text-[13px] text-muted">{subtitle}</p>}
+              {title ? <DialogTitle className="text-title text-ink">{title}</DialogTitle> : <DialogTitle className="sr-only">Dialog</DialogTitle>}
+              {subtitle && <DialogDescription className="mt-1 text-body text-muted">{subtitle}</DialogDescription>}
             </div>
-            <button data-close className="btn btn-ghost btn-icon btn-sm -mr-1.5 -mt-1" onClick={onClose} aria-label="Close">
-              <X size={18} />
-            </button>
           </div>
+        ) : (
+          <DialogTitle className="sr-only">Dialog</DialogTitle>
         )}
-        <div className={cn('scroll-thin min-h-0 flex-1 overflow-y-auto px-5 py-4', bodyClass)}>{children}</div>
-        {footer && <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line bg-surface-2/60 px-5 py-3">{footer}</div>}
-      </div>
-    </div>,
-    document.body,
+        <div className={mergeCn('scroll-thin min-h-0 flex-1 overflow-y-auto px-6 py-4', bodyClass)}>{children}</div>
+        {footer && <div className="flex flex-wrap items-center justify-end gap-2 px-6 pb-6 pt-2">{footer}</div>}
+        {header && (
+          <button type="button" data-close className="btn btn-ghost btn-icon btn-sm absolute right-4 top-4" onClick={onClose} aria-label="Close">
+            <X />
+          </button>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
+/** A side sheet: inset on the right on wide screens, full screen on phones. */
 export function Drawer({ open, onClose, title, children, footer, width = 440 }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode; width?: number }) {
-  const panel = useRef<HTMLDivElement>(null);
-  useEscape(open, onClose);
-  useFocusReturn(open, panel);
   if (!open) return null;
-  return createPortal(
-    <div className="fixed inset-0 z-[55]">
-      <div className="absolute inset-0 animate-fade-in bg-[rgb(var(--shadow)/0.35)]" onClick={onClose} />
-      <div
-        ref={panel}
-        role="dialog"
-        aria-modal="true"
-        tabIndex={-1}
-        className="absolute bottom-0 right-0 top-0 flex w-full animate-slide-in-right flex-col border-l border-line bg-surface shadow-pop outline-none"
-        style={{ maxWidth: width, paddingTop: 'env(safe-area-inset-top, 0px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)', paddingRight: 'env(safe-area-inset-right, 0px)' }}
+  return (
+    <Sheet open onOpenChange={(v) => !v && onClose()}>
+      <SheetContent
+        side="right"
+        aria-describedby={undefined}
+        onPointerDownOutside={keepForToasts}
+        onInteractOutside={keepForToasts}
+        className="text-ink"
+        style={{ maxWidth: width, paddingTop: 'env(safe-area-inset-top, 0px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
-        <div className="flex items-center justify-between border-b border-line px-5 py-4">
-          <h2 className="font-display text-lg font-semibold">{title}</h2>
-          <button data-close className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="Close">
-            <X size={18} />
+        <div className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line pl-5 pr-3">
+          <SheetTitle className="min-w-0 truncate text-h3 text-ink">{title}</SheetTitle>
+          <button type="button" data-close className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="Close">
+            <X />
           </button>
         </div>
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
-        {footer && <div className="border-t border-line px-5 py-4">{footer}</div>}
-      </div>
-    </div>,
-    document.body,
+        {footer && <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>}
+      </SheetContent>
+    </Sheet>
   );
 }
 
+/**
+ * A floating panel next to `anchor` (below it, flipping above when there's no room). A click on the
+ * anchor itself doesn't count as "outside", so its own onClick decides (open, or toggle).
+ */
 export function Popover({ open, onClose, anchor, children, align = 'end', className }: { open: boolean; onClose: () => void; anchor: React.RefObject<HTMLElement>; children: ReactNode; align?: 'start' | 'end'; className?: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ top?: number; bottom?: number; left?: number; right?: number; maxHeight?: number }>({ top: 0 });
-  useEscape(open, onClose);
-  useLayoutEffect(() => {
-    if (!open || !anchor.current) return;
-    const r = anchor.current.getBoundingClientRect();
-    const vh = window.innerHeight;
-    // open below, or above when there's clearly more room there; never past the screen edge
-    const below = vh - r.bottom - 14;
-    const above = r.top - 14;
-    const v = below >= 320 || below >= above ? { top: r.bottom + 6, maxHeight: Math.min(vh * 0.7, below) } : { bottom: vh - r.top + 6, maxHeight: Math.min(vh * 0.7, above) };
-    if (align === 'end') setPos({ ...v, right: Math.max(8, window.innerWidth - r.right) });
-    else setPos({ ...v, left: Math.max(8, r.left) });
-  }, [open, anchor, align]);
-  useEffect(() => {
-    if (!open) return;
-    const h = (e: MouseEvent) => {
-      if (ref.current?.contains(e.target as Node) || anchor.current?.contains(e.target as Node)) return;
-      onClose();
-    };
-    window.addEventListener('mousedown', h);
-    return () => window.removeEventListener('mousedown', h);
-  }, [open, onClose, anchor]);
-  if (!open) return null;
-  return createPortal(
-    <div ref={ref} className={cn('fixed z-[70] max-h-[70vh] animate-rise-in overflow-auto rounded-lg border border-line bg-surface p-1.5 shadow-pop', className)} style={{ top: pos.top, bottom: pos.bottom, left: pos.left, right: pos.right, maxHeight: pos.maxHeight }}>
-      {children}
-    </div>,
-    document.body,
+  // closed by a click elsewhere: the focus stays where the person clicked (otherwise it goes back to the anchor)
+  const clickedOutside = useRef(false);
+  return (
+    <PopoverRoot open={open} onOpenChange={(v) => !v && onClose()}>
+      <PopoverAnchor virtualRef={anchor as React.RefObject<HTMLElement>} />
+      {open && (
+        <PopoverContent
+          align={align}
+          side="bottom"
+          sideOffset={6}
+          collisionPadding={8}
+          onOpenAutoFocus={() => {
+            clickedOutside.current = false;
+          }}
+          onInteractOutside={(e) => {
+            if (anchor.current?.contains(e.target as Node)) e.preventDefault();
+            else clickedOutside.current = true;
+          }}
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            if (!clickedOutside.current) anchor.current?.focus({ preventScroll: true });
+            clickedOutside.current = false;
+          }}
+          className={cn('scroll-thin max-h-[min(70vh,var(--radix-popover-content-available-height))] overflow-auto', className)}
+        >
+          {children}
+        </PopoverContent>
+      )}
+    </PopoverRoot>
   );
 }
 
@@ -172,21 +195,39 @@ export function MenuItem({ icon, children, onClick, danger, active }: { icon?: R
       type="button"
       onClick={onClick}
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] font-medium transition-colors',
-        danger ? 'text-bad hover:bg-bad-soft' : 'text-ink-2 hover:bg-surface-2 hover:text-ink',
-        active && 'bg-surface-2 text-ink',
+        'flex h-8 w-full items-center gap-2.5 rounded px-2 text-left text-small font-medium transition-colors duration-120',
+        danger ? 'text-bad hover:bg-bad-soft' : cn('hover:bg-surface-3 hover:text-ink', active ? 'text-ink' : 'text-ink-2'),
       )}
     >
-      {icon && <span className="shrink-0 opacity-80">{icon}</span>}
+      {icon && <span className={cn('flex shrink-0 items-center [&>svg.lucide]:size-4', danger ? 'text-bad' : 'text-muted')}>{icon}</span>}
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {active && <Check size={14} className="text-primary" />}
+      {active && <Check size={14} className="shrink-0 text-primary" aria-hidden="true" />}
     </button>
   );
 }
 
 // ───────────────────────── Controls ─────────────────────────
 
-export function Tabs<T extends string>({ tabs, value, onChange, className, size = 'md' }: { tabs: { id: T; label: ReactNode; icon?: ReactNode; count?: number }[]; value: T; onChange: (v: T) => void; className?: string; size?: 'sm' | 'md' }) {
+/**
+ * Tabs: an underline row (no icons, no pills). `icon` is accepted and ignored. On narrow screens the
+ * row scrolls sideways, fading at the edges, and keeps the selected tab in view.
+ */
+export function Tabs<T extends string>({
+  tabs,
+  value,
+  onChange,
+  className,
+  size = 'md',
+  sticky,
+}: {
+  tabs: { id: T; label: ReactNode; icon?: ReactNode; count?: number }[];
+  value: T;
+  onChange: (v: T) => void;
+  className?: string;
+  size?: 'sm' | 'md';
+  /** stick to the top of the page's scroll area */
+  sticky?: boolean;
+}) {
   const listRef = useRef<HTMLDivElement>(null);
   // on narrow screens the tab row scrolls sideways: keep the selected tab in view
   useEffect(() => {
@@ -198,7 +239,7 @@ export function Tabs<T extends string>({ tabs, value, onChange, className, size 
     }
   }, [value]);
   return (
-    <div ref={listRef} role="tablist" className={cn('scroll-thin flex gap-1 overflow-x-auto border-b border-line', className)}>
+    <div ref={listRef} role="tablist" className={mergeCn('flex gap-6 overflow-x-auto border-b border-line [scrollbar-width:none] max-md:scroll-fade-x max-md:gap-5', sticky && 'sticky top-0 z-10 bg-surface', className)}>
       {tabs.map((t) => (
         <button
           key={t.id}
@@ -206,23 +247,23 @@ export function Tabs<T extends string>({ tabs, value, onChange, className, size 
           aria-selected={value === t.id}
           onClick={() => onChange(t.id)}
           className={cn(
-            '-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-3 font-semibold transition-colors',
-            size === 'sm' ? 'h-9 text-[13px]' : 'h-11 text-sm',
-            value === t.id ? 'border-primary text-ink' : 'border-transparent text-muted hover:text-ink',
+            '-mb-px inline-flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 transition-colors duration-120',
+            size === 'sm' ? 'h-9 text-small font-medium' : 'h-10 text-ui',
+            value === t.id ? 'border-ink text-ink' : 'border-transparent text-muted hover:text-ink-2',
           )}
         >
-          {t.icon}
           {t.label}
-          {t.count !== undefined && <span className={cn('num rounded-full px-1.5 text-2xs', value === t.id ? 'bg-primary-soft text-primary' : 'bg-surface-2 text-muted')}>{t.count}</span>}
+          {t.count !== undefined && <span className="num font-mono text-caption text-muted">{t.count}</span>}
         </button>
       ))}
     </div>
   );
 }
 
+/** A segmented control (radio group): a grey track with a raised thumb on the selected option. */
 export function Segmented<T extends string>({ options, value, onChange, size = 'md', className }: { options: { id: T; label: ReactNode; icon?: ReactNode }[]; value: T; onChange: (v: T) => void; size?: 'sm' | 'md'; className?: string }) {
   return (
-    <div role="radiogroup" className={cn('scroll-thin inline-flex max-w-full overflow-x-auto rounded-md border border-line-2 bg-surface-2 p-0.5', className)}>
+    <div role="radiogroup" className={mergeCn('inline-flex max-w-full gap-0.5 overflow-x-auto rounded-md bg-surface-3 p-0.5 [scrollbar-width:none]', className)}>
       {options.map((o) => (
         <button
           key={o.id}
@@ -230,9 +271,9 @@ export function Segmented<T extends string>({ options, value, onChange, size = '
           aria-checked={value === o.id}
           onClick={() => onChange(o.id)}
           className={cn(
-            'inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[5px] px-2.5 font-semibold transition-colors',
-            size === 'sm' ? 'h-7 text-xs' : 'h-8 text-[13px]',
-            value === o.id ? 'bg-surface text-ink shadow-card' : 'text-muted hover:text-ink',
+            'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded transition-colors duration-120 [&>svg]:size-3.5 [&>svg]:shrink-0',
+            size === 'sm' ? 'h-7 px-2.5 text-caption font-medium' : 'h-8 px-3 text-small font-medium',
+            value === o.id ? 'segmented-on text-ink' : 'text-muted hover:text-ink',
           )}
         >
           {o.icon}
@@ -243,11 +284,12 @@ export function Segmented<T extends string>({ options, value, onChange, size = '
   );
 }
 
+/** A switch, with an optional label and description beside it. */
 export function Toggle({ checked, onChange, label, description, disabled, id }: { checked: boolean; onChange: (v: boolean) => void; label?: ReactNode; description?: ReactNode; disabled?: boolean; id?: string }) {
   const auto = useId();
   const tid = id ?? auto;
   return (
-    <label htmlFor={tid} className={cn('flex cursor-pointer items-start gap-3', disabled && 'cursor-not-allowed opacity-60')}>
+    <label htmlFor={tid} className={cn('flex items-start gap-3', disabled ? 'cursor-not-allowed' : 'cursor-pointer')}>
       <button
         id={tid}
         type="button"
@@ -255,14 +297,18 @@ export function Toggle({ checked, onChange, label, description, disabled, id }: 
         aria-checked={checked}
         disabled={disabled}
         onClick={() => onChange(!checked)}
-        className={cn('relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors', checked ? 'bg-primary' : 'bg-line-2')}
+        className={cn(
+          // (no "disabled:" variants here: tests read this tag's attributes for the word)
+          'relative mt-0.5 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-180 ease-out',
+          disabled ? 'cursor-not-allowed bg-surface-3' : checked ? 'bg-primary' : 'bg-surface-3 shadow-[inset_0_0_0_1px_rgb(var(--line-2))]',
+        )}
       >
-        <span className={cn('inline-block h-4 w-4 rounded-full bg-white shadow transition-transform', checked ? 'translate-x-[18px]' : 'translate-x-0.5')} />
+        <span className={cn('switch-thumb inline-block h-4 w-4 rounded-full transition-transform duration-180 ease-out', disabled ? 'bg-surface-2' : 'bg-thumb', checked ? 'translate-x-[18px]' : 'translate-x-0.5')} />
       </button>
       {(label || description) && (
         <span className="min-w-0">
-          {label && <span className="block text-sm font-semibold text-ink">{label}</span>}
-          {description && <span className="mt-0.5 block text-xs text-muted">{description}</span>}
+          {label && <span className={cn('block text-ui', disabled ? 'text-faint' : 'text-ink')}>{label}</span>}
+          {description && <span className="mt-0.5 block text-small text-muted">{description}</span>}
         </span>
       )}
     </label>
@@ -279,11 +325,18 @@ export function Field({ label, hint, error, children, className, htmlFor, right 
               {label}
             </label>
           )}
-          {right && <div className="mb-1.5 text-xs text-muted">{right}</div>}
+          {right && <div className="mb-1.5 text-caption text-muted">{right}</div>}
         </div>
       )}
       {children}
-      {error ? <p className="mt-1 text-xs font-medium text-bad">{error}</p> : hint ? <p className="hint">{hint}</p> : null}
+      {error ? (
+        <p className="mt-1.5 flex items-center gap-1.5 text-caption text-bad">
+          <CircleAlert size={14} className="shrink-0" aria-hidden="true" />
+          {error}
+        </p>
+      ) : hint ? (
+        <p className="hint">{hint}</p>
+      ) : null}
     </div>
   );
 }
@@ -297,7 +350,7 @@ export function AutoTextarea({ value, onChange, minRows = 3, className, ...rest 
       // not rendered (e.g. on a hidden tab): measure once it shows
       if (!el.offsetParent && el.getClientRects().length === 0) return;
       el.style.height = 'auto';
-      el.style.height = `${Math.max(el.scrollHeight + 2, minRows * 22 + 18)}px`;
+      el.style.height = `${Math.max(el.scrollHeight + 2, minRows * 22 + 20)}px`;
     };
     fit();
     if (typeof ResizeObserver === 'undefined') return;
@@ -327,11 +380,11 @@ export function ChipInput({ values, onChange, placeholder, max = 20, prefix }: {
     setDraft('');
   };
   return (
-    <div className="flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border border-line-2 bg-surface px-2 py-1.5 focus-within:border-primary focus-within:shadow-focus">
+    <div className="flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border border-line-2 bg-surface px-2 py-1 transition-[border-color,box-shadow] duration-120 focus-within:border-ring focus-within:shadow-focus hover:border-line-3 dark:bg-surface-2">
       {values.map((v) => (
-        <span key={v} className="inline-flex items-center gap-1 rounded bg-surface-2 py-0.5 pl-2 pr-1 text-xs font-medium text-ink-2">
+        <span key={v} className="inline-flex items-center gap-1 rounded-sm bg-surface-3 py-0.5 pl-2 pr-0.5 text-caption font-medium text-ink-2">
           {v}
-          <button type="button" className="rounded p-0.5 text-muted hover:bg-surface-3 hover:text-ink" onClick={() => onChange(values.filter((x) => x !== v))} aria-label={`Remove ${v}`}>
+          <button type="button" className="relative flex h-4 w-4 items-center justify-center rounded-xs text-muted hover:text-ink before:absolute before:-inset-1.5 [@media(pointer:coarse)]:before:-inset-3" onClick={() => onChange(values.filter((x) => x !== v))} aria-label={`Remove ${v}`}>
             <X size={12} />
           </button>
         </span>
@@ -347,7 +400,7 @@ export function ChipInput({ values, onChange, placeholder, max = 20, prefix }: {
         }}
         onBlur={() => add(draft)}
         placeholder={values.length ? '' : placeholder}
-        className="min-w-[90px] flex-1 bg-transparent px-1 text-[13px] outline-none placeholder:text-faint"
+        className="h-7 min-w-[90px] flex-1 bg-transparent px-1 text-body text-ink outline-none placeholder:text-muted max-sm:text-body-lg"
       />
     </div>
   );
@@ -380,28 +433,86 @@ export function Spinner({ size = 16, className }: { size?: number; className?: s
   return <Loader2 size={size} className={cn('animate-spin', className)} aria-hidden="true" />;
 }
 
-export function Empty({ icon, title, body, action, className }: { icon?: ReactNode; title: ReactNode; body?: ReactNode; action?: ReactNode; className?: string }) {
+/**
+ * An empty state. `section` (default) sits inside a section; `page` fills a page; `ai` is the page
+ * variant for "the AI can do this for you" (aura tile, an optional `summary` line and a ghosted
+ * `preview`); `inline` is one muted line. No dashed borders.
+ */
+export function Empty({
+  icon,
+  title,
+  body,
+  action,
+  className,
+  variant = 'section',
+  preview,
+  summary,
+}: {
+  icon?: ReactNode;
+  title: ReactNode;
+  body?: ReactNode;
+  action?: ReactNode;
+  className?: string;
+  variant?: 'section' | 'page' | 'ai' | 'inline';
+  preview?: ReactNode;
+  summary?: ReactNode;
+}) {
+  if (variant === 'inline') {
+    return (
+      <p className={mergeCn('flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted', className)}>
+        <span>{title}</span>
+        {body && <span>{body}</span>}
+        {action}
+      </p>
+    );
+  }
+  if (variant === 'section') {
+    return (
+      <div className={mergeCn('flex flex-col items-center justify-center px-6 py-10 text-center', className)}>
+        {icon && <div className="mb-3 flex h-8 w-8 items-center justify-center rounded-md bg-surface-3 text-ink-2 [&>svg]:size-4">{icon}</div>}
+        <p className="text-h4 text-ink">{title}</p>
+        {body && <p className="mt-1 max-w-sm text-small text-muted">{body}</p>}
+        {action && <div className="mt-4 flex flex-wrap justify-center gap-2">{action}</div>}
+      </div>
+    );
+  }
+  const ai = variant === 'ai';
   return (
-    <div className={cn('flex flex-col items-center justify-center rounded-lg border border-dashed border-line-2 px-6 py-10 text-center', className)}>
-      {icon && <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-surface-2 text-muted">{icon}</div>}
-      <p className="font-display text-[16px] font-semibold text-ink">{title}</p>
-      {body && <p className="mt-1 max-w-md text-[13px] text-muted">{body}</p>}
-      {action && <div className="mt-4 flex flex-wrap justify-center gap-2">{action}</div>}
+    <div className={mergeCn('flex flex-col items-center px-4 text-center', ai ? 'ai-hero-glow rounded-stage py-14' : 'py-16', className)}>
+      <div className="flex w-full max-w-[440px] flex-col items-center">
+        {ai ? (
+          <div className="aura-edge mb-4 flex h-[52px] w-[52px] items-center justify-center rounded-stage shadow-ai">
+            <Spark size={24} />
+          </div>
+        ) : (
+          icon && <div className="mb-4 flex h-[52px] w-[52px] items-center justify-center rounded-stage bg-surface-3 text-ink-2 [&>svg]:size-6">{icon}</div>
+        )}
+        <h2 className="text-h2 text-ink">{title}</h2>
+        {body && <p className="mt-2 text-body text-muted">{body}</p>}
+        {summary && <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-small text-muted">{summary}</div>}
+        {action && <div className="mt-5 flex flex-wrap items-center justify-center gap-3">{action}</div>}
+      </div>
+      {preview && (
+        <div aria-hidden="true" className="pointer-events-none mt-10 w-full select-none opacity-50">
+          {preview}
+        </div>
+      )}
     </div>
   );
 }
 
+/** Kept for the SEO score only (other rings become ProgressBar in Phase 2). */
 export function ProgressRing({ value, size = 44, stroke = 5, color = 'rgb(var(--primary))', label }: { value: number; size?: number; stroke?: number; color?: string; label?: ReactNode }) {
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const v = Math.max(0, Math.min(1, value));
   return (
     <div className="relative inline-flex shrink-0 items-center justify-center" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="-rotate-90">
+      <svg width={size} height={size} className="-rotate-90" aria-hidden="true">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgb(var(--surface-3))" strokeWidth={stroke} />
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeDasharray={c} strokeDashoffset={c * (1 - v)} strokeLinecap="round" style={{ transition: 'stroke-dashoffset .5s ease' }} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeDasharray={c} strokeDashoffset={c * (1 - v)} strokeLinecap="round" style={{ transition: 'stroke-dashoffset .5s cubic-bezier(0.22, 1, 0.36, 1)' }} />
       </svg>
-      <span className="num absolute text-[11px] font-bold">{label ?? `${Math.round(v * 100)}%`}</span>
+      <span className="num absolute text-micro text-ink">{label ?? `${Math.round(v * 100)}%`}</span>
     </div>
   );
 }
@@ -420,67 +531,9 @@ export function CopyButton({ text, label = 'Copy', size = 'sm', className }: { t
         } else useUI.getState().toast({ kind: 'error', title: 'Copy was blocked', body: 'Select the text and copy it manually.' });
       }}
     >
-      {done ? <Check size={14} className="text-good" /> : <Copy size={14} />}
+      {done ? <Check className="text-good" /> : <Copy />}
       {done ? 'Copied' : label}
     </button>
-  );
-}
-
-/**
- * Where toasts go: the corner, above the assistant's chat button (so they don't cover it), or, while its
- * panel is open, beside the panel on wide screens and at the top on smaller ones.
- */
-export type ToastPlacement = 'corner' | 'above-launcher' | 'beside-panel';
-
-export function Toaster({ placement = 'corner' }: { placement?: ToastPlacement }) {
-  const toasts = useUI((s) => s.toasts);
-  const dismiss = useUI((s) => s.dismissToast);
-  const safeBottom = 'max(16px, env(safe-area-inset-bottom, 0px))';
-  return createPortal(
-    <div
-      className={cn('pointer-events-none fixed right-0 z-[80] flex w-full max-w-[380px] flex-col gap-2 p-4', placement === 'beside-panel' ? 'top-0 lg:bottom-0 lg:right-[416px] lg:top-auto' : 'bottom-0')}
-      style={{
-        paddingBottom: placement === 'above-launcher' ? `calc(${safeBottom} + 72px)` : safeBottom,
-        paddingRight: 'max(16px, env(safe-area-inset-right, 0px))',
-        ...(placement === 'beside-panel' ? { paddingTop: 'max(16px, env(safe-area-inset-top, 0px))' } : {}),
-      }}
-      aria-live="polite"
-    >
-      {toasts.map((t) => (
-        <div key={t.id} className="pointer-events-auto flex animate-rise-in items-start gap-3 rounded-lg border border-line bg-surface p-3 pr-2 shadow-pop">
-          <span
-            className={cn(
-              'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full',
-              t.kind === 'success' && 'bg-good-soft text-good',
-              t.kind === 'error' && 'bg-bad-soft text-bad',
-              t.kind === 'info' && 'bg-info-soft text-info',
-              t.kind === 'ai' && 'bg-accent-soft text-on-accent',
-            )}
-          >
-            {t.kind === 'success' ? <Check size={14} /> : t.kind === 'error' ? <CircleAlert size={14} /> : t.kind === 'ai' ? <Sparkles size={13} /> : <Info size={14} />}
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-semibold text-ink">{t.title}</p>
-            {t.body && <p className="mt-0.5 text-xs text-muted">{t.body}</p>}
-            {t.action && (
-              <button
-                className="link mt-1 text-xs"
-                onClick={() => {
-                  t.action!.run();
-                  dismiss(t.id);
-                }}
-              >
-                {t.action.label}
-              </button>
-            )}
-          </div>
-          <button className="rounded p-1 text-muted hover:bg-surface-2 hover:text-ink" onClick={() => dismiss(t.id)} aria-label="Dismiss">
-            <X size={14} />
-          </button>
-        </div>
-      ))}
-    </div>,
-    document.body,
   );
 }
 
@@ -504,48 +557,63 @@ export function confirmAction(opts: Omit<ConfirmReq, 'resolve'>): Promise<boolea
   });
 }
 
+/** The confirm dialog: Cancel (secondary) and Confirm (solid red when it destroys something). */
 export function ConfirmHost() {
   const req = useConfirmStore((s) => s.req);
   const set = useConfirmStore((s) => s.set);
+  const confirmRef = useRef<HTMLButtonElement>(null);
   const close = (v: boolean) => {
     req?.resolve(v);
     set(null);
   };
+  if (!req) return null;
   return (
-    <Modal
-      open={!!req}
-      onClose={() => close(false)}
-      size="sm"
-      title={req?.title}
-      footer={
-        <>
-          <button className="btn btn-secondary btn-sm" onClick={() => close(false)}>
-            {req?.cancelLabel ?? 'Cancel'}
+    <AlertDialog open onOpenChange={(v) => !v && close(false)}>
+      <AlertDialogContent
+        {...(req.body ? {} : { 'aria-describedby': undefined })}
+        onOpenAutoFocus={(e) => {
+          // a destructive question starts on Cancel (the Radix default); any other on Confirm
+          if (req.danger) return;
+          e.preventDefault();
+          confirmRef.current?.focus({ preventScroll: true });
+        }}
+        className={cn(
+          'flex flex-col border border-line bg-elevated p-6 text-ink shadow-dialog',
+          'inset-x-0 bottom-0 w-full rounded-t-xl',
+          'sm:inset-0 sm:m-auto sm:h-fit sm:w-[calc(100%-48px)] sm:max-w-[440px] sm:rounded-xl',
+          'data-[state=open]:animate-in data-[state=open]:fade-in-0 max-sm:data-[state=open]:slide-in-from-bottom sm:data-[state=open]:zoom-in-[0.97] data-[state=open]:duration-240 max-sm:data-[state=open]:duration-320',
+        )}
+        style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom, 0px))' }}
+      >
+        <AlertDialogTitle className="text-title text-ink">{req.title}</AlertDialogTitle>
+        {req.body && <AlertDialogDescription className="mt-1.5 text-body text-ink-2">{req.body}</AlertDialogDescription>}
+        <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+          <AlertDialogCancel className="btn-sm" onClick={() => close(false)}>
+            {req.cancelLabel ?? 'Cancel'}
+          </AlertDialogCancel>
+          <button ref={confirmRef} type="button" data-autofocus className={cn('btn btn-sm', req.danger ? 'btn-danger' : 'btn-primary')} onClick={() => close(true)}>
+            {req.confirmLabel ?? 'Confirm'}
           </button>
-          <button data-autofocus className={cn('btn btn-sm', req?.danger ? 'bg-bad text-white hover:bg-bad/90' : 'btn-primary')} onClick={() => close(true)}>
-            {req?.confirmLabel ?? 'Confirm'}
-          </button>
-        </>
-      }
-    >
-      <p className="text-sm text-ink-2">{req?.body}</p>
-    </Modal>
+        </div>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
 // ───────────────────────── Small display helpers ─────────────────────────
 
 export function Swatch({ color, size = 14, className }: { color: string; size?: number; className?: string }) {
-  return <span className={cn('inline-block shrink-0 rounded-full ring-1 ring-black/10', className)} style={{ width: size, height: size, background: color }} />;
+  return <span className={cn('inline-block shrink-0 rounded-full ring-1 ring-ink/10', className)} style={{ width: size, height: size, background: color }} />;
 }
 
+/** A section's header (title, description, actions): the same look as <Section>'s. */
 export function SectionHeader({ title, desc, action, eyebrow }: { title: ReactNode; desc?: ReactNode; action?: ReactNode; eyebrow?: ReactNode }) {
   return (
-    <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
       <div className="min-w-0">
-        {eyebrow && <p className="eyebrow mb-1">{eyebrow}</p>}
-        <h2 className="section-title">{title}</h2>
-        {desc && <p className="mt-0.5 text-[13px] text-muted">{desc}</p>}
+        {eyebrow && <p className="mb-1 text-caption text-muted">{eyebrow}</p>}
+        <h2 className="text-h2 text-ink">{title}</h2>
+        {desc && <p className="mt-1 text-small text-muted">{desc}</p>}
       </div>
       {action && <div className="flex flex-wrap items-center gap-2">{action}</div>}
     </div>
@@ -570,7 +638,581 @@ export function LinesEditor({ values, onChange, minRows = 3, placeholder, classN
       }}
       minRows={minRows}
       placeholder={placeholder}
-      className={cn('text-[13px]', className)}
+      className={className}
     />
   );
+}
+
+// ───────────────────────── Page structure ─────────────────────────
+
+/** One per routed page: the page's name, a one-line description, meta, and its actions. */
+export function PageHeader({
+  title,
+  description,
+  meta,
+  actions,
+  back,
+  size = 'default',
+  className,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  meta?: ReactNode;
+  actions?: ReactNode;
+  back?: { label: string; onClick: () => void };
+  size?: 'default' | 'display';
+  className?: string;
+}) {
+  const text = typeof description === 'string' ? description : undefined;
+  return (
+    <header className={mergeCn('mb-6', className)}>
+      {back && (
+        <button type="button" className="btn btn-ghost btn-sm -ml-2 mb-2" onClick={back.onClick}>
+          <ChevronLeft />
+          {back.label}
+        </button>
+      )}
+      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div className="min-w-0">
+          <h1 className={cn('text-ink', size === 'display' ? 'text-phone-display sm:text-display' : 'text-phone-h1 sm:text-h1')}>{title}</h1>
+          {description && (
+            <p className={cn('mt-1 truncate text-body-lg text-muted', text && text.length > 48 && 'max-sm:hidden')} title={text}>
+              {description}
+            </p>
+          )}
+          {meta && <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted">{meta}</div>}
+        </div>
+        {actions && <div className="flex flex-wrap items-center gap-2 md:shrink-0">{actions}</div>}
+      </div>
+    </header>
+  );
+}
+
+/** A titled section of a page (sections, not boxes). */
+export function Section({ title, description, actions, divider, id, className, children }: { title?: ReactNode; description?: ReactNode; actions?: ReactNode; divider?: boolean; id?: string; className?: string; children: ReactNode }) {
+  return (
+    <section id={id} className={mergeCn('mt-10 first:mt-0', divider && 'border-t border-line pt-8', className)}>
+      {(title || description || actions) && (
+        <div className="mb-4 flex items-end justify-between gap-3">
+          <div className="min-w-0">
+            {title && <h2 className="text-h2 text-ink">{title}</h2>}
+            {description && <p className="mt-1 text-small text-muted">{description}</p>}
+          </div>
+          {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+        </div>
+      )}
+      {children}
+    </section>
+  );
+}
+
+const STAT_COLS: Record<number, string> = { 1: 'lg:grid-cols-1', 2: 'lg:grid-cols-2', 3: 'lg:grid-cols-3', 4: 'lg:grid-cols-4', 5: 'lg:grid-cols-5', 6: 'lg:grid-cols-6' };
+
+/** Key numbers in one card, split by hairlines (2×2 on phones). A delta shows only when there's a baseline. */
+export function StatStrip({
+  items,
+  className,
+}: {
+  items: { label: ReactNode; value: ReactNode; sub?: ReactNode; delta?: number | null; upIsGood?: boolean; info?: ReactNode; onClick?: () => void }[];
+  className?: string;
+}) {
+  const odd = items.length % 2 === 1;
+  return (
+    <div className={mergeCn('card grid grid-cols-2 gap-px overflow-hidden bg-line', STAT_COLS[Math.min(6, Math.max(1, items.length))], className)}>
+      {items.map((it, i) => {
+        const delta = typeof it.delta === 'number' && Number.isFinite(it.delta) ? it.delta : null;
+        const good = delta === null ? null : (delta >= 0) === (it.upIsGood ?? true);
+        const inner = (
+          <>
+            <span className="flex items-center gap-1 text-small text-muted">
+              {it.label}
+              {it.info && <InfoTip>{it.info}</InfoTip>}
+            </span>
+            <span className="num mt-1 block text-phone-kpi text-ink sm:text-kpi">{it.value}</span>
+            <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-caption text-muted">
+              {it.sub}
+              {delta !== null && delta !== 0 && (
+                <span className={cn('font-mono', good ? 'text-good' : 'text-bad')}>
+                  {delta > 0 ? '↑' : '↓'} {Math.abs(delta)}
+                </span>
+              )}
+            </span>
+          </>
+        );
+        const cell = cn('min-w-0 bg-surface px-5 py-4 text-left', odd && i === items.length - 1 && 'col-span-2 lg:col-span-1');
+        return it.onClick ? (
+          <button key={i} type="button" onClick={it.onClick} className={cn(cell, 'transition-colors duration-120 hover:bg-surface-2')}>
+            {inner}
+          </button>
+        ) : (
+          <div key={i} className={cell}>
+            {inner}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const DOT: Record<'good' | 'warn' | 'bad' | 'primary' | 'faint', string> = { good: 'bg-good-solid', warn: 'bg-warn-solid', bad: 'bg-bad-solid', primary: 'bg-primary', faint: 'bg-faint' };
+
+/** A small coloured dot with a word: the state of a post, page or connection. */
+export function StatusDot({ tone, pulse, children }: { tone: 'good' | 'warn' | 'bad' | 'primary' | 'faint'; pulse?: boolean; children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-small font-medium text-ink-2">
+      <span className={cn('h-[7px] w-[7px] shrink-0 rounded-full', DOT[tone], pulse && 'animate-pulse-dot')} aria-hidden="true" />
+      {children}
+    </span>
+  );
+}
+
+const BADGE: Record<'neutral' | 'good' | 'warn' | 'bad' | 'primary', string> = {
+  neutral: '',
+  good: 'bg-good-soft text-good',
+  warn: 'bg-warn-soft text-warn',
+  bad: 'bg-bad-soft text-bad',
+  primary: 'bg-primary-soft text-primary',
+};
+
+/** A badge, only for state that changes what you can do. tone="ai" is for "AI draft" only. */
+export function Badge({ tone = 'neutral', dot, children, className }: { tone?: 'neutral' | 'good' | 'warn' | 'bad' | 'primary' | 'ai'; dot?: boolean; children: ReactNode; className?: string }) {
+  if (tone === 'ai') {
+    return (
+      <span className={mergeCn('badge badge-ai text-ink-2', className)}>
+        <Spark size={12} />
+        {children}
+      </span>
+    );
+  }
+  return (
+    <span className={mergeCn('badge', BADGE[tone], className)}>
+      {dot && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />}
+      {children}
+    </span>
+  );
+}
+
+export function Kbd({ children }: { children: ReactNode }) {
+  return <kbd className="kbd">{children}</kbd>;
+}
+
+/**
+ * A ⓘ button that opens a small popover: where standing disclaimers, "how it works" paragraphs,
+ * model and cost notes and host-specific help go, instead of on the page.
+ */
+export function InfoTip({ title, children, label, link }: { title?: ReactNode; children: ReactNode; label?: string; link?: { label: string; onClick: () => void } }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <PopoverRoot open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted transition-colors duration-120 hover:text-ink" aria-label={label ?? 'More info'}>
+          <CircleHelp size={16} aria-hidden="true" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" collisionPadding={8} className="w-80 max-w-[calc(100vw-16px)] p-3">
+        {title && <p className="text-small font-semibold text-ink">{title}</p>}
+        <div className={cn('text-small text-ink-2', title && 'mt-1')}>{children}</div>
+        {link && (
+          <button
+            type="button"
+            className="link mt-2 text-small"
+            onClick={() => {
+              setOpen(false);
+              link.onClick();
+            }}
+          >
+            {link.label}
+          </button>
+        )}
+      </PopoverContent>
+    </PopoverRoot>
+  );
+}
+
+const CALLOUT = {
+  info: { box: 'border-primary-line bg-primary-soft', icon: 'text-primary', Icon: Info },
+  good: { box: 'border-good-line bg-good-soft', icon: 'text-good', Icon: CircleCheck },
+  warn: { box: 'border-warn-line bg-warn-soft', icon: 'text-warn', Icon: TriangleAlert },
+  bad: { box: 'border-bad-line bg-bad-soft', icon: 'text-bad', Icon: CircleAlert },
+} as const;
+
+/** A tinted note for state that needs action (at most one per page). */
+export function Callout({ tone, title, action, onDismiss, children, className }: { tone: 'info' | 'good' | 'warn' | 'bad'; title?: ReactNode; action?: ReactNode; onDismiss?: () => void; children: ReactNode; className?: string }) {
+  const t = CALLOUT[tone];
+  return (
+    <div className={mergeCn('flex items-start gap-2.5 rounded-pop border px-3 py-2.5', t.box, className)} role={tone === 'bad' ? 'alert' : undefined}>
+      <t.Icon size={16} className={cn('mt-0.5 shrink-0', t.icon)} aria-hidden="true" />
+      <div className="min-w-0 flex-1 text-small text-ink-2">
+        {title && <p className="font-semibold text-ink">{title}</p>}
+        <div>{children}</div>
+      </div>
+      {action && <div className="flex shrink-0 items-center gap-2 self-center">{action}</div>}
+      {onDismiss && (
+        <button type="button" className="btn btn-ghost btn-icon btn-xs -my-1 -mr-1 shrink-0" onClick={onDismiss} aria-label="Dismiss">
+          <X />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** A settings card: a title and rows of label + control. */
+export function SettingsSection({ title, description, actions, children, id }: { title: ReactNode; description?: ReactNode; actions?: ReactNode; children: ReactNode; id?: string }) {
+  return (
+    <section id={id} className="card">
+      <div className="flex items-start justify-between gap-3 px-5 pb-1 pt-5">
+        <div className="min-w-0">
+          <h3 className="text-h3 text-ink">{title}</h3>
+          {description && <p className="mt-0.5 text-small text-muted">{description}</p>}
+        </div>
+        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+      </div>
+      <div className="px-5 pb-1">{children}</div>
+    </section>
+  );
+}
+
+export function SettingsRow({ label, description, htmlFor, stack, children }: { label: ReactNode; description?: ReactNode; htmlFor?: string; stack?: boolean; children: ReactNode }) {
+  return (
+    <div className={cn('grid gap-x-8 gap-y-2 border-t border-line py-4 first:border-t-0', !stack && 'md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]')}>
+      <div className="min-w-0">
+        {htmlFor ? (
+          <label htmlFor={htmlFor} className="block text-ui text-ink">
+            {label}
+          </label>
+        ) : (
+          <p className="text-ui text-ink">{label}</p>
+        )}
+        {description && <p className="clamp-2 mt-0.5 text-small text-muted">{description}</p>}
+      </div>
+      <div className="flex min-w-0 items-center md:justify-end [&>.input]:max-w-[420px] [&>.select]:max-w-[420px] [&>.textarea]:max-w-[420px]">{children}</div>
+    </div>
+  );
+}
+
+/** A thin progress bar ("3 of 5"), or n gapped segments. */
+export function ProgressBar({ value, max = 100, label, segments, className }: { value: number; max?: number; label?: ReactNode; segments?: number; className?: string }) {
+  const v = Math.max(0, Math.min(max, value));
+  const done = max > 0 && v >= max;
+  return (
+    <div className={mergeCn('flex items-center gap-3', className)}>
+      <div role="progressbar" aria-valuemin={0} aria-valuemax={max} aria-valuenow={v} className={cn('flex min-w-0 flex-1', segments ? 'gap-1' : 'h-1 overflow-hidden rounded-full bg-surface-3')}>
+        {segments ? (
+          Array.from({ length: segments }, (_, i) => <span key={i} className={cn('h-1 flex-1 rounded-full', i < Math.round((v / (max || 1)) * segments) ? (done ? 'bg-good-solid' : 'bg-primary') : 'bg-surface-3')} />)
+        ) : (
+          <span className={cn('h-full rounded-full transition-[width] duration-240 ease-out', done ? 'bg-good-solid' : 'bg-primary')} style={{ width: `${max > 0 ? (v / max) * 100 : 0}%` }} />
+        )}
+      </div>
+      {label && <span className="num shrink-0 font-mono text-caption text-muted">{label}</span>}
+    </div>
+  );
+}
+
+/** Vertical steps: only the current one is open; done ones show their one-line summary. */
+export function Stepper({ steps }: { steps: { title: ReactNode; summary?: ReactNode; state: 'done' | 'current' | 'upcoming'; content?: ReactNode }[] }) {
+  return (
+    <ol className="flex flex-col">
+      {steps.map((s, i) => {
+        const last = i === steps.length - 1;
+        return (
+          <li key={i} className="relative flex gap-3 pb-5 last:pb-0" aria-current={s.state === 'current' ? 'step' : undefined}>
+            {!last && <span aria-hidden="true" className={cn('absolute bottom-0 left-3 top-7 w-px', s.state === 'done' ? 'bg-primary-line' : 'bg-line')} />}
+            <span
+              className={cn(
+                'relative z-[1] flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-caption font-semibold',
+                s.state === 'done' && 'bg-primary-soft text-primary',
+                s.state === 'current' && 'bg-primary text-on-primary ring-[3px] ring-primary/15',
+                s.state === 'upcoming' && 'border border-line bg-surface-2 text-muted',
+              )}
+            >
+              {s.state === 'done' ? <Check size={14} aria-hidden="true" /> : i + 1}
+            </span>
+            <div className="min-w-0 flex-1 pt-0.5">
+              <p className={cn('text-h4', s.state === 'upcoming' ? 'text-muted' : 'text-ink')}>{s.title}</p>
+              {s.state === 'done' && s.summary && <p className="mt-0.5 text-small text-muted">{s.summary}</p>}
+              {s.state === 'current' && s.content && <div className="mt-3">{s.content}</div>}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+export function Skeleton({ className, ai }: { className?: string; ai?: boolean }) {
+  return <div aria-hidden="true" className={cn('skeleton', ai && 'skeleton-ai', className)} />;
+}
+
+/** A tooltip on any element (required on icon-only buttons). The provider is mounted in main.tsx. */
+export function Tooltip({ content, side = 'top', kbd, children }: { content: ReactNode; side?: 'top' | 'right' | 'bottom' | 'left'; kbd?: string; children: ReactElement }) {
+  return (
+    <TooltipRoot>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={side}>
+        {content}
+        {kbd && <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-sm border border-on-inverse/25 px-[5px] font-mono text-micro text-on-inverse/80">{kbd}</span>}
+      </TooltipContent>
+    </TooltipRoot>
+  );
+}
+
+export type MenuEntry = { label: ReactNode; icon?: ReactNode; onSelect: () => void; danger?: boolean; disabled?: boolean; shortcut?: string; checked?: boolean } | 'separator' | { group: string };
+
+/** A dropdown menu on any trigger element. */
+export function Menu({ trigger, items, align = 'end', className }: { trigger: ReactElement; items: MenuEntry[]; align?: 'start' | 'end'; className?: string }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+      <DropdownMenuContent align={align} collisionPadding={8} className={className}>
+        <MenuEntries items={items} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function MenuEntries({ items }: { items: MenuEntry[] }) {
+  return (
+    <>
+      {items.map((it, i) => {
+        if (it === 'separator') return <DropdownMenuSeparator key={i} />;
+        if ('group' in it) return <DropdownMenuLabel key={i}>{it.group}</DropdownMenuLabel>;
+        return (
+          <DropdownMenuItem key={i} disabled={it.disabled} onSelect={() => it.onSelect()} className={cn(it.danger && 'text-bad focus:bg-bad-soft focus:text-bad [&>svg]:text-bad')}>
+            {it.icon}
+            <span className="min-w-0 flex-1 truncate">{it.label}</span>
+            {it.checked && <Check className="!text-primary" aria-hidden="true" />}
+            {it.shortcut && <DropdownMenuShortcut>{it.shortcut}</DropdownMenuShortcut>}
+          </DropdownMenuItem>
+        );
+      })}
+    </>
+  );
+}
+
+/** The standard "⋯" menu for rows, cards and footers. */
+export function MoreMenu({ items, label, size = 'sm' }: { items: MenuEntry[]; label?: string; size?: 'xs' | 'sm' }) {
+  return (
+    <DropdownMenu>
+      <Tooltip content="More">
+        <DropdownMenuTrigger asChild>
+          <button type="button" className={cn('btn btn-ghost btn-icon', size === 'xs' ? 'btn-xs' : 'btn-sm')} aria-label={label ?? 'More actions'}>
+            <Ellipsis />
+          </button>
+        </DropdownMenuTrigger>
+      </Tooltip>
+      <DropdownMenuContent align="end" collisionPadding={8}>
+        <DropdownMenuGroup>
+          <MenuEntries items={items} />
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** A select (Radix). A native <select className="select"> stays valid where it's simpler or tested. */
+export function Select<T extends string>({
+  value,
+  onChange,
+  options,
+  placeholder,
+  size = 'md',
+  disabled,
+  id,
+  'aria-label': ariaLabel,
+  className,
+}: {
+  value: T | '';
+  onChange: (v: T) => void;
+  options: { value: T; label: ReactNode; description?: ReactNode; icon?: ReactNode; disabled?: boolean }[];
+  placeholder?: string;
+  size?: 'sm' | 'md';
+  disabled?: boolean;
+  id?: string;
+  'aria-label'?: string;
+  className?: string;
+}) {
+  return (
+    <SelectRoot value={value} onValueChange={(v) => onChange(v as T)} disabled={disabled}>
+      <SelectTrigger id={id} aria-label={ariaLabel} className={cn(size === 'sm' && 'h-8 text-small max-sm:h-9', className)}>
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value} disabled={o.disabled}>
+            <span className="flex min-w-0 items-center gap-2">
+              {o.icon && <span className="flex shrink-0 text-muted [&>svg]:size-4">{o.icon}</span>}
+              <span className="min-w-0">
+                <span className="block truncate">{o.label}</span>
+                {o.description && <span className="block truncate text-caption text-muted">{o.description}</span>}
+              </span>
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </SelectRoot>
+  );
+}
+
+export function Checkbox({ checked, onChange, label, description, disabled, id }: { checked: boolean | 'indeterminate'; onChange: (v: boolean) => void; label?: ReactNode; description?: ReactNode; disabled?: boolean; id?: string }) {
+  const auto = useId();
+  const cid = id ?? auto;
+  return (
+    <div className="flex items-start gap-2.5">
+      <CheckboxRoot id={cid} checked={checked} onCheckedChange={(v) => onChange(v === true)} disabled={disabled} className="mt-[3px]" />
+      {(label || description) && (
+        <label htmlFor={cid} className={cn('min-w-0', disabled ? 'cursor-not-allowed' : 'cursor-pointer')}>
+          {label && <span className={cn('block text-body', disabled ? 'text-faint' : 'text-ink')}>{label}</span>}
+          {description && <span className="block text-small text-muted">{description}</span>}
+        </label>
+      )}
+    </div>
+  );
+}
+
+const OPTION_COLS: Record<1 | 2 | 3 | 4, string> = { 1: 'grid-cols-1', 2: 'sm:grid-cols-2', 3: 'sm:grid-cols-2 lg:grid-cols-3', 4: 'grid-cols-2 lg:grid-cols-4' };
+
+/** Choice cards (a radio group: one tab stop, arrow keys). */
+export function OptionCards<T extends string>({
+  value,
+  onChange,
+  options,
+  columns = 2,
+  size = 'md',
+  'aria-label': ariaLabel,
+}: {
+  value: T | '';
+  onChange: (v: T) => void;
+  options: { value: T; title: ReactNode; description?: ReactNode; icon?: ReactNode; badge?: ReactNode; disabled?: boolean }[];
+  columns?: 1 | 2 | 3 | 4;
+  size?: 'md' | 'lg';
+  'aria-label': string;
+}) {
+  return (
+    <RadioGroupPrimitive.Root aria-label={ariaLabel} value={value} onValueChange={(v) => onChange(v as T)} className={cn('grid gap-3', OPTION_COLS[columns])}>
+      {options.map((o) => {
+        const on = value === o.value;
+        return (
+          <RadioGroupPrimitive.Item
+            key={o.value}
+            value={o.value}
+            disabled={o.disabled}
+            className={cn(
+              'relative flex min-w-0 flex-col items-start gap-3 rounded-lg border border-line bg-surface text-left transition-[border-color,box-shadow,background-color] duration-120 disabled:cursor-not-allowed disabled:bg-surface-2',
+              size === 'lg' ? 'p-5' : 'p-4',
+              on ? 'bg-primary-soft/50 shadow-[inset_0_0_0_1.5px_rgb(var(--primary))]' : 'hover:border-line-3 hover:shadow-sm',
+            )}
+          >
+            {on && (
+              <span className="absolute right-3 top-3 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-on-primary" aria-hidden="true">
+                <Check size={12} strokeWidth={3} />
+              </span>
+            )}
+            {o.icon && <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-pop bg-surface-3 text-ink-2 [&>svg]:size-5">{o.icon}</span>}
+            <span className="min-w-0 pr-6">
+              <span className={cn('flex flex-wrap items-center gap-2', size === 'lg' ? 'text-title' : 'text-h3', o.disabled ? 'text-faint' : 'text-ink')}>
+                {o.title}
+                {o.badge}
+              </span>
+              {o.description && <span className="clamp-2 mt-1 block text-small text-muted">{o.description}</span>}
+            </span>
+          </RadioGroupPrimitive.Item>
+        );
+      })}
+    </RadioGroupPrimitive.Root>
+  );
+}
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** A date and/or time as one button ("Thu, Nov 5 · 12:00 PM") that opens a calendar and a list of times. */
+export function DateTimeButton({
+  value,
+  onChange,
+  mode = 'datetime',
+  stepMinutes = 15,
+  min,
+  disabled,
+  size = 'sm',
+  'aria-label': ariaLabel,
+}: {
+  value: number | null;
+  onChange: (ms: number) => void;
+  mode?: 'datetime' | 'date' | 'time';
+  stepMinutes?: number;
+  min?: number;
+  disabled?: boolean;
+  size?: 'xs' | 'sm';
+  'aria-label'?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const date = value != null ? new Date(value) : null;
+  const zone = useMemo(() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      return '';
+    }
+  }, []);
+  const fmtDay = (d: Date) => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const fmtTime = (d: Date) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const text = !date ? (mode === 'time' ? 'Pick a time' : 'Pick a date') : mode === 'date' ? fmtDay(date) : mode === 'time' ? fmtTime(date) : `${fmtDay(date)} · ${fmtTime(date)}`;
+  const times = useMemo(() => {
+    const out: { value: string; label: string }[] = [];
+    const base = new Date(2000, 0, 1);
+    for (let m = 0; m < 24 * 60; m += Math.max(5, stepMinutes)) {
+      base.setHours(Math.floor(m / 60), m % 60, 0, 0);
+      out.push({ value: `${pad(Math.floor(m / 60))}:${pad(m % 60)}`, label: fmtTime(base) });
+    }
+    return out;
+  }, [stepMinutes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const current = date ? `${pad(date.getHours())}:${pad(date.getMinutes())}` : '';
+  const timeOptions = current && !times.some((t) => t.value === current) ? [{ value: current, label: fmtTime(date!) }, ...times] : times;
+  const setDay = (d: Date | undefined) => {
+    if (!d) return;
+    const next = new Date(d);
+    if (date) next.setHours(date.getHours(), date.getMinutes(), 0, 0);
+    else next.setHours(12, 0, 0, 0);
+    onChange(next.getTime());
+  };
+  const setTime = (hm: string) => {
+    const [h, m] = hm.split(':').map(Number);
+    const next = date ? new Date(date) : new Date();
+    next.setHours(h, m, 0, 0);
+    onChange(next.getTime());
+  };
+  return (
+    <PopoverRoot open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" disabled={disabled} className={cn('btn btn-secondary', size === 'xs' ? 'btn-xs' : 'btn-sm')} aria-label={ariaLabel ? `${ariaLabel}: ${text}` : undefined}>
+          <CalendarClock className="!size-3.5" aria-hidden="true" />
+          <span className="num">{text}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" collisionPadding={8} className="w-auto p-2">
+        {mode !== 'time' && <Calendar mode="single" selected={date ?? undefined} onSelect={setDay} disabled={min != null ? { before: new Date(min) } : undefined} defaultMonth={date ?? undefined} />}
+        {mode !== 'date' && (
+          <div className={cn('px-1', mode !== 'time' && 'border-t border-line pt-2')}>
+            <Select value={current} onChange={setTime} options={timeOptions} placeholder="Time" size="sm" aria-label="Time" />
+          </div>
+        )}
+        {mode !== 'date' && zone && <p className="mt-2 px-1 text-caption text-muted">Times are in your time zone ({zone})</p>}
+      </PopoverContent>
+    </PopoverRoot>
+  );
+}
+
+/**
+ * A phone bottom action bar (fixed, above the safe area); inline from 640px. While it's on a phone
+ * screen, body[data-bottom-bar] tells the assistant's launcher to move up.
+ */
+export function StickyActionBar({ children }: { children: ReactNode }) {
+  const phone = useMediaQuery('(max-width: 639px)');
+  useEffect(() => {
+    if (!phone || typeof document === 'undefined') return;
+    document.body.dataset.bottomBar = '1';
+    return () => {
+      delete document.body.dataset.bottomBar;
+    };
+  }, [phone]);
+  return <div className="sticky-bar flex items-center justify-end gap-2">{children}</div>;
 }

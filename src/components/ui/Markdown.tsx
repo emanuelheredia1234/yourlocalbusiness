@@ -11,8 +11,8 @@ function inline(text: string, key: string): ReactNode[] {
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(text.slice(last, m.index));
     const t = m[0];
-    if (t.startsWith('**')) out.push(<strong key={`${key}-${i++}`}>{t.slice(2, -2)}</strong>);
-    else if (t.startsWith('`')) out.push(<code key={`${key}-${i++}`} className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[0.9em]">{t.slice(1, -1)}</code>);
+    if (t.startsWith('**')) out.push(<strong key={`${key}-${i++}`} className="font-semibold text-ink">{t.slice(2, -2)}</strong>);
+    else if (t.startsWith('`')) out.push(<code key={`${key}-${i++}`} className="rounded-sm bg-surface-3 px-1 font-mono text-caption text-ink">{t.slice(1, -1)}</code>);
     else out.push(<em key={`${key}-${i++}`}>{t.slice(1, -1)}</em>);
     last = m.index + t.length;
   }
@@ -20,7 +20,7 @@ function inline(text: string, key: string): ReactNode[] {
   return out;
 }
 
-/** Small, safe Markdown renderer for AI drafts: headings, lists, quotes, paragraphs. */
+/** Small, safe Markdown renderer for AI drafts (Strategy, Studio): headings, lists, quotes, paragraphs. */
 export function Markdown({ text, className }: { text: string; className?: string }) {
   const lines = text.replace(/\r/g, '').split('\n');
   const blocks: ReactNode[] = [];
@@ -30,7 +30,7 @@ export function Markdown({ text, className }: { text: string; className?: string
     if (para.length) {
       const k = `p${blocks.length}`;
       blocks.push(
-        <p key={k} className="my-2">
+        <p key={k} className="my-2 max-w-[72ch]">
           {inline(para.join(' '), k)}
         </p>,
       );
@@ -42,7 +42,7 @@ export function Markdown({ text, className }: { text: string; className?: string
       const k = `l${blocks.length}`;
       const Tag = list.ordered ? 'ol' : 'ul';
       blocks.push(
-        <Tag key={k} className={cn('my-2 flex flex-col gap-1 pl-5', list.ordered ? 'list-decimal' : 'list-disc')}>
+        <Tag key={k} className={cn('my-2 flex max-w-[72ch] flex-col gap-1.5 pl-5 marker:text-muted', list.ordered ? 'list-decimal' : 'list-disc')}>
           {list.items.map((it, i) => (
             <li key={i}>{inline(it, `${k}-${i}`)}</li>
           ))}
@@ -65,7 +65,7 @@ export function Markdown({ text, className }: { text: string; className?: string
       flushList();
       const level = h[1].length;
       const k = `h${blocks.length}`;
-      const cls = level === 1 ? 'mt-4 mb-2 font-display text-[20px] font-bold' : level === 2 ? 'mt-4 mb-1.5 font-display text-[16.5px] font-semibold' : 'mt-3 mb-1 text-[14px] font-semibold';
+      const cls = level <= 2 ? 'mt-5 mb-1.5 text-h3' : 'mt-4 mb-1 text-h4';
       blocks.push(
         <p key={k} role="heading" aria-level={Math.min(6, level + 2)} className={cn('text-ink', cls)}>
           {inline(h[2], k)}
@@ -82,7 +82,7 @@ export function Markdown({ text, className }: { text: string; className?: string
       flushList();
       const k = `q${blocks.length}`;
       blocks.push(
-        <blockquote key={k} className="my-2 border-l-2 border-accent pl-3 italic text-ink-2">
+        <blockquote key={k} className="my-2 max-w-[72ch] border-l-2 border-line-2 pl-3 text-ink-2">
           {inline(quote[1], k)}
         </blockquote>,
       );
@@ -93,5 +93,5 @@ export function Markdown({ text, className }: { text: string; className?: string
   }
   flushPara();
   flushList();
-  return <div className={cn('text-[14px] leading-relaxed text-ink-2 [&>*:first-child]:mt-0', className)}>{blocks.map((b, i) => <Fragment key={i}>{b}</Fragment>)}</div>;
+  return <div className={cn('text-body text-ink-2 [&>*:first-child]:mt-0', className)}>{blocks.map((b, i) => <Fragment key={i}>{b}</Fragment>)}</div>;
 }

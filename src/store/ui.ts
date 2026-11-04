@@ -75,8 +75,9 @@ export const useUI = create<UIState>((set) => ({
   toasts: [],
   toast: (t) => {
     const id = uid('t');
-    set((s) => ({ toasts: [...s.toasts.slice(-3), { ...t, id }] }));
-    setTimeout(() => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })), t.action ? 7000 : 4200);
+    // at most 3 on screen; errors stay longest, then anything with an action
+    set((s) => ({ toasts: [...s.toasts.slice(-2), { ...t, id }] }));
+    setTimeout(() => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })), t.kind === 'error' ? 8000 : t.action ? 6000 : 4000);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((x) => x.id !== id) })),
 

@@ -188,7 +188,7 @@ function saveDrafts(posts: Post[], schedule: boolean | undefined, media: MediaRe
 const createPostDrafts = defineTool({
   name: 'create_post_drafts',
   class: 'L',
-  summary: 'Save the owner’s post as drafts per network, as Create individual post does.',
+  summary: 'Save the owner’s post as drafts per network, as Create post does.',
   args: {
     caption: arg.string({ max: 2200 }),
     headline: arg.string({ optional: true, max: 90 }),
@@ -481,7 +481,7 @@ const generateCampaignPlan = defineTool({
   args: { replace: arg.boolean({ optional: true }) },
   validate: ({ replace }) => {
     const p = activeProject();
-    if (busyWith(campaignPlanTask.label)) return 'A 30-day plan is being written on the Social media engine right now. Wait for it to finish.';
+    if (busyWith(campaignPlanTask.label)) return 'A 30-day plan is being written on Social right now. Wait for it to finish.';
     const problem = campaignProblem(p.marketing.campaign);
     if (problem) return `The campaign setup can’t make a plan yet: ${problem} Fix it with update_campaign.`;
     return p.marketing.plan && !replace ? 'There is already a 30-day plan (posts made from it stay). Ask the owner, then call again with replace: true.' : null;
@@ -552,7 +552,7 @@ const generateWeekBatch = defineTool({
   validate: () => {
     const p = activeProject();
     if (!p.marketing.plan) return 'There’s no 30-day plan yet: generate_campaign_plan writes one first.';
-    if (busyWith(contentBatchTask.label)) return 'A 7-day batch is being written on the Social media engine right now. Wait for it to finish.';
+    if (busyWith(contentBatchTask.label)) return 'A 7-day batch is being written on Social right now. Wait for it to finish.';
     return weekBatchInput(p, coveredSlots(s().posts, p.id)) ? null : 'Every slot in the 30-day plan already has a post.';
   },
   run: async (_a, ctx) => {
