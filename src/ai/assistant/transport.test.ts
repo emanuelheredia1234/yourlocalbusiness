@@ -25,7 +25,7 @@ describe('whether the assistant can think', () => {
 
   it('says what to do when no key powers it, or the server is down; tries while still checking', () => {
     useRuntime.getState().set({ ai: { ...NO_AI_SERVER, reachable: true, routing: { assistant: [] } } });
-    expect(assistantAvailability()).toEqual({ ok: false, reason: 'No API key powers the Assistant yet. In Settings → AI, tick Assistant for one of your keys, or add your own key there.', settings: true });
+    expect(assistantAvailability()).toEqual({ ok: false, reason: 'No API key powers the Assistant yet. In Settings → AI keys, tick Assistant for one of your keys, or add your own key there.', settings: true });
     useRuntime.getState().set({ server: 'down' });
     expect(assistantAvailability()).toMatchObject({ ok: false, settings: true, reason: expect.stringContaining('can’t reach its AI server') });
     useRuntime.getState().set({ server: 'unknown', ai: NO_AI_SERVER });
@@ -70,9 +70,9 @@ describe('asking for a step', () => {
 
 describe('without an AI', () => {
   it('finds the page a message is about', () => {
-    expect(matchPageIntent('where do I change my API keys?')).toEqual({ route: 'workspace-settings', tab: 'ai', label: 'Settings → AI' });
+    expect(matchPageIntent('where do I change my API keys?')).toEqual({ route: 'workspace-settings', tab: 'ai', label: 'Settings → AI keys' });
     expect(matchPageIntent('show me my calendar')).toEqual({ route: 'calendar', label: 'Content calendar' });
-    expect(matchPageIntent('I want to write a new post')).toEqual({ route: 'marketing-social', tab: 'create', label: 'Social media engine → Create individual post' });
+    expect(matchPageIntent('I want to write a new post')).toEqual({ route: 'marketing-social', tab: 'create', label: 'Social → Create post' });
     expect(matchPageIntent('my email subscribers')).toMatchObject({ route: 'marketing-email', tab: 'subscribers' });
     expect(matchPageIntent('hello there')).toBeNull();
   });

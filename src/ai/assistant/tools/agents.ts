@@ -27,7 +27,7 @@ function notReady(via: AgentId, use: 'build' | 'chat'): string {
   if (__ARTIFACT_BUILD__) return NOT_HERE;
   const r = agentReady(via, use);
   if (!r.show) return r.text || `${agentName(via)} isn’t available here.`;
-  if (!r.ready) return `${agentName(via)} isn’t ready${use === 'build' ? ' to build' : ''}: ${r.text || 'see Settings → AI.'}`;
+  if (!r.ready) return `${agentName(via)} isn’t ready${use === 'build' ? ' to build' : ''}: ${r.text || 'see Settings → AI keys.'}`;
   return '';
 }
 

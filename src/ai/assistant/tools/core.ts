@@ -262,12 +262,12 @@ const openPost = defineTool({
 const openComposer = defineTool({
   name: 'open_composer',
   class: 'L',
-  summary: '“Create individual post” in the Social media engine, starting a new draft from a topic when given (the owner finishes it there).',
+  summary: '“Create post” in Social, starting a new draft from a topic when given (the owner finishes it there).',
   args: { topic: arg.string({ optional: true, max: 200 }) },
   run: async ({ topic }) => {
     if (!(await host.openPage('marketing-social'))) return { ok: false, error: 'The owner chose to stay on this page (something is still generating here).', note: 'Stayed on this page: something is still generating here' };
     useUI.getState().openComposer(topic ? { topic } : undefined);
-    return { data: { opened: '#marketing-social/create', topic: topic ?? null }, note: topic ? `Started a new post about “${clip(topic, 60)}”` : 'Opened Create individual post' };
+    return { data: { opened: '#marketing-social/create', topic: topic ?? null }, note: topic ? `Started a new post about “${clip(topic, 60)}”` : 'Opened Create post' };
   },
 });
 

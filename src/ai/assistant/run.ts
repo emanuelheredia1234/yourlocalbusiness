@@ -52,7 +52,7 @@ function plainCard(tool: AnyTool, kind: MediaKind): ConfirmCardSpec {
   return {
     title,
     what: tool.summary,
-    who: kind === 'manus' ? 'Manus, an AI agent working in its own browser (usually a few minutes).' : 'The key that powers Videos in Settings → AI.',
+    who: kind === 'manus' ? 'Manus, an AI agent working in its own browser (usually a few minutes).' : 'The key that powers Videos in Settings → AI keys.',
     cost: kind === 'manus' ? 'Uses your Manus credits.' : 'Billed to that key by the second.',
     confirmLabel: 'Go ahead',
   };

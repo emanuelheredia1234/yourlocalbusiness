@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, searchForWorkspaceRoot, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 import fs from 'node:fs';
@@ -77,6 +77,16 @@ function publishedPages(): Plugin {
   };
 }
 
+/** Where node_modules really is (it may be a link to another checkout's). */
+function realNodeModules(): string {
+  const p = path.resolve('node_modules');
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 // `npm run build`           -> regular multi-file production build in dist/
 // `npm run build:artifact`  -> one self-contained HTML file in dist-artifact/ (claude.ai Artifact)
 export default defineConfig(({ mode }) => {
@@ -93,6 +103,9 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       // Replit serves the dev server from its own domain
       allowedHosts: process.env.REPL_ID ? true : undefined,
+      // the interface fonts are files in node_modules (@fontsource); a git worktree that links node_modules
+      // to the main checkout's has them outside the project, so the dev server is allowed to read there too
+      fs: { allow: [searchForWorkspaceRoot(process.cwd()), realNodeModules()] },
       // Preserve Host for same-origin checks and forward the preview host to the local API.
       proxy: { '/api': { target: 'http://localhost:8787', changeOrigin: false, xfwd: true } },
     },

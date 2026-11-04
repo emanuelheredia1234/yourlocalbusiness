@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Brand, BrandColors, LogoConfig, LogoFont, LogoShape, MiniLogo } from '@/lib/types';
 import { cn, darken, initials, lighten, readableOn } from '@/lib/utils';
 import { useMediaUrl } from '@/lib/media';
@@ -68,13 +68,63 @@ export function LogoMark({ colors, logo, name, size = 40, className }: { colors:
   );
 }
 
+/**
+ * Never cut a wordmark: at its normal size the word is measured against the room it has; when it
+ * doesn't fit it is scaled down (to 60% at most), and if it still doesn't fit the logo stacks (mark
+ * above the word). Measured again when the room changes and once the logo's web font has loaded.
+ */
+function useFittedWord(base: number, deps: unknown[]) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [stack, setStack] = useState(false);
+  const stackedAt = useRef(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const root = el?.parentElement;
+    const host = root?.parentElement;
+    if (!el || !root || !host) return;
+    let alive = true;
+    const fit = () => {
+      if (!alive) return;
+      if (stackedAt.current && host.clientWidth > stackedAt.current + 1) {
+        stackedAt.current = 0;
+        setStack(false);
+        return;
+      }
+      el.style.fontSize = `${base}px`;
+      const natural = el.scrollWidth;
+      const room = el.clientWidth;
+      if (!natural || !room || natural <= room + 1) return;
+      const ratio = room / natural;
+      if (ratio >= 0.6) el.style.fontSize = `${Math.floor(base * ratio * 10) / 10}px`;
+      else if (!stackedAt.current) {
+        el.style.fontSize = `${base * 0.6}px`;
+        stackedAt.current = host.clientWidth;
+        setStack(true);
+      }
+    };
+    fit();
+    void document.fonts?.ready.then(fit);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(fit);
+    ro.observe(host);
+    return () => {
+      alive = false;
+      ro.disconnect();
+    };
+  }, [base, stack, ...deps]); // eslint-disable-line react-hooks/exhaustive-deps
+  return { ref, stack };
+}
+
 export function BrandLogo({ brand, size = 36, layout, className, textClassName, tone }: { brand: Pick<Brand, 'name' | 'colors' | 'logo'>; size?: number; layout?: LogoConfig['layout']; className?: string; textClassName?: string; tone?: 'auto' | 'light' }) {
-  const l = layout ?? brand.logo.layout;
+  const asked = layout ?? brand.logo.layout;
   const font = LOGO_FONTS[brand.logo.font];
   const name = brand.name || 'Your Brand';
+  const fitted = useFittedWord(size * (asked === 'stacked' ? 0.42 : 0.56), [name, brand.logo.font, asked]);
+  const l = asked === 'horizontal' && fitted.stack ? 'stacked' : asked;
   const word = (
     <span
-      className={cn('min-w-0 truncate leading-none', textClassName)}
+      ref={asked === 'stacked' || asked === 'mark' ? undefined : fitted.ref}
+      className={cn('block min-w-0 overflow-hidden whitespace-nowrap leading-none', textClassName)}
       style={{ fontFamily: font.family, fontWeight: font.weight, letterSpacing: font.spacing, textTransform: font.transform, fontSize: size * (l === 'stacked' ? 0.42 : 0.56), color: tone === 'light' ? '#fff' : undefined }}
     >
       {name}
@@ -83,20 +133,20 @@ export function BrandLogo({ brand, size = 36, layout, className, textClassName, 
   if (l === 'mark') return <LogoMark colors={brand.colors} logo={brand.logo} name={name} size={size} className={className} />;
   if (l === 'wordmark')
     return (
-      <span className={cn('inline-flex items-baseline gap-1', className)}>
+      <span className={cn('inline-flex max-w-full min-w-0 items-baseline gap-1', className)}>
         {word}
-        <span className="inline-block rounded-full" style={{ width: size * 0.16, height: size * 0.16, background: brand.colors.accent }} />
+        <span className="inline-block shrink-0 rounded-full" style={{ width: size * 0.16, height: size * 0.16, background: brand.colors.accent }} />
       </span>
     );
   if (l === 'stacked')
     return (
-      <span className={cn('inline-flex flex-col items-center gap-2 text-center', className)}>
+      <span className={cn('inline-flex max-w-full flex-col items-center gap-2 text-center', className)}>
         <LogoMark colors={brand.colors} logo={brand.logo} name={name} size={size} />
         {word}
       </span>
     );
   return (
-    <span className={cn('inline-flex min-w-0 items-center', className)} style={{ gap: size * 0.28 }}>
+    <span className={cn('inline-flex max-w-full min-w-0 items-center', className)} style={{ gap: size * 0.28 }}>
       <LogoMark colors={brand.colors} logo={brand.logo} name={name} size={size} />
       {word}
     </span>

@@ -77,9 +77,27 @@ export function usePasteImages(onFiles: (media: MediaRef[]) => void, opts: { roo
 }
 
 /**
+ * Adds saved images to a prompt box's list: numbered after the ones there (and any `reserved` keys),
+ * at most `max`; the ones that can't be added are reported and their saved files deleted.
+ */
+export function usePromptImageAdder(images: PromptImage[], onChange: (images: PromptImage[]) => void, { max = MAX_PROMPT_IMAGES, reserved }: { max?: number; reserved?: readonly string[] } = {}) {
+  const latest = useRef({ images, onChange, max, reserved });
+  latest.current = { images, onChange, max, reserved };
+  return useCallback((media: MediaRef[]) => {
+    const { images: now, onChange: change, max: most, reserved: keep } = latest.current;
+    const plan = planPromptImages(now, media, { max: most, reserved: keep });
+    reportRefusals(plan.refused, most);
+    // these were saved just now: don't keep (or upload) the ones that couldn't be added
+    for (const m of media) if (!plan.added.some((a) => a.media.id === m.id)) void deleteBlob(m.id);
+    if (plan.added.length) change(plan.images);
+  }, []);
+}
+
+/**
  * The images in a prompt box: a thumbnail of each with an optional note for the AI ("what it shows or
  * where it goes") and Remove, then "Add images". The AI and the page refer to each by its number
- * ({{img-N}}), which stays the same when others are removed.
+ * ({{img-N}}), which stays the same when others are removed. `compact` (inside the AI composer) leaves
+ * out the drop zone: the composer has its own Add images button.
  */
 export function PromptImages({
   images,
@@ -91,6 +109,7 @@ export function PromptImages({
   label,
   hint,
   className,
+  compact,
 }: {
   images: PromptImage[];
   onChange: (images: PromptImage[]) => void;
@@ -103,18 +122,10 @@ export function PromptImages({
   label?: ReactNode;
   hint?: ReactNode;
   className?: string;
+  compact?: boolean;
 }) {
   const base = useId();
-  const latest = useRef({ images, onChange });
-  latest.current = { images, onChange };
-
-  const add = (media: MediaRef[]) => {
-    const plan = planPromptImages(latest.current.images, media, { max, reserved });
-    reportRefusals(plan.refused, max);
-    // these were saved just now: don't keep (or upload) the ones that couldn't be added
-    for (const m of media) if (!plan.added.some((a) => a.media.id === m.id)) void deleteBlob(m.id);
-    if (plan.added.length) latest.current.onChange(plan.images);
-  };
+  const add = usePromptImageAdder(images, onChange, { max, reserved });
   const setNote = (key: string, note: string) => onChange(images.map((i) => (i.key === key ? { ...i, note } : i)));
   const tidyNote = (key: string) =>
     onChange(
@@ -131,15 +142,15 @@ export function PromptImages({
     <div className={cn('flex min-w-0 flex-col gap-2', className)}>
       {label && <p className="label mb-0">{label}</p>}
       {images.length > 0 && (
-        <ul className="flex flex-col gap-1.5" aria-label="Images for the AI">
+        <ul className="flex flex-col gap-2" aria-label="Images for the AI">
           {images.map((img) => {
             const n = imageKeyNumber(img.key);
             const noteId = `${base}-${img.key}`;
             return (
-              <li key={img.key} className="flex items-center gap-2.5 rounded-md border border-line bg-surface p-1.5 pr-2">
-                <MediaThumb media={img.media} className="h-12 w-12 shrink-0" />
+              <li key={img.key} className="flex items-center gap-2.5">
+                <MediaThumb media={img.media} className="h-10 w-10 shrink-0 rounded-md" />
                 <div className="min-w-0 flex-1">
-                  <label htmlFor={noteId} className="mb-0.5 block text-[11.5px] font-semibold text-ink-2">
+                  <label htmlFor={noteId} className="mb-0.5 block text-caption font-medium text-ink-2">
                     Image {n}
                   </label>
                   <input
@@ -153,8 +164,8 @@ export function PromptImages({
                     onBlur={() => tidyNote(img.key)}
                   />
                 </div>
-                <button type="button" className="btn btn-ghost btn-icon btn-xs shrink-0 text-muted hover:text-bad" aria-label={`Remove image ${n}`} title="Remove" disabled={disabled} onClick={() => remove(img.key)}>
-                  <X size={14} />
+                <button type="button" className="relative flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted transition-colors duration-120 hover:bg-surface-3 hover:text-ink disabled:cursor-not-allowed disabled:text-faint disabled:hover:bg-transparent" aria-label={`Remove image ${n}`} title="Remove" disabled={disabled} onClick={() => remove(img.key)}>
+                  <X size={14} aria-hidden="true" />
                 </button>
               </li>
             );
@@ -162,13 +173,14 @@ export function PromptImages({
         </ul>
       )}
       {!disabled &&
+        !compact &&
         (images.length < max ? (
           <MediaDrop compact multiple accept={PROMPT_IMAGE_ACCEPT} label={images.length ? 'Add more images' : 'Add images'} sub={`JPEG, PNG, WebP or GIF · up to ${max}`} onFiles={add} />
         ) : (
           <p className="hint mt-0">That’s {plural(max, 'image')}, the most for one page. Remove one to add another.</p>
         ))}
       {busy && (
-        <p className="flex items-center gap-1.5 text-xs text-muted" role="status">
+        <p className="flex items-center gap-1.5 text-caption text-muted" role="status">
           <Spinner size={12} /> Adding your image…
         </p>
       )}

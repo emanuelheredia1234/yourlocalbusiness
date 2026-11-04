@@ -304,7 +304,7 @@ describe('the campaign: setup, plan, batch and link settings', () => {
     expect((await runTool('generate_campaign_plan', {})).error).toBe('The campaign setup can’t make a plan yet: Pick at least one platform. Fix it with update_campaign.');
     await runTool('update_campaign', { platforms: ['instagram'] });
     useBusy.setState({ jobs: { plan: { id: 'plan', label: '30-day campaign plan', scope: 'page' } } });
-    expect((await runTool('generate_campaign_plan', {})).error).toMatch(/being written on the Social media engine right now/);
+    expect((await runTool('generate_campaign_plan', {})).error).toMatch(/being written on Social right now/);
   });
 
   it('set_link_placement sets where a network’s link goes on new posts; posts already made keep theirs', async () => {

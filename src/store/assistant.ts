@@ -172,9 +172,15 @@ interface AssistantState {
   /** `${projectId}:${agent}` while a message to that agent is on its way (one at a time) */
   sendingTo: Record<string, true>;
   setOpen: (v: boolean) => void;
+  /** text handed to the chat's input from elsewhere ("Ask AI: …" in the command palette); the composer takes it once */
+  draft: string | null;
+  /** Open the chat with this text waiting in its input (nothing is sent: the owner presses Send). */
+  openWith: (text: string) => void;
+  /** The waiting draft, cleared (null when there is none). */
+  takeDraft: () => string | null;
 }
 
-export const useAssistant = create<AssistantState>((set) => ({
+export const useAssistant = create<AssistantState>((set, get) => ({
   open: false,
   key: null,
   threads: {},
@@ -185,6 +191,13 @@ export const useAssistant = create<AssistantState>((set) => ({
   unread: {},
   sendingTo: {},
   setOpen: (v) => set({ open: v }),
+  draft: null,
+  openWith: (text) => set({ open: true, draft: text }),
+  takeDraft: () => {
+    const d = get().draft;
+    if (d !== null) set({ draft: null });
+    return d;
+  },
 }));
 
 // in memory only: click handlers and the turn's Stop

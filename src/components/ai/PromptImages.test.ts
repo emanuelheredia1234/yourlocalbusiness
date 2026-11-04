@@ -34,6 +34,19 @@ describe('prompt box images', () => {
     expect(render([img('img-1')], { max: 1 })).toContain('That’s 1 image, the most for one page.');
   });
 
+  it('show 40px thumbnails, each with a small Remove (a 24px target)', () => {
+    const html = render([img('img-1')]);
+    expect(html).toMatch(/class="[^"]*h-10 w-10[^"]*rounded-md/);
+    expect(html).toMatch(/<button[^>]*class="[^"]*h-6 w-6[^"]*"[^>]*aria-label="Remove image 1"/);
+  });
+
+  it('leave the drop zone out inside the AI composer (compact), keeping each image’s note and Remove', () => {
+    const html = render([img('img-1', 'Shop front')], { compact: true });
+    expect(html).not.toContain('Add more images');
+    expect(html).toContain('value="Shop front"');
+    expect(html).toContain('aria-label="Remove image 1"');
+  });
+
   it('can’t be changed while the AI is working', () => {
     const html = render([img('img-1')], { disabled: true, busy: true });
     expect(html).not.toContain('Add more images');
