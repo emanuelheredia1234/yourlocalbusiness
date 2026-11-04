@@ -1,16 +1,19 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowDown, ArrowUp, Check, CircleDashed, Code2, Copy, Download, Eye, EyeOff, ImagePlus, Link2, Monitor, PenLine, RefreshCw, Search, Smartphone, Sparkles, Undo2, Wand2, X } from 'lucide-react';
-import type { MediaRef, Project, PromptImage, Published, SalesPage, SalesSection, SalesTheme, SeoMeta } from '@/lib/types';
+import { AlertTriangle, ArrowDown, ArrowUp, Check, CircleDashed, Code2, Copy, Download, Eye, EyeOff, ImagePlus, Inbox, Link2, Monitor, PenLine, RefreshCw, Search, Smartphone, Sparkles, Undo2, Wand2, X } from 'lucide-react';
+import type { MediaRef, PageType, Project, PromptImage, Published, SalesPage, SalesSection, SalesTheme, SeoMeta } from '@/lib/types';
 import { cn, listJoin, moveItem, plural, slugify, stripProtocol, truncate } from '@/lib/utils';
-import { applyEdit, claimsToReview, canonicalForSlugChange, ownCanonical, pageImageIds, pageLink, placeNewImages, pruneImages, scoreSeo, SECTION_LABEL, siteUrl, withOwnerFacts } from '@/ai/local/seo';
+import { applyEdit, claimsToReview, canonicalForSlugChange, ctaLink, ownCanonical, pageImageIds, pageTargets, placeNewImages, pruneImages, scoreSeo, SECTION_LABEL, sectionsKeptHidden, siteUrl, withKeptSections, withOwnerFacts } from '@/ai/local/seo';
 import { AI_NO_CHANGE, salesPageEditTask, salesPageTask, salesSectionTask, seoMetaTask, type SalesEditInput, type SalesEditResult, type SalesSectionInput } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { copyText } from '@/lib/platform';
 import { deleteBlob } from '@/lib/storage';
 import { useMediaUrl } from '@/lib/media';
 import { MAX_PROMPT_IMAGES, imageDataUrls, imageKeyNumber, planPromptImages, reportRefusals } from '@/lib/promptImages';
+import { PAGE_TYPE_DESC, PAGE_TYPE_LABEL, bookingLink, missingLink, pageTypeNoun, pageTypeOf, paymentLink, sectionPlan } from '@/lib/pageTypes';
+import { navigate } from '@/lib/router';
+import { usePublishAccess } from '@/lib/publish';
 import { getActiveProject, useActiveProject, useStore } from '@/store/useStore';
-import { toast } from '@/store/ui';
+import { toast, useUI } from '@/store/ui';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { PromptImages, usePasteImages } from '@/components/ai/PromptImages';
 import { PublishPanel } from '@/components/publish/PublishPanel';
@@ -18,6 +21,7 @@ import { AutoTextarea, ChipInput, Empty, Field, ProgressRing, Segmented, Spinner
 import { BrandBanner } from '@/components/brand/Logo';
 import { download } from '@/components/ui/download';
 import { MarketingHeader } from './MarketingNav';
+import { PageTypeLinks, PageTypePicker } from './PageTypePicker';
 import { SalesPreview } from './SalesPreview';
 import { highestImageNumber, joinImages, seoFileHtml, seoPageId, seoPublishBuild, seoSourceHtml, shownPromptImages } from './seoPage';
 import { useSeoUndo, type SeoSnapshot } from './seoUndo';
@@ -53,11 +57,34 @@ export default function SeoSalesPage() {
   const [editing, setEditing] = useState(true);
   const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop');
   const [panel, setPanel] = useState<'meta' | 'score' | 'sections'>('meta');
-  const result = useMemo(() => (meta ? scoreSeo(meta, page) : null), [meta, page]);
+  // the page's type, and the one being chosen (before a page is written, or to change it)
+  const type = pageTypeOf(project);
+  const [choice, setChoice] = useState<PageType>(type);
+  const [typeOpen, setTypeOpen] = useState(false);
+  /** the type someone else suggested (the Strategy tab, the assistant), until the owner moves on */
+  const [suggested, setSuggested] = useState<PageType | null>(null);
+  const { access } = usePublishAccess();
+  const ids = useId();
+  const result = useMemo(() => (meta ? scoreSeo(meta, page, type) : null), [meta, page, type]);
   const toReview = claimsToReview(page);
-  const noLink = !pageLink(project);
   const busy = metaAI.running || pageAI.running || editAI.running || sectionAI.running;
   const projectId = project.id;
+
+  // another project: its own type, nothing open
+  useEffect(() => {
+    setChoice(pageTypeOf(project));
+    setTypeOpen(false);
+    setSuggested(null);
+  }, [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // opened with a type chosen elsewhere: take it once. It never writes anything by itself.
+  const preset = useUI((s) => s.seoPreset);
+  useEffect(() => {
+    if (!preset) return;
+    useUI.setState({ seoPreset: undefined });
+    setChoice(preset.pageType);
+    setSuggested(preset.pageType);
+    if (current().salesPage) setTypeOpen(true);
+  }, [preset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // AI changes land in the project they were asked for, even if another one is opened meanwhile.
   const projectNow = (): Project => useStore.getState().projects.find((p) => p.id === projectId) ?? project;
@@ -71,16 +98,16 @@ export default function SeoSalesPage() {
     if (cur) updateMarketing({ salesPage: { ...fn(cur), updatedAt: Date.now() } });
   };
 
-  /** Keep the page and its metadata as they are now, so the AI change about to be saved can be undone. */
+  /** Keep the page, its metadata and its type as they are now, so the AI change about to be saved can be undone. */
   const remember = () => {
     const m = current();
-    if (m.salesPage || m.seo) useSeoUndo.getState().push(projectId, { salesPage: m.salesPage, seo: m.seo });
+    if (m.salesPage || m.seo) useSeoUndo.getState().push(projectId, { salesPage: m.salesPage, seo: m.seo, pageType: m.pageType });
   };
   const undo = () => {
     const snap = useSeoUndo.getState().pop(projectId);
     if (!snap) return;
     // an image removed from the page's images since then stays off the page
-    save({ seo: snap.seo, salesPage: snap.salesPage ? { ...pruneImages(snap.salesPage, current().seoImages ?? []), updatedAt: Date.now() } : null });
+    save({ seo: snap.seo, salesPage: snap.salesPage ? { ...pruneImages(snap.salesPage, current().seoImages ?? []), updatedAt: Date.now() } : null, pageType: snap.pageType });
     toast({ kind: 'info', title: 'Undone', body: 'Your page is back to how it was before the last AI change.' });
   };
 
@@ -100,13 +127,19 @@ export default function SeoSalesPage() {
     save({ salesPage: { ...placeNewImages(m.salesPage, projectNow(), imgs, keys), updatedAt: Date.now() } });
   };
 
-  const generateAll = async () => {
+  /** Write the page (as type `t`), or rewrite it: never by itself, only when the owner presses Write page or Rewrite page. */
+  const generateAll = async (t: PageType = pageTypeOf(projectNow())) => {
     const m = current();
+    // Buy now opens the owner's own payment link: a checkout page needs one before it's written
+    if (!m.salesPage && t === 'checkout' && !paymentLink(projectNow())) {
+      toast({ kind: 'info', title: 'Add your payment link first', body: 'Buy now opens your own payment link: the app never takes payments.' });
+      return;
+    }
     if (
       m.salesPage &&
       !(await confirmAction({
         title: 'Rewrite the whole page?',
-        body: 'Your copy and edits will be replaced, following your guidance. Kept: metadata, your testimonials and facts, your guarantee, your prices and your images. You can undo this.',
+        body: 'Your copy and edits will be replaced, following your guidance. Kept: metadata, your testimonials and facts, your guarantee, prices, services, contact details and images. You can undo this.',
         confirmLabel: 'Rewrite page',
       }))
     )
@@ -121,20 +154,45 @@ export default function SeoSalesPage() {
     };
     let seo = m.seo;
     if (!seo) {
-      seo = await metaAI.run({ instructions, images: imgs });
+      seo = await metaAI.run({ instructions, images: imgs, pageType: t });
       // stopped (or failed): the page needs its metadata, so don't go on without it
       if (!seo) return;
       put({ seo });
     }
-    const p = await pageAI.run({ primaryKeyword: seo?.primaryKeyword, instructions, images: imgs });
-    if (p) put({ salesPage: p });
+    const p = await pageAI.run({ primaryKeyword: seo?.primaryKeyword, instructions, images: imgs, pageType: t });
+    // sections the new page doesn't have that hold what the owner entered stay, hidden
+    if (p) put({ salesPage: { ...withKeptSections(p, current().salesPage), updatedAt: Date.now() }, pageType: t });
+  };
+
+  /** Page type → Change: the AI writes the page again for the new type (after the owner confirms). Stopped or failed: nothing changes. */
+  const switchType = async (next: PageType) => {
+    const m = current();
+    const now = projectNow();
+    if (!m.salesPage || busy) return;
+    if (next === 'checkout' && !paymentLink(now)) return;
+    const kept = sectionsKeptHidden(m.salesPage, sectionPlan(next, now).map((x) => x.type));
+    const ok = await confirmAction({
+      title: `Rewrite this page as ${pageTypeNoun(next)}?`,
+      body: `The AI writes the page again for this type. Kept: your metadata, testimonials and facts, prices, contact details and images.${kept.length ? ` Hidden but kept: ${listJoin(kept.map((k) => SECTION_LABEL[k]))}.` : ''} You can undo this.`,
+      confirmLabel: `Rewrite as ${PAGE_TYPE_LABEL[next].toLowerCase()}`,
+    });
+    if (!ok) return;
+    const cur = current();
+    const p = await pageAI.run({ primaryKeyword: cur.seo?.primaryKeyword, instructions: (cur.seoGuide ?? '').trim(), images: cur.seoImages ?? [], pageType: next });
+    if (!p) return;
+    remember();
+    save({ salesPage: { ...withKeptSections(p, current().salesPage), updatedAt: Date.now() }, pageType: next });
+    setChoice(next);
+    setTypeOpen(false);
+    setSuggested(null);
+    toast({ kind: 'success', title: `Your page is now ${pageTypeNoun(next)}`, body: current().seoPublished ? 'Publish it again to update the live page.' : undefined });
   };
 
   const regenMeta = async () => {
     const m = current();
     const imgs = m.seoImages ?? [];
     const mainImage = imgs.find((i) => i.media.id === heroImageId(m.salesPage))?.key;
-    const next = await metaAI.run({ instructions: (m.seoGuide ?? '').trim(), images: imgs, ...(mainImage ? { mainImage } : {}) });
+    const next = await metaAI.run({ instructions: (m.seoGuide ?? '').trim(), images: imgs, ...(mainImage ? { mainImage } : {}), pageType: pageTypeOf(projectNow()) });
     if (!next) return;
     // Only replace a canonical the app made from the slug; an address the owner pasted is kept.
     const cur = current().seo;
@@ -178,13 +236,42 @@ export default function SeoSalesPage() {
   const running = metaAI.running || pageAI.running;
   const last = pageAI.result ?? metaAI.result;
   const heroMedia = images.find((i) => i.media.id === heroImageId(page))?.media;
+  // the chosen type can't be written yet: a checkout page needs the owner's payment link first
+  const blocked = missingLink(project, choice) === 'payment';
+  const published = project.marketing.seoPublished;
+  const formShown = !!page?.sections.some((s) => s.type === 'leadForm' && s.visible);
+  const formNote = __ARTIFACT_BUILD__
+    ? 'Nothing was sent: this is a preview. Forms work on pages published from the app’s own site.'
+    : published
+      ? 'Nothing was sent: this is a preview. On your published page, this form sends to Email → Leads.'
+      : 'Nothing was sent: this is a preview. Publish this page to collect leads.';
+  /** What the owner should know about the page's buttons and form: the first that applies. */
+  const note: { kind: 'warn' | 'info'; text: string; leads?: boolean } | null = !page
+    ? null
+    : type === 'checkout' && !paymentLink(project)
+      ? { kind: 'warn', text: 'Buy now doesn’t open anything yet: add your payment link under Page type.' }
+      : type === 'booking' && !bookingLink(project)
+        ? formShown
+          ? { kind: 'info', text: 'No booking link yet: visitors send a request with the form instead. Add your booking link under Page type to let them book straight away.' }
+          : { kind: 'warn', text: 'No booking link yet, and the “Request a time” form is hidden: show it in Sections, or add your booking link under Page type.' }
+        : type === 'landing' && !ctaLink(project)
+          ? { kind: 'info', text: 'The buttons don’t link anywhere yet. Add your buy or booking link in Studio › Publish, or your website in Settings.' }
+          : !formShown
+            ? null
+            : __ARTIFACT_BUILD__
+              ? { kind: 'info', text: 'Forms work on pages published from the app’s own site. In claude.ai, the form can’t send.' }
+              : published
+                ? { kind: 'info', text: 'What people send with the form arrives in Email → Leads.', leads: true }
+                : access === 'off'
+                  ? { kind: 'info', text: 'Forms send once the page is published, and publishing isn’t set up on this app’s server yet.' }
+                  : { kind: 'info', text: 'The form starts collecting leads once you publish this page (Public page, beside the score).' };
 
   return (
     <div className="flex flex-col gap-5">
       <MarketingHeader
         eyebrow="Marketing Hub · SEO"
-        title="SEO sales page"
-        desc="Keyword-targeted metadata, a live SEO score and a one-page sales page you can edit right on the canvas or with AI. Add your own photos, publish it at its own address, or export clean HTML with schema markup."
+        title="SEO page"
+        desc="Pick the kind of page you need: a lead form, a booking page, a website, a landing page, a showcase or a checkout page. Edit it on the canvas or with AI, add your own photos, publish it at its own address, or export the HTML."
         actions={
           page && meta ? (
             <>
@@ -194,7 +281,7 @@ export default function SeoSalesPage() {
                   <Undo2 size={14} /> Undo
                 </button>
               )}
-              <GenerateButton running={running} disabled={busy} onClick={generateAll} size="sm">
+              <GenerateButton running={running} disabled={busy} onClick={() => void generateAll()} size="sm">
                 Rewrite page
               </GenerateButton>
             </>
@@ -207,14 +294,18 @@ export default function SeoSalesPage() {
       {!page && !running ? (
         <Empty
           icon={<Search size={20} />}
-          title="Build your SEO sales page"
-          body={`The AI picks a buyer-intent keyword for ${project.brand.name}, writes the metadata and drafts the copy: hero, problem, solution, pricing, FAQ and closing call to action. You add the real parts: customer testimonials, facts and any guarantee you offer.`}
+          title="Build your SEO page"
+          body={`Choose the kind of page. The AI picks a buyer-intent keyword for ${project.brand.name}, writes the metadata and drafts the page. You add the real parts: customer testimonials, facts and any guarantee you offer.`}
           action={
-            <div className="flex w-full max-w-xl flex-col gap-4 text-left">
+            <div className="flex w-full max-w-3xl flex-col gap-4 text-left">
+              <PageTypePicker value={choice} onChange={setChoice} disabled={busy} />
+              {suggested && <p className="hint mt-0">Suggested for you. You can pick another.</p>}
+              <PageTypeLinks project={project} type={choice} />
               <GuideBox project={project} busy={busy} onImages={setImages} />
-              <GenerateButton running={running} disabled={busy} onClick={generateAll} size="lg" className="self-center">
-                Generate SEO sales page
+              <GenerateButton running={running} disabled={busy || blocked} onClick={() => void generateAll(choice)} size="lg" className="self-center">
+                Write page
               </GenerateButton>
+              {blocked && <p className="-mt-2 text-center text-xs text-muted">Add your payment link first. The app never takes payments: Buy now opens your own link.</p>}
             </div>
           }
           className="min-h-[360px]"
@@ -235,6 +326,63 @@ export default function SeoSalesPage() {
               </div>
             </section>
 
+            <section className="panel p-4" aria-label="Page type">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-[14px] font-semibold">Page type</h2>
+                <span className="chip">{PAGE_TYPE_LABEL[type]}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs ml-auto"
+                  aria-expanded={typeOpen}
+                  aria-controls={`${ids}-type`}
+                  disabled={busy && !typeOpen}
+                  onClick={() => {
+                    if (typeOpen) {
+                      setTypeOpen(false);
+                      setSuggested(null);
+                    } else {
+                      setChoice(type);
+                      setTypeOpen(true);
+                    }
+                  }}
+                >
+                  Change
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-muted">{PAGE_TYPE_DESC[type]}</p>
+              {!typeOpen && (type === 'booking' || type === 'showcase' || type === 'checkout') && (
+                <div className="mt-3">
+                  <PageTypeLinks project={project} type={type} />
+                </div>
+              )}
+              {typeOpen && (
+                <div id={`${ids}-type`} className="mt-3 flex flex-col gap-3 border-t border-line pt-3">
+                  {suggested && (
+                    <p className="text-xs font-medium text-ink-2" role="status">
+                      {suggested === type ? `Your page is already ${pageTypeNoun(type)}.` : `Suggested for you: ${PAGE_TYPE_LABEL[suggested]}. You can pick another.`}
+                    </p>
+                  )}
+                  <PageTypePicker value={choice} onChange={setChoice} disabled={busy} compact />
+                  <PageTypeLinks project={project} type={choice} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <GenerateButton running={pageAI.running} disabled={busy || choice === type || blocked} onClick={() => void switchType(choice)} size="sm">
+                      Rewrite as {PAGE_TYPE_LABEL[choice].toLowerCase()}
+                    </GenerateButton>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => {
+                        setTypeOpen(false);
+                        setSuggested(null);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+
             <div className="panel p-4">
               <PublishPanel
                 pageId={seoPageId(project)}
@@ -248,7 +396,7 @@ export default function SeoSalesPage() {
               />
             </div>
 
-            <GuidePanel project={project} page={page} busy={busy} running={running} onImages={setImages} onAddToPage={addToPage} onRewrite={generateAll} />
+            <GuidePanel project={project} page={page} busy={busy} running={running} onImages={setImages} onAddToPage={addToPage} onRewrite={() => void generateAll()} />
 
             <Segmented
               size="sm"
@@ -279,11 +427,11 @@ export default function SeoSalesPage() {
                 </ul>
               </section>
             )}
-            {panel === 'sections' && <SectionsPanel page={page} setPage={setPage} ai={sectionAI} busy={busy} onRewritten={applySection} />}
+            {panel === 'sections' && <SectionsPanel page={page} setPage={setPage} ai={sectionAI} busy={busy} onRewritten={applySection} pageType={type} />}
           </aside>
 
           <section className="flex min-w-0 flex-col gap-3" aria-label="Visual page editor">
-            <EditPanel project={project} page={page} ai={editAI} busy={busy} canUndo={undoStack.length > 0} onUndo={undo} onApply={applyPageEdit} />
+            <EditPanel project={project} page={page} ai={editAI} busy={busy} canUndo={undoStack.length > 0} onUndo={undo} onApply={applyPageEdit} pageType={type} />
             <div className="panel flex flex-wrap items-center gap-2 px-3 py-2">
               <Segmented
                 size="sm"
@@ -313,14 +461,44 @@ export default function SeoSalesPage() {
                 </span>
               </p>
             )}
-            {noLink && (
-              <p className="flex items-start gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-[13px] text-ink-2">
-                <Link2 size={15} className="mt-0.5 shrink-0 text-muted" /> The buttons don’t link anywhere yet. Add your buy or booking link in Studio › Publish, or your website in Settings.
-              </p>
-            )}
+            {note &&
+              (note.kind === 'warn' ? (
+                <p className="flex items-start gap-2 rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">
+                  <AlertTriangle size={15} className="mt-0.5 shrink-0" /> <span>{note.text}</span>
+                </p>
+              ) : (
+                <p className="flex flex-wrap items-start gap-x-2 gap-y-1 rounded-md border border-line bg-surface-2 px-3 py-2 text-[13px] text-ink-2">
+                  {note.leads ? <Inbox size={15} className="mt-0.5 shrink-0 text-muted" /> : <Link2 size={15} className="mt-0.5 shrink-0 text-muted" />}
+                  <span className="min-w-0 flex-1">{note.text}</span>
+                  {note.leads && (
+                    <button
+                      type="button"
+                      className="link"
+                      onClick={() => {
+                        // the Leads tab is Email's own: until it's there, the request is ignored and Email opens as it was
+                        useUI.getState().requestTab('marketing-email', 'leads');
+                        void navigate('marketing-email');
+                      }}
+                    >
+                      Open Leads
+                    </button>
+                  )}
+                </p>
+              ))}
             {editing && <p className="text-xs text-muted">Click any text on the page to edit it. Changes save automatically and update your SEO score.</p>}
             <div className="dotgrid flex justify-center overflow-x-auto rounded-lg bg-surface-2 p-3 sm:p-5">
-              <SalesPreview page={page} brand={project.brand} business={project.track === 'business'} editing={editing} device={device} images={images} onData={(id, data) => setPage((p) => ({ ...p, sections: p.sections.map((s) => (s.id === id ? ({ ...s, data } as SalesSection) : s)) }))} />
+              <SalesPreview
+                page={page}
+                brand={project.brand}
+                business={project.track === 'business'}
+                editing={editing}
+                device={device}
+                images={images}
+                pageType={type}
+                targets={pageTargets(page, project)}
+                formNote={formNote}
+                onData={(id, data) => setPage((p) => ({ ...p, sections: p.sections.map((s) => (s.id === id ? ({ ...s, data } as SalesSection) : s)) }))}
+              />
             </div>
             <details className="panel group">
               <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-semibold">
@@ -486,6 +664,7 @@ function EditPanel({
   canUndo,
   onUndo,
   onApply,
+  pageType,
 }: {
   project: Project;
   page: SalesPage;
@@ -494,6 +673,8 @@ function EditPanel({
   canUndo: boolean;
   onUndo: () => void;
   onApply: (next: SalesPage, base: SalesPage, added?: PromptImage[]) => boolean;
+  /** the page's type (the AI is told what kind of page it edits) */
+  pageType: PageType;
 }) {
   const ids = useId();
   const images = project.marketing.seoImages ?? NO_IMAGES;
@@ -536,6 +717,7 @@ function EditPanel({
       newImages: joined.added.map((i) => i.key),
       ...(targetSection ? { sectionId: targetSection.id } : {}),
       ...(m.seo?.primaryKeyword ? { primaryKeyword: m.seo.primaryKeyword } : {}),
+      pageType,
     });
     if (!r) return;
     if (!r.edited) {
@@ -756,12 +938,15 @@ function SectionsPanel({
   ai,
   busy,
   onRewritten,
+  pageType,
 }: {
   page: SalesPage;
   setPage: (fn: (p: SalesPage) => SalesPage) => void;
   ai: AIHook<SalesSectionInput, SalesSection>;
   busy: boolean;
   onRewritten: (id: string, next: SalesSection) => void;
+  /** the page's type (a fresh take is written for it) */
+  pageType: PageType;
 }) {
   const ids = useId();
   const [open, setOpen] = useState<string | null>(null);
@@ -783,7 +968,7 @@ function SectionsPanel({
     const instruction = ask.trim();
     setWorking(s.id);
     setUnchanged(null);
-    const r = await ai.run({ type: s.type, current: s, ...(instruction ? { instruction } : {}) });
+    const r = await ai.run({ type: s.type, current: s, ...(instruction ? { instruction } : {}), pageType });
     setWorking(null);
     if (!r) return;
     const next = { ...r, id: s.id, visible: s.visible } as SalesSection;

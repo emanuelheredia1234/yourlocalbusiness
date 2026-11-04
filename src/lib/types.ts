@@ -494,6 +494,53 @@ export interface GalleryData {
   intro: string;
   items: { imageId: string; alt: string; caption: string }[];
 }
+/** The page's form. Its fields are the app's own (name, email, phone optional, message, plus a preferred time
+ *  when askTime): the AI writes only the heading, intro and button label. Published, it posts to /<slug>/lead. */
+export interface LeadFormData {
+  heading: string;
+  intro: string;
+  buttonLabel: string;
+  /** ask for a preferred time (a booking request): the owner's setting, never the AI's */
+  askTime: boolean;
+}
+/** One thing the business sells: every field is the owner's (their packages or product, or what they typed on the page). */
+export interface OfferItem {
+  id: string;
+  name: string;
+  description: string;
+  /** 0: no price ("Ask for a quote" for a business, unless priceNote says otherwise) */
+  price: number;
+  /** what the price is for ("per visit"), or the whole price text when there's no number ("Free") */
+  priceNote: string;
+  /** "60 min", typed by the owner; '' for none */
+  duration: string;
+  /** one of the page's images (media id) */
+  imageId?: string;
+  imageAlt?: string;
+  /** its button: book (the booking link, else the request form), buy (the payment link), inquire (the form), or none */
+  cta: 'book' | 'buy' | 'inquire' | 'none';
+  /** this item's own link (a payment link for just this package, say); else the page's booking or payment link */
+  link?: string;
+}
+/** What the business sells: a booking page's services, a showcase, a website's Services. The AI writes only the heading and intro. */
+export interface OffersData {
+  heading: string;
+  intro: string;
+  items: OfferItem[];
+}
+export interface AboutData {
+  heading: string;
+  body: string;
+}
+/** How to reach the business: the owner's details (from the listing, editable on the page). Empty ones stay off the page. */
+export interface ContactData {
+  heading: string;
+  intro: string;
+  address: string;
+  hours: string;
+  phone: string;
+  email: string;
+}
 
 export type SalesSection =
   | { id: string; type: 'hero'; visible: boolean; data: HeroData }
@@ -504,7 +551,11 @@ export type SalesSection =
   | { id: string; type: 'faq'; visible: boolean; data: FaqData }
   | { id: string; type: 'guarantee'; visible: boolean; data: GuaranteeData }
   /** not on a new page: added (after the solution) once the page has images for it */
-  | { id: string; type: 'gallery'; visible: boolean; data: GalleryData };
+  | { id: string; type: 'gallery'; visible: boolean; data: GalleryData }
+  | { id: string; type: 'leadForm'; visible: boolean; data: LeadFormData }
+  | { id: string; type: 'offers'; visible: boolean; data: OffersData }
+  | { id: string; type: 'about'; visible: boolean; data: AboutData }
+  | { id: string; type: 'contact'; visible: boolean; data: ContactData };
 export type SalesSectionType = SalesSection['type'];
 
 export interface SalesTheme {
@@ -956,6 +1007,8 @@ export interface Project {
     salesPage: SalesPage | null;
     /** the owner's standing guidance for the AI when it writes or edits the sales page */
     seoGuide?: string;
+    /** links the SEO page's buttons use, typed in the page builder (owner facts, never the AI's); else the listing's link counts */
+    pageLinks?: { booking?: string; payment?: string };
     /** images added in the sales page's prompt boxes */
     seoImages?: PromptImage[];
     /** the highest image number (img-N) the sales page has used: a removed image's number is never given to a new one, since its published file may still be cached */

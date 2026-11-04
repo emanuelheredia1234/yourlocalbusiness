@@ -1,0 +1,341 @@
+{
+ "id": "fixture_business",
+ "createdAt": 1793664000000,
+ "updatedAt": 1793664000000,
+ "legacyCleaned": 1,
+ "track": "business",
+ "origin": "new",
+ "onboarded": true,
+ "wizardStep": "goal",
+ "niche": "Home Cleaning",
+ "category": "Eco-friendly house cleaning",
+ "format": null,
+ "businessType": "Home Cleaning",
+ "location": {
+  "city": "Austin",
+  "region": "TX"
+ },
+ "summary": "",
+ "ideas": [],
+ "idea": null,
+ "brand": {
+  "name": "Sparkle & Co \"Home\"",
+  "nameOptions": [],
+  "tagline": "",
+  "pitch": "",
+  "valueProp": "",
+  "audience": "",
+  "personality": [],
+  "mission": "Eco-friendly cleaning for busy homes in Austin.",
+  "websiteUrl": "https://sparkle.example.org",
+  "slug": "sparkle-co",
+  "domainIdeas": [],
+  "colors": {
+   "primary": "#1F6F5C",
+   "secondary": "#0E3B2A",
+   "accent": "#F2B33D",
+   "ink": "#14201B",
+   "paper": "#FFFFFF"
+  },
+  "logo": {
+   "mode": "generated",
+   "icon": "sparkles",
+   "shape": "circle",
+   "layout": "horizontal",
+   "font": "grotesk",
+   "monogram": false
+  },
+  "banner": {
+   "style": "waves",
+   "showTagline": true
+  },
+  "images": [],
+  "socials": {}
+ },
+ "studio": {
+  "outline": [],
+  "outlineLabel": "Outline",
+  "packages": [
+   {
+    "id": "pkg_std",
+    "name": "Standard clean",
+    "price": 120,
+    "priceModel": "per-session",
+    "description": "Kitchen, bathrooms, floors and dusting.",
+    "includes": [
+     "Kitchen and bathrooms",
+     "Floors vacuumed and mopped",
+     "Dusting"
+    ],
+    "popular": true
+   },
+   {
+    "id": "pkg_deep",
+    "name": "Deep clean",
+    "price": 240,
+    "priceModel": "per-session",
+    "description": "Everything in Standard, plus inside the oven and fridge.",
+    "includes": [
+     "Everything in Standard",
+     "Inside the oven",
+     "Inside the fridge"
+    ]
+   },
+   {
+    "id": "pkg_move",
+    "name": "Move-out clean",
+    "price": 0,
+    "priceModel": "quote",
+    "description": "For empty homes, priced by size.",
+    "includes": []
+   }
+  ],
+  "operating": [],
+  "valueStack": [],
+  "price": 120,
+  "compareAt": 0,
+  "priceModel": "one-time",
+  "codeAssets": [],
+  "listing": {
+   "title": "",
+   "tagline": "",
+   "description": "",
+   "category": "",
+   "tags": [],
+   "bookingType": "book",
+   "hours": "Mon–Fri 8am–6pm",
+   "buyUrl": "https://book.example.org/sparkle",
+   "phone": "(512) 555-0142",
+   "contactEmail": "hello@sparkle.example.org"
+  }
+ },
+ "marketing": {
+  "leadMagnet": null,
+  "emails": [],
+  "subscribers": [],
+  "seo": {
+   "metaTitle": "Home Cleaning in Austin | Sparkle & Co \"Home\"",
+   "metaDescription": "Sparkle & Co \"Home\" offers home cleaning in austin for homeowners. Book today.",
+   "slug": "home-cleaning-in-austin",
+   "primaryKeyword": "home cleaning in austin",
+   "secondaryKeywords": [
+    "best home cleaning in austin",
+    "eco-friendly house cleaning near me",
+    "affordable eco-friendly house cleaning",
+    "estimate",
+    "service call",
+    "austin home services"
+   ],
+   "ogTitle": "Sparkle & Co \"Home\": Home Cleaning in Austin",
+   "ogDescription": "Sparkle & Co \"Home\" offers home cleaning in austin for homeowners. Book today.",
+   "ogImageAlt": "Sparkle & Co \"Home\" logo and name",
+   "canonical": "https://sparkle.example.org/home-cleaning-in-austin"
+  },
+  "salesPage": {
+   "sections": [
+    {
+     "id": "sec_fx0",
+     "type": "hero",
+     "visible": true,
+     "data": {
+      "eyebrow": "Serving Austin, TX",
+      "headline": "Home Cleaning for Homeowners, From Sparkle & Co \"Home\"",
+      "subheadline": "Sparkle & Co \"Home\" provides home cleaning in austin for homeowners.",
+      "ctaLabel": "Book now",
+      "ctaSubtext": "",
+      "bullets": [
+       "Standard clean",
+       "Deep clean",
+       "Move-out clean"
+      ]
+     }
+    },
+    {
+     "id": "sec_fx1",
+     "type": "problem",
+     "visible": true,
+     "data": {
+      "heading": "Why eco-friendly house cleaning feels so hard",
+      "intro": "For homeowners dealing with weekends lost to scrubbing and laundry, a few things may sound familiar.",
+      "points": [
+       {
+        "title": "Weekends lost to scrubbing and laundry",
+        "body": "It eats time you don’t have and makes every week feel behind."
+       },
+       {
+        "title": "Cleaners who cancel last minute",
+        "body": "You try a fix, it works for a while, then everything slides back."
+       },
+       {
+        "title": "Never quite getting the whole house clean",
+        "body": "The advice out there contradicts itself, so you second-guess every step."
+       }
+      ],
+      "agitation": "Below: what Sparkle & Co \"Home\" offers, who it’s for, and how to book."
+     }
+    },
+    {
+     "id": "sec_fx2",
+     "type": "solution",
+     "visible": true,
+     "data": {
+      "heading": "How Sparkle & Co \"Home\" works",
+      "intro": "Home cleaning for homeowners.",
+      "features": [
+       {
+        "title": "Standard clean",
+        "body": "Kitchen, bathrooms, floors and dusting.",
+        "icon": "check-circle"
+       },
+       {
+        "title": "Deep clean",
+        "body": "Everything in Standard, plus inside the oven and fridge.",
+        "icon": "zap"
+       },
+       {
+        "title": "Move-out clean",
+        "body": "For empty homes, priced by size.",
+        "icon": "layers"
+       }
+      ]
+     }
+    },
+    {
+     "id": "sec_fx3",
+     "type": "proof",
+     "visible": true,
+     "data": {
+      "heading": "What customers say",
+      "stats": [
+       {
+        "value": "9",
+        "label": "Years in business"
+       }
+      ],
+      "testimonials": [
+       {
+        "quote": "They left the place <spotless>.",
+        "name": "Lee K.",
+        "role": "Homeowner",
+        "rating": 5
+       }
+      ]
+     }
+    },
+    {
+     "id": "sec_fx4",
+     "type": "pricing",
+     "visible": true,
+     "data": {
+      "heading": "Pricing",
+      "planName": "Standard clean",
+      "price": 120,
+      "compareAt": 150,
+      "priceNote": "per visit",
+      "includes": [
+       "Kitchen and bathrooms",
+       "Floors vacuumed and mopped",
+       "Dusting"
+      ],
+      "ctaLabel": "Book your appointment",
+      "badge": "Most booked"
+     }
+    },
+    {
+     "id": "sec_fx5",
+     "type": "faq",
+     "visible": true,
+     "data": {
+      "heading": "Frequently asked questions",
+      "items": [
+       {
+        "q": "Who is this service for?",
+        "a": "Sparkle & Co \"Home\" serves homeowners in Austin, TX."
+       },
+       {
+        "q": "What makes this home cleaning in austin different?",
+        "a": "Sparkle & Co \"Home\" offers Standard clean, Deep clean and Move-out clean."
+       },
+       {
+        "q": "Your prices are higher than the other guy. Will this still work for me?",
+        "a": "[Your answer]"
+       },
+       {
+        "q": "I'll try to fix it myself. Will this still work for me?",
+        "a": "[Your answer]"
+       },
+       {
+        "q": "How do I book?",
+        "a": "Use the booking button on this page or call (512) 555-0142."
+       }
+      ]
+     }
+    },
+    {
+     "id": "sec_fx6",
+     "type": "guarantee",
+     "visible": true,
+     "data": {
+      "heading": "Our re-clean promise",
+      "body": "Not happy with a room? Tell us within 24 hours and we clean it again.",
+      "days": 7,
+      "finalHeading": "Ready to book with Sparkle & Co \"Home\"?",
+      "finalCta": "Book now",
+      "offered": true
+     }
+    }
+   ],
+   "theme": {
+    "font": "grotesk",
+    "mode": "light",
+    "radius": "soft"
+   },
+   "updatedAt": 1793664000000,
+   "claimsChecked": true
+  },
+  "campaign": {
+   "days": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    false,
+    false
+   ],
+   "postsPerDay": 2,
+   "videosPerDay": 1,
+   "watermark": true,
+   "imageStyles": [
+    "minimal",
+    "handcrafted",
+    "editorial"
+   ],
+   "videoStyles": [
+    "ugc",
+    "kinetic"
+   ],
+   "platforms": [
+    "instagram",
+    "facebook"
+   ],
+   "postTypes": {
+    "educational": 2,
+    "tip": 2,
+    "question": 1,
+    "sales": 2,
+    "bts": 1
+   },
+   "startDate": "2026-11-04",
+   "times": [
+    "09:00",
+    "12:30",
+    "17:30",
+    "19:30",
+    "21:00"
+   ],
+   "goal": "sales"
+  },
+  "plan": null
+ }
+}

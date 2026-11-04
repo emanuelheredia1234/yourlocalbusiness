@@ -27,6 +27,11 @@ function tokens(images: PromptImage[]): SalesHtmlOptions['imageUrl'] {
   return (id) => (keyOf.has(id) ? `{{${keyOf.get(id)}}}` : undefined);
 }
 
+/** Where the page's form sends from a copy of the page (the HTML source, Copy and Export): the published page's
+ *  /lead, once it's published ('' before: the form shows but can't send). The published address is always the
+ *  app's own (https://<app>/<slug>), which takes the form from any site. */
+const leadActionOf = (p: Project) => (p.marketing.seoPublished ? `${p.marketing.seoPublished.url}/lead` : '');
+
 /** The images the page shows (visible sections), in the order they appear. */
 export function shownPromptImages(page: SalesPage, images: PromptImage[]): PromptImage[] {
   const byId = new Map(images.map((i) => [i.media.id, i]));
@@ -38,7 +43,7 @@ export function shownPromptImages(page: SalesPage, images: PromptImage[]): Promp
 /** The HTML source as it's shown on screen: short {{img-N}} placeholders instead of image data. */
 export function seoSourceHtml(project: Project): string {
   const { salesPage, seo, seoImages = [] } = project.marketing;
-  return salesPage && seo ? exportSalesHtml(salesPage, seo, project.brand, project, { imageUrl: tokens(seoImages), imageSize: sizes(seoImages) }) : '';
+  return salesPage && seo ? exportSalesHtml(salesPage, seo, project.brand, project, { imageUrl: tokens(seoImages), imageSize: sizes(seoImages), leadAction: leadActionOf(project) }) : '';
 }
 
 /**
@@ -51,14 +56,14 @@ export async function seoFileHtml(project: Project): Promise<{ html: string; mis
   const used = shownPromptImages(salesPage, seoImages);
   const urls = used.length ? await imageDataUrls(used) : {};
   const byId = new Map(used.map((i) => [i.media.id, urls[i.key]]));
-  const html = exportSalesHtml(salesPage, seo, project.brand, project, { imageUrl: (id) => byId.get(id), imageSize: sizes(seoImages) });
+  const html = exportSalesHtml(salesPage, seo, project.brand, project, { imageUrl: (id) => byId.get(id), imageSize: sizes(seoImages), leadAction: leadActionOf(project) });
   return { html, missing: used.filter((i) => !urls[i.key]).map((i) => imageKeyNumber(i.key)) };
 }
 
 /**
  * The page as it goes online at `target` (the Publish panel's build). Its images are {{img-N}} tokens, and
  * the share image is `${target.origin}{{img-N}}`, a full address. The canonical address is where it's
- * published, unless the owner pasted their own (the page also lives there).
+ * published, unless the owner pasted their own (the page also lives there). Its form sends to /<slug>/lead.
  */
 export function seoPublishBuild(project: Project, target: PublishTarget): PublishBuild {
   const { salesPage, seo, seoImages = [] } = project.marketing;
@@ -68,6 +73,8 @@ export function seoPublishBuild(project: Project, target: PublishTarget): Publis
     imageSize: sizes(seoImages),
     canonical: ownCanonical(project, seo) ? seo.canonical : target.canonical,
     origin: target.origin,
+    // relative: the form works on the app's address and on the owner's domain (its home page too)
+    leadAction: `/${target.slug}/lead`,
   });
   return { html, images: seoImages };
 }

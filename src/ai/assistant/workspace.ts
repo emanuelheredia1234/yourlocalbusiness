@@ -105,7 +105,7 @@ export function workspaceSummary(now = Date.now()) {
     somePosts: [...due.slice(0, 3), ...upcoming.slice(0, 3), ...drafts.slice(0, 2)].map((x) => postLine(x, now)),
     social: { plan: m.plan ? `${m.plan.summary.total} posts planned from ${m.plan.startDate}` : 'none', batchPostsNotPosted: batch, platforms: m.campaign.platforms },
     email: { leadMagnet: m.leadMagnet?.title ?? null, emails: m.emails.length, subscribers: m.subscribers.length },
-    seo: { metadata: !!m.seo, salesPage: m.salesPage ? 'drafted' : 'none', published: m.seoPublished?.url ?? null },
+    seo: { metadata: !!m.seo, salesPage: m.salesPage ? 'drafted' : 'none', pageType: m.pageType ?? 'landing', published: m.seoPublished?.url ?? null },
     studio: {
       [p.track === 'business' ? 'packages' : 'outlineSections']: p.track === 'business' ? p.studio.packages.length : p.studio.outline.length,
       codeAssets: p.studio.codeAssets.length,

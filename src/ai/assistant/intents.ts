@@ -28,7 +28,7 @@ const RULES: { re: RegExp; route: Route; tab?: string }[] = [
   { re: /\b(subscribers?)\b/i, route: 'marketing-email', tab: 'subscribers' },
   { re: /\b(lead magnet|opt-?in)\b/i, route: 'marketing-email', tab: 'magnet' },
   { re: /\b(emails?|sequence|newsletter)\b/i, route: 'marketing-email' },
-  { re: /\b(seo|sales page|landing page|meta description)\b/i, route: 'marketing-seo' },
+  { re: /\b(seo|sales page|landing page|booking page|lead form page|checkout page|showcase page|meta description)\b/i, route: 'marketing-seo' },
   { re: /\b(ads?|advert\w*|budget)\b/i, route: 'marketing-ads' },
   { re: /\b(analytics|stats|numbers|results)\b/i, route: 'analytics' },
   { re: /\b(my listings?)\b/i, route: 'store', tab: 'mine' },

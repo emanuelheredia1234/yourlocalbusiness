@@ -1,0 +1,464 @@
+{
+ "id": "fixture_product",
+ "createdAt": 1793664000000,
+ "updatedAt": 1793664000000,
+ "legacyCleaned": 1,
+ "track": "product",
+ "origin": "new",
+ "onboarded": true,
+ "wizardStep": "goal",
+ "niche": "Personal Finance",
+ "category": "Freelancer Tax Tracking",
+ "format": "spreadsheet",
+ "businessType": "",
+ "location": null,
+ "summary": "",
+ "ideas": [],
+ "idea": null,
+ "brand": {
+  "name": "TaxTidy",
+  "nameOptions": [],
+  "tagline": "",
+  "pitch": "",
+  "valueProp": "",
+  "audience": "",
+  "personality": [],
+  "mission": "",
+  "websiteUrl": "",
+  "slug": "taxtidy",
+  "domainIdeas": [],
+  "colors": {
+   "primary": "#3B4CCA",
+   "secondary": "#1B235E",
+   "accent": "#FFB020",
+   "ink": "#111827",
+   "paper": "#FFFFFF"
+  },
+  "logo": {
+   "mode": "generated",
+   "icon": "sparkles",
+   "shape": "circle",
+   "layout": "horizontal",
+   "font": "serif",
+   "monogram": false
+  },
+  "banner": {
+   "style": "waves",
+   "showTagline": true
+  },
+  "images": [],
+  "socials": {}
+ },
+ "studio": {
+  "outline": [
+   {
+    "id": "out_fx0",
+    "title": "Start Here",
+    "summary": "Setup guide and settings.",
+    "items": [
+     {
+      "id": "item_fx0_0",
+      "title": "How to use this spreadsheet",
+      "meta": "Instructions tab"
+     },
+     {
+      "id": "item_fx0_1",
+      "title": "Settings: currency, start month, targets",
+      "meta": "Inputs"
+     }
+    ]
+   },
+   {
+    "id": "out_fx1",
+    "title": "Dashboard",
+    "summary": "See cash flow and progress at a glance.",
+    "items": [
+     {
+      "id": "item_fx1_0",
+      "title": "Cash Flow summary cards",
+      "meta": "SUMIFS + charts"
+     },
+     {
+      "id": "item_fx1_1",
+      "title": "Monthly trend chart",
+      "meta": "Line chart"
+     },
+     {
+      "id": "item_fx1_2",
+      "title": "Progress toward goal: make steady progress with freelancer tax tracking",
+      "meta": "Progress bar formula"
+     }
+    ]
+   },
+   {
+    "id": "out_fx2",
+    "title": "Quarterly Estimates Log",
+    "summary": "Where daily entries go.",
+    "items": [
+     {
+      "id": "item_fx2_0",
+      "title": "Columns: Date, Description, Category, Amount, Status",
+      "meta": "Data validation dropdowns"
+     },
+     {
+      "id": "item_fx2_1",
+      "title": "Auto-categorization rules",
+      "meta": "IFS + XLOOKUP"
+     },
+     {
+      "id": "item_fx2_2",
+      "title": "Conditional formatting for overdue items",
+      "meta": "Rules"
+     }
+    ]
+   },
+   {
+    "id": "out_fx3",
+    "title": "Monthly Summary",
+    "summary": "Totals by category and month.",
+    "items": [
+     {
+      "id": "item_fx3_0",
+      "title": "Pivot-style summary",
+      "meta": "QUERY / SUMIFS"
+     },
+     {
+      "id": "item_fx3_1",
+      "title": "Month-over-month change",
+      "meta": "Percent change formulas"
+     }
+    ]
+   },
+   {
+    "id": "out_fx4",
+    "title": "Annual Overview",
+    "summary": "The year on one page.",
+    "items": [
+     {
+      "id": "item_fx4_0",
+      "title": "12-month heatmap",
+      "meta": "Conditional formatting"
+     },
+     {
+      "id": "item_fx4_1",
+      "title": "Year-end report export",
+      "meta": "Print-ready layout"
+     }
+    ]
+   }
+  ],
+  "outlineLabel": "Outline",
+  "packages": [],
+  "operating": [],
+  "valueStack": [],
+  "price": 29,
+  "compareAt": 0,
+  "priceModel": "one-time",
+  "codeAssets": [],
+  "listing": {
+   "title": "",
+   "tagline": "",
+   "description": "",
+   "category": "",
+   "tags": [],
+   "bookingType": "buy",
+   "hours": ""
+  }
+ },
+ "marketing": {
+  "leadMagnet": null,
+  "emails": [],
+  "subscribers": [],
+  "seo": {
+   "metaTitle": "Freelancer Tax Tracking Spreadsheet | TaxTidy",
+   "metaDescription": "TaxTidy is a freelancer tax tracking spreadsheet for freelancers. Want to make steady progress with freelancer tax tracking? See what’s inside.",
+   "slug": "freelancer-tax-tracking-spreadsheet",
+   "primaryKeyword": "freelancer tax tracking spreadsheet",
+   "secondaryKeywords": [
+    "freelancer tax tracking for freelancers",
+    "how to make steady progress with freelancer tax tracking",
+    "best freelancer tax tracking spreadsheet",
+    "cash flow",
+    "quarterly estimates",
+    "freelancer tax tracking template"
+   ],
+   "ogTitle": "TaxTidy: Freelancer Tax Tracking Spreadsheet for Freelancers",
+   "ogDescription": "TaxTidy is a freelancer tax tracking spreadsheet for freelancers. Want to make steady progress with freelancer tax tracking? See what’s inside.",
+   "ogImageAlt": "TaxTidy preview",
+   "canonical": ""
+  },
+  "salesPage": {
+   "sections": [
+    {
+     "id": "sec_fx0",
+     "type": "hero",
+     "visible": true,
+     "data": {
+      "eyebrow": "For freelancers",
+      "headline": "A Freelancer Tax Tracking Spreadsheet Made for Freelancers",
+      "subheadline": "TaxTidy is a freelancer tax tracking spreadsheet for freelancers who want to make steady progress with freelancer tax tracking.",
+      "ctaLabel": "Get TaxTidy · $29",
+      "ctaSubtext": "One-time payment",
+      "bullets": [
+       "Start Here",
+       "Dashboard",
+       "Quarterly Estimates Log"
+      ],
+      "imageId": "fx1",
+      "imageAlt": "The tracker’s dashboard tab"
+     }
+    },
+    {
+     "id": "sec_fx1",
+     "type": "problem",
+     "visible": true,
+     "data": {
+      "heading": "Sound familiar?",
+      "intro": "For freelancers dealing with not knowing where to start with freelancer tax tracking, a few things may sound familiar.",
+      "points": [
+       {
+        "title": "Not knowing where to start with freelancer tax tracking",
+        "body": "It eats time you don’t have and makes every week feel behind."
+       },
+       {
+        "title": "Surprise tax bills",
+        "body": "You try a fix, it works for a while, then everything slides back."
+       },
+       {
+        "title": "Conflicting advice about freelancer tax tracking",
+        "body": "The advice out there contradicts itself, so you second-guess every step."
+       }
+      ],
+      "agitation": "Below: what TaxTidy offers, who it’s for, and how to get it."
+     }
+    },
+    {
+     "id": "sec_fx2",
+     "type": "solution",
+     "visible": true,
+     "data": {
+      "heading": "Meet TaxTidy",
+      "intro": "TaxTidy is a spreadsheet about freelancer tax tracking for freelancers.",
+      "features": [
+       {
+        "title": "Start Here",
+        "body": "Setup guide and settings.",
+        "icon": "check-circle"
+       },
+       {
+        "title": "Dashboard",
+        "body": "See cash flow and progress at a glance.",
+        "icon": "zap"
+       },
+       {
+        "title": "Quarterly Estimates Log",
+        "body": "Where daily entries go.",
+        "icon": "layers"
+       },
+       {
+        "title": "Monthly Summary",
+        "body": "Totals by category and month.",
+        "icon": "shield-check"
+       },
+       {
+        "title": "Annual Overview",
+        "body": "The year on one page.",
+        "icon": "clock"
+       }
+      ]
+     }
+    },
+    {
+     "id": "sec_fx3",
+     "type": "gallery",
+     "visible": true,
+     "data": {
+      "heading": "Inside the tracker",
+      "intro": "",
+      "items": [
+       {
+        "imageId": "fx2",
+        "alt": "Monthly totals",
+        "caption": "Every month on one tab"
+       },
+       {
+        "imageId": "fx3",
+        "alt": "Receipts log",
+        "caption": ""
+       }
+      ]
+     }
+    },
+    {
+     "id": "sec_fx4",
+     "type": "proof",
+     "visible": true,
+     "data": {
+      "heading": "What customers say",
+      "stats": [
+       {
+        "value": "5",
+        "label": "Tabs"
+       },
+       {
+        "value": "12",
+        "label": "Lessons, tools & steps"
+       }
+      ],
+      "testimonials": []
+     }
+    },
+    {
+     "id": "sec_fx5",
+     "type": "pricing",
+     "visible": true,
+     "data": {
+      "heading": "Get started today",
+      "planName": "TaxTidy",
+      "price": 29,
+      "compareAt": 0,
+      "priceNote": "one-time payment",
+      "includes": [
+       "TaxTidy"
+      ],
+      "ctaLabel": "Get TaxTidy",
+      "badge": ""
+     }
+    },
+    {
+     "id": "sec_fx6",
+     "type": "faq",
+     "visible": true,
+     "data": {
+      "heading": "Frequently asked questions",
+      "items": [
+       {
+        "q": "Who is this spreadsheet for?",
+        "a": "It’s for freelancers who want to make steady progress with freelancer tax tracking."
+       },
+       {
+        "q": "What makes this freelancer tax tracking spreadsheet different?",
+        "a": "It covers Start Here, Dashboard, Quarterly Estimates Log, Monthly Summary and Annual Overview."
+       },
+       {
+        "q": "I'm not a numbers person. Will this still work for me?",
+        "a": "[Your answer]"
+       },
+       {
+        "q": "I don't have time to track every expense. Will this still work for me?",
+        "a": "[Your answer]"
+       }
+      ]
+     }
+    },
+    {
+     "id": "sec_fx7",
+     "type": "guarantee",
+     "visible": true,
+     "data": {
+      "heading": "14-day refund",
+      "body": "Email me within 14 days for a full refund.",
+      "days": 14,
+      "finalHeading": "Ready to make steady progress with freelancer tax tracking?",
+      "finalCta": "Get TaxTidy",
+      "offered": true
+     }
+    }
+   ],
+   "theme": {
+    "font": "serif",
+    "mode": "dark",
+    "radius": "sharp"
+   },
+   "updatedAt": 1793664000000,
+   "claimsChecked": true
+  },
+  "campaign": {
+   "days": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    false,
+    false
+   ],
+   "postsPerDay": 2,
+   "videosPerDay": 1,
+   "watermark": true,
+   "imageStyles": [
+    "minimal",
+    "handcrafted",
+    "editorial"
+   ],
+   "videoStyles": [
+    "ugc",
+    "kinetic"
+   ],
+   "platforms": [
+    "instagram",
+    "facebook"
+   ],
+   "postTypes": {
+    "educational": 2,
+    "tip": 2,
+    "question": 1,
+    "sales": 2,
+    "bts": 1
+   },
+   "startDate": "2026-11-04",
+   "times": [
+    "09:00",
+    "12:30",
+    "17:30",
+    "19:30",
+    "21:00"
+   ],
+   "goal": "sales"
+  },
+  "plan": null,
+  "seoImages": [
+   {
+    "key": "img-1",
+    "media": {
+     "id": "fx1",
+     "kind": "image",
+     "name": "fx1.jpg",
+     "mime": "image/jpeg",
+     "size": 1000,
+     "createdAt": 1793664000000,
+     "w": 1600,
+     "h": 1000
+    },
+    "note": "The tracker’s dashboard tab"
+   },
+   {
+    "key": "img-2",
+    "media": {
+     "id": "fx2",
+     "kind": "image",
+     "name": "fx2.jpg",
+     "mime": "image/jpeg",
+     "size": 1000,
+     "createdAt": 1793664000000,
+     "w": 1200,
+     "h": 900
+    }
+   },
+   {
+    "key": "img-3",
+    "media": {
+     "id": "fx3",
+     "kind": "image",
+     "name": "fx3.jpg",
+     "mime": "image/jpeg",
+     "size": 1000,
+     "createdAt": 1793664000000,
+     "w": 1200,
+     "h": 900
+    }
+   }
+  ],
+  "seoImageMax": 3
+ }
+}

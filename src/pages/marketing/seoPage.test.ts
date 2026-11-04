@@ -126,6 +126,44 @@ describe('the page as published', () => {
   });
 });
 
+describe('the page’s form', () => {
+  // a lead form page: its form sends to the published page's /lead, and only once there is one
+  const leadPage = (): Project => {
+    const p = project();
+    p.marketing.pageType = 'lead';
+    p.marketing.salesPage = generateSalesPage(p, {}, 0, 'lead');
+    return p;
+  };
+  const published = { slug: 'clean-austin', url: 'https://app.example/clean-austin', publishedAt: 1, hash: 'h' };
+
+  it('as published, posts to /<name>/lead on whichever address shows it', () => {
+    const build = seoPublishBuild(leadPage(), publishTarget('https://app.example', 'clean-austin'));
+    expect(build.html).toContain('<form method="post" action="/clean-austin/lead" enctype="application/x-www-form-urlencoded" accept-charset="utf-8">');
+    expect(build.html).not.toContain('<fieldset disabled>');
+    // on the owner's domain (its home page too), the same relative address
+    expect(seoPublishBuild(leadPage(), publishTarget('https://app.example', 'clean-austin', 'cleanaustin.com', true)).html).toContain('action="/clean-austin/lead"');
+  });
+
+  it('in a copy of the page (source, Copy and Export HTML), posts to the published page, else can’t send', async () => {
+    const p = leadPage();
+    expect(seoSourceHtml(p)).toContain('<fieldset disabled>');
+    expect(seoSourceHtml(p)).toContain('Publish this page to collect leads.');
+    expect((await seoFileHtml(p)).html).not.toContain('action=');
+    p.marketing.seoPublished = published;
+    expect(seoSourceHtml(p)).toContain('action="https://app.example/clean-austin/lead"');
+    const file = await seoFileHtml(p);
+    expect(file.html).toContain('<form method="post" action="https://app.example/clean-austin/lead"');
+    expect(file.html).not.toContain('Publish this page to collect leads.');
+  });
+
+  it('a page without a form has no form address', () => {
+    const p = project();
+    p.marketing.seoPublished = published;
+    expect(seoSourceHtml(p)).not.toContain('<form');
+    expect(seoPublishBuild(p, publishTarget('https://app.example', 'clean-austin')).html).not.toContain('/lead');
+  });
+});
+
 describe('image numbers', () => {
   it('track the highest one the page has used', () => {
     expect(highestImageNumber([])).toBe(0);
@@ -163,5 +201,16 @@ describe('undo', () => {
     let last;
     while ((last = pop('p1'))) if (useSeoUndo.getState().stacks.p1.length === 0) break;
     expect(last?.seo?.metaTitle).toBe('v4');
+  });
+
+  it('keeps the page’s type with the page, so undoing a change of type brings both back', () => {
+    const p = project();
+    const { push, pop } = useSeoUndo.getState();
+    push('p3', { salesPage: p.marketing.salesPage, seo: p.marketing.seo, pageType: 'booking' });
+    push('p3', { salesPage: null, seo: null });
+    expect(pop('p3')?.pageType).toBeUndefined();
+    const snap = pop('p3');
+    expect(snap?.pageType).toBe('booking');
+    expect(snap?.salesPage).toBe(p.marketing.salesPage);
   });
 });
