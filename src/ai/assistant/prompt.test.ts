@@ -10,7 +10,10 @@ import { ASSISTANT_MARKER as MOCK_MARKER, mockAssistantReply } from '../../../se
 import { APP_GUIDE, HELP_TOPICS } from './guide';
 import { ASSISTANT_MARKER, SECTIONS } from './protocol';
 import { PROMPT_BUDGET, SYSTEM, buildPrompt, redactSecrets, type PromptInput, type StepResult } from './prompt';
-import { registry } from './tools';
+import { GROUP_ABOUT, toolCatalog } from './catalog';
+import { OPENABLE_ROUTES } from './nav';
+import { catalogLine } from './registry';
+import { TOOL_GROUPS, registry } from './tools';
 import { workspaceSummary } from './workspace';
 
 const post = (id: string, extra: Partial<Post> = {}): Post =>
@@ -22,7 +25,12 @@ beforeEach(() => {
   useStore.setState({ projects: [project], activeProjectId: 'p1', posts: [post('post_due1'), post('post_due2'), post('post_later', { scheduledAt: '2999-01-01T10:00:00.000Z' }), post('post_draft', { status: 'draft' })], notices: [], myListings: [], ads: [], settings: defaultSettings() });
 });
 
-const input = (o: Partial<PromptInput> = {}): PromptInput => ({ message: 'What is due on my calendar?', history: [], results: [], route: 'dashboard', workspace: workspaceSummary(), catalog: registry.catalog(), step: 1, maxSteps: 6, ...o });
+/** A step's input as a turn makes it: the tool list at two levels for this page, message and results (catalog.ts). */
+const input = (o: Partial<PromptInput> = {}): PromptInput => {
+  const base = { message: 'What is due on my calendar?', history: [], results: [], route: 'dashboard' as const, workspace: workspaceSummary(), step: 1, maxSteps: 6, ...o };
+  const tools = toolCatalog(TOOL_GROUPS, base);
+  return { catalog: tools.full, catalogCompact: tools.compact, ...base };
+};
 const msg = (role: ChatMessage['role'], text: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({ id: `m${Math.random()}`, role, text, at: 1, ...extra });
 
 describe('the prompt', () => {
@@ -35,7 +43,10 @@ describe('the prompt', () => {
     expect(p).toContain('Page open now: #dashboard (Dashboard)');
     expect(p).toContain('"name":"Copper Kettle"');
     expect(p).toContain('"due":2');
-    for (const t of registry.tools) expect(p).toContain(`- ${t.name}(`);
+    // every tool: the core, the ones that only explain and the group that fits in full, the others by name
+    for (const t of registry.tools) expect(p).toContain(t.name);
+    for (const t of [...TOOL_GROUPS.core, ...TOOL_GROUPS.excluded, ...TOOL_GROUPS.social]) expect(p).toContain(catalogLine(t));
+    expect(p).toContain(`\n- marketing (${GROUP_ABOUT.marketing}): get_email_funnel, generate_lead_magnet`);
     expect(p).toContain('Owner: Hi there\nYou: Hello! How can I help?\n(app) navigate: Opened Content calendar\n(app) asked the owner: Make a video? [declined]');
     expect(p).toContain('## Latest message from the owner\nWhat is due on my calendar?');
     expect(p).toContain('[{"step":1,"tool":"list_posts","ok":true,"status":"ok","result":{"total":2}}]');
@@ -69,8 +80,30 @@ describe('the prompt', () => {
     expect(buildPrompt(input()).length).toBeLessThan(PROMPT_BUDGET / 2);
   });
 
+  it('lists the tools at two levels, so a usual prompt stays under half its budget on every page', () => {
+    for (const route of OPENABLE_ROUTES) {
+      expect(buildPrompt(input({ route })).length, route).toBeLessThan(PROMPT_BUDGET / 2);
+      expect(buildPrompt(input({ route, message: 'Write my lead magnet, then plan an ad campaign' })).length, route).toBeLessThan(PROMPT_BUDGET / 2);
+    }
+    // every tool in full would be most of it: that's what the two levels avoid
+    expect(registry.catalog().length).toBeGreaterThan(20_000);
+  });
+
+  it('falls back to every group by name when the prompt runs long, and keeps the latest message and the format', () => {
+    const results: StepResult[] = [{ step: 1, tool: 'list_tools', ok: true, status: 'ok', result: { group: 'brand' } }];
+    const message = `please ${'q'.repeat(5000)}`;
+    const full = input({ route: 'marketing-email', message, results });
+    expect(full.catalog).toContain('- update_brand(');
+    const p = buildPrompt(full, 20_000);
+    expect(p.length).toBeLessThanOrEqual(20_000);
+    expect(p).not.toContain('- update_brand(');
+    expect(p).toContain('- brand (');
+    expect(p).toContain('please q');
+    expect(p).toContain(`## ${SECTIONS.format}`);
+  });
+
   it('holds nothing the claude.ai build can’t carry in its inline script', () => {
-    const texts = [SYSTEM, APP_GUIDE, ...Object.values(HELP_TOPICS), registry.catalog(), ...registry.tools.map((t) => (t.class === 'X' ? t.refusal.text : ''))];
+    const texts = [SYSTEM, APP_GUIDE, ...Object.values(HELP_TOPICS), registry.catalog(), toolCatalog(TOOL_GROUPS, { route: null }).compact, ...registry.tools.map((t) => (t.class === 'X' ? t.refusal.text : ''))];
     for (const t of texts) {
       expect(t).not.toMatch(/<\/script/i);
       expect(t).not.toMatch(/<\/style/i);

@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from './types';
 import { LeadsError, csvCell, deleteLead, leadEmail, leadTime, leadToSubscriber, leadsCsv, listLeads, seoPageIdOf, toLead, type Lead } from './leads';
-import { seoPageId } from '@/pages/marketing/seoPage';
+import { seoPageId } from './seoPage';
 
 const lead = (over: Partial<Lead> = {}): Lead => ({ id: 'l1', pageId: 'seo:p1', slug: 'maya-bakes', name: 'Ann Lee', email: 'Ann.Lee@Example.com', phone: '', message: 'Hi', time: '', createdAt: '2026-11-03T10:00:00.123456+00:00', ...over });
 

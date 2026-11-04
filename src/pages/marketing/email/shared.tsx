@@ -1,7 +1,7 @@
 import type { EmailStep, Project, Subscriber } from '@/lib/types';
-import { ensureUrl, readableOn, uid } from '@/lib/utils';
+import { ensureUrl, readableOn } from '@/lib/utils';
 import { renderTokens } from '@/ai/local/email';
-import { getActiveProject, useStore } from '@/store/useStore';
+import { useStore } from '@/store/useStore';
 import { BrandLogo } from '@/components/brand/Logo';
 
 /** Merge values for previews: a real subscriber's, or clear placeholders (never invented people or sites). */
@@ -17,23 +17,6 @@ export function emailTokens(p: Project, sub?: Pick<Subscriber, 'name' | 'email'>
     sender_email: profile.email || 'your sending address',
     brand: p.brand.name,
   };
-}
-
-/** Add subscribers you imported (skipping emails already on the list). Returns how many were added. */
-export function importSubscribers(rows: { name: string; email: string }[]): number {
-  const s = useStore.getState();
-  const current = getActiveProject()!.marketing.subscribers;
-  const have = new Set(current.map((x) => x.email.toLowerCase()));
-  const now = Date.now();
-  const added: Subscriber[] = [];
-  for (const r of rows) {
-    const email = r.email.trim().toLowerCase();
-    if (!email || have.has(email)) continue;
-    have.add(email);
-    added.push({ id: uid('sub'), name: r.name.trim() || email.split('@')[0], email, joinedAt: now, source: 'import' });
-  }
-  if (added.length) s.updateMarketing({ subscribers: [...added, ...current] });
-  return added.length;
 }
 
 /** An email rendered the way a subscriber’s inbox shows it. */
@@ -67,11 +50,4 @@ export function EmailView({ project, email, tokens, compact }: { project: Projec
       </div>
     </div>
   );
-}
-
-export function delayLabel(e: EmailStep, i: number): string {
-  const v = e.delay.value;
-  if (!v) return i === 0 ? 'Immediately after sign-up' : 'Right after the previous email';
-  const unit = v === 1 ? e.delay.unit.replace(/s$/, '') : e.delay.unit;
-  return `${v} ${unit} after ${i === 0 ? 'sign-up' : `email ${i}`}`;
 }

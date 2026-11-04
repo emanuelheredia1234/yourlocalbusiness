@@ -7,6 +7,7 @@ import { useManusPost } from '@/components/posts/ManusPost';
 import { useManusGroups } from '@/components/posts/ManusGroups';
 import { useMarkPosted } from '@/components/posts/PostActions';
 import { openListingWindow } from '@/components/studio/ListingWindowHost';
+import { useUI } from '@/store/ui';
 import type { DangerSpec, PubWindow } from './registry';
 import { assistantAvailability, askAssistantModel, promptBudget, type Availability } from './transport';
 import { openPage } from './nav';
@@ -43,6 +44,12 @@ export const host: AssistantHost = {
         return true;
       case 'listing':
         return openListingWindow(w.action);
+      case 'publish': {
+        // the page with the panel, then the panel itself (the page brings it into view)
+        const ok = w.page === 'seo' ? await openPage('marketing-seo') : await openPage('studio', 'code');
+        if (ok) useUI.getState().requestPublish(w.page === 'seo' ? { page: 'seo' } : { page: 'asset', assetId: w.assetId });
+        return ok;
+      }
       case 'page':
         return openPage(w.route, w.tab);
     }

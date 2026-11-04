@@ -246,6 +246,9 @@ export type PubWindow =
   | { kind: 'mark-posted'; postId: string }
   /** the open project's Marketplace listing: publish it (the window shows exactly what goes public), or show or hide your listings to other people */
   | { kind: 'listing'; action: 'publish' | 'show' | 'hide' }
+  /** a page's Publish panel at a public address (the SEO page, or a code asset): the owner chooses the address and publishes there */
+  | { kind: 'publish'; page: 'seo' }
+  | { kind: 'publish'; page: 'asset'; assetId: string; name: string }
   | { kind: 'page'; route: Route; tab?: string };
 
 /** Why an excluded tool isn't done by the assistant, and the page where the owner does it. */

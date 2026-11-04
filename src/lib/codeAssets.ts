@@ -1,13 +1,17 @@
 // The Code & assets tab's logic, apart from its UI: undo snapshots (which keep the asset's images), the
 // image keys a new image mustn't take, what to tell the owner about images the code doesn't show or no
 // longer has, and the documents an asset makes: to copy or download (images embedded as data URLs)
-// and to publish (images as {{img-N}} tokens, which publishing turns into addresses).
+// and to publish (images as {{img-N}} tokens, which publishing turns into addresses). Also what the tab
+// keeps while the app is open (each asset's undo stack, each project's creation box), and how a new or
+// edited asset is saved: shared by Studio → Code & assets and the assistant, so both do exactly the same.
 
+import { create } from 'zustand';
 import type { CodeAsset, CodeKind, Project, PromptImage, Published } from '@/lib/types';
-import { buildDocument } from '@/ai/local/code';
+import { buildDocument, type CodeResult } from '@/ai/local/code';
 import { imageDataUrls, imageKeyNumber, imageTokens } from '@/lib/promptImages';
 import { buildHash, type PublishBuild } from '@/lib/publish';
-import { listJoin } from '@/lib/utils';
+import { listJoin, uid } from '@/lib/utils';
+import { useStore } from '@/store/useStore';
 
 export type Code = { html: string; css: string; js: string };
 /**
@@ -172,4 +176,76 @@ export function promptIdeas(p: Project): string[] {
   return p.track === 'business'
     ? [`Booking widget for ${p.brand.name} with my packages`, `Instant quote calculator for ${topic}`, `FAQ that answers pricing and service-area questions`]
     : [`A calculator that shows the cost of ${topic} problems`, `A 5-question quiz that recommends ${p.idea?.title ?? 'my product'}`, `Launch countdown with an email capture`];
+}
+
+// ───────────── what the tab keeps while the app is open ─────────────
+
+/** The creation box: what was typed, the images added, and the type picked (the project's usual one until then). */
+export interface Draft {
+  prompt: string;
+  images: PromptImage[];
+  kind?: CodeKind;
+}
+export const NO_DRAFT: Draft = { prompt: '', images: [] };
+
+/**
+ * Kept while the app is open, so switching Studio tabs loses neither (not saved): each asset's undo
+ * stack, and each project's creation box (the type picked, what was typed and the images added).
+ */
+export const useCodeTabMemory = create<{ undo: Record<string, Snapshot[]>; drafts: Record<string, Draft> }>(() => ({ undo: {}, drafts: {} }));
+export const setUndoStack = (assetId: string, stack: Snapshot[]) => useCodeTabMemory.setState((s) => ({ undo: { ...s.undo, [assetId]: stack } }));
+/** Keep `snap` so Undo can put it back. Returns the top of the stack after (the same snapshot as before when the code didn't change). */
+export function rememberCodeUndo(assetId: string, snap: Snapshot): Snapshot {
+  const next = pushSnapshot(useCodeTabMemory.getState().undo[assetId] ?? [], snap);
+  setUndoStack(assetId, next);
+  return next[next.length - 1];
+}
+
+// ───────────── saving new and edited assets ─────────────
+
+const projectOf = (projectId: string): Project | undefined => useStore.getState().projects.find((p) => p.id === projectId);
+const setAssets = (projectId: string, fn: (list: CodeAsset[]) => CodeAsset[]) => useStore.getState().updateProject(projectId, (p) => ({ ...p, studio: { ...p.studio, codeAssets: fn(p.studio.codeAssets) } }));
+
+/** One of a project's assets, as it is now. */
+export const findCodeAsset = (projectId: string, assetId: string): CodeAsset | undefined => projectOf(projectId)?.studio.codeAssets.find((a) => a.id === assetId);
+
+/** Change an asset (its "updated" time too). */
+export function patchCodeAsset(projectId: string, assetId: string, patch: Partial<CodeAsset>): void {
+  setAssets(projectId, (list) => list.map((a) => (a.id === assetId ? { ...a, ...patch, updatedAt: Date.now() } : a)));
+}
+
+/** A newly generated asset, first in the project's list, with the request and images it was made from. */
+export function addCodeAsset(projectId: string, r: CodeResult, prompt: string, images: PromptImage[] = []): CodeAsset {
+  const now = Date.now();
+  const asset: CodeAsset = { id: uid('code'), name: r.name, kind: r.kind, prompt, html: r.html, css: r.css, js: r.js, script: r.script, ...(images.length ? { images } : {}), outdated: false, createdAt: now, updatedAt: now };
+  setAssets(projectId, (list) => [asset, ...list]);
+  return asset;
+}
+
+/**
+ * An AI edit made from `before` (the asset's snapshot when it was asked for): the code becomes the edited
+ * code, and Undo can put `before` back. 'unchanged' when the code came back the same (nothing to undo), 'gone'
+ * when the asset was deleted meanwhile; otherwise the asset as saved and its undo snapshot.
+ */
+export function applyCodeEdit(projectId: string, assetId: string, before: Snapshot, r: Code): 'unchanged' | 'gone' | { asset: CodeAsset; undo: Snapshot } {
+  if (!findCodeAsset(projectId, assetId)) return 'gone';
+  if (sameCode(r, before)) return 'unchanged';
+  const undo = rememberCodeUndo(assetId, before);
+  patchCodeAsset(projectId, assetId, codeOf(r));
+  return { asset: findCodeAsset(projectId, assetId)!, undo };
+}
+
+/**
+ * Undo an asset's last AI change (its code, and any image the old code shows, go back). With `only`, it undoes
+ * that change only if nothing came after it ('newer' otherwise).
+ */
+export function undoCodeAsset(projectId: string, assetId: string, only?: Snapshot): 'undone' | 'nothing' | 'newer' {
+  const a = findCodeAsset(projectId, assetId);
+  const stack = useCodeTabMemory.getState().undo[assetId] ?? [];
+  const prev = stack[stack.length - 1];
+  if (!a || !prev) return 'nothing';
+  if (only && prev !== only) return stack.includes(only) ? 'newer' : 'nothing';
+  setUndoStack(assetId, stack.slice(0, -1));
+  patchCodeAsset(projectId, assetId, undoPatch(a.images ?? [], prev));
+  return 'undone';
 }

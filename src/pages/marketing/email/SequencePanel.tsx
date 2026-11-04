@@ -5,17 +5,12 @@ import { cn, slugify } from '@/lib/utils';
 import { delayToMs, renderTokens } from '@/ai/local/email';
 import { emailSequenceTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
+import { applyEmailSequence, delayLabel, sequenceText } from '@/lib/emailFunnel';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, CopyButton, Empty, Field, confirmAction } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
-import { EmailView, delayLabel, emailTokens } from './shared';
-
-function sequenceText(p: Project): string {
-  return p.marketing.emails
-    .map((e, i) => [`EMAIL ${i + 1}: ${e.purpose}`, `Send: ${delayLabel(e, i)}`, `Subject: ${e.subject}`, `Preview: ${e.preview}`, '', e.body, '', `[${e.ctaLabel}] → ${e.ctaUrl}`].join('\n'))
-    .join('\n\n────────────────────────\n\n');
-}
+import { EmailView, emailTokens } from './shared';
 
 export function SequencePanel({ project, onPreview }: { project: Project; onPreview: () => void }) {
   const updateMarketing = useStore((s) => s.updateMarketing);
@@ -31,7 +26,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
     if (emails.length && !(await confirmAction({ title: 'Rewrite all five emails?', body: 'Your edited subject lines, bodies and delays will be replaced.', confirmLabel: 'Rewrite sequence' }))) return;
     const r = await ai.run({ leadMagnet: getActiveProject()!.marketing.leadMagnet });
     if (r) {
-      updateMarketing({ emails: r });
+      applyEmailSequence(r, project.id);
       setOpen(r[0]?.id ?? null);
     }
   };
