@@ -74,7 +74,10 @@ const scrollTo = (id: string) => {
 /** Go where a target points (pages go through the leave guard). */
 export async function runTarget(t: StrategyTarget): Promise<void> {
   const ui = useUI.getState();
-  if (t.kind === 'seo') return ui.openSeoBuilder({ pageType: t.pageType });
+  if (t.kind === 'seo') {
+    await ui.openSeoBuilder({ pageType: t.pageType });
+    return;
+  }
   if (t.kind === 'composer') return ui.openComposer({ topic: t.topic });
   if (t.kind === 'strategy') {
     const ok = await openPage('strategy', t.tab);
