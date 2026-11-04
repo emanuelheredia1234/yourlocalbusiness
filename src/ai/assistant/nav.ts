@@ -16,7 +16,7 @@ export const PAGE_LABELS: Record<Route, string> = {
   dashboard: 'Dashboard',
   studio: 'Studio',
   marketing: 'Marketing Hub',
-  'marketing-seo': 'SEO sales page',
+  'marketing-seo': 'SEO page',
   'marketing-email': 'Email funnel',
   'marketing-social': 'Social media engine',
   'marketing-ads': 'Paid ads',

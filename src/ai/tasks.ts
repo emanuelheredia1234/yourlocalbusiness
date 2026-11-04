@@ -13,6 +13,7 @@ import type {
   ModuleScope,
   OutlineItem,
   OutlineSection,
+  PageType,
   Post,
   ProductIdea,
   Project,
@@ -28,6 +29,7 @@ import { isHex, truncate, uid } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
 import { videoFrame } from '@/lib/utils';
 import { MAX_AI_IMAGES, describeImagesForAI } from '@/lib/promptImages';
+import { PAGE_TYPE_LABEL, pageTypeNoun, pageTypeOf, sectionPlan } from '@/lib/pageTypes';
 import { conform, framePrompt, type Tier } from './claude';
 import { FORMATS, LOGO_ICONS } from './knowledge';
 import { generateAds, type AdsResult } from './local/ads';
@@ -512,6 +514,8 @@ export interface SeoMetaInput {
   images?: PromptImage[];
   /** key of the page's main (hero) image, when it has one */
   mainImage?: string;
+  /** the page's type (absent: the project's) */
+  pageType?: PageType;
 }
 
 export const seoMetaTask = def<SeoMetaInput, SeoMeta>({
@@ -519,15 +523,16 @@ export const seoMetaTask = def<SeoMetaInput, SeoMeta>({
   label: 'SEO metadata',
   module: 'seo',
   tier: 'quick',
-  local: (_i, env) => generateSeoMeta(env.project, env.directives, env.variation),
+  local: (i, env) => generateSeoMeta(env.project, env.directives, env.variation, i.pageType),
   claude: {
     prompt: (i, env, base) => {
       const guide = i.instructions?.trim();
       const images = photos(i.images);
       const main = i.mainImage && images.some((x) => x.key === i.mainImage) ? i.mainImage : '';
+      const type = i.pageType ?? pageTypeOf(env.project);
       return framePrompt({
         task:
-          `Write SEO metadata for the sales page. Choose the best primary keyword (buyer intent${env.project.track === 'business' ? ', local' : ''}), 4–6 secondary keywords, a meta title of 50–60 characters containing the primary keyword, a meta description of 140–158 characters containing it, a short URL slug, OpenGraph title/description and image alt text. Current best guess for the primary keyword: “${base.primaryKeyword}”.` +
+          `Write SEO metadata for the ${type === 'landing' ? 'sales page' : PAGE_TYPE_LABEL[type].toLowerCase()}. Choose the best primary keyword (buyer intent${env.project.track === 'business' ? ', local' : ''}), 4–6 secondary keywords, a meta title of 50–60 characters containing the primary keyword, a meta description of 140–158 characters containing it, a short URL slug, OpenGraph title/description and image alt text. Current best guess for the primary keyword: “${base.primaryKeyword}”.` +
           (guide ? ` The owner’s guidance for this page: ${quoted(guide)}.` : '') +
           (images.length ? `\n\nThe page’s images (you can see the attached ones; go by the owner’s note for the others):\n${imageLines(images, env)}\nogImageAlt says what ${main ? `the page’s main image, ${main},` : 'the first image'} shows.` : ''),
         project: env.project,
@@ -552,7 +557,49 @@ export const seoMetaTask = def<SeoMetaInput, SeoMeta>({
 });
 
 // Testimonials, stats, prices and any guarantee are the owner's facts: the AI writes copy around them, never the facts.
-const SALES_SHAPE = `{"hero": {"eyebrow": string, "headline": string, "subheadline": string, "ctaLabel": string, "bullets": [string, string, string]}, "problem": {"heading": string, "intro": string, "points": [{"title": string, "body": string}] (3), "agitation": string}, "solution": {"heading": string, "intro": string, "features": [{"title": string, "body": string}] (4-6)}, "proof": {"heading": string}, "pricing": {"heading": string, "planName": string, "includes": [string], "ctaLabel": string}, "faq": {"heading": string, "items": [{"q": string, "a": string}] (4-5)}, "guarantee": {"finalHeading": string, "finalCta": string}}`;
+// Each section's piece of the answer's shape (a landing page's are the seven first, as they always were). The
+// gallery's words come with "images"; the form's fields, the offers' items and the contact details are the owner's.
+const SECTION_SHAPE: Record<SalesSectionType, string> = {
+  hero: `"hero": {"eyebrow": string, "headline": string, "subheadline": string, "ctaLabel": string, "bullets": [string, string, string]}`,
+  problem: `"problem": {"heading": string, "intro": string, "points": [{"title": string, "body": string}] (3), "agitation": string}`,
+  solution: `"solution": {"heading": string, "intro": string, "features": [{"title": string, "body": string}] (4-6)}`,
+  proof: `"proof": {"heading": string}`,
+  pricing: `"pricing": {"heading": string, "planName": string, "includes": [string], "ctaLabel": string}`,
+  faq: `"faq": {"heading": string, "items": [{"q": string, "a": string}] (4-5)}`,
+  guarantee: `"guarantee": {"finalHeading": string, "finalCta": string}`,
+  gallery: '',
+  leadForm: `"leadForm": {"heading": string, "intro": string, "buttonLabel": string}`,
+  offers: `"offers": {"heading": string, "intro": string}`,
+  about: `"about": {"heading": string, "body": string}`,
+  contact: `"contact": {"heading": string, "intro": string}`,
+};
+/** The answer's shape for a page with these sections. */
+export const salesShape = (types: SalesSectionType[]) => `{${types.map((t) => SECTION_SHAPE[t]).filter(Boolean).join(', ')}}`;
+
+/** What the AI writes in each section. */
+const SECTION_BRIEF: Record<SalesSectionType, string> = {
+  hero: 'hero with hook & CTA',
+  problem: 'problem/agitation',
+  solution: 'solution & features',
+  proof: 'a heading for the customer quotes the owner will add',
+  pricing: 'pricing card copy',
+  faq: 'FAQ (4–5 questions)',
+  guarantee: 'a closing heading with CTA',
+  gallery: '',
+  leadForm: 'the form’s heading, a one-line intro and its button label (the app adds the fields)',
+  offers: 'a heading and a one-line intro for the list of what’s offered (the app fills in each item, its price and its button)',
+  about: 'an About section: a heading and 2–4 sentences, only from PROJECT CONTEXT',
+  contact: 'the contact section’s heading and a one-line intro (the app fills in the address, hours, phone and email)',
+};
+
+/** The one thing each type of page is for. */
+const TYPE_GOAL: Record<Exclude<PageType, 'landing'>, string> = {
+  lead: 'Its one goal: people send the form on the page.',
+  booking: 'Its one goal: people book a time.',
+  website: 'It introduces the business: what it offers, who it is and how to get in touch.',
+  showcase: 'It shows what’s on offer, each with its own button.',
+  checkout: 'Its one goal: people buy the offer with the Buy now button.',
+};
 
 export interface SalesPageInput {
   primaryKeyword?: string;
@@ -560,6 +607,8 @@ export interface SalesPageInput {
   instructions?: string;
   /** the page's images (marketing.seoImages): all of them go on the new page */
   images?: PromptImage[];
+  /** the type of page to write (absent: the project's) */
+  pageType?: PageType;
 }
 
 export const salesPageTask = def<SalesPageInput, SalesPage>({
@@ -568,7 +617,7 @@ export const salesPageTask = def<SalesPageInput, SalesPage>({
   module: 'seo',
   tier: 'default',
   local: (i, env) => {
-    const page = generateSalesPage(env.project, env.directives, env.variation);
+    const page = generateSalesPage(env.project, env.directives, env.variation, i.pageType);
     const images = photos(i.images);
     return images.length ? placeNewImages(page, env.project, images, images.map((x) => x.key)) : page;
   },
@@ -577,9 +626,14 @@ export const salesPageTask = def<SalesPageInput, SalesPage>({
       const kw = i.primaryKeyword || primaryKeywordFor(buildFacts(env.project));
       const guide = i.instructions?.trim();
       const images = photos(i.images);
+      const type = i.pageType ?? pageTypeOf(env.project);
+      const plan = sectionPlan(type, env.project);
+      const shape = salesShape(plan.map((p) => p.type));
       return framePrompt({
         task:
-          `Write a conversion-optimized, SEO-ready one-page sales page. Primary keyword: “${kw}” — use it in the hero headline and subheadline naturally and 2–4 more times on the page. Sections: hero with hook & CTA, problem/agitation, solution & features, a heading for the customer quotes the owner will add, pricing card copy, FAQ (4–5 questions) and a closing heading with CTA. The app fills in testimonials, stats, prices and any guarantee from the owner's own inputs: do not write them.` +
+          (type === 'landing'
+            ? `Write a conversion-optimized, SEO-ready one-page sales page. Primary keyword: “${kw}” — use it in the hero headline and subheadline naturally and 2–4 more times on the page. Sections: hero with hook & CTA, problem/agitation, solution & features, a heading for the customer quotes the owner will add, pricing card copy, FAQ (4–5 questions) and a closing heading with CTA. The app fills in testimonials, stats, prices and any guarantee from the owner's own inputs: do not write them.`
+            : `Write a conversion-optimized, SEO-ready ${PAGE_TYPE_LABEL[type].toLowerCase()} for this ${env.project.track === 'business' ? 'business' : 'product'}. ${TYPE_GOAL[type]} Primary keyword: “${kw}” — use it in the hero headline and subheadline naturally and 2–4 more times on the page. Sections: ${plan.map((p) => SECTION_BRIEF[p.type]).join(', ')}. The app fills in testimonials, stats, prices, contact details, links and any guarantee from the owner's own inputs: do not write them.`) +
           (guide ? ` The owner’s guidance for this page: ${quoted(guide)}.` : '') +
           (images.length
             ? `\n\nThe owner’s images for the page (you can see the attached ones; go by the owner’s note for the others):\n${imageLines(images, env)}\nPut every image on the page in "images": the one that suits it best in the hero, beside the headline, and the others in the gallery, in the order that works best. Also write the gallery’s heading and a one-line intro.`
@@ -587,10 +641,11 @@ export const salesPageTask = def<SalesPageInput, SalesPage>({
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
-        shape: images.length ? `${SALES_SHAPE.slice(0, -1)}, ${IMAGES_SHAPE}}` : SALES_SHAPE,
+        shape: images.length ? `${shape.slice(0, -1)}, ${IMAGES_SHAPE}}` : shape,
         extraRules: [
           NO_INVENTED_CLAIMS,
           'Pricing "includes" lists only what PROJECT CONTEXT says the offer contains. FAQ answers must not promise refunds, guarantees, response times or payment terms.',
+          ...(plan.some((p) => p.type === 'leadForm') ? ['Never promise a reply, a reply time or that a time is booked.'] : []),
           ...(guide ? [OWNER_WORDS_RULE] : []),
           ...(images.length ? IMAGE_RULES : []),
         ],
@@ -617,6 +672,8 @@ export interface SalesSectionInput {
   current?: SalesSection;
   /** what the owner wants changed; without it, a fresh take */
   instruction?: string;
+  /** the page's type (absent: the project's) */
+  pageType?: PageType;
 }
 
 export const salesSectionTask = def<SalesSectionInput, SalesSection>({
@@ -627,14 +684,14 @@ export const salesSectionTask = def<SalesSectionInput, SalesSection>({
   local: (i, env) => {
     // A change the owner asked for needs the AI: without it, the section stays as it is.
     if (i.current && i.instruction?.trim()) return i.current;
-    const fresh = generateSalesSection(env.project, i.type, env.directives, env.variation);
+    const fresh = generateSalesSection(env.project, i.type, env.directives, env.variation, i.pageType);
     return i.current ? keepFacts({ ...fresh, id: i.current.id, visible: i.current.visible } as SalesSection, i.current) : fresh;
   },
   claude: {
     prompt: (i, env, base) => {
       const ask = i.instruction?.trim();
       return framePrompt({
-        task: ask ? `Rewrite the “${SECTION_LABEL[i.type]}” section of the sales page as the owner asks: ${quoted(ask, 1000)}. Change only what the request is about.` : `Rewrite the “${i.type}” section of the sales page with a fresh angle.`,
+        task: ask ? `Rewrite the “${SECTION_LABEL[i.type]}” section of the sales page as the owner asks: ${quoted(ask, 1000)}. Change only what the request is about.` : `Rewrite the “${SECTION_LABEL[i.type]}” section of the sales page with a fresh angle.`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         // a change the owner asked for isn't a "fresh take"
@@ -661,6 +718,8 @@ export interface SalesEditInput {
   sectionId?: string;
   /** the page's primary keyword, kept in the hero */
   primaryKeyword?: string;
+  /** the page's type (absent: the project's) */
+  pageType?: PageType;
 }
 
 /** The summary when the AI answered an edit but changed nothing. */
@@ -720,7 +779,7 @@ export const salesPageEditTask = def<SalesEditInput, SalesEditResult>({
       const sections = (target ? [target] : i.page.sections).map((s) => ({ id: s.id, section: SECTION_LABEL[s.type], ...(s.visible ? {} : { hidden: true }), copy: aiWritableData(s) }));
       return framePrompt({
         task:
-          `Make this change to the owner’s sales page: ${quoted(i.instruction, 1000)}. ` +
+          `Make this change to the owner’s sales page: ${quoted(i.instruction, 1000)}. This page is ${pageTypeNoun(i.pageType ?? pageTypeOf(env.project))}. ` +
           (target ? `Change only the “${SECTION_LABEL[target.type]}” section.` : 'Change only what the request is about and keep everything else as it is.') +
           ` The sections, their order and which are hidden stay as they are${kw ? `, and the primary keyword “${kw}” stays in the hero headline and subheadline` : ''}.` +
           (images.length

@@ -1,10 +1,16 @@
 import type {
+  AboutData,
   Brand,
+  ContactData,
   Directives,
   FaqData,
   GalleryData,
   GuaranteeData,
   HeroData,
+  LeadFormData,
+  OfferItem,
+  OffersData,
+  PageType,
   PricingData,
   ProblemData,
   Project,
@@ -15,10 +21,12 @@ import type {
   SalesSection,
   SalesSectionType,
   SeoMeta,
+  ServicePackage,
   ServicePriceModel,
   SolutionData,
 } from '@/lib/types';
 import { capitalize, escapeHtml, hashStr, lighten, darken, readableOn, slugify, titleCase, truncate, uid, wordCount, ensureUrl } from '@/lib/utils';
+import { bookingLink, pageTypeOf, paymentLink, sectionPlan, webLink } from '@/lib/pageTypes';
 import { FORMATS } from '../knowledge';
 import { buildFacts, singular, verbOutcome, Voice, type Facts } from '../text';
 import { SCRIPT_CLOSE } from './code';
@@ -67,7 +75,26 @@ function trimKeyword(s: string, maxWords = 9): string {
   return words.join(' ');
 }
 
-export function generateSeoMeta(project: Project, d: Directives = {}, variation = 0): SeoMeta {
+/** The business meta description's last sentence: what the page lets people do (only what its links allow). */
+function metaCall(project: Project, type: PageType): string {
+  switch (type) {
+    case 'booking':
+      return bookingLink(project) ? ' Book online.' : ' Request a time online.';
+    case 'lead':
+      return ' Get in touch today.';
+    case 'website':
+      return '';
+    case 'showcase':
+      return ' See services and prices.';
+    case 'checkout':
+      return paymentLink(project) ? ' Buy online.' : '';
+    case 'landing':
+    default:
+      return ctaLink(project) ? ' Book today.' : '';
+  }
+}
+
+export function generateSeoMeta(project: Project, d: Directives = {}, variation = 0, type: PageType = pageTypeOf(project)): SeoMeta {
   const f = buildFacts(project);
   const v = Voice.create(f, d, hashStr(`${project.id}|seo|${variation}`));
   const primary = primaryKeywordFor(f);
@@ -91,7 +118,7 @@ export function generateSeoMeta(project: Project, d: Directives = {}, variation 
   const metaTitle = fitTitle(primary, f.brand);
   const metaDescription = fitDescription(
     f.track === 'business'
-      ? `${f.brand} offers ${primary} for ${f.audience}.${pageLink(project) ? ' Book today.' : ''}`
+      ? `${f.brand} offers ${primary} for ${f.audience}.${metaCall(project, type)}`
       : `${f.productShort} is ${article(primary)} ${primary} for ${f.audience}. Want to ${verbOutcome(f.outcomes[0])}? ${v.pick(['Start today.', 'See what’s inside.'])}`,
   );
   const slug = slugify(primary).split('-').slice(0, 5).join('-');
@@ -133,8 +160,9 @@ export function canonicalForSlugChange(project: Project, canonical: string, oldS
   return `${base}/${newSlug}`;
 }
 
-/** Where the page's buttons go: the owner's own buy or booking link, else their website, else ''. */
-export function pageLink(project: Project): string {
+/** Where the page's buttons go: the owner's own buy or booking link, else their website, else ''.
+ *  Landing pages only: the other page types' buttons follow pageTargets(). */
+export function ctaLink(project: Project): string {
   return ensureUrl(project.studio.listing.buyUrl ?? '') || siteUrl(project);
 }
 
@@ -159,7 +187,26 @@ function heroBullets(project: Project): string[] {
   return clean(project.studio.outline.map((s) => s.title.replace(/^(Module|Chapter|Section) \d+:\s*/i, '')));
 }
 
-function heroData(f: Facts, v: Voice, primary: string, project: Project): HeroData {
+/** The hero's button label: what the page's main button does on this type of page. */
+function heroCta(f: Facts, project: Project, type: PageType): string {
+  switch (type) {
+    case 'lead':
+      return 'Get in touch';
+    case 'booking':
+      return bookingLink(project) ? 'Book now' : 'Request a time';
+    case 'website':
+      return 'Contact us';
+    case 'showcase':
+      return 'See what we offer';
+    case 'checkout':
+      return 'Buy now';
+    case 'landing':
+    default:
+      return f.track === 'business' ? `Book now` : `Get ${f.productShort} · ${f.priceStr}${f.priceSuffix}`;
+  }
+}
+
+function heroData(f: Facts, v: Voice, primary: string, project: Project, type: PageType): HeroData {
   const outcome = verbOutcome(f.outcomes[0]);
   const label = titleCase((f.business?.label ?? 'Service').split(/[&,]/)[0].trim());
   const headline =
@@ -173,7 +220,7 @@ function heroData(f: Facts, v: Voice, primary: string, project: Project): HeroDa
       f.track === 'business'
         ? `${f.brand} provides ${primary} for ${f.audience}.`
         : `${f.productShort} is ${article(primary)} ${primary} for ${f.audience} who want to ${outcome}.`,
-    ctaLabel: f.track === 'business' ? `Book now` : `Get ${f.productShort} · ${f.priceStr}${f.priceSuffix}`,
+    ctaLabel: heroCta(f, project, type),
     ctaSubtext: finePrint(project),
     bullets: heroBullets(project),
   };
@@ -258,8 +305,9 @@ export function priceText(price: number, business: boolean): string {
 /** What the price model says about billing, and nothing more (no "cancel anytime"). */
 const PRICE_NOTE: Record<ServicePriceModel, string> = { 'one-time': 'one-time payment', monthly: 'per month', yearly: 'per year', 'per-session': 'per visit', project: 'per project', quote: 'starting price', free: '' };
 
-function pricingData(f: Facts, project: Project): PricingData {
+function pricingData(f: Facts, project: Project, type: PageType): PricingData {
   const prev = previous(project, 'pricing');
+  const checkout = type === 'checkout';
   // a business leads with the package it marked popular, else its first one (as its listing does)
   const popular = project.track === 'business' ? (project.studio.packages.find((p) => p.popular) ?? project.studio.packages[0]) : undefined;
   const price = popular?.price ?? f.price;
@@ -269,14 +317,14 @@ function pricingData(f: Facts, project: Project): PricingData {
   const review = !studioCompare && !!prev?.compareAtNeedsReview;
   const includes = project.track === 'business' ? popular?.includes ?? [] : [f.product, ...(project.idea?.features ?? [])].slice(0, 6);
   return {
-    heading: project.track === 'business' ? 'Pricing' : 'Get started today',
+    heading: checkout ? (project.track === 'business' ? 'What’s included' : 'What you get') : project.track === 'business' ? 'Pricing' : 'Get started today',
     planName: project.track === 'business' ? popular?.name ?? f.brand : f.productShort,
     price,
     compareAt: compare > price ? compare : 0,
     ...(review && compare > price ? { compareAtNeedsReview: true } : {}),
     priceNote: PRICE_NOTE[popular?.priceModel ?? project.studio.priceModel] ?? '',
     includes,
-    ctaLabel: project.track === 'business' ? 'Book your appointment' : `Get ${f.productShort}`,
+    ctaLabel: checkout ? 'Buy now' : project.track === 'business' ? 'Book your appointment' : `Get ${f.productShort}`,
     badge: prev?.badge ?? '',
   };
 }
@@ -294,7 +342,27 @@ function differenceAnswer(f: Facts, project: Project): string {
   return `[What makes ${project.track === 'business' ? f.brand : f.productShort} different]`;
 }
 
-function faqData(f: Facts, primary: string, project: Project): FaqData {
+/** The FAQ's last answer on a page that isn't a landing page: how to take the page's one step (null: as on a landing page). */
+function howToAnswer(f: Facts, project: Project, type: PageType, orCall: string): FaqData['items'][number] | null {
+  switch (type) {
+    case 'booking':
+      return { q: 'How do I book?', a: bookingLink(project) ? `Use the Book now button on this page${orCall}.` : `Send a request with the form on this page${orCall}.` };
+    case 'lead':
+      return { q: 'How do I get in touch?', a: `Use the form on this page${orCall}.` };
+    case 'website':
+      return { q: 'How do I get in touch?', a: 'Use the contact details or the form on this page.' };
+    case 'showcase':
+      return { q: 'How do I order or book?', a: 'Use the button under each item, or send a question with the form.' };
+    case 'checkout':
+      // a product's checkout page ends as its landing page does (the owner's own guarantee, if any)
+      return f.track === 'business' ? { q: 'How do I buy?', a: `Use the Buy now button on this page${orCall}.` } : null;
+    case 'landing':
+    default:
+      return null;
+  }
+}
+
+function faqData(f: Facts, primary: string, project: Project, type: PageType): FaqData {
   const items: FaqData['items'] = [
     { q: `Who is this ${f.track === 'business' ? 'service' : f.formatNoun.toLowerCase()} for?`, a: f.track === 'business' ? `${f.brand} serves ${f.audience}${f.city ? ` in ${f.city}${f.region ? `, ${f.region}` : ''}` : ''}.` : `It’s for ${f.audience} who want to ${verbOutcome(f.outcomes[0])}.` },
     { q: `What makes this ${primary} different?`, a: differenceAnswer(f, project) },
@@ -302,8 +370,10 @@ function faqData(f: Facts, primary: string, project: Project): FaqData {
     ...f.objections.slice(0, 2).map((o) => ({ q: o.endsWith('?') ? o : `${o}. Will this still work for me?`, a: `[Your answer]` })),
   ];
   // Booking and refund answers only from what the owner told us: their phone number, their own guarantee.
-  if (f.track === 'business') {
-    const phone = project.studio.listing.phone?.trim();
+  const phone = project.studio.listing.phone?.trim();
+  const how = howToAnswer(f, project, type, phone ? ` or call ${phone}` : '');
+  if (how) items.push(how);
+  else if (f.track === 'business') {
     items.push({ q: 'How do I book?', a: `Use the booking button on this page${phone ? ` or call ${phone}` : ''}.` });
   } else {
     const g = previous(project, 'guarantee');
@@ -313,15 +383,16 @@ function faqData(f: Facts, primary: string, project: Project): FaqData {
 }
 
 /** A guarantee only when the owner turned theirs on (kept across rewrites); otherwise just the closing heading and button. */
-function guaranteeData(f: Facts, project: Project): GuaranteeData {
+function guaranteeData(f: Facts, project: Project, type: PageType): GuaranteeData {
   const prev = previous(project, 'guarantee');
   const own = prev?.offered ? prev : null;
+  const checkout = type === 'checkout';
   return {
     heading: own?.heading ?? '',
     body: own?.body ?? '',
     days: own?.days ?? 0,
-    finalHeading: project.track === 'business' ? `Ready to book with ${f.brand}?` : `Ready to ${verbOutcome(f.outcomes[0])}?`,
-    finalCta: project.track === 'business' ? 'Book now' : `Get ${f.productShort}`,
+    finalHeading: project.track === 'business' ? (checkout ? `Ready to order from ${f.brand}?` : `Ready to book with ${f.brand}?`) : `Ready to ${verbOutcome(f.outcomes[0])}?`,
+    finalCta: checkout ? 'Buy now' : project.track === 'business' ? 'Book now' : `Get ${f.productShort}`,
     offered: !!own,
   };
 }
@@ -335,14 +406,103 @@ function galleryData(f: Facts, project: Project): GalleryData {
   };
 }
 
-export function generateSalesSection(project: Project, type: SalesSectionType, d: Directives = {}, variation = 0): SalesSection {
+/**
+ * The form's words (its fields are the app's own). It asks for a preferred time on a booking page; a
+ * rewrite that keeps the page's type keeps the owner's choice.
+ */
+function leadFormData(f: Facts, project: Project, type: PageType): LeadFormData {
+  const prev = previous(project, 'leadForm');
+  const askTime = prev && type === pageTypeOf(project) ? !!prev.askTime : type === 'booking';
+  switch (type) {
+    case 'booking':
+      return { heading: 'Request a time', intro: `Tell ${f.brand} when suits you. It’s a request: the time isn’t booked until ${f.brand} confirms it.`, buttonLabel: 'Send request', askTime };
+    case 'showcase':
+      return { heading: 'Ask a question or get a quote', intro: `Send ${f.brand} a message about anything on this page.`, buttonLabel: 'Send', askTime };
+    case 'website':
+      return { heading: 'Send a message', intro: `Write to ${f.brand} here.`, buttonLabel: 'Send message', askTime };
+    default:
+      return { heading: f.track === 'business' ? `Get in touch with ${f.brand}` : `Ask about ${f.productShort}`, intro: 'Leave your name, your email and a short message.', buttonLabel: 'Send', askTime };
+  }
+}
+
+/** An item's price text after the number ("per visit"), or the whole price text without one ("Free"): never a note with no price. */
+function itemPriceNote(price: number, model: ServicePriceModel): string {
+  if (model === 'free') return 'Free';
+  return price > 0 ? PRICE_NOTE[model] ?? '' : '';
+}
+
+/** A package's button: a quote asks, else a booking page books, else what the listing does (book, buy or ask). */
+function packageCta(p: ServicePackage, project: Project, type: PageType): OfferItem['cta'] {
+  if (p.priceModel === 'quote' || (p.price <= 0 && p.priceModel !== 'free')) return 'inquire';
+  if (type === 'booking') return 'book';
+  const b = project.studio.listing.bookingType;
+  return b === 'book' ? 'book' : b === 'buy' ? 'buy' : 'inquire';
+}
+
+/** What the business sells: its packages (or the product), each with its own button. Items the owner has on the page stay. */
+function offersData(f: Facts, project: Project, type: PageType): OffersData {
+  const prev = previous(project, 'offers');
+  if (prev?.items.length) return { heading: prev.heading, intro: prev.intro, items: prev.items };
+  const business = project.track === 'business';
+  const items: OfferItem[] = business
+    ? project.studio.packages
+        .filter((p) => p.name.trim())
+        .map((p) => {
+          const price = p.priceModel === 'free' ? 0 : Math.max(0, p.price || 0);
+          return { id: uid('item'), name: p.name.trim(), description: p.description.trim(), price, priceNote: itemPriceNote(price, p.priceModel), duration: '', cta: packageCta(p, project, type) };
+        })
+    : [{ id: uid('item'), name: f.productShort, description: (f.pitch || f.summary || '').trim(), price: Math.max(0, project.studio.price || 0), priceNote: itemPriceNote(project.studio.price, project.studio.priceModel), duration: '', cta: 'buy' }];
+  return { heading: type === 'booking' || (type === 'website' && business) ? 'Services' : 'What we offer', intro: '', items };
+}
+
+/** About the business, from its own words (mission, pitch or summary), else a placeholder for the owner. */
+function aboutData(f: Facts, project: Project): AboutData {
+  const own = [project.brand.mission, project.brand.pitch, project.summary].map((x) => (x ?? '').trim()).find(Boolean);
+  return { heading: `About ${f.brand}`, body: own ?? `[A few lines about ${f.brand}: who you are and how you work]` };
+}
+
+const EMAIL = /^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+\.[a-z]{2,}$/i;
+
+/** An email address a page may link to (mailto:): the same check as the Marketplace's. '' when it isn't one. */
+export function contactEmail(raw: string | undefined): string {
+  const t = (raw ?? '').trim();
+  return EMAIL.test(t) ? t : '';
+}
+
+/** A phone number a page may call (tel:): its digits (and a leading +) when there are 6 to 15. '' otherwise. */
+export function contactTel(raw: string | undefined): string {
+  const tel = (raw ?? '').trim().replace(/[^\d+]/g, '');
+  const digits = tel.replace(/\D/g, '').length;
+  return digits >= 6 && digits <= 15 ? tel : '';
+}
+
+/** The contact section shows: it has an address, hours, a phone or an email. */
+export const hasContactDetail = (d: ContactData) => !!(d.address.trim() || d.hours.trim() || d.phone.trim() || d.email.trim());
+
+/** How to reach the business: what the owner has on the page, else their listing's details and location (checked). */
+function contactData(f: Facts, project: Project): ContactData {
+  const prev = previous(project, 'contact');
+  const l = project.studio.listing;
+  const own = (k: 'address' | 'hours' | 'phone' | 'email', fallback: string) => (prev?.[k]?.trim() ? prev[k] : fallback);
+  const loc = project.location;
+  return {
+    heading: 'Contact',
+    intro: project.track === 'business' && f.city ? `${f.brand} serves ${f.city}${f.region ? `, ${f.region}` : ''}.` : '',
+    address: own('address', loc?.city?.trim() ? `${loc.city.trim()}${loc.region?.trim() ? `, ${loc.region.trim()}` : ''}` : ''),
+    hours: own('hours', (l.hours ?? '').trim()),
+    phone: own('phone', contactTel(l.phone) ? (l.phone ?? '').trim() : ''),
+    email: own('email', contactEmail(l.contactEmail)),
+  };
+}
+
+export function generateSalesSection(project: Project, type: SalesSectionType, d: Directives = {}, variation = 0, pageType: PageType = pageTypeOf(project)): SalesSection {
   const f = buildFacts(project);
   const v = Voice.create(f, d, hashStr(`${project.id}|sales|${type}|${variation}`));
   const primary = primaryKeywordFor(f);
   const id = uid('sec');
   switch (type) {
     case 'hero':
-      return { id, type, visible: true, data: heroData(f, v, primary, project) };
+      return { id, type, visible: true, data: heroData(f, v, primary, project, pageType) };
     case 'problem':
       return { id, type, visible: true, data: problemData(f, v) };
     case 'solution':
@@ -350,17 +510,26 @@ export function generateSalesSection(project: Project, type: SalesSectionType, d
     case 'proof':
       return { id, type, visible: true, data: proofData(project) };
     case 'pricing':
-      return { id, type, visible: true, data: pricingData(f, project) };
+      return { id, type, visible: true, data: pricingData(f, project, pageType) };
     case 'faq':
-      return { id, type, visible: true, data: faqData(f, primary, project) };
+      return { id, type, visible: true, data: faqData(f, primary, project, pageType) };
     case 'gallery':
       return { id, type, visible: true, data: galleryData(f, project) };
+    case 'leadForm':
+      return { id, type, visible: true, data: leadFormData(f, project, pageType) };
+    case 'offers':
+      return { id, type, visible: true, data: offersData(f, project, pageType) };
+    case 'about':
+      return { id, type, visible: true, data: aboutData(f, project) };
+    case 'contact':
+      return { id, type, visible: true, data: contactData(f, project) };
     case 'guarantee':
     default:
-      return { id, type: 'guarantee', visible: true, data: guaranteeData(f, project) };
+      return { id, type: 'guarantee', visible: true, data: guaranteeData(f, project, pageType) };
   }
 }
 
+/** The landing page's sections (sectionPlan('landing') is the same list). */
 export const SECTION_ORDER: SalesSectionType[] = ['hero', 'problem', 'solution', 'proof', 'pricing', 'faq', 'guarantee'];
 export const SECTION_LABEL: Record<SalesSectionType, string> = {
   hero: 'Hero & CTA',
@@ -371,11 +540,18 @@ export const SECTION_LABEL: Record<SalesSectionType, string> = {
   faq: 'FAQ',
   guarantee: 'Guarantee & final CTA',
   gallery: 'Gallery',
+  leadForm: 'Form',
+  offers: 'Offers & prices',
+  about: 'About',
+  contact: 'Contact details',
 };
 
-export function generateSalesPage(project: Project, d: Directives = {}, variation = 0): SalesPage {
+/** Each section's id on the page (#lead-form…): the website menu, buttons and links within the page. */
+export const ANCHOR: Record<SalesSectionType, string> = { hero: 'home', problem: 'problem', solution: 'solution', proof: 'proof', pricing: 'pricing', faq: 'faq', guarantee: 'guarantee', gallery: 'gallery', leadForm: 'lead-form', offers: 'offers', about: 'about', contact: 'contact' };
+
+export function generateSalesPage(project: Project, d: Directives = {}, variation = 0, type: PageType = pageTypeOf(project)): SalesPage {
   return {
-    sections: SECTION_ORDER.map((t) => generateSalesSection(project, t, d, variation)),
+    sections: sectionPlan(type, project).map((p) => ({ ...generateSalesSection(project, p.type, d, variation, type), visible: !p.hidden })),
     theme: { font: project.brand.logo.font === 'serif' ? 'serif' : 'grotesk', mode: 'light', radius: 'soft' },
     updatedAt: Date.now(),
     claimsChecked: true,
@@ -395,6 +571,12 @@ const FACT_FIELDS: Partial<Record<SalesSectionType, string[]>> = {
   pricing: ['price', 'compareAt', 'compareAtNeedsReview', 'priceNote', 'badge'],
   guarantee: ['heading', 'body', 'days', 'offered'],
   gallery: ['items'],
+  // the form's fields are the app's; whether it asks for a time is the owner's setting
+  leadForm: ['askTime'],
+  // the whole list: each item's name, price, duration, image, button and link are the owner's (an AI answer
+  // with more items would otherwise bring copies of the first item's price)
+  offers: ['items'],
+  contact: ['address', 'hours', 'phone', 'email'],
 };
 
 /** The part of a section the AI may rewrite. */
@@ -474,8 +656,40 @@ export function applyEdit(current: SalesPage, base: SalesPage, next: SalesPage):
   return withOwnerFacts({ ...next, sections, theme }, current);
 }
 
+/** A section that holds what the owner entered: their guarantee, a "was" price or badge, their offers, their contact details. */
+function holdsOwnerFacts(s: SalesSection): boolean {
+  switch (s.type) {
+    case 'guarantee':
+      return !!s.data.offered;
+    case 'pricing':
+      return s.data.compareAt > 0 || !!s.data.badge.trim();
+    case 'offers':
+      return s.data.items.length > 0;
+    case 'contact':
+      return hasContactDetail(s.data);
+    default:
+      return false;
+  }
+}
+
+/** Sections of `current` that hold what the owner entered and that `next` doesn't have (another page type, or a
+ *  rewrite): they stay on the page, hidden, at the end, so nothing the owner entered is lost. */
+export function withKeptSections(next: SalesPage, current: SalesPage | null): SalesPage {
+  if (!current) return next;
+  const has = new Set(next.sections.map((s) => s.type));
+  const kept = current.sections.filter((s) => !has.has(s.type) && holdsOwnerFacts(s)).map((s) => ({ ...s, visible: false }));
+  return kept.length ? { ...next, sections: [...next.sections, ...kept] } : next;
+}
+
+/** The types withKeptSections would keep hidden if the page became one with these section types (for the confirm text). */
+export function sectionsKeptHidden(current: SalesPage | null, nextTypes: SalesSectionType[]): SalesSectionType[] {
+  const has = new Set(nextTypes);
+  return [...new Set((current?.sections ?? []).filter((s) => !has.has(s.type) && holdsOwnerFacts(s)).map((s) => s.type))];
+}
+
 // ───────────────────────── Images on the page ─────────────────────────
 // The owner's images (marketing.seoImages) go in two places: the hero's main image and a photo gallery.
+// The owner can also give each of their offers one of them (in Edit).
 // The page refers to each by its media id; the AI and the prompt box by its key ({{img-2}} → "img-2").
 
 type GalleryItem = GalleryData['items'][number];
@@ -556,23 +770,31 @@ function withHeroImage(d: HeroData, imageId?: string, imageAlt?: string): HeroDa
   return imageId ? { ...rest, imageId, imageAlt: imageAlt ?? '' } : rest;
 }
 
-/** The media ids of the images on the page (the hero's first, then the gallery's), each once. */
+/** The media ids of the images on the page (the hero's, the gallery's, the offers' in page order), each once. */
 export function pageImageIds(page: SalesPage | null, opts: { visibleOnly?: boolean } = {}): string[] {
   const ids: string[] = [];
   for (const s of page?.sections ?? []) {
     if (opts.visibleOnly && !s.visible) continue;
     if (s.type === 'hero' && s.data.imageId) ids.push(s.data.imageId);
     if (s.type === 'gallery') ids.push(...s.data.items.map((i) => i.imageId));
+    if (s.type === 'offers') ids.push(...s.data.items.flatMap((i) => (i.imageId ? [i.imageId] : [])));
   }
   return [...new Set(ids)];
+}
+
+/** An offered item without its image. */
+function withoutItemImage(it: OfferItem): OfferItem {
+  const { imageId: _id, imageAlt: _alt, ...rest } = it;
+  return rest;
 }
 
 /**
  * The page with its images placed as `plan` says. Keys the page doesn't have are ignored, each image
  * shows once (the hero's isn't repeated in the gallery), and an image no longer among `images` is taken
  * off. Each `fresh` image (just added by the owner) that isn't placed goes at the end of the gallery:
- * images added to a prompt box are always on the page. The gallery section is added (visible, after
- * the solution) the first time it has images; an existing one keeps its place and visibility.
+ * images added to a prompt box are always on the page. The gallery section is added (visible, after the
+ * last solution, offers or About section, else after the hero) the first time it has images; an existing
+ * one keeps its place and visibility.
  */
 export function placeImages(page: SalesPage, project: Project, images: PromptImage[], plan: ImagePlan, fresh: readonly string[] = []): SalesPage {
   const usable = images.filter((i) => i.media.kind === 'image');
@@ -626,7 +848,11 @@ export function placeImages(page: SalesPage, project: Project, images: PromptIma
   if (!galSec && items.length) {
     const g = generateSalesSection(project, 'gallery');
     const gallery: SalesSection = { id: g.id, type: 'gallery', visible: true, data: { ...(g.data as GalleryData), ...words, items } };
-    const after = sections.findIndex((s) => s.type === 'solution');
+    // after the last section that says what's on offer: a shown one first (sections kept hidden at the end
+    // from another page type don't count), else a hidden one, else after the hero
+    const lastOf = (pick: (s: SalesSection) => boolean) => sections.reduce((at, s, i) => ((s.type === 'solution' || s.type === 'offers' || s.type === 'about') && pick(s) ? i : at), -1);
+    const shown = lastOf((s) => s.visible);
+    const after = shown >= 0 ? shown : lastOf(() => true);
     const at = after >= 0 ? after + 1 : sections.findIndex((s) => s.type === 'hero') + 1 || sections.length;
     sections = [...sections.slice(0, at), gallery, ...sections.slice(at)];
   }
@@ -645,18 +871,24 @@ export function placeNewImages(page: SalesPage, project: Project, images: Prompt
   return placeImages(page, project, images, heroHas ? {} : { hero: usable[0] }, usable);
 }
 
-/** The page without the images that are no longer among its images (removed in the prompt box). */
+/** The page without the images that are no longer among its images (removed in the prompt box). An offered
+ *  item whose image went keeps its place, without an image. */
 export function pruneImages(page: SalesPage, images: PromptImage[]): SalesPage {
   const ids = new Set(images.map((i) => i.media.id));
+  const gone = (id?: string) => !!id && !ids.has(id);
   let changed = false;
   const sections = page.sections.map((s): SalesSection => {
-    if (s.type === 'hero' && s.data.imageId && !ids.has(s.data.imageId)) {
+    if (s.type === 'hero' && gone(s.data.imageId)) {
       changed = true;
       return { ...s, data: withHeroImage(s.data) };
     }
     if (s.type === 'gallery' && s.data.items.some((it) => !ids.has(it.imageId))) {
       changed = true;
       return { ...s, data: { ...s.data, items: s.data.items.filter((it) => ids.has(it.imageId)) } };
+    }
+    if (s.type === 'offers' && s.data.items.some((it) => gone(it.imageId))) {
+      changed = true;
+      return { ...s, data: { ...s.data, items: s.data.items.map((it) => (gone(it.imageId) ? withoutItemImage(it) : it)) } };
     }
     return s;
   });
@@ -729,6 +961,29 @@ export function pageText(page: SalesPage): { all: string; h1: string; h2s: strin
           parts.push(s.data.heading, s.data.intro, ...s.data.items.map((i) => i.caption));
         }
         break;
+      case 'leadForm':
+        if (s.data.heading.trim()) h2s.push(s.data.heading);
+        parts.push(s.data.heading, s.data.intro);
+        break;
+      // As published: offers without items, About without words and contact without details are left out.
+      case 'offers':
+        if (s.data.items.length) {
+          if (s.data.heading.trim()) h2s.push(s.data.heading);
+          parts.push(s.data.heading, s.data.intro, ...s.data.items.flatMap((i) => [i.name, i.description]));
+        }
+        break;
+      case 'about':
+        if (s.data.body.trim()) {
+          if (s.data.heading.trim()) h2s.push(s.data.heading);
+          parts.push(s.data.heading, s.data.body);
+        }
+        break;
+      case 'contact':
+        if (hasContactDetail(s.data)) {
+          if (s.data.heading.trim()) h2s.push(s.data.heading);
+          parts.push(s.data.heading, s.data.intro, s.data.address, s.data.hours);
+        }
+        break;
     }
   }
   return { all: parts.join(' '), h1, h2s, firstPara };
@@ -741,9 +996,14 @@ function shownImages(page: SalesPage | null): { imageId: string; alt: string }[]
     if (!s.visible) continue;
     if (s.type === 'hero' && s.data.imageId) out.push({ imageId: s.data.imageId, alt: s.data.imageAlt ?? '' });
     if (s.type === 'gallery') out.push(...s.data.items);
+    if (s.type === 'offers') out.push(...s.data.items.flatMap((i) => (i.imageId ? [{ imageId: i.imageId, alt: i.imageAlt ?? '' }] : [])));
   }
   return out;
 }
+
+/** How much text and how many section headings each type of page needs (with partial credit from the second number): a lead form page is meant to be short. */
+const MIN_WORDS: Record<PageType, [number, number]> = { landing: [350, 220], website: [400, 250], showcase: [250, 160], booking: [250, 160], lead: [180, 110], checkout: [200, 130] };
+const MIN_H2S: Record<PageType, number> = { landing: 3, website: 3, showcase: 3, booking: 3, lead: 2, checkout: 2 };
 
 function countPhrase(text: string, phrase: string): number {
   if (!phrase.trim()) return 0;
@@ -751,7 +1011,9 @@ function countPhrase(text: string, phrase: string): number {
   return (text.match(re) || []).length;
 }
 
-export function scoreSeo(meta: SeoMeta, page: SalesPage | null): { score: number; checks: SeoCheck[]; words: number; density: number } {
+export function scoreSeo(meta: SeoMeta, page: SalesPage | null, type: PageType = 'landing'): { score: number; checks: SeoCheck[]; words: number; density: number } {
+  const [minWords, someWords] = MIN_WORDS[type] ?? MIN_WORDS.landing;
+  const minH2s = MIN_H2S[type] ?? MIN_H2S.landing;
   const kw = meta.primaryKeyword.trim().toLowerCase();
   const { all, h1, h2s, firstPara } = page ? pageText(page) : { all: '', h1: '', h2s: [], firstPara: '' };
   const words = wordCount(all);
@@ -775,9 +1037,9 @@ export function scoreSeo(meta: SeoMeta, page: SalesPage | null): { score: number
     { id: 'h1-kw', label: 'Keyword in the H1 headline', pass: includes(h1), partial: looseIncludes(h1), weight: 10, tip: 'Your hero headline is the page’s H1.' },
     { id: 'intro-kw', label: 'Keyword in the first paragraph', pass: includes(firstPara), partial: looseIncludes(firstPara), weight: 6, tip: 'Use it in the hero subheadline.' },
     { id: 'slug', label: 'Short URL slug containing the keyword', pass: kwWords.every((w) => meta.slug.includes(w.replace(/[^a-z0-9]/g, ''))) && meta.slug.split('-').length <= 6, partial: meta.slug.length > 0, weight: 6, tip: 'Keep slugs to 3–5 words.' },
-    { id: 'words', label: 'At least 350 words of content', pass: words >= 350, partial: words >= 220, weight: 8, tip: `Currently ${words} words.` },
+    { id: 'words', label: `At least ${minWords} words of content`, pass: words >= minWords, partial: words >= someWords, weight: 8, tip: `Currently ${words} words.` },
     { id: 'density', label: 'Keyword density between 0.5% and 2.5%', pass: density >= 0.005 && density <= 0.025, partial: occurrences > 0, weight: 7, tip: `Currently ${(density * 100).toFixed(1)}% (${occurrences} uses).` },
-    { id: 'h2', label: 'At least 3 H2 section headings', pass: h2s.length >= 3, partial: h2s.length >= 1, weight: 5, tip: `${h2s.length} section headings visible.` },
+    { id: 'h2', label: `At least ${minH2s} H2 section headings`, pass: h2s.length >= minH2s, partial: h2s.length >= 1, weight: 5, tip: `${h2s.length} section headings visible.` },
     { id: 'secondary', label: 'Two or more secondary keywords used', pass: secondaryUsed >= 2, partial: secondaryUsed === 1, weight: 6, tip: `${secondaryUsed} of ${meta.secondaryKeywords.length} found on the page.` },
     { id: 'faq', label: 'FAQ section with 3+ questions (FAQ schema)', pass: !!faq && faq.type === 'faq' && faq.data.items.length >= 3, weight: 5, tip: 'FAQ rich results can win extra search space.' },
     { id: 'og', label: 'OpenGraph title and description set', pass: !!meta.ogTitle && !!meta.ogDescription, weight: 5, tip: 'Controls how links look when shared.' },
@@ -791,6 +1053,112 @@ export function scoreSeo(meta: SeoMeta, page: SalesPage | null): { score: number
   const max = checks.reduce((s, c) => s + c.weight, 0);
   const got = checks.reduce((s, c) => s + (c.pass ? c.weight : c.partial ? c.weight * 0.45 : 0), 0);
   return { score: Math.round((got / max) * 100), checks, words, density };
+}
+
+// ───────────────────────── Buttons ─────────────────────────
+// Where the page's buttons go: the owner's own booking or payment link (the app never takes payments), or a
+// section of the page itself (#lead-form, #contact…). A button with nowhere to go is left out.
+
+/** What the page's buttons can open. */
+export interface PageTargets {
+  /** the owner's booking link ('' when none) */
+  booking: string;
+  /** the owner's payment link ('' when none) */
+  payment: string;
+  /** the form is on the page */
+  hasForm: boolean;
+  /** the contact details are on the page (shown, with at least one detail) */
+  hasContact: boolean;
+  /** a landing page's own link (ctaLink: the listing's buy or booking link, else the website): its hero button opens it when Pricing is hidden ('' when none) */
+  landing?: string;
+}
+
+/** A section the published page shows: visible, and with something in it (offers with items, About with words, contact with a detail). */
+function showsOnPage(s: SalesSection): boolean {
+  if (!s.visible) return false;
+  switch (s.type) {
+    case 'offers':
+      return s.data.items.length > 0;
+    case 'about':
+      return !!s.data.body.trim();
+    case 'contact':
+      return hasContactDetail(s.data);
+    default:
+      return true;
+  }
+}
+
+const shownSection = <T extends SalesSectionType>(page: SalesPage, type: T) => page.sections.find((s): s is Extract<SalesSection, { type: T }> => s.type === type && showsOnPage(s));
+
+/** What the page's buttons can open: the links from pageTypes.ts, and the form and contact sections when they're on the page. */
+export function pageTargets(page: SalesPage, project: Project): PageTargets {
+  return { booking: bookingLink(project), payment: paymentLink(project), hasForm: !!shownSection(page, 'leadForm'), hasContact: !!shownSection(page, 'contact'), landing: ctaLink(project) };
+}
+
+/** An offered item's button: where it goes and what it says, or null for none. */
+export function itemTarget(item: OfferItem, t: PageTargets, business: boolean): { href: string; label: string } | null {
+  switch (item.cta) {
+    case 'book': {
+      const href = webLink(item.link) || t.booking;
+      if (href) return { href, label: 'Book now' };
+      return t.hasForm ? { href: '#lead-form', label: 'Request a time' } : null;
+    }
+    case 'buy': {
+      const href = webLink(item.link) || t.payment;
+      return href ? { href, label: 'Buy now' } : null;
+    }
+    case 'inquire': {
+      const href = t.hasForm ? '#lead-form' : t.hasContact ? '#contact' : '';
+      if (!href) return null;
+      return { href, label: business && item.price <= 0 && !item.priceNote.trim() ? 'Get a quote' : 'Ask about this' };
+    }
+    default:
+      return null;
+  }
+}
+
+/** Where the hero's button goes ('' → no button): the first of this type's steps whose section is on the page. */
+export function heroHref(page: SalesPage, project: Project, t: PageTargets): string {
+  return heroTarget(page, pageTypeOf(project), t.landing === undefined ? { ...t, landing: ctaLink(project) } : t);
+}
+
+/** heroHref for a page of this type, when only the type is at hand (the preview). */
+export function heroTarget(page: SalesPage, type: PageType, t: PageTargets): string {
+  const form = t.hasForm ? '#lead-form' : '';
+  const contact = t.hasContact ? '#contact' : '';
+  switch (type) {
+    case 'lead':
+      return form || contact;
+    case 'booking':
+      return t.booking || form || contact;
+    case 'website':
+      return contact || form;
+    case 'showcase':
+      return (shownSection(page, 'offers') ? '#offers' : '') || form;
+    case 'checkout':
+      return t.payment || (shownSection(page, 'pricing') ? '#pricing' : '');
+    case 'landing':
+    default:
+      return shownSection(page, 'pricing') ? '#pricing' : t.landing ?? '';
+  }
+}
+
+/** Where the pricing card's and the closing section's buttons go: on a landing page as always, else as the hero's ('' → no button). */
+export function closingHref(page: SalesPage, project: Project, t: PageTargets): string {
+  return pageTypeOf(project) === 'landing' ? ctaLink(project) || '#pricing' : heroHref(page, project, t);
+}
+
+/** A website's top menu: Home, Services (Offers for a product), About, Gallery, FAQ and Contact, each when its section has something to show. */
+export function websiteMenu(page: SalesPage, business: boolean): { label: string; anchor: string; type: SalesSectionType }[] {
+  const out: { label: string; anchor: string; type: SalesSectionType }[] = [];
+  if (shownSection(page, 'hero')) out.push({ label: 'Home', anchor: '#home', type: 'hero' });
+  if (shownSection(page, 'offers')) out.push({ label: business ? 'Services' : 'Offers', anchor: '#offers', type: 'offers' });
+  if (shownSection(page, 'about')) out.push({ label: 'About', anchor: '#about', type: 'about' });
+  if (shownSection(page, 'gallery')?.data.items.length) out.push({ label: 'Gallery', anchor: '#gallery', type: 'gallery' });
+  if (shownSection(page, 'faq')?.data.items.length) out.push({ label: 'FAQ', anchor: '#faq', type: 'faq' });
+  if (shownSection(page, 'contact')) out.push({ label: 'Contact', anchor: '#contact', type: 'contact' });
+  else if (shownSection(page, 'leadForm')) out.push({ label: 'Contact', anchor: '#lead-form', type: 'leadForm' });
+  return out;
 }
 
 // ───────────────────────── HTML export ─────────────────────────
@@ -813,6 +1181,8 @@ export interface SalesHtmlOptions {
   canonical?: string;
   /** where the page's images are served from: a link preview needs a full image address (og:image) */
   origin?: string;
+  /** where the page's form sends (its action): the published page's /<slug>/lead. '' or absent: the form shows but can't send */
+  leadAction?: string;
 }
 
 /** The owner pasted this canonical address themselves: it isn't the one the app makes from their website and the slug. */
@@ -823,6 +1193,33 @@ export function ownCanonical(project: Project, meta: SeoMeta): boolean {
 
 /** Stands for the share image in the schema markup until its address goes in (that address may hold a {{img-N}} token). */
 const SHARE_IMAGE = '__ylb_share_image__';
+
+/** A website's top menu: smooth scrolling to each section, which stops below the sticky menu. */
+const MENU_CSS = `html { scroll-behavior: smooth; } @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+[id] { scroll-margin-top: 72px; }
+.menu { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid rgba(127,127,127,.2); }
+.menu-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; min-height: 58px; }
+.menu-brand { margin-right: auto; font-weight: 800; color: var(--ink); text-decoration: none; }
+.menu ul { display: flex; flex-wrap: wrap; gap: 4px 18px; list-style: none; margin: 0; padding: 0; }
+.menu a { color: var(--ink); font-weight: 600; font-size: 15px; text-decoration: none; } .menu a:hover { color: var(--brand); }
+`;
+
+/** The form, offers, About and contact sections. */
+const TYPE_CSS = `.lead-form { background: var(--soft); } .lead-form form, .lead-form fieldset { display: grid; gap: 14px; margin: 22px 0 0; padding: 0; border: 0; min-width: 0; }
+.field label { display: block; font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+.field input, .field textarea { width: 100%; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid rgba(127,127,127,.45); border-radius: var(--radius); padding: 12px 14px; }
+.field textarea { resize: vertical; } .field input:focus, .field textarea:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+button.btn { border: 0; font: inherit; font-weight: 700; cursor: pointer; justify-self: start; }
+fieldset[disabled] { opacity: .6; } fieldset[disabled] button.btn { cursor: not-allowed; } .note { color: var(--muted); font-size: 15px; margin: 12px 0 0; }
+.hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.items { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 28px; }
+.item { background: var(--soft); border-radius: var(--radius); padding: 22px; display: flex; flex-direction: column; gap: 8px; }
+.item h3, .item p { margin: 0; } .item .meta { color: var(--muted); font-size: 14px; margin: 0; } .price-line b { font-size: 26px; } .price-line span { color: var(--muted); font-size: 15px; } .item .btn { margin-top: auto; align-self: flex-start; }
+.contact-list { list-style: none; padding: 0; display: grid; gap: 10px; } .contact-list a { color: var(--brand); font-weight: 600; } .about p { max-width: 65ch; }
+`;
+
+/** The form's note when it can't send (not published yet; in claude.ai there's no publishing). */
+const formNote = () => (__ARTIFACT_BUILD__ ? 'This form works once the page is published from the app’s own site.' : 'Publish this page to collect leads.');
 
 export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, project: Project, opts: SalesHtmlOptions = {}): string {
   const c = brand.colors;
@@ -842,7 +1239,13 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
   const e = (s: string) => escapeHtml(s).replace(/\{\{/g, '{&#123;');
   // Only the owner's own addresses: no guessed domain. Without a link, buttons stay on the page.
   const site = ensureUrl(brand.websiteUrl).replace(/\/$/, '');
-  const link = pageLink(project) || '#pricing';
+  const type = pageTypeOf(project);
+  const landing = type === 'landing';
+  const website = type === 'website';
+  const business = project.track === 'business';
+  const targets = pageTargets(page, project);
+  const heroTo = heroHref(page, project, targets);
+  const link = closingHref(page, project, targets);
   const canonical = (opts.canonical ?? meta.canonical).trim();
   const faq = page.sections.find((s) => s.type === 'faq');
   const pricing = page.sections.find((s) => s.type === 'pricing');
@@ -861,26 +1264,75 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
   const heroSec = page.sections.find((s) => s.type === 'hero' && s.visible);
   const shareImage = heroSec?.type === 'hero' ? fullUrl(imageSrc(heroSec.data.imageId)) : '';
 
+  /** The schema of a page that isn't a landing page: only what the page shows (its contact details, its offers, a price above 0). */
+  const typeSchema = (): Record<string, unknown> => {
+    const offers = shownSection(page, 'offers');
+    const items = offers?.data.items ?? [];
+    const card = shownSection(page, 'pricing');
+    if (business) {
+      const contact = shownSection(page, 'contact');
+      const telephone = contact && contactTel(contact.data.phone) ? contact.data.phone.trim() : '';
+      const email = contact ? contactEmail(contact.data.email) : '';
+      return {
+        '@context': 'https://schema.org',
+        '@type': 'LocalBusiness',
+        name: brand.name,
+        description: meta.metaDescription,
+        ...(site ? { url: site } : {}),
+        ...(shareImage ? { image: SHARE_IMAGE } : {}),
+        ...(project.location ? { address: { '@type': 'PostalAddress', addressLocality: project.location.city, addressRegion: project.location.region } } : {}),
+        ...(telephone ? { telephone } : {}),
+        ...(email ? { email } : {}),
+        ...(offers && items.length
+          ? {
+              hasOfferCatalog: {
+                '@type': 'OfferCatalog',
+                name: offers.data.heading.trim() || 'Services',
+                itemListElement: items.map((it) => ({
+                  '@type': 'Offer',
+                  itemOffered: { '@type': 'Service', name: it.name, ...(it.description.trim() ? { description: it.description.trim() } : {}) },
+                  ...(it.price > 0 ? { price: it.price, priceCurrency: 'USD' } : {}),
+                })),
+              },
+            }
+          : {}),
+        ...(type === 'checkout' && card && card.data.price > 0 ? { makesOffer: { '@type': 'Offer', itemOffered: { '@type': 'Service', name: card.data.planName }, price: card.data.price, priceCurrency: 'USD' } } : {}),
+      };
+    }
+    const price = card ? card.data.price : items[0]?.price ?? 0;
+    return {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: card?.data.planName.trim() || items[0]?.name.trim() || brand.name,
+      description: meta.metaDescription,
+      ...(shareImage ? { image: SHARE_IMAGE } : {}),
+      brand: { '@type': 'Brand', name: brand.name },
+      ...(price > 0 ? { offers: { '@type': 'Offer', priceCurrency: 'USD', price, ...(canonical ? { url: canonical } : {}) } } : {}),
+    };
+  };
+
   const ld: Record<string, unknown>[] = [
-    project.track === 'business'
-      ? {
-          '@context': 'https://schema.org',
-          '@type': 'LocalBusiness',
-          name: brand.name,
-          description: meta.metaDescription,
-          ...(site ? { url: site } : {}),
-          ...(shareImage ? { image: SHARE_IMAGE } : {}),
-          ...(project.location ? { address: { '@type': 'PostalAddress', addressLocality: project.location.city, addressRegion: project.location.region } } : {}),
-        }
-      : {
-          '@context': 'https://schema.org',
-          '@type': 'Product',
-          name: pricing && pricing.type === 'pricing' ? pricing.data.planName : brand.name,
-          description: meta.metaDescription,
-          ...(shareImage ? { image: SHARE_IMAGE } : {}),
-          brand: { '@type': 'Brand', name: brand.name },
-          offers: { '@type': 'Offer', priceCurrency: 'USD', price: pricing && pricing.type === 'pricing' ? pricing.data.price : project.studio.price, availability: 'https://schema.org/InStock', ...(canonical ? { url: canonical } : {}) },
-        },
+    !landing
+      ? typeSchema()
+      : project.track === 'business'
+        ? {
+            '@context': 'https://schema.org',
+            '@type': 'LocalBusiness',
+            name: brand.name,
+            description: meta.metaDescription,
+            ...(site ? { url: site } : {}),
+            ...(shareImage ? { image: SHARE_IMAGE } : {}),
+            ...(project.location ? { address: { '@type': 'PostalAddress', addressLocality: project.location.city, addressRegion: project.location.region } } : {}),
+          }
+        : {
+            '@context': 'https://schema.org',
+            '@type': 'Product',
+            name: pricing && pricing.type === 'pricing' ? pricing.data.planName : brand.name,
+            description: meta.metaDescription,
+            ...(shareImage ? { image: SHARE_IMAGE } : {}),
+            brand: { '@type': 'Brand', name: brand.name },
+            offers: { '@type': 'Offer', priceCurrency: 'USD', price: pricing && pricing.type === 'pricing' ? pricing.data.price : project.studio.price, availability: 'https://schema.org/InStock', ...(canonical ? { url: canonical } : {}) },
+          },
   ];
   if (faq && faq.type === 'faq' && faq.visible) {
     ld.push({
@@ -895,26 +1347,35 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
     .replace(/\{\{/g, '{\\u007b')
     .replace(`"${SHARE_IMAGE}"`, () => JSON.stringify(shareImage).replace(/</g, '\\u003c'));
 
+  // The ids the page has (the website menu links only to those), and what the page needs styles for.
+  const anchors = new Set<string>();
+  let typeSections = false;
+  let itemImages = false;
+  /** A section's lines, without the empty ones (an optional heading or intro left out). */
+  const block = (...lines: (string | false | undefined)[]) => lines.filter((l): l is string => !!l).join('\n');
+
   const sectionHtml = page.sections
     .filter((s) => s.visible)
     .map((s) => {
       switch (s.type) {
         case 'hero': {
+          if (website) anchors.add('home');
           const copy = `<p class="eyebrow">${e(s.data.eyebrow)}</p>
       <h1>${e(s.data.headline)}</h1>
       <p class="lead">${e(s.data.subheadline)}</p>
       ${s.data.bullets.length ? `<ul class="ticks">${s.data.bullets.map((b) => `<li>${e(b)}</li>`).join('')}</ul>` : ''}
-      <a class="btn" href="#pricing">${e(s.data.ctaLabel)}</a>
+      ${heroTo ? `<a class="btn" href="${e(heroTo)}">${e(s.data.ctaLabel)}</a>` : ''}
       ${s.data.ctaSubtext.trim() ? `<p class="fine">${e(s.data.ctaSubtext)}</p>` : ''}`;
+          const open = `<header class="hero"${website ? ' id="home"' : ''}>`;
           const pic = s.data.imageId ? img(s.data.imageId, s.data.imageAlt ?? '', ' fetchpriority="high" decoding="async"') : '';
           if (!pic) {
-            return `  <header class="hero">
+            return `  ${open}
     <div class="wrap">
       ${copy}
     </div>
   </header>`;
           }
-          return `  <header class="hero">
+          return `  ${open}
     <div class="wrap hero-grid">
       <div class="hero-copy">
       ${copy}
@@ -962,6 +1423,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
   </section>`;
         }
         case 'pricing':
+          anchors.add('pricing');
           return `  <section class="pricing" id="pricing">
     <div class="wrap narrow">
       <h2>${e(s.data.heading)}</h2>
@@ -970,12 +1432,13 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
         <h3>${e(s.data.planName)}</h3>
         <p class="price">${showsCompareAt(s.data) ? `<s>$${s.data.compareAt}</s> ` : ''}<b>${e(priceText(s.data.price, project.track === 'business'))}</b> <span>${e(s.data.priceNote)}</span></p>
         <ul class="ticks">${s.data.includes.map((i) => `<li>${e(i)}</li>`).join('')}</ul>
-        <a class="btn block" href="${e(link)}">${e(s.data.ctaLabel)}</a>
+        ${link ? `<a class="btn block" href="${e(link)}">${e(s.data.ctaLabel)}</a>` : ''}
       </div>
     </div>
   </section>`;
         case 'faq':
-          return `  <section class="faq">
+          if (website) anchors.add('faq');
+          return `  <section class="faq"${website ? ' id="faq"' : ''}>
     <div class="wrap narrow">
       <h2>${e(s.data.heading)}</h2>
       ${s.data.items.map((i) => `<details><summary>${e(i.q)}</summary><p>${e(i.a)}</p></details>`).join('\n      ')}
@@ -989,7 +1452,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
           return `  <section class="guarantee">
     <div class="wrap narrow">
       ${top}
-      <a class="btn" href="${e(link)}">${e(s.data.finalCta)}</a>
+      ${link ? `<a class="btn" href="${e(link)}">${e(s.data.finalCta)}</a>` : ''}
     </div>
   </section>`;
         }
@@ -1002,11 +1465,116 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
             })
             .filter(Boolean);
           if (!photos.length) return '';
-          return `  <section class="gallery">
+          if (website) anchors.add('gallery');
+          return `  <section class="gallery"${website ? ' id="gallery"' : ''}>
     <div class="wrap">
       ${s.data.heading.trim() ? `<h2>${e(s.data.heading)}</h2>\n      ` : ''}${s.data.intro.trim() ? `<p class="lead">${e(s.data.intro)}</p>\n      ` : ''}<div class="photos">${photos.join('')}</div>
     </div>
   </section>`;
+        }
+        case 'leadForm': {
+          // The app's own fields; it sends only once the page is published (SEO pages run no scripts).
+          const d = s.data;
+          const action = (opts.leadAction ?? '').trim();
+          typeSections = true;
+          anchors.add('lead-form');
+          return block(
+            `  <section class="lead-form" id="lead-form">`,
+            `    <div class="wrap narrow">`,
+            d.heading.trim() && `      <h2>${e(d.heading)}</h2>`,
+            d.intro.trim() && `      <p class="lead">${e(d.intro)}</p>`,
+            action ? `      <form method="post" action="${e(action)}" enctype="application/x-www-form-urlencoded" accept-charset="utf-8">` : `      <form>`,
+            `        <fieldset${action ? '' : ' disabled'}>`,
+            `          <div class="field"><label for="lf-name">Your name</label><input id="lf-name" name="name" autocomplete="name" maxlength="120" required></div>`,
+            `          <div class="field"><label for="lf-email">Email</label><input id="lf-email" name="email" type="email" autocomplete="email" maxlength="254" required></div>`,
+            `          <div class="field"><label for="lf-phone">Phone (optional)</label><input id="lf-phone" name="phone" type="tel" autocomplete="tel" maxlength="40"></div>`,
+            d.askTime && `          <div class="field"><label for="lf-time">Preferred day and time</label><input id="lf-time" name="time" maxlength="120" required placeholder="For example: Tuesday morning"></div>`,
+            `          <div class="field"><label for="lf-message">Message (optional)</label><textarea id="lf-message" name="message" rows="4" maxlength="2000"></textarea></div>`,
+            `          <div class="hp" aria-hidden="true"><label for="lf-website">Leave this empty</label><input id="lf-website" name="website" tabindex="-1" autocomplete="off"></div>`,
+            `          <button class="btn" type="submit">${e(d.buttonLabel.trim() || 'Send')}</button>`,
+            `        </fieldset>`,
+            !action && `        <p class="note">${e(formNote())}</p>`,
+            `      </form>`,
+            `    </div>`,
+            `  </section>`,
+          );
+        }
+        case 'offers': {
+          // What's on offer, as the owner has it: a price only when there is one, a button only when it goes somewhere.
+          const d = s.data;
+          if (!d.items.length) return '';
+          typeSections = true;
+          anchors.add('offers');
+          const cards = d.items.map((it) => {
+            const pic = it.imageId ? img(it.imageId, it.imageAlt ?? '', ' loading="lazy" decoding="async"') : '';
+            if (pic) itemImages = true;
+            const note = it.priceNote.trim();
+            const price = it.price > 0 ? `<b>$${it.price}</b>${note ? ` <span>${e(note)}</span>` : ''}` : `<b>${e(note || (business ? 'Ask for a quote' : 'Free'))}</b>`;
+            const to = itemTarget(it, targets, business);
+            return [
+              '<article class="item">',
+              pic,
+              `<h3>${e(it.name)}</h3>`,
+              it.duration.trim() && `<p class="meta">${e(it.duration.trim())}</p>`,
+              it.description.trim() && `<p>${e(it.description.trim())}</p>`,
+              `<p class="price-line">${price}</p>`,
+              to && `<a class="btn" href="${e(to.href)}">${e(to.label)}</a>`,
+              '</article>',
+            ]
+              .filter(Boolean)
+              .join('');
+          });
+          return block(
+            `  <section class="offers" id="offers">`,
+            `    <div class="wrap">`,
+            d.heading.trim() && `      <h2>${e(d.heading)}</h2>`,
+            d.intro.trim() && `      <p class="lead">${e(d.intro)}</p>`,
+            `      <div class="items">${cards.join('')}</div>`,
+            `    </div>`,
+            `  </section>`,
+          );
+        }
+        case 'about': {
+          const paras = s.data.body
+            .split(/\n\s*\n/)
+            .map((p) => p.trim())
+            .filter(Boolean);
+          if (!paras.length) return '';
+          typeSections = true;
+          anchors.add('about');
+          return block(
+            `  <section class="about" id="about">`,
+            `    <div class="wrap narrow">`,
+            s.data.heading.trim() && `      <h2>${e(s.data.heading)}</h2>`,
+            ...paras.map((p) => `      <p>${e(p).replace(/\n/g, '<br>')}</p>`),
+            `    </div>`,
+            `  </section>`,
+          );
+        }
+        case 'contact': {
+          // The owner's details; a phone or email that doesn't pass the check is shown as text, never linked.
+          const d = s.data;
+          if (!hasContactDetail(d)) return '';
+          typeSections = true;
+          anchors.add('contact');
+          const phone = d.phone.trim();
+          const tel = contactTel(phone);
+          const mail = contactEmail(d.email);
+          const rows = [
+            d.address.trim() && `<li><b>Address:</b> ${e(d.address.trim())}</li>`,
+            d.hours.trim() && `<li><b>Hours:</b> ${e(d.hours.trim())}</li>`,
+            phone && `<li><b>Phone:</b> ${tel ? `<a href="tel:${e(tel)}">${e(phone)}</a>` : e(phone)}</li>`,
+            d.email.trim() && `<li><b>Email:</b> ${mail ? `<a href="mailto:${e(mail)}">${e(mail)}</a>` : e(d.email.trim())}</li>`,
+          ].filter(Boolean);
+          return block(
+            `  <section class="contact" id="contact">`,
+            `    <div class="wrap narrow">`,
+            d.heading.trim() && `      <h2>${e(d.heading)}</h2>`,
+            d.intro.trim() && `      <p class="lead">${e(d.intro)}</p>`,
+            `      <ul class="contact-list">${rows.join('')}</ul>`,
+            `    </div>`,
+            `  </section>`,
+          );
         }
         default:
           return '';
@@ -1014,6 +1582,13 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
     })
     .filter(Boolean)
     .join('\n');
+  // A website's menu, above the first section: only links to sections the page shows.
+  const menu = website ? websiteMenu(page, business).filter((m) => anchors.has(m.anchor.slice(1))) : [];
+  const menuHtml = website
+    ? `  <nav class="menu" aria-label="Main"><div class="wrap menu-row">${anchors.has('home') ? `<a class="menu-brand" href="#home">${e(brand.name)}</a>` : `<span class="menu-brand">${e(brand.name)}</span>`}${menu.length ? `<ul>${menu.map((m) => `<li><a href="${m.anchor}">${e(m.label)}</a></li>`).join('')}</ul>` : ''}</div></nav>\n`
+    : '';
+  // Styles only for what the page has, so a landing page's HTML is what it always was.
+  const typeCss = website || typeSections ? `${website ? MENU_CSS : ''}${TYPE_CSS}` : '';
   const imageCss = sectionHtml.includes('<img ')
     ? `.hero-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 44px; align-items: center; }
 .hero-img { margin: 0; }
@@ -1023,7 +1598,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
 .photos img { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--radius); }
 .photos figcaption { margin-top: 8px; color: var(--muted); font-size: 15px; }
 @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; gap: 28px; } }
-`
+${itemImages ? '.item img { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--radius); }\n' : ''}`
     : '';
 
   return `<!doctype html>
@@ -1087,11 +1662,11 @@ details p { margin: 0 0 18px; color: var(--muted); }
 .seal { width: 92px; height: 92px; border-radius: 50%; margin: 0 auto 16px; background: var(--brand); color: var(--on-brand); display: grid; place-content: center; font-size: 30px; font-weight: 800; line-height: 1; }
 .seal small { font-size: 11px; letter-spacing: .14em; }
 footer { padding: 30px 0; text-align: center; color: var(--muted); font-size: 14px; }
-${imageCss}@media (max-width: 640px) { section, header { padding: 52px 0; } .stats { grid-template-columns: 1fr; } }
+${typeCss}${imageCss}@media (max-width: 640px) { section, header { padding: 52px 0; } .stats { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-${sectionHtml}
+${menuHtml}${sectionHtml}
   <footer><div class="wrap">© ${new Date().getFullYear()} ${e(brand.name)}${site ? ` · <a href="${e(site)}">${e(site.replace(/^https?:\/\//, ''))}</a>` : ''}</div></footer>
 </body>
 </html>`;

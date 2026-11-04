@@ -1,10 +1,11 @@
-import { useId, useState, type CSSProperties, type ReactNode } from 'react';
-import { Check, ChevronDown, ImageOff, Plus, ShieldCheck, Star, X } from 'lucide-react';
-import type { Brand, GalleryData, HeroData, PromptImage, ProofStat, SalesPage, SalesSection, Testimonial } from '@/lib/types';
-import { cn, lighten, readableOn, withAlpha } from '@/lib/utils';
+import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Check, ChevronDown, Clock, ImageOff, Mail, MapPin, Phone, Plus, ShieldCheck, Star, X } from 'lucide-react';
+import type { Brand, ContactData, GalleryData, HeroData, LeadFormData, OfferItem, OffersData, PageType, PromptImage, ProofStat, SalesPage, SalesSection, Testimonial } from '@/lib/types';
+import { cn, lighten, readableOn, uid, withAlpha } from '@/lib/utils';
 import { imageKeyNumber } from '@/lib/promptImages';
 import { useMediaUrl } from '@/lib/media';
-import { priceText, publishableProof, showsCompareAt, showsGuarantee } from '@/ai/local/seo';
+import { webLink } from '@/lib/pageTypes';
+import { altFromNote, contactEmail, contactTel, hasContactDetail, heroTarget, itemTarget, priceText, publishableProof, showsCompareAt, showsGuarantee, websiteMenu, type PageTargets } from '@/ai/local/seo';
 import { Editable } from '@/components/ui/Editable';
 import { Icon } from '@/components/ui/Icon';
 
@@ -47,10 +48,23 @@ interface Ctx {
   business?: boolean;
   /** one of the page's images, by media id (undefined: it was removed from the page's images) */
   image: (mediaId: string) => PromptImage | undefined;
+  /** the page's type */
+  pageType: PageType;
+  /** what the page's buttons can open */
+  targets: PageTargets;
+  /** what pressing Send in the form says */
+  formNote: string;
+  /** the page's images (an offered item can show one of them) */
+  allImages: PromptImage[];
+  /** why the hero's button is left off the page ('' when it goes somewhere) */
+  heroOff: string;
+  /** why the pricing card's and the closing section's buttons are left off the page ('' when they go somewhere) */
+  closingOff: string;
 }
 
 /** The sales page as visitors see it, with click-to-edit text when `editing` is on. Preview shows exactly
- *  what the export publishes: no unconfirmed proof, no guarantee the owner hasn't turned on. */
+ *  what the export publishes: no unconfirmed proof, no guarantee the owner hasn't turned on. Nothing in it
+ *  is a link (the app finds its pages by the address's #), and its form never sends. */
 export function SalesPreview({
   page,
   brand,
@@ -59,6 +73,9 @@ export function SalesPreview({
   onData,
   business,
   images = [],
+  pageType = 'landing',
+  targets,
+  formNote = 'Nothing was sent: this is a preview.',
 }: {
   page: SalesPage;
   brand: Brand;
@@ -68,15 +85,48 @@ export function SalesPreview({
   business?: boolean;
   /** the page's images (marketing.seoImages) */
   images?: PromptImage[];
+  /** the page's type (absent: 'landing') */
+  pageType?: PageType;
+  /** what the page's buttons can open (pageTargets) */
+  targets?: PageTargets;
+  /** what pressing Send says (the preview never sends anything) */
+  formNote?: string;
 }) {
   const t = salesTokens(page, brand);
+  const root = useRef<HTMLDivElement>(null);
   const image = (id: string) => images.find((i) => i.media.id === id && i.media.kind === 'image');
+  const allImages = images.filter((i) => i.media.kind === 'image');
+  const tg: PageTargets = targets ?? {
+    booking: '',
+    payment: '',
+    hasForm: page.sections.some((s) => s.type === 'leadForm' && s.visible),
+    hasContact: page.sections.some((s) => s.type === 'contact' && s.visible && hasContactDetail(s.data)),
+  };
+  // As published: a button shows only when it opens something. A landing page's pricing and closing buttons
+  // always do (its link, else #pricing), and its hero button does unless Pricing is hidden and it has no link.
+  const heroTo = !targets && pageType === 'landing' ? '#pricing' : heroTarget(page, pageType, tg);
+  const heroOff = heroTo ? '' : pageType === 'landing' ? 'the Pricing section is hidden, and there’s no buy or booking link or website' : pageType === 'checkout' ? 'no payment link, and the Pricing section is hidden' : 'nothing on the page for it to open';
+  const closingOff = pageType === 'landing' ? '' : heroOff;
+  const menu = pageType === 'website' ? websiteMenu(page, !!business) : [];
+  const go = (type: string) => root.current?.querySelector(`[data-section="${type}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   return (
-    <div className="overflow-hidden rounded-md border border-line shadow-card" style={{ background: t.bg, color: t.ink, fontFamily: t.font, width: device === 'mobile' ? 390 : '100%', maxWidth: '100%' }}>
+    <div ref={root} className="overflow-hidden rounded-md border border-line shadow-card" style={{ background: t.bg, color: t.ink, fontFamily: t.font, width: device === 'mobile' ? 390 : '100%', maxWidth: '100%' }}>
+      {pageType === 'website' && (
+        <nav aria-label="Page menu (preview)" className="flex flex-wrap items-center gap-x-4 gap-y-1 px-6 py-3" style={{ borderBottom: `1px solid ${withAlpha(t.ink, 0.12)}` }}>
+          <span className="mr-auto text-[15px] font-extrabold">{brand.name}</span>
+          {menu.map((m) => (
+            <button key={m.anchor} type="button" className="rounded px-1 py-0.5 text-[14px] font-semibold hover:underline" onClick={() => go(m.type)}>
+              {m.label}
+            </button>
+          ))}
+        </nav>
+      )}
       {page.sections
         .filter((s) => s.visible)
         .map((s) => (
-          <SectionView key={s.id} s={s} ctx={{ t, editing, device, business, image, set: (d) => onData(s.id, d) }} />
+          <div key={s.id} data-section={s.type}>
+            <SectionView s={s} ctx={{ t, editing, device, business, image, pageType, targets: tg, formNote, allImages, heroOff, closingOff, set: (d) => onData(s.id, d) }} />
+          </div>
         ))}
       <footer className="px-6 py-6 text-center text-[12px]" style={{ color: t.muted, borderTop: `1px solid ${withAlpha(t.ink, 0.08)}` }}>
         © {new Date().getFullYear()} {brand.name}
@@ -143,10 +193,21 @@ const confirmed = <T extends { needsReview?: boolean }>(x: T): T => {
   return rest as T;
 };
 
-function Cta({ ctx, value, onChange, block }: { ctx: Ctx; value: string; onChange: (v: string) => void; block?: boolean }) {
+/** A button as the page shows it (never a link here). `off`: why it's left off the page, shown faded while editing. */
+function Cta({ ctx, value, onChange, block, off, label = 'Button label' }: { ctx: Ctx; value: string; onChange: (v: string) => void; block?: boolean; off?: string; label?: string }) {
+  if (off && !ctx.editing) return null;
+  const btn = (
+    <span className={cn('inline-flex items-center justify-center px-6 py-3.5 text-[16px] font-bold shadow-sm', block && 'w-full', off && 'opacity-50')} style={{ background: ctx.t.primary, color: ctx.t.onPrimary, borderRadius: ctx.t.radius }}>
+      <Editable editing={ctx.editing} value={value} onChange={onChange} label={label} />
+    </span>
+  );
+  if (!off) return btn;
   return (
-    <span className={cn('inline-flex items-center justify-center px-6 py-3.5 text-[16px] font-bold shadow-sm', block && 'w-full')} style={{ background: ctx.t.primary, color: ctx.t.onPrimary, borderRadius: ctx.t.radius }}>
-      <Editable editing={ctx.editing} value={value} onChange={onChange} label="Button label" />
+    <span className={cn('inline-flex flex-col items-start gap-1', block && 'w-full')}>
+      {btn}
+      <span className="text-[11.5px] font-semibold" style={{ color: ctx.t.muted }}>
+        Hidden on your page: {off}.
+      </span>
     </span>
   );
 }
@@ -246,7 +307,7 @@ function SectionView({ s, ctx }: { s: SalesSection; ctx: Ctx }) {
             <Ticks items={d.bullets} ctx={ctx} onChange={(v) => set({ bullets: v })} label="bullet" />
           </div>
           <div className="mt-7 flex flex-col items-start gap-2">
-            <Cta ctx={ctx} value={d.ctaLabel} onChange={(v) => set({ ctaLabel: v })} />
+            <Cta ctx={ctx} value={d.ctaLabel} onChange={(v) => set({ ctaLabel: v })} off={ctx.heroOff} />
             {(editing || !!d.ctaSubtext.trim()) && <Editable editing={editing} value={d.ctaSubtext} onChange={(v) => set({ ctaSubtext: v })} label="Fine print" placeholder="Fine print (optional)" tag="p" className="text-[12.5px]" style={{ color: t.muted }} />}
           </div>
         </>
@@ -443,7 +504,7 @@ function SectionView({ s, ctx }: { s: SalesSection; ctx: Ctx }) {
                 <Ticks items={d.includes} ctx={ctx} onChange={(v) => set({ includes: v })} label="included item" />
               </div>
               <div className="mt-6">
-                <Cta ctx={ctx} value={d.ctaLabel} onChange={(v) => set({ ctaLabel: v })} block />
+                <Cta ctx={ctx} value={d.ctaLabel} onChange={(v) => set({ ctaLabel: v })} block off={ctx.closingOff} />
               </div>
             </div>
           </Wrap>
@@ -520,7 +581,7 @@ function SectionView({ s, ctx }: { s: SalesSection; ctx: Ctx }) {
             <div className={on ? 'mt-10' : undefined}>
               <Editable editing={editing} value={d.finalHeading} onChange={(v) => set({ finalHeading: v })} label="Final heading" tag="h2" className={h2} />
               <div className="mt-5">
-                <Cta ctx={ctx} value={d.finalCta} onChange={(v) => set({ finalCta: v })} />
+                <Cta ctx={ctx} value={d.finalCta} onChange={(v) => set({ finalCta: v })} off={ctx.closingOff} />
               </div>
             </div>
           </Wrap>
@@ -529,7 +590,326 @@ function SectionView({ s, ctx }: { s: SalesSection; ctx: Ctx }) {
     }
     case 'gallery':
       return <GallerySection d={s.data} ctx={ctx} />;
+    case 'leadForm':
+      return <LeadFormSection d={s.data} ctx={ctx} />;
+    case 'offers':
+      return <OffersSection d={s.data} ctx={ctx} />;
+    case 'about': {
+      const d = s.data;
+      const set = (p: Partial<typeof d>) => ctx.set({ ...d, ...p });
+      // as published: an About section without words is left out
+      if (!editing && !d.body.trim()) return null;
+      return (
+        <section>
+          <Wrap narrow>
+            <Editable editing={editing} value={d.heading} onChange={(v) => set({ heading: v })} label="About heading" tag="h2" className={h2} />
+            <Editable editing={editing} value={d.body} onChange={(v) => set({ body: v })} label="About text" placeholder="A few lines about who you are and how you work" tag="p" multiline className="mt-3 whitespace-pre-line text-[16px] leading-relaxed" style={{ color: t.muted }} />
+          </Wrap>
+        </section>
+      );
+    }
+    case 'contact':
+      return <ContactSection d={s.data} ctx={ctx} />;
   }
+}
+
+/** A text field as the page shows it (labelled; in Edit, a look only). */
+function FormField({ ctx, id, label, type = 'text', multiline, placeholder, autoComplete }: { ctx: Ctx; id: string; label: string; type?: string; multiline?: boolean; placeholder?: string; autoComplete?: string }) {
+  const style = { borderColor: withAlpha(ctx.t.ink, 0.28), background: ctx.t.bg, color: ctx.t.ink, borderRadius: ctx.t.radius };
+  const cls = 'w-full border px-3 py-2.5 text-[15px] disabled:opacity-60';
+  return (
+    <div className="min-w-0">
+      <label htmlFor={id} className="mb-1.5 block text-[14px] font-semibold">
+        {label}
+      </label>
+      {multiline ? <textarea id={id} rows={4} className={cn(cls, 'resize-y')} style={style} disabled={ctx.editing} /> : <input id={id} type={type} className={cls} style={style} disabled={ctx.editing} placeholder={placeholder} autoComplete={autoComplete} />}
+    </div>
+  );
+}
+
+/** The page's form: the app's own fields. In the preview it never sends: Send says so. */
+function LeadFormSection({ d, ctx }: { d: LeadFormData; ctx: Ctx }) {
+  const { t, editing } = ctx;
+  const ids = useId();
+  const [sent, setSent] = useState(false);
+  const set = (p: Partial<LeadFormData>) => ctx.set({ ...d, ...p });
+  return (
+    <section style={{ background: t.soft }}>
+      <Wrap narrow>
+        <Editable editing={editing} value={d.heading} onChange={(v) => set({ heading: v })} label="Form heading" tag="h2" className={h2} />
+        {(editing || !!d.intro.trim()) && <Editable editing={editing} value={d.intro} onChange={(v) => set({ intro: v })} label="Form intro" placeholder="A line above the form (optional)" tag="p" multiline className="mt-3 text-[16px] leading-relaxed" style={{ color: t.muted }} />}
+        {editing && (
+          <div className="mt-4 rounded-md border border-dashed p-3 text-[13px]" style={{ borderColor: withAlpha(t.ink, 0.25), color: t.muted }}>
+            <p>
+              Visitors fill in their name, email, phone (optional){d.askTime ? ', a preferred time' : ''} and a message. {__ARTIFACT_BUILD__ ? 'The form sends only on pages published from the app’s own site.' : 'What they send arrives in Email → Leads once the page is published.'}
+            </p>
+            <label className="mt-2 inline-flex items-center gap-2 font-semibold" style={{ color: t.ink }}>
+              <input type="checkbox" checked={!!d.askTime} onChange={(e) => set({ askTime: e.target.checked })} />
+              Ask for a preferred time
+            </label>
+          </div>
+        )}
+        <form
+          className="mt-6 grid gap-4"
+          aria-label={d.heading.trim() || 'Form'}
+          onSubmit={(e) => {
+            e.preventDefault();
+            setSent(true);
+          }}
+        >
+          <FormField ctx={ctx} id={`${ids}-name`} label="Your name" autoComplete="off" />
+          <FormField ctx={ctx} id={`${ids}-email`} label="Email" type="email" autoComplete="off" />
+          <FormField ctx={ctx} id={`${ids}-phone`} label="Phone (optional)" type="tel" autoComplete="off" />
+          {d.askTime && <FormField ctx={ctx} id={`${ids}-time`} label="Preferred day and time" placeholder="For example: Tuesday morning" autoComplete="off" />}
+          <FormField ctx={ctx} id={`${ids}-message`} label="Message (optional)" multiline />
+          <div>
+            {editing ? (
+              <Cta ctx={ctx} value={d.buttonLabel} onChange={(v) => set({ buttonLabel: v })} label="Form button label" />
+            ) : (
+              <button type="submit" className="inline-flex items-center justify-center px-6 py-3.5 text-[16px] font-bold shadow-sm" style={{ background: t.primary, color: t.onPrimary, borderRadius: t.radius }}>
+                {d.buttonLabel.trim() || 'Send'}
+              </button>
+            )}
+          </div>
+          <p role="status" className="text-[14px] font-semibold empty:hidden" style={{ color: t.ink }}>
+            {sent && !editing ? ctx.formNote : ''}
+          </p>
+        </form>
+      </Wrap>
+    </section>
+  );
+}
+
+const CTA_NAMES: { id: OfferItem['cta']; label: string }[] = [
+  { id: 'book', label: 'Book now' },
+  { id: 'buy', label: 'Buy now' },
+  { id: 'inquire', label: 'Ask about this' },
+  { id: 'none', label: 'No button' },
+];
+
+/** What an item's button would say, and why it's left off the page when it is. */
+function itemButton(it: OfferItem, ctx: Ctx): { label: string; off: string } | null {
+  const business = !!ctx.business;
+  const to = itemTarget(it, ctx.targets, business);
+  if (to) return { label: to.label, off: '' };
+  switch (it.cta) {
+    case 'book':
+      return { label: 'Book now', off: 'no booking link, and the form isn’t on the page' };
+    case 'buy':
+      return { label: 'Buy now', off: 'no payment link' };
+    case 'inquire':
+      return { label: business && it.price <= 0 && !it.priceNote.trim() ? 'Get a quote' : 'Ask about this', off: 'no form or contact details on the page' };
+    default:
+      return null;
+  }
+}
+
+/** The item's price as the page shows it: $N and its note, or the note alone, or “Ask for a quote” (a business) / “Free”. */
+function itemPrice(it: OfferItem, business: boolean): { main: string; note: string } {
+  const note = it.priceNote.trim();
+  if (it.price > 0) return { main: `$${it.price}`, note };
+  return { main: note || (business ? 'Ask for a quote' : 'Free'), note: '' };
+}
+
+/** What the business sells, each item with its own price and button. Every item is the owner's. */
+function OffersSection({ d, ctx }: { d: OffersData; ctx: Ctx }) {
+  const { t, editing } = ctx;
+  const set = (p: Partial<OffersData>) => ctx.set({ ...d, ...p });
+  // as published: offers without items are left out
+  if (!editing && !d.items.length) return null;
+  const cols = ctx.device === 'mobile' ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+  const buyNoLink = editing && d.items.some((it) => it.cta === 'buy' && !itemTarget(it, ctx.targets, !!ctx.business));
+  return (
+    <section>
+      <Wrap>
+        <Editable editing={editing} value={d.heading} onChange={(v) => set({ heading: v })} label="Offers heading" tag="h2" className={h2} />
+        {(editing || !!d.intro.trim()) && <Editable editing={editing} value={d.intro} onChange={(v) => set({ intro: v })} label="Offers intro" placeholder="A line about what you offer (optional)" tag="p" multiline className="mt-3 max-w-[680px] text-[16px] leading-relaxed" style={{ color: t.muted }} />}
+        {editing && !d.items.length && (
+          <p className="mt-5 rounded-md border border-dashed p-5 text-center text-[14px]" style={{ borderColor: withAlpha(t.ink, 0.25), color: t.muted }}>
+            Add your services in Studio, or add items here.
+          </p>
+        )}
+        {d.items.length > 0 && (
+          <div className={cn('mt-6 grid gap-4', cols)}>
+            {d.items.map((it, i) => (
+              <OfferCard key={it.id} it={it} index={i} ctx={ctx} onChange={(p) => set({ items: d.items.map((x) => (x.id === it.id ? { ...x, ...p } : x)) })} onReplace={(next) => set({ items: d.items.map((x) => (x.id === it.id ? next : x)) })} onRemove={() => set({ items: d.items.filter((x) => x.id !== it.id) })} />
+            ))}
+          </div>
+        )}
+        {editing && d.items.length < 24 && <AddBtn onClick={() => set({ items: [...d.items, { id: uid('item'), name: 'New item', description: '', price: 0, priceNote: '', duration: '', cta: 'inquire' }] })} label="Add an item" />}
+        {buyNoLink && (
+          <p className="mt-3 text-[12.5px] font-semibold" style={{ color: t.muted }}>
+            Buy buttons need a payment link: add one under Page type, or give the item its own link.
+          </p>
+        )}
+      </Wrap>
+    </section>
+  );
+}
+
+function OfferCard({ it, index, ctx, onChange, onReplace, onRemove }: { it: OfferItem; index: number; ctx: Ctx; onChange: (p: Partial<OfferItem>) => void; onReplace: (next: OfferItem) => void; onRemove: () => void }) {
+  const { t, editing } = ctx;
+  const ids = useId();
+  const business = !!ctx.business;
+  const name = it.name.trim() || `item ${index + 1}`;
+  const price = itemPrice(it, business);
+  const button = itemButton(it, ctx);
+  const linkBad = !!it.link?.trim() && !webLink(it.link);
+  const noImage = (x: OfferItem): OfferItem => {
+    const { imageId: _id, imageAlt: _alt, ...rest } = x;
+    return rest;
+  };
+  const pickImage = (id: string) => {
+    if (!id) return onReplace(noImage(it));
+    const img = ctx.allImages.find((x) => x.media.id === id);
+    onReplace({ ...it, imageId: id, imageAlt: id === it.imageId ? it.imageAlt ?? '' : altFromNote(img?.note) });
+  };
+  const control = 'w-full rounded border bg-transparent px-2 py-1.5 text-[13px]';
+  const controlStyle = { borderColor: withAlpha(t.ink, 0.25), color: t.ink, background: t.bg };
+  return (
+    <article className="group relative flex min-w-0 flex-col gap-2 p-5" style={{ background: t.soft, borderRadius: t.radius }}>
+      {it.imageId && <PageImage img={ctx.image(it.imageId)} alt={it.imageAlt ?? ''} ctx={ctx} name={`the image of ${name}`} cover onAlt={(imageAlt) => onChange({ imageAlt })} onRemove={() => onReplace(noImage(it))} />}
+      <Editable editing={editing} value={it.name} onChange={(v) => onChange({ name: v })} label={`Item ${index + 1} name`} tag="h3" className="text-[17px] font-bold" />
+      {(editing || !!it.duration.trim()) && <Editable editing={editing} value={it.duration} onChange={(v) => onChange({ duration: v })} label={`Item ${index + 1} duration`} placeholder="Duration (optional)" tag="p" className="text-[13px]" style={{ color: t.muted }} />}
+      {(editing || !!it.description.trim()) && <Editable editing={editing} value={it.description} onChange={(v) => onChange({ description: v })} label={`Item ${index + 1} description`} placeholder="What’s included (optional)" tag="p" multiline className="text-[14px] leading-relaxed" style={{ color: t.muted }} />}
+      <p className="flex flex-wrap items-baseline gap-x-2">
+        {editing ? (
+          <>
+            <b className="text-[24px] font-extrabold leading-none">
+              $
+              <input type="number" min={0} placeholder="—" className="w-20 bg-transparent text-[24px] font-extrabold outline-none ylb-editable" value={it.price || ''} onChange={(e) => onChange({ price: Math.max(0, Number(e.target.value) || 0) })} aria-label={`Price of ${name} (empty: ${business ? 'Ask for a quote' : 'Free'})`} />
+            </b>
+            <Editable editing value={it.priceNote} onChange={(v) => onChange({ priceNote: v })} label={`Item ${index + 1} price note`} placeholder="per visit (optional)" className="text-[13px]" style={{ color: t.muted }} />
+          </>
+        ) : (
+          <>
+            <b className={cn('font-extrabold leading-none', it.price > 0 ? 'text-[24px]' : 'text-[18px]')}>{price.main}</b>
+            {price.note && (
+              <span className="text-[13px]" style={{ color: t.muted }}>
+                {price.note}
+              </span>
+            )}
+          </>
+        )}
+      </p>
+      {button && (!button.off || editing) && (
+        <div className="mt-auto pt-2">
+          <span className={cn('inline-flex items-center justify-center px-4 py-2.5 text-[14px] font-bold', button.off && 'opacity-50')} style={{ background: t.primary, color: t.onPrimary, borderRadius: t.radius }}>
+            {button.label}
+          </span>
+          {button.off && (
+            <span className="mt-1 block text-[11.5px] font-semibold" style={{ color: t.muted }}>
+              Hidden on your page: {button.off}.
+            </span>
+          )}
+        </div>
+      )}
+      {editing && (
+        <div className="mt-2 grid gap-2 border-t pt-3 text-[12px]" style={{ borderColor: withAlpha(t.ink, 0.12), color: t.muted }}>
+          <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-2">
+            <label htmlFor={`${ids}-cta`} className="font-semibold">
+              Button
+            </label>
+            <select id={`${ids}-cta`} className={control} style={controlStyle} value={it.cta} onChange={(e) => onChange({ cta: e.target.value as OfferItem['cta'] })}>
+              {CTA_NAMES.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <label htmlFor={`${ids}-img`} className="font-semibold">
+              Image
+            </label>
+            <select id={`${ids}-img`} className={control} style={controlStyle} value={it.imageId ?? ''} onChange={(e) => pickImage(e.target.value)}>
+              <option value="">No image</option>
+              {ctx.allImages.map((img) => (
+                <option key={img.media.id} value={img.media.id}>
+                  Image {imageKeyNumber(img.key)}
+                </option>
+              ))}
+              {it.imageId && !ctx.allImages.some((img) => img.media.id === it.imageId) && <option value={it.imageId}>Removed image</option>}
+            </select>
+          </div>
+          {it.cta !== 'none' && (
+            <div>
+              <label htmlFor={`${ids}-link`} className="mb-1 block font-semibold">
+                Its own link (optional)
+              </label>
+              <input id={`${ids}-link`} type="url" inputMode="url" spellCheck={false} placeholder="https://" maxLength={500} className={control} style={controlStyle} value={it.link ?? ''} onChange={(e) => onChange({ link: e.target.value.trim() || undefined })} aria-invalid={linkBad || undefined} aria-describedby={linkBad ? `${ids}-link-bad` : undefined} />
+              {linkBad && (
+                <span id={`${ids}-link-bad`} className="mt-1 block font-semibold" style={{ color: t.ink }}>
+                  Use a web address, like https://…
+                </span>
+              )}
+            </div>
+          )}
+          <button type="button" className="justify-self-start underline underline-offset-2" onClick={onRemove}>
+            Remove {name}
+          </button>
+        </div>
+      )}
+    </article>
+  );
+}
+
+/** How to reach the business: in Edit, the owner's details; as published, the ones that are filled in (as text here). */
+function ContactSection({ d, ctx }: { d: ContactData; ctx: Ctx }) {
+  const { t, editing } = ctx;
+  const ids = useId();
+  const set = (p: Partial<ContactData>) => ctx.set({ ...d, ...p });
+  // as published: contact without details is left out
+  if (!editing && !hasContactDetail(d)) return null;
+  const fields: { key: 'address' | 'hours' | 'phone' | 'email'; label: string; icon: ReactNode; type?: string; check?: string }[] = [
+    { key: 'address', label: 'Address or area', icon: <MapPin size={16} /> },
+    { key: 'hours', label: 'Hours', icon: <Clock size={16} /> },
+    { key: 'phone', label: 'Phone', icon: <Phone size={16} />, type: 'tel', check: d.phone.trim() && !contactTel(d.phone) ? 'Not a phone number (6 to 15 digits): it shows as text, without a call link.' : '' },
+    { key: 'email', label: 'Email', icon: <Mail size={16} />, type: 'email', check: d.email.trim() && !contactEmail(d.email) ? 'Not an email address: it shows as text, without a link.' : '' },
+  ];
+  const control = 'w-full rounded border bg-transparent px-2.5 py-2 text-[14px]';
+  return (
+    <section>
+      <Wrap narrow>
+        <Editable editing={editing} value={d.heading} onChange={(v) => set({ heading: v })} label="Contact heading" tag="h2" className={h2} />
+        {(editing || !!d.intro.trim()) && <Editable editing={editing} value={d.intro} onChange={(v) => set({ intro: v })} label="Contact intro" placeholder="A line about where you work (optional)" tag="p" multiline className="mt-3 text-[16px] leading-relaxed" style={{ color: t.muted }} />}
+        {editing ? (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            {fields.map((f) => (
+              <div key={f.key} className="min-w-0 text-[13px]">
+                <label htmlFor={`${ids}-${f.key}`} className="mb-1 block font-semibold">
+                  {f.label}
+                </label>
+                <input id={`${ids}-${f.key}`} type={f.type ?? 'text'} className={control} style={{ borderColor: withAlpha(t.ink, 0.25), color: t.ink }} value={d[f.key]} maxLength={200} onChange={(e) => set({ [f.key]: e.target.value })} aria-describedby={f.check ? `${ids}-${f.key}-check` : undefined} />
+                {f.check && (
+                  <span id={`${ids}-${f.key}-check`} className="mt-1 block text-[12px]" style={{ color: t.muted }}>
+                    {f.check}
+                  </span>
+                )}
+              </div>
+            ))}
+            <p className="text-[12px] sm:col-span-2" style={{ color: t.muted }}>
+              Empty ones stay off your page.
+            </p>
+          </div>
+        ) : (
+          <ul className="mt-5 grid gap-2.5 text-[15px]">
+            {fields
+              .filter((f) => d[f.key].trim())
+              .map((f) => (
+                <li key={f.key} className="flex items-start gap-2.5">
+                  <span className="mt-0.5 shrink-0" style={{ color: t.primary }} aria-hidden="true">
+                    {f.icon}
+                  </span>
+                  <span className="min-w-0 break-words">
+                    <span className="sr-only">{f.label}: </span>
+                    {d[f.key].trim()}
+                  </span>
+                </li>
+              ))}
+          </ul>
+        )}
+      </Wrap>
+    </section>
+  );
 }
 
 function FaqItem({ ctx, q, a, index, onQ, onA, onRemove }: { ctx: Ctx; q: string; a: string; index: number; onQ: (v: string) => void; onA: (v: string) => void; onRemove?: () => void }) {

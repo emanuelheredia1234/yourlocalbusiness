@@ -3,12 +3,14 @@
 // project, so it can't grow the saved workspace. Snapshots hold the page's text and image ids, never image files.
 
 import { create } from 'zustand';
-import type { SalesPage, SeoMeta } from '@/lib/types';
+import type { PageType, SalesPage, SeoMeta } from '@/lib/types';
 
-/** What an AI change replaced: the page and its metadata as they were just before. */
+/** What an AI change replaced: the page, its metadata and its type as they were just before. */
 export interface SeoSnapshot {
   salesPage: SalesPage | null;
   seo: SeoMeta | null;
+  /** the page's type (absent: it had none, which reads as a landing page) */
+  pageType?: PageType;
 }
 
 /** The most AI changes that can be undone, per project. */

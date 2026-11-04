@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { create } from 'zustand';
 import { uid } from '@/lib/utils';
 import { navigate, type Route } from '@/lib/router';
+import type { PageType } from '@/lib/types';
 
 /** The Social media engine's tabs (create = Create individual post). */
 export type SocialTab = 'setup' | 'plan' | 'batch' | 'create';
@@ -26,6 +27,10 @@ interface UIState {
   /** the Social media engine tab to show next */
   socialTab: SocialTab | null;
   setSocialTab: (t: SocialTab | null) => void;
+  /** a page type to open the SEO page builder with (n changes with each request); the builder takes it once */
+  seoPreset?: { pageType: PageType; n: number };
+  /** Open the SEO page builder, with a page type chosen. Nothing is written by itself: the owner presses Write page, or confirms a switch. */
+  openSeoBuilder: (preset?: { pageType?: PageType }) => void;
 
   commandOpen: boolean;
   setCommandOpen: (v: boolean) => void;
@@ -73,6 +78,19 @@ export const useUI = create<UIState>((set) => ({
   },
   socialTab: null,
   setSocialTab: (t) => set({ socialTab: t }),
+  seoPreset: undefined,
+  openSeoBuilder: (preset) => {
+    void navigate('marketing-seo').then((ok) => {
+      const pageType = preset?.pageType;
+      if (!ok || !pageType) return;
+      set((s) => ({ seoPreset: { pageType, n: (s.seoPreset?.n ?? 0) + 1 } }));
+      try {
+        document.getElementById('main-scroll')?.scrollTo({ top: 0 });
+      } catch {
+        /* not in a browser */
+      }
+    });
+  },
 
   commandOpen: false,
   setCommandOpen: (v) => set({ commandOpen: v }),

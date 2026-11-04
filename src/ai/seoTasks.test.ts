@@ -2,10 +2,11 @@
 // what it may change, and how its answer is merged (facts and image ids stay the owner's).
 import { describe, expect, it } from 'vitest';
 import { newProject } from '@/store/defaults';
-import type { GalleryData, HeroData, MediaRef, Project, PromptImage, SalesPage, SalesSection } from '@/lib/types';
+import type { ContactData, GalleryData, HeroData, LeadFormData, MediaRef, OffersData, Project, PromptImage, SalesPage, SalesSection } from '@/lib/types';
+import { sectionPlan } from '@/lib/pageTypes';
 import { generateBrandKit } from './local/brand';
-import { placeNewImages } from './local/seo';
-import { salesPageEditTask, salesPageTask, salesSectionTask, seoMetaTask, type TaskEnv } from './tasks';
+import { SECTION_ORDER, placeNewImages } from './local/seo';
+import { salesPageEditTask, salesPageTask, salesSectionTask, salesShape, seoMetaTask, type TaskEnv } from './tasks';
 
 function project(): Project {
   const p = newProject('business', 'new');
@@ -260,5 +261,114 @@ describe('Edit with AI', () => {
     const r = salesPageEditTask.claude!.merge({}, salesPageEditTask.local(input, e), input, e);
     expect(r).toMatchObject({ edited: true, summary: 'The AI made no changes.' });
     expect(r.page).toEqual(page);
+  });
+});
+
+describe('page types', () => {
+  /** SALES_SHAPE as it was before page types: a landing page's answer has exactly this shape. */
+  const SALES_SHAPE = `{"hero": {"eyebrow": string, "headline": string, "subheadline": string, "ctaLabel": string, "bullets": [string, string, string]}, "problem": {"heading": string, "intro": string, "points": [{"title": string, "body": string}] (3), "agitation": string}, "solution": {"heading": string, "intro": string, "features": [{"title": string, "body": string}] (4-6)}, "proof": {"heading": string}, "pricing": {"heading": string, "planName": string, "includes": [string], "ctaLabel": string}, "faq": {"heading": string, "items": [{"q": string, "a": string}] (4-5)}, "guarantee": {"finalHeading": string, "finalCta": string}}`;
+  const LANDING_TASK =
+    'Write a conversion-optimized, SEO-ready one-page sales page. Primary keyword: “house cleaning in austin” — use it in the hero headline and subheadline naturally and 2–4 more times on the page. Sections: hero with hook & CTA, problem/agitation, solution & features, a heading for the customer quotes the owner will add, pricing card copy, FAQ (4–5 questions) and a closing heading with CTA. The app fills in testimonials, stats, prices and any guarantee from the owner\'s own inputs: do not write them.';
+
+  const salon = (): Project => {
+    const p = project();
+    p.studio.packages = [
+      { id: 'pk1', name: 'Standard clean', price: 120, priceModel: 'per-session', description: 'Kitchen, bathrooms and floors.', includes: [] },
+      { id: 'pk2', name: 'Move-out clean', price: 0, priceModel: 'quote', description: '', includes: [] },
+    ];
+    p.studio.listing = { ...p.studio.listing, phone: '(512) 555-0142', contactEmail: 'hello@sparkle.example.org', hours: 'Mon–Fri 8–6' };
+    return p;
+  };
+
+  it('a landing page’s answer has the shape it always had, and its prompt is the one it always was', () => {
+    expect(salesShape(SECTION_ORDER)).toBe(SALES_SHAPE);
+    const p = project();
+    const input = { primaryKeyword: 'house cleaning in austin' };
+    for (const i of [input, { ...input, pageType: 'landing' as const }]) {
+      const prompt = salesPageTask.claude!.prompt(i, env(p), salesPageTask.local(i, env(p)));
+      expect(prompt).toContain(LANDING_TASK);
+      expect(prompt).toContain(SALES_SHAPE);
+      expect(prompt).not.toContain('Never promise a reply');
+    }
+    expect(seoMetaTask.claude!.prompt({}, env(p), seoMetaTask.local({}, env(p)))).toContain('Write SEO metadata for the sales page.');
+  });
+
+  it('a booking page: its own goal, sections and shape, and no promise of a reply or a booked time', () => {
+    const p = salon();
+    const input = { primaryKeyword: 'house cleaning in austin', pageType: 'booking' as const };
+    const prompt = salesPageTask.claude!.prompt(input, env(p), salesPageTask.local(input, env(p)));
+    expect(prompt).toContain('Write a conversion-optimized, SEO-ready booking page for this business. Its one goal: people book a time.');
+    expect(prompt).toContain('Sections: hero with hook & CTA, a heading and a one-line intro for the list of what’s offered (the app fills in each item, its price and its button), the form’s heading, a one-line intro and its button label (the app adds the fields), a heading for the customer quotes the owner will add, FAQ (4–5 questions), the contact section’s heading and a one-line intro (the app fills in the address, hours, phone and email).');
+    expect(prompt).toContain('The app fills in testimonials, stats, prices, contact details, links and any guarantee from the owner\'s own inputs: do not write them.');
+    expect(prompt).toContain(salesShape(['hero', 'offers', 'leadForm', 'proof', 'faq', 'contact']));
+    expect(prompt).toContain('"offers": {"heading": string, "intro": string}');
+    expect(prompt).toContain('"leadForm": {"heading": string, "intro": string, "buttonLabel": string}');
+    expect(prompt).toContain('"contact": {"heading": string, "intro": string}');
+    expect(prompt).not.toContain('"problem"');
+    expect(prompt).toContain('Never promise a reply, a reply time or that a time is booked.');
+    expect(prompt).toMatch(/Never invent testimonials/);
+    // a product's page says "product"
+    const prod = newProject('product', 'new');
+    prod.niche = 'Personal Finance';
+    prod.category = 'Freelancer Tax Tracking';
+    prod.format = 'spreadsheet';
+    prod.brand.name = 'TaxTidy';
+    expect(salesPageTask.claude!.prompt({ pageType: 'checkout' }, env(prod), salesPageTask.local({ pageType: 'checkout' }, env(prod)))).toContain('SEO-ready checkout page for this product. Its one goal: people buy the offer with the Buy now button.');
+  });
+
+  it('without an AI, the built-in engine writes the type’s sections; an AI answer can’t change the owner’s items or contact details', () => {
+    const p = salon();
+    const input = { pageType: 'booking' as const };
+    const base = salesPageTask.local(input, env(p));
+    expect(base.sections.map((s) => s.type)).toEqual(sectionPlan('booking', p).map((x) => x.type));
+    const offers = sec(base, 'offers').data as OffersData;
+    const contact = sec(base, 'contact').data as ContactData;
+    expect(offers.items.map((i) => [i.name, i.price])).toEqual([
+      ['Standard clean', 120],
+      ['Move-out clean', 0],
+    ]);
+    const merged = salesPageTask.claude!.merge(
+      {
+        offers: { heading: 'Pick a clean', intro: 'Two ways to start.', items: [{ name: 'Free clean', price: 0 }] },
+        contact: { heading: 'Find us', intro: 'Call any time.', phone: '555-FAKE', email: 'made@up.com', hours: '24/7' },
+        leadForm: { heading: 'Ask for a time', buttonLabel: 'Send', askTime: false },
+        problem: { heading: 'Not on this page' },
+      },
+      base,
+      input,
+      env(p),
+    );
+    expect(sec(merged, 'offers').data).toEqual({ heading: 'Pick a clean', intro: 'Two ways to start.', items: offers.items });
+    expect(sec(merged, 'contact').data).toEqual({ ...contact, heading: 'Find us', intro: 'Call any time.' });
+    expect(sec(merged, 'leadForm').data).toMatchObject({ heading: 'Ask for a time', askTime: true } satisfies Partial<LeadFormData>);
+    expect(merged.sections.map((s) => s.type)).not.toContain('problem');
+  });
+
+  it('a section’s fresh take is named by its label, and written for the page’s type', () => {
+    const p = salon();
+    const base = salesPageTask.local({ pageType: 'lead' }, env(p));
+    const form = sec(base, 'leadForm');
+    const e = env(p, { variation: 2 });
+    const prompt = salesSectionTask.claude!.prompt({ type: 'leadForm', current: form, pageType: 'lead' }, e, salesSectionTask.local({ type: 'leadForm', current: form, pageType: 'lead' }, e));
+    expect(prompt).toContain('Rewrite the “Form” section of the sales page with a fresh angle.');
+    expect(salesSectionTask.claude!.prompt({ type: 'hero' }, e, salesSectionTask.local({ type: 'hero' }, e))).toContain('Rewrite the “Hero & CTA” section');
+    // the built-in fresh take keeps the owner's setting
+    const noTime = { ...form, data: { ...form.data, askTime: true } } as SalesSection;
+    expect(salesSectionTask.local({ type: 'leadForm', current: noTime, pageType: 'lead' }, e).data).toMatchObject({ askTime: true });
+    expect((salesSectionTask.local({ type: 'hero', pageType: 'website' }, e).data as HeroData).ctaLabel).toBe('Contact us');
+  });
+
+  it('the metadata and edits know the page’s type', () => {
+    const p = salon();
+    expect(seoMetaTask.claude!.prompt({ pageType: 'website' }, env(p), seoMetaTask.local({ pageType: 'website' }, env(p)))).toContain('Write SEO metadata for the website.');
+    expect(seoMetaTask.claude!.prompt({ pageType: 'lead' }, env(p), seoMetaTask.local({ pageType: 'lead' }, env(p)))).toContain('Write SEO metadata for the lead form page.');
+    expect(seoMetaTask.local({ pageType: 'lead' }, env(p)).metaDescription).toMatch(/Get in touch today\.$/);
+    const page = salesPageTask.local({ pageType: 'showcase' }, env(p));
+    const input = { page, instruction: 'Shorter', pageType: 'showcase' as const };
+    expect(salesPageEditTask.claude!.prompt(input, env(p), salesPageEditTask.local(input, env(p)))).toContain('Make this change to the owner’s sales page: “Shorter”. This page is a showcase page. Change only what the request is about');
+    // the project's own type when none is passed
+    const site = { ...p, marketing: { ...p.marketing, pageType: 'website' as const } };
+    expect(salesPageEditTask.claude!.prompt({ page, instruction: 'Shorter' }, env(site), salesPageEditTask.local({ page, instruction: 'Shorter' }, env(site)))).toContain('This page is a website.');
+    expect(salesPageTask.local({}, env(site)).sections.map((s) => s.type)).toEqual(sectionPlan('website', site).map((x) => x.type));
   });
 });
