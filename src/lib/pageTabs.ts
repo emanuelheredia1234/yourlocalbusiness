@@ -7,7 +7,7 @@ export const PAGE_TABS = {
   studio: { structure: 'Structure & outline (Business model for a business)', code: 'Code & assets', publish: 'Listing & publish' },
   'workspace-settings': { brand: 'Brand', ai: 'AI', accounts: 'Social accounts', projects: 'Projects & data', prefs: 'Preferences', account: 'Account', domains: 'Domains' },
   'marketing-social': { setup: 'Campaign setup', plan: '30-day plan', batch: '7-day batch', create: 'Create individual post' },
-  'marketing-email': { magnet: 'Lead magnet & opt-in', sequence: 'Email sequence', preview: 'Preview & export', subscribers: 'Subscribers' },
+  'marketing-email': { magnet: 'Lead magnet & opt-in', sequence: 'Email sequence', preview: 'Preview & export', subscribers: 'Subscribers', leads: 'Leads' },
   calendar: { scheduled: 'Planned', published: 'Posted', drafts: 'Drafts' },
   brain: { skills: 'Skills', library: 'Skill library', docs: 'Knowledge docs', playground: 'Playground', log: 'Activity' },
   store: { browse: 'Browse', mine: 'My listings' },

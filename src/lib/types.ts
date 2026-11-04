@@ -25,6 +25,10 @@ export type ImageStyleId = 'minimal' | 'neon' | 'editorial' | 'isometric' | 'han
 export type VideoStyleId = 'ugc' | 'kinetic' | 'split' | 'cinematic' | 'talking';
 export type StyleId = ImageStyleId | VideoStyleId;
 export type PostStatus = 'draft' | 'scheduled' | 'published';
+/** The SEO page's type: lead form, booking, website, landing, showcase or checkout page (absent on a project: 'landing'). */
+export type PageType = 'lead' | 'booking' | 'website' | 'landing' | 'showcase' | 'checkout';
+/** Where a social post's link goes: in the post, in the first comment (a reply on X), or in the profile's bio. */
+export type LinkPlacement = 'post' | 'comment' | 'bio';
 
 export type LogoShape = 'circle' | 'rounded' | 'hex' | 'shield' | 'blob' | 'none';
 export type LogoLayout = 'horizontal' | 'stacked' | 'mark' | 'wordmark';
@@ -399,8 +403,8 @@ export interface Subscriber {
   name: string;
   email: string;
   joinedAt: number;
-  /** optin: signed up on your page · import: from a CSV you imported */
-  source: 'optin' | 'import';
+  /** optin: signed up on your page · import: from a CSV you imported · lead: added from a lead your page's form sent */
+  source: 'optin' | 'import' | 'lead';
 }
 
 export interface SeoMeta {
@@ -940,6 +944,10 @@ export interface Project {
     leadMagnet: LeadMagnet | null;
     emails: EmailStep[];
     subscribers: Subscriber[];
+    /** the newest lead (ms) the owner has seen in Email → Leads: newer ones count as new */
+    leadsSeenAt?: number;
+    /** the newest lead (ms) the bell announced, so another device doesn't announce it again */
+    leadsNotifiedAt?: number;
     seo: SeoMeta | null;
     salesPage: SalesPage | null;
     /** the owner's standing guidance for the AI when it writes or edits the sales page */

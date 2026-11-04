@@ -8,7 +8,7 @@ import { Empty, confirmAction } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
 import { importSubscribers } from './shared';
 
-const SOURCE: Record<string, string> = { optin: 'Signed up', import: 'Imported' };
+const SOURCE: Record<string, string> = { optin: 'Signed up', import: 'Imported', lead: 'From your page' };
 
 /** Split one CSV line (quotes and doubled quotes supported). */
 function cells(line: string): string[] {

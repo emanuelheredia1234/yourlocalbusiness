@@ -3,7 +3,8 @@ import { LayoutGrid, Mail, Megaphone, Search, Target } from 'lucide-react';
 import type { Channel } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { CHANNEL_ROUTES, navigate, useRoute } from '@/lib/router';
-import { useStore } from '@/store/useStore';
+import { useActiveProject, useStore } from '@/store/useStore';
+import { useNewLeadCount } from '@/store/leads';
 
 export const CHANNELS: { id: Channel; label: string; short: string; icon: ReactNode; desc: string }[] = [
   { id: 'seo', label: 'SEO sales page', short: 'SEO', icon: <Search size={15} />, desc: 'Metadata, live SEO score and a visual page editor with HTML export.' },
@@ -20,6 +21,7 @@ export function goChannel(c: Channel) {
 /** Channel switcher shown at the top of every Marketing Hub page. */
 export function MarketingNav() {
   const route = useRoute();
+  const newLeads = useNewLeadCount(useActiveProject());
   return (
     <nav aria-label="Marketing channels" className="scroll-thin -mx-1 overflow-x-auto px-1">
       <div className="inline-flex min-w-max items-center gap-1 rounded-lg border border-line bg-surface p-1">
@@ -31,6 +33,14 @@ export function MarketingNav() {
           return (
             <button key={c.id} className={cn('flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-semibold transition-colors', active ? 'bg-ink text-surface' : 'text-muted hover:bg-surface-2 hover:text-ink')} onClick={() => goChannel(c.id)} aria-current={active ? 'page' : undefined}>
               {c.icon} {c.short}
+              {c.id === 'email' && newLeads > 0 && (
+                <>
+                  <span className="num rounded-full bg-info-soft px-1.5 text-2xs text-info" aria-hidden="true">
+                    {newLeads}
+                  </span>
+                  <span className="sr-only">, {newLeads} new lead{newLeads === 1 ? '' : 's'}</span>
+                </>
+              )}
             </button>
           );
         })}

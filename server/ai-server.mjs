@@ -186,6 +186,8 @@ function route(req, res, url) {
     }, (e) => crashed(req, res, e));
   }
   if (url.pathname.startsWith('/api/')) return send(res, 404, { error: 'Not found' }, corsHeaders(req));
+  // a visitor sending a published page's form (/<name>/lead; server/leads.mjs)
+  if (req.method === 'POST' && pages.matchLead(url)) return void pages.receiveLead(req, res, url).then((handled) => handled || send(res, 405, 'Method not allowed'), (e) => crashed(req, res, e));
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
   // a published page (/<name>, /<name>/img/…), unless the name is one of the app's own paths
   if (pages.matchPage(url)) return void pages.servePage(req, res, url).then((handled) => handled || serveStatic(req, res), (e) => crashed(req, res, e));
@@ -220,6 +222,7 @@ server.listen(PORT, HOST, async () => {
         ? 'AI keys and settings: kept on this server’s disk. Add the SUPABASE_SECRET_KEY Secret to keep them in Supabase (published Replit apps wipe the disk when they restart).'
         : 'AI keys and settings: kept on this server’s disk. To keep them in Supabase, add the SUPABASE_URL and SUPABASE_SECRET_KEY Secrets (published Replit apps wipe the disk when they restart).',
   );
+  if (auth.enabled && pages.enabled) console.log('Lead forms: on (they need supabase/migrations/20261103050000_page_leads.sql in Supabase too; limits: LEADS_PER_IP_PER_HOUR, LEADS_PER_PAGE_PER_HOUR).');
   if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
   if (!fs.existsSync(DIST)) console.log('No ./dist yet: run `npm run build` to serve the app from here, or use `npm run dev` (it proxies /api to this server).');
 });

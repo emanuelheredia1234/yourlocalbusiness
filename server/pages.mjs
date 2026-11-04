@@ -33,6 +33,8 @@ import net from 'node:net';
 import path from 'node:path';
 import { serviceHeaders } from './secretBox.mjs';
 import { sameOrigin } from './providers/routes.mjs';
+// lead forms on published pages: POST /<slug>/lead and /api/leads (server/leads.mjs)
+import { createLeads, leadLimitsFromEnv } from './leads.mjs';
 
 export const PAGES_MIGRATION = 'supabase/migrations/20261103040000_published_pages.sql';
 
@@ -263,6 +265,7 @@ export function pagesFromEnv(env = process.env, deps = {}) {
   return createPages({
     supabaseUrl: env.SUPABASE_URL || '',
     secretKey: env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '',
+    leadLimits: leadLimitsFromEnv(env),
     appHosts: env.APP_HOSTS || '',
     checkBase: env.PAGES_CHECK_BASE || '',
     ...deps,
@@ -285,6 +288,8 @@ export function createPages({
   corsHeaders = () => ({}),
   allowedOrigin = '',
   distDir = '',
+  // lead forms: { perIp, perPage, windowMs } (server/leads.mjs)
+  leadLimits,
   appHosts = '',
   checkBase = '',
   fetch = globalThis.fetch,
@@ -489,6 +494,8 @@ export function createPages({
       return true;
     }
     if (!site) return false;
+    // a visitor sending one of the domain's pages' forms (server/leads.mjs)
+    if (req.method === 'POST' && leads.matchLead(url)) return leads.receiveOnDomain(req, res, url, site);
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       write(req, res, 405, { ...COMMON, 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', allow: 'GET, HEAD' }, 'Method not allowed');
       return true;
@@ -537,6 +544,9 @@ export function createPages({
     }
     return true;
   }
+
+  // ── lead forms on published pages (server/leads.mjs): POST /<slug>/lead, /api/leads ──
+  const leads = createLeads({ enabled, supabaseUrl: url, secretKey, fetch, limits: leadLimits, findPage: (slug) => pageRow(slug), reserved, notFound, whoIs, send, corsHeaders, rateLimited, allowedOrigin });
 
   // ── the signed-in API ──
   const describePage = (r, origin) => ({
@@ -774,9 +784,10 @@ export function createPages({
     return { ok: true };
   }
 
-  const matchApi = (url) => /^\/api\/(pages|domains)(\/|$)/.test(url.pathname);
+  const matchApi = (url) => /^\/api\/(pages|domains)(\/|$)/.test(url.pathname) || leads.matchApi(url);
 
   async function handleApi(req, res, url) {
+    if (leads.matchApi(url)) return leads.handleApi(req, res, url);
     const reply = (status, body) => send(res, status, body, corsHeaders(req));
     if (!sameOrigin(req, allowedOrigin)) return reply(403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
     if (!enabled) return reply(503, { error: 'Publishing isn’t set up on this server yet: it needs accounts and the SUPABASE_SECRET_KEY Secret. Ask the app’s owner.', code: 'PAGES_OFF' });
@@ -872,6 +883,9 @@ export function createPages({
     enabled,
     /** For GET /api/config. */
     config: () => ({ enabled }),
+    // POST /<slug>/lead on the app's address (server/leads.mjs)
+    matchLead: leads.matchLead,
+    receiveLead: leads.receiveLead,
     forgetUser,
     mayBeDomain,
     serveDomain,

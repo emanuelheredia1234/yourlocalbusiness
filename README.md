@@ -28,6 +28,7 @@ Real:
 - AI images and videos: real files you can download, schedule with posts and publish on listings. Without a key that makes photos, a built-in brand illustration is used and labelled as such.
 - Posting: Manus posts on Facebook, Instagram, TikTok, LinkedIn and X for you, in its own browser signed in as you (see "Posting with Manus"). The app itself never logs in to a network and never posts on its own. Without Manus, copy the text and download the image or video from a post's ⋯ menu, post it yourself, and mark it posted.
 - Shared Marketplace: with accounts (Supabase), everyone signed in sees every published listing (`market_listings` table: anyone signed in can read, each seller can only add, change or remove their own; signed-out visitors see nothing). In claude.ai as a shared Artifact, listings sync between everyone who opens it. Without either, listings stay in your browser. Buyers pay on each seller's own link.
+- Lead forms: a published page's form sends what visitors type to the app's server, and it shows in Marketing Hub → Email → Leads. The app doesn't reply or send email.
 
 Not done by the app (it says so where it matters):
 - Sending email: you export the sequence to your email provider (Kit, Mailchimp, MailerLite…), which collects sign-ups and sends it.
@@ -188,6 +189,7 @@ Set it up once:
    - `app_state`: the server's own settings (your AI keys and their settings, the daily limits, the Manus task list, the usage log), encrypted. Browsers can't reach it either.
    - `ai_usage_daily` and the `ylb_add_ai_usage` function (`20261103030000_ai_usage_daily.sql`): each user's AI requests and dollars per day (UTC), for the daily limits. Server-only, like `user_secrets`. **Already set up before this version? Run this one file**: it also lets `user_secrets` hold keys for every provider, not just Manus. Until it's run, the counters live in the server's memory (they reset when it restarts) and only Manus keys can be saved.
    - `published_pages` and `published_domains` (`20261103040000_published_pages.sql`): published pages and people's own domains (see "Publishing pages"). Server-only.
+   - `page_leads` (`20261103050000_page_leads.sql`): what visitors send with a published page's form. Server-only.
 3. Supabase → **Authentication** → Sign In / Providers → Email: keep **Confirm email** on. The owner check below relies on confirmed emails.
 4. Supabase → **Authentication** → **URL Configuration**:
    - Set **Site URL** to your app's address (for example `https://your-app.replit.app`).
@@ -255,7 +257,13 @@ Own domains:
 
 Security: published pages are other people's HTML and scripts, served from the app's own address, where the app keeps its sign-in. So on the app's address every page is sent with a `Content-Security-Policy: sandbox` header that never allows the app's origin: the page can't read the sign-in or use the API as the visitor, and SEO pages can't run scripts at all. Images are served only when they're listed with their page and are still the exact files checked when it was published (JPEG, PNG, WebP or GIF; never SVG). On a person's own domain, pages run unsandboxed on that domain's own origin.
 
-API (signed in, same site only): `GET /api/pages`, `GET /api/pages/check?slug=&pageId=`, `PUT` and `DELETE /api/pages/<pageId>`, `POST /api/domains`, `POST /api/domains/<domain>/check`, `DELETE /api/domains/<domain>`.
+API (signed in, same site only): `GET /api/pages`, `GET /api/pages/check?slug=&pageId=`, `PUT` and `DELETE /api/pages/<pageId>`, `POST /api/domains`, `POST /api/domains/<domain>/check`, `DELETE /api/domains/<domain>`, `GET /api/leads?before=&limit=&pageId=`, `DELETE /api/leads/<id>`. Public: `POST /<name>/lead`.
+
+Lead forms: a page with a form (a lead form page, a booking page's "Request a time", a showcase's questions, a website's contact form) posts to `/<name>/lead` on the app's address or the owner's domain. Set it up once: also run `supabase/migrations/20261103050000_page_leads.sql` in Supabase → SQL Editor. Until then, forms answer that the message wasn't sent, and Email → Leads names the file.
+- The server keeps the name, email, phone, preferred time and message (table `page_leads`, server-only), needs an email or a phone, refuses anything over its length limit (never cuts it), and answers with a short thank-you page (no app name, strict CSP) that links back. Only a page published with a form that posts to its own `/<name>/lead` takes leads; on a domain, only that domain's pages.
+- A hidden field catches most bots, and there are limits per visitor and per page (`LEADS_PER_IP_PER_HOUR`, default 10; `LEADS_PER_PAGE_PER_HOUR`, default 30), kept in the server's memory. Behind a proxy on a private network, visitors are told apart by the address it forwards (IPv6 by its /64); otherwise they share one count, and the per-page limit is the main guard.
+- Every input is bounded before it's checked, and nothing a visitor typed, nor their email or address, goes into the server's log.
+- Owners see leads in Marketing Hub → Email → Leads: add one to subscribers, delete it or export a CSV. The bell says when new ones arrive.
 
 ## Run it
 
@@ -282,10 +290,11 @@ Server environment:
 - `DATA_DIR` (default `./.data`)
 - `ADMIN_TOKEN`
 - `AI_PROVIDER_BASE_URLS`: a JSON map of provider id to base URL, for a proxy or the test mock
+- `LEADS_PER_IP_PER_HOUR` (default 10) and `LEADS_PER_PAGE_PER_HOUR` (default 30): lead form limits (see "Publishing pages")
 - accounts: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `ADMIN_EMAILS`, `SIGN_IN_REQUIRED` (see "Accounts")
 - `APP_HOSTS`: other domains the app itself runs on (see "Publishing pages")
 
-`GET /api/config` tells the app whether accounts are on and whether it can publish pages, and `DELETE /api/account` deletes the signed-in user, with their saved workspace, files and published pages.
+`GET /api/config` tells the app whether accounts are on and whether it can publish pages, and `DELETE /api/account` deletes the signed-in user, with their saved workspace, files, published pages and leads.
 
 `GET /api/health` returns `{ ok, ai }`, where `ai` lists each key's readiness, model and effort, and which keys power each function.
 
@@ -310,6 +319,7 @@ With accounts on, each user's workspace is saved in Supabase:
 - each project, post, ad, skill, generation, listing, order, sale and notice is a row in `user_docs`, plus one row for account-level settings;
 - their files go to Storage, under `media/<user id>/` (a published page's images under `media/<user id>/published/`);
 - published pages are rows in `published_pages`, and their own domains in `published_domains`;
+- what visitors send with a page's form is a row in `page_leads` (server-only) until the owner deletes it;
 - each device they use keeps a copy for speed and offline work.
 
 Theme, server address and demo switches stay per device.

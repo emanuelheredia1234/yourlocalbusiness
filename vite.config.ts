@@ -9,12 +9,14 @@ import { fileURLToPath, URL } from 'node:url';
 /**
  * Dev only: published pages (/<name>, /<name>/ and /<name>/img/…) come from the server on :8787, as
  * in production. Vite answers instead when the server has no such page, isn't running, or the path
- * is one of Vite's own (/@…, /src/…, /node_modules/…) or a file in the project.
+ * is one of Vite's own (/@…, /src/…, /node_modules/…) or a file in the project. A page's form
+ * (POST /<name>/lead) goes to the server too.
  */
 function publishedPages(): Plugin {
   const name = '[a-z0-9][a-z0-9-]{1,58}[a-z0-9]';
   const page = new RegExp(`^/${name}/?$`);
   const image = new RegExp(`^/${name}/img/[^/]+$`);
+  const lead = new RegExp(`^/${name}/lead$`);
   const isFile = (p: string) => {
     try {
       return fs.statSync(p).isFile();
@@ -30,6 +32,19 @@ function publishedPages(): Plugin {
       server.middlewares.use((req, res, next) => {
         const pathname = (req.url ?? '/').split('?')[0];
         const isPage = page.test(pathname);
+        if (req.method === 'POST' && lead.test(pathname)) {
+          const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() || 'http';
+          // the visitor's address, added after what a proxy in front of Vite forwarded (the server counts forms per visitor)
+          const fwd = String(req.headers['x-forwarded-for'] ?? '').trim();
+          const from = req.socket.remoteAddress ?? '';
+          const up = http.request({ host: 'localhost', port: 8787, path: req.url, method: 'POST', headers: { ...req.headers, 'x-forwarded-host': req.headers.host ?? '', 'x-forwarded-proto': proto, 'x-forwarded-for': fwd ? `${fwd}, ${from}` : from } }, (r) => {
+            res.writeHead(r.statusCode ?? 502, r.headers);
+            r.pipe(res);
+          });
+          up.on('error', () => (res.headersSent ? res.destroy() : next()));
+          req.pipe(up);
+          return;
+        }
         if (req.method !== 'GET' && req.method !== 'HEAD') return next();
         if (!isPage && !image.test(pathname)) return next();
         if (/^\/(@|src\/|node_modules\/)/.test(pathname) || isFile(path.join(root, pathname)) || (publicDir && isFile(path.join(publicDir, pathname)))) return next();
