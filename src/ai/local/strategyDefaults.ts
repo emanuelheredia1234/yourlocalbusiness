@@ -4,7 +4,7 @@
 // re-exports these) can use them without an import cycle. Labelled "Built-in guidance": never research.
 import type { CampaignConfig, CodeKind, LeadMagnetType, PageType, PostPlatform, PostType, Project } from '@/lib/types';
 import type { ActionKind, AssetKind, StrategyLinkRec, StrategyPageRec } from '@/lib/strategyTypes';
-import { PAGE_TYPES, paymentLink } from '@/lib/pageTypes';
+import { paymentLink } from '@/lib/pageTypes';
 import { DEFAULT_LINK_PLACEMENT } from '@/lib/pageLink';
 import { matchBusinessType } from '../knowledge';
 import { CODE_KINDS } from './code';
@@ -97,4 +97,3 @@ export const ACTION_KINDS: ActionKind[] = [
 ];
 export const ASSET_KINDS: AssetKind[] = ['page', 'lead_magnet', 'emails', 'code', 'listing', 'listing_images', 'video', 'product_file', 'packages', 'other'];
 export const LEAD_MAGNET_KINDS: LeadMagnetType[] = ['checklist', 'guide', 'cheatsheet', 'template', 'swipe', 'workbook'];
-export const STRATEGY_PAGE_TYPES: PageType[] = PAGE_TYPES;

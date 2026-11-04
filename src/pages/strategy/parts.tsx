@@ -61,12 +61,12 @@ const BASIS_CHIP = { web: 'From the web', ai: 'AI’s general knowledge', builti
 const BASIS_CLASS = { web: 'bg-good-soft text-good', ai: 'bg-warn-soft text-warn', builtin: 'bg-surface-2 text-ink-2' } as const;
 
 /** "From the web" (with when it was found), "AI's general knowledge" or "Built-in guidance". */
-export function BasisBadge({ basis, sources, all }: { basis: Backed['basis']; sources?: number[]; all: StrategySource[] }) {
+export function BasisBadge({ basis, sources, all, manus }: { basis: Backed['basis']; sources?: number[]; all: StrategySource[]; manus?: boolean }) {
   const cited = all.filter((x) => sources?.includes(x.n));
   const found = cited.length ? Math.min(...cited.map((x) => x.at || Date.now())) : 0;
   const tip =
     basis === 'web'
-      ? `Found by a web search on ${found ? fmtDate(found, { month: 'short', day: 'numeric', year: 'numeric' }) : 'the date shown'}. Pages change: check them before you rely on them.${cited.some((x) => x.via === 'manus') ? ' Manus read this page.' : ''}`
+      ? `Found by a web search on ${found ? fmtDate(found, { month: 'short', day: 'numeric', year: 'numeric' }) : 'the date shown'}. Pages change: check them before you rely on them.${manus || cited.some((x) => x.via === 'manus') ? ' Manus read this page.' : ''}`
       : basis === 'ai'
         ? 'Not from a search. It may be out of date or wrong for your area.'
         : 'The app’s general starter notes, not research.';
@@ -95,10 +95,10 @@ export function SourceChips({ ns, all }: { ns?: number[]; all: StrategySource[] 
 }
 
 /** The basis badge and the sources of one point. */
-export function Backing({ item, all, className }: { item: Backed; all: StrategySource[]; className?: string }) {
+export function Backing({ item, all, className, manus }: { item: Backed; all: StrategySource[]; className?: string; manus?: boolean }) {
   return (
     <span className={cn('inline-flex flex-wrap items-center gap-1.5', className)}>
-      <BasisBadge basis={item.basis} sources={item.sources} all={all} />
+      <BasisBadge basis={item.basis} sources={item.sources} all={all} manus={manus} />
       {item.basis === 'web' && <SourceChips ns={item.sources} all={all} />}
     </span>
   );
@@ -110,7 +110,7 @@ export function citedBy(items: (Backed | undefined)[]): number[] {
 }
 
 /** The sources, as found: title, site, when, the page's own date, and whether Manus read it. */
-export function SourcesList({ ns, all, title = 'Sources' }: { ns?: number[]; all: StrategySource[]; title?: string }) {
+export function SourcesList({ ns, all, title = 'Sources', manusRead }: { ns?: number[]; all: StrategySource[]; title?: string; manusRead?: Set<number> }) {
   const list = (ns ? all.filter((x) => ns.includes(x.n)) : all).filter((x) => isHttpUrl(x.url)).sort((a, b) => a.n - b.n);
   if (!list.length) return null;
   return (
@@ -131,7 +131,7 @@ export function SourcesList({ ns, all, title = 'Sources' }: { ns?: number[]; all
               — {x.domain}
               {x.at ? ` · found ${fmtDate(x.at, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
               {x.pageAge ? ` · page date ${x.pageAge}` : ''}
-              {x.via === 'manus' ? ' · Manus read this page' : ''}
+              {x.via === 'manus' || manusRead?.has(x.n) ? ' · Manus read this page' : ''}
             </span>
           </li>
         ))}

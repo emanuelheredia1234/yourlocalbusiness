@@ -64,8 +64,6 @@ export const STEP_LABEL: Record<StrategyStep, string> = {
   outreach: 'Writing outreach emails',
   plan: 'Writing your plan',
 };
-/** The tab each step fills. */
-export const STEP_TAB: Record<StrategyStep, string> = { research: 'research', promote: 'promote', content: 'content', assets: 'assets', outreach: 'outreach', plan: 'plan' };
 export const TOPIC_LABEL: Record<FindingTopic, string> = {
   buyers: 'Where buyers look',
   social: 'Social content that gets attention',
@@ -556,9 +554,6 @@ export function actionDone(a: StrategyAction, p: Project, s: StrategyState, ctx:
   if (derived) return { done: true, by: 'app' };
   return s.ticks[a.id] ? { done: true, by: 'owner' } : { done: false, by: null };
 }
-
-/** Kinds the owner ticks (the app can't see them done). */
-export const OWNER_TICK: ActionKind[] = ['write_post', 'outreach', 'brain', 'offline'];
 
 export function derivedDone(a: { kind: ActionKind; pageType?: PageType; codeKind?: string }, p: Project, s: StrategyState, ctx: ActionCtx): boolean {
   const m = p.marketing;

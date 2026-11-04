@@ -114,9 +114,10 @@ export function strategyMarkdown(p: Project, s: StrategyState, ctx: ActionCtx): 
   }
 
   const sources = [...s.sources].sort((a, b) => a.n - b.n);
+  const manusRead = new Set((s.manus?.findings ?? []).flatMap((f) => f.sources ?? []));
   if (sources.length) {
     add('## Sources', '');
-    for (const x of sources) add(`[${x.n}] ${esc(x.title)} — ${esc(x.url)} (found ${day(x.at || ctx.now)}${x.pageAge ? `, page date ${esc(x.pageAge)}` : ''}${x.via === 'manus' ? ', via Manus' : ''})`);
+    for (const x of sources) add(`[${x.n}] ${esc(x.title)} — ${esc(x.url)} (found ${day(x.at || ctx.now)}${x.pageAge ? `, page date ${esc(x.pageAge)}` : ''}${x.via === 'manus' || manusRead.has(x.n) ? ', via Manus' : ''})`);
     add('', 'Links open the original pages. The app shows them as found and doesn’t vouch for them.');
   }
   return `${L.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`;

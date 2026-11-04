@@ -7,7 +7,7 @@ import { ChevronDown, FileDown, Globe, ListChecks, Mail, Megaphone, MessageSquar
 import type { Project } from '@/lib/types';
 import type { StrategyState } from '@/lib/strategyTypes';
 import { hasAnySection, readStrategy } from '@/lib/strategy';
-import { tabsOf } from '@/lib/pageTabs';
+import { tabLabel, tabsOf } from '@/lib/pageTabs';
 import { FORMATS, matchBusinessType } from '@/ai/knowledge';
 import { starterChecklist } from '@/ai/local/strategy';
 import { strategyHas } from '@/ai/strategyTasks';
@@ -55,15 +55,13 @@ function UpdateMenu({ project, disabled }: { project: Project; disabled: boolean
   };
   return (
     <>
-      <button ref={anchor} type="button" className="btn btn-secondary" disabled={disabled} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button ref={anchor} type="button" className="btn btn-secondary" disabled={disabled} aria-haspopup="true" aria-expanded={open} onClick={() => setOpen(!open)}>
         <RefreshCw size={15} /> Update… <ChevronDown size={14} />
       </button>
       <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} className="w-[280px]">
-        <div role="menu">
-          <MenuItem onClick={() => go({ kind: 'all' })}>Update everything (6 steps)</MenuItem>
-          <MenuItem onClick={() => go({ kind: 'research' })}>Search again (research only)</MenuItem>
-          <MenuItem onClick={() => go({ kind: 'plan' })}>Update the plan from the research (5 steps)</MenuItem>
-        </div>
+        <MenuItem onClick={() => go({ kind: 'all' })}>Update everything (6 steps)</MenuItem>
+        <MenuItem onClick={() => go({ kind: 'research' })}>Search again (research only)</MenuItem>
+        <MenuItem onClick={() => go({ kind: 'plan' })}>Update the plan from the research (5 steps)</MenuItem>
       </Popover>
     </>
   );
@@ -149,7 +147,7 @@ export function StrategyPage({ project }: { project: Project }) {
           <section className="panel p-4 sm:p-5" aria-label="Your details">
             <h2 className="section-title">Your details</h2>
             <p className="mb-4 mt-0.5 text-[13px] text-muted">All optional. Your own words: the AI reads them and never writes them.</p>
-            <DetailsForm project={project} d={details} />
+            <DetailsForm project={project} d={details} idPrefix="strategy-page" />
           </section>
           <RunPanel project={project} s={s} />
           <StarterChecklist project={project} s={s} />
@@ -170,7 +168,7 @@ export function StrategyPage({ project }: { project: Project }) {
             ]}
           />
           <RunPanel project={project} s={s} compact />
-          <div role="tabpanel" aria-label={tab}>
+          <div role="tabpanel" aria-label={tabLabel('strategy', tab)}>
             {tab === 'plan' && <PlanTab project={project} s={s} ctx={ctx} />}
             {tab === 'research' && <ResearchTab project={project} s={s} />}
             {tab === 'promote' && <PromoteTab project={project} s={s} />}

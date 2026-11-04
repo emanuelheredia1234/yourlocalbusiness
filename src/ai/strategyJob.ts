@@ -54,6 +54,17 @@ export const NO_AI = ['no_provider', 'server_down', 'unavailable', 'not_granted'
 /** Fresh wording for each regeneration of a step, per project (as useAI keeps them). */
 const variations = new Map<string, number>();
 
+/**
+ * The page is going away (reload, closed tab): the request under way fails as the browser drops it. That's
+ * not a failure to report: the run is left as it was, so it shows as stopped "because the page was closed".
+ */
+let leaving = false;
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('pagehide', () => (leaving = true));
+  // back from the browser's page cache: this page is in use again
+  window.addEventListener('pageshow', () => (leaving = false));
+}
+
 /** A failure's note without "the built-in engine answered instead" (here nothing was saved in its place). */
 export function stopNote(note: string | undefined): string {
   const kept = sentences(note ?? '')
@@ -149,12 +160,14 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
           onStage: (t) => setJob(projectId, { stage: t }),
         });
       } catch (e) {
+        if (leaving) return (result = 'stopped');
         if ((e as AIError)?.code === 'cancelled' || controller.signal.aborted) {
           if (project(projectId)) writeStrategy(projectId, (st) => (st.run ? { ...st, run: { ...st.run, stoppedAt: step } } : st));
           return (result = 'stopped');
         }
         throw e;
       }
+      if (leaving) return (result = 'stopped');
       if (res.provider === 'local' && !builtinMode) {
         const noAI = !res.code || NO_AI.includes(res.code);
         if (noAI && !aiWrote) builtinMode = true;
@@ -192,6 +205,7 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
     }
     return (result = 'done');
   } catch (e) {
+    if (leaving) return (result = 'stopped');
     note = stopNote((e as Error)?.message);
     result = 'failed';
     const at = Math.min(list.length - 1, useStrategyJobs.getState().jobs[projectId]?.index ?? 0);

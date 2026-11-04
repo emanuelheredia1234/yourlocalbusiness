@@ -12,7 +12,7 @@ import { startRun } from './runs';
 
 const DAY = 86_400_000;
 
-function Findings({ list, s }: { list: StrategyFinding[]; s: StrategyState }) {
+function Findings({ list, s, manus }: { list: StrategyFinding[]; s: StrategyState; manus?: boolean }) {
   const groups = FINDING_TOPICS.map((t) => [t, list.filter((f) => f.topic === t)] as [FindingTopic, StrategyFinding[]]).filter(([, l]) => l.length);
   return (
     <div className="flex flex-col gap-4">
@@ -23,7 +23,7 @@ function Findings({ list, s }: { list: StrategyFinding[]; s: StrategyState }) {
             {items.map((f) => (
               <li key={f.text} className="rounded-md border border-line bg-surface px-3 py-2.5">
                 <p className="text-[13.5px] text-ink">{f.text}</p>
-                <Backing item={f} all={s.sources} className="mt-1.5" />
+                <Backing item={f} all={s.sources} className="mt-1.5" manus={manus} />
               </li>
             ))}
           </ul>
@@ -120,11 +120,11 @@ export function ResearchTab({ project, s }: { project: Project; s: StrategyState
             <h2 className="section-title">Findings Manus read</h2>
             <p className="text-[12.5px] text-muted">Manus reports what each page says; the app can’t check it.</p>
           </div>
-          <Findings list={manusFindings} s={s} />
+          <Findings list={manusFindings} s={s} manus />
         </section>
       )}
 
-      <SourcesList ns={citedBy([...(r?.findings ?? []), ...manusFindings])} all={s.sources} />
+      <SourcesList ns={citedBy([...(r?.findings ?? []), ...manusFindings])} all={s.sources} manusRead={new Set(citedBy(manusFindings))} />
       <DeepResearch project={project} s={s} />
       <SectionFooter project={project} s={s} step="research" />
     </div>

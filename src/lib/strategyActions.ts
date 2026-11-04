@@ -85,8 +85,6 @@ export async function runTarget(t: StrategyTarget): Promise<void> {
   else await navigate(t.route);
 }
 
-/** Whether the app can see an action done (for actions shown outside a plan, like the starter checklist). */
-export const actionDoneNow = (a: StrategyAction, p: Project, s: StrategyState, ctx: ActionCtx) => actionDone(a, p, s, ctx);
 export { derivedDone };
 
 /** Other marketplaces and platforms: a channel naming one is outside the app, even if it says "marketplace". */

@@ -40,8 +40,9 @@ export function projectLine(p: Project): string {
   return [type, p.location?.city, audience ? `for ${audience.length > 60 ? `${audience.slice(0, 59).trimEnd()}…` : audience}` : ''].filter(Boolean).join(' · ');
 }
 
-export function DetailsForm({ project, d }: { project: Project; d: DetailsDraft }) {
-  const id = (k: string) => `strategy-${k}`;
+/** `idPrefix` keeps the ids apart when the form is on the page and in the drawer at once (the first visit). */
+export function DetailsForm({ project, d, idPrefix = 'strategy' }: { project: Project; d: DetailsDraft; idPrefix?: string }) {
+  const id = (k: string) => `${idPrefix}-${k}`;
   const text = (k: 'goal' | 'budget' | 'timePerWeek', label: string, placeholder: string, hint?: string, max = 200) => (
     <Field label={label} hint={hint} htmlFor={id(k)}>
       <input id={id(k)} className="input" value={d.draft[k]} placeholder={placeholder} maxLength={max} onChange={(e) => d.set({ [k]: e.target.value })} onBlur={() => d.save(k)} />
