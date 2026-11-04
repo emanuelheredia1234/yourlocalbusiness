@@ -5,6 +5,7 @@
 // to its built-in engine, browser downloads and local-only storage.
 
 import { create } from 'zustand';
+import type { AgentsHealth } from './agentTypes';
 
 export interface SampleResult {
   text: string;
@@ -144,6 +145,8 @@ export interface AIServerState {
   routing: Record<string, string[]>;
   /** whether Manus can post for the signed-in person, and if not, why */
   posting?: { ready: boolean; reason: 'ok' | 'no_key' | 'not_ticked' | 'own_key_needed' };
+  /** whether Manus and Viktor (through Slack) can build and chat for this person, and if not, why (src/ai/agents/who.ts) */
+  agents?: AgentsHealth;
 }
 
 export const NO_AI_SERVER: AIServerState = { reachable: false, ready: false, providers: [], routing: {} };

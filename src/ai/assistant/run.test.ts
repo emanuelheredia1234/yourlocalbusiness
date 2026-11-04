@@ -59,6 +59,24 @@ vi.mock('./tools', async (importOriginal) => {
       window: ({ id }) => ({ kind: 'manus-post', postIds: [id] }),
     }),
     defineTool({
+      name: 'build_with',
+      class: 'Pub',
+      summary: 'Open Build with Manus or Viktor.',
+      args: { target: arg.enum(['asset', 'seo']), agent: arg.enum(['manus', 'viktor']) },
+      window: ({ target, agent }) => ({ kind: 'agent-build', target, agent }),
+    }),
+    defineTool({
+      name: 'message_agent',
+      class: 'P-media',
+      summary: 'Send a drafted message to Manus or Viktor.',
+      args: { text: arg.string() },
+      media: 'agent',
+      run: ({ text }) => {
+        did.ran.push(`message:${text}`);
+        return { note: 'Sent' };
+      },
+    }),
+    defineTool({
       name: 'write_copy',
       class: 'P-text',
       summary: 'Write new copy for a post.',
@@ -292,6 +310,28 @@ describe('the policy, whatever the model says', () => {
     expect(activities()[0]).toMatchObject({ status: 'opened', text: expect.stringMatching(/^Opened “Post with Manus” for the post: .*confirm there$/) });
     expect(prompts[1]).toContain('"status":"opened","result":{"opened":"manus-post","waiting":"for the owner to confirm in that window: nothing is posted or published until they do"}');
     expect(useStore.getState().posts.find((p) => p.id === 'post_due')?.external).toBeUndefined();
+  });
+
+  it('Pub: Build with Manus or Viktor only opens its window, which the owner fills in and sends', async () => {
+    script({ actions: [{ tool: 'build_with', args: { target: 'seo', agent: 'viktor' } }, { tool: 'build_with', args: { target: 'asset', agent: 'manus' } }] }, { reply: 'Fill it in there.' });
+    await sendToAssistant('build my page with viktor');
+    expect(openWindow).toHaveBeenNthCalledWith(1, { kind: 'agent-build', target: 'seo', agent: 'viktor' });
+    expect(activities().map((m) => [m.status, m.text])).toEqual([
+      ['opened', 'Opened “Build with Viktor” for your SEO page: fill it in and send it there'],
+      ['opened', 'Opened “Build with Manus” for a new asset in Code & assets: fill it in and send it there'],
+    ]);
+  });
+
+  it('P-media: a message for Manus or Viktor waits for the owner’s yes on a card (a plain one when the tool words none)', async () => {
+    script({ actions: [{ tool: 'message_agent', args: { text: 'hi' } }] }, { reply: 'Not sent.' });
+    const turn = sendToAssistant('message viktor');
+    await tick();
+    await tick();
+    const card = chat().find((m) => m.role === 'card')!;
+    expect(card.card).toMatchObject({ title: 'Message agent?', who: 'Manus or Viktor (in Slack), who get it as your message.', cost: 'Uses your Manus credits, or counts toward your viktor.com plan.', state: 'pending' });
+    answerCard(card.id, false);
+    await turn;
+    expect(did.ran).toEqual([]);
   });
 
   it('X: refuses, explains and opens the page where the owner does it', async () => {

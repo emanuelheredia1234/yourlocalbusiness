@@ -26,6 +26,9 @@ import { PageTypeLinks, PageTypePicker } from './PageTypePicker';
 import { SalesPreview } from './SalesPreview';
 import { highestImageNumber, joinImages, seoFileHtml, seoPageId, seoPublishBuild, seoSourceHtml, shownPromptImages } from '@/lib/seoPage';
 import { useSeoUndo, type SeoSnapshot } from '@/store/seoUndo';
+import { AgentButtons } from '@/components/agents/AgentButtons';
+import { AgentBuildList } from '@/components/agents/AgentBuildList';
+import { SeoHtmlMode, SeoVersionSwitch } from './SeoHtmlMode';
 
 type Marketing = Project['marketing'];
 type AIHook<I, O> = ReturnType<typeof useAI<I, O>>;
@@ -70,6 +73,9 @@ export default function SeoSalesPage() {
   const toReview = claimsToReview(page);
   const busy = metaAI.running || pageAI.running || editAI.running || sectionAI.running;
   const projectId = project.id;
+  // the page Manus or Viktor made is the one in use (HTML mode): shown, scored and published instead of the builder's
+  const seoHtml = project.marketing.seoHtml;
+  const htmlMode = !!seoHtml?.active && !!meta;
 
   // another project: its own type, nothing open
   useEffect(() => {
@@ -233,7 +239,16 @@ export default function SeoSalesPage() {
         title="SEO page"
         desc="Pick the kind of page you need: a lead form, a booking page, a website, a landing page, a showcase or a checkout page. Edit it on the canvas or with AI, add your own photos, publish it at its own address, or export the HTML."
         actions={
-          page && meta ? (
+          htmlMode && meta ? (
+            <>
+              <FileActions projectId={projectId} fileName={`${meta.slug || slugify(project.brand.name) || 'sales-page'}.html`} />
+              {undoStack.length > 0 && (
+                <button type="button" className="btn btn-secondary btn-sm" onClick={undo} disabled={busy} title="Undo the last change" aria-label={`Undo the last change (${undoStack.length} can be undone)`}>
+                  <Undo2 size={14} /> Undo
+                </button>
+              )}
+            </>
+          ) : page && meta ? (
             <>
               <FileActions projectId={projectId} fileName={`${meta.slug || slugify(project.brand.name) || 'sales-page'}.html`} />
               {undoStack.length > 0 && (
@@ -249,15 +264,19 @@ export default function SeoSalesPage() {
         }
       />
       <AIThinking running={running} stage={pageAI.stage || metaAI.stage} chars={pageAI.chars || metaAI.chars} onStop={() => (pageAI.running ? pageAI.stop() : metaAI.stop())} />
-      {last && !running && <AIResultBar provider={last.provider} skills={last.skills} ms={last.ms} note={last.note} logId={pageAI.logId ?? metaAI.logId} />}
+      {last && !running && !htmlMode && <AIResultBar provider={last.provider} skills={last.skills} ms={last.ms} note={last.note} logId={pageAI.logId ?? metaAI.logId} />}
+      <AgentBuildList target="seo" />
 
-      {!page && !running ? (
+      {htmlMode ? (
+        <SeoHtmlMode project={project} publishRef={publishRef} />
+      ) : !page && !running ? (
         <Empty
           icon={<Search size={20} />}
           title="Build your SEO page"
           body={`Choose the kind of page. The AI picks a buyer-intent keyword for ${project.brand.name}, writes the metadata and drafts the page. You add the real parts: customer testimonials, facts and any guarantee you offer.`}
           action={
             <div className="flex w-full max-w-3xl flex-col gap-4 text-left">
+              {seoHtml && <SeoVersionSwitch project={project} />}
               <PageTypePicker value={choice} onChange={setChoice} disabled={busy} />
               {suggested && <p className="hint mt-0">Suggested for you. You can pick another.</p>}
               <PageTypeLinks project={project} type={choice} />
@@ -266,6 +285,7 @@ export default function SeoSalesPage() {
                 Write page
               </GenerateButton>
               {blocked && <p className="-mt-2 text-center text-xs text-muted">Add your payment link first. The app never takes payments: Buy now opens your own link.</p>}
+              <AgentButtons target="seo" kind={choice} lead="or build it with" className="justify-center" />
             </div>
           }
           className="min-h-[360px]"
@@ -273,6 +293,7 @@ export default function SeoSalesPage() {
       ) : page && meta && result ? (
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
           <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-120px)] xl:self-start xl:overflow-y-auto xl:pr-1 scroll-thin">
+            {seoHtml && <SeoVersionSwitch project={project} />}
             <section className="panel flex items-center gap-4 p-4" aria-label="SEO score">
               <ProgressRing value={result.score / 100} size={64} stroke={6} color={scoreColor(result.score)} label={<span className="text-[17px]">{result.score}</span>} />
               <div className="min-w-0 flex-1">
@@ -476,7 +497,7 @@ export default function SeoSalesPage() {
 }
 
 /** Copy HTML and Export HTML: the page as one file, with its images inside it (prepared when you click). */
-function FileActions({ projectId, fileName }: { projectId: string; fileName: string }) {
+export function FileActions({ projectId, fileName }: { projectId: string; fileName: string }) {
   const [busy, setBusy] = useState<null | 'copy' | 'export'>(null);
   const [copied, setCopied] = useState(false);
   const file = async (): Promise<string | null> => {
@@ -604,6 +625,7 @@ function GuidePanel({ project, page, busy, running, onImages, onAddToPage, onRew
           <GenerateButton running={running} disabled={busy} onClick={onRewrite} size="sm" className="self-start">
             Rewrite page
           </GenerateButton>
+          <AgentButtons target="seo" rebuild kind={pageTypeOf(project)} />
         </GuideBox>
       </div>
     </details>
@@ -791,7 +813,7 @@ function EditPanel({
   );
 }
 
-function MetaPanel({ project, meta, setMeta, onRegen, running, disabled, heroMedia, published }: { project: Project; meta: SeoMeta; setMeta: (p: Partial<SeoMeta>) => void; onRegen: () => void; running: boolean; disabled?: boolean; heroMedia?: MediaRef; published?: Published }) {
+export function MetaPanel({ project, meta, setMeta, onRegen, running, disabled, heroMedia, published }: { project: Project; meta: SeoMeta; setMeta: (p: Partial<SeoMeta>) => void; onRegen: () => void; running: boolean; disabled?: boolean; heroMedia?: MediaRef; published?: Published }) {
   // The owner's own website only; until there is one, show a clear placeholder, never a guessed domain.
   const site = siteUrl(project);
   const domain = stripProtocol(site) || '[your website]';

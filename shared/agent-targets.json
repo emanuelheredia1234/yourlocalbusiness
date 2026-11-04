@@ -1,0 +1,24 @@
+{
+  "asset": {
+    "calculator": "An interactive calculator for my niche that helps visitors work something out.",
+    "leadform": "A sign-up section that invites visitors to get in touch.",
+    "pricing": "A pricing table with my packages.",
+    "hero": "A hero section for the top of my website: a headline, a short text and a button.",
+    "countdown": "A countdown to a date I give.",
+    "quiz": "A short quiz that recommends one of my offers.",
+    "checklist": "An interactive checklist visitors can tick.",
+    "testimonials": "A section showing testimonials, only the ones in my request.",
+    "booking": "A section that shows my services and lets people book through my booking link.",
+    "spreadsheet": "A simple interactive table that works like a small spreadsheet.",
+    "faq": "An FAQ section with the questions and answers in my request.",
+    "roi": "A calculator that shows the time or money my offer saves, from numbers the visitor enters."
+  },
+  "seo": {
+    "lead": "A lead form page: a short pitch and one contact form.",
+    "booking": "A booking page: my services, and Book buttons that open my booking link (or a short “Request a time” form when I have no booking link).",
+    "website": "A one-page website with a top menu: Home, Services, About and Contact.",
+    "landing": "A landing page: one offer and one call to action.",
+    "showcase": "A showcase page: what I sell, with photos, and a button for each.",
+    "checkout": "A checkout page: one offer, what's included, the price and a Buy now button that opens my payment link."
+  }
+}

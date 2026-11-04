@@ -628,8 +628,9 @@ describe('the Assistant function', () => {
     // (Strategy was added later too: store.mjs ADDED_LATER)
     expect(store.settings('openai').functions).toEqual(['strategy', 'research', 'assistant', 'photos']);
     expect(store.route('assistant')).toEqual(['openai']);
-    // Manus doesn't write, so it never powers the Assistant
-    expect(store.settings('manus').functions).toEqual(['facebook']);
+    // Manus doesn't write, so it never powers the Assistant (Building pages & assets and Chat with Manus were
+    // added later too: store.mjs ADDED_LATER_AGENTS)
+    expect(store.settings('manus').functions).toEqual(['facebook', 'build', 'agentchat']);
     store.update('openai', { functions: ['research', 'photos'] });
     expect(store.settings('openai').functions).toEqual(['research', 'photos']);
     expect(new AIStore(store.file, { env: { OPENAI_API_KEY: 'o' } }).route('assistant')).toEqual([]);
@@ -670,5 +671,226 @@ describe('the Assistant function', () => {
     } finally {
       app.server.close();
     }
+  });
+});
+
+// ───────────── building pages and assets, and chatting, with Manus ─────────────
+
+describe('Manus builds and chats', () => {
+  let app;
+  beforeAll(async () => {
+    app = await startApp({ adminToken: 'admin-secret-token' });
+  });
+  afterAll(() => app.server.close());
+
+  const post = async (p, body, headers = {}) => {
+    const r = await fetch(`${app.base}${p}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+    const text = await r.text();
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      /* bytes */
+    }
+    return { status: r.status, json, text, headers: r.headers };
+  };
+  const BUILD = { target: 'asset', kind: 'booking', facts: [{ id: 'name', value: 'Bean & Leaf' }], website: 'https://beanleaf.example', request: 'A booking widget for my yoga classes', images: [{ key: 'img-1', note: 'the shop' }] };
+  let n = 0;
+  const ref = () => `ylb-P${String(++n).padStart(5, '0')}`;
+  const start = async (request, o = {}) => {
+    const r = await post('/api/ai/manus/create', { fn: 'build', build: { ...BUILD, request }, ref: ref(), ...o });
+    expect(r.status).toBe(200);
+    return r.json.task_id;
+  };
+  /** Read the build until it isn't working any more. */
+  const settle = async (taskId) => {
+    for (let i = 0; i < 8; i++) {
+      const r = await post('/api/ai/manus/messages', { task_id: taskId });
+      if (r.json.build?.state !== 'working') return r.json;
+    }
+    throw new Error('still working');
+  };
+
+  it('starts a build from the server’s template: no connected apps, never interactive, the profile chosen, up to 8 files', async () => {
+    const files = Array.from({ length: 8 }, (_, i) => ({ file_id: `file0000${i}`, filename: `img-${i + 1}.jpg` }));
+    const r = await post('/api/ai/manus/create', { fn: 'build', build: BUILD, ref: 'ylb-BUILD1', profile: 'max-high', files, prompt: 'IGNORED free text' });
+    expect(r.json).toMatchObject({ ok: true, meta: { fn: 'build', effort: 'max-high' } });
+    const sent = mock.last('manus', '/v2/task.create').body;
+    expect(sent).toMatchObject({ agent_profile: 'max-high', interactive_mode: false, hide_in_task_list: false, clear_connectors: true, title: 'Build · Booking widget · Bean & Leaf · ylb-BUILD1' });
+    expect(sent.message.content[0].text).toMatch(/^Build ONE web page as ONE self-contained HTML file\./);
+    expect(sent.message.content[0].text).not.toContain('IGNORED');
+    expect(sent.message.content.filter((c) => c.type === 'file')).toHaveLength(8);
+    // an unknown profile falls back to the key's agent profile
+    await post('/api/ai/manus/create', { fn: 'build', build: BUILD, ref: 'ylb-BUILD2', profile: 'turbo' });
+    expect(mock.last('manus', '/v2/task.create').body.agent_profile).toBe('standard');
+    // 9 files, a bad Ref, an unknown kind or an http website are refused before anything is sent
+    const before = mock.calls.length;
+    expect((await post('/api/ai/manus/create', { fn: 'build', build: BUILD, ref: 'ylb-BUILD3', files: [...files, { file_id: 'file00009', filename: 'img-9.jpg' }] })).status).toBe(400);
+    expect((await post('/api/ai/manus/create', { fn: 'build', build: BUILD, ref: 'bad' })).status).toBe(400);
+    expect((await post('/api/ai/manus/create', { fn: 'build', build: { ...BUILD, kind: 'casino' }, ref: 'ylb-BUILD4' })).status).toBe(400);
+    expect((await post('/api/ai/manus/create', { fn: 'build', build: { ...BUILD, website: 'http://beanleaf.example' }, ref: 'ylb-BUILD5' })).json).toMatchObject({ code: 'BAD_WEBSITE' });
+    expect(mock.calls.slice(before).some((c) => c.provider === 'manus' && c.path === '/v2/task.create')).toBe(false);
+  });
+
+  it('shows the exact message without starting anything (dry run), and refuses one that’s too long', async () => {
+    const before = mock.calls.length;
+    const r = await post('/api/ai/manus/create', { fn: 'agentchat', chat: { text: 'hello', website: '', images: [], brand: 'Bean & Leaf' }, ref: 'ylb-DRY001', dryRun: true });
+    expect(r.json.preview).toMatchObject({ limit: 12000 });
+    expect(r.json.preview.text).toContain('<<<MESSAGE\nhello\nMESSAGE>>>');
+    expect(r.json.preview.chars).toBe(r.json.preview.text.length);
+    const long = await post('/api/ai/manus/create', { fn: 'agentchat', chat: { text: 'x'.repeat(6001), website: '', images: [] }, ref: 'ylb-DRY002' });
+    expect(long).toMatchObject({ status: 413, json: { code: 'TOO_LONG', chars: 6001, limit: 6000 } });
+    expect(mock.calls.length).toBe(before);
+  });
+
+  it('reads a build’s latest round: built, then a change; markers for every other ending', async () => {
+    const id = await start('A plain one');
+    let r = await settle(id);
+    expect(r.build).toMatchObject({ state: 'built', result: { source: 'file', filename: 'page.html' } });
+    expect(r.credits).toBe(41);
+    expect(JSON.stringify(r)).not.toContain('/files/page.html');
+    const page = await post('/api/ai/manus/html', { task_id: id });
+    expect(page.headers.get('content-type')).toMatch(/^application\/json/);
+    expect(page.json).toMatchObject({ source: 'file', filename: 'page.html', at: r.build.result.at });
+    expect(page.json.html).toContain('{{img-1}}');
+    // Ask for changes: a new round in the same task; the old page doesn't count for it
+    const edit = await post('/api/ai/manus/continue', { task_id: id, edit: { text: 'Make the button green', images: [{ key: 'img-2', note: '' }] }, files: [{ file_id: 'file00042', filename: 'img-2.jpg' }] });
+    expect(edit.json).toEqual({ ok: true });
+    const sent = mock.last('manus', '/v2/task.sendMessage').body;
+    expect(sent.message.content[0].text).toMatch(/^Change page\.html as the owner asks below\./);
+    expect(sent.message.content[1]).toEqual({ type: 'file', file_id: 'file00042', filename: 'img-2.jpg' });
+    expect((await post('/api/ai/manus/messages', { task_id: id })).json.build.state).toBe('working');
+    r = await settle(id);
+    expect(r.build.state).toBe('built');
+    expect(r.credits).toBe(82);
+    // a build never takes a free prompt
+    expect((await post('/api/ai/manus/continue', { task_id: id, prompt: 'do something else' })).status).toBe(400);
+
+    const ending = async (marker) => (await settle(await start(marker))).build;
+    expect(await ending('qa-manus-fail')).toMatchObject({ state: 'failed', reason: "QA: couldn't open the website." });
+    expect(await ending('qa-manus-webdev')).toMatchObject({ state: 'failed', reason: 'Manus made a website in its own Manus account instead of a file.' });
+    expect(await ending('qa-manus-nofile')).toMatchObject({ state: 'no_file', reason: 'Manus finished without page.html.' });
+    expect(await ending('qa-manus-noresult')).toMatchObject({ state: 'built' });
+    const zip = await start('qa-manus-zip');
+    expect((await settle(zip)).build).toMatchObject({ state: 'no_file', reason: 'Manus sent page.zip, not one HTML file.' });
+    // the fixed follow-up builds it
+    await post('/api/ai/manus/continue', { task_id: zip, followup: 'missing_file' });
+    expect(mock.last('manus', '/v2/task.sendMessage').body.message.content).toMatch(/^I didn't receive page\.html\./);
+    expect((await settle(zip)).build.state).toBe('built');
+    const webdev = await start('qa-manus-webdev');
+    expect((await settle(webdev)).webdev).toBe(true);
+    expect((await post('/api/ai/manus/html', { task_id: webdev })).json).toMatchObject({ code: 'WEBDEV' });
+  });
+
+  it('a question is answered here; an approval waits in Manus; background work keeps it working', async () => {
+    const ask = await start('qa-manus-ask');
+    let r = await settle(ask);
+    expect(r).toMatchObject({ status: 'waiting', waiting: { type: 'messageAskUser', answerHere: true }, build: { state: 'needs_you', reason: 'Which colors do you prefer?' } });
+    await post('/api/ai/manus/continue', { task_id: ask, answer: 'Blue and white' });
+    expect(mock.last('manus', '/v2/task.sendMessage').body.message.content).toBe('My answer, in my own words:\n<<<ANSWER\nBlue and white\nANSWER>>>\nKeep to all the rules in my first message.');
+    expect((await settle(ask)).build.state).toBe('built');
+    r = await settle(await start('qa-manus-approve'));
+    expect(r).toMatchObject({ waiting: { type: 'needConnectMyBrowser', answerHere: false }, build: { state: 'needs_you' } });
+    const bg = await start('qa-manus-bg');
+    let saw = false;
+    for (let i = 0; i < 8; i++) {
+      const x = (await post('/api/ai/manus/messages', { task_id: bg })).json;
+      if (x.build.reason === 'Manus is still finishing in the background.') saw = true;
+      if (x.build.state === 'built') break;
+    }
+    expect(saw).toBe(true);
+  });
+
+  it('refuses pages it can’t use: a zip, one over 1.5 MB', async () => {
+    const zip = await start('qa-manus-zip');
+    const r = await settle(zip);
+    expect(r.build.state).toBe('no_file');
+    const at = `${r.events.find((e) => e.files.some((f) => f.name === 'page.zip')).id}:0`;
+    expect((await post('/api/ai/manus/html', { task_id: zip, at })).json).toMatchObject({ code: 'NOT_HTML', filename: 'page.zip' });
+    const big = await start('qa-manus-big');
+    await settle(big);
+    expect(await post('/api/ai/manus/html', { task_id: big })).toMatchObject({ status: 413, json: { code: 'TOO_BIG' } });
+  });
+
+  it('chats: the opening once, then the owner’s words as typed; replies with options, files and delivery kinds', async () => {
+    const c = await post('/api/ai/manus/create', { fn: 'agentchat', chat: { text: 'hello', website: '', images: [], brand: 'Bean & Leaf' }, ref: 'ylb-CHAT01' });
+    const created = mock.last('manus', '/v2/task.create').body;
+    expect(created).toMatchObject({ interactive_mode: true, clear_connectors: true, title: 'Chat · Bean & Leaf · ylb-CHAT01' });
+    const id = c.json.task_id;
+    let r;
+    for (let i = 0; i < 6 && !r?.events?.some((e) => e.type === 'assistant'); i++) r = (await post('/api/ai/manus/messages', { task_id: id })).json;
+    expect(r.events.find((e) => e.type === 'assistant')).toMatchObject({ text: 'QA Manus: I read your message (5 characters).', deliveryKind: 'result' });
+    expect(r.build).toBeUndefined();
+    const last = r.events[0].id;
+    await post('/api/ai/manus/continue', { task_id: id, chat: { text: 'qa-manus-question and qa-manus-image', website: 'https://beanleaf.example', images: [] } });
+    expect(mock.last('manus', '/v2/task.sendMessage').body.message.content).toBe('qa-manus-question and qa-manus-image\n\nMy website: https://beanleaf.example/');
+    for (let i = 0; i < 6 && r.status !== 'waiting'; i++) r = (await post('/api/ai/manus/messages', { task_id: id, after: last })).json;
+    expect(r.waiting).toMatchObject({ answerHere: true });
+    expect(r.events.every((e) => e.id !== last)).toBe(true);
+    expect(r.events.find((e) => e.options)).toMatchObject({ options: ['Blue', 'Green'] });
+    // a chat takes chat messages only
+    expect((await post('/api/ai/manus/continue', { task_id: id, prompt: 'free' })).status).toBe(400);
+    await post('/api/ai/manus/continue', { task_id: id, chat: { text: 'qa-manus-image please', website: '', images: [] } });
+    for (let i = 0; i < 6 && !r.events?.some((e) => e.files.some((f) => f.kind === 'image')); i++) r = (await post('/api/ai/manus/messages', { task_id: id })).json;
+    const image = r.events.flatMap((e) => e.files).find((f) => f.kind === 'image');
+    const file = await post('/api/ai/manus/file', { task_id: id, at: image.id });
+    expect(file.headers.get('content-type')).toBe('application/octet-stream');
+    expect(file.headers.get('x-file-type')).toBe('image/png');
+    expect(file.headers.get('content-disposition')).toBe('attachment; filename="photo.png"');
+    expect(file.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(file.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('stops a task; finds one by its Ref after an uncertain start; never touches tasks it didn’t start', async () => {
+    const id = await start('stop me');
+    expect((await post('/api/ai/manus/stop', { task_id: id })).json).toEqual({ ok: true });
+    expect(mock.last('manus', '/v2/task.stop').body).toEqual({ task_id: id });
+    expect((await post('/api/ai/manus/messages', { task_id: id })).json.status).toBe('stopped');
+    // a task started (by another tab, say) that this server doesn't know yet is found by its title's Ref
+    const created = await fetch(`${mock.baseUrls().manus}/v2/task.create`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-manus-api-key': 'mn-key-6666' }, body: JSON.stringify({ title: 'Build · Pricing table · Bean & Leaf · ylb-LOST01', message: { content: 'Build ONE web page as ONE self-contained HTML file.' } }) }).then((x) => x.json());
+    const v = await post('/api/ai/manus/verify', { ref: 'ylb-LOST01', sent_at: Date.now() - 1000 });
+    expect(v.json).toEqual({ found: true, task_id: created.task_id, task_url: `https://manus.im/app/${created.task_id}` });
+    expect(app.ai.router.manusTasks.get(created.task_id)).toMatchObject({ fn: 'build', ref: 'ylb-LOST01' });
+    expect((await post('/api/ai/manus/verify', { ref: 'ylb-NOPE01', sent_at: Date.now() })).json).toEqual({ found: false });
+    for (const route of ['messages', 'html', 'file', 'stop']) expect((await post(`/api/ai/manus/${route}`, { task_id: 'notOurs12345', at: 'e1:0' })).status).toBe(404);
+  });
+
+  it('needs Building pages & assets (or Chat with Manus) ticked, and says which is missing', async () => {
+    app.ai.store.update('manus', { functions: ['facebook'] });
+    try {
+      const r = await post('/api/ai/manus/create', { fn: 'build', build: BUILD, ref: 'ylb-TICK01' });
+      expect(r).toMatchObject({ status: 409, json: { code: 'NO_PROVIDER', reason: 'not_ticked' } });
+      const h = await app.ai.health(null, { headers: {}, socket: { remoteAddress: '127.0.0.1' } });
+      expect(h.agents.manus).toMatchObject({ build: { ready: false, reason: 'not_ticked' }, chat: { ready: false, reason: 'not_ticked' }, own: false, profile: 'standard' });
+    } finally {
+      app.ai.store.update('manus', { functions: ['facebook', 'photos', 'build', 'agentchat'] });
+    }
+    const h = await app.ai.health(null, { headers: {}, socket: { remoteAddress: '127.0.0.1' } });
+    expect(h.agents.manus.build).toEqual({ ready: true, reason: 'ok' });
+  });
+});
+
+describe('Manus build and chat tasks', () => {
+  it('are kept 30 days (other Manus tasks 7)', async () => {
+    const { ttlOf } = await import('./router.mjs');
+    expect(ttlOf({ fn: 'build' })).toBe(30 * 24 * 3600_000);
+    expect(ttlOf({ fn: 'agentchat' })).toBe(30 * 24 * 3600_000);
+    expect(ttlOf({ fn: 'facebook' })).toBe(7 * 24 * 3600_000);
+    const dir = tmpDir();
+    const tasksFile = path.join(dir, 'ai-tasks.json');
+    const day = 24 * 3600_000;
+    fs.writeFileSync(tasksFile, JSON.stringify({ tasks: { old1: { fn: 'build', at: Date.now() - 20 * day }, old2: { fn: 'facebook', at: Date.now() - 20 * day }, old3: { fn: 'agentchat', at: Date.now() - 31 * day } } }));
+    const { store, usage } = setup(['manus']);
+    const router = new AIRouter({ store, usage, baseUrls: mock.baseUrls(), tasksFile });
+    expect([...router.manusTasks.keys()]).toEqual(['old1']);
+  });
+
+  it('are on for Manus keys saved before they existed, until unticked', () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, 'ai.json'), JSON.stringify({ providers: { manus: { functions: ['facebook'], seen: ['strategy', 'research', 'facebook', 'photos'] } }, order: [...PROVIDER_IDS] }));
+    const store = new AIStore(path.join(dir, 'ai.json'), { env: { MANUS_API_KEY: 'm' } });
+    expect(store.settings('manus').functions).toEqual(['facebook', 'build', 'agentchat']);
+    store.update('manus', { functions: ['facebook'] });
+    expect(store.settings('manus').functions).toEqual(['facebook']);
   });
 });

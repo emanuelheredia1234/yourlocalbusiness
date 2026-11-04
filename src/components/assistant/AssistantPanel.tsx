@@ -1,22 +1,28 @@
 // The assistant's chat panel: a window at the bottom right on larger screens, a full-height sheet on
 // phones. Loaded the first time the chat opens. Escape closes it only while focus is inside it, so
 // closing a window the assistant opened (a confirm, "Post with Manus") never closes the chat too.
+//
+// The same chat talks to Manus and Viktor (its To: switch, AgentComposer): their replies show as their own
+// kind of message (ExternalMessage), and while the chat is open a reply that's due is checked for every few
+// seconds; opening it clears the unread dot for this project.
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { AppWindow, Ban, Check, CircleAlert, Copy, Download, ExternalLink, Info, SendHorizontal, Sparkles, Square, SquarePen, Upload, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AppWindow, Ban, Check, CircleAlert, Copy, Download, ExternalLink, Info, Sparkles, Square, SquarePen, Upload, X } from 'lucide-react';
 import type { Route } from '@/lib/router';
-import { cn } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { answerCard, buttonAlive, cardWaiting, pressButton, useAssistant, type ChatMessage } from '@/store/assistant';
+import { answerCard, buttonAlive, cardWaiting, clearUnread, pressButton, useAssistant, type ChatMessage } from '@/store/assistant';
 import type { ChatButtonIcon } from '@/ai/assistant/registry';
 import { newChat, sendToAssistant, stopAssistant } from '@/ai/assistant/run';
 import { assistantAvailability } from '@/ai/assistant/transport';
 import { openPage } from '@/ai/assistant/nav';
 import { OFFLINE_SUGGESTIONS, starterSuggestions } from '@/ai/assistant/intents';
 import { workspaceSummary } from '@/ai/assistant/workspace';
-import { Spinner } from '../ui/primitives';
+import { useAgentChatPolling } from '@/ai/agents/chat';
+import { CopyButton, Spinner } from '../ui/primitives';
 import { ChatText } from './ChatText';
+import AgentComposer from './AgentComposer';
+import { AgentUserMessage, ExternalMessage, OpenInAgent } from './ExternalMessage';
 
 const EMPTY: ChatMessage[] = [];
 const isPhone = () => typeof window !== 'undefined' && !!window.matchMedia?.('(max-width: 639px)').matches;
@@ -101,6 +107,17 @@ function Card({ m }: { m: ChatMessage }) {
     <div className="rounded-lg border border-line-2 bg-surface-2/60 p-3 text-[13px]" role="group" aria-label={card.title}>
       <p className="font-semibold text-ink">{card.title}</p>
       <p className="mt-1 text-ink-2">{card.what}</p>
+      {card.quote && (
+        <div className="mt-2 rounded-md border border-line bg-surface">
+          {/* the exact text that goes, in full */}
+          <p className="scroll-thin max-h-[16.5em] overflow-y-auto whitespace-pre-wrap break-words px-2.5 py-2 text-[12.5px] leading-snug text-ink" tabIndex={0} aria-label="The exact message">
+            {card.quote}
+          </p>
+          <div className="flex justify-end border-t border-line px-1.5 py-1">
+            <CopyButton text={card.quote} size="xs" label="Copy" />
+          </div>
+        </div>
+      )}
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[12.5px]">
         <dt className="font-semibold text-muted">Who</dt>
         <dd className="text-ink-2">{card.who}</dd>
@@ -127,10 +144,26 @@ function Card({ m }: { m: ChatMessage }) {
   );
 }
 
-function Message({ m, onOpenPage, offline }: { m: ChatMessage; onOpenPage: (route: Route, tab?: string) => void; offline: boolean }) {
+interface MessageProps {
+  m: ChatMessage;
+  projectId: string;
+  onOpenPage: (route: Route, tab?: string) => void;
+  offline: boolean;
+  /** an opening or progress message from Manus that a result came after */
+  folded?: boolean;
+  /** Manus's question with choices that waits for the owner */
+  answerable?: boolean;
+  /** a reply's page is opening one of the app's pages (on a phone the chat gets out of the way) */
+  onLeave?: () => void;
+}
+
+function Message({ m, projectId, onOpenPage, offline, folded, answerable, onLeave }: MessageProps) {
   switch (m.role) {
     case 'user':
+      if (m.via) return <AgentUserMessage m={m} projectId={projectId} />;
       return <p className="ml-auto max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-primary px-3 py-2 text-[13.5px] text-on-primary">{m.text}</p>;
+    case 'external':
+      return <ExternalMessage m={m} projectId={projectId} folded={folded} answerable={answerable} onLeave={onLeave} />;
     case 'assistant':
       return <ChatText text={m.text} onOpenPage={onOpenPage} />;
     case 'activity':
@@ -160,11 +193,36 @@ function Message({ m, onOpenPage, offline }: { m: ChatMessage; onOpenPage: (rout
       );
     default:
       return (
-        <p className="flex items-center justify-center gap-1.5 text-center text-[12px] text-muted">
+        <p className="flex flex-wrap items-center justify-center gap-x-1.5 text-center text-[12px] text-muted">
           <Info size={12} aria-hidden="true" /> {m.text}
+          {m.via && <OpenInAgent m={m} />}
         </p>
       );
   }
+}
+
+/** Manus's opening and progress messages that a result came after (they fold away), newest round last. */
+function foldedIds(messages: ChatMessage[]): Set<string> {
+  const out = new Set<string>();
+  let resultAfter = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const x = messages[i];
+    if (x.role !== 'external' || x.via !== 'manus') continue;
+    if (x.deliveryKind === 'opening' || x.deliveryKind === 'progress') {
+      if (resultAfter) out.add(x.id);
+    } else resultAfter = true;
+  }
+  return out;
+}
+
+/** The message whose choices the owner can pick from: Manus's newest message, when it asks with choices and nothing went to Manus after it. */
+function answerableId(messages: ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const x = messages[i];
+    if (x.role === 'user' && x.via === 'manus') return null;
+    if (x.role === 'external' && x.via === 'manus') return x.options?.length ? x.id : null;
+  }
+  return null;
 }
 
 export default function AssistantPanel({ onClose }: { onClose: () => void }) {
@@ -182,6 +240,15 @@ export default function AssistantPanel({ onClose }: { onClose: () => void }) {
   const [draft, setDraft] = useState('');
   const input = useRef<HTMLTextAreaElement>(null);
   const log = useRef<HTMLDivElement>(null);
+  const folded = useMemo(() => foldedIds(messages), [messages]);
+  const answerable = useMemo(() => answerableId(messages), [messages]);
+
+  // replies from Manus or Viktor that are due are checked every few seconds while the chat is open
+  useAgentChatPolling(pid || null);
+  // the chat is on screen: its replies are read
+  useEffect(() => {
+    if (pid) clearUnread(pid);
+  }, [pid, messages.length]);
 
   const suggestions = useMemo(() => {
     const w = workspaceSummary();
@@ -196,14 +263,6 @@ export default function AssistantPanel({ onClose }: { onClose: () => void }) {
     const el = log.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length, stage, running]);
-  // the input grows with what's typed, up to about six lines
-  useEffect(() => {
-    const el = input.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
-  }, [draft]);
-
   const go = (route: Route, tab?: string) => {
     // on a phone the chat covers the page: get out of the way
     if (isPhone()) onClose();
@@ -215,11 +274,9 @@ export default function AssistantPanel({ onClose }: { onClose: () => void }) {
     setDraft('');
     void sendToAssistant(t);
   };
-  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      send();
-    }
+  // a page from Manus or Viktor opened as an asset or the SEO page: on a phone the chat covers it
+  const leave = () => {
+    if (isPhone()) onClose();
   };
   const lastIsError = messages[messages.length - 1]?.role === 'error';
 
@@ -283,7 +340,7 @@ export default function AssistantPanel({ onClose }: { onClose: () => void }) {
           </div>
         )}
         {messages.map((m, i) => (
-          <Message key={m.id} m={m} onOpenPage={go} offline={!avail.ok && lastIsError && i === messages.length - 1} />
+          <Message key={m.id} m={m} projectId={pid} onOpenPage={go} offline={!avail.ok && lastIsError && i === messages.length - 1} folded={folded.has(m.id)} answerable={answerable === m.id} onLeave={leave} />
         ))}
         {running && runHere && (
           <p className="flex items-center gap-2 text-[12.5px] text-muted" role="status">
@@ -301,32 +358,19 @@ export default function AssistantPanel({ onClose }: { onClose: () => void }) {
             </button>
           </div>
         )}
-        <form
-          className="flex items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            send();
-          }}
-        >
-          <label htmlFor="assistant-input" className="sr-only">
-            Message the assistant
-          </label>
-          <textarea
-            id="assistant-input"
-            ref={input}
-            rows={1}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKey}
-            maxLength={6000}
-            placeholder={avail.ok ? 'Ask, or tell me what to do…' : 'Name a page to open…'}
-            className="textarea scroll-thin min-h-[40px] flex-1 resize-none overflow-y-auto py-2"
+        {project && (
+          <AgentComposer
+            key={pid}
+            project={project}
+            draft={draft}
+            setDraft={setDraft}
+            inputRef={input}
+            running={running}
+            assistantReady={avail.ok}
+            onSendAssistant={(t) => send(t)}
+            onSetup={() => go('workspace-settings', 'ai')}
           />
-          <button type="submit" className="btn btn-primary btn-icon shrink-0" disabled={!draft.trim() || running} aria-label="Send">
-            <SendHorizontal size={17} />
-          </button>
-        </form>
-        <p className={cn('mt-1.5 px-1 text-[11px] text-faint')}>Enter sends, Shift+Enter starts a new line.</p>
+        )}
       </div>
     </section>
   );

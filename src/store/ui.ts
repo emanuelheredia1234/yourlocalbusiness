@@ -62,6 +62,11 @@ interface UIState {
   publishRequest: PublishRequest | null;
   /** Ask the open page to show this Publish panel. Nothing is published: the owner chooses the address and presses Publish there. */
   requestPublish: (r: { page: 'seo' } | { page: 'asset'; assetId: string }) => void;
+
+  /** a code asset to open in Studio → Code & assets, asked for from elsewhere (a page from Manus or Viktor was just added); n changes with each request, and the tab takes it once */
+  assetRequest: { assetId: string; n: number } | null;
+  /** Ask Studio → Code & assets to open this asset (open the tab first). */
+  requestAsset: (assetId: string) => void;
 }
 
 export type PublishRequest = { page: 'seo'; n: number } | { page: 'asset'; assetId: string; n: number };
@@ -125,6 +130,9 @@ export const useUI = create<UIState>((set) => ({
 
   publishRequest: null,
   requestPublish: (r) => set((s) => ({ publishRequest: { ...r, n: (s.publishRequest?.n ?? 0) + 1 } })),
+
+  assetRequest: null,
+  requestAsset: (assetId) => set((s) => ({ assetRequest: { assetId, n: (s.assetRequest?.n ?? 0) + 1 } })),
 }));
 
 export const toast = (t: Omit<Toast, 'id'>) => useUI.getState().toast(t);

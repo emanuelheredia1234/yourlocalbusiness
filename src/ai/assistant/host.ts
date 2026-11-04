@@ -7,6 +7,7 @@ import { useManusPost } from '@/components/posts/ManusPost';
 import { useManusGroups } from '@/components/posts/ManusGroups';
 import { useMarkPosted } from '@/components/posts/PostActions';
 import { openListingWindow } from '@/components/studio/ListingWindowHost';
+import { openAgentBuild } from '@/components/agents/buildWindow';
 import { useUI } from '@/store/ui';
 import type { DangerSpec, PubWindow } from './registry';
 import { assistantAvailability, askAssistantModel, promptBudget, type Availability } from './transport';
@@ -50,6 +51,9 @@ export const host: AssistantHost = {
         if (ok) useUI.getState().requestPublish(w.page === 'seo' ? { page: 'seo' } : { page: 'asset', assetId: w.assetId });
         return ok;
       }
+      case 'agent-build':
+        // the page (Code & assets, or the SEO page), then "Build with Manus / Viktor" there: the owner fills it in and sends it
+        return openAgentBuild({ target: w.target, via: w.agent });
       case 'page':
         return openPage(w.route, w.tab);
     }

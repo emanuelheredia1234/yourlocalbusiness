@@ -4,13 +4,14 @@ import { cn, fmtRelative } from '@/lib/utils';
 import { safeStorage } from '@/lib/storage';
 import { useRuntime } from '@/lib/platform';
 import { authHeaders, trustServer, useAuth } from '@/lib/cloud/auth';
-import { pingServer, serverBase } from '@/ai/claude';
+import { ADMIN_TOKEN_KEY, pingServer, serverBase } from '@/ai/claude';
 import { AI_FUNCTIONS, AI_FUNCTION_GROUPS, type AIKind } from '@/ai/functions';
 import { fmtTokens, fmtUsdSmall } from '@/ai/meta';
 import { countersNote, limitPercent, ownKeyCapability, parseMyKeys, requestsInUse, resetLabel, type CountersProblem, type MyKeys, type OwnKeyProvider } from '@/ai/usageLimits';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { Field, Popover, Spinner, Toggle, confirmAction } from '@/components/ui/primitives';
+import { SlackCard } from './SlackCard';
 
 // ───────────── what the server sends ─────────────
 
@@ -91,7 +92,7 @@ interface UsageTotals {
 }
 
 const KIND_TITLE: Record<AIKind, string> = { text: 'Writing', image: 'Photos', video: 'Videos', agent: 'Agent tasks' };
-const ADMIN_KEY = 'ylb-admin-token';
+const ADMIN_KEY = ADMIN_TOKEN_KEY;
 
 function effortTitle(providerId: string, kind: AIKind): string {
   if (providerId === 'manus') return 'Agent profile';
@@ -341,6 +342,8 @@ export function AIProviders() {
               <UsageCard usage={usage} locked={usageLocked} catalog={catalog} onRefresh={() => void loadUsage()} />
             </div>
           </div>
+          {/* Viktor (viktor.com) through the owner's own Slack app: the owner's, and self-hosted only */}
+          {state.canManage && !__ARTIFACT_BUILD__ && <SlackCard call={call} serverUrl={serverUrl} />}
           {state.accounts && state.canManage && (
             <div className="grid grid-cols-1 gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
               <DailyLimitsCard call={call} />
@@ -902,7 +905,7 @@ function OwnKeys({ call, serverUrl, onChange }: { call: Call; serverUrl: string;
         <KeyRound size={15} className="text-primary" /> Your own keys
       </h3>
       <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-muted">
-        Optional. Writing, photos and videos one of your keys can do run in <strong className="text-ink-2">your own account</strong>, on your credits, and aren’t limited. Everything else uses the app’s keys, within the daily limit. A Manus key is only for Manus tasks (agent photos and social posts). Keys are checked with the provider, stored encrypted on the server and never shown again (only their last 4 characters).
+        Optional. Writing, photos and videos one of your keys can do run in <strong className="text-ink-2">your own account</strong>, on your credits, and aren’t limited. Everything else uses the app’s keys, within the daily limit. A Manus key is only for Manus tasks (agent photos, social posts, building pages and assets, and chat). Keys are checked with the provider, stored encrypted on the server and never shown again (only their last 4 characters).
       </p>
       {failed && !info && (
         <p role="alert" className="mt-3 text-[13px] text-bad">
@@ -995,9 +998,9 @@ function OwnKeyRow({ p, saved, available, call, onSaved }: { p: OwnKeyProvider; 
 function ManusExplainer() {
   return (
     <details className="rounded-md bg-surface-2/60 px-3 py-2 text-[12.5px]">
-      <summary className="cursor-pointer font-semibold text-ink-2">Manus: your photos and social posts, in your own account</summary>
+      <summary className="cursor-pointer font-semibold text-ink-2">Manus: your photos, social posts, pages and chats, in your own account</summary>
       <p className="mt-1.5 leading-relaxed text-muted">
-        Manus is an AI agent with its own browser. With your own Manus account it can make product photos and post on <strong className="text-ink-2">your</strong> Facebook, Instagram, TikTok, LinkedIn and X accounts, right away or scheduled. Tasks run in your Manus account and use your Manus credits.
+        Manus is an AI agent with its own browser. With your own Manus account it can make product photos, post on <strong className="text-ink-2">your</strong> Facebook, Instagram, TikTok, LinkedIn and X accounts (right away or scheduled), build pages and assets for you, and chat with you in the assistant. Tasks run in your Manus account and use your Manus credits.
       </p>
       <ol className="mt-2 flex list-decimal flex-col gap-1 pl-5 text-ink-2">
         <li>
@@ -1008,7 +1011,7 @@ function ManusExplainer() {
           (free to start; tasks use Manus credits).
         </li>
         <li>
-          In Manus, open <strong>Settings → API Integration</strong>, press <strong>Create API Key</strong>, name it (for example “Yourlocalbusiness”) and copy it. Manus shows it only once.{' '}
+          In Manus, open <strong>Settings → Developers (API keys)</strong>, press <strong>Create API Key</strong>, name it (for example “Yourlocalbusiness”) and copy it. Manus shows it only once.{' '}
           <a className="text-primary hover:underline" href="https://open.manus.ai/docs/v2/authentication" target="_blank" rel="noreferrer">
             Manus’s guide <ExternalLink size={11} className="inline" />
           </a>

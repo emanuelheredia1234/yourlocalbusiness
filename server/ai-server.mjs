@@ -8,9 +8,12 @@
 // Keys: Replit Secrets / env vars OPENROUTER_API_KEY, GEMINI_API_KEY (or GOOGLE_API_KEY), XAI_API_KEY,
 //   ANTHROPIC_API_KEY, META_MODEL_API_KEY, MANUS_API_KEY, OPENAI_API_KEY; or add them in the app
 //   (saved in DATA_DIR/ai-providers.json, never sent back to the browser). Secrets win over keys typed in the app.
+//   SLACK_USER_TOKEN: the User OAuth Token (xoxp-…) of the owner's own Slack app, so the app can talk to Viktor
+//   (viktor.com) as the owner (server/slack/routes.mjs); or paste it in Settings → AI → Viktor (Slack).
 // Optional env: PORT (8787), HOST (0.0.0.0), ALLOWED_ORIGIN (enable CORS for one origin), RATE_LIMIT_PER_MIN (30),
 //   DATA_DIR (./.data), ADMIN_TOKEN (lets a remote browser change AI settings; otherwise only this machine can),
-//   AI_PROVIDER_BASE_URLS (JSON map of provider id → base URL, for a proxy or a test server).
+//   AI_PROVIDER_BASE_URLS (JSON map of provider id → base URL, for a proxy or a test server; "slack" is Slack's
+//   Web API base, e.g. the stand-in from node server/test/mock-providers.mjs).
 // Accounts (Supabase): SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY (account deletion), ADMIN_EMAILS
 //   (the owner's email: manages the AI keys), SIGN_IN_REQUIRED (default true). See server/auth.mjs.
 //   With the secret key, users' own keys (server/userKeys.mjs) and their daily AI counters (server/limits.mjs) live in Supabase,
@@ -89,12 +92,13 @@ function readJson(req, limit = MAX_BODY) {
 }
 
 const hits = new Map();
-function rateLimited(ip) {
+/** Over the per-minute limit for this key (a bucket and a user or address)? factor: reads get a multiple of it. */
+function rateLimited(key, factor = 1) {
   const now = Date.now();
-  const recent = (hits.get(ip) || []).filter((t) => now - t < 60_000);
+  const recent = (hits.get(key) || []).filter((t) => now - t < 60_000);
   recent.push(now);
-  hits.set(ip, recent);
-  return recent.length > RATE_LIMIT;
+  hits.set(key, recent);
+  return recent.length > RATE_LIMIT * factor;
 }
 
 // ───────────── static files (production build) ─────────────
@@ -204,7 +208,7 @@ function route(req, res, url) {
     // `ok`: the server is up; `ai` says which keys are ready and what powers each function (signed-in users only, with accounts on)
     return void ai
       .whoIs(req, res)
-      .then(async (ident) => ident && send(res, 200, { ok: true, ai: await ai.health(ident.who) }, corsHeaders(req)))
+      .then(async (ident) => ident && send(res, 200, { ok: true, ai: await ai.health(ident.who, req) }, corsHeaders(req)))
       .catch((e) => crashed(req, res, e));
   }
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res).catch((e) => crashed(req, res, e));

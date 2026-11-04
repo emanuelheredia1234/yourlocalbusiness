@@ -3,13 +3,15 @@
 // restart, and several copies of the server must agree on the keys (server/appState.mjs).
 //
 //   { providers: { [id]: { apiKey?, enabled?, functions?, effort?: {kind: value}, models?: {kind: id} } }, order: [id],
-//     limits?: { requestsPerDay, usdPerDay } }   (daily limits for signed-in non-admin users on these keys; 0 = none)
+//     limits?: { requestsPerDay, usdPerDay },   (daily limits for signed-in non-admin users on these keys; 0 = none)
+//     connections?: { slack?: SlackConn } }       (the owner's Slack user token for Viktor: see slackPublic())
 // Keys from Replit Secrets / env vars take precedence over keys typed into the app, and no key
 // is ever sent back to the browser (only its last 4 characters).
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { FUNCTION_IDS, PROVIDERS, PROVIDER_IDS, adapterId, defaultEffort, effortIds, fnById, kindDef, supportedFunctions, supports } from './registry.mjs';
+import { hasChannelScopes, missingFor } from '../slack/manifest.mjs';
 
 export function maskKey(key) {
   if (!key) return '';
@@ -27,7 +29,17 @@ const REMOTE_KEY = 'ai-providers';
  * existed then (`seen`), so later ones are told apart from ones the owner unticked.
  */
 const ADDED_LATER = ['assistant', 'strategy'];
-const isNewFor = (saved, fn) => (Array.isArray(saved.seen) ? !saved.seen.includes(fn) && fnById[fn]?.kind === 'text' : ADDED_LATER.includes(fn));
+/**
+ * Manus's Building pages & assets and Chat with Manus are on for Manus keys saved before they existed, until the
+ * owner unticks them: the owner asked for these, and every build or chat still asks first, with who does it
+ * and what it costs, before anything goes to Manus.
+ */
+const ADDED_LATER_AGENTS = ['build', 'agentchat'];
+const isNewFor = (saved, fn) => (Array.isArray(saved.seen) ? !saved.seen.includes(fn) && (fnById[fn]?.kind === 'text' || ADDED_LATER_AGENTS.includes(fn)) : ADDED_LATER.includes(fn) || ADDED_LATER_AGENTS.includes(fn));
+
+/** The Secret that holds the owner's Slack user token (it wins over one saved in the app). */
+export const SLACK_ENV = 'SLACK_USER_TOKEN';
+const SLACK_FIELDS = ['token', 'verified', 'viktor', 'where', 'problem'];
 
 /** Daily limits for each signed-in non-admin user on the owner's keys, until the owner changes them. */
 export const DEFAULT_LIMITS = { requestsPerDay: 50, usdPerDay: 1 };
@@ -78,6 +90,8 @@ export class AIStore {
       providers: raw?.providers && typeof raw.providers === 'object' ? raw.providers : {},
       order: Array.isArray(raw?.order) ? raw.order : [...PROVIDER_IDS],
       ...(raw?.limits && typeof raw.limits === 'object' ? { limits: raw.limits } : {}),
+      // the Slack connection (Viktor) lives here too: a field left out would be wiped by the next load
+      ...(raw?.connections && typeof raw.connections === 'object' && !Array.isArray(raw.connections) ? { connections: raw.connections } : {}),
     };
   }
 
@@ -442,5 +456,94 @@ export class AIStore {
     this.mutate((st) => {
       st.order = [...new Set([...ids, ...PROVIDER_IDS])];
     });
+  }
+
+  // ───────────── the owner's Slack connection (Viktor) ─────────────
+  //   SlackConn = { token?, verified?: { teamId, team, url, userId, user, scopes: string[], last4, checkedAt },
+  //                 viktor?: { userId, botId?, appId?, name }, where?: { kind: 'dm', channelId } | { kind: 'channel', channelId, name, private },
+  //                 problem?: { code: 'bad_token' | 'missing_scopes', at, needed?: string[] } }
+  // The token acts as the owner in Slack: it never leaves the server (slackPublic() is all the browser sees).
+
+  /** The Slack user token: the Secret, else the one saved here ('' for none). */
+  slackToken() {
+    const env = this.env[SLACK_ENV];
+    return (typeof env === 'string' && env.trim()) || this.state.connections?.slack?.token || '';
+  }
+
+  /** Where the token comes from: 'secrets', 'app' or ''. */
+  slackSource() {
+    const env = this.env[SLACK_ENV];
+    if (typeof env === 'string' && env.trim()) return 'secrets';
+    return this.state.connections?.slack?.token ? 'app' : '';
+  }
+
+  /** A copy of the saved connection without the token. */
+  slack() {
+    const { token: _token, ...rest } = structuredClone(this.state.connections?.slack ?? {});
+    return rest;
+  }
+
+  /** Change the saved connection: a field set to null (or undefined) is removed. Same conflict handling as the keys. */
+  setSlack(patch) {
+    const change = (st) => {
+      const cur = { ...(st.connections?.slack ?? {}) };
+      for (const k of SLACK_FIELDS) {
+        if (!(k in patch)) continue;
+        if (patch[k] === null || patch[k] === undefined) delete cur[k];
+        else cur[k] = structuredClone(patch[k]);
+      }
+      const connections = { ...(st.connections ?? {}) };
+      if (Object.keys(cur).length) connections.slack = cur;
+      else delete connections.slack;
+      if (Object.keys(connections).length) st.connections = connections;
+      else delete st.connections;
+    };
+    this.mutate(change);
+  }
+
+  /** Whether Viktor can be used, from what's saved (no Slack call): ok | no_token | bad_token | missing_scopes | no_viktor | no_place. */
+  slackReadiness() {
+    const s = this.state.connections?.slack ?? {};
+    const token = this.slackToken();
+    const where = s.where?.kind === 'dm' || s.where?.kind === 'channel' ? s.where.kind : '';
+    const place = s.where?.kind === 'channel' && s.where.name ? `#${s.where.name}` : '';
+    const out = (reason) => ({ ready: reason === 'ok', reason, where, place });
+    if (!token) return out('no_token');
+    if (s.problem?.code === 'bad_token') return out('bad_token');
+    // scopes are known once the token was checked with auth.test (Settings re-checks it every 10 minutes)
+    const scopes = s.verified && s.verified.last4 === token.slice(-4) ? s.verified.scopes : null;
+    if (s.problem?.code === 'missing_scopes' || (scopes && missingFor(scopes, where || 'dm', !!s.where?.private).length)) return out('missing_scopes');
+    if (!s.viktor?.userId) return out('no_viktor');
+    if (!where || !s.where.channelId) return out('no_place');
+    return out('ok');
+  }
+
+  /** The only shape of the Slack connection the browser sees: never the token, only its last 4 characters. */
+  slackPublic() {
+    const s = this.state.connections?.slack ?? {};
+    const token = this.slackToken();
+    const v = s.verified ?? null;
+    const scopes = Array.isArray(v?.scopes) ? v.scopes : [];
+    const r = this.slackReadiness();
+    return {
+      configured: !!token,
+      source: this.slackSource(),
+      envKey: SLACK_ENV,
+      tokenHint: maskKey(token),
+      team: v?.team ?? '',
+      teamId: v?.teamId ?? '',
+      user: v?.user ?? '',
+      userId: v?.userId ?? '',
+      url: v?.url ?? '',
+      scopes,
+      missingScopes: v ? missingFor(scopes, r.where || 'dm', !!s.where?.private) : [],
+      channelScopes: hasChannelScopes(scopes),
+      viktor: s.viktor ? { userId: s.viktor.userId, botId: s.viktor.botId ?? '', name: s.viktor.name ?? '' } : null,
+      where: s.where ? { kind: s.where.kind, channelId: s.where.channelId, ...(s.where.kind === 'channel' ? { name: s.where.name ?? '', private: !!s.where.private } : {}) } : null,
+      problem: s.problem ? { code: s.problem.code, ...(Array.isArray(s.problem.needed) ? { needed: s.problem.needed } : {}) } : null,
+      ready: r.ready,
+      reason: r.reason,
+      checkedAt: v?.checkedAt ?? 0,
+    };
   }
 }

@@ -18,12 +18,12 @@ import { applyEmailSequence, applyLeadMagnet, delayLabel, importSubscribers, par
 import { allLeads, deleteLead, leadEmail, leadTime, leadsCsv, listLeads, seoPageIdOf, type Lead } from '@/lib/leads';
 import { PAGE_TYPES, PAGE_TYPE_LABEL, bookingLink, missingLink, pageTypeNoun, pageTypeOf, paymentLink, webLink } from '@/lib/pageTypes';
 import { listPublished, publishConfig, type ServerPage } from '@/lib/publish';
-import { seoFileHtml } from '@/lib/seoPage';
+import { seoFileHtml, seoHtmlActive } from '@/lib/seoPage';
 import { addCodeAsset, applyCodeEdit, codeOf, downloadDocument, findCodeAsset, hasUnpublishedChanges, imageUseNotes, snapshotOf, undoCodeAsset, type Snapshot } from '@/lib/codeAssets';
 import { AD_OBJECTIVES, AD_PLATFORMS, newAdCampaign } from '@/ai/local/ads';
 import { CODE_KINDS, codeKindLabel } from '@/ai/local/code';
 import { LEAD_MAGNET_TYPES, leadMagnetMarkdown } from '@/ai/local/email';
-import { SECTION_LABEL, claimsToReview, ctaLink, scoreSeo } from '@/ai/local/seo';
+import { SECTION_LABEL, claimsToReview, ctaLink, scoreSeo, scoreSeoHtml } from '@/ai/local/seo';
 import { applySalesPageEdit, saveSeo, undoSeo, writeSeoPage } from '@/ai/seoBuilder';
 import { AI_NO_CHANGE, adsTask, codeEditTask, codeTask, emailSequenceTask, leadMagnetTask, salesPageEditTask, salesPageTask, salesSectionTask, seoMetaTask } from '@/ai/tasks';
 import type { SeoSnapshot } from '@/store/seoUndo';
@@ -681,8 +681,16 @@ const deleteAdCampaign = defineTool({
 const SEO_LABELS = [seoMetaTask.label, salesPageTask.label, salesPageEditTask.label, salesSectionTask.label];
 const seoBusy = () => (busyWith(...SEO_LABELS) ? 'The SEO page is being written or edited on its page right now. Wait for it to finish.' : null);
 const noPage = () => {
-  const m = activeProject().marketing;
-  return m.salesPage && m.seo ? null : 'There’s no SEO page yet: write_seo_page writes it.';
+  const p = activeProject();
+  const m = p.marketing;
+  return (m.salesPage && m.seo) || seoHtmlActive(p) ? null : 'There’s no SEO page yet: write_seo_page writes it.';
+};
+const AGENT_NAME = { manus: 'Manus', viktor: 'Viktor' } as const;
+/** The SEO page in use is a page Manus or Viktor made (HTML mode): the app's builder doesn't write or edit it. */
+const htmlModeProblem = () => {
+  const p = activeProject();
+  if (!seoHtmlActive(p)) return null;
+  return `Your SEO page is ${AGENT_NAME[p.marketing.seoHtml!.source.via]}’s page right now: switch Version back to the app’s builder first.`;
 };
 
 /** What the owner should know about the page's buttons and form (the first that applies), as the builder says it. */
@@ -712,7 +720,28 @@ const getSeoPage = defineTool({
     const p = activeProject();
     const m = p.marketing;
     const type = pageTypeOf(p);
-    const base = { type, typeName: PAGE_TYPE_LABEL[type], guide: m.seoGuide?.trim() ? cut(m.seoGuide.trim(), 400) : null, images: (m.seoImages ?? []).length };
+    const h = m.seoHtml;
+    const version = h && seoHtmlActive(p) ? h.source.via : 'builder';
+    const base = { type, typeName: PAGE_TYPE_LABEL[type], version, guide: m.seoGuide?.trim() ? cut(m.seoGuide.trim(), 400) : null, images: (m.seoImages ?? []).length, ...(h && version === 'builder' ? { kept: `${AGENT_NAME[h.source.via]}’s page is kept too: the owner switches to it under Version.` } : {}) };
+    if (h && m.seo && version !== 'builder') {
+      // a page Manus or Viktor made: its words (and metadata made from its title) are theirs, so data only
+      const meta = m.seo;
+      const score = scoreSeoHtml(meta, h.html, type);
+      const live = m.seoPublished;
+      return {
+        data: {
+          ...base,
+          madeBy: AGENT_NAME[h.source.via],
+          title: untrusted(h.title, 120),
+          meta: { title: untrusted(meta.metaTitle, 120), description: untrusted(meta.metaDescription, 200), primaryKeyword: untrusted(meta.primaryKeyword, 80), slug: meta.slug, canonical: meta.canonical || null },
+          score: { score: score.score, words: score.words, toFix: score.checks.filter((c) => !c.pass).slice(0, 6).map((c) => `${c.label}: ${c.tip}`) },
+          form: h.hasLeadForm ? (live ? 'Its form sends to Email → Leads.' : 'Its form sends to Email → Leads once it’s published (publish_seo_page).') : 'It has no form.',
+          published: live ? { url: live.url, ...(live.domainUrl ? { domainUrl: live.domainUrl } : {}), since: fmtRelative(live.publishedAt) } : null,
+          check: `${AGENT_NAME[h.source.via]} wrote this page: the app can’t check its claims, so the owner checks every claim, price and testimonial before publishing. write_seo_page and edit_seo_page don’t change it.`,
+        },
+        note: `Read your SEO page (${AGENT_NAME[h.source.via]}’s page): score ${score.score}`,
+      };
+    }
     const page = m.salesPage;
     const meta = m.seo;
     if (!page || !meta) {
@@ -747,6 +776,7 @@ const setPageType = defineTool({
   class: 'L',
   summary: 'Open the SEO page builder with a page type chosen (nothing is written): the owner presses Write page, or confirms a rewrite there.',
   args: { pageType: arg.enum(PAGE_TYPES) },
+  validate: () => htmlModeProblem(),
   run: async ({ pageType }) => {
     // as Email → Leads' “Make a lead form page” does: the builder takes the type once and writes nothing
     if (!(await useUI.getState().openSeoBuilder({ pageType }, (route) => host.openPage(route)))) return stayed;
@@ -777,7 +807,7 @@ const writeSeoPageTool = defineTool({
     const p = activeProject();
     const now = pageTypeOf(p);
     const t = pageType ?? now;
-    const busy = seoBusy();
+    const busy = htmlModeProblem() ?? seoBusy();
     if (busy) return busy;
     if (t === 'checkout' && !paymentLink(p) && (!p.marketing.salesPage || now !== 'checkout')) return 'A checkout page needs the owner’s own payment link first: they add it under Page type on the SEO page (set_page_type opens it). The app never takes payments.';
     if (p.marketing.salesPage && !replace) return `There is already an SEO page (${PAGE_TYPE_LABEL[now].toLowerCase()}). Ask the owner, then call again with replace: true. Its copy is rewritten following their guidance; kept: metadata, testimonials and facts, guarantee, prices, services, contact details and images. It can be undone.`;
@@ -821,7 +851,7 @@ const editSeoPage = defineTool({
   class: 'P-text',
   summary: 'AI makes one change the owner asks for to the SEO page, or one section (sectionId from get_seo_page) (1 AI request); it can be undone.',
   args: { instruction: arg.string({ max: 1000 }), sectionId: arg.string({ optional: true, max: 60 }) },
-  validate: ({ sectionId }) => noPage() ?? seoBusy() ?? (sectionId && !activeProject().marketing.salesPage!.sections.some((x) => x.id === sectionId) ? `There’s no section with id "${sectionId}": get_seo_page lists them.` : null),
+  validate: ({ sectionId }) => noPage() ?? htmlModeProblem() ?? seoBusy() ?? (sectionId && !activeProject().marketing.salesPage!.sections.some((x) => x.id === sectionId) ? `There’s no section with id "${sectionId}": get_seo_page lists them.` : null),
   run: async ({ instruction, sectionId }, ctx) => {
     const p = projectOf(ctx);
     const m = p.marketing;
@@ -876,7 +906,9 @@ const BUILT_IN_EDIT = 'The built-in editor (used when no AI answers) can only sw
 function assetLine(a: CodeAsset) {
   return {
     id: a.id,
-    name: a.name,
+    // an asset Manus or Viktor made is named from their page's title: data only
+    name: a.source ? untrusted(a.name, 60) ?? 'Untitled' : a.name,
+    ...(a.source ? { madeBy: AGENT_NAME[a.source.via] } : {}),
     kind: codeKindLabel(a.kind),
     updated: fmtRelative(a.updatedAt),
     ...(a.images?.length ? { images: a.images.length } : {}),

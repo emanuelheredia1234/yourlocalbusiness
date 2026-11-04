@@ -1,11 +1,19 @@
 // The sales page as HTML in its three forms: on screen (the HTML source view, images as short
 // {{img-N}} placeholders), as a file (Copy and Export, images put in as data), and as published
 // (images as {{img-N}} tokens that the Publish panel turns into the page's own image addresses).
+// In HTML mode (a page Manus or Viktor made is the one in use: marketing.seoHtml.active), the same three
+// come from that page (src/lib/seoHtml.ts), at the same address.
 
 import type { Project, PromptImage, SalesPage } from '@/lib/types';
 import { imageDataUrls, imageKeyNumber, nextImageKey } from '@/lib/promptImages';
 import type { PublishBuild, PublishTarget } from '@/lib/publish';
 import { exportSalesHtml, ownCanonical, pageImageIds, type SalesHtmlOptions } from '@/ai/local/seo';
+import { seoHtmlDocument, seoHtmlShownImages } from './seoHtml';
+
+/** Whether the page in use is the one Manus or Viktor made (HTML mode): it's shown, scored and published instead of the builder's. */
+export function seoHtmlActive(project: Project): boolean {
+  return !!(project.marketing.seoHtml?.active && project.marketing.seo);
+}
 
 /** The sales page's id for publishing: one per project. */
 export function seoPageId(project: Project): string {
@@ -43,6 +51,7 @@ export function shownPromptImages(page: SalesPage, images: PromptImage[]): Promp
 /** The HTML source as it's shown on screen: short {{img-N}} placeholders instead of image data. */
 export function seoSourceHtml(project: Project): string {
   const { salesPage, seo, seoImages = [] } = project.marketing;
+  if (seoHtmlActive(project)) return seoHtmlDocument(project, { canonical: seo!.canonical, origin: '', leadAction: leadActionOf(project), imageUrl: (k) => `{{${k}}}` });
   return salesPage && seo ? exportSalesHtml(salesPage, seo, project.brand, project, { imageUrl: tokens(seoImages), imageSize: sizes(seoImages), leadAction: leadActionOf(project) }) : '';
 }
 
@@ -51,7 +60,14 @@ export function seoSourceHtml(project: Project): string {
  * of images whose files couldn't be loaded here: they're left out of the file.
  */
 export async function seoFileHtml(project: Project): Promise<{ html: string; missing: number[] }> {
-  const { salesPage, seo, seoImages = [] } = project.marketing;
+  const { salesPage, seo, seoImages = [], seoHtml } = project.marketing;
+  if (seoHtml && seoHtmlActive(project)) {
+    const keys = new Set(seoHtmlShownImages(project));
+    const used = seoHtml.images.filter((i) => keys.has(i.key));
+    const urls = used.length ? await imageDataUrls(used) : {};
+    const html = seoHtmlDocument(project, { canonical: seo!.canonical, origin: '', leadAction: leadActionOf(project), imageUrl: (k) => urls[k] });
+    return { html, missing: used.filter((i) => !urls[i.key]).map((i) => imageKeyNumber(i.key)) };
+  }
   if (!salesPage || !seo) return { html: '', missing: [] };
   const used = shownPromptImages(salesPage, seoImages);
   const urls = used.length ? await imageDataUrls(used) : {};
@@ -66,7 +82,12 @@ export async function seoFileHtml(project: Project): Promise<{ html: string; mis
  * published, unless the owner pasted their own (the page also lives there). Its form sends to /<slug>/lead.
  */
 export function seoPublishBuild(project: Project, target: PublishTarget): PublishBuild {
-  const { salesPage, seo, seoImages = [] } = project.marketing;
+  const { salesPage, seo, seoImages = [], seoHtml } = project.marketing;
+  if (seoHtml && seo && seoHtmlActive(project)) {
+    // the same page id, kind and address as the builder's page; the form ends up as action="/<slug>/lead"
+    const html = seoHtmlDocument(project, { canonical: ownCanonical(project, seo) ? seo.canonical : target.canonical, origin: target.origin, leadAction: `/${target.slug}/lead`, imageUrl: (k) => `{{${k}}}` });
+    return { html, images: seoHtml.images };
+  }
   if (!salesPage || !seo) return { html: '', images: [] };
   const html = exportSalesHtml(salesPage, seo, project.brand, project, {
     imageUrl: tokens(seoImages),

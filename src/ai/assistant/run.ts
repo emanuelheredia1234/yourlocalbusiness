@@ -5,7 +5,8 @@
 //
 // The policy (runAction) is what keeps the assistant safe, whatever the model says: reads and local
 // changes run; AI writing runs and is noted (writing that makes many requests, like a whole PDF, asks on
-// a card first); videos and Manus wait for a card the owner confirms in the chat; deletes wait for a
+// a card first); videos, Manus, and a message drafted for Manus or Viktor wait for a card the owner confirms
+// in the chat (the message goes only on yes, as the owner's); deletes wait for a
 // danger confirm; public actions only open the app's own window; excluded tools are refused with the
 // reason and the page where the owner does it.
 
@@ -43,10 +44,13 @@ function activity(turn: Turn, o: { tool: string; text: string; status: ActivityS
   addMessage(turn.projectId, { role: 'activity', text: o.text, tool: o.tool, status: o.status, ...(o.ai ? { ai: o.ai } : {}), ...(o.buttons?.length ? { buttons: registerButtons(o.buttons) } : {}) });
 }
 
-/** A card for a video or Manus tool that didn't word its own. */
+/** A card for a video, Manus or agent-message tool that didn't word its own. */
 function plainCard(tool: AnyTool, kind: MediaKind): ConfirmCardSpec {
+  const title = `${words(tool.name)[0].toUpperCase()}${words(tool.name).slice(1)}?`;
+  // a message for Manus or Viktor: like a Manus job, it waits for the owner's yes (who answers, and that it's paid)
+  if (kind === 'agent') return { title, what: tool.summary, who: 'Manus or Viktor (in Slack), who get it as your message.', cost: 'Uses your Manus credits, or counts toward your viktor.com plan.', confirmLabel: 'Send' };
   return {
-    title: `${words(tool.name)[0].toUpperCase()}${words(tool.name).slice(1)}?`,
+    title,
     what: tool.summary,
     who: kind === 'manus' ? 'Manus, an AI agent working in its own browser (usually a few minutes).' : 'The key that powers Videos in Settings → AI.',
     cost: kind === 'manus' ? 'Uses your Manus credits.' : 'Billed to that key by the second.',
@@ -66,6 +70,8 @@ function windowNote(w: PubWindow): string {
       return w.action === 'publish' ? 'Opened “Publish listing”: check what goes public, then confirm there' : `Opened “${w.action === 'show' ? 'Show' : 'Hide'} my listings”: confirm there`;
     case 'publish':
       return `Opened the Publish panel for ${w.page === 'seo' ? 'your SEO page' : `“${w.name}”`}: check the address, then publish there`;
+    case 'agent-build':
+      return `Opened “Build with ${w.agent === 'manus' ? 'Manus' : 'Viktor'}” for ${w.target === 'seo' ? 'your SEO page' : 'a new asset in Code & assets'}: fill it in and send it there`;
     case 'page':
       return `Opened ${pageName(w.route, w.tab)}: confirm there`;
   }
@@ -170,7 +176,7 @@ export async function runAction(action: Action, turn: Turn, tools: Registry = re
       return execute(tool, args, ctx, turn);
     }
     case 'P-media': {
-      // AI images run; videos and anything Manus wait for the owner's OK on a card
+      // AI images run; videos, anything Manus and a drafted message for Manus or Viktor wait for the owner's OK on a card
       const kind = typeof tool.media === 'function' ? tool.media(args as never) : tool.media;
       if (kind !== 'image') {
         const stopped = await askFirst(tool.card?.(args as never, ctx) ?? plainCard(tool, kind), turn, tool.name);

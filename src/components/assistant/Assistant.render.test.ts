@@ -37,6 +37,18 @@ describe('the chat button', () => {
     expect(renderToStaticMarkup(createElement(Assistant))).toContain('title="The assistant is waiting for you to confirm"');
   });
 
+  it('has a dot for a reply from Manus or Viktor that came while the chat was closed', () => {
+    expect(renderToStaticMarkup(createElement(Assistant))).not.toContain('data-unread');
+    fake.chat = { ...fake.chat, unread: { p1: 2 }, threads: { p1: [{ id: 'x', role: 'external', via: 'viktor', from: 'viktor', text: 'Hi', at: 1 }] } };
+    const html = renderToStaticMarkup(createElement(Assistant));
+    expect(html).toContain('aria-label="Open assistant: new reply from viktor"');
+    expect(html).toContain('title="New reply from Viktor"');
+    expect(html).toContain('data-unread=""');
+    // another project's replies don't put a dot on this one
+    fake.chat = { ...fake.chat, unread: { p2: 1 } };
+    expect(renderToStaticMarkup(createElement(Assistant))).not.toContain('data-unread');
+  });
+
   it('isn’t shown without a project', () => {
     fake.store = { activeProjectId: null };
     expect(renderToStaticMarkup(createElement(Assistant))).toBe('');
@@ -67,6 +79,14 @@ describe('a reply', () => {
     const html = text('Set the button link to {{lead_magnet_link}} (export_file ads_text), and *one* _last_ thing.');
     expect(html).toContain('{{lead_magnet_link}} (export_file ads_text)');
     expect(html).toContain('<em>one</em> <em>last</em> thing');
+  });
+
+  it('with app links off (text from Manus or Viktor), an app link is plain text and only https links work', () => {
+    const html = renderToStaticMarkup(createElement(ChatText, { text: 'Open [Settings](#workspace-settings/ai), [the page](https://example.com) or [x](javascript:alert(1))', appLinks: false }));
+    expect(html).not.toContain('href="#');
+    expect(html).toContain('Open Settings, ');
+    expect(html).toMatch(/<a href="https:\/\/example.com" target="_blank" rel="noopener noreferrer"/);
+    expect(html).not.toContain('javascript');
   });
 
   it('never renders HTML or script links from a reply', () => {

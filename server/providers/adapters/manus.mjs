@@ -98,12 +98,43 @@ export default {
     return { ok: true, task_id: taskId, task_url: p.task_url || `https://manus.im/app/${taskId}`, task_title: p.task_title || title || '' };
   },
 
-  /** A follow-up message to a task (one-shot write: never retried). */
-  async send(ctx, { taskId, prompt, profile, signal }) {
-    const body = { task_id: taskId, message: { content: prompt } };
+  /**
+   * A follow-up message to a task (one-shot write: never retried). `files`: [{ file_id, filename }] from
+   * uploadFile, sent with the text as file parts.
+   */
+  async send(ctx, { taskId, prompt, profile, files = [], signal }) {
+    const content = files.length ? [{ type: 'text', text: prompt }, ...files.map((f) => ({ type: 'file', file_id: f.file_id, filename: f.filename }))] : prompt;
+    const body = { task_id: taskId, message: { content } };
     if (profile) body.agent_profile = profile;
     await call(ctx, '/v2/task.sendMessage', { method: 'POST', body, signal, timeoutMs: 60_000 });
     return { ok: true };
+  },
+
+  /** The task and its newest events (newest first), as Manus sends them (server/agents/manusRead.mjs reads them). */
+  async messages(ctx, { taskId, limit = 50, signal }) {
+    const [detail, list] = await Promise.all([
+      call(ctx, `/v2/task.detail?task_id=${encodeURIComponent(taskId)}`, { signal }),
+      call(ctx, `/v2/task.listMessages?task_id=${encodeURIComponent(taskId)}&order=desc&limit=${Math.max(1, Math.min(200, limit))}`, { signal }),
+    ]);
+    return { task: detail.task ?? {}, events: Array.isArray(list.messages) ? list.messages : [], hasMore: list.has_more === true };
+  },
+
+  /** Stop a task (free; a stopped task can be resumed with a new message). */
+  async stop(ctx, { taskId, signal }) {
+    await call(ctx, '/v2/task.stop', { method: 'POST', body: { task_id: taskId }, signal });
+    return { ok: true };
+  },
+
+  /** The account's newest tasks: [{ id, title, created_at (seconds), task_url }]. */
+  async list(ctx, { limit = 20, signal } = {}) {
+    const p = await call(ctx, `/v2/task.list?limit=${Math.max(1, Math.min(100, limit))}&order=desc`, { signal });
+    const rows = Array.isArray(p.data) ? p.data : Array.isArray(p.tasks) ? p.tasks : [];
+    return rows.map((t) => ({ id: String(t?.id ?? t?.task_id ?? ''), title: String(t?.title ?? ''), created_at: num(t?.created_at) ?? 0, task_url: String(t?.task_url || `https://manus.im/app/${t?.id ?? ''}`) })).filter((t) => t.id);
+  },
+
+  /** An attachment's bytes from its signed address (it carries no key, so following redirects is fine). */
+  async fetchFile(ctx, url, { maxBytes, signal }) {
+    return downloadBytes(ctx.fetch, url, { maxBytes, signal, label: ctx.label, timeoutMs: 120_000, tooLarge: 'TOO_BIG' });
   },
 
   /**

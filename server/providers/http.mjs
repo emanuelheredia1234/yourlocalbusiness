@@ -20,11 +20,14 @@ export class ProviderError extends Error {
 
 const str = (v) => (typeof v === 'string' ? v : '');
 
-/** Providers sometimes quote part of the key back in errors: never pass that on. */
+/** Providers sometimes quote part of the key back in errors: never pass that on (Slack's tokens too). */
 export const scrubKeys = (s) =>
   s
     .replace(/\b(sk|xai|mk|key)[-_][A-Za-z0-9*._-]{6,}/g, '[key]')
     .replace(/\bAIza[A-Za-z0-9_-]{10,}/g, '[key]')
+    .replace(/\bxoxe\.xox[bp]-[A-Za-z0-9-]{10,}/g, '[key]')
+    .replace(/\bxox[abpe]-[A-Za-z0-9-]{10,}/g, '[key]')
+    .replace(/\bxapp-[A-Za-z0-9-]{10,}/g, '[key]')
     .replace(/(api key provided:?\s*)\S+/gi, '$1[key]');
 
 /** The provider's own error text, from the many shapes APIs use. */
@@ -100,8 +103,8 @@ export async function requestJson(fetchImpl, url, { method = 'GET', headers = {}
   return { status: res.status, ok: res.ok, payload, headers: res.headers };
 }
 
-/** Download a file with a size cap. Resolves { bytes, contentType }. */
-export async function downloadBytes(fetchImpl, url, { headers = {}, maxBytes = 50_000_000, timeoutMs = 180_000, signal, label = 'The provider' } = {}) {
+/** Download a file with a size cap. Resolves { bytes, contentType }. tooLarge: the error code for a file over the cap. */
+export async function downloadBytes(fetchImpl, url, { headers = {}, maxBytes = 50_000_000, timeoutMs = 180_000, signal, label = 'The provider', tooLarge = 'UPSTREAM' } = {}) {
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (signal) signals.push(signal);
   let res;
@@ -120,13 +123,14 @@ export async function downloadBytes(fetchImpl, url, { headers = {}, maxBytes = 5
     throw errorFromResponse(res.status, payload, label);
   }
   const declared = Number(res.headers.get('content-length') || 0);
-  if (declared > maxBytes) throw new ProviderError('UPSTREAM', `${label} sent a file that’s too large (${Math.round(declared / 1e6)} MB).`, { provider: label });
+  const big = { provider: label, ...(tooLarge === 'UPSTREAM' ? {} : { status: 413 }) };
+  if (declared > maxBytes) throw new ProviderError(tooLarge, `${label} sent a file that’s too large (${Math.round(declared / 1e6)} MB).`, big);
   const chunks = [];
   let size = 0;
   try {
     for await (const chunk of res.body) {
       size += chunk.length;
-      if (size > maxBytes) throw new ProviderError('UPSTREAM', `${label} sent a file that’s too large.`, { provider: label });
+      if (size > maxBytes) throw new ProviderError(tooLarge, `${label} sent a file that’s too large.`, big);
       chunks.push(chunk);
     }
   } catch (e) {

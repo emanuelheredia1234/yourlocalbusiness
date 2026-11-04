@@ -97,4 +97,27 @@ describe('the Code & assets tab', () => {
     expect(html).toContain('localStorage');
     expect(STORAGE_SHIM).toContain('defineProperty');
   });
+
+  it('offers Build with Manus and Build with Viktor beside Generate (until the server answers, they wait, saying why)', () => {
+    const html = render(project());
+    expect(html).toMatch(/Generate booking widget[\s\S]*Build with Manus[\s\S]*Build with Viktor/);
+    expect(html).toContain('title="Checking your AI server…"');
+  });
+
+  it('has no Build with… buttons in the claude.ai build', () => {
+    vi.stubGlobal('__ARTIFACT_BUILD__', true);
+    try {
+      const html = render(project());
+      expect(html).toContain('Generate booking widget');
+      expect(html).not.toContain('Build with');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('an asset Manus or Viktor made says so in the list and its header, with a link to the task or thread', () => {
+    const html = render(project([{ ...hero, published: undefined, source: { via: 'viktor', url: 'https://slack.example/p1', at: 1 } }]));
+    expect(html).toContain('· Viktor</span>');
+    expect(html).toMatch(/<a href="https:\/\/slack.example\/p1"[^>]*title="Made by Viktor: open the Slack thread"[^>]*>Viktor/);
+  });
 });

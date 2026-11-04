@@ -15,7 +15,7 @@ import type { StepResult } from './prompt';
 import { arg, catalogLine, defineTool, type AnyTool } from './registry';
 
 /** The groups listed by name until they're needed (any other group, the core and the excluded tools, is always in full). */
-export const TOOL_GROUP_NAMES = ['social', 'studio', 'marketing', 'brand'] as const;
+export const TOOL_GROUP_NAMES = ['social', 'studio', 'marketing', 'brand', 'agents'] as const;
 export type ToolGroupName = (typeof TOOL_GROUP_NAMES)[number];
 
 /** What each group covers, in a few words (shown with its tools' names). */
@@ -24,6 +24,7 @@ export const GROUP_ABOUT: Record<ToolGroupName, string> = {
   studio: 'prices and packages, the Marketplace listing (copy, images, publishing), outline and chapters or business model, PDF and workbook',
   marketing: 'lead magnet, emails, subscribers, leads, ad campaigns, the SEO page, code & assets, published pages',
   brand: 'brand kit, Brain skills and documents, brand voice, analytics, the Marketplace, product ideas, projects, backup',
+  agents: 'Manus and Viktor (Slack): open their build window for a page or asset, draft a message the owner confirms and sends them, what they’re working on',
 };
 
 /** The groups that fit each page, most fitting first (Code & assets is in Studio, its tools are marketing's). */
@@ -31,9 +32,9 @@ const PAGE_GROUPS: Partial<Record<Route, ToolGroupName[]>> = {
   dashboard: ['social'],
   calendar: ['social'],
   'marketing-social': ['social'],
-  studio: ['studio', 'marketing'],
+  studio: ['studio', 'marketing', 'agents'],
   marketing: ['marketing'],
-  'marketing-seo': ['marketing'],
+  'marketing-seo': ['marketing', 'agents'],
   'marketing-email': ['marketing'],
   'marketing-ads': ['marketing'],
   store: ['brand', 'studio'],
@@ -58,12 +59,16 @@ const uniq = <T>(list: T[]) => [...new Set(list)];
 /** A group's tool lines, as the tool list shows them in full. */
 export const groupText = (tools: AnyTool[]) => tools.map(catalogLine).join('\n');
 
-/** The groups the latest message is about, by the page it names ("my lead magnet" is Email). */
+/** A message about Manus or Viktor (talking to them, building with them) wants the agents group first. */
+const AGENT_WORDS = /\b(manus|viktor)\b/i;
+
+/** The groups the latest message is about: Manus or Viktor first, then the page it names ("my lead magnet" is Email). */
 function messageGroups(message: string): ToolGroupName[] {
+  const agents: ToolGroupName[] = AGENT_WORDS.test(message) ? ['agents'] : [];
   const intent = matchPageIntent(message);
-  if (!intent) return [];
-  if (intent.route === 'studio' && intent.tab === 'code') return ['marketing'];
-  return PAGE_GROUPS[intent.route] ?? [];
+  if (!intent) return agents;
+  if (intent.route === 'studio' && intent.tab === 'code') return [...agents, 'marketing'];
+  return [...agents, ...(PAGE_GROUPS[intent.route] ?? [])];
 }
 
 export interface CatalogInput {

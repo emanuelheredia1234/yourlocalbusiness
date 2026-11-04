@@ -26,19 +26,23 @@ export function seoImagesPatch(projectId: string, next: PromptImage[]): Partial<
   return { seoImages: next, seoImageMax: highestImageNumber(next, projectOf(projectId)?.marketing.seoImageMax) };
 }
 
-/** Keep the page, its metadata and its type as they are now, so the AI change about to be saved can be undone. */
-export function rememberSeo(projectId: string): SeoSnapshot | null {
+/**
+ * Keep the page, its metadata, its type and its HTML-mode page as they are now, so the change about to be saved
+ * can be undone. Nothing is kept for an empty builder unless `always` (using an agent's page as the first page,
+ * which Undo then takes back to nothing).
+ */
+export function rememberSeo(projectId: string, o: { always?: boolean } = {}): SeoSnapshot | null {
   const m = projectOf(projectId)?.marketing;
-  if (!m || (!m.salesPage && !m.seo)) return null;
-  const snap: SeoSnapshot = { salesPage: m.salesPage, seo: m.seo, pageType: m.pageType };
+  if (!m || (!m.salesPage && !m.seo && !m.seoHtml && !o.always)) return null;
+  const snap: SeoSnapshot = { salesPage: m.salesPage, seo: m.seo, pageType: m.pageType, seoHtml: m.seoHtml ?? null };
   useSeoUndo.getState().push(projectId, snap);
   return snap;
 }
 
 /**
- * Undo the last AI change (the page, its metadata and its type go back). With `only`, it undoes that change
- * only if nothing came after it ('newer' otherwise). An image removed from the page's images since then
- * stays off the page.
+ * Undo the last change (the page, its metadata, its type and its HTML-mode page go back). With `only`, it undoes
+ * that change only if nothing came after it ('newer' otherwise). An image removed from the page's images since
+ * then stays off the page. The highest image number used (seoImageMax) never goes down.
  */
 export function undoSeo(projectId: string, only?: SeoSnapshot | null): 'undone' | 'nothing' | 'newer' {
   const stack = useSeoUndo.getState().stacks[projectId] ?? [];
@@ -47,8 +51,40 @@ export function undoSeo(projectId: string, only?: SeoSnapshot | null): 'undone' 
   if (only && top !== only) return stack.includes(only) ? 'newer' : 'nothing';
   const snap = useSeoUndo.getState().pop(projectId)!;
   const images = projectOf(projectId)?.marketing.seoImages ?? [];
-  saveSeo(projectId, { seo: snap.seo, salesPage: snap.salesPage ? { ...pruneImages(snap.salesPage, images), updatedAt: Date.now() } : null, pageType: snap.pageType });
+  const patch: Partial<Marketing> = { seo: snap.seo, salesPage: snap.salesPage ? { ...pruneImages(snap.salesPage, images), updatedAt: Date.now() } : null, pageType: snap.pageType };
+  if (snap.seoHtml === undefined) {
+    saveSeo(projectId, patch);
+  } else {
+    // the HTML-mode page as it was: null takes it away
+    useStore.getState().updateProject(projectId, (p) => {
+      const { seoHtml: _now, ...rest } = p.marketing;
+      return { ...p, marketing: { ...rest, ...patch, ...(snap.seoHtml ? { seoHtml: snap.seoHtml } : {}) } };
+    });
+  }
   return 'undone';
+}
+
+/**
+ * Version: the page Manus or Viktor made (true) or the app's builder (false) is the one shown, scored and published,
+ * at the same address. Undo switches back. False when there's no such page, or it's already that way.
+ */
+export function setSeoHtmlActive(projectId: string, active: boolean): boolean {
+  const h = projectOf(projectId)?.marketing.seoHtml;
+  if (!h || h.active === active) return false;
+  rememberSeo(projectId);
+  saveSeo(projectId, { seoHtml: { ...h, active } });
+  return true;
+}
+
+/** Remove the page Manus or Viktor made (the app's builder is used again); Undo brings it back. */
+export function removeSeoHtml(projectId: string): boolean {
+  if (!projectOf(projectId)?.marketing.seoHtml) return false;
+  rememberSeo(projectId);
+  useStore.getState().updateProject(projectId, (p) => {
+    const { seoHtml: _gone, ...marketing } = p.marketing;
+    return { ...p, marketing };
+  });
+  return true;
 }
 
 /** How the AI writes: the page's hooks (null when stopped or failed), or the assistant's runAITask. */

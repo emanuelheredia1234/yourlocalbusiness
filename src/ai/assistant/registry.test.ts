@@ -6,6 +6,7 @@ import { socialTools } from './tools/social';
 import { studioTools } from './tools/studio';
 import { marketingTools } from './tools/marketing';
 import { brandTools } from './tools/brand';
+import { agentTools } from './tools/agents';
 
 const props = {
   id: arg.string({ desc: 'a post id' }),
@@ -75,11 +76,12 @@ describe('the catalog', () => {
 
 describe('the registry', () => {
   it('has every group, each in its own file (the groups fill theirs)', () => {
-    expect(Object.keys(TOOL_GROUPS)).toEqual(['core', 'social', 'studio', 'marketing', 'brand', 'excluded']);
+    expect(Object.keys(TOOL_GROUPS)).toEqual(['core', 'social', 'studio', 'marketing', 'brand', 'agents', 'excluded']);
     expect(TOOL_GROUPS.social).toBe(socialTools);
     expect(TOOL_GROUPS.studio).toBe(studioTools);
     expect(TOOL_GROUPS.marketing).toBe(marketingTools);
     expect(TOOL_GROUPS.brand).toBe(brandTools);
+    expect(TOOL_GROUPS.agents).toBe(agentTools);
     expect(registry.tools.length).toBe(Object.values(TOOL_GROUPS).flat().length);
   });
 

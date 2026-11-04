@@ -2,6 +2,9 @@
 // numbered lists, **bold**, *italic*, `code`, and links. A link to an app page (#calendar, or with a
 // tab: #workspace-settings/ai) opens it in the app; https links open in a new tab; anything else
 // stays plain text. No HTML from the reply is ever rendered.
+//
+// Replies from Manus and Viktor use it too, with appLinks off: text from outside the app never moves
+// the app (an app link there is plain text), and only https links work, in a new tab.
 
 import { Fragment, type ReactNode } from 'react';
 import { ArrowUpRight } from 'lucide-react';
@@ -20,7 +23,7 @@ export function appLink(href: string): { route: Route; tab?: string } | null {
 // _italic_ only as a whole word: a merge tag ({{lead_magnet_link}}) or a name like ads_text stays as it is
 const TOKEN = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|\*[^*\s][^*\n]*\*|(?<![\p{L}\p{N}_])_[^_\s][^_\n]*_(?![\p{L}\p{N}_]))/gu;
 
-function inline(text: string, key: string, open: OpenPage): ReactNode[] {
+function inline(text: string, key: string, open: OpenPage | null): ReactNode[] {
   const out: ReactNode[] = [];
   let last = 0;
   let i = 0;
@@ -33,8 +36,8 @@ function inline(text: string, key: string, open: OpenPage): ReactNode[] {
     else if (t.startsWith('`')) out.push(<code key={k} className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[0.9em]">{t.slice(1, -1)}</code>);
     else if (t.startsWith('[')) {
       const [, label, href] = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(t) ?? [];
-      const page = appLink(href ?? '');
-      if (page) {
+      const page = open ? appLink(href ?? '') : null;
+      if (page && open) {
         out.push(
           <a
             key={k}
@@ -64,15 +67,16 @@ function inline(text: string, key: string, open: OpenPage): ReactNode[] {
   return out;
 }
 
-/** A reply as paragraphs and lists. */
-export function ChatText({ text, onOpenPage, className }: { text: string; onOpenPage: OpenPage; className?: string }) {
+/** A reply as paragraphs and lists. appLinks false: app page links stay plain text (text from Manus or Viktor). */
+export function ChatText({ text, onOpenPage, appLinks = true, className }: { text: string; onOpenPage?: OpenPage; appLinks?: boolean; className?: string }) {
+  const open = appLinks && onOpenPage ? onOpenPage : null;
   const blocks: ReactNode[] = [];
   let list: { ordered: boolean; items: string[] } | null = null;
   let para: string[] = [];
   const flushPara = () => {
     if (!para.length) return;
     const k = `p${blocks.length}`;
-    blocks.push(<p key={k}>{inline(para.join(' '), k, onOpenPage)}</p>);
+    blocks.push(<p key={k}>{inline(para.join(' '), k, open)}</p>);
     para = [];
   };
   const flushList = () => {
@@ -82,7 +86,7 @@ export function ChatText({ text, onOpenPage, className }: { text: string; onOpen
     blocks.push(
       <Tag key={k} className={cn('flex flex-col gap-1 pl-5', list.ordered ? 'list-decimal' : 'list-disc')}>
         {list.items.map((it, n) => (
-          <li key={n}>{inline(it, `${k}-${n}`, onOpenPage)}</li>
+          <li key={n}>{inline(it, `${k}-${n}`, open)}</li>
         ))}
       </Tag>,
     );
@@ -108,7 +112,7 @@ export function ChatText({ text, onOpenPage, className }: { text: string; onOpen
       const k = `h${blocks.length}`;
       blocks.push(
         <p key={k} className="font-semibold text-ink">
-          {inline(heading[1], k, onOpenPage)}
+          {inline(heading[1], k, open)}
         </p>,
       );
     } else {

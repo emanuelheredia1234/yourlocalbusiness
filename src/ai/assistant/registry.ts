@@ -5,8 +5,8 @@
 //   L        a local change (nothing leaves the app, nothing is paid): runs right away
 //   P-text   an AI text task (counts toward the daily AI limits): runs right away, noted "Used your AI";
 //            one that makes many requests (a whole PDF) can ask on a card first (its `card`)
-//   P-media  AI images run right away; videos and anything done by Manus first wait for the owner's OK on
-//            a card in the chat (what it does, who does it, what it costs)
+//   P-media  AI images run right away; videos, anything done by Manus, and a message drafted for Manus or
+//            Viktor first wait for the owner's OK on a card in the chat (what it does, who does it, what it costs)
 //   Pub      goes public: the tool only names one of the app's own windows, the app opens it and the
 //            owner confirms there (the tool itself never posts or publishes)
 //   D        destructive: the app asks with a danger confirm first, and runs it only on yes
@@ -221,7 +221,8 @@ export interface ToolResult {
   end?: boolean;
 }
 
-export type MediaKind = 'image' | 'video' | 'manus';
+/** agent: a message to Manus or Viktor (draft_agent_message), sent as the owner's only after their yes on the card */
+export type MediaKind = 'image' | 'video' | 'manus' | 'agent';
 
 /** The card a P-media tool shows before a video or a Manus job: what it does, who does it, what it costs. */
 export interface ConfirmCardSpec {
@@ -230,6 +231,8 @@ export interface ConfirmCardSpec {
   who: string;
   cost?: string;
   confirmLabel?: string;
+  /** the exact text that goes (a drafted message), shown in full with a Copy button */
+  quote?: string;
 }
 
 /** The danger confirm a D tool shows first. */
@@ -249,6 +252,8 @@ export type PubWindow =
   /** a page's Publish panel at a public address (the SEO page, or a code asset): the owner chooses the address and publishes there */
   | { kind: 'publish'; page: 'seo' }
   | { kind: 'publish'; page: 'asset'; assetId: string; name: string }
+  /** "Build with Manus" or "Build with Viktor" for the SEO page or a Code & assets asset: the owner fills it in and sends it there */
+  | { kind: 'agent-build'; target: 'asset' | 'seo'; agent: 'manus' | 'viktor' }
   | { kind: 'page'; route: Route; tab?: string };
 
 /** Why an excluded tool isn't done by the assistant, and the page where the owner does it. */

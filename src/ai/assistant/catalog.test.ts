@@ -26,7 +26,7 @@ describe('the tool list', () => {
     const c = toolCatalog(TOOL_GROUPS, { route: 'marketing-ads', message: 'hello' });
     expect(c.groups).toEqual(['marketing']);
     expect(full(c.full, 'core') && full(c.full, 'excluded') && full(c.full, 'marketing')).toBe(true);
-    for (const g of ['social', 'studio', 'brand'] as const) {
+    for (const g of ['social', 'studio', 'brand', 'agents'] as const) {
       expect(named(c.full, g), g).toBe(true);
       expect(c.full).not.toContain(catalogLine(TOOL_GROUPS[g][0]));
     }
@@ -47,7 +47,8 @@ describe('the tool list', () => {
     expect(fullGroups(TOOL_GROUPS, { route: 'dashboard' })).toEqual(['social']);
     expect(fullGroups(TOOL_GROUPS, { route: 'calendar' })).toEqual(['social']);
     expect(fullGroups(TOOL_GROUPS, { route: 'workspace-settings' })).toEqual(['brand']);
-    expect(fullGroups(TOOL_GROUPS, { route: 'studio' }, ALL)).toEqual(['studio', 'marketing']);
+    expect(fullGroups(TOOL_GROUPS, { route: 'studio' }, ALL)).toEqual(['studio', 'marketing', 'agents']);
+    expect(fullGroups(TOOL_GROUPS, { route: 'marketing-seo' }, ALL)).toEqual(['marketing', 'agents']);
     expect(fullGroups(TOOL_GROUPS, { route: 'store' }, ALL)).toEqual(['brand', 'studio']);
     expect(fullGroups(TOOL_GROUPS, { route: 'studio' })[0]).toBe('studio');
     expect(fullGroups(TOOL_GROUPS, { route: 'onboarding' })).toEqual([]);
@@ -63,6 +64,10 @@ describe('the tool list', () => {
     // a follow-up like “make it shorter” is about what the chat just did
     expect(fullGroups(TOOL_GROUPS, { route: 'dashboard', message: 'Make it shorter', history: [activity('update_post'), activity('edit_email')] }, ALL)).toEqual(['marketing', 'social']);
     expect(fullGroups(TOOL_GROUPS, { route: 'dashboard', message: 'Make it shorter', history: [activity('edit_email')] })[0]).toBe('marketing');
+    // a message about Manus or Viktor brings in their group first, then the page's
+    expect(fullGroups(TOOL_GROUPS, { route: 'dashboard', message: 'Write a message to Viktor asking for a darker version' }, ALL)).toEqual(['agents', 'social']);
+    expect(fullGroups(TOOL_GROUPS, { route: 'dashboard', message: 'What is Manus building for me?' })[0]).toBe('agents');
+    expect(fullGroups(TOOL_GROUPS, { route: 'dashboard', message: 'Ask viktor to build my SEO page' }, ALL)).toEqual(['agents', 'marketing', 'social']);
     // a refused list_tools (a bad group) brings in nothing
     expect(fullGroups(TOOL_GROUPS, { route: 'dashboard', results: [result('list_tools', { ok: false, status: 'failed' })] })).toEqual(['social']);
   });
@@ -71,6 +76,8 @@ describe('the tool list', () => {
     for (const g of TOOL_GROUP_NAMES) expect(size(g), `${g} has outgrown GROUP_BUDGET: split it into two groups`).toBeLessThanOrEqual(GROUP_BUDGET);
     const cases = [
       { route: 'studio' as const },
+      { route: 'calendar' as const, message: 'Post my Friday post with Manus' },
+      { route: 'marketing-seo' as const, message: 'Rebuild my page with Viktor' },
       { route: 'store' as const },
       { route: 'marketing-email' as const, message: 'What is due on my calendar?' },
       { route: 'dashboard' as const, message: 'Write my lead magnet' },
@@ -124,7 +131,7 @@ describe('list_tools', () => {
     expect(registry.get('list_tools')?.class).toBe('R');
     expect(TOOL_GROUPS.core.some((t) => t.name === 'list_tools')).toBe(true);
     expect(await runTool('list_tools', { group: 'Marketing' })).toMatchObject({ ok: true, result: { group: 'marketing' } });
-    expect(await runTool('list_tools', { group: 'everything' })).toMatchObject({ ok: false, error: expect.stringContaining('group must be one of: social, studio, marketing, brand') });
+    expect(await runTool('list_tools', { group: 'everything' })).toMatchObject({ ok: false, error: expect.stringContaining('group must be one of: social, studio, marketing, brand, agents') });
   });
 });
 

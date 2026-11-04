@@ -19,9 +19,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { PROVIDERS, adapterId, defaultEffort, effortIds, effortLabel, estimateCost, fnById, kindDef } from './registry.mjs';
 import { USER_KEY_PROVIDERS } from '../userKeys.mjs';
-import { ProviderError } from './http.mjs';
+import { ProviderError, sniffImage } from './http.mjs';
 import { RESEARCH_TIMEOUT_MS, canResearch, researchMeta, searchPrice } from './research.mjs';
 import { MARKET_RESEARCH_SCHEMA, parseMarketResearch } from './marketResearch.mjs';
+import { buildRound, cleanManusText, contentText, parseAt, readManus } from '../agents/manusRead.mjs';
+import { MAX_HTML_BYTES, checkHtmlBytes, extractHtml, isHtmlFile } from '../agents/html.mjs';
+import { fnFromTitle } from '../agents/templates.mjs';
 import anthropic from './adapters/anthropic.mjs';
 import google from './adapters/google.mjs';
 import manus from './adapters/manus.mjs';
@@ -42,6 +45,14 @@ export const COMPARE_PROMPT =
 const MAX_JOBS = 40;
 const JOB_TTL = 6 * 3600_000;
 const TASK_TTL = 7 * 24 * 3600_000;
+/** Builds and chats with Manus are followed for longer: the owner may come back to a chat or a build after weeks. */
+const AGENT_TASK_TTL = 30 * 24 * 3600_000;
+const AGENT_FNS = new Set(['build', 'agentchat']);
+/** How long the app keeps a Manus task it started (only those can be read or continued). */
+export const ttlOf = (t) => (AGENT_FNS.has(t?.fn) ? AGENT_TASK_TTL : TASK_TTL);
+const expired = (t, now = Date.now()) => now - (t?.at ?? 0) > ttlOf(t);
+/** The largest file brought back from a Manus task for the app (an image, say). */
+const MAX_FILE_BYTES = 15_000_000;
 
 export function asProviderError(e, label = '') {
   if (e instanceof ProviderError) return e;
@@ -72,8 +83,8 @@ const RESEARCH_FALLBACK = 0.15;
 /** The label a user's own key is shown with. */
 export const ownLabel = (id) => `${PROVIDERS[id].label} (your key)`;
 
-/** Manus tasks the app may start, by function. */
-const MANUS_FUNCTIONS = new Set(['photos', 'facebook', 'marketResearch']);
+/** Manus tasks the app may start, by function (build and agentchat: Building pages & assets, Chat with Manus). */
+const MANUS_FUNCTIONS = new Set(['photos', 'facebook', 'marketResearch', 'build', 'agentchat']);
 
 export class AIRouter {
   /**
@@ -95,7 +106,7 @@ export class AIRouter {
     this.manusTasks = new Map();
     try {
       const raw = tasksFile ? JSON.parse(fs.readFileSync(tasksFile, 'utf8')) : null;
-      for (const [id, t] of Object.entries(raw?.tasks ?? {})) if (Date.now() - (t.at ?? 0) < TASK_TTL) this.manusTasks.set(id, t);
+      for (const [id, t] of Object.entries(raw?.tasks ?? {})) if (!expired(t)) this.manusTasks.set(id, t);
     } catch {
       /* none yet */
     }
@@ -108,7 +119,7 @@ export class AIRouter {
       const got = await this.remote.get('ai-tasks');
       // (a list saved under another secret can't be read: it's replaced at the next save; tasks expire anyway)
       for (const [id, t] of Object.entries(got?.unreadable ? {} : (got?.value?.tasks ?? {}))) {
-        if (!this.manusTasks.has(id) && Date.now() - (t?.at ?? 0) < TASK_TTL) this.manusTasks.set(id, t);
+        if (!this.manusTasks.has(id) && !expired(t)) this.manusTasks.set(id, t);
       }
     } catch (e) {
       console.warn(`Manus tasks: ${e.message}`);
@@ -131,7 +142,7 @@ export class AIRouter {
       this.taskChain = this.taskChain.then(async () => {
         try {
           await this.loadTasksRemote();
-          for (const [id, t] of this.manusTasks) if (Date.now() - (t.at ?? 0) > TASK_TTL) this.manusTasks.delete(id);
+          for (const [id, t] of this.manusTasks) if (expired(t)) this.manusTasks.delete(id);
           await this.remote.put('ai-tasks', { tasks: Object.fromEntries(this.manusTasks) });
         } catch (e) {
           console.warn(`Manus tasks: ${e.message}`);
@@ -554,23 +565,31 @@ export class AIRouter {
   /**
    * Deep research (fn 'marketResearch'): the prompt is the server's fixed template (marketResearch.mjs);
    * it never asks questions, stays in the task list, fills in the research schema and runs without the
-   * account's connected apps.
+   * account's connected apps. Builds and chats (fn 'build', 'agentchat'): the prompt is the server's fixed
+   * template too (server/agents/templates.mjs); they run without the account's connected apps, a build never
+   * asks questions, and `profile` (a Manus agent profile) picks the agent for this task, else the key's
+   * agent profile in Settings → AI. `ref` ends the task's title, so /verify can find it after an uncertain start.
    */
-  async manusCreate({ fn, prompt, title, interactive, hidden, image, files = [], signal, owner = null, apiKey = null }) {
+  async manusCreate({ fn, prompt, title, interactive, hidden, image, files = [], signal, owner = null, apiKey = null, profile: wanted = '', ref = '' }) {
     const kind = fnById[fn]?.kind;
     if (!MANUS_FUNCTIONS.has(fn)) throw new ProviderError('BAD_REQUEST', 'Unknown Manus task.', { status: 400 });
     if (!apiKey && !this.store.powers('manus', fn)) throw new ProviderError('NO_PROVIDER', `Your Manus key isn’t set to power ${fnById[fn].label}. Turn it on in Settings → AI.`, { status: 409 });
-    const profile = this.store.settings('manus').effort[kind];
+    const agentTask = AGENT_FNS.has(fn);
+    const profile = agentTask && wanted && effortIds('manus', 'agent', 'manus').includes(wanted) ? wanted : this.store.settings('manus').effort[kind];
     const research = fn === 'marketResearch';
-    const task = research ? { interactive: false, hidden: false, image: null, files: [], structuredOutputSchema: MARKET_RESEARCH_SCHEMA, clearConnectors: true } : { interactive, hidden, image, files };
+    const task = research
+      ? { interactive: false, hidden: false, image: null, files: [], structuredOutputSchema: MARKET_RESEARCH_SCHEMA, clearConnectors: true }
+      : agentTask
+        ? { interactive: fn === 'agentchat', hidden: false, image: null, files, clearConnectors: true }
+        : { interactive, hidden, image, files };
     const t0 = Date.now();
     try {
       const out = await this.adapters.manus.create(this.manusCtx(apiKey), { prompt, title, profile, ...task, signal });
       const meta = this.describe('manus', kind, fn, { model: 'manus', effort: profile, ms: Date.now() - t0 });
       if (apiKey) meta.providerLabel = 'Manus (your key)';
       const usageId = this.usage.add({ ok: true, pending: true, provider: 'manus', fn, kind, model: 'manus', effort: profile, ms: meta.ms, taskId: out.task_id, userId: owner, ...(apiKey ? { ownKey: true } : {}) });
-      this.manusTasks.set(out.task_id, { usageId, fn, kind, profile, at: Date.now(), owner, ...(apiKey ? { ownKey: true } : {}) });
-      for (const [id, t] of this.manusTasks) if (Date.now() - (t.at ?? 0) > TASK_TTL) this.manusTasks.delete(id);
+      this.manusTasks.set(out.task_id, { usageId, fn, kind, profile, at: Date.now(), owner, ...(apiKey ? { ownKey: true } : {}), ...(ref ? { ref } : {}) });
+      for (const [id, t] of this.manusTasks) if (expired(t)) this.manusTasks.delete(id);
       this.saveTasks();
       return { ...out, meta };
     } catch (e) {
@@ -591,15 +610,141 @@ export class AIRouter {
     return out;
   }
 
-  async manusContinue({ taskId, prompt, signal, apiKey = null }) {
+  /** A follow-up to a task this app started (one-shot write); `files` from /attach go with it as file parts. */
+  async manusContinue({ taskId, prompt, files = [], signal, apiKey = null }) {
     this.knownTask(taskId);
-    return this.adapters.manus.send(this.manusCtx(apiKey), { taskId, prompt, signal });
+    return this.adapters.manus.send(this.manusCtx(apiKey), { taskId, prompt, files, signal });
   }
 
   /** Upload a file to the Manus account behind this key (the owner's, or a user's own). */
   async manusUpload({ filename, size, body, signal, apiKey = null }) {
-    if (!apiKey && !this.store.powers('manus', 'facebook') && !this.store.powers('manus', 'photos')) throw new ProviderError('NO_PROVIDER', 'Your Manus key is off, or isn’t set to power Social posting. Turn it on in Settings → AI.', { status: 409 });
+    if (!apiKey && !['facebook', 'photos', 'build', 'agentchat'].some((fn) => this.store.powers('manus', fn))) throw new ProviderError('NO_PROVIDER', 'Your Manus key is off, or isn’t set to power Social posting or Building pages & assets. Turn it on in Settings → AI.', { status: 409 });
     return this.adapters.manus.uploadFile(this.manusCtx(apiKey), { filename, size, body, signal });
+  }
+
+  /**
+   * A task the app started, as the browser sees it (server/agents/manusRead.mjs): its state, waiting
+   * question, credits and replies (newer than `after`), and for a build, its latest round.
+   */
+  async manusMessages({ taskId, after = '', signal, apiKey = null }) {
+    const t = this.knownTask(taskId);
+    let got;
+    try {
+      got = await this.adapters.manus.messages(this.manusCtx(apiKey), { taskId, limit: 50, signal });
+    } catch (e) {
+      const err = asProviderError(e, 'Manus');
+      // task.detail answers 404 for a deleted task
+      if (err.code !== 'NOT_FOUND' || err.httpStatus !== 404) throw err;
+      got = { task: { status: 'deleted' }, events: [], hasMore: false };
+    }
+    const out = readManus(got.task, got.events, { taskId, after, hasMore: got.hasMore, build: t.fn === 'build' });
+    const done = out.status === 'stopped' || out.status === 'error' || out.status === 'deleted';
+    this.usage.update(t.usageId, { credits: out.credits || null, pending: !done || out.background, ok: out.status !== 'error' });
+    return out;
+  }
+
+  /** The events a file or page is looked up in (fresh signed addresses every time: never one from the browser). */
+  async manusEvents(taskId, signal, apiKey) {
+    try {
+      return await this.adapters.manus.messages(this.manusCtx(apiKey), { taskId, limit: 100, signal });
+    } catch (e) {
+      const err = asProviderError(e, 'Manus');
+      if (err.code === 'NOT_FOUND' && err.httpStatus === 404) throw new ProviderError('GONE', 'The Manus task was deleted.', { status: 410 });
+      throw err;
+    }
+  }
+
+  /**
+   * A page Manus made, as text: `at` ("<event id>:<index>" or "<event id>:code"), or the latest round's page.
+   * Never served as a page by the app's server (the routes answer JSON).
+   */
+  async manusHtml({ taskId, at = '', signal, apiKey = null }) {
+    this.knownTask(taskId);
+    const { task, events } = await this.manusEvents(taskId, signal, apiKey);
+    let where = at;
+    if (!where) {
+      const round = buildRound(task, events);
+      if (!round.result) {
+        if (round.state === 'failed' && /instead of a file/.test(round.reason)) throw new ProviderError('WEBDEV', round.reason, { status: 409 });
+        throw new ProviderError('NO_FILE', round.reason || 'Manus hasn’t sent a page yet.', { status: 404 });
+      }
+      where = round.result.at;
+    }
+    const pos = parseAt(where);
+    if (!pos) throw new ProviderError('BAD_REQUEST', 'Which file? Send its event and index.', { status: 400 });
+    const ev = events.find((e) => e?.id === pos.eventId && e.type === 'assistant_message');
+    if (!ev) throw new ProviderError('NO_FILE', 'That message isn’t in the task any more.', { status: 404 });
+    if (pos.part === 'code') {
+      const page = extractHtml({ text: cleanManusText(contentText(ev.assistant_message?.content)).text, slack: false });
+      if (!page) throw new ProviderError('NO_FILE', 'That message has no page in it.', { status: 404 });
+      if (page.tooBig) throw new ProviderError('TOO_BIG', 'The page is over 1.5 MB, too big to use. Ask for a smaller page.', { status: 413 });
+      if (!page.complete) throw new ProviderError('PARTIAL', 'Manus sent only part of the page.', { status: 422 });
+      return { html: page.html, filename: 'page.html', bytes: page.bytes, source: 'code', at: where };
+    }
+    const a = (Array.isArray(ev.assistant_message?.attachments) ? ev.assistant_message.attachments : [])[pos.part];
+    if (!a) throw new ProviderError('NO_FILE', 'That file isn’t in the task any more.', { status: 404 });
+    const filename = String(a.filename || 'page.html').slice(0, 160);
+    if (!isHtmlFile(a)) throw Object.assign(new ProviderError('NOT_HTML', `Manus sent ${filename}, not one HTML file.`, { status: 415 }), { filename });
+    if (typeof a.url !== 'string' || !/^https?:\/\//i.test(a.url)) throw new ProviderError('NO_FILE', 'Manus didn’t give an address for that file.', { status: 404 });
+    let got;
+    try {
+      got = await this.adapters.manus.fetchFile(this.manusCtx(apiKey), a.url, { maxBytes: MAX_HTML_BYTES, signal });
+    } catch (e) {
+      const err = asProviderError(e, 'Manus');
+      if (err.code === 'TOO_BIG') throw new ProviderError('TOO_BIG', 'The page is over 1.5 MB, too big to use. Ask for a smaller page.', { status: 413 });
+      throw err;
+    }
+    const checked = checkHtmlBytes(got.bytes);
+    if (!checked.ok) {
+      if (checked.reason === 'too_big') throw new ProviderError('TOO_BIG', 'The page is over 1.5 MB, too big to use. Ask for a smaller page.', { status: 413 });
+      throw Object.assign(new ProviderError('NOT_HTML', `${filename} isn’t a web page the app can read.`, { status: 415 }), { filename });
+    }
+    return { html: checked.html, filename, bytes: got.bytes.length, source: 'file', at: where };
+  }
+
+  /** A file Manus attached ("<event id>:<index>"): its bytes, name and sniffed type (at most 15 MB). */
+  async manusFile({ taskId, at, signal, apiKey = null }) {
+    this.knownTask(taskId);
+    const pos = parseAt(at);
+    if (!pos || pos.part === 'code') throw new ProviderError('BAD_REQUEST', 'Which file? Send its event and index.', { status: 400 });
+    const { events } = await this.manusEvents(taskId, signal, apiKey);
+    const ev = events.find((e) => e?.id === pos.eventId && e.type === 'assistant_message');
+    const a = (Array.isArray(ev?.assistant_message?.attachments) ? ev.assistant_message.attachments : [])[pos.part];
+    if (!a || typeof a.url !== 'string' || !/^https?:\/\//i.test(a.url)) throw new ProviderError('NO_FILE', 'That file isn’t in the task any more.', { status: 404 });
+    let got;
+    try {
+      got = await this.adapters.manus.fetchFile(this.manusCtx(apiKey), a.url, { maxBytes: MAX_FILE_BYTES, signal });
+    } catch (e) {
+      const err = asProviderError(e, 'Manus');
+      if (err.code === 'TOO_BIG') throw new ProviderError('TOO_BIG', 'That file is over 15 MB: open it in Manus instead.', { status: 413 });
+      throw err;
+    }
+    return { bytes: got.bytes, filename: String(a.filename || 'file').slice(0, 160), type: sniffImage(got.bytes) ?? 'application/octet-stream' };
+  }
+
+  /** Stop a task the app started (free; the next message resumes it). */
+  async manusStop({ taskId, signal, apiKey = null }) {
+    this.knownTask(taskId);
+    return this.adapters.manus.stop(this.manusCtx(apiKey), { taskId, signal });
+  }
+
+  /**
+   * After an uncertain start: the task whose title ends with "· <ref>", created since `sentAt` (less 2 minutes).
+   * A task found that this server doesn't know is registered (its function from its title), so it can be
+   * followed. Returns { task_id, task_url } or null. A read: never starts anything.
+   */
+  async manusVerify({ ref, sentAt, owner = null, apiKey = null, signal }) {
+    const list = await this.adapters.manus.list(this.manusCtx(apiKey), { limit: 20, signal });
+    const since = Math.floor((Number(sentAt) || 0) / 1000) - 120;
+    const hit = list.find((t) => t.title.endsWith(`· ${ref}`) && (!t.created_at || t.created_at >= since));
+    if (!hit) return null;
+    if (!this.manusTasks.has(hit.id)) {
+      const fn = fnFromTitle(hit.title) ?? 'build';
+      const usageId = this.usage.add({ ok: true, pending: true, provider: 'manus', fn, kind: 'agent', model: 'manus', effort: '', ms: 0, taskId: hit.id, userId: owner, ...(apiKey ? { ownKey: true } : {}) });
+      this.manusTasks.set(hit.id, { usageId, fn, kind: 'agent', profile: this.store.settings('manus').effort.agent, at: Date.now(), owner, ref, ...(apiKey ? { ownKey: true } : {}) });
+      this.saveTasks();
+    }
+    return { task_id: hit.id, task_url: hit.task_url };
   }
 
   /** A free check of a user's own Manus key (lists one task). */

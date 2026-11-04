@@ -66,8 +66,12 @@ export const excludedTools: AnyTool[] = [
   defineTool({
     name: 'manus_task',
     class: 'X',
-    summary: 'Give Manus any other task, or a task written in the chat.',
+    summary: 'Start a Manus task yourself, with your own words (to write a message the owner asked for, use draft_agent_message: they confirm it first).',
     args: why,
-    refusal: { text: 'Manus works in a browser signed in to your accounts, so it only gets the app’s own fixed instructions: posting a post or sharing it in Facebook groups (from a post’s Manus buttons), making a photo, or learning your brand voice. It never gets a task written in the chat. Your posts are on the calendar.', route: 'calendar' },
+    refusal: {
+      text: __ARTIFACT_BUILD__
+        ? 'Manus only gets the app’s own fixed instructions: posting, groups, photos and brand voice, from their buttons. I don’t start Manus tasks myself. Talking to Manus and Build with Manus work in the self-hosted app.'
+        : 'Manus only gets the app’s fixed instructions or your own words: posting, groups, photos and brand voice from their buttons, pages and assets from Build with Manus, and anything else from you, with the chat’s To: Manus switch. I don’t start Manus tasks myself, but I can draft a message for you to send.',
+    },
   }),
 ];

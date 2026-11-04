@@ -16,6 +16,9 @@ import { ManusGroupsHost, useGroupShareWatcher } from '@/components/posts/ManusG
 import { ListingWindowHost } from '@/components/studio/ListingWindowHost';
 import { useVoiceReadWatcher } from '@/components/brand/SocialVoice';
 import { useStrategyManusWatcher } from '@/ai/strategyManus';
+import { useAgentBuildWatcher } from '@/ai/agents/builds';
+import { AgentBuildHost } from '@/components/agents/AgentBuildWindow';
+import { HtmlPreviewHost } from '@/components/agents/HtmlPreview';
 import { Assistant } from '@/components/assistant/Assistant';
 import { useAssistant } from '@/store/assistant';
 import { StoreOverlays } from '@/pages/store/StoreOverlays';
@@ -66,6 +69,7 @@ export default function App() {
   useGroupShareWatcher();
   useVoiceReadWatcher();
   useStrategyManusWatcher();
+  useAgentBuildWatcher();
 
   useEffect(() => {
     initRuntime();
@@ -166,6 +170,8 @@ export default function App() {
       <CommandPalette />
       <PostEditorHost />
       <ManusPostHost />
+      <AgentBuildHost />
+      <HtmlPreviewHost />
       <ManusGroupsHost />
       <MarkPostedHost />
       <ListingWindowHost />

@@ -1,14 +1,17 @@
 // A stand-in for every AI provider's API, for tests and offline QA. Each provider lives under its
 // own path prefix (http://127.0.0.1:PORT/<id>/…). Reasoning tokens grow with the effort sent, so a
-// test can see effort travel from the settings to the request and back into the usage.
+// test can see effort travel from the settings to the request and back into the usage. Slack and a
+// scripted Viktor live in mock-slack.mjs (the "slack" base URL).
 //
 //   node server/test/mock-providers.mjs [port]   → prints the AI_PROVIDER_BASE_URLS value to use
 
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { QA_SOURCES, STRATEGY_SCRIPTED } from './strategy-qa.mjs';
+import { createMockSlack } from './mock-slack.mjs';
 
 export { QA_SOURCES, STRATEGY_QA, STRATEGY_SCRIPTED } from './strategy-qa.mjs';
+export { SLACK_QA, mockViktorReply, viktorPage } from './mock-slack.mjs';
 
 // 1×1 PNG, and the start of an MP4 (an `ftyp` box) padded to look like a file
 export const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
@@ -59,6 +62,9 @@ function assistantPromptIn(value, depth = 0) {
  *   "calendar"   → step 1: navigate to the calendar + list_posts {due: true}; step 2: done, with the due count
  *   "qa-confirm" → make_video for a post (P-media: a confirm card first); then done, saying what happened
  *   "qa-delete"  → delete_posts for one real post from the prompt (D: a danger confirm first); then done
+ *   "Write a message to Viktor|Manus …" or "qa-draft" → draft_agent_message (a card with the exact text; sent only
+ *                  on the owner's yes); then done, saying what happened
+ *   "qa-open-build" → open_agent_build for the SEO page with Viktor (Manus when the message names Manus)
  *   anything else → a short done answer
  * Until a tool exists, the app answers it with an unknown-tool error, and the next step says so.
  */
@@ -81,6 +87,15 @@ export function mockAssistantReply(prompt) {
   if (/qa-confirm/i.test(message)) {
     if (!results.length) return step('QA: asking to make a short video for one of your posts.', [{ tool: 'make_video', args: { postId, seconds: 5 } }]);
     return step(`QA: make_video → ${outcome('make_video')}.`);
+  }
+  const agent = /\bmanus\b/i.test(message) ? 'manus' : 'viktor';
+  if (/qa-draft/i.test(message) || /\b(write|draft) a message (to|for) (viktor|manus)\b/i.test(message)) {
+    if (!results.length) return step('', [{ tool: 'draft_agent_message', args: { to: agent, text: /darker/i.test(message) ? 'Please make a darker version of the page you sent.' : 'QA: a message the assistant drafted.' } }]);
+    return step(`QA: draft_agent_message → ${outcome('draft_agent_message')}.`);
+  }
+  if (/qa-open-build/i.test(message)) {
+    if (!results.length) return step('', [{ tool: 'open_agent_build', args: { target: 'seo', agent } }]);
+    return step(`QA: open_agent_build → ${outcome('open_agent_build')}.`);
   }
   if (/qa-delete/i.test(message)) {
     if (!postId) return step('QA: there’s no post in this project to delete. Create one first.');
@@ -186,6 +201,171 @@ export function mockVoiceReply(prompt) {
   ].join('\n');
 }
 
+// ───────────── Manus builds and chats (server/agents/templates.mjs writes their messages) ─────────────
+// A build or chat task keeps a log of events (ids e1, e2…, timestamps in ms, delivery_kind), in rounds: the
+// task's first message, then each task.sendMessage. A round's answer arrives on the first read of the
+// messages after 2 status checks (task.detail), and the task says "stopped" only once it has arrived. Markers
+// in the owner's words pick the answer:
+//   build: qa-manus-script (page-script.html: a script, onclick= and a form that doesn't fit), qa-manus-zip
+//          (page.zip only), qa-manus-webdev (a Manus website link, no file), qa-manus-noresult (the file, no
+//          RESULT line), qa-manus-fail (RESULT: FAILED), qa-manus-nofile ("Done."), qa-manus-big (page-big.html,
+//          1.6 MB), qa-manus-ask (a question first; the answer's round builds), qa-manus-approve (waits for an
+//          approval in Manus), qa-manus-bg (background jobs for one check); anything else: page.html.
+//   chat:  qa-manus-page (+ page.html), qa-manus-image (+ photo.png), qa-manus-question (a question with Blue /
+//          Green), qa-manus-progress (an opening and a progress message, then the result); else "I read it".
+
+export const MANUS_BUILD_TASK = /^Build ONE web page as ONE self-contained HTML file/;
+export const MANUS_CHAT_TASK = /^I'm writing to you from my Yourlocalbusiness app/;
+
+/** The page the stand-in Manus builds: it shows {{img-1}} and "Fish &amp; Chips". */
+export const MANUS_QA_PAGE = [
+  '<!DOCTYPE html>',
+  '<html lang="en">',
+  '<head><meta charset="utf-8"><title>QA page from Manus</title><meta name="description" content="A page the stand-in Manus made for QA.">',
+  '<style>body{font-family:sans-serif;margin:0;padding:24px;color:#1d2a22}h1{color:#156343}</style></head>',
+  '<body>',
+  '<header><h1>Fish &amp; Chips</h1><p>Fresh every day.</p><a href="#contact">Get in touch</a></header>',
+  '<img src="{{img-1}}" alt="The shop front">',
+  '<section><h2>What we serve</h2><p>Hand-cut chips and fish from the morning boats.</p></section>',
+  '</body>',
+  '</html>',
+].join('\n');
+
+/** The QA files the stand-in Manus attaches, served at /files/<name>. */
+export function manusQaFile(name) {
+  if (name === 'page.html') return { type: 'text/html; charset=utf-8', bytes: Buffer.from(MANUS_QA_PAGE, 'utf8') };
+  if (name === 'page-script.html') {
+    const page = MANUS_QA_PAGE.replace('</body>', '<button onclick="alert(1)">Hi</button>\n<form action="https://collect.example/card" method="post"><input name="card"><button>Pay</button></form>\n<script>document.title = "changed";</script>\n</body>');
+    return { type: 'text/html; charset=utf-8', bytes: Buffer.from(page, 'utf8') };
+  }
+  if (name === 'page-big.html') return { type: 'text/html; charset=utf-8', bytes: Buffer.from(MANUS_QA_PAGE.replace('</body>', `<p>${'x'.repeat(1_600_000)}</p></body>`), 'utf8') };
+  if (name === 'page.zip') return { type: 'application/zip', bytes: Buffer.from('PK\u0003\u0004qa-zip-file', 'binary') };
+  return null;
+}
+
+/** The owner's words in a chat message: the MESSAGE block of the first one; a later one without its website and images lines. */
+function manusChatWords(text) {
+  const block = /<<<MESSAGE\n([\s\S]*?)\nMESSAGE>>>/.exec(text);
+  if (block) return block[1];
+  return String(text).replace(/\n\n\(Images attached:[^\n]*\)$/, '').replace(/\n\nMy website: [^\n]*$/, '');
+}
+
+function agentEvent(t, type, payload) {
+  t.seq += 1;
+  const e = { id: `e${t.seq}`, type, timestamp: t.createdMs + t.seq * 10, [type]: payload };
+  t.events.push(e);
+  return e;
+}
+
+/** A new build or chat task from task.create, or null when the prompt is neither. */
+export function newAgentTask(prompt, files, { title, profile, now = Date.now() }) {
+  const kind = MANUS_BUILD_TASK.test(prompt) ? 'build' : MANUS_CHAT_TASK.test(prompt) ? 'chat' : null;
+  if (!kind) return null;
+  const t = { kind, title, profile, createdMs: now, seq: 0, events: [], credits: 0, rounds: 0, asked: false, stopped: false };
+  agentEvent(t, 'user_message', { content: prompt, attachments: files.map((f) => ({ type: 'file', filename: f.filename, file_uid: f.file_id })) });
+  agentEvent(t, 'status_update', { agent_status: 'running' });
+  t.round = { text: prompt, polls: 0, state: 'running', bg: false };
+  return t;
+}
+
+/** task.sendMessage: the owner's message starts a new round (a stopped task resumes). */
+export function agentFollowUp(t, content) {
+  const parts = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : [];
+  const text = parts.filter((p) => p?.type === 'text').map((p) => p.text).join('\n');
+  const files = parts.filter((p) => p?.type === 'file');
+  agentEvent(t, 'user_message', { content: text, attachments: files.map((f) => ({ type: 'file', filename: f.filename, file_uid: f.file_id })) });
+  agentEvent(t, 'status_update', { agent_status: 'running' });
+  t.stopped = false;
+  t.round = { text, polls: 0, state: 'running', bg: false };
+}
+
+/** The round's answer (on the read after 2 checks). */
+function finishRound(t, base) {
+  const r = t.round;
+  const has = (m) => r.text.includes(m);
+  const credit = () => {
+    t.credits += t.profile === 'lite' ? 12 : 41;
+  };
+  const file = (name, type = 'text/html') => ({ type: 'file', filename: name, content_type: type, path: `/home/ubuntu/${name}`, url: `${base}/files/${name}`, file_uid: `f-${name}`, version_uid: `v${t.rounds + 1}` });
+  const wait = (type, description) => {
+    agentEvent(t, 'status_update', { agent_status: 'waiting', status_detail: { waiting_for_event_type: type, waiting_description: description } });
+    r.state = 'waiting';
+    credit();
+  };
+  if (t.kind === 'build') {
+    if (has('qa-manus-ask') && !t.asked) {
+      t.asked = true;
+      agentEvent(t, 'assistant_message', { content: 'Which colors do you prefer?', attachments: [], delivery_kind: 'result' });
+      return wait('messageAskUser', 'Which colors do you prefer?');
+    }
+    if (has('qa-manus-approve')) return wait('needConnectMyBrowser', 'Please sign in to your website in my browser so I can look at it.');
+    let content = 'Here is your page.\nRESULT: BUILT | page.html';
+    let attachments = [file('page.html')];
+    if (has('qa-manus-zip')) {
+      content = 'Here is your site.\nRESULT: BUILT | page.zip';
+      attachments = [file('page.zip', 'application/zip')];
+    } else if (has('qa-manus-webdev')) {
+      content = 'I built it: [your site](manus-webdev://v1)';
+      attachments = [];
+    } else if (has('qa-manus-fail')) {
+      content = "RESULT: FAILED | QA: couldn't open the website.";
+      attachments = [];
+    } else if (has('qa-manus-nofile')) {
+      content = 'Done.';
+      attachments = [];
+    } else if (has('qa-manus-noresult')) content = 'Here is your page.';
+    else if (has('qa-manus-script')) attachments = [file('page-script.html')];
+    else if (has('qa-manus-big')) attachments = [file('page-big.html')];
+    agentEvent(t, 'assistant_message', { content, attachments, delivery_kind: 'result' });
+  } else {
+    if (has('qa-manus-question')) {
+      agentEvent(t, 'assistant_message', { content: 'Which color should the button be?', attachments: [], question_expectation: { options: ['Blue', 'Green'], selection_mode: 'single', response_method: 'send_message' }, delivery_kind: 'result' });
+      return wait('messageAskUser', 'Which color should the button be?');
+    }
+    if (has('qa-manus-progress')) {
+      agentEvent(t, 'assistant_message', { content: 'On it: reading your message.', attachments: [], delivery_kind: 'opening' });
+      agentEvent(t, 'assistant_message', { content: 'Working on it…', attachments: [], delivery_kind: 'progress' });
+    }
+    const attachments = [];
+    if (has('qa-manus-page')) attachments.push(file('page.html'));
+    if (has('qa-manus-image')) attachments.push({ type: 'image', filename: 'photo.png', content_type: 'image/png', url: `${base}/files/photo.png` });
+    agentEvent(t, 'assistant_message', { content: `QA Manus: I read your message (${manusChatWords(r.text).length} characters).`, attachments, delivery_kind: 'result' });
+  }
+  agentEvent(t, 'status_update', { agent_status: 'stopped' });
+  r.state = 'done';
+  r.bg = has('qa-manus-bg');
+  t.rounds += 1;
+  credit();
+}
+
+/** task.detail for a build or chat task: running until the round's answer arrived. */
+export function agentDetail(t, id) {
+  const r = t.round;
+  if (r.state === 'running' && !t.stopped) r.polls += 1;
+  let background = false;
+  if (r.state === 'done' && r.bg && !r.bgShown) {
+    r.bgShown = true;
+    background = true;
+  }
+  const status = t.stopped ? 'stopped' : r.state === 'running' ? 'running' : r.state === 'waiting' ? 'waiting' : 'stopped';
+  return { id, status, title: t.title || 'Mock task', task_url: `https://manus.im/app/${id}`, has_running_background_jobs: background, ...(t.credits ? { credit_usage: t.credits } : {}) };
+}
+
+/** task.listMessages for a build or chat task, newest first. */
+export function agentMessages(t, base, limit = 50) {
+  const r = t.round;
+  if (r.state === 'running' && !t.stopped && r.polls >= 2) finishRound(t, base);
+  const list = [...t.events].reverse();
+  return { messages: list.slice(0, limit), has_more: list.length > limit };
+}
+
+/** task.stop. */
+export function agentStop(t) {
+  t.stopped = true;
+  if (t.round.state === 'running') t.round.state = 'stopped';
+  agentEvent(t, 'status_update', { agent_status: 'stopped' });
+}
+
 export function createMockProviders({ keys = {} } = {}) {
   const calls = [];
   const behavior = {}; // provider id → 'fail500' | 'policy' | 'auth' | 'rate' | undefined
@@ -194,6 +374,7 @@ export function createMockProviders({ keys = {} } = {}) {
   const manusFiles = new Map(); // file id → { filename, status, size } (Manus file.upload)
   let server;
   let base = '';
+  const slack = createMockSlack({ base: () => base });
 
   const json = (res, status, body) => {
     res.writeHead(status, { 'content-type': 'application/json' });
@@ -342,7 +523,8 @@ export function createMockProviders({ keys = {} } = {}) {
     try {
       body = raw ? JSON.parse(raw) : null;
     } catch {
-      body = raw;
+      // Slack's form-encoded calls are kept as fields
+      body = /application\/x-www-form-urlencoded/.test(String(req.headers['content-type'] ?? '')) ? Object.fromEntries(new URLSearchParams(raw)) : raw;
     }
     const auth = req.headers.authorization || req.headers['x-api-key'] || req.headers['x-goog-api-key'] || req.headers['x-manus-api-key'] || '';
     calls.push({ provider: id, method: req.method, path: p, query: Object.fromEntries(url.searchParams), headers: req.headers, body });
@@ -351,6 +533,10 @@ export function createMockProviders({ keys = {} } = {}) {
     if (id === '__calls') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(calls.slice(0, -1).map((c) => ({ provider: c.provider, path: c.path, body: c.body && typeof c.body === 'object' ? { ...c.body, messages: undefined, input: undefined } : null }))));
+    }
+    // Slack (its API answers 200 { ok: false } for a bad token, so it's routed before the key check below)
+    if (id === 'slack' || id === 'slack-upload' || id === 'slack-files' || id === 'evil') {
+      if (slack.handle(req, res, id, rest, raw, rawBuf)) return;
     }
     // Manus's presigned upload address (S3): no key, the exact length is required
     if (id === 'manus-upload' && req.method === 'PUT') {
@@ -365,6 +551,11 @@ export function createMockProviders({ keys = {} } = {}) {
     }
     // downloads (no key needed, like signed links)
     if (id === 'files') {
+      const qa = manusQaFile(rest[rest.length - 1] ?? '');
+      if (qa) {
+        res.writeHead(200, { 'content-type': qa.type, 'content-length': qa.bytes.length });
+        return res.end(req.method === 'HEAD' ? undefined : qa.bytes);
+      }
       if (p.endsWith('.mp4')) {
         res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': MP4.length });
         return res.end(MP4);
@@ -502,12 +693,15 @@ export function createMockProviders({ keys = {} } = {}) {
       const content = body?.message?.content;
       const prompt = typeof content === 'string' ? content : ((content ?? []).find?.((c) => c?.type === 'text')?.text ?? '');
       // deep research (Strategy): the schema it fills in at the end, and whether it runs without connected apps
-      manusTasks.set(taskId, { polls: 0, profile: body?.agent_profile, followUps: [], prompt, research: RESEARCH_TASK.test(prompt), schema: body?.structured_output_schema ?? null, clearConnectors: body?.clear_connectors === true });
+      const fileParts = Array.isArray(content) ? content.filter((c) => c?.type === 'file' && c.file_id) : [];
+      const agent = newAgentTask(prompt, fileParts, { title: body?.title || '', profile: body?.agent_profile });
+      manusTasks.set(taskId, { polls: 0, profile: body?.agent_profile, followUps: [], prompt, research: RESEARCH_TASK.test(prompt), schema: body?.structured_output_schema ?? null, clearConnectors: body?.clear_connectors === true, interactive: body?.interactive_mode === true, title: body?.title || 'Mock task', createdAt: Math.floor(Date.now() / 1000), ...(agent ? { agent } : {}) });
       return json(res, 200, { ok: true, request_id: 'r1', task_id: taskId, task_title: body?.title || 'Mock task', task_url: `https://manus.im/app/${taskId}` });
     }
     if (id === 'manus' && p === '/v2/task.detail') {
       const t = manusTasks.get(url.searchParams.get('task_id'));
       if (!t) return json(res, 404, { ok: false, error: { code: 'not_found', message: 'task not found' } });
+      if (t.agent) return json(res, 200, { ok: true, task: agentDetail(t.agent, url.searchParams.get('task_id')) });
       t.polls += 1;
       const done = t.polls >= (signInFirst(t) ? 4 : 2);
       if (signInFirst(t) && t.polls < 3) return json(res, 200, { ok: true, task: { id: url.searchParams.get('task_id'), status: 'waiting', title: 'Mock task', task_url: `https://manus.im/app/${url.searchParams.get('task_id')}` } });
@@ -516,6 +710,7 @@ export function createMockProviders({ keys = {} } = {}) {
     }
     if (id === 'manus' && p === '/v2/task.listMessages') {
       const t = manusTasks.get(url.searchParams.get('task_id'));
+      if (t?.agent) return json(res, 200, { ok: true, ...agentMessages(t.agent, base, Number(url.searchParams.get('limit')) || 50) });
       const voice = voiceProfile(t?.prompt) !== null;
       const done = t && t.polls >= (signInFirst(t) ? 4 : 2);
       if (t && signInFirst(t) && t.polls < 3) {
@@ -556,8 +751,25 @@ export function createMockProviders({ keys = {} } = {}) {
           : [{ id: 'e1', type: 'user_message', user_message: { content: 'make it' } }],
       });
     }
-    if (id === 'manus' && p === '/v2/task.sendMessage') return json(res, 200, { ok: true });
-    if (id === 'manus' && p === '/v2/task.list') return json(res, 200, { ok: true, data: [] });
+    if (id === 'manus' && p === '/v2/task.sendMessage') {
+      const t = manusTasks.get(body?.task_id);
+      if (!t) return json(res, 404, { ok: false, error: { code: 'not_found', message: 'task not found' } });
+      t.followUps.push(body?.message?.content);
+      if (t.agent) agentFollowUp(t.agent, body?.message?.content);
+      return json(res, 200, { ok: true });
+    }
+    if (id === 'manus' && p === '/v2/task.stop') {
+      const t = manusTasks.get(body?.task_id);
+      if (!t) return json(res, 404, { ok: false, error: { code: 'not_found', message: 'task not found' } });
+      if (t.agent) agentStop(t.agent);
+      else t.polls = Math.max(t.polls, 99);
+      return json(res, 200, { ok: true });
+    }
+    if (id === 'manus' && p === '/v2/task.list') {
+      const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 20));
+      const data = [...manusTasks.entries()].reverse().slice(0, limit).map(([tid, t]) => ({ id: tid, title: t.title, created_at: t.createdAt, task_url: `https://manus.im/app/${tid}`, status: t.agent ? agentDetail({ ...t.agent, round: { ...t.agent.round } }, tid).status : 'stopped' }));
+      return json(res, 200, { ok: true, data, has_more: false });
+    }
 
     return json(res, 404, { error: { message: `mock: no route for ${id} ${p}` } });
   }
@@ -578,9 +790,13 @@ export function createMockProviders({ keys = {} } = {}) {
         meta: `${base}/meta`,
         openrouter: `${base}/openrouter`,
         manus: `${base}/manus`,
+        slack: `${base}/slack/api`,
       };
     },
     manusFiles,
+    manusTasks,
+    /** The Slack stand-in (its conversations, files and reset()). */
+    slack,
     last(provider, path) {
       return [...calls].reverse().find((c) => c.provider === provider && (!path || c.path === path));
     },
@@ -602,6 +818,9 @@ export function createMockProviders({ keys = {} } = {}) {
       return this;
     },
     close() {
+      // answers that never came (qa-slack-timeout) would keep the server open
+      slack.close();
+      server.closeAllConnections?.();
       return new Promise((r) => server.close(r));
     },
   };

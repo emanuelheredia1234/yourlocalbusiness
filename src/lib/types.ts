@@ -1,6 +1,7 @@
 import type { EbookExtras } from '@/ai/local/ebook';
 import type { WorkbookSpec } from '@/ai/workbook';
 import type { StrategyState } from './strategyTypes';
+import type { AgentBuild, AgentId } from './agentTypes';
 // ───────────────────────── Domain model: the Project Context Store ─────────────────────────
 
 export type Track = 'product' | 'business';
@@ -298,8 +299,39 @@ export interface CodeAsset {
   images?: PromptImage[];
   /** where it's published, if it is */
   published?: Published;
+  /** made by Manus or Viktor (Build with…, or a page from the assistant chat): its code is theirs, untrusted */
+  source?: AgentSource;
   createdAt: number;
   updatedAt: number;
+}
+
+/** Where a page from Manus or Viktor came from: the agent, its task or thread, the build. */
+export interface AgentSource {
+  via: AgentId;
+  /** the Manus task, or the Slack permalink */
+  url?: string;
+  buildId?: string;
+  at: number;
+}
+
+/**
+ * The SEO page as Manus or Viktor made it ("HTML mode"): published under the same address, with the app's own
+ * <head> (metadata, canonical, share image, JSON-LD from the owner's facts) and no scripts. The app's structured
+ * page stays beside it: `active` says which one is shown, scored and published.
+ */
+export interface SeoHtml {
+  /** the body, cleaned; images as {{img-N}} in the page's own number space; its form's action is {{lead-action}} */
+  html: string;
+  css: string;
+  images: PromptImage[];
+  source: AgentSource;
+  title: string;
+  description: string;
+  notes: string[];
+  /** true: this page is the one shown, scored and published; false: kept, and the app's builder is used */
+  active: boolean;
+  hasLeadForm: boolean;
+  importedAt: number;
 }
 
 export type BookingType = 'book' | 'inquire' | 'buy';
@@ -1025,6 +1057,8 @@ export interface Project {
     seoPublished?: Published;
     /** the SEO page's type; absent means 'landing' (what every page was before) */
     pageType?: PageType;
+    /** the SEO page as Manus or Viktor made it (HTML mode), when the owner used one of theirs */
+    seoHtml?: SeoHtml;
     /** where each network's link goes on new posts; absent: the built-in default for that network */
     linkPlacement?: Partial<Record<PostPlatform, LinkPlacement>>;
     campaign: CampaignConfig;
@@ -1036,4 +1070,6 @@ export interface Project {
   };
   /** the Strategy tab (src/lib/strategy.ts reads it through readStrategy) */
   strategy?: StrategyState;
+  /** pages and assets Manus or Viktor build (Build with…), newest first: kept so a reload or another device picks them up */
+  agentBuilds?: AgentBuild[];
 }

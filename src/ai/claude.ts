@@ -4,6 +4,8 @@ import { readFileAsDataURL, uid } from '@/lib/utils';
 import { FORMATS } from './knowledge';
 import { isAIMeta, type AIMeta } from './meta';
 import { authHeaders } from '@/lib/cloud/auth';
+import { safeStorage } from '@/lib/storage';
+import type { AgentReady, AgentsHealth } from '@/lib/agentTypes';
 
 // ───────────────────────── Transport ─────────────────────────
 
@@ -132,13 +134,32 @@ export async function callServerAI(fn: string, prompt: string, opts: ServerCallO
 
 export const serverBase = (serverUrl: string) => (serverUrl || '').replace(/\/+$/, '');
 
-/** A request to your server, saying who's signed in (when accounts are on). */
+/** Where Settings → AI keeps the ADMIN_TOKEN this browser was given (without accounts, it makes this browser the owner). */
+export const ADMIN_TOKEN_KEY = 'ylb-admin-token';
+
+/** A request to your server, saying who's signed in (when accounts are on), and the admin token when this browser has one. */
 export async function serverFetch(serverUrl: string, path: string, init: RequestInit = {}): Promise<Response> {
   const target = `${serverBase(serverUrl)}${path}`;
   const headers = new Headers(init.headers);
   // the sign-in token (with accounts on, the server refuses AI without it)
   for (const [key, value] of Object.entries(await authHeaders(target))) headers.set(key, value);
+  // without accounts, the owner's routes (Viktor in Slack) need the ADMIN_TOKEN entered in Settings → AI
+  const admin = safeStorage.getItem(ADMIN_TOKEN_KEY);
+  if (admin && !headers.has('x-admin-token')) headers.set('x-admin-token', admin);
   return fetch(target, { ...init, headers });
+}
+
+/** /api/health's `agents`, when it has the expected shape (an older server sends none). */
+function agentsHealth(v: unknown): AgentsHealth | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const a = v as Partial<AgentsHealth>;
+  const ready = (r: unknown): r is AgentReady => !!r && typeof r === 'object' && typeof (r as AgentReady).ready === 'boolean' && typeof (r as AgentReady).reason === 'string';
+  if (!a.manus || !ready(a.manus.build) || !ready(a.manus.chat) || !ready(a.viktor)) return undefined;
+  const where = a.viktor.where === 'dm' || a.viktor.where === 'channel' ? a.viktor.where : '';
+  return {
+    manus: { build: { ready: a.manus.build.ready, reason: a.manus.build.reason }, chat: { ready: a.manus.chat.ready, reason: a.manus.chat.reason }, own: a.manus.own === true, profile: typeof a.manus.profile === 'string' ? a.manus.profile : '' },
+    viktor: { ready: a.viktor.ready, reason: a.viktor.reason, where, place: typeof a.viktor.place === 'string' ? a.viktor.place : '' },
+  };
 }
 
 /** Ask the server which keys are ready and what powers each function. */
@@ -150,7 +171,7 @@ export async function pingServer(serverUrl: string): Promise<boolean> {
     const ai = body?.ai;
     useRuntime.getState().set({
       server: ok ? 'ok' : 'down',
-      ai: ok && ai ? { reachable: true, ready: ai.ready === true, providers: Array.isArray(ai.providers) ? ai.providers : [], routing: ai.routing && typeof ai.routing === 'object' ? ai.routing : {}, posting: ai.posting && typeof ai.posting === 'object' ? ai.posting : undefined } : { ...NO_AI_SERVER, reachable: ok },
+      ai: ok && ai ? { reachable: true, ready: ai.ready === true, providers: Array.isArray(ai.providers) ? ai.providers : [], routing: ai.routing && typeof ai.routing === 'object' ? ai.routing : {}, posting: ai.posting && typeof ai.posting === 'object' ? ai.posting : undefined, agents: agentsHealth(ai.agents) } : { ...NO_AI_SERVER, reachable: ok },
     });
     return ok;
   } catch {

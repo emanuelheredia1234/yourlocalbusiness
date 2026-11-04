@@ -1,13 +1,16 @@
 // The assistant's round chat button at the bottom right, and its panel (loaded the first time it opens).
 // A chat turn isn't tied to the panel: closing it leaves a turn running (the button shows it), and
-// the panel shows where it is when opened again.
+// the panel shows where it is when opened again. Chats waiting for Manus or Viktor are checked from here
+// (every 45 seconds, panel open or not), and a reply that came while the panel was closed puts a dot on
+// the button.
 
 import { Component, Suspense, lazy, useEffect, useRef, type ReactNode } from 'react';
 import { MessageCircle, RotateCcw, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/cloud/auth';
 import { useStore } from '@/store/useStore';
-import { loadChats, useAssistant } from '@/store/assistant';
+import { loadChats, useAssistant, type ChatMessage } from '@/store/assistant';
+import { useAgentChatWatcher } from '@/ai/agents/chat';
 import { Spinner } from '../ui/primitives';
 
 const AssistantPanel = lazy(() => import('./AssistantPanel'));
@@ -46,9 +49,23 @@ class AssistantBoundary extends Component<{ children: ReactNode }, { error: Erro
 /** Set when the panel closes, so the button that replaces it takes the focus back. */
 const refocus = { next: false };
 
+const NO_MESSAGES: ChatMessage[] = [];
+
+/** Who the newest reply in a chat is from ('Viktor', 'Manus'), for the unread dot. */
+function newestReplyFrom(list: ChatMessage[]): string {
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].role === 'external' && (list[i].from === 'manus' || list[i].from === 'viktor')) return list[i].via === 'manus' ? 'Manus' : 'Viktor';
+  return '';
+}
+
 function Launcher({ onOpen }: { onOpen: () => void }) {
   const running = useAssistant((s) => s.running);
   const waiting = useAssistant((s) => !!s.runProjectId && (s.threads[s.runProjectId] ?? []).some((m) => m.card?.state === 'pending'));
+  const pid = useStore((s) => s.activeProjectId);
+  // replies from Manus or Viktor that came while the chat was closed
+  const unread = useAssistant((s) => (pid ? s.unread?.[pid] ?? 0 : 0));
+  const thread = useAssistant((s) => (pid ? s.threads[pid] ?? NO_MESSAGES : NO_MESSAGES));
+  const from = unread ? newestReplyFrom(thread) : '';
+  const news = unread ? `New reply from ${from || 'Manus or Viktor'}` : '';
   const ref = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!refocus.next) return;
@@ -60,10 +77,10 @@ function Launcher({ onOpen }: { onOpen: () => void }) {
       ref={ref}
       type="button"
       onClick={onOpen}
-      aria-label="Open assistant"
+      aria-label={news ? `Open assistant: ${news.toLowerCase()}` : 'Open assistant'}
       aria-controls="assistant-panel"
       aria-expanded={false}
-      title={waiting ? 'The assistant is waiting for you to confirm' : running ? 'The assistant is working' : 'Ask the assistant'}
+      title={waiting ? 'The assistant is waiting for you to confirm' : running ? 'The assistant is working' : news || 'Ask the assistant'}
       className="fixed z-[45] flex h-14 w-14 items-center justify-center rounded-full bg-primary text-on-primary shadow-pop transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30 motion-reduce:transition-none motion-reduce:hover:scale-100"
       style={{ right: 'max(16px, env(safe-area-inset-right, 0px))', bottom: 'max(16px, env(safe-area-inset-bottom, 0px))' }}
     >
@@ -74,6 +91,7 @@ function Launcher({ onOpen }: { onOpen: () => void }) {
       {(running || waiting) && (
         <span aria-hidden="true" className={cn('absolute -bottom-0.5 -left-0.5 h-3.5 w-3.5 rounded-full border-2 border-surface', waiting ? 'bg-warn' : 'animate-pulse-dot bg-good')} />
       )}
+      {!!news && <span aria-hidden="true" data-unread="" className="absolute -left-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-surface bg-info" />}
     </button>
   );
 }
@@ -106,6 +124,8 @@ export function Assistant() {
   const hasProject = useStore((s) => !!s.activeProjectId);
   // this account's chats on this device
   useEffect(() => loadChats(userId), [userId]);
+  // replies from Manus and Viktor, panel open or not (self-hosted only)
+  useAgentChatWatcher();
   if (!hasProject) return null;
   return (
     <AssistantBoundary>

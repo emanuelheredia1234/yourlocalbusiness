@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Code2, Copy, CopyPlus, Download, FileCode2, Globe, Info, RefreshCw, Sparkles, Trash2, Undo2, Wand2, Columns2, Eye, SquareCode } from 'lucide-react';
-import type { CodeAsset, CodeKind, MediaRef, Project, PromptImage, Published } from '@/lib/types';
+import { Check, Code2, Copy, CopyPlus, Download, ExternalLink, FileCode2, Globe, Info, RefreshCw, Sparkles, Trash2, Undo2, Wand2, Columns2, Eye, SquareCode } from 'lucide-react';
+import type { AgentSource, CodeAsset, CodeKind, MediaRef, Project, PromptImage, Published } from '@/lib/types';
 import { cn, fmtRelative, listJoin, slugify, uid } from '@/lib/utils';
 import { CODE_KINDS, codeKindLabel, detectKind, matchKind, removeImages } from '@/ai/local/code';
 import { codeEditTask, codeTask } from '@/ai/tasks';
@@ -14,6 +14,8 @@ import { toast, useUI } from '@/store/ui';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { PromptImages, usePasteImages } from '@/components/ai/PromptImages';
 import { PublishPanel } from '@/components/publish/PublishPanel';
+import { AgentButtons } from '@/components/agents/AgentButtons';
+import { AgentBuildList } from '@/components/agents/AgentBuildList';
 import { CodeEditor, LivePreview, type CodeLang } from '@/components/code/CodeEditor';
 import { AutoTextarea, Empty, Segmented, Spinner, confirmAction } from '@/components/ui/primitives';
 import { Icon } from '@/components/ui/Icon';
@@ -44,6 +46,8 @@ import {
 } from '@/lib/codeAssets';
 
 type Lang = CodeLang | 'script';
+
+const AGENT_LABEL: Record<AgentSource['via'], string> = { manus: 'Manus', viktor: 'Viktor' };
 
 const SHORT_LABEL: Record<CodeKind, string> = {
   calculator: 'Calculator',
@@ -239,6 +243,14 @@ export function CodeTab({ project }: { project: Project }) {
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     el?.focus({ preventScroll: true });
   }, [publishOpen, active?.id]);
+
+  // an asset asked for from elsewhere (a page from Manus or Viktor was just added): it opens, once
+  const assetReq = useUI((s) => s.assetRequest);
+  useEffect(() => {
+    if (!assetReq) return;
+    useUI.setState({ assetRequest: null });
+    if (assets().some((a) => a.id === assetReq.assetId)) setActiveId(assetReq.assetId);
+  }, [assetReq]);
 
   // a description that names another kind ("a booking widget…") suggests it; the owner picks
   const named = useMemo(() => matchKind(draft.prompt), [draft.prompt]);
@@ -457,9 +469,12 @@ export function CodeTab({ project }: { project: Project }) {
           <GenerateButton running={gen.running} onClick={generate} className="mt-3 w-full">
             Generate {codeKindLabel(kind).toLowerCase()}
           </GenerateButton>
+          <AgentButtons target="asset" className="mt-2" />
           <AIThinking running={gen.running} stage={gen.stage} chars={gen.chars} onStop={gen.stop} compact className="mt-3" />
           {gen.error && <p className="mt-2 text-xs text-bad">{gen.error}</p>}
         </section>
+
+        <AgentBuildList target="asset" />
 
         <section className="panel overflow-hidden" aria-label="Your assets">
           <h3 className="border-b border-line px-4 py-2.5 text-[13px] font-semibold">Your assets ({list.length})</h3>
@@ -477,6 +492,7 @@ export function CodeTab({ project }: { project: Project }) {
                         <span className="block truncate text-[13px] font-semibold">{a.name}</span>
                         <span className="block text-[11px] text-muted">
                           {codeKindLabel(a.kind)} · {fmtRelative(a.updatedAt)}
+                          {a.source && <span className="ml-1 font-semibold text-ink-2">· {AGENT_LABEL[a.source.via]}</span>}
                           {a.outdated && <span className="ml-1 font-semibold text-warn">· Outdated: regenerate</span>}
                         </span>
                       </span>
@@ -509,6 +525,7 @@ export function CodeTab({ project }: { project: Project }) {
               <FileCode2 size={16} className="shrink-0 text-primary" />
               <input className="min-w-[220px] flex-1 rounded bg-transparent px-1 py-1 text-[14px] font-semibold outline-none hover:bg-surface-2 focus:bg-surface-2" value={active.name} onChange={(e) => patchAsset(active.id, { name: e.target.value })} aria-label="Asset name" />
               <span className="badge bg-surface-2 text-ink-2">{codeKindLabel(active.kind)}</span>
+              {active.source && <AgentSourceBadge source={active.source} />}
               <div className="flex flex-wrap items-center gap-1.5">
                 <CopyPageButton make={() => pageWithImages(active)} />
                 <button className="btn btn-secondary btn-sm" onClick={() => void exportHtml(active)}>
@@ -704,6 +721,21 @@ export function CodeTab({ project }: { project: Project }) {
         )}
       </section>
     </div>
+  );
+}
+
+/** Who made an asset from a page of theirs (Manus or Viktor), with a link to the task or thread. Their code is theirs: check it before you publish. */
+function AgentSourceBadge({ source }: { source: AgentSource }) {
+  const label = AGENT_LABEL[source.via];
+  const title = `Made by ${label}${source.url ? `: open the ${source.via === 'manus' ? 'Manus task' : 'Slack thread'}` : ''}`;
+  return source.url ? (
+    <a href={source.url} target="_blank" rel="noopener noreferrer" className="badge bg-accent-soft text-on-accent hover:underline" title={title}>
+      {label} <ExternalLink size={11} aria-hidden="true" />
+    </a>
+  ) : (
+    <span className="badge bg-accent-soft text-on-accent" title={title}>
+      {label}
+    </span>
   );
 }
 

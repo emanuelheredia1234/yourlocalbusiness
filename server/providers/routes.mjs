@@ -13,7 +13,12 @@
 //   GET  /api/ai/video/:id                 → job;  GET /api/ai/video/:id/content → video bytes
 //   POST /api/ai/manus/create | /output | /continue   (Manus tasks, same shapes as the Zapier actions;
 //                                          fn "marketResearch" sends { research: { niche, category, kind, typeLabel,
-//                                          city, region } } and the server writes the task itself)
+//                                          city, region } } and the server writes the task itself; so do fn "build"
+//                                          { build, files?, profile?, ref, dryRun? } and fn "agentchat" { chat, … },
+//                                          from server/agents/templates.mjs, and their follow-ups on /continue)
+//   POST /api/ai/manus/messages | /html | /file | /stop | /verify   (a build's or chat's replies, its page as JSON,
+//                                          a file's bytes, stop, and finding a task after an uncertain start)
+//   /api/ai/slack…                         Viktor through the owner's Slack app (server/slack/routes.mjs)
 //   GET  /api/ai/usage                     → recent requests and totals                                      (admin)
 //   GET  /api/ai/limits | PUT { requestsPerDay?, usdPerDay? } → daily limits for signed-in users             (admin)
 //   GET  /api/ai/usage/users?days=7        → each user's daily counters                                     (admin)
@@ -42,6 +47,8 @@ import { ASPECTS } from './adapters/images.mjs';
 import { ProviderError, parseDataUrl } from './http.mjs';
 import { researchFromBody, researchInfo } from './research.mjs';
 import { marketResearchFacts, marketResearchPrompt, marketResearchTitle } from './marketResearch.mjs';
+import { MANUS_FILE_RE, MANUS_LIMIT, MANUS_MISSING_FILE, REF_RE, TemplateError, cleanAnswer, cleanBuild, cleanChat, cleanEdit, manusAnswer, manusBuild, manusChatLater, manusChatOpening, manusEdit } from '../agents/templates.mjs';
+import { createSlackRoutes } from '../slack/routes.mjs';
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
@@ -103,7 +110,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * auth (server/auth.mjs): with accounts on, AI needs a signed-in user, the owner (ADMIN_EMAILS) manages
  * the keys, and each video job or Manus task can only be read by whoever started it.
  */
-export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS, userKeys = NO_USER_KEYS, appState = LOCAL_ONLY, limits = createLimits() }) {
+export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS, userKeys = NO_USER_KEYS, appState = LOCAL_ONLY, limits = createLimits(), slackOptions = {} }) {
   // appState (server/appState.mjs): with Supabase's secret key, the owner's keys and settings, the
   // Manus task list and the usage log are also kept in Supabase, so they survive restarts
   const store = new AIStore(path.join(dataDir, 'ai-providers.json'), { env, legacyFile: path.join(dataDir, 'image-providers.json'), remote: appState });
@@ -146,7 +153,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
   const fail = (req, res, e) => {
     const err = asProviderError(e);
     if (err.code === 'UPSTREAM' && !err.provider) console.error(e);
-    return reply(req, res, err.status || 502, { error: err.message, code: err.code, ...(err.attempts ? { attempts: err.attempts } : {}) });
+    return reply(req, res, err.status || 502, { error: err.message, code: err.code, ...(err.attempts ? { attempts: err.attempts } : {}), ...(typeof err.filename === 'string' ? { filename: err.filename } : {}) });
   };
 
   /**
@@ -188,7 +195,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       return false;
     }
     if (!signedIn(req, res, who)) return false;
-    if (rateLimited(`${bucket}:${who ? `user:${who.id}` : req.socket.remoteAddress || 'unknown'}`)) {
+    // reads (a build card or the chat checking for replies every few seconds) get three times the limit
+    if (rateLimited(`${bucket}:${who ? `user:${who.id}` : req.socket.remoteAddress || 'unknown'}`, bucket.endsWith('-read') ? 3 : 1)) {
       reply(req, res, 429, { error: 'Too many requests. Try again in a minute.', code: 'RATE_LIMIT' });
       return false;
     }
@@ -366,6 +374,9 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     return c.signal;
   };
 
+  // Viktor through the owner's own Slack app (server/slack/routes.mjs): the same owner rule and helpers
+  const slack = createSlackRoutes({ store, appState, fetch, baseUrls, dataDir, reply, body, admin, isAdmin, generationAllowed, abortOnClose, mayUse, rateLimited, corsHeaders, ...slackOptions });
+
   /** Where the daily counters are kept, and why Supabase isn't keeping them (if it isn't). */
   const countersWhere = () => ({ storage: limits.storage, storageProblem: limits.problem ?? null });
 
@@ -382,6 +393,85 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     }
   }
 
+  // ───────────── building and chatting with Manus (server/agents/templates.mjs writes every message) ─────────────
+
+  /** Files already handed to Manus with /api/ai/manus/attach (the owner's images): at most 8; null when one isn't valid. */
+  const agentFiles = (list) => {
+    const files = Array.isArray(list) ? list : [];
+    if (files.length > 8) return null;
+    const out = [];
+    for (const f of files) {
+      if (!f || typeof f.file_id !== 'string' || !MANUS_FILE_RE.test(f.file_id)) return null;
+      out.push({ file_id: f.file_id, filename: typeof f.filename === 'string' && f.filename ? f.filename.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').slice(0, 120) : 'image.jpg' });
+    }
+    return out;
+  };
+
+  /** A failure starting or continuing a build or chat: which setup is missing, or Manus's "too long". */
+  const agentFail = (req, res, e, prompt) => {
+    const err = asProviderError(e, 'Manus');
+    if (err.code === 'NO_PROVIDER') return reply(req, res, 409, { error: err.message, code: 'NO_PROVIDER', reason: store.ready('manus') ? 'not_ticked' : 'no_key' });
+    if (err.code === 'BAD_REQUEST' && /too long|too many tokens|token limit|exceed|length/i.test(err.message)) return reply(req, res, 413, { error: 'Your message is too long for Manus.', code: 'TOO_LONG', chars: prompt.length, limit: MANUS_LIMIT });
+    return fail(req, res, err);
+  };
+
+  /**
+   * A build or chat task (one-shot: never retried). The browser sends structured fields only; the server
+   * writes the task from its fixed template. dryRun: the exact message, without starting anything.
+   */
+  async function agentCreate(req, res, who, b) {
+    const ref = typeof b.ref === 'string' ? b.ref : '';
+    if (!REF_RE.test(ref)) return reply(req, res, 400, { error: 'The request needs its Ref.', code: 'BAD_REQUEST' });
+    // the owner's Manus, or a signed-in user's own Manus key (their account and credits)
+    const ownKey = auth.enabled && !isAdmin(req, who) ? await userKeys.get(who?.id, 'manus') : null;
+    if (auth.enabled && !isAdmin(req, who) && !ownKey) return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings → AI.', code: 'OWN_KEY_NEEDED' });
+    const tpl = b.fn === 'build' ? manusBuild(cleanBuild(b.build, 'manus'), ref) : manusChatOpening(cleanChat(b.chat, 'manus'), ref);
+    if (b.dryRun === true) return reply(req, res, 200, { preview: { text: tpl.prompt, chars: tpl.prompt.length, limit: MANUS_LIMIT } });
+    const files = agentFiles(b.files);
+    if (!files) return reply(req, res, 400, { error: 'An image wasn’t sent to Manus first (at most 8 go with one message).', code: 'BAD_REQUEST' });
+    if (!ownKey && !store.key('manus') && store.remote.enabled) await freshEnough(store.refresh({ force: true }), 2500);
+    let created;
+    try {
+      created = await withFreshKeys(() => router.manusCreate({ fn: b.fn, prompt: tpl.prompt, title: tpl.title, files, owner: who?.id ?? null, apiKey: ownKey, profile: typeof b.profile === 'string' ? b.profile : '', ref }));
+    } catch (e) {
+      return agentFail(req, res, e, tpl.prompt);
+    }
+    // the task list must reach Supabase before the app asks another copy of the server about it
+    await router.tasksSaved();
+    return reply(req, res, 200, created);
+  }
+
+  /**
+   * A follow-up (one-shot): a build takes a change, an answer or the fixed "send page.html" follow-up (never
+   * a free prompt); a chat takes the owner's words as typed, with the website and images lines when added.
+   */
+  async function agentContinue(req, res, b, task, taskId, apiKey) {
+    let prompt;
+    let files = [];
+    if (task.fn === 'build') {
+      if (typeof b.prompt === 'string' && b.prompt.trim()) return reply(req, res, 400, { error: 'A build takes changes, answers or the fixed follow-up, not a free message.', code: 'BAD_REQUEST' });
+      if (b.edit && typeof b.edit === 'object') {
+        prompt = manusEdit(cleanEdit(b.edit, 'manus'));
+        files = agentFiles(b.files);
+      } else if (typeof b.answer === 'string') {
+        prompt = manusAnswer(cleanAnswer(b.answer, 'manus'));
+        files = agentFiles(b.files);
+      } else if (b.followup === 'missing_file') prompt = MANUS_MISSING_FILE;
+      else return reply(req, res, 400, { error: 'Send a change, an answer or the follow-up.', code: 'BAD_REQUEST' });
+    } else {
+      if (!b.chat || typeof b.chat !== 'object') return reply(req, res, 400, { error: 'Write a message first.', code: 'BAD_REQUEST' });
+      prompt = manusChatLater(cleanChat(b.chat, 'manus'));
+      files = agentFiles(b.files);
+    }
+    if (!files) return reply(req, res, 400, { error: 'An image wasn’t sent to Manus first (at most 8 go with one message).', code: 'BAD_REQUEST' });
+    try {
+      await router.manusContinue({ apiKey, taskId, prompt, files });
+    } catch (e) {
+      return agentFail(req, res, e, prompt);
+    }
+    return reply(req, res, 200, { ok: true });
+  }
+
   async function handle(req, res, url) {
     const p = url.pathname;
     const m = req.method;
@@ -391,6 +481,9 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     // keys or settings changed through another copy of the server: looked up every few seconds,
     // in the background (AI requests never wait for Supabase)
     const looked = store.refresh();
+
+    // Viktor through the owner's Slack app (owner only)
+    if (slack.match(url)) return slack.handle(req, res, url, who);
 
     if (p === '/api/ai/providers' && m === 'GET') {
       if (!signedIn(req, res, who)) return;
@@ -635,7 +728,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           const raw = typeof b.apiKey === 'string' ? b.apiKey : typeof b.key === 'string' ? b.key : '';
           const key = raw.trim();
           if (key.length < 16 || key.length > 400 || /\s/.test(key)) {
-            return reply(req, res, 400, { error: id === 'manus' ? 'That doesn’t look like a Manus API key. Copy it again from Manus → Settings → API Integration.' : `That doesn’t look like a ${label} API key. Copy it again from ${PROVIDERS[id].keyUrl}.`, code: 'BAD_REQUEST' });
+            return reply(req, res, 400, { error: id === 'manus' ? 'That doesn’t look like a Manus API key. Copy it again from Manus → Settings → Developers (API keys).' : `That doesn’t look like a ${label} API key. Copy it again from ${PROVIDERS[id].keyUrl}.`, code: 'BAD_REQUEST' });
           }
           if (!userKeys.enabled) return reply(req, res, 501, { error: 'Your own keys need the SUPABASE_SECRET_KEY Secret on the server. Ask the app’s owner to add it.', code: 'NOT_CONFIGURED' });
           try {
@@ -703,13 +796,17 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       }
     }
 
-    const mt = /^\/api\/ai\/manus\/(create|output|continue)$/.exec(p);
+    const mt = /^\/api\/ai\/manus\/(create|output|continue|messages|html|file|stop|verify)$/.exec(p);
     if (mt && m === 'POST') {
-      if (!generationAllowed(req, res, mt[1] === 'output' ? 'manus-read' : 'manus', who)) return;
+      const action = mt[1];
+      const reading = action === 'output' || action === 'messages' || action === 'html' || action === 'file' || action === 'verify';
+      if (!generationAllowed(req, res, reading ? 'manus-read' : 'manus', who)) return;
       const b = await body(req, res);
       if (!b) return;
       try {
-        if (mt[1] === 'create') {
+        // building a page or an asset, and chatting: the server writes the message (server/agents/templates.mjs)
+        if (action === 'create' && (b.fn === 'build' || b.fn === 'agentchat')) return await agentCreate(req, res, who, b);
+        if (action === 'create') {
           // deep research (Strategy): the server writes the task from the owner's facts; a client prompt is ignored
           const research = b.fn === 'marketResearch';
           const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
@@ -742,6 +839,18 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           await router.tasksSaved();
           return reply(req, res, 200, created);
         }
+        if (action === 'verify') {
+          // after an uncertain start: a read of the account's newest tasks, never a new task
+          const ref = typeof b.ref === 'string' ? b.ref : '';
+          const sentAt = Number(b.sent_at);
+          if (!REF_RE.test(ref) || !Number.isFinite(sentAt) || sentAt <= 0) return reply(req, res, 400, { error: 'Send the request’s Ref and when it was sent.', code: 'BAD_REQUEST' });
+          const ownKey = auth.enabled && !isAdmin(req, who) ? await userKeys.get(who?.id, 'manus') : null;
+          if (auth.enabled && !isAdmin(req, who) && !ownKey) return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings → AI.', code: 'OWN_KEY_NEEDED' });
+          if (!ownKey && !store.key('manus') && store.remote.enabled) await freshEnough(store.refresh({ force: true }), 2500);
+          const hit = await router.manusVerify({ ref, sentAt, owner: who?.id ?? null, apiKey: ownKey, signal: abortOnClose(res) });
+          if (hit) await router.tasksSaved();
+          return reply(req, res, 200, hit ? { found: true, ...hit } : { found: false });
+        }
         const taskId = typeof b.task_id === 'string' ? b.task_id.trim() : '';
         if (!/^[A-Za-z0-9_-]{6,64}$/.test(taskId)) return reply(req, res, 400, { error: 'Missing task id', code: 'BAD_REQUEST' });
         // started by another copy of the server, or before a restart
@@ -753,17 +862,41 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         if (task?.ownKey && !apiKey) return reply(req, res, 409, { error: 'The Manus key this task was started with was removed. Add it again in Settings → AI.', code: 'OWN_KEY_NEEDED' });
         // the owner's task, on a copy of the server that hasn't picked up the owner's Manus key yet
         if (!apiKey && !store.key('manus') && store.remote.enabled) await freshEnough(store.refresh({ force: true }), 2500);
-        if (mt[1] === 'output') {
+        if (action === 'output') {
           const out = await router.manusOutput({ apiKey, taskId, maxImages: Math.max(0, Math.min(8, Number(b.max_images) || 0)), maxImageBytes: Math.max(1, Math.min(30_000_000, Number(b.max_image_bytes) || 15_000_000)), signal: abortOnClose(res) });
           return reply(req, res, 200, out);
+        }
+        if (action === 'messages') return reply(req, res, 200, await router.manusMessages({ apiKey, taskId, after: typeof b.after === 'string' ? b.after.slice(0, 128) : '', signal: abortOnClose(res) }));
+        // Manus's page as JSON: never answered as a page from the app's own address
+        if (action === 'html') return reply(req, res, 200, await router.manusHtml({ apiKey, taskId, at: typeof b.at === 'string' ? b.at : '', signal: abortOnClose(res) }));
+        if (action === 'file') {
+          const out = await router.manusFile({ apiKey, taskId, at: typeof b.at === 'string' ? b.at : '', signal: abortOnClose(res) });
+          res.writeHead(200, {
+            'content-type': 'application/octet-stream',
+            'content-length': out.bytes.length,
+            'content-disposition': `attachment; filename="${String(out.filename).replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 100) || 'file'}"`,
+            'x-content-type-options': 'nosniff',
+            'cache-control': 'no-store',
+            'x-file-type': out.type,
+            'access-control-expose-headers': 'x-file-type',
+            ...corsHeaders(req),
+          });
+          return res.end(out.bytes);
         }
         if (auth.enabled && !isAdmin(req, who) && !task?.ownKey) {
           return reply(req, res, 403, { error: 'Manus runs in the app owner’s account, so only the owner can use it.', code: 'OWNER_ONLY' });
         }
+        if (action === 'stop') {
+          await router.manusStop({ apiKey, taskId, signal: abortOnClose(res) });
+          return reply(req, res, 200, { ok: true });
+        }
+        // a build's or a chat's follow-up: the server writes it, and the task's own function decides which kinds it takes
+        if (task?.fn === 'build' || task?.fn === 'agentchat') return await agentContinue(req, res, b, task, taskId, apiKey);
         const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
         if (!prompt) return reply(req, res, 400, { error: 'Missing message', code: 'BAD_REQUEST' });
         return reply(req, res, 200, await router.manusContinue({ apiKey, taskId, prompt: prompt.slice(0, 20_000) }));
       } catch (e) {
+        if (e instanceof TemplateError) return reply(req, res, e.status, { error: e.message, code: e.code, ...e.data });
         return fail(req, res, e);
       }
     }
@@ -785,7 +918,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       const [settings] = await Promise.all([store.loadRemote(), usage.loadRemote(), router.loadTasksRemote()]);
       return settings;
     },
-    health: async (who = null) => {
+    health: async (who = null, req = null) => {
       if (auth.signInRequired && !who) return { ready: false, providers: [], routing: {}, signedIn: false };
       // the app routes on this answer: a key just saved through another copy must show up here
       await freshEnough(store.refresh({ every: 1000 }), 2000);
@@ -818,12 +951,25 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           : !store.powers('manus', 'facebook')
             ? { ready: false, reason: 'not_ticked' }
             : { ready: true, reason: 'ok' };
+      // building pages and assets, and chatting, with Manus and with Viktor (through the owner's Slack)
+      const agentReady = (fn) => {
+        const reason = hide.size ? (ownManus ? 'ok' : 'own_key_needed') : !store.ready('manus') ? 'no_key' : !store.powers('manus', fn) ? 'not_ticked' : 'ok';
+        return { ready: reason === 'ok', reason };
+      };
+      // Viktor posts as the owner in Slack: only for the owner (same origin; with accounts, the owner's account)
+      const viktorAllowed = !!req && sameOrigin(req, allowedOrigin) && isAdmin(req, who);
+      base.agents = {
+        manus: { build: agentReady('build'), chat: agentReady('agentchat'), own: !!ownManus, profile: store.settings('manus').effort.agent },
+        viktor: viktorAllowed ? slack.health() : { ready: false, reason: 'owner_only', where: '', place: '' },
+      };
       if (ownManus) {
         const s = store.settings('manus');
         base.ready = true;
         base.providers.push({ id: 'manus', label: 'Manus (your key)', ready: true, own: true, models: s.models, effort: Object.fromEntries(Object.entries(s.effort).map(([kind, value]) => [kind, { id: value, label: value ? effortLabel('manus', kind, value) : 'Set by the model' }])), research: null });
         base.routing.facebook = ['manus'];
         base.routing.marketResearch = ['manus'];
+        base.routing.build = ['manus'];
+        base.routing.agentchat = ['manus'];
         base.routing.photos = [...(base.routing.photos ?? []), 'manus'];
       }
       // a signed-in user's own keys: functions of a kind they can do run on them (and only them)

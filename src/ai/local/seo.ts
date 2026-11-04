@@ -1011,11 +1011,74 @@ function countPhrase(text: string, phrase: string): number {
   return (text.match(re) || []).length;
 }
 
+/** What the SEO score reads from a page: its text, headings, first paragraph, FAQ, the button at the top and its images' alt text. */
+export interface PageFacts {
+  all: string;
+  h1: string;
+  h2s: string[];
+  firstPara: string;
+  /** questions in the page's FAQ (0 when it has none) */
+  faqItems: number;
+  /** a call to action at the top (the hero's button) */
+  heroCta: boolean;
+  /** the images the page shows */
+  images: { alt: string }[];
+}
+
+/** The builder's page as the score reads it (hidden sections left out). */
+export function salesFacts(page: SalesPage | null): PageFacts {
+  const { all, h1, h2s, firstPara } = page ? pageText(page) : { all: '', h1: '', h2s: [], firstPara: '' };
+  const faq = page?.sections.find((s) => s.type === 'faq' && s.visible);
+  const hero = page?.sections.find((s) => s.type === 'hero' && s.visible);
+  return {
+    all,
+    h1,
+    h2s,
+    firstPara,
+    faqItems: faq?.type === 'faq' ? faq.data.items.length : 0,
+    heroCta: !!hero && hero.type === 'hero' && !!hero.data.ctaLabel,
+    images: shownImages(page).map((p) => ({ alt: p.alt })),
+  };
+}
+
+const textOf = (el: Element | null | undefined) => (el?.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+/**
+ * A page's HTML (the SEO page's HTML mode: a page Manus or Viktor made) as the score reads it: its text, the first
+ * H1, the H2s, the first paragraph, FAQ questions (<details>), a link or button in its first header or section, and
+ * its images' alt text. Read with DOMParser (an inert document: nothing in it runs or loads).
+ */
+export function htmlFacts(html: string): PageFacts {
+  const doc = new DOMParser().parseFromString(`${LT}!doctype html><html><head></head><body>${html}</body></html>`, 'text/html');
+  for (const el of Array.from(doc.querySelectorAll('script, style, template, noscript'))) el.remove();
+  const body = doc.body;
+  const top = body.querySelector('header, section');
+  return {
+    all: textOf(body),
+    h1: textOf(body.querySelector('h1')),
+    h2s: Array.from(body.querySelectorAll('h2')).map(textOf).filter(Boolean),
+    firstPara: textOf(body.querySelector('p')),
+    faqItems: body.querySelectorAll('details').length,
+    heroCta: !!top?.querySelector('a, button'),
+    images: Array.from(body.querySelectorAll('img')).map((img) => ({ alt: img.getAttribute('alt') ?? '' })),
+  };
+}
+
 export function scoreSeo(meta: SeoMeta, page: SalesPage | null, type: PageType = 'landing'): { score: number; checks: SeoCheck[]; words: number; density: number } {
+  return scoreFacts(meta, salesFacts(page), type);
+}
+
+/** The score of the SEO page in HTML mode (a page Manus or Viktor made): the same checks, read from its HTML. */
+export function scoreSeoHtml(meta: SeoMeta, html: string, type: PageType = 'landing'): { score: number; checks: SeoCheck[]; words: number; density: number } {
+  return scoreFacts(meta, htmlFacts(html), type, { html: true });
+}
+
+/** The SEO score from what a page shows. `html`: the page is free HTML (its tips say to ask for a change rather than edit). */
+export function scoreFacts(meta: SeoMeta, facts: PageFacts, type: PageType = 'landing', o: { html?: boolean } = {}): { score: number; checks: SeoCheck[]; words: number; density: number } {
   const [minWords, someWords] = MIN_WORDS[type] ?? MIN_WORDS.landing;
   const minH2s = MIN_H2S[type] ?? MIN_H2S.landing;
   const kw = meta.primaryKeyword.trim().toLowerCase();
-  const { all, h1, h2s, firstPara } = page ? pageText(page) : { all: '', h1: '', h2s: [], firstPara: '' };
+  const { all, h1, h2s, firstPara } = facts;
   const words = wordCount(all);
   const occurrences = countPhrase(all, kw);
   const density = words ? (occurrences * Math.max(1, kw.split(/\s+/).length)) / words : 0;
@@ -1023,31 +1086,29 @@ export function scoreSeo(meta: SeoMeta, page: SalesPage | null, type: PageType =
   const kwWords = kw.split(/\s+/).filter((w) => w.length > 2);
   const looseIncludes = (s: string) => kwWords.length > 0 && kwWords.every((w) => s.toLowerCase().includes(w));
   const secondaryUsed = meta.secondaryKeywords.filter((k) => countPhrase(all + ' ' + meta.metaDescription, k) > 0).length;
-  const faq = page?.sections.find((s) => s.type === 'faq' && s.visible);
-  const hero = page?.sections.find((s) => s.type === 'hero' && s.visible);
   const tLen = meta.metaTitle.length;
   const dLen = meta.metaDescription.length;
-  const pics = shownImages(page);
+  const pics = facts.images;
   const described = pics.filter((p) => p.alt.trim().length >= 5).length;
   const checks: SeoCheck[] = [
     { id: 'title-len', label: 'Meta title is 30–60 characters', pass: tLen >= 30 && tLen <= 60, partial: tLen > 0 && tLen < 70, weight: 10, tip: `Currently ${tLen} characters.` },
     { id: 'title-kw', label: 'Primary keyword in meta title', pass: includes(meta.metaTitle), partial: looseIncludes(meta.metaTitle), weight: 10, tip: 'Put the exact keyword near the start of the title.' },
     { id: 'desc-len', label: 'Meta description is 120–160 characters', pass: dLen >= 120 && dLen <= 160, partial: dLen >= 80 && dLen <= 175, weight: 8, tip: `Currently ${dLen} characters.` },
     { id: 'desc-kw', label: 'Keyword in meta description', pass: includes(meta.metaDescription), partial: looseIncludes(meta.metaDescription), weight: 7, tip: 'Mention the keyword naturally once.' },
-    { id: 'h1-kw', label: 'Keyword in the H1 headline', pass: includes(h1), partial: looseIncludes(h1), weight: 10, tip: 'Your hero headline is the page’s H1.' },
-    { id: 'intro-kw', label: 'Keyword in the first paragraph', pass: includes(firstPara), partial: looseIncludes(firstPara), weight: 6, tip: 'Use it in the hero subheadline.' },
+    { id: 'h1-kw', label: 'Keyword in the H1 headline', pass: includes(h1), partial: looseIncludes(h1), weight: 10, tip: o.html ? 'The page’s main headline is its H1: ask for a change that uses the keyword there.' : 'Your hero headline is the page’s H1.' },
+    { id: 'intro-kw', label: 'Keyword in the first paragraph', pass: includes(firstPara), partial: looseIncludes(firstPara), weight: 6, tip: o.html ? 'Ask for a change that uses it in the first paragraph.' : 'Use it in the hero subheadline.' },
     { id: 'slug', label: 'Short URL slug containing the keyword', pass: kwWords.every((w) => meta.slug.includes(w.replace(/[^a-z0-9]/g, ''))) && meta.slug.split('-').length <= 6, partial: meta.slug.length > 0, weight: 6, tip: 'Keep slugs to 3–5 words.' },
     { id: 'words', label: `At least ${minWords} words of content`, pass: words >= minWords, partial: words >= someWords, weight: 8, tip: `Currently ${words} words.` },
     { id: 'density', label: 'Keyword density between 0.5% and 2.5%', pass: density >= 0.005 && density <= 0.025, partial: occurrences > 0, weight: 7, tip: `Currently ${(density * 100).toFixed(1)}% (${occurrences} uses).` },
     { id: 'h2', label: `At least ${minH2s} H2 section headings`, pass: h2s.length >= minH2s, partial: h2s.length >= 1, weight: 5, tip: `${h2s.length} section headings visible.` },
     { id: 'secondary', label: 'Two or more secondary keywords used', pass: secondaryUsed >= 2, partial: secondaryUsed === 1, weight: 6, tip: `${secondaryUsed} of ${meta.secondaryKeywords.length} found on the page.` },
-    { id: 'faq', label: 'FAQ section with 3+ questions (FAQ schema)', pass: !!faq && faq.type === 'faq' && faq.data.items.length >= 3, weight: 5, tip: 'FAQ rich results can win extra search space.' },
+    { id: 'faq', label: 'FAQ section with 3+ questions (FAQ schema)', pass: facts.faqItems >= 3, weight: 5, tip: 'FAQ rich results can win extra search space.' },
     { id: 'og', label: 'OpenGraph title and description set', pass: !!meta.ogTitle && !!meta.ogDescription, weight: 5, tip: 'Controls how links look when shared.' },
-    { id: 'cta', label: 'Call to action above the fold', pass: !!hero && hero.type === 'hero' && !!hero.data.ctaLabel, weight: 4, tip: 'The hero needs a clear button.' },
+    { id: 'cta', label: 'Call to action above the fold', pass: facts.heroCta, weight: 4, tip: 'The hero needs a clear button.' },
     { id: 'alt', label: 'Social image has alt text', pass: meta.ogImageAlt.trim().length >= 8, weight: 3, tip: 'Describe the image for screen readers.' },
     // only for a page with images: alt text is how search engines and screen readers know what they show
     ...(pics.length
-      ? [{ id: 'img-alt', label: 'Every image on the page has alt text', pass: described === pics.length, partial: described > 0, weight: 4, tip: `${described} of ${pics.length} described. In Edit, write what each image shows under it.` }]
+      ? [{ id: 'img-alt', label: 'Every image on the page has alt text', pass: described === pics.length, partial: described > 0, weight: 4, tip: `${described} of ${pics.length} described. ${o.html ? 'Ask for a change that describes each image (alt text).' : 'In Edit, write what each image shows under it.'}` }]
       : []),
   ];
   const max = checks.reduce((s, c) => s + c.weight, 0);
