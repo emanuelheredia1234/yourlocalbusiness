@@ -215,7 +215,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
             <ul className="flex flex-col gap-1.5">
               {platforms.map((p) => (
                 <li key={p} className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span className="flex min-w-[96px] items-center gap-1.5 text-[13px]">
+                  <span className="flex min-w-[96px] items-center gap-1.5 text-small">
                     <PlatformGlyph platform={p} size={13} /> {networkLabel(p)}
                   </span>
                   <select className="select input-sm w-auto" aria-label={`Where the link goes on ${networkLabel(p)}`} value={linkFor(p)!.placement} onChange={(e) => setLinkWhere((x) => ({ ...x, [p]: e.target.value as LinkPlacement }))}>
@@ -225,13 +225,13 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
                       </option>
                     ))}
                   </select>
-                  <span className="text-[11.5px] text-muted">{LINK_FACTS[p]}</span>
+                  <span className="text-caption text-muted">{LINK_FACTS[p]}</span>
                 </li>
               ))}
             </ul>
           </Field>
         ) : (
-          <p className="text-[12.5px] text-muted">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings → Brand.' : 'No link in your posts yet. Publish your page (Marketing Hub → SEO page), or add your website in Settings → Brand.'}</p>
+          <p className="text-small text-muted">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings → Brand.' : 'No link in your posts yet. Publish your page (Marketing Hub → SEO page), or add your website in Settings → Brand.'}</p>
         )}
         <div className="flex flex-wrap items-center gap-3">
           <GenerateButton running={ai.running} onClick={generate}>
@@ -276,7 +276,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
                 <X size={15} /> Clear
               </button>
             </div>
-            <p className="text-[12px] text-muted">{manusReady ? 'Nothing posts by itself: Manus posts it when you confirm (now, or scheduled for this time), or you post it yourself and mark it posted.' : `Nothing posts by itself. ${manusSetupHint()} Until then, copy the text and post it yourself, then mark it posted.`}</p>
+            <p className="text-caption text-muted">{manusReady ? 'Nothing posts by itself: Manus posts it when you confirm (now, or scheduled for this time), or you post it yourself and mark it posted.' : `Nothing posts by itself. ${manusSetupHint()} Until then, copy the text and post it yourself, then mark it posted.`}</p>
           </div>
         )}
       </div>
@@ -284,7 +284,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
         <p className="eyebrow mb-2">Live preview</p>
         <div className="mx-auto w-full max-w-[300px]">
           <PostVisual style={style} headline={previewPost.headline} brand={project.brand} watermark={watermark} media={source === 'upload' ? media : effFormat === 'image' ? genMedia : genVideo} storyboard={storyboard} points={pointsFromCaption(caption)} aspect="4/5" hoverPlay autoPlay={effFormat === 'video' && !!storyboard} />
-          {hasDraft && <p className="clamp-3 mt-2 whitespace-pre-line text-xs text-muted">{caption}</p>}
+          {hasDraft && <p className="clamp-3 mt-2 whitespace-pre-line text-caption text-muted">{caption}</p>}
         </div>
         {source === 'ai' && effFormat === 'video' && hasDraft && (
           <VideoPanel

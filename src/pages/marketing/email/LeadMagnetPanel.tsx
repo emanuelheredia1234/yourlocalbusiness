@@ -31,14 +31,14 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
       <div className="flex min-w-0 flex-col gap-4">
         <section className="panel p-4 sm:p-5" aria-label="Lead magnet type">
           <h2 className="section-title mb-1">Free lead magnet</h2>
-          <p className="mb-3 text-[13px] text-muted">A quick win your ideal buyer will trade their email for, designed to lead naturally to {project.studio.listing.title || project.brand.name}.</p>
+          <p className="mb-3 text-small text-muted">A quick win your ideal buyer will trade their email for, designed to lead naturally to {project.studio.listing.title || project.brand.name}.</p>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Lead magnet type">
             {LEAD_MAGNET_TYPES.map((t) => (
               <button key={t.id} role="radio" aria-checked={type === t.id} onClick={() => setType(t.id)} className={cn('flex flex-col gap-1 rounded-md border p-3 text-left transition-colors', type === t.id ? 'border-primary bg-primary-soft' : 'border-line hover:border-line-2 hover:bg-surface-2')}>
-                <span className="flex items-center gap-1.5 text-[13px] font-semibold">
+                <span className="flex items-center gap-1.5 text-small font-semibold">
                   <Icon name={t.icon} size={14} className={type === t.id ? 'text-primary' : 'text-muted'} /> {t.label}
                 </span>
-                <span className="text-[11.5px] leading-snug text-muted">{t.desc}</span>
+                <span className="text-caption leading-snug text-muted">{t.desc}</span>
               </button>
             ))}
           </div>
@@ -63,7 +63,7 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
           <section className="panel flex flex-col gap-3.5 p-4 sm:p-5" aria-label="Lead magnet content">
             <div className="flex items-center gap-2">
               <FileText size={16} className="text-primary" />
-              <h3 className="text-[14px] font-semibold">Freebie content</h3>
+              <h3 className="text-body font-semibold">Freebie content</h3>
               <span className="badge ml-auto bg-surface-2 text-ink-2">{LEAD_MAGNET_TYPES.find((t) => t.id === lm.type)?.label}</span>
             </div>
             <Field label="Title" htmlFor="lm-title">
@@ -73,7 +73,7 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
               <input id="lm-sub" className="input" value={lm.subtitle} onChange={(e) => set({ subtitle: e.target.value })} />
             </Field>
             <Field label="Intro" htmlFor="lm-intro">
-              <AutoTextarea id="lm-intro" value={lm.intro} onChange={(v) => set({ intro: v })} minRows={2} className="text-[13.5px]" />
+              <AutoTextarea id="lm-intro" value={lm.intro} onChange={(v) => set({ intro: v })} minRows={2} className="text-small" />
             </Field>
             {lm.sections.map((sec, i) => (
               <div key={i} className="rounded-md border border-line bg-surface-2/40 p-3">
@@ -90,7 +90,7 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
               <Plus size={14} /> Add section
             </button>
             <Field label="Closing call to action" htmlFor="lm-cta">
-              <AutoTextarea id="lm-cta" value={lm.cta} onChange={(v) => set({ cta: v })} minRows={2} className="text-[13.5px]" />
+              <AutoTextarea id="lm-cta" value={lm.cta} onChange={(v) => set({ cta: v })} minRows={2} className="text-small" />
             </Field>
           </section>
         ) : (
@@ -115,7 +115,7 @@ function OptInPreview({ project, lm, set }: { project: Project; lm: LeadMagnet; 
     <>
       <section className="panel overflow-hidden" aria-label="Opt-in page preview">
         <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-          <h3 className="text-[13px] font-semibold">Opt-in page preview</h3>
+          <h3 className="text-small font-semibold">Opt-in page preview</h3>
           <span className="badge bg-surface-2 text-muted">Preview</span>
         </div>
         <div className="p-5" style={{ background: `linear-gradient(160deg, ${withAlpha(c.primary, 0.1)}, ${c.paper} 60%)`, color: c.ink }}>
@@ -124,13 +124,13 @@ function OptInPreview({ project, lm, set }: { project: Project; lm: LeadMagnet; 
           </div>
           <div className="flex gap-4">
             <div className="relative hidden h-[124px] w-[96px] shrink-0 rotate-[-4deg] flex-col justify-between rounded-md p-2.5 shadow-pop sm:flex" style={{ background: c.primary, color: onPrimary }} aria-hidden="true">
-              <span className="text-[8px] font-bold uppercase tracking-wider opacity-80">Free {LEAD_MAGNET_TYPES.find((t) => t.id === lm.type)?.label}</span>
-              <span className="text-[11px] font-extrabold leading-tight">{lm.title}</span>
+              <span className="text-caption font-semibold uppercase tracking-wider opacity-80">Free {LEAD_MAGNET_TYPES.find((t) => t.id === lm.type)?.label}</span>
+              <span className="text-caption font-semibold leading-tight">{lm.title}</span>
               <span className="h-1 w-8 rounded-full" style={{ background: c.accent }} />
             </div>
             <div className="min-w-0">
-              <p className="text-[19px] font-extrabold leading-tight">{lm.optInHeadline}</p>
-              <ul className="mt-3 flex flex-col gap-1.5 text-[13px]">
+              <p className="text-title font-semibold leading-tight">{lm.optInHeadline}</p>
+              <ul className="mt-3 flex flex-col gap-1.5 text-small">
                 {lm.optInBullets.map((b, i) => (
                   <li key={i} className="flex gap-1.5">
                     <Check size={14} className="mt-0.5 shrink-0" style={{ color: c.primary }} /> {b}
@@ -140,9 +140,9 @@ function OptInPreview({ project, lm, set }: { project: Project; lm: LeadMagnet; 
             </div>
           </div>
           {done ? (
-            <div className="mt-5 rounded-md bg-white/80 p-4 text-[13.5px] text-[#1d2420]">
-              <p className="font-bold">This is only a preview.</p>
-              <p className="mt-0.5 text-[12.5px] text-[#5b6861]">On your real opt-in page, this form sends the sign-up to your email provider, which delivers “{lm.title}”. Nothing was saved or sent here.</p>
+            <div className="mt-5 rounded-md bg-white/80 p-4 text-small text-[#1d2420]">
+              <p className="font-semibold">This is only a preview.</p>
+              <p className="mt-0.5 text-small text-[#5b6861]">On your real opt-in page, this form sends the sign-up to your email provider, which delivers “{lm.title}”. Nothing was saved or sent here.</p>
               <button className="btn btn-secondary btn-sm mt-3" onClick={() => setDone(false)}>
                 Back to the form
               </button>
@@ -160,26 +160,26 @@ function OptInPreview({ project, lm, set }: { project: Project; lm: LeadMagnet; 
               <label className="sr-only" htmlFor="oi-name">
                 First name
               </label>
-              <input id="oi-name" className="w-full rounded-md border border-black/10 bg-white px-3 py-2.5 text-[14px] text-[#1d2420] outline-none focus:border-black/30" placeholder="First name" value={name} onChange={(e) => setName(e.target.value)} />
+              <input id="oi-name" className="w-full rounded-md border border-black/10 bg-white px-3 py-2.5 text-body text-[#1d2420] outline-none focus:border-black/30" placeholder="First name" value={name} onChange={(e) => setName(e.target.value)} />
               <label className="sr-only" htmlFor="oi-email">
                 Email
               </label>
-              <input id="oi-email" type="email" className="w-full rounded-md border border-black/10 bg-white px-3 py-2.5 text-[14px] text-[#1d2420] outline-none focus:border-black/30" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-              {touched && !emailValid(email) && <p className="text-xs font-medium text-[#b42318]">Enter a valid email address.</p>}
-              <button type="submit" className="w-full rounded-md px-4 py-3 text-[15px] font-bold shadow-sm" style={{ background: c.primary, color: onPrimary }}>
+              <input id="oi-email" type="email" className="w-full rounded-md border border-black/10 bg-white px-3 py-2.5 text-body text-[#1d2420] outline-none focus:border-black/30" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+              {touched && !emailValid(email) && <p className="text-caption font-medium text-[#b42318]">Enter a valid email address.</p>}
+              <button type="submit" className="w-full rounded-md px-4 py-3 text-h3 font-semibold shadow-sm" style={{ background: c.primary, color: onPrimary }}>
                 {lm.buttonLabel}
               </button>
-              <p className="text-center text-[11px] opacity-70">No spam. Unsubscribe anytime.</p>
+              <p className="text-center text-caption opacity-70">No spam. Unsubscribe anytime.</p>
             </form>
           )}
         </div>
-        <p className="border-t border-line px-4 py-2 text-[11.5px] text-muted">A preview of your page’s copy. To collect sign-ups, use your email provider’s form (or connect this copy to it).</p>
+        <p className="border-t border-line px-4 py-2 text-caption text-muted">A preview of your page’s copy. To collect sign-ups, use your email provider’s form (or connect this copy to it).</p>
       </section>
 
       <section className="panel flex flex-col gap-3 p-4" aria-label="Opt-in copy">
-        <h3 className="text-[13px] font-semibold">Opt-in copy</h3>
+        <h3 className="text-small font-semibold">Opt-in copy</h3>
         <Field label="Headline" htmlFor="oi-h">
-          <AutoTextarea id="oi-h" value={lm.optInHeadline} onChange={(v) => set({ optInHeadline: v })} minRows={1} className="text-[13.5px]" />
+          <AutoTextarea id="oi-h" value={lm.optInHeadline} onChange={(v) => set({ optInHeadline: v })} minRows={1} className="text-small" />
         </Field>
         <Field label="Benefit bullets (one per line)">
           <LinesEditor values={lm.optInBullets} onChange={(v) => set({ optInBullets: v })} minRows={3} />

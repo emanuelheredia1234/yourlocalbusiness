@@ -64,7 +64,7 @@ function AccessNote({ children, action }: { children: string; action?: JSX.Eleme
   return (
     <section className="panel flex flex-wrap items-center gap-3 p-4" aria-label="Leads">
       <Inbox size={18} className="shrink-0 text-muted" aria-hidden="true" />
-      <p className="min-w-0 flex-1 text-[13px] text-ink-2">{children}</p>
+      <p className="min-w-0 flex-1 text-small text-ink-2">{children}</p>
       {action}
     </section>
   );
@@ -218,10 +218,10 @@ function LeadList({ project }: { project: Project }) {
   const count = leads?.length ?? 0;
   return (
     <div className="flex flex-col gap-4">
-      <p className="rounded-md border border-line bg-surface-2/60 px-3 py-2 text-[13px] text-ink-2">Messages people send with the form on your published page. Reply from your own email or phone: the app doesn’t send email.</p>
+      <p className="rounded-md border border-line bg-surface-2/60 px-3 py-2 text-small text-ink-2">Messages people send with the form on your published page. Reply from your own email or phone: the app doesn’t send email.</p>
       <section className="panel overflow-hidden" aria-labelledby={`${ids}-title`}>
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
-          <h2 id={`${ids}-title`} className="text-[13px] font-semibold">
+          <h2 id={`${ids}-title`} className="text-small font-semibold">
             {leads ? `${count}${more ? '+' : ''} lead${count === 1 && !more ? '' : 's'}` : 'Leads'}
           </h2>
           <div role="group" aria-label="Which pages">
@@ -245,7 +245,7 @@ function LeadList({ project }: { project: Project }) {
           </div>
         </div>
         {error && (
-          <div role="alert" className="flex flex-wrap items-center gap-2 border-b border-line bg-bad-soft px-4 py-2 text-[13px] text-bad">
+          <div role="alert" className="flex flex-wrap items-center gap-2 border-b border-line bg-bad-soft px-4 py-2 text-small text-bad">
             <span className="min-w-0 flex-1 break-words">{error}</span>
             <button type="button" className="btn btn-secondary btn-xs" onClick={() => setLoads((n) => n + 1)}>
               Try again
@@ -274,7 +274,7 @@ function LeadList({ project }: { project: Project }) {
           />
         ) : (
           <>
-            <p className="px-4 pt-3 text-xs text-muted">Add only people who asked to hear from you.</p>
+            <p className="px-4 pt-3 text-caption text-muted">Add only people who asked to hear from you.</p>
             <ul ref={listRef} tabIndex={-1} aria-label="Leads" className="divide-y divide-line">
               {leads.map((lead) => (
                 <LeadItem key={lead.id} lead={lead} project={project} projects={projects} from={ownerOf(lead)} who={who(lead)} busy={busy.has(lead.id)} onSubscribe={() => subscribe(lead)} onDelete={() => void remove(lead)} />
@@ -309,16 +309,16 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
     <li className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className={cn('min-w-0 break-words text-[13.5px] font-semibold', !lead.name && 'text-muted')}>{lead.name ? <bdi>{lead.name}</bdi> : 'No name given'}</span>
+          <span className={cn('min-w-0 break-words text-small font-semibold', !lead.name && 'text-muted')}>{lead.name ? <bdi>{lead.name}</bdi> : 'No name given'}</span>
           {lead.createdAt && (
-            <time dateTime={lead.createdAt} title={t ? fmtDateTime(t) : undefined} className="text-xs text-muted">
+            <time dateTime={lead.createdAt} title={t ? fmtDateTime(t) : undefined} className="text-caption text-muted">
               {t ? fmtRelative(t) : lead.createdAt}
             </time>
           )}
         </p>
         {lead.time && (
           <p className="mt-1">
-            <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-info-soft px-2.5 py-0.5 text-xs font-medium text-info">
+            <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-info-soft px-2.5 py-0.5 text-caption font-medium text-info">
               <CalendarClock size={13} aria-hidden="true" className="shrink-0" />
               <span className="min-w-0 break-words">
                 Preferred time: <bdi>{lead.time}</bdi>
@@ -327,7 +327,7 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
           </p>
         )}
         {(lead.email || lead.phone) && (
-          <p className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
+          <p className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-small">
             {lead.email && (
               <span className="inline-flex min-w-0 items-center gap-1.5">
                 <Mail size={13} aria-hidden="true" className="shrink-0 text-muted" />
@@ -356,17 +356,17 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
         )}
         {lead.message && (
           <div className="mt-1.5">
-            <p id={`${ids}-msg`} dir="auto" className={cn('whitespace-pre-line break-words text-[13px] text-ink-2', long && !open && 'line-clamp-6')}>
+            <p id={`${ids}-msg`} dir="auto" className={cn('whitespace-pre-line break-words text-small text-ink-2', long && !open && 'line-clamp-6')}>
               {lead.message}
             </p>
             {long && (
-              <button type="button" className="mt-0.5 text-xs font-semibold text-primary hover:underline" aria-expanded={open} aria-controls={`${ids}-msg`} onClick={() => setOpen((v) => !v)}>
+              <button type="button" className="mt-0.5 text-caption font-semibold text-primary hover:underline" aria-expanded={open} aria-controls={`${ids}-msg`} onClick={() => setOpen((v) => !v)}>
                 {open ? 'Show less' : 'Show all'}
               </button>
             )}
           </div>
         )}
-        <p className="mt-1.5 break-words text-xs text-muted">
+        <p className="mt-1.5 break-words text-caption text-muted">
           From /{lead.slug} · {from ? from.brand.name : 'a page that isn’t in your projects'}
         </p>
       </div>

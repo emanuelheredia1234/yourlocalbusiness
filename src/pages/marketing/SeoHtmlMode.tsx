@@ -42,7 +42,7 @@ export function SeoVersionSwitch({ project, className }: { project: Project; cla
   };
   return (
     <section className={cn('panel flex flex-wrap items-center gap-2 p-3', className)} aria-label="Version">
-      <h2 className="text-[13px] font-semibold">Version</h2>
+      <h2 className="text-small font-semibold">Version</h2>
       <Segmented
         size="sm"
         value={h.active ? 'agent' : 'builder'}
@@ -113,13 +113,13 @@ export function SeoHtmlMode({ project, publishRef }: { project: Project; publish
     <div className="grid grid-cols-1 gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
       <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-120px)] xl:self-start xl:overflow-y-auto xl:pr-1 scroll-thin">
         <section className="panel flex items-center gap-4 p-4" aria-label="SEO score">
-          <ProgressRing value={result.score / 100} size={64} stroke={6} color={scoreColor(result.score)} label={<span className="text-[17px]">{result.score}</span>} />
+          <ProgressRing value={result.score / 100} size={64} stroke={6} color={scoreColor(result.score)} label={<span className="text-h3">{result.score}</span>} />
           <div className="min-w-0 flex-1">
-            <p className="text-[14px] font-semibold">SEO score {result.score >= 80 ? '· Great' : result.score >= 55 ? '· Getting there' : '· Needs work'}</p>
-            <p className="num text-xs text-muted">
+            <p className="text-body font-semibold">SEO score {result.score >= 80 ? '· Great' : result.score >= 55 ? '· Getting there' : '· Needs work'}</p>
+            <p className="num text-caption text-muted">
               {result.words.toLocaleString()} words · keyword density {(result.density * 100).toFixed(1)}% · {result.checks.filter((c) => c.pass).length}/{result.checks.length} checks
             </p>
-            <button className="link mt-1 text-xs" onClick={() => setPanel('score')}>
+            <button className="link mt-1 text-caption" onClick={() => setPanel('score')}>
               See the checklist →
             </button>
           </div>
@@ -129,10 +129,10 @@ export function SeoHtmlMode({ project, publishRef }: { project: Project; publish
 
         <section className="panel p-4" aria-label="Page type">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-[14px] font-semibold">Page type</h2>
+            <h2 className="text-body font-semibold">Page type</h2>
             <span className="chip">{PAGE_TYPE_LABEL[type]}</span>
           </div>
-          <p className="mt-1 text-xs text-muted">{PAGE_TYPE_DESC[type]}</p>
+          <p className="mt-1 text-caption text-muted">{PAGE_TYPE_DESC[type]}</p>
           <AgentButtons target="seo" lead="Build another type with" className="mt-3" />
         </section>
 
@@ -163,13 +163,13 @@ export function SeoHtmlMode({ project, publishRef }: { project: Project; publish
           <section className="panel p-4" aria-label="SEO checklist">
             <ul className="flex flex-col gap-3">
               {result.checks.map((c) => (
-                <li key={c.id} className="flex gap-2.5 text-[13px]">
+                <li key={c.id} className="flex gap-2.5 text-small">
                   <span className={cn('mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full', c.pass ? 'bg-good-soft text-good' : c.partial ? 'bg-warn-soft text-warn' : 'bg-bad-soft text-bad')}>
                     {c.pass ? <Check size={12} /> : c.partial ? <CircleDashed size={12} /> : <X size={12} />}
                   </span>
                   <span className="min-w-0">
                     <span className="font-semibold text-ink">{c.label}</span>
-                    {!c.pass && <span className="block text-xs text-muted">{c.tip}</span>}
+                    {!c.pass && <span className="block text-caption text-muted">{c.tip}</span>}
                   </span>
                 </li>
               ))}
@@ -183,7 +183,7 @@ export function SeoHtmlMode({ project, publishRef }: { project: Project; publish
       </aside>
 
       <section className="flex min-w-0 flex-col gap-3" aria-label={`${name}’s page`}>
-        <p className="flex items-start gap-2 rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">
+        <p className="flex items-start gap-2 rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-small text-warn">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <span>
             {name} wrote this page. Check every claim, price and testimonial before you publish: the app can’t check free HTML.
@@ -192,7 +192,7 @@ export function SeoHtmlMode({ project, publishRef }: { project: Project; publish
         {h.notes.length > 0 && (
           <ul className="flex flex-col gap-1 rounded-md border border-line bg-surface-2 px-3 py-2" aria-label="What the app changed in it">
             {h.notes.map((n) => (
-              <li key={n} className="flex items-start gap-1.5 text-xs text-ink-2">
+              <li key={n} className="flex items-start gap-1.5 text-caption text-ink-2">
                 <Info size={13} className="mt-px shrink-0 text-muted" aria-hidden="true" />
                 <span>{n}</span>
               </li>
@@ -200,7 +200,7 @@ export function SeoHtmlMode({ project, publishRef }: { project: Project; publish
           </ul>
         )}
         {formNote && (
-          <p className="flex flex-wrap items-start gap-x-2 gap-y-1 rounded-md border border-line bg-surface-2 px-3 py-2 text-[13px] text-ink-2">
+          <p className="flex flex-wrap items-start gap-x-2 gap-y-1 rounded-md border border-line bg-surface-2 px-3 py-2 text-small text-ink-2">
             <Inbox size={15} className="mt-0.5 shrink-0 text-muted" />
             <span className="min-w-0 flex-1">{formNote.text}</span>
             {formNote.leads && (
@@ -219,16 +219,16 @@ export function SeoHtmlMode({ project, publishRef }: { project: Project; publish
         )}
         <div className="panel flex flex-wrap items-center justify-between gap-2 px-3 py-2">
           <DeviceSwitch value={device} onChange={setDevice} />
-          <span className="text-xs text-muted">Scripts are off; the form doesn’t send from this preview.</span>
+          <span className="text-caption text-muted">Scripts are off; the form doesn’t send from this preview.</span>
         </div>
         <HtmlPreviewFrame doc={doc} sandbox={SEO_SANDBOX} device={device} title={`${name}’s SEO page`} />
         <details className="panel group">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-semibold">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-small font-semibold">
             <Code2 size={15} className="text-primary" /> HTML source
-            <span className="ml-auto text-xs font-normal text-muted">With your metadata, OpenGraph and JSON-LD from your own facts</span>
+            <span className="ml-auto text-caption font-normal text-muted">With your metadata, OpenGraph and JSON-LD from your own facts</span>
           </summary>
-          {h.images.length > 0 && <p className="border-t border-line px-4 py-2 text-xs text-muted">Images show here as short placeholders, like {'{{img-1}}'}. Copy HTML and Export HTML put the images themselves into the file.</p>}
-          <pre className="max-h-[360px] overflow-auto border-t border-line bg-surface-2 p-3 font-mono text-[11.5px] leading-relaxed text-ink-2 scroll-thin">{seoSourceHtml(project)}</pre>
+          {h.images.length > 0 && <p className="border-t border-line px-4 py-2 text-caption text-muted">Images show here as short placeholders, like {'{{img-1}}'}. Copy HTML and Export HTML put the images themselves into the file.</p>}
+          <pre className="max-h-[360px] overflow-auto border-t border-line bg-surface-2 p-3 font-mono text-caption leading-relaxed text-ink-2 scroll-thin">{seoSourceHtml(project)}</pre>
         </details>
       </section>
     </div>

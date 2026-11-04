@@ -31,9 +31,9 @@ export function LinkPlacementCard({ project }: { project: Project }) {
       <h2 id={titleId} className="section-title mb-1 flex items-center gap-2">
         <Link2 size={17} className="text-primary" aria-hidden="true" /> Where the link goes
       </h2>
-      <p className="mb-3 text-[13px] text-muted">New posts put your link in the post, in the first comment (a reply on X), or say it’s in your bio. The suggestions follow how each network treats links. Posts you already made keep theirs.</p>
+      <p className="mb-3 text-small text-muted">New posts put your link in the post, in the first comment (a reply on X), or say it’s in your bio. The suggestions follow how each network treats links. Posts you already made keep theirs.</p>
       {link ? (
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-[12.5px]">
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-small">
           <span className="min-w-[12rem] flex-1">
             Your posts link to {link.source === 'website' ? 'your website' : 'your page'}: <b className="[overflow-wrap:anywhere]">{linkText(link.url)}</b>.
             {link.source === 'website' && !__ARTIFACT_BUILD__ && ' Publish your page to link to it instead.'}
@@ -41,7 +41,7 @@ export function LinkPlacementCard({ project }: { project: Project }) {
           <CopyButton text={link.url} label="Copy link" size="xs" />
         </div>
       ) : (
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-[12.5px] text-muted">
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-small text-muted">
           {/* publishing needs the app's own server, so in claude.ai only the website can be the link */}
           <span className="min-w-[12rem] flex-1">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings → Brand.' : 'No link in your posts yet. Publish your SEO page, or add your website in Settings → Brand.'}</span>
           {!__ARTIFACT_BUILD__ && (
@@ -60,7 +60,7 @@ export function LinkPlacementCard({ project }: { project: Project }) {
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 <span className="flex min-w-[120px] flex-wrap items-center gap-x-1.5">
                   <PlatformChip platform={p} />
-                  {!inCampaign.includes(p) && <span className="text-[11.5px] text-muted">(not in this campaign)</span>}
+                  {!inCampaign.includes(p) && <span className="text-caption text-muted">(not in this campaign)</span>}
                 </span>
                 <select className="select input-sm w-auto max-w-full" aria-label={`Where the link goes on ${networkLabel(p)}`} aria-describedby={factId} value={value} onChange={(e) => setPlacement(p, e.target.value as LinkPlacement)}>
                   {LINK_PLACEMENTS.map((id) => (
@@ -70,7 +70,7 @@ export function LinkPlacementCard({ project }: { project: Project }) {
                   ))}
                 </select>
               </div>
-              <p id={factId} className="text-[11.5px] text-muted">
+              <p id={factId} className="text-caption text-muted">
                 {LINK_FACTS[p]}
                 {value === 'bio' ? ' Keep your link in your bio there: the app never changes your profile.' : ''}
               </p>

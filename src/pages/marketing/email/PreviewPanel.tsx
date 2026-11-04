@@ -27,7 +27,7 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 max-w-[70ch]">
             <h2 className="section-title">Preview & export</h2>
-            <p className="text-[13px] text-muted">This app doesn’t send email. Set the sequence up as an automation in your email provider, which sends it to everyone who signs up. Merge values in brackets are placeholders your provider fills in.</p>
+            <p className="text-small text-muted">This app doesn’t send email. Set the sequence up as an automation in your email provider, which sends it to everyone who signs up. Merge values in brackets are placeholders your provider fills in.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button className="btn btn-primary btn-sm" onClick={() => download(`${slugify(project.brand.name)}-email-sequence.csv`, sequenceCsv(project))}>
@@ -35,7 +35,7 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
             </button>
           </div>
         </div>
-        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-muted">
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-small text-muted">
           Email providers:
           {PROVIDERS.map((p) => (
             <a key={p.name} href={p.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-semibold text-primary hover:underline">
@@ -48,8 +48,8 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
         {emails.map((e, i) => (
           <li key={e.id} className="grid grid-cols-1 gap-3 lg:grid-cols-[200px_minmax(0,1fr)]">
             <div className="flex flex-col gap-2">
-              <p className="text-[13px] font-semibold">Email {i + 1}</p>
-              <p className="text-xs text-muted">{delayLabel(e, i)}</p>
+              <p className="text-small font-semibold">Email {i + 1}</p>
+              <p className="text-caption text-muted">{delayLabel(e, i)}</p>
               <div className="flex flex-wrap gap-1.5">
                 <CopyButton size="xs" label="Copy subject" text={() => renderTokens(e.subject, tokens)} />
                 <CopyButton size="xs" label="Copy body" text={() => e.body} />

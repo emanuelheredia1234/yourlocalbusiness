@@ -31,8 +31,8 @@ export function PageTypePicker({ value, onChange, disabled, compact }: { value: 
               <input type="radio" name={name} value={t} checked={on} onChange={() => onChange(t)} className="sr-only" aria-describedby={`${name}-${t}`} />
               <Icon size={16} className={cn('mt-0.5 shrink-0', on ? 'text-primary' : 'text-muted')} aria-hidden="true" />
               <span className="min-w-0">
-                <span className="block text-[13px] font-semibold text-ink">{PAGE_TYPE_LABEL[t]}</span>
-                <span id={`${name}-${t}`} className="mt-0.5 block text-[11.5px] leading-snug text-muted">
+                <span className="block text-small font-semibold text-ink">{PAGE_TYPE_LABEL[t]}</span>
+                <span id={`${name}-${t}`} className="mt-0.5 block text-caption leading-snug text-muted">
                   {PAGE_TYPE_DESC[t]}
                 </span>
               </span>
@@ -85,7 +85,7 @@ function LinkField({ id, label, value, onChange, hint, required }: { id: string;
         aria-required={required || undefined}
         aria-describedby={`${id}-note`}
       />
-      <p id={`${id}-note`} className={error ? 'mt-1 text-xs font-medium text-bad' : 'hint'}>
+      <p id={`${id}-note`} className={error ? 'mt-1 text-caption font-medium text-bad' : 'hint'}>
         {error || hint}
       </p>
     </div>
@@ -117,7 +117,7 @@ export function PageTypeLinks({ project, type }: { project: Project; type: PageT
       {kinds.includes('booking') && <LinkField id={`${id}-booking`} label="Your booking link (optional)" value={links.booking ?? ''} onChange={(v) => set('booking', v)} hint={bookingHint} />}
       {kinds.includes('payment') && <LinkField id={`${id}-payment`} label={type === 'checkout' ? 'Your payment link' : 'Your payment link (optional)'} required={type === 'checkout'} value={links.payment ?? ''} onChange={(v) => set('payment', v)} hint={paymentHint} />}
       {notes.map((n) => (
-        <p key={n} className="rounded-md border border-line bg-surface-2 px-3 py-2 text-xs text-ink-2">
+        <p key={n} className="rounded-md border border-line bg-surface-2 px-3 py-2 text-caption text-ink-2">
           {n}
         </p>
       ))}

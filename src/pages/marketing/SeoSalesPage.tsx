@@ -284,7 +284,7 @@ export default function SeoSalesPage() {
               <GenerateButton running={running} disabled={busy || blocked} onClick={() => void generateAll(choice)} size="lg" className="self-center">
                 Write page
               </GenerateButton>
-              {blocked && <p className="-mt-2 text-center text-xs text-muted">Add your payment link first. The app never takes payments: Buy now opens your own link.</p>}
+              {blocked && <p className="-mt-2 text-center text-caption text-muted">Add your payment link first. The app never takes payments: Buy now opens your own link.</p>}
               <AgentButtons target="seo" kind={choice} lead="or build it with" className="justify-center" />
             </div>
           }
@@ -295,13 +295,13 @@ export default function SeoSalesPage() {
           <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-120px)] xl:self-start xl:overflow-y-auto xl:pr-1 scroll-thin">
             {seoHtml && <SeoVersionSwitch project={project} />}
             <section className="panel flex items-center gap-4 p-4" aria-label="SEO score">
-              <ProgressRing value={result.score / 100} size={64} stroke={6} color={scoreColor(result.score)} label={<span className="text-[17px]">{result.score}</span>} />
+              <ProgressRing value={result.score / 100} size={64} stroke={6} color={scoreColor(result.score)} label={<span className="text-h3">{result.score}</span>} />
               <div className="min-w-0 flex-1">
-                <p className="text-[14px] font-semibold">SEO score {result.score >= 80 ? '· Great' : result.score >= 55 ? '· Getting there' : '· Needs work'}</p>
-                <p className="num text-xs text-muted">
+                <p className="text-body font-semibold">SEO score {result.score >= 80 ? '· Great' : result.score >= 55 ? '· Getting there' : '· Needs work'}</p>
+                <p className="num text-caption text-muted">
                   {result.words.toLocaleString()} words · keyword density {(result.density * 100).toFixed(1)}% · {result.checks.filter((c) => c.pass).length}/{result.checks.length} checks
                 </p>
-                <button className="link mt-1 text-xs" onClick={() => setPanel('score')}>
+                <button className="link mt-1 text-caption" onClick={() => setPanel('score')}>
                   See the checklist →
                 </button>
               </div>
@@ -309,7 +309,7 @@ export default function SeoSalesPage() {
 
             <section className="panel p-4" aria-label="Page type">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-[14px] font-semibold">Page type</h2>
+                <h2 className="text-body font-semibold">Page type</h2>
                 <span className="chip">{PAGE_TYPE_LABEL[type]}</span>
                 <button
                   type="button"
@@ -330,7 +330,7 @@ export default function SeoSalesPage() {
                   Change
                 </button>
               </div>
-              <p className="mt-1 text-xs text-muted">{PAGE_TYPE_DESC[type]}</p>
+              <p className="mt-1 text-caption text-muted">{PAGE_TYPE_DESC[type]}</p>
               {!typeOpen && (type === 'booking' || type === 'showcase' || type === 'checkout') && (
                 <div className="mt-3">
                   <PageTypeLinks project={project} type={type} />
@@ -339,7 +339,7 @@ export default function SeoSalesPage() {
               {typeOpen && (
                 <div id={`${ids}-type`} className="mt-3 flex flex-col gap-3 border-t border-line pt-3">
                   {suggested && (
-                    <p className="text-xs font-medium text-ink-2" role="status">
+                    <p className="text-caption font-medium text-ink-2" role="status">
                       {suggested === type ? `Your page is already ${pageTypeNoun(type)}.` : `Suggested for you: ${PAGE_TYPE_LABEL[suggested]}. You can pick another.`}
                     </p>
                   )}
@@ -395,13 +395,13 @@ export default function SeoSalesPage() {
               <section className="panel p-4" aria-label="SEO checklist">
                 <ul className="flex flex-col gap-3">
                   {result.checks.map((c) => (
-                    <li key={c.id} className="flex gap-2.5 text-[13px]">
+                    <li key={c.id} className="flex gap-2.5 text-small">
                       <span className={cn('mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full', c.pass ? 'bg-good-soft text-good' : c.partial ? 'bg-warn-soft text-warn' : 'bg-bad-soft text-bad')}>
                         {c.pass ? <Check size={12} /> : c.partial ? <CircleDashed size={12} /> : <X size={12} />}
                       </span>
                       <span className="min-w-0">
                         <span className="font-semibold text-ink">{c.label}</span>
-                        {!c.pass && <span className="block text-xs text-muted">{c.tip}</span>}
+                        {!c.pass && <span className="block text-caption text-muted">{c.tip}</span>}
                       </span>
                     </li>
                   ))}
@@ -435,7 +435,7 @@ export default function SeoSalesPage() {
               <ThemeControls theme={page.theme} onChange={(theme) => setPage((p) => ({ ...p, theme }))} />
             </div>
             {toReview > 0 && (
-              <p className="flex items-start gap-2 rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">
+              <p className="flex items-start gap-2 rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-small text-warn">
                 <AlertTriangle size={15} className="mt-0.5 shrink-0" />
                 <span>
                   Check the {toReview === 1 ? 'item' : `${toReview} items`} marked on the page: testimonials, facts or an earlier price that may have been written by AI. They stay off your exported page until you confirm they’re real.
@@ -444,11 +444,11 @@ export default function SeoSalesPage() {
             )}
             {note &&
               (note.kind === 'warn' ? (
-                <p className="flex items-start gap-2 rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">
+                <p className="flex items-start gap-2 rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-small text-warn">
                   <AlertTriangle size={15} className="mt-0.5 shrink-0" /> <span>{note.text}</span>
                 </p>
               ) : (
-                <p className="flex flex-wrap items-start gap-x-2 gap-y-1 rounded-md border border-line bg-surface-2 px-3 py-2 text-[13px] text-ink-2">
+                <p className="flex flex-wrap items-start gap-x-2 gap-y-1 rounded-md border border-line bg-surface-2 px-3 py-2 text-small text-ink-2">
                   {note.leads ? <Inbox size={15} className="mt-0.5 shrink-0 text-muted" /> : <Link2 size={15} className="mt-0.5 shrink-0 text-muted" />}
                   <span className="min-w-0 flex-1">{note.text}</span>
                   {note.leads && (
@@ -466,7 +466,7 @@ export default function SeoSalesPage() {
                   )}
                 </p>
               ))}
-            {editing && <p className="text-xs text-muted">Click any text on the page to edit it. Changes save automatically and update your SEO score.</p>}
+            {editing && <p className="text-caption text-muted">Click any text on the page to edit it. Changes save automatically and update your SEO score.</p>}
             <div className="dotgrid flex justify-center overflow-x-auto rounded-lg bg-surface-2 p-3 sm:p-5">
               <SalesPreview
                 page={page}
@@ -482,12 +482,12 @@ export default function SeoSalesPage() {
               />
             </div>
             <details className="panel group">
-              <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-semibold">
+              <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-small font-semibold">
                 <Code2 size={15} className="text-primary" /> HTML source
-                <span className="ml-auto text-xs font-normal text-muted">Standalone page with meta tags, OpenGraph and JSON-LD schema</span>
+                <span className="ml-auto text-caption font-normal text-muted">Standalone page with meta tags, OpenGraph and JSON-LD schema</span>
               </summary>
-              {pageImageIds(page).length > 0 && <p className="border-t border-line px-4 py-2 text-xs text-muted">Images show here as short placeholders, like {'{{img-1}}'}. Copy HTML and Export HTML put the images themselves into the file.</p>}
-              <pre className="max-h-[360px] overflow-auto border-t border-line bg-surface-2 p-3 font-mono text-[11.5px] leading-relaxed text-ink-2 scroll-thin">{seoSourceHtml(project)}</pre>
+              {pageImageIds(page).length > 0 && <p className="border-t border-line px-4 py-2 text-caption text-muted">Images show here as short placeholders, like {'{{img-1}}'}. Copy HTML and Export HTML put the images themselves into the file.</p>}
+              <pre className="max-h-[360px] overflow-auto border-t border-line bg-surface-2 p-3 font-mono text-caption leading-relaxed text-ink-2 scroll-thin">{seoSourceHtml(project)}</pre>
             </details>
           </section>
         </div>
@@ -576,7 +576,7 @@ function GuideBox({ project, busy, onImages, children }: { project: Project; bus
           minRows={3}
           maxLength={2000}
           placeholder="For example: plain, friendly words. Speak to first-time customers. Mention that we serve the whole city."
-          className="text-[13px]"
+          className="text-small"
           disabled={busy}
           {...paste}
         />
@@ -605,23 +605,23 @@ function GuidePanel({ project, page, busy, running, onImages, onAddToPage, onRew
   const guide = (project.marketing.seoGuide ?? '').trim();
   return (
     <details className="panel group" open={open}>
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-semibold">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-small font-semibold">
         <Sparkles size={15} className="text-accent" /> Guide the AI
-        <span className="ml-auto text-xs font-normal text-muted">
+        <span className="ml-auto text-caption font-normal text-muted">
           {guide ? 'Guidance set' : 'No guidance'} · {plural(images.length, 'image')}
         </span>
       </summary>
       <div className="border-t border-line p-4">
         <GuideBox project={project} busy={busy} onImages={onImages}>
           {unplaced.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-xs text-ink-2" role="status">
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-caption text-ink-2" role="status">
               <span className="min-w-0 flex-1">Not on the page yet: {listJoin(unplaced.map((i) => `image ${imageKeyNumber(i.key)}`))}.</span>
               <button type="button" className="btn btn-secondary btn-xs" onClick={onAddToPage} disabled={busy}>
                 <ImagePlus size={12} /> Add to the page
               </button>
             </div>
           )}
-          <p className="text-xs text-muted">Rewrite page uses your guidance and all these images. The built-in engine (used when no AI answers) can’t read guidance or see images, but it still puts your images on the page.</p>
+          <p className="text-caption text-muted">Rewrite page uses your guidance and all these images. The built-in engine (used when no AI answers) can’t read guidance or see images, but it still puts your images on the page.</p>
           <GenerateButton running={running} disabled={busy} onClick={onRewrite} size="sm" className="self-start">
             Rewrite page
           </GenerateButton>
@@ -732,7 +732,7 @@ function EditPanel({
           minRows={2}
           maxLength={1000}
           placeholder="Say what to change, e.g. “Make the headline shorter and say we work weekends.”"
-          className="text-[13px]"
+          className="text-small"
           disabled={busy}
           aria-describedby={`${ids}-hint`}
           onKeyDown={(e) => {
@@ -748,7 +748,7 @@ function EditPanel({
           The AI changes only what you ask, from the page as it is now. It never adds testimonials, numbers or guarantees: you add your real ones on the page.
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <label htmlFor={`${ids}-target`} className="text-xs font-semibold text-ink-2">
+          <label htmlFor={`${ids}-target`} className="text-caption font-semibold text-ink-2">
             Change
           </label>
           <select id={`${ids}-target`} className="select input-sm w-auto" value={target} disabled={busy} onChange={(e) => setTarget(e.target.value)}>
@@ -791,14 +791,14 @@ function EditPanel({
       </form>
       <div className="mt-2 flex flex-wrap gap-1">
         {EDIT_IDEAS.map((idea) => (
-          <button key={idea} type="button" className="chip text-[11.5px]" disabled={busy} onClick={() => setInstruction(idea)}>
+          <button key={idea} type="button" className="chip text-caption" disabled={busy} onClick={() => setInstruction(idea)}>
             {idea}
           </button>
         ))}
       </div>
       <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact className="mt-2" />
       {outcome && !ai.running && (
-        <p className={cn('mt-2 flex flex-wrap items-center gap-x-2 text-xs', outcome.kind === 'done' ? 'text-good' : outcome.kind === 'nothing' ? 'text-warn' : 'text-ink-2')} role="status">
+        <p className={cn('mt-2 flex flex-wrap items-center gap-x-2 text-caption', outcome.kind === 'done' ? 'text-good' : outcome.kind === 'nothing' ? 'text-warn' : 'text-ink-2')} role="status">
           <span>{outcome.kind === 'done' ? `✓ ${outcome.text}` : outcome.kind === 'same' ? `Nothing on the page changed.${outcome.text !== AI_NO_CHANGE ? ` The AI said: “${outcome.text}”` : ''}` : outcome.text}</span>
           {outcome.kind === 'done' && canUndo && (
             <button type="button" className="link" onClick={onUndo}>
@@ -807,7 +807,7 @@ function EditPanel({
           )}
         </p>
       )}
-      {ai.error && <p className="mt-2 text-xs text-bad">{ai.error}</p>}
+      {ai.error && <p className="mt-2 text-caption text-bad">{ai.error}</p>}
       {ai.result && !ai.running && <AIResultBar className="mt-2" provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
     </section>
   );
@@ -826,7 +826,7 @@ export function MetaPanel({ project, meta, setMeta, onRegen, running, disabled, 
   return (
     <section className="panel flex flex-col gap-3.5 p-4" aria-label="SEO metadata">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-[14px] font-semibold">Metadata</h2>
+        <h2 className="text-body font-semibold">Metadata</h2>
         <button className="btn btn-ghost btn-xs" onClick={onRegen} disabled={running || disabled}>
           {running ? <Spinner size={12} /> : <RefreshCw size={12} />} Regenerate
         </button>
@@ -841,14 +841,14 @@ export function MetaPanel({ project, meta, setMeta, onRegen, running, disabled, 
         <input id="seo-title" className="input" value={meta.metaTitle} onChange={(e) => setMeta({ metaTitle: e.target.value })} />
       </Field>
       <Field label="Meta description" htmlFor="seo-desc" right={lenHint(dLen, 120, 158)}>
-        <AutoTextarea id="seo-desc" value={meta.metaDescription} onChange={(v) => setMeta({ metaDescription: v })} minRows={3} className="text-[13px]" />
+        <AutoTextarea id="seo-desc" value={meta.metaDescription} onChange={(v) => setMeta({ metaDescription: v })} minRows={3} className="text-small" />
       </Field>
       <Field label="URL slug" htmlFor="seo-slug" hint="For the page on your own website. The public address you publish it at is set in Public page.">
         <div className="flex items-center rounded-md border border-line-2 bg-surface focus-within:border-primary focus-within:shadow-focus">
-          <span className="truncate pl-3 text-[12.5px] text-muted">{domain}/</span>
+          <span className="truncate pl-3 text-small text-muted">{domain}/</span>
           <input
             id="seo-slug"
-            className="min-w-0 flex-1 bg-transparent py-2 pr-3 text-[13px] outline-none"
+            className="min-w-0 flex-1 bg-transparent py-2 pr-3 text-small outline-none"
             value={meta.slug}
             onChange={(e) => {
               const slug = e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
@@ -861,9 +861,9 @@ export function MetaPanel({ project, meta, setMeta, onRegen, running, disabled, 
       <div>
         <p className="label">Google preview</p>
         <div className="rounded-md border border-line bg-white p-3 text-left" style={{ fontFamily: 'Arial, sans-serif' }}>
-          <p className="truncate text-[12px] text-[#202124]">{crumb}</p>
-          <p className="mt-0.5 text-[18px] leading-snug text-[#1a0dab]">{truncate(meta.metaTitle, 62)}</p>
-          <p className="mt-0.5 text-[13px] leading-snug text-[#4d5156]">{truncate(meta.metaDescription, 160)}</p>
+          <p className="truncate text-caption text-[#202124]">{crumb}</p>
+          <p className="mt-0.5 text-h3 leading-snug text-[#1a0dab]">{truncate(meta.metaTitle, 62)}</p>
+          <p className="mt-0.5 text-small leading-snug text-[#4d5156]">{truncate(meta.metaDescription, 160)}</p>
         </div>
       </div>
 
@@ -871,7 +871,7 @@ export function MetaPanel({ project, meta, setMeta, onRegen, running, disabled, 
         <input id="seo-ogt" className="input" value={meta.ogTitle} onChange={(e) => setMeta({ ogTitle: e.target.value })} />
       </Field>
       <Field label="Social description" htmlFor="seo-ogd">
-        <AutoTextarea id="seo-ogd" value={meta.ogDescription} onChange={(v) => setMeta({ ogDescription: v })} minRows={2} className="text-[13px]" />
+        <AutoTextarea id="seo-ogd" value={meta.ogDescription} onChange={(v) => setMeta({ ogDescription: v })} minRows={2} className="text-small" />
       </Field>
       <Field label="Share image alt text" htmlFor="seo-alt" hint={heroMedia ? 'Says what your page’s main image shows. Shared links show that image once the page is published.' : undefined}>
         <input id="seo-alt" className="input" value={meta.ogImageAlt} onChange={(e) => setMeta({ ogImageAlt: e.target.value })} />
@@ -881,9 +881,9 @@ export function MetaPanel({ project, meta, setMeta, onRegen, running, disabled, 
         <div className="overflow-hidden rounded-md border border-line bg-surface">
           {heroMedia ? <ShareImage media={heroMedia} alt={meta.ogImageAlt} /> : <BrandBanner brand={project.brand} rounded={false} className="aspect-[1.91/1] w-full" />}
           <div className="border-t border-line px-3 py-2">
-            <p className="text-[11px] uppercase tracking-wide text-muted">{live ? stripProtocol(live).split('/')[0] : domain}</p>
-            <p className="truncate text-[13.5px] font-semibold">{meta.ogTitle}</p>
-            <p className="clamp-2 text-xs text-muted">{meta.ogDescription}</p>
+            <p className="text-caption uppercase tracking-wide text-muted">{live ? stripProtocol(live).split('/')[0] : domain}</p>
+            <p className="truncate text-small font-semibold">{meta.ogTitle}</p>
+            <p className="clamp-2 text-caption text-muted">{meta.ogDescription}</p>
           </div>
         </div>
       </div>
@@ -898,7 +898,7 @@ export function MetaPanel({ project, meta, setMeta, onRegen, running, disabled, 
               : 'Where will this page live? Paste its full address, or add your website in Settings. Until then the export leaves it out.'
         }
       >
-        <input id="seo-can" className="input text-[12.5px]" value={meta.canonical} onChange={(e) => setMeta({ canonical: e.target.value.trim() })} placeholder="https://" />
+        <input id="seo-can" className="input text-small" value={meta.canonical} onChange={(e) => setMeta({ canonical: e.target.value.trim() })} placeholder="https://" />
       </Field>
     </section>
   );
@@ -971,8 +971,8 @@ function SectionsPanel({
           return (
             <li key={s.id}>
               <div className={cn('flex items-center gap-2 px-3 py-2.5', !s.visible && 'opacity-60')}>
-                <span className="num w-5 text-xs font-semibold text-muted">{i + 1}</span>
-                <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{label}</span>
+                <span className="num w-5 text-caption font-semibold text-muted">{i + 1}</span>
+                <span className="min-w-0 flex-1 truncate text-small font-semibold">{label}</span>
                 <button
                   type="button"
                   className={cn('btn btn-ghost btn-icon btn-xs', open === s.id && 'bg-primary-soft')}
@@ -1004,7 +1004,7 @@ function SectionsPanel({
                     if (!busy) void rewrite(s);
                   }}
                 >
-                  <label htmlFor={`${formId}-ask`} className="text-xs font-semibold text-ink-2">
+                  <label htmlFor={`${formId}-ask`} className="text-caption font-semibold text-ink-2">
                     What should change? (optional)
                   </label>
                   <input
@@ -1029,7 +1029,7 @@ function SectionsPanel({
                     </button>
                   </div>
                   {unchanged === s.id && (
-                    <p className="text-xs text-warn" role="status">
+                    <p className="text-caption text-warn" role="status">
                       Nothing changed: only the AI can make this change.{ai.result?.note ? ` ${ai.result.note}` : ''}
                     </p>
                   )}
@@ -1039,7 +1039,7 @@ function SectionsPanel({
           );
         })}
       </ul>
-      {ai.error && <p className="px-3 pb-3 text-xs text-bad">{ai.error}</p>}
+      {ai.error && <p className="px-3 pb-3 text-caption text-bad">{ai.error}</p>}
       {ai.result && !ai.running && <AIResultBar className="border-t border-line px-3 py-2" provider={ai.result.provider} skills={ai.result.skills} note={ai.result.note} logId={ai.logId} />}
     </section>
   );

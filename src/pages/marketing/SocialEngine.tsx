@@ -79,7 +79,7 @@ export default function SocialEngine() {
         <>
           <CampaignSetup project={project} />
           <div className="flex flex-wrap items-center justify-end gap-3">
-            {invalid && <p className="text-xs text-warn">Fix the highlighted settings to continue.</p>}
+            {invalid && <p className="text-caption text-warn">Fix the highlighted settings to continue.</p>}
             {planButton}
           </div>
         </>
@@ -105,7 +105,7 @@ export default function SocialEngine() {
       )}
       {shown.has('create') && (
         <section hidden={tab !== 'create'} aria-label="Create individual post" className="panel p-4 sm:p-5">
-          <p className="mb-4 text-[13.5px] text-muted">One post at a time, outside your campaign: generate it with AI, or upload your own photo or video and let AI write the caption.</p>
+          <p className="mb-4 text-small text-muted">One post at a time, outside your campaign: generate it with AI, or upload your own photo or video and let AI write the caption.</p>
           <QuickComposer key={`${project.id}:${preset?.n ?? 0}`} initialTopic={preset?.topic} />
         </section>
       )}

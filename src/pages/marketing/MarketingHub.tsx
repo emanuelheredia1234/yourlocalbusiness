@@ -73,12 +73,12 @@ export default function MarketingHub() {
               <div className="flex items-start gap-4">
                 <ProgressRing value={st.progress} size={52} stroke={5} label={<span className="text-primary">{c.icon}</span>} />
                 <div className="min-w-0 flex-1">
-                  <h2 className="font-display text-[17px] font-semibold">{c.label}</h2>
-                  <p className="mt-0.5 text-[13px] text-muted">{c.desc}</p>
+                  <h2 className="text-h3 font-semibold">{c.label}</h2>
+                  <p className="mt-0.5 text-small text-muted">{c.desc}</p>
                 </div>
                 <ArrowRight size={18} className="mt-1 shrink-0 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-ink" />
               </div>
-              <ul className="flex flex-col gap-1.5 text-[13px]">
+              <ul className="flex flex-col gap-1.5 text-small">
                 {st.lines.map((l) => (
                   <li key={l.label} className={cn('flex items-center gap-2', l.done ? 'text-ink-2' : 'text-muted')}>
                     {l.done ? <Check size={14} className="text-good" /> : <Circle size={12} className="mx-[1px]" />}
@@ -86,15 +86,15 @@ export default function MarketingHub() {
                   </li>
                 ))}
               </ul>
-              <p className="num text-xs font-semibold text-ink-2">{st.metric}</p>
+              <p className="num text-caption font-semibold text-ink-2">{st.metric}</p>
             </button>
           );
         })}
       </section>
 
       <section className="panel p-5" aria-label="Last 30 days">
-        <h3 className="font-display text-[15px] font-semibold">Last 30 days</h3>
-        <p className="mb-3 text-[12.5px] text-muted">Real counts only. Reach, likes and clicks live on each network, and sales on your own checkout: open them there.</p>
+        <h3 className="text-h3 font-semibold">Last 30 days</h3>
+        <p className="mb-3 text-small text-muted">Real counts only. Reach, likes and clicks live on each network, and sales on your own checkout: open them there.</p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Tile label="Posted" value={String(k.posted)} />
           <Tile label="Posted by Manus" value={String(k.byManus)} />
@@ -109,8 +109,8 @@ export default function MarketingHub() {
 function Tile({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md bg-surface-2 px-3 py-2.5">
-      <p className="text-[11.5px] font-medium text-muted">{label}</p>
-      <p className="num text-[19px] font-bold">{value}</p>
+      <p className="text-caption font-medium text-muted">{label}</p>
+      <p className="num text-h3 font-semibold">{value}</p>
     </div>
   );
 }

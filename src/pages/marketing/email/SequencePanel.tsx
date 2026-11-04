@@ -36,7 +36,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h2 className="section-title">5-email nurture sequence</h2>
-          <p className="text-[13px] text-muted">
+          <p className="text-small text-muted">
             {project.marketing.leadMagnet ? <>For everyone who claims “{project.marketing.leadMagnet.title}”: set it up as an automation in your email provider.</> : 'Tip: create the lead magnet first so email 1 can deliver it.'} Delivery → quick win → myth-busting → objections → offer.
           </p>
         </div>
@@ -65,7 +65,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
       ) : (
         <>
           {emails.length > 0 && (
-            <p className="flex items-center gap-1.5 text-xs text-muted">
+            <p className="flex items-center gap-1.5 text-caption text-muted">
               <Clock size={13} /> The full sequence runs over <b className="num text-ink">{totalDays < 1 ? `${Math.round(totalDays * 24)} hours` : `${Math.round(totalDays * 10) / 10} days`}</b>.
             </p>
           )}
@@ -75,24 +75,24 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
               const pv = preview[e.id];
               return (
                 <li key={e.id} className="relative pl-12">
-                  <span className="num absolute left-0 top-3 flex h-10 w-10 items-center justify-center rounded-full border-2 border-surface bg-primary text-[14px] font-bold text-on-primary shadow-card">{i + 1}</span>
+                  <span className="num absolute left-0 top-3 flex h-10 w-10 items-center justify-center rounded-full border-2 border-surface bg-primary text-body font-semibold text-on-primary shadow-card">{i + 1}</span>
                   <div className="panel overflow-hidden">
                     <button className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-left" onClick={() => setOpen(isOpen ? null : e.id)} aria-expanded={isOpen}>
                       <span className="badge bg-primary-soft text-primary">{e.purpose}</span>
-                      <span className="flex items-center gap-1 text-xs text-muted">
+                      <span className="flex items-center gap-1 text-caption text-muted">
                         <Clock size={12} /> {delayLabel(e, i)}
                       </span>
-                      <span className="w-full min-w-0 truncate text-[14px] font-semibold sm:w-auto sm:flex-1">{renderTokens(e.subject, tokens)}</span>
+                      <span className="w-full min-w-0 truncate text-body font-semibold sm:w-auto sm:flex-1">{renderTokens(e.subject, tokens)}</span>
                       <ChevronDown size={16} className={cn('ml-auto shrink-0 text-muted transition-transform', isOpen && 'rotate-180')} />
                     </button>
                     {isOpen && (
                       <div className="border-t border-line p-4">
                         <div className="mb-3 flex flex-wrap items-center gap-2">
                           <div className="inline-flex rounded-md border border-line p-0.5">
-                            <button className={cn('flex items-center gap-1 rounded px-2.5 py-1 text-xs font-semibold', !pv ? 'bg-ink text-surface' : 'text-muted')} onClick={() => setPreview((x) => ({ ...x, [e.id]: false }))}>
+                            <button className={cn('flex items-center gap-1 rounded px-2.5 py-1 text-caption font-semibold', !pv ? 'bg-ink text-surface' : 'text-muted')} onClick={() => setPreview((x) => ({ ...x, [e.id]: false }))}>
                               <PenLine size={12} /> Edit
                             </button>
-                            <button className={cn('flex items-center gap-1 rounded px-2.5 py-1 text-xs font-semibold', pv ? 'bg-ink text-surface' : 'text-muted')} onClick={() => setPreview((x) => ({ ...x, [e.id]: true }))}>
+                            <button className={cn('flex items-center gap-1 rounded px-2.5 py-1 text-caption font-semibold', pv ? 'bg-ink text-surface' : 'text-muted')} onClick={() => setPreview((x) => ({ ...x, [e.id]: true }))}>
                               <Eye size={12} /> Preview
                             </button>
                           </div>
@@ -121,14 +121,14 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
                               <input id={`pre-${e.id}`} className="input" value={e.preview} onChange={(ev) => patch(e.id, { preview: ev.target.value })} />
                             </Field>
                             <Field label="Body" htmlFor={`body-${e.id}`} hint="Merge tags: {{first_name}}, {{lead_magnet_link}}, {{product_link}}, {{sender_name}}">
-                              <AutoTextarea id={`body-${e.id}`} value={e.body} onChange={(v) => patch(e.id, { body: v })} minRows={8} className="text-[13.5px] leading-relaxed" />
+                              <AutoTextarea id={`body-${e.id}`} value={e.body} onChange={(v) => patch(e.id, { body: v })} minRows={8} className="text-small leading-relaxed" />
                             </Field>
                             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                               <Field label="Button label" htmlFor={`cta-${e.id}`}>
                                 <input id={`cta-${e.id}`} className="input" value={e.ctaLabel} onChange={(ev) => patch(e.id, { ctaLabel: ev.target.value })} />
                               </Field>
                               <Field label="Button link" htmlFor={`url-${e.id}`}>
-                                <input id={`url-${e.id}`} className="input text-[13px]" value={e.ctaUrl} onChange={(ev) => patch(e.id, { ctaUrl: ev.target.value })} />
+                                <input id={`url-${e.id}`} className="input text-small" value={e.ctaUrl} onChange={(ev) => patch(e.id, { ctaUrl: ev.target.value })} />
                               </Field>
                             </div>
                           </div>

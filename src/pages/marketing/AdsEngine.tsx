@@ -84,7 +84,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <section className="panel flex min-w-0 flex-col gap-4 p-4 sm:p-5" aria-label="Campaign settings">
           <div className="flex flex-wrap items-center gap-2">
-            <input className="min-w-[200px] flex-1 rounded bg-transparent px-1 py-1 font-display text-[18px] font-semibold outline-none hover:bg-surface-2 focus:bg-surface-2" value={c.name} onChange={(e) => set({ name: e.target.value })} aria-label="Campaign name" />
+            <input className="min-w-[200px] flex-1 rounded bg-transparent px-1 py-1 text-h3 font-semibold outline-none hover:bg-surface-2 focus:bg-surface-2" value={c.name} onChange={(e) => set({ name: e.target.value })} aria-label="Campaign name" />
             <span className="badge bg-surface-2 text-muted">Plan</span>
           </div>
           <fieldset className="flex flex-col gap-4">
@@ -92,8 +92,8 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4" role="radiogroup" aria-label="Objective">
                 {AD_OBJECTIVES.map((o) => (
                   <button key={o.id} role="radio" aria-checked={c.objective === o.id} className={cn('rounded-md border p-2.5 text-left', c.objective === o.id ? 'border-primary bg-primary-soft' : 'border-line hover:bg-surface-2')} onClick={() => set({ objective: o.id as AdObjective })}>
-                    <span className="block text-[13px] font-semibold">{o.label}</span>
-                    <span className="block text-[11px] leading-snug text-muted">{o.desc}</span>
+                    <span className="block text-small font-semibold">{o.label}</span>
+                    <span className="block text-caption leading-snug text-muted">{o.desc}</span>
                   </button>
                 ))}
               </div>
@@ -106,8 +106,8 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
                     <label key={p.id} className={cn('flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5', on ? 'border-primary bg-primary-soft/60' : 'border-line hover:bg-surface-2')}>
                       <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[rgb(var(--primary))]" checked={on} onChange={() => set({ platforms: on ? c.platforms.filter((x) => x !== p.id) : [...c.platforms, p.id as AdPlatform] })} />
                       <span>
-                        <span className="block text-[13px] font-semibold">{p.label}</span>
-                        <span className="block text-[11.5px] text-muted">{p.desc}</span>
+                        <span className="block text-small font-semibold">{p.label}</span>
+                        <span className="block text-caption text-muted">{p.desc}</span>
                       </span>
                     </label>
                   );
@@ -147,7 +147,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
                   .filter((s) => !c.interests.includes(s))
                   .slice(0, 8)
                   .map((s) => (
-                    <button key={s} type="button" className="chip text-[11.5px]" onClick={() => set({ interests: [...c.interests, s] })}>
+                    <button key={s} type="button" className="chip text-caption" onClick={() => set({ interests: [...c.interests, s] })}>
                       + {s}
                     </button>
                   ))}
@@ -182,7 +182,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
           <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
             <div>
               <h2 className="section-title">A/B creatives</h2>
-              <p className="text-[13px] text-muted">Three angles to test against each other. Untick a variant to leave it out of the campaign.</p>
+              <p className="text-small text-muted">Three angles to test against each other. Untick a variant to leave it out of the campaign.</p>
             </div>
           </div>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -204,12 +204,12 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
             {c.audiences.map((a) => (
               <div key={a.id} className="panel flex flex-col gap-2 p-4">
                 <div className="flex items-start justify-between gap-2">
-                  <p className="text-[14px] font-semibold">{a.name}</p>
+                  <p className="text-body font-semibold">{a.name}</p>
                 </div>
-                <p className="text-[12.5px] text-muted">{a.description}</p>
+                <p className="text-small text-muted">{a.description}</p>
                 <div className="mt-auto flex flex-wrap gap-1">
                   {a.interests.map((i) => (
-                    <span key={i} className="rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-ink-2">
+                    <span key={i} className="rounded bg-surface-2 px-1.5 py-0.5 text-caption text-ink-2">
                       {i}
                     </span>
                   ))}
@@ -240,15 +240,15 @@ function ExportPanel({ c, finalUrl, onFinalUrl, onExported }: { c: AdCampaign; f
   return (
     <aside className="flex min-w-0 flex-col gap-4">
       <section className="panel p-4" aria-label="Budget">
-        <h2 className="mb-1 text-[14px] font-semibold">Budget</h2>
-        <p className="num text-[22px] font-bold">{fmtMoney(c.dailyBudget * c.durationDays)}</p>
-        <p className="text-xs text-muted">
+        <h2 className="mb-1 text-body font-semibold">Budget</h2>
+        <p className="num text-h2 font-semibold">{fmtMoney(c.dailyBudget * c.durationDays)}</p>
+        <p className="text-caption text-muted">
           {fmtMoney(c.dailyBudget)}/day × {c.durationDays} days, the amount you set. Reach, clicks and costs depend on each platform’s auction: its ads manager estimates them when you set the campaign up.
         </p>
       </section>
       <section className="panel flex flex-col gap-3 p-4" aria-label="Run it">
-        <h2 className="text-[14px] font-semibold">Run it on the platforms</h2>
-        <p className="text-xs text-muted">This app doesn’t run or pay for ads. Copy the plan into each platform’s ads manager, where you set the budget and launch it.</p>
+        <h2 className="text-body font-semibold">Run it on the platforms</h2>
+        <p className="text-caption text-muted">This app doesn’t run or pay for ads. Copy the plan into each platform’s ads manager, where you set the budget and launch it.</p>
         <Field label="Final URL" htmlFor="ad-final" hint="The page people land on when they click your ad.">
           <input id="ad-final" className="input" placeholder="https://yourbusiness.com/offer" value={c.finalUrl ?? finalUrl} onChange={(e) => onFinalUrl(e.target.value)} onBlur={(e) => onFinalUrl(ensureUrl(e.target.value))} />
         </Field>
@@ -271,8 +271,8 @@ function ExportPanel({ c, finalUrl, onFinalUrl, onExported }: { c: AdCampaign; f
             <Download size={14} /> Ads CSV
           </button>
         </div>
-        {!hasCreatives ? <p className="text-xs text-muted">Generate creatives first.</p> : !finalUrl && <p className="text-xs text-warn">Add the page your ads link to before you export them.</p>}
-        <ul className="flex flex-col gap-1.5 text-[13px]">
+        {!hasCreatives ? <p className="text-caption text-muted">Generate creatives first.</p> : !finalUrl && <p className="text-caption text-warn">Add the page your ads link to before you export them.</p>}
+        <ul className="flex flex-col gap-1.5 text-small">
           {(c.platforms.length ? c.platforms : (['meta'] as AdPlatform[])).map((p) => (
             <li key={p}>
               <a href={AD_MANAGERS[p].url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-semibold text-primary hover:underline">
@@ -281,7 +281,7 @@ function ExportPanel({ c, finalUrl, onFinalUrl, onExported }: { c: AdCampaign; f
             </li>
           ))}
         </ul>
-        {c.exportedAt && <p className="text-xs text-muted">Last copied or exported {fmtRelative(c.exportedAt)}.</p>}
+        {c.exportedAt && <p className="text-caption text-muted">Last copied or exported {fmtRelative(c.exportedAt)}.</p>}
       </section>
     </aside>
   );
@@ -294,34 +294,34 @@ function CreativeCard({ project, site: finalUrl, cr, selected, onSelect, onChang
   return (
     <article className={cn('panel flex min-w-0 flex-col overflow-hidden', selected ? 'ring-2 ring-primary' : 'opacity-80')}>
       <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
-        <label className="flex items-center gap-2 text-[13px] font-semibold">
+        <label className="flex items-center gap-2 text-small font-semibold">
           <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={selected} onChange={(e) => onSelect(e.target.checked)} />
           Variant {cr.variant}
         </label>
-        <span className="text-xs text-muted">{cr.angle}</span>
+        <span className="text-caption text-muted">{cr.angle}</span>
       </div>
       <div className="bg-white text-[#1c1e21]">
         <div className="flex items-center gap-2 px-3 py-2.5">
           <LogoMark colors={project.brand.colors} logo={project.brand.logo} name={project.brand.name} size={32} />
           <div className="min-w-0 flex-1 leading-tight">
-            <p className="truncate text-[13px] font-semibold">{project.brand.name}</p>
-            <p className="flex items-center gap-1 text-[11px] text-[#65676b]">
+            <p className="truncate text-small font-semibold">{project.brand.name}</p>
+            <p className="flex items-center gap-1 text-caption text-[#65676b]">
               Sponsored · <Globe size={10} />
             </p>
           </div>
           <MoreHorizontal size={16} className="text-[#65676b]" />
         </div>
-        <p className="whitespace-pre-line px-3 pb-2.5 text-[13px] leading-snug">{cr.primaryText}</p>
+        <p className="whitespace-pre-line px-3 pb-2.5 text-small leading-snug">{cr.primaryText}</p>
         <PostVisual style={cr.style} headline={cr.visualHeadline} brand={project.brand} watermark aspect={cr.format === 'video' ? '4/5' : '1/1'} className="rounded-none" />
         <div className="flex items-center gap-3 bg-[#f0f2f5] px-3 py-2.5">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[10.5px] uppercase text-[#65676b]">{site}</p>
-            <p className="truncate text-[14px] font-semibold">{cr.headline}</p>
-            <p className="truncate text-[12px] text-[#65676b]">{cr.description}</p>
+            <p className="truncate text-caption uppercase text-[#65676b]">{site}</p>
+            <p className="truncate text-body font-semibold">{cr.headline}</p>
+            <p className="truncate text-caption text-[#65676b]">{cr.description}</p>
           </div>
-          <span className="shrink-0 rounded-md bg-[#e4e6eb] px-3 py-1.5 text-[13px] font-semibold">{cr.cta}</span>
+          <span className="shrink-0 rounded-md bg-[#e4e6eb] px-3 py-1.5 text-small font-semibold">{cr.cta}</span>
         </div>
-        <div className="flex items-center gap-4 border-t border-[#e4e6eb] px-3 py-1.5 text-[12px] text-[#65676b]">
+        <div className="flex items-center gap-4 border-t border-[#e4e6eb] px-3 py-1.5 text-caption text-[#65676b]">
           <span className="flex items-center gap-1">
             <ThumbsUp size={12} /> Like
           </span>
@@ -336,7 +336,7 @@ function CreativeCard({ project, site: finalUrl, cr, selected, onSelect, onChang
         {editing && (
           <div className="grid gap-2.5">
             <Field label="Primary text" right={`${cr.primaryText.length}/125`}>
-              <AutoTextarea value={cr.primaryText} onChange={(v) => onChange({ primaryText: v })} minRows={2} className="text-[13px]" />
+              <AutoTextarea value={cr.primaryText} onChange={(v) => onChange({ primaryText: v })} minRows={2} className="text-small" />
             </Field>
             <Field label="Headline" right={`${cr.headline.length}/40`}>
               <input className="input" value={cr.headline} onChange={(e) => onChange({ headline: e.target.value })} />
@@ -376,7 +376,7 @@ function CreativeCard({ project, site: finalUrl, cr, selected, onSelect, onChang
             </div>
           </div>
         )}
-        {!editing && <p className="text-[11.5px] text-muted">{STYLE_LABEL[cr.style]} · {cr.format === 'video' ? 'Video' : 'Image'} ad</p>}
+        {!editing && <p className="text-caption text-muted">{STYLE_LABEL[cr.style]} · {cr.format === 'video' ? 'Video' : 'Image'} ad</p>}
       </div>
     </article>
   );
@@ -391,25 +391,25 @@ function SearchAds({ project, site, search, onChange }: { project: Project; site
           <Search size={17} className="text-primary" /> Google search ad
         </h2>
         <div className="rounded-md border border-line bg-white p-4 text-left" style={{ fontFamily: 'Arial, sans-serif' }}>
-          <p className="text-[12px] font-bold text-[#202124]">Sponsored</p>
-          <p className="mt-1 flex items-center gap-2 text-[12px] text-[#202124]">
+          <p className="text-caption font-semibold text-[#202124]">Sponsored</p>
+          <p className="mt-1 flex items-center gap-2 text-caption text-[#202124]">
             <span className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full bg-[#f1f3f4]">
               <LogoMark colors={project.brand.colors} logo={project.brand.logo} name={project.brand.name} size={18} />
             </span>
             <span>
               {project.brand.name}
-              <span className="block text-[11px] text-[#4d5156]">
+              <span className="block text-caption text-[#4d5156]">
                 {domain}/{search.path.join('/')}
               </span>
             </span>
           </p>
-          <p className="mt-1.5 text-[19px] leading-snug text-[#1a0dab]">{search.headlines.slice(0, 3).join(' | ')}</p>
-          <p className="mt-1 text-[13.5px] leading-snug text-[#4d5156]">{search.descriptions.join(' ')}</p>
+          <p className="mt-1.5 text-h3 leading-snug text-[#1a0dab]">{search.headlines.slice(0, 3).join(' | ')}</p>
+          <p className="mt-1 text-small leading-snug text-[#4d5156]">{search.descriptions.join(' ')}</p>
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5">
             {search.sitelinks.map((s) => (
-              <p key={s.title} className="text-[13px] leading-tight">
+              <p key={s.title} className="text-small leading-tight">
                 <span className="text-[#1a0dab]">{s.title}</span>
-                <span className="block text-[12px] text-[#4d5156]">{s.desc}</span>
+                <span className="block text-caption text-[#4d5156]">{s.desc}</span>
               </p>
             ))}
           </div>
@@ -418,7 +418,7 @@ function SearchAds({ project, site, search, onChange }: { project: Project; site
       <div className="panel grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
         <Field label="Headlines (≤30 characters, one per line)" className="sm:col-span-2">
           <LinesEditor values={search.headlines} onChange={(v) => onChange({ ...search, headlines: v })} minRows={4} />
-          {search.headlines.some((h) => h.length > 30) && <p className="mt-1 text-xs text-warn">Some headlines are over 30 characters.</p>}
+          {search.headlines.some((h) => h.length > 30) && <p className="mt-1 text-caption text-warn">Some headlines are over 30 characters.</p>}
         </Field>
         <Field label="Descriptions (≤90 characters)" className="sm:col-span-2">
           <LinesEditor values={search.descriptions} onChange={(v) => onChange({ ...search, descriptions: v })} minRows={2} />

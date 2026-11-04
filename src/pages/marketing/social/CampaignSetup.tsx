@@ -45,7 +45,7 @@ export function CampaignSetup({ project }: { project: Project }) {
         <h2 className="section-title mb-1 flex items-center gap-2">
           <CalendarDays size={17} className="text-primary" /> Posting cadence
         </h2>
-        <p className="mb-4 text-[13px] text-muted">Pick your posting days, how many posts per day, and how many of those are videos.</p>
+        <p className="mb-4 text-small text-muted">Pick your posting days, how many posts per day, and how many of those are videos.</p>
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
           <Field label="Posting days">
             <div className="flex flex-wrap gap-1.5" role="group" aria-label="Posting days">
@@ -93,7 +93,7 @@ export function CampaignSetup({ project }: { project: Project }) {
             <input id="cmp-start" type="date" className="input w-[180px]" value={cfg.startDate} onChange={(e) => e.target.value && set({ startDate: e.target.value })} />
           </Field>
         </div>
-        <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-md bg-surface-2 px-4 py-3 text-[13px]">
+        <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-md bg-surface-2 px-4 py-3 text-small">
           <span>
             <b className="num">{c.perWeek}</b> posts/week
           </span>
@@ -116,8 +116,8 @@ export function CampaignSetup({ project }: { project: Project }) {
 
       <section className="panel p-4 sm:p-5" aria-label="Visual styles">
         <h2 className="section-title mb-1">Visual styles</h2>
-        <p className="mb-4 text-[13px] text-muted">Select the looks to rotate through. Every preview uses your brand colors.</p>
-        <h3 className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold">
+        <p className="mb-4 text-small text-muted">Select the looks to rotate through. Every preview uses your brand colors.</p>
+        <h3 className="mb-2 flex items-center gap-1.5 text-small font-semibold">
           <ImageIcon size={14} /> Image styles
         </h3>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
@@ -128,7 +128,7 @@ export function CampaignSetup({ project }: { project: Project }) {
           ))}
         </div>
         {needImageStyle && <Warn>Choose at least one image style for your image posts.</Warn>}
-        <h3 className="mb-2 mt-5 flex items-center gap-1.5 text-[13px] font-semibold">
+        <h3 className="mb-2 mt-5 flex items-center gap-1.5 text-small font-semibold">
           <Clapperboard size={14} /> Video styles
         </h3>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
@@ -145,7 +145,7 @@ export function CampaignSetup({ project }: { project: Project }) {
         <h2 className="section-title mb-1 flex items-center gap-2">
           <Globe size={17} className="text-primary" /> Platforms & accounts
         </h2>
-        <p className="mb-4 text-[13px] text-muted">Choose where this campaign posts, and add your handle on each. This app doesn’t log in to your accounts: Manus posts for you, signed in as you in its own browser, or you post yourself. The handles show in previews and tell Manus which account to use.</p>
+        <p className="mb-4 text-small text-muted">Choose where this campaign posts, and add your handle on each. This app doesn’t log in to your accounts: Manus posts for you, signed in as you in its own browser, or you post yourself. The handles show in previews and tell Manus which account to use.</p>
         <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
           {POST_PLATFORMS.map((p) => {
             const on = cfg.platforms.includes(p);
@@ -175,14 +175,14 @@ export function CampaignSetup({ project }: { project: Project }) {
         <h2 className="section-title mb-1 flex items-center gap-2">
           <Users size={17} className="text-primary" /> Post type mix
         </h2>
-        <p className="mb-4 text-[13px] text-muted">Weight the five post types. The plan also shifts the mix week by week, from awareness to conversion.</p>
+        <p className="mb-4 text-small text-muted">Weight the five post types. The plan also shifts the mix week by week, from awareness to conversion.</p>
         <ul className="flex flex-col gap-3">
           {POST_TYPES.map((t) => (
             <li key={t.id} className="flex flex-wrap items-center gap-3">
               <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: `rgb(var(--${t.slot}))` }} />
               <span className="min-w-[180px] flex-1">
-                <span className="block text-[13.5px] font-semibold">{t.label}</span>
-                <span className="block text-xs text-muted">
+                <span className="block text-small font-semibold">{t.label}</span>
+                <span className="block text-caption text-muted">
                   {t.desc} Good for {t.goal.toLowerCase()}.
                 </span>
               </span>
@@ -207,8 +207,8 @@ function StyleCard({ checked, onToggle, label, desc, children }: { checked: bool
         <Check size={13} />
       </span>
       <span className="p-2.5">
-        <span className="block text-[12.5px] font-semibold leading-tight">{label}</span>
-        <span className="mt-0.5 block text-[11px] leading-snug text-muted">{desc}</span>
+        <span className="block text-small font-semibold leading-tight">{label}</span>
+        <span className="mt-0.5 block text-caption leading-snug text-muted">{desc}</span>
       </span>
     </label>
   );
@@ -216,7 +216,7 @@ function StyleCard({ checked, onToggle, label, desc, children }: { checked: bool
 
 function Warn({ children }: { children: React.ReactNode }) {
   return (
-    <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-warn">
+    <p className="mt-3 flex items-center gap-1.5 text-caption font-medium text-warn">
       <AlertTriangle size={13} /> {children}
     </p>
   );

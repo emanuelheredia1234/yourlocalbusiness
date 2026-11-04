@@ -30,7 +30,7 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
         <div className="flex flex-wrap items-start gap-4">
           <div className="min-w-[240px] flex-1">
             <p className="eyebrow mb-1">Strategy</p>
-            <p className="text-[14px] leading-relaxed text-ink-2">{plan.strategy}</p>
+            <p className="text-body leading-relaxed text-ink-2">{plan.strategy}</p>
           </div>
           <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat label="Posts" value={String(s.total)} icon={<Megaphone size={12} />} />
@@ -41,14 +41,14 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
         </div>
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
           <div>
-            <p className="mb-2 text-xs font-semibold text-muted">Post type mix</p>
+            <p className="mb-2 text-caption font-semibold text-muted">Post type mix</p>
             <StackedBar parts={POST_TYPES.map((t) => ({ key: t.id, label: t.short, value: s.byType[t.id], color: `rgb(var(--${t.slot}))` }))} />
           </div>
           <div>
-            <p className="mb-2 text-xs font-semibold text-muted">Platforms</p>
+            <p className="mb-2 text-caption font-semibold text-muted">Platforms</p>
             <div className="flex flex-wrap gap-x-4 gap-y-2">
               {platforms.map(([p, n]) => (
-                <span key={p} className="flex items-center gap-1.5 text-[13px]">
+                <span key={p} className="flex items-center gap-1.5 text-small">
                   <PlatformChip platform={p} showLabel={false} /> {PLATFORMS[p].label} <b className="num">{n}</b>
                 </span>
               ))}
@@ -61,19 +61,19 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
         {plan.weeks.map((w) => (
           <div key={w.week} className="panel flex flex-col gap-1.5 p-3.5">
             <p className="eyebrow">Week {w.week}</p>
-            <p className="text-[14px] font-semibold leading-snug">{w.theme}</p>
-            <p className="text-xs text-ink-2">{w.goal}</p>
-            <p className="mt-auto pt-1 text-[11.5px] text-muted">
+            <p className="text-body font-semibold leading-snug">{w.theme}</p>
+            <p className="text-caption text-ink-2">{w.goal}</p>
+            <p className="mt-auto pt-1 text-caption text-muted">
               <b className="text-ink-2">KPI:</b> {w.kpi}
             </p>
-            <p className="text-[11.5px] italic text-muted">“{w.keyMessage}”</p>
+            <p className="text-caption italic text-muted">“{w.keyMessage}”</p>
           </div>
         ))}
       </section>
 
       <section className="panel overflow-hidden" aria-label="30-day calendar">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
-          <h3 className="flex items-center gap-2 text-[14px] font-semibold">
+          <h3 className="flex items-center gap-2 text-body font-semibold">
             <CalendarDays size={16} className="text-primary" /> 30-day plan · {fmtDate(plan.days[0].date)} – {fmtDate(plan.days[plan.days.length - 1].date)}
           </h3>
           <Segmented
@@ -90,7 +90,7 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
           <div className="overflow-x-auto p-3">
             <div className="grid min-w-[700px] grid-cols-7 gap-1.5">
               {WEEKDAYS.map((d) => (
-                <div key={d} className="px-1 pb-1 text-center text-[11px] font-semibold uppercase tracking-wide text-muted">
+                <div key={d} className="px-1 pb-1 text-center text-caption font-semibold uppercase tracking-wide text-muted">
                   {d}
                 </div>
               ))}
@@ -100,22 +100,22 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
               {plan.days.map((d) => (
                 <button key={d.date} onClick={() => setDay(d)} className={cn('flex min-h-[96px] flex-col gap-1 rounded-md border p-1.5 text-left transition-colors hover:border-primary', d.posting ? 'border-line bg-surface' : 'border-dashed border-line bg-surface-2/40')} aria-label={`${fmtDate(d.date, { weekday: 'long', month: 'long', day: 'numeric' })}: ${d.slots.length} posts`}>
                   <span className="flex items-center justify-between gap-1">
-                    <span className="num text-[12px] font-bold">{fmtDate(d.date, { day: 'numeric' })}</span>
+                    <span className="num text-caption font-semibold">{fmtDate(d.date, { day: 'numeric' })}</span>
                     <span className="h-1.5 w-6 rounded-full" style={{ background: PHASE_TONE[d.phase] ?? 'rgb(var(--line))' }} title={d.phase} />
                   </span>
                   {d.slots.map((sl) => (
-                    <span key={sl.id} className="flex items-center gap-1 rounded bg-surface-2 px-1 py-0.5 text-[10.5px] leading-tight" title={`${fmtTime(sl.time)} · ${PLATFORMS[sl.platform].label} · ${POST_TYPE_MAP[sl.postType].label}: ${sl.topic}`}>
+                    <span key={sl.id} className="flex items-center gap-1 rounded bg-surface-2 px-1 py-0.5 text-caption leading-tight" title={`${fmtTime(sl.time)} · ${PLATFORMS[sl.platform].label} · ${POST_TYPE_MAP[sl.postType].label}: ${sl.topic}`}>
                       <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: `rgb(var(--${POST_TYPE_MAP[sl.postType].slot}))` }} />
                       {sl.format === 'video' ? <Clapperboard size={9} className="shrink-0" /> : <ImageIcon size={9} className="shrink-0" />}
                       <span className="min-w-0 truncate">{POST_TYPE_MAP[sl.postType].short}</span>
                       {covered.has(sl.id) && <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-good" title="Post generated" />}
                     </span>
                   ))}
-                  {!d.posting && <span className="mt-auto text-[10px] text-faint">Rest day</span>}
+                  {!d.posting && <span className="mt-auto text-caption text-faint">Rest day</span>}
                 </button>
               ))}
             </div>
-            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 px-1 text-[11.5px] text-muted">
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 px-1 text-caption text-muted">
               {POST_TYPES.map((t) => (
                 <span key={t.id} className="flex items-center gap-1.5">
                   <span className="h-2 w-2 rounded-full" style={{ background: `rgb(var(--${t.slot}))` }} /> {t.short}
@@ -132,7 +132,7 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
       </section>
 
       <Modal open={!!dayLive} onClose={() => setDay(null)} title={dayLive ? fmtDate(dayLive.date, { weekday: 'long', month: 'long', day: 'numeric' }) : ''} subtitle={dayLive ? `${dayLive.phase} phase · week ${dayLive.week}` : ''} size="md">
-        {dayLive && (dayLive.slots.length ? <SlotList slots={dayLive.slots} covered={covered} /> : <p className="py-6 text-center text-[13px] text-muted">Rest day: no posts planned. Turn this weekday on in the setup to add posts.</p>)}
+        {dayLive && (dayLive.slots.length ? <SlotList slots={dayLive.slots} covered={covered} /> : <p className="py-6 text-center text-small text-muted">Rest day: no posts planned. Turn this weekday on in the setup to add posts.</p>)}
       </Modal>
     </div>
   );
@@ -141,11 +141,11 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
 function Stat({ label, value, icon }: { label: string; value: string; icon: React.ReactNode }) {
   return (
     <div className="rounded-md bg-surface-2 px-3 py-2">
-      <dt className="flex items-center gap-1 text-[11px] font-medium text-muted">
+      <dt className="flex items-center gap-1 text-caption font-medium text-muted">
         {icon}
         {label}
       </dt>
-      <dd className="num text-[17px] font-bold">{value}</dd>
+      <dd className="num text-h3 font-semibold">{value}</dd>
     </div>
   );
 }
@@ -155,7 +155,7 @@ function SlotList({ slots, covered }: { slots: PlanSlot[]; covered: Set<string> 
     <ul className="flex flex-col gap-3">
       {slots.map((s) => (
         <li key={s.id} className="rounded-md border border-line p-3">
-          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-caption">
             <span className="num font-semibold">{fmtTime(s.time)}</span>
             <PlatformChip platform={s.platform} />
             <span className="badge bg-surface-2 text-ink-2">{s.format === 'video' ? 'Video' : 'Image'}</span>
@@ -169,7 +169,7 @@ function SlotList({ slots, covered }: { slots: PlanSlot[]; covered: Set<string> 
             Topic
           </label>
           <input id={`topic-${s.id}`} className="input" defaultValue={s.topic} onBlur={(e) => e.target.value.trim() && e.target.value !== s.topic && setSlotTopic(s.id, e.target.value.trim())} />
-          {covered.has(s.id) && <p className="mt-1.5 text-[11.5px] text-good">Post already generated. Edit it in the batch below.</p>}
+          {covered.has(s.id) && <p className="mt-1.5 text-caption text-good">Post already generated. Edit it in the batch below.</p>}
         </li>
       ))}
     </ul>
@@ -180,8 +180,8 @@ function SlotTable({ plan, covered }: { plan: CampaignPlan; covered: Set<string>
   const rows = useMemo(() => plan.days.flatMap((d) => d.slots.map((s) => ({ d, s }))), [plan]);
   return (
     <div className="max-h-[560px] overflow-auto scroll-thin">
-      <table className="w-full min-w-[760px] text-left text-[13px]">
-        <thead className="sticky top-0 z-10 border-b border-line bg-surface text-xs text-muted">
+      <table className="w-full min-w-[760px] text-left text-small">
+        <thead className="sticky top-0 z-10 border-b border-line bg-surface text-caption text-muted">
           <tr>
             <th className="px-4 py-2 font-medium">Date</th>
             <th className="px-2 py-2 font-medium">Platform</th>
@@ -193,22 +193,22 @@ function SlotTable({ plan, covered }: { plan: CampaignPlan; covered: Set<string>
         <tbody className="divide-y divide-line">
           {rows.map(({ d, s }) => (
             <tr key={s.id}>
-              <td className="num whitespace-nowrap px-4 py-2 text-xs">
+              <td className="num whitespace-nowrap px-4 py-2 text-caption">
                 {fmtDate(d.date, { weekday: 'short', month: 'short', day: 'numeric' })} · {fmtTime(s.time)}
               </td>
               <td className="px-2 py-2">
-                <span className="flex items-center gap-1.5 text-xs">
+                <span className="flex items-center gap-1.5 text-caption">
                   <span className="flex h-5 w-5 items-center justify-center rounded text-white" style={{ background: PLATFORMS[s.platform].color }}>
                     <PlatformGlyph platform={s.platform} size={11} />
                   </span>
                   {PLATFORMS[s.platform].label}
                 </span>
               </td>
-              <td className="px-2 py-2 text-xs text-ink-2">
+              <td className="px-2 py-2 text-caption text-ink-2">
                 {s.format === 'video' ? 'Video' : 'Image'} · {STYLE_LABEL[s.style]}
               </td>
               <td className="px-2 py-2">
-                <span className="flex items-center gap-1.5 whitespace-nowrap text-xs font-medium">
+                <span className="flex items-center gap-1.5 whitespace-nowrap text-caption font-medium">
                   <span className="h-2 w-2 rounded-full" style={{ background: `rgb(var(--${POST_TYPE_MAP[s.postType].slot}))` }} />
                   {POST_TYPE_MAP[s.postType].short}
                 </span>

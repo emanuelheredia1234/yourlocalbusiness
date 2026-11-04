@@ -27,12 +27,12 @@ export function Subscribers({ project }: { project: Project }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="rounded-md border border-line bg-surface-2/60 px-3 py-2 text-[13px] text-ink-2">
+      <p className="rounded-md border border-line bg-surface-2/60 px-3 py-2 text-small text-ink-2">
         Your email provider collects sign-ups from your opt-in page and tracks opens and clicks. This list is for the people you bring in: import a CSV export from your provider to keep a copy here.
       </p>
       <section className="panel overflow-hidden">
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
-          <p className="text-[13px] font-semibold">
+          <p className="text-small font-semibold">
             {subs.length} subscriber{subs.length === 1 ? '' : 's'}
           </p>
           <div className="ml-auto flex flex-wrap gap-1.5">
@@ -61,8 +61,8 @@ export function Subscribers({ project }: { project: Project }) {
           <Empty className="m-4" icon={<Users size={20} />} title="No subscribers yet" body="Import a CSV from your email provider to see your list here." />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[520px] text-left text-[13px]">
-              <thead className="border-b border-line text-xs text-muted">
+            <table className="w-full min-w-[520px] text-left text-small">
+              <thead className="border-b border-line text-caption text-muted">
                 <tr>
                   <th className="px-4 py-2 font-medium">Subscriber</th>
                   <th className="px-2 py-2 font-medium">Source</th>
@@ -75,10 +75,10 @@ export function Subscribers({ project }: { project: Project }) {
                   <tr key={s.id}>
                     <td className="px-4 py-2.5">
                       <span className="block font-semibold">{s.name}</span>
-                      <span className="block text-xs text-muted">{s.email}</span>
+                      <span className="block text-caption text-muted">{s.email}</span>
                     </td>
-                    <td className="px-2 py-2.5 text-xs text-ink-2">{SOURCE[s.source] ?? s.source}</td>
-                    <td className="px-2 py-2.5 text-xs text-muted">{fmtRelative(s.joinedAt)}</td>
+                    <td className="px-2 py-2.5 text-caption text-ink-2">{SOURCE[s.source] ?? s.source}</td>
+                    <td className="px-2 py-2.5 text-caption text-muted">{fmtRelative(s.joinedAt)}</td>
                     <td className="px-4 py-2.5 text-right">
                       <button
                         className="btn btn-ghost btn-icon btn-xs text-muted hover:text-bad"
@@ -94,7 +94,7 @@ export function Subscribers({ project }: { project: Project }) {
                 ))}
               </tbody>
             </table>
-            {subs.length > 500 && <p className="px-4 py-2 text-xs text-muted">Showing the first 500. Export the CSV for everyone.</p>}
+            {subs.length > 500 && <p className="px-4 py-2 text-caption text-muted">Showing the first 500. Export the CSV for everyone.</p>}
           </div>
         )}
       </section>

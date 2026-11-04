@@ -63,7 +63,7 @@ export function BatchView({ project, posts, covered }: { project: Project; posts
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h2 className="section-title">Ready-to-publish posts</h2>
-          <p className="text-[13px] text-muted">
+          <p className="text-small text-muted">
             {complete ? 'Every slot in your 30-day plan has a post.' : `Next batch covers ${fmtDate(plan.days[offset].date)} – ${fmtDate(plan.days[Math.min(plan.days.length - 1, offset + 6)].date)}.`} Each post has a visual mockup, caption (hook, body, CTA), hashtags, platform and time.
           </p>
         </div>
@@ -135,13 +135,13 @@ export function BatchView({ project, posts, covered }: { project: Project; posts
       {!posts.length && !ai.running ? (
         <Empty icon={<Layers size={20} />} title="No posts generated yet" body="Generate the first seven days of your plan: every post comes with a visual mockup, caption and hashtags you can edit inline." action={<GenerateButton running={ai.running} onClick={generate}>Generate 7-day batch</GenerateButton>} />
       ) : shown.length === 0 ? (
-        <p className="py-8 text-center text-[13px] text-muted">{filter === 'draft' ? 'No drafts left. Everything in this batch is on your calendar.' : 'Nothing here yet.'}</p>
+        <p className="py-8 text-center text-small text-muted">{filter === 'draft' ? 'No drafts left. Everything in this batch is on your calendar.' : 'Nothing here yet.'}</p>
       ) : (
         byDay.map(([date, list]) => (
           <section key={date} aria-label={fmtDate(date, { weekday: 'long', month: 'long', day: 'numeric' })}>
-            <h3 className="mb-2 flex items-center gap-2 text-[13px] font-semibold">
+            <h3 className="mb-2 flex items-center gap-2 text-small font-semibold">
               {fmtDate(date, { weekday: 'long', month: 'short', day: 'numeric' })}
-              <span className="text-xs font-normal text-muted">
+              <span className="text-caption font-normal text-muted">
                 {list.length} post{list.length > 1 ? 's' : ''}
               </span>
             </h3>
