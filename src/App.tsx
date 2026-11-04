@@ -4,6 +4,7 @@ import { initRuntime } from '@/lib/platform';
 import { pingServer } from '@/ai/claude';
 import { startCommunitySync } from '@/lib/community';
 import { useActiveProject, useStore } from '@/store/useStore';
+import { useLeadsWatcher } from '@/store/leads';
 import { CommandPalette, MobileNav, Sidebar, Topbar } from '@/components/layout/Shell';
 import { PageErrorBoundary } from '@/components/layout/ErrorBoundary';
 import { ConfirmHost, Spinner, Toaster } from '@/components/ui/primitives';
@@ -59,6 +60,7 @@ export default function App() {
   const assistantOpen = useAssistant((s) => s.open);
   useThemeSync();
   useManusPostWatcher();
+  useLeadsWatcher();
   useGroupShareWatcher();
   useVoiceReadWatcher();
 

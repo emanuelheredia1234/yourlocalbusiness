@@ -403,8 +403,8 @@ export interface Subscriber {
   name: string;
   email: string;
   joinedAt: number;
-  /** optin: signed up on your page · import: from a CSV you imported */
-  source: 'optin' | 'import';
+  /** optin: signed up on your page · import: from a CSV you imported · lead: added from a lead your page's form sent */
+  source: 'optin' | 'import' | 'lead';
 }
 
 export interface SeoMeta {
@@ -1003,6 +1003,10 @@ export interface Project {
     leadMagnet: LeadMagnet | null;
     emails: EmailStep[];
     subscribers: Subscriber[];
+    /** the newest lead (ms) the owner has seen in Email → Leads: newer ones count as new */
+    leadsSeenAt?: number;
+    /** the newest lead (ms) the bell announced, so another device doesn't announce it again */
+    leadsNotifiedAt?: number;
     seo: SeoMeta | null;
     salesPage: SalesPage | null;
     /** the owner's standing guidance for the AI when it writes or edits the sales page */

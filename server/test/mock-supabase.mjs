@@ -16,11 +16,11 @@ const SECRET = 'sb_secret_mock_456';
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 /** Primary keys per table: rows with the same values are one row (upserts replace them). */
-const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'], app_state: ['key'], market_listings: ['user_id', 'id'], ai_usage_daily: ['user_id', 'day'], published_pages: ['slug'], published_domains: ['domain'] };
+const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'], app_state: ['key'], market_listings: ['user_id', 'id'], ai_usage_daily: ['user_id', 'day'], published_pages: ['slug'], published_domains: ['domain'], page_leads: ['id'] };
 /** tables every signed-in person may read (writes stay owner-only), like the market_listings policies */
 const PUBLIC_READ = new Set(['market_listings']);
 /** tables with row-level security and no policies: only the secret key reaches them */
-const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'published_pages', 'published_domains']);
+const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'published_pages', 'published_domains', 'page_leads']);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** the user_secrets.provider check constraint (supabase/migrations/20261103030000_ai_usage_daily.sql) */
 const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openrouter', 'meta', 'manus']);
@@ -129,6 +129,9 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       if (f.op === 'gt') return String(v) > f.value;
       if (f.op === 'gte') return String(v) >= f.value;
       if (f.op === 'is') return f.value === 'null' ? v == null : String(v) === f.value;
+      // ISO times compare correctly as text
+      if (f.op === 'lt') return String(v) < f.value;
+      if (f.op === 'lte') return String(v) <= f.value;
       return true;
     });
   }
