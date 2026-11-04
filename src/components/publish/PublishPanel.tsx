@@ -342,7 +342,7 @@ export function PublishPanel({
           <Links published={published} />
           {domainOff && !domainOff.verified && (
             <p className="text-[12.5px] text-warn">
-              {published.domain} isn’t reaching this app yet, so that address won’t open until it does.{' '}
+              {published.domain} isn’t verified yet, so that address won’t open until it is.{' '}
               <button type="button" className="link" onClick={openDomainSettings}>
                 Check it in Settings → Domains
               </button>
@@ -419,7 +419,7 @@ export function PublishPanel({
                   {domains.map((d) => (
                     <option key={d.domain} value={d.domain}>
                       {d.domain}
-                      {d.verified ? '' : ' (not reaching this app yet)'}
+                      {d.verified ? '' : ' (not verified yet)'}
                     </option>
                   ))}
                 </select>

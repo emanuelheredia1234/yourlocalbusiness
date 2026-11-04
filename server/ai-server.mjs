@@ -14,7 +14,10 @@
 // Accounts (Supabase): SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY (account deletion), ADMIN_EMAILS
 //   (the owner's email: manages the AI keys), SIGN_IN_REQUIRED (default true). See server/auth.mjs.
 //   With the secret key, users' own keys (server/userKeys.mjs) and their daily AI counters (server/limits.mjs) live in Supabase,
-//   and people can publish pages at https://<app>/<name> and on their own domains (server/pages.mjs; env APP_HOSTS).
+//   and people can publish pages at https://<app>/<name> and on their own domains (server/pages.mjs; env APP_HOSTS,
+//   PAGES_DNS_SERVERS, TRUSTED_PROXY_HOPS).
+// Hosts: the app and /api answer only on the app's own hosts (*.replit.app, localhost, IP addresses, ALLOWED_ORIGIN's host,
+//   APP_HOSTS). Any other host shows only published pages of a verified domain, so the app's own custom domain goes in APP_HOSTS.
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -61,13 +64,13 @@ function corsHeaders(req) {
   return { 'access-control-allow-origin': ALLOWED_ORIGIN, 'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS', 'access-control-allow-headers': 'content-type, x-admin-token, authorization', vary: 'origin' };
 }
 
-function readJson(req) {
+function readJson(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on('data', (c) => {
       size += c.length;
-      if (size > MAX_BODY) {
+      if (size > limit) {
         reject(Object.assign(new Error('Request too large'), { status: 413 }));
         req.destroy();
         return;
@@ -112,9 +115,8 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
-function serveStatic(req, res) {
+function serveStatic(req, res, url) {
   if (!fs.existsSync(DIST)) return send(res, 404, 'Build the app first: npm run build');
-  const url = new URL(req.url || '/', 'http://local');
   let rel;
   try {
     rel = decodeURIComponent(url.pathname);
@@ -131,7 +133,30 @@ function serveStatic(req, res) {
     'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
     'x-content-type-options': 'nosniff',
   });
-  fs.createReadStream(file).pipe(res);
+  // a file that can't be read after all ends this response, not the server
+  fs.createReadStream(file)
+    .on('error', () => res.destroy())
+    .pipe(res);
+}
+
+/**
+ * The request's address, read once and safely: a target like //x:y is a path here, never a host, and
+ * an absolute one (http://host/path, from a proxy) keeps its path. null when it can't be read.
+ */
+function requestUrl(req) {
+  let target = String(req.url || '/');
+  try {
+    if (!target.startsWith('/')) {
+      if (!/^https?:\/\//i.test(target)) target = '/';
+      else {
+        const u = new URL(target);
+        target = `${u.pathname}${u.search}`;
+      }
+    }
+    return new URL(`http://local${target}`);
+  } catch {
+    return null;
+  }
 }
 
 // ───────────── router ─────────────
@@ -163,6 +188,7 @@ const pages = pagesFromEnv(process.env, { auth, whoIs: ai.whoIs, send, readJson,
 const crashed = (req, res, e) => {
   console.error(e);
   if (!res.headersSent) send(res, 500, { error: 'Unexpected server error' }, corsHeaders(req));
+  else res.destroy();
 };
 
 function route(req, res, url) {
@@ -176,9 +202,12 @@ function route(req, res, url) {
   }
   if (url.pathname === '/api/health' && req.method === 'GET') {
     // `ok`: the server is up; `ai` says which keys are ready and what powers each function (signed-in users only, with accounts on)
-    return void ai.whoIs(req, res).then(async (ident) => ident && send(res, 200, { ok: true, ai: await ai.health(ident.who) }, corsHeaders(req)));
+    return void ai
+      .whoIs(req, res)
+      .then(async (ident) => ident && send(res, 200, { ok: true, ai: await ai.health(ident.who) }, corsHeaders(req)))
+      .catch((e) => crashed(req, res, e));
   }
-  if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res);
+  if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res).catch((e) => crashed(req, res, e));
   if (pages.matchApi(url)) return void pages.handleApi(req, res, url).catch((e) => crashed(req, res, e));
   if (ai.match(url)) {
     return void ai.handle(req, res, url).then((handled) => {
@@ -190,16 +219,29 @@ function route(req, res, url) {
   if (req.method === 'POST' && pages.matchLead(url)) return void pages.receiveLead(req, res, url).then((handled) => handled || send(res, 405, 'Method not allowed'), (e) => crashed(req, res, e));
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
   // a published page (/<name>, /<name>/img/…), unless the name is one of the app's own paths
-  if (pages.matchPage(url)) return void pages.servePage(req, res, url).then((handled) => handled || serveStatic(req, res), (e) => crashed(req, res, e));
-  return serveStatic(req, res);
+  if (pages.matchPage(url)) return void pages.servePage(req, res, url).then((handled) => handled || serveStatic(req, res, url), (e) => crashed(req, res, e));
+  return serveStatic(req, res, url);
+}
+
+function handle(req, res) {
+  const url = requestUrl(req);
+  if (!url) return send(res, 400, 'Bad request');
+  // The app and /api answer only on the app's own hosts. Any other host may be someone's domain, now or
+  // later, so only published pages (of a verified domain) answer there, whatever the database says.
+  if (!pages.isAppHost(req)) return void pages.serveDomain(req, res, url).catch((e) => crashed(req, res, e));
+  return route(req, res, url);
 }
 
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url || '/', 'http://local');
-  // someone's own domain shows only their published pages, never the app or /api: so it's decided first
-  if (!pages.mayBeDomain(req)) return route(req, res, url);
-  pages.serveDomain(req, res, url).then((handled) => handled || route(req, res, url), (e) => crashed(req, res, e));
+  // nothing a request does may stop the server: an unexpected error answers 500
+  try {
+    handle(req, res);
+  } catch (e) {
+    crashed(req, res, e);
+  }
 });
+// a promise that fails with nothing waiting for it is logged, not the end of every request this copy is serving
+process.on('unhandledRejection', (e) => console.error('Unhandled rejection:', e));
 
 server.listen(PORT, HOST, async () => {
   const h = await ai.health({ id: 'startup' });
@@ -207,7 +249,9 @@ server.listen(PORT, HOST, async () => {
   const ready = h.providers.filter((p) => p.ready).map((p) => p.label);
   console.log(ready.length ? `AI keys ready: ${ready.join(', ')}` : 'No AI keys yet: add them in Settings → AI, or as Secrets (e.g. OPENROUTER_API_KEY).');
   console.log(auth.enabled ? `Accounts: on (Supabase)${auth.signInRequired ? ', sign-in required' : ''}` : 'Accounts: off (add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to turn them on).');
-  if (auth.enabled) console.log(pages.enabled ? 'Publishing pages: on (needs supabase/migrations/20261103040000_published_pages.sql in Supabase).' : 'Publishing pages: off (add the SUPABASE_SECRET_KEY Secret to turn it on).');
+  if (auth.enabled) console.log(pages.enabled ? 'Publishing pages: on (needs supabase/migrations/20261103040000_published_pages.sql in Supabase). Own domains are proven with a TXT record, _ylb-domain.<domain>.' : 'Publishing pages: off (add the SUPABASE_SECRET_KEY Secret to turn it on).');
+  console.log(pages.appHostsNote());
+  if (pages.enabled) console.log(pages.visitorsNote());
   console.log(
     ai.store.storage === 'supabase'
       ? {
