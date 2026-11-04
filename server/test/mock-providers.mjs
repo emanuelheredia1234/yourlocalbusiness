@@ -357,7 +357,7 @@ export function createMockProviders({ keys = {} } = {}) {
         ? mockVoiceReply(t?.prompt)
         : groupsTask
         ? `Done.\n${groupLines.map((g, i) => (/approval/i.test(g) ? `GROUP: ${g} | PENDING | waiting for admin approval` : `GROUP: ${g} | POSTED | https://www.facebook.com/groups/mock${i}/posts/1`)).join('\n')}\nRESULT: GROUPS DONE`
-        : postNow ? `Posted it.\nRESULT: POSTED | Mock Account | ${LINKS[postNow[1]]}` : 'Here is your image.\nRESULT: SCHEDULED | Mock Page | Monday 9:00 AM';
+        : postNow ? `Posted it.\nRESULT: POSTED | Mock Account | ${LINKS[postNow[1]]}${/^<<<COMMENT TEXT$/m.test(t?.prompt ?? '') ? (/comments-off/i.test(t?.prompt ?? '') ? ' | COMMENT FAILED: Comments are turned off for this post' : ' | COMMENT ADDED') : ''}` : 'Here is your image.\nRESULT: SCHEDULED | Mock Page | Monday 9:00 AM';
       return json(res, 200, {
         ok: true,
         messages: done

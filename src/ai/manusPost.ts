@@ -6,6 +6,7 @@
 
 import type { ExternalPublish, Post, PostPlatform } from '@/lib/types';
 import { getBlob, safeStorage } from '@/lib/storage';
+import { firstCommentOf, xLength } from '@/lib/pageLink';
 import { PLATFORMS } from './knowledge';
 import { ManusError, createManusTask, readManusTask, sendFileToManus, type ManusState } from './manus';
 
@@ -191,7 +192,9 @@ export function postBlocker(post: Pick<Post, 'platform' | 'format' | 'media'>, o
 /** Text longer than the network usually takes (some accounts allow more, so this only warns). */
 export function textWarning(post: Pick<Post, 'platform' | 'caption' | 'hashtags'>): string | null {
   const limit = NETWORKS[post.platform].textLimit;
-  const n = [...postText(post)].length;
+  const text = postText(post);
+  // X counts every link as 23 characters
+  const n = post.platform === 'x' ? xLength(text) : [...text].length;
   return limit && n > limit ? `${label(post.platform)} takes ${limit} characters on most accounts, and this post has ${n}. Shorten it unless your account allows longer posts.` : null;
 }
 
@@ -216,11 +219,27 @@ export function postText(post: Pick<Post, 'caption' | 'hashtags'>): string {
   return tags ? `${post.caption.trim()}\n\n${tags}` : post.caption.trim();
 }
 
-/** Exact instructions for Manus: one post on the account, with this text and this image or video. */
-export function postPrompt(o: { network: PostPlatform; mode: PostMode; account: string; whenIso: string; timeZone: string; text: string; media: 'image' | 'video' | null }): string {
+/** The owner's text inside a block: a line that is the block's end can't close it early. */
+const inBlock = (text: string, end: string) =>
+  text
+    .split('\n')
+    .filter((l) => l.trim() !== end)
+    .join('\n');
+
+/**
+ * Exact instructions for Manus: one post on the account, with this text and this image or video. When the
+ * post's link goes in the first comment and Manus posts right away, it adds that one comment (a reply on X)
+ * too, as part of the same fixed steps, and reports it on its RESULT line. A scheduled post isn't there yet
+ * to comment on, so it never gets the comment step.
+ */
+export function postPrompt(o: { network: PostPlatform; mode: PostMode; account: string; whenIso: string; timeZone: string; text: string; media: 'image' | 'video' | null; comment?: string }): string {
   const n = NETWORKS[o.network];
   const now = o.mode === 'now';
   const name = label(o.network);
+  // the owner's comment text is content inside the template's block, never instructions
+  const comment = now ? (o.comment?.trim() ?? '') : '';
+  const word = o.network === 'x' ? 'reply' : 'comment';
+  const posted = 'RESULT: POSTED | <account name> | <link to the post, if you can see it>';
   return [
     now ? `Post ONE organic post on ${name}, right now. Use your web browser.` : `Schedule ONE organic ${name} post. Use your web browser.`,
     '',
@@ -228,16 +247,25 @@ export function postPrompt(o: { network: PostPlatform; mode: PostMode; account: 
     `2. ${n.as(o.account)}`,
     '3. Paste this exact post text, keeping its line breaks, emojis and hashtags:',
     '<<<POST TEXT',
-    o.text,
+    inBlock(o.text, 'POST TEXT>>>'),
     'POST TEXT>>>',
     `4. ${o.media ? n.media[o.media] : n.media.none}`,
     now ? `5. ${n.publish}` : `5. ${n.schedule} for: ${fmtWhen(o.whenIso, o.timeZone)} (${o.timeZone} time; that is ${new Date(o.whenIso).toISOString()} UTC). Set ${name}'s date, time and time zone to match exactly.`,
     now ? `6. ${n.checkNow}, with the text${o.media ? ` and the ${o.media}` : ''} exactly as given.` : `6. ${n.checkScheduled}`,
+    ...(comment
+      ? [
+          `7. Then add the first ${word} on that post, as the same account: ${o.network === 'x' ? 'reply to the post you just made (one reply, not a thread)' : 'open the post and write a comment'}. Paste this exact comment text, keeping its line breaks:`,
+          '<<<COMMENT TEXT',
+          inBlock(comment, 'COMMENT TEXT>>>'),
+          'COMMENT TEXT>>>',
+          `8. Check that the ${word} shows under the post. If you can't add it, leave the post as it is (don't edit or delete it) and use the COMMENT FAILED line.`,
+        ]
+      : []),
     '',
-    `Rules: if you are not signed in to ${name}, ask me to sign in and wait. Go straight to ${now ? 'posting' : 'scheduling'}: don’t check whether the account already has this post. ${now ? 'Never schedule it for later.' : 'Never publish immediately.'} ${n.rules}`,
+    `Rules: if you are not signed in to ${name}, ask me to sign in and wait. Go straight to ${now ? 'posting' : 'scheduling'}: don’t check whether the account already has this post. ${now ? 'Never schedule it for later.' : 'Never publish immediately.'} ${n.rules}${comment ? ` The one ${word} in step 7 is the only thing you add besides the post.` : ''}`,
     '',
     'When you finish, end your final message with exactly one of these lines:',
-    now ? 'RESULT: POSTED | <account name> | <link to the post, if you can see it>' : `RESULT: SCHEDULED | <account name> | <date and time as ${name} shows it>`,
+    ...(comment ? [`${posted} | COMMENT ADDED`, `${posted} | COMMENT FAILED: <short reason>`] : [now ? posted : `RESULT: SCHEDULED | <account name> | <date and time as ${name} shows it>`]),
     'RESULT: FAILED | <short reason>',
   ].join('\n');
 }
@@ -279,6 +307,37 @@ export function parseResult(text: string): { state: 'posted' | 'scheduled' | 'fa
   return { state: null, detail: '', parts: [] };
 }
 
+/** "COMMENT ADDED" / "COMMENT FAILED: reason" as a later part of a RESULT: POSTED line (never the first: that's the account). */
+const COMMENT_PART = /^COMMENT\s*:?\s*(ADDED|POSTED|DONE|FAILED)\b\s*[:\-–—]?\s*(.*)$/i;
+
+/** A RESULT line's parts without the first comment's report, and that report (its reason: the rest of the line). */
+export function splitComment(parts: string[]): { rest: string[]; comment: { state: 'added' | 'failed'; detail: string } | null } {
+  const i = parts.findIndex((p, k) => k >= 1 && COMMENT_PART.test(p));
+  if (i < 0) return { rest: parts, comment: null };
+  const m = COMMENT_PART.exec(parts[i])!;
+  const detail = [m[2], ...parts.slice(i + 1)]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(' · ');
+  return { rest: parts.slice(0, i), comment: { state: m[1].toUpperCase() === 'FAILED' ? 'failed' : 'added', detail } };
+}
+
+/**
+ * What Manus reported about the first comment once its task is done: ADDED or FAILED on its RESULT line, or
+ * "unknown" when it posted (or finished) without saying. A failed post never got to the comment, and a
+ * task still running hasn't said yet: the comment stays as it was. Nothing is ever retried.
+ */
+export function commentFrom(s: Pick<ManusState, 'done' | 'text'>, state: ExternalPublish['state'], prev: NonNullable<ExternalPublish['comment']>): NonNullable<ExternalPublish['comment']> {
+  if (prev.state !== 'asked' || !s.done) return prev;
+  if (state === 'posted') {
+    const c = splitComment(parseResult(s.text).parts).comment;
+    if (!c) return { state: 'unknown' };
+    return c.detail ? { state: c.state, detail: c.detail.slice(0, 200) } : { state: c.state };
+  }
+  if (state === 'finished') return { state: 'unknown' };
+  return prev;
+}
+
 /** What Manus is waiting for, in plain words (also used by brand-voice reads). */
 export const WAITING_COPY: Record<string, string> = {
   needConnectMyBrowser: 'Manus needs you to connect your browser in Manus so it can use your account.',
@@ -293,8 +352,12 @@ export function stateFromManus(s: ManusState, mode: PostMode = 'schedule', netwo
   if (s.waiting) return { state: 'needs_input', message: s.waitingDescription || WAITING_COPY[s.waitingType] || `Manus paused and needs you (for example, to sign in to ${name}). Open the task in Manus.` };
   if (s.done) {
     const r = parseResult(s.text);
-    // the link has its own slot (account | link); the account's own profile address is never the post's
-    if (r.state === 'posted') return { state: 'posted', message: r.detail || `Manus reports it posted on ${name}.`, url: postUrlFrom(r.parts.length > 1 ? r.parts.slice(1).join(' ') : r.detail, network, r.parts[0]) };
+    // the link has its own slot (account | link); the account's own profile address is never the post's.
+    // The first comment's report (a later part) is kept apart: it never changes what happened to the post.
+    if (r.state === 'posted') {
+      const { rest } = splitComment(r.parts);
+      return { state: 'posted', message: rest.join(' · ') || `Manus reports it posted on ${name}.`, url: postUrlFrom(rest.length > 1 ? rest.slice(1).join(' ') : rest.join(' '), network, rest[0]) };
+    }
     if (r.state === 'scheduled') return { state: 'scheduled', message: r.detail || `Manus reports it scheduled on ${name}.` };
     if (r.state === 'failed') return { state: 'failed', message: r.detail || `Manus couldn’t ${verb} the post.` };
     return { state: 'finished', message: s.text.slice(0, 280) || `Manus finished. Check the task to confirm the post was ${mode === 'now' ? 'posted' : 'scheduled'}.` };
@@ -321,9 +384,11 @@ export async function startManusPost(post: Post, account: string, mode: PostMode
   onStage?.('Starting the Manus task…');
   const timeZone = localTimeZone();
   const whenIso = mode === 'now' ? new Date().toISOString() : post.scheduledAt;
+  // the first comment (a reply on X) goes on right after posting; a scheduled post isn't there yet to comment on
+  const comment = mode === 'now' ? firstCommentOf(post) : undefined;
   const task = await createManusTask({
     fn: 'facebook',
-    prompt: postPrompt({ network, mode, account, whenIso, timeZone, text: postText(post), media: media?.kind ?? null }),
+    prompt: postPrompt({ network, mode, account, whenIso, timeZone, text: postText(post), media: media?.kind ?? null, comment }),
     title: `${mode === 'now' ? `Post on ${label(network)}` : `Schedule ${label(network)} post`} · ${post.headline}`.slice(0, 110),
     image,
     imageName: media?.name,
@@ -331,10 +396,12 @@ export async function startManusPost(post: Post, account: string, mode: PostMode
     interactive: true,
   });
   const at = Date.now();
-  return { via: 'manus', network, mode, taskId: task.taskId, taskUrl: task.taskUrl, state: 'working', message: `Manus is opening ${label(network)}…`, page: account, scheduledFor: whenIso, requestedAt: at, checkedAt: at };
+  return { via: 'manus', network, mode, taskId: task.taskId, taskUrl: task.taskUrl, state: 'working', message: `Manus is opening ${label(network)}…`, page: account, scheduledFor: whenIso, requestedAt: at, checkedAt: at, ...(comment ? { comment: { state: 'asked' as const } } : {}) };
 }
 
 export async function refreshManusPost(ext: ExternalPublish): Promise<ExternalPublish> {
   const s = await readManusTask(ext.taskId, { waitSeconds: 0 });
-  return { ...ext, ...stateFromManus(s, ext.mode ?? 'schedule', ext.network ?? 'facebook'), taskUrl: s.taskUrl || ext.taskUrl, checkedAt: Date.now() };
+  const next: ExternalPublish = { ...ext, ...stateFromManus(s, ext.mode ?? 'schedule', ext.network ?? 'facebook'), taskUrl: s.taskUrl || ext.taskUrl, checkedAt: Date.now() };
+  // the comment's report comes with the RESULT line, when the task stops (the same read that says "posted")
+  return ext.comment ? { ...next, comment: commentFrom(s, next.state, ext.comment) } : next;
 }

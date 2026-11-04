@@ -5,8 +5,21 @@
 
 import type { GroupResult, GroupShare, Post } from '@/lib/types';
 import { getBlob } from '@/lib/storage';
+import { linkText, placeLink } from '@/lib/pageLink';
 import { ManusError, createManusTask, readManusTask, sendFileToManus, type ManusState } from './manus';
 import { postText } from './manusPost';
+
+/**
+ * The text for groups: the link goes in the text (Manus never comments in groups, and a "bio" there is the
+ * poster's own). Where the caption pointed to the link, the link takes its place. A post whose link goes in the
+ * first comment, and whose caption doesn't say so, ends with that comment's text instead, so the link isn't lost.
+ */
+export function groupPostText(post: Pick<Post, 'caption' | 'hashtags'> & Partial<Pick<Post, 'linkPlacement' | 'firstComment'>>, link: string | null, known: string[] = []): string {
+  const caption = placeLink(post.caption, link ? { url: link, placement: 'post' } : null, 'facebook', known);
+  const comment = post.linkPlacement === 'comment' ? post.firstComment?.trim() : '';
+  const carried = !link || caption.includes(link) || caption.includes(linkText(link));
+  return postText({ ...post, caption: comment && !carried ? `${caption.trim()}\n\n${comment}` : caption });
+}
 
 /** Most groups per share: posting the same thing in many groups at once looks like spam to Facebook. */
 export const MAX_GROUPS = 10;
@@ -182,8 +195,8 @@ export function groupStateFromManus(s: ManusState, groups: string[]): Pick<Group
   return { state: 'working', message: `Manus is posting in ${groups.length} group${groups.length === 1 ? '' : 's'}…`, results };
 }
 
-/** Hand the post to Manus for the groups. One-shot: never retried. */
-export async function startGroupShare(post: Post, groups: string[], postAs: string, onStage?: (stage: string) => void): Promise<GroupShare> {
+/** Hand the post to Manus for the groups, with the link in the text when there's one. One-shot: never retried. */
+export async function startGroupShare(post: Post, groups: string[], postAs: string, onStage?: (stage: string) => void, link: { url: string; known: string[] } | null = null): Promise<GroupShare> {
   if (!groups.length) throw new ManusError('Add at least one group.', 'MANUS_CREATE');
   if (groups.length > MAX_GROUPS) throw new ManusError(`Up to ${MAX_GROUPS} groups at a time.`, 'MANUS_CREATE');
   const media = post.media ?? null;
@@ -198,7 +211,7 @@ export async function startGroupShare(post: Post, groups: string[], postAs: stri
   onStage?.('Starting the Manus task…');
   const task = await createManusTask({
     fn: 'facebook',
-    prompt: groupsPrompt({ groups, postAs, text: postText(post), media: media?.kind ?? null }),
+    prompt: groupsPrompt({ groups, postAs, text: groupPostText(post, link?.url ?? null, link?.known), media: media?.kind ?? null }),
     title: `Post in ${groups.length} Facebook group${groups.length === 1 ? '' : 's'} · ${post.headline}`.slice(0, 110),
     image,
     imageName: media?.name,

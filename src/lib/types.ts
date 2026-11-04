@@ -25,6 +25,10 @@ export type ImageStyleId = 'minimal' | 'neon' | 'editorial' | 'isometric' | 'han
 export type VideoStyleId = 'ugc' | 'kinetic' | 'split' | 'cinematic' | 'talking';
 export type StyleId = ImageStyleId | VideoStyleId;
 export type PostStatus = 'draft' | 'scheduled' | 'published';
+/** The SEO page's type: lead form, booking, website, landing, showcase or checkout page (absent on a project: 'landing'). */
+export type PageType = 'lead' | 'booking' | 'website' | 'landing' | 'showcase' | 'checkout';
+/** Where a social post's link goes: in the post, in the first comment (a reply on X), or in the profile's bio. */
+export type LinkPlacement = 'post' | 'comment' | 'bio';
 
 export type LogoShape = 'circle' | 'rounded' | 'hex' | 'shield' | 'blob' | 'none';
 export type LogoLayout = 'horizontal' | 'stacked' | 'mark' | 'wordmark';
@@ -612,6 +616,10 @@ export interface Post {
   external?: ExternalPublish;
   /** the post shared in Facebook groups by Manus (separate from posting it on the Page) */
   groupShare?: GroupShare;
+  /** where this post's link goes; absent: the network's built-in default, which is what its caption was written for */
+  linkPlacement?: LinkPlacement;
+  /** the first comment's text, with the link, when the link goes in the first comment */
+  firstComment?: string;
   source: 'batch' | 'composer' | 'ads';
   planSlotId?: string;
   batchId?: string;
@@ -663,6 +671,9 @@ export interface ExternalPublish {
   scheduledFor: string;
   /** the post's address, when Manus reported one */
   url?: string;
+  /** the first comment (a reply on X) Manus was asked to add right after posting, and what its RESULT line said:
+   *  asked (no report yet) · added · failed · unknown (it posted but didn't say) */
+  comment?: { state: 'asked' | 'added' | 'failed' | 'unknown'; detail?: string };
   requestedAt: number;
   checkedAt: number;
 }
@@ -951,6 +962,10 @@ export interface Project {
     seoImageMax?: number;
     /** where the sales page is published, if it is */
     seoPublished?: Published;
+    /** the SEO page's type; absent means 'landing' (what every page was before) */
+    pageType?: PageType;
+    /** where each network's link goes on new posts; absent: the built-in default for that network */
+    linkPlacement?: Partial<Record<PostPlatform, LinkPlacement>>;
     campaign: CampaignConfig;
     plan: CampaignPlan | null;
     batchId?: string;

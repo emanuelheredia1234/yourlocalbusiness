@@ -51,7 +51,8 @@ import {
   withoutImageTokens,
   type ImagePlan,
 } from './local/seo';
-import { composePost, generateCampaignPlan, generateContentBatch, type ComposedPost, type ComposeInput } from './local/social';
+import { composePost, finishCaption, generateCampaignPlan, generateContentBatch, linkRule, type ComposedPost, type ComposeInput } from './local/social';
+import { postLinkFor, postLinkOf } from '@/lib/pageLink';
 import { draftSection, expandItem, generateBusinessModel, generateListing, generateOutline, type BusinessModelResult, type OutlineResult } from './local/studio';
 import { buildFacts } from './text';
 import { ART_SIZE, proceduralSvg, type ArtScene } from './local/art';
@@ -813,17 +814,17 @@ export const contentBatchTask = def<{ plan: CampaignPlan; config: CampaignConfig
   claude: {
     prompt: (_i, env, base) =>
       framePrompt({
-        task: `Write ready-to-publish social posts for each slot below (the next 7 days of the campaign). Each needs: an on-image headline (max 60 chars), a caption with a hook first line, a value body and a clear call to action (respect each platform: X under 260 characters; Instagram/TikTok say “link in bio” instead of URLs; elsewhere use only the website given below, or “link in bio” when none is given: never make up a web address), platform-appropriate hashtags, a detailed visual prompt in the slot’s style, and for video slots a 4-scene storyboard (on-screen text, shot, seconds).`,
+        task: `Write ready-to-publish social posts for each slot below (the next 7 days of the campaign). Each needs: an on-image headline (max 60 chars), a caption with a hook first line, a value body and a clear call to action (X under 260 characters, where a link counts as 23; follow the link rule for the slot’s platform in "links"; never make up a web address), platform-appropriate hashtags, a detailed visual prompt in the slot’s style, and for video slots a 4-scene storyboard (on-screen text, shot, seconds).`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
         input: {
-          website: env.project.brand.websiteUrl || undefined,
+          links: Object.fromEntries([...new Set(base.map((p) => p.platform))].map((pl) => [pl, linkRule(postLinkFor(env.project, pl), pl)])),
           slots: base.map((p) => ({ slotId: p.planSlotId, when: p.scheduledAt.slice(0, 16), platform: p.platform, format: p.format, style: p.style, postType: p.postType, topic: p.headline })),
         },
         shape: `{"posts": [{"slotId": string, "headline": string, "caption": string, "hashtags": [string], "visualPrompt": string, "storyboard": [{"text": string, "shot": string, "duration": number}] (video slots only)}]}`,
       }),
-    merge: (raw, base) => {
+    merge: (raw, base, _i, env) => {
       const r = obj(raw);
       const list = Array.isArray(r.posts) ? (r.posts as Record<string, unknown>[]) : [];
       const byId = new Map(list.filter((x) => x && typeof x.slotId === 'string').map((x) => [x.slotId as string, x]));
@@ -831,8 +832,10 @@ export const contentBatchTask = def<{ plan: CampaignPlan; config: CampaignConfig
         const x = byId.get(p.planSlotId ?? '');
         if (!x) return p;
         const merged = conform({ headline: p.headline, caption: p.caption, hashtags: p.hashtags, visualPrompt: p.visualPrompt }, x);
+        const hashtags = merged.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`));
         const sb: Scene[] | undefined = p.storyboard && Array.isArray(x.storyboard) ? conform(p.storyboard, x.storyboard) : p.storyboard;
-        return { ...p, ...merged, hashtags: merged.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`)), storyboard: sb };
+        // the app places the link again itself, where the post's placement says
+        return { ...p, ...merged, hashtags, caption: finishCaption(env.project, merged.caption, p.platform, p.linkPlacement ? postLinkOf(env.project, p) : null, hashtags), storyboard: sb };
       });
     },
   },
@@ -847,16 +850,18 @@ export const postTask = def<ComposeInput & { media?: MediaRef }, ComposedPost>({
   claude: {
     prompt: (i, env) =>
       framePrompt({
-        task: `Write one ready-to-publish ${i.platform} post (${i.format}, post type: ${i.postType}). ${i.media ? `The user is posting their own ${i.media.kind}${i.mediaDescription ? ` described as “${i.mediaDescription}”` : ''}${i.media.kind === 'image' || i.media.kind === 'video' ? '; an image of it is attached, so describe what is actually shown' : ''}.` : `Topic: “${i.topic}”.`} Caption = hook first line, value body, clear CTA. Respect the platform (X under 260 characters; Instagram/TikTok say “link in bio”). Link only to the brand’s own website if one is given; otherwise say “link in bio”. Never make up a web address.`,
+        task: `Write one ready-to-publish ${i.platform} post (${i.format}, post type: ${i.postType}). ${i.media ? `The user is posting their own ${i.media.kind}${i.mediaDescription ? ` described as “${i.mediaDescription}”` : ''}${i.media.kind === 'image' || i.media.kind === 'video' ? '; an image of it is attached, so describe what is actually shown' : ''}.` : `Topic: “${i.topic}”.`} Caption = hook first line, value body, clear CTA. Respect the platform (X under 260 characters, where a link counts as 23). ${linkRule(i.link ?? null, i.platform)} Never make up a web address.`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         variation: env.variation,
         input: { topic: i.topic, platform: i.platform, postType: i.postType, format: i.format, style: i.style },
         shape: `{"headline": string (on-image text, max 60 chars), "caption": string, "hashtags": [string], "visualPrompt": string${i.format === 'video' ? ', "storyboard": [{"text": string, "shot": string, "duration": number}] (4)' : ''}}`,
       }),
-    merge: (raw, base) => {
+    merge: (raw, base, i, env) => {
       const m = conform(base, obj(raw));
-      return { ...m, hashtags: m.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`)) };
+      const hashtags = m.hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`));
+      // the app places the link again itself (the page's or website's address, or "link in …", goes where this post's link goes)
+      return { ...m, hashtags, caption: finishCaption(env.project, m.caption, i.platform, i.link ?? null, hashtags) };
     },
     images: async (i) => {
       if (!i.media) return undefined;

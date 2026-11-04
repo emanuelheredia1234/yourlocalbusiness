@@ -7,8 +7,9 @@ import type { GroupResult, GroupShare, Post } from '@/lib/types';
 import { cn, fmtRelative } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { manusViaServer } from '@/ai/manus';
-import { postBlocker, postText, suggestedAccount } from '@/ai/manusPost';
-import { MAX_GROUPS, carriedResults, groupKey, groupLinkError, groupRecord, groupSummary, groupsAlreadyOut, groupsToRetry, parseGroups, refreshGroupShare, rememberedGroups, startGroupShare } from '@/ai/manusGroups';
+import { postBlocker, suggestedAccount } from '@/ai/manusPost';
+import { MAX_GROUPS, carriedResults, groupKey, groupLinkError, groupPostText, groupRecord, groupSummary, groupsAlreadyOut, groupsToRetry, parseGroups, refreshGroupShare, rememberedGroups, startGroupShare } from '@/ai/manusGroups';
+import { knownLinks, linkText, pageLink, postPlacement } from '@/lib/pageLink';
 import { beginBusy, endBusy } from '@/lib/busy';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
@@ -51,6 +52,12 @@ export function ManusGroupsHost() {
   }, [id]);
   if (!id || !post || !project) return null;
 
+  // in groups the link always goes in the text: Manus never comments there, and a bio would be the poster's own
+  const page = pageLink(project);
+  const groupLink = page ? { url: page.url, known: knownLinks(project) } : null;
+  const groupText = groupPostText(post, groupLink?.url ?? null, groupLink?.known);
+  // the post's link was going in a comment or a bio, and in groups it's in the text instead
+  const linkMoved = !!groupLink && postPlacement(post) !== 'post' && (groupText.includes(groupLink.url) || groupText.includes(linkText(groupLink.url)));
   const groups = parseGroups(raw);
   const linkProblem = groups.map(groupLinkError).find(Boolean) ?? null;
   const tooMany = groups.length > MAX_GROUPS ? `Up to ${MAX_GROUPS} groups at a time: posting the same thing in many groups at once can get your account limited by Facebook.` : null;
@@ -75,7 +82,7 @@ export function ManusGroupsHost() {
     setBusy(true);
     setErr(null);
     try {
-      const share = await startGroupShare(useStore.getState().posts.find((x) => x.id === post.id) ?? post, groups, postAs.trim(), setStage);
+      const share = await startGroupShare(useStore.getState().posts.find((x) => x.id === post.id) ?? post, groups, postAs.trim(), setStage, groupLink);
       // the groups that already have it stay on the post, with their results and links
       const earlier = prev ? carriedResults(prev, groups) : [];
       useStore.getState().updatePost(post.id, { groupShare: earlier.length ? { ...share, earlier } : share });
@@ -123,10 +130,11 @@ export function ManusGroupsHost() {
           </Field>
           <div>
             <p className="label">Post text</p>
-            <p className="max-h-40 overflow-y-auto whitespace-pre-line rounded-md border border-line bg-surface-2/50 p-3 text-[13px] leading-relaxed text-ink-2">{postText(post)}</p>
+            <p className="max-h-40 overflow-y-auto whitespace-pre-line rounded-md border border-line bg-surface-2/50 p-3 text-[13px] leading-relaxed text-ink-2">{groupText}</p>
           </div>
           <ul className="flex list-disc flex-col gap-1 pl-5 text-[12.5px] text-muted">
             <li>Manus posts once in each group, right away, about 2 minutes apart, and never joins a group or comments.</li>
+            {linkMoved && <li>In groups, your link goes in the post text: Manus doesn’t comment in groups.</li>}
             <li>It reads each group’s rules first and skips groups that don’t allow this kind of post. Some groups hold posts for their admins to approve.</li>
             <li>It’s one Manus task for all the groups, on your Manus credits. The first time, sign in to Facebook inside Manus.</li>
           </ul>

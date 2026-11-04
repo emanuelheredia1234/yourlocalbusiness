@@ -21,6 +21,9 @@ import { DueBadge, PostMoreMenu, PostedBy, addToCalendarFlow, manusHolds, useMar
 import { createPostImage, defaultImageKind, postVideoPrompt } from '@/ai/image';
 import { brandHandle } from '@/lib/brandMark';
 import { isOwnPhoto } from '@/lib/media';
+import { firstCommentFor, firstCommentOf, knownLinks, placeLink, postLinkFor, postLinkOf, xLength } from '@/lib/pageLink';
+import { postText } from '@/ai/manusPost';
+import { LinkFields, PostLinkNote } from './PostLinkNote';
 
 export function PostTypeTag({ type, className }: { type: PostType; className?: string }) {
   const def = POST_TYPE_MAP[type];
@@ -59,12 +62,14 @@ export function PostFields({ post, onChange }: EditableProps) {
       <Field label={ownPhoto ? 'Headline' : 'On-image headline'} htmlFor={`h-${post.id}`} right={`${post.headline.length}/70`} hint={ownPhoto ? 'Names the post in your lists. It isn’t added to your photo.' : undefined}>
         <input id={`h-${post.id}`} className="input" value={post.headline} maxLength={90} onChange={(e) => onChange({ headline: e.target.value })} />
       </Field>
-      <Field label="Caption" htmlFor={`c-${post.id}`} right={`${post.caption.length}/${PLATFORMS[post.platform].limit}`}>
+      {/* X counts the whole post (hashtags too), and every link as 23 characters */}
+      <Field label="Caption" htmlFor={`c-${post.id}`} right={post.platform === 'x' ? `${xLength(postText(post))}/280` : `${post.caption.length}/${PLATFORMS[post.platform].limit}`}>
         <AutoTextarea id={`c-${post.id}`} value={post.caption} onChange={(v) => onChange({ caption: v })} minRows={4} />
       </Field>
       <Field label="Hashtags">
         <ChipInput values={post.hashtags} onChange={(v) => onChange({ hashtags: v })} prefix="#" placeholder="#hashtag" />
       </Field>
+      <LinkFields post={post} onChange={onChange} />
       {post.format === 'image' && project ? (
         <PostImagePanel project={project} headline={post.headline} prompt={post.visualPrompt} onPromptChange={(v) => onChange({ visualPrompt: v })} style={post.style} watermark={post.watermark} platform={post.platform} media={post.media} onChange={(m) => onChange({ media: m ?? undefined })} pendingKey={`post:${post.id}`} />
       ) : project ? (
@@ -90,7 +95,18 @@ export function PostFields({ post, onChange }: EditableProps) {
           <input id={`t-${post.id}`} type="time" className="input" value={isoToTime(post.scheduledAt)} onChange={(e) => e.target.value && onChange({ scheduledAt: combineDateTime(isoToDateStr(post.scheduledAt), e.target.value) })} />
         </Field>
         <Field label="Platform" htmlFor={`p-${post.id}`}>
-          <select id={`p-${post.id}`} className="select" value={post.platform} onChange={(e) => onChange({ platform: e.target.value as PostPlatform })}>
+          <select
+            id={`p-${post.id}`}
+            className="select"
+            value={post.platform}
+            onChange={(e) => {
+              // the link moves to where it goes on the new network (its own setting), in the caption too
+              const platform = e.target.value as PostPlatform;
+              const link = project ? postLinkFor(project, platform) : null;
+              const firstComment = project && link && !post.firstComment?.trim() ? firstCommentFor(project, link) : undefined;
+              onChange({ platform, ...(project && link ? { linkPlacement: link.placement, caption: placeLink(post.caption, link, platform, knownLinks(project)), ...(firstComment ? { firstComment } : {}) } : {}) });
+            }}
+          >
             {POST_PLATFORMS.map((p) => (
               <option key={p} value={p}>
                 {PLATFORMS[p].label}
@@ -155,8 +171,13 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
       },
     );
   const regenerate = async () => {
-    const r = await ai.run({ topic: post.headline, postType: post.postType, platform: post.platform, format: post.format, style: post.style, watermark: post.watermark, media: post.media });
-    if (r) update(post.id, { headline: r.headline, caption: r.caption, hashtags: r.hashtags, visualPrompt: r.visualPrompt, storyboard: r.storyboard ?? post.storyboard });
+    // written for where this post's link goes; the app places the link itself afterwards
+    const link = project ? postLinkOf(project, post) : null;
+    const r = await ai.run({ topic: post.headline, postType: post.postType, platform: post.platform, format: post.format, style: post.style, watermark: post.watermark, media: post.media, link });
+    if (r) {
+      const firstComment = project && !post.firstComment?.trim() ? firstCommentFor(project, link) : undefined;
+      update(post.id, { headline: r.headline, caption: r.caption, hashtags: r.hashtags, visualPrompt: r.visualPrompt, storyboard: r.storyboard ?? post.storyboard, ...(link ? { linkPlacement: link.placement } : {}), ...(firstComment ? { firstComment } : {}) });
+    }
   };
   return (
     <article className={cn('panel flex min-w-0 flex-col overflow-hidden', selected && 'ring-2 ring-primary')}>
@@ -200,6 +221,7 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
               </button>
             )}
             <p className="text-xs font-medium text-info">{post.hashtags.join(' ')}</p>
+            <PostLinkNote post={post} />
           </>
         )}
         <DueBadge post={post} />
@@ -271,6 +293,15 @@ export function PlatformFrame({ post, brand }: { post: Post; brand: Brand }) {
         </p>
       )}
       <p className={cn('px-3 pb-3 text-[12.5px] font-medium text-info', post.platform !== 'instagram' && post.platform !== 'tiktok' && 'pt-2.5')}>{post.hashtags.join(' ')}</p>
+      {firstCommentOf(post) && (
+        <div className="border-t border-line px-3 py-2.5 text-[12.5px] leading-relaxed text-ink">
+          <p className="mb-0.5 text-[11px] font-semibold text-muted">{post.platform === 'x' ? 'First reply' : 'First comment'}</p>
+          <p className="whitespace-pre-line break-words">
+            <b className="mr-1">{post.platform === 'linkedin' || post.platform === 'facebook' ? brand.name : handle}</b>
+            {firstCommentOf(post)}
+          </p>
+        </div>
+      )}
       <p className="border-t border-line bg-surface-2/60 px-3 py-2 text-[11px] text-muted">Preview: the network shows it in its own style.</p>
     </div>
   );

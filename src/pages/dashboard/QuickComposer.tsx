@@ -1,9 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { CalendarClock, FilePlus2, ImageUp, Send, Sparkles, X } from 'lucide-react';
-import type { MediaRef, Post, PostFormat, PostPlatform, PostType, StyleId } from '@/lib/types';
+import type { LinkPlacement, MediaRef, Post, PostFormat, PostPlatform, PostType, StyleId } from '@/lib/types';
 import { addDays, cn, combineDateTime, hashStr, todayStr, truncate, uid } from '@/lib/utils';
 import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
-import { suggestTopics } from '@/ai/local/social';
+import { finishCaption, suggestTopics } from '@/ai/local/social';
+import { LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, firstCommentFor, linkText, pageLink, postLinkFor } from '@/lib/pageLink';
+import { networkLabel } from '@/ai/manusPost';
 import { postTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore } from '@/store/useStore';
@@ -48,6 +50,10 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
   const [hashtags, setHashtags] = useState<string[]>([]);
   const [visualPrompt, setVisualPrompt] = useState('');
   const [storyboard, setStoryboard] = useState<Post['storyboard']>(undefined);
+  // where each network's link goes on this post (it starts at the project's setting for that network)
+  const [linkWhere, setLinkWhere] = useState<Partial<Record<PostPlatform, LinkPlacement>>>({});
+  const link = pageLink(project);
+  const linkFor = (p: PostPlatform) => postLinkFor(project, p, linkWhere[p]);
   const [date, setDate] = useState(addDays(todayStr(), 1));
   const [time, setTime] = useState(PLATFORMS[platforms[0] ?? 'instagram'].times[1]);
   const suggestions = useMemo(() => suggestTopics(project), [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -69,7 +75,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
       toast({ kind: 'info', title: 'Add your photo or video first' });
       return;
     }
-    const r = await ai.run({ topic: topic.trim() || desc || 'Behind the scenes', postType, platform: platforms[0] ?? 'instagram', format: effFormat, style, watermark, media: source === 'upload' ? media ?? undefined : undefined, mediaDescription: source === 'upload' ? desc || topic : undefined, hasMedia: source === 'upload' });
+    const r = await ai.run({ topic: topic.trim() || desc || 'Behind the scenes', postType, platform: platforms[0] ?? 'instagram', format: effFormat, style, watermark, media: source === 'upload' ? media ?? undefined : undefined, mediaDescription: source === 'upload' ? desc || topic : undefined, hasMedia: source === 'upload', link: linkFor(platforms[0] ?? 'instagram') });
     if (r) {
       setHeadline(r.headline);
       setCaption(r.caption);
@@ -81,27 +87,35 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
 
   const build = (): Post[] => {
     const now = Date.now();
-    return platforms.map((platform) => ({
-      id: uid('post'),
-      projectId: project.id,
-      status: 'draft',
-      platform,
-      format: effFormat,
-      style,
-      postType,
-      headline: headline || truncate(topic, 60),
-      visualPrompt,
-      caption: platform === 'x' && caption.length > 270 ? truncate(caption.split('\n\n')[0], 240) : caption,
-      hashtags: platform === 'x' ? hashtags.slice(0, 2) : hashtags,
-      scheduledAt: combineDateTime(date, time),
-      media: source === 'upload' ? media ?? undefined : effFormat === 'image' ? genMedia ?? undefined : genVideo ?? undefined,
-      storyboard,
-      watermark,
-      source: 'composer',
-      createdAt: now,
-      updatedAt: now,
-      seed: hashStr(uid('s')),
-    }));
+    return platforms.map((platform) => {
+      const pl = linkFor(platform);
+      const tags = platform === 'x' ? hashtags.slice(0, 2) : hashtags;
+      const firstComment = firstCommentFor(project, pl);
+      return {
+        id: uid('post'),
+        projectId: project.id,
+        status: 'draft',
+        platform,
+        format: effFormat,
+        style,
+        postType,
+        headline: headline || truncate(topic, 60),
+        visualPrompt,
+        // the link where it goes on this network; on X the opening is shortened, never the link
+        caption: finishCaption(project, caption, platform, pl, tags),
+        hashtags: tags,
+        ...(pl ? { linkPlacement: pl.placement } : {}),
+        ...(firstComment ? { firstComment } : {}),
+        scheduledAt: combineDateTime(date, time),
+        media: source === 'upload' ? media ?? undefined : effFormat === 'image' ? genMedia ?? undefined : genVideo ?? undefined,
+        storyboard,
+        watermark,
+        source: 'composer',
+        createdAt: now,
+        updatedAt: now,
+        seed: hashStr(uid('s')),
+      };
+    });
   };
 
   const reset = (discard = false) => {
@@ -116,6 +130,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
     setTopic('');
     setMedia(null);
     setDesc('');
+    setLinkWhere({});
     ai.reset();
   };
 
@@ -206,6 +221,30 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
             </Field>
           )}
         </div>
+        {/* before generating, so the AI writes for the first network's choice; the others get the link moved for them */}
+        {link ? (
+          <Field label="Where the link goes" hint={<>Your link: <span className="[overflow-wrap:anywhere]">{linkText(link.url)}</span></>}>
+            <ul className="flex flex-col gap-1.5">
+              {platforms.map((p) => (
+                <li key={p} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="flex min-w-[96px] items-center gap-1.5 text-[13px]">
+                    <PlatformGlyph platform={p} size={13} /> {networkLabel(p)}
+                  </span>
+                  <select className="select input-sm w-auto" aria-label={`Where the link goes on ${networkLabel(p)}`} value={linkFor(p)!.placement} onChange={(e) => setLinkWhere((x) => ({ ...x, [p]: e.target.value as LinkPlacement }))}>
+                    {LINK_PLACEMENTS.map((id) => (
+                      <option key={id} value={id}>
+                        {id === 'comment' && p === 'x' ? 'First reply' : LINK_PLACEMENT_LABEL[id]}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-[11.5px] text-muted">{LINK_FACTS[p]}</span>
+                </li>
+              ))}
+            </ul>
+          </Field>
+        ) : (
+          <p className="text-[12.5px] text-muted">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings → Brand.' : 'No link in your posts yet. Publish your page (Marketing Hub → SEO page), or add your website in Settings → Brand.'}</p>
+        )}
         <div className="flex flex-wrap items-center gap-3">
           <GenerateButton running={ai.running} onClick={generate}>
             {hasDraft ? 'Regenerate' : source === 'upload' ? 'Write AI caption' : 'Generate post'}

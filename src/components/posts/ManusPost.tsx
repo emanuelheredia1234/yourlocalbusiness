@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { CalendarClock, CheckCircle2, CircleAlert, ExternalLink, Hand, Loader2, RefreshCw, Send } from 'lucide-react';
 import type { Post, PostPlatform } from '@/lib/types';
-import { cn, fmtRelative } from '@/lib/utils';
+import { cn, fmtRelative, truncate } from '@/lib/utils';
+import { firstCommentOf, linkText, pageLink, postPlacement } from '@/lib/pageLink';
 import { useRuntime } from '@/lib/platform';
 import { zapierErrorMessage } from '@/lib/zapier';
 import { manusErrorMessage, manusViaServer } from '@/ai/manus';
@@ -26,7 +27,7 @@ import { beginBusy, endBusy } from '@/lib/busy';
 import { useStore } from '@/store/useStore';
 import { navigate } from '@/lib/router';
 import { toast, useUI } from '@/store/ui';
-import { Field, Modal, Segmented, Spinner } from '../ui/primitives';
+import { CopyButton, Field, Modal, Segmented, Spinner } from '../ui/primitives';
 import { MediaThumb } from '../media/MediaUpload';
 import { PlatformChip } from './PlatformIcon';
 
@@ -255,6 +256,8 @@ export function ManusPostHost() {
           <li>The first time, sign in to each network inside Manus. If Manus needs you, the post card says so, with a link.</li>
           <li>{mode === 'now' ? 'Manus posts each one once, right away, on the account you name.' : 'Manus schedules each one on the network for its time; it never publishes right away.'}</li>
           {posts.some((p) => p.media?.kind === 'video') && <li>Videos go to Manus first (through your server). Big videos take a little longer.</li>}
+          {mode === 'now' && posts.some((p) => firstCommentOf(p)) && <li>Right after posting, Manus adds the first comment you see on the post (a reply on X). It’s part of the same task.</li>}
+          {mode === 'schedule' && posts.some((p) => firstCommentOf(p)) && <li>Manus can’t comment on a scheduled post. Once it’s live, add the first comment yourself: the post card has it, with Copy.</li>}
         </ul>
         {!ready && (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-warn/40 bg-warn-soft px-3 py-2 text-[12.5px]" role="alert">
@@ -292,6 +295,7 @@ function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry 
           {mode === 'schedule' && <span className="text-xs text-muted">{fmtWhen(post.scheduledAt, tz)}</span>}
         </div>
         <p className="clamp-3 whitespace-pre-line text-[12.5px] leading-relaxed text-ink-2">{postText(post)}</p>
+        <LinkLine post={post} mode={mode} />
         {problem && (
           <p className="text-[12.5px] font-medium text-warn">
             {problem}{' '}
@@ -345,6 +349,30 @@ function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry 
         )}
       </div>
     </li>
+  );
+}
+
+/** What happens to the post's link: Manus adds the first comment only when it posts right away, and never changes a bio. */
+function LinkLine({ post, mode }: { post: Post; mode: PostMode }) {
+  const project = useStore((s) => s.projects.find((p) => p.id === post.projectId));
+  const comment = firstCommentOf(post);
+  const word = post.platform === 'x' ? 'reply' : 'comment';
+  if (comment)
+    return (
+      <p className="text-[12.5px] text-ink-2">
+        <b>First {word}:</b> <span className="break-words">{truncate(comment, 140)}</span>{' '}
+        <span className="text-muted">{mode === 'now' ? 'Manus adds it right after posting.' : `Manus can’t ${post.platform === 'x' ? 'reply to' : 'comment on'} a scheduled post: add it yourself once it’s live.`}</span>
+      </p>
+    );
+  const link = project && postPlacement(post) === 'bio' ? pageLink(project) : null;
+  if (!link) return null;
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted">
+      <span className="min-w-0">
+        Manus doesn’t change your profile: check that your {networkLabel(post.platform)} bio has <span className="[overflow-wrap:anywhere]">{linkText(link.url)}</span>.
+      </span>
+      <CopyButton text={link.url} label="Copy link" size="xs" />
+    </p>
   );
 }
 
@@ -437,7 +465,10 @@ async function applyRefresh(postId: string) {
   if (next.state !== prev.state) {
     const action = { label: 'Open in Manus', run: () => open(next.taskUrl) };
     if (next.state === 'posted') {
-      toast({ kind: 'success', title: `Manus posted it on ${name}`, body: next.message, action });
+      // the first comment didn't go on (or Manus didn't say): the owner adds it, from the post card
+      const missed = next.comment?.state === 'failed' || next.comment?.state === 'unknown';
+      const check = `Check the first ${next.network === 'x' ? 'reply' : 'comment'}: the post card has it to copy.`;
+      toast({ kind: 'success', title: `Manus posted it on ${name}`, body: missed ? `${next.message}${/[.!?…]$/.test(next.message) ? '' : '.'} ${check}` : next.message, action });
       useStore.getState().notify({ kind: 'post', title: `Manus posted it on ${name}`, body: post.headline, route: 'calendar' });
     } else if (next.state === 'scheduled') {
       toast({ kind: 'success', title: `Manus scheduled it on ${name}`, body: next.message, action });
