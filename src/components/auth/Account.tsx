@@ -1,15 +1,15 @@
 // Who's signed in, with Log out: the account button in the top bar, a row at the bottom of the
 // sidebar, a chip during setup, and Settings → Account.
 
-import { useState, type FormEvent } from 'react';
-import { CircleUserRound, Cloud, CloudOff, LogIn, LogOut, Monitor, Moon, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react';
+import { useState, type FormEvent, type ReactNode } from 'react';
+import { CircleAlert, Cloud, CloudOff, LogIn, LogOut, Monitor, Moon, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react';
 import { cn, fmtRelative } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { deleteAccount, setNewPassword, showSignIn, signOut, useAuth } from '@/lib/cloud/auth';
 import { useSyncStatus } from '@/lib/cloud/sync';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
-import { Spinner, confirmAction } from '@/components/ui/primitives';
+import { Callout, SettingsRow, SettingsSection, Spinner, confirmAction } from '@/components/ui/primitives';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -174,7 +174,20 @@ export function AccountChip() {
   );
 }
 
-// ───────────── Settings → Account ─────────────
+// ───────────── Settings › Account ─────────────
+
+/** A settings card for things that can't be undone: a red hairline and title (Account, Projects & data). */
+export function DangerSection({ title, description, children }: { title: ReactNode; description?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="rounded-lg border border-bad-line bg-surface shadow-card">
+      <div className="px-5 pb-1 pt-5">
+        <h3 className="text-h3 text-bad">{title}</h3>
+        {description && <p className="mt-0.5 text-small text-muted">{description}</p>}
+      </div>
+      <div className="px-5 pb-1">{children}</div>
+    </section>
+  );
+}
 
 export function AccountSettings() {
   const email = useAuth((s) => s.user?.email ?? '');
@@ -182,26 +195,30 @@ export function AccountSettings() {
   const sync = useSyncLine();
   const problem = useSyncStatus((s) => s.message);
   return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-      <section className="card p-5">
-        <h3 className="section-title flex items-center gap-2">
-          <CircleUserRound size={17} className="text-primary" /> Your account
-        </h3>
-        <div className="mt-4 flex items-center gap-3">
-          <Avatar email={email} size={44} />
-          <div className="min-w-0">
-            <p className="truncate text-[14px] font-semibold text-ink">{email}</p>
-            <p className={cn('flex items-center gap-1 text-[12.5px]', sync.tone === 'warn' ? 'text-warn' : sync.tone === 'good' ? 'text-good' : 'text-muted')}>
-              {sync.tone === 'warn' ? <CloudOff size={13} /> : <Cloud size={13} />} {sync.text}
-            </p>
+    <div className="flex flex-col gap-6">
+      <SettingsSection title="Your account" description="Your projects, posts, skills, listings and files are saved to your account and open on any device.">
+        <SettingsRow label="Signed in as">
+          <span className="flex min-w-0 items-center gap-3">
+            <Avatar email={email} size={32} />
+            <span className="min-w-0">
+              <span className="block truncate text-ui text-ink">{email}</span>
+              <span className={cn('flex items-center gap-1.5 text-small', sync.tone === 'warn' ? 'text-warn' : 'text-muted')}>
+                {sync.tone === 'warn' ? <CloudOff size={14} aria-hidden="true" /> : <Cloud size={14} aria-hidden="true" />} {sync.text}
+              </span>
+            </span>
+          </span>
+        </SettingsRow>
+        {problem && (
+          <div className="pb-4">
+            <Callout tone="warn">{problem}</Callout>
           </div>
-        </div>
-        {problem && <p className="mt-3 rounded-md bg-warn-soft px-3 py-2 text-[12.5px] text-ink-2">{problem}</p>}
-        <p className="mt-4 text-[13px] leading-relaxed text-muted">Your projects, posts, skills, listings and files are saved to your account, so they open on any device you sign in on. Logging out removes them from this device (they stay in your account).</p>
-        <button className="btn btn-secondary mt-4" onClick={() => void logOut()}>
-          <LogOut size={15} /> Log out
-        </button>
-      </section>
+        )}
+        <SettingsRow label="Log out of this device" description="Removes your work from this device. It stays in your account.">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void logOut()}>
+            <LogOut /> Log out
+          </button>
+        </SettingsRow>
+      </SettingsSection>
       <ChangePassword email={email} />
       {canDelete && <DeleteAccount email={email} />}
     </div>
@@ -227,34 +244,28 @@ function ChangePassword({ email }: { email: string }) {
     toast({ kind: 'success', title: 'Password changed' });
   }
   return (
-    <section className="card p-5">
-      <h3 className="section-title">Change password</h3>
-      <form className="mt-4 flex flex-col gap-3" onSubmit={(e) => void submit(e)} noValidate>
+    <SettingsSection title="Change password" description="At least 8 characters.">
+      <form onSubmit={(e) => void submit(e)} noValidate>
         <input type="email" autoComplete="username" value={email} readOnly hidden />
-        <div>
-          <label className="label" htmlFor="cp-1">
-            New password
-          </label>
-          <input id="cp-1" className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        </div>
-        <div>
-          <label className="label" htmlFor="cp-2">
-            Type it again
-          </label>
-          <input id="cp-2" className="input" type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
-        </div>
-        {error && (
-          <p role="alert" className="text-[13px] text-bad">
-            {error}
-          </p>
-        )}
-        <div>
-          <button type="submit" className="btn btn-primary" disabled={busy || !password}>
+        <SettingsRow label="New password" htmlFor="cp-1">
+          <input id="cp-1" className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={!!error || undefined} />
+        </SettingsRow>
+        <SettingsRow label="Type it again" htmlFor="cp-2">
+          <input id="cp-2" className="input" type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} aria-invalid={!!error || undefined} />
+        </SettingsRow>
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-line py-4">
+          {error && (
+            <p role="alert" className="mr-auto flex items-center gap-1.5 text-caption text-bad">
+              <CircleAlert size={14} className="shrink-0" aria-hidden="true" />
+              {error}
+            </p>
+          )}
+          <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !password}>
             {busy && <Spinner size={14} />} Change password
           </button>
         </div>
       </form>
-    </section>
+    </SettingsSection>
   );
 }
 
@@ -263,26 +274,26 @@ function DeleteAccount({ email }: { email: string }) {
   const [busy, setBusy] = useState(false);
   const match = typed.trim().toLowerCase() === email.toLowerCase();
   return (
-    <section className="card border-bad/30 p-5">
-      <h3 className="section-title text-bad">Delete account</h3>
-      <p className="mt-1 text-[13px] leading-relaxed text-muted">Deletes your account, every project, post and listing in it, and all your files. This can’t be undone. Export a backup first (Projects &amp; data) if you might need anything.</p>
-      <label className="label mt-4" htmlFor="del-confirm">
-        Type your email to confirm
-      </label>
-      <input id="del-confirm" className="input" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={email} />
-      <button
-        className="btn btn-danger mt-3"
-        disabled={!match || busy}
-        onClick={async () => {
-          if (!(await confirmAction({ title: 'Delete your account for good?', body: 'Your workspace and files are deleted from your account and this device.', confirmLabel: 'Delete my account', danger: true }))) return;
-          setBusy(true);
-          const r = await deleteAccount();
-          setBusy(false);
-          if (r.error) toast({ kind: 'error', title: 'Couldn’t delete your account', body: r.error });
-        }}
-      >
-        {busy ? <Spinner size={14} /> : <Trash2 size={15} />} Delete my account
-      </button>
-    </section>
+    <DangerSection title="Delete account" description="Deletes your account, every project, post and listing in it, and all your files. This can’t be undone.">
+      <SettingsRow label="Type your email to confirm" description="Export a backup first (Projects & data) if you might need anything." htmlFor="del-confirm">
+        <input id="del-confirm" className="input" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={email} />
+      </SettingsRow>
+      <div className="flex justify-end border-t border-line py-4">
+        <button
+          type="button"
+          className="btn btn-danger-ghost btn-sm"
+          disabled={!match || busy}
+          onClick={async () => {
+            if (!(await confirmAction({ title: 'Delete your account for good?', body: 'Your workspace and files are deleted from your account and this device.', confirmLabel: 'Delete my account', danger: true }))) return;
+            setBusy(true);
+            const r = await deleteAccount();
+            setBusy(false);
+            if (r.error) toast({ kind: 'error', title: 'Couldn’t delete your account', body: r.error });
+          }}
+        >
+          {busy ? <Spinner size={14} /> : <Trash2 />} Delete my account
+        </button>
+      </div>
+    </DangerSection>
   );
 }

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { Bot, CircleUserRound, Database, Download, FolderOpen, Link2, Moon, Palette, Plus, SlidersHorizontal, Sun, Trash2, Upload, Users } from 'lucide-react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Check, ChevronRight, CircleUserRound, Database, Download, FolderOpen, Globe, KeyRound, Link2, Monitor, Moon, Palette, Pencil, Plus, SlidersHorizontal, Sun, Trash2, Upload } from 'lucide-react';
 import type { AppSettings, Brand, Project } from '@/lib/types';
 import { cn, ensureUrl, fmtRelative, readFileAsText, slugify } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
@@ -7,6 +7,7 @@ import { pushMyListings } from '@/lib/community';
 import { saveBrand, brandCopyFrom } from '@/lib/brandSave';
 import { EXPORT_KEYS, backupFileName, backupJson } from '@/lib/backup';
 import { deleteProjectEverywhere } from '@/lib/projectActions';
+import { usePublishAccess } from '@/lib/publish';
 import { PLATFORMS, POST_PLATFORMS, FORMATS } from '@/ai/knowledge';
 import { brandKitTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
@@ -15,86 +16,190 @@ import { defaultSettings } from '@/store/defaults';
 import { cleanWorkspace } from '@/store/cleanup';
 import { toast, useUI } from '@/store/ui';
 import { useAuth } from '@/lib/cloud/auth';
-import { AccountSettings } from '@/components/auth/Account';
+import { AccountSettings, DangerSection } from '@/components/auth/Account';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { AutoTextarea, ChipInput, Field, Segmented, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
+import { AutoTextarea, Badge, Callout, ChipInput, InfoTip, MoreMenu, PageHeader, Segmented, SettingsRow, SettingsSection, Toggle, confirmAction } from '@/components/ui/primitives';
 import { BannerDesigner, BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
-import { BrandBanner, BrandLogo } from '@/components/brand/Logo';
+import { BrandBanner, BrandLogo, LogoMark } from '@/components/brand/Logo';
 import { manusSetupHint, useManusReady } from '@/components/posts/ManusPost';
 import { download } from '@/components/ui/download';
 import { AIProviders, ArtifactAI } from './AIProviders';
 import { DomainsCard } from './Domains';
 
-type Tab = 'brand' | 'ai' | 'accounts' | 'projects' | 'prefs' | 'account';
+type Tab = 'brand' | 'domains' | 'ai' | 'accounts' | 'projects' | 'prefs' | 'account';
+
+/** The sections, in the order of the sub-navigation (ids never change: the palette and the assistant open them). */
+const SECTIONS: { id: Tab; label: string; hint: string; icon: ReactNode }[] = [
+  { id: 'brand', label: 'Brand', hint: 'Name, logo, colours and photos', icon: <Palette /> },
+  { id: 'domains', label: 'Domains', hint: 'Your own web addresses', icon: <Globe /> },
+  { id: 'ai', label: 'AI keys', hint: 'What powers the AI', icon: <KeyRound /> },
+  { id: 'accounts', label: 'Social accounts', hint: 'Profiles and posting with Manus', icon: <Link2 /> },
+  { id: 'projects', label: 'Projects & data', hint: 'Projects, backups and reset', icon: <Database /> },
+  { id: 'prefs', label: 'Preferences', hint: 'Your name, theme and Marketplace', icon: <SlidersHorizontal /> },
+  { id: 'account', label: 'Account', hint: 'Sign-in, password and deletion', icon: <CircleUserRound /> },
+];
+const TAB_IDS = SECTIONS.map((s) => s.id) as string[];
 
 export default function Settings() {
   const project = useActiveProject()!;
   const signedIn = useAuth((s) => s.phase === 'ready');
+  const { access } = usePublishAccess();
   const wanted = useUI((s) => s.settingsTab);
-  const [tab, setTab] = useState<Tab>(() => (wanted === 'account' && signedIn ? 'account' : 'brand'));
-  // "domains" (from a page's Publish panel): the Domains card on the Brand tab
+  const [tab, setTab] = useState<Tab>(() => (wanted && TAB_IDS.includes(wanted) && (wanted !== 'account' || signedIn) ? (wanted as Tab) : 'brand'));
+  // phones: the list of sections, or one open section (a request from elsewhere opens it directly)
+  const [open, setOpen] = useState(() => !!wanted && TAB_IDS.includes(wanted));
+  // "domains" from a page's Publish panel: the Domains section, with its Add domain button in view
   const [focusDomains, setFocusDomains] = useState(wanted === 'domains');
-  // the account menu asks for a tab
+  // the account menu, the palette and the assistant ask for a section
   useEffect(() => {
     if (!wanted) return;
-    if (wanted === 'domains') {
-      setTab('brand');
-      setFocusDomains(true);
-    } else if (wanted === 'account' ? signedIn : ['brand', 'ai', 'accounts', 'projects', 'prefs'].includes(wanted)) setTab(wanted as Tab);
+    if (TAB_IDS.includes(wanted) && (wanted !== 'account' || signedIn)) {
+      setTab(wanted as Tab);
+      setOpen(true);
+      if (wanted === 'domains') setFocusDomains(true);
+    }
     useUI.getState().setSettingsTab(null);
   }, [wanted, signedIn]);
+
+  // Domains only where publishing is on; Account only when signed in
+  const domainsOn = access === 'ready' || access === 'signed-out';
+  const items = SECTIONS.filter((s) => (s.id !== 'domains' || domainsOn || (tab === 'domains' && access === 'checking')) && (s.id !== 'account' || signedIn));
+  const shown: Tab = items.some((s) => s.id === tab) ? tab : 'brand';
+  const current = SECTIONS.find((s) => s.id === shown)!;
+
+  const choose = (id: Tab) => {
+    setTab(id);
+    setOpen(true);
+    document.getElementById('main-scroll')?.scrollTo({ top: 0 });
+  };
+  // a vertical tab list: up and down move between sections
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    const i = items.findIndex((s) => s.id === shown);
+    const j = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : (i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    choose(items[j].id);
+    requestAnimationFrame(() => e.currentTarget.querySelector<HTMLElement>(`[data-section="${items[j].id}"]`)?.focus());
+  };
+
   return (
-    <div className="flex flex-col gap-5">
-      <header>
-        <p className="eyebrow mb-1">Settings</p>
-        <h1 className="page-title">Workspace settings</h1>
-        <p className="mt-1 text-[13.5px] text-muted">Your brand kit, AI keys, social handles and posting, projects and data. Brand changes flow into every module automatically.</p>
-      </header>
-      <Tabs<Tab>
-        value={tab}
-        onChange={setTab}
-        tabs={[
-          { id: 'brand', label: 'Brand', icon: <Palette size={15} /> },
-          { id: 'ai', label: 'AI', icon: <Bot size={15} /> },
-          { id: 'accounts', label: 'Social accounts', icon: <Link2 size={15} /> },
-          { id: 'projects', label: 'Projects & data', icon: <Database size={15} /> },
-          { id: 'prefs', label: 'Preferences', icon: <SlidersHorizontal size={15} /> },
-          ...(signedIn ? [{ id: 'account' as const, label: 'Account', icon: <CircleUserRound size={15} /> }] : []),
-        ]}
-      />
-      {tab === 'brand' && <BrandSettings project={project} focusDomains={focusDomains} onDomainsFocused={() => setFocusDomains(false)} />}
-      {tab === 'ai' && <AISettings />}
-      {tab === 'accounts' && <Accounts />}
-      {tab === 'projects' && <ProjectsData />}
-      {tab === 'prefs' && <Preferences />}
-      {tab === 'account' && signedIn && <AccountSettings />}
+    <div>
+      {/* wide screens, and the list of sections on phones */}
+      <PageHeader title="Settings" className={cn(open && 'max-lg:hidden')} />
+      {/* phones: one section, with the way back to the list */}
+      <PageHeader title={current.label} back={{ label: 'Settings', onClick: () => setOpen(false) }} className={cn('lg:hidden', !open && 'hidden')} />
+
+      <div className="lg:grid lg:grid-cols-[200px_minmax(0,1fr)] lg:gap-8">
+        <div role="tablist" aria-orientation="vertical" aria-label="Settings sections" onKeyDown={onKey} className="hidden flex-col gap-0.5 self-start lg:sticky lg:top-0 lg:flex">
+          {items.map((s) => {
+            const on = s.id === shown;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                role="tab"
+                id={`settings-tab-${s.id}`}
+                data-section={s.id}
+                aria-selected={on}
+                aria-controls="settings-panel"
+                aria-current={on ? 'page' : undefined}
+                tabIndex={on ? 0 : -1}
+                className="nav-item"
+                onClick={() => choose(s.id)}
+              >
+                {s.icon}
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* phones: every section as a row */}
+        <div role="tablist" aria-orientation="vertical" aria-label="Settings sections" onKeyDown={onKey} className={cn('card flex flex-col divide-y divide-line overflow-hidden lg:hidden', open && 'hidden')}>
+          {items.map((s) => (
+            <button key={s.id} type="button" role="tab" data-section={s.id} aria-selected={s.id === shown} aria-controls="settings-panel" onClick={() => choose(s.id)} className="flex min-h-14 items-center gap-3 px-4 py-2.5 text-left transition-colors duration-120 hover:bg-surface-2">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-3 text-ink-2 [&>svg]:size-4">{s.icon}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-ui text-ink">{s.label}</span>
+                <span className="block truncate text-small text-muted">{s.hint}</span>
+              </span>
+              <ChevronRight size={16} className="shrink-0 text-muted" aria-hidden="true" />
+            </button>
+          ))}
+        </div>
+
+        <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${shown}`} className={cn('min-w-0', !open && 'max-lg:hidden')}>
+          {shown === 'brand' && <BrandSettings project={project} />}
+          {shown === 'domains' && (
+            <div className="max-w-[880px]">
+              <DomainsCard focus={focusDomains} onFocused={() => setFocusDomains(false)} />
+            </div>
+          )}
+          {shown === 'ai' && <AISettings />}
+          {shown === 'accounts' && <Accounts />}
+          {shown === 'projects' && <ProjectsData />}
+          {shown === 'prefs' && <Preferences />}
+          {shown === 'account' && signedIn && (
+            <div className="max-w-[880px]">
+              <AccountSettings />
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-function Card({ title, desc, children, action }: { title: string; desc?: string; children: React.ReactNode; action?: React.ReactNode }) {
+// ───────────────────────── "Saved" ─────────────────────────
+
+/**
+ * Changes save as you type: a short "Saved" shows a moment after the last one, then fades. `value` is
+ * what's being edited (compared by its JSON); the first value seen doesn't count as a change.
+ */
+function useSaved(value: unknown): boolean {
+  const key = JSON.stringify(value ?? null);
+  const first = useRef(key);
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (key === first.current) return;
+    first.current = key;
+    const show = setTimeout(() => setShown(true), 500);
+    const hide = setTimeout(() => setShown(false), 1700);
+    return () => {
+      clearTimeout(show);
+      clearTimeout(hide);
+    };
+  }, [key]);
+  return shown;
+}
+
+function Saved({ shown }: { shown: boolean }) {
   return (
-    <section className="panel p-4 sm:p-5">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="section-title">{title}</h2>
-          {desc && <p className="mt-0.5 text-[13px] text-muted">{desc}</p>}
-        </div>
-        {action}
-      </div>
-      {children}
-    </section>
+    <span aria-live="polite" className={cn('inline-flex items-center gap-1 text-caption text-good transition-opacity duration-240 ease-out', shown ? 'opacity-100' : 'opacity-0')}>
+      {shown && (
+        <>
+          <Check size={12} aria-hidden="true" /> Saved
+        </>
+      )}
+    </span>
   );
 }
 
 // ───────────────────────── Brand ─────────────────────────
 
-function BrandSettings({ project, focusDomains, onDomainsFocused }: { project: Project; focusDomains?: boolean; onDomainsFocused?: () => void }) {
+/** Long text edited in place: a borderless field that shows its edge on hover and focus. */
+const INLINE = 'input-inline -mx-3 w-[calc(100%+24px)] !max-w-none';
+
+function BrandSettings({ project }: { project: Project }) {
   const brand = project.brand;
   const ai = useAI(brandKitTask);
   const [palettes, setPalettes] = useState<Brand['colors'][] | undefined>(undefined);
   // the active project's brand, and its shared Marketplace listing when it's listed
   const set = (patch: Partial<Brand>) => saveBrand(patch);
+  const identitySaved = useSaved([brand.name, brand.websiteUrl, brand.tagline, brand.pitch, brand.valueProp, brand.audience, brand.mission, brand.personality, brand.slug]);
+  const lookSaved = useSaved([brand.logo, brand.colors]);
+  const bannerSaved = useSaved(brand.banner);
+  const socialsSaved = useSaved(brand.socials);
 
   const refreshCopy = async () => {
     const r = await ai.run({});
@@ -105,91 +210,108 @@ function BrandSettings({ project, focusDomains, onDomainsFocused }: { project: P
   };
 
   return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="flex min-w-0 flex-col gap-5">
-        <Card title="Identity" desc="Name, website and the words that describe you.">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Brand name" htmlFor="b-name">
-              <input id="b-name" className="input" value={brand.name} onChange={(e) => set({ name: e.target.value })} />
-            </Field>
-            <Field label="Website" htmlFor="b-url">
-              <input id="b-url" className="input" value={brand.websiteUrl} onChange={(e) => set({ websiteUrl: e.target.value })} onBlur={(e) => e.target.value && set({ websiteUrl: ensureUrl(e.target.value) })} placeholder="https://yourbrand.com" />
-            </Field>
-            <Field label="Tagline" htmlFor="b-tag" className="sm:col-span-2">
-              <input id="b-tag" className="input" value={brand.tagline} onChange={(e) => set({ tagline: e.target.value })} />
-            </Field>
-            <Field label="Elevator pitch" htmlFor="b-pitch" className="sm:col-span-2">
-              <AutoTextarea id="b-pitch" value={brand.pitch} onChange={(v) => set({ pitch: v })} minRows={2} className="text-[13.5px]" />
-            </Field>
-            <Field label="Value proposition" htmlFor="b-vp" className="sm:col-span-2">
-              <AutoTextarea id="b-vp" value={brand.valueProp} onChange={(v) => set({ valueProp: v })} minRows={2} className="text-[13.5px]" />
-            </Field>
-            <Field label="Target audience" htmlFor="b-aud" className="sm:col-span-2">
-              <AutoTextarea id="b-aud" value={brand.audience} onChange={(v) => set({ audience: v })} minRows={2} className="text-[13.5px]" />
-            </Field>
-            <Field label="Mission" htmlFor="b-mission" className="sm:col-span-2">
-              <AutoTextarea id="b-mission" value={brand.mission} onChange={(v) => set({ mission: v })} minRows={1} className="text-[13.5px]" />
-            </Field>
-            <Field label="Personality" className="sm:col-span-2">
-              <ChipInput values={brand.personality} onChange={(v) => set({ personality: v })} placeholder="e.g. warm, expert, playful" max={8} />
-            </Field>
-            <Field label="URL slug" htmlFor="b-slug" hint="Used in the names of files you download.">
-              <input id="b-slug" className="input" value={brand.slug} onChange={(e) => set({ slug: slugify(e.target.value) })} />
-            </Field>
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-4">
-            <GenerateButton running={ai.running} onClick={refreshCopy} size="sm" variant="secondary">
-              Refresh brand copy with AI
-            </GenerateButton>
-            <span className="text-xs text-muted">Rewrites tagline, pitch, value prop, audience and mission. Keeps name, logo and colors.</span>
-          </div>
-          <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact className="mt-3" />
-          {ai.result && !ai.running && <AIResultBar className="mt-3" provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_240px]">
+      <div className="flex min-w-0 flex-col gap-6">
+        <SettingsSection title="Identity" description="Your name and the words that describe you. Changes save as you type." actions={<Saved shown={identitySaved} />}>
+          <SettingsRow label="Brand name" htmlFor="b-name">
+            <input id="b-name" className="input" value={brand.name} onChange={(e) => set({ name: e.target.value })} />
+          </SettingsRow>
           {brand.nameOptions.length > 1 && (
-            <div className="mt-4">
-              <p className="label">Other name ideas</p>
-              <div className="flex flex-wrap gap-1.5">
+            <SettingsRow label="Other name ideas" description="From your brand kit.">
+              <div className="flex flex-wrap gap-1.5 md:justify-end">
                 {brand.nameOptions.map((n) => (
-                  <button key={n.name} className={cn('chip', brand.name === n.name && 'chip-active')} title={n.rationale} onClick={() => set({ name: n.name, slug: slugify(n.name) })}>
+                  <button key={n.name} type="button" className={cn('chip', brand.name === n.name && 'chip-active')} title={n.rationale} onClick={() => set({ name: n.name, slug: slugify(n.name) })}>
                     {n.name}
                   </button>
                 ))}
               </div>
+            </SettingsRow>
+          )}
+          <SettingsRow label="Website" htmlFor="b-url">
+            <input id="b-url" className="input" value={brand.websiteUrl} onChange={(e) => set({ websiteUrl: e.target.value })} onBlur={(e) => e.target.value && set({ websiteUrl: ensureUrl(e.target.value) })} placeholder="https://yourbrand.com" />
+          </SettingsRow>
+          <SettingsRow label="Tagline" htmlFor="b-tag">
+            <input id="b-tag" className="input" value={brand.tagline} onChange={(e) => set({ tagline: e.target.value })} />
+          </SettingsRow>
+          <SettingsRow label="Elevator pitch" htmlFor="b-pitch" stack>
+            <AutoTextarea id="b-pitch" value={brand.pitch} onChange={(v) => set({ pitch: v })} minRows={2} className={INLINE} placeholder="What you do, for whom, and why it’s different" />
+          </SettingsRow>
+          <SettingsRow label="Value proposition" htmlFor="b-vp" stack>
+            <AutoTextarea id="b-vp" value={brand.valueProp} onChange={(v) => set({ valueProp: v })} minRows={1} className={INLINE} placeholder="The one result people get from you" />
+          </SettingsRow>
+          <SettingsRow label="Target audience" htmlFor="b-aud" stack>
+            <AutoTextarea id="b-aud" value={brand.audience} onChange={(v) => set({ audience: v })} minRows={1} className={INLINE} placeholder="Who you serve, as specifically as you can" />
+          </SettingsRow>
+          <SettingsRow label="Mission" htmlFor="b-mission" stack>
+            <AutoTextarea id="b-mission" value={brand.mission} onChange={(v) => set({ mission: v })} minRows={1} className={INLINE} placeholder="Why you do it, in one sentence" />
+          </SettingsRow>
+          <SettingsRow label="Personality" description="Up to 8 words for how you sound.">
+            <div className="w-full md:max-w-[420px]">
+              <ChipInput values={brand.personality} onChange={(v) => set({ personality: v })} placeholder="e.g. warm, expert, playful" max={8} />
+            </div>
+          </SettingsRow>
+          <SettingsRow label="File name" description="Used in the names of files you download." htmlFor="b-slug">
+            <input id="b-slug" className="input font-mono" value={brand.slug} onChange={(e) => set({ slug: slugify(e.target.value) })} />
+          </SettingsRow>
+          <SettingsRow label="Refresh the copy" description="Rewrites your tagline, pitch, value proposition, audience and mission. Keeps your name, logo and colours.">
+            <GenerateButton running={ai.running} onClick={refreshCopy} size="sm" runningLabel="Writing…">
+              Refresh brand copy with AI
+            </GenerateButton>
+          </SettingsRow>
+          {(ai.running || (ai.result && !ai.running)) && (
+            <div className="pb-4">
+              <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact />
+              {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
             </div>
           )}
-        </Card>
+        </SettingsSection>
 
-        <DomainsCard focus={focusDomains} onFocused={onDomainsFocused} />
-
-        <Card title="Logo & colors" desc="Upload your own logo or design one from an icon, shape and font.">
-          <LogoDesigner brand={brand} onChange={set} paletteOptions={palettes} />
-        </Card>
-        <Card title="Cover banner">
-          <BannerDesigner brand={brand} onChange={set} />
-        </Card>
-        <Card title="Brand images" desc="Photos and product shots used in posts, listings and covers.">
-          <BrandImagesEditor brand={brand} onChange={(images) => set({ images })} />
-        </Card>
-        <Card title="Social profiles" desc="Your profile links or handles. Nothing gets connected: they show in post previews and tell Manus which account to post as.">
-          <SocialLinksEditor socials={brand.socials} onChange={(socials) => set({ socials })} projectId={project.id} voiceSetup="button" />
-        </Card>
-      </div>
-      <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4 xl:self-start">
-        <section className="panel overflow-hidden" aria-label="Brand preview">
-          <BrandBanner brand={brand} rounded={false} className="aspect-[3/1] w-full" />
-          <div className="flex flex-col gap-2 p-4" style={{ background: brand.colors.paper, color: brand.colors.ink }}>
-            <BrandLogo brand={brand} size={40} layout="horizontal" />
-            {brand.tagline && <p className="text-[13px] opacity-80">{brand.tagline}</p>}
-            <div className="mt-1 flex gap-1.5">
-              {(['primary', 'secondary', 'accent', 'ink', 'paper'] as const).map((k) => (
-                <span key={k} className="h-7 flex-1 rounded ring-1 ring-black/10" style={{ background: brand.colors[k] }} title={`${k}: ${brand.colors[k]}`} />
-              ))}
-            </div>
+        <SettingsSection title="Logo & colours" description="Upload your own logo or design one from an icon, a shape and a font." actions={<Saved shown={lookSaved} />}>
+          <div className="pb-4 pt-3">
+            <LogoDesigner brand={brand} onChange={set} paletteOptions={palettes} />
           </div>
-        </section>
-        <p className="text-xs text-muted">Changes save automatically and update your Studio, sales page, emails, posts and Marketplace listing.</p>
-      </aside>
+        </SettingsSection>
+
+        <SettingsSection title="Cover banner" description="Shown on your listing and social profiles." actions={<Saved shown={bannerSaved} />}>
+          <div className="pb-4 pt-3">
+            <BannerDesigner brand={brand} onChange={set} />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection title="Brand images" description="Photos and product shots for posts, listings and covers.">
+          <div className="pb-4 pt-3">
+            <BrandImagesEditor brand={brand} onChange={(images) => set({ images })} />
+          </div>
+        </SettingsSection>
+
+        <SettingsSection title="Social profiles" description="Shown in post previews; they tell Manus which account to post as." actions={<Saved shown={socialsSaved} />}>
+          <SocialLinksEditor socials={brand.socials} onChange={(socials) => set({ socials })} projectId={project.id} voiceSetup="button" />
+        </SettingsSection>
+      </div>
+
+      <BrandPreview brand={brand} />
     </div>
+  );
+}
+
+/** The brand as people see it: banner, logo, name, tagline and palette (wide screens, beside the form). */
+function BrandPreview({ brand }: { brand: Brand }) {
+  return (
+    <aside className="hidden min-w-0 xl:sticky xl:top-0 xl:block xl:self-start" aria-label="Brand preview">
+      <div className="overflow-hidden rounded-stage border border-line bg-surface shadow-product">
+        <BrandBanner brand={brand} rounded={false} className="aspect-[3/1] w-full" />
+        <div className="flex flex-col gap-2.5 p-4" style={{ background: brand.colors.paper, color: brand.colors.ink }}>
+          <BrandLogo brand={brand} size={34} layout="horizontal" />
+          {brand.tagline && <p className="clamp-2 text-small opacity-80">{brand.tagline}</p>}
+          <div className="mt-1 flex gap-1">
+            {(['primary', 'secondary', 'accent', 'ink', 'paper'] as const).map((k) => (
+              <span key={k} className="h-6 flex-1 rounded-xs ring-1 ring-inset ring-ink/10" style={{ background: brand.colors[k] }} title={`${k}: ${brand.colors[k]}`} />
+            ))}
+          </div>
+        </div>
+      </div>
+      <p className="mt-3 text-caption text-muted">Updates your Studio, pages, emails, posts and listing.</p>
+    </aside>
   );
 }
 
@@ -199,34 +321,49 @@ function AISettings() {
   return __ARTIFACT_BUILD__ ? <ArtifactAI /> : <AIProviders />;
 }
 
-// ───────────────────────── Accounts ─────────────────────────
+// ───────────────────────── Social accounts ─────────────────────────
 
 function Accounts() {
   const project = useActiveProject()!;
   const updateBrand = useStore((s) => s.updateBrand);
   const ready = useManusReady();
+  const saved = useSaved(project.brand.socials);
+  const networks = POST_PLATFORMS.map((p) => PLATFORMS[p].label.replace(' (Twitter)', '')).join(', ');
   return (
-    <div className="flex flex-col gap-5">
-      <Card
-        title="Posting with Manus"
-        desc="This app doesn’t log in to your social accounts and never posts on its own. Manus, an AI agent, posts for you: it opens each network in its own browser, where you sign in once, and posts exactly the text and image or video you confirm, right away or scheduled."
-      >
-        <div className={cn('flex flex-wrap items-center gap-3 rounded-md border px-3 py-2.5 text-[13px]', ready ? 'border-good/40 bg-good-soft' : 'border-warn/40 bg-warn-soft')}>
-          <span className="min-w-0 flex-1">
-            <b className={ready ? 'text-good' : 'text-warn'}>{ready ? 'Manus is ready.' : 'Manus isn’t set up yet.'}</b>{' '}
-            <span className="text-ink-2">{ready ? `It can post on ${POST_PLATFORMS.map((p) => PLATFORMS[p].label.replace(' (Twitter)', '')).join(', ')}. Each post is a Manus task and uses your Manus credits.` : manusSetupHint()}</span>
+    <div className="flex max-w-[880px] flex-col gap-6">
+      {ready ? (
+        <Callout tone="good" title="Manus is ready to post for you.">
+          It posts on {networks}, right away or scheduled, using your Manus credits.
+        </Callout>
+      ) : (
+        <Callout
+          tone="warn"
+          title="Manus isn’t set up yet."
+          action={
+            !__ARTIFACT_BUILD__ && (
+              <button type="button" className="btn btn-secondary btn-xs" onClick={() => useUI.getState().setSettingsTab('ai')}>
+                Open AI keys
+              </button>
+            )
+          }
+        >
+          {manusSetupHint()}
+        </Callout>
+      )}
+      <SettingsSection
+        title="Your profiles"
+        description={`For ${project.brand.name || 'this project'}. Shown in post previews; they tell Manus which account to post as.`}
+        actions={
+          <span className="flex items-center gap-1">
+            <Saved shown={saved} />
+            <InfoTip title="How posting works" label="How posting works">
+              This app doesn’t log in to your social accounts and never posts on its own. Manus, an AI agent, opens each network in its own browser, where you sign in once, and posts exactly the text and image or video you confirm. Without Manus, copy a post’s text and download its image from the post’s ⋯ menu, post it yourself, then choose Mark as posted.
+            </InfoTip>
           </span>
-          {!ready && !__ARTIFACT_BUILD__ && (
-            <button className="btn btn-secondary btn-sm" onClick={() => useUI.getState().setSettingsTab('ai')}>
-              <Bot size={14} /> Open AI settings
-            </button>
-          )}
-        </div>
-        <p className="mt-3 text-[12.5px] text-muted">Without Manus, copy a post’s text and download its image or video from the post’s ⋯ menu, post it yourself, then choose Mark as posted.</p>
-      </Card>
-      <Card title="Your profiles" desc={`For ${project.brand.name || 'this project'}. They show in post previews and tell Manus which account to post as.`}>
+        }
+      >
         <SocialLinksEditor socials={project.brand.socials} onChange={(socials) => updateBrand({ socials })} projectId={project.id} voiceSetup="none" />
-      </Card>
+      </SettingsSection>
     </div>
   );
 }
@@ -267,79 +404,95 @@ function ProjectsData() {
     }
   };
 
+  const remove = async (p: Project) => {
+    if (await confirmAction({ title: `Delete ${p.brand.name || 'this project'}?`, body: 'Its posts, campaigns and Marketplace listing are removed too. This can’t be undone.', confirmLabel: 'Delete project', danger: true })) deleteProjectEverywhere(p.id);
+  };
+  // the name lives in Brand: open it there, ready to type
+  const rename = () => {
+    useUI.getState().setSettingsTab('brand');
+    setTimeout(() => document.getElementById('b-name')?.focus(), 80);
+  };
+
   return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-      <Card
+    <div className="flex max-w-[880px] flex-col gap-6">
+      <SettingsSection
         title="Projects"
-        desc="Each project has its own brand, studio, marketing and analytics."
-        action={
-          <div className="flex gap-2">
-            <button className="btn btn-secondary btn-sm" onClick={() => createProject('business', 'new')}>
-              <Plus size={14} /> New business
+        description="Each project has its own brand, studio, marketing and analytics."
+        actions={
+          <>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => createProject('business', 'new')}>
+              <Plus /> New business
             </button>
-            <button className="btn btn-primary btn-sm" onClick={() => createProject('product', 'new')}>
-              <Plus size={14} /> New product
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => createProject('product', 'new')}>
+              <Plus /> New product
             </button>
-          </div>
+          </>
         }
       >
-        <ul className="flex flex-col gap-2">
-          {projects.map((p) => (
-            <li key={p.id} className={cn('flex flex-wrap items-center gap-3 rounded-md border px-3 py-2.5', p.id === activeId ? 'border-primary bg-primary-soft/50' : 'border-line')}>
-              <BrandLogo brand={p.brand} size={30} layout="mark" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13.5px] font-semibold">{p.brand.name || 'Untitled project'}</span>
-                <span className="block text-xs text-muted">
-                  {p.track === 'business' ? 'Business' : p.format ? FORMATS[p.format].label : 'Digital product'} · updated {fmtRelative(p.updatedAt)}
-                  {!p.onboarded && ' · setup unfinished'}
+        <ul className="-mx-5 mt-3 flex flex-col border-t border-line" aria-label="Your projects">
+          {projects.map((p) => {
+            const active = p.id === activeId;
+            const name = p.brand.name || 'Untitled project';
+            return (
+              <li key={p.id} className="flex min-h-14 items-center gap-3 border-b border-line px-5 py-2.5 last:border-b-0">
+                <LogoMark colors={p.brand.colors} logo={p.brand.logo} name={p.brand.name || 'P'} size={32} />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2">
+                    <span className="truncate text-ui text-ink">{name}</span>
+                    {active && <Badge tone="primary">Open now</Badge>}
+                    {!p.onboarded && <Badge>Setup</Badge>}
+                  </span>
+                  <span className="block truncate text-small text-muted">
+                    {p.track === 'business' ? 'Business' : p.format ? FORMATS[p.format].label : 'Digital product'} · updated {fmtRelative(p.updatedAt)}
+                  </span>
                 </span>
-              </span>
-              {p.id === activeId ? (
-                <span className="badge bg-primary text-on-primary">Active</span>
-              ) : (
-                <button className="btn btn-secondary btn-xs" onClick={() => setActive(p.id)}>
-                  <FolderOpen size={12} /> Open
-                </button>
-              )}
-              <button
-                className="btn btn-ghost btn-icon btn-xs text-muted hover:text-bad"
-                aria-label={`Delete ${p.brand.name || 'project'}`}
-                onClick={async () => {
-                  if (await confirmAction({ title: `Delete ${p.brand.name || 'this project'}?`, body: 'Its posts, campaigns and Marketplace listing are removed too. This can’t be undone.', confirmLabel: 'Delete project', danger: true })) deleteProjectEverywhere(p.id);
-                }}
-              >
-                <Trash2 size={13} />
-              </button>
-            </li>
-          ))}
+                {!active && (
+                  <button type="button" className="btn btn-secondary btn-xs" onClick={() => setActive(p.id)}>
+                    <FolderOpen /> Open
+                  </button>
+                )}
+                <MoreMenu
+                  label={`More actions for ${name}`}
+                  items={[
+                    ...(active ? [{ label: 'Rename', icon: <Pencil />, onSelect: rename }] : []),
+                    { label: 'Delete project', icon: <Trash2 />, danger: true, onSelect: () => void remove(p) },
+                  ]}
+                />
+              </li>
+            );
+          })}
         </ul>
-      </Card>
+      </SettingsSection>
 
-      <div className="flex min-w-0 flex-col gap-5">
-        <Card title="Backup & restore" desc={signedIn ? 'Your workspace is saved to your account. Export a backup to keep your own copy (uploaded images and videos aren’t included).' : 'Everything lives in this browser. Export a backup to move it or keep it safe (uploaded images and videos aren’t included).'}>
-          <div className="flex flex-wrap gap-2">
-            <button className="btn btn-secondary" onClick={exportJson}>
-              <Download size={15} /> Export backup (.json)
-            </button>
-            <button className="btn btn-secondary" onClick={() => fileRef.current?.click()}>
-              <Upload size={15} /> Import backup
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json,.json"
-              className="sr-only"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                e.target.value = '';
-                if (f) importJson(f);
-              }}
-            />
-          </div>
-        </Card>
-        <Card title="Danger zone">
+      <SettingsSection title="Backup & restore" description={signedIn ? 'Your workspace is saved to your account. A backup is your own copy.' : 'Everything lives in this browser. A backup moves it or keeps it safe.'}>
+        <SettingsRow label="Export a backup" description="A .json file of every project. Uploaded images and videos aren’t included.">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={exportJson}>
+            <Download /> Export backup (.json)
+          </button>
+        </SettingsRow>
+        <SettingsRow label="Import a backup" description="Replaces the workspace on this device with the file’s projects.">
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => fileRef.current?.click()}>
+            <Upload /> Import backup
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="sr-only"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) importJson(f);
+            }}
+          />
+        </SettingsRow>
+      </SettingsSection>
+
+      <DangerSection title="Danger zone">
+        <SettingsRow label="Reset workspace" description={signedIn ? 'Deletes every project, post, skill, listing and file from your account and every device.' : 'Deletes every project, post, skill, listing and order on this device.'}>
           <button
-            className="btn btn-danger"
+            type="button"
+            className="btn btn-danger-ghost btn-sm"
             onClick={async () => {
               if (
                 await confirmAction(
@@ -353,10 +506,10 @@ function ProjectsData() {
               }
             }}
           >
-            <Trash2 size={15} /> Reset workspace
+            <Trash2 /> Reset workspace
           </button>
-        </Card>
-      </div>
+        </SettingsRow>
+      </DangerSection>
     </div>
   );
 }
@@ -369,47 +522,56 @@ function Preferences() {
   const updateSettings = useStore((s) => s.updateSettings);
   const community = useRuntime((s) => s.community);
   const set = (patch: Partial<AppSettings>) => updateSettings((s) => ({ ...s, ...patch }));
+  const profileSaved = useSaved(settings.profile);
+  const lookSaved = useSaved(settings.theme);
   return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-      <Card title="Profile" desc="Used to pre-fill opt-in tests and email sign-offs.">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Your name" htmlFor="pf-name">
-            <input id="pf-name" className="input" autoComplete="name" value={settings.profile.name} onChange={(e) => set({ profile: { ...settings.profile, name: e.target.value } })} />
-          </Field>
-          <Field label="Email" htmlFor="pf-email">
-            <input id="pf-email" type="email" className="input" autoComplete="email" value={settings.profile.email} onChange={(e) => set({ profile: { ...settings.profile, email: e.target.value } })} />
-          </Field>
-        </div>
-      </Card>
-      <Card title="Appearance">
-        <Segmented<AppSettings['theme']>
-          value={settings.theme}
-          onChange={(theme) => set({ theme })}
-          options={[
-            { id: 'system', label: 'System' },
-            { id: 'light', label: 'Light', icon: <Sun size={14} /> },
-            { id: 'dark', label: 'Dark', icon: <Moon size={14} /> },
-          ]}
-        />
-      </Card>
-      {community === 'live' && (
-        <Card title="Marketplace" desc="This app is shared: listings you publish are visible to everyone who uses it. People buy through your own links; this app takes no payments.">
-          <Toggle
-            checked={settings.shareToCommunity}
-            onChange={(v) => {
-              set({ shareToCommunity: v });
-              setTimeout(() => pushMyListings(), 0);
-            }}
-            label="Show my listings to other people"
-            description="Turn off to keep your listings visible only to you."
+    <div className="flex max-w-[880px] flex-col gap-6">
+      <SettingsSection title="Profile" description="Pre-fills opt-in tests and email sign-offs." actions={<Saved shown={profileSaved} />}>
+        <SettingsRow label="Your name" htmlFor="pf-name">
+          <input id="pf-name" className="input" autoComplete="name" value={settings.profile.name} onChange={(e) => set({ profile: { ...settings.profile, name: e.target.value } })} />
+        </SettingsRow>
+        <SettingsRow label="Email" htmlFor="pf-email">
+          <input id="pf-email" type="email" className="input" autoComplete="email" value={settings.profile.email} onChange={(e) => set({ profile: { ...settings.profile, email: e.target.value } })} />
+        </SettingsRow>
+      </SettingsSection>
+
+      <SettingsSection title="Appearance" actions={<Saved shown={lookSaved} />}>
+        <SettingsRow label="Theme" description="System follows your device’s light or dark setting.">
+          <Segmented<AppSettings['theme']>
+            value={settings.theme}
+            onChange={(theme) => set({ theme })}
+            options={[
+              { id: 'system', label: 'System', icon: <Monitor /> },
+              { id: 'light', label: 'Light', icon: <Sun /> },
+              { id: 'dark', label: 'Dark', icon: <Moon /> },
+            ]}
           />
-        </Card>
+        </SettingsRow>
+      </SettingsSection>
+
+      {community === 'live' && (
+        <SettingsSection title="Marketplace" description="Listings you publish are visible to everyone who uses this app. People buy through your own links.">
+          <SettingsRow label="Show my listings to other people" description="Turn off to keep your listings visible only to you." htmlFor="pref-share">
+            <Toggle
+              id="pref-share"
+              checked={settings.shareToCommunity}
+              onChange={(v) => {
+                set({ shareToCommunity: v });
+                setTimeout(() => pushMyListings(), 0);
+              }}
+            />
+          </SettingsRow>
+        </SettingsSection>
       )}
-      <Card title="About">
-        <p className="flex items-center gap-2 text-[13px] text-ink-2">
-          <Users size={15} className="text-primary" /> {signedIn ? 'Yourlocalbusiness saves your workspace to your account.' : 'Yourlocalbusiness keeps your data in this browser.'} AI runs on your server’s keys when they’re set up, otherwise on the built-in engine.
-        </p>
-      </Card>
+
+      <SettingsSection title="About">
+        <SettingsRow label="Where your work is kept" description={signedIn ? 'Yourlocalbusiness saves your workspace to your account.' : 'Yourlocalbusiness keeps your data in this browser.'}>
+          <span className="text-small text-muted">{signedIn ? 'Your account' : 'This browser'}</span>
+        </SettingsRow>
+        <SettingsRow label="Where the AI runs" description="On your server’s keys when they’re set up, otherwise on the built-in engine.">
+          <span className="text-small text-muted">{__ARTIFACT_BUILD__ ? 'claude.ai' : 'Your server'}</span>
+        </SettingsRow>
+      </SettingsSection>
     </div>
   );
 }

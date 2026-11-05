@@ -2,16 +2,13 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { Globe, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { showSignIn } from '@/lib/cloud/auth';
 import { PublishError, addDomain, checkDomain, isValidDomain, listPublished, normalizeDomain, removeDomain, usePublishAccess, type DomainInfo, type DomainRecord, type PublishedList } from '@/lib/publish';
-import { CopyButton, Field, Spinner, confirmAction } from '@/components/ui/primitives';
+import { cn } from '@/lib/utils';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Badge, Callout, CopyButton, Drawer, Empty, Field, MoreMenu, SettingsRow, SettingsSection, Spinner, confirmAction } from '@/components/ui/primitives';
 import { toast } from '@/store/ui';
 
-/** Where the app's owner links a domain to the published app in Replit. */
-const REPLIT_LINK = 'Deployments → Settings → Link a domain';
-
 /**
- * Settings → Domains: the owner's own domains, where their published pages can also show. Only where
- * publishing is on (never in the claude.ai build). `focus` scrolls it into view (from a page's
- * Publish panel).
+ * Settings › Domains: the owner's own domains, where their published pages can also show. Only where
+ * publishing is on (never in the claude.ai build). `focus` (from a page's Publish panel) opens Add domain.
  */
 export function DomainsCard({ focus, onFocused }: { focus?: boolean; onFocused?: () => void }) {
   const { access } = usePublishAccess();
@@ -19,13 +16,15 @@ export function DomainsCard({ focus, onFocused }: { focus?: boolean; onFocused?:
   return <Domains signedIn={access === 'ready'} focus={focus} onFocused={onFocused} />;
 }
 
+const pagesText = (pages: { title?: string; slug: string; home?: boolean }[]) => pages.map((p) => `${p.title || p.slug} (${p.home ? 'home page' : `/${p.slug}`})`).join(' · ');
+
 function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: boolean; onFocused?: () => void }) {
   const ids = useId();
-  const card = useRef<HTMLElement>(null);
-  const input = useRef<HTMLInputElement>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
   const [list, setList] = useState<PublishedList | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loads, setLoads] = useState(0);
+  const [drawer, setDrawer] = useState(false);
   const [draft, setDraft] = useState('');
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
@@ -33,16 +32,18 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
   const [claims, setClaims] = useState<DomainInfo[]>([]);
   const [checking, setChecking] = useState<Set<string>>(() => new Set());
   const [problems, setProblems] = useState<Record<string, string>>({});
+  // verified domains whose TXT record is shown (it has to stay at the registrar)
+  const [records, setRecords] = useState<Set<string>>(() => new Set());
   const checkedOnce = useRef(new Set<string>());
 
   const focused = useRef(onFocused);
   focused.current = onFocused;
   useEffect(() => {
     if (!focus) return;
-    card.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    input.current?.focus({ preventScroll: true });
+    addButton.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (signedIn) setDrawer(true);
     focused.current?.();
-  }, [focus]);
+  }, [focus, signedIn]);
 
   /** Put a domain in the list as the server describes it now (it may have just moved to this account). */
   const keepDomain = (info: DomainInfo) => {
@@ -101,6 +102,11 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
     return () => ctrl.abort();
   }, [signedIn, loads]);
 
+  const closeDrawer = () => {
+    setDrawer(false);
+    setAddError(null);
+  };
+
   const add = async () => {
     const domain = normalizeDomain(draft);
     if (!isValidDomain(domain)) return setAddError('Enter a domain like yourbrand.com.');
@@ -110,14 +116,15 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
     try {
       const info = await addDomain(domain);
       setDraft('');
+      setDrawer(false);
       if (info.takenByOther) {
         keepClaim(info);
         setProblems((p) => ({ ...p, [info.domain]: '' }));
-        toast({ kind: 'info', title: `Another account added ${info.domain} first`, body: 'If it’s yours, add the TXT record shown below to move it to your account.' });
+        toast({ kind: 'info', title: `Another account added ${info.domain} first`, body: 'If it’s yours, add the TXT record shown in the list to move it to your account.' });
         return;
       }
       keepDomain(info);
-      toast({ kind: 'success', title: `${info.domain} added`, body: 'Follow the steps below to connect it.' });
+      toast({ kind: 'success', title: `${info.domain} added`, body: 'Add its TXT record at your registrar: it’s shown in the list.' });
       void check(info.domain);
     } catch (e) {
       setAddError((e as Error)?.message || 'Couldn’t add that domain. Try again.');
@@ -143,170 +150,208 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
     }
   };
 
+  const toggleRecord = (domain: string) =>
+    setRecords((s) => {
+      const next = new Set(s);
+      if (next.has(domain)) next.delete(domain);
+      else next.add(domain);
+      return next;
+    });
+
   const rows = [...(list?.domains ?? []), ...claims];
 
   return (
-    <section ref={card} id="settings-domains" className="panel scroll-mt-4 p-4 sm:p-5" aria-labelledby={`${ids}-title`}>
-      <div className="mb-4 min-w-0">
-        <h2 id={`${ids}-title`} className="section-title flex items-center gap-2">
-          <Globe size={16} className="text-primary" aria-hidden="true" /> Domains
-        </h2>
-        <p className="mt-0.5 text-[13px] text-muted">Show your published pages on a domain you own, like yourbrand.com, as well as on this app’s address. Your domains work for all your projects.</p>
-      </div>
-
-      {!signedIn ? (
-        <div className="flex flex-wrap items-center gap-3">
-          <p className="min-w-0 flex-1 text-[13px] text-ink-2">Sign in to add your own domains.</p>
-          <button type="button" className="btn btn-primary btn-sm" onClick={showSignIn}>
-            Sign in
-          </button>
-        </div>
-      ) : (
-        <>
-          <form
-            className="flex flex-wrap items-end gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!adding && draft.trim()) void add();
-            }}
-          >
-            <Field label="Add a domain" htmlFor={`${ids}-new`} className="min-w-[200px] flex-1" error={addError}>
-              <input
-                ref={input}
-                id={`${ids}-new`}
-                className="input"
-                value={draft}
-                placeholder="yourbrand.com"
-                autoComplete="off"
-                autoCapitalize="none"
-                spellCheck={false}
-                inputMode="url"
-                disabled={adding}
-                aria-invalid={!!addError}
-                onChange={(e) => {
-                  setDraft(e.target.value);
-                  setAddError(null);
-                }}
-              />
-            </Field>
-            <button type="submit" className="btn btn-primary" disabled={adding || !draft.trim() || !list}>
-              {adding ? <Spinner size={14} /> : <Plus size={15} />} Add domain
+    <div className="flex flex-col gap-6">
+      <SettingsSection
+        id="settings-domains"
+        title="Domains"
+        description="Show your published pages on a domain you own, like yourbrand.com. Your domains work for all your projects."
+        actions={
+          signedIn && (
+            <button ref={addButton} type="button" className="btn btn-secondary btn-sm" disabled={!list} onClick={() => setDrawer(true)}>
+              <Plus /> Add domain
             </button>
-          </form>
+          )
+        }
+      >
+        {!signedIn ? (
+          <SettingsRow label="Sign in to add your own domains." description="Then publish your pages on them.">
+            <button type="button" className="btn btn-primary btn-sm" onClick={showSignIn}>
+              Sign in
+            </button>
+          </SettingsRow>
+        ) : (
+          <>
+            {loadError && (
+              <div className="py-4">
+                <Callout
+                  tone="bad"
+                  action={
+                    <button type="button" className="btn btn-secondary btn-xs" onClick={() => setLoads((n) => n + 1)}>
+                      Try again
+                    </button>
+                  }
+                >
+                  {loadError}
+                </Callout>
+              </div>
+            )}
+            {!list && !loadError && (
+              <p className="flex items-center gap-2 py-4 text-small text-muted">
+                <Spinner size={14} /> Loading your domains…
+              </p>
+            )}
+            {list && !rows.length && <Empty icon={<Globe />} title="No domains yet" body="Add one to show your pages at yourbrand.com as well as on this app’s address." className="py-8" />}
 
-          {loadError && (
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-[13px] text-bad" role="alert">
-              <span className="min-w-0 flex-1">{loadError}</span>
-              <button type="button" className="btn btn-secondary btn-xs" onClick={() => setLoads((n) => n + 1)}>
-                Try again
-              </button>
-            </div>
-          )}
-          {!list && !loadError && (
-            <p className="mt-3 flex items-center gap-2 text-[13px] text-muted">
-              <Spinner size={14} /> Loading your domains…
-            </p>
-          )}
-
-          {rows.length > 0 && (
-            <ul className="mt-4 flex flex-col" aria-label="Your domains">
-              {rows.map((d) => {
-                const claim = !!d.takenByOther;
-                const pages = claim ? [] : (list?.pages ?? []).filter((p) => p.domain === d.domain);
-                const busy = checking.has(d.domain);
-                const problem = problems[d.domain];
-                return (
-                  <li key={d.domain} className="flex flex-col gap-2 border-t border-line py-3 first:border-t-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="min-w-0 break-all text-[14px] font-semibold text-ink">{d.domain}</span>
-                      <span aria-live="polite">
-                        {busy ? (
-                          <span className="badge bg-surface-2 text-muted">
-                            <Spinner size={10} /> Checking
+            {rows.length > 0 && (
+              <div className="-mx-5 mt-3 border-t border-line">
+                <div className="hidden grid-cols-[minmax(0,1.3fr)_136px_minmax(0,1fr)_100px] gap-4 border-b border-line px-5 py-2 text-caption text-muted md:grid" aria-hidden="true">
+                  <span>Domain</span>
+                  <span>Status</span>
+                  <span>Pages</span>
+                  <span />
+                </div>
+                <ul className="flex flex-col" aria-label="Your domains">
+                  {rows.map((d) => {
+                    const claim = !!d.takenByOther;
+                    const pages = claim ? [] : (list?.pages ?? []).filter((p) => p.domain === d.domain);
+                    const busy = checking.has(d.domain);
+                    const problem = problems[d.domain];
+                    const showRecord = claim || !d.verified || records.has(d.domain);
+                    return (
+                      <li key={d.domain} className="border-b border-line px-5 py-3 last:border-b-0">
+                        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 md:grid-cols-[minmax(0,1.3fr)_136px_minmax(0,1fr)_100px]">
+                          <span className="min-w-0 break-all font-mono text-small text-ink">{d.domain}</span>
+                          <span aria-live="polite" className="md:order-none max-md:col-start-1 max-md:row-start-2">
+                            {busy ? (
+                              <Badge>
+                                <Spinner size={12} /> Checking
+                              </Badge>
+                            ) : claim ? (
+                              <Badge tone="warn">Another account’s for now</Badge>
+                            ) : d.verified ? (
+                              <Badge tone="good">Verified</Badge>
+                            ) : (
+                              <Badge tone="warn">Waiting for DNS</Badge>
+                            )}
                           </span>
-                        ) : claim ? (
-                          <span className="badge bg-warn-soft text-warn">Another account’s for now</span>
-                        ) : d.verified ? (
-                          <span className="badge bg-good-soft text-good">Verified</span>
-                        ) : (
-                          <span className="badge bg-warn-soft text-warn">Not verified yet</span>
-                        )}
-                      </span>
-                      <span className="ml-auto flex gap-1.5">
-                        <button type="button" className="btn btn-secondary btn-xs" disabled={busy} onClick={() => void check(d.domain, claim)}>
-                          <RefreshCw size={12} /> Check again
-                        </button>
-                        {claim ? (
-                          <button type="button" className="btn btn-ghost btn-xs text-muted" aria-label={`Stop adding ${d.domain}`} onClick={() => setClaims((c) => c.filter((x) => x.domain !== d.domain))}>
-                            <X size={12} /> Cancel
-                          </button>
-                        ) : (
-                          <button type="button" className="btn btn-ghost btn-xs text-muted hover:text-bad" aria-label={`Remove ${d.domain}`} onClick={() => void remove(d.domain, pages.length)}>
-                            <Trash2 size={12} /> Remove
-                          </button>
-                        )}
-                      </span>
-                    </div>
-                    {!busy && !d.verified && problem && <p className="text-[12.5px] text-muted">{problem}</p>}
-                    {claim ? (
-                      <>
-                        <p className="text-[12.5px] text-ink-2">Another account added this domain first. If it’s yours, add this TXT record at your domain registrar, then press “Check again”: the domain moves to your account.</p>
-                        <TxtRecord record={d.record} />
-                      </>
-                    ) : d.verified ? (
-                      <>
-                        <p className="text-[12.5px] text-muted">
-                          {pages.length ? `Shows: ${pages.map((p) => `${p.title || p.slug} (${p.home ? 'home page' : `/${p.slug}`})`).join(' · ')}` : 'No pages on it yet. Choose it when you publish a page.'}
-                        </p>
-                        <details className="text-[12.5px] text-muted">
-                          <summary className="cursor-pointer select-none">Its TXT record (keep it at your registrar)</summary>
-                          <div className="mt-2 flex flex-col gap-2">
+                          <span className="min-w-0 truncate text-small text-muted max-md:hidden" title={pages.length ? pagesText(pages) : undefined}>
+                            {claim ? '–' : pages.length ? pagesText(pages) : 'No pages yet'}
+                          </span>
+                          <span className="flex items-center justify-end gap-1 max-md:col-start-2 max-md:row-span-2 max-md:row-start-1">
+                            {(claim || !d.verified) && (
+                              <button type="button" className="btn btn-secondary btn-xs" disabled={busy} onClick={() => void check(d.domain, claim)}>
+                                <RefreshCw /> Check again
+                              </button>
+                            )}
+                            <MoreMenu
+                              size="xs"
+                              label={`More actions for ${d.domain}`}
+                              items={
+                                claim
+                                  ? [{ label: 'Stop adding it', icon: <X />, onSelect: () => setClaims((c) => c.filter((x) => x.domain !== d.domain)) }]
+                                  : [
+                                      ...(d.verified
+                                        ? [
+                                            { label: 'Check again', icon: <RefreshCw />, onSelect: () => void check(d.domain) },
+                                            { label: records.has(d.domain) ? 'Hide its TXT record' : 'Show its TXT record', icon: <Globe />, onSelect: () => toggleRecord(d.domain) },
+                                          ]
+                                        : []),
+                                      { label: 'Remove domain', icon: <Trash2 />, danger: true, onSelect: () => void remove(d.domain, pages.length) },
+                                    ]
+                              }
+                            />
+                          </span>
+                        </div>
+                        {!claim && pages.length > 0 && <p className="mt-1 truncate text-small text-muted md:hidden">{pagesText(pages)}</p>}
+                        {showRecord && (
+                          <div className="mt-3 flex flex-col gap-2">
+                            {!busy && !d.verified && problem && <p className="text-small text-muted">{problem}</p>}
+                            {claim ? (
+                              <p className="text-small text-ink-2">Another account added this domain first. If it’s yours, add this TXT record at your registrar, then press “Check again”: the domain moves to your account.</p>
+                            ) : d.verified ? (
+                              <p className="text-small text-ink-2">Keep this record at your registrar: the app looks at it every few hours, and without it the domain stops showing your pages.</p>
+                            ) : (
+                              <p className="text-small text-ink-2">Add this TXT record at your registrar, then press “Check again”. New records can take from a few minutes to a few hours to show up.</p>
+                            )}
                             <TxtRecord record={d.record} />
-                            <p>The app looks at this record every few hours. If it’s removed, the domain stops showing your pages. It also has to stay linked to this app in Replit ({REPLIT_LINK}).</p>
                           </div>
-                        </details>
-                      </>
-                    ) : (
-                      <>
-                        <ConnectSteps record={d.record} />
-                        <p className="text-[12.5px] text-muted">
-                          {pages.length ? `Will show: ${pages.map((p) => `${p.title || p.slug} (${p.home ? 'home page' : `/${p.slug}`})`).join(' · ')}` : 'No pages on it yet. Choose it when you publish a page.'}
-                        </p>
-                      </>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+        <Accordion type="single" collapsible className={cn('-mx-5 border-t border-line px-5', !signedIn && 'mt-1')}>
+          <AccordionItem value="how" className="border-b-0">
+            <AccordionTrigger>How to connect a domain</AccordionTrigger>
+            <AccordionContent>
+              <ConnectSteps />
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      </SettingsSection>
 
-          <div className="mt-4 rounded-md bg-surface-2/60 px-3 py-2.5 text-[12.5px]">
-            <p className="font-semibold text-ink-2">How to connect a domain</p>
-            <ol className="mt-1.5 flex list-decimal flex-col gap-1 pl-5 leading-relaxed text-ink-2">
-              <li>Add it above. You get a TXT record for it.</li>
-              <li>At your domain registrar, add that TXT record. It shows the domain is yours, and it has to stay there.</li>
-              <li>
-                The domain must also be linked to this app in Replit: {REPLIT_LINK}. Then add the records Replit shows at your registrar too (on Cloudflare: DNS only, not proxied). Only the app’s owner can link it; if that’s someone else, send them the domain.
-              </li>
-              <li>Come back here and press “Check again” next to the domain. New records can take from a few minutes to a few hours to show up.</li>
-            </ol>
-          </div>
-        </>
-      )}
-    </section>
+      <Drawer
+        open={drawer}
+        onClose={closeDrawer}
+        title="Add a domain"
+        footer={
+          <>
+            <button type="button" className="btn btn-secondary" onClick={closeDrawer}>
+              Cancel
+            </button>
+            <button type="submit" form={`${ids}-form`} className="btn btn-primary" disabled={adding || !draft.trim() || !list}>
+              {adding ? <Spinner size={16} /> : <Plus />} Add domain
+            </button>
+          </>
+        }
+      >
+        <form
+          id={`${ids}-form`}
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!adding && draft.trim()) void add();
+          }}
+        >
+          <p className="text-body text-muted">Your published pages can show on it as well as on this app’s address. Next you add a TXT record at your registrar to show it’s yours.</p>
+          <Field label="Domain" htmlFor={`${ids}-new`} error={addError} hint={!addError ? 'Without https://, like yourbrand.com or www.yourbrand.com.' : undefined}>
+            <input
+              id={`${ids}-new`}
+              className="input"
+              value={draft}
+              placeholder="yourbrand.com"
+              autoComplete="off"
+              autoCapitalize="none"
+              spellCheck={false}
+              inputMode="url"
+              autoFocus
+              disabled={adding}
+              aria-invalid={!!addError}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                setAddError(null);
+              }}
+            />
+          </Field>
+        </form>
+      </Drawer>
+    </div>
   );
 }
 
-/** What to do for a domain that isn't verified yet: its TXT record, and linking it in Replit. */
-export function ConnectSteps({ record }: { record: DomainRecord }) {
+/** The steps, written once: the TXT record proves the domain is yours; the domain also has to reach this app. */
+export function ConnectSteps() {
   return (
-    <ol className="flex list-decimal flex-col gap-2 pl-5 text-[12.5px] leading-relaxed text-ink-2">
-      <li>
-        At your domain registrar, add this TXT record:
-        <TxtRecord record={record} className="mt-1.5" />
-      </li>
-      <li>Link the domain to this app in Replit: {REPLIT_LINK}. Only the app’s owner can do this; if that’s someone else, send them the domain.</li>
-      <li>Press “Check again”.</li>
+    <ol className="flex list-decimal flex-col gap-1.5 pl-5 text-small text-ink-2">
+      <li>Add the domain here. You get a TXT record for it.</li>
+      <li>At your domain registrar, add that TXT record. It shows the domain is yours, and it has to stay there.</li>
+      <li>Connect the domain to this app where the app is hosted. Only the app’s owner can do this; if that’s someone else, send them the domain.</li>
+      <li>Come back and press “Check again” next to the domain. New records can take from a few minutes to a few hours to show up.</li>
     </ol>
   );
 }
@@ -318,18 +363,19 @@ export function TxtRecord({ record, className = '' }: { record: DomainRecord; cl
     ['Value', record.value],
   ];
   return (
-    <div className={`flex flex-col gap-1.5 rounded-md border border-line bg-surface px-3 py-2 ${className}`}>
-      <p className="text-xs text-muted">
-        Type: <span className="font-mono text-ink-2">TXT</span>
-      </p>
-      {rows.map(([label, text]) => (
-        <div key={label} className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="w-11 shrink-0 text-xs text-muted">{label}</span>
-          <code className="min-w-0 flex-1 break-all font-mono text-[12.5px] text-ink">{text}</code>
-          <CopyButton text={text} size="xs" label={`Copy ${label.toLowerCase()}`} />
-        </div>
-      ))}
-      <p className="text-xs text-muted">Some registrars add your domain to the end of the name by themselves. If yours does, type the name without it.</p>
+    <div className={cn('well flex flex-col gap-2 px-3 py-2.5', className)}>
+      <div className="grid grid-cols-[48px_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2">
+        <span className="text-caption text-muted">Type</span>
+        <span className="col-span-2 font-mono text-small text-ink">TXT</span>
+        {rows.map(([label, text]) => (
+          <div key={label} className="contents">
+            <span className="text-caption text-muted">{label}</span>
+            <code className="min-w-0 break-all font-mono text-small text-ink">{text}</code>
+            <CopyButton text={text} size="xs" label={`Copy ${label.toLowerCase()}`} />
+          </div>
+        ))}
+      </div>
+      <p className="text-caption text-muted">Some registrars add your domain to the end of the name by themselves. If yours does, type the name without it.</p>
     </div>
   );
 }
