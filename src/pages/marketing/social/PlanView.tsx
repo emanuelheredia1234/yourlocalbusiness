@@ -82,8 +82,8 @@ function SlotRow({ day, slot: sl, done }: { day: PlanDay; slot: PlanSlot; done: 
   const p = PLATFORMS[sl.platform];
   const when = `${fmtDate(day.date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTime(sl.time)}`;
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-2.5 md:grid-cols-[150px_120px_minmax(0,1fr)_auto]">
-      <span className="num font-mono text-caption text-muted">{when}</span>
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-4 py-2.5 md:grid-cols-[176px_120px_minmax(0,1fr)_auto]">
+      <span className="num whitespace-nowrap font-mono text-caption text-muted">{when}</span>
       <span className="flex items-center gap-2 md:order-none">
         <Badge>
           <span className="h-1.5 w-1.5 rounded-full" style={{ background: `rgb(var(--${type.slot}))` }} aria-hidden="true" />

@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { CalendarCheck, CalendarClock, CheckSquare, Square, Trash2 } from 'lucide-react';
 import type { Post, Project } from '@/lib/types';
-import { cn, fmtDate, isoToDateStr } from '@/lib/utils';
+import { fmtDate, isoToDateStr } from '@/lib/utils';
 import { contentBatchTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { navigate } from '@/lib/router';
@@ -12,9 +12,6 @@ import { Empty, Segmented, confirmAction } from '@/components/ui/primitives';
 import { PostCard } from '@/components/posts/PostCard';
 import { addToCalendarFlow } from '@/components/posts/PostActions';
 import { applyWeekBatch, batchStart, weekBatchInput } from '@/ai/socialPlan';
-
-/** How many grid columns a day takes (its posts, up to the row's width), so days sit side by side. */
-const SPAN: Record<number, string> = { 1: '', 2: 'sm:col-span-2', 3: 'sm:col-span-2 xl:col-span-3' };
 
 export function BatchView({ project, posts, covered, planAction }: { project: Project; posts: Post[]; covered: Set<string>; /** the 30-day plan's button, offered here before there's a plan */ planAction?: ReactNode }) {
   const plan = project.marketing.plan;
@@ -186,21 +183,28 @@ export function BatchView({ project, posts, covered, planAction }: { project: Pr
       {shown.length === 0 ? (
         <Empty variant="inline" className="justify-center py-8" title={filter === 'draft' ? 'No drafts left. Everything in this batch is on your calendar.' : 'Nothing here yet.'} />
       ) : (
-        <div className="grid grid-cols-1 items-start gap-x-4 gap-y-8 sm:grid-cols-2 xl:grid-cols-3">
-          {byDay.map(([date, list]) => (
-            <section key={date} aria-label={fmtDate(date, { weekday: 'long', month: 'long', day: 'numeric' })} className={cn('grid grid-cols-subgrid content-start gap-y-3', SPAN[Math.min(3, list.length)])}>
-              <h3 className="col-span-full flex items-baseline gap-2">
-                <span className="text-h4 text-ink">{fmtDate(date, { weekday: 'long', month: 'short', day: 'numeric' })}</span>
-                <span className="text-caption text-muted">
-                  {list.length} post{list.length > 1 ? 's' : ''}
-                </span>
-              </h3>
-              {list.map((p) => (
-                <PostCard key={p.id} post={p} brand={project.brand} selectable={p.status === 'draft'} selected={selected.has(p.id)} onSelect={(v) => toggle(p.id, v)} />
-              ))}
-            </section>
-          ))}
-        </div>
+        // one grid, so a week of posts fills every column; each day's name sits above its first post
+        <ol className="grid grid-cols-1 items-start gap-x-4 gap-y-6 sm:grid-cols-2 xl:grid-cols-3" aria-label="Posts by day">
+          {byDay.flatMap(([date, list]) =>
+            list.map((p, i) => (
+              <li key={p.id} className="flex min-w-0 flex-col gap-2">
+                {i === 0 ? (
+                  <h3 className="flex h-6 items-baseline gap-2">
+                    <span className="truncate text-h4 text-ink">{fmtDate(date, { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+                    <span className="shrink-0 text-caption text-muted">
+                      {list.length} post{list.length > 1 ? 's' : ''}
+                    </span>
+                  </h3>
+                ) : (
+                  <p className="h-6 max-sm:hidden">
+                    <span className="sr-only">{fmtDate(date, { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+                  </p>
+                )}
+                <PostCard post={p} brand={project.brand} selectable={p.status === 'draft'} selected={selected.has(p.id)} onSelect={(v) => toggle(p.id, v)} />
+              </li>
+            )),
+          )}
+        </ol>
       )}
     </div>
   );

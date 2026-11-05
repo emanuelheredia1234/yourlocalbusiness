@@ -790,7 +790,7 @@ function GuideBox({ project, busy, onImages, children, compact }: { project: Pro
   );
 }
 
-const EDIT_IDEAS = ['Make the headline shorter and clearer', 'Use simpler words everywhere', 'Switch to a dark look with round corners', 'Make the FAQ answers shorter', 'Say we take walk-ins', 'Add a line about parking'];
+const EDIT_IDEAS = ['Make the headline shorter', 'Use simpler words', 'Try a dark look', 'Shorten the FAQ answers', 'Say we take walk-ins', 'Mention parking'];
 /** What an edit with only new images asks for. */
 const IMAGES_ONLY = 'Put the new images on the page where they fit best.';
 

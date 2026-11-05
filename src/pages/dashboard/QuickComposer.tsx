@@ -419,17 +419,20 @@ function PhonePost({
         <Send size={18} />
         <Bookmark size={18} className="ml-auto" />
       </div>
-      <p className="clamp-3 px-3 pb-3 text-small text-ink-2">
-        <span className="mr-1 font-semibold text-ink">{handle}</span>
-        {caption ? (
-          <>
-            {caption}
-            {hashtags.length > 0 && <span className="text-primary"> {hashtags.join(' ')}</span>}
-          </>
-        ) : (
-          <span className="text-muted">Your caption shows here once it’s written.</span>
-        )}
-      </p>
+      {/* the clamp sits on an element without padding, or the next line would show in the padding */}
+      <div className="px-3 pb-3">
+        <p className="clamp-3 text-small text-ink-2">
+          <span className="mr-1 font-semibold text-ink">{handle}</span>
+          {caption ? (
+            <>
+              {caption}
+              {hashtags.length > 0 && <span className="text-primary"> {hashtags.join(' ')}</span>}
+            </>
+          ) : (
+            <span className="text-muted">Your caption shows here once it’s written.</span>
+          )}
+        </p>
+      </div>
     </div>
   );
 }

@@ -294,7 +294,6 @@ function CreativeCard({ project, site: finalUrl, cr, selected, onSelect, onChang
         handle={project.brand.name}
         avatar={<LogoMark colors={project.brand.colors} logo={project.brand.logo} name={project.brand.name} size={24} />}
         meta="Sponsored"
-        caption={cr.primaryText}
         footer={
           <span className="flex items-center gap-3">
             <span className="min-w-0 flex-1">
@@ -305,6 +304,10 @@ function CreativeCard({ project, site: finalUrl, cr, selected, onSelect, onChang
           </span>
         }
       >
+        {/* Meta shows an ad's text above its picture */}
+        <div className="px-3 pb-2.5">
+          <p className="clamp-3 whitespace-pre-line text-small text-ink-2">{cr.primaryText}</p>
+        </div>
         <PostVisual style={cr.style} headline={cr.visualHeadline} brand={project.brand} watermark aspect={cr.format === 'video' ? '4/5' : '1/1'} className="rounded-none" />
       </PostFrame>
       <div className="flex items-center justify-between gap-2">
