@@ -349,7 +349,11 @@ export default function SeoSalesPage() {
         <SeoHtmlMode project={project} publishRef={publishRef} rail={rail} onRail={setRail} />
       ) : !page || !meta || !result ? (
         running ? (
-          <WritingCanvas stage={pageAI.stage || metaAI.stage} onStop={() => (pageAI.running ? pageAI.stop() : metaAI.stop())} />
+          <>
+            {/* builds by Manus or Viktor stay in view while the page is first written */}
+            <AgentBuildList target="seo" className="mb-6" />
+            <WritingCanvas stage={pageAI.stage || metaAI.stage} onStop={() => (pageAI.running ? pageAI.stop() : metaAI.stop())} />
+          </>
         ) : (
           <div className="mx-auto flex max-w-[920px] flex-col">
             {seoHtml && <SeoVersionSwitch project={project} className="mb-6" />}
@@ -794,7 +798,8 @@ function GuideBox({ project, busy, onImages, children, compact }: { project: Pro
   );
 }
 
-const EDIT_IDEAS = ['Make the headline shorter', 'Use simpler words', 'Try a dark look', 'Shorten the FAQ answers', 'Say we take walk-ins', 'Mention parking'];
+// requests that fit any page (never a fact about the business the owner hasn't given, like walk-ins or parking)
+const EDIT_IDEAS = ['Make the headline shorter', 'Use simpler words', 'Try a dark look', 'Shorten the FAQ answers'];
 /** What an edit with only new images asks for. */
 const IMAGES_ONLY = 'Put the new images on the page where they fit best.';
 

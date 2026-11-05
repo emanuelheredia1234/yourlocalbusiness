@@ -98,7 +98,7 @@ function SlotRow({ day, slot: sl, done }: { day: PlanDay; slot: PlanSlot; done: 
       </span>
       <span className="col-span-2 flex items-center justify-end gap-2.5 text-caption text-muted md:col-span-1">
         <Tooltip content={`${p.label} · ${sl.format === 'video' ? 'Video' : 'Image'} · ${STYLE_LABEL[sl.style]}`}>
-          <span className="flex items-center gap-1.5" tabIndex={0} aria-label={`${p.label}, ${sl.format === 'video' ? 'video' : 'image'}, ${STYLE_LABEL[sl.style]}`}>
+          <span className="flex items-center gap-1.5" role="img" tabIndex={0} aria-label={`${p.label}, ${sl.format === 'video' ? 'video' : 'image'}, ${STYLE_LABEL[sl.style]}`}>
             <PlatformGlyph platform={sl.platform} size={14} />
             {sl.format === 'video' ? <Clapperboard size={14} aria-hidden="true" /> : <ImageIcon size={14} aria-hidden="true" />}
           </span>

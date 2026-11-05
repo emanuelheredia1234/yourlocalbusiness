@@ -75,12 +75,11 @@ export default function SocialEngine() {
           { id: 'create', label: label('create') },
         ]}
       />
-      {(tab === 'setup' || tab === 'plan') && (
-        <div className="mb-5 flex flex-col gap-3 empty:hidden">
-          <AIThinking running={planAI.running} stage={planAI.stage} chars={planAI.chars} onStop={planAI.stop} />
-          {planAI.result && !planAI.running && tab === 'plan' && <AIResultBar provider={planAI.result.provider} skills={planAI.result.skills} ms={planAI.result.ms} note={planAI.result.note} logId={planAI.logId} />}
-        </div>
-      )}
+      {/* the plan's progress and Stop show on every tab while it runs: it can be started from the setup, the plan or the 7-day batch */}
+      <div className="mb-5 flex flex-col gap-3 empty:hidden">
+        <AIThinking running={planAI.running} stage={planAI.stage} chars={planAI.chars} onStop={planAI.stop} />
+        {planAI.result && !planAI.running && tab === 'plan' && <AIResultBar provider={planAI.result.provider} skills={planAI.result.skills} ms={planAI.result.ms} note={planAI.result.note} logId={planAI.logId} />}
+      </div>
 
       {tab === 'setup' && (
         <>

@@ -3,7 +3,7 @@ import { Check, TriangleAlert } from 'lucide-react';
 import type { CampaignConfig, ImageStyleId, PostPlatform, PostType, Project, StyleId, VideoStyleId } from '@/lib/types';
 import { cn, parseDateStr, WEEKDAYS } from '@/lib/utils';
 import { brandMark } from '@/lib/brandMark';
-import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES } from '@/ai/knowledge';
+import { IMAGE_STYLES, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES } from '@/ai/knowledge';
 import { suggestTopics } from '@/ai/local/social';
 import { useStore } from '@/store/useStore';
 import { cadence, patchCampaign } from '@/ai/socialPlan';
@@ -197,8 +197,10 @@ function PlatformRow({ platform: p, on, handle, onToggle, onHandle }: { platform
   const id = `pl-${p}`;
   return (
     <li className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 border-t border-line py-3 first:border-t-0 sm:grid-cols-[auto_150px_minmax(0,1fr)]">
-      <Toggle id={id} checked={on} onChange={onToggle} label={<span className="sr-only">Post on {PLATFORMS[p].label}</span>} />
+      {/* one label for the switch, so its name is "Post on Instagram" (not the network twice) */}
+      <Toggle id={id} checked={on} onChange={onToggle} />
       <label htmlFor={id} className="cursor-pointer">
+        <span className="sr-only">Post on </span>
         <PlatformChip platform={p} />
       </label>
       <input className="input input-sm col-span-2 min-w-0 sm:col-span-1" value={handle} onChange={(e) => onHandle(e.target.value)} placeholder={NETWORKS[p].placeholder} aria-label={`Your ${NETWORKS[p].account}`} />

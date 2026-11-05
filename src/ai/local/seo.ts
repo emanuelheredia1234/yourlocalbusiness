@@ -1266,8 +1266,12 @@ const MENU_CSS = `html { scroll-behavior: smooth; } @media (prefers-reduced-moti
 .menu a.topbar-cta { color: var(--on-brand); }
 `;
 
-/** Every page's slim top bar (a website's menu has its own): the brand's mark and name, and the page's one call to action. */
-const TOPBAR_CSS = `.topbar { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--rule); }
+/**
+ * Every page's slim top bar (a website's menu has its own): the brand's mark and name, and the page's one call to
+ * action. A section a link jumps to (the call to action's) stops below it, as under a website's menu.
+ */
+const TOPBAR_CSS = `[id] { scroll-margin-top: 72px; }
+.topbar { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--rule); }
 .topbar-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 60px; }
 .site-brand { display: inline-flex; min-width: 0; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
 `;

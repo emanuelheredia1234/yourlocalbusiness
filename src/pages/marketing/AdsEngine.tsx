@@ -304,6 +304,7 @@ function CreativeCard({ project, site: finalUrl, cr, selected, onSelect, onChang
             <span className="min-w-0 flex-1">
               <span className="block truncate font-mono text-caption text-muted">{site}</span>
               <span className="block truncate text-small font-medium text-ink">{cr.headline}</span>
+              {cr.description && <span className="block truncate text-caption text-muted">{cr.description}</span>}
             </span>
             <span className="shrink-0 rounded bg-surface-3 px-2.5 py-1 text-caption font-medium text-ink">{cr.cta}</span>
           </span>
