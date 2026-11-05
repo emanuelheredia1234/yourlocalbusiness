@@ -18,7 +18,8 @@ import { applyAgentPage, type AgentHtmlSource } from '@/ai/agents/results';
 import { findBuild } from '@/ai/agents/buildRecords';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
-import { Modal, Segmented, Spinner } from '@/components/ui/primitives';
+import { Callout, Modal, Segmented, Spinner } from '@/components/ui/primitives';
+import { BrowserFrame } from '@/components/frames/Frames';
 
 const AGENT_NAME: Record<AgentId, string> = { manus: 'Manus', viktor: 'Viktor' };
 
@@ -29,11 +30,16 @@ export const SEO_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox';
 type Device = 'desktop' | 'tablet' | 'mobile';
 const WIDTH: Record<Device, string> = { desktop: '100%', tablet: '768px', mobile: '390px' };
 
-/** A whole page in a sandboxed frame (it never gets the app's origin). */
+/** A whole page in a sandboxed frame (it never gets the app's origin), in a browser window on a well, at the device's width. */
 export function HtmlPreviewFrame({ doc, sandbox, device = 'desktop', title, className }: { doc: string; sandbox: string; device?: Device; title: string; className?: string }) {
   return (
-    <div className={cn('dotgrid flex min-h-0 justify-center overflow-auto rounded-md bg-surface-2 p-3', className)}>
-      <iframe title={title} srcDoc={doc} sandbox={sandbox} referrerPolicy="no-referrer" className="h-[62vh] min-h-[380px] rounded-md border border-line bg-white shadow-card transition-[width] duration-300" style={{ width: WIDTH[device], maxWidth: '100%' }} />
+    <div className={cn('well flex min-h-0 justify-center overflow-auto p-3 sm:p-5', className)}>
+      <div className="w-full transition-[max-width] duration-240 ease-out" style={{ maxWidth: WIDTH[device] }}>
+        <BrowserFrame>
+          {/* the page keeps its own colours in both themes (white until it paints) */}
+          <iframe data-media title={title} srcDoc={doc} sandbox={sandbox} referrerPolicy="no-referrer" className="block h-[60vh] min-h-[360px] w-full bg-white" />
+        </BrowserFrame>
+      </div>
     </div>
   );
 }
@@ -46,9 +52,9 @@ export function DeviceSwitch({ value, onChange }: { value: Device; onChange: (d:
       value={value}
       onChange={onChange}
       options={[
-        { id: 'desktop', label: 'Desktop', icon: <Monitor size={13} /> },
-        { id: 'tablet', label: '768 px', icon: <Tablet size={13} /> },
-        { id: 'mobile', label: 'Mobile', icon: <Smartphone size={13} /> },
+        { id: 'desktop', label: 'Desktop', icon: <Monitor /> },
+        { id: 'tablet', label: 'Tablet', icon: <Tablet /> },
+        { id: 'mobile', label: 'Mobile', icon: <Smartphone /> },
       ]}
     />
   );
@@ -146,7 +152,7 @@ export function HtmlPreviewHost() {
       onClose={close}
       size="xl"
       title={req.title}
-      subtitle={`${name}’s page as the app would keep it: ${req.target === 'seo' ? 'without JavaScript, with your page’s metadata' : 'cleaned, with your images'}. Nothing is published.`}
+      subtitle={`As the app would keep it: ${req.target === 'seo' ? 'without JavaScript, with your page’s metadata' : 'cleaned, with your images'}. Nothing is published.`}
       footer={
         <>
           <button type="button" className="btn btn-secondary btn-sm" onClick={close}>
@@ -171,34 +177,30 @@ export function HtmlPreviewHost() {
       }
     >
       {!result ? null : !result.ok ? (
-        <p className="rounded-md border border-bad/30 bg-bad-soft px-3 py-2 text-[13px] text-bad" role="alert">
-          {result.message}
-        </p>
+        <Callout tone="bad">{result.message}</Callout>
       ) : (
         <div className="flex flex-col gap-3">
-          {req.target === 'seo' && (
-            <p className="rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">{name} wrote this page. Check every claim, price and testimonial before you publish: the app can’t check free HTML.</p>
-          )}
-          {result.page.notes.length > 0 && (
-            <ul className="flex flex-col gap-1" aria-label="What the app changed">
-              {result.page.notes.map((n) => (
-                <li key={n} className="flex items-start gap-1.5 text-xs text-ink-2">
-                  <Info size={13} className="mt-px shrink-0 text-muted" aria-hidden="true" />
-                  <span>{n}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          {req.target === 'seo' && <Callout tone="warn">{name} wrote this page. Check every claim, price and testimonial before you publish: the app can’t check free HTML.</Callout>}
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <DeviceSwitch value={device} onChange={setDevice} />
-            <span className="text-xs text-muted">{req.target === 'seo' ? 'Scripts are off and its form doesn’t send from here.' : 'Its script runs here in a sandbox, as on a published page.'}</span>
+            <span className="text-caption text-muted">{req.target === 'seo' ? 'Scripts are off and its form doesn’t send from here.' : 'Its script runs here in a sandbox, as on a published page.'}</span>
           </div>
           {doc ? (
             <HtmlPreviewFrame doc={doc} sandbox={req.target === 'seo' ? SEO_SANDBOX : ASSET_SANDBOX} device={device} title={`Preview of ${req.title}`} />
           ) : (
-            <p className="flex h-[62vh] min-h-[380px] items-center justify-center gap-2 rounded-md bg-surface-2 text-xs text-muted" role="status">
-              <Spinner size={14} /> Getting your images ready…
+            <p className="well flex h-[60vh] min-h-[360px] items-center justify-center gap-2 text-small text-muted" role="status">
+              <Spinner size={16} /> Getting your images ready…
             </p>
+          )}
+          {result.page.notes.length > 0 && (
+            <ul className="flex flex-col gap-1" aria-label="What the app changed">
+              {result.page.notes.map((n) => (
+                <li key={n} className="flex items-start gap-1.5 text-caption text-muted">
+                  <Info size={14} className="mt-px shrink-0" aria-hidden="true" />
+                  <span>{n}</span>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

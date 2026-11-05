@@ -1,10 +1,11 @@
-// The builds Manus and Viktor are doing for this page (Code & assets, or the SEO page): one card each, with what's
-// happening and what the owner can do next. While a card is on screen it checks its build every few seconds; the
-// app's watcher checks the rest. What the agent wrote is shown as plain text (it's untrusted: no links into the
-// app, no HTML). Every follow-up that goes to the agent asks first, with who does it and what it costs.
+// The builds Manus and Viktor are doing for this page (Code & assets, or the SEO page): one compact row each, with
+// the agent, what it builds and when, a status dot with what's happening, and what the owner can do next (the rest
+// in ⋯). While a row is on screen it checks its build every few seconds; the app's watcher checks the rest. What
+// the agent wrote is shown as plain text (it's untrusted: no links into the app, no HTML). Every follow-up that
+// goes to the agent asks first, with who does it and what it costs.
 
-import { useState } from 'react';
-import { Bot, Check, ExternalLink, Eye, MessagesSquare, RefreshCw, Send, X } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { Check, ExternalLink, Eye, RefreshCw, Send, X } from 'lucide-react';
 import type { AgentBuild, AgentId, BuildTarget } from '@/lib/agentTypes';
 import type { MediaRef, PromptImage } from '@/lib/types';
 import { cn, fmtRelative } from '@/lib/utils';
@@ -17,14 +18,14 @@ import { agentName } from '@/ai/agents/who';
 import { useActiveProject } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { PromptImages, usePasteImages } from '@/components/ai/PromptImages';
-import { AutoTextarea, Spinner } from '@/components/ui/primitives';
+import { AutoTextarea, MoreMenu, Spinner, type MenuEntry } from '@/components/ui/primitives';
 import { openHtmlPreview } from './HtmlPreview';
 import { openAgentBuild } from './buildWindow';
+import { AgentAvatar } from './AgentButtons';
 
-const ICON: Record<AgentId, typeof Bot> = { manus: Bot, viktor: MessagesSquare };
 const NO_BUILDS: AgentBuild[] = [];
 
-/** The cards of this page's builds (nothing when there are none, and nothing in the claude.ai build). */
+/** The rows of this page's builds (nothing when there are none, and nothing in the claude.ai build). */
 export function AgentBuildList({ target, className }: { target: BuildTarget; className?: string }) {
   const project = useActiveProject();
   const all = project?.agentBuilds ?? NO_BUILDS;
@@ -32,9 +33,11 @@ export function AgentBuildList({ target, className }: { target: BuildTarget; cla
   useBuildPolling(project?.id ?? '', builds);
   if (__ARTIFACT_BUILD__ || !project || !builds.length) return null;
   return (
-    <section className={cn('panel overflow-hidden', className)} aria-label="Builds by Manus and Viktor">
-      <h3 className="border-b border-line px-4 py-2.5 text-[13px] font-semibold">Built with Manus or Viktor ({builds.length})</h3>
-      <ul className="divide-y divide-line">
+    <section className={className} aria-label="Builds by Manus and Viktor">
+      <h3 className="flex items-baseline gap-2 text-h4 text-ink">
+        Built with Manus or Viktor <span className="num font-mono text-caption font-normal text-muted">{builds.length}</span>
+      </h3>
+      <ul className="mt-1 divide-y divide-line">
         {builds.map((b) => (
           <BuildCard key={b.id} projectId={project.id} build={b} />
         ))}
@@ -45,10 +48,22 @@ export function AgentBuildList({ target, className }: { target: BuildTarget; cla
 
 const service = (via: AgentId) => (via === 'manus' ? 'Manus' : 'Slack');
 
+type Tone = 'good' | 'warn' | 'bad' | 'primary' | 'faint';
+const DOT: Record<Tone, string> = { good: 'bg-good-solid', warn: 'bg-warn-solid', bad: 'bg-bad-solid', primary: 'bg-primary', faint: 'bg-faint' };
+
+/** A status dot and its words (like StatusDot, but the words wrap: an agent's message can be long). */
+function StateLine({ tone, pulse, children }: { tone: Tone; pulse?: boolean; children: ReactNode }) {
+  return (
+    <span className="flex items-start gap-1.5 text-small text-ink-2">
+      <span className={cn('mt-[7px] h-[7px] w-[7px] shrink-0 rounded-full', DOT[tone], pulse && 'animate-pulse-dot')} aria-hidden="true" />
+      <span className="min-w-0">{children}</span>
+    </span>
+  );
+}
+
 /** One build: what's happening and what can be done. */
 export function BuildCard({ projectId, build: b }: { projectId: string; build: AgentBuild }) {
   const name = agentName(b.via);
-  const Icon = ICON[b.via];
   const link = agentLink(b);
   const what = kindLabel(b.target, b.kind);
   const [box, setBox] = useState<null | 'answer' | 'edit'>(null);
@@ -104,37 +119,44 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
 
   const openLink = link ? (
     <a href={link} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-xs">
-      <ExternalLink size={12} /> Open in {service(b.via)}
+      <ExternalLink aria-hidden="true" /> Open in {service(b.via)}
     </a>
   ) : null;
+  // taking a build off the list sends nothing: an icon with its name, at the end of the row
   const dismiss = (
-    <button type="button" className="btn btn-ghost btn-xs text-muted" disabled={!!busy} onClick={() => dismissBuild(projectId, b.id)} title="Take it off this list (nothing is sent)">
-      <X size={12} /> Dismiss
+    <button type="button" className="btn btn-ghost btn-icon btn-xs text-muted" disabled={!!busy} onClick={() => dismissBuild(projectId, b.id)} aria-label="Dismiss" title="Take it off this list (nothing is sent)">
+      <X />
     </button>
   );
   const changes = b.taskId || b.threadId ? (
-    <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} aria-expanded={box === 'edit'} onClick={() => setBox(box === 'edit' ? null : 'edit')}>
+    <button type="button" className="btn btn-ghost btn-xs" disabled={!!busy} aria-expanded={box === 'edit'} onClick={() => setBox(box === 'edit' ? null : 'edit')}>
       Ask for changes
     </button>
   ) : null;
+  const checkButton = (label: string) => (
+    <button type="button" className="btn btn-ghost btn-xs" disabled={!!busy} onClick={() => void check()}>
+      {busy === 'check' ? <Spinner /> : <RefreshCw aria-hidden="true" />} {label}
+    </button>
+  );
+  const linkEntry: MenuEntry[] = link ? [{ label: `Open in ${service(b.via)}`, icon: <ExternalLink />, onSelect: () => window.open(link, '_blank', 'noopener,noreferrer') }] : [];
 
-  let status: React.ReactNode;
-  let actions: React.ReactNode;
+  let status: ReactNode;
+  let actions: ReactNode;
+  // what doesn't fit in the row (at most 3 buttons) goes in ⋯
+  let more: MenuEntry[] = [];
   switch (b.state) {
     case 'sending':
       status = (
-        <span className="flex items-center gap-1.5">
-          <Spinner size={12} /> Sending to {name}…
-        </span>
+        <StateLine tone="primary" pulse>
+          Sending to {name}…
+        </StateLine>
       );
       break;
     case 'unknown_start':
-      status = b.message || `May have been delivered. Checking ${service(b.via)}…`;
+      status = <StateLine tone="warn">{b.message || `May have been delivered. Checking ${service(b.via)}…`}</StateLine>;
       actions = (
         <>
-          <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} onClick={() => void check()}>
-            {busy === 'check' ? <Spinner size={12} /> : <RefreshCw size={12} />} Check now
-          </button>
+          {checkButton('Check now')}
           {openLink}
           {b.via === 'manus' && b.rounds === 1 && (
             <button type="button" className="btn btn-ghost btn-xs" disabled={!!busy} onClick={() => markNotStarted(projectId, b.id)}>
@@ -146,16 +168,14 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
       break;
     case 'working':
       status = (
-        <span className="flex items-center gap-1.5">
-          <Spinner size={12} /> {b.message || `${name} is working`}
-        </span>
+        <StateLine tone="primary" pulse>
+          {b.message || `${name} is working`}
+        </StateLine>
       );
       actions = (
         <>
           {openLink}
-          <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} onClick={() => void check()}>
-            {busy === 'check' ? <Spinner size={12} /> : <RefreshCw size={12} />} Check now
-          </button>
+          {checkButton('Check now')}
           <button type="button" className="btn btn-ghost btn-xs" disabled={!!busy} onClick={() => void stop()} title={b.via === 'manus' ? 'Stop the Manus task' : 'Stop checking (nothing is sent to Slack)'}>
             {b.via === 'manus' ? 'Stop' : 'Stop waiting'}
           </button>
@@ -163,61 +183,52 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
       );
       break;
     case 'needs_you':
-      status = b.message || `${name} is waiting for you`;
+      status = <StateLine tone="warn">{b.message || `${name} is waiting for you`}</StateLine>;
       actions = (
         <>
           <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} aria-expanded={box === 'answer'} onClick={() => setBox(box === 'answer' ? null : 'answer')}>
             Answer
           </button>
-          <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} onClick={() => void follow({ kind: 'missing_file' })}>
+          <button type="button" className="btn btn-ghost btn-xs" disabled={!!busy} onClick={() => void follow({ kind: 'missing_file' })}>
             Ask for the page as one file
-          </button>
-          {b.result && (
-            <button type="button" className="btn btn-ghost btn-xs" disabled={!!busy} onClick={preview}>
-              {busy === 'page' ? <Spinner size={12} /> : <Eye size={12} />} Preview the last page
-            </button>
-          )}
-          {openLink}
-          <button type="button" className="btn btn-ghost btn-xs" disabled={!!busy} onClick={() => void stop()}>
-            {b.via === 'manus' ? 'Stop' : 'Stop waiting'}
           </button>
         </>
       );
+      more = [
+        ...(b.result ? [{ label: 'Preview the last page', icon: <Eye />, onSelect: preview }] : []),
+        ...linkEntry,
+        { label: b.via === 'manus' ? 'Stop' : 'Stop waiting', icon: <X />, onSelect: () => void stop() },
+      ];
       break;
     case 'built':
       status = (
-        <span className="text-good">
+        <StateLine tone="good">
           {name} built your {what}
-          {b.via === 'manus' && b.credits ? ` · used ${b.credits.toLocaleString('en-US')} Manus credits` : ''}
-        </span>
+          {b.via === 'manus' && b.credits ? <span className="text-muted">{` · used ${b.credits.toLocaleString('en-US')} Manus credits`}</span> : ''}
+        </StateLine>
       );
       actions = (
         <>
-          <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} onClick={preview}>
-            {busy === 'page' ? <Spinner size={12} /> : <Eye size={12} />} Preview
+          <button type="button" className="btn btn-ghost btn-xs" disabled={!!busy} onClick={preview}>
+            {busy === 'page' ? <Spinner /> : <Eye aria-hidden="true" />} Preview
           </button>
           {earlier ? (
-            <>
-              <button type="button" className="btn btn-primary btn-xs" disabled={!!busy} onClick={() => use(earlier.id)}>
-                {busy === 'use' ? <Spinner size={12} /> : <Check size={12} />} Update “{earlier.name}”
-              </button>
-              <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} onClick={() => use()}>
-                Add as a new asset
-              </button>
-            </>
+            <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} onClick={() => use(earlier.id)}>
+              {busy === 'use' ? <Spinner /> : <Check aria-hidden="true" />} Update “{earlier.name}”
+            </button>
           ) : (
-            <button type="button" className="btn btn-primary btn-xs" disabled={!!busy} onClick={() => use()}>
-              {busy === 'use' ? <Spinner size={12} /> : <Check size={12} />} {b.target === 'seo' ? 'Use as my SEO page' : 'Use this'}
+            <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} onClick={() => use()}>
+              {busy === 'use' ? <Spinner /> : <Check aria-hidden="true" />} {b.target === 'seo' ? 'Use as my SEO page' : 'Use this'}
             </button>
           )}
           {changes}
-          {dismiss}
         </>
       );
+      if (earlier) more = [{ label: 'Add as a new asset', onSelect: () => use() }];
       break;
     case 'imported': {
       const asset = b.imported?.assetId ? findCodeAsset(projectId, b.imported.assetId) : undefined;
-      status = b.imported?.seo ? 'Used as your SEO page' : asset ? `Used as “${asset.name}”` : 'Used';
+      status = <StateLine tone="good">{b.imported?.seo ? 'Used as your SEO page' : asset ? `Used as “${asset.name}”` : 'Used'}</StateLine>;
       actions = (
         <>
           {asset && (
@@ -231,52 +242,58 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
             </button>
           )}
           {changes}
-          {dismiss}
         </>
       );
       break;
     }
     case 'failed':
-      status = <span className="text-bad">{b.message || `${name} couldn’t build it.`}</span>;
+      status = <StateLine tone="bad">{b.message || `${name} couldn’t build it.`}</StateLine>;
       actions = (
         <>
           {openLink}
           <button type="button" className="btn btn-secondary btn-xs" onClick={() => void openAgentBuild({ target: b.target, via: b.via, from: b })}>
             Try again
           </button>
-          {dismiss}
         </>
       );
       break;
     case 'stopped':
-      status = 'Stopped';
+      status = <StateLine tone="faint">Stopped</StateLine>;
       actions = (
         <>
-          <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} onClick={() => void check()}>
-            {busy === 'check' ? <Spinner size={12} /> : <RefreshCw size={12} />} Check again
-          </button>
+          {checkButton('Check again')}
           {openLink}
-          {dismiss}
         </>
       );
       break;
   }
+  const dismissible = b.state === 'built' || b.state === 'imported' || b.state === 'failed' || b.state === 'stopped';
 
   return (
-    <li className="px-4 py-3">
-      <p className="flex flex-wrap items-center gap-x-1.5 text-[12px] font-semibold text-ink-2">
-        <Icon size={13} className="text-muted" aria-hidden="true" />
-        {name} · {what} · <span className="font-normal text-muted">{fmtRelative(b.lastSentAt)}</span>
-      </p>
-      <div className="mt-1 text-[13px] text-ink" role="status">
-        {status}
+    <li className="py-3">
+      <div className="flex flex-col gap-2 md:flex-row md:items-start md:gap-4">
+        <div className="flex min-w-0 flex-1 items-start gap-2.5">
+          <AgentAvatar via={b.via} size={20} className="mt-px" />
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className="text-small text-muted">
+              <span className="font-medium text-ink">{name}</span> · {what} · <span className="num">{fmtRelative(b.lastSentAt)}</span>
+            </p>
+            <div role="status">{status}</div>
+          </div>
+        </div>
+        {(actions || more.length > 0 || dismissible) && (
+          <div className="flex shrink-0 flex-wrap items-center gap-1 pl-[30px] md:pl-0">
+            {actions}
+            {more.length > 0 && <MoreMenu items={more} size="xs" label={`More for ${name}’s ${what}`} />}
+            {dismissible && dismiss}
+          </div>
+        )}
       </div>
       {b.state === 'needs_you' && b.said && (
-        <blockquote className="mt-1.5 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded-md border-l-2 border-line-2 bg-surface-2 px-2.5 py-1.5 text-xs text-ink-2 scroll-thin" aria-label={`What ${name} said`}>
+        <blockquote className="well scroll-thin ml-[30px] mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words px-3 py-2 text-small text-ink-2" aria-label={`What ${name} said`}>
           {b.said}
         </blockquote>
       )}
-      {actions && <div className="mt-2 flex flex-wrap items-center gap-1.5">{actions}</div>}
       {box === 'answer' && <AnswerBox via={b.via} busy={busy === 'send'} onCancel={() => setBox(null)} onSend={async (text) => (await follow({ kind: 'answer', text })) && setBox(null)} />}
       {box === 'edit' && <ChangesBox build={b} busy={busy === 'send'} onCancel={() => setBox(null)} onSend={async (text, images) => (await follow({ kind: 'edit', text, images })) && setBox(null)} />}
     </li>
@@ -284,7 +301,7 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
 }
 
 function Counter({ n, max }: { n: number; max: number }) {
-  return <span className={cn('num text-[11px]', n > max ? 'text-bad' : 'text-muted')}>{`${n.toLocaleString('en-US')} / ${max.toLocaleString('en-US')}`}</span>;
+  return <span className={cn('num ml-auto font-mono text-caption', n > max ? 'text-bad' : 'text-muted')}>{`${n.toLocaleString('en-US')} / ${max.toLocaleString('en-US')}`}</span>;
 }
 
 /** Answer the agent's question in the owner's own words. */
@@ -293,14 +310,14 @@ function AnswerBox({ via, busy, onSend, onCancel }: { via: AgentId; busy: boolea
   const max = REQUEST_MAX[via];
   const n = text.trim().length;
   return (
-    <div className="mt-2 flex flex-col gap-1.5 rounded-md border border-line bg-surface p-2.5">
-      <label className="text-xs font-semibold text-ink-2">Your answer to {agentName(via)}</label>
-      <AutoTextarea value={text} onChange={setText} minRows={2} className="text-[13px]" placeholder="Your words, sent as you write them." />
+    <div className="well ml-[30px] mt-2 flex flex-col gap-2 p-3">
+      <label className="text-small font-medium text-ink-2">Your answer to {agentName(via)}</label>
+      <AutoTextarea value={text} onChange={setText} minRows={2} placeholder="Your words, sent as you write them." />
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="btn btn-primary btn-xs" disabled={busy || !n || n > max} onClick={() => void onSend(text)}>
-          {busy ? <Spinner size={12} /> : <Send size={12} />} Send
+          {busy ? <Spinner /> : <Send aria-hidden="true" />} Send
         </button>
-        <button type="button" className="btn btn-ghost btn-xs" onClick={onCancel}>
+        <button type="button" className="btn btn-secondary btn-xs" onClick={onCancel}>
           Cancel
         </button>
         <Counter n={n} max={max} />
@@ -330,15 +347,15 @@ function ChangesBox({ build: b, busy, onSend, onCancel }: { build: AgentBuild; b
     { room, disabled: busy, onBusy: setAdding },
   );
   return (
-    <div className="mt-2 flex flex-col gap-1.5 rounded-md border border-line bg-surface p-2.5">
-      <label className="text-xs font-semibold text-ink-2">What should {agentName(b.via)} change?</label>
-      <AutoTextarea value={text} onChange={setText} minRows={2} className="text-[13px]" placeholder="For example: make the headline shorter and use a dark background." {...paste} />
+    <div className="well ml-[30px] mt-2 flex flex-col gap-2 p-3">
+      <label className="text-small font-medium text-ink-2">What should {agentName(b.via)} change?</label>
+      <AutoTextarea value={text} onChange={setText} minRows={2} placeholder="For example: make the headline shorter and use a dark background." {...paste} />
       <PromptImages images={images} onChange={setImages} reserved={reserved} busy={adding} disabled={busy} label="New images (optional)" hint="They’re numbered after the images already sent." />
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="btn btn-primary btn-xs" disabled={busy || adding || !n || n > max} onClick={() => void onSend(text, images)}>
-          {busy ? <Spinner size={12} /> : <Send size={12} />} Send
+          {busy ? <Spinner /> : <Send aria-hidden="true" />} Send
         </button>
-        <button type="button" className="btn btn-ghost btn-xs" onClick={onCancel}>
+        <button type="button" className="btn btn-secondary btn-xs" onClick={onCancel}>
           Cancel
         </button>
         <Counter n={n} max={max} />
