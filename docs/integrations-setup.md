@@ -108,8 +108,40 @@ send invoices: bill customers from the CSV outside the app.
 
 ## 6. Analytics, Search Console and email stats
 
-_Filled in by the analytics work (WP4): the app-domain Search Console property and its verification file, the
-sitemap, and the Omnisend reporting scope._
+**The Update button** (Marketing hub) fetches four sources in the background, at most once every 15 minutes per
+business: Social (public stats through treg for each handle in Settings; a connected account's own stats
+instead), Ads (connected Google Ads / Meta Ads results, read only, plus up to 3 competitors' active ads), SEO page
+(Google rank and Maps position per keyword in the business's city, Search Console numbers for this page) and
+Email (Omnisend). A source that fails keeps showing its last good numbers with an "as of" time. Before anything is
+spent, an Update is refused when the customer is over their daily or monthly cap (estimated connection and X costs
+never count). Until the treg wrapper (section 5) is in the app, these routes answer "not available yet".
+
+**Search Console for pages on the app's own address** (one property for every customer's page):
+1. In Google Search Console, add the URL-prefix property `https://yourlocalbusiness.replit.app/`.
+2. Choose **HTML file** verification. Put the file name Google gives you (for example
+   `google1a2b3c4d5e6f7a8b.html`) in the plain setting `GSC_APP_VERIFICATION_FILE`, redeploy, then press
+   **Verify** in Google. The app answers `https://yourlocalbusiness.replit.app/<that file>` itself.
+3. Set `GSC_APP_PROPERTY` to `https://yourlocalbusiness.replit.app/`.
+4. Connect Search Console to your treg team with the **write** capability (`treg connections connect --provider
+   google-search-console`), pick the property, and check that `google-search-console.sites` lists it as
+   `siteOwner`.
+
+The app now serves `https://yourlocalbusiness.replit.app/sitemap.xml` (every customer's published sales page on
+the app's address; pages on a customer's own domain are in that domain's sitemap instead, rebuilt at most every
+10 minutes) and `/robots.txt` (everything allowed except `/api/`, pointing at the sitemap).
+
+**Submit to Google** (SEO page → Analytics): for an app-address page the shared sitemap is submitted at most
+once a day across all customers, and the page is inspected (Google allows 2,000 inspections a day for the whole
+property: the app stops at 1,500, and at 20 per customer, and inspects a page at most once a week until it is
+indexed). For a page on the customer's own domain, the customer connects their own Search Console; the steps are
+the DNS TXT record, Verify, adding the site, submitting the domain's sitemap and inspecting the page. Nothing is
+sent twice by itself: when Google's answer was lost, the next press first checks, and sends again only after the
+customer confirms. Google decides when to index; there is no "request indexing" API.
+
+**Email stats** come from Omnisend's reports, at most one live call per Omnisend account per hour and 40 a day
+(Omnisend allows 55). The OAuth scope Omnisend needs for reports isn't confirmed yet: once it is, add it to
+`OMNISEND_OPTIONAL_SCOPES` in `server/omnisend.mjs`. New connections then ask for it, existing customers are not
+forced to reconnect (drafts keep working), and only the Email Analytics tab asks them to reconnect.
 
 ## 7. What customers see
 
