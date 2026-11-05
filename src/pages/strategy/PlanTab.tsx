@@ -93,7 +93,7 @@ export function PlanTab({ project, s, ctx }: { project: Project; s: StrategyStat
           className="mt-6"
           icon={<Compass />}
           title="No plan yet"
-          body="It’s the last of the six steps: Plan my strategy writes it, or Update plan → Update the plan from the research."
+          body="It’s the last of the six steps: Plan my strategy writes it, or Update plan › Update the plan from the research."
         />
       </div>
     );

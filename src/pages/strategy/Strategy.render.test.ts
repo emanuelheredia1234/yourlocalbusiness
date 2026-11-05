@@ -106,6 +106,12 @@ describe('the Strategy page', () => {
     expect(page).toContain('Build this page first');
     expect(page).toContain('Booking page');
     expect(page).toContain('Guide my other tabs with this strategy');
+    // the plan's regions keep their names (sections, not boxes, but still named)
+    for (const name of ['The page to build first', 'This week', 'Your plan', 'All 4 weeks', 'Guide my other tabs with this strategy', 'Sources']) expect(page).toContain(`aria-label="${name}"`);
+    // a step you tick yourself: the round check is still the "I did this" box, described by the step's title
+    const tick = /<input type="checkbox"[^>]*aria-label="I did this" aria-describedby="([^"]+)"/.exec(page);
+    expect(tick).not.toBeNull();
+    expect(page).toContain(`id="${tick![1]}"`);
     expect(page).toContain('QA stand-in source 1 (not a real page)');
     expect(page).not.toContain('aria-label="Needs work"');
     expect(page).not.toMatch(/thumbs/i);
