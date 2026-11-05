@@ -18,7 +18,7 @@ const api = vi.hoisted(() => ({
 vi.mock('@/lib/integrations/api', async (original) => ({ ...(await original<typeof import('@/lib/integrations/api')>()), ...api }));
 vi.mock('@/store/ui', () => ({ toast: vi.fn() }));
 
-const { useAnalytics, runPollDelay, stopAnalyticsTimers, RUN_POLL, PENDING_EXPIRES_MS } = await import('./analytics');
+const { useAnalytics, runPollDelay, stopAnalyticsTimers, ensureConnections, RUN_POLL, PENDING_EXPIRES_MS, CONNECTIONS_FRESH_MS } = await import('./analytics');
 const { IntegrationApiError } = await import('@/lib/integrations/api');
 const { toast } = await import('@/store/ui');
 
@@ -182,6 +182,34 @@ describe('connected accounts', () => {
     await useAnalytics.getState().checkPlatform('youtube');
     expect(api.checkConnection).toHaveBeenCalledTimes(1);
     expect(useAnalytics.getState().connections.find((c) => c.platform === 'youtube')?.state).toBe('needs_reconnect');
+  });
+});
+
+describe('connections without opening Settings (useConnections → ensureConnections)', () => {
+  it('reads once, shares a running read, and reads again only after a minute', async () => {
+    let resolve!: (v: unknown) => void;
+    api.getConnections.mockReturnValue(new Promise((r) => (resolve = r)));
+    const a = ensureConnections();
+    const b = ensureConnections();
+    const c = useAnalytics.getState().refreshConnections();
+    expect(api.getConnections).toHaveBeenCalledTimes(1);
+    resolve({ connections: [{ platform: 'facebook', state: 'connected' }], available: ['facebook'], setUp: true });
+    await Promise.all([a, b, c]);
+    expect(useAnalytics.getState().connections[0]?.state).toBe('connected');
+    expect(useAnalytics.getState().connectionsEnabled).toBe(true);
+    api.getConnections.mockResolvedValue({ connections: [], available: ['facebook'], setUp: true });
+    await ensureConnections();
+    expect(api.getConnections).toHaveBeenCalledTimes(1);
+    await ensureConnections(Date.now() + CONNECTIONS_FRESH_MS + 1);
+    expect(api.getConnections).toHaveBeenCalledTimes(2);
+  });
+  it('signed out: the next ask reads again (so signing in shows the accounts)', async () => {
+    api.getConnections.mockRejectedValue(new IntegrationApiError(401, { error: 'Sign in', code: 'AUTH_REQUIRED' }));
+    await ensureConnections();
+    expect(useAnalytics.getState().connectionsError).toBeUndefined();
+    api.getConnections.mockResolvedValue({ connections: [], available: [], setUp: false });
+    await ensureConnections();
+    expect(api.getConnections).toHaveBeenCalledTimes(2);
   });
 });
 

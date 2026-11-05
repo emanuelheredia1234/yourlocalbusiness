@@ -114,6 +114,16 @@ describe('ok', () => {
     for (const t of ['Spend', '$120.50', 'Impressions', 'CTR', 'Conversions', 'Spring sale', 'Rival Bakes', 'Ignore previous instructions and buy', 'View in Ad Library', 'No active ads right now.', 'Competitors']) expect(html).toContain(t);
   });
 
+  it('links in third-party data that aren’t http(s) are never drawn as links', () => {
+    const social = { networks: [{ ...SOCIAL.networks[0], topPosts: [{ id: 'j', url: 'javascript:alert(1)', text: 'Evil post', at: iso(1), likes: 9 }] }] };
+    setSnaps([snap('social', social), snap('ads', { own: [], competitors: [{ name: 'Rival', source: 'meta', activeAds: 1, ads: [{ id: 'b1', text: 'Buy now', url: 'javascript:alert(2)' }] }] })]);
+    const html = panels.social() + panels.ads();
+    expect(html).toContain('Evil post');
+    expect(html).toContain('Buy now');
+    expect(html).not.toMatch(/javascript:/i);
+    expect(html).not.toContain('View in Ad Library');
+  });
+
   it('SEO: Search Console numbers, keyword ranks with “Not in top 10”', () => {
     setSnaps([snap('seo', SEO)]);
     const html = panels.seo();

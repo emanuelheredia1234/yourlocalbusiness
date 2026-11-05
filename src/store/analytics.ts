@@ -8,6 +8,7 @@
 // The only thing kept in the browser is the Analytics range (7 or 30 days) under ylb-analytics-range.
 // Nothing here retries a write: Update and Connect are one request each, started by the person.
 
+import { useEffect } from 'react';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { AnalyticsSettings, AnalyticsSettingsInput, AnalyticsSnapshot, AnalyticsSource, ConnectPlatform, ConnectionStatus, RefreshRun } from '@/lib/integrations/types';
 import { ANALYTICS_SOURCES } from '@/lib/integrations/types';
@@ -26,6 +27,8 @@ export const RUN_POLL = { fastMs: 2_000, fastForMs: 120_000, slowMs: 10_000, bac
 export const CONNECT_POLL = { everyMs: 5_000, forMs: 180_000 } as const;
 /** A connect window that didn't finish within 30 minutes: "That didn't finish. Try again." */
 export const PENDING_EXPIRES_MS = 30 * 60_000;
+/** useConnections() reads the connections at most this often (on mount and when the tab comes back). */
+export const CONNECTIONS_FRESH_MS = 60_000;
 
 export function runPollDelay(elapsedMs: number): number {
   if (elapsedMs < RUN_POLL.fastForMs) return RUN_POLL.fastMs;
@@ -112,6 +115,9 @@ let runTimer: ReturnType<typeof setTimeout> | null = null;
 let runFollowing: string | null = null;
 let connectTimer: ReturnType<typeof setTimeout> | null = null;
 let connectUntil = 0;
+let connectionsInFlight: Promise<void> | null = null;
+let connectionsAt = 0;
+let focusRefetchInstalled = false;
 
 const messageOf = (e: unknown, fallback = 'Something went wrong. Try again shortly.') => (e instanceof IntegrationApiError ? e.message : fallback);
 
@@ -183,6 +189,44 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     runTimer = setTimeout(() => void tick(), RUN_POLL.fastMs);
   };
 
+  /** One read of the connections (refreshConnections() shares it while it runs). */
+  const readConnections = async () => {
+    try {
+      const r = await getConnections();
+      const connections = Array.isArray(r.connections) ? r.connections : [];
+      // a network that's no longer waiting (connected, or anything but not connected) leaves `pending`;
+      // one still not connected after 30 minutes becomes "That didn't finish"
+      const pending = { ...get().pending };
+      const expired = { ...get().expired };
+      const now = Date.now();
+      for (const [p, at] of Object.entries(pending) as [ConnectPlatform, number][]) {
+        const c = connections.find((x) => x.platform === p);
+        if (c && c.state !== 'not_connected' && c.state !== 'pending') {
+          delete pending[p];
+          delete expired[p];
+        } else if (now - at > PENDING_EXPIRES_MS) {
+          delete pending[p];
+          expired[p] = true;
+        }
+      }
+      connectionsAt = Date.now();
+      set({
+        connections,
+        connectionsEnabled: r.setUp === true && Array.isArray(r.available) && r.available.length > 0,
+        connectionsLoaded: true,
+        connectionsHint: typeof r.hint === 'string' && r.hint ? r.hint : undefined,
+        connectionsError: undefined,
+        pending,
+        expired,
+      });
+    } catch (e) {
+      // off, signed out or unreachable: everything reads "Not connected" and posting stays manual
+      // (signed out: the next mount or focus asks again, so signing in shows the accounts)
+      connectionsAt = e instanceof IntegrationApiError && e.code === 'AUTH_REQUIRED' ? 0 : Date.now();
+      set({ connections: [], connectionsEnabled: false, connectionsLoaded: true, connectionsError: e instanceof IntegrationApiError && e.code !== 'AUTH_REQUIRED' ? e.message : undefined });
+    }
+  };
+
   return {
     snapshots: {},
     snapshotsLoading: {},
@@ -200,39 +244,14 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     owner: null,
     settings: {},
 
-    refreshConnections: async () => {
-      if (artifact()) return;
-      try {
-        const r = await getConnections();
-        const connections = Array.isArray(r.connections) ? r.connections : [];
-        // a network that's no longer waiting (connected, or anything but not connected) leaves `pending`;
-        // one still not connected after 30 minutes becomes "That didn't finish"
-        const pending = { ...get().pending };
-        const expired = { ...get().expired };
-        const now = Date.now();
-        for (const [p, at] of Object.entries(pending) as [ConnectPlatform, number][]) {
-          const c = connections.find((x) => x.platform === p);
-          if (c && c.state !== 'not_connected' && c.state !== 'pending') {
-            delete pending[p];
-            delete expired[p];
-          } else if (now - at > PENDING_EXPIRES_MS) {
-            delete pending[p];
-            expired[p] = true;
-          }
-        }
-        set({
-          connections,
-          connectionsEnabled: r.setUp === true && Array.isArray(r.available) && r.available.length > 0,
-          connectionsLoaded: true,
-          connectionsHint: typeof r.hint === 'string' && r.hint ? r.hint : undefined,
-          connectionsError: undefined,
-          pending,
-          expired,
-        });
-      } catch (e) {
-        // off, signed out or unreachable: everything reads "Not connected" and posting stays manual
-        set({ connections: [], connectionsEnabled: false, connectionsLoaded: true, connectionsError: e instanceof IntegrationApiError && e.code !== 'AUTH_REQUIRED' ? e.message : undefined });
-      }
+    refreshConnections: () => {
+      if (artifact()) return Promise.resolve();
+      // one read at a time: every posting button may ask at once
+      if (connectionsInFlight) return connectionsInFlight;
+      connectionsInFlight = readConnections().finally(() => {
+        connectionsInFlight = null;
+      });
+      return connectionsInFlight;
     },
 
     loadSnapshots: async (projectId) => {
@@ -385,6 +404,29 @@ export function stopAnalyticsTimers(): void {
   connectTimer = null;
   runFollowing = null;
   connectUntil = 0;
+  connectionsAt = 0;
+}
+
+/**
+ * Read the connections unless a read is running or one finished in the last minute. Posting buttons and the
+ * analytics tabs call this through useConnections(), so they know what's connected without opening Settings.
+ */
+export function ensureConnections(now = Date.now()): Promise<void> {
+  if (artifact()) return Promise.resolve();
+  if (connectionsInFlight) return connectionsInFlight;
+  if (connectionsAt && now - connectionsAt < CONNECTIONS_FRESH_MS) return Promise.resolve();
+  return useAnalytics.getState().refreshConnections();
+}
+
+/** Read the connections again whenever the tab comes back into view (at most once a minute). */
+function installFocusRefetch(): void {
+  if (focusRefetchInstalled || typeof window === 'undefined' || typeof document === 'undefined') return;
+  focusRefetchInstalled = true;
+  const onFocus = () => {
+    if (document.visibilityState !== 'hidden') void ensureConnections();
+  };
+  window.addEventListener('focus', onFocus);
+  document.addEventListener('visibilitychange', onFocus);
 }
 
 /** Connection status by platform (missing: not connected), whether connecting is on, and a refetch. */
@@ -392,6 +434,12 @@ export function useConnections(): { byPlatform: Partial<Record<ConnectPlatform, 
   const connections = useAnalytics((s) => s.connections);
   const enabled = useAnalytics((s) => s.connectionsEnabled);
   const refresh = useAnalytics((s) => s.refreshConnections);
+  // read once when first needed, and again when the tab comes back (§2.3: refetched on focus)
+  useEffect(() => {
+    if (artifact()) return;
+    installFocusRefetch();
+    void ensureConnections();
+  }, []);
   const byPlatform: Partial<Record<ConnectPlatform, ConnectionStatus>> = {};
   for (const c of connections) byPlatform[c.platform] = c;
   return { byPlatform, enabled, refresh };

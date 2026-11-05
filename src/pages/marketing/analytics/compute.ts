@@ -1,9 +1,13 @@
 // Pure helpers for the Analytics tabs: the range window, totals per range, rank matching labels and the
 // plain words for each source status. Third-party text is data: these return strings for React to render as
 // text, never HTML.
+import { isHttpUrl } from '@/lib/strategyNormalize';
 import type { AdsData, AnalyticsSnapshot, EmailData, SocialData, SocialNetworkStats, SourceStatus } from '@/lib/integrations/types';
 
 const DAY = 86_400_000;
+
+/** A link from someone else's data, only when it's a plain http(s) web address (never javascript:, data: …). */
+export const safeLink = (url: string | undefined): string | undefined => (isHttpUrl(url) ? url : undefined);
 
 /** Is an ISO date (or YYYY-MM-DD) within the last `days` days of `now`? Undated items count. */
 export function inRange(date: string | undefined, days: number, now = Date.now()): boolean {
@@ -44,7 +48,7 @@ export function socialTotals(data: SocialData | undefined, days: number, now = D
       const r = series.length ? sum(series.map((s) => s.reach)) : n.reach ?? 0;
       reach = (reach ?? 0) + r;
     }
-    for (const p of inWindow) top.push({ key: `${n.network}:${p.id}`, network: n.network, text: p.text, url: p.url, engagement: engagementOf(p), at: p.at });
+    for (const p of inWindow) top.push({ key: `${n.network}:${p.id}`, network: n.network, text: p.text, url: safeLink(p.url), engagement: engagementOf(p), at: p.at });
   }
   top.sort((a, b) => b.engagement - a.engagement);
   return {

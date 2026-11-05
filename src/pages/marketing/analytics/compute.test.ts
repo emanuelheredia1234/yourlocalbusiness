@@ -1,6 +1,6 @@
 // The Analytics tabs' arithmetic: the 7/30-day window, totals across networks and ad accounts, labels.
 import { describe, expect, it } from 'vitest';
-import { adsTotals, inRange, money, pct, rankLabel, socialTotals, statusView } from './compute';
+import { adsTotals, inRange, money, pct, rankLabel, safeLink, socialTotals, statusView } from './compute';
 
 const NOW = Date.parse('2026-11-05T12:00:00Z');
 const ago = (d: number) => new Date(NOW - d * 86_400_000).toISOString();
@@ -61,5 +61,17 @@ describe('labels', () => {
     expect(statusView('error', 'CUSTOMER_CAP').label).toBe('Over today’s analytics limit');
     expect(statusView('not_connected', 'NEEDS_RECONNECT').label).toBe('Reconnect needed');
     expect(statusView(undefined).label).toBe('Not updated yet');
+  });
+});
+
+describe('links from someone else’s data', () => {
+  it('only plain http(s) web addresses become links', () => {
+    expect(safeLink('https://instagram.com/p/1')).toBe('https://instagram.com/p/1');
+    for (const bad of ['javascript:alert(1)', 'JAVASCRIPT:alert(1)', 'data:text/html,<b>x</b>', 'vbscript:x', 'https://user:pw@evil.example/', '//evil.example', '', undefined]) expect(safeLink(bad)).toBeUndefined();
+  });
+  it('a top post with a javascript: link keeps its text but loses the link', () => {
+    const t = socialTotals({ networks: [{ network: 'x', origin: 'public', followers: 1, topPosts: [{ id: 'z', text: 'hi', url: 'javascript:alert(1)', at: ago(1), likes: 1 }] }] }, 7, NOW);
+    expect(t.topPosts[0].text).toBe('hi');
+    expect(t.topPosts[0].url).toBeUndefined();
   });
 });

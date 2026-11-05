@@ -10,7 +10,7 @@ import { toast } from '@/store/ui';
 import { AreaChart, ChartCard } from '@/components/charts/Charts';
 import { Badge, Callout, Drawer, Empty, Field, Spinner, StatStrip } from '@/components/ui/primitives';
 import { AnalyticsShell, DataTable } from '../analytics/AnalyticsShell';
-import { adsTotals, money, pct } from '../analytics/compute';
+import { adsTotals, money, pct, safeLink } from '../analytics/compute';
 import { openConnectedAccounts } from '../analytics/links';
 
 const n = (v: number | undefined) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v).toLocaleString('en-US') : '–');
@@ -152,8 +152,8 @@ export function AdsBody({ data, range, onCompetitors, now }: { data: AdsData; ra
                           <p className="clamp-2 text-small text-ink-2">{ad.text || 'No text'}</p>
                           <span className="flex flex-wrap items-center gap-x-3 text-caption text-muted">
                             {ad.firstShown && <span>First shown {fmtDate(ad.firstShown)}</span>}
-                            {ad.url && (
-                              <a href={ad.url} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1">
+                            {safeLink(ad.url) && (
+                              <a href={safeLink(ad.url)} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1">
                                 View in Ad Library <ExternalLink size={12} aria-hidden="true" />
                               </a>
                             )}
