@@ -194,10 +194,11 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
           </button>
         </>
       );
+      // like the buttons they replace: not while something for this build is under way
       more = [
-        ...(b.result ? [{ label: 'Preview the last page', icon: <Eye />, onSelect: preview }] : []),
+        ...(b.result ? [{ label: 'Preview the last page', icon: <Eye />, onSelect: preview, disabled: !!busy }] : []),
         ...linkEntry,
-        { label: b.via === 'manus' ? 'Stop' : 'Stop waiting', icon: <X />, onSelect: () => void stop() },
+        { label: b.via === 'manus' ? 'Stop' : 'Stop waiting', icon: <X />, onSelect: () => void stop(), disabled: !!busy },
       ];
       break;
     case 'built':
@@ -224,7 +225,7 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
           {changes}
         </>
       );
-      if (earlier) more = [{ label: 'Add as a new asset', onSelect: () => use() }];
+      if (earlier) more = [{ label: 'Add as a new asset', onSelect: () => use(), disabled: !!busy }];
       break;
     case 'imported': {
       const asset = b.imported?.assetId ? findCodeAsset(projectId, b.imported.assetId) : undefined;

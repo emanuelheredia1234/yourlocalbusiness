@@ -268,26 +268,29 @@ export function ManusPostHost() {
           </AccordionItem>
         </Accordion>
         {!ready && (
-          <Callout
-            tone="warn"
-            title="Manus can’t post yet"
-            action={
-              !__ARTIFACT_BUILD__ && (
-                <button
-                  className="btn btn-secondary btn-xs"
-                  onClick={() => {
-                    close();
-                    useUI.getState().setSettingsTab('ai');
-                    navigate('workspace-settings');
-                  }}
-                >
-                  Open Settings › AI keys
-                </button>
-              )
-            }
-          >
-            {manusSetupHint()}
-          </Callout>
+          // announced, as before the redesign (a warn Callout has no role of its own)
+          <div role="alert">
+            <Callout
+              tone="warn"
+              title="Manus can’t post yet"
+              action={
+                !__ARTIFACT_BUILD__ && (
+                  <button
+                    className="btn btn-secondary btn-xs"
+                    onClick={() => {
+                      close();
+                      useUI.getState().setSettingsTab('ai');
+                      navigate('workspace-settings');
+                    }}
+                  >
+                    Open Settings › AI keys
+                  </button>
+                )
+              }
+            >
+              {manusSetupHint()}
+            </Callout>
+          </div>
         )}
       </div>
     </Modal>
@@ -312,9 +315,10 @@ function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry 
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <PlatformChip platform={post.platform} />
-          {mode === 'schedule' && <span className="num text-caption text-muted">· {fmtWhen(post.scheduledAt, tz)}</span>}
+          {mode === 'schedule' && <span className="num text-caption text-muted">{fmtWhen(post.scheduledAt, tz)}</span>}
         </div>
-        <p className="clamp-2 whitespace-pre-line text-small text-ink-2">{postText(post)}</p>
+        {/* two lines of the text, its paragraphs run together (a blank line would take the second line) */}
+        <p className="clamp-2 break-words text-small text-ink-2">{postText(post)}</p>
         <LinkLine post={post} mode={mode} />
         {problem && (
           <p className="text-small font-medium text-warn">

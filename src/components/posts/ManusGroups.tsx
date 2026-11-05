@@ -134,10 +134,10 @@ export function ManusGroupsHost() {
           )}
           <div className="flex min-w-0 flex-1 flex-col gap-1.5">
             <PlatformChip platform="facebook" />
-            {/* the text that goes, exactly (its link included) */}
-            <p className="scroll-thin max-h-32 overflow-y-auto whitespace-pre-line text-small text-ink-2" tabIndex={0} aria-label="Post text">
+            {/* the text that goes, exactly (its link included): a well that scrolls past six whole lines */}
+            <div role="region" aria-label="Post text" tabIndex={0} className="well scroll-thin max-h-[136px] overflow-y-auto whitespace-pre-line break-words px-3 py-2 text-small text-ink-2">
               {groupText}
-            </p>
+            </div>
           </div>
         </div>
         <Field label="Groups" htmlFor="fb-groups" hint={`One per line: the group’s name, or its link (facebook.com/groups/…). Only groups you’re already a member of. Up to ${MAX_GROUPS}.`} error={linkProblem ?? tooMany ?? undefined}>
@@ -174,26 +174,29 @@ export function ManusGroupsHost() {
           </AccordionItem>
         </Accordion>
         {!ready && (
-          <Callout
-            tone="warn"
-            title="Manus can’t post yet"
-            action={
-              !__ARTIFACT_BUILD__ && (
-                <button
-                  className="btn btn-secondary btn-xs"
-                  onClick={() => {
-                    close();
-                    useUI.getState().setSettingsTab('ai');
-                    navigate('workspace-settings');
-                  }}
-                >
-                  Open Settings › AI keys
-                </button>
-              )
-            }
-          >
-            {manusSetupHint()}
-          </Callout>
+          // announced, as before the redesign (a warn Callout has no role of its own)
+          <div role="alert">
+            <Callout
+              tone="warn"
+              title="Manus can’t post yet"
+              action={
+                !__ARTIFACT_BUILD__ && (
+                  <button
+                    className="btn btn-secondary btn-xs"
+                    onClick={() => {
+                      close();
+                      useUI.getState().setSettingsTab('ai');
+                      navigate('workspace-settings');
+                    }}
+                  >
+                    Open Settings › AI keys
+                  </button>
+                )
+              }
+            >
+              {manusSetupHint()}
+            </Callout>
+          </div>
         )}
         {err && (
           <Callout tone="bad" title={err.title}>

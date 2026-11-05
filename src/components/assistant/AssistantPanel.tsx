@@ -185,10 +185,15 @@ function Working({ stage }: { stage: string }) {
   }, []);
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="thinking min-h-11 gap-2.5 py-1.5 pl-3 pr-1.5" role="status" aria-live="polite">
+      <div className="thinking min-h-11 gap-2.5 py-1.5 pl-3 pr-1.5">
         <span className="orb" aria-hidden="true" />
-        <p className="shimmer-text min-w-0 flex-1 truncate text-ui">{stage || 'Working…'}</p>
-        <span className="num shrink-0 font-mono text-caption text-muted">{fmtElapsed(secs)}</span>
+        {/* only the stage is announced: the clock ticks every second and would be read out each time */}
+        <p className="shimmer-text min-w-0 flex-1 truncate text-ui" role="status" aria-live="polite">
+          {stage || 'Working…'}
+        </p>
+        <span className="num shrink-0 font-mono text-caption text-muted" aria-hidden="true">
+          {fmtElapsed(secs)}
+        </span>
         <button type="button" className="btn btn-ghost btn-xs shrink-0" onClick={stopAssistant} aria-label="Stop the assistant">
           <Square className="!size-3 fill-current" aria-hidden="true" /> Stop
         </button>

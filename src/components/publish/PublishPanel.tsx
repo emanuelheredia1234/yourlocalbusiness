@@ -456,9 +456,8 @@ export function PublishPanel({
               <ul className="flex flex-col gap-1.5">
                 {[target.url, ...(domain && target.domainUrl ? [target.domainUrl] : [])].map((url) => (
                   <li key={url} className="well flex min-w-0 flex-wrap items-center gap-2 py-1 pl-3 pr-1">
-                    <span className="min-w-[150px] flex-1 truncate py-1 font-mono text-caption text-ink" title={url}>
-                      {bare(url)}
-                    </span>
+                    {/* the whole address, wrapped in a narrow column (cut short, the page's name is what goes) */}
+                    <span className="min-w-[150px] flex-1 break-all py-1 font-mono text-caption text-ink">{bare(url)}</span>
                     <CopyButton text={url} size="xs" label="Copy" />
                   </li>
                 ))}
@@ -508,7 +507,8 @@ function Links({ published }: { published: Published }) {
     <ul className="flex flex-col gap-1.5">
       {links.map((url) => (
         <li key={url} className="well flex min-w-0 flex-wrap items-center gap-1.5 py-1 pl-3 pr-1">
-          <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-[150px] flex-1 truncate py-1 font-mono text-caption text-ink underline-offset-[3px] hover:underline" title={url}>
+          {/* the whole address, wrapped in a narrow column (cut short, the page's name is what goes) */}
+          <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-[150px] flex-1 break-all py-1 font-mono text-caption text-ink underline-offset-[3px] hover:underline">
             {bare(url)}
           </a>
           <CopyButton text={url} size="xs" label="Copy" />
