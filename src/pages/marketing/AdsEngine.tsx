@@ -10,11 +10,10 @@ import { adsTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { AutoTextarea, ChipInput, CopyButton, Empty, Field, LinesEditor, confirmAction } from '@/components/ui/primitives';
+import { AutoTextarea, ChipInput, CopyButton, Empty, Field, LinesEditor, PageHeader, confirmAction } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
 import { PostVisual } from '@/components/visuals/PostVisual';
 import { LogoMark } from '@/components/brand/Logo';
-import { MarketingHeader } from './MarketingNav';
 
 export default function AdsEngine() {
   const project = useActiveProject()!;
@@ -32,10 +31,8 @@ export default function AdsEngine() {
 
   return (
     <div className="flex flex-col gap-5">
-      <MarketingHeader
-        eyebrow="Marketing Hub · Paid ads"
-        title="Paid ads engine"
-        desc="Plan campaigns for Meta, TikTok, Google Search and LinkedIn: targeting, three A/B creatives and search ads. Then copy them into each platform’s ads manager, where you launch and pay for them."
+      <PageHeader
+        title="Ads"
         actions={
           <button className="btn btn-primary" onClick={create}>
             <Plus size={16} /> New campaign

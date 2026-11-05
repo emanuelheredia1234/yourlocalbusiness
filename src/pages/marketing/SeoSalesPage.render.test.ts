@@ -76,7 +76,8 @@ describe('before there’s a page', () => {
     expect(html).toMatch(/<input type="radio"[^>]* checked=""[^>]* value="landing"/);
     expect(html.match(/ checked=""/g)).toHaveLength(1);
     for (const label of ['Lead form page', 'Booking page', 'Website', 'Landing page', 'Showcase page', 'Checkout page']) expect(html).toContain(`>${label}</span>`);
-    expect(html).toContain('Build your SEO page');
+    // the empty state names the chosen type (spec E07: "Write your {type} page")
+    expect(html).toContain('Write your landing page');
     expect(html.indexOf('What kind of page?')).toBeLessThan(html.indexOf('seo-guide'));
     expect(html).toMatch(/<button[^>]*>(?:(?!<\/button>).)*Write page/);
     expect(html).not.toContain('Add your payment link first');
@@ -129,9 +130,11 @@ describe('with a page', () => {
     expect(html).toContain('Say what to change');
     expect(html).toContain('<option value="" selected="">Whole page</option>');
     for (const label of ['Hero &amp; CTA', 'Problem / agitation', 'Gallery', 'FAQ']) expect(html).toContain(`>${label}</option>`);
-    expect(html).toMatch(/aria-expanded="false"[^>]*aria-controls="[^"]+-images"[^>]*>.*Images/);
-    expect(html).toMatch(/<button type="submit" class="btn btn-ai btn-sm ml-auto" disabled="">/);
-    expect(html).toContain('It never adds testimonials, numbers or guarantees');
+    // the AI composer: new images for the change, and Apply (disabled until there's a request)
+    expect(html).toContain('aria-label="Add images"');
+    expect(html).toMatch(/<button(?=[^>]*class="btn btn-ai-outline btn-sm")(?=[^>]*disabled="")[^>]*>(?:(?!<\/button>).)*Apply<\/button>/);
+    // what the AI never adds is behind the composer's ⓘ
+    expect(html).toContain('aria-label="About AI edits"');
   });
 
   it('has the public page, and Guide the AI with Rewrite page and the images not on the page yet', () => {
@@ -147,7 +150,7 @@ describe('with a page', () => {
     expect(html).toContain('Not on the page yet: image 3.');
     expect(html).toContain('Add to the page');
     // open, since there's an image to place
-    expect(html).toMatch(/<details class="panel group" open="">/);
+    expect(html).toMatch(/<div(?=[^>]*data-item="guide")(?=[^>]*data-state="open")[^>]*>/);
   });
 
   it('shows the images on the canvas, with their alt text to edit', () => {
@@ -175,8 +178,9 @@ describe('with a page', () => {
   it('shows the page’s type, with Change', () => {
     const html = render(withPage());
     expect(html).toContain('aria-label="Page type"');
-    expect(html).toMatch(/<h2[^>]*>Page type<\/h2><span class="chip">Landing page<\/span>/);
-    expect(html).toMatch(/<button type="button" class="btn btn-ghost btn-xs ml-auto" aria-expanded="false"[^>]*>Change<\/button>/);
+    expect(html).toMatch(/>Page type<\/span><span[^>]*>Landing page<\/span>/);
+    // Change opens a window with the six types
+    expect(html).toMatch(/<button type="button" class="btn btn-secondary btn-xs self-start" aria-haspopup="dialog"[^>]*>Change<\/button>/);
     expect(html).toContain('One offer and one call to action.');
     expect(html).toContain('>SEO page</h1>');
   });
@@ -188,7 +192,7 @@ describe('with a page', () => {
     p.marketing.salesPage = generateSalesPage(p, {}, 0, 'booking');
     const html = render(p);
     expect(html).toContain('No booking link yet: visitors send a request with the form instead. Add your booking link under Page type to let them book straight away.');
-    expect(html).toContain('<span class="chip">Booking page</span>');
+    expect(html).toMatch(/>Page type<\/span><span[^>]*>Booking page<\/span>/);
     expect(html).toContain('Your booking link (optional)</label>');
     // the preview's form (it asks for a time): it never sends, and has no address
     expect(html).toContain('aria-label="Form heading"');
@@ -209,7 +213,7 @@ describe('with a page', () => {
     p.marketing.pageType = 'lead';
     p.marketing.seo = generateSeoMeta(p);
     p.marketing.salesPage = generateSalesPage(p, {}, 0, 'lead');
-    expect(render(p)).toContain('The form starts collecting leads once you publish this page (Public page, beside the score).');
+    expect(render(p)).toContain('The form starts collecting leads once you publish this page.');
     p.marketing.seoPublished = { slug: 'sparkle', url: 'https://app.example/sparkle', publishedAt: 1, hash: 'h' };
     const html = render(p);
     expect(html).toContain('What people send with the form arrives in Email → Leads.');

@@ -110,7 +110,7 @@ export function SalesPreview({
   const menu = pageType === 'website' ? websiteMenu(page, !!business) : [];
   const go = (type: string) => root.current?.querySelector(`[data-section="${type}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   return (
-    <div ref={root} className="overflow-hidden rounded-md border border-line shadow-card" style={{ background: t.bg, color: t.ink, fontFamily: t.font, width: device === 'mobile' ? 390 : '100%', maxWidth: '100%' }}>
+    <div ref={root} className="overflow-hidden" style={{ background: t.bg, color: t.ink, fontFamily: t.font, width: device === 'mobile' ? 390 : '100%', maxWidth: '100%' }}>
       {pageType === 'website' && (
         <nav aria-label="Page menu (preview)" className="flex flex-wrap items-center gap-x-4 gap-y-1 px-6 py-3" style={{ borderBottom: `1px solid ${withAlpha(t.ink, 0.12)}` }}>
           <span className="mr-auto text-[15px] font-extrabold">{brand.name}</span>

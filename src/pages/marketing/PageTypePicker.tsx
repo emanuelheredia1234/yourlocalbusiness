@@ -1,42 +1,68 @@
-// The SEO page builder's choice of page type (six radio cards), and the links each type's buttons open: the
+// The SEO page builder's choice of page type (six option cards), and the links each type's buttons open: the
 // owner's own booking or payment link, typed here for this page (the app never takes payments).
 import { useId } from 'react';
-import { CalendarCheck, CreditCard, Globe, LayoutGrid, MessageSquareText, PanelTop, type LucideIcon } from 'lucide-react';
+import { CalendarCheck, Check, CircleAlert, CreditCard, Globe, LayoutGrid, MessageSquareText, PanelTop, type LucideIcon } from 'lucide-react';
 import type { PageType, Project } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { PAGE_TYPES, PAGE_TYPE_DESC, PAGE_TYPE_LABEL, PAGE_TYPE_LINKS, bookingLink, linkFromListing, paymentLink, webLink } from '@/lib/pageTypes';
 import { useStore } from '@/store/useStore';
+import { InfoTip } from '@/components/ui/primitives';
 
 const ICONS: Record<PageType, LucideIcon> = { lead: MessageSquareText, booking: CalendarCheck, website: Globe, landing: PanelTop, showcase: LayoutGrid, checkout: CreditCard };
 
-/** The six page types as radio cards: a fieldset with a legend, so arrow keys move between them and screen readers hear one group. */
+/** Each type in one line (the full description is behind the ⓘ). */
+const SHORT: Record<PageType, string> = {
+  lead: 'A short pitch and a form for enquiries.',
+  booking: 'Your services, prices and a Book button.',
+  website: 'One page with a menu: services, about, contact.',
+  landing: 'One offer and one call to action.',
+  showcase: 'What you sell, each with a price and a button.',
+  checkout: 'One offer with a Buy now button.',
+};
+
+/**
+ * The six page types as option cards: real radio buttons in a fieldset with a legend, so arrow keys move
+ * between them and screen readers hear one group. Selected: the iris ring and a check.
+ */
 export function PageTypePicker({ value, onChange, disabled, compact }: { value: PageType; onChange: (t: PageType) => void; disabled?: boolean; compact?: boolean }) {
   const name = useId();
   return (
     <fieldset className="min-w-0" disabled={disabled}>
       <legend className="label">What kind of page?</legend>
-      <div className={cn('grid grid-cols-1 gap-2 sm:grid-cols-2', !compact && 'lg:grid-cols-3')}>
+      <div className={cn('grid grid-cols-1 gap-3 sm:grid-cols-2', !compact && 'lg:grid-cols-3')}>
         {PAGE_TYPES.map((t) => {
           const Icon = ICONS[t];
           const on = value === t;
           return (
-            <label
-              key={t}
-              className={cn(
-                'flex cursor-pointer gap-2.5 rounded-md border p-3 text-left transition-colors has-[:focus-visible]:shadow-focus',
-                on ? 'border-primary bg-primary-soft' : 'border-line hover:border-line-2 hover:bg-surface-2',
-                disabled && 'cursor-not-allowed opacity-60',
-              )}
-            >
-              <input type="radio" name={name} value={t} checked={on} onChange={() => onChange(t)} className="sr-only" aria-describedby={`${name}-${t}`} />
-              <Icon size={16} className={cn('mt-0.5 shrink-0', on ? 'text-primary' : 'text-muted')} aria-hidden="true" />
-              <span className="min-w-0">
-                <span className="block text-small font-semibold text-ink">{PAGE_TYPE_LABEL[t]}</span>
-                <span id={`${name}-${t}`} className="mt-0.5 block text-caption leading-snug text-muted">
-                  {PAGE_TYPE_DESC[t]}
+            <div key={t} className="relative min-w-0">
+              <label
+                className={cn(
+                  'flex h-full cursor-pointer flex-col items-start rounded-lg border bg-surface text-left transition-[border-color,box-shadow,background-color] duration-120 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring',
+                  compact ? 'gap-2.5 p-3' : 'gap-3 p-4',
+                  on ? 'border-transparent bg-primary-soft/50 ring-[1.5px] ring-inset ring-primary' : 'border-line hover:border-line-3 hover:shadow-sm',
+                  disabled && 'cursor-not-allowed bg-surface-2 hover:border-line hover:shadow-none',
+                )}
+              >
+                <input type="radio" name={name} value={t} checked={on} onChange={() => onChange(t)} className="sr-only" aria-describedby={`${name}-${t}`} />
+                <span className={cn('flex shrink-0 items-center justify-center bg-surface-3 text-ink-2', compact ? 'h-8 w-8 rounded-md' : 'h-10 w-10 rounded-pop')} aria-hidden="true">
+                  <Icon size={compact ? 16 : 20} />
                 </span>
+                <span className="min-w-0 pr-7">
+                  <span className={cn('block', compact ? 'text-h4' : 'text-h3', disabled ? 'text-faint' : 'text-ink')}>{PAGE_TYPE_LABEL[t]}</span>
+                  <span id={`${name}-${t}`} className="mt-1 block text-small text-muted">
+                    {SHORT[t]}
+                  </span>
+                </span>
+              </label>
+              {on && (
+                <span className="pointer-events-none absolute right-3 top-3 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-on-primary" aria-hidden="true">
+                  <Check size={12} strokeWidth={3} />
+                </span>
+              )}
+              <span className="absolute bottom-2 right-2">
+                <InfoTip label={`About the ${PAGE_TYPE_LABEL[t].toLowerCase()}`}>{PAGE_TYPE_DESC[t]}</InfoTip>
               </span>
-            </label>
+            </div>
           );
         })}
       </div>
@@ -85,9 +111,16 @@ function LinkField({ id, label, value, onChange, hint, required }: { id: string;
         aria-required={required || undefined}
         aria-describedby={`${id}-note`}
       />
-      <p id={`${id}-note`} className={error ? 'mt-1 text-caption font-medium text-bad' : 'hint'}>
-        {error || hint}
-      </p>
+      {error ? (
+        <p id={`${id}-note`} className="mt-1.5 flex items-center gap-1.5 text-caption text-bad">
+          <CircleAlert size={14} className="shrink-0" aria-hidden="true" />
+          {error}
+        </p>
+      ) : (
+        <p id={`${id}-note`} className="hint">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }
@@ -117,7 +150,7 @@ export function PageTypeLinks({ project, type }: { project: Project; type: PageT
       {kinds.includes('booking') && <LinkField id={`${id}-booking`} label="Your booking link (optional)" value={links.booking ?? ''} onChange={(v) => set('booking', v)} hint={bookingHint} />}
       {kinds.includes('payment') && <LinkField id={`${id}-payment`} label={type === 'checkout' ? 'Your payment link' : 'Your payment link (optional)'} required={type === 'checkout'} value={links.payment ?? ''} onChange={(v) => set('payment', v)} hint={paymentHint} />}
       {notes.map((n) => (
-        <p key={n} className="rounded-md border border-line bg-surface-2 px-3 py-2 text-caption text-ink-2">
+        <p key={n} className="well px-3 py-2 text-small text-ink-2">
           {n}
         </p>
       ))}
