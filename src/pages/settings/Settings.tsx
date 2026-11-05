@@ -265,13 +265,13 @@ function BrandSettings({ project }: { project: Project }) {
       </SettingsSection>
 
       <SettingsSection title="Logo, colours & banner" description="Upload your logo or design one from an icon, a shape and a font." actions={<Saved shown={lookSaved} />}>
-        <div className="pb-5 pt-3">
+        <div className="pb-4 pt-2">
           <LogoDesigner brand={brand} onChange={set} paletteOptions={palettes} withBanner />
         </div>
       </SettingsSection>
 
       <SettingsSection title="Brand images" description="Photos and product shots for posts, listings and covers.">
-        <div className="pb-5 pt-3">
+        <div className="pb-4 pt-2">
           <BrandImagesEditor brand={brand} onChange={(images) => set({ images })} />
         </div>
       </SettingsSection>

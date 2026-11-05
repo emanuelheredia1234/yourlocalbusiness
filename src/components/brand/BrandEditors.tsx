@@ -27,7 +27,7 @@ export function LogoDesigner({ brand, onChange, iconOptions, paletteOptions, wit
   return (
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_272px]">
       <BrandCard brand={brand} className="xl:sticky xl:top-4 xl:order-2 xl:self-start" />
-      <div className="flex min-w-0 flex-col gap-5">
+      <div className="flex min-w-0 flex-col gap-4">
         <Field label="Logo source">
           <Segmented
             options={[
@@ -163,7 +163,7 @@ export function PaletteEditor({ colors, onChange, options }: { colors: BrandColo
           </div>
         </Field>
       )}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-4">
         <Field label="Primary">
           <ColorInput value={colors.primary} onChange={(v) => onChange({ ...paletteFrom([v, colors.secondary, colors.accent]) })} label="Primary color" />
         </Field>
