@@ -9,8 +9,9 @@ import { SequencePanel } from './email/SequencePanel';
 import { PreviewPanel } from './email/PreviewPanel';
 import { Subscribers } from './email/Subscribers';
 import { Leads } from './email/Leads';
+import { EmailAnalytics } from './email/EmailAnalytics';
 
-type Tab = 'magnet' | 'sequence' | 'preview' | 'subscribers' | 'leads';
+type Tab = 'magnet' | 'sequence' | 'preview' | 'subscribers' | 'leads' | 'analytics';
 
 export default function EmailFunnel() {
   const project = useActiveProject()!;
@@ -30,7 +31,7 @@ export default function EmailFunnel() {
             : 'preview',
   );
   // a tab asked for from elsewhere (the assistant)
-  useTabRequest<Tab>('marketing-email', (tabsOf('marketing-email') as Tab[]).filter((t) => !__ARTIFACT_BUILD__ || t !== 'leads'), setTab);
+  useTabRequest<Tab>('marketing-email', (tabsOf('marketing-email') as Tab[]).filter((t) => !__ARTIFACT_BUILD__ || (t !== 'leads' && t !== 'analytics')), setTab);
   const label = (t: Tab) => tabLabel('marketing-email', t);
 
   return (
@@ -49,7 +50,7 @@ export default function EmailFunnel() {
           { id: 'sequence', label: label('sequence'), count: m.emails.length || undefined },
           { id: 'preview', label: label('preview') },
           { id: 'subscribers', label: label('subscribers'), count: m.subscribers.length || undefined },
-          ...(__ARTIFACT_BUILD__ ? [] : [{ id: 'leads' as const, label: label('leads'), count: newLeads || undefined }]),
+          ...(__ARTIFACT_BUILD__ ? [] : [{ id: 'leads' as const, label: label('leads'), count: newLeads || undefined }, { id: 'analytics' as const, label: label('analytics') }]),
         ]}
       />
       {tab === 'magnet' && <LeadMagnetPanel project={project} />}
@@ -57,6 +58,7 @@ export default function EmailFunnel() {
       {tab === 'preview' && <PreviewPanel project={project} onWrite={() => setTab('sequence')} />}
       {tab === 'subscribers' && <Subscribers project={project} />}
       {!__ARTIFACT_BUILD__ && tab === 'leads' && <Leads project={project} />}
+      {!__ARTIFACT_BUILD__ && tab === 'analytics' && <EmailAnalytics project={project} onConnect={() => setTab('preview')} />}
     </div>
   );
 }

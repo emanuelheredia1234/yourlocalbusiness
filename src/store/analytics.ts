@@ -9,9 +9,9 @@
 // Nothing here retries a write: Update and Connect are one request each, started by the person.
 
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import type { AnalyticsSnapshot, AnalyticsSource, ConnectPlatform, ConnectionStatus, RefreshRun } from '@/lib/integrations/types';
+import type { AnalyticsSettings, AnalyticsSettingsInput, AnalyticsSnapshot, AnalyticsSource, ConnectPlatform, ConnectionStatus, RefreshRun } from '@/lib/integrations/types';
 import { ANALYTICS_SOURCES } from '@/lib/integrations/types';
-import { IntegrationApiError, checkConnection, connect as connectApi, disconnect as disconnectApi, getConnections, getRun, getSnapshots, reconnect as reconnectApi, refreshAnalytics } from '@/lib/integrations/api';
+import { IntegrationApiError, checkConnection, connect as connectApi, disconnect as disconnectApi, getConnections, getRun, getSnapshots, reconnect as reconnectApi, refreshAnalytics, saveAnalyticsSettings } from '@/lib/integrations/api';
 import { serverFetch } from '@/ai/claude';
 import { serverBaseNow } from '@/lib/cloud/auth';
 import { safeStorage } from '@/lib/storage';
@@ -88,6 +88,8 @@ export interface AnalyticsState {
 
   /** whether this person is the app's owner (null: not known yet) */
   owner: boolean | null;
+  /** keywords, city and competitors per project, as the server last said */
+  settings: Record<string, AnalyticsSettings | undefined>;
 
   refreshConnections: () => Promise<void>;
   loadSnapshots: (projectId: string) => Promise<void>;
@@ -101,6 +103,9 @@ export interface AnalyticsState {
   checkPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
   disconnectPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
   loadOwner: () => Promise<void>;
+  /** Read the project's analytics settings (a PUT with no fields changes nothing and answers them). */
+  loadSettings: (projectId: string) => Promise<void>;
+  saveSettings: (input: AnalyticsSettingsInput) => Promise<{ ok: boolean; message?: string }>;
 }
 
 let runTimer: ReturnType<typeof setTimeout> | null = null;
@@ -193,6 +198,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     pending: {},
     expired: {},
     owner: null,
+    settings: {},
 
     refreshConnections: async () => {
       if (artifact()) return;
@@ -333,6 +339,27 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
         return { ok: true };
       } catch (e) {
         return { ok: false, message: messageOf(e) };
+      }
+    },
+
+    loadSettings: async (projectId) => {
+      if (artifact() || !projectId) return;
+      try {
+        const { settings } = await saveAnalyticsSettings({ projectId });
+        set((s) => ({ settings: { ...s.settings, [projectId]: settings } }));
+      } catch {
+        /* the drawer starts empty and says what failed when saving */
+      }
+    },
+
+    saveSettings: async (input) => {
+      if (artifact()) return { ok: false };
+      try {
+        const { settings } = await saveAnalyticsSettings(input);
+        set((s) => ({ settings: { ...s.settings, [input.projectId]: settings } }));
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, message: messageOf(e, 'Couldn’t save.') };
       }
     },
 
