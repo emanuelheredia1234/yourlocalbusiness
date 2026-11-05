@@ -113,6 +113,7 @@ async function researchText(ctx, params, research, { model, signal, timeoutMs })
   }
   const answers = [message];
   const content = [...(message.content ?? [])];
+  // from here on searches may be billed: a failure is paid work and says what the finished calls used
   const paid = (err, all) => Object.assign(err, { notStarted: false, used: { ...tally(answers), all } });
   for (let i = 0; message.stop_reason === 'pause_turn' && i < MAX_CONTINUATIONS; i += 1) {
     const left = research.maxSearches - tally(answers).searches;
