@@ -94,7 +94,8 @@ function EditableLines({
           const part = splitLine(line, !!named);
           const field = (
             <input
-              className="input input-inline input-sm min-w-0 flex-1 px-2"
+              // a blank to fill in looks like a field; a filled line reads as text until it's hovered or focused
+              className={cn('input input-sm min-w-0 flex-1 px-2', !part.hint && 'input-inline')}
               value={part.value}
               placeholder={part.hint ?? placeholder}
               aria-label={part.label ?? itemLabel(i)}
@@ -594,7 +595,7 @@ function BusinessModel({ project }: { project: Project }) {
               </span>
               <div className="min-w-0">
                 <input
-                  className="input input-inline h-8 px-2 text-ui"
+                  className={cn('input h-8 px-2 text-ui', !blankHint(v.title) && 'input-inline')}
                   value={blankHint(v.title) ? '' : v.title}
                   placeholder={blankHint(v.title)}
                   onChange={(e) => setStack((x) => x.map((i) => (i.id === v.id ? { ...i, title: e.target.value } : i)))}
@@ -604,7 +605,7 @@ function BusinessModel({ project }: { project: Project }) {
                   value={blankHint(v.description) ? '' : v.description}
                   onChange={(t) => setStack((x) => x.map((i) => (i.id === v.id ? { ...i, description: t } : i)))}
                   minRows={1}
-                  className="input-inline px-2 py-1 text-small text-ink-2"
+                  className={cn('mt-1 px-2 py-1 text-small text-ink-2', !blankHint(v.description) && 'input-inline')}
                   aria-label="Value item description"
                   placeholder={blankHint(v.description) ?? (v.kind === 'guarantee' ? 'Describe the promise you actually make' : 'What it is and why it helps')}
                 />
@@ -669,7 +670,7 @@ function PackageCard({ pk, removable, onChange, onPopular, onRemove }: { pk: Ser
         value={blankHint(pk.description) ? '' : pk.description}
         onChange={(v) => onChange({ description: v })}
         minRows={2}
-        className="input-inline -mx-2 px-2 py-1 text-body text-ink-2"
+        className={cn('-mx-2 px-2 py-1 text-body text-ink-2', !blankHint(pk.description) && 'input-inline')}
         aria-label="Package description"
         placeholder={blankHint(pk.description) ?? 'Who it’s for and what they get'}
       />

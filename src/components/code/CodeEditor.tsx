@@ -11,6 +11,8 @@ import { javascript } from '@codemirror/lang-javascript';
 import { tags as t } from '@lezer/highlight';
 import { Monitor, RefreshCw, Smartphone, Tablet } from 'lucide-react';
 import { cn, debounce } from '@/lib/utils';
+import { Tooltip } from '@/components/ui/primitives';
+import { BrowserFrame } from '@/components/frames/Frames';
 import { buildDocument } from '@/ai/local/code';
 
 const highlight = HighlightStyle.define([
@@ -25,11 +27,12 @@ const highlight = HighlightStyle.define([
   { tag: t.invalid, color: 'rgb(var(--bad))' },
 ]);
 
+// The editor's own chrome (font, gutters, active line, selection) comes from index.css; only what CSS can't
+// reach from outside is set here: the text colour and caret, the content padding and the autocomplete popup.
 const theme = EditorView.theme({
-  '&': { color: 'rgb(var(--ink))', backgroundColor: 'rgb(var(--code-bg))' },
+  '&': { color: 'rgb(var(--ink))' },
   '.cm-content': { caretColor: 'rgb(var(--ink))', padding: '10px 0' },
-  '.cm-gutters': { border: 'none' },
-  '.cm-tooltip': { border: '1px solid rgb(var(--line))', backgroundColor: 'rgb(var(--surface))', color: 'rgb(var(--ink))' },
+  '.cm-tooltip': { border: '1px solid rgb(var(--line))', borderRadius: '12px', overflow: 'hidden', backgroundColor: 'rgb(var(--elevated))', color: 'rgb(var(--ink))', boxShadow: 'var(--shadow-pop)' },
   '.cm-tooltip-autocomplete > ul > li[aria-selected]': { backgroundColor: 'rgb(var(--primary) / 0.18)', color: 'rgb(var(--ink))' },
 });
 
@@ -101,7 +104,7 @@ type PreviewCode = { html: string; css: string; js: string };
  */
 const previewDoc = (c: PreviewCode, title?: string, images?: Record<string, string>) => buildDocument(c, title, { images: images ?? {}, storageShim: true });
 
-export function LivePreview({ code, title, images, className }: { code: PreviewCode; title?: string; images?: Record<string, string>; className?: string }) {
+export function LivePreview({ code, title, images, className, url }: { code: PreviewCode; title?: string; images?: Record<string, string>; className?: string; url?: string }) {
   const [device, setDevice] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [doc, setDoc] = useState(() => previewDoc(code, title, images));
   const [nonce, setNonce] = useState(0);
@@ -111,34 +114,34 @@ export function LivePreview({ code, title, images, className }: { code: PreviewC
   }, [code, title, images]);
   const width = device === 'desktop' ? '100%' : device === 'tablet' ? '768px' : '390px';
   return (
-    <div className={cn('flex h-full min-h-0 flex-col', className)}>
-      <div className="flex items-center justify-between gap-2 border-b border-line bg-surface px-3 py-2">
-        <div className="flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-full bg-bad/70" />
-          <span className="h-2.5 w-2.5 rounded-full bg-warn/70" />
-          <span className="h-2.5 w-2.5 rounded-full bg-good/70" />
-          <span className="ml-2 text-xs font-semibold text-muted">Live preview</span>
-        </div>
-        <div className="flex items-center gap-1">
+    <BrowserFrame
+      url={url ?? 'Preview'}
+      className={cn('flex min-h-0 min-w-0 flex-col', className)}
+      bodyClassName="flex min-h-0 flex-1 justify-center overflow-auto bg-surface-2"
+      toolbar={
+        <>
           {(
             [
-              ['desktop', Monitor],
-              ['tablet', Tablet],
-              ['mobile', Smartphone],
+              ['desktop', Monitor, 'Desktop width'],
+              ['tablet', Tablet, 'Tablet width'],
+              ['mobile', Smartphone, 'Phone width'],
             ] as const
-          ).map(([d, I]) => (
-            <button key={d} className={cn('btn btn-ghost btn-icon btn-xs', device === d && 'bg-surface-2 text-ink')} onClick={() => setDevice(d)} aria-label={`${d} width`} aria-pressed={device === d}>
-              <I size={14} />
-            </button>
+          ).map(([d, I, label]) => (
+            <Tooltip key={d} content={label}>
+              <button type="button" className={cn('btn btn-ghost btn-icon h-6 w-6 rounded-sm', device === d && 'bg-surface-3 text-ink')} onClick={() => setDevice(d)} aria-label={`${d} width`} aria-pressed={device === d}>
+                <I className="!size-3.5" />
+              </button>
+            </Tooltip>
           ))}
-          <button className="btn btn-ghost btn-icon btn-xs" onClick={() => setNonce((n) => n + 1)} aria-label="Reload preview">
-            <RefreshCw size={14} />
-          </button>
-        </div>
-      </div>
-      <div className="dotgrid flex min-h-0 flex-1 justify-center overflow-auto bg-surface-2 p-3">
-        <iframe key={nonce} title={title ?? 'Live preview'} srcDoc={doc} sandbox="allow-scripts allow-forms allow-popups allow-modals" className="h-full min-h-[420px] rounded-md border border-line bg-white shadow-card transition-[width] duration-300" style={{ width, maxWidth: '100%' }} />
-      </div>
-    </div>
+          <Tooltip content="Reload">
+            <button type="button" className="btn btn-ghost btn-icon h-6 w-6 rounded-sm" onClick={() => setNonce((n) => n + 1)} aria-label="Reload preview">
+              <RefreshCw className="!size-3.5" />
+            </button>
+          </Tooltip>
+        </>
+      }
+    >
+      <iframe key={nonce} title={title ?? 'Live preview'} srcDoc={doc} sandbox="allow-scripts allow-forms allow-popups allow-modals" className="h-full min-h-[360px] bg-white transition-[width] duration-240 ease-out" style={{ width, maxWidth: '100%' }} />
+    </BrowserFrame>
   );
 }

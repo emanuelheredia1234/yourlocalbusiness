@@ -1,23 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Code2, Copy, CopyPlus, Download, ExternalLink, FileCode2, Globe, Info, RefreshCw, Sparkles, Trash2, Undo2, Wand2, Columns2, Eye, SquareCode } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Check, ChevronLeft, Columns2, Copy, CopyPlus, Download, ExternalLink, Eye, Globe, ImagePlus, Info, RefreshCw, SquareCode, Trash2, Undo2 } from 'lucide-react';
 import type { AgentSource, CodeAsset, CodeKind, MediaRef, Project, PromptImage, Published } from '@/lib/types';
 import { cn, fmtRelative, listJoin, slugify, uid } from '@/lib/utils';
 import { CODE_KINDS, codeKindLabel, detectKind, matchKind, removeImages } from '@/ai/local/code';
 import { codeEditTask, codeTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
-import { MAX_PROMPT_IMAGES, imageDataUrls, imageKeyNumber, planPromptImages, reportRefusals } from '@/lib/promptImages';
+import { MAX_PROMPT_IMAGES, PROMPT_IMAGE_ACCEPT, imageDataUrls, imageKeyNumber, planPromptImages, reportRefusals } from '@/lib/promptImages';
 import { unpublishPage } from '@/lib/publish';
 import { copyText } from '@/lib/platform';
-import { deleteBlob } from '@/lib/storage';
+import { deleteBlob, saveMediaFile } from '@/lib/storage';
+import { useMediaQuery } from '@/lib/hooks';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
-import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
+import { AIResultBar, AIThinking, GenerateButton, Spark } from '@/components/ai/AI';
 import { PromptImages, usePasteImages } from '@/components/ai/PromptImages';
 import { PublishPanel } from '@/components/publish/PublishPanel';
 import { AgentButtons } from '@/components/agents/AgentButtons';
 import { AgentBuildList } from '@/components/agents/AgentBuildList';
 import { CodeEditor, LivePreview, type CodeLang } from '@/components/code/CodeEditor';
-import { AutoTextarea, Empty, Segmented, Spinner, confirmAction } from '@/components/ui/primitives';
+import { AutoTextarea, Callout, Empty, InfoTip, Modal, MoreMenu, OptionCards, Segmented, Select, Spinner, StatusDot, StickyActionBar, Tooltip, confirmAction, type MenuEntry } from '@/components/ui/primitives';
 import { Icon } from '@/components/ui/Icon';
 import { download } from '@/components/ui/download';
 import {
@@ -46,6 +47,7 @@ import {
 } from '@/lib/codeAssets';
 
 type Lang = CodeLang | 'script';
+type View = 'split' | 'code' | 'preview';
 
 const AGENT_LABEL: Record<AgentSource['via'], string> = { manus: 'Manus', viktor: 'Viktor' };
 
@@ -78,6 +80,9 @@ const ABOUT_IMAGES = /\b(?:images?|photos?|pictures?|pics?|logo|img-\d+)\b/i;
 
 const MOD_KEY = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '') ? '⌘' : 'Ctrl';
 
+/** Side by side from this canvas width (px); narrower, the code sits above the preview. */
+const SPLIT_SIDE_BY_SIDE = 760;
+
 const assets = () => getActiveProject()!.studio.codeAssets;
 
 /** What happened last, for the asset it happened to: what changed (✓) and what the owner should know. */
@@ -101,6 +106,25 @@ function withImages(current: PromptImage[], media: MediaRef[], reserved: readonl
   return plan.images;
 }
 
+/** Save picked files as images (the ones that can't be saved say why). */
+async function saveFiles(files: FileList | null, onBusy: (busy: boolean) => void): Promise<MediaRef[]> {
+  if (!files?.length) return [];
+  onBusy(true);
+  const media: MediaRef[] = [];
+  try {
+    for (const f of Array.from(files)) {
+      try {
+        media.push(await saveMediaFile(f));
+      } catch (e) {
+        toast({ kind: 'error', title: `Couldn’t add ${f.name || 'that image'}`, body: (e as Error).message });
+      }
+    }
+  } finally {
+    onBusy(false);
+  }
+  return media;
+}
+
 /** Ctrl+Enter (⌘+Enter on a Mac) in a text box runs `run`; Enter alone makes a new line. */
 const onModEnter = (run: () => void) => (e: React.KeyboardEvent) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -108,6 +132,9 @@ const onModEnter = (run: () => void) => (e: React.KeyboardEvent) => {
     run();
   }
 };
+
+/** The text box inside an AI composer frame: no border or fill of its own. */
+const COMPOSER_TEXT = '!border-0 !bg-transparent !px-1 !py-0.5 !shadow-none';
 
 // ───────────── images in the preview ─────────────
 
@@ -158,6 +185,19 @@ function usePreviewImages(assetId: string | null, images: PromptImage[] | undefi
   return { urls, full };
 }
 
+/** An element's width as it changes (0 until it's measured). */
+function useWidth() {
+  const [el, setEl] = useState<HTMLElement | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(([e]) => setWidth(Math.round(e.contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return [setEl, width] as const;
+}
+
 // ───────────── the tab ─────────────
 
 export function CodeTab({ project }: { project: Project }) {
@@ -169,16 +209,19 @@ export function CodeTab({ project }: { project: Project }) {
   const kind = draft.kind ?? defaultKind(project);
   const undoStack = useCodeTabMemory((s) => (active ? s.undo[active.id] : undefined));
   const [lang, setLang] = useState<Lang>('html');
-  const [view, setView] = useState<'split' | 'code' | 'preview'>('split');
+  const [view, setView] = useState<View>('split');
   const [instruction, setInstruction] = useState('');
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
-  const [draftBusy, setDraftBusy] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
+  const [newOpen, setNewOpen] = useState(false);
+  // phones: the list, then one asset (its preview), then the AI composer in a sheet
+  const phone = useMediaQuery('(max-width: 639px)');
+  const [phoneAsset, setPhoneAsset] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [canvasRef, canvasWidth] = useWidth();
   const gen = useAI(codeTask);
   const edit = useAI(codeEditTask);
-  const kinds = CODE_KINDS.filter((k) => !k.business || project.track === 'business');
-  const ideas = useMemo(() => promptIdeas(project), [project]);
   const preview = usePreviewImages(active?.id ?? null, active?.images);
   const code = useMemo(() => (active ? codeOf(active) : null), [active?.html, active?.css, active?.js]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -192,26 +235,19 @@ export function CodeTab({ project }: { project: Project }) {
         return published ? { ...rest, published } : rest;
       }),
     });
-  const setDraft = (patch: Partial<Draft>) =>
-    useCodeTabMemory.setState((s) => ({ drafts: { ...s.drafts, [project.id]: { ...(s.drafts[project.id] ?? NO_DRAFT), ...patch } } }));
-  const setKind = (k: CodeKind) => setDraft({ kind: k });
+  const open = (id: string) => {
+    setActiveId(id);
+    setPhoneAsset(true);
+  };
 
-  // images pasted or dropped on the creation box go with the next asset made
-  const draftPaste = usePasteImages((media) => setDraft({ images: withImages(useCodeTabMemory.getState().drafts[project.id]?.images ?? [], media) }), {
-    room: MAX_PROMPT_IMAGES - draft.images.length,
-    disabled: gen.running,
-    onBusy: setDraftBusy,
-  });
-  // …and on the edit box, to the asset that was open when they were pasted (saving them takes a moment)
+  // images pasted or dropped on the edit box go to the asset that was open when they were pasted (saving them takes a moment)
   const pasteTarget = useRef<string | null>(null);
-  const editPaste = usePasteImages(
-    (media) => {
-      const a = assets().find((x) => x.id === pasteTarget.current);
-      if (!a) return media.forEach((m) => void deleteBlob(m.id));
-      patchAsset(a.id, { images: withImages(a.images ?? [], media, reservedImageKeys(a, useCodeTabMemory.getState().undo[a.id])) });
-    },
-    { room: MAX_PROMPT_IMAGES - (active?.images?.length ?? 0), disabled: !active || edit.running, onBusy: setEditBusy },
-  );
+  const addEditImages = (assetId: string | null, media: MediaRef[]) => {
+    const a = assets().find((x) => x.id === assetId);
+    if (!a) return media.forEach((m) => void deleteBlob(m.id));
+    patchAsset(a.id, { images: withImages(a.images ?? [], media, reservedImageKeys(a, useCodeTabMemory.getState().undo[a.id])) });
+  };
+  const editPaste = usePasteImages((media) => addEditImages(pasteTarget.current, media), { room: MAX_PROMPT_IMAGES - (active?.images?.length ?? 0), disabled: !active || edit.running, onBusy: setEditBusy });
   const editPasteHandlers = {
     onPaste: (e: React.ClipboardEvent<HTMLElement>) => {
       pasteTarget.current = active?.id ?? null;
@@ -223,6 +259,11 @@ export function CodeTab({ project }: { project: Project }) {
     },
     onDragOver: editPaste.onDragOver,
   };
+  const pickEditImages = async (files: FileList | null) => {
+    const target = active?.id ?? null;
+    const media = await saveFiles(files, setEditBusy);
+    if (media.length) addEditImages(target, media);
+  };
 
   // an asset's Publish panel asked for from elsewhere (the assistant): that asset opens with its panel in view, once.
   // Nothing is published by itself: the owner chooses the address and presses Publish there.
@@ -233,7 +274,7 @@ export function CodeTab({ project }: { project: Project }) {
     useUI.setState({ publishRequest: null });
     if (__ARTIFACT_BUILD__ || !assets().some((a) => a.id === publishReq.assetId)) return;
     focusPublish.current = true;
-    setActiveId(publishReq.assetId);
+    open(publishReq.assetId);
     setPublishOpen(true);
   }, [publishReq]);
   useEffect(() => {
@@ -249,12 +290,8 @@ export function CodeTab({ project }: { project: Project }) {
   useEffect(() => {
     if (!assetReq) return;
     useUI.setState({ assetRequest: null });
-    if (assets().some((a) => a.id === assetReq.assetId)) setActiveId(assetReq.assetId);
+    if (assets().some((a) => a.id === assetReq.assetId)) open(assetReq.assetId);
   }, [assetReq]);
-
-  // a description that names another kind ("a booking widget…") suggests it; the owner picks
-  const named = useMemo(() => matchKind(draft.prompt), [draft.prompt]);
-  const suggested = named && named !== kind && kinds.some((k) => k.id === named) ? named : null;
 
   const generate = async () => {
     if (gen.running) return;
@@ -263,7 +300,8 @@ export function CodeTab({ project }: { project: Project }) {
     const r = await gen.run({ kind, prompt: text, ...(images.length ? { images } : {}) });
     if (!r) return;
     const asset = addCodeAsset(project.id, r, text, images);
-    setActiveId(asset.id);
+    open(asset.id);
+    setNewOpen(false);
     setLang('html');
     setOutcome({ assetId: asset.id, run: 'gen', done: [], notes: [...(r.note ? [r.note] : []), ...imageUseNotes(asset)], guided: !!text });
   };
@@ -340,6 +378,7 @@ export function CodeTab({ project }: { project: Project }) {
     updateStudio({ codeAssets: next });
     setUndoStack(a.id, []);
     setActiveId(next[0]?.id ?? null);
+    if (!next.length) setPhoneAsset(false);
   };
 
   const duplicate = (a: CodeAsset) => {
@@ -369,6 +408,16 @@ export function CodeTab({ project }: { project: Project }) {
     }
   };
 
+  /** Copy HTML from a menu (phones): the menu closes, so a toast says it worked. */
+  const copyFromMenu = async (a: CodeAsset) => {
+    try {
+      if (await copyText(await pageWithImages(a))) toast({ kind: 'success', title: 'HTML copied' });
+      else toast({ kind: 'error', title: 'Copy was blocked', body: 'Try again, or use Export .html instead.' });
+    } catch {
+      toast({ kind: 'error', title: 'Couldn’t make the HTML', body: 'Please try again.' });
+    }
+  };
+
   const langs: { id: Lang; label: string }[] = [
     { id: 'html', label: 'HTML' },
     { id: 'css', label: 'CSS' },
@@ -390,365 +439,622 @@ export function CodeTab({ project }: { project: Project }) {
   const reserved = active ? reservedImageKeys(active, undoStack) : [];
   const busy = gen.running || edit.running;
 
-  return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
-      <aside className="flex min-w-0 flex-col gap-4">
-        <section className="panel p-4" aria-label="Generate a new asset">
-          <h2 className="mb-1 flex items-center gap-2 text-[14px] font-semibold">
-            <Sparkles size={15} className="text-accent" /> AI code & asset generator
-          </h2>
-          <p className="mb-3 text-xs text-muted">Working HTML, CSS and JavaScript in your brand colors. Edit it live, then {__ARTIFACT_BUILD__ ? 'copy or export it' : 'copy, export or publish it'}.</p>
-          <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Asset type">
-            {kinds.map((k) => (
-              <button
-                key={k.id}
-                type="button"
-                role="radio"
-                aria-checked={kind === k.id}
-                className={cn('flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-[12px] font-medium transition-colors', kind === k.id ? 'border-primary bg-primary-soft text-primary' : 'border-line hover:border-line-2 hover:bg-surface-2')}
-                onClick={() => setKind(k.id)}
-                title={k.desc}
-              >
-                <Icon name={k.icon} size={13} className="shrink-0" />
-                <span className="truncate">{SHORT_LABEL[k.id]}</span>
-              </button>
-            ))}
-          </div>
-          <label htmlFor="code-prompt" className="label mt-3">
-            Describe it and guide the AI
-          </label>
-          <AutoTextarea
-            id="code-prompt"
-            value={draft.prompt}
-            onChange={(v) => setDraft({ prompt: v })}
-            minRows={3}
-            placeholder={`${ideas[0]}. Say what it should do, what to include and how it should look.`}
-            className="text-[13px]"
-            aria-describedby="code-prompt-hint"
-            onKeyDown={onModEnter(() => void generate())}
-            {...draftPaste}
-          />
-          <p id="code-prompt-hint" className="hint">
-            Paste or drop images here too. {MOD_KEY}+Enter generates.
-          </p>
-          <div aria-live="polite">
-            {suggested && (
-              <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-ink-2">
-                Your description sounds like a different type.
-                <button type="button" className="link text-xs" onClick={() => setKind(suggested)}>
-                  Switch to {SHORT_LABEL[suggested]}
-                </button>
-              </p>
-            )}
-          </div>
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {ideas.map((i) => (
-              <button
-                key={i}
-                type="button"
-                className="chip text-[11px]"
-                title={i}
-                onClick={() => {
-                  setDraft({ prompt: i });
-                  setKind(detectKind(i, project));
-                }}
-              >
-                {i.length > 38 ? `${i.slice(0, 36)}…` : i}
-              </button>
-            ))}
-          </div>
-          <PromptImages
-            images={draft.images}
-            onChange={(images) => setDraft({ images })}
-            busy={draftBusy}
-            disabled={gen.running}
-            label="Images (optional)"
-            hint="Say where each one goes, in your description or in its note."
-            className="mt-3"
-          />
-          <GenerateButton running={gen.running} onClick={generate} className="mt-3 w-full">
-            Generate {codeKindLabel(kind).toLowerCase()}
+  const newAssetDialog = (
+    <Modal
+      open={newOpen}
+      onClose={() => setNewOpen(false)}
+      size="lg"
+      title="New asset"
+      subtitle="A page or widget in your brand, ready to copy, export or publish."
+      footer={
+        <>
+          <button type="button" className="btn btn-secondary" onClick={() => setNewOpen(false)}>
+            Cancel
+          </button>
+          <GenerateButton variant="ai" running={gen.running} runningLabel="Building…" onClick={() => void generate()}>
+            Generate
           </GenerateButton>
-          <AgentButtons target="asset" className="mt-2" />
-          <AIThinking running={gen.running} stage={gen.stage} chars={gen.chars} onStop={gen.stop} compact className="mt-3" />
-          {gen.error && <p className="mt-2 text-xs text-bad">{gen.error}</p>}
-        </section>
+        </>
+      }
+    >
+      <NewAssetForm project={project} running={gen.running} onGenerate={() => void generate()} />
+      <AIThinking running={gen.running} stage={gen.stage} onStop={gen.stop} compact className="mt-4" />
+      {gen.error && (
+        <Callout tone="bad" className="mt-4">
+          {gen.error}
+        </Callout>
+      )}
+    </Modal>
+  );
 
-        <AgentBuildList target="asset" />
+  /** "New asset", the agents' build buttons and their builds (the list's foot, or the empty state). */
+  const newAssetButton = (variant: 'ai' | 'ai-outline', className?: string) => (
+    <GenerateButton variant={variant} size="sm" running={gen.running} runningLabel="Building…" onClick={() => setNewOpen(true)} className={className}>
+      New asset
+    </GenerateButton>
+  );
 
-        <section className="panel overflow-hidden" aria-label="Your assets">
-          <h3 className="border-b border-line px-4 py-2.5 text-[13px] font-semibold">Your assets ({list.length})</h3>
-          {list.length === 0 ? (
-            <p className="px-4 py-5 text-[13px] text-muted">Generated assets are saved here automatically.</p>
-          ) : (
-            <ul className="max-h-[360px] divide-y divide-line overflow-y-auto scroll-thin">
-              {list.map((a) => {
-                const on = active?.id === a.id;
-                return (
-                  <li key={a.id} className={cn(on && 'bg-primary-soft')}>
-                    <button className={cn('flex w-full items-center gap-2.5 px-4 py-2.5 text-left', !on && 'hover:bg-surface-2')} onClick={() => setActiveId(a.id)} aria-current={on}>
-                      <Icon name={CODE_KINDS.find((k) => k.id === a.kind)?.icon ?? 'code-xml'} size={15} className={on ? 'text-primary' : 'text-muted'} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-semibold">{a.name}</span>
-                        <span className="block text-[11px] text-muted">
-                          {codeKindLabel(a.kind)} · {fmtRelative(a.updatedAt)}
-                          {a.source && <span className="ml-1 font-semibold text-ink-2">· {AGENT_LABEL[a.source.via]}</span>}
-                          {a.outdated && <span className="ml-1 font-semibold text-warn">· Outdated: regenerate</span>}
-                        </span>
-                      </span>
-                    </button>
-                    {a.published && <PublishedLink asset={a} published={a.published} />}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
-      </aside>
-
-      <section className="flex min-w-0 flex-col gap-3" aria-label="Code editor and live preview">
-        {!active || !code ? (
-          <Empty
-            icon={<Code2 size={20} />}
-            title="Generate your first interactive asset"
-            body="Calculators, quizzes, booking widgets, pricing tables and more, written for your niche in your brand colors."
-            action={
-              <GenerateButton running={gen.running} onClick={generate}>
-                Generate {codeKindLabel(kind).toLowerCase()}
+  // ── no assets yet ──
+  if (!active || !code) {
+    return (
+      <div>
+        <AgentBuildList target="asset" className="mb-6" />
+        <Empty
+          variant="ai"
+          title="Make your first page or widget"
+          body="A booking widget, a price table or a landing section, in your brand."
+          action={
+            <>
+              <GenerateButton variant="ai" running={gen.running} runningLabel="Building…" onClick={() => setNewOpen(true)}>
+                New asset
               </GenerateButton>
-            }
-            className="min-h-[420px]"
-          />
+              <AgentButtons target="asset" className="justify-center" />
+            </>
+          }
+        />
+        {!newOpen && <AIThinking running={gen.running} stage={gen.stage} onStop={gen.stop} className="mx-auto max-w-[560px]" />}
+        {!newOpen && gen.error && (
+          <Callout tone="bad" className="mx-auto max-w-[560px]">
+            {gen.error}
+          </Callout>
+        )}
+        {newAssetDialog}
+      </div>
+    );
+  }
+
+  const assetList = (
+    <AssetList
+      list={list}
+      activeId={active.id}
+      onOpen={open}
+      foot={
+        <>
+          {newAssetButton(phone ? 'ai' : 'ai-outline', 'w-full')}
+          <AgentButtons target="asset" className="[&>span]:w-full [&_button]:w-full [&_button]:justify-start" />
+        </>
+      }
+    />
+  );
+
+  // ── phones: the list first ──
+  if (phone && !phoneAsset) {
+    return (
+      <div className="flex flex-col gap-6">
+        {assetList}
+        <AgentBuildList target="asset" />
+        {!newOpen && <AIThinking running={gen.running} stage={gen.stage} onStop={gen.stop} />}
+        {newAssetDialog}
+      </div>
+    );
+  }
+
+  const menu: MenuEntry[] = [
+    ...(phone ? ([{ label: 'Copy HTML', icon: <Copy />, onSelect: () => void copyFromMenu(active) }] as MenuEntry[]) : []),
+    { label: 'Export .html', icon: <Download />, onSelect: () => void exportHtml(active) },
+    ...(active.script ? ([{ label: 'Export Apps Script', icon: <Download />, onSelect: () => download(`${slugify(active.name) || 'sheet'}-apps-script.txt`, active.script ?? '') }] as MenuEntry[]) : []),
+    { label: 'Duplicate', icon: <CopyPlus />, onSelect: () => duplicate(active) },
+    'separator',
+    { label: 'Delete', icon: <Trash2 />, danger: true, onSelect: () => void remove(active) },
+  ];
+
+  const publishButton = !__ARTIFACT_BUILD__ && (
+    <button
+      type="button"
+      className={cn('btn btn-sm', active.published ? 'btn-secondary' : 'btn-primary', phone && 'flex-1')}
+      aria-expanded={publishOpen}
+      aria-controls="code-publish"
+      onClick={() => {
+        setPublishOpen((o) => !o);
+        if (phone) focusPublish.current = true;
+      }}
+    >
+      {active.published ? (
+        <>
+          Public page
+          <span className={cn('h-2 w-2 rounded-full', hasUnpublishedChanges(active) ? 'bg-warn-solid' : 'bg-good-solid')} aria-hidden="true" />
+        </>
+      ) : (
+        <>
+          <Globe /> Publish
+        </>
+      )}
+    </button>
+  );
+
+  const composer = (
+    <EditComposer
+      asset={active}
+      instruction={instruction}
+      onInstruction={setInstruction}
+      onApply={(t) => void applyEdit(t)}
+      running={edit.running}
+      busy={busy}
+      imagesBusy={editBusy}
+      reserved={reserved}
+      onImages={(images) => patchAsset(active.id, { images })}
+      onPickImages={(files) => void pickEditImages(files)}
+      pasteHandlers={editPasteHandlers}
+      canUndo={(undoStack?.length ?? 0) > 0}
+      onUndo={undo}
+      sticky={!phone}
+      status={
+        <>
+          <AIThinking running={edit.running} stage={edit.stage} onStop={edit.stop} compact />
+          {edit.error && (
+            <p className="text-caption text-bad" role="alert">
+              {edit.error}
+            </p>
+          )}
+          <div aria-live="polite">
+            {shown && !busy && (shown.done.length > 0 || notes.length > 0) && (
+              <div className="flex flex-col gap-1">
+                {shown.done.length > 0 && (
+                  <ul className="flex flex-col gap-0.5 text-small text-good">
+                    {shown.done.map((d) => (
+                      <li key={d} className="flex items-start gap-1.5">
+                        <Check size={14} className="mt-[3px] shrink-0" aria-hidden="true" />
+                        {d}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {notes.map((n) => (
+                  <p key={n} className="flex items-start gap-1.5 text-small text-ink-2">
+                    <Info size={14} className="mt-[3px] shrink-0 text-muted" aria-hidden="true" />
+                    <span>{n}</span>
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+          {shown && result && !busy && <AIResultBar provider={result.provider} skills={result.skills} ms={result.ms} note={result.note} logId={shown.run === 'edit' ? edit.logId : gen.logId} />}
+        </>
+      }
+    />
+  );
+
+  const codePane = (
+    <div className={cn('flex min-w-0 flex-col overflow-hidden rounded-pop border border-line bg-surface', view === 'split' && canvasWidth < SPLIT_SIDE_BY_SIDE ? 'h-[360px]' : 'h-[560px]')}>
+      {curLang === 'script' ? (
+        <CodeEditor key={`${active.id}-script`} lang="js" value={active.script ?? ''} onChange={(v) => patchAsset(active.id, { script: v })} ariaLabel="Google Apps Script editor" />
+      ) : (
+        <CodeEditor key={`${active.id}-${curLang}`} lang={curLang} value={active[curLang]} onChange={(v) => patchAsset(active.id, { [curLang]: v })} />
+      )}
+    </div>
+  );
+  const lines = (curLang === 'script' ? active.script ?? '' : active[curLang]).split('\n').length;
+  const publishedUrl = active.published ? (active.published.domainUrl ?? active.published.url).replace(/^https?:\/\//, '') : undefined;
+
+  return (
+    <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[240px_minmax(0,1fr)]">
+      {/* ≥ 1280: the list beside the canvas */}
+      {!phone && (
+        <aside className="hidden min-w-0 flex-col gap-6 xl:sticky xl:top-6 xl:flex" aria-label="Assets">
+          {assetList}
+          <AgentBuildList target="asset" />
+        </aside>
+      )}
+
+      <section className="flex min-w-0 flex-col gap-4" aria-label="Code editor and live preview">
+        {phone ? (
+          <button type="button" className="btn btn-ghost btn-sm -ml-2 self-start" onClick={() => setPhoneAsset(false)}>
+            <ChevronLeft /> Assets
+          </button>
         ) : (
+          // < 1280: a picker instead of the list
+          <div className="flex flex-wrap items-center gap-2 xl:hidden">
+            <Select<string> value={active.id} onChange={(id) => setActiveId(id)} options={list.map((a) => ({ value: a.id, label: a.name, description: a.published ? 'Live' : 'Draft' }))} aria-label="Asset" className="w-auto min-w-[220px] max-w-full" />
+            {newAssetButton('ai-outline')}
+            <AgentButtons target="asset" />
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+          <div className="min-w-0 flex-1 basis-[240px]">
+            <input className="input input-inline -ml-2 h-9 w-full px-2 text-h3" value={active.name} onChange={(e) => patchAsset(active.id, { name: e.target.value })} aria-label="Asset name" />
+            <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-small text-muted">
+              <span>{codeKindLabel(active.kind)}</span>
+              {active.source && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <AgentSourceLink source={active.source} />
+                </>
+              )}
+              <span aria-hidden="true">·</span>
+              <span>Updated {fmtRelative(active.updatedAt)}</span>
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {!phone && <CopyPageButton make={() => pageWithImages(active)} />}
+            {!phone && publishButton}
+            <MoreMenu label="More asset actions" items={menu} />
+          </div>
+        </div>
+
+        {active.outdated && (
+          <Callout
+            tone="warn"
+            title="Outdated: regenerate."
+            onDismiss={() => patchAsset(active.id, { outdated: false })}
+            action={
+              <button type="button" className="btn btn-secondary btn-xs" onClick={() => void regenerate(active)} disabled={busy}>
+                {gen.running ? <Spinner size={12} /> : <RefreshCw />} Regenerate
+              </button>
+            }
+          >
+            An older version made this code. It may tell visitors a form was sent when nothing was, or show made-up taken times, reviews or a deadline. Check it before you use it, or regenerate it.
+          </Callout>
+        )}
+        {missing.length > 0 && (
+          <Callout
+            tone="warn"
+            action={
+              <button type="button" className="btn btn-secondary btn-xs" onClick={() => takeOut(active, missing)} disabled={busy}>
+                Take {missing.length === 1 ? 'it' : 'them'} out of the code
+              </button>
+            }
+          >
+            {missingImagesNote(missing)}
+          </Callout>
+        )}
+
+        {publishOpen && !__ARTIFACT_BUILD__ && (
+          <div id="code-publish" className="card p-4 outline-none focus-visible:shadow-focus sm:p-5" tabIndex={-1}>
+            <PublishPanel
+              key={active.id}
+              pageId={artifactPageId(active.id)}
+              kind="artifact"
+              title={active.name}
+              defaultSlug={active.name}
+              published={active.published}
+              build={() => publishBuild(active)}
+              onChange={(p) => setPublished(active.id, p)}
+              version={active.updatedAt}
+            />
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div role="group" aria-label="View">
+            <Segmented<View>
+              value={phone && view === 'split' ? 'preview' : view}
+              onChange={setView}
+              options={[
+                ...(phone ? [] : [{ id: 'split' as const, label: 'Split', icon: <Columns2 /> }]),
+                { id: 'code', label: 'Code', icon: <SquareCode /> },
+                { id: 'preview', label: 'Preview', icon: <Eye /> },
+              ]}
+            />
+          </div>
+          {(phone ? view === 'code' : view !== 'preview') && (
+            <div role="group" aria-label="Code language">
+              <Segmented<Lang> size="sm" value={curLang} onChange={setLang} options={langs} />
+            </div>
+          )}
+          {(phone ? view === 'code' : view !== 'preview') && <span className="num ml-auto font-mono text-caption text-muted">{lines} lines</span>}
+        </div>
+
+        <div ref={canvasRef} className="well relative flex flex-col p-3 sm:p-6">
+          {phone ? (
+            view === 'code' ? (
+              codePane
+            ) : (
+              <LivePreview code={code} title={active.name} images={preview.urls} url={publishedUrl} className="h-[520px]" />
+            )
+          ) : (
+            <div className={cn('grid gap-4', view === 'split' && canvasWidth >= SPLIT_SIDE_BY_SIDE && 'grid-cols-2')}>
+              {view !== 'preview' && codePane}
+              {view !== 'code' && <LivePreview code={code} title={active.name} images={preview.urls} url={publishedUrl} className="h-[560px]" />}
+            </div>
+          )}
+          {!phone && composer}
+        </div>
+
+        {phone && (
           <>
-            <div className="panel flex flex-wrap items-center gap-2 px-3 py-2.5">
-              <FileCode2 size={16} className="shrink-0 text-primary" />
-              <input className="min-w-[220px] flex-1 rounded bg-transparent px-1 py-1 text-[14px] font-semibold outline-none hover:bg-surface-2 focus:bg-surface-2" value={active.name} onChange={(e) => patchAsset(active.id, { name: e.target.value })} aria-label="Asset name" />
-              <span className="badge bg-surface-2 text-ink-2">{codeKindLabel(active.kind)}</span>
-              {active.source && <AgentSourceBadge source={active.source} />}
-              <div className="flex flex-wrap items-center gap-1.5">
-                <CopyPageButton make={() => pageWithImages(active)} />
-                <button className="btn btn-secondary btn-sm" onClick={() => void exportHtml(active)}>
-                  <Download size={14} /> Export .html
-                </button>
-                {active.script && (
-                  <button className="btn btn-secondary btn-sm" onClick={() => download(`${slugify(active.name) || 'sheet'}-apps-script.txt`, active.script ?? '')}>
-                    <Download size={14} /> Apps Script
-                  </button>
-                )}
-                {!__ARTIFACT_BUILD__ && (
-                  <button type="button" className={cn('btn btn-sm', publishOpen ? 'btn-primary' : 'btn-secondary')} aria-expanded={publishOpen} aria-controls="code-publish" onClick={() => setPublishOpen((o) => !o)}>
-                    <Globe size={14} /> {active.published ? 'Public page' : 'Publish'}
-                    {active.published && <span className={cn('h-2 w-2 rounded-full', hasUnpublishedChanges(active) ? 'bg-warn' : 'bg-good')} aria-hidden="true" />}
-                  </button>
-                )}
-                <button className="btn btn-ghost btn-icon btn-sm" onClick={() => duplicate(active)} aria-label="Duplicate asset" title="Duplicate">
-                  <CopyPlus size={15} />
-                </button>
-                <button className="btn btn-ghost btn-icon btn-sm text-muted hover:text-bad" onClick={() => void remove(active)} aria-label="Delete asset" title="Delete">
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </div>
-
-            {publishOpen && !__ARTIFACT_BUILD__ && (
-              <div id="code-publish" className="panel p-4 outline-none focus:shadow-focus" tabIndex={-1}>
-                <PublishPanel
-                  key={active.id}
-                  pageId={artifactPageId(active.id)}
-                  kind="artifact"
-                  title={active.name}
-                  defaultSlug={active.name}
-                  published={active.published}
-                  build={() => publishBuild(active)}
-                  onChange={(p) => setPublished(active.id, p)}
-                  version={active.updatedAt}
-                />
-              </div>
-            )}
-
-            {active.outdated && (
-              <div className="panel flex flex-wrap items-center gap-2 border-warn/40 bg-warn-soft px-3 py-2.5 text-[13px]" role="status">
-                <p className="min-w-0 flex-1">
-                  <b>Outdated: regenerate.</b> An older version made this code. It may tell visitors a form was sent when nothing was, show made-up taken times, reviews or a deadline. Check it before you use it, or regenerate it.
-                </p>
-                <button className="btn btn-secondary btn-sm" onClick={() => regenerate(active)} disabled={busy}>
-                  {gen.running ? <Spinner size={14} /> : <RefreshCw size={14} />} Regenerate
-                </button>
-                <button className="btn btn-ghost btn-sm" onClick={() => patchAsset(active.id, { outdated: false })}>
-                  Dismiss
-                </button>
-              </div>
-            )}
-
-            <div className="panel p-3">
-              <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
-                <div className="min-w-0">
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      void applyEdit(instruction);
-                    }}
-                  >
-                    <label htmlFor="code-edit" className="label flex items-center gap-1.5">
-                      <Wand2 size={14} className="text-primary" aria-hidden="true" /> Edit with AI
-                    </label>
-                    <AutoTextarea
-                      id="code-edit"
-                      value={instruction}
-                      onChange={setInstruction}
-                      minRows={2}
-                      placeholder="Say what to change, e.g. “add an email field, make it dark and put image 1 at the top”"
-                      className="text-[13px]"
-                      aria-describedby="code-edit-hint"
-                      onKeyDown={onModEnter(() => void applyEdit(instruction))}
-                      {...editPasteHandlers}
-                    />
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <button type="submit" className="btn btn-ai btn-sm" disabled={busy || !instruction.trim()}>
-                        {edit.running ? <Spinner size={14} /> : <Sparkles size={14} className="text-accent" />} Apply
-                      </button>
-                      {(undoStack?.length ?? 0) > 0 && (
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={undo} disabled={busy}>
-                          <Undo2 size={14} /> Undo
-                        </button>
-                      )}
-                      <span id="code-edit-hint" className="text-xs text-muted">
-                        Paste or drop images here too. {MOD_KEY}+Enter applies.
-                      </span>
-                    </div>
-                  </form>
-                  <div className="mt-2 flex flex-wrap gap-1" role="group" aria-label="Quick edits">
-                    {QUICK_EDITS.map((q) => (
-                      <button key={q} type="button" className="chip text-[11.5px]" disabled={busy} onClick={() => void applyEdit(q)}>
-                        {q}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <PromptImages
-                  key={active.id}
-                  images={active.images ?? []}
-                  onChange={(images) => patchAsset(active.id, { images })}
-                  reserved={reserved}
-                  busy={editBusy}
-                  disabled={edit.running}
-                  label="Images in this asset"
-                  hint="Say where they go, e.g. “put image 2 at the top”."
-                />
-              </div>
-
-              {missing.length > 0 && (
-                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-warn/40 bg-warn-soft px-3 py-2 text-xs text-ink-2" role="status">
-                  <span className="min-w-0 flex-1">{missingImagesNote(missing)}</span>
-                  <button type="button" className="btn btn-secondary btn-xs" onClick={() => takeOut(active, missing)} disabled={busy}>
-                    Take {missing.length === 1 ? 'it' : 'them'} out of the code
-                  </button>
-                </div>
-              )}
-
-              <AIThinking running={edit.running} stage={edit.stage} chars={edit.chars} onStop={edit.stop} compact className="mt-2" />
-              {edit.error && (
-                <p className="mt-2 text-xs text-bad" role="alert">
-                  {edit.error}
-                </p>
-              )}
-              <div aria-live="polite">
-                {shown && !busy && (shown.done.length > 0 || notes.length > 0) && (
-                  <div className="mt-2 flex flex-col gap-1">
-                    {shown.done.length > 0 && (
-                      <ul className="flex flex-col gap-0.5 text-xs text-good">
-                        {shown.done.map((d) => (
-                          <li key={d}>✓ {d}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {notes.map((n) => (
-                      <p key={n} className="flex items-start gap-1.5 text-xs text-ink-2">
-                        <Info size={13} className="mt-px shrink-0 text-muted" aria-hidden="true" />
-                        <span>{n}</span>
-                      </p>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {shown && result && !busy && (
-                <AIResultBar className="mt-2" provider={result.provider} skills={result.skills} ms={result.ms} note={result.note} logId={shown.run === 'edit' ? edit.logId : gen.logId} />
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <Segmented
-                size="sm"
-                value={view}
-                onChange={setView}
-                options={[
-                  { id: 'split', label: 'Split', icon: <Columns2 size={13} /> },
-                  { id: 'code', label: 'Code', icon: <SquareCode size={13} /> },
-                  { id: 'preview', label: 'Preview', icon: <Eye size={13} /> },
-                ]}
-              />
-              <p className="text-xs text-muted">Edits update the preview instantly. Everything saves automatically.</p>
-            </div>
-
-            <div className={cn('grid gap-3', view === 'split' && '2xl:grid-cols-2')}>
-              {view !== 'preview' && (
-                <div className="panel flex h-[540px] min-w-0 flex-col overflow-hidden">
-                  <div className="flex items-center gap-1 border-b border-line bg-surface px-2 py-1.5" role="tablist" aria-label="Code language">
-                    {langs.map((l) => (
-                      <button key={l.id} role="tab" aria-selected={curLang === l.id} className={cn('rounded px-2.5 py-1 text-[12px] font-semibold', curLang === l.id ? 'bg-ink text-surface' : 'text-muted hover:bg-surface-2 hover:text-ink')} onClick={() => setLang(l.id)}>
-                        {l.label}
-                      </button>
-                    ))}
-                    <span className="num ml-auto pr-1 text-[11px] text-faint">{(curLang === 'script' ? active.script ?? '' : active[curLang]).split('\n').length} lines</span>
-                  </div>
-                  <div className="min-h-0 flex-1">
-                    {curLang === 'script' ? (
-                      <CodeEditor key={`${active.id}-script`} lang="js" value={active.script ?? ''} onChange={(v) => patchAsset(active.id, { script: v })} ariaLabel="Google Apps Script editor" />
-                    ) : (
-                      <CodeEditor key={`${active.id}-${curLang}`} lang={curLang} value={active[curLang]} onChange={(v) => patchAsset(active.id, { [curLang]: v })} />
-                    )}
-                  </div>
-                </div>
-              )}
-              {view !== 'code' && (
-                <div className="panel h-[540px] min-w-0 overflow-hidden">
-                  <LivePreview code={code} title={active.name} images={preview.urls} />
-                </div>
-              )}
-            </div>
+            <StickyActionBar>
+              <button type="button" className="btn btn-ai-outline btn-sm flex-1" onClick={() => setComposerOpen(true)}>
+                <Spark /> Edit with AI
+              </button>
+              {publishButton}
+            </StickyActionBar>
+            <Modal open={composerOpen} onClose={() => setComposerOpen(false)} title="Edit with AI" bodyClass="pb-6">
+              {composer}
+            </Modal>
           </>
         )}
       </section>
+      {newAssetDialog}
     </div>
   );
 }
 
+// ───────────── the parts ─────────────
+
+/** The assets: a row each (type, name, Live or Draft), each published one's address under it. */
+function AssetList({ list, activeId, onOpen, foot }: { list: CodeAsset[]; activeId: string; onOpen: (id: string) => void; foot: ReactNode }) {
+  return (
+    <section className="flex min-w-0 flex-col gap-3" aria-label="Your assets">
+      <h2 className="flex items-baseline justify-between gap-2 text-h4 text-ink">
+        Assets <span className="num font-mono text-caption font-normal text-muted">{list.length}</span>
+      </h2>
+      <ul className="-mx-2 flex flex-col gap-0.5">
+        {list.map((a) => {
+          const on = activeId === a.id;
+          return (
+            <li key={a.id} className={cn('rounded-md', on && 'bg-primary-soft')}>
+              <button type="button" className={cn('flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left transition-colors duration-120', !on && 'hover:bg-surface-2')} onClick={() => onOpen(a.id)} aria-current={on}>
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-surface-3 text-ink-2">
+                  <Icon name={CODE_KINDS.find((k) => k.id === a.kind)?.icon ?? 'code-xml'} size={14} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-ui text-ink">{a.name}</span>
+                  <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-caption text-muted">
+                    {a.published ? hasUnpublishedChanges(a) ? <StatusDot tone="warn">Changes not live</StatusDot> : <StatusDot tone="good">Live</StatusDot> : <StatusDot tone="faint">Draft</StatusDot>}
+                    {a.source && <span>· {AGENT_LABEL[a.source.via]}</span>}
+                    {a.outdated && <span className="text-warn">· Outdated</span>}
+                  </span>
+                </span>
+              </button>
+              {a.published && <PublishedLink asset={a} published={a.published} />}
+            </li>
+          );
+        })}
+      </ul>
+      <div className="flex flex-col gap-2">{foot}</div>
+    </section>
+  );
+}
+
+/**
+ * The box to describe a new asset: its type, what it should be (with images), and ideas. In the New asset
+ * window; exported so tests can render it (a closed window renders nothing).
+ */
+export function NewAssetForm({ project, running, onGenerate }: { project: Project; running: boolean; onGenerate: () => void }) {
+  const draft = useCodeTabMemory((s) => s.drafts[project.id]) ?? NO_DRAFT;
+  const kind = draft.kind ?? defaultKind(project);
+  const kinds = CODE_KINDS.filter((k) => !k.business || project.track === 'business');
+  const ideas = useMemo(() => promptIdeas(project), [project]);
+  const [busy, setBusy] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const setDraft = (patch: Partial<Draft>) =>
+    useCodeTabMemory.setState((s) => ({ drafts: { ...s.drafts, [project.id]: { ...(s.drafts[project.id] ?? NO_DRAFT), ...patch } } }));
+  const setKind = (k: CodeKind) => setDraft({ kind: k });
+  const addImages = (media: MediaRef[]) => setDraft({ images: withImages(useCodeTabMemory.getState().drafts[project.id]?.images ?? [], media) });
+  // images pasted or dropped on the box go with the asset
+  const paste = usePasteImages(addImages, { room: MAX_PROMPT_IMAGES - draft.images.length, disabled: running, onBusy: setBusy });
+  // a description that names another kind ("a booking widget…") suggests it; the owner picks
+  const named = useMemo(() => matchKind(draft.prompt), [draft.prompt]);
+  const suggested = named && named !== kind && kinds.some((k) => k.id === named) ? named : null;
+
+  return (
+    <section className="flex flex-col gap-5" aria-label="Generate a new asset">
+      <OptionCards<CodeKind>
+        aria-label="Asset type"
+        columns={4}
+        value={kind}
+        onChange={setKind}
+        options={kinds.map((k) => ({ value: k.id, title: SHORT_LABEL[k.id], description: k.desc, icon: <Icon name={k.icon} /> }))}
+      />
+      <div>
+        <label htmlFor="code-prompt" className="label">
+          Describe it
+        </label>
+        <div className="ai-composer px-3 pb-2 pt-2.5">
+          <AutoTextarea
+            id="code-prompt"
+            aria-describedby="code-prompt-hint"
+            value={draft.prompt}
+            onChange={(v) => setDraft({ prompt: v })}
+            minRows={3}
+            placeholder={`${ideas[0]}. Say what it should do, what to include and how it should look.`}
+            onKeyDown={onModEnter(onGenerate)}
+            {...paste}
+            className={COMPOSER_TEXT}
+          />
+          {(draft.images.length > 0 || busy) && <PromptImages images={draft.images} onChange={(images) => setDraft({ images })} busy={busy} disabled={running} compact className="mt-2" />}
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <Tooltip content="Add images">
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" aria-label="Add images" disabled={running || draft.images.length >= MAX_PROMPT_IMAGES} onClick={() => fileInput.current?.click()}>
+                <ImagePlus />
+              </button>
+            </Tooltip>
+            <input
+              ref={fileInput}
+              type="file"
+              accept={PROMPT_IMAGE_ACCEPT}
+              multiple
+              className="hidden"
+              tabIndex={-1}
+              aria-hidden="true"
+              onChange={(e) => {
+                const files = e.target.files;
+                void saveFiles(files, setBusy).then((media) => {
+                  if (media.length) addImages(media);
+                });
+                e.target.value = '';
+              }}
+            />
+            <span className="text-caption text-muted">Your photos or logo: say where each one goes.</span>
+          </div>
+        </div>
+        <p id="code-prompt-hint" className="hint">
+          Paste or drop images here too. {MOD_KEY}+Enter generates.
+        </p>
+        <div aria-live="polite">
+          {suggested && (
+            <p className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-small text-ink-2">
+              Your description sounds like a different type.
+              <button type="button" className="link text-small" onClick={() => setKind(suggested)}>
+                Switch to {SHORT_LABEL[suggested]}
+              </button>
+            </p>
+          )}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Ideas">
+          {ideas.map((i) => (
+            <button
+              key={i}
+              type="button"
+              className="chip max-w-[40ch]"
+              title={i}
+              onClick={() => {
+                setDraft({ prompt: i });
+                setKind(detectKind(i, project));
+              }}
+            >
+              <span className="truncate">{i}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * "Edit with AI" for the open asset: what to change, its images, Undo and Apply, and quick edits. Docked at
+ * the bottom of the canvas (a sheet on phones). The status (thinking, what changed, the result bar) sits above it.
+ */
+function EditComposer({
+  asset,
+  instruction,
+  onInstruction,
+  onApply,
+  running,
+  busy,
+  imagesBusy,
+  reserved,
+  onImages,
+  onPickImages,
+  pasteHandlers,
+  canUndo,
+  onUndo,
+  sticky,
+  status,
+}: {
+  asset: CodeAsset;
+  instruction: string;
+  onInstruction: (v: string) => void;
+  onApply: (text: string) => void;
+  running: boolean;
+  busy: boolean;
+  imagesBusy: boolean;
+  reserved: readonly string[];
+  onImages: (images: PromptImage[]) => void;
+  onPickImages: (files: FileList | null) => void;
+  pasteHandlers: Pick<React.HTMLAttributes<HTMLElement>, 'onPaste' | 'onDrop' | 'onDragOver'>;
+  canUndo: boolean;
+  onUndo: () => void;
+  sticky: boolean;
+  status: ReactNode;
+}) {
+  const fileInput = useRef<HTMLInputElement>(null);
+  const images = asset.images ?? [];
+  return (
+    <form
+      className={cn('mx-auto flex w-full max-w-[760px] flex-col gap-2', sticky && 'sticky bottom-3 z-10 mt-4')}
+      aria-label="Edit with AI"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onApply(instruction);
+      }}
+    >
+      {status}
+      <div className={cn('ai-composer px-3 pb-2 pt-2.5', sticky && 'shadow-pop')}>
+        <label htmlFor="code-edit" className="sr-only">
+          Edit with AI
+        </label>
+        <AutoTextarea
+          id="code-edit"
+          value={instruction}
+          onChange={onInstruction}
+          minRows={2}
+          placeholder="Say what to change, e.g. “add an email field, make it dark and put image 1 at the top”"
+          onKeyDown={onModEnter(() => onApply(instruction))}
+          {...pasteHandlers}
+          className={COMPOSER_TEXT}
+        />
+        {(images.length > 0 || imagesBusy) && <PromptImages key={asset.id} images={images} onChange={onImages} reserved={reserved} busy={imagesBusy} disabled={running} label="Images in this asset" compact className="mt-2" />}
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <Tooltip content="Add images">
+            <button type="button" className="btn btn-ghost btn-icon btn-sm" aria-label="Add images" disabled={running || images.length >= MAX_PROMPT_IMAGES} onClick={() => fileInput.current?.click()}>
+              <ImagePlus />
+            </button>
+          </Tooltip>
+          <input
+            ref={fileInput}
+            type="file"
+            accept={PROMPT_IMAGE_ACCEPT}
+            multiple
+            className="hidden"
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={(e) => {
+              onPickImages(e.target.files);
+              e.target.value = '';
+            }}
+          />
+          <span className="ml-auto flex items-center gap-1.5">
+            {canUndo && (
+              <Tooltip content="Put back the version before your last change">
+                <button type="button" className="btn btn-ghost btn-sm" onClick={onUndo} disabled={busy}>
+                  <Undo2 /> Undo
+                </button>
+              </Tooltip>
+            )}
+            <InfoTip label="About AI edits">
+              Say what to change and the AI edits this code; the preview updates as soon as it’s done. Paste or drop images on the box too, and say where each one goes, e.g. “put image 2 at the top”. {MOD_KEY}+Enter applies.
+            </InfoTip>
+            <button type="submit" className={cn('btn btn-ai-outline btn-sm', running && 'is-running')} disabled={busy || !instruction.trim()} aria-busy={running || undefined}>
+              <Spark size={16} />
+              {running ? 'Applying…' : 'Apply'}
+            </button>
+          </span>
+        </div>
+      </div>
+      {!instruction.trim() && (
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Quick edits">
+          {QUICK_EDITS.map((q) => (
+            <button key={q} type="button" className="chip" disabled={busy} onClick={() => onApply(q)}>
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
+    </form>
+  );
+}
+
 /** Who made an asset from a page of theirs (Manus or Viktor), with a link to the task or thread. Their code is theirs: check it before you publish. */
-function AgentSourceBadge({ source }: { source: AgentSource }) {
+function AgentSourceLink({ source }: { source: AgentSource }) {
   const label = AGENT_LABEL[source.via];
   const title = `Made by ${label}${source.url ? `: open the ${source.via === 'manus' ? 'Manus task' : 'Slack thread'}` : ''}`;
-  return source.url ? (
-    <a href={source.url} target="_blank" rel="noopener noreferrer" className="badge bg-accent-soft text-on-accent hover:underline" title={title}>
-      {label} <ExternalLink size={11} aria-hidden="true" />
-    </a>
-  ) : (
-    <span className="badge bg-accent-soft text-on-accent" title={title}>
-      {label}
+  return (
+    <span>
+      Made by{' '}
+      {source.url ? (
+        <a href={source.url} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1" title={title}>
+          {label} <ExternalLink size={12} aria-hidden="true" />
+        </a>
+      ) : (
+        <span className="font-medium text-ink-2" title={title}>
+          {label}
+        </span>
+      )}
     </span>
   );
 }
 
-/** A published asset's address in the list (its own domain's when it has one), and whether it has changes not published yet. */
+/** A published asset's address in the list (its own domain's when it has one). */
 function PublishedLink({ asset, published }: { asset: CodeAsset; published: Published }) {
   const url = published.domainUrl ?? published.url;
   return (
-    <p className="-mt-1.5 flex min-w-0 items-center gap-1.5 pb-2.5 pl-[41px] pr-4 text-[11.5px]">
-      <Globe size={11} className="shrink-0 text-good" aria-hidden="true" />
-      <a href={url} target="_blank" rel="noopener noreferrer" className="link min-w-0 truncate" title={url} aria-label={`${url}: the public page of ${asset.name} (opens in a new tab)`}>
+    <p className="-mt-1 flex min-w-0 items-center gap-1.5 pb-2 pl-[46px] pr-2 text-caption">
+      <a href={url} target="_blank" rel="noopener noreferrer" className="link min-w-0 truncate font-mono font-normal" title={url} aria-label={`${url}: the public page of ${asset.name} (opens in a new tab)`}>
         {url.replace(/^https?:\/\//, '')}
       </a>
-      {hasUnpublishedChanges(asset) && <span className="shrink-0 text-warn">· changes not published</span>}
     </p>
   );
 }
@@ -781,7 +1087,7 @@ function CopyPageButton({ make }: { make: () => string | Promise<string> }) {
   };
   return (
     <button type="button" className="btn btn-secondary btn-sm" disabled={state === 'busy'} onClick={() => void copy()}>
-      {state === 'busy' ? <Spinner size={14} /> : state === 'done' ? <Check size={14} className="text-good" /> : <Copy size={14} />}
+      {state === 'busy' ? <Spinner size={14} /> : state === 'done' ? <Check className="text-good" /> : <Copy />}
       {state === 'done' ? 'Copied' : 'Copy HTML'}
     </button>
   );
