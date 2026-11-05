@@ -1,5 +1,5 @@
 import { useEffect, useMemo, type ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, Check, Compass, LogOut, Megaphone, Package, PencilRuler, Search, Store, Upload, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Compass, LogOut, Megaphone, Package, PencilRuler, Search, Store, Upload, X } from 'lucide-react';
 import type { Origin, Project, Track } from '@/lib/types';
 import { cn, fmtMoney, stripProtocol } from '@/lib/utils';
 import { navigate } from '@/lib/router';
@@ -10,6 +10,7 @@ import { logOut } from '@/components/auth/Account';
 import { useAuth } from '@/lib/cloud/auth';
 import { BrandBanner, LogoMark } from '@/components/brand/Logo';
 import { Spark } from '@/components/ai/Spark';
+import { OptionCards, ProgressBar } from '@/components/ui/primitives';
 import { StepResearch } from './StepResearch';
 import { StepSetup } from './StepSetup';
 import { StepBrand } from './StepBrand';
@@ -30,53 +31,6 @@ const STEP_LABEL: Record<StepId, string> = {
   brand: 'AI brand identity',
   done: 'Launch',
 };
-
-/**
- * A choice that moves you on (a button, like OptionCards looks): a 40px tile, the title, one line, and
- * examples as plain text.
- */
-function ChoiceCard({ icon, title, body, examples, onClick, selected }: { icon: ReactNode; title: string; body: string; examples?: string[]; onClick: () => void; selected?: boolean }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={selected}
-      className={cn(
-        'relative flex min-w-0 flex-col items-start gap-4 rounded-lg border bg-surface p-5 text-left transition-[border-color,box-shadow,background-color] duration-120 sm:p-6',
-        selected ? 'border-transparent bg-primary-soft/50 ring-[1.5px] ring-inset ring-primary' : 'border-line hover:border-line-3 hover:shadow-sm',
-      )}
-    >
-      {selected && (
-        <span className="absolute right-4 top-4 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-on-primary" aria-hidden="true">
-          <Check size={12} strokeWidth={3} />
-        </span>
-      )}
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-pop bg-surface-3 text-ink-2 [&>svg]:size-5">{icon}</span>
-      <span className="min-w-0">
-        <span className="block text-title text-ink">{title}</span>
-        <span className="mt-1 block text-body text-muted">{body}</span>
-        {examples && <span className="mt-3 block text-small text-muted">{examples.join(' · ')}</span>}
-      </span>
-    </button>
-  );
-}
-
-/** Where you are: one short segment per step (ink up to here, a hairline after). */
-function Progress({ index, total, label }: { index: number; total: number; label: string }) {
-  return (
-    <div className="flex min-w-0 items-center gap-3" title={label}>
-      {/* (the segments give way on a narrow phone with Cancel setup beside them, so "Step 2 of 5" stays clear of it) */}
-      <div role="progressbar" aria-label="Setup progress" aria-valuemin={1} aria-valuemax={total} aria-valuenow={index + 1} aria-valuetext={`Step ${index + 1} of ${total}: ${label}`} className="flex min-w-0 gap-1">
-        {Array.from({ length: total }, (_, i) => (
-          <span key={i} className={cn('h-1 w-8 min-w-3 rounded-full transition-colors duration-240 sm:w-12', i <= index ? 'bg-ink' : 'bg-line-2')} />
-        ))}
-      </div>
-      <span className="num whitespace-nowrap font-mono text-caption text-muted">
-        Step {index + 1} of {total}
-      </span>
-    </div>
-  );
-}
 
 function Done({ project }: { project: Project }) {
   const b = project.brand;
@@ -219,7 +173,18 @@ export function Onboarding() {
         <AppMark size={24} />
         <span className="hidden text-h4 text-ink sm:inline">Yourlocalbusiness</span>
         <span className="hidden h-4 w-px bg-line-2 sm:block" aria-hidden="true" />
-        <Progress index={idx} total={path.length} label={STEP_LABEL[step]} />
+        {/* (the segments give way on a narrow phone with Cancel setup beside them, so "Step 2 of 5" stays clear of it) */}
+        <ProgressBar
+          variant="ink"
+          segments={path.length}
+          value={idx + 1}
+          min={1}
+          max={path.length}
+          aria-label="Setup progress"
+          valueText={`Step ${idx + 1} of ${path.length}: ${STEP_LABEL[step]}`}
+          title={STEP_LABEL[step]}
+          label={`Step ${idx + 1} of ${path.length}`}
+        />
         <span className="ml-auto flex items-center gap-1">
           {others.length > 0 && (
             <button
@@ -250,25 +215,37 @@ export function Onboarding() {
           </div>
           <div key={step} className="animate-rise-in">
             {step === 'goal' && (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <ChoiceCard selected={project.track === 'product' && project.wizardStep !== 'goal'} icon={<Package />} title="Promote a Product" body="Digital products you sell online: get AI product ideas or launch the one you have." examples={['Courses', 'Templates', 'Ebooks', 'Spreadsheets', 'Software']} onClick={() => chooseTrack('product')} />
-                <ChoiceCard selected={project.track === 'business' && project.wizardStep !== 'goal'} icon={<Store />} title="Promote a Business" body="Local shops, services and studios, or online businesses that sell services." examples={['Cafés', 'Salons', 'Home services', 'Agencies', 'Studios']} onClick={() => chooseTrack('business')} />
-              </div>
+              <OptionCards<'product' | 'business'>
+                mode="button"
+                size="lg"
+                aria-label="What to promote"
+                value={project.wizardStep !== 'goal' && (project.track === 'product' || project.track === 'business') ? project.track : ''}
+                onChange={chooseTrack}
+                options={[
+                  { value: 'product', icon: <Package />, title: 'Promote a Product', description: 'Digital products you sell online: get AI product ideas or launch the one you have.', meta: ['Courses', 'Templates', 'Ebooks', 'Spreadsheets', 'Software'].join(' · ') },
+                  { value: 'business', icon: <Store />, title: 'Promote a Business', description: 'Local shops, services and studios, or online businesses that sell services.', meta: ['Cafés', 'Salons', 'Home services', 'Agencies', 'Studios'].join(' · ') },
+                ]}
+              />
             )}
             {step === 'start' && (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {project.track === 'product' ? (
-                  <>
-                    <ChoiceCard icon={<Upload />} title="I already have a product" body="Bring your name, logo, website, images and social accounts, then go straight to marketing." onClick={() => chooseOrigin('existing')} />
-                    <ChoiceCard icon={<Search />} title="Help me find & create one" body="AI suggests product ideas for your niche and builds a brand around the one you pick." onClick={() => chooseOrigin('new')} />
-                  </>
-                ) : (
-                  <>
-                    <ChoiceCard icon={<Store />} title="I have an existing business" body="Bring your brand and accounts. We’ll set up your listing, funnel and campaigns." onClick={() => chooseOrigin('existing')} />
-                    <ChoiceCard icon={<Compass />} title="I want to start a new business" body="Describe your idea and city. AI makes names, a logo, palette, banner and pitch." onClick={() => chooseOrigin('new')} />
-                  </>
-                )}
-              </div>
+              <OptionCards<'existing' | 'new'>
+                mode="button"
+                size="lg"
+                aria-label="Where to start"
+                value=""
+                onChange={chooseOrigin}
+                options={
+                  project.track === 'product'
+                    ? [
+                        { value: 'existing', icon: <Upload />, title: 'I already have a product', description: 'Bring your name, logo, website, images and social accounts, then go straight to marketing.' },
+                        { value: 'new', icon: <Search />, title: 'Help me find & create one', description: 'AI suggests product ideas for your niche and builds a brand around the one you pick.' },
+                      ]
+                    : [
+                        { value: 'existing', icon: <Store />, title: 'I have an existing business', description: 'Bring your brand and accounts. We’ll set up your listing, funnel and campaigns.' },
+                        { value: 'new', icon: <Compass />, title: 'I want to start a new business', description: 'Describe your idea and city. AI makes names, a logo, palette, banner and pitch.' },
+                      ]
+                }
+              />
             )}
             {step === 'research' && <StepResearch project={project} onNext={() => go('brand')} />}
             {step === 'setup' && <StepSetup project={project} />}

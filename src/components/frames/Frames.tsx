@@ -37,10 +37,13 @@ export function PostFrame({
       </header>
       <div className="relative">{children}</div>
       {caption && (
-        <p className="clamp-3 px-3 py-2.5 text-small text-ink-2">
-          <span className="mr-1 font-semibold text-ink">{handle}</span>
-          {caption}
-        </p>
+        // the padding sits outside the 3-line clamp, so a 4th line never shows in it
+        <div className="px-3 py-2.5">
+          <p className="clamp-3 text-small text-ink-2">
+            <span className="mr-1 font-semibold text-ink">{handle}</span>
+            {caption}
+          </p>
+        </div>
       )}
       {footer && <div className="border-t border-line px-3 py-2 text-caption text-muted">{footer}</div>}
     </article>

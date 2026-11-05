@@ -16,7 +16,7 @@ import { defaultSettings } from '@/store/defaults';
 import { cleanWorkspace } from '@/store/cleanup';
 import { toast, useUI } from '@/store/ui';
 import { useAuth } from '@/lib/cloud/auth';
-import { AccountSettings, DangerSection } from '@/components/auth/Account';
+import { AccountSettings } from '@/components/auth/Account';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, Badge, Callout, ChipInput, InfoTip, MoreMenu, PageHeader, Segmented, SettingsRow, SettingsSection, Toggle, confirmAction } from '@/components/ui/primitives';
 import { BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
@@ -478,7 +478,7 @@ function ProjectsData() {
         </SettingsRow>
       </SettingsSection>
 
-      <DangerSection title="Danger zone">
+      <SettingsSection tone="danger" title="Danger zone">
         <SettingsRow label="Reset workspace" description={signedIn ? 'Deletes every project, post, skill, listing and file from your account and every device.' : 'Deletes every project, post, skill, listing and order on this device.'}>
           <button
             type="button"
@@ -499,7 +499,7 @@ function ProjectsData() {
             <Trash2 /> Reset workspace
           </button>
         </SettingsRow>
-      </DangerSection>
+      </SettingsSection>
     </div>
   );
 }

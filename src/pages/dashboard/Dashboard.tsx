@@ -354,7 +354,8 @@ function PlanCard({ project, s, ctx, className, primaryTaken }: { project: Proje
         <section aria-label="Your plan this week">
           <Empty
             variant="ai"
-            className="!bg-none py-6 sm:py-8"
+            glow={false}
+            className="py-6 sm:py-8"
             title={`Plan how ${project.brand.name || 'your business'} gets customers`}
             body="Research, where to promote, and a 4-week plan. About two minutes."
             action={

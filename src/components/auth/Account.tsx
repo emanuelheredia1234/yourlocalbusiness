@@ -1,7 +1,7 @@
 // Who's signed in, with Log out: the account button in the top bar, a row at the bottom of the
 // sidebar, a chip during setup, and Settings › Account.
 
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useState, type FormEvent } from 'react';
 import { CircleAlert, Cloud, CloudOff, LogIn, LogOut, Monitor, Moon, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react';
 import { cn, fmtRelative } from '@/lib/utils';
 import { navigate } from '@/lib/router';
@@ -125,19 +125,6 @@ export function AccountButton() {
 
 // ───────────── Settings › Account ─────────────
 
-/** A settings card for things that can't be undone: a red hairline and title (Account, Projects & data). */
-export function DangerSection({ title, description, children }: { title: ReactNode; description?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="rounded-lg border border-bad-line bg-surface shadow-card">
-      <div className="px-5 pb-1 pt-5">
-        <h3 className="text-h3 text-bad">{title}</h3>
-        {description && <p className="mt-0.5 text-small text-muted">{description}</p>}
-      </div>
-      <div className="px-5 pb-1">{children}</div>
-    </section>
-  );
-}
-
 export function AccountSettings() {
   const email = useAuth((s) => s.user?.email ?? '');
   const canDelete = useAuth((s) => !!s.config?.canDeleteAccount);
@@ -223,7 +210,7 @@ function DeleteAccount({ email }: { email: string }) {
   const [busy, setBusy] = useState(false);
   const match = typed.trim().toLowerCase() === email.toLowerCase();
   return (
-    <DangerSection title="Delete account" description="Deletes your account, every project, post and listing in it, and all your files. This can’t be undone.">
+    <SettingsSection tone="danger" title="Delete account" description="Deletes your account, every project, post and listing in it, and all your files. This can’t be undone.">
       <SettingsRow label="Type your email to confirm" description="Export a backup first (Projects & data) if you might need anything." htmlFor="del-confirm">
         <input id="del-confirm" className="input" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={email} />
       </SettingsRow>
@@ -243,6 +230,6 @@ function DeleteAccount({ email }: { email: string }) {
           {busy ? <Spinner size={14} /> : <Trash2 />} Delete my account
         </button>
       </div>
-    </DangerSection>
+    </SettingsSection>
   );
 }

@@ -496,10 +496,13 @@
     color: rgb(var(--muted));
     opacity: 1;
   }
-  .input:hover,
-  .select:hover,
-  .textarea:hover {
-    border-color: rgb(var(--line-3));
+  /* hover only where there is a pointer that hovers: on touch screens the border would stick after a tap */
+  @media (hover: hover) {
+    .input:hover,
+    .select:hover,
+    .textarea:hover {
+      border-color: rgb(var(--line-3));
+    }
   }
   .input:focus,
   .select:focus,
@@ -743,6 +746,19 @@
   .scroll-fade-x::-webkit-scrollbar {
     display: none;
   }
+  /* with useEdgeFade (primitives): fade only the edges that have more to scroll to */
+  .scroll-fade-x[data-fade='none'] {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .scroll-fade-x[data-fade='end'] {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  }
+  .scroll-fade-x[data-fade='start'] {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 24px);
+    mask-image: linear-gradient(to right, transparent, #000 24px);
+  }
 
   /* ───────────── Shell ───────────── */
   .nav-item {
@@ -915,11 +931,12 @@
   .ai-arrive > :nth-child(6) {
     animation-delay: 200ms;
   }
+  /* the wash peaks a little inside the box, so its top edge never reads as a hard line */
   .ai-hero-glow {
-    background: radial-gradient(60% 50% at 50% 0%, rgb(var(--ai-1) / 0.06), rgb(var(--ai-2) / 0.04) 40%, transparent 70%);
+    background: radial-gradient(60% 55% at 50% 20%, rgb(var(--ai-1) / 0.06), rgb(var(--ai-2) / 0.04) 40%, transparent 70%);
   }
   :root[data-theme='dark'] .ai-hero-glow {
-    background: radial-gradient(60% 50% at 50% 0%, rgb(var(--ai-1) / 0.12), rgb(var(--ai-2) / 0.08) 40%, transparent 70%);
+    background: radial-gradient(60% 55% at 50% 20%, rgb(var(--ai-1) / 0.12), rgb(var(--ai-2) / 0.08) 40%, transparent 70%);
   }
 }
 

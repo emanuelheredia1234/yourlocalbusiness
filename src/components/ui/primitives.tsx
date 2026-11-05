@@ -7,7 +7,7 @@
 // Section, Empty, Tabs, Segmented), the merging cn from ./shadcn/utils (mergeCn) composes them.
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
-import { CalendarClock, Check, ChevronLeft, CircleAlert, CircleCheck, CircleHelp, Copy, Ellipsis, Info, Loader2, TriangleAlert, X } from 'lucide-react';
+import { CalendarClock, Check, ChevronLeft, CircleAlert, CircleCheck, CircleHelp, Copy, Ellipsis, Info, Loader2, Lock, TriangleAlert, X } from 'lucide-react';
 import { create } from 'zustand';
 import * as RadioGroupPrimitive from '@radix-ui/react-radio-group';
 import { cn, hexToRgb, isHex } from '@/lib/utils';
@@ -245,6 +245,7 @@ export function Tabs<T extends string>({
   className,
   size = 'md',
   sticky,
+  'aria-label': ariaLabel,
 }: {
   tabs: { id: T; label: ReactNode; icon?: ReactNode; count?: number }[];
   value: T;
@@ -253,8 +254,10 @@ export function Tabs<T extends string>({
   size?: 'sm' | 'md';
   /** stick to the top of the page's scroll area */
   sticky?: boolean;
+  'aria-label'?: string;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  useEdgeFade(listRef);
   // on narrow screens the tab row scrolls sideways: keep the selected tab in view
   useEffect(() => {
     const sel = listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]');
@@ -264,8 +267,8 @@ export function Tabs<T extends string>({
       /* old browsers */
     }
   }, [value]);
-  return (
-    <div ref={listRef} role="tablist" className={mergeCn('flex gap-6 overflow-x-auto border-b border-line [scrollbar-width:none] max-md:scroll-fade-x max-md:gap-5', sticky && 'sticky top-0 z-10 bg-surface', className)}>
+  const list = (
+    <div ref={listRef} role="tablist" aria-label={ariaLabel} className={mergeCn('flex gap-6 overflow-x-auto border-b border-line [scrollbar-width:none] max-md:scroll-fade-x max-md:gap-5', !sticky && className)}>
       {tabs.map((t) => (
         <button
           key={t.id}
@@ -284,28 +287,92 @@ export function Tabs<T extends string>({
       ))}
     </div>
   );
+  // sticky: the opaque bar sticks and the edge fade stays on the row inside it, so content scrolling under it never shows through
+  return sticky ? <div className={mergeCn('sticky top-0 z-10 bg-surface', className)}>{list}</div> : list;
 }
 
-/** A segmented control (radio group): a grey track with a raised thumb on the selected option. */
-export function Segmented<T extends string>({ options, value, onChange, size = 'md', className }: { options: { id: T; label: ReactNode; icon?: ReactNode }[]; value: T; onChange: (v: T) => void; size?: 'sm' | 'md'; className?: string }) {
+/**
+ * Marks which edges of a sideways-scrolling row (.scroll-fade-x) have more to scroll to, so the fade shows
+ * only there (none at rest when everything fits, only the right edge at the start).
+ */
+export function useEdgeFade(ref: React.RefObject<HTMLElement>) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => {
+      const start = el.scrollLeft > 1;
+      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      el.dataset.fade = start && end ? 'both' : start ? 'start' : end ? 'end' : 'none';
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener('scroll', update);
+      ro?.disconnect();
+    };
+  }, [ref]);
+}
+
+/**
+ * A segmented control (radio group): a grey track with a raised thumb on the selected option. Name it with
+ * `aria-label` or `aria-labelledby`. An option with a `reason` shows a lock and says why (as the wrapper's
+ * tooltip, since a disabled button shows none, and to screen readers); `disabled` makes it unpickable.
+ */
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  size = 'md',
+  className,
+  'aria-label': ariaLabel,
+  'aria-labelledby': labelledBy,
+}: {
+  options: { id: T; label: ReactNode; icon?: ReactNode; disabled?: boolean; reason?: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  size?: 'sm' | 'md';
+  className?: string;
+  'aria-label'?: string;
+  'aria-labelledby'?: string;
+}) {
+  const ids = useId();
   return (
-    <div role="radiogroup" className={mergeCn('inline-flex max-w-full gap-0.5 overflow-x-auto rounded-md bg-surface-3 p-0.5 [scrollbar-width:none]', className)}>
-      {options.map((o) => (
-        <button
-          key={o.id}
-          role="radio"
-          aria-checked={value === o.id}
-          onClick={() => onChange(o.id)}
-          className={cn(
-            'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded transition-colors duration-120 [&>svg]:size-3.5 [&>svg]:shrink-0',
-            size === 'sm' ? 'h-7 px-2.5 text-caption font-medium' : 'h-8 px-3 text-small font-medium',
-            value === o.id ? 'segmented-on text-ink' : 'text-muted hover:text-ink',
-          )}
-        >
-          {o.icon}
-          {o.label}
-        </button>
-      ))}
+    <div role="radiogroup" aria-label={ariaLabel} aria-labelledby={labelledBy} className={mergeCn('inline-flex max-w-full gap-0.5 overflow-x-auto rounded-md bg-surface-3 p-0.5 [scrollbar-width:none]', className)}>
+      {options.map((o) => {
+        const on = value === o.id;
+        const off = !!o.disabled;
+        const why = o.reason ? `${ids}-${o.id}` : undefined;
+        const button = (
+          <button
+            key={o.id}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            disabled={off || undefined}
+            aria-describedby={why}
+            onClick={() => onChange(o.id)}
+            className={cn(
+              'inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded transition-colors duration-120 [&>svg]:size-3.5 [&>svg]:shrink-0',
+              size === 'sm' ? 'h-7 px-2.5 text-caption font-medium' : 'h-8 px-3 text-small font-medium',
+              on ? 'segmented-on text-ink' : off ? 'cursor-not-allowed text-faint' : 'text-muted hover:text-ink',
+            )}
+          >
+            {o.reason ? <Lock size={12} className="shrink-0" aria-hidden="true" /> : o.icon}
+            {o.label}
+          </button>
+        );
+        if (!o.reason) return button;
+        return (
+          <span key={o.id} title={o.reason} className="inline-flex shrink-0">
+            {button}
+            <span id={why} className="sr-only">
+              {o.reason}
+            </span>
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -473,6 +540,7 @@ export function Empty({
   variant = 'section',
   preview,
   summary,
+  glow = true,
 }: {
   icon?: ReactNode;
   title: ReactNode;
@@ -482,6 +550,8 @@ export function Empty({
   variant?: 'section' | 'page' | 'ai' | 'inline';
   preview?: ReactNode;
   summary?: ReactNode;
+  /** variant="ai": the soft aura wash behind it (off inside an AiCard, which has its own) */
+  glow?: boolean;
 }) {
   if (variant === 'inline') {
     return (
@@ -504,7 +574,7 @@ export function Empty({
   }
   const ai = variant === 'ai';
   return (
-    <div className={mergeCn('flex flex-col items-center px-4 text-center', ai ? 'ai-hero-glow rounded-stage py-14' : 'py-16', className)}>
+    <div className={mergeCn('flex flex-col items-center px-4 text-center', ai ? cn(glow && 'ai-hero-glow', 'rounded-stage py-14') : 'py-16', className)}>
       <div className="flex w-full max-w-[440px] flex-col items-center">
         {ai ? (
           <div className="aura-edge mb-4 flex h-[52px] w-[52px] items-center justify-center rounded-stage shadow-ai">
@@ -692,29 +762,61 @@ export function PageHeader({
           {back.label}
         </button>
       )}
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div className="min-w-0">
+      {/* phones: the title, then meta and actions on one row; wider: meta under the title, actions at the right */}
+      <div className={cn('grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-4', meta || actions ? 'gap-y-3 md:gap-y-2' : '')}>
+        <div className="col-span-2 min-w-0 md:col-span-1">
           <h1 className={cn('text-ink', size === 'display' ? 'text-phone-display sm:text-display' : 'text-phone-h1 sm:text-h1')}>{title}</h1>
           {description && (
             <p className={cn('mt-1 truncate text-body-lg text-muted', text && text.length > 48 && 'max-sm:hidden')} title={text}>
               {description}
             </p>
           )}
-          {meta && <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted">{meta}</div>}
         </div>
-        {actions && <div className="flex flex-wrap items-center gap-2 md:shrink-0">{actions}</div>}
+        {meta && <div className="col-start-1 row-start-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted">{meta}</div>}
+        {/* empty:hidden: actions that render nothing leave no gap */}
+        {actions && (
+          <div
+            className={cn(
+              'flex flex-wrap items-center gap-2 empty:hidden md:col-start-2 md:row-span-2 md:row-start-1 md:shrink-0 md:justify-end md:self-end',
+              meta ? 'col-start-2 row-start-2 justify-end' : 'col-span-2 col-start-1 row-start-2 md:col-span-1',
+            )}
+          >
+            {actions}
+          </div>
+        )}
       </div>
     </header>
   );
 }
 
-/** A titled section of a page (sections, not boxes). */
-export function Section({ title, description, actions, divider, id, className, children }: { title?: ReactNode; description?: ReactNode; actions?: ReactNode; divider?: boolean; id?: string; className?: string; children: ReactNode }) {
+/** A titled section of a page (sections, not boxes). `aria-label` names it as a region. */
+export function Section({
+  title,
+  description,
+  actions,
+  divider,
+  id,
+  className,
+  children,
+  'aria-label': ariaLabel,
+  'aria-labelledby': labelledBy,
+}: {
+  title?: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
+  divider?: boolean;
+  id?: string;
+  className?: string;
+  children: ReactNode;
+  'aria-label'?: string;
+  'aria-labelledby'?: string;
+}) {
   return (
-    <section id={id} className={mergeCn('mt-10 first:mt-0', divider && 'border-t border-line pt-8', className)}>
+    <section id={id} aria-label={ariaLabel} aria-labelledby={labelledBy} className={mergeCn('mt-10 first:mt-0', divider && 'border-t border-line pt-8', className)}>
       {(title || description || actions) && (
-        <div className="mb-4 flex items-end justify-between gap-3">
-          <div className="min-w-0">
+        // wide actions wrap under the title instead of squeezing it into a one-word column
+        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0 flex-[1_1_16rem]">
             {title && <h2 className="text-h2 text-ink">{title}</h2>}
             {description && <p className="mt-1 text-small text-muted">{description}</p>}
           </div>
@@ -876,13 +978,34 @@ export function Callout({ tone, title, action, onDismiss, children, className }:
   );
 }
 
-/** A settings card: a title and rows of label + control. */
-export function SettingsSection({ title, description, actions, children, id }: { title: ReactNode; description?: ReactNode; actions?: ReactNode; children: ReactNode; id?: string }) {
+/**
+ * A settings card: a title and rows of label + control. Below 640px the header's actions go under the
+ * title. tone="danger" is for things that can't be undone (a red hairline and title).
+ */
+export function SettingsSection({
+  title,
+  description,
+  actions,
+  children,
+  id,
+  className,
+  tone,
+  'aria-label': ariaLabel,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+  id?: string;
+  className?: string;
+  tone?: 'danger';
+  'aria-label'?: string;
+}) {
   return (
-    <section id={id} className="card">
-      <div className="flex items-start justify-between gap-3 px-5 pb-1 pt-5">
+    <section id={id} aria-label={ariaLabel} className={mergeCn('card', tone === 'danger' && 'border-bad-line', className)}>
+      <div className="flex flex-col gap-3 px-5 pb-1 pt-5 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h3 className="text-h3 text-ink">{title}</h3>
+          <h3 className={cn('text-h3', tone === 'danger' ? 'text-bad' : 'text-ink')}>{title}</h3>
           {description && <p className="mt-0.5 text-small text-muted">{description}</p>}
         </div>
         {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
@@ -910,20 +1033,61 @@ export function SettingsRow({ label, description, htmlFor, stack, children }: { 
   );
 }
 
-/** A thin progress bar ("3 of 5"), or n gapped segments. */
-export function ProgressBar({ value, max = 100, label, segments, className }: { value: number; max?: number; label?: ReactNode; segments?: number; className?: string }) {
-  const v = Math.max(0, Math.min(max, value));
+/**
+ * A thin progress bar ("3 of 5"), or n gapped segments. variant="ink" (segments only) is the setup top bar's
+ * look: short ink segments up to the current step, hairlines after.
+ */
+export function ProgressBar({
+  value,
+  max = 100,
+  min = 0,
+  label,
+  segments,
+  className,
+  variant = 'default',
+  title,
+  'aria-label': ariaLabel,
+  valueText,
+}: {
+  value: number;
+  max?: number;
+  min?: number;
+  label?: ReactNode;
+  segments?: number;
+  className?: string;
+  variant?: 'default' | 'ink';
+  title?: string;
+  'aria-label'?: string;
+  valueText?: string;
+}) {
+  const v = Math.max(min, Math.min(max, value));
   const done = max > 0 && v >= max;
+  const ink = variant === 'ink' && !!segments;
   return (
-    <div className={mergeCn('flex items-center gap-3', className)}>
-      <div role="progressbar" aria-valuemin={0} aria-valuemax={max} aria-valuenow={v} className={cn('flex min-w-0 flex-1', segments ? 'gap-1' : 'h-1 overflow-hidden rounded-full bg-surface-3')}>
+    <div className={mergeCn(ink ? 'flex min-w-0 items-center gap-3' : 'flex items-center gap-3', className)} title={title}>
+      <div
+        role="progressbar"
+        aria-label={ariaLabel}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={v}
+        aria-valuetext={valueText}
+        className={cn('flex min-w-0', !ink && 'flex-1', segments ? 'gap-1' : 'h-1 overflow-hidden rounded-full bg-surface-3')}
+      >
         {segments ? (
-          Array.from({ length: segments }, (_, i) => <span key={i} className={cn('h-1 flex-1 rounded-full', i < Math.round((v / (max || 1)) * segments) ? (done ? 'bg-good-solid' : 'bg-primary') : 'bg-surface-3')} />)
+          Array.from({ length: segments }, (_, i) => {
+            const filled = i < Math.round((v / (max || 1)) * segments);
+            return ink ? (
+              <span key={i} className={cn('h-1 w-8 min-w-3 rounded-full transition-colors duration-240 sm:w-12', filled ? 'bg-ink' : 'bg-line-2')} />
+            ) : (
+              <span key={i} className={cn('h-1 flex-1 rounded-full', filled ? (done ? 'bg-good-solid' : 'bg-primary') : 'bg-surface-3')} />
+            );
+          })
         ) : (
           <span className={cn('h-full rounded-full transition-[width] duration-240 ease-out', done ? 'bg-good-solid' : 'bg-primary')} style={{ width: `${max > 0 ? (v / max) * 100 : 0}%` }} />
         )}
       </div>
-      {label && <span className="num shrink-0 font-mono text-caption text-muted">{label}</span>}
+      {label && <span className="num shrink-0 whitespace-nowrap font-mono text-caption text-muted">{label}</span>}
     </div>
   );
 }
@@ -963,11 +1127,23 @@ export function Skeleton({ className, ai }: { className?: string; ai?: boolean }
   return <div aria-hidden="true" className={cn('skeleton', ai && 'skeleton-ai', className)} />;
 }
 
-/** A tooltip on any element (required on icon-only buttons). The provider is mounted in main.tsx. */
+/**
+ * A tooltip on any element (required on icon-only buttons). The provider is mounted in main.tsx. A disabled
+ * trigger gets no pointer or focus events, so it is wrapped in a focusable span that carries the tooltip.
+ */
 export function Tooltip({ content, side = 'top', kbd, children }: { content: ReactNode; side?: 'top' | 'right' | 'bottom' | 'left'; kbd?: string; children: ReactElement }) {
+  const disabled = !!(children.props as { disabled?: boolean }).disabled;
   return (
     <TooltipRoot>
-      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipTrigger asChild>
+        {disabled ? (
+          <span tabIndex={0} className="inline-flex rounded-md">
+            {children}
+          </span>
+        ) : (
+          children
+        )}
+      </TooltipTrigger>
       <TooltipContent side={side}>
         {content}
         {kbd && <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-sm border border-on-inverse/25 px-[5px] font-mono text-micro text-on-inverse/80">{kbd}</span>}
@@ -1091,50 +1267,77 @@ export function Checkbox({ checked, onChange, label, description, disabled, id }
 
 const OPTION_COLS: Record<1 | 2 | 3 | 4, string> = { 1: 'grid-cols-1', 2: 'sm:grid-cols-2', 3: 'sm:grid-cols-2 lg:grid-cols-3', 4: 'grid-cols-2 lg:grid-cols-4' };
 
-/** Choice cards (a radio group: one tab stop, arrow keys). */
+type OptionCard<T> = { value: T; title: ReactNode; description?: ReactNode; icon?: ReactNode; badge?: ReactNode; disabled?: boolean; /** a quieter line under the description (examples) */ meta?: ReactNode };
+
+/**
+ * Choice cards. The default is a radio group (one tab stop, arrow keys). mode="button": each card is a
+ * button that moves you on (onChange on click; the chosen one, if any, is pressed), as on the setup steps.
+ */
 export function OptionCards<T extends string>({
   value,
   onChange,
   options,
   columns = 2,
   size = 'md',
+  mode = 'radio',
   'aria-label': ariaLabel,
 }: {
   value: T | '';
   onChange: (v: T) => void;
-  options: { value: T; title: ReactNode; description?: ReactNode; icon?: ReactNode; badge?: ReactNode; disabled?: boolean }[];
+  options: OptionCard<T>[];
   columns?: 1 | 2 | 3 | 4;
   size?: 'md' | 'lg';
+  mode?: 'radio' | 'button';
   'aria-label': string;
 }) {
+  const lg = size === 'lg';
+  const card = (on: boolean) =>
+    cn(
+      'relative flex min-w-0 flex-col items-start rounded-lg border border-line bg-surface text-left transition-[border-color,box-shadow,background-color] duration-120 disabled:cursor-not-allowed disabled:bg-surface-2',
+      lg ? 'gap-4 p-5 sm:p-6' : 'gap-3 p-4',
+      on ? 'bg-primary-soft/50 shadow-[inset_0_0_0_1.5px_rgb(var(--primary))]' : 'hover:border-line-3 hover:shadow-sm',
+    );
+  const inner = (o: OptionCard<T>, on: boolean) => (
+    <>
+      {on && (
+        <span className={cn('absolute flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-on-primary', lg ? 'right-4 top-4' : 'right-3 top-3')} aria-hidden="true">
+          <Check size={12} strokeWidth={3} />
+        </span>
+      )}
+      {o.icon && <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-pop bg-surface-3 text-ink-2 [&>svg]:size-5">{o.icon}</span>}
+      <span className="block w-full min-w-0">
+        {/* without an icon the check sits beside the title: room is kept on its first line only */}
+        {!o.icon && <span className="float-right ml-2 h-[18px] w-[18px]" aria-hidden="true" />}
+        <span className={cn('block', lg ? 'text-title' : 'text-h3', o.disabled ? 'text-faint' : 'text-ink')}>
+          {o.title}
+          {o.badge && <span className="ml-2 inline-flex align-middle">{o.badge}</span>}
+        </span>
+        {o.description && <span className={cn('mt-1 text-muted', lg ? 'block text-body' : 'clamp-2 text-small')}>{o.description}</span>}
+        {o.meta && <span className="mt-3 block text-small text-muted">{o.meta}</span>}
+      </span>
+    </>
+  );
+  if (mode === 'button') {
+    return (
+      <div role="group" aria-label={ariaLabel} className={cn('grid', lg ? 'gap-4' : 'gap-3', OPTION_COLS[columns])}>
+        {options.map((o) => {
+          const on = !!value && value === o.value;
+          return (
+            <button key={o.value} type="button" disabled={o.disabled} aria-pressed={value ? on : undefined} onClick={() => onChange(o.value)} className={card(on)}>
+              {inner(o, on)}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
   return (
     <RadioGroupPrimitive.Root aria-label={ariaLabel} value={value} onValueChange={(v) => onChange(v as T)} className={cn('grid gap-3', OPTION_COLS[columns])}>
       {options.map((o) => {
         const on = value === o.value;
         return (
-          <RadioGroupPrimitive.Item
-            key={o.value}
-            value={o.value}
-            disabled={o.disabled}
-            className={cn(
-              'relative flex min-w-0 flex-col items-start gap-3 rounded-lg border border-line bg-surface text-left transition-[border-color,box-shadow,background-color] duration-120 disabled:cursor-not-allowed disabled:bg-surface-2',
-              size === 'lg' ? 'p-5' : 'p-4',
-              on ? 'bg-primary-soft/50 shadow-[inset_0_0_0_1.5px_rgb(var(--primary))]' : 'hover:border-line-3 hover:shadow-sm',
-            )}
-          >
-            {on && (
-              <span className="absolute right-3 top-3 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-on-primary" aria-hidden="true">
-                <Check size={12} strokeWidth={3} />
-              </span>
-            )}
-            {o.icon && <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-pop bg-surface-3 text-ink-2 [&>svg]:size-5">{o.icon}</span>}
-            <span className="min-w-0 pr-6">
-              <span className={cn('flex flex-wrap items-center gap-2', size === 'lg' ? 'text-title' : 'text-h3', o.disabled ? 'text-faint' : 'text-ink')}>
-                {o.title}
-                {o.badge}
-              </span>
-              {o.description && <span className="clamp-2 mt-1 block text-small text-muted">{o.description}</span>}
-            </span>
+          <RadioGroupPrimitive.Item key={o.value} value={o.value} disabled={o.disabled} className={card(on)}>
+            {inner(o, on)}
           </RadioGroupPrimitive.Item>
         );
       })}
