@@ -444,7 +444,7 @@ describe('outline and chapters (a product)', () => {
     expect(r).toMatchObject({ ok: true, result: { sections: expect.any(Array) } });
     expect(studio().outline.length).toBeGreaterThan(2);
     // the chat line says the built-in engine wrote it, and why
-    expect(lastActivity()).toMatchObject({ ai: 'builtin', text: `Wrote a ${studio().outline.length}-section outline. No API key powers Product outline & chapters yet, so the built-in engine answered. In Settings → AI, tick Product outline & chapters for one of your keys.` });
+    expect(lastActivity()).toMatchObject({ ai: 'builtin', text: `Wrote a ${studio().outline.length}-section outline. No API key powers Product outline & chapters yet, so the built-in engine answered. In Settings › AI keys, tick Product outline & chapters for one of your keys.` });
     expect((await runTool('generate_outline')).error).toMatch(/replace: true/);
     expect(await runTool('generate_outline', { replace: true })).toMatchObject({ ok: true });
     business();

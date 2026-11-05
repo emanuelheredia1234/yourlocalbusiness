@@ -54,7 +54,7 @@ export function LinkPlacementCard({ project }: { project: Project }) {
         ) : (
           <div className="well mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-small text-muted">
             {/* publishing needs the app's own server, so in claude.ai only the website can be the link */}
-            <span className="min-w-[12rem] flex-1">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings → Brand.' : 'No link in your posts yet. Publish your SEO page, or add your website in Settings → Brand.'}</span>
+            <span className="min-w-[12rem] flex-1">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings › Brand.' : 'No link in your posts yet. Publish your SEO page, or add your website in Settings › Brand.'}</span>
             {!__ARTIFACT_BUILD__ && (
               <button type="button" className="btn btn-secondary btn-xs" onClick={() => void navigate('marketing-seo')}>
                 Open the SEO page builder

@@ -74,7 +74,7 @@ describe('the Viktor (Slack) card', () => {
     expect(html).not.toContain('Also revoke the token in Slack');
     expect(html).not.toContain('id="slack-token"');
     expect(html).toContain('Needs attention');
-    expect(html).toContain('Choose Viktor in Settings → AI → Viktor (Slack).');
+    expect(html).toContain('Choose Viktor in Settings › AI keys › Viktor (Slack).');
   });
 
   it('ready: connected, Viktor chosen, the DM chosen; Remove with revoke', () => {
@@ -91,7 +91,7 @@ describe('the Viktor (Slack) card', () => {
   });
 
   it('needs attention: a token Slack refused, or missing permissions named', () => {
-    expect(render({ configured: true, source: 'app', tokenHint: '••••0001', reason: 'bad_token', problem: { code: 'bad_token' } })).toContain('Slack didn’t accept the saved token: connect again in Settings → AI → Viktor (Slack).');
+    expect(render({ configured: true, source: 'app', tokenHint: '••••0001', reason: 'bad_token', problem: { code: 'bad_token' } })).toContain('Slack didn’t accept the saved token: connect again in Settings › AI keys › Viktor (Slack).');
     const html = render({ configured: true, source: 'app', tokenHint: '••••0003', scopes: ALL.filter((x) => x !== 'files:read'), missingScopes: ['files:read'], channelScopes: true, reason: 'missing_scopes' });
     expect(html).toContain('Needs attention');
     expect(html).toContain('Missing permissions: files:read.');

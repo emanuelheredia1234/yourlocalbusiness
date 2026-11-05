@@ -1,5 +1,5 @@
 // Who's signed in, with Log out: the account button in the top bar, a row at the bottom of the
-// sidebar, a chip during setup, and Settings → Account.
+// sidebar, a chip during setup, and Settings › Account.
 
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { CircleAlert, Cloud, CloudOff, LogIn, LogOut, Monitor, Moon, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react';

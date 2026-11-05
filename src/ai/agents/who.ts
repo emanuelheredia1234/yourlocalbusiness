@@ -18,29 +18,29 @@ export interface AgentReadiness {
   reason: string;
   /** one sentence for a tooltip or a disabled button ('' when ready) */
   text: string;
-  /** offer "Open Settings → AI" */
+  /** offer "Open Settings › AI keys" */
   settings: boolean;
 }
 
 /** What to tell the owner for each reason a server gives (src/lib/agentTypes.ts AgentReady.reason). */
 export function readinessText(via: AgentId, reason: string, use: AgentUse = 'build'): string {
   if (via === 'manus') {
-    if (reason === 'no_key') return 'Add a Manus API key in Settings → AI.';
-    if (reason === 'not_ticked') return use === 'chat' ? 'Tick “Chat with Manus” for your Manus key in Settings → AI.' : 'Tick “Building pages & assets” for your Manus key in Settings → AI.';
-    if (reason === 'own_key_needed') return 'Manus runs in your own Manus account: add your Manus API key in Settings → AI.';
+    if (reason === 'no_key') return 'Add a Manus API key in Settings › AI keys.';
+    if (reason === 'not_ticked') return use === 'chat' ? 'Tick “Chat with Manus” for your Manus key in Settings › AI keys.' : 'Tick “Building pages & assets” for your Manus key in Settings › AI keys.';
+    if (reason === 'own_key_needed') return 'Manus runs in your own Manus account: add your Manus API key in Settings › AI keys.';
   } else {
-    if (reason === 'no_token') return 'Connect Slack in Settings → AI → Viktor (Slack).';
-    if (reason === 'bad_token') return 'Slack didn’t accept the saved token: connect again in Settings → AI → Viktor (Slack).';
-    if (reason === 'missing_scopes') return 'The Slack app is missing permissions: create it again from the manifest in Settings → AI → Viktor (Slack).';
-    if (reason === 'no_viktor') return 'Choose Viktor in Settings → AI → Viktor (Slack).';
-    if (reason === 'no_place') return 'Choose where to talk to Viktor (your DM or a channel) in Settings → AI → Viktor (Slack).';
+    if (reason === 'no_token') return 'Connect Slack in Settings › AI keys › Viktor (Slack).';
+    if (reason === 'bad_token') return 'Slack didn’t accept the saved token: connect again in Settings › AI keys › Viktor (Slack).';
+    if (reason === 'missing_scopes') return 'The Slack app is missing permissions: create it again from the manifest in Settings › AI keys › Viktor (Slack).';
+    if (reason === 'no_viktor') return 'Choose Viktor in Settings › AI keys › Viktor (Slack).';
+    if (reason === 'no_place') return 'Choose where to talk to Viktor (your DM or a channel) in Settings › AI keys › Viktor (Slack).';
     if (reason === 'owner_only') return 'Viktor runs in the app owner’s Slack, so only the owner can use it.';
   }
   if (reason === 'server_down') return 'Your AI server isn’t running.';
   if (reason === 'checking') return 'Checking your AI server…';
   if (reason === 'old_server') return 'Your AI server needs updating to build and chat with Manus or Viktor: publish the newest version.';
   if (reason === 'ok' || reason === '') return '';
-  return via === 'manus' ? 'Manus isn’t set up yet: see Settings → AI.' : 'Viktor isn’t set up yet: see Settings → AI → Viktor (Slack).';
+  return via === 'manus' ? 'Manus isn’t set up yet: see Settings › AI keys.' : 'Viktor isn’t set up yet: see Settings › AI keys › Viktor (Slack).';
 }
 
 const NOT_SETTINGS = new Set(['ok', 'server_down', 'checking', 'old_server', 'owner_only', 'artifact']);

@@ -16,7 +16,7 @@ vi.mock('@/store/useStore', () => {
 vi.mock('@/components/posts/ManusPost', () => ({
   useManusReady: () => fake.ready,
   useCanOfferManus: () => true,
-  manusSetupHint: () => 'Add your Manus API key in Settings → AI.',
+  manusSetupHint: () => 'Add your Manus API key in Settings › AI keys.',
   errorCopy: () => ({ title: 'x', body: 'y' }),
 }));
 
@@ -51,7 +51,7 @@ describe('the profile switch', () => {
     fake.ready = false;
     const html = render({ instagram: '@copper' });
     expect(html).toMatch(/role="switch" aria-checked="false" disabled/);
-    expect(html).toContain('Manus can’t read your posts yet: it uses the same Manus setup as posting. Add your Manus API key in Settings → AI.');
+    expect(html).toContain('Manus can’t read your posts yet: it uses the same Manus setup as posting. Add your Manus API key in Settings › AI keys.');
     // the way there is named after the section (Settings › AI keys)
     expect(html).toContain('>Open AI keys</button>');
   });

@@ -93,8 +93,8 @@ describe('draft_agent_message', () => {
   it('refuses a draft with a key or token in it, and an agent that isn’t ready, before any card', async () => {
     expect(await runTool('draft_agent_message', { to: 'viktor', text: 'Use my token xo\x78p-1234567890-abcdefghij to post' })).toMatchObject({ ok: false, error: expect.stringContaining('looks like a key or password') });
     serve(health({ viktor: { ready: false, reason: 'no_place' }, manusChat: false }));
-    expect((await runTool('draft_agent_message', { to: 'viktor', text: 'hi' })).error).toBe('Viktor isn’t ready: Choose where to talk to Viktor (your DM or a channel) in Settings → AI → Viktor (Slack).');
-    expect((await runTool('draft_agent_message', { to: 'manus', text: 'hi' })).error).toBe('Manus isn’t ready: Tick “Chat with Manus” for your Manus key in Settings → AI.');
+    expect((await runTool('draft_agent_message', { to: 'viktor', text: 'hi' })).error).toBe('Viktor isn’t ready: Choose where to talk to Viktor (your DM or a channel) in Settings › AI keys › Viktor (Slack).');
+    expect((await runTool('draft_agent_message', { to: 'manus', text: 'hi' })).error).toBe('Manus isn’t ready: Tick “Chat with Manus” for your Manus key in Settings › AI keys.');
     // Viktor is the owner's: for anyone else it isn't there at all
     serve(health({ viktor: { ready: false, reason: 'owner_only' } }));
     expect((await runTool('draft_agent_message', { to: 'viktor', text: 'hi' })).error).toBe('Viktor runs in the app owner’s Slack, so only the owner can use it.');
@@ -120,7 +120,7 @@ describe('open_agent_build', () => {
 
   it('says why when that agent can’t build', async () => {
     useRuntime.getState().set({ ai: { ...NO_AI_SERVER, reachable: true, ready: true, agents: { ...health(), manus: { ...health().manus, build: { ready: false, reason: 'no_key' } } } } });
-    expect((await runTool('open_agent_build', { target: 'asset', agent: 'manus' })).error).toBe('Manus isn’t ready to build: Add a Manus API key in Settings → AI.');
+    expect((await runTool('open_agent_build', { target: 'asset', agent: 'manus' })).error).toBe('Manus isn’t ready to build: Add a Manus API key in Settings › AI keys.');
     expect(host.calls.windows).toEqual([]);
   });
 });

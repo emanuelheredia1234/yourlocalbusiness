@@ -261,7 +261,7 @@ describe('Omnisend drafts', () => {
     await act(async () => buttons('Create Omnisend draft')[0].click());
     await settle();
     expect(calls(f, DRAFTS_PATH)).toHaveLength(0);
-    expect(host.querySelector('ol > li [role="alert"]')?.textContent).toBe('This email’s button has no web address yet. Add your website in Settings → Brand, or a full https:// link as its Button link in Sequence.');
+    expect(host.querySelector('ol > li [role="alert"]')?.textContent).toBe('This email’s button has no web address yet. Add your website in Settings › Brand, or a full https:// link as its Button link in Sequence.');
   });
 
   it('says a draft may have been created when Omnisend didn’t confirm it, and never sends again by itself', async () => {

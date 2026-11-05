@@ -255,7 +255,7 @@ export class AIStore {
     this.pending = p;
   }
 
-  /** Bring over image keys saved by the old Settings → Image generation page (photos only). */
+  /** Bring over image keys saved by the old Settings › Image generation page (photos only). */
   importLegacy(legacyFile) {
     let raw;
     try {

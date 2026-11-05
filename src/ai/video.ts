@@ -58,7 +58,7 @@ export interface VideoRequest {
   prompt: string;
   aspect: VideoAspect;
   duration: number;
-  /** claude.ai route only: self-hosted, the key's quality in Settings → AI decides */
+  /** claude.ai route only: self-hosted, the key's quality in Settings › AI keys decides */
   resolution: VideoResolution;
   /** a photo to start from (e.g. the listing cover) */
   firstFrame?: Blob | null;
@@ -320,7 +320,7 @@ export function videoErrorMessage(code: string, message = ''): { title: string; 
     case 'VIDEO_ERROR':
       return { title: 'Couldn’t create the video', body: message || 'Please try again.' };
     case 'VIDEO_SETUP':
-      return { title: 'No key makes videos yet', body: message || 'In Settings → AI, tick Videos for an OpenRouter, Google or xAI key.' };
+      return { title: 'No key makes videos yet', body: message || 'In Settings › AI keys, tick Videos for an OpenRouter, Google or xAI key.' };
     case 'VIDEO_NETWORK':
       return { title: 'Couldn’t reach your AI server', body: 'Check that the server is running (npm run server), then try again.' };
     case 'VIDEO_DAILY_LIMIT':

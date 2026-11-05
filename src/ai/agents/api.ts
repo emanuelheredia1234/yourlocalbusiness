@@ -327,7 +327,7 @@ const sentence = (s: string) => {
   return t ? `${t}.` : '';
 };
 
-/** Friendly copy for any failure above. settings: offer "Open Settings → AI". */
+/** Friendly copy for any failure above. settings: offer "Open Settings › AI keys". */
 export function agentErrorText(e: unknown, via: AgentId): { title: string; body: string; settings: boolean } {
   const name = agentName(via);
   const service = via === 'manus' ? 'Manus' : 'Slack';

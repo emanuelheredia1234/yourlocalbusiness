@@ -228,7 +228,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
 
   const dailyLimitError = (st, who) => {
     const parts = [st.requestsPerDay > 0 ? `${st.requestsPerDay} request${st.requestsPerDay === 1 ? '' : 's'}` : '', st.usdPerDay > 0 ? `$${st.usdPerDay.toFixed(2)}` : ''].filter(Boolean).join(' or ');
-    const next = who ? 'To keep going now, add your own API keys in Settings → AI.' : 'Sign in, and add your own API keys in Settings → AI, to keep going now.';
+    const next = who ? 'To keep going now, add your own API keys in Settings › AI keys.' : 'Sign in, and add your own API keys in Settings › AI keys, to keep going now.';
     const left = Math.max(0, st.usdPerDay - st.usedUsd - (st.pendingUsd || 0));
     return {
       error: st.tooCostly
@@ -277,7 +277,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (!own && st.reached) {
         release();
         if (st.unavailable) {
-          reply(req, res, 503, { error: 'Couldn’t check today’s AI usage right now (Supabase didn’t answer). Try again in a minute, or add your own API keys in Settings → AI.', code: 'LIMITS_UNAVAILABLE' });
+          reply(req, res, 503, { error: 'Couldn’t check today’s AI usage right now (Supabase didn’t answer). Try again in a minute, or add your own API keys in Settings › AI keys.', code: 'LIMITS_UNAVAILABLE' });
           return null;
         }
         reply(req, res, 429, dailyLimitError(st, who));
@@ -430,7 +430,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     if (!REF_RE.test(ref)) return reply(req, res, 400, { error: 'The request needs its Ref.', code: 'BAD_REQUEST' });
     // the owner's Manus, or a signed-in user's own Manus key (their account and credits)
     const ownKey = auth.enabled && !isAdmin(req, who) ? await userKeys.get(who?.id, 'manus') : null;
-    if (auth.enabled && !isAdmin(req, who) && !ownKey) return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings → AI.', code: 'OWN_KEY_NEEDED' });
+    if (auth.enabled && !isAdmin(req, who) && !ownKey) return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings › AI keys.', code: 'OWN_KEY_NEEDED' });
     const tpl = b.fn === 'build' ? manusBuild(cleanBuild(b.build, 'manus'), ref) : manusChatOpening(cleanChat(b.chat, 'manus'), ref);
     if (b.dryRun === true) return reply(req, res, 200, { preview: { text: tpl.prompt, chars: tpl.prompt.length, limit: MANUS_LIMIT } });
     const files = agentFiles(b.files);
@@ -736,7 +736,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           const raw = typeof b.apiKey === 'string' ? b.apiKey : typeof b.key === 'string' ? b.key : '';
           const key = raw.trim();
           if (key.length < 16 || key.length > 400 || /\s/.test(key)) {
-            return reply(req, res, 400, { error: id === 'manus' ? 'That doesn’t look like a Manus API key. Copy it again from Manus → Settings → Developers (API keys).' : `That doesn’t look like a ${label} API key. Copy it again from ${PROVIDERS[id].keyUrl}.`, code: 'BAD_REQUEST' });
+            return reply(req, res, 400, { error: id === 'manus' ? 'That doesn’t look like a Manus API key. Copy it again from Manus → Settings › Developers (API keys).' : `That doesn’t look like a ${label} API key. Copy it again from ${PROVIDERS[id].keyUrl}.`, code: 'BAD_REQUEST' });
           }
           if (!userKeys.enabled) return reply(req, res, 501, { error: 'Your own keys need the SUPABASE_SECRET_KEY Secret on the server. Ask the app’s owner to add it.', code: 'NOT_CONFIGURED' });
           try {
@@ -762,7 +762,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     if (p === '/api/ai/manus/attach' && m === 'POST') {
       if (!generationAllowed(req, res, 'manus', who)) return;
       const ownKey = auth.enabled && !isAdmin(req, who) ? await userKeys.get(who?.id, 'manus') : null;
-      if (auth.enabled && !isAdmin(req, who) && !ownKey) return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings → AI.', code: 'OWN_KEY_NEEDED' });
+      if (auth.enabled && !isAdmin(req, who) && !ownKey) return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings › AI keys.', code: 'OWN_KEY_NEEDED' });
       if (!ownKey && !store.key('manus') && store.remote.enabled) await freshEnough(store.refresh({ force: true }), 2500);
       const MAX = 300 * 1024 * 1024;
       const cleanName = (n) => String(n || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').slice(0, 120) || 'file';
@@ -824,7 +824,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           // …unless they've added their own Manus key: then it's their own account and credits
           const ownKey = auth.enabled && !isAdmin(req, who) ? await userKeys.get(who?.id, 'manus') : null;
           if (auth.enabled && !isAdmin(req, who) && !ownKey) {
-            return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings → AI.', code: 'OWN_KEY_NEEDED' });
+            return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings › AI keys.', code: 'OWN_KEY_NEEDED' });
           }
           let created;
           if (research) {
@@ -853,7 +853,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           const sentAt = Number(b.sent_at);
           if (!REF_RE.test(ref) || !Number.isFinite(sentAt) || sentAt <= 0) return reply(req, res, 400, { error: 'Send the request’s Ref and when it was sent.', code: 'BAD_REQUEST' });
           const ownKey = auth.enabled && !isAdmin(req, who) ? await userKeys.get(who?.id, 'manus') : null;
-          if (auth.enabled && !isAdmin(req, who) && !ownKey) return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings → AI.', code: 'OWN_KEY_NEEDED' });
+          if (auth.enabled && !isAdmin(req, who) && !ownKey) return reply(req, res, 403, { error: 'Manus needs your own Manus account: add your Manus API key in Settings › AI keys.', code: 'OWN_KEY_NEEDED' });
           if (!ownKey && !store.key('manus') && store.remote.enabled) await freshEnough(store.refresh({ force: true }), 2500);
           const hit = await router.manusVerify({ ref, sentAt, owner: who?.id ?? null, apiKey: ownKey, signal: abortOnClose(res) });
           if (hit) await router.tasksSaved();
@@ -867,7 +867,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         if (!mayUse(req, task?.owner, who)) return notFound(req, res);
         // a task started with someone's own key is read and continued with that key
         const apiKey = task?.ownKey ? await userKeys.get(task.owner, 'manus') : null;
-        if (task?.ownKey && !apiKey) return reply(req, res, 409, { error: 'The Manus key this task was started with was removed. Add it again in Settings → AI.', code: 'OWN_KEY_NEEDED' });
+        if (task?.ownKey && !apiKey) return reply(req, res, 409, { error: 'The Manus key this task was started with was removed. Add it again in Settings › AI keys.', code: 'OWN_KEY_NEEDED' });
         // the owner's task, on a copy of the server that hasn't picked up the owner's Manus key yet
         if (!apiKey && !store.key('manus') && store.remote.enabled) await freshEnough(store.refresh({ force: true }), 2500);
         if (action === 'output') {

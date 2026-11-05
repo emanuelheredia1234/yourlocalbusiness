@@ -72,9 +72,7 @@ export function useImageJob(label = 'AI image') {
 export function usePhotoAvailability() {
   useRuntime((s) => s.ai);
   useRuntime((s) => s.zapier);
-  const a = photoAvailability();
-  // the page is called "Settings › AI keys" now (the shared reason in src/ai/image.ts still says "Settings → AI")
-  return a.ok ? a : { ...a, reason: a.reason.replace(/Settings → AI\b(?! keys)/g, 'Settings › AI keys') };
+  return photoAvailability();
 }
 
 /** The Brain skills that will shape a photo or video's art direction (for a hint under the controls). */

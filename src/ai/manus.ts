@@ -2,7 +2,7 @@
 //   claude.ai artifact → the viewer's Zapier connector, where two custom actions on the Manus
 //                        connection do the work (create_task_with_image, task_output)
 //   self-hosted        → your server (/api/ai/manus/*) with your Manus API key, which also picks
-//                        the agent profile (the key's effort in Settings → AI)
+//                        the agent profile (the key's effort in Settings › AI keys)
 // Manus tasks take minutes, so the page starts a task and then polls its output.
 
 import type { BrandColors, ImageAspect } from '@/lib/types';
@@ -238,7 +238,7 @@ export interface CreateManusOptions {
   /** let Manus pause to ask (e.g. to sign in to a network) */
   interactive?: boolean;
   hidden?: boolean;
-  /** claude.ai only: self-hosted, the key's effort in Settings → AI picks the profile */
+  /** claude.ai only: self-hosted, the key's effort in Settings › AI keys picks the profile */
   profile?: 'standard' | 'lite' | 'max';
 }
 
@@ -269,7 +269,7 @@ export async function sendFileToManus(o: { blob: Blob; name?: string; mediaId?: 
   const json = (await res.json().catch(() => null)) as { file_id?: string; filename?: string; error?: string; code?: string } | null;
   if (!res.ok || !json?.file_id) {
     if (res.status === 413) throw new ManusError('That file is too big to send to Manus from here. Use a shorter or smaller video (under about 30 MB), or sign in so the server can take it from your account.', 'MANUS_CREATE');
-    if (json?.code === 'NO_PROVIDER' || json?.code === 'OWN_KEY_NEEDED') throw new ManusError(json.error || 'Add a Manus API key in Settings → AI first.', 'MANUS_SETUP');
+    if (json?.code === 'NO_PROVIDER' || json?.code === 'OWN_KEY_NEEDED') throw new ManusError(json.error || 'Add a Manus API key in Settings › AI keys first.', 'MANUS_SETUP');
     throw new ManusError(json?.error || `Couldn’t send the file to Manus (${res.status}).`, 'MANUS_CREATE');
   }
   return { file_id: json.file_id, filename: json.filename || filename };
@@ -443,10 +443,10 @@ export function manusErrorMessage(code: string, message = ''): { title: string; 
   switch (code) {
     case 'MANUS_SETUP':
       return manusViaServer()
-        ? { title: 'Manus isn’t set up for this', body: message || 'Add your Manus API key in Settings → AI and tick this function in its “Powers” list.' }
+        ? { title: 'Manus isn’t set up for this', body: message || 'Add your Manus API key in Settings › AI keys and tick this function in its “Powers” list.' }
         : { title: 'Manus isn’t set up in Zapier', body: 'The custom Manus actions are missing from your Zapier account. Ask Claude to set up Manus in Zapier again.' };
     case 'MANUS_CREATE':
-      return { title: 'Manus couldn’t start the task', body: message || (manusViaServer() ? 'Check your Manus key and credits in Settings → AI.' : 'Check your Manus connection and credits in Zapier.') };
+      return { title: 'Manus couldn’t start the task', body: message || (manusViaServer() ? 'Check your Manus key and credits in Settings › AI keys.' : 'Check your Manus connection and credits in Zapier.') };
     case 'MANUS_CREATE_UNKNOWN':
       return { title: 'Not sure the task started', body: `${message ? `${message} ` : ''}The task may have started anyway: check your Manus tasks before sending it again, or it could be posted twice.` };
     case 'MANUS_NETWORK':

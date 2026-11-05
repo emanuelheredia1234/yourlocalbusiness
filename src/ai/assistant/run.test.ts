@@ -226,7 +226,7 @@ describe('a turn', () => {
     expect(replies()).not.toContain('never');
   });
 
-  it('says plainly when the AI can’t be reached, with Settings → AI', async () => {
+  it('says plainly when the AI can’t be reached, with Settings › AI keys', async () => {
     setAssistantHost({
       ask: async () => {
         throw new AssistantError('No API key powers the Assistant yet.', 'no_provider', true);
@@ -340,7 +340,7 @@ describe('the policy, whatever the model says', () => {
     expect(openPage).toHaveBeenNthCalledWith(1, 'workspace-settings', 'account');
     expect(openPage).toHaveBeenNthCalledWith(2, 'workspace-settings', 'ai');
     expect(activities().map((m) => m.status)).toEqual(['refused', 'refused']);
-    expect(activities()[1].text).toMatch(/only changed by you, in Settings → AI/);
+    expect(activities()[1].text).toMatch(/only changed by you, in Settings › AI keys/);
     expect(prompts[1]).toContain('"status":"refused"');
   });
 

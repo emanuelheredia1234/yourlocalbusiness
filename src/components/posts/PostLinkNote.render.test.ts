@@ -186,7 +186,7 @@ describe('Campaign setup’s “Where the link goes” card', () => {
 
   it('says where to get a link when there’s none, and when it’s only the website', () => {
     const none = card(project({ published: false }));
-    expect(none).toContain('No link in your posts yet. Publish your SEO page, or add your website in Settings → Brand.');
+    expect(none).toContain('No link in your posts yet. Publish your SEO page, or add your website in Settings › Brand.');
     expect(none).toContain('Open the SEO page builder');
     const site = card(project({ published: false, website: 'copperkettle.co' }));
     expect(words(site)).toContain('Your posts link to your website: copperkettle.co. Publish your page to link to it instead.');

@@ -45,11 +45,11 @@ const AT_RE = /^(\d{1,12}\.\d{1,9})(?::(F[A-Z0-9]{6,}))?$/;
 
 const OWNER_ONLY = 'Viktor runs in the app owner’s Slack, so only the owner can use it.';
 const NOT_READY_TEXT = {
-  no_token: 'Connect Slack in Settings → AI → Viktor (Slack).',
-  bad_token: 'Slack didn’t accept the saved token: connect again in Settings → AI → Viktor (Slack).',
-  missing_scopes: 'The Slack app is missing permissions: create it again from the manifest in Settings → AI → Viktor (Slack).',
-  no_viktor: 'Choose Viktor in Settings → AI → Viktor (Slack).',
-  no_place: 'Choose where to talk to Viktor (your DM or a channel) in Settings → AI → Viktor (Slack).',
+  no_token: 'Connect Slack in Settings › AI keys › Viktor (Slack).',
+  bad_token: 'Slack didn’t accept the saved token: connect again in Settings › AI keys › Viktor (Slack).',
+  missing_scopes: 'The Slack app is missing permissions: create it again from the manifest in Settings › AI keys › Viktor (Slack).',
+  no_viktor: 'Choose Viktor in Settings › AI keys › Viktor (Slack).',
+  no_place: 'Choose where to talk to Viktor (your DM or a channel) in Settings › AI keys › Viktor (Slack).',
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -129,7 +129,7 @@ export function createSlackRoutes({ store, appState = { enabled: false }, fetch 
   // ───────────── answers ─────────────
 
   const send = (req, res, status, payload) => reply(req, res, status, payload, { 'cache-control': 'no-store' });
-  const notReady = (req, res, reason) => send(req, res, 409, { error: NOT_READY_TEXT[reason] ?? 'Viktor isn’t set up yet: see Settings → AI → Viktor (Slack).', code: 'NOT_READY', reason });
+  const notReady = (req, res, reason) => send(req, res, 409, { error: NOT_READY_TEXT[reason] ?? 'Viktor isn’t set up yet: see Settings › AI keys › Viktor (Slack).', code: 'NOT_READY', reason });
   const templateRefusal = (req, res, e) => send(req, res, e.status, { error: e.message, code: e.code, ...e.data });
 
   /** A Slack failure on a read or a settings call. */

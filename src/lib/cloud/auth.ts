@@ -102,7 +102,7 @@ function httpOrigin(url: string): string | null {
 
 /**
  * Where the sign-in token may go: the app's own server, or a separate server this account chose on
- * this device (Settings → AI → Test connection). Never just what's in the server address field: a
+ * this device (Settings › AI keys › Test connection). Never just what's in the server address field: a
  * half-typed host or an address from an imported backup must not receive it.
  */
 export function tokenAllowed(target: string, appOrigin: string, trustedOrigin: string | null): boolean {
@@ -559,7 +559,7 @@ export async function sendPasswordReset(email: string): Promise<{ error?: string
   return error ? { error: authMessage(error) } : {};
 }
 
-/** After a reset link (or from Settings → Account). */
+/** After a reset link (or from Settings › Account). */
 export async function setNewPassword(password: string): Promise<{ error?: string }> {
   if (!client) return { error: 'Accounts aren’t available right now.' };
   const { data, error } = await client.auth.updateUser({ password });

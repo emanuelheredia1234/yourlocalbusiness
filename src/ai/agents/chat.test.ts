@@ -168,7 +168,7 @@ describe('sending', () => {
     useRuntime.getState().set({ ai: { ...NO_AI_SERVER, reachable: true, ready: true, agents: health({ ready: false, reason: 'no_viktor' }) } });
     expect(await chat.sendToAgent(PID, 'viktor', { text: 'hi', images: [], website: false })).toBe('failed');
     expect(m.viktorSend).not.toHaveBeenCalled();
-    expect(chatOf(PID).at(-1)).toMatchObject({ role: 'error', via: 'viktor', settings: true, text: 'Choose Viktor in Settings → AI → Viktor (Slack).' });
+    expect(chatOf(PID).at(-1)).toMatchObject({ role: 'error', via: 'viktor', settings: true, text: 'Choose Viktor in Settings › AI keys › Viktor (Slack).' });
   });
 
   it('an image that couldn’t be sent stops the message: nothing was sent', async () => {

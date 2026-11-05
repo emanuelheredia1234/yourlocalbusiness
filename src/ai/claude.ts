@@ -139,7 +139,7 @@ export async function callServerAI(fn: string, prompt: string, opts: ServerCallO
 
 export const serverBase = (serverUrl: string) => (serverUrl || '').replace(/\/+$/, '');
 
-/** Where Settings → AI keeps the ADMIN_TOKEN this browser was given (without accounts, it makes this browser the owner). */
+/** Where Settings › AI keys keeps the ADMIN_TOKEN this browser was given (without accounts, it makes this browser the owner). */
 export const ADMIN_TOKEN_KEY = 'ylb-admin-token';
 
 /** A request to your server, saying who's signed in (when accounts are on), and the admin token when this browser has one. */
@@ -148,7 +148,7 @@ export async function serverFetch(serverUrl: string, path: string, init: Request
   const headers = new Headers(init.headers);
   // the sign-in token (with accounts on, the server refuses AI without it)
   for (const [key, value] of Object.entries(await authHeaders(target))) headers.set(key, value);
-  // without accounts, the owner's routes (Viktor in Slack) need the ADMIN_TOKEN entered in Settings → AI
+  // without accounts, the owner's routes (Viktor in Slack) need the ADMIN_TOKEN entered in Settings › AI keys
   const admin = safeStorage.getItem(ADMIN_TOKEN_KEY);
   if (admin && !headers.has('x-admin-token')) headers.set('x-admin-token', admin);
   return fetch(target, { ...init, headers });
@@ -369,11 +369,11 @@ export function conform<T>(base: T, raw: unknown, allow: ReadonlySet<string> = n
 
 /**
  * Today's limit on the app's keys was reached (server code DAILY_LIMIT). The server's message says
- * the limit and when it resets; this makes sure it always points to Settings → AI.
+ * the limit and when it resets; this makes sure it always points to Settings › AI keys.
  */
 export function dailyLimitText(message = ''): string {
   const m = message.trim() || 'You’ve reached today’s limit on the app’s AI keys. It resets at midnight UTC.';
-  return /Settings\s*→\s*AI/.test(m) ? m : `${m} To keep going now, add your own API keys in Settings → AI.`;
+  return /Settings\s*[→›]\s*AI/.test(m) ? m : `${m} To keep going now, add your own API keys in Settings › AI keys.`;
 }
 
 /** Why the built-in engine answered instead. `message` is the server's own explanation, when there is one. */

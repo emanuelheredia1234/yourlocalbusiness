@@ -57,8 +57,8 @@ function liveNote(p: Project): { marketplace?: string } {
 function writer(fns: string[]): string {
   if (__ARTIFACT_BUILD__) return 'Claude, in claude.ai.';
   const labels = [...new Set(fns.map((f) => primaryProvider(f)?.label).filter((l): l is string => !!l))];
-  if (!labels.length) return 'The built-in engine: no key powers this writing in Settings → AI keys, so the drafts are simpler.';
-  return `${listJoin(labels)}, the key${labels.length === 1 ? ' that powers' : 's that power'} this writing in Settings → AI keys.`;
+  if (!labels.length) return 'The built-in engine: no key powers this writing in Settings › AI keys, so the drafts are simpler.';
+  return `${listJoin(labels)}, the key${labels.length === 1 ? ' that powers' : 's that power'} this writing in Settings › AI keys.`;
 }
 
 /** What a card says about the requests a tool makes. */

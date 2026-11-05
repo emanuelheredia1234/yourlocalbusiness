@@ -10,7 +10,7 @@ export interface PageIntent {
   label: string;
 }
 
-/** Most specific first: "AI keys" is Settings → AI keys, not just Settings. */
+/** Most specific first: "AI keys" is Settings › AI keys, not just Settings. */
 const RULES: { re: RegExp; route: Route; tab?: string }[] = [
   { re: /\b(api keys?|ai keys?|ai settings?|my keys?|keys?\b.*\bai|daily limit)/i, route: 'workspace-settings', tab: 'ai' },
   { re: /\b(social accounts?|handles?)\b/i, route: 'workspace-settings', tab: 'accounts' },
@@ -74,5 +74,5 @@ export function starterSuggestions(w: WorkspaceGist | null): string[] {
 export const OFFLINE_SUGGESTIONS: PageIntent[] = [
   { route: 'calendar', label: 'Open the content calendar' },
   { route: 'marketing-social', tab: 'create', label: 'Create a post' },
-  { route: 'workspace-settings', tab: 'ai', label: 'Open Settings → AI keys' },
+  { route: 'workspace-settings', tab: 'ai', label: 'Open Settings › AI keys' },
 ];

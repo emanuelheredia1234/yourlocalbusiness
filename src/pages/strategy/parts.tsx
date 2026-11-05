@@ -55,7 +55,7 @@ export function NamedSection({ label, className, id, ...rest }: { label: string 
 
 /** Where keys and what they power are set, as the app names it. */
 export const SETTINGS_AI = 'Settings › AI keys';
-/** The AI layer's sentences still say "Settings → AI": they're shown (and linked) with the page's name. */
+/** The AI layer's sentences name "Settings › AI keys" (older saved text may still say "Settings → AI"): shown and linked with the page's name. */
 const SETTINGS_RX = /Settings (?:→|›) AI(?: keys)?/;
 
 /** A link to Settings › AI keys. */

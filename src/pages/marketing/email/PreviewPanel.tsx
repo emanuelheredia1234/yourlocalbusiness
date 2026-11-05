@@ -333,7 +333,7 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
     const draft = omnisendDraft(project, email, index, tokens);
     // the draft is what the preview shows, so its button needs somewhere to go first
     if (draft.ctaLabel && !isWebAddress(draft.ctaUrl)) {
-      settle(emailId, { tone: 'bad', message: 'This email’s button has no web address yet. Add your website in Settings → Brand, or a full https:// link as its Button link in Sequence.' });
+      settle(emailId, { tone: 'bad', message: 'This email’s button has no web address yet. Add your website in Settings › Brand, or a full https:// link as its Button link in Sequence.' });
       return;
     }
     settle(emailId, { busy: true });

@@ -100,13 +100,13 @@ describe('the chat panel', () => {
     expect(html).toContain('aria-label="Stop the assistant"');
   });
 
-  it('says plainly when there’s no AI, links Settings → AI, and still offers pages', () => {
+  it('says plainly when there’s no AI, links Settings › AI keys, and still offers pages', () => {
     useRuntime.getState().set({ ai: { ...NO_AI_SERVER, reachable: true, ready: false, routing: {} } });
     const html = render();
     expect(html).toContain('No API key powers the Assistant yet.');
     expect(html).toContain('Open the content calendar');
     expect(html).toContain('Create a post');
-    expect(html).toContain('Open Settings → AI');
+    expect(html).toContain('Open Settings › AI keys');
     expect(html).toContain('placeholder="Name a page to open…"');
   });
 });
@@ -127,9 +127,9 @@ describe('talking to Manus and Viktor', () => {
     expect(render()).not.toMatch(/>Viktor<\/button>/);
     serve(agents({ viktor: { ready: false, reason: 'no_place' }, manusChat: { ready: false, reason: 'not_ticked' } }));
     const html = flat(render());
-    expect(html).toContain('title="Choose where to talk to Viktor (your DM or a channel) in Settings → AI → Viktor (Slack)."');
+    expect(html).toContain('title="Choose where to talk to Viktor (your DM or a channel) in Settings › AI keys › Viktor (Slack)."');
     expect(html).toMatch(/aria-checked="false" disabled=""[^>]*>(<svg[\s\S]*?<\/svg>)?Viktor</);
-    expect(html).toContain('Tick “Chat with Manus” for your Manus key in Settings → AI.');
+    expect(html).toContain('Tick “Chat with Manus” for your Manus key in Settings › AI keys.');
     expect(html).toMatch(/<button type="button" class="link[^"]*">Set up<\/button>/);
     vi.stubGlobal('__ARTIFACT_BUILD__', true);
     serve(agents());

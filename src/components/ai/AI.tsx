@@ -66,7 +66,7 @@ export function GenerateButton({
       onClick={onClick}
       className={cn('btn', VARIANT[variant], size === 'sm' && 'btn-sm', size === 'lg' && 'btn-lg', running && 'is-running', className)}
     >
-      {running ? aiLook ? <span className="orb" aria-hidden="true" /> : <Spinner /> : icon ?? <Spark size={size === 'lg' ? 18 : 16} />}
+      {running ? aiLook ? <span className="orb" aria-hidden="true" /> : <Spinner /> : icon ?? <Spark size={size === 'lg' ? 18 : 16} mono={disabled} />}
       {running ? runningLabel : children}
     </button>
   );
@@ -91,11 +91,14 @@ function ThinkingStrip({ stage, step, onStop, className, compact }: { stage: str
     return () => clearInterval(t);
   }, []);
   return (
-    <div className={mergeCn('thinking', compact && 'min-h-9 gap-2.5 py-1.5 pl-3 pr-1.5', className)} role="status" aria-live="polite">
+    <div className={mergeCn('thinking', compact && 'min-h-9 gap-2.5 py-1.5 pl-3 pr-1.5', className)}>
       <span className="orb" aria-hidden="true" />
-      <p className="shimmer-text min-w-0 flex-1 truncate text-ui">{stage || 'Thinking…'}</p>
-      <span className="num shrink-0 font-mono text-caption text-muted">
-        {!compact && step ? `${step} · ` : ''}
+      {/* only the stage is announced; the clock ticks every second and stays out of the live region */}
+      <p className={cn('shimmer-text min-w-0 flex-1 text-ui', compact ? 'truncate' : 'clamp-2 break-words')} role="status" aria-live="polite">
+        {stage || 'Thinking…'}
+      </p>
+      <span className="num shrink-0 font-mono text-caption text-muted" aria-hidden="true">
+        {!compact && step ? <span className="max-sm:hidden">{step} · </span> : null}
         {fmtElapsed(secs)}
       </span>
       {onStop && (

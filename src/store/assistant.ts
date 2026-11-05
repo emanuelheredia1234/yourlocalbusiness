@@ -77,7 +77,7 @@ export interface ChatMessage {
   ai?: 'used' | 'builtin';
   buttons?: ButtonRef[];
   card?: CardState;
-  /** error: offer Settings → AI */
+  /** error: offer Settings › AI keys */
   settings?: boolean;
   /** a message the owner sent to Manus or Viktor, a reply from one, or a notice about one */
   via?: AgentId;

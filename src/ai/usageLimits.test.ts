@@ -5,15 +5,15 @@ import { imageErrorMessage } from './image';
 import { videoErrorMessage } from './video';
 import { countersNote, limitPercent, nextUtcMidnight, ownKeyCapability, parseMyKeys, requestsInUse, resetLabel } from './usageLimits';
 
-const SERVER = 'You’ve reached today’s limit on the app’s AI keys (50 requests or $1.00 a day). It resets at midnight UTC. To keep going now, add your own API keys in Settings → AI.';
+const SERVER = 'You’ve reached today’s limit on the app’s AI keys (50 requests or $1.00 a day). It resets at midnight UTC. To keep going now, add your own API keys in Settings › AI keys.';
 
 describe('reaching the daily limit', () => {
-  it('shows the server’s message as is when it already points to Settings → AI', () => {
+  it('shows the server’s message as is when it already points to Settings › AI keys', () => {
     expect(dailyLimitText(SERVER)).toBe(SERVER);
   });
-  it('adds the pointer to Settings → AI when the message lacks it, or there is none', () => {
-    expect(dailyLimitText('Limit reached.')).toBe('Limit reached. To keep going now, add your own API keys in Settings → AI.');
-    expect(dailyLimitText('')).toMatch(/today’s limit.*Settings → AI/);
+  it('adds the pointer to Settings › AI keys when the message lacks it, or there is none', () => {
+    expect(dailyLimitText('Limit reached.')).toBe('Limit reached. To keep going now, add your own API keys in Settings › AI keys.');
+    expect(dailyLimitText('')).toMatch(/today’s limit.*Settings › AI keys/);
   });
   it('writing: the note says why the built-in engine answered', () => {
     const note = friendlyAIError('daily_limit', SERVER);
@@ -51,7 +51,7 @@ describe('usage card helpers', () => {
   });
 });
 
-describe('Settings → AI: the own-keys card', () => {
+describe('Settings › AI keys: the own-keys card', () => {
   const providers = [
     { id: 'openai', label: 'OpenAI', kinds: ['text', 'image'], keyUrl: 'https://platform.openai.com/api-keys' },
     { id: 'manus', label: 'Manus', kinds: ['image', 'agent'], keyUrl: '' },
@@ -83,7 +83,7 @@ describe('Settings → AI: the own-keys card', () => {
   });
 });
 
-describe('Settings → AI: the usage cards', () => {
+describe('Settings › AI keys: the usage cards', () => {
   it('counts running requests in the Requests meter, like the server’s limit does', () => {
     expect(requestsInUse({ usedRequests: 0, running: 1 })).toBe(1);
     expect(requestsInUse({ usedRequests: 3 })).toBe(3);

@@ -1,7 +1,7 @@
 // The server's own settings, kept in Supabase so they survive restarts and are shared by every
 // copy of the server: the owner's AI keys and their settings, the Manus tasks the app started, and
 // the usage log. Replit's published apps (and similar hosts) wipe their disk when they restart, so
-// without this, keys typed into Settings → AI would quietly disappear.
+// without this, keys typed into Settings › AI keys would quietly disappear.
 //
 // Each value is a JSON document, encrypted (AES-256-GCM) in the app_state table, which only the
 // server can reach (row-level security with no policies). Needs SUPABASE_SECRET_KEY; USER_KEYS_SECRET

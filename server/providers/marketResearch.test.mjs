@@ -261,7 +261,7 @@ describe('POST /api/ai/manus/create for deep research', () => {
     try {
       const r = await post('/api/ai/manus/create', { fn: 'marketResearch', research: FACTS });
       expect(r.status).toBe(409);
-      expect(await r.json()).toMatchObject({ code: 'NO_PROVIDER', error: 'Your Manus key isn’t set to power Deep research (Manus). Turn it on in Settings → AI.' });
+      expect(await r.json()).toMatchObject({ code: 'NO_PROVIDER', error: 'Your Manus key isn’t set to power Deep research (Manus). Turn it on in Settings › AI keys.' });
       expect((await app.ai.health()).routing.marketResearch).toEqual([]);
     } finally {
       app.ai.store.update('manus', { functions: ['facebook', 'photos', 'marketResearch'] });

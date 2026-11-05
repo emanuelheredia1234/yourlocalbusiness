@@ -609,7 +609,7 @@ describe('published pages', () => {
           { what: `the code asset “${a.name}” (Copper Kettle)`, url: 'https://app.test/bread-faq' },
         ],
         domains: [{ domain: 'copperkettle.com', verified: false }],
-        aboutDomains: expect.stringContaining('Settings → Domains'),
+        aboutDomains: expect.stringContaining('Settings › Domains'),
       },
     });
     expect(JSON.stringify(r)).not.toContain('SECRET123');

@@ -1,4 +1,4 @@
-// Settings → Domains shows only where publishing is on (rendered once, as on the server: no effects run).
+// Settings › Domains shows only where publishing is on (rendered once, as on the server: no effects run).
 import { describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';

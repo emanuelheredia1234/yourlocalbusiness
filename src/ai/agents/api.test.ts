@@ -176,7 +176,7 @@ describe('what the owner is told', () => {
 
   it('points setup problems at Settings with the readiness text', () => {
     const t = agentErrorText(new AgentError('x', 'SETUP', { reason: 'no_token' }), 'viktor');
-    expect(t).toMatchObject({ settings: true, body: 'Connect Slack in Settings → AI → Viktor (Slack).' });
-    expect(agentErrorText(new AgentError('x', 'SETUP', { reason: 'not_ticked' }), 'manus').body).toBe('Tick “Building pages & assets” for your Manus key in Settings → AI.');
+    expect(t).toMatchObject({ settings: true, body: 'Connect Slack in Settings › AI keys › Viktor (Slack).' });
+    expect(agentErrorText(new AgentError('x', 'SETUP', { reason: 'not_ticked' }), 'manus').body).toBe('Tick “Building pages & assets” for your Manus key in Settings › AI keys.');
   });
 });

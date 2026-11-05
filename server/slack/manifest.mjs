@@ -1,5 +1,5 @@
 // The small Slack app the owner creates in their own workspace so this app can talk to Viktor (viktor.com's
-// AI employee) as them: user scopes only (no bot user), token rotation off. Settings → AI → Viktor (Slack)
+// AI employee) as them: user scopes only (no bot user), token rotation off. Settings › AI keys › Viktor (Slack)
 // shows it with a Copy button and a "Create it from the manifest" link (Slack's share-link pattern:
 // https://api.slack.com/apps?new_app=1&manifest_yaml=<URL-encoded YAML>).
 //

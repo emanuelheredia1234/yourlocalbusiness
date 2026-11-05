@@ -44,7 +44,7 @@ describe('requests to your server', () => {
 describe('the daily limit on the app’s keys', () => {
   it('a DAILY_LIMIT answer becomes the daily_limit error, with the server’s message', async () => {
     const { callServerAI, AIError } = await import('./claude');
-    const message = 'You’ve reached today’s limit on the app’s AI keys (50 requests or $1.00 a day). It resets at midnight UTC. To keep going now, add your own API keys in Settings → AI.';
+    const message = 'You’ve reached today’s limit on the app’s AI keys (50 requests or $1.00 a day). It resets at midnight UTC. To keep going now, add your own API keys in Settings › AI keys.';
     fakeFetch.mockImplementationOnce(async () => new Response(JSON.stringify({ code: 'DAILY_LIMIT', error: message, limits: { reached: true } }), { status: 429, headers: { 'content-type': 'application/json' } }));
     const err = await callServerAI('product', 'hi', { serverUrl: '', tier: 'default' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AIError);

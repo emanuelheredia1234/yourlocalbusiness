@@ -14,7 +14,7 @@ export function videoCard(o: { what: string; seconds: number; resolution?: Video
     return {
       title: `Make a ${o.seconds}-second video?`,
       what: o.what,
-      who: p ? `${p.label}, with ${p.models.video ?? 'its video model'} at ${p.effort.video?.label ?? 'its default'} quality (set in Settings → AI keys). It takes a minute or more.` : 'The key that powers Videos in Settings → AI keys.',
+      who: p ? `${p.label}, with ${p.models.video ?? 'its video model'} at ${p.effort.video?.label ?? 'its default'} quality (set in Settings › AI keys). It takes a minute or more.` : 'The key that powers Videos in Settings › AI keys.',
       cost: 'Billed to that key by the second; the estimate counts toward today’s AI limit as soon as it starts.',
       confirmLabel: o.confirmLabel ?? 'Make the video',
     };

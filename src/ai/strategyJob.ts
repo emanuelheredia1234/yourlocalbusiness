@@ -101,7 +101,7 @@ export function noAIText(code?: string, unchanged = true): string {
     : __ARTIFACT_BUILD__ ? 'claude' : useRuntime.getState().server === 'down' ? 'server' : 'key';
   const so = unchanged ? ', so nothing was changed' : '';
   if (cause === 'server') return `Your AI server can’t be reached right now${so}. Check that it’s running, then try again.`;
-  if (cause === 'key') return `No API key powers Strategy now${so}. In Settings → AI, tick Strategy for one of your keys.`;
+  if (cause === 'key') return `No API key powers Strategy now${so}. In Settings › AI keys, tick Strategy for one of your keys.`;
   return `Claude isn’t available here right now${so}.`;
 }
 

@@ -100,7 +100,7 @@ function projectMedia(p: Project, id: string | undefined): MediaRef | undefined 
   return p.brand.images.find((m) => m.id === id) ?? findPost(id)?.media ?? projectPosts().find((x) => x.media?.id === id)?.media;
 }
 
-const noLink = () => (__ARTIFACT_BUILD__ ? 'There’s no link for posts yet: the owner adds their website in Settings → Brand.' : 'There’s no link for posts yet: publish the SEO page, or add the website in Settings → Brand.');
+const noLink = () => (__ARTIFACT_BUILD__ ? 'There’s no link for posts yet: the owner adds their website in Settings › Brand.' : 'There’s no link for posts yet: publish the SEO page, or add the website in Settings › Brand.');
 
 /** Posts an image or video is being made for by the assistant right now (so one isn't started twice). */
 const making = new Set<string>();

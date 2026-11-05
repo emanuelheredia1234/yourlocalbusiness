@@ -491,7 +491,7 @@ export function buildVoiceSkill(o: VoiceSkillInput): VoiceSkill {
   return {
     name: voiceSkillName(o.platform),
     category: 'voice',
-    description: `Learned by Manus from ${posts} by ${o.profileLabel || `your ${network} profile`} (${date}). Switch it on or off next to the profile in Settings → Brand.`,
+    description: `Learned by Manus from ${posts} by ${o.profileLabel || `your ${network} profile`} (${date}). Switch it on or off next to the profile in Settings › Brand.`,
     instructions,
     scope: ['all'],
     priority: 2,
