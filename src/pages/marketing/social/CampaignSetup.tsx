@@ -1,15 +1,15 @@
-import { useMemo } from 'react';
-import { AlertTriangle, CalendarDays, Check, Clapperboard, Globe, Image as ImageIcon, Users } from 'lucide-react';
-import type { CampaignConfig, ImageStyleId, PostPlatform, PostType, Project, VideoStyleId } from '@/lib/types';
-import { cn, WEEKDAYS } from '@/lib/utils';
+import { useMemo, type ReactNode } from 'react';
+import { Check, TriangleAlert } from 'lucide-react';
+import type { CampaignConfig, ImageStyleId, PostPlatform, PostType, Project, StyleId, VideoStyleId } from '@/lib/types';
+import { cn, parseDateStr, WEEKDAYS } from '@/lib/utils';
 import { brandMark } from '@/lib/brandMark';
-import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES } from '@/ai/knowledge';
+import { IMAGE_STYLES, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES } from '@/ai/knowledge';
 import { suggestTopics } from '@/ai/local/social';
 import { useStore } from '@/store/useStore';
 import { cadence, patchCampaign } from '@/ai/socialPlan';
-import { Field, Segmented, Toggle } from '@/components/ui/primitives';
+import { DateTimeButton, Segmented, SettingsRow, Toggle } from '@/components/ui/primitives';
 import { StackedBar } from '@/components/charts/Charts';
-import { PostVisual } from '@/components/visuals/PostVisual';
+import { PostVisual, orderStyles } from '@/components/visuals/PostVisual';
 import { PlatformChip } from '@/components/posts/PlatformIcon';
 import { NETWORKS } from '@/ai/manusPost';
 import { LinkPlacementCard } from './LinkPlacementCard';
@@ -21,8 +21,39 @@ const WEIGHTS = [
   { id: '3', label: 'Most' },
 ] as const;
 
+
+const pad = (n: number) => String(n).padStart(2, '0');
+/** "14:30" today, as a time the time picker shows */
+const hmToMs = (hm: string) => {
+  const [h, m] = hm.split(':').map(Number);
+  const d = new Date();
+  d.setHours(h || 0, m || 0, 0, 0);
+  return d.getTime();
+};
+const msToHm = (ms: number) => {
+  const d = new Date(ms);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+const msToDateStr = (ms: number) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
 export function useCampaign() {
   return (patch: Partial<CampaignConfig>) => patchCampaign(patch);
+}
+
+/** A settings card with a page-level heading (h2): the setup's sections sit right under the page title. */
+function SetupSection({ title, description, children, label }: { title: ReactNode; description?: ReactNode; children: ReactNode; label: string }) {
+  return (
+    <section className="card" aria-label={label}>
+      <div className="px-5 pb-1 pt-5">
+        <h2 className="text-h3 text-ink">{title}</h2>
+        {description && <p className="mt-0.5 text-small text-muted">{description}</p>}
+      </div>
+      <div className="px-5 pb-1">{children}</div>
+    </section>
+  );
 }
 
 export function CampaignSetup({ project }: { project: Project }) {
@@ -38,151 +69,114 @@ export function CampaignSetup({ project }: { project: Project }) {
   const needVideoStyle = c.videos > 0 && cfg.videoStyles.length === 0;
 
   const toggleIn = <T extends string>(list: T[], id: T): T[] => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
+  const videos = Math.min(cfg.videosPerDay, cfg.postsPerDay);
 
   return (
     <div className="flex flex-col gap-5">
-      <section className="panel p-4 sm:p-5" aria-label="Cadence">
-        <h2 className="section-title mb-1 flex items-center gap-2">
-          <CalendarDays size={17} className="text-primary" /> Posting cadence
-        </h2>
-        <p className="mb-4 text-[13px] text-muted">Pick your posting days, how many posts per day, and how many of those are videos.</p>
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-          <Field label="Posting days">
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Posting days">
-              {WEEKDAYS.map((d, i) => (
-                <button key={d} className={cn('chip min-w-[48px] justify-center', cfg.days[i] && 'chip-active')} aria-pressed={cfg.days[i]} onClick={() => set({ days: cfg.days.map((x, j) => (j === i ? !x : x)) })}>
-                  {d}
-                </button>
-              ))}
-            </div>
-          </Field>
-          <Field label="Campaign goal">
-            <Segmented<CampaignConfig['goal']>
-              size="sm"
-              value={cfg.goal}
-              onChange={(goal) => set({ goal })}
-              options={[
-                { id: 'awareness', label: 'Awareness' },
-                { id: 'leads', label: 'Leads' },
-                { id: 'sales', label: project.track === 'business' ? 'Bookings' : 'Sales' },
-              ]}
-            />
-          </Field>
-          <Field label="Posts per day">
-            <Segmented
-              size="sm"
-              value={String(cfg.postsPerDay)}
-              onChange={(v) => {
-                const n = Number(v);
-                set({ postsPerDay: n, videosPerDay: Math.min(cfg.videosPerDay, n) });
-              }}
-              options={[1, 2, 3, 4, 5].map((n) => ({ id: String(n), label: String(n) }))}
-            />
-          </Field>
-          <Field label="Videos per day" hint={`${cfg.postsPerDay - Math.min(cfg.videosPerDay, cfg.postsPerDay)} image post${cfg.postsPerDay - cfg.videosPerDay === 1 ? '' : 's'} + ${Math.min(cfg.videosPerDay, cfg.postsPerDay)} video${cfg.videosPerDay === 1 ? '' : 's'} each posting day`}>
-            <Segmented size="sm" value={String(Math.min(cfg.videosPerDay, cfg.postsPerDay))} onChange={(v) => set({ videosPerDay: Number(v) })} options={Array.from({ length: cfg.postsPerDay + 1 }, (_, n) => ({ id: String(n), label: String(n) }))} />
-          </Field>
-          <Field label="Posting times">
-            <div className="flex flex-wrap gap-2">
-              {Array.from({ length: cfg.postsPerDay }, (_, i) => (
-                <input key={i} type="time" className="input input-sm w-[118px]" value={cfg.times[i] ?? '12:00'} onChange={(e) => set({ times: Object.assign([...cfg.times], { [i]: e.target.value }) })} aria-label={`Post ${i + 1} time`} />
-              ))}
-            </div>
-          </Field>
-          <Field label="Start date" htmlFor="cmp-start">
-            <input id="cmp-start" type="date" className="input w-[180px]" value={cfg.startDate} onChange={(e) => e.target.value && set({ startDate: e.target.value })} />
-          </Field>
+      <SetupSection label="Cadence" title="Posting cadence" description="When you post, how often, and how many of those are videos.">
+        <SettingsRow label="Posting days">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Posting days">
+            {WEEKDAYS.map((d, i) => (
+              <button key={d} type="button" className={cn('chip min-w-[48px] justify-center', cfg.days[i] && 'chip-active')} aria-pressed={cfg.days[i]} onClick={() => set({ days: cfg.days.map((x, j) => (j === i ? !x : x)) })}>
+                {cfg.days[i] && <Check aria-hidden="true" />}
+                {d}
+              </button>
+            ))}
+          </div>
+        </SettingsRow>
+        <SettingsRow label="Posts per day">
+          <Segmented
+            size="sm"
+            value={String(cfg.postsPerDay)}
+            onChange={(v) => {
+              const n = Number(v);
+              set({ postsPerDay: n, videosPerDay: Math.min(cfg.videosPerDay, n) });
+            }}
+            options={[1, 2, 3, 4, 5].map((n) => ({ id: String(n), label: String(n) }))}
+          />
+        </SettingsRow>
+        <SettingsRow label="Videos per day" description={`${cfg.postsPerDay - videos} image post${cfg.postsPerDay - videos === 1 ? '' : 's'} and ${videos} video${videos === 1 ? '' : 's'} each posting day`}>
+          <Segmented size="sm" value={String(videos)} onChange={(v) => set({ videosPerDay: Number(v) })} options={Array.from({ length: cfg.postsPerDay + 1 }, (_, n) => ({ id: String(n), label: String(n) }))} />
+        </SettingsRow>
+        <SettingsRow label="Posting times" description="One for each post of the day.">
+          <div className="flex flex-wrap gap-2 md:justify-end">
+            {Array.from({ length: cfg.postsPerDay }, (_, i) => (
+              <DateTimeButton key={i} mode="time" aria-label={`Post ${i + 1} time`} value={hmToMs(cfg.times[i] ?? '12:00')} onChange={(ms) => set({ times: Object.assign([...cfg.times], { [i]: msToHm(ms) }) })} />
+            ))}
+          </div>
+        </SettingsRow>
+        <SettingsRow label="Start date">
+          <DateTimeButton mode="date" aria-label="Start date" value={parseDateStr(cfg.startDate).getTime()} onChange={(ms) => set({ startDate: msToDateStr(ms) })} />
+        </SettingsRow>
+        <SettingsRow label="Campaign goal">
+          <Segmented<CampaignConfig['goal']>
+            size="sm"
+            value={cfg.goal}
+            onChange={(goal) => set({ goal })}
+            options={[
+              { id: 'awareness', label: 'Awareness' },
+              { id: 'leads', label: 'Leads' },
+              { id: 'sales', label: project.track === 'business' ? 'Bookings' : 'Sales' },
+            ]}
+          />
+        </SettingsRow>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-line py-4">
+          <p className="num font-mono text-small text-muted">
+            {c.perWeek} posts a week · {c.videos} videos · {c.images} images · ≈ {c.month} over 30 days
+          </p>
+          {c.days === 0 && <Warn>Pick at least one posting day.</Warn>}
         </div>
-        <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-md bg-surface-2 px-4 py-3 text-[13px]">
-          <span>
-            <b className="num">{c.perWeek}</b> posts/week
-          </span>
-          <span className="flex items-center gap-1">
-            <Clapperboard size={13} /> <b className="num">{c.videos}</b> videos
-          </span>
-          <span className="flex items-center gap-1">
-            <ImageIcon size={13} /> <b className="num">{c.images}</b> images
-          </span>
-          <span className="text-muted">
-            ≈ <b className="num text-ink">{c.month}</b> posts over 30 days
-          </span>
-          {c.days === 0 && <span className="text-warn">Pick at least one posting day.</span>}
+      </SetupSection>
+
+      <SetupSection label="Visual styles" title="Look and feel" description="The looks your posts rotate through, in your brand’s colours and photos.">
+        <SettingsRow label="Watermark" htmlFor="cmp-watermark" description={mark && mark !== project.brand.name.trim() ? <>AI images show {mark} in the corner. Your own photos post as they are.</> : 'No website or @handle yet, so AI images show your brand name.'}>
+          <Toggle id="cmp-watermark" checked={cfg.watermark} onChange={(v) => set({ watermark: v })} />
+        </SettingsRow>
+        <div className="border-t border-line py-4">
+          <StyleGroup label="Image styles">
+            {orderStyles(IMAGE_STYLES).map((s) => (
+              <StyleCard key={s.id} checked={cfg.imageStyles.includes(s.id)} onToggle={() => set({ imageStyles: toggleIn<ImageStyleId>(cfg.imageStyles, s.id) })} label={s.label} desc={s.bestFor}>
+                <PostVisual style={s.id} headline={sample} brand={project.brand} watermark={cfg.watermark} aspect="1/1" points={['Start small', 'Stay consistent', 'Track wins']} className="rounded-none" />
+              </StyleCard>
+            ))}
+          </StyleGroup>
+          {needImageStyle && <Warn>Choose at least one image style for your image posts.</Warn>}
         </div>
-      </section>
+        <div className="border-t border-line py-4">
+          <StyleGroup label="Video styles">
+            {orderStyles(VIDEO_STYLES).map((s) => (
+              <StyleCard key={s.id} checked={cfg.videoStyles.includes(s.id)} onToggle={() => set({ videoStyles: toggleIn<VideoStyleId>(cfg.videoStyles, s.id) })} label={s.label} desc={s.bestFor} tall>
+                <PostVisual style={s.id as StyleId} headline={sample} brand={project.brand} watermark={cfg.watermark} aspect="9/16" hoverPlay className="rounded-none" />
+              </StyleCard>
+            ))}
+          </StyleGroup>
+          {needVideoStyle && <Warn>Choose at least one video style, or set videos per day to 0.</Warn>}
+        </div>
+      </SetupSection>
 
-      <section className="panel p-4 sm:p-5" aria-label="Watermark">
-        <Toggle checked={cfg.watermark} onChange={(v) => set({ watermark: v })} label="Add a watermark" description={mark && mark !== project.brand.name.trim() ? <>AI images show <b className="text-ink">{mark}</b> in the corner. Your own photos post as they are.</> : 'No website or @handle yet, so AI images show your brand name. Add your handles below, or your website in Settings → Brand.'} />
-      </section>
-
-      <section className="panel p-4 sm:p-5" aria-label="Visual styles">
-        <h2 className="section-title mb-1">Visual styles</h2>
-        <p className="mb-4 text-[13px] text-muted">Select the looks to rotate through. Every preview uses your brand colors.</p>
-        <h3 className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold">
-          <ImageIcon size={14} /> Image styles
-        </h3>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-          {IMAGE_STYLES.map((s) => (
-            <StyleCard key={s.id} checked={cfg.imageStyles.includes(s.id)} onToggle={() => set({ imageStyles: toggleIn<ImageStyleId>(cfg.imageStyles, s.id) })} label={s.label} desc={s.bestFor}>
-              <PostVisual style={s.id} headline={sample} brand={project.brand} watermark={cfg.watermark} aspect="1/1" points={['Start small', 'Stay consistent', 'Track wins']} />
-            </StyleCard>
+      <SetupSection label="Platforms and accounts" title="Platforms" description="Where this campaign posts, and your handle on each. Manus posts as you, or you post yourself.">
+        <ul>
+          {POST_PLATFORMS.map((p) => (
+            <PlatformRow key={p} platform={p} on={cfg.platforms.includes(p)} handle={project.brand.socials[p] ?? ''} onToggle={() => set({ platforms: toggleIn<PostPlatform>(cfg.platforms, p) })} onHandle={(v) => updateBrand({ socials: { ...project.brand.socials, [p]: v } })} />
           ))}
-        </div>
-        {needImageStyle && <Warn>Choose at least one image style for your image posts.</Warn>}
-        <h3 className="mb-2 mt-5 flex items-center gap-1.5 text-[13px] font-semibold">
-          <Clapperboard size={14} /> Video styles
-        </h3>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-          {VIDEO_STYLES.map((s) => (
-            <StyleCard key={s.id} checked={cfg.videoStyles.includes(s.id)} onToggle={() => set({ videoStyles: toggleIn<VideoStyleId>(cfg.videoStyles, s.id) })} label={s.label} desc={s.bestFor}>
-              <PostVisual style={s.id} headline={sample} brand={project.brand} watermark={cfg.watermark} aspect="9/16" hoverPlay className="max-h-[260px]" />
-            </StyleCard>
-          ))}
-        </div>
-        {needVideoStyle && <Warn>Choose at least one video style, or set videos per day to 0.</Warn>}
-      </section>
-
-      <section className="panel p-4 sm:p-5" aria-label="Platforms and accounts">
-        <h2 className="section-title mb-1 flex items-center gap-2">
-          <Globe size={17} className="text-primary" /> Platforms & accounts
-        </h2>
-        <p className="mb-4 text-[13px] text-muted">Choose where this campaign posts, and add your handle on each. This app doesn’t log in to your accounts: Manus posts for you, signed in as you in its own browser, or you post yourself. The handles show in previews and tell Manus which account to use.</p>
-        <ul className="grid grid-cols-1 gap-2 md:grid-cols-2">
-          {POST_PLATFORMS.map((p) => {
-            const on = cfg.platforms.includes(p);
-            return (
-              <li key={p} className={cn('flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3 py-2.5', on ? 'border-primary/50 bg-primary-soft/50' : 'border-line')}>
-                <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={on} onChange={() => set({ platforms: toggleIn<PostPlatform>(cfg.platforms, p) })} aria-label={`Post on ${PLATFORMS[p].label}`} id={`pl-${p}`} />
-                <label htmlFor={`pl-${p}`} className="min-w-[110px] cursor-pointer">
-                  <PlatformChip platform={p} />
-                </label>
-                <input
-                  className="input input-sm min-w-0 flex-1 basis-[160px]"
-                  value={project.brand.socials[p] ?? ''}
-                  onChange={(e) => updateBrand({ socials: { ...project.brand.socials, [p]: e.target.value } })}
-                  placeholder={NETWORKS[p].placeholder}
-                  aria-label={`Your ${NETWORKS[p].account}`}
-                />
-              </li>
-            );
-          })}
         </ul>
-        {cfg.platforms.length === 0 && <Warn>Pick at least one platform.</Warn>}
-      </section>
+        {cfg.platforms.length === 0 && (
+          <div className="pb-4">
+            <Warn>Pick at least one platform.</Warn>
+          </div>
+        )}
+      </SetupSection>
 
       <LinkPlacementCard project={project} />
 
-      <section className="panel p-4 sm:p-5" aria-label="Post type mix">
-        <h2 className="section-title mb-1 flex items-center gap-2">
-          <Users size={17} className="text-primary" /> Post type mix
-        </h2>
-        <p className="mb-4 text-[13px] text-muted">Weight the five post types. The plan also shifts the mix week by week, from awareness to conversion.</p>
-        <ul className="flex flex-col gap-3">
+      <SetupSection label="Post type mix" title="Post mix" description="How much of each kind of post. The plan also shifts the mix week by week, from awareness to booking.">
+        <ul>
           {POST_TYPES.map((t) => (
-            <li key={t.id} className="flex flex-wrap items-center gap-3">
-              <span className="h-3 w-3 shrink-0 rounded-full" style={{ background: `rgb(var(--${t.slot}))` }} />
+            <li key={t.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line py-3 first:border-t-0">
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: `rgb(var(--${t.slot}))` }} aria-hidden="true" />
               <span className="min-w-[180px] flex-1">
-                <span className="block text-[13.5px] font-semibold">{t.label}</span>
-                <span className="block text-xs text-muted">
+                <span className="block text-ui text-ink">{t.label}</span>
+                <span className="block text-small text-muted">
                   {t.desc} Good for {t.goal.toLowerCase()}.
                 </span>
               </span>
@@ -190,34 +184,67 @@ export function CampaignSetup({ project }: { project: Project }) {
             </li>
           ))}
         </ul>
-        <div className="mt-4">
+        <div className="border-t border-line py-4">
+          <p className="mb-2 text-small font-medium text-ink-2">Your mix</p>
           <StackedBar parts={POST_TYPES.map((t) => ({ key: t.id, label: t.short, value: Math.round((cfg.postTypes[t.id] / typeTotal) * 100), color: `rgb(var(--${t.slot}))` }))} />
         </div>
-      </section>
+      </SetupSection>
     </div>
   );
 }
 
-function StyleCard({ checked, onToggle, label, desc, children }: { checked: boolean; onToggle: () => void; label: string; desc: string; children: React.ReactNode }) {
+function PlatformRow({ platform: p, on, handle, onToggle, onHandle }: { platform: PostPlatform; on: boolean; handle: string; onToggle: () => void; onHandle: (v: string) => void }) {
+  const id = `pl-${p}`;
   return (
-    <label className={cn('group relative flex cursor-pointer flex-col overflow-hidden rounded-lg border bg-surface transition-shadow', checked ? 'border-primary ring-2 ring-primary/40' : 'border-line hover:shadow-card')}>
+    <li className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 border-t border-line py-3 first:border-t-0 sm:grid-cols-[auto_150px_minmax(0,1fr)]">
+      {/* one label for the switch, so its name is "Post on Instagram" (not the network twice) */}
+      <Toggle id={id} checked={on} onChange={onToggle} />
+      <label htmlFor={id} className="cursor-pointer">
+        <span className="sr-only">Post on </span>
+        <PlatformChip platform={p} />
+      </label>
+      <input className="input input-sm col-span-2 min-w-0 sm:col-span-1" value={handle} onChange={(e) => onHandle(e.target.value)} placeholder={NETWORKS[p].placeholder} aria-label={`Your ${NETWORKS[p].account}`} />
+    </li>
+  );
+}
+
+function StyleGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div role="group" aria-label={label}>
+      <h3 className="mb-3 text-h4 text-ink">{label}</h3>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">{children}</div>
+    </div>
+  );
+}
+
+/** A visual style to rotate through: a real post preview, picked with the option-card ring and a check. */
+function StyleCard({ checked, onToggle, label, desc, children, tall }: { checked: boolean; onToggle: () => void; label: string; desc: string; children: ReactNode; tall?: boolean }) {
+  return (
+    <label
+      className={cn(
+        'group relative flex cursor-pointer flex-col overflow-hidden rounded-lg border bg-surface transition-[border-color,box-shadow,background-color] duration-120 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring',
+        checked ? 'border-transparent bg-primary-soft/50 ring-[1.5px] ring-inset ring-primary' : 'border-line hover:border-line-3 hover:shadow-sm',
+      )}
+    >
       <input type="checkbox" className="sr-only" checked={checked} onChange={onToggle} />
-      <div className="flex justify-center bg-surface-2">{children}</div>
-      <span className={cn('absolute right-2 top-2 z-30 flex h-6 w-6 items-center justify-center rounded-full border-2 shadow-sm', checked ? 'border-primary bg-primary text-on-primary' : 'border-white/80 bg-black/25 text-transparent')}>
-        <Check size={13} />
-      </span>
-      <span className="p-2.5">
-        <span className="block text-[12.5px] font-semibold leading-tight">{label}</span>
-        <span className="mt-0.5 block text-[11px] leading-snug text-muted">{desc}</span>
+      <div className={cn('relative overflow-hidden', tall && 'mx-auto w-full max-w-[150px]')}>{children}</div>
+      {checked && (
+        <span className="absolute right-2 top-2 z-30 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-on-primary" aria-hidden="true">
+          <Check size={12} strokeWidth={3} />
+        </span>
+      )}
+      <span className="p-3">
+        <span className="block text-ui text-ink">{label}</span>
+        <span className="clamp-2 mt-0.5 block text-caption text-muted">{desc}</span>
       </span>
     </label>
   );
 }
 
-function Warn({ children }: { children: React.ReactNode }) {
+function Warn({ children }: { children: ReactNode }) {
   return (
-    <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-warn">
-      <AlertTriangle size={13} /> {children}
+    <p className="mt-3 flex items-center gap-1.5 text-caption font-medium text-warn">
+      <TriangleAlert size={14} aria-hidden="true" /> {children}
     </p>
   );
 }

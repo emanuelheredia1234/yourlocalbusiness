@@ -1,17 +1,21 @@
 import { useState } from 'react';
-import { Check, Download, FileText, Gift, Plus, Trash2 } from 'lucide-react';
+import { Check, Copy, Download, Plus, Trash2 } from 'lucide-react';
 import type { LeadMagnet, LeadMagnetType, Project } from '@/lib/types';
-import { cn, emailValid, readableOn, slugify, withAlpha } from '@/lib/utils';
+import { emailValid, readableOn, slugify, withAlpha } from '@/lib/utils';
 import { LEAD_MAGNET_TYPES, leadMagnetMarkdown } from '@/ai/local/email';
 import { applyLeadMagnet } from '@/lib/emailFunnel';
 import { leadMagnetTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
+import { copyText } from '@/lib/platform';
 import { getActiveProject, useStore } from '@/store/useStore';
+import { toast } from '@/store/ui';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { AutoTextarea, CopyButton, Empty, Field, LinesEditor, confirmAction } from '@/components/ui/primitives';
+import { AutoTextarea, Empty, Field, LinesEditor, MoreMenu, OptionCards, Section, Select, Tooltip, confirmAction } from '@/components/ui/primitives';
 import { Icon } from '@/components/ui/Icon';
 import { BrandLogo } from '@/components/brand/Logo';
+import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
+import { PanelHead } from './shared';
 
 export function LeadMagnetPanel({ project }: { project: Project }) {
   const updateMarketing = useStore((s) => s.updateMarketing);
@@ -25,85 +29,137 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
     const r = await ai.run({ type });
     if (r) applyLeadMagnet(r, project.id);
   };
+  const copyMarkdown = async () => {
+    const cur = getActiveProject()!.marketing.leadMagnet;
+    if (!cur) return;
+    if (await copyText(leadMagnetMarkdown(cur, project.brand.name))) toast({ kind: 'success', title: 'Copied as Markdown' });
+    else toast({ kind: 'error', title: 'Copy was blocked', body: 'Use Export .md instead.' });
+  };
+
+  const thinking = <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />;
+  const resultBar = ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />;
+
+  // before there's a lead magnet: what it is, the six kinds, and one button that writes it
+  if (!lm) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Empty
+          variant="ai"
+          title="Turn visitors into subscribers"
+          body="A free guide, an opt-in page and five emails in your voice."
+          action={
+            <GenerateButton variant="ai" size="lg" running={ai.running} runningLabel="Writing…" onClick={generate}>
+              Generate lead magnet
+            </GenerateButton>
+          }
+          className="pb-10"
+        />
+        <div className="mx-auto w-full max-w-[880px]">
+          <p className="label">What kind of freebie?</p>
+          <OptionCards<LeadMagnetType>
+            aria-label="Lead magnet type"
+            columns={3}
+            value={type}
+            onChange={setType}
+            options={LEAD_MAGNET_TYPES.map((t) => ({ value: t.id, title: t.label, description: t.desc, icon: <Icon name={t.icon} size={20} /> }))}
+          />
+        </div>
+        {thinking}
+        {resultBar}
+      </div>
+    );
+  }
 
   return (
-    <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-      <div className="flex min-w-0 flex-col gap-4">
-        <section className="panel p-4 sm:p-5" aria-label="Lead magnet type">
-          <h2 className="section-title mb-1">Free lead magnet</h2>
-          <p className="mb-3 text-[13px] text-muted">A quick win your ideal buyer will trade their email for, designed to lead naturally to {project.studio.listing.title || project.brand.name}.</p>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Lead magnet type">
-            {LEAD_MAGNET_TYPES.map((t) => (
-              <button key={t.id} role="radio" aria-checked={type === t.id} onClick={() => setType(t.id)} className={cn('flex flex-col gap-1 rounded-md border p-3 text-left transition-colors', type === t.id ? 'border-primary bg-primary-soft' : 'border-line hover:border-line-2 hover:bg-surface-2')}>
-                <span className="flex items-center gap-1.5 text-[13px] font-semibold">
-                  <Icon name={t.icon} size={14} className={type === t.id ? 'text-primary' : 'text-muted'} /> {t.label}
-                </span>
-                <span className="text-[11.5px] leading-snug text-muted">{t.desc}</span>
-              </button>
-            ))}
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <GenerateButton running={ai.running} onClick={generate}>
-              {lm ? 'Generate a new lead magnet' : 'Generate lead magnet'}
-            </GenerateButton>
-            {lm && (
+    <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-12">
+      <div className="flex min-w-0 flex-col lg:col-span-7">
+        <section aria-label="Lead magnet content">
+          <PanelHead
+            title="Lead magnet"
+            description={`A quick win people trade their email for, leading to ${project.studio.listing.title || project.brand.name}.`}
+            actions={
               <>
-                <CopyButton text={() => leadMagnetMarkdown(getActiveProject()!.marketing.leadMagnet!, project.brand.name)} label="Copy" />
-                <button className="btn btn-secondary btn-sm" onClick={() => download(`${slugify(lm.title)}.md`, leadMagnetMarkdown(lm, project.brand.name))}>
-                  <Download size={14} /> Export .md
-                </button>
+                <Select<LeadMagnetType> size="sm" aria-label="Lead magnet type" value={type} onChange={setType} options={LEAD_MAGNET_TYPES.map((t) => ({ value: t.id, label: t.label }))} className="w-[150px]" />
+                <GenerateButton size="sm" running={ai.running} runningLabel="Writing…" onClick={generate}>
+                  Write a new one
+                </GenerateButton>
+                <MoreMenu
+                  items={[
+                    { label: 'Copy as Markdown', icon: <Copy />, onSelect: () => void copyMarkdown() },
+                    { label: 'Export .md', icon: <Download />, onSelect: () => void download(`${slugify(lm.title)}.md`, leadMagnetMarkdown(lm, project.brand.name)) },
+                  ]}
+                />
               </>
-            )}
-          </div>
-          <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} className="mt-3" />
-          {ai.result && !ai.running && <AIResultBar className="mt-3" provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
-        </section>
-
-        {lm ? (
-          <section className="panel flex flex-col gap-3.5 p-4 sm:p-5" aria-label="Lead magnet content">
-            <div className="flex items-center gap-2">
-              <FileText size={16} className="text-primary" />
-              <h3 className="text-[14px] font-semibold">Freebie content</h3>
-              <span className="badge ml-auto bg-surface-2 text-ink-2">{LEAD_MAGNET_TYPES.find((t) => t.id === lm.type)?.label}</span>
-            </div>
+            }
+          />
+          <div className="flex flex-col gap-4">
+            {thinking}
+            {resultBar}
             <Field label="Title" htmlFor="lm-title">
-              <input id="lm-title" className="input font-semibold" value={lm.title} onChange={(e) => set({ title: e.target.value })} />
+              <input id="lm-title" className="input" value={lm.title} onChange={(e) => set({ title: e.target.value })} />
             </Field>
             <Field label="Subtitle" htmlFor="lm-sub">
               <input id="lm-sub" className="input" value={lm.subtitle} onChange={(e) => set({ subtitle: e.target.value })} />
             </Field>
             <Field label="Intro" htmlFor="lm-intro">
-              <AutoTextarea id="lm-intro" value={lm.intro} onChange={(v) => set({ intro: v })} minRows={2} className="text-[13.5px]" />
+              <AutoTextarea id="lm-intro" value={lm.intro} onChange={(v) => set({ intro: v })} minRows={2} />
             </Field>
-            {lm.sections.map((sec, i) => (
-              <div key={i} className="rounded-md border border-line bg-surface-2/40 p-3">
-                <div className="mb-2 flex items-center gap-2">
-                  <input className="input input-sm flex-1 font-semibold" value={sec.heading} onChange={(e) => set({ sections: lm.sections.map((x, j) => (j === i ? { ...x, heading: e.target.value } : x)) })} aria-label={`Section ${i + 1} heading`} />
-                  <button className="btn btn-ghost btn-icon btn-xs text-muted hover:text-bad" onClick={() => set({ sections: lm.sections.filter((_, j) => j !== i) })} aria-label={`Remove section ${i + 1}`}>
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-                <LinesEditor values={sec.items} onChange={(v) => set({ sections: lm.sections.map((x, j) => (j === i ? { ...x, items: v } : x)) })} />
-              </div>
-            ))}
-            <button className="btn btn-secondary btn-sm self-start" onClick={() => set({ sections: [...lm.sections, { heading: 'New section', items: ['First item'] }] })}>
-              <Plus size={14} /> Add section
-            </button>
+            <div>
+              <p className="label">Sections</p>
+              <ol className="flex flex-col divide-y divide-line rounded-lg border border-line">
+                {lm.sections.map((sec, i) => (
+                  <li key={i} className="flex flex-col gap-2 p-3">
+                    <div className="flex items-center gap-2">
+                      <span className="num w-5 shrink-0 font-mono text-caption text-muted">{i + 1}</span>
+                      <input className="input input-inline min-w-0 flex-1 text-h4" value={sec.heading} onChange={(e) => set({ sections: lm.sections.map((x, j) => (j === i ? { ...x, heading: e.target.value } : x)) })} aria-label={`Section ${i + 1} heading`} />
+                      <Tooltip content="Remove section">
+                        <button type="button" className="btn btn-danger-ghost btn-icon btn-xs" onClick={() => set({ sections: lm.sections.filter((_, j) => j !== i) })} aria-label={`Remove section ${i + 1}`}>
+                          <Trash2 />
+                        </button>
+                      </Tooltip>
+                    </div>
+                    <LinesEditor values={sec.items} onChange={(v) => set({ sections: lm.sections.map((x, j) => (j === i ? { ...x, items: v } : x)) })} />
+                  </li>
+                ))}
+              </ol>
+              <button type="button" className="btn btn-ghost btn-sm mt-2" onClick={() => set({ sections: [...lm.sections, { heading: 'New section', items: ['First item'] }] })}>
+                <Plus /> Add section
+              </button>
+            </div>
             <Field label="Closing call to action" htmlFor="lm-cta">
-              <AutoTextarea id="lm-cta" value={lm.cta} onChange={(v) => set({ cta: v })} minRows={2} className="text-[13.5px]" />
+              <AutoTextarea id="lm-cta" value={lm.cta} onChange={(v) => set({ cta: v })} minRows={2} />
             </Field>
-          </section>
-        ) : (
-          !ai.running && <Empty icon={<Gift size={20} />} title="No lead magnet yet" body="Pick a format above and generate one. You can edit every line afterwards." />
-        )}
+          </div>
+        </section>
+
+        <Section title="Opt-in page" description="The words on the page where people sign up." divider>
+          <div className="flex flex-col gap-4" aria-label="Opt-in copy" role="group">
+            <Field label="Headline" htmlFor="oi-h">
+              <AutoTextarea id="oi-h" value={lm.optInHeadline} onChange={(v) => set({ optInHeadline: v })} minRows={1} />
+            </Field>
+            <Field label="Benefit bullets" right="One per line">
+              <LinesEditor values={lm.optInBullets} onChange={(v) => set({ optInBullets: v })} minRows={3} />
+            </Field>
+            <Field label="Button label" htmlFor="oi-btn">
+              <input id="oi-btn" className="input" value={lm.buttonLabel} onChange={(e) => set({ buttonLabel: e.target.value })} />
+            </Field>
+          </div>
+        </Section>
       </div>
 
-      <aside className="flex min-w-0 flex-col gap-4">{lm && <OptInPreview project={project} lm={lm} set={set} />}</aside>
+      <aside className="min-w-0 lg:sticky lg:top-4 lg:col-span-5">
+        <OptInPreview project={project} lm={lm} />
+      </aside>
     </div>
   );
 }
 
-function OptInPreview({ project, lm, set }: { project: Project; lm: LeadMagnet; set: (p: Partial<LeadMagnet>) => void }) {
+// The opt-in page as visitors see it: the business's own page (its colours, its button), so it keeps its
+// own look in both themes. Only the frame around it is the app's.
+const PAGE_INK = '#1d2420';
+const PAGE_MUTED = '#5b6861';
+
+function OptInPreview({ project, lm }: { project: Project; lm: LeadMagnet }) {
   const c = project.brand.colors;
   const profile = useStore((s) => s.settings.profile);
   const [name, setName] = useState(profile.name);
@@ -111,45 +167,45 @@ function OptInPreview({ project, lm, set }: { project: Project; lm: LeadMagnet; 
   const [done, setDone] = useState(false);
   const [touched, setTouched] = useState(false);
   const onPrimary = readableOn(c.primary);
+  const typeLabel = LEAD_MAGNET_TYPES.find((t) => t.id === lm.type)?.label;
+  const site = project.brand.websiteUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const field = { width: '100%', borderRadius: 8, border: '1px solid rgba(0,0,0,.12)', background: '#ffffff', padding: '10px 12px', fontSize: 14, color: PAGE_INK } as const;
   return (
-    <>
-      <section className="panel overflow-hidden" aria-label="Opt-in page preview">
-        <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-          <h3 className="text-[13px] font-semibold">Opt-in page preview</h3>
-          <span className="badge bg-surface-2 text-muted">Preview</span>
-        </div>
-        <div className="p-5" style={{ background: `linear-gradient(160deg, ${withAlpha(c.primary, 0.1)}, ${c.paper} 60%)`, color: c.ink }}>
-          <div className="mb-4">
+    <section aria-label="Opt-in page preview">
+      <BrowserFrame url={site ? `${site}/free` : 'Your opt-in page'}>
+        <div style={{ background: `linear-gradient(160deg, ${withAlpha(c.primary, 0.1)}, ${c.paper} 60%)`, color: c.ink, padding: 24 }}>
+          <div style={{ marginBottom: 20 }}>
             <BrandLogo brand={project.brand} size={26} layout="horizontal" />
           </div>
           <div className="flex gap-4">
-            <div className="relative hidden h-[124px] w-[96px] shrink-0 rotate-[-4deg] flex-col justify-between rounded-md p-2.5 shadow-pop sm:flex" style={{ background: c.primary, color: onPrimary }} aria-hidden="true">
-              <span className="text-[8px] font-bold uppercase tracking-wider opacity-80">Free {LEAD_MAGNET_TYPES.find((t) => t.id === lm.type)?.label}</span>
-              <span className="text-[11px] font-extrabold leading-tight">{lm.title}</span>
-              <span className="h-1 w-8 rounded-full" style={{ background: c.accent }} />
+            <div aria-hidden="true" className="relative hidden shrink-0 flex-col justify-between sm:flex" style={{ height: 124, width: 96, transform: 'rotate(-4deg)', borderRadius: 8, padding: 10, background: c.primary, color: onPrimary, boxShadow: '0 12px 24px -12px rgba(0,0,0,.35)' }}>
+              <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', opacity: 0.8 }}>Free {typeLabel}</span>
+              <span style={{ fontSize: 11, fontWeight: 800, lineHeight: 1.2 }}>{lm.title}</span>
+              <span style={{ height: 4, width: 32, borderRadius: 999, background: c.accent }} />
             </div>
             <div className="min-w-0">
-              <p className="text-[19px] font-extrabold leading-tight">{lm.optInHeadline}</p>
-              <ul className="mt-3 flex flex-col gap-1.5 text-[13px]">
+              <p style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.2 }}>{lm.optInHeadline}</p>
+              <ul className="flex flex-col" style={{ marginTop: 12, gap: 6, fontSize: 13 }}>
                 {lm.optInBullets.map((b, i) => (
-                  <li key={i} className="flex gap-1.5">
-                    <Check size={14} className="mt-0.5 shrink-0" style={{ color: c.primary }} /> {b}
+                  <li key={i} className="flex" style={{ gap: 6 }}>
+                    <Check size={14} className="shrink-0" style={{ marginTop: 2, color: c.primary }} aria-hidden="true" /> {b}
                   </li>
                 ))}
               </ul>
             </div>
           </div>
           {done ? (
-            <div className="mt-5 rounded-md bg-white/80 p-4 text-[13.5px] text-[#1d2420]">
-              <p className="font-bold">This is only a preview.</p>
-              <p className="mt-0.5 text-[12.5px] text-[#5b6861]">On your real opt-in page, this form sends the sign-up to your email provider, which delivers “{lm.title}”. Nothing was saved or sent here.</p>
-              <button className="btn btn-secondary btn-sm mt-3" onClick={() => setDone(false)}>
+            <div style={{ marginTop: 20, borderRadius: 8, background: 'rgba(255,255,255,.85)', padding: 16, fontSize: 14, color: PAGE_INK }}>
+              <p style={{ fontWeight: 700 }}>This is only a preview.</p>
+              <p style={{ marginTop: 2, fontSize: 13, color: PAGE_MUTED }}>On your real opt-in page, this form sends the sign-up to your email provider, which delivers “{lm.title}”. Nothing was saved or sent here.</p>
+              <button type="button" className="btn btn-secondary btn-sm mt-3" onClick={() => setDone(false)}>
                 Back to the form
               </button>
             </div>
           ) : (
             <form
-              className="mt-5 flex flex-col gap-2"
+              className="flex flex-col"
+              style={{ marginTop: 20, gap: 8 }}
               onSubmit={(e) => {
                 e.preventDefault();
                 setTouched(true);
@@ -160,34 +216,21 @@ function OptInPreview({ project, lm, set }: { project: Project; lm: LeadMagnet; 
               <label className="sr-only" htmlFor="oi-name">
                 First name
               </label>
-              <input id="oi-name" className="w-full rounded-md border border-black/10 bg-white px-3 py-2.5 text-[14px] text-[#1d2420] outline-none focus:border-black/30" placeholder="First name" value={name} onChange={(e) => setName(e.target.value)} />
+              <input id="oi-name" style={field} placeholder="First name" value={name} onChange={(e) => setName(e.target.value)} />
               <label className="sr-only" htmlFor="oi-email">
                 Email
               </label>
-              <input id="oi-email" type="email" className="w-full rounded-md border border-black/10 bg-white px-3 py-2.5 text-[14px] text-[#1d2420] outline-none focus:border-black/30" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-              {touched && !emailValid(email) && <p className="text-xs font-medium text-[#b42318]">Enter a valid email address.</p>}
-              <button type="submit" className="w-full rounded-md px-4 py-3 text-[15px] font-bold shadow-sm" style={{ background: c.primary, color: onPrimary }}>
+              <input id="oi-email" type="email" style={field} placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+              {touched && !emailValid(email) && <p style={{ fontSize: 12, fontWeight: 500, color: '#b42318' }}>Enter a valid email address.</p>}
+              <button type="submit" style={{ width: '100%', borderRadius: 8, padding: '12px 16px', fontSize: 15, fontWeight: 700, background: c.primary, color: onPrimary, boxShadow: '0 1px 2px rgba(0,0,0,.15)' }}>
                 {lm.buttonLabel}
               </button>
-              <p className="text-center text-[11px] opacity-70">No spam. Unsubscribe anytime.</p>
+              <p style={{ textAlign: 'center', fontSize: 11, opacity: 0.7 }}>No spam. Unsubscribe anytime.</p>
             </form>
           )}
         </div>
-        <p className="border-t border-line px-4 py-2 text-[11.5px] text-muted">A preview of your page’s copy. To collect sign-ups, use your email provider’s form (or connect this copy to it).</p>
-      </section>
-
-      <section className="panel flex flex-col gap-3 p-4" aria-label="Opt-in copy">
-        <h3 className="text-[13px] font-semibold">Opt-in copy</h3>
-        <Field label="Headline" htmlFor="oi-h">
-          <AutoTextarea id="oi-h" value={lm.optInHeadline} onChange={(v) => set({ optInHeadline: v })} minRows={1} className="text-[13.5px]" />
-        </Field>
-        <Field label="Benefit bullets (one per line)">
-          <LinesEditor values={lm.optInBullets} onChange={(v) => set({ optInBullets: v })} minRows={3} />
-        </Field>
-        <Field label="Button label" htmlFor="oi-btn">
-          <input id="oi-btn" className="input" value={lm.buttonLabel} onChange={(e) => set({ buttonLabel: e.target.value })} />
-        </Field>
-      </section>
-    </>
+      </BrowserFrame>
+      <p className="mt-2 text-caption text-muted">A preview of your page’s words. To collect sign-ups, use your email provider’s form.</p>
+    </section>
   );
 }

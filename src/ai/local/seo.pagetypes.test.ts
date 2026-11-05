@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { newProject } from '@/store/defaults';
 import type { ContactData, LeadFormData, MediaRef, OfferItem, OffersData, PageType, Project, PromptImage, SalesPage, SalesSection, SalesSectionType } from '@/lib/types';
 import { PAGE_TYPES, sectionPlan } from '@/lib/pageTypes';
+import { initials } from '@/lib/utils';
 import { buildFacts } from '../text';
 import { generateBrandKit } from './brand';
 import { generateBusinessModel } from './studio';
@@ -521,7 +522,8 @@ describe('the exported page', () => {
   it('a website has a menu to the sections it shows', () => {
     const page = generateSalesPage(p, {}, 0, 'website');
     const out = html(as(p, 'website'), page);
-    expect(out).toContain(`<nav class="menu" aria-label="Main"><div class="wrap menu-row"><a class="menu-brand" href="#home">${p.brand.name}</a><ul><li><a href="#home">Home</a></li><li><a href="#offers">Services</a></li><li><a href="#about">About</a></li><li><a href="#faq">FAQ</a></li><li><a href="#contact">Contact</a></li></ul></div></nav>`);
+    // the brand's mark and name, the links to the sections it shows, and the page's one call to action (the hero's)
+    expect(out).toContain(`<nav class="menu" aria-label="Main"><div class="wrap menu-row"><a class="menu-brand" href="#home"><span class="mark" aria-hidden="true">${initials(p.brand.name)}</span>${p.brand.name}</a><ul><li><a href="#home">Home</a></li><li><a href="#offers">Services</a></li><li><a href="#about">About</a></li><li><a href="#faq">FAQ</a></li><li><a href="#contact">Contact</a></li></ul><a class="topbar-cta" href="#contact">`);
     expect(out).toContain('.menu { position: sticky; top: 0;');
     expect(out).toContain('html { scroll-behavior: smooth; }');
     // Gallery only with photos it can show, FAQ only with questions

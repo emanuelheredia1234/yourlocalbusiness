@@ -10,7 +10,7 @@ import { DEFAULT_LINK_PLACEMENT, LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LAB
 import { navigate } from '@/lib/router';
 import { useStore } from '@/store/useStore';
 import { setLinkPlacement } from '@/ai/socialPlan';
-import { CopyButton } from '@/components/ui/primitives';
+import { CopyButton, InfoTip } from '@/components/ui/primitives';
 import { PlatformChip } from '@/components/posts/PlatformIcon';
 
 /** An option's words: X's first comment is a reply, and the built-in default is marked as the suggestion. */
@@ -27,62 +27,71 @@ export function LinkPlacementCard({ project }: { project: Project }) {
   // the latest saved settings, so two quick changes never undo each other
   const setPlacement = (p: PostPlatform, v: LinkPlacement) => setLinkPlacement(p, v);
   return (
-    <section className="panel p-4 sm:p-5" aria-labelledby={titleId}>
-      <h2 id={titleId} className="section-title mb-1 flex items-center gap-2">
-        <Link2 size={17} className="text-primary" aria-hidden="true" /> Where the link goes
-      </h2>
-      <p className="mb-3 text-[13px] text-muted">New posts put your link in the post, in the first comment (a reply on X), or say it’s in your bio. The suggestions follow how each network treats links. Posts you already made keep theirs.</p>
-      {link ? (
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-[12.5px]">
-          <span className="min-w-[12rem] flex-1">
-            Your posts link to {link.source === 'website' ? 'your website' : 'your page'}: <b className="[overflow-wrap:anywhere]">{linkText(link.url)}</b>.
-            {link.source === 'website' && !__ARTIFACT_BUILD__ && ' Publish your page to link to it instead.'}
-          </span>
-          <CopyButton text={link.url} label="Copy link" size="xs" />
+    <section className="card" aria-labelledby={titleId}>
+      <div className="flex items-start justify-between gap-3 px-5 pb-1 pt-5">
+        <div className="min-w-0">
+          <h2 id={titleId} className="text-h3 text-ink">
+            Where the link goes
+          </h2>
+          <p className="mt-0.5 text-small text-muted">New posts put your link in the post, in the first comment (a reply on X), or say it’s in your bio.</p>
         </div>
-      ) : (
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-[12.5px] text-muted">
-          {/* publishing needs the app's own server, so in claude.ai only the website can be the link */}
-          <span className="min-w-[12rem] flex-1">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings → Brand.' : 'No link in your posts yet. Publish your SEO page, or add your website in Settings → Brand.'}</span>
-          {!__ARTIFACT_BUILD__ && (
-            <button type="button" className="btn btn-secondary btn-xs" onClick={() => void navigate('marketing-seo')}>
-              Open the SEO page builder
-            </button>
-          )}
-        </div>
-      )}
-      <ul className="flex flex-col gap-2">
-        {rows.map((p) => {
-          const value = placementFor(project, p);
-          const factId = `${titleId}-${p}`;
-          return (
-            <li key={p} className="flex flex-col gap-1 rounded-md border border-line px-3 py-2.5">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                <span className="flex min-w-[120px] flex-wrap items-center gap-x-1.5">
+        {changed && (
+          <button type="button" className="btn btn-ghost btn-sm shrink-0" onClick={() => updateMarketing({ linkPlacement: undefined })}>
+            Use the suggestions
+          </button>
+        )}
+      </div>
+      <div className="px-5 pb-1">
+        {link ? (
+          <div className="well mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-small text-ink-2">
+            <Link2 size={14} className="shrink-0 text-muted" aria-hidden="true" />
+            <span className="min-w-[12rem] flex-1">
+              Your posts link to {link.source === 'website' ? 'your website' : 'your page'}: <b className="font-mono text-caption font-medium text-ink [overflow-wrap:anywhere]">{linkText(link.url)}</b>.
+              {link.source === 'website' && !__ARTIFACT_BUILD__ && ' Publish your page to link to it instead.'}
+            </span>
+            <CopyButton text={link.url} label="Copy link" size="xs" />
+          </div>
+        ) : (
+          <div className="well mt-3 flex flex-wrap items-center gap-2 px-3 py-2 text-small text-muted">
+            {/* publishing needs the app's own server, so in claude.ai only the website can be the link */}
+            <span className="min-w-[12rem] flex-1">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings → Brand.' : 'No link in your posts yet. Publish your SEO page, or add your website in Settings → Brand.'}</span>
+            {!__ARTIFACT_BUILD__ && (
+              <button type="button" className="btn btn-secondary btn-xs" onClick={() => void navigate('marketing-seo')}>
+                Open the SEO page builder
+              </button>
+            )}
+          </div>
+        )}
+        <ul className="mt-1">
+          {rows.map((p) => {
+            const value = placementFor(project, p);
+            const factId = `${titleId}-${p}`;
+            const fact = `${LINK_FACTS[p]}${value === 'bio' ? ' Keep your link in your bio there: the app never changes your profile.' : ''}`;
+            return (
+              <li key={p} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line py-3 first:border-t-0">
+                <span className="flex min-w-[150px] flex-1 flex-wrap items-center gap-x-2">
                   <PlatformChip platform={p} />
-                  {!inCampaign.includes(p) && <span className="text-[11.5px] text-muted">(not in this campaign)</span>}
+                  {!inCampaign.includes(p) && <span className="text-caption text-muted">(not in this campaign)</span>}
                 </span>
-                <select className="select input-sm w-auto max-w-full" aria-label={`Where the link goes on ${networkLabel(p)}`} aria-describedby={factId} value={value} onChange={(e) => setPlacement(p, e.target.value as LinkPlacement)}>
-                  {LINK_PLACEMENTS.map((id) => (
-                    <option key={id} value={id}>
-                      {optionLabel(id, p)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <p id={factId} className="text-[11.5px] text-muted">
-                {LINK_FACTS[p]}
-                {value === 'bio' ? ' Keep your link in your bio there: the app never changes your profile.' : ''}
-              </p>
-            </li>
-          );
-        })}
-      </ul>
-      {changed && (
-        <button type="button" className="btn btn-ghost btn-sm mt-3" onClick={() => updateMarketing({ linkPlacement: undefined })}>
-          Use the suggestions
-        </button>
-      )}
+                <span className="flex items-center gap-1">
+                  <select className="select input-sm w-auto max-w-full" aria-label={`Where the link goes on ${networkLabel(p)}`} aria-describedby={factId} value={value} onChange={(e) => setPlacement(p, e.target.value as LinkPlacement)}>
+                    {LINK_PLACEMENTS.map((id) => (
+                      <option key={id} value={id}>
+                        {optionLabel(id, p)}
+                      </option>
+                    ))}
+                  </select>
+                  <InfoTip label={`How links work on ${networkLabel(p)}`}>{fact}</InfoTip>
+                </span>
+                {/* the network's rule, read with the select (the ⓘ shows it on screen) */}
+                <p id={factId} className="sr-only">
+                  {fact}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </section>
   );
 }

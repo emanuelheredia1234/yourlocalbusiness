@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, Layers, PenSquare, SlidersHorizontal } from 'lucide-react';
+import { Layers } from 'lucide-react';
 import { campaignPlanTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { getActiveProject, useActiveProject, useStore } from '@/store/useStore';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { Empty, Tabs, confirmAction } from '@/components/ui/primitives';
+import { Empty, PageHeader, StickyActionBar, Tabs, confirmAction } from '@/components/ui/primitives';
 import { useUI, type SocialTab } from '@/store/ui';
+import { tabLabel } from '@/lib/pageTabs';
 import { applyCampaignPlan, campaignProblem, coveredSlots } from '@/ai/socialPlan';
 import { QuickComposer } from '@/pages/dashboard/QuickComposer';
-import { MarketingHeader } from './MarketingNav';
 import { CampaignSetup } from './social/CampaignSetup';
 import { PlanView } from './social/PlanView';
 import { BatchView } from './social/BatchView';
@@ -53,59 +53,73 @@ export default function SocialEngine() {
     }
   };
 
-  const planButton = (
-    <GenerateButton running={planAI.running} onClick={generatePlan} disabled={invalid}>
-      {plan ? 'Regenerate 30-day plan' : 'Generate 30-day plan'}
+  /** The plan's one button: filled while there's no plan yet (the setup's main action), outlined once there is. */
+  const planButton = (label?: string) => (
+    <GenerateButton variant={plan ? 'ai-outline' : 'ai'} size={plan ? 'sm' : 'md'} running={planAI.running} runningLabel="Planning…" onClick={generatePlan} disabled={invalid}>
+      {label ?? (plan ? 'Regenerate 30-day plan' : 'Generate 30-day plan')}
     </GenerateButton>
   );
+  const label = (t: Tab) => tabLabel('marketing-social', t);
 
   return (
-    <div className="flex flex-col gap-5">
-      <MarketingHeader eyebrow="Marketing Hub · Social" title="Social media engine" desc="Set your cadence, visual styles, platforms and post mix. The AI writes a 30-day campaign plan, then a 7-day batch of ready-to-publish posts you can edit and schedule. Or create individual posts, one at a time." actions={tab === 'setup' || (!plan && tab !== 'create') ? planButton : undefined} />
+    <div>
+      <PageHeader className="mb-4" title="Social" description="A 30-day plan, then a week of posts ready to go out." />
       <Tabs<Tab>
+        className="mb-5"
         value={tab}
         onChange={setTab}
         tabs={[
-          { id: 'setup', label: '1 · Campaign setup', icon: <SlidersHorizontal size={15} /> },
-          { id: 'plan', label: '2 · 30-day plan', icon: <CalendarDays size={15} />, count: plan?.summary.total },
-          { id: 'batch', label: '3 · 7-day batch', icon: <Layers size={15} />, count: batchPosts.filter((p) => p.status !== 'published').length || undefined },
-          { id: 'create', label: 'Create individual post', icon: <PenSquare size={15} /> },
+          { id: 'setup', label: label('setup') },
+          { id: 'plan', label: label('plan'), count: plan?.summary.total },
+          { id: 'batch', label: label('batch'), count: batchPosts.filter((p) => p.status !== 'published').length || undefined },
+          { id: 'create', label: label('create') },
         ]}
       />
-      <AIThinking running={planAI.running} stage={planAI.stage} chars={planAI.chars} onStop={planAI.stop} />
-      {planAI.result && !planAI.running && tab === 'plan' && <AIResultBar provider={planAI.result.provider} skills={planAI.result.skills} ms={planAI.result.ms} note={planAI.result.note} logId={planAI.logId} />}
+      {/* the plan's progress and Stop show on every tab while it runs: it can be started from the setup, the plan or the 7-day batch */}
+      <div className="mb-5 flex flex-col gap-3 empty:hidden">
+        <AIThinking running={planAI.running} stage={planAI.stage} chars={planAI.chars} onStop={planAI.stop} />
+        {planAI.result && !planAI.running && tab === 'plan' && <AIResultBar provider={planAI.result.provider} skills={planAI.result.skills} ms={planAI.result.ms} note={planAI.result.note} logId={planAI.logId} />}
+      </div>
 
       {tab === 'setup' && (
         <>
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3 max-sm:hidden">
+            <p className="text-small text-muted">Your cadence, looks and networks. The plan and every post follow them.</p>
+            <div className="flex flex-wrap items-center gap-3">
+              {invalid && <p className="text-caption text-warn">Fix the highlighted settings to continue.</p>}
+              {planButton()}
+            </div>
+          </div>
           <CampaignSetup project={project} />
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            {invalid && <p className="text-xs text-warn">Fix the highlighted settings to continue.</p>}
-            {planButton}
+          <div className="sm:hidden">
+            <StickyActionBar>
+              {invalid && <p className="mr-auto text-caption text-warn">Fix the highlighted settings.</p>}
+              {planButton()}
+            </StickyActionBar>
           </div>
         </>
       )}
       {tab === 'plan' &&
         (plan ? (
           <>
-            <PlanView plan={plan} covered={covered} />
-            <div className="flex flex-wrap justify-end gap-2">
-              {planButton}
-              <button className="btn btn-primary" onClick={() => setTab('batch')}>
-                <Layers size={15} /> Go to the 7-day batch
+            <div className="mb-5 flex flex-wrap items-center justify-end gap-2">
+              {planButton('Regenerate plan')}
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setTab('batch')}>
+                <Layers /> Go to the 7-day batch
               </button>
             </div>
+            <PlanView plan={plan} covered={covered} />
           </>
         ) : (
-          <Empty icon={<CalendarDays size={20} />} title="No plan yet" body="Finish the setup, then generate a 30-day plan that moves people from awareness to purchase." action={planButton} />
+          !planAI.running && <Empty variant="ai" title="No plan yet" body="Finish the setup, then plan 30 days that move people from hearing about you to booking." action={planButton()} />
         ))}
       {shown.has('batch') && (
         <div hidden={tab !== 'batch'}>
-          <BatchView project={project} posts={batchPosts} covered={covered} />
+          <BatchView project={project} posts={batchPosts} covered={covered} planAction={plan ? undefined : planButton()} />
         </div>
       )}
       {shown.has('create') && (
-        <section hidden={tab !== 'create'} aria-label="Create individual post" className="panel p-4 sm:p-5">
-          <p className="mb-4 text-[13.5px] text-muted">One post at a time, outside your campaign: generate it with AI, or upload your own photo or video and let AI write the caption.</p>
+        <section hidden={tab !== 'create'} aria-label="Create individual post">
           <QuickComposer key={`${project.id}:${preset?.n ?? 0}`} initialTopic={preset?.topic} />
         </section>
       )}

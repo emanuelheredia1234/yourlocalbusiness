@@ -25,7 +25,7 @@ import type {
   ServicePriceModel,
   SolutionData,
 } from '@/lib/types';
-import { capitalize, escapeHtml, hashStr, lighten, darken, readableOn, slugify, titleCase, truncate, uid, wordCount, ensureUrl } from '@/lib/utils';
+import { capitalize, contrastRatio, escapeHtml, hashStr, initials, lighten, darken, readableOn, slugify, titleCase, truncate, uid, wordCount, ensureUrl } from '@/lib/utils';
 import { bookingLink, pageTypeOf, paymentLink, sectionPlan, webLink } from '@/lib/pageTypes';
 import { FORMATS } from '../knowledge';
 import { buildFacts, singular, verbOutcome, Voice, type Facts } from '../text';
@@ -1258,11 +1258,22 @@ const SHARE_IMAGE = '__ylb_share_image__';
 /** A website's top menu: smooth scrolling to each section, which stops below the sticky menu. */
 const MENU_CSS = `html { scroll-behavior: smooth; } @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 [id] { scroll-margin-top: 72px; }
-.menu { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid rgba(127,127,127,.2); }
-.menu-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; min-height: 58px; }
-.menu-brand { margin-right: auto; font-weight: 800; color: var(--ink); text-decoration: none; }
+.menu { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--rule); }
+.menu-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; min-height: 60px; }
+.menu-brand { margin-right: auto; display: inline-flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); text-decoration: none; }
 .menu ul { display: flex; flex-wrap: wrap; gap: 4px 18px; list-style: none; margin: 0; padding: 0; }
-.menu a { color: var(--ink); font-weight: 600; font-size: 15px; text-decoration: none; } .menu a:hover { color: var(--brand); }
+.menu a { color: var(--ink); font-weight: 600; font-size: 15px; text-decoration: none; } .menu a:hover { color: var(--link); }
+.menu a.topbar-cta { color: var(--on-brand); }
+`;
+
+/**
+ * Every page's slim top bar (a website's menu has its own): the brand's mark and name, and the page's one call to
+ * action. A section a link jumps to (the call to action's) stops below it, as under a website's menu.
+ */
+const TOPBAR_CSS = `[id] { scroll-margin-top: 72px; }
+.topbar { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--rule); }
+.topbar-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 60px; }
+.site-brand { display: inline-flex; min-width: 0; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
 `;
 
 /** The form, offers, About and contact sections. */
@@ -1276,11 +1287,26 @@ fieldset[disabled] { opacity: .6; } fieldset[disabled] button.btn { cursor: not-
 .items { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 28px; }
 .item { background: var(--soft); border-radius: var(--radius); padding: 22px; display: flex; flex-direction: column; gap: 8px; }
 .item h3, .item p { margin: 0; } .item .meta { color: var(--muted); font-size: 14px; margin: 0; } .price-line b { font-size: 26px; } .price-line span { color: var(--muted); font-size: 15px; } .item .btn { margin-top: auto; align-self: flex-start; }
-.contact-list { list-style: none; padding: 0; display: grid; gap: 10px; } .contact-list a { color: var(--brand); font-weight: 600; } .about p { max-width: 65ch; }
+.contact-list { list-style: none; padding: 0; display: grid; gap: 10px; } .contact-list a { color: var(--link); font-weight: 600; } .about p { max-width: 65ch; }
 `;
 
 /** The form's note when it can't send (not published yet; in claude.ai there's no publishing). */
 const formNote = () => (__ARTIFACT_BUILD__ ? 'This form works once the page is published from the app’s own site.' : 'Publish this page to collect leads.');
+
+/** The brand's colour as text on the page: darkened (lightened on a dark page) until it reads at 4.5:1. */
+function readableTint(color: string, bg: string, dark: boolean): string {
+  let c = color;
+  for (let i = 0; i < 12 && contrastRatio(c, bg) < 4.5; i++) c = dark ? lighten(c, 0.14) : darken(c, 0.14);
+  return c;
+}
+
+/** The brand's mark for the top bar: its uploaded logo when it's small enough to carry in the page, else its initials. */
+function brandMarkHtml(brand: Brand, e: (s: string) => string): string {
+  const logo = brand.logo?.mode === 'upload' ? brand.logo.uploadDataUrl ?? '' : '';
+  if (/^data:image\/(png|jpe?g|webp|gif|svg\+xml)[;,]/i.test(logo) && logo.length <= 40_000) return `<img class="mark-img" src="${escapeHtml(logo)}" alt="" width="32" height="32">`;
+  const shape = brand.logo?.shape === 'rounded' || brand.logo?.shape === 'shield' ? ' mark-rounded' : '';
+  return `<span class="mark${shape}" aria-hidden="true">${e(initials(brand.name || ''))}</span>`;
+}
 
 export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, project: Project, opts: SalesHtmlOptions = {}): string {
   const c = brand.colors;
@@ -1290,6 +1316,8 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
   const muted = dark ? '#a9b8af' : '#5b6861';
   const soft = dark ? '#18211c' : lighten(c.primary, 0.93);
   const radius = page.theme.radius === 'sharp' ? '4px' : page.theme.radius === 'round' ? '22px' : '12px';
+  // links, small headings and ticks in the brand's colour, readable on the page (never the browser's blue)
+  const linkColor = readableTint(c.primary, bg, dark);
   const font =
     page.theme.font === 'serif'
       ? 'Georgia, "Times New Roman", serif'
@@ -1643,17 +1671,21 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
     })
     .filter(Boolean)
     .join('\n');
+  // The page's one call to action in its top bar: the hero's button, where it goes (none when it goes nowhere).
+  const heroCta = heroSec?.type === 'hero' ? heroSec.data.ctaLabel.trim() : '';
+  const topCta = heroTo && heroCta ? `<a class="topbar-cta" href="${e(heroTo)}">${e(heroCta)}</a>` : '';
+  const mark = brandMarkHtml(brand, e);
   // A website's menu, above the first section: only links to sections the page shows.
   const menu = website ? websiteMenu(page, business).filter((m) => anchors.has(m.anchor.slice(1))) : [];
   const menuHtml = website
-    ? `  <nav class="menu" aria-label="Main"><div class="wrap menu-row">${anchors.has('home') ? `<a class="menu-brand" href="#home">${e(brand.name)}</a>` : `<span class="menu-brand">${e(brand.name)}</span>`}${menu.length ? `<ul>${menu.map((m) => `<li><a href="${m.anchor}">${e(m.label)}</a></li>`).join('')}</ul>` : ''}</div></nav>\n`
-    : '';
+    ? `  <nav class="menu" aria-label="Main"><div class="wrap menu-row">${anchors.has('home') ? `<a class="menu-brand" href="#home">${mark}${e(brand.name)}</a>` : `<span class="menu-brand">${mark}${e(brand.name)}</span>`}${menu.length ? `<ul>${menu.map((m) => `<li><a href="${m.anchor}">${e(m.label)}</a></li>`).join('')}</ul>` : ''}${topCta}</div></nav>\n`
+    : `  <div class="topbar"><div class="wrap topbar-row"><span class="site-brand">${mark}<span>${e(brand.name)}</span></span>${topCta}</div></div>\n`;
   // Styles only for what the page has, so a landing page's HTML is what it always was.
-  const typeCss = website || typeSections ? `${website ? MENU_CSS : ''}${TYPE_CSS}` : '';
+  const typeCss = `${website ? MENU_CSS : TOPBAR_CSS}${website || typeSections ? TYPE_CSS : ''}`;
   const imageCss = sectionHtml.includes('<img ')
     ? `.hero-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 44px; align-items: center; }
 .hero-img { margin: 0; }
-.hero-img img { display: block; width: 100%; height: auto; max-height: 560px; object-fit: cover; border-radius: var(--radius); box-shadow: 0 24px 50px -30px rgba(0, 0, 0, .45); }
+.hero-img img { display: block; width: 100%; height: auto; max-height: 560px; object-fit: cover; border-radius: var(--radius); box-shadow: 0 24px 48px -24px rgb(0 0 0 / .25); }
 .photos { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-top: 28px; }
 .photos figure { margin: 0; }
 .photos img { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3; object-fit: cover; border-radius: var(--radius); }
@@ -1681,16 +1713,21 @@ ${shareImage ? `<meta name="twitter:image" content="${escapeHtml(shareImage)}" /
 ${json}
 ${SCRIPT_CLOSE}
 <style>
-:root { --brand: ${c.primary}; --brand-dark: ${darken(c.primary, 0.2)}; --on-brand: ${readableOn(c.primary)}; --accent: ${c.accent}; --bg: ${bg}; --ink: ${ink}; --muted: ${muted}; --soft: ${soft}; --radius: ${radius}; }
+:root { --brand: ${c.primary}; --brand-dark: ${darken(c.primary, 0.2)}; --on-brand: ${readableOn(c.primary)}; --link: ${linkColor}; --accent: ${c.accent}; --bg: ${bg}; --ink: ${ink}; --muted: ${muted}; --soft: ${soft}; --rule: ${dark ? 'rgba(255,255,255,.12)' : 'rgba(17,24,20,.1)'}; --radius: ${radius}; }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 ${font}; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 ${font}; -webkit-font-smoothing: antialiased; }
+a { color: var(--link); text-underline-offset: 3px; }
+.mark { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--brand); color: var(--on-brand); font-size: 13px; font-weight: 800; letter-spacing: .02em; }
+.mark-rounded { border-radius: 9px; } .mark-img { display: block; flex: none; width: 32px; height: 32px; border-radius: 8px; object-fit: contain; }
+.topbar-cta { flex: none; display: inline-block; background: var(--brand); color: var(--on-brand); padding: 9px 16px; border-radius: var(--radius); font-size: 15px; font-weight: 700; line-height: 1.3; text-decoration: none; white-space: nowrap; }
+.topbar-cta:hover { background: var(--brand-dark); }
 .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 .wrap.narrow { max-width: 720px; }
 section, header { padding: 72px 0; }
 h1 { font-size: clamp(34px, 5vw, 56px); line-height: 1.05; letter-spacing: -0.02em; margin: 10px 0 18px; max-width: 18ch; }
 h2 { font-size: clamp(26px, 3.4vw, 38px); line-height: 1.15; letter-spacing: -0.01em; margin: 0 0 12px; }
 h3 { margin: 0 0 6px; font-size: 19px; }
-.eyebrow { text-transform: uppercase; letter-spacing: .12em; font-size: 13px; font-weight: 700; color: var(--brand); margin: 0; }
+.eyebrow { text-transform: uppercase; letter-spacing: .12em; font-size: 13px; font-weight: 700; color: var(--link); margin: 0; }
 .lead { font-size: 19px; color: var(--muted); max-width: 60ch; margin: 0 0 24px; }
 .hero { background: radial-gradient(900px 400px at 90% 0%, var(--soft), transparent), var(--bg); }
 .btn { display: inline-block; background: var(--brand); color: var(--on-brand); padding: 15px 26px; border-radius: var(--radius); font-weight: 700; text-decoration: none; }
@@ -1698,16 +1735,16 @@ h3 { margin: 0 0 6px; font-size: 19px; }
 .btn.block { display: block; text-align: center; }
 .fine { font-size: 14px; color: var(--muted); }
 .ticks { list-style: none; padding: 0; margin: 0 0 26px; display: grid; gap: 8px; }
-.ticks li::before { content: "✓"; color: var(--brand); font-weight: 800; margin-right: 10px; }
+.ticks li::before { content: "✓"; color: var(--link); font-weight: 800; margin-right: 10px; }
 .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-top: 28px; }
 .card, .feature { background: var(--soft); border-radius: var(--radius); padding: 22px; margin: 0; }
-.feature svg { color: var(--brand); }
+.feature svg { color: var(--link); }
 .agitate { margin-top: 28px; font-size: 19px; font-weight: 600; }
 .problem { background: var(--bg); }
 .solution, .faq { background: var(--soft); }
 .solution .feature { background: var(--bg); }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 24px; text-align: center; }
-.stats b { display: block; font-size: 34px; color: var(--brand); }
+.stats b { display: block; font-size: 34px; color: var(--link); }
 .stats span { color: var(--muted); font-size: 14px; }
 blockquote { margin: 8px 0 12px; font-size: 18px; }
 .stars { color: var(--accent); letter-spacing: 2px; }
@@ -1717,13 +1754,18 @@ blockquote { margin: 8px 0 12px; font-size: 18px; }
 .price s { color: var(--muted); font-size: 22px; }
 .price span { color: var(--muted); font-size: 15px; }
 details { background: var(--bg); border-radius: var(--radius); padding: 0 20px; margin: 10px 0; }
-summary { cursor: pointer; padding: 18px 0; font-weight: 700; }
+summary { cursor: pointer; padding: 18px 0; font-weight: 700; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: ""; flex: none; width: 8px; height: 8px; margin: -4px 4px 0 0; border-right: 2px solid var(--link); border-bottom: 2px solid var(--link); transform: rotate(45deg); transition: transform .2s ease; }
+details[open] summary::after { margin-top: 4px; transform: rotate(225deg); }
+summary:focus-visible { outline: 2px solid var(--link); outline-offset: 4px; border-radius: 4px; }
 details p { margin: 0 0 18px; color: var(--muted); }
 .guarantee { text-align: center; }
 .seal { width: 92px; height: 92px; border-radius: 50%; margin: 0 auto 16px; background: var(--brand); color: var(--on-brand); display: grid; place-content: center; font-size: 30px; font-weight: 800; line-height: 1; }
 .seal small { font-size: 11px; letter-spacing: .14em; }
 footer { padding: 30px 0; text-align: center; color: var(--muted); font-size: 14px; }
-${typeCss}${imageCss}@media (max-width: 640px) { section, header { padding: 52px 0; } .stats { grid-template-columns: 1fr; } }
+${typeCss}${imageCss}@media (max-width: 640px) { section, header { padding: 52px 0; } .stats { grid-template-columns: 1fr; } .topbar-cta { padding: 8px 14px; font-size: 14px; } }
+@media (prefers-reduced-motion: reduce) { summary::after { transition: none; } }
 </style>
 </head>
 <body>

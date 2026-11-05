@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { TooltipProvider } from '@/components/ui/shadcn/tooltip';
 import type { Project } from '@/lib/types';
 import type { PublishAccess } from '@/lib/publish';
 import type { Lead } from '@/lib/leads';
@@ -56,7 +57,7 @@ const use = (p: Project, recent: Lead[] | null) => {
 };
 const render = (p: Project, recent: Lead[] | null) => {
   use(p, recent);
-  return renderToStaticMarkup(createElement(Leads, { project: p }));
+  return renderToStaticMarkup(createElement(TooltipProvider, null, createElement(Leads, { project: p })));
 };
 
 beforeEach(() => {
@@ -146,7 +147,7 @@ describe('Email', () => {
   it('has a Leads tab with the count of new leads, opens on it, and the Email channel shows a badge', () => {
     const p = project();
     use(p, [lead(), lead({ id: 'l2', name: 'Cy' })]);
-    let html = renderToStaticMarkup(createElement(EmailFunnel));
+    let html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(EmailFunnel)));
     expect(html).toMatch(/<button role="tab" aria-selected="true"[^>]*>.*Leads<span class="num font-mono text-caption text-muted">2<\/span><\/button>/);
     // the Email channel's badge sits in the sidebar's Marketing group now (it replaced the channel switcher)
     expect(renderToStaticMarkup(createElement(Sidebar))).toMatch(/>Email<\/span><span class="nav-count">2<span class="sr-only">, 2 new leads<\/span><\/span><\/button>/);
@@ -155,10 +156,10 @@ describe('Email', () => {
     // seen: no count, and the funnel opens where it always did
     p.marketing.leadsSeenAt = Date.now();
     use(p, [lead()]);
-    html = renderToStaticMarkup(createElement(EmailFunnel));
+    html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(EmailFunnel)));
     expect(html).toMatch(/<button role="tab" aria-selected="false"[^>]*>.*Leads<\/button>/);
     expect(html).not.toContain('new lead');
     expect(renderToStaticMarkup(createElement(Sidebar))).not.toContain('new lead');
-    expect(html).toMatch(/<button role="tab" aria-selected="true"[^>]*>.*Lead magnet &amp; opt-in<\/button>/);
+    expect(html).toMatch(/<button role="tab" aria-selected="true"[^>]*>.*Lead magnet<\/button>/);
   });
 });

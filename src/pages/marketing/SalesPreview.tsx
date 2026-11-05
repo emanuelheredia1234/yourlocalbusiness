@@ -1,7 +1,7 @@
 import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Check, ChevronDown, Clock, ImageOff, Mail, MapPin, Phone, Plus, ShieldCheck, Star, X } from 'lucide-react';
 import type { Brand, ContactData, GalleryData, HeroData, LeadFormData, OfferItem, OffersData, PageType, PromptImage, ProofStat, SalesPage, SalesSection, Testimonial } from '@/lib/types';
-import { cn, lighten, readableOn, uid, withAlpha } from '@/lib/utils';
+import { cn, initials, lighten, readableOn, uid, withAlpha } from '@/lib/utils';
 import { imageKeyNumber } from '@/lib/promptImages';
 import { useMediaUrl } from '@/lib/media';
 import { webLink } from '@/lib/pageTypes';
@@ -109,17 +109,37 @@ export function SalesPreview({
   const closingOff = pageType === 'landing' ? '' : heroOff;
   const menu = pageType === 'website' ? websiteMenu(page, !!business) : [];
   const go = (type: string) => root.current?.querySelector(`[data-section="${type}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // the published page's top bar: the brand's mark and name, and the page's one call to action (the hero's, where it goes)
+  const hero = page.sections.find((s) => s.type === 'hero' && s.visible);
+  const topCta = heroTo && hero?.type === 'hero' ? hero.data.ctaLabel.trim() : '';
+  const ctaPill = topCta ? (
+    <span className="shrink-0 whitespace-nowrap px-4 py-2 text-[15px] font-bold" style={{ background: t.primary, color: t.onPrimary, borderRadius: t.radius }}>
+      {topCta}
+    </span>
+  ) : null;
   return (
-    <div ref={root} className="overflow-hidden rounded-md border border-line shadow-card" style={{ background: t.bg, color: t.ink, fontFamily: t.font, width: device === 'mobile' ? 390 : '100%', maxWidth: '100%' }}>
-      {pageType === 'website' && (
+    <div ref={root} className="overflow-hidden" style={{ background: t.bg, color: t.ink, fontFamily: t.font, width: device === 'mobile' ? 390 : '100%', maxWidth: '100%' }}>
+      {pageType === 'website' ? (
         <nav aria-label="Page menu (preview)" className="flex flex-wrap items-center gap-x-4 gap-y-1 px-6 py-3" style={{ borderBottom: `1px solid ${withAlpha(t.ink, 0.12)}` }}>
-          <span className="mr-auto text-[15px] font-extrabold">{brand.name}</span>
+          <span className="mr-auto flex min-w-0 items-center gap-2.5 text-[15px] font-bold">
+            <SiteMark brand={brand} t={t} />
+            {brand.name}
+          </span>
           {menu.map((m) => (
             <button key={m.anchor} type="button" className="rounded px-1 py-0.5 text-[14px] font-semibold hover:underline" onClick={() => go(m.type)}>
               {m.label}
             </button>
           ))}
+          {ctaPill}
         </nav>
+      ) : (
+        <div className="flex min-h-[60px] items-center justify-between gap-4 px-6 py-2" style={{ borderBottom: `1px solid ${withAlpha(t.ink, 0.1)}` }}>
+          <span className="flex min-w-0 items-center gap-2.5 text-[15px] font-bold">
+            <SiteMark brand={brand} t={t} />
+            <span className="truncate">{brand.name}</span>
+          </span>
+          {ctaPill}
+        </div>
       )}
       {page.sections
         .filter((s) => s.visible)
@@ -132,6 +152,17 @@ export function SalesPreview({
         © {new Date().getFullYear()} {brand.name}
       </footer>
     </div>
+  );
+}
+
+/** The brand's mark in the page's top bar, as published: its uploaded logo when small enough, else its initials. */
+function SiteMark({ brand, t }: { brand: Brand; t: SalesTokens }) {
+  const logo = brand.logo?.mode === 'upload' ? brand.logo.uploadDataUrl ?? '' : '';
+  if (/^data:image\//i.test(logo) && logo.length <= 40_000) return <img src={logo} alt="" className="h-8 w-8 shrink-0 rounded-lg object-contain" />;
+  return (
+    <span className="flex h-8 w-8 shrink-0 items-center justify-center text-[13px] font-extrabold" style={{ background: t.primary, color: t.onPrimary, borderRadius: brand.logo?.shape === 'rounded' || brand.logo?.shape === 'shield' ? 9 : 999 }} aria-hidden="true">
+      {initials(brand.name || '')}
+    </span>
   );
 }
 

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Check, Download, ExternalLink, Globe, MoreHorizontal, Plus, Search, Target, ThumbsUp, Trash2, Users } from 'lucide-react';
+import { Check, Download, ExternalLink, PenLine, Plus, Trash2 } from 'lucide-react';
 import type { AdCampaign, AdCreative, AdObjective, AdPlatform, Project, SearchAd, StyleId } from '@/lib/types';
-import { cn, ensureUrl, fmtMoney, fmtRelative, slugify, stripProtocol } from '@/lib/utils';
+import { cn, ensureUrl, fmtMoney, fmtRelative, parseDateStr, slugify, stripProtocol } from '@/lib/utils';
 import { AD_CTAS as CTAS, adFinalUrl, adsCsv, adsText, applyAds } from '@/lib/ads';
 import { IMAGE_STYLES, STYLE_LABEL, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
 import { AD_OBJECTIVES, AD_PLATFORMS, newAdCampaign, suggestInterests } from '@/ai/local/ads';
@@ -10,11 +10,17 @@ import { adsTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { AutoTextarea, ChipInput, CopyButton, Empty, Field, LinesEditor, confirmAction } from '@/components/ui/primitives';
+import { AutoTextarea, Checkbox, ChipInput, CopyButton, DateTimeButton, Empty, Field, InfoTip, LinesEditor, MoreMenu, OptionCards, PageHeader, Section, Tabs, confirmAction } from '@/components/ui/primitives';
+import { PostFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
-import { PostVisual } from '@/components/visuals/PostVisual';
+import { PostVisual, orderStyles } from '@/components/visuals/PostVisual';
 import { LogoMark } from '@/components/brand/Logo';
-import { MarketingHeader } from './MarketingNav';
+
+const pad = (n: number) => String(n).padStart(2, '0');
+const dateStr = (ms: number) => {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
 
 export default function AdsEngine() {
   const project = useActiveProject()!;
@@ -31,28 +37,34 @@ export default function AdsEngine() {
   };
 
   return (
-    <div className="flex flex-col gap-5">
-      <MarketingHeader
-        eyebrow="Marketing Hub · Paid ads"
-        title="Paid ads engine"
-        desc="Plan campaigns for Meta, TikTok, Google Search and LinkedIn: targeting, three A/B creatives and search ads. Then copy them into each platform’s ads manager, where you launch and pay for them."
+    <div>
+      <PageHeader
+        className={campaigns.length > 1 ? 'mb-4' : 'max-sm:mb-4'}
+        title="Ads"
+        description="Plan a campaign here, then run it in each platform’s ads manager."
         actions={
-          <button className="btn btn-primary" onClick={create}>
-            <Plus size={16} /> New campaign
+          <button type="button" className="btn btn-secondary btn-sm" onClick={create}>
+            <Plus /> New campaign
           </button>
         }
       />
-      {campaigns.length > 1 && (
-        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Campaigns">
-          {campaigns.map((c) => (
-            <button key={c.id} role="tab" aria-selected={active?.id === c.id} className={cn('chip', active?.id === c.id && 'chip-active')} onClick={() => setActiveId(c.id)}>
-              {c.name}
-            </button>
-          ))}
+      {campaigns.length > 1 && active && (
+        // the tab row keeps its name for screen readers ("Campaigns")
+        <div role="group" aria-label="Campaigns" className="mb-5">
+          <Tabs size="sm" value={active.id} onChange={setActiveId} tabs={campaigns.map((c) => ({ id: c.id, label: c.name || 'Untitled campaign' }))} />
         </div>
       )}
       {!active ? (
-        <Empty icon={<Target size={20} />} title="No ad campaigns yet" body={`Create a campaign and the AI drafts targeting, creatives and search ads for ${project.brand.name}.`} action={<button className="btn btn-primary" onClick={create}><Plus size={15} /> Create campaign</button>} className="min-h-[320px]" />
+        <Empty
+          variant="ai"
+          title="Plan a local ad campaign"
+          body="A budget, an audience and three ad versions to test."
+          action={
+            <GenerateButton variant="ai" size="lg" onClick={create}>
+              Plan my campaign
+            </GenerateButton>
+          }
+        />
       ) : (
         <CampaignEditor key={active.id} project={project} c={active} onDeleted={() => setActiveId(null)} />
       )}
@@ -72,60 +84,56 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
   };
   const setCreative = (id: string, patch: Partial<AdCreative>) => set({ creatives: live().creatives.map((x) => (x.id === id ? { ...x, ...patch } : x)) });
   const finalUrl = adFinalUrl(c, project);
+  const hasCreatives = c.creatives.length > 0;
+  const unpicked = suggestions.filter((s) => !c.interests.includes(s)).slice(0, 8);
 
   const generate = async () => {
     if (c.creatives.length && !(await confirmAction({ title: 'Regenerate creatives and audiences?', body: 'Your edited ad copy will be replaced.', confirmLabel: 'Regenerate' }))) return;
     const r = await ai.run({ campaign: live() });
     if (r) applyAds(c.id, r);
   };
+  const remove = async () => {
+    if (await confirmAction({ title: `Delete “${c.name}”?`, body: 'The campaign and its creatives will be removed.', confirmLabel: 'Delete', danger: true })) {
+      deleteAd(c.id);
+      onDeleted();
+    }
+  };
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="panel flex min-w-0 flex-col gap-4 p-4 sm:p-5" aria-label="Campaign settings">
-          <div className="flex flex-wrap items-center gap-2">
-            <input className="min-w-[200px] flex-1 rounded bg-transparent px-1 py-1 font-display text-[18px] font-semibold outline-none hover:bg-surface-2 focus:bg-surface-2" value={c.name} onChange={(e) => set({ name: e.target.value })} aria-label="Campaign name" />
-            <span className="badge bg-surface-2 text-muted">Plan</span>
+    <div className="grid grid-cols-1 items-start gap-x-8 gap-y-10 lg:grid-cols-12">
+      <div className="min-w-0 lg:col-span-8">
+        <section aria-label="Campaign settings">
+          <div className="mb-5 flex items-center gap-2">
+            <input className="input input-inline -ml-3 h-10 min-w-0 flex-1 text-h2" value={c.name} onChange={(e) => set({ name: e.target.value })} aria-label="Campaign name" />
+            <MoreMenu label="More campaign actions" items={[{ label: 'Delete campaign', icon: <Trash2 />, onSelect: () => void remove(), danger: true }]} />
           </div>
-          <fieldset className="flex flex-col gap-4">
-            <Field label="Objective">
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-4" role="radiogroup" aria-label="Objective">
-                {AD_OBJECTIVES.map((o) => (
-                  <button key={o.id} role="radio" aria-checked={c.objective === o.id} className={cn('rounded-md border p-2.5 text-left', c.objective === o.id ? 'border-primary bg-primary-soft' : 'border-line hover:bg-surface-2')} onClick={() => set({ objective: o.id as AdObjective })}>
-                    <span className="block text-[13px] font-semibold">{o.label}</span>
-                    <span className="block text-[11px] leading-snug text-muted">{o.desc}</span>
-                  </button>
-                ))}
-              </div>
-            </Field>
-            <Field label="Platforms">
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="flex flex-col gap-6">
+            <div>
+              <p className="label">Objective</p>
+              <OptionCards<AdObjective> aria-label="Objective" columns={4} value={c.objective} onChange={(objective) => set({ objective })} options={AD_OBJECTIVES.map((o) => ({ value: o.id, title: o.label, description: o.desc }))} />
+            </div>
+            <div>
+              <p className="label">Platforms</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="group" aria-label="Platforms">
                 {AD_PLATFORMS.map((p) => {
                   const on = c.platforms.includes(p.id);
                   return (
-                    <label key={p.id} className={cn('flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5', on ? 'border-primary bg-primary-soft/60' : 'border-line hover:bg-surface-2')}>
-                      <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[rgb(var(--primary))]" checked={on} onChange={() => set({ platforms: on ? c.platforms.filter((x) => x !== p.id) : [...c.platforms, p.id as AdPlatform] })} />
-                      <span>
-                        <span className="block text-[13px] font-semibold">{p.label}</span>
-                        <span className="block text-[11.5px] text-muted">{p.desc}</span>
-                      </span>
-                    </label>
+                    <div key={p.id} className={cn('rounded-lg border p-3.5 transition-[border-color,box-shadow,background-color] duration-120', on ? 'border-transparent bg-primary-soft/50 ring-[1.5px] ring-inset ring-primary' : 'border-line hover:border-line-3')}>
+                      <Checkbox id={`ad-pl-${p.id}`} checked={on} onChange={(v) => set({ platforms: v ? [...c.platforms.filter((x) => x !== p.id), p.id as AdPlatform] : c.platforms.filter((x) => x !== p.id) })} label={p.label} description={p.desc} />
+                    </div>
                   );
                 })}
               </div>
-            </Field>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <Field label={`Daily budget · ${fmtMoney(c.dailyBudget)}`} htmlFor="ad-budget">
-                <input id="ad-budget" type="range" min={5} max={500} step={5} value={c.dailyBudget} onChange={(e) => set({ dailyBudget: Number(e.target.value) })} className="w-full accent-[rgb(var(--primary))]" />
+            </div>
+            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+              <Field label="Daily budget" htmlFor="ad-budget" right={<span className="num font-mono text-small text-ink">{fmtMoney(c.dailyBudget)}</span>}>
+                <input id="ad-budget" type="range" min={5} max={500} step={5} value={c.dailyBudget} onChange={(e) => set({ dailyBudget: Number(e.target.value) })} className="h-6 w-full cursor-pointer" />
               </Field>
-              <Field label={`Duration · ${c.durationDays} days`} htmlFor="ad-days">
-                <input id="ad-days" type="range" min={3} max={60} value={c.durationDays} onChange={(e) => set({ durationDays: Number(e.target.value) })} className="w-full accent-[rgb(var(--primary))]" />
-              </Field>
-              <Field label="Start date" htmlFor="ad-start">
-                <input id="ad-start" type="date" className="input" value={c.startDate} onChange={(e) => e.target.value && set({ startDate: e.target.value })} />
+              <Field label="Duration" htmlFor="ad-days" right={<span className="num font-mono text-small text-ink">{c.durationDays} days</span>}>
+                <input id="ad-days" type="range" min={3} max={60} value={c.durationDays} onChange={(e) => set({ durationDays: Number(e.target.value) })} className="h-6 w-full cursor-pointer" />
               </Field>
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_120px_160px]">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_110px_150px_auto]">
               <Field label="Locations" htmlFor="ad-loc">
                 <input id="ad-loc" className="input" value={c.locations} onChange={(e) => set({ locations: e.target.value })} />
               </Field>
@@ -139,86 +147,65 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
                   <input type="number" min={13} max={65} className="input num" value={c.ageMax} onChange={(e) => set({ ageMax: Math.max(c.ageMin, Math.min(65, Number(e.target.value) || 65)) })} aria-label="Maximum age" />
                 </div>
               </Field>
+              <Field label="Starts">
+                <DateTimeButton mode="date" aria-label="Start date" value={parseDateStr(c.startDate).getTime()} onChange={(ms) => set({ startDate: dateStr(ms) })} />
+              </Field>
             </div>
-            <Field label="Interests" hint="Leave empty and the AI picks interests for your niche.">
+            <Field label="Interests" hint="Leave it empty and the AI picks interests for your niche.">
               <ChipInput values={c.interests} onChange={(v) => set({ interests: v })} placeholder="Add an interest" max={15} />
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {suggestions
-                  .filter((s) => !c.interests.includes(s))
-                  .slice(0, 8)
-                  .map((s) => (
-                    <button key={s} type="button" className="chip text-[11.5px]" onClick={() => set({ interests: [...c.interests, s] })}>
-                      + {s}
+              {unpicked.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {unpicked.map((s) => (
+                    <button key={s} type="button" className="chip" onClick={() => set({ interests: [...c.interests, s] })}>
+                      <Plus /> {s}
                     </button>
                   ))}
-              </div>
+                </div>
+              )}
             </Field>
-          </fieldset>
-          <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
-            <GenerateButton running={ai.running} onClick={generate} disabled={!c.platforms.length}>
-              {c.creatives.length ? 'Regenerate audiences & creatives' : 'Generate audiences & creatives'}
-            </GenerateButton>
-            <button
-              className="btn btn-ghost btn-sm ml-auto text-muted hover:text-bad"
-              onClick={async () => {
-                if (await confirmAction({ title: `Delete “${c.name}”?`, body: 'The campaign and its creatives will be removed.', confirmLabel: 'Delete', danger: true })) {
-                  deleteAd(c.id);
-                  onDeleted();
-                }
-              }}
-            >
-              <Trash2 size={14} /> Delete campaign
-            </button>
-          </div>
-          <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
-          {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
-        </section>
-
-        <ExportPanel c={c} finalUrl={finalUrl} onFinalUrl={(v) => set({ finalUrl: v })} onExported={() => set({ exportedAt: Date.now() })} />
-      </div>
-
-      {c.creatives.length > 0 && (
-        <section aria-label="Ad creatives">
-          <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-            <div>
-              <h2 className="section-title">A/B creatives</h2>
-              <p className="text-[13px] text-muted">Three angles to test against each other. Untick a variant to leave it out of the campaign.</p>
+            <div className="flex flex-col gap-3 border-t border-line pt-5">
+              <div className="flex flex-wrap items-center gap-3">
+                <GenerateButton variant={hasCreatives ? 'ai-outline' : 'ai'} running={ai.running} runningLabel="Writing…" onClick={generate} disabled={!c.platforms.length}>
+                  {hasCreatives ? 'Regenerate audiences & creatives' : 'Generate audiences & creatives'}
+                </GenerateButton>
+                {!c.platforms.length && <p className="text-caption text-muted">Pick at least one platform.</p>}
+              </div>
+              <AIThinking running={ai.running} stage={ai.stage} onStop={ai.stop} />
+              {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
             </div>
           </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {c.creatives.map((cr) => (
-              <CreativeCard key={cr.id} project={project} site={finalUrl} cr={cr} selected={c.selectedCreativeIds.includes(cr.id)} onSelect={(v) => set({ selectedCreativeIds: v ? [...c.selectedCreativeIds, cr.id] : c.selectedCreativeIds.filter((x) => x !== cr.id) })} onChange={(p) => setCreative(cr.id, p)} />
-            ))}
-          </div>
         </section>
-      )}
 
-      {c.search && <SearchAds project={project} site={finalUrl} search={c.search} onChange={(search) => set({ search })} />}
+        {hasCreatives && (
+          <Section title="Ad versions" description="Three angles to test against each other. Untick a version to leave it out of the campaign." className="mt-12" id="ad-creatives">
+            <div className="grid grid-cols-1 items-start gap-5 md:grid-cols-2 xl:grid-cols-3" aria-label="Ad creatives" role="group">
+              {c.creatives.map((cr) => (
+                <CreativeCard key={cr.id} project={project} site={finalUrl} cr={cr} selected={c.selectedCreativeIds.includes(cr.id)} onSelect={(v) => set({ selectedCreativeIds: v ? [...c.selectedCreativeIds, cr.id] : c.selectedCreativeIds.filter((x) => x !== cr.id) })} onChange={(p) => setCreative(cr.id, p)} />
+              ))}
+            </div>
+          </Section>
+        )}
 
-      {c.audiences.length > 0 && (
-        <section aria-label="Audiences">
-          <h2 className="section-title mb-3 flex items-center gap-2">
-            <Users size={17} className="text-primary" /> Audiences
-          </h2>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            {c.audiences.map((a) => (
-              <div key={a.id} className="panel flex flex-col gap-2 p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <p className="text-[14px] font-semibold">{a.name}</p>
-                </div>
-                <p className="text-[12.5px] text-muted">{a.description}</p>
-                <div className="mt-auto flex flex-wrap gap-1">
-                  {a.interests.map((i) => (
-                    <span key={i} className="rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-ink-2">
-                      {i}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+        {c.search && <SearchAds project={project} site={finalUrl} search={c.search} onChange={(search) => set({ search })} />}
+
+        {c.audiences.length > 0 && (
+          <Section title="Audiences" className="mt-12">
+            <ul className="card divide-y divide-line" aria-label="Audiences">
+              {c.audiences.map((a) => (
+                <li key={a.id} className="px-5 py-3.5">
+                  <p className="text-ui text-ink">{a.name}</p>
+                  <p className="mt-0.5 text-small text-muted">{a.description}</p>
+                  {a.interests.length > 0 && <p className="mt-1 text-small text-ink-2">{a.interests.join(' · ')}</p>}
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
+      </div>
+
+      <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-6 lg:col-span-4">
+        <ExportPanel c={c} finalUrl={finalUrl} onFinalUrl={(v) => set({ finalUrl: v })} onExported={() => set({ exportedAt: Date.now() })} />
+      </aside>
     </div>
   );
 }
@@ -238,19 +225,24 @@ function ExportPanel({ c, finalUrl, onFinalUrl, onExported }: { c: AdCampaign; f
   const hasCreatives = c.creatives.length > 0 && c.selectedCreativeIds.length > 0;
   const ready = hasCreatives && !!finalUrl;
   return (
-    <aside className="flex min-w-0 flex-col gap-4">
-      <section className="panel p-4" aria-label="Budget">
-        <h2 className="mb-1 text-[14px] font-semibold">Budget</h2>
-        <p className="num text-[22px] font-bold">{fmtMoney(c.dailyBudget * c.durationDays)}</p>
-        <p className="text-xs text-muted">
-          {fmtMoney(c.dailyBudget)}/day × {c.durationDays} days, the amount you set. Reach, clicks and costs depend on each platform’s auction: its ads manager estimates them when you set the campaign up.
+    <>
+      <section className="card p-5" aria-label="Budget">
+        <p className="flex items-center gap-1 text-small text-muted">
+          Budget
+          <InfoTip label="About the budget">The amount you set. Reach, clicks and costs depend on each platform’s auction: its ads manager estimates them when you set the campaign up.</InfoTip>
+        </p>
+        <p className="num mt-1 text-phone-kpi text-ink sm:text-kpi">{fmtMoney(c.dailyBudget * c.durationDays)}</p>
+        <p className="num mt-1 font-mono text-small text-muted">
+          {fmtMoney(c.dailyBudget)} a day × {c.durationDays} days
         </p>
       </section>
-      <section className="panel flex flex-col gap-3 p-4" aria-label="Run it">
-        <h2 className="text-[14px] font-semibold">Run it on the platforms</h2>
-        <p className="text-xs text-muted">This app doesn’t run or pay for ads. Copy the plan into each platform’s ads manager, where you set the budget and launch it.</p>
+      <section className="card flex flex-col gap-4 p-5" aria-label="Run it">
+        <h2 className="flex items-center gap-1 text-h3 text-ink">
+          Run it on the platforms
+          <InfoTip label="How ads run">This app doesn’t run or pay for ads. Copy the plan into each platform’s ads manager, where you set the budget and launch it.</InfoTip>
+        </h2>
         <Field label="Final URL" htmlFor="ad-final" hint="The page people land on when they click your ad.">
-          <input id="ad-final" className="input" placeholder="https://yourbusiness.com/offer" value={c.finalUrl ?? finalUrl} onChange={(e) => onFinalUrl(e.target.value)} onBlur={(e) => onFinalUrl(ensureUrl(e.target.value))} />
+          <input id="ad-final" className="input font-mono" placeholder="https://yourbusiness.com/offer" value={c.finalUrl ?? finalUrl} onChange={(e) => onFinalUrl(e.target.value)} onBlur={(e) => onFinalUrl(ensureUrl(e.target.value))} />
         </Field>
         <div className="flex flex-wrap gap-2">
           <CopyButton
@@ -261,6 +253,7 @@ function ExportPanel({ c, finalUrl, onFinalUrl, onExported }: { c: AdCampaign; f
             }}
           />
           <button
+            type="button"
             className="btn btn-secondary btn-sm"
             disabled={!ready}
             onClick={() => {
@@ -268,165 +261,171 @@ function ExportPanel({ c, finalUrl, onFinalUrl, onExported }: { c: AdCampaign; f
               void download(`${slugify(c.name)}-ads.csv`, adsCsv(c, finalUrl));
             }}
           >
-            <Download size={14} /> Ads CSV
+            <Download /> Ads CSV
           </button>
         </div>
-        {!hasCreatives ? <p className="text-xs text-muted">Generate creatives first.</p> : !finalUrl && <p className="text-xs text-warn">Add the page your ads link to before you export them.</p>}
-        <ul className="flex flex-col gap-1.5 text-[13px]">
+        {!hasCreatives ? <p className="-mt-2 text-caption text-muted">Generate creatives first.</p> : !finalUrl && <p className="-mt-2 text-caption text-warn">Add the page your ads link to before you export them.</p>}
+        <ul className="-mx-2 flex flex-col">
           {(c.platforms.length ? c.platforms : (['meta'] as AdPlatform[])).map((p) => (
             <li key={p}>
-              <a href={AD_MANAGERS[p].url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-semibold text-primary hover:underline">
-                Open {AD_MANAGERS[p].label} <ExternalLink size={12} />
+              <a href={AD_MANAGERS[p].url} target="_blank" rel="noopener noreferrer" className="flex h-9 items-center justify-between gap-2 rounded px-2 text-ui text-ink transition-colors duration-120 hover:bg-surface-2">
+                Open {AD_MANAGERS[p].label}
+                <ExternalLink size={14} className="shrink-0 text-muted" aria-hidden="true" />
               </a>
             </li>
           ))}
         </ul>
-        {c.exportedAt && <p className="text-xs text-muted">Last copied or exported {fmtRelative(c.exportedAt)}.</p>}
+        {c.exportedAt && <p className="text-caption text-muted">Last copied or exported {fmtRelative(c.exportedAt)}.</p>}
       </section>
-    </aside>
+    </>
   );
 }
 
+/** One ad version as it shows in a feed, picked with the option-card ring; Edit opens its words below it. */
 function CreativeCard({ project, site: finalUrl, cr, selected, onSelect, onChange }: { project: Project; site: string; cr: AdCreative; selected: boolean; onSelect: (v: boolean) => void; onChange: (p: Partial<AdCreative>) => void }) {
   const [editing, setEditing] = useState(false);
   // the final URL's domain, as Meta shows it; a clear placeholder until you add one
-  const site = (displayUrl(finalUrl).split('/')[0] || '[Final URL]').toUpperCase();
+  const site = displayUrl(finalUrl).split('/')[0] || '[Final URL]';
   return (
-    <article className={cn('panel flex min-w-0 flex-col overflow-hidden', selected ? 'ring-2 ring-primary' : 'opacity-80')}>
-      <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
-        <label className="flex items-center gap-2 text-[13px] font-semibold">
-          <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={selected} onChange={(e) => onSelect(e.target.checked)} />
-          Variant {cr.variant}
-        </label>
-        <span className="text-xs text-muted">{cr.angle}</span>
+    <div className="flex min-w-0 flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <Checkbox id={`cr-${cr.id}`} checked={selected} onChange={onSelect} label={<span className="text-ui">Version {cr.variant}</span>} />
+        <span className="min-w-0 truncate text-small text-muted" title={cr.angle}>
+          {cr.angle}
+        </span>
       </div>
-      <div className="bg-white text-[#1c1e21]">
-        <div className="flex items-center gap-2 px-3 py-2.5">
-          <LogoMark colors={project.brand.colors} logo={project.brand.logo} name={project.brand.name} size={32} />
-          <div className="min-w-0 flex-1 leading-tight">
-            <p className="truncate text-[13px] font-semibold">{project.brand.name}</p>
-            <p className="flex items-center gap-1 text-[11px] text-[#65676b]">
-              Sponsored · <Globe size={10} />
-            </p>
-          </div>
-          <MoreHorizontal size={16} className="text-[#65676b]" />
-        </div>
-        <p className="whitespace-pre-line px-3 pb-2.5 text-[13px] leading-snug">{cr.primaryText}</p>
-        <PostVisual style={cr.style} headline={cr.visualHeadline} brand={project.brand} watermark aspect={cr.format === 'video' ? '4/5' : '1/1'} className="rounded-none" />
-        <div className="flex items-center gap-3 bg-[#f0f2f5] px-3 py-2.5">
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[10.5px] uppercase text-[#65676b]">{site}</p>
-            <p className="truncate text-[14px] font-semibold">{cr.headline}</p>
-            <p className="truncate text-[12px] text-[#65676b]">{cr.description}</p>
-          </div>
-          <span className="shrink-0 rounded-md bg-[#e4e6eb] px-3 py-1.5 text-[13px] font-semibold">{cr.cta}</span>
-        </div>
-        <div className="flex items-center gap-4 border-t border-[#e4e6eb] px-3 py-1.5 text-[12px] text-[#65676b]">
-          <span className="flex items-center gap-1">
-            <ThumbsUp size={12} /> Like
+      <PostFrame
+        className={cn('transition-[box-shadow,opacity] duration-120', selected ? 'ring-[1.5px] ring-primary' : 'opacity-70')}
+        handle={project.brand.name}
+        avatar={<LogoMark colors={project.brand.colors} logo={project.brand.logo} name={project.brand.name} size={24} />}
+        meta="Sponsored"
+        footer={
+          <span className="flex items-center gap-3">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-mono text-caption text-muted">{site}</span>
+              <span className="block truncate text-small font-medium text-ink">{cr.headline}</span>
+              {cr.description && <span className="block truncate text-caption text-muted">{cr.description}</span>}
+            </span>
+            <span className="shrink-0 rounded bg-surface-3 px-2.5 py-1 text-caption font-medium text-ink">{cr.cta}</span>
           </span>
-          <span>Comment</span>
-          <span>Share</span>
+        }
+      >
+        {/* Meta shows an ad's text above its picture */}
+        <div className="px-3 pb-2.5">
+          <p className="clamp-3 whitespace-pre-line text-small text-ink-2">{cr.primaryText}</p>
         </div>
-      </div>
-      <div className="flex flex-col gap-2 p-3">
-        <button className="btn btn-secondary btn-sm self-start" onClick={() => setEditing((e) => !e)}>
-          {editing ? <Check size={14} /> : null} {editing ? 'Done' : 'Edit creative'}
+        <PostVisual style={cr.style} headline={cr.visualHeadline} brand={project.brand} watermark aspect={cr.format === 'video' ? '4/5' : '1/1'} className="rounded-none" />
+      </PostFrame>
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-caption text-muted">
+          {STYLE_LABEL[cr.style]} · {cr.format === 'video' ? 'Video' : 'Image'} ad
+        </span>
+        <button type="button" className="btn btn-ghost btn-xs" onClick={() => setEditing((e) => !e)} aria-expanded={editing}>
+          {editing ? <Check /> : <PenLine />} {editing ? 'Done' : 'Edit'}
         </button>
-        {editing && (
-          <div className="grid gap-2.5">
-            <Field label="Primary text" right={`${cr.primaryText.length}/125`}>
-              <AutoTextarea value={cr.primaryText} onChange={(v) => onChange({ primaryText: v })} minRows={2} className="text-[13px]" />
-            </Field>
-            <Field label="Headline" right={`${cr.headline.length}/40`}>
-              <input className="input" value={cr.headline} onChange={(e) => onChange({ headline: e.target.value })} />
-            </Field>
-            <Field label="Description" right={`${cr.description.length}/30`}>
-              <input className="input" value={cr.description} onChange={(e) => onChange({ description: e.target.value })} />
-            </Field>
-            <Field label="On-visual text">
-              <input className="input" value={cr.visualHeadline} onChange={(e) => onChange({ visualHeadline: e.target.value })} />
-            </Field>
-            <div className="grid grid-cols-2 gap-2">
-              <Field label="Button">
-                <select className="select" value={cr.cta} onChange={(e) => onChange({ cta: e.target.value })}>
-                  {[...new Set([cr.cta, ...CTAS])].map((x) => (
-                    <option key={x}>{x}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Visual style">
-                <select className="select" value={cr.style} onChange={(e) => onChange({ style: e.target.value as StyleId, format: isVideoStyle(e.target.value as StyleId) ? 'video' : 'image' })}>
-                  <optgroup label="Image">
-                    {IMAGE_STYLES.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Video">
-                    {VIDEO_STYLES.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                </select>
-              </Field>
-            </div>
-          </div>
-        )}
-        {!editing && <p className="text-[11.5px] text-muted">{STYLE_LABEL[cr.style]} · {cr.format === 'video' ? 'Video' : 'Image'} ad</p>}
       </div>
-    </article>
+      {editing && (
+        <div className="well grid gap-3 p-3">
+          <Field label="Primary text" right={<span className="num font-mono">{cr.primaryText.length}/125</span>}>
+            <AutoTextarea value={cr.primaryText} onChange={(v) => onChange({ primaryText: v })} minRows={2} />
+          </Field>
+          <Field label="Headline" right={<span className="num font-mono">{cr.headline.length}/40</span>}>
+            <input className="input" value={cr.headline} onChange={(e) => onChange({ headline: e.target.value })} />
+          </Field>
+          <Field label="Description" right={<span className="num font-mono">{cr.description.length}/30</span>}>
+            <input className="input" value={cr.description} onChange={(e) => onChange({ description: e.target.value })} />
+          </Field>
+          <Field label="On-visual text">
+            <input className="input" value={cr.visualHeadline} onChange={(e) => onChange({ visualHeadline: e.target.value })} />
+          </Field>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Button">
+              <select className="select" value={cr.cta} onChange={(e) => onChange({ cta: e.target.value })}>
+                {[...new Set([cr.cta, ...CTAS])].map((x) => (
+                  <option key={x}>{x}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Visual style">
+              <select className="select" value={cr.style} onChange={(e) => onChange({ style: e.target.value as StyleId, format: isVideoStyle(e.target.value as StyleId) ? 'video' : 'image' })}>
+                <optgroup label="Image">
+                  {orderStyles(IMAGE_STYLES).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Video">
+                  {orderStyles(VIDEO_STYLES).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </Field>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
+
+// The search ad as Google shows it: Google's own colours in both themes (it's the business's ad, not the app).
+const G = { ink: '#202124', url: '#4d5156', title: '#1a0dab', chip: '#f1f3f4' } as const;
 
 function SearchAds({ project, site, search, onChange }: { project: Project; site: string; search: SearchAd; onChange: (s: SearchAd) => void }) {
   const domain = displayUrl(site).split('/')[0] || '[Final URL]';
   return (
-    <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" aria-label="Google search ads">
-      <div className="panel flex flex-col gap-3 p-4">
-        <h2 className="section-title flex items-center gap-2">
-          <Search size={17} className="text-primary" /> Google search ad
-        </h2>
-        <div className="rounded-md border border-line bg-white p-4 text-left" style={{ fontFamily: 'Arial, sans-serif' }}>
-          <p className="text-[12px] font-bold text-[#202124]">Sponsored</p>
-          <p className="mt-1 flex items-center gap-2 text-[12px] text-[#202124]">
-            <span className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full bg-[#f1f3f4]">
-              <LogoMark colors={project.brand.colors} logo={project.brand.logo} name={project.brand.name} size={18} />
-            </span>
-            <span>
-              {project.brand.name}
-              <span className="block text-[11px] text-[#4d5156]">
-                {domain}/{search.path.join('/')}
+    <Section title="Google search ad" className="mt-12" id="ad-search">
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2" aria-label="Google search ads" role="group">
+        <div className="card overflow-hidden" style={{ background: '#ffffff', fontFamily: 'Arial, sans-serif' }}>
+          <div className="p-5" style={{ color: G.ink }}>
+            <p className="text-caption font-semibold">Sponsored</p>
+            <p className="mt-1.5 flex items-center gap-2 text-caption">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full" style={{ background: G.chip }}>
+                <LogoMark colors={project.brand.colors} logo={project.brand.logo} name={project.brand.name} size={18} />
               </span>
-            </span>
-          </p>
-          <p className="mt-1.5 text-[19px] leading-snug text-[#1a0dab]">{search.headlines.slice(0, 3).join(' | ')}</p>
-          <p className="mt-1 text-[13.5px] leading-snug text-[#4d5156]">{search.descriptions.join(' ')}</p>
-          <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5">
-            {search.sitelinks.map((s) => (
-              <p key={s.title} className="text-[13px] leading-tight">
-                <span className="text-[#1a0dab]">{s.title}</span>
-                <span className="block text-[12px] text-[#4d5156]">{s.desc}</span>
-              </p>
-            ))}
+              <span className="min-w-0">
+                <span className="block truncate">{project.brand.name}</span>
+                <span className="block truncate" style={{ color: G.url }}>
+                  {domain}/{search.path.join('/')}
+                </span>
+              </span>
+            </p>
+            <p className="mt-2 text-h3" style={{ color: G.title, fontWeight: 400 }}>
+              {search.headlines.slice(0, 3).join(' | ')}
+            </p>
+            <p className="mt-1 text-small" style={{ color: G.url }}>
+              {search.descriptions.join(' ')}
+            </p>
+            {search.sitelinks.length > 0 && (
+              <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
+                {search.sitelinks.map((s) => (
+                  <p key={s.title} className="text-small">
+                    <span style={{ color: G.title }}>{s.title}</span>
+                    <span className="block text-caption" style={{ color: G.url }}>
+                      {s.desc}
+                    </span>
+                  </p>
+                ))}
+              </div>
+            )}
           </div>
         </div>
+        <div className="flex flex-col gap-4">
+          <Field label="Headlines" right="Up to 30 characters, one per line">
+            <LinesEditor values={search.headlines} onChange={(v) => onChange({ ...search, headlines: v })} minRows={4} />
+            {search.headlines.some((h) => h.length > 30) && <p className="mt-1.5 text-caption text-warn">Some headlines are over 30 characters.</p>}
+          </Field>
+          <Field label="Descriptions" right="Up to 90 characters">
+            <LinesEditor values={search.descriptions} onChange={(v) => onChange({ ...search, descriptions: v })} minRows={2} />
+          </Field>
+          <Field label="Keywords" right="With match types">
+            <LinesEditor values={search.keywords} onChange={(v) => onChange({ ...search, keywords: v })} minRows={3} className="font-mono" />
+          </Field>
+        </div>
       </div>
-      <div className="panel grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
-        <Field label="Headlines (≤30 characters, one per line)" className="sm:col-span-2">
-          <LinesEditor values={search.headlines} onChange={(v) => onChange({ ...search, headlines: v })} minRows={4} />
-          {search.headlines.some((h) => h.length > 30) && <p className="mt-1 text-xs text-warn">Some headlines are over 30 characters.</p>}
-        </Field>
-        <Field label="Descriptions (≤90 characters)" className="sm:col-span-2">
-          <LinesEditor values={search.descriptions} onChange={(v) => onChange({ ...search, descriptions: v })} minRows={2} />
-        </Field>
-        <Field label="Keywords (match types)" className="sm:col-span-2">
-          <LinesEditor values={search.keywords} onChange={(v) => onChange({ ...search, keywords: v })} minRows={3} className="font-mono" />
-        </Field>
-      </div>
-    </section>
+    </Section>
   );
 }
