@@ -1,8 +1,9 @@
-// Settings → AI → Viktor (Slack), drawn once per state (as on the server: no effects run). The token is never
+// Settings › AI keys › Viktor (Slack), drawn once per state (as on the server: no effects run). The token is never
 // on the page: the server sends only its last 4 characters.
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { TooltipProvider } from '@/components/ui/shadcn/tooltip';
 import { SlackCardView, type SlackInfo, type SlackPublic } from './SlackCard';
 
 const MANIFEST = { yaml: '_metadata:\n  major_version: 1\n', json: '{}', createUrl: 'https://api.slack.com/apps?new_app=1&manifest_yaml=_metadata' };
@@ -27,7 +28,8 @@ const BASE: SlackPublic = {
   checkedAt: 0,
 };
 const ALL = ['chat:write', 'im:write', 'im:history', 'users:read', 'files:write', 'files:read', 'channels:history', 'groups:history', 'channels:read', 'groups:read'];
-const render = (slack: Partial<SlackPublic>, extra: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(SlackCardView, { info: { slack: { ...BASE, ...slack }, manifest: MANIFEST } as SlackInfo, ...extra }));
+// (the app mounts the tooltip provider once, in main.tsx)
+const render = (slack: Partial<SlackPublic>, extra: Record<string, unknown> = {}) => renderToStaticMarkup(createElement(TooltipProvider, null, createElement(SlackCardView, { info: { slack: { ...BASE, ...slack }, manifest: MANIFEST } as SlackInfo, ...extra })));
 
 describe('the Viktor (Slack) card', () => {
   it('not connected: what it is, the five steps, the manifest to copy, and the fine print', () => {
@@ -38,21 +40,26 @@ describe('the Viktor (Slack) card', () => {
     for (const step of ['Create the Slack app', 'Install it', 'Paste the token', 'Find Viktor', 'Where to talk to Viktor']) expect(html).toContain(step);
     expect(html).toContain('href="https://api.slack.com/apps?new_app=1&amp;manifest_yaml=_metadata"');
     expect(html).toContain('Copy the manifest');
-    expect(html).toContain('_metadata:');
-    expect(html).toContain('type="password"');
-    expect(html).toMatch(/id="slack-token" type="password" autocomplete="off"/i);
-    expect(html).toContain('What the token can do: it acts as you in Slack');
-    expect(html).toContain('the app can’t see how many');
+    // the YAML itself sits behind "View manifest" (Copy the manifest carries it)
+    expect(html).toMatch(/aria-expanded="false"[^>]*>View manifest/);
+    expect(html).not.toContain('_metadata:');
+    // the token step, once you reach it: a password field, and what the token can do
+    const token = render({}, { initialStep: 2 });
+    expect(token).toContain('type="password"');
+    expect(token).toMatch(/id="slack-token" type="password" autocomplete="off"/i);
+    expect(token).toContain('What the token can do: it acts as you in Slack');
+    expect(token).toContain('the app can’t see how many');
     // nothing to test or remove yet
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>.*Test connection/);
     expect(html).not.toContain('Also revoke the token in Slack');
   });
 
-  it('with the token from Replit Secrets: no Remove, where to remove it instead', () => {
+  it('with the token from the server’s secrets: no Remove, where to remove it instead', () => {
     const html = render({ configured: true, source: 'secrets', tokenHint: '••••0001', team: 'QA Workspace', user: 'owner', scopes: ALL, channelScopes: true, reason: 'no_viktor' });
-    expect(html).toContain('From Replit Secrets (SLACK_USER_TOKEN)');
+    expect(html).toContain('From the server’s secrets (SLACK_USER_TOKEN)');
     expect(html).toContain('••••0001');
-    expect(html).toContain('Replit → Secrets');
+    expect(html).toContain('To remove the token, delete the secret on the server.');
+    expect(html).not.toContain('Replit');
     expect(html).not.toContain('Also revoke the token in Slack');
     expect(html).not.toContain('id="slack-token"');
     expect(html).toContain('Needs attention');
@@ -61,11 +68,13 @@ describe('the Viktor (Slack) card', () => {
 
   it('ready: connected, Viktor chosen, the DM chosen; Remove with revoke', () => {
     const html = render({ configured: true, source: 'app', tokenHint: '••••0001', team: 'QA Workspace', user: 'owner', scopes: ALL, channelScopes: true, viktor: { userId: 'UQAVIKTOR', botId: 'BQAVIKTOR', name: 'Viktor' }, where: { kind: 'dm', channelId: 'DQAVIKTOR1' }, ready: true, reason: 'ok' });
-    expect(html).toContain('>Ready<');
+    expect(html).toContain('>Connected<');
     expect(html).toContain('Connected to <strong class="text-ink-2">QA Workspace</strong> as <strong class="text-ink-2">owner</strong>');
     expect(html).toContain('(saved here)');
     expect(html).toContain('(UQAVIKTOR)');
-    expect(html).toMatch(/<input type="radio" name="slack-where"[^>]*checked=""/);
+    // every step done: each shows its one-line summary, and opens again on a click
+    expect(html).toContain('Your DM with Viktor');
+    expect(render({ configured: true, source: 'app', tokenHint: '••••0001', scopes: ALL, channelScopes: true, viktor: { userId: 'UQAVIKTOR', botId: 'BQAVIKTOR', name: 'Viktor' }, where: { kind: 'dm', channelId: 'DQAVIKTOR1' }, ready: true, reason: 'ok' }, { initialStep: 4 })).toMatch(/<input type="radio" name="slack-where"[^>]*checked=""/);
     expect(html).toContain('Also revoke the token in Slack');
     expect(html).toContain('Step 5, done');
   });
