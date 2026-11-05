@@ -117,7 +117,8 @@ export function pct(n: number | undefined): string {
 export function money(n: number | undefined, currency = 'USD'): string {
   const v = typeof n === 'number' && Number.isFinite(n) ? n : 0;
   try {
-    return v.toLocaleString('en-US', { style: 'currency', currency, maximumFractionDigits: v >= 100 ? 0 : 2 });
+    const d = Math.abs(v) >= 10_000 ? 0 : 2;
+    return v.toLocaleString('en-US', { style: 'currency', currency, minimumFractionDigits: d, maximumFractionDigits: d });
   } catch {
     return `$${v.toFixed(2)}`;
   }

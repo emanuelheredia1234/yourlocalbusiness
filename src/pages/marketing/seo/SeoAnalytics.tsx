@@ -69,9 +69,10 @@ export function SeoBody({ data, range, now }: { data: SeoData; range: number; no
               { label: 'Clicks', value: n(gsc.clicks), sub: 'Last 28 days' },
               { label: 'Impressions', value: n(gsc.impressions) },
               { label: 'Avg position', value: gsc.position ? gsc.position.toFixed(1) : '–' },
-              { label: 'CTR', value: pct(gsc.ctr), info: 'Google data is about 2 days behind.' },
+              { label: 'CTR', value: pct(gsc.ctr) },
             ]}
           />
+          <p className="-mt-2 text-caption text-muted">Google data is about 2 days behind.</p>
           <ChartCard
             title={metric === 'clicks' ? 'Clicks per day' : 'Impressions per day'}
             subtitle={`From Google, last ${range} days`}
