@@ -9,7 +9,7 @@ import { useStore } from '@/store/useStore';
 import { cadence, patchCampaign } from '@/ai/socialPlan';
 import { DateTimeButton, Segmented, SettingsRow, Toggle } from '@/components/ui/primitives';
 import { StackedBar } from '@/components/charts/Charts';
-import { PostVisual } from '@/components/visuals/PostVisual';
+import { PostVisual, orderStyles } from '@/components/visuals/PostVisual';
 import { PlatformChip } from '@/components/posts/PlatformIcon';
 import { NETWORKS } from '@/ai/manusPost';
 import { LinkPlacementCard } from './LinkPlacementCard';
@@ -21,10 +21,6 @@ const WEIGHTS = [
   { id: '3', label: 'Most' },
 ] as const;
 
-/** The gallery's order: the brand-led looks first, the loud ones (neon, handwriting, kinetic type) last. */
-const IMAGE_ORDER: ImageStyleId[] = ['editorial', 'minimal', 'isometric', 'handcrafted', 'neon'];
-const VIDEO_ORDER: VideoStyleId[] = ['split', 'cinematic', 'talking', 'ugc', 'kinetic'];
-const ordered = <T extends { id: string }>(list: T[], order: string[]) => [...list].sort((a, b) => (order.indexOf(a.id) + 1 || 99) - (order.indexOf(b.id) + 1 || 99));
 
 const pad = (n: number) => String(n).padStart(2, '0');
 /** "14:30" today, as a time the time picker shows */
@@ -138,7 +134,7 @@ export function CampaignSetup({ project }: { project: Project }) {
         </SettingsRow>
         <div className="border-t border-line py-4">
           <StyleGroup label="Image styles">
-            {ordered(IMAGE_STYLES, IMAGE_ORDER).map((s) => (
+            {orderStyles(IMAGE_STYLES).map((s) => (
               <StyleCard key={s.id} checked={cfg.imageStyles.includes(s.id)} onToggle={() => set({ imageStyles: toggleIn<ImageStyleId>(cfg.imageStyles, s.id) })} label={s.label} desc={s.bestFor}>
                 <PostVisual style={s.id} headline={sample} brand={project.brand} watermark={cfg.watermark} aspect="1/1" points={['Start small', 'Stay consistent', 'Track wins']} className="rounded-none" />
               </StyleCard>
@@ -148,7 +144,7 @@ export function CampaignSetup({ project }: { project: Project }) {
         </div>
         <div className="border-t border-line py-4">
           <StyleGroup label="Video styles">
-            {ordered(VIDEO_STYLES, VIDEO_ORDER).map((s) => (
+            {orderStyles(VIDEO_STYLES).map((s) => (
               <StyleCard key={s.id} checked={cfg.videoStyles.includes(s.id)} onToggle={() => set({ videoStyles: toggleIn<VideoStyleId>(cfg.videoStyles, s.id) })} label={s.label} desc={s.bestFor} tall>
                 <PostVisual style={s.id as StyleId} headline={sample} brand={project.brand} watermark={cfg.watermark} aspect="9/16" hoverPlay className="rounded-none" />
               </StyleCard>

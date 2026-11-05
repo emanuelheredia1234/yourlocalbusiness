@@ -1,12 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { Pause, Play } from 'lucide-react';
-import type { Brand, MediaRef, Scene, StyleId } from '@/lib/types';
-import { cn, darken, lighten, mix, readableOn, withAlpha } from '@/lib/utils';
+import type { Brand, BrandColors, ImageStyleId, MediaRef, Scene, StyleId, VideoStyleId } from '@/lib/types';
+import { cn, darken, lighten, luminance, mix, readableOn, withAlpha } from '@/lib/utils';
 import { brandHandle, brandMark } from '@/lib/brandMark';
 import { isVideoStyle } from '@/ai/knowledge';
 import { useMediaUrl } from '@/lib/media';
-import { Icon } from '../ui/Icon';
-import { LogoMark } from '../brand/Logo';
+import { LOGO_FONTS, LogoMark } from '../brand/Logo';
 
 export interface PostVisualProps {
   style: StyleId;
@@ -24,6 +23,57 @@ export interface PostVisualProps {
 }
 
 const cq = (n: number) => `${n}cqw`;
+
+/**
+ * The order the looks are offered in (the campaign's gallery, the composer): the brand-led ones first
+ * (editorial, photo-led, before/after), the loud ones (neon, hand lettering, kinetic type) last.
+ */
+export const IMAGE_STYLE_ORDER: ImageStyleId[] = ['editorial', 'minimal', 'isometric', 'handcrafted', 'neon'];
+export const VIDEO_STYLE_ORDER: VideoStyleId[] = ['split', 'cinematic', 'talking', 'ugc', 'kinetic'];
+const STYLE_RANK: string[] = [...IMAGE_STYLE_ORDER, ...VIDEO_STYLE_ORDER];
+/** A list of styles in the order above (unknown ones last, as they came). */
+export function orderStyles<T extends { id: string }>(list: readonly T[]): T[] {
+  return [...list].sort((a, b) => (STYLE_RANK.indexOf(a.id) + 1 || 99) - (STYLE_RANK.indexOf(b.id) + 1 || 99));
+}
+
+/** One of the brand's own photos (Settings › Brand), picked by the headline so a week of posts doesn't repeat one. */
+function brandPhoto(brand: Brand, seed: string): MediaRef | null {
+  const photos = (brand.images ?? []).filter((m) => m.kind === 'image');
+  if (!photos.length) return null;
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  return photos[Math.abs(h) % photos.length];
+}
+
+/** The darkest of the brand's colours (the photo scrim fades into it). */
+function darkest(c: BrandColors): string {
+  return [c.ink, c.secondary, c.primary, c.accent].reduce((a, b) => (luminance(b) < luminance(a) ? b : a));
+}
+
+/** The brand's logo font, for headlines that should read as the brand. */
+function logoFont(brand: Brand): CSSProperties {
+  const f = LOGO_FONTS[brand.logo?.font] ?? LOGO_FONTS.grotesk;
+  return { fontFamily: f.family, fontWeight: f.weight, letterSpacing: f.spacing, textTransform: f.transform };
+}
+
+type Corner = 'tl' | 'tr' | 'bl' | 'br';
+/** Where each look keeps the watermark: the corner opposite its headline, which the layout leaves free of text. */
+const WATERMARK_CORNER: Record<StyleId, Corner> = { minimal: 'tr', editorial: 'tr', isometric: 'tr', handcrafted: 'br', neon: 'tr', ugc: 'tr', kinetic: 'tr', split: 'tr', cinematic: 'tr', talking: 'tl' };
+/** 6% in from the edges, 2.2% of the canvas wide (its type size), in its own box. */
+function watermarkStyle(corner: Corner): CSSProperties {
+  const inset = cq(6);
+  return {
+    ...(corner[0] === 't' ? { top: inset } : { bottom: inset }),
+    ...(corner[1] === 'l' ? { left: inset } : { right: inset }),
+    padding: `${cq(0.6)} ${cq(1.6)}`,
+    fontSize: cq(2.2),
+    lineHeight: 1.2,
+    background: 'rgba(0,0,0,0.38)',
+    color: '#fff',
+    letterSpacing: '0.01em',
+    maxWidth: '46%',
+  };
+}
 
 /** Tallest and widest shapes a photo preview takes (9:16 and 1.91:1, the range feeds show); beyond them it's cropped to fit. */
 const TALLEST = 9 / 16;
@@ -53,19 +103,7 @@ export function PostVisual(props: PostVisualProps) {
     <div className={cn('pv relative w-full overflow-hidden rounded-md bg-surface-3', className)} style={{ aspectRatio: ratio, maxWidth: '100%' }} role="img" aria-label={label ?? `${video ? 'Video' : 'Image'} mockup: ${props.headline}`}>
       {video ? <VideoStage {...props} mediaUrl={mediaUrl} /> : <ImageStage {...props} mediaUrl={mediaUrl} />}
       {watermark && url && (
-        <span
-          className="pointer-events-none absolute z-20 rounded-full font-semibold"
-          style={{
-            right: cq(3),
-            bottom: video ? cq(10) : cq(3),
-            padding: `${cq(0.8)} ${cq(2.2)}`,
-            fontSize: cq(2.6),
-            background: 'rgba(0,0,0,0.42)',
-            color: '#fff',
-            letterSpacing: '0.02em',
-            backdropFilter: 'blur(4px)',
-          }}
-        >
+        <span className="pointer-events-none absolute z-20 truncate rounded-full font-semibold" style={watermarkStyle(WATERMARK_CORNER[style] ?? 'tr')}>
           {url}
         </span>
       )}
@@ -104,6 +142,10 @@ function ImageStage({ style, headline, brand, media, mediaUrl, points }: PostVis
   const name = brand.name || 'Your Brand';
   // photos never get here (PostVisual shows them as they post); a video in an image style plays inside it
   const mediaEl = media?.kind === 'video' && mediaUrl ? <video src={mediaUrl} muted loop playsInline autoPlay className="h-full w-full object-cover" /> : null;
+  // until the post has its own picture, the brand's own photos stand in (never a stock or made-up one)
+  const photo = brandPhoto(brand, headline);
+  const photoUrl = useMediaUrl(mediaEl ? null : photo);
+  const photoEl = photoUrl ? <img src={photoUrl} alt="" className="h-full w-full object-cover" /> : null;
 
   switch (style) {
     case 'neon':
@@ -112,12 +154,9 @@ function ImageStage({ style, headline, brand, media, mediaUrl, points }: PostVis
           <div className="absolute inset-0" style={{ background: `radial-gradient(60% 50% at 80% 10%, ${withAlpha(c.accent, 0.35)}, transparent 70%), radial-gradient(60% 60% at 10% 100%, ${withAlpha(c.primary, 0.45)}, transparent 70%)` }} />
           <div className="absolute inset-0 opacity-40" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px)', backgroundSize: `${cq(8)} ${cq(8)}` }} />
           {mediaEl && <div className="absolute inset-0 opacity-35 mix-blend-screen">{mediaEl}</div>}
-          <div className="relative flex items-center justify-between">
-            <span className="font-bold uppercase text-white/80" style={{ fontSize: cq(3), letterSpacing: '0.18em' }}>
+          <div className="relative flex items-center" style={{ maxWidth: '60%' }}>
+            <span className="truncate font-bold uppercase text-white/80" style={{ fontSize: cq(3), letterSpacing: '0.18em' }}>
               {name}
-            </span>
-            <span className="rounded font-black uppercase" style={{ fontSize: cq(2.8), padding: `${cq(0.8)} ${cq(1.8)}`, background: c.accent, color: readableOn(c.accent), transform: 'rotate(4deg)' }}>
-              New
             </span>
           </div>
           <h3
@@ -133,16 +172,17 @@ function ImageStage({ style, headline, brand, media, mediaUrl, points }: PostVis
         </div>
       );
     case 'editorial': {
-      const photo = mediaEl ?? (
-        <div className="h-full w-full" style={{ background: `linear-gradient(135deg, ${lighten(c.primary, 0.35)}, ${darken(c.secondary, 0.05)})` }}>
-          <div className="h-full w-full" style={{ background: `radial-gradient(30% 40% at 30% 40%, ${withAlpha('#ffffff', 0.55)}, transparent 70%), radial-gradient(25% 30% at 75% 65%, ${withAlpha(c.accent, 0.6)}, transparent 70%), radial-gradient(20% 25% at 60% 20%, ${withAlpha('#ffffff', 0.35)}, transparent 70%)` }} />
-        </div>
-      );
+      const picture = mediaEl ??
+        photoEl ?? (
+          <div className="h-full w-full" style={{ background: `linear-gradient(135deg, ${lighten(c.primary, 0.35)}, ${darken(c.secondary, 0.05)})` }}>
+            <div className="h-full w-full" style={{ background: `radial-gradient(30% 40% at 30% 40%, ${withAlpha('#ffffff', 0.55)}, transparent 70%), radial-gradient(25% 30% at 75% 65%, ${withAlpha(c.accent, 0.6)}, transparent 70%), radial-gradient(20% 25% at 60% 20%, ${withAlpha('#ffffff', 0.35)}, transparent 70%)` }} />
+          </div>
+        );
       return (
         <div className="absolute inset-0 flex flex-col" style={{ background: mix(c.paper, '#fffaf2', 0.5) }}>
           <div className="relative overflow-hidden" style={{ height: '60%' }}>
-            {photo}
-            <span className="absolute left-[4cqw] top-[4cqw] rounded-sm bg-white/90 font-mono font-semibold uppercase text-black/80" style={{ fontSize: cq(2.3), padding: `${cq(0.5)} ${cq(1.4)}`, letterSpacing: '0.12em' }}>
+            {picture}
+            <span className="absolute left-[6cqw] top-[6cqw] rounded-sm bg-white/90 font-mono font-semibold uppercase text-black/80" style={{ fontSize: cq(2.3), padding: `${cq(0.5)} ${cq(1.4)}`, letterSpacing: '0.12em' }}>
               Journal
             </span>
           </div>
@@ -214,7 +254,7 @@ function ImageStage({ style, headline, brand, media, mediaUrl, points }: PostVis
             <path d="M2 8 C 30 2, 50 12, 80 6 S 140 2, 198 7" fill="none" stroke={c.accent} strokeWidth="4" strokeLinecap="round" />
           </svg>
           <ol className="mt-auto flex flex-col" style={{ gap: cq(2.6) }}>
-            {steps.map((s, i) => (
+            {steps.map((st, i) => (
               <li key={i} className="flex items-center" style={{ gap: cq(3) }}>
                 <span
                   className="flex shrink-0 items-center justify-center font-hand font-bold"
@@ -223,44 +263,72 @@ function ImageStage({ style, headline, brand, media, mediaUrl, points }: PostVis
                   {i + 1}
                 </span>
                 <span className="font-hand leading-tight" style={{ fontSize: cq(5.4), color: c.ink }}>
-                  {s.length > 46 ? s.slice(0, 44) + '…' : s}
+                  {st.length > 46 ? st.slice(0, 44) + '…' : st}
                 </span>
               </li>
             ))}
           </ol>
-          <div className="mt-[3cqw] flex items-center justify-between">
-            <span className="font-hand" style={{ fontSize: cq(4.2), color: withAlpha(c.ink, 0.7) }}>
-              — {name}
-            </span>
-            <svg viewBox="0 0 24 24" style={{ width: cq(7), height: cq(7) }} aria-hidden="true">
-              <path d="M12 2l2.6 6.6L21 9.3l-5 4.6 1.4 7.1L12 17.3 6.6 21l1.4-7.1-5-4.6 6.4-.7z" fill={c.accent} stroke={c.ink} strokeWidth="1" strokeLinejoin="round" />
-            </svg>
-          </div>
+          {/* the bottom-right corner stays free for the watermark */}
+          <span className="mt-[3cqw] block truncate font-hand" style={{ fontSize: cq(4.2), color: withAlpha(c.ink, 0.7), maxWidth: '50%' }}>
+            — {name}
+          </span>
         </div>
       );
     }
     case 'minimal':
     default:
-      return (
-        <div className="absolute inset-0 flex flex-col items-center" style={{ background: `linear-gradient(165deg, ${lighten(c.primary, 0.9)}, ${lighten(c.accent, 0.82)})`, padding: cq(6) }}>
-          <div className="flex w-full items-center" style={{ gap: cq(2) }}>
-            <LogoMark colors={c} logo={brand.logo} name={name} size={0} className="!h-[6cqw] !w-[6cqw]" />
-            <span className="font-semibold" style={{ fontSize: cq(3), color: c.ink }}>
-              {name}
-            </span>
-          </div>
-          <div className="relative my-auto flex items-center justify-center" style={{ width: cq(46), height: cq(46) }}>
-            <span className="absolute rounded-[50%] blur-[2px]" style={{ bottom: cq(-4), width: cq(40), height: cq(5), background: withAlpha(c.ink, 0.18) }} />
-            <div className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-[4cqw]" style={{ background: `linear-gradient(145deg, ${c.primary}, ${darken(c.secondary, 0.1)})`, boxShadow: `0 ${cq(3)} ${cq(6)} ${withAlpha(c.ink, 0.22)}` }}>
-              {mediaEl ?? <Icon name={brand.logo.icon} width="46%" height="46%" color={readableOn(c.primary)} strokeWidth={1.6} />}
-            </div>
-          </div>
-          <h3 className="text-center font-brand font-bold leading-[1.08] tracking-[-0.02em]" style={{ fontSize: cq(headline.length > 48 ? 5.4 : 6.6), color: c.ink }}>
-            {headline}
-          </h3>
-        </div>
-      );
+      // the default look: photo-led when the brand has photos, else type on the brand's colours with the logo mark
+      return photoEl ? <PhotoLed brand={brand} headline={headline} picture={photoEl} /> : mediaEl ? <PhotoLed brand={brand} headline={headline} picture={mediaEl} /> : <BrandType brand={brand} headline={headline} />;
   }
+}
+
+/** The brand's logo mark and name, as they sign a post (on a light disc, so the mark reads on any colour). */
+function Lockup({ brand, color, disc }: { brand: Brand; color: string; disc: string }) {
+  const name = brand.name || 'Your Brand';
+  return (
+    <span className="flex min-w-0 items-center" style={{ gap: cq(2) }}>
+      <span className="flex shrink-0 items-center justify-center rounded-full" style={{ width: cq(8.4), height: cq(8.4), background: disc }}>
+        <LogoMark colors={brand.colors} logo={brand.logo} name={name} size={0} className="!h-[6.4cqw] !w-[6.4cqw]" />
+      </span>
+      <span className="truncate" style={{ ...logoFont(brand), fontSize: cq(3.4), lineHeight: 1.1, color }}>
+        {name}
+      </span>
+    </span>
+  );
+}
+
+/** Photo-led: the picture cover-cropped, a scrim rising from the brand's darkest colour, the headline in its logo font, the lock-up bottom left. */
+function PhotoLed({ brand, headline, picture }: { brand: Brand; headline: string; picture: ReactNode }) {
+  const dark = darkest(brand.colors);
+  return (
+    <div className="absolute inset-0 overflow-hidden" style={{ background: dark }}>
+      <div className="absolute inset-0">{picture}</div>
+      <div className="absolute inset-0" style={{ background: `linear-gradient(to top, ${withAlpha(dark, 0.78)} 0%, ${withAlpha(dark, 0.5)} 34%, ${withAlpha(dark, 0)} 64%)` }} />
+      <div className="absolute inset-x-0 bottom-0 flex flex-col" style={{ padding: cq(6), gap: cq(3.6) }}>
+        <h3 style={{ ...logoFont(brand), fontSize: cq(headline.length > 56 ? 5.8 : headline.length > 36 ? 6.8 : 8), lineHeight: 1.06, color: '#fff', textWrap: 'balance', textShadow: '0 0.4cqw 2cqw rgba(0,0,0,.25)' }}>{headline}</h3>
+        <Lockup brand={brand} color="rgba(255,255,255,.92)" disc="rgba(255,255,255,.94)" />
+      </div>
+    </div>
+  );
+}
+
+/** Without photos: type on the brand's colours, an accent rule and the lock-up (never a stock icon). */
+function BrandType({ brand, headline }: { brand: Brand; headline: string }) {
+  const c = brand.colors;
+  const bg = c.primary;
+  const fg = readableOn(bg);
+  return (
+    <div className="absolute inset-0 flex flex-col justify-between overflow-hidden" style={{ background: `linear-gradient(155deg, ${lighten(bg, 0.06)} 0%, ${bg} 45%, ${darken(bg, 0.14)} 100%)`, padding: cq(6) }}>
+      <span className="pointer-events-none absolute rounded-full" style={{ right: cq(-18), bottom: cq(-22), width: cq(70), height: cq(70), background: withAlpha(c.accent, 0.18) }} aria-hidden="true" />
+      <div className="relative" style={{ maxWidth: '66%' }}>
+        <Lockup brand={brand} color={withAlpha(fg, 0.9)} disc={c.paper} />
+      </div>
+      <div className="relative">
+        <span className="block" style={{ width: cq(12), height: cq(1.2), marginBottom: cq(3.4), borderRadius: 999, background: c.accent }} />
+        <h3 style={{ ...logoFont(brand), fontSize: cq(headline.length > 56 ? 6.6 : headline.length > 36 ? 7.8 : 9.4), lineHeight: 1.02, color: fg, textWrap: 'balance' }}>{headline}</h3>
+      </div>
+    </div>
+  );
 }
 
 // ───────────────────────── Video styles (animated storyboards) ─────────────────────────
@@ -307,6 +375,16 @@ function useStoryboard(scenes: Scene[], playing: boolean) {
 function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoPlay, hoverPlay }: PostVisualProps & { mediaUrl: string | null }) {
   const reduced = useMemo(() => typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches, []);
   const [playing, setPlaying] = useState(!!autoPlay && !reduced);
+  // Inside another control (a post thumbnail that opens the editor, a style card you pick) the stage can't have
+  // its own button: it shows the time (and plays on hover where hoverPlay asks), and the click goes to that control.
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [nested, setNested] = useState<boolean | null>(null);
+  useLayoutEffect(() => {
+    setNested(!!stageRef.current?.parentElement?.closest('button, a[href], label, summary, [role="button"], [role="link"]'));
+  }, []);
+  // until the post has its own footage, the brand's own photo stands in (UGC, B-roll and talking-head looks)
+  const photo = media ? null : style === 'ugc' || style === 'cinematic' || style === 'talking' ? brandPhoto(brand, headline) : null;
+  const photoUrl = useMediaUrl(photo);
   const scenes = storyboard && storyboard.length ? storyboard : defaultScenes(headline, brand);
   const { idx, elapsed, total } = useStoryboard(scenes, playing);
   const scene = scenes[idx] ?? scenes[0];
@@ -326,6 +404,8 @@ function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoP
       ) : (
         <img src={mediaUrl} alt="" className="absolute inset-0 h-full w-full object-cover" style={{ animation: playing ? 'pv-kenburns 9s ease-in-out infinite alternate' : undefined }} />
       )
+    ) : photoUrl ? (
+      <img src={photoUrl} alt="" className="absolute inset-0 h-full w-full object-cover" style={{ animation: playing ? 'pv-kenburns 9s ease-in-out infinite alternate' : undefined }} />
     ) : null;
 
   let body: ReactNode;
@@ -397,7 +477,9 @@ function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoP
               <div className="h-full w-full" style={{ background: `radial-gradient(70% 50% at 70% 35%, ${withAlpha(c.accent, 0.55)}, transparent 70%), radial-gradient(60% 60% at 25% 75%, ${withAlpha(c.primary, 0.75)}, transparent 70%), linear-gradient(180deg, #0c0c0c, ${darken(c.secondary, 0.5)})` }}>
                 <div className="absolute left-1/2 top-[42%] -translate-x-1/2 -translate-y-1/2 rounded-[3cqw]" style={{ width: cq(40), height: cq(52), background: `linear-gradient(150deg, ${lighten(c.primary, 0.15)}, ${darken(c.primary, 0.35)})`, boxShadow: `0 ${cq(6)} ${cq(14)} rgba(0,0,0,.6)` }}>
                   <div className="flex h-full items-center justify-center">
-                    <Icon name={brand.logo.icon} width="42%" height="42%" color="rgba(255,255,255,.85)" strokeWidth={1.4} />
+                    <span className="flex items-center justify-center rounded-full" style={{ width: cq(20), height: cq(20), background: withAlpha(c.paper, 0.92) }}>
+                      <LogoMark colors={c} logo={brand.logo} name={name} size={0} className="!h-[15cqw] !w-[15cqw]" />
+                    </span>
                   </div>
                 </div>
               </div>
@@ -438,7 +520,7 @@ function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoP
           {idx % 2 === 1 && (
             <div key={`broll-${idx}`} className="absolute right-[4cqw] top-[6cqw] overflow-hidden rounded-[2cqw] border-[0.6cqw] border-white shadow-lg" style={{ width: cq(34), height: cq(42), animation: 'pv-slide-up .45s ease-out both', background: `linear-gradient(140deg, ${c.primary}, ${c.accent})` }}>
               <div className="flex h-full items-center justify-center">
-                <Icon name={brand.logo.icon} width="50%" height="50%" color="#fff" strokeWidth={1.6} />
+                {photoUrl ? <img src={photoUrl} alt="" className="h-full w-full object-cover" /> : <LogoMark colors={c} logo={brand.logo} name={name} size={0} className="!h-[16cqw] !w-[16cqw]" />}
               </div>
               <span className="absolute left-[2cqw] top-[2cqw] rounded bg-black/50 font-bold uppercase text-white" style={{ fontSize: cq(2.2), padding: `${cq(0.3)} ${cq(1)}` }}>
                 B-roll
@@ -483,8 +565,19 @@ function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoP
       );
   }
 
+  const toggle = () => setPlaying((p) => !p);
+  const time = (
+    <>
+      {playing ? <Pause className="h-[3.4cqw] w-[3.4cqw]" aria-hidden="true" /> : <Play className="h-[3.4cqw] w-[3.4cqw] fill-current" aria-hidden="true" />}
+      <span className="num">
+        {Math.floor(elapsed)}s / {total}s
+      </span>
+    </>
+  );
+  const controlClass = 'absolute bottom-[3cqw] left-[3cqw] z-20 flex items-center gap-[1.2cqw] rounded-full bg-black/55 font-semibold text-white backdrop-blur';
+  const controlStyle: CSSProperties = { fontSize: cq(2.8), padding: `${cq(1.2)} ${cq(2.6)}` };
   return (
-    <div className="absolute inset-0" onMouseEnter={() => hoverPlay && !reduced && setPlaying(true)} onMouseLeave={() => hoverPlay && setPlaying(false)}>
+    <div ref={stageRef} className="absolute inset-0" onMouseEnter={() => hoverPlay && !reduced && setPlaying(true)} onMouseLeave={() => hoverPlay && setPlaying(false)}>
       {body}
       <div className="absolute inset-x-[3cqw] top-[3cqw] z-10 flex gap-[1cqw]">
         {scenes.map((s, i) => {
@@ -497,21 +590,33 @@ function VideoStage({ style, headline, brand, storyboard, mediaUrl, media, autoP
           );
         })}
       </div>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setPlaying((p) => !p);
-        }}
-        className="absolute bottom-[3cqw] left-[3cqw] z-20 flex items-center gap-[1.2cqw] rounded-full bg-black/55 font-semibold text-white backdrop-blur hover:bg-black/70"
-        style={{ fontSize: cq(2.8), padding: `${cq(1.2)} ${cq(2.6)}` }}
-        aria-label={playing ? 'Pause preview' : 'Play preview'}
-      >
-        {playing ? <Pause className="h-[3.4cqw] w-[3.4cqw]" /> : <Play className="h-[3.4cqw] w-[3.4cqw] fill-current" />}
-        <span className="num">
-          {Math.floor(elapsed)}s / {total}s
+      {nested ? (
+        // inside another control: the time only (no second button in there)
+        <span className={controlClass} style={controlStyle} aria-hidden="true">
+          {time}
         </span>
-      </button>
+      ) : (
+        // a control of its own (a span with the button role, so a first render inside another control never nests buttons)
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggle();
+          }}
+          onKeyDown={(e: KeyboardEvent<HTMLSpanElement>) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            e.stopPropagation();
+            toggle();
+          }}
+          className={cn(controlClass, 'cursor-pointer hover:bg-black/70')}
+          style={controlStyle}
+          aria-label={playing ? 'Pause preview' : 'Play preview'}
+        >
+          {time}
+        </span>
+      )}
     </div>
   );
 }
