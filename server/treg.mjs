@@ -19,7 +19,7 @@
 // - Metered endpoints need opts.maxCostUsd (X-Treg-Route-Max-Cost); Search Console ones (the team's own
 //   connection) never send that header.
 // - Every call needs an Idempotency-Key. A client-side timeout on a read is repeated once with the same key;
-//   one-shot writes (gsc.submit) are never repeated.
+//   one-shot writes (gsc.submit) are never repeated. The repeat waits replayDelayMs (5 s) first.
 // - treg's error bodies are never returned, logged or stored: 402 insufficient_balance carries the balance
 //   and a top-up link. Errors are TregError with a kind (the table below) and our own words.
 
@@ -142,7 +142,7 @@ function queryString(query) {
   return s ? `?${s}` : '';
 }
 
-export function createTreg({ env = process.env, fetch = globalThis.fetch, now = () => Date.now(), db = null, ledger = null, caps = null, storage = null, log = console, maxInFlight = MAX_IN_FLIGHT_PER_CUSTOMER } = {}) {
+export function createTreg({ env = process.env, fetch = globalThis.fetch, now = () => Date.now(), db = null, ledger = null, caps = null, storage = null, log = console, maxInFlight = MAX_IN_FLIGHT_PER_CUSTOMER, replayDelayMs = 5_000 } = {}) {
   const base = String(env.TREG_BASE_URL || 'https://treg.to').replace(/\/+$/, '');
   const book = ledger ?? (db ? createLedger({ db, now, log }) : null);
   const limits = caps ?? (db && book ? createCaps({ db, ledger: book, now, log }) : null);
@@ -266,6 +266,8 @@ export function createTreg({ env = process.env, fetch = globalThis.fetch, now = 
         await book.write({ ...row, outcome: 'timeout', cost_micro: 0, http_status: null });
         // a read may be asked once more with the same key: treg answers the stored result for free
         if (oneShot) throw new TregError('timeout', KIND_COPY.timeout, { status: 504 });
+        // give treg a moment to finish the first one (a 409 means it's still running: the caller tries later)
+        await new Promise((r) => setTimeout(r, replayDelayMs));
         got = await attempt(url, init, timeoutMs);
         if (got.timedOut) {
           await book.write({ ...row, outcome: 'timeout', cost_micro: 0, http_status: null });
