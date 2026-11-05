@@ -120,19 +120,22 @@ export function LivePreview({ code, title, images, className, url }: { code: Pre
       bodyClassName="flex min-h-0 flex-1 justify-center overflow-auto bg-surface-2"
       toolbar={
         <>
-          {(
-            [
-              ['desktop', Monitor, 'Desktop width'],
-              ['tablet', Tablet, 'Tablet width'],
-              ['mobile', Smartphone, 'Phone width'],
-            ] as const
-          ).map(([d, I, label]) => (
-            <Tooltip key={d} content={label}>
-              <button type="button" className={cn('btn btn-ghost btn-icon h-6 w-6 rounded-sm', device === d && 'bg-surface-3 text-ink')} onClick={() => setDevice(d)} aria-label={`${d} width`} aria-pressed={device === d}>
-                <I className="!size-3.5" />
-              </button>
-            </Tooltip>
-          ))}
+          {/* preview widths: not on a phone's own screen, where they'd squeeze out the address */}
+          <span className="flex items-center gap-1 max-sm:hidden">
+            {(
+              [
+                ['desktop', Monitor, 'Desktop width'],
+                ['tablet', Tablet, 'Tablet width'],
+                ['mobile', Smartphone, 'Phone width'],
+              ] as const
+            ).map(([d, I, label]) => (
+              <Tooltip key={d} content={label}>
+                <button type="button" className={cn('btn btn-ghost btn-icon h-6 w-6 rounded-sm', device === d && 'bg-surface-3 text-ink')} onClick={() => setDevice(d)} aria-label={`${d} width`} aria-pressed={device === d}>
+                  <I className="!size-3.5" />
+                </button>
+              </Tooltip>
+            ))}
+          </span>
           <Tooltip content="Reload">
             <button type="button" className="btn btn-ghost btn-icon h-6 w-6 rounded-sm" onClick={() => setNonce((n) => n + 1)} aria-label="Reload preview">
               <RefreshCw className="!size-3.5" />

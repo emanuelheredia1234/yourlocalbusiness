@@ -3,7 +3,7 @@ import { Camera, Download, ExternalLink, Palette, Trash2, Type } from 'lucide-re
 import type { ImageAspect, ImageKind, MediaRef, PostPlatform, Project, StyleId } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
-import { artMetaLine, aspectForPlatform, createPostImage, defaultImageKind, photoLabel, photoSourceNote, postSubject, releaseMedia, retypesetPostImage } from '@/ai/image';
+import { artMetaLine, aspectForPlatform, createPostImage, defaultImageKind, photoSourceNote, postSubject, releaseMedia, retypesetPostImage } from '@/ai/image';
 import { pendingManus, type ManusTask } from '@/ai/manus';
 import { AIThinking, GenerateButton } from '@/components/ai/AI';
 import { openPage } from '@/ai/assistant/nav';
@@ -153,7 +153,8 @@ export function PostImagePanel({ project, headline, prompt, onPromptChange, styl
           onChange={(v) => (v === 'photo' && !photo.ok ? undefined : setKind(v))}
           options={[
             { id: 'illustration', label: 'Illustration', icon: <Palette /> },
-            { id: 'photo', label: <span className={cn(!photo.ok && 'text-faint')}>{photoLabel()}</span>, icon: <Camera className={cn(!photo.ok && 'text-faint')} /> },
+            // who makes the photo is in the ⓘ, not on the switch
+            { id: 'photo', label: <span className={cn(!photo.ok && 'text-faint')}>Photo</span>, icon: <Camera className={cn(!photo.ok && 'text-faint')} /> },
           ]}
         />
       </div>

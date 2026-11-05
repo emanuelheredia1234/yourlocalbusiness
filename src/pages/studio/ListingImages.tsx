@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
 import { isOwnPhoto } from '@/lib/media';
 import { galleryIds, MAX_GALLERY } from '@/lib/listing';
-import { composeOwnListingPhoto, defaultImageKind, listingShots, photoLabel, photoRoute, photoSourceNote, type ListingShot } from '@/ai/image';
+import { composeOwnListingPhoto, defaultImageKind, listingShots, photoRoute, photoSourceNote, type ListingShot } from '@/ai/image';
 import { fromOwnPhoto, listingShotMedia, PHOTO_ACCEPT } from '@/ai/listingPhotos';
 import { ALL_SHOTS, listingPendingKey, makeListingShot, ownPhotoPlaced, placeListingShot, savePhotoFile, shotText } from '@/ai/listingImages';
 import { pendingManus, type ManusTask } from '@/ai/manus';
@@ -257,7 +257,8 @@ export function ListingImages({ project, children }: { project: Project; childre
             onChange={(v) => (v === 'photo' && !photo.ok ? undefined : setKind(v))}
             options={[
               { id: 'illustration', label: 'Illustration', icon: <Palette /> },
-              { id: 'photo', label: <span className={cn(!photo.ok && 'text-faint')}>{photoLabel()}</span>, icon: <Camera className={cn(!photo.ok && 'text-faint')} /> },
+              // who makes the photos is in the ⓘ, not on the switch
+              { id: 'photo', label: <span className={cn(!photo.ok && 'text-faint')}>Photo</span>, icon: <Camera className={cn(!photo.ok && 'text-faint')} /> },
             ]}
           />
           <InfoTip label="How listing images are made" link={!photo.ok && !__ARTIFACT_BUILD__ ? { label: 'Open Settings › AI keys', onClick: () => void openPage('workspace-settings', 'ai') } : undefined}>
@@ -478,7 +479,8 @@ function ShotTile({
           </div>
         )}
         {!busy && !uploading && (
-          <div className={cn('absolute bottom-2 right-2 flex items-center gap-1.5 transition-opacity duration-120', m && 'opacity-0 focus-within:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100')}>
+          // shown on hover or focus (always on touch), and while one of its menus is open
+          <div className={cn('absolute bottom-2 right-2 flex items-center gap-1.5 transition-opacity duration-120', m && 'opacity-0 focus-within:opacity-100 group-hover:opacity-100 has-[[data-state=open]]:opacity-100 [@media(pointer:coarse)]:opacity-100')}>
             <Menu
               align="end"
               items={replaceItems}

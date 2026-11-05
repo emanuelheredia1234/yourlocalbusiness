@@ -16,6 +16,8 @@ import { MediaThumb } from '@/components/media/MediaUpload';
 import { ListingCard } from '@/pages/store/ListingParts';
 import { buildListing, galleryIds, leadPrice, listingSuggestions, MAX_GALLERY, priceLabel } from '@/lib/listing';
 import { listingChanged, listingChecks, openInStore, publishProjectListing, setListingsShared, UNPUBLISH_CONFIRM, unpublishProjectListing } from '@/lib/listingPublish';
+import { listingShots } from '@/ai/image';
+import { listingShotMedia } from '@/ai/listingPhotos';
 import { ListingImages, PhotoUploadButton } from './ListingImages';
 import { VideoPanel } from '@/components/images/VideoPanel';
 
@@ -100,7 +102,23 @@ export function PublishTab({ project }: { project: Project }) {
   const checks = listingChecks(project, preview);
   const blocking = checks.filter((c) => !c.ok && !c.optional);
   const changed = listingChanged(project, live);
-  const unwritten = !d.title.trim() && !d.tagline.trim() && !d.description.trim();
+  // nothing written, picked or made for the listing yet: it starts on its empty state (anything the owner set, a
+  // photo, a tag, a link, keeps the form open after a reload)
+  const untouched =
+    !d.title.trim() &&
+    !d.tagline.trim() &&
+    !d.description.trim() &&
+    !d.tags.length &&
+    !(d.hours ?? '').trim() &&
+    !d.buyUrl?.trim() &&
+    !d.contactEmail?.trim() &&
+    !d.phone?.trim() &&
+    !d.coverImageId &&
+    !d.galleryIds?.length &&
+    !Object.keys(d.shotPrompts ?? {}).length &&
+    !Object.keys(d.shotImageIds ?? {}).length &&
+    !d.demoVideo &&
+    !listingShots(project).some((s) => listingShotMedia(project, s.id));
 
   const write = async () => {
     const r = await ai.run({});
@@ -123,7 +141,7 @@ export function PublishTab({ project }: { project: Project }) {
   };
 
   // ── not written yet ──
-  if (unwritten && !byHand && !live) {
+  if (untouched && !byHand && !live) {
     return (
       <div>
         {ai.error && (

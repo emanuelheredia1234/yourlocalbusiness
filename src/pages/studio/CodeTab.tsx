@@ -20,6 +20,7 @@ import { AgentBuildList } from '@/components/agents/AgentBuildList';
 import { CodeEditor, LivePreview, type CodeLang } from '@/components/code/CodeEditor';
 import { AutoTextarea, Callout, Empty, InfoTip, Modal, MoreMenu, OptionCards, Segmented, Select, Spinner, StatusDot, StickyActionBar, Tooltip, confirmAction, type MenuEntry } from '@/components/ui/primitives';
 import { Icon } from '@/components/ui/Icon';
+import { MediaThumb } from '@/components/media/MediaUpload';
 import { download } from '@/components/ui/download';
 import {
   NO_DRAFT,
@@ -72,14 +73,14 @@ const SHORT_DESC: Record<CodeKind, string> = {
   leadform: 'Collects emails',
   pricing: 'Plans side by side',
   hero: 'Headline and button',
-  countdown: 'Counts down to a date',
-  quiz: 'Recommends an offer',
+  countdown: 'Timer to a date',
+  quiz: 'Picks an offer',
   checklist: 'Remembers ticks',
   testimonials: 'Rotating reviews',
-  booking: 'Service, date and time',
-  spreadsheet: 'Formulas and a script',
+  booking: 'Pick a time',
+  spreadsheet: 'Tabs and formulas',
   faq: 'Answers questions',
-  roi: 'Shows what they save',
+  roi: 'Shows the savings',
 };
 
 const QUICK_EDITS = ['Switch to a dark theme', 'Make the button bigger and rounder', 'Add a phone number field', 'Use my accent color for highlights', 'Tighten the spacing', 'Add a subtle entrance animation'];
@@ -852,9 +853,9 @@ export function NewAssetForm({ project, running, onGenerate }: { project: Projec
       {phone ? (
         <div>
           <label htmlFor="code-kind" className="label">
-            Type
+            Asset type
           </label>
-          <Select<CodeKind> id="code-kind" aria-label="Asset type" value={kind} onChange={setKind} options={kinds.map((k) => ({ value: k.id, label: SHORT_LABEL[k.id], description: SHORT_DESC[k.id], icon: <Icon name={k.icon} /> }))} />
+          <Select<CodeKind> id="code-kind" aria-label="Asset type" value={kind} onChange={setKind} options={kinds.map((k) => ({ value: k.id, label: SHORT_LABEL[k.id], icon: <Icon name={k.icon} /> }))} />
         </div>
       ) : (
         <OptionCards<CodeKind>
@@ -980,10 +981,13 @@ function EditComposer({
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const images = asset.images ?? [];
-  // quick edits: four at a time (one row), "More ideas" shows the next ones
+  // quick edits: three at a time (one row under the box), "More ideas" shows the next ones
   const [ideasPage, setIdeasPage] = useState(0);
-  const pages = Math.ceil(QUICK_EDITS.length / 4);
-  const ideas = QUICK_EDITS.slice((ideasPage % pages) * 4, (ideasPage % pages) * 4 + 4);
+  const pages = Math.ceil(QUICK_EDITS.length / 3);
+  const ideas = QUICK_EDITS.slice((ideasPage % pages) * 3, (ideasPage % pages) * 3 + 3);
+  // docked over the canvas, the box stays small: its images (with their notes) open while you're in it, a strip of
+  // thumbnails stands for them otherwise
+  const folded = sticky && images.length > 0 && !imagesBusy;
   const form = (
     <form
       className="mx-auto flex w-full max-w-[760px] flex-col gap-2"
@@ -994,7 +998,7 @@ function EditComposer({
       }}
     >
       {status}
-      <div className={cn('ai-composer px-3 pb-2 pt-2.5', sticky && 'shadow-pop')}>
+      <div className={cn('ai-composer group/composer px-3 pb-2 pt-2.5', sticky && 'shadow-pop')}>
         <label htmlFor="code-edit" className="sr-only">
           Edit with AI
         </label>
@@ -1008,13 +1012,30 @@ function EditComposer({
           {...pasteHandlers}
           className={COMPOSER_TEXT}
         />
-        {(images.length > 0 || imagesBusy) && <PromptImages key={asset.id} images={images} onChange={onImages} reserved={reserved} busy={imagesBusy} disabled={running} label="Images in this asset" compact className="mt-2" />}
+        {(images.length > 0 || imagesBusy) && (
+          <PromptImages key={asset.id} images={images} onChange={onImages} reserved={reserved} busy={imagesBusy} disabled={running} label="Images in this asset" compact className={cn('mt-2', folded && 'hidden group-focus-within/composer:flex')} />
+        )}
         <div className="mt-1.5 flex items-center gap-1.5">
           <Tooltip content="Add images">
             <button type="button" className="btn btn-ghost btn-icon btn-sm" aria-label="Add images" disabled={running || images.length >= MAX_PROMPT_IMAGES} onClick={() => fileInput.current?.click()}>
               <ImagePlus />
             </button>
           </Tooltip>
+          {folded && (
+            <button
+              type="button"
+              className="flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-caption text-muted transition-colors duration-120 hover:text-ink group-focus-within/composer:hidden"
+              onClick={() => document.getElementById('code-edit')?.focus()}
+              aria-label={`${images.length === 1 ? '1 image' : `${images.length} images`} in this asset: show ${images.length === 1 ? 'it' : 'them'}`}
+            >
+              <span className="flex gap-1" aria-hidden="true">
+                {images.slice(0, 4).map((i) => (
+                  <MediaThumb key={i.key} media={i.media} className="h-6 w-6 rounded" />
+                ))}
+              </span>
+              <span className="num truncate">{images.length === 1 ? '1 image' : `${images.length} images`}</span>
+            </button>
+          )}
           <input
             ref={fileInput}
             type="file"
