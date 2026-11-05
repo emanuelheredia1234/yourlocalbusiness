@@ -63,8 +63,45 @@ and the integration ids._
 
 ## 4. Platform apps and approvals
 
-_Filled in by the posting work (WP2): what to create at Meta, LinkedIn, TikTok, X and Google, and what works
-before each approval._
+Start these early: nothing posts publicly until each network has approved your app. Create the apps and start
+Business Verification any time; register the OAuth redirect URI `https://api.nango.dev/oauth/callback` at each
+network only when you set up Nango (§3). Client ids and secrets go **in the Nango dashboard**, never in the app.
+The waits below are typical estimates, not promises.
+
+| Network | What to create | Approval and typical wait | Before approval |
+|---|---|---|---|
+| Meta (Facebook Pages, Instagram, Meta Ads) | A Business-type Meta app, a Facebook Login for Business configuration (its id goes in `META_LOGIN_CONFIG_ID`), products Pages, Instagram and Marketing API | App Review for Advanced Access (pages_manage_posts, pages_manage_engagement, instagram_content_publish, instagram_manage_comments, read_insights, ads_read) and Business Verification: often 1–4 weeks | Only the app's admins and testers can connect |
+| LinkedIn | A developer app with "Share on LinkedIn" (self-serve); the Community Management API on a fresh app with no other products | Community Management: Development tier, then Standard tier (screencast): weeks | Members can post as themselves; company pages wait. Set `LINKEDIN_ORG_APPROVED=1` only once it's granted |
+| TikTok | A developer app with Content Posting API and Login Kit | The Direct Post audit: weeks | Posts are private (only the poster sees them) and at most 5 people a day can post |
+| X | A developer account with pay-per-use credits | None; prepaid credits (about $0.015 a post, $0.20 with a link) | Works as soon as there are credits |
+| Google (YouTube, Ads, Search Console) | One Cloud project and OAuth client; turn on YouTube Data, YouTube Analytics, Google Ads, Search Console and Site Verification APIs | OAuth verification for sensitive scopes: weeks. YouTube allows 100 uploads a day per project | Testing mode: up to 100 test users, sign-ins last 7 days |
+
+**How posting works once an account is connected**
+- The customer presses **Post on Facebook** (or another network) and confirms. The app sends the post **once**.
+  If it can't tell whether the post went out (a timeout or a network error), the post shows **We couldn't confirm
+  the post went out** with **Check again** (a read, at most every 30 seconds) and **Post it yourself**. It never
+  sends the post again by itself, and there's no "Try again" for that case.
+- The post that goes out is the one saved in the customer's account. If the screen shows something older, the app
+  asks them to save first.
+- Facebook posts use the Page's own access, fetched for that one post and never stored. Photos and videos for
+  Instagram, Facebook and TikTok are shared through a private link that lasts 30 minutes (2 hours for a video):
+  `https://yourlocalbusiness.replit.app/api/media/public/…`. LinkedIn, X and YouTube get the file uploaded by the
+  server.
+- Daily caps per customer: 20 posts on X (X bills each post), 50 on each other network. Change them in the
+  `billing_caps` table (`x_posts_per_day`, `posts_per_day`; the `*` row is the default).
+- Formats: Instagram takes JPEG photos and MP4 Reels; Facebook and LinkedIn take photos (video is coming); TikTok
+  needs a video or a photo; X takes up to one photo or video here; YouTube needs a video.
+
+**Settings for posting** (plain settings, not secret)
+
+| Name | Default | Meaning |
+|---|---|---|
+| `TIKTOK_UPLOAD_MODE` | `FILE_UPLOAD` | `FILE_UPLOAD` sends TikTok videos from the server. Set `PULL_FROM_URL` only after TikTok has verified the URL prefix `https://yourlocalbusiness.replit.app/api/media/public/` in its developer portal; TikTok photo posts need that too. |
+| `LINKEDIN_UPLOAD_BEARER` | unset | Set to `1` only if LinkedIn's upload links turn out to need the member's sign-in (the upload then goes through Nango). |
+| `MEDIA_PUBLIC_BASE_URL` | `ALLOWED_ORIGIN`, else `https://yourlocalbusiness.replit.app` | The address networks fetch shared photos and videos from. |
+
+`MEDIA_URL_SECRET` (§1) signs those links: without it, photo and video posts to Instagram, Facebook and TikTok
+say "isn't set up yet" and nothing is sent.
 
 ## 5. treg, caps and billing
 
