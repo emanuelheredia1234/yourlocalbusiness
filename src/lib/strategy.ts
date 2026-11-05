@@ -24,12 +24,13 @@ import type {
 } from './strategyTypes';
 import { hashStr, fmtRelative } from './utils';
 import { pageTypeOf } from './pageTypes';
-import { LINK_PLACEMENTS, placementFor } from './pageLink';
+import { LINK_PLACEMENTS, knownLinks, placementFor } from './pageLink';
 import {
   POST_NETWORKS,
   STRATEGY_CAPS as C,
   STRATEGY_STEPS,
   TICK_KEY,
+  cleanText,
   clip,
   domainOf,
   enumOf,
@@ -136,8 +137,11 @@ export function emptyStrategy(): StrategyState {
   return { v: 1, inputs: { goal: '', budget: '', timePerWeek: '', competitors: [], tried: '', notes: '' }, useBrain: true, maxSearches: 5, sources: [], nextSource: 1, ticks: {}, applied: {}, updatedAt: 0 };
 }
 
-/** The owner's own numbers and words (prices, budget, goal, their texts): claims and numbers in them are facts the owner gave. */
-export function ownerFacts(p: Project, inputs: StrategyInputs): OwnerFacts {
+/**
+ * The owner's own numbers and words (prices, budget, goal, their texts): claims and numbers in them are facts the
+ * owner gave. With them, the links the app has checked: the business's own addresses and the strategy's `sources`.
+ */
+export function ownerFacts(p: Project, inputs: StrategyInputs, sources: readonly Pick<StrategySource, 'url'>[] = []): OwnerFacts {
   const words = [
     inputs.goal,
     inputs.budget,
@@ -158,7 +162,10 @@ export function ownerFacts(p: Project, inputs: StrategyInputs): OwnerFacts {
   const nums = new Set<string>();
   for (const n of [p.studio.price, p.studio.compareAt, ...p.studio.packages.map((x) => x.price)]) if (Number.isFinite(n) && n > 0) nums.add(String(Math.round(n * 1000) / 1000));
   for (const t of [inputs.budget, inputs.goal, inputs.timePerWeek, inputs.notes]) for (const n of numbersIn(t)) nums.add(n);
-  return { nums, text: words.filter(Boolean).join('\n').toLowerCase() };
+  // a website typed without https:// is still the business's
+  const sites = knownLinks(p).map((u) => sourceKey(/^[a-z][a-z\d+.-]*:/i.test(u.trim()) ? u.trim() : `https://${u.trim()}`)).filter(Boolean);
+  const pages = new Set(sources.map((x) => sourceKey(x.url)).filter(Boolean));
+  return { nums, text: words.filter(Boolean).join('\n').toLowerCase(), ...(sites.length ? { sites } : {}), ...(pages.size ? { pages } : {}) };
 }
 
 const normInputs = (raw: unknown): StrategyInputs => {
@@ -261,7 +268,7 @@ function normManus(raw: unknown, ctx: NormCtx): StrategyManus | undefined {
 
 /** The context the normalizers read a project's strategy with. */
 export function normCtx(p: Project, s: Pick<StrategyState, 'inputs' | 'sources'> & { promote?: { page?: { pageType?: PageType } } }, o: Partial<NormCtx> = {}): NormCtx {
-  return { ns: new Set(s.sources.map((x) => x.n)), fallback: 'ai', trustBasis: true, owner: ownerFacts(p, s.inputs), networks: strategyNetworks(p), project: p, pageType: s.promote?.page?.pageType, ...o };
+  return { ns: new Set(s.sources.map((x) => x.n)), fallback: 'ai', trustBasis: true, owner: ownerFacts(p, s.inputs, s.sources), networks: strategyNetworks(p), project: p, pageType: s.promote?.page?.pageType, ...o };
 }
 
 /**
@@ -303,7 +310,8 @@ export function readStrategy(p: Project): StrategyState {
       // the summary is never sourced: the rules of an unsourced statement
       summary: statementText(rr.summary, C.research.summary, ctx.owner),
       findings: normalizeFindings(rr.findings, ctx),
-      checks: (Array.isArray(rr.checks) ? rr.checks : []).map((c) => clip(c, C.research.check)).filter(Boolean).slice(0, C.research.checks),
+      // the built-in engine's, with the same rule as when they were written (no links)
+      checks: (Array.isArray(rr.checks) ? rr.checks : []).map((c) => cleanText(clip(c, C.research.check))).filter(Boolean).slice(0, C.research.checks),
     };
   }
   const pi = normalizeStepInfo(promoteRaw);

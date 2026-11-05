@@ -264,6 +264,10 @@ export type PlanOut = Omit<StrategyPlan, keyof StepInfo | 'startAt'>;
 export interface OwnerFacts {
   nums: Set<string>;
   text: string;
+  /** the business's own addresses (website, published page) as sourceKey writes them: a link to one, or to a page under it, stays */
+  sites?: string[];
+  /** the strategy's sources (sourceKey): a link to one of them stays */
+  pages?: Set<string>;
 }
 
 /** What already exists in the project (never AI text): the steps skip what's done. */

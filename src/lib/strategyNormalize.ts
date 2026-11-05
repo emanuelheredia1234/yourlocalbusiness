@@ -70,7 +70,22 @@ export function domainOf(raw: unknown): string {
 
 // ───────────── patterns ─────────────
 
-export const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi;
+/**
+ * A link: an address with a scheme (https://, also spelled hxxps:// or http[:]//), www., a protocol-relative
+ * //host, or a bare host with a path (evil.example/book). A bare host alone (Node.js, e.g., U.S.) isn't one.
+ */
+export const URL_RE = new RegExp(
+  [
+    String.raw`\b[a-z][a-z\d+.-]{0,20}(?::|\[:\])\/\/[^\s<>"')\]]+`,
+    String.raw`\bwww\.[^\s<>"')\]]+`,
+    String.raw`(?<![\w:/.])\/\/[a-z\d-]+(?:\.[a-z\d-]+)+[^\s<>"')\]]*`,
+    // no .js: "Node.js/Express" is a word, and no mail client links it
+    String.raw`(?<![\w@./-])(?:[a-z\d](?:[a-z\d-]*[a-z\d])?\.)+(?!js[:/])[a-z]{2,}(?::\d+)?\/[^\s<>"')\]]*`,
+  ].join('|'),
+  'gi',
+);
+/** A Markdown link or image: [words](target) */
+const MD_LINK = /!?\[([^\]\n]*)\]\(([^)\n]*)\)/g;
 export const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 export const PHONE_RE = /\+?\d[\d\s().-]{7,}\d/g;
 /** a market number: percentages, multiples, money, big counts of people or actions */
@@ -120,16 +135,28 @@ export function clip(v: unknown, max: number, keepNewlines = false): string {
   return `${cut}…`;
 }
 
+/** A link the app has checked: to one of the business's own addresses (or a page under it) or to one of the strategy's sources. */
+function checkedLink(link: string, owner?: OwnerFacts): boolean {
+  if (!owner?.sites?.length && !owner?.pages?.size) return false;
+  // any other scheme, or a spelling like hxxps:// or http[:]//, is never one
+  const url = /^https?:\/\//i.test(link) ? link : /^[a-z][a-z\d+.-]*(?::|\[:\])\/\//i.test(link) ? '' : `https://${link.replace(/^\/\//, '')}`;
+  const key = sourceKey(url);
+  return !!key && (!!owner.pages?.has(key) || !!owner.sites?.some((x) => key === x || key.startsWith(`${x}/`) || key.startsWith(`${x}?`)));
+}
+
 /**
  * Links, emails and phone numbers out of a text. 'drop' removes them; 'placeholders' (email templates)
- * writes [link to your page], [your email] and [your phone] instead, for the owner to fill in.
+ * writes [link to your page], [your email] and [your phone] instead, for the owner to fill in. A Markdown
+ * link keeps its words. With the owner's facts, a link the app has checked stays (checkedLink).
  */
-export function noLinks(s: string, mode: 'drop' | 'placeholders'): string {
+export function noLinks(s: string, mode: 'drop' | 'placeholders', owner?: OwnerFacts): string {
   const put = (word: string) => (m: string) => {
     const trail = /[.,;:!?]+$/.exec(m)?.[0] ?? '';
+    if (checkedLink(m.slice(0, m.length - trail.length), owner)) return m;
     return (mode === 'drop' ? '' : word) + trail;
   };
   return s
+    .replace(MD_LINK, (_m, words: string, target: string) => `${words} ${target.trim()}`)
     .replace(URL_RE, put('[link to your page]'))
     .replace(EMAIL_RE, mode === 'drop' ? '' : '[your email]')
     .replace(PHONE_RE, mode === 'drop' ? '' : '[your phone]')
@@ -197,9 +224,9 @@ function claimsOk(sentence: string, owner: OwnerFacts): boolean {
   return true;
 }
 
-/** No links, emails or phone numbers, and no sentence that promises results. */
-export function cleanText(s: string, _owner?: OwnerFacts): string {
-  return bySentence(noLinks(s, 'drop'), (x) => !PREDICTION.test(x));
+/** No links (but the ones the app has checked), emails or phone numbers, and no sentence that promises results. */
+export function cleanText(s: string, owner?: OwnerFacts): string {
+  return bySentence(noLinks(s, 'drop', owner), (x) => !PREDICTION.test(x));
 }
 
 /** cleanText, and no sentence with a claim or a market number the owner didn't give (owner-facing copy). */
@@ -222,8 +249,8 @@ function field(v: unknown, max: number, rule: (s: string) => string, keepNewline
 const stmt = (v: unknown, max: number, basis: StrategyBasis, owner: OwnerFacts) => field(v, max, (s) => (basis === 'web' ? cleanText(s, owner) : unsourcedOk(cleanText(s, owner), owner)));
 /** An unsourced statement (a summary, a habit): no links, predictions or market numbers the owner didn't give. */
 export const statementText = (v: unknown, max: number, owner: OwnerFacts) => stmt(v, max, 'ai', owner);
-/** Email bodies: links become [placeholders], then claimFree, keeping line breaks. */
-const body = (v: unknown, max: number, owner: OwnerFacts) => field(v, max, (s) => claimFree(noLinks(s, 'placeholders'), owner), true);
+/** Email bodies: links become [placeholders] (but the ones the app has checked), then claimFree, keeping line breaks. */
+const body = (v: unknown, max: number, owner: OwnerFacts) => field(v, max, (s) => claimFree(noLinks(s, 'placeholders', owner), owner), true);
 
 // ───────────── ids, enums, numbers ─────────────
 
