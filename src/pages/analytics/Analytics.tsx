@@ -53,7 +53,8 @@ export default function Analytics() {
   const activeDays = series.filter((d) => d.y > 0).length;
   const prevPosted = k.prev.reduce((s, d) => s + d.posted, 0);
   const pageId = seoPageIdOf(project.id);
-  const leads = recentLeads?.filter((l) => l.pageId === pageId && leadTime(l) >= since).length ?? 0;
+  // null until the app has looked (a moment after it opens, signed in, with a page published): no count is shown until then
+  const leads = recentLeads ? recentLeads.filter((l) => l.pageId === pageId && leadTime(l) >= since).length : null;
   const span = `${days} days`;
   const wide = useMediaQuery('(min-width: 768px)');
   const rangeControl = started ? (
@@ -112,7 +113,7 @@ export default function Analytics() {
           { label: 'Posted', value: k.posted, sub: `Last ${span}`, delta: prevPosted > 0 ? k.posted - prevPosted : null },
           { label: 'Posted by Manus', value: k.byManus, sub: `${k.posted - k.byManus} marked by you` },
           { label: 'Planned', value: k.upcoming, sub: k.due ? `${k.due} due, not posted` : 'Coming up on your calendar', onClick: () => navigate('calendar') },
-          { label: 'New leads', value: leads, sub: project.marketing.seoPublished ? 'From your page’s form' : 'Publish your page to collect them' },
+          { label: 'New leads', value: leads ?? '–', sub: !project.marketing.seoPublished ? 'Publish your page to collect them' : leads === null ? 'Not checked yet' : 'From your page’s form' },
         ]}
       />
 
@@ -199,7 +200,7 @@ function PostedTable({ posts, span }: { posts: ReturnType<typeof postedSince>; s
               <th className="hidden w-[150px] px-2 py-2 font-medium md:table-cell">Type</th>
               <th className="hidden w-[170px] px-2 py-2 font-medium sm:table-cell">Posted</th>
               <th className="hidden w-[90px] px-2 py-2 font-medium md:table-cell">By</th>
-              <th className="hidden w-[150px] px-4 py-2 font-medium sm:table-cell sm:px-5">Link</th>
+              <th className="hidden w-[172px] py-2 pl-2 pr-4 font-medium sm:table-cell sm:pr-5">Link</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -233,7 +234,7 @@ function PostedTable({ posts, span }: { posts: ReturnType<typeof postedSince>; s
                 </td>
                 <td className="num hidden truncate px-2 py-2 font-mono text-caption text-muted sm:table-cell">{post.publishedAt ? fmtDateTime(post.publishedAt) : ''}</td>
                 <td className="hidden px-2 py-2 text-muted md:table-cell">{post.publishedBy === 'manus' ? 'Manus' : 'You'}</td>
-                <td className="hidden truncate px-4 py-2 sm:table-cell sm:px-5">{post.postUrl ? <PostLink post={post} /> : <span className="text-faint">–</span>}</td>
+                <td className="hidden truncate py-2 pl-2 pr-4 sm:table-cell sm:pr-5">{post.postUrl ? <PostLink post={post} /> : <span className="text-faint">–</span>}</td>
               </tr>
             ))}
           </tbody>

@@ -47,12 +47,16 @@ export default function Brain() {
     setEditorOpen(true);
   };
   const phone = useMediaQuery('(max-width: 639px)');
+  // with no skills, the Skills tab's empty state offers "Add a skill": one filled button per view
+  const empty = tab === 'skills' && !skills.length;
   const actions = (
     <>
       <Toggle checked={useBrain} onChange={(v) => updateSettings((s) => ({ ...s, ai: { ...s.ai, useBrain: v } }))} label={useBrain ? 'Brain on' : 'Brain off'} />
-      <button type="button" className={cn('btn btn-primary ml-2', phone && 'btn-sm ml-auto')} onClick={() => openEditor(null)}>
-        <Plus /> New skill
-      </button>
+      {!empty && (
+        <button type="button" className={cn('btn btn-primary ml-2', phone && 'btn-sm ml-auto')} onClick={() => openEditor(null)}>
+          <Plus /> New skill
+        </button>
+      )}
     </>
   );
 
@@ -129,8 +133,9 @@ function SkillList({ onEdit, onNew, summary }: { onEdit: (s: Skill) => void; onN
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        {/* the chips scroll (and fade) on phones only: wider, they wrap */}
         {cats.length > 1 && (
-          <div className="scroll-fade-x -mx-4 flex min-w-0 max-w-[calc(100%+2rem)] gap-1.5 px-4 py-0.5 sm:mx-0 sm:max-w-full sm:flex-wrap sm:px-0">
+          <div className="-mx-4 flex min-w-0 max-w-[calc(100%+2rem)] gap-1.5 px-4 py-0.5 max-sm:scroll-fade-x sm:mx-0 sm:max-w-full sm:flex-wrap sm:px-0">
             <button type="button" className={cn('chip', filter === 'all' && 'chip-active')} onClick={() => setFilter('all')} aria-pressed={filter === 'all'}>
               All <span className="num font-mono text-caption">{skills.length}</span>
             </button>

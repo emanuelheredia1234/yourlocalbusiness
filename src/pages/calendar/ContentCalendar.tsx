@@ -27,6 +27,11 @@ const notSent = (p: Post) => !p.external || p.external.state === 'failed';
 /** "Post to groups" applies: a Facebook post, Manus reachable, no group share running. */
 const groupsOpen = (p: Post, offer: boolean) => offer && p.platform === 'facebook' && !(p.groupShare && (p.groupShare.state === 'working' || p.groupShare.state === 'needs_input'));
 
+/** A planned post's "⋯" menu (list rows and the phone agenda): Edit, Post to groups, then the post's own entries. */
+function plannedMenu(p: Post, offer: boolean, openEditor: (id: string) => void): MenuEntry[] {
+  return [{ label: 'Edit', icon: <Pencil />, onSelect: () => openEditor(p.id) }, ...(groupsOpen(p, offer) ? [{ label: 'Post to groups', icon: <Users />, onSelect: () => useManusGroups.getState().open(p.id) }] : []), ...postMenuEntries(p)];
+}
+
 /** The Social page on its 7-day batch. */
 function openBatch() {
   void navigate('marketing-social').then((ok) => ok && useUI.getState().setSocialTab('batch'));
@@ -554,10 +559,11 @@ function groupByDay(posts: Post[]): [string, Post[]][] {
   return [...byDay(posts).entries()];
 }
 
-/** Phones: the planned posts by day, each a row that opens the post. */
+/** Phones: the planned posts by day, each a row that opens the post, with the post's "⋯" menu. */
 function Agenda({ posts }: { posts: Post[] }) {
   const project = useActiveProject()!;
   const openEditor = useUI((s) => s.openPostEditor);
+  const offer = useCanOfferManus();
   const now = useNow(60_000);
   const groups = useMemo(() => groupByDay(posts), [posts]);
   return (
@@ -587,6 +593,10 @@ function Agenda({ posts }: { posts: Post[] }) {
                 </span>
                 <span className="shrink-0">
                   <RowState post={p} now={now} />
+                </span>
+                {/* above the row's stretched title button */}
+                <span className="relative z-[1] -mr-1 shrink-0">
+                  <MoreMenu items={plannedMenu(p, offer, openEditor)} />
                 </span>
               </li>
             ))}
@@ -655,7 +665,7 @@ function QueueRow({ post: p }: { post: Post }) {
   const offer = useCanOfferManus();
   const now = useNow(60_000);
   const held = manusHolds(p);
-  const menu: MenuEntry[] = [{ label: 'Edit', icon: <Pencil />, onSelect: () => openEditor(p.id) }, ...(groupsOpen(p, offer) ? [{ label: 'Post to groups', icon: <Users />, onSelect: () => useManusGroups.getState().open(p.id) }] : []), ...postMenuEntries(p)];
+  const menu = plannedMenu(p, offer, openEditor);
   return (
     <li className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center">
       <div className="flex min-w-0 flex-1 items-start gap-3">

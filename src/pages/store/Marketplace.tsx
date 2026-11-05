@@ -179,7 +179,8 @@ export default function Marketplace() {
                 </button>
               )}
             </div>
-            <div className="scroll-fade-x -mx-4 flex gap-1.5 px-4 py-0.5 sm:-mx-1 sm:px-1">
+            {/* edge to edge, so the fades sit in the page gutter and the first chip starts unfaded */}
+            <div className="scroll-fade-x -mx-4 flex gap-1.5 px-4 py-0.5 sm:-mx-6 sm:px-6">
               <button type="button" className={cn('chip', !cat && 'chip-active')} onClick={() => setCat('')}>
                 All categories
               </button>

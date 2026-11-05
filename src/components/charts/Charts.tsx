@@ -117,7 +117,7 @@ export function AreaChart({ data, height = 220, color = 'rgb(var(--primary))', f
     return Math.max(0, Math.min(data.length - 1, i));
   });
   return (
-    <div ref={ref} className="relative w-full select-none rounded-xs" tabIndex={0} aria-label={`${label} over time`} {...scrub}>
+    <div ref={ref} className="relative w-full select-none rounded-xs" tabIndex={0} role="img" aria-label={`${label} over time`} {...scrub}>
       {width > 0 && (
         <svg width={w} height={height} className="block overflow-visible" aria-hidden="true">
           <Grid ticks={ticks} y={y} left={pad.l} right={w - pad.r} format={format} />
@@ -186,7 +186,7 @@ export function ColumnChart({ data, height = 220, color = 'rgb(var(--primary))',
     return `M${x0},${y(0)} V${top + r} Q${x0},${top} ${x0 + r},${top} H${x0 + bar - r} Q${x0 + bar},${top} ${x0 + bar},${top + r} V${y(0)} Z`;
   };
   return (
-    <div ref={ref} className="relative w-full select-none rounded-xs" tabIndex={0} aria-label={`${label} per day`} {...scrub}>
+    <div ref={ref} className="relative w-full select-none rounded-xs" tabIndex={0} role="img" aria-label={`${label} per day`} {...scrub}>
       {width > 0 && (
         <svg width={w} height={height} className="block overflow-visible" aria-hidden="true">
           <Grid ticks={ticks} y={y} left={pad.l} right={w - pad.r} format={format} />
