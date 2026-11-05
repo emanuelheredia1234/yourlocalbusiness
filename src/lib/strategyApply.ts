@@ -151,7 +151,8 @@ export function withSeoBlock(guide: string, block: string, prev?: string): { mod
   const lines = block.split('\n');
   for (let n = lines.length; n >= 2; n--) {
     const b = lines.slice(0, n).join('\n');
-    const text = prev ? current.replace(prev, b) : current.trim() ? `${current.replace(/\s+$/, '')}\n\n${b}` : b;
+    // a function, so "$&", "$'" or "$$" in the AI's words are written as they are (never as replace patterns)
+    const text = prev ? current.replace(prev, () => b) : current.trim() ? `${current.replace(/\s+$/, '')}\n\n${b}` : b;
     if (text.length <= SEO_GUIDE_MAX) return { mode, text, block: b };
   }
   return { mode: 'full', text: current, block };

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { Project } from './types';
 import type { StrategyState } from './strategyTypes';
 import { STRATEGY_CAPS as C } from './strategyNormalize';
-import { addSource, capStrategy, currentWeek, emptyStrategy, gcSources, isHttpUrl, readStrategy, sourceKey, stale, strategyFactsHash, strategyProgress, strategyStatusLine } from './strategy';
+import { addSource, capStrategy, citedSources, currentWeek, derivedDone, emptyStrategy, gcSources, isHttpUrl, readStrategy, sourceKey, stale, strategyFactsHash, strategyProgress, strategyStatusLine } from './strategy';
 import { qaProject, qaSavedStrategy } from '@/test/strategyQa';
 
 const p = qaProject();
@@ -119,6 +119,76 @@ describe('capStrategy', () => {
     // read back the same way
     expect(JSON.stringify(readStrategy(withStrategy(big))).length).toBeLessThanOrEqual(C.json);
   });
+
+  /** `s` after a search that found `count` new pages, cited two to a finding by the new research, saved during `run`. */
+  const searched = (s: StrategyState, count: number, run: StrategyState['run']): StrategyState => {
+    const ns = Array.from({ length: count }, (_, i) => s.nextSource + i);
+    const sources = [...s.sources, ...ns.map((n) => ({ n, url: `https://site${n}.example/page`, title: `Page ${n}`, domain: `site${n}.example`, via: 'search' as const, at: 2 }))];
+    const findings = Array.from({ length: Math.ceil(count / 2) }, (_, i) => ({ topic: 'buyers' as const, text: `Finding ${i}: buyers compare listings first.`, basis: 'web' as const, sources: ns.slice(i * 2, i * 2 + 2) }));
+    return { ...s, sources, nextSource: s.nextSource + count, research: { ...s.research!, findings }, run };
+  };
+  /** Every citation points at a source that's there, and every source is cited. */
+  const consistent = (s: StrategyState) => {
+    const ns = new Set(s.sources.map((x) => x.n));
+    for (const n of citedSources(s)) expect(ns.has(n)).toBe(true);
+    expect([...ns].every((n) => citedSources(s).has(n))).toBe(true);
+  };
+  const withNumber = (s: StrategyState): StrategyState => ({ ...s, promote: { ...s.promote!, channels: s.promote!.channels.map((c, i) => (i === 0 ? { ...c, why: 'QA: 60% of buyers compare map listings.' } : c)) } });
+
+  it('keeps the sources something cites: uncited ones go first, and "Search again" never takes the plan’s', () => {
+    const s = withNumber(qaSavedStrategy(p));
+    expect(s.sources.map((x) => x.n)).toEqual([1, 2]);
+    const searchOnly = { startedAt: 3, steps: ['research' as const], done: ['research' as const] };
+    // 24 new pages, 8 of them cited only by findings past the 16 kept: those go, not the plan's
+    const r24 = searched(s, 24, searchOnly);
+    const roomy = capStrategy({ ...r24, research: { ...r24.research!, findings: Array.from({ length: 24 }, (_, i) => ({ topic: 'buyers' as const, text: `Finding ${i}.`, basis: 'web' as const, sources: [3 + i] })) } });
+    expect(roomy.sources.map((x) => x.n)).toEqual([1, 2, ...Array.from({ length: 16 }, (_, i) => 3 + i)]);
+    consistent(roomy);
+    // 30 new pages, all cited: still 24 sources, the plan's and the other sections' first, then the newest
+    const full = capStrategy(searched(s, 30, searchOnly));
+    expect(full.sources.map((x) => x.n)).toEqual([1, 2, ...Array.from({ length: 22 }, (_, i) => 11 + i)]);
+    consistent(full);
+    for (const x of [full, readStrategy(withStrategy(full))]) {
+      expect(x.promote!.positioning).toMatchObject({ basis: 'web', sources: [1] });
+      expect(x.promote!.channels.slice(0, 2).map((c) => [c.basis, c.sources])).toEqual([['web', [1]], ['web', [2]]]);
+      expect(x.promote!.channels[0].why).toBe('QA: 60% of buyers compare map listings.');
+      expect(x.plan!.actions.filter((a) => a.basis === 'web').map((a) => a.sources)).toEqual([[1], [2]]);
+      expect(x.content!.formats[0]).toMatchObject({ basis: 'web', sources: [2] });
+      expect(x.assets!.seo).toMatchObject({ basis: 'web', sources: [1] });
+      // past the room, the new research's findings that lost both their pages are the AI's general knowledge (never citing a page that's gone)
+      expect(x.research!.findings.map((f) => f.basis)).toEqual([...Array(4).fill('ai'), ...Array(11).fill('web')]);
+      expect(x.research!.findings.slice(0, 4).every((f) => f.sources === undefined)).toBe(true);
+    }
+    expect(capStrategy(full)).toEqual(full);
+  });
+
+  it('while a run writes the sections again, the new research keeps its pages before theirs', () => {
+    const s = withNumber(qaSavedStrategy(p));
+    // "Update everything": the research is saved, the five sections after it are next
+    const all = capStrategy(searched(s, 23, { startedAt: 3, steps: ['research', 'promote', 'content', 'assets', 'outreach', 'plan'], done: ['research'] }));
+    expect(all.sources.map((x) => x.n)).toEqual([2, ...Array.from({ length: 23 }, (_, i) => 3 + i)]);
+    expect(all.research!.findings.every((f) => f.basis === 'web')).toBe(true);
+    // the old sections' citations of the page that went go with it
+    expect(all.promote!.channels.slice(0, 2).map((c) => [c.basis, c.sources])).toEqual([['ai', undefined], ['web', [2]]]);
+    consistent(all);
+    // the same run stopped: what's left is the owner's, kept first again
+    const stopped = capStrategy(searched(s, 23, { startedAt: 3, steps: ['research', 'promote', 'content', 'assets', 'outreach', 'plan'], done: ['research'], stoppedAt: 'promote' }));
+    expect(stopped.sources.map((x) => x.n)).toEqual([1, 2, ...Array.from({ length: 22 }, (_, i) => 4 + i)]);
+    consistent(stopped);
+  });
+
+  it('reads a stored strategy with more sources than it keeps without losing the cited ones (an older build’s)', () => {
+    const s = withNumber(qaSavedStrategy(p));
+    // 30 stored: 1-2 cited by the sections, 3-20 by the research, 21-30 by nothing
+    const raw = searched(s, 28, undefined);
+    raw.research!.findings = raw.research!.findings.slice(0, 9);
+    expect(raw.sources).toHaveLength(30);
+    const back = readStrategy(withStrategy(raw));
+    expect(back.sources.map((x) => x.n)).toEqual(Array.from({ length: 20 }, (_, i) => 1 + i));
+    expect(back.promote!.channels[0]).toMatchObject({ basis: 'web', sources: [1], why: 'QA: 60% of buyers compare map listings.' });
+    expect(back.research!.findings).toHaveLength(9);
+    consistent(back);
+  });
 });
 
 describe('sources', () => {
@@ -139,6 +209,19 @@ describe('sources', () => {
     const gone = { ...s, sources: s.sources.filter((x) => x.n !== 2) };
     expect(addSource(gone, { url: 'https://example.com/c' }, 'manus', 4)).toBe(3);
     expect(gone.sources.at(-1)).toMatchObject({ n: 3, via: 'manus', domain: 'example.com' });
+  });
+
+  it('keep every URL the server passes on: the same 400-character limit (server/providers/research.test.mjs)', () => {
+    const at = (n: number) => `https://example.com/${'a'.repeat(n - 'https://example.com/'.length)}`;
+    expect(C.sources.url).toBe(400);
+    const s = emptyStrategy();
+    expect(addSource(s, { url: at(400) }, 'search', 1)).toBe(1);
+    expect(addSource(s, { url: at(401) }, 'search', 1)).toBeNull();
+    // a cited page at the limit reads back as the web
+    const saved = qaSavedStrategy(p);
+    const back = readStrategy(withStrategy({ ...saved, sources: saved.sources.map((x) => (x.n === 1 ? { ...x, url: at(400) } : x)) }));
+    expect(back.sources.map((x) => x.url)).toEqual([at(400), saved.sources[1].url]);
+    expect(back.promote!.positioning).toMatchObject({ basis: 'web', sources: [1] });
   });
 });
 
@@ -171,6 +254,23 @@ describe('weeks, progress and what changed', () => {
     expect(stale(p, later).beforeResearch).toEqual(['promote', 'content', 'assets', 'outreach', 'plan']);
     const manus = { ...s, manus: { taskId: 'task_abc123', taskUrl: 'https://manus.im/app/x', state: 'done' as const, requestedAt: 1, doneAt: s.plan!.at + 5 } };
     expect(stale(p, manus).beforeResearch).toContain('plan');
+  });
+
+  it('"Set where links go" is done when each link already goes where the strategy says, by default or by the owner’s setting', () => {
+    const s = qaSavedStrategy(p);
+    const action = { kind: 'link_settings' as const };
+    const same = { ...s, promote: { ...s.promote!, links: { instagram: { placement: 'bio' as const, why: 'x', basis: 'builtin' as const }, facebook: { placement: 'post' as const, why: 'y', basis: 'builtin' as const } } } };
+    // nothing set: Instagram's link goes in the bio and Facebook's in the post by default, as advised
+    expect(p.marketing.linkPlacement).toBeUndefined();
+    expect(derivedDone(action, p, same, ctx)).toBe(true);
+    // the QA strategy wants Facebook's in the first comment
+    expect(s.promote!.links).toMatchObject({ instagram: { placement: 'bio' }, facebook: { placement: 'comment' } });
+    expect(derivedDone(action, p, s, ctx)).toBe(false);
+    const set = (linkPlacement: Project['marketing']['linkPlacement']): Project => ({ ...p, marketing: { ...p.marketing, linkPlacement } });
+    expect(derivedDone(action, set({ facebook: 'comment' }), s, ctx)).toBe(true);
+    expect(derivedDone(action, set({ instagram: 'comment' }), same, ctx)).toBe(false);
+    // no advice: nothing to see done
+    expect(derivedDone(action, p, { ...s, promote: { ...s.promote!, links: {} } }, ctx)).toBe(false);
   });
 
   it('progress and the Dashboard line', () => {

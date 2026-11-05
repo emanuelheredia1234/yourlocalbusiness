@@ -9,6 +9,7 @@ import { useStore } from '@/store/useStore';
 import { defaultSettings } from '@/store/defaults';
 import { qaProject, qaSavedStrategy } from '@/test/strategyQa';
 import {
+  SEO_BLOCK_HEADER,
   SKILL_HEADER,
   applyCampaign,
   applyLinks,
@@ -120,6 +121,15 @@ describe('the SEO page’s guidance', () => {
     expect(fit.block.startsWith('From your Strategy (edit freely):')).toBe(true);
     expect(fit.block.split('\n').length).toBeLessThan(block.split('\n').length);
     expect(withSeoBlock('x'.repeat(1990), block).mode).toBe('full');
+  });
+
+  it('writes the AI’s "$&", "$\'" and "$$" as they are, so the next apply still finds its block', () => {
+    const prev = `${SEO_BLOCK_HEADER}\n- Angle: old`;
+    const guide = `My own notes.\n\n${prev}`;
+    const odd = `${SEO_BLOCK_HEADER}\n- Search terms to work in: salon $' deals, cuts $& more, $$5 off`;
+    const r = withSeoBlock(guide, odd, prev);
+    expect(r).toEqual({ mode: 'replace', text: `My own notes.\n\n${odd}`, block: odd });
+    expect(withSeoBlock(r.text, block, r.block)).toEqual({ mode: 'replace', text: `My own notes.\n\n${block}`, block });
   });
 });
 

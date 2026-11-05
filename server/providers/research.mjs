@@ -11,8 +11,14 @@ import { fnById, kindDef, modelDef } from './registry.mjs';
 export const RESEARCH_TIMEOUT_MS = 10 * 60_000;
 /** Sources returned per request, at most. */
 export const MAX_SOURCES = 30;
-const MAX_SEARCHES = 8;
+/** The most web searches a research request may ask for (Strategy offers 3, 5 or 8). */
+export const MAX_SEARCHES = 8;
 const MAX_URL = 2000;
+/**
+ * A source's URL is at most this long: the app keeps no longer one (STRATEGY_CAPS.sources.url in
+ * src/lib/strategyNormalize.ts, the same 400), so a source it returns is never one the app drops.
+ */
+export const MAX_SOURCE_URL = 400;
 
 /** Cut to `max` characters without leaving half of a surrogate pair at the end. */
 function cut(s, max) {
@@ -83,8 +89,8 @@ export function isHttpUrl(raw) {
 /** A provider's URL string (trimmed, never rewritten) with its parsed form, or null when it isn't one to pass on. */
 export function sourceUrl(raw) {
   const s = typeof raw === 'string' ? raw.trim() : '';
-  // a URL with a space or a control character inside isn't one a search engine returns
-  if (!isHttpUrl(s) || /[\s\u0000-\u001f\u007f]/.test(s)) return null;
+  // a URL with a space or a control character inside isn't one a search engine returns; a longer one than the app keeps isn't passed on
+  if (!isHttpUrl(s) || s.length > MAX_SOURCE_URL || /[\s\u0000-\u001f\u007f]/.test(s)) return null;
   return { raw: s, u: new URL(s) };
 }
 
@@ -103,9 +109,9 @@ const domainOf = (u) => u.hostname.toLowerCase().replace(/^www\./, '');
 
 /**
  * Sources a provider returned → numbered, de-duplicated sources: cited first (then in the order found),
- * at most 30. Items: { url, title?, cited?, quote?, pageAge? }. The URL string is kept as the provider
- * sent it; numeric titles (xAI's citation numbers) become the domain. A quote is only ever a provider's
- * own cited text (Anthropic `cited_text`), never a snippet.
+ * at most 30, each URL at most 400 characters. Items: { url, title?, cited?, quote?, pageAge? }. The URL
+ * string is kept as the provider sent it; numeric titles (xAI's citation numbers) become the domain. A
+ * quote is only ever a provider's own cited text (Anthropic `cited_text`), never a snippet.
  */
 export function normalizeSources(raw) {
   const byKey = new Map();

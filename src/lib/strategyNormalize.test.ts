@@ -1,5 +1,5 @@
-// Strategy's honesty patterns and text helpers: what counts as a market number, a prediction or a claim,
-// and how owner-facing copy loses them line by line without touching [placeholders].
+// Strategy's honesty patterns and text helpers: what counts as a link, a market number, a prediction or a
+// claim, and how owner-facing copy loses them line by line without touching [placeholders].
 import { describe, expect, it } from 'vitest';
 import type { OwnerFacts } from './strategyTypes';
 import { CLAIMS, EMAIL_RE, NUMBER_CLAIM, PHONE_RE, PREDICTION, URL_RE, cleanText, claimFree, clip, enumOf, noLinks, nums, sentences, unsourcedOk } from './strategyNormalize';
@@ -53,6 +53,37 @@ describe('the text helpers', () => {
   it('noLinks drops links, or writes placeholders for an email the owner sends', () => {
     expect(noLinks('See https://evil.example/now for details.', 'drop')).toBe('See for details.');
     expect(noLinks('See https://evil.example/now. Or mail me@x.com or call 512 555 0100.', 'placeholders')).toBe('See [link to your page]. Or mail [your email] or call [your phone].');
+  });
+
+  it('a link however it’s written: //host, a bare host with a path, hxxp spellings, other schemes, Markdown links', () => {
+    expect('a //evil.example/x or evil.example/book or hxxps://evil.example or http[:]//evil.example or ftp://evil.example/f'.match(URL_RE)).toEqual(['//evil.example/x', 'evil.example/book', 'hxxps://evil.example', 'http[:]//evil.example', 'ftp://evil.example/f']);
+    expect(cleanText('Join the [local group](//evil.example/x) to find leads.')).toBe('Join the local group to find leads.');
+    expect(claimFree('See [this list](evil.example/deals) of directories.', none)).toBe('See this list of directories.');
+    expect(cleanText('Book through hxxps://evil.example or evil.example/book today.')).toBe('Book through or today.');
+    // in an email the owner sends, a mail client would make each one a link: a placeholder instead
+    expect(noLinks('Book at evil.example/book or //evil.example/x.', 'placeholders')).toBe('Book at [link to your page] or [link to your page].');
+  });
+
+  it('never takes ordinary words for links', () => {
+    const words = 'Built on Node.js, Node.js/Express or Vue.js. E.g. U.S. shops sell at $4.50 a loaf with 3.5 stars, 24/7, and/or from 9 a.m./5 p.m., rated 1.5/10 by St. Louis/Kansas City critics.';
+    expect(cleanText(words)).toBe(words);
+    expect(words.match(URL_RE)).toBeNull();
+  });
+
+  it('keeps a link the app has checked: the business’s own address (or a page under it) and the strategy’s sources', () => {
+    const own: OwnerFacts = { ...none, sites: ['qabakery.com', 'facebook.com/qabakery'], pages: new Set(['example.com/qa-research/where-buyers-look']) };
+    expect(cleanText('Order at qabakery.com/order or https://www.qabakery.com/menu, not at evil.example/book.', own)).toBe('Order at qabakery.com/order or https://www.qabakery.com/menu, not at.');
+    // on a shared host, only the business's own page
+    expect(cleanText('Post on facebook.com/qabakery/posts, not facebook.com/evilgroup.', own)).toBe('Post on facebook.com/qabakery/posts, not.');
+    expect(cleanText('Listed on example.com/qa-research/where-buyers-look?utm_source=x but not example.com/qa-research/other.', own)).toBe('Listed on example.com/qa-research/where-buyers-look?utm_source=x but not.');
+    // a spelling like hxxps:// is never a checked link, nor is another scheme or another host
+    expect(cleanText('Visit hxxps://qabakery.com or ftp://qabakery.com/f or shop.qabakery.com/x.', own)).toBe('Visit or or.');
+    expect(noLinks('Book at qabakery.com/book or evil.example/book.', 'placeholders', own)).toBe('Book at qabakery.com/book or [link to your page].');
+    // the owner's facts carry the business's addresses: its website (typed with or without https://) and its published page
+    const p = qaProject();
+    p.brand.websiteUrl = 'www.QABakery.com/';
+    p.marketing.seoPublished = { url: 'https://pages.example.app/qa-bakery', at: 1 } as never;
+    expect(ownerFacts(p, { goal: '', budget: '', timePerWeek: '', competitors: [], tried: '', notes: '' }).sites).toEqual(['pages.example.app/qa-bakery', 'qabakery.com']);
   });
 
   it('sentences split after . ! ?', () => {

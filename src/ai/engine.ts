@@ -3,7 +3,7 @@ import { useRuntime } from '@/lib/platform';
 import { imagesWithKeysForAI } from '@/lib/promptImages';
 import { uid } from '@/lib/utils';
 import { polishDeep, resolveBrain } from './brain';
-import { AIError, SERVER_MAX_IMAGES, callArtifactClaude, callServerAI, fitClaudeImages, friendlyAIError } from './claude';
+import { AIError, SERVER_MAX_IMAGES, callArtifactClaude, callServerAI, fitClaudeImages, friendlyAIError, recheckServer } from './claude';
 import { functionForTask, routeFor } from './functions';
 import type { AIMeta } from './meta';
 import type { TaskDef, TaskEnv } from './tasks';
@@ -83,6 +83,8 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
   const t0 = performance.now();
   const brain = resolveBrain(opts.skills, task.module, opts.settings.ai.useBrain, opts.project.id);
   const env: TaskEnv = { project: opts.project, directives: brain.directives, brainPrompt: brain.prompt, variation: opts.variation ?? 0 };
+  // a request that couldn't reach your server a while ago may have been a blip: ask it again before going without it
+  if (!opts.forceLocal && task.claude) await recheckServer(opts.settings.ai.serverUrl);
   const provider = resolveProvider(opts.settings, opts.forceLocal);
   opts.onStage?.(brain.skills.length ? `Reading ${brain.skills.length} Brain skill${brain.skills.length > 1 ? 's' : ''}…` : 'Reading your project context…');
 

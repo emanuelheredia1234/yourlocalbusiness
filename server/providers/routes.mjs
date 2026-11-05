@@ -250,6 +250,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
    * add the estimate to the day as soon as they start (their real cost is known only when the job
    * finishes); later(usd) then records the difference. opts.strict (videos, and web research): refuse
    * when the estimate alone would take the day over the dollar limit ("too costly"), before anything runs.
+   * A web research request that failed after it started (timed out, stopped, cut off) adds the estimate
+   * too: its searches may be billed and its real cost never arrives (the router says so: cost(usd, { unsure })).
    */
   async function gate(req, res, who, kind, { estimateUsd = 0, charge = false, strict = charge } = {}) {
     const noop = { ownKeys: null, meter: null, done: async () => {}, later: null };
@@ -285,10 +287,13 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     const meter = {
       started: false,
       usd: 0,
+      // a research request that failed after it started: what it cost is only an estimate
+      unsure: false,
       start() {
         this.started = true;
       },
-      cost(usd) {
+      cost(usd, { unsure = false } = {}) {
+        if (unsure) this.unsure = true;
         if (typeof usd === 'number' && Number.isFinite(usd) && usd > 0) this.usd += usd;
       },
     };
@@ -309,7 +314,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           if (!meter.started) return;
           if (own) await add({ ownRequests: 1, ownUsd: meter.usd });
           else {
-            const usd = charge && !failed ? Math.max(meter.usd, estimateUsd) : meter.usd;
+            // a started video, or a research request that failed after it started, counts at least its estimate
+            const usd = (charge && !failed) || meter.unsure ? Math.max(meter.usd, estimateUsd) : meter.usd;
             charged = charge && !failed ? usd : 0;
             await add({ requests: 1, usd });
           }
@@ -623,6 +629,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         await g.done();
         return reply(req, res, 200, out);
       } catch (e) {
+        // failed, or stopped (the browser went away and the call was aborted): recorded either way, so
+        // a research request that had started counts its estimate even when nobody is left to answer
         await g.done();
         if (signal.aborted) return;
         return fail(req, res, e);

@@ -39,6 +39,8 @@ export const STRATEGY_RULES = [
   'Use exactly the ids given for every choice (page types, placements, platforms, post types, kinds). Leave a field empty ("" or []) rather than guess.',
 ];
 const LATER_RULE = 'INPUT.research holds findings and INPUT.sources lists their sources by number. When a recommendation rests on a finding, put that finding’s source numbers in "sources". Use only numbers from INPUT.sources.';
+/** The plan step's rule when the owner ticked steps of the current plan (INPUT.earlier.done): they stay ticked only under the same title. */
+const DONE_RULE = 'INPUT.earlier.done lists steps of the current plan the owner already did. Keep each one that still applies in the new plan, with exactly the same title, so it stays marked as done.';
 
 /** The marker each step's task text starts with (the provider mock answers by it). */
 export const stepMarker = (step: StrategyStep) => `[ylb-strategy:${step} v1]`;
@@ -98,7 +100,12 @@ export function stepRules(step: StrategyStep, input: Partial<ResearchInput>): st
     case 'outreach':
       return [LATER_RULE, "Bodies under 900 characters, with \\n for line breaks. Use [Name], [Your name] and [link to your page] where they go. No links, prices, offers or claims the owner hasn't given."];
     case 'plan':
-      return [LATER_RULE, 'Put the page to build first and the link settings in week 1.', 'An action with kind "write_post" has the post topic in "topic". An action with kind "build_page" has the page type in "pageType".'];
+      return [
+        LATER_RULE,
+        'Put the page to build first and the link settings in week 1.',
+        'An action with kind "write_post" has the post topic in "topic". An action with kind "build_page" has the page type in "pageType".',
+        ...(Array.isArray(obj((input as Partial<LaterInput>).earlier).done) ? [DONE_RULE] : []),
+      ];
     case 'promote':
     default:
       return [LATER_RULE];
@@ -156,7 +163,9 @@ function earlierFor(step: StrategyStep, s: StrategyState): Record<string, unknow
   if (step === 'content') return { angle, socialChannels: (pr?.channels ?? []).filter((c) => c.channelType === 'social').map((c) => c.name), page };
   if (step === 'assets') return { angle, page, channels: (pr?.channels ?? []).map((c) => ({ name: c.name, priority: c.priority })) };
   if (step === 'outreach') return { angle, partners: (pr?.channels ?? []).filter((c) => c.channelType === 'partners' || c.channelType === 'community').map((c) => c.name), page };
-  if (step === 'plan')
+  if (step === 'plan') {
+    // the current plan's steps the owner ticked: a new plan keeps their titles, so the ticks stay on them
+    const done = (s.plan?.actions ?? []).filter((a) => !!s.ticks[a.id]).map((a) => a.title);
     return {
       angle,
       channels: (pr?.channels ?? []).map((c) => ({ name: c.name, priority: c.priority, channelType: c.channelType })),
@@ -167,7 +176,9 @@ function earlierFor(step: StrategyStep, s: StrategyState): Record<string, unknow
       assets: (s.assets?.assets ?? []).map((a) => ({ kind: a.kind, title: a.title, codeKind: a.codeKind ?? '', leadMagnetType: a.leadMagnetType ?? '' })),
       email: s.outreach ? { leadMagnetType: s.outreach.email.leadMagnetType, idea: s.outreach.email.idea } : undefined,
       outreach: (s.outreach?.templates ?? []).map((t) => t.who),
+      ...(done.length ? { done } : {}),
     };
+  }
   return undefined;
 }
 
@@ -221,6 +232,34 @@ export function fitInput(input: LaterInput): LaterInput {
 
 // ───────────── reading the answers ─────────────
 
+/** The top-level keys of each step's answer (STRATEGY_SHAPES). */
+const ANSWER_KEYS: Record<StrategyStep, readonly string[]> = {
+  research: ['summary', 'findings'],
+  promote: ['positioning', 'channels', 'page', 'links'],
+  content: ['pillars', 'formats', 'campaign', 'ideas'],
+  assets: ['assets', 'seo'],
+  outreach: ['email', 'templates'],
+  plan: ['summary', 'weeks', 'actions', 'habits', 'measure'],
+};
+
+/**
+ * An answer the model wrapped in one key ({"plan": {…}}, {"result": {"research": {…}}}, {"assets": {"assets": […], "seo": {…}}}):
+ * the object inside it, at most two levels down, while the wrapper has none of the step's keys or the inside has more of
+ * them. Anything else is returned as it came (the step's normalizer and the runner's check deal with it).
+ */
+export function unwrapAnswer(step: StrategyStep, raw: unknown): unknown {
+  const count = (o: Record<string, unknown>) => ANSWER_KEYS[step].filter((k) => k in o).length;
+  let v = raw;
+  for (let depth = 0; depth < 2; depth++) {
+    const o = obj(v);
+    const keys = Object.keys(o);
+    const inner = keys.length === 1 ? obj(o[keys[0]]) : {};
+    if (!Object.keys(inner).length || (count(o) > 0 && count(inner) <= count(o))) break;
+    v = inner;
+  }
+  return v;
+}
+
 /** The context an answer is checked with: the source numbers the step was given, the owner's facts, the networks. */
 export function ctxFrom(input: StepInputBase & Partial<LaterInput>, env: Pick<TaskEnv, 'project'>, fallback: 'ai' | 'builtin', trustBasis = false): NormCtx {
   const page = obj(input.earlier).page;
@@ -268,7 +307,7 @@ export const strategyResearchTask = def<ResearchInput, ResearchOut>({
   claude: {
     prompt: promptOf('research'),
     merge: (raw, _base, input, env) => {
-      const r = obj(raw);
+      const r = obj(unwrapAnswer('research', raw));
       // checks are the built-in engine's alone
       return normalizeResearchOut({ summary: r.summary, findings: mapResearchUrls(r.findings, env.meta), checks: [] }, ctxFrom(input, env, 'ai'));
     },
@@ -282,7 +321,7 @@ export const strategyPromoteTask = def<LaterInput, PromoteOut>({
   module: 'strategy',
   tier: 'default',
   local: (input, env) => localPromote(env.project, input),
-  claude: { prompt: promptOf('promote'), merge: (raw, _base, input, env) => normalizePromote(raw, ctxFrom(input, env, 'ai')) },
+  claude: { prompt: promptOf('promote'), merge: (raw, _base, input, env) => normalizePromote(unwrapAnswer('promote', raw), ctxFrom(input, env, 'ai')) },
 });
 
 export const strategyContentTask = def<LaterInput, ContentOut>({
@@ -291,7 +330,7 @@ export const strategyContentTask = def<LaterInput, ContentOut>({
   module: 'strategy',
   tier: 'default',
   local: (input, env) => localContent(env.project, input),
-  claude: { prompt: promptOf('content'), merge: (raw, _base, input, env) => normalizeContent(raw, ctxFrom(input, env, 'ai')) },
+  claude: { prompt: promptOf('content'), merge: (raw, _base, input, env) => normalizeContent(unwrapAnswer('content', raw), ctxFrom(input, env, 'ai')) },
 });
 
 export const strategyAssetsTask = def<LaterInput, AssetsOut>({
@@ -300,7 +339,7 @@ export const strategyAssetsTask = def<LaterInput, AssetsOut>({
   module: 'strategy',
   tier: 'default',
   local: (input, env) => localAssets(env.project, input),
-  claude: { prompt: promptOf('assets'), merge: (raw, _base, input, env) => normalizeAssets(raw, ctxFrom(input, env, 'ai')) },
+  claude: { prompt: promptOf('assets'), merge: (raw, _base, input, env) => normalizeAssets(unwrapAnswer('assets', raw), ctxFrom(input, env, 'ai')) },
 });
 
 export const strategyOutreachTask = def<LaterInput, OutreachOut>({
@@ -309,7 +348,7 @@ export const strategyOutreachTask = def<LaterInput, OutreachOut>({
   module: 'strategy',
   tier: 'default',
   local: (input, env) => localOutreach(env.project, input),
-  claude: { prompt: promptOf('outreach'), merge: (raw, _base, input, env) => normalizeOutreach(raw, ctxFrom(input, env, 'ai')) },
+  claude: { prompt: promptOf('outreach'), merge: (raw, _base, input, env) => normalizeOutreach(unwrapAnswer('outreach', raw), ctxFrom(input, env, 'ai')) },
 });
 
 export const strategyPlanTask = def<LaterInput, PlanOut>({
@@ -318,7 +357,7 @@ export const strategyPlanTask = def<LaterInput, PlanOut>({
   module: 'strategy',
   tier: 'default',
   local: (input, env) => localPlan(env.project, input),
-  claude: { prompt: promptOf('plan'), merge: (raw, _base, input, env) => normalizePlan(raw, ctxFrom(input, env, 'ai')) },
+  claude: { prompt: promptOf('plan'), merge: (raw, _base, input, env) => normalizePlan(unwrapAnswer('plan', raw), ctxFrom(input, env, 'ai')) },
 });
 
 /** Each step's task. */

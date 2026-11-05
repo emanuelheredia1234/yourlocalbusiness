@@ -12,7 +12,7 @@ import { AIRouter } from './router.mjs';
 import { createAIRoutes } from './routes.mjs';
 import { createAuth } from '../auth.mjs';
 import { createLimits } from '../limits.mjs';
-import { RESEARCH_TIMEOUT_MS, TOOL_REFUSED, TOOL_VERSION, canResearch, isHttpUrl, normalizeSources, researchFromBody, researchInfo, researchMeta, searchPrice, sourceKey, userLocation } from './research.mjs';
+import { MAX_SOURCE_URL, RESEARCH_TIMEOUT_MS, TOOL_REFUSED, TOOL_VERSION, canResearch, isHttpUrl, normalizeSources, researchFromBody, researchInfo, researchMeta, searchPrice, sourceKey, userLocation } from './research.mjs';
 import { responsesOutput, responsesUsage } from './adapters/responses.mjs';
 import { createMockProviders } from '../test/mock-providers.mjs';
 import { createMockSupabase } from '../test/mock-supabase.mjs';
@@ -178,6 +178,16 @@ describe('sources', () => {
     ]);
     expect(out.map((s) => s.url)).toEqual(['https://example.com/ok']);
     expect(normalizeSources('nope')).toEqual([]);
+  });
+
+  it('pass on only URLs the app keeps: at most 400 characters (the same limit as src/lib/strategy.test.ts)', () => {
+    const at = (n) => `https://example.com/${'a'.repeat(n - 'https://example.com/'.length)}`;
+    expect(MAX_SOURCE_URL).toBe(400);
+    const out = normalizeSources([{ url: at(401), cited: true }, { url: at(400) }, { url: 'https://example.org/short' }]);
+    expect(out.map((s) => s.url)).toEqual([at(400), 'https://example.org/short']);
+    expect(out.map((s) => s.n)).toEqual([1, 2]);
+    // a search whose only source is longer brings nothing back
+    expect(researchMeta(true, { searches: 1, sources: [{ url: at(401), cited: true }] })).toMatchObject({ web: false, reason: 'no_results', sources: [] });
   });
 
   it('de-duplicate the same page however it’s written, keeping the URL as the provider sent it', () => {
@@ -409,7 +419,9 @@ describe('Anthropic specifics', () => {
     const calls = callsTo('anthropic', '/v1/messages');
     expect(calls).toHaveLength(2);
     const [first, second] = calls.map((c) => c.body);
-    expect(second.tools).toEqual(first.tools);
+    // the same tool, but max_uses counts the searches of one request: the continuation may run only the 4 left
+    expect(first.tools[0].max_uses).toBe(5);
+    expect(second.tools).toEqual([{ ...first.tools[0], max_uses: 4 }]);
     expect(second.system).toBe(first.system);
     expect(second.messages).toHaveLength(2);
     expect(second.messages[0]).toEqual(first.messages[0]);
@@ -420,6 +432,39 @@ describe('Anthropic specifics', () => {
     expect(JSON.parse(out.text)).toEqual(STRATEGY_QA.research);
     expect(out.meta.usage).toEqual({ input: 8400, output: 1020, reasoning: null });
     expect(out.meta.research).toMatchObject({ web: true, searches: 2, queries: ['qa stand-in search'] });
+  });
+
+  it('never runs more searches than asked over a paused turn: with none left, the turn isn’t continued', async () => {
+    const { router, usage } = setup(['anthropic']);
+    const err = await router.text('strategy', { prompt: `${PROMPT}\nAnything else: qa-pause-turn`, research: { ...RESEARCH, maxSearches: 1 } }).catch((e) => e);
+    // max_uses can't be 0 and the tool has to stay on a continuation, so the turn ends where it paused
+    expect(callsTo('anthropic', '/v1/messages')).toHaveLength(1);
+    expect(err.code).toBe('CUT_OFF');
+    // it says the searches ran out (never "try fewer searches")
+    expect(err.message).toBe('Claude used all 1 web search before it finished answering. Try again, or choose more web searches.');
+    // what the call used is known (4,200 in, 120 out, one search): logged at list prices
+    expect(usage.recent(1)[0]).toMatchObject({ ok: false, code: 'CUT_OFF', research: true, searches: 1, usage: { input: 4200, output: 120 }, cost: { usd: 0.0292, source: 'estimate' } });
+  });
+
+  it('treats a failed continuation as paid work: no other key searches again, and what the first call used counts', async () => {
+    let sent = 0;
+    const f = async (url, init) => {
+      if (String(url).endsWith('/v1/messages') && ++sent === 2) {
+        return new Response(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'Number of input tokens has exceeded your per-minute rate limit' } }), { status: 429, headers: { 'content-type': 'application/json' } });
+      }
+      return fetch(url, init);
+    };
+    const { router, usage } = setup(['anthropic', 'openai'], { fetch: f, env: { ANTHROPIC_API_KEY: `${ENV.ANTHROPIC_API_KEY}-continued`, OPENAI_API_KEY: ENV.OPENAI_API_KEY } });
+    const metered = [];
+    const meter = { start() {}, cost: (usd, o) => metered.push([usd, !!o?.unsure]) };
+    const err = await router.text('strategy', { prompt: `${PROMPT}\nAnything else: qa-pause-turn`, research: RESEARCH, meter }).catch((e) => e);
+    expect(sent).toBe(2);
+    expect(err).toMatchObject({ code: 'RATE_LIMIT', notStarted: false });
+    expect(err.attempts).toEqual([expect.objectContaining({ provider: 'anthropic', code: 'RATE_LIMIT' })]);
+    expect(callsTo('openai')).toHaveLength(0);
+    // the 429 billed nothing, so the first call is all of it: 4,200 in, 120 out and one search
+    expect(usage.recent(1)[0]).toMatchObject({ ok: false, provider: 'anthropic', code: 'RATE_LIMIT', research: true, searches: 1, cost: { usd: 0.0292, source: 'estimate' } });
+    expect(metered).toEqual([[0.0292, true]]);
   });
 
   it('says the search failed when every search errored', async () => {
@@ -535,6 +580,39 @@ describe('routing a research request', () => {
     expect(callsTo('xai')).toHaveLength(0);
   });
 
+  it('logs a research request that failed after it started at an estimate, and tells the meter; never one that started nothing', async () => {
+    const metered = [];
+    const meter = { start() {}, cost: (usd, o) => metered.push([usd, !!o?.unsure]) };
+    const { router, usage } = setup(['anthropic'], { researchTimeoutMs: 300 });
+    // timed out: its searches may be billed and nothing says how many, so a research-sized request with all 5 (Opus 5.5: $0.28 + 5 × $0.01)
+    await expect(router.text('strategy', { prompt: `${PROMPT} qa-research-slow`, research: RESEARCH, meter })).rejects.toMatchObject({ code: 'TIMEOUT' });
+    const entry = usage.recent(1)[0];
+    expect(entry).toMatchObject({ ok: false, code: 'TIMEOUT', research: true, cost: { usd: 0.33, source: 'estimate' } });
+    expect(entry).not.toHaveProperty('searches');
+    expect(metered).toEqual([[0.33, true]]);
+    // stopped (the browser went away) on the Responses API: the same kind of estimate (GPT-6.1 Sol: $0.14 + 5 × $0.01)
+    metered.length = 0;
+    const openai = setup(['openai']);
+    const stop = new AbortController();
+    const stopped = openai.router.text('strategy', { prompt: `${PROMPT} qa-research-slow`, research: RESEARCH, meter, signal: stop.signal }).catch((e) => e);
+    for (let i = 0; i < 200 && !callsTo('openai', '/responses').length; i++) await new Promise((r) => setTimeout(r, 10));
+    stop.abort();
+    expect(await stopped).toMatchObject({ code: 'ABORTED' });
+    expect(openai.usage.recent(1)[0]).toMatchObject({ ok: false, provider: 'openai', code: 'ABORTED', research: true, cost: { usd: 0.19, source: 'estimate' } });
+    expect(metered).toEqual([[0.19, true]]);
+    // refused before it did anything (429): no cost, and nothing for the meter
+    metered.length = 0;
+    mock.behavior.anthropic = 'rate';
+    await expect(router.text('strategy', { prompt: PROMPT, research: RESEARCH, meter })).rejects.toMatchObject({ code: 'RATE_LIMIT', notStarted: true });
+    expect(usage.recent(1)[0]).toMatchObject({ ok: false, code: 'RATE_LIMIT', research: true });
+    expect(usage.recent(1)[0]).not.toHaveProperty('cost');
+    // an ordinary request that fails is logged as before
+    mock.behavior.anthropic = 'fail500';
+    await expect(router.text('strategy', { prompt: PROMPT, meter })).rejects.toMatchObject({ code: 'UPSTREAM' });
+    expect(usage.recent(1)[0]).not.toHaveProperty('cost');
+    expect(metered).toEqual([]);
+  });
+
   it('tries the next key after one refused before doing anything (429)', async () => {
     const { router } = setup(['anthropic', 'openai']);
     mock.behavior.anthropic = 'rate';
@@ -544,6 +622,52 @@ describe('routing a research request', () => {
     expect(out.meta.attempts).toEqual([expect.objectContaining({ provider: 'anthropic', code: 'RATE_LIMIT' })]);
     // the SDK didn't retry the 429 either
     expect(callsTo('anthropic', '/v1/messages')).toHaveLength(1);
+  });
+
+  it('an HTTP error before Anthropic’s stream starts (529 overloaded, 500) or a request never sent ran nothing: no cost, and the next key searches', async () => {
+    const overloaded = async (url, init) => (String(url).endsWith('/v1/messages') ? new Response(JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }), { status: 529, headers: { 'content-type': 'application/json' } }) : fetch(url, init));
+    const refused = async (url, init) => {
+      if (String(url).endsWith('/v1/messages')) throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:443'), { code: 'ECONNREFUSED' }) });
+      return fetch(url, init);
+    };
+    const cases = [
+      ['overloaded', { fetch: overloaded }, 'UPSTREAM'],
+      ['outage', {}, 'UPSTREAM'],
+      ['refused', { fetch: refused }, 'NETWORK'],
+    ];
+    for (const [name, o, code] of cases) {
+      mock.reset();
+      if (name === 'outage') mock.behavior.anthropic = 'fail500';
+      const metered = [];
+      const meter = { start() {}, cost: (usd, x) => metered.push([usd, !!x?.unsure]) };
+      const { router, usage } = setup(['anthropic', 'openai'], { ...o, env: { ANTHROPIC_API_KEY: `${ENV.ANTHROPIC_API_KEY}-${name}`, OPENAI_API_KEY: ENV.OPENAI_API_KEY } });
+      const out = await router.text('strategy', { prompt: PROMPT, research: RESEARCH, meter });
+      expect(out.meta.provider).toBe('openai');
+      expect(out.meta.attempts).toEqual([expect.objectContaining({ provider: 'anthropic', code })]);
+      const failed = usage.recent(2).find((e) => !e.ok);
+      expect(failed).toMatchObject({ provider: 'anthropic', code, research: true });
+      expect(failed).not.toHaveProperty('cost');
+      // only what OpenAI's answer cost: nothing for Anthropic, and no estimate
+      expect(metered).toEqual([[out.meta.cost.usd, false]]);
+    }
+  });
+
+  it('an error once Anthropic’s stream has started (an error event, no HTTP status) is still paid work', async () => {
+    const f = async (url, init) => {
+      if (!String(url).endsWith('/v1/messages')) return fetch(url, init);
+      const events = [
+        { type: 'message_start', message: { id: 'msg_qa_err', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 4200, output_tokens: 1 } } },
+        { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } },
+      ];
+      return new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+    const metered = [];
+    const meter = { start() {}, cost: (usd, x) => metered.push([usd, !!x?.unsure]) };
+    const { router, usage } = setup(['anthropic', 'openai'], { fetch: f, env: { ANTHROPIC_API_KEY: `${ENV.ANTHROPIC_API_KEY}-midstream`, OPENAI_API_KEY: ENV.OPENAI_API_KEY } });
+    await expect(router.text('strategy', { prompt: PROMPT, research: RESEARCH, meter })).rejects.toMatchObject({ code: 'UPSTREAM', notStarted: false });
+    expect(callsTo('openai')).toHaveLength(0);
+    expect(usage.recent(1)[0]).toMatchObject({ ok: false, provider: 'anthropic', research: true, cost: { usd: 0.33, source: 'estimate' } });
+    expect(metered).toEqual([[0.33, true]]);
   });
 
   it('degrades on every provider: not used, failed, refused', async () => {
@@ -698,6 +822,38 @@ describe('the daily limit for a research request', () => {
       expect(mock.calls).toHaveLength(0);
       // without research the same request fits
       expect((await gen({ fn: 'strategy', prompt: PROMPT })).status).toBe(200);
+    } finally {
+      app.server.close();
+    }
+  });
+
+  it('counts a stopped research request at its estimate (its searches may be billed), and never one refused before it started', async () => {
+    const auth = createAuth({ supabaseUrl: supa.url, publishableKey: supa.PUBLISHABLE, adminEmails: 'owner@example.com', signInRequired: false });
+    const limits = createLimits();
+    const app = await startApp({ env: { ANTHROPIC_API_KEY: ENV.ANTHROPIC_API_KEY }, auth, limits });
+    const today = async () => (await limits.usageByUser({ days: 1 })).find((r) => r.userId.startsWith('anon:')) ?? { requests: 0, usd: 0 };
+    const counted = async (n) => {
+      for (let i = 0; i < 100 && (await today()).requests < n; i++) await new Promise((r) => setTimeout(r, 20));
+      return today();
+    };
+    const gen = (body, signal) => fetch(`${app.base}/api/ai/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+    try {
+      // a dollar limit only: a stopped request that cost nothing on the day would make it no limit at all
+      app.ai.store.setLimits({ requestsPerDay: 0, usdPerDay: 1 });
+      const stop = new AbortController();
+      const r = gen({ fn: 'strategy', prompt: `${PROMPT} qa-research-slow`, research: { web: true, maxSearches: 8 } }, stop.signal).catch((e) => e);
+      // Stop, once the provider has the request
+      for (let i = 0; i < 200 && !callsTo('anthropic', '/v1/messages').length; i++) await new Promise((res) => setTimeout(res, 10));
+      stop.abort();
+      expect(await r).toMatchObject({ name: 'AbortError' });
+      // what was reserved for it: a research-sized request with all 8 searches (Opus 5.5: $0.28 + 8 × $0.01)
+      expect(await counted(1)).toMatchObject({ requests: 1, usd: 0.36 });
+      expect(app.ai.usage.recent(1)[0]).toMatchObject({ ok: false, provider: 'anthropic', code: 'ABORTED', research: true, cost: { usd: 0.36, source: 'estimate' } });
+      // refused before it did anything (429): it reached the provider, so one request, but no dollars
+      mock.behavior.anthropic = 'rate';
+      const refused = await gen({ fn: 'strategy', prompt: PROMPT, research: { web: true, maxSearches: 8 } });
+      expect((await refused.json()).code).toBe('RATE_LIMIT');
+      expect(await counted(2)).toMatchObject({ requests: 2, usd: 0.36 });
     } finally {
       app.server.close();
     }

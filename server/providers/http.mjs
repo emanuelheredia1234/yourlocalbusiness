@@ -60,7 +60,8 @@ export function errorFromResponse(httpStatus, payload, label) {
   return new ProviderError('UPSTREAM', `${label} had an error${message ? `: ${message}` : ` (${httpStatus}).`}`, { ...o, status: 502 });
 }
 
-const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ERR_INVALID_URL']);
+/** Network error codes of a request that was never sent (nothing reached the provider). */
+export const NOT_SENT = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ERR_INVALID_URL']);
 
 function networkError(e, signal, label) {
   if (signal?.aborted) return new ProviderError('ABORTED', 'Stopped.', { status: 499, provider: label });

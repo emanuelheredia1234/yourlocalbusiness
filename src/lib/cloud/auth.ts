@@ -10,6 +10,7 @@ import { deleteMediaDatabase, readBrowserMedia, putBlob, safeStorage, setMediaAc
 import { initial, starterSkills, useStore, type StoreState } from '@/store/useStore';
 import { defaultSettings } from '@/store/defaults';
 import { cleanWorkspace } from '@/store/cleanup';
+import { stopTurn } from '@/store/assistant';
 import { createSync, supabaseBackend, useSyncStatus, type Sync } from './sync';
 import { createMediaSync, type MediaSync } from './media';
 
@@ -290,6 +291,7 @@ async function onAuthEvent(event: string, user: User | null, ctx: { badLink: str
     case 'SIGNED_OUT':
       // signed out in another tab, or the sign-in ended (password changed elsewhere)
       if (['opening', 'import', 'ready', 'failed', 'recovery', 'elsewhere'].includes(st.phase)) {
+        void stopRunningWork();
         sync?.dispose();
         media?.dispose();
         location.reload();
@@ -321,8 +323,19 @@ function listenToOtherTabs() {
   };
 }
 
-/** Another tab took over: stop saving from here (what's waiting is in storage; that tab saves it). */
+/**
+ * Paid work this tab runs outside the pages (a Strategy run, the assistant's turn) stops when the tab lets
+ * the workspace go: its results could no longer be saved, and the tab that has it may start the same work.
+ */
+async function stopRunningWork(): Promise<void> {
+  stopTurn();
+  // loaded when needed: the Strategy runner imports the AI client, which imports this file
+  await import('@/ai/strategyJob').then((m) => m.stopAllStrategies()).catch(() => undefined);
+}
+
+/** Another tab took over: stop saving from here (what's waiting is in storage; that tab saves it), and stop what's running. */
 function stepAside() {
+  void stopRunningWork();
   sync?.dispose();
   media?.dispose();
   sync = null;
@@ -618,6 +631,8 @@ function reloadSignedOut() {
 export async function signOut({ force = false } = {}): Promise<'unsaved' | 'done'> {
   const st = useAuth.getState();
   if (!client || !st.user) return 'done';
+  // the owner chose to leave (confirmLeave asked first when something was running): nothing new starts while it saves
+  await stopRunningWork();
   if (!force && st.phase === 'ready' && !(await saveNow())) return 'unsaved';
   const userId = st.user.id;
   st.set({ phase: 'leaving' });
@@ -633,7 +648,8 @@ export async function deleteAccount(): Promise<{ error?: string }> {
   const st = useAuth.getState();
   if (!client || !st.user) return { error: 'You’re not signed in.' };
   const target = `${serverBaseNow()}/api/account`;
-  // nothing may upload into the folder while the server empties it
+  // nothing may upload into the folder while the server empties it, nor spend on the account's keys
+  await stopRunningWork();
   sync?.stop();
   await media?.stop();
   const res = await fetch(target, { method: 'DELETE', headers: await authHeaders(target) }).catch(() => null);
