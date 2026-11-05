@@ -68,6 +68,8 @@ export function createPostingRoutes(deps = {}) {
   async function route(req, res, url, who) {
     const p = url.pathname;
     if (!db?.enabled) throw fail(503, 'NOT_SET_UP', 'Posting from the app isn’t set up yet. Post it yourself for now.', {}, 'Supabase isn’t set up on this server (SUPABASE_URL and SUPABASE_SECRET_KEY).');
+    // no connected accounts (NANGO_SECRET_KEY unset): nothing can be posted from the app, and no job exists
+    if (!connections?.enabled) throw fail(503, 'NOT_SET_UP', 'Posting from the app isn’t switched on yet. Post it yourself, then mark it as posted.', {}, connections?.hint || 'Connecting accounts is off: add NANGO_SECRET_KEY in Replit Secrets.');
     if (p === `${PREFIX}publish` && req.method === 'POST') {
       limited('posting-publish', who.id);
       const out = await posting.publish(who, await body(req));

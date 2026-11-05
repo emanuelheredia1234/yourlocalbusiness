@@ -2,7 +2,7 @@
 // "Check again", the stuck-job sweep, caps, ownership and the rules on tokens and media links.
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { FB_PAGE_TOKEN, IG_USER_ID } from '../test/mock-social-providers.mjs';
-import { verifyMediaToken } from './media.mjs';
+import { mediaToken, verifyMediaToken } from './media.mjs';
 import { JPEG, MP4, PNG, startPosting } from './test-helpers.mjs';
 
 let t;
@@ -481,7 +481,7 @@ describe('ownership and access', () => {
 });
 
 describe('connections switched off', () => {
-  it('answers 503 CONNECTIONS_NOT_ENABLED and sends nothing', async () => {
+  it('answers 503 NOT_SET_UP on every posting route and the media link, and sends nothing', async () => {
     const off = await startPosting({ enabled: false });
     try {
       const u = await off.user('dave@example.com');
@@ -489,7 +489,11 @@ describe('connections switched off', () => {
       const post = await off.post(u, { platform: 'facebook' });
       const r = await off.publish(u, post);
       expect(r.status).toBe(503);
-      expect(r.body.code).toBe('CONNECTIONS_NOT_ENABLED');
+      expect(r.body.code).toBe('NOT_SET_UP');
+      expect(r.body.hint).toBeUndefined();
+      expect((await off.call(u, 'GET', '/api/posting/jobs?projectId=proj-1')).status).toBe(503);
+      const token = mediaToken(off.env, { userId: u.id, mediaId: 'any', kind: 'image' }, off.clock.t);
+      expect((await off.call(null, 'GET', `/api/media/public/${token}`)).status).toBe(503);
       expect(off.social.calls).toHaveLength(0);
     } finally {
       await off.close();
