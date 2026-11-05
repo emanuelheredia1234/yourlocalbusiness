@@ -33,9 +33,33 @@ export interface StrategyJob {
   controller: AbortController;
 }
 
-/** One job per project in this browser tab (in memory: a reload ends it). */
-export const useStrategyJobs = create<{ jobs: Record<string, StrategyJob> }>(() => ({ jobs: {} }));
+/**
+ * What a run's step that wasn't saved may still cost, for the run's summary (in this tab only; `runAt` is
+ * the run's startedAt). A web research step stopped or failed after it was asked: its searches may already
+ * be billed, and your server counts an estimate for them, so `usd` is the searches at list price, the most
+ * the step may make (`estimate`; the pages it read are billed as tokens on top). A step whose answer arrived
+ * but couldn't be used was billed in full: `usd` is what the answer reported.
+ */
+export interface UnsavedCost {
+  runAt: number;
+  step: StrategyStep;
+  usd: number;
+  estimate: boolean;
+  /** with `estimate`: the most searches the step may make, and the list price of one */
+  searches?: number;
+  perSearch?: number;
+}
+
+/** One job per project in this browser tab (in memory: a reload ends it), and its last run's unsaved step cost. */
+export const useStrategyJobs = create<{ jobs: Record<string, StrategyJob>; unsaved: Record<string, UnsavedCost> }>(() => ({ jobs: {}, unsaved: {} }));
 export const useStrategyJob = (projectId: string) => useStrategyJobs((s) => s.jobs[projectId]);
+/** The unsaved step cost of a project's last run in this tab (match `runAt` with the run you show). */
+export const useUnsavedCost = (projectId: string) => useStrategyJobs((s) => s.unsaved?.[projectId]);
+const setUnsaved = (pid: string, cost: UnsavedCost | null) =>
+  useStrategyJobs.setState((s) => {
+    const { [pid]: _old, ...rest } = s.unsaved ?? {};
+    return { unsaved: cost ? { ...rest, [pid]: cost } : rest };
+  });
 
 const setJob = (pid: string, patch: Partial<StrategyJob>) =>
   useStrategyJobs.setState((s) => (s.jobs[pid] ? { jobs: { ...s.jobs, [pid]: { ...s.jobs[pid], ...patch } } } : s));
@@ -57,6 +81,8 @@ export function stopAllStrategies(): void {
 
 /** Codes that mean "no AI here" (not a failure of an AI that was asked): the built-in engine may write the whole run. */
 export const NO_AI = ['no_provider', 'server_down', 'unavailable', 'not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'];
+/** Results that mean the request never reached a key, so nothing was billed: no AI here, your server unreachable, a daily limit. */
+const NOT_SENT = new Set([...NO_AI, 'network', 'daily_limit']);
 
 /** A step's sections as their tabs name them: the assets step writes two, “Assets to create” and “SEO page”. */
 export const sectionNames = (step: StrategyStep): string[] => (step === 'assets' ? ['assets', 'seo'] : [step]).map((t) => `“${tabLabel('strategy', t)}”`);
@@ -190,6 +216,7 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
   const controller = new AbortController();
   const startedAt = Date.now();
   useStrategyJobs.setState((s) => ({ jobs: { ...s.jobs, [projectId]: { projectId, steps: list, index: 0, stage: 'Starting…', startedAt, costUsd: 0, searches: 0, requests: 0, controller } } }));
+  setUnsaved(projectId, null);
   const busy = `strategy:${projectId}`;
   beginBusy(busy, 'Strategy', 'app');
   writeStrategy(projectId, (s) => ({ ...s, run: { startedAt, steps: list, done: [] } }));
@@ -200,6 +227,12 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
   let note = '';
   let written = 0;
   let cost = 0;
+  /** the step under way, when it's a web research step: the most searches it may make, and the list price of one */
+  let searching: { step: StrategyStep; searches: number; perSearch: number } | null = null;
+  /** a web research step that ended unsaved: its searches may be billed */
+  const searchesMayBeBilled = () => {
+    if (searching) setUnsaved(projectId, { runAt: startedAt, step: searching.step, usd: searching.searches * searching.perSearch, estimate: true, searches: searching.searches, perSearch: searching.perSearch });
+  };
   try {
     for (let i = 0; i < list.length; i++) {
       const step = list[i];
@@ -214,6 +247,7 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
       const who = strategyWho();
       const input = stepInput(step, p, s, { web: who.mode === 'web', posts: store.posts, ads: store.ads, myListings: store.myListings });
       const task = STEP_TASK[step];
+      searching = step === 'research' && who.mode === 'web' && who.searchKey && !builtinMode ? { step, searches: s.maxSearches, perSearch: who.searchKey.perSearch } : null;
       let res;
       try {
         // no "fresh take" on a re-run (no variation): a re-plan keeps the steps that still apply in the same words, and their ticks
@@ -229,6 +263,7 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
         if (leaving) return (result = 'stopped');
         if ((e as AIError)?.code === 'cancelled' || controller.signal.aborted) {
           if (project(projectId)) writeStrategy(projectId, (st) => (st.run ? { ...st, run: { ...st.run, stoppedAt: step } } : st));
+          searchesMayBeBilled();
           return (result = 'stopped');
         }
         throw e;
@@ -244,7 +279,10 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
         const noAI = !res.code || NO_AI.includes(res.code);
         // the built-in engine stands in only for a run no AI is here for, and over sections an AI wrote only when the owner chose it
         if (noAI && !aiWrote && (o.replaceAI || !aiWritten(s, list).length)) builtinMode = true;
-        else return fail(noAI ? noAIText(res.code, !aiWrote) : stopNote(res.note));
+        else {
+          if (res.code && !NOT_SENT.has(res.code)) searchesMayBeBilled();
+          return fail(noAI ? noAIText(res.code, !aiWrote) : stopNote(res.note));
+        }
       }
       // the latest project: a project deleted meanwhile ends the run quietly
       const latest = project(projectId);
@@ -254,6 +292,10 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
       // valid JSON in the wrong shape (or all of it dropped by the checks) never replaces a section
       if (!CORE[step].has(out)) {
         const names = sectionNames(step);
+        // the answer came back, so it was billed: what it cost (else, for a web research step, its searches' estimate)
+        const billed = res.provider !== 'local' ? res.meta?.cost?.usd : undefined;
+        if (typeof billed === 'number' && billed > 0) setUnsaved(projectId, { runAt: startedAt, step, usd: billed, estimate: false });
+        else if (res.provider !== 'local') searchesMayBeBilled();
         return fail(`The answer had no ${CORE[step].what} the app could use, so ${listOf(names)} ${names.length > 1 ? 'stay as they were' : 'stays as it was'}. Try again.`);
       }
       if (res.provider !== 'local') aiWrote = true;
@@ -270,6 +312,8 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
         ),
       );
       written += 1;
+      // saved: its cost is in the section now
+      searching = null;
       useStore.getState().recordGeneration({ id: res.id, task: task.id, label: task.label, module: 'strategy', provider: res.provider, skillIds: res.skills.map((k) => k.id), createdAt: now, ms: res.ms, projectId, ...(res.meta ? { meta: compactMeta(res.meta) } : {}) });
       cost += res.meta?.cost?.usd ?? 0;
       const job = useStrategyJobs.getState().jobs[projectId];
@@ -278,6 +322,7 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
     return (result = 'done');
   } catch (e) {
     if (leaving) return (result = 'stopped');
+    searchesMayBeBilled();
     note = stopNote((e as Error)?.message);
     result = 'failed';
     const at = Math.min(list.length - 1, useStrategyJobs.getState().jobs[projectId]?.index ?? 0);
