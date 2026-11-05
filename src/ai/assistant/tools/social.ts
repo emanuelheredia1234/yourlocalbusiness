@@ -803,7 +803,7 @@ const deletePosts = defineTool({
   class: 'D',
   summary: 'Delete posts from the app (what’s on a network stays).',
   args: { ids: arg.array(arg.string({ max: 60 }), { min: 1, max: 50 }) },
-  validate: ({ ids }) => eachPost(ids, (p) => (sendingNow(p.id) ? `${name(p)} is being handed to Manus right now.` : making.has(p.id) ? `An image or video for ${name(p)} is being made right now.` : null)),
+  validate: ({ ids }) => eachPost(ids, (p) => (sendingNow(p.id) ? `${name(p)} is being sent right now.` : making.has(p.id) ? `An image or video for ${name(p)} is being made right now.` : null)),
   danger: ({ ids }) => {
     const list = uniq(ids).map((id) => findPost(id)!);
     const out = list.some((p) => p.status === 'published');

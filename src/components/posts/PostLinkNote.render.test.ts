@@ -1,5 +1,5 @@
 // What a post shows about its link (rendered once, as on the server: no effects run): the first comment to
-// add, with Copy and what Manus did with it, or the link to keep in the bio; the editor's "Where the link
+// add, with Copy and what happened to it (the app's post, or an older Manus one), or the link to keep in the bio; the editor's "Where the link
 // goes"; and Campaign setup's "Where the link goes" card with the suggested defaults.
 import { describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
@@ -71,22 +71,29 @@ describe('the first comment on a post card', () => {
     expect(note(post({ status: 'published', publishedBy: 'manual' }))).toContain('If it isn’t there yet, add this as the first comment.');
   });
 
-  it('follows what Manus did with it', () => {
-    const asked = note(post({ external: manus({ comment: { state: 'asked' } }) }));
-    expect(asked).toContain('First comment</p>');
-    expect(asked).toContain('Manus adds it right after posting.');
+  it('follows the app’s post: it adds the comment while posting, then asks you to check', () => {
+    const api = (state: ExternalPublish['state']) => ({ ...manus({ state }), via: 'api' as const, jobId: 'job_1', taskUrl: '' });
+    const sending = note(post({ external: api('working') }));
+    expect(sending).toContain('First comment</p>');
+    expect(sending).toContain('The app adds it right after posting.');
+    expect(note(post({ status: 'published', publishedBy: 'api', external: api('posted') }))).toContain('Check that it’s on Facebook. If not, add it yourself.');
+    expect(note(post({ external: api('unknown') }))).toContain('Add this as the first comment</p>');
+    // a failed try never got to the comment
+    expect(note(post({ external: api('failed') }))).toContain('Add this as the first comment when you post.');
+  });
+
+  it('shows what an older Manus post reported, read-only', () => {
     const added = note(post({ status: 'published', publishedBy: 'manus', external: manus({ state: 'posted', comment: { state: 'added' } }) }));
     expect(added).toContain('First comment</p>');
-    expect(added).toContain('Manus added it.');
+    expect(added).toContain('It was added with the post (sent with Manus earlier).');
     expect(note(post({ external: manus({ state: 'posted', comment: { state: 'unknown' } }) }))).toContain('Check that it’s on Facebook. If not, add it yourself.');
-    expect(note(post({ external: manus({ mode: 'schedule', state: 'scheduled' }) }))).toContain('Manus only schedules the post. Once it’s live, add this as the first comment.');
-    // a failed try never got to the comment
+    expect(note(post({ external: manus({ comment: { state: 'asked' } }) }))).toContain('Check that it’s on Facebook. If not, add it yourself.');
     expect(note(post({ external: manus({ state: 'failed', comment: { state: 'asked' } }) }))).toContain('Add this as the first comment when you post.');
   });
 
-  it('shows Manus’s reason as text, clipped, when it couldn’t add it', () => {
+  it('shows an older Manus reason as text, clipped, when it couldn’t add it', () => {
     const html = note(post({ status: 'published', external: manus({ state: 'posted', comment: { state: 'failed', detail: `Comments are off <script>alert(1)</script> ${'x'.repeat(200)}` } }) }));
-    expect(html).toContain('Manus couldn’t add it (Comments are off &lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(html).toContain('It wasn’t added (Comments are off &lt;script&gt;alert(1)&lt;/script&gt;');
     expect(html).toContain('…). Add it yourself.');
     expect(html).not.toContain('<script>');
     expect(html).toContain('Add this as the first comment</p>');
@@ -141,7 +148,7 @@ describe('the editor’s “Where the link goes”', () => {
     expect(html).toMatch(/<option value="post">In the post<\/option><option value="comment" selected="">First comment<\/option><option value="bio">Bio<\/option>/);
     expect(words(html)).toContain('Links in Facebook posts and comments can be clicked. Your link: https://app.example/copper-kettle');
     expect(html).toContain('<label for="fc-post_1" class="label">First comment</label>');
-    expect(html).toContain('When Manus posts it right away, it adds this too. Otherwise, add it yourself after posting.');
+    expect(html).toContain('The app adds this right after posting when your account is connected. Otherwise, add it yourself after posting.');
     expect(html).toContain(`>Book here: ${PAGE}</textarea>`);
     expect(fields(post({ linkPlacement: 'bio' }))).not.toContain('fc-post_1');
   });
