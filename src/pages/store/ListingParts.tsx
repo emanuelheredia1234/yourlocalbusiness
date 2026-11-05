@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
-import { ArrowRight, MapPin } from 'lucide-react';
+import { MapPin } from 'lucide-react';
 import type { Listing } from '@/lib/types';
 import { cn, darken, fmtMoney, lighten, readableOn, withAlpha } from '@/lib/utils';
 import { priceLabel } from '@/lib/listing';
 import { CITIES, FORMATS } from '@/ai/knowledge';
 import { Icon } from '@/components/ui/Icon';
 import { MiniMark } from '@/components/brand/Logo';
+import { Badge } from '@/components/ui/primitives';
 
 export function ListingCover({ listing, className, big }: { listing: Listing; className?: string; big?: boolean }) {
   const [a, b, c] = listing.cover.colors;
@@ -43,46 +44,53 @@ export function ListingCover({ listing, className, big }: { listing: Listing; cl
   );
 }
 
+/** Where a listing is (a business's city, or a digital product's format), in a few words. */
+function placeLine(listing: Listing): string {
+  if (listing.kind !== 'business') return FORMATS[listing.format ?? 'pdf'].label;
+  const loc = listing.location;
+  if (loc?.online && loc.city === 'Online') return 'Online';
+  return `${loc?.city ?? 'Local'}${loc?.region ? `, ${loc.region}` : ''}${loc?.online ? ' · also online' : ''}`;
+}
+
+/**
+ * A listing in a grid: the 4:3 cover, then title, seller (unless it repeats the title), price and where it
+ * is. The cover opens the listing ("View {title}"), and so does the title.
+ */
 export function ListingCard({ listing, onOpen }: { listing: Listing; onOpen: () => void }) {
-  const isBiz = listing.kind === 'business';
+  const seller = listing.seller.name.trim();
+  const showSeller = !!seller && seller.toLowerCase() !== listing.title.trim().toLowerCase();
   return (
-    <article className="panel group flex min-w-0 flex-col overflow-hidden transition-shadow hover:shadow-pop">
-      <button className="relative block text-left" onClick={onOpen} aria-label={`View ${listing.title}`}>
-        <ListingCover listing={listing} className="aspect-[16/10] w-full" />
-        <span className="absolute left-2 top-2 flex gap-1">
-          {listing.origin === 'mine' && <span className="badge bg-accent text-on-accent">Your listing</span>}
-          {listing.origin === 'community' && <span className="badge bg-info text-white">Community</span>}
-        </span>
-        <span className="absolute bottom-2 left-2 badge bg-surface/95 text-ink-2 shadow-card">
-          {isBiz ? (
-            <>
-              <MapPin size={11} /> {listing.location?.online && listing.location.city === 'Online' ? 'Online' : `${listing.location?.city ?? 'Local'}${listing.location?.region ? `, ${listing.location.region}` : ''}`}
-            </>
-          ) : (
-            <>
-              <Icon name={FORMATS[listing.format ?? 'pdf'].icon} size={11} /> {FORMATS[listing.format ?? 'pdf'].short}
-            </>
-          )}
-        </span>
-      </button>
-      <div className="flex flex-1 flex-col gap-2 p-3.5">
-        <div className="flex items-center gap-2">
-          <MiniMark logo={listing.seller.logo} name={listing.seller.name} size={20} />
-          <span className="min-w-0 truncate text-caption font-semibold text-ink-2">{listing.seller.name}</span>
-        </div>
-        <button className="text-left" onClick={onOpen}>
-          <h3 className="clamp-2 text-h3 font-semibold leading-snug text-ink group-hover:underline">{listing.title}</h3>
-        </button>
-        <p className="clamp-2 text-small text-muted">{listing.tagline}</p>
-        <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-          <span className="num text-h3 font-semibold text-ink">
-            {priceLabel(listing.price, listing.priceModel)}
-            {listing.compareAt && listing.compareAt > listing.price && <s className="ml-1.5 text-caption font-medium text-faint">{fmtMoney(listing.compareAt)}</s>}
+    <article className="group flex min-w-0 flex-col">
+      <button type="button" className="relative block overflow-hidden rounded-pop text-left ring-1 ring-inset ring-line transition-shadow duration-120 hover:shadow-sm" onClick={onOpen} aria-label={`View ${listing.title}`}>
+        <ListingCover listing={listing} className="aspect-[4/3] w-full" />
+        {listing.origin === 'mine' && (
+          <span className="absolute left-2.5 top-2.5">
+            <Badge className="bg-surface shadow-xs">Your listing</Badge>
           </span>
-          <button className="btn btn-secondary btn-sm" onClick={onOpen} aria-label={`View ${listing.title}`}>
-            View <ArrowRight size={14} />
-          </button>
+        )}
+      </button>
+      <div className="mt-3 flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-h4 text-ink">
+            <button type="button" className="block max-w-full truncate text-left hover:underline" onClick={onOpen}>
+              {listing.title}
+            </button>
+          </h3>
+          {showSeller && (
+            <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-small text-muted">
+              <MiniMark logo={listing.seller.logo} name={seller} size={16} />
+              <span className="truncate">{seller}</span>
+            </p>
+          )}
+          <p className="mt-0.5 flex min-w-0 items-center gap-1 text-caption text-muted">
+            {listing.kind === 'business' ? <MapPin size={12} className="shrink-0" aria-hidden="true" /> : <Icon name={FORMATS[listing.format ?? 'pdf'].icon} size={12} className="shrink-0" />}
+            <span className="truncate">{placeLine(listing)}</span>
+          </p>
         </div>
+        <span className="num shrink-0 text-right font-mono text-ui font-semibold text-ink">
+          {priceLabel(listing.price, listing.priceModel)}
+          {listing.compareAt && listing.compareAt > listing.price && <s className="block text-caption font-normal text-faint">{fmtMoney(listing.compareAt)}</s>}
+        </span>
       </div>
     </article>
   );
@@ -114,7 +122,7 @@ export function UsMap({ listings, selected, onSelect }: { listings: Listing[]; s
   }, [listings]);
   const d = OUTLINE.map(([lng, lat], i) => `${i ? 'L' : 'M'}${proj(lng, lat)[0].toFixed(1)},${proj(lng, lat)[1].toFixed(1)}`).join(' ') + ' Z';
   return (
-    <div className="relative w-full overflow-hidden rounded-lg border border-line bg-surface-2">
+    <div className="well relative w-full overflow-hidden">
       <svg viewBox="0 0 1000 560" className="block h-auto w-full" role="img" aria-label="Map of business listings by city">
         <path d={d} fill="rgb(var(--surface))" stroke="rgb(var(--line-2))" strokeWidth="2" strokeLinejoin="round" />
         {pins.map(([key, p]) => {
@@ -134,16 +142,16 @@ export function UsMap({ listings, selected, onSelect }: { listings: Listing[]; s
               onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelect(active ? '' : key)}
             >
               <circle r="22" fill="transparent" />
-              <circle r={active ? 13 : 10} fill={active ? 'rgb(var(--accent))' : 'rgb(var(--primary))'} stroke="rgb(var(--surface))" strokeWidth="3" />
+              <circle r={active ? 13 : 10} fill={active ? 'rgb(var(--ink))' : 'rgb(var(--primary))'} stroke="rgb(var(--surface))" strokeWidth="3" />
               {p.count > 1 && (
-                <text textAnchor="middle" dy="0.35em" className="num" fill={active ? 'rgb(var(--on-accent))' : 'rgb(var(--on-primary))'} style={{ fontSize: 11, fontWeight: 700 }}>
+                <text textAnchor="middle" dy="0.35em" className="num" fill={active ? 'rgb(var(--surface))' : 'rgb(var(--on-primary))'} style={{ fontSize: 11, fontWeight: 600 }}>
                   {p.count}
                 </text>
               )}
               {(hover === key || active) && (
                 <g transform="translate(0 -24)">
-                  <rect x={-((key.length * 7.2) / 2) - 8} y={-14} width={key.length * 7.2 + 16} height={24} rx={6} fill="rgb(var(--ink))" />
-                  <text textAnchor="middle" dy="0.32em" y={-2} fill="rgb(var(--surface))" style={{ fontSize: 12, fontWeight: 600 }}>
+                  <rect x={-((key.length * 7.2) / 2) - 8} y={-14} width={key.length * 7.2 + 16} height={24} rx={8} fill="rgb(var(--inverse))" />
+                  <text textAnchor="middle" dy="0.32em" y={-2} fill="rgb(var(--on-inverse))" style={{ fontSize: 12, fontWeight: 500 }}>
                     {key}
                   </text>
                 </g>
