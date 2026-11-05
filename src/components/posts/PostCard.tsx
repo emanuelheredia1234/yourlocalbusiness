@@ -239,7 +239,12 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
           <span className="sr-only">{PLATFORMS[post.platform].label} · </span>
           <span className="num font-mono">{fmtWhen(when)}</span>
           {/* the format is metadata, not a badge over the visual (where it collided with the watermark and story bars) */}
-          {(post.format === 'video' || ownPhotoPost(post)) && <span> · {post.format === 'video' ? 'Video' : 'Your photo'}</span>}
+          {(post.format === 'video' || ownPhotoPost(post)) && (
+            <span>
+              <span className="px-1.5">·</span>
+              {post.format === 'video' ? 'Video' : 'Your photo'}
+            </span>
+          )}
         </>
       }
       corner={

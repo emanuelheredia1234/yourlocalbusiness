@@ -1004,8 +1004,9 @@ export function SettingsSection({
 }) {
   return (
     <section id={id} aria-label={ariaLabel} className={mergeCn('card', tone === 'danger' && 'border-bad-line', className)}>
-      <div className="flex flex-col gap-3 px-5 pb-1 pt-5 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
+      {/* actions share the title's row while they fit (an ⓘ always does); wider ones wrap under it on phones */}
+      <div className="flex flex-wrap items-start justify-between gap-3 px-5 pb-1 pt-5">
+        <div className="min-w-0 flex-1 basis-56">
           <h3 className={cn('text-h3', tone === 'danger' ? 'text-bad' : 'text-ink')}>{title}</h3>
           {description && <p className="mt-0.5 text-small text-muted">{description}</p>}
         </div>
