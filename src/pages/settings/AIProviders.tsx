@@ -259,8 +259,7 @@ export function AIProviders() {
         <>
           {!state.canManage && !accounts && <AdminAccess adminTokenSet={state.adminTokenSet} token={adminToken} onToken={setAdminToken} onCheck={() => void load()} />}
           <StorageNote state={state} />
-          <Providers state={state} catalog={catalog} usage={usage} call={call} save={save} onReload={() => void load()} onUsage={() => void loadUsage()} />
-          <RoutingAndUsage state={state} catalog={catalog} usage={usage} usageLocked={usageLocked} call={call} people={!!state.accounts && state.canManage} onRefreshUsage={() => void loadUsage()} />
+          <Providers state={state} catalog={catalog} usage={usage} usageLocked={usageLocked} call={call} save={save} onReload={() => void load()} onUsage={() => void loadUsage()} />
           {/* Viktor (viktor.com) through the owner's own Slack app: the owner's, and self-hosted only */}
           {state.canManage && !__ARTIFACT_BUILD__ && <SlackCard call={call} serverUrl={serverUrl} />}
           {state.accounts && state.canManage && <DailyLimitsCard call={call} />}
@@ -278,11 +277,11 @@ function BrainSection({ short }: { short?: boolean }) {
   const updateSettings = useStore((s) => s.updateSettings);
   return (
     <Region name="Brain">
-      <SettingsSection title="Brain">
+      <div className="card px-5">
         <SettingsRow label={useBrain ? 'Brain is on' : 'Brain is off'} description={short ? 'Writing follows your Brain skills; photos and videos get its art direction.' : 'Writing follows your Brain skills, and photos and videos get its art direction, for every key that’s on.'} htmlFor="ai-brain">
           <Toggle id="ai-brain" checked={useBrain} onChange={(v) => updateSettings((s) => ({ ...s, ai: { ...s.ai, useBrain: v } }))} />
         </SettingsRow>
-      </SettingsSection>
+      </div>
     </Region>
   );
 }
@@ -353,7 +352,7 @@ function statusOf(st: ProviderState): { text: string; tone: 'good' | 'neutral' }
 }
 
 /** The keys as a table, in the order they're tried; Configure opens one in a side sheet. */
-function Providers({ state, catalog, usage, call, save, onReload, onUsage }: { state: AIState; catalog: CatalogProvider[]; usage: { recent: UsageEntry[]; totals: UsageTotals } | null; call: Call; save: Save; onReload: () => void; onUsage: () => void }) {
+function Providers({ state, catalog, usage, usageLocked, call, save, onReload, onUsage }: { state: AIState; catalog: CatalogProvider[]; usage: { recent: UsageEntry[]; totals: UsageTotals } | null; usageLocked: boolean; call: Call; save: Save; onReload: () => void; onUsage: () => void }) {
   const [open, setOpen] = useState<string | null>(null);
   const locked = !state.canManage;
   const move = (i: number, dir: -1 | 1) => {
@@ -399,7 +398,7 @@ function Providers({ state, catalog, usage, call, save, onReload, onUsage }: { s
               const names = poweredNames(p.functions);
               const s = statusOf(p);
               return (
-                <li key={id} aria-label={`${d.label} key`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-b border-line px-5 py-3 last:border-b-0 md:grid-cols-[20px_minmax(0,1.1fr)_72px_minmax(0,1.5fr)_128px]">
+                <li key={id} aria-label={`${d.label} key`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-b border-line px-5 py-2.5 md:grid-cols-[20px_minmax(0,1.1fr)_72px_minmax(0,1.5fr)_128px]">
                   <span className="num font-mono text-caption text-muted max-md:hidden">{i + 1}</span>
                   <span className="min-w-0">
                     <span className="flex items-center gap-2">
@@ -436,6 +435,7 @@ function Providers({ state, catalog, usage, call, save, onReload, onUsage }: { s
             })}
           </ul>
         </div>
+        <RoutingAndUsage state={state} catalog={catalog} usage={usage} usageLocked={usageLocked} call={call} people={!!state.accounts && state.canManage} onRefreshUsage={onUsage} />
         {state.canManage && state.storage === 'supabase' && !state.storageProblem && (
           <p className="flex items-center gap-1.5 border-t border-line py-3 text-caption text-muted">
             <ShieldCheck size={14} className="shrink-0 text-good" aria-hidden="true" /> Keys and settings are saved in your Supabase project, encrypted, so they stay through restarts.
@@ -799,30 +799,28 @@ function CompareEfforts({ def, st, disabled, call, onDone }: { def: CatalogProvi
 
 function RoutingAndUsage({ state, catalog, usage, usageLocked, call, people, onRefreshUsage }: { state: AIState; catalog: CatalogProvider[]; usage: { recent: UsageEntry[]; totals: UsageTotals } | null; usageLocked: boolean; call: Call; people: boolean; onRefreshUsage: () => void }) {
   return (
-    <SettingsSection title="Routing and usage" description="Which key answers each function, and what your keys have done.">
-      <Accordion type="multiple" className="-mx-5 mt-2 border-t border-line px-5">
-        <AccordionItem value="routing" className="last:border-b-0">
-          <AccordionTrigger>Routing</AccordionTrigger>
+    <Accordion type="multiple" className="-mx-5 border-t border-line px-5">
+      <AccordionItem value="routing" className="last:border-b-0">
+        <AccordionTrigger>Routing</AccordionTrigger>
+        <AccordionContent>
+          <RoutingSummary state={state} catalog={catalog} />
+        </AccordionContent>
+      </AccordionItem>
+      <AccordionItem value="recent" className="last:border-b-0">
+        <AccordionTrigger>Recent usage</AccordionTrigger>
+        <AccordionContent>
+          <UsageList usage={usage} locked={usageLocked} catalog={catalog} onRefresh={onRefreshUsage} />
+        </AccordionContent>
+      </AccordionItem>
+      {people && (
+        <AccordionItem value="people" className="last:border-b-0">
+          <AccordionTrigger>Usage by person</AccordionTrigger>
           <AccordionContent>
-            <RoutingSummary state={state} catalog={catalog} />
+            <PeopleUsage call={call} />
           </AccordionContent>
         </AccordionItem>
-        <AccordionItem value="recent" className="last:border-b-0">
-          <AccordionTrigger>Recent usage</AccordionTrigger>
-          <AccordionContent>
-            <UsageList usage={usage} locked={usageLocked} catalog={catalog} onRefresh={onRefreshUsage} />
-          </AccordionContent>
-        </AccordionItem>
-        {people && (
-          <AccordionItem value="people" className="last:border-b-0">
-            <AccordionTrigger>Usage by person</AccordionTrigger>
-            <AccordionContent>
-              <PeopleUsage call={call} />
-            </AccordionContent>
-          </AccordionItem>
-        )}
-      </Accordion>
-    </SettingsSection>
+      )}
+    </Accordion>
   );
 }
 
@@ -1165,7 +1163,7 @@ function OwnKeyDrawer({ p, saved, call, onClose, onSaved }: { p: OwnKeyProvider;
             </a>
           }
         >
-          <input id={inputId} className="input font-mono" type="password" autoComplete="off" spellCheck={false} autoFocus placeholder={saved ? 'Paste a new key to replace it' : `Paste your ${p.label} key`} value={key} onChange={(e) => setKey(e.target.value)} aria-invalid={!!error || undefined} />
+          <input id={inputId} className="input" type="password" autoComplete="off" spellCheck={false} autoFocus placeholder={saved ? 'Paste a new key to replace it' : `Paste your ${p.label} key`} value={key} onChange={(e) => setKey(e.target.value)} aria-invalid={!!error || undefined} />
         </Field>
         {error && (
           <p role="alert" className="flex items-start gap-1.5 text-small text-bad">
@@ -1385,32 +1383,24 @@ function DailyLimitsCard({ call }: { call: Call }) {
             if (dirty) void save();
           }}
         >
-          <SettingsRow label="Requests per day" htmlFor="limit-requests">
-            <input id="limit-requests" className="input num w-full font-mono md:max-w-[160px]" type="number" min={0} max={100000} step={1} inputMode="numeric" value={reqs} disabled={!limits} onChange={(e) => setReqs(e.target.value)} aria-invalid={!valid && !!limits ? true : undefined} />
+          <SettingsRow label="Each person, per day" description={note && !error && valid ? <span role={problem ? 'alert' : undefined} className={problem ? 'text-warn' : undefined}>{note}</span> : undefined}>
+            <div className="flex w-full flex-wrap items-end gap-2 md:max-w-[420px] md:justify-end">
+              <Field label="Requests per day" htmlFor="limit-requests" className="w-[120px]">
+                <input id="limit-requests" className="input num font-mono" type="number" min={0} max={100000} step={1} inputMode="numeric" value={reqs} disabled={!limits} onChange={(e) => setReqs(e.target.value)} aria-invalid={!valid && !!limits ? true : undefined} />
+              </Field>
+              <Field label="Cost per day ($)" htmlFor="limit-usd" className="w-[120px]">
+                <input id="limit-usd" className="input num font-mono" type="number" min={0} max={10000} step={0.01} inputMode="decimal" value={usd} disabled={!limits} onChange={(e) => setUsd(e.target.value)} aria-invalid={!valid && !!limits ? true : undefined} />
+              </Field>
+              <button type="submit" className="btn btn-secondary" disabled={busy || !dirty}>
+                {busy && <Spinner size={14} />} Save limits
+              </button>
+            </div>
           </SettingsRow>
-          <SettingsRow label="Cost per day ($)" htmlFor="limit-usd">
-            <input id="limit-usd" className="input num w-full font-mono md:max-w-[160px]" type="number" min={0} max={10000} step={0.01} inputMode="decimal" value={usd} disabled={!limits} onChange={(e) => setUsd(e.target.value)} aria-invalid={!valid && !!limits ? true : undefined} />
-          </SettingsRow>
-          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-line py-4">
-            {!valid && limits && (
-              <p className="mr-auto flex items-center gap-1.5 text-caption text-bad">
-                <CircleAlert size={14} className="shrink-0" aria-hidden="true" /> Use numbers of 0 or more.
-              </p>
-            )}
-            {error && (
-              <p role="alert" className="mr-auto flex items-center gap-1.5 text-caption text-bad">
-                <CircleAlert size={14} className="shrink-0" aria-hidden="true" /> {error}
-              </p>
-            )}
-            {note && !error && valid && (
-              <p role={problem ? 'alert' : undefined} className={cn('mr-auto text-caption', problem ? 'text-warn' : 'text-muted')}>
-                {note}
-              </p>
-            )}
-            <button type="submit" className="btn btn-secondary btn-sm" disabled={busy || !dirty}>
-              {busy && <Spinner size={14} />} Save limits
-            </button>
-          </div>
+          {(!valid && limits) || error ? (
+            <p role={error ? 'alert' : undefined} className="flex items-center gap-1.5 pb-4 text-caption text-bad">
+              <CircleAlert size={14} className="shrink-0" aria-hidden="true" /> {error ?? 'Use numbers of 0 or more.'}
+            </p>
+          ) : null}
         </form>
       </SettingsSection>
     </Region>
@@ -1491,35 +1481,43 @@ function PeopleUsage({ call }: { call: Call }) {
   );
 }
 
-/** Signed in as someone other than the owner: what powers each function (from /api/health). */
+/** Signed in as someone other than the owner: what powers each function (from /api/health), behind a disclosure. */
 function OwnerManaged() {
   const ai = useRuntime((s) => s.ai);
   const byId = new Map(ai.providers.map((p) => [p.id, p]));
   return (
     <Region name="What powers each function">
-      <SettingsSection title="What powers each function" description="Only the app’s owner can change keys, models and effort. Where nothing is set up, the built-in engine writes.">
-        <div className="grid grid-cols-1 gap-x-8 gap-y-4 pb-5 pt-3 md:grid-cols-2">
-          {AI_FUNCTION_GROUPS.map((g) => (
-            <div key={g.id}>
-              <p className="mb-1 text-caption font-medium text-muted">{g.label}</p>
-              <ul className="flex flex-col divide-y divide-line">
-                {AI_FUNCTIONS.filter((f) => f.group === g.id).map((f) => {
-                  const p = byId.get(ai.routing[f.id]?.[0] ?? '');
-                  const model = p?.models[f.kind];
-                  return (
-                    <li key={f.id} className="flex items-baseline justify-between gap-3 py-1.5 text-small">
-                      <span className="text-ink-2">{f.label}</span>
-                      <span className={cn('min-w-0 truncate text-right', p ? 'text-ink' : 'text-muted')} title={p && model ? `${p.label} · ${model}` : undefined}>
-                        {p ? p.label : 'Built-in engine'}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))}
-        </div>
-      </SettingsSection>
+      <div className="card px-5">
+        <Accordion type="single" collapsible>
+          <AccordionItem value="powers" className="border-b-0">
+            <AccordionTrigger>What powers each function</AccordionTrigger>
+            <AccordionContent>
+              <p className="mb-3 text-small text-muted">Only the app’s owner can change keys, models and effort. Where nothing is set up, the built-in engine writes.</p>
+              <div className="grid grid-cols-1 gap-x-8 gap-y-4 md:grid-cols-2">
+                {AI_FUNCTION_GROUPS.map((g) => (
+                  <div key={g.id}>
+                    <p className="mb-1 text-caption font-medium text-muted">{g.label}</p>
+                    <ul className="flex flex-col divide-y divide-line">
+                      {AI_FUNCTIONS.filter((f) => f.group === g.id).map((f) => {
+                        const p = byId.get(ai.routing[f.id]?.[0] ?? '');
+                        const model = p?.models[f.kind];
+                        return (
+                          <li key={f.id} className="flex items-baseline justify-between gap-3 py-1.5 text-small">
+                            <span className="text-ink-2">{f.label}</span>
+                            <span className={cn('min-w-0 truncate text-right', p ? 'text-ink' : 'text-muted')} title={p && model ? `${p.label} · ${model}` : undefined}>
+                              {p ? p.label : 'Built-in engine'}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      </div>
     </Region>
   );
 }
