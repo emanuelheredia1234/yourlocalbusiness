@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Map as MapIcon, Pencil, Search, Store as StoreIcon, X } from 'lucide-react';
+import { Map as MapIcon, Pencil, Search, SlidersHorizontal, Store as StoreIcon, X } from 'lucide-react';
 import type { Listing, ListingKind } from '@/lib/types';
 import { cn, fmtDate } from '@/lib/utils';
 import { navigate } from '@/lib/router';
+import { useMediaQuery } from '@/lib/hooks';
 import { useRuntime } from '@/lib/platform';
 import { pushMyListings, refreshCommunity, startCommunitySync } from '@/lib/community';
 import { BUSINESS_CATEGORIES, FORMAT_LIST, FORMATS } from '@/ai/knowledge';
@@ -10,7 +11,7 @@ import { filterListings, listingCities, type ListingSort } from '@/lib/marketpla
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useTabRequest, useUI } from '@/store/ui';
 import { tabsOf } from '@/lib/pageTabs';
-import { Empty, MoreMenu, PageHeader, Segmented, Select, StatusDot, Tabs, confirmAction } from '@/components/ui/primitives';
+import { Drawer, Empty, Field, MoreMenu, PageHeader, Segmented, Select, StatusDot, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
 import { Icon } from '@/components/ui/Icon';
 import { ListingCard, ListingCover, UsMap } from './ListingParts';
 import { priceLabel } from '@/lib/listing';
@@ -57,6 +58,63 @@ export default function Marketplace() {
 
   const pills = kind === 'business' ? BUSINESS_CATEGORIES.map((c) => ({ id: c, label: c })) : kind === 'product' ? FORMAT_LIST.map((f) => ({ id: f.id as string, label: f.label })) : [...FORMAT_LIST.slice(0, 5).map((f) => ({ id: f.id as string, label: f.label })), ...BUSINESS_CATEGORIES.slice(0, 4).map((c) => ({ id: c, label: c }))];
   const shared = community === 'live';
+  const wide = useMediaQuery('(min-width: 640px)');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeFilters = (kind !== 'all' ? 1 : 0) + (sort !== 'recommended' ? 1 : 0) + (city ? 1 : 0) + (near ? 1 : 0);
+  const kindControl = (
+    <Segmented
+      options={[
+        { id: 'all', label: 'All' },
+        { id: 'product', label: 'Digital products' },
+        { id: 'business', label: 'Local & online businesses' },
+      ]}
+      value={kind}
+      onChange={(v) => {
+        setKind(v);
+        setCat('');
+        if (v === 'product') {
+          setCity('');
+          setNear(0);
+        }
+      }}
+    />
+  );
+  const sortControl = (className: string) => <Select<Sort> className={className} value={sort} onChange={setSort} options={SORTS} aria-label="Sort listings" />;
+  const cityControl = (className: string) => (
+    <Select
+      size={wide ? 'sm' : 'md'}
+      className={className}
+      value={city || '__any'}
+      onChange={(v) => {
+        const c = v === '__any' ? '' : v;
+        setCity(c);
+        if (c) {
+          setKind('business');
+          setNear(0);
+        }
+      }}
+      aria-label="Filter by city"
+      options={[{ value: '__any', label: 'Any location' }, ...cities.map((c) => ({ value: c, label: c }))]}
+    />
+  );
+  const distanceControl = (className: string) =>
+    origin ? (
+      <Select
+        size={wide ? 'sm' : 'md'}
+        className={className}
+        value={String(near)}
+        onChange={(v) => {
+          const n = Number(v);
+          setNear(n);
+          if (n) {
+            setCity('');
+            setKind('business');
+          }
+        }}
+        aria-label="Distance from your business"
+        options={[{ value: '0', label: 'Any distance' }, ...[10, 25, 50, 100, 250].map((m) => ({ value: String(m), label: `Within ${m} mi of ${project?.location?.city}` }))]}
+      />
+    ) : null;
   const filtering = !!(q.trim() || cat || city || near || kind !== 'all');
   const clearFilters = () => {
     setQ('');
@@ -83,9 +141,11 @@ export default function Marketplace() {
           </>
         }
         actions={
-          <button type="button" className="btn btn-primary max-sm:hidden" onClick={() => navigate('studio')}>
-            <StoreIcon /> List on the marketplace
-          </button>
+          wide ? (
+            <button type="button" className="btn btn-primary" onClick={() => navigate('studio')}>
+              <StoreIcon /> List on the marketplace
+            </button>
+          ) : undefined
         }
       />
 
@@ -103,27 +163,21 @@ export default function Marketplace() {
         <>
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="relative min-w-[200px] flex-1 basis-full sm:basis-60">
+              <div className={cn('relative min-w-0 flex-1', wide && 'min-w-[200px] basis-60')}>
                 <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
                 <input className="input pl-9" placeholder="Search products, businesses, cities…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search the marketplace" />
               </div>
-              <Segmented
-                options={[
-                  { id: 'all', label: 'All' },
-                  { id: 'product', label: 'Digital products' },
-                  { id: 'business', label: 'Local & online businesses' },
-                ]}
-                value={kind}
-                onChange={(v) => {
-                  setKind(v);
-                  setCat('');
-                  if (v === 'product') {
-                    setCity('');
-                    setNear(0);
-                  }
-                }}
-              />
-              <Select<Sort> className="w-[176px] sm:ml-auto" value={sort} onChange={setSort} options={SORTS} aria-label="Sort listings" />
+              {wide ? (
+                <>
+                  {kindControl}
+                  {sortControl('ml-auto w-[176px]')}
+                </>
+              ) : (
+                <button type="button" className="btn btn-secondary" onClick={() => setFiltersOpen(true)}>
+                  <SlidersHorizontal /> Filters
+                  {activeFilters > 0 && <span className="num font-mono text-caption text-muted">{activeFilters}</span>}
+                </button>
+              )}
             </div>
             <div className="scroll-fade-x -mx-4 flex gap-1.5 px-4 py-0.5 sm:-mx-1 sm:px-1">
               <button type="button" className={cn('chip', !cat && 'chip-active')} onClick={() => setCat('')}>
@@ -136,40 +190,10 @@ export default function Marketplace() {
                 </button>
               ))}
             </div>
-            {kind !== 'product' && (
+            {wide && kind !== 'product' && (
               <div className="flex flex-wrap items-center gap-2">
-                <Select
-                  size="sm"
-                  className="w-auto min-w-[160px]"
-                  value={city || '__any'}
-                  onChange={(v) => {
-                    const c = v === '__any' ? '' : v;
-                    setCity(c);
-                    if (c) {
-                      setKind('business');
-                      setNear(0);
-                    }
-                  }}
-                  aria-label="Filter by city"
-                  options={[{ value: '__any', label: 'Any location' }, ...cities.map((c) => ({ value: c, label: c }))]}
-                />
-                {origin && (
-                  <Select
-                    size="sm"
-                    className="w-auto min-w-[160px]"
-                    value={String(near)}
-                    onChange={(v) => {
-                      const n = Number(v);
-                      setNear(n);
-                      if (n) {
-                        setCity('');
-                        setKind('business');
-                      }
-                    }}
-                    aria-label="Distance from your business"
-                    options={[{ value: '0', label: 'Any distance' }, ...[10, 25, 50, 100, 250].map((m) => ({ value: String(m), label: `Within ${m} mi of ${project?.location?.city}` }))]}
-                  />
-                )}
+                {cityControl('w-auto min-w-[160px]')}
+                {distanceControl('w-auto min-w-[160px]')}
                 <button type="button" className={cn('chip', showMap && 'chip-active')} onClick={() => setShowMap((m) => !m)} aria-pressed={showMap}>
                   <MapIcon /> Map
                 </button>
@@ -239,6 +263,38 @@ export default function Marketplace() {
       )}
 
       {tab === 'mine' && <MyListings />}
+
+      {!wide && (
+        <Drawer
+          open={filtersOpen}
+          onClose={() => setFiltersOpen(false)}
+          title="Filters"
+          footer={
+            <>
+              <button type="button" className="btn btn-ghost btn-sm mr-auto" onClick={clearFilters} disabled={!filtering}>
+                Clear filters
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setFiltersOpen(false)}>
+                Show {filtered.length} listing{filtered.length === 1 ? '' : 's'}
+              </button>
+            </>
+          }
+        >
+          <div className="flex flex-col gap-4">
+            <Field label="Show">{kindControl}</Field>
+            <Field label="Sort">{sortControl('w-full')}</Field>
+            {kind !== 'product' && (
+              <Field label="Location">
+                <div className="flex flex-col gap-2">
+                  {cityControl('w-full')}
+                  {distanceControl('w-full')}
+                </div>
+              </Field>
+            )}
+            {kind !== 'product' && <Toggle checked={showMap} onChange={setShowMap} label="Show the map" />}
+          </div>
+        </Drawer>
+      )}
     </div>
   );
 }

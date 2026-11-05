@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { CalendarClock, CalendarDays, CheckCheck, ChevronLeft, ChevronRight, FileEdit, Pencil, Plus, Search, Send, SlidersHorizontal, Users } from 'lucide-react';
-import type { Post, PostFormat, PostPlatform, PostType } from '@/lib/types';
+import type { Brand, Post, PostFormat, PostPlatform, PostType } from '@/lib/types';
 import { addDays, cn, combineDateTime, fmtDate, fmtDateTime, isoToDateStr, isoToTime, todayStr, WEEKDAYS, weekdayIndex } from '@/lib/utils';
 import { PLATFORMS, POST_PLATFORMS, POST_TYPES } from '@/ai/knowledge';
 import { useMediaQuery, useNow } from '@/lib/hooks';
@@ -267,25 +267,23 @@ function Filters({ q, setQ, platform, setPlatform, type, setType, format, setFor
 /** Planned posts whose time has passed: the one note on the page that asks for something. */
 function DueCallout({ posts, offer }: { posts: Post[]; offer: boolean }) {
   const now = useNow(60_000);
+  const wide = useMediaQuery('(min-width: 640px)');
   const due = posts.filter((p) => isDue(p, now) && notSent(p));
   if (!due.length) return null;
   // a failed try may still have gone out: Manus doesn't look for an earlier copy before posting
   const failed = due.filter(failedOnItsNetwork).length;
   const many = due.length > 1;
+  const action = offer ? (
+    <button type="button" className="btn btn-secondary btn-xs" onClick={() => useManusPost.getState().open(due.map((p) => p.id))}>
+      <Send /> Post {many ? `${due.length} due` : 'it'} with Manus
+    </button>
+  ) : undefined;
   return (
-    <Callout
-      tone="warn"
-      className="mb-5"
-      action={
-        offer ? (
-          <button type="button" className="btn btn-secondary btn-xs" onClick={() => useManusPost.getState().open(due.map((p) => p.id))}>
-            <Send /> Post {many ? `${due.length} due` : 'it'} with Manus
-          </button>
-        ) : undefined
-      }
-    >
+    // on phones the button goes under the words, so they keep the callout's width
+    <Callout tone="warn" className="mb-5" action={wide ? action : undefined}>
       {due.length} planned post{many ? 's are' : ' is'} past {many ? 'their' : 'its'} time and not posted. {offer ? `Post ${many ? 'them' : 'it'} with Manus, or post ${many ? 'them' : 'it'} yourself and mark ${many ? 'them' : 'it'} posted.` : `Post ${many ? 'them' : 'it'} yourself and mark ${many ? 'them' : 'it'} posted.`}
       {failed > 0 && ` ${failed} failed last time and may already be out: check before sending ${failed === 1 ? 'it' : 'them'} again.`}
+      {!wide && action && <span className="mt-2 flex">{action}</span>}
     </Callout>
   );
 }
@@ -572,24 +570,24 @@ function Agenda({ posts }: { posts: Post[] }) {
           </h3>
           <ul className="flex flex-col">
             {list.map((p) => (
-              <li key={p.id}>
-                <button type="button" className="-mx-2 flex w-[calc(100%+16px)] min-w-0 items-center gap-3 rounded-md px-2 py-2 text-left transition-colors duration-120 hover:bg-surface-2" onClick={() => openEditor(p.id)} aria-label={`Edit ${p.headline}, ${PLATFORMS[p.platform].label} at ${timeOf(p.scheduledAt)}`}>
-                  <span className="w-12 shrink-0 overflow-hidden rounded-md">
-                    <PostVisual style={p.style} headline={p.headline} brand={project.brand} media={p.media} storyboard={p.storyboard} aspect="1/1" className="!rounded-none" />
+              <li key={p.id} className="relative -mx-2 flex min-w-0 items-center gap-3 rounded-md px-2 py-2 transition-colors duration-120 hover:bg-surface-2">
+                <span className="w-12 shrink-0 overflow-hidden rounded-md">
+                  <PostVisual style={p.style} headline={p.headline} brand={project.brand} media={p.media} storyboard={p.storyboard} aspect="1/1" className="!rounded-none" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <button type="button" className="block w-full truncate text-left text-ui text-ink after:absolute after:inset-0 after:rounded-md" onClick={() => openEditor(p.id)} aria-label={`Edit ${p.headline}, ${PLATFORMS[p.platform].label} at ${timeOf(p.scheduledAt)}`}>
+                    {p.headline}
+                  </button>
+                  <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-caption text-muted">
+                    <PlatformMark platform={p.platform} size={12} />
+                    <span className="truncate">{networkLabel(p.platform)}</span>
+                    <span aria-hidden="true">·</span>
+                    <span className="num shrink-0 font-mono">{timeOf(p.scheduledAt)}</span>
                   </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-ui text-ink">{p.headline}</span>
-                    <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-caption text-muted">
-                      <PlatformMark platform={p.platform} size={12} />
-                      <span className="truncate">{networkLabel(p.platform)}</span>
-                      <span aria-hidden="true">·</span>
-                      <span className="num shrink-0 font-mono">{timeOf(p.scheduledAt)}</span>
-                    </span>
-                  </span>
-                  <span className="shrink-0">
-                    <RowState post={p} now={now} />
-                  </span>
-                </button>
+                </span>
+                <span className="shrink-0">
+                  <RowState post={p} now={now} />
+                </span>
               </li>
             ))}
           </ul>
@@ -623,6 +621,18 @@ function QueueList({ posts }: { posts: Post[] }) {
   );
 }
 
+/**
+ * A row's 56px thumbnail. The row's title is its button; the picture opens the post too, for the mouse,
+ * without being a button itself (a video's visual has a play button of its own).
+ */
+function Thumb({ post: p, brand, onOpen }: { post: Post; brand: Brand; onOpen: () => void }) {
+  return (
+    <div className="w-14 shrink-0 cursor-pointer overflow-hidden rounded-md" onClick={onOpen}>
+      <PostVisual style={p.style} headline={p.headline} brand={brand} media={p.media} storyboard={p.storyboard} aspect="1/1" className="!rounded-none" />
+    </div>
+  );
+}
+
 /** Platform, type and look of a post as one muted line. */
 function PostMeta({ post, children }: { post: Post; children?: ReactNode }) {
   return (
@@ -649,11 +659,9 @@ function QueueRow({ post: p }: { post: Post }) {
   return (
     <li className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center">
       <div className="flex min-w-0 flex-1 items-start gap-3">
-        <button type="button" className="w-14 shrink-0 overflow-hidden rounded-md" onClick={() => openEditor(p.id)} aria-label={`Edit ${p.headline}`}>
-          <PostVisual style={p.style} headline={p.headline} brand={project.brand} media={p.media} storyboard={p.storyboard} aspect="1/1" className="!rounded-none" />
-        </button>
+        <Thumb post={p} brand={project.brand} onOpen={() => openEditor(p.id)} />
         <div className="min-w-0 flex-1">
-          <button type="button" className="block max-w-full truncate text-left text-ui text-ink hover:underline" onClick={() => openEditor(p.id)}>
+          <button type="button" className="block max-w-full truncate text-left text-ui text-ink hover:underline" onClick={() => openEditor(p.id)} aria-label={`Edit ${p.headline}`}>
             {p.headline}
           </button>
           <p className="truncate text-small text-muted">{p.caption.split('\n')[0]}</p>
@@ -710,11 +718,9 @@ function PublishedList({ posts }: { posts: Post[] }) {
       <ul className="card divide-y divide-line">
         {posts.slice(0, 60).map((p) => (
           <li key={p.id} className="flex items-start gap-3 px-4 py-3">
-            <button type="button" className="w-14 shrink-0 overflow-hidden rounded-md" onClick={() => openEditor(p.id)} aria-label={`Open ${p.headline}`}>
-              <PostVisual style={p.style} headline={p.headline} brand={project.brand} media={p.media} storyboard={p.storyboard} aspect="1/1" className="!rounded-none" />
-            </button>
+            <Thumb post={p} brand={project.brand} onOpen={() => openEditor(p.id)} />
             <div className="min-w-0 flex-1">
-              <button type="button" className="block max-w-full truncate text-left text-ui text-ink hover:underline" onClick={() => openEditor(p.id)}>
+              <button type="button" className="block max-w-full truncate text-left text-ui text-ink hover:underline" onClick={() => openEditor(p.id)} aria-label={`Open ${p.headline}`}>
                 {p.headline}
               </button>
               <p className="truncate text-small text-muted">{p.caption.split('\n')[0]}</p>

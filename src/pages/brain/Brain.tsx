@@ -9,6 +9,7 @@ import { providerLabel } from '@/ai/engine';
 import { metaDetails } from '@/ai/meta';
 import { skillTestTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
+import { useMediaQuery } from '@/lib/hooks';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useTabRequest } from '@/store/ui';
 import { tabsOf } from '@/lib/pageTabs';
@@ -45,6 +46,15 @@ export default function Brain() {
     setEditing(s);
     setEditorOpen(true);
   };
+  const phone = useMediaQuery('(max-width: 639px)');
+  const actions = (
+    <>
+      <Toggle checked={useBrain} onChange={(v) => updateSettings((s) => ({ ...s, ai: { ...s.ai, useBrain: v } }))} label={useBrain ? 'Brain on' : 'Brain off'} />
+      <button type="button" className={cn('btn btn-primary ml-2', phone && 'btn-sm ml-auto')} onClick={() => openEditor(null)}>
+        <Plus /> New skill
+      </button>
+    </>
+  );
 
   return (
     <div>
@@ -52,14 +62,8 @@ export default function Brain() {
         className="mb-4"
         title="Brain"
         description="What the AI reads before it writes: your voice, customers, rules and facts."
-        actions={
-          <>
-            <Toggle checked={useBrain} onChange={(v) => updateSettings((s) => ({ ...s, ai: { ...s.ai, useBrain: v } }))} label={useBrain ? 'Brain on' : 'Brain off'} />
-            <button type="button" className="btn btn-primary ml-2" onClick={() => openEditor(null)}>
-              <Plus /> New skill
-            </button>
-          </>
-        }
+        meta={phone ? <span className="flex w-full items-center">{actions}</span> : undefined}
+        actions={phone ? undefined : actions}
       />
 
       <Tabs<Tab>

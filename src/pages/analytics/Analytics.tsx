@@ -6,6 +6,7 @@ import { PLATFORMS, POST_TYPE_MAP } from '@/ai/knowledge';
 import { countBy, postedSince, useKpis } from '@/lib/kpis';
 import { leadTime, seoPageIdOf } from '@/lib/leads';
 import { navigate } from '@/lib/router';
+import { useMediaQuery } from '@/lib/hooks';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { useLeads } from '@/store/leads';
 import { useUI } from '@/store/ui';
@@ -54,32 +55,33 @@ export default function Analytics() {
   const pageId = seoPageIdOf(project.id);
   const leads = recentLeads?.filter((l) => l.pageId === pageId && leadTime(l) >= since).length ?? 0;
   const span = `${days} days`;
+  const wide = useMediaQuery('(min-width: 768px)');
+  const rangeControl = started ? (
+    <Segmented
+      size="sm"
+      value={range}
+      onChange={setRange}
+      options={[
+        { id: '7', label: '7 days' },
+        { id: '30', label: '30 days' },
+        { id: '90', label: '90 days' },
+      ]}
+    />
+  ) : null;
 
   const header = (
     <PageHeader
       title="Analytics"
       meta={
         <>
+          {!wide && rangeControl && <span className="mr-2">{rangeControl}</span>}
           <span>Real counts only</span>
           <InfoTip title="What’s counted" label="What’s counted">
             Posts that went out (Manus reported them posted, or you marked them posted), posts on your calendar, new leads from your page’s form, and what you made with AI. Likes, views, clicks and followers live on each network, and sales on your own checkout: this app doesn’t read them, so it doesn’t show or guess them.
           </InfoTip>
         </>
       }
-      actions={
-        started ? (
-          <Segmented
-            size="sm"
-            value={range}
-            onChange={setRange}
-            options={[
-              { id: '7', label: '7 days' },
-              { id: '30', label: '30 days' },
-              { id: '90', label: '90 days' },
-            ]}
-          />
-        ) : undefined
-      }
+      actions={wide && rangeControl ? rangeControl : undefined}
     />
   );
 
@@ -197,19 +199,21 @@ function PostedTable({ posts, span }: { posts: ReturnType<typeof postedSince>; s
               <th className="hidden w-[150px] px-2 py-2 font-medium md:table-cell">Type</th>
               <th className="hidden w-[170px] px-2 py-2 font-medium sm:table-cell">Posted</th>
               <th className="hidden w-[90px] px-2 py-2 font-medium md:table-cell">By</th>
-              <th className="w-[150px] px-4 py-2 font-medium sm:px-5">Link</th>
+              <th className="hidden w-[150px] px-4 py-2 font-medium sm:table-cell sm:px-5">Link</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
             {posts.slice(0, 60).map((post) => (
               <tr key={post.id} className="transition-colors duration-120 hover:bg-surface-2">
                 <td className="px-4 py-2 sm:px-5">
-                  <button type="button" className="flex w-full min-w-0 items-center gap-3 text-left" onClick={() => openEditor(post.id)}>
-                    <span className="w-10 shrink-0 overflow-hidden rounded-md">
+                  <div className="flex w-full min-w-0 items-center gap-3">
+                    <span className="w-10 shrink-0 cursor-pointer overflow-hidden rounded-md" onClick={() => openEditor(post.id)}>
                       <PostVisual style={post.style} headline={post.headline} brand={project.brand} media={post.media} storyboard={post.storyboard} aspect="1/1" className="!rounded-none" />
                     </span>
                     <span className="min-w-0">
-                      <span className="block truncate text-ui text-ink">{post.headline}</span>
+                      <button type="button" className="block max-w-full truncate text-left text-ui text-ink hover:underline" onClick={() => openEditor(post.id)}>
+                        {post.headline}
+                      </button>
                       <span className="flex min-w-0 items-center gap-1.5 text-caption text-muted">
                         <PlatformMark platform={post.platform} size={12} />
                         <span className="truncate">{PLATFORMS[post.platform].label}</span>
@@ -217,14 +221,19 @@ function PostedTable({ posts, span }: { posts: ReturnType<typeof postedSince>; s
                         <span className="num truncate font-mono sm:hidden">· {post.publishedAt ? fmtDate(post.publishedAt, { month: 'short', day: 'numeric' }) : ''}</span>
                       </span>
                     </span>
-                  </button>
+                  </div>
+                  {post.postUrl && (
+                    <span className="mt-1 block pl-[52px] text-small sm:hidden">
+                      <PostLink post={post} />
+                    </span>
+                  )}
                 </td>
                 <td className="hidden px-2 py-2 md:table-cell">
                   <PostTypeTag type={post.postType} />
                 </td>
                 <td className="num hidden truncate px-2 py-2 font-mono text-caption text-muted sm:table-cell">{post.publishedAt ? fmtDateTime(post.publishedAt) : ''}</td>
                 <td className="hidden px-2 py-2 text-muted md:table-cell">{post.publishedBy === 'manus' ? 'Manus' : 'You'}</td>
-                <td className="truncate px-4 py-2 sm:px-5">{post.postUrl ? <PostLink post={post} /> : <span className="text-faint">–</span>}</td>
+                <td className="hidden truncate px-4 py-2 sm:table-cell sm:px-5">{post.postUrl ? <PostLink post={post} /> : <span className="text-faint">–</span>}</td>
               </tr>
             ))}
           </tbody>
