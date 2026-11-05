@@ -525,7 +525,7 @@ export function voiceSummary(r: VoiceReport): string {
 // ───────────── the task ─────────────
 
 /**
- * Hand the profile to Manus: one read-only task. It runs on the Manus key's Social posting power (its work on
+ * Hand the profile to Manus: one read-only task. It runs on the Manus key's Facebook groups posting power (its work on
  * your social accounts), so it's ready wherever posting with Manus is. One-shot: never retried.
  */
 export async function startVoiceRead(o: { platform: SocialPlatform; profile: string; brandName: string; replace?: boolean }): Promise<VoiceRead> {

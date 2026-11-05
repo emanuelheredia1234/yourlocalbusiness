@@ -25,7 +25,7 @@ import { VOICE_POSTS, profileTarget, sameProfile, voiceNetworkName, voiceSkillNa
 import { brandKitTask, productIdeasTask, skillTestTask } from '@/ai/tasks';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { isStartingVoiceRead, profileLabel, readVoice, setVoiceLearn, voiceOf, voiceReadRunning, voiceSkill, voiceSkillEdited } from '@/store/voice';
-import { manusSetupHint } from '@/components/posts/ManusPost';
+import { manusSetupHint } from '@/components/posts/manusShared';
 import { voiceErrorCopy } from '@/components/brand/SocialVoice';
 import { runAITask } from '../aiTask';
 import { downloadButton, fileButton, noteInChat } from '../buttons';

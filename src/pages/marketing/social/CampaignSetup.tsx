@@ -154,7 +154,7 @@ export function CampaignSetup({ project }: { project: Project }) {
         </div>
       </SetupSection>
 
-      <SetupSection label="Platforms and accounts" title="Platforms" description="Where this campaign posts, and your handle on each. Manus posts as you, or you post yourself.">
+      <SetupSection label="Platforms and accounts" title="Platforms" description="Where this campaign posts, and your handle on each. Post from the app when your account is connected, or post it yourself.">
         <ul>
           {POST_PLATFORMS.map((p) => (
             <PlatformRow key={p} platform={p} on={cfg.platforms.includes(p)} handle={project.brand.socials[p] ?? ''} onToggle={() => set({ platforms: toggleIn<PostPlatform>(cfg.platforms, p) })} onHandle={(v) => updateBrand({ socials: { ...project.brand.socials, [p]: v } })} />

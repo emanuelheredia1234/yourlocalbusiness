@@ -143,7 +143,7 @@ export interface AIServerState {
   providers: AIServerProvider[];
   /** function id → the keys that power it, in priority order */
   routing: Record<string, string[]>;
-  /** whether Manus can post for the signed-in person, and if not, why */
+  /** whether Manus can post to Facebook groups for the signed-in person, and if not, why */
   posting?: { ready: boolean; reason: 'ok' | 'no_key' | 'not_ticked' | 'own_key_needed' };
   /** whether Manus and Viktor (through Slack) can build and chat for this person, and if not, why (src/ai/agents/who.ts) */
   agents?: AgentsHealth;
@@ -151,7 +151,7 @@ export interface AIServerState {
 
 export const NO_AI_SERVER: AIServerState = { reachable: false, ready: false, providers: [], routing: {} };
 
-/** The Zapier connector as this page sees it (for Manus images and social posts). */
+/** The Zapier connector as this page sees it (for Manus images and Facebook groups posts). */
 export type ZapierStatus = 'checking' | 'ready' | 'needs_reauth' | 'missing' | 'unavailable';
 
 /** What Claude in claude.ai takes with one request: how many images, how large, which types. */

@@ -22,7 +22,7 @@
     { "id": "photos", "label": "Photos", "group": "media", "kind": "image", "desc": "AI photos for posts and listings.", "tasks": [] },
     { "id": "videos", "label": "Videos", "group": "media", "kind": "video", "desc": "AI videos for posts and product demos.", "tasks": [] },
     { "id": "marketResearch", "label": "Deep research (Manus)", "group": "agents", "kind": "agent", "desc": "For Strategy: Manus opens public web pages about your market and reports what each one says, with its link. Uses Manus credits and takes several minutes.", "tasks": [] },
-    { "id": "facebook", "label": "Social posting", "group": "agents", "kind": "agent", "desc": "An agent posts on your Facebook, Instagram, TikTok, LinkedIn and X accounts (right away or scheduled), with the post’s image or video.", "tasks": [] },
+    { "id": "facebook", "label": "Facebook groups posting", "group": "agents", "kind": "agent", "desc": "Manus shares a Facebook post in the groups you list, signed in as you, and reads your profiles to learn your brand voice. Posts on your Pages and profiles go out through your connected accounts instead.", "tasks": [] },
     { "id": "build", "label": "Building pages & assets", "group": "agents", "kind": "agent", "desc": "Manus builds your SEO page or a Code & assets asset as one HTML file, from your website, your words and your images. You choose each time; it uses Manus credits.", "tasks": [] },
     { "id": "agentchat", "label": "Chat with Manus", "group": "agents", "kind": "agent", "desc": "Talk to Manus from the assistant chat: your messages go to one Manus task as you type them, and its replies and files come back to the chat. Uses Manus credits.", "tasks": [] }
   ]

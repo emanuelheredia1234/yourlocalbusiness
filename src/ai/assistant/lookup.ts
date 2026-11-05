@@ -27,7 +27,7 @@ export function findPost(id: string): Post | undefined {
 /** What a validate hook says about an id that isn't one of this project's posts. */
 export const missingPost = (id: string) => `There’s no post with id "${id}" in this project. Use list_posts to find it.`;
 
-/** When a post is (posted: when it went out; otherwise when it's planned, or when Manus scheduled it). */
+/** When a post is (posted: when it went out; otherwise when it's planned, or when Manus scheduled it, older posts). */
 export const postWhen = (p: Post) => (p.status === 'published' ? p.publishedAt ?? p.scheduledAt : goesOutAt(p));
 
 /** A post in a few fields, as list_posts returns it (use the same shape in other tools' results). */
@@ -43,6 +43,6 @@ export function postSummary(p: Post, now = Date.now()) {
     headline: clip(p.headline, 90),
     caption: clip(p.caption, 90),
     media: p.media ? p.media.kind : null,
-    ...(p.external ? { manus: p.external.state } : {}),
+    ...(p.external ? { sent: { by: p.external.via === 'api' ? 'the app' : 'Manus (earlier)', state: p.external.state } } : {}),
   };
 }

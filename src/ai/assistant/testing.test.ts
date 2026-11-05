@@ -35,10 +35,10 @@ const removePosts = defineTool({
 const postWithManus = defineTool({
   name: 'post_now',
   class: 'Pub',
-  summary: 'Open “Post with Manus” for posts.',
+  summary: 'Open a post’s posting window.',
   args: { ids: arg.array(arg.string(), { min: 1, max: 20 }) },
   validate: ({ ids }) => ids.map((id) => (findPost(id) ? '' : missingPost(id))).find(Boolean) || null,
-  window: ({ ids }) => ({ kind: 'manus-post', postIds: ids }),
+  window: ({ ids }) => ({ kind: 'post-now', postId: ids[0] }),
 });
 const manusPhoto = defineTool({
   name: 'manus_photo',
@@ -78,7 +78,7 @@ describe('testing tools, one class at a time', () => {
 
   it('Pub: only the window opens', async () => {
     expect(await runTool('post_now', { ids: ['post_b'] }, { tools })).toMatchObject({ ok: true, status: 'opened' });
-    expect(host.calls.windows).toEqual([{ kind: 'manus-post', postIds: ['post_b'] }]);
+    expect(host.calls.windows).toEqual([{ kind: 'post-now', postId: 'post_b' }]);
   });
 
   it('P-media (Manus): waits for the card in the chat', async () => {

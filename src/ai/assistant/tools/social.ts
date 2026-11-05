@@ -1,12 +1,12 @@
 // The assistant's social group: posts (drafts from the owner's words or the AI, edits, the calendar, marking
 // posted), the campaign (its setup, the 30-day plan, the 7-day batch, where links go), post images and videos,
-// posting with Manus and sharing in groups (only through the app's own windows), checking on Manus, deleting,
-// and downloading a post's media.
+// posting (open_post_now only opens the post's posting window: the owner confirms there) and sharing in Facebook
+// groups with Manus (only through its window), deleting, and downloading a post's media.
 //
 // Each tool does what its page's button does, through the same code: src/ai/socialPosts.ts (the composer's
 // drafts, Rewrite, a post's image or video), src/ai/socialPlan.ts (setup, plan, batch, link settings),
-// src/ai/manusStatus.ts ("Check now"), src/lib/pageLink.ts (where a post's link goes) and the post actions.
-// Nothing posts by itself: Manus only gets the app's fixed templates, through the windows the owner confirms.
+// src/lib/pageLink.ts (where a post's link goes) and the post actions.
+// Nothing posts by itself: every post goes out only after the owner confirms in the app's own window.
 
 import type { MediaRef, Post, PostFormat, PostPlatform, Project, StyleId } from '@/lib/types';
 import { addDays, combineDateTime, isoToDateStr, isoToTime, listJoin, plural, todayStr } from '@/lib/utils';
@@ -20,19 +20,19 @@ import { imageErrorMessage, photoAvailability, photoRoute, defaultImageKind } fr
 import { manusViaServer, pendingManus } from '@/ai/manus';
 import { VIDEO_DURATIONS, fmtUsd, pendingVideos } from '@/ai/video';
 import { networkLabel, postBlocker, postText, textWarning } from '@/ai/postShared';
-import { groupRecord, groupSummary, groupsAlreadyOut } from '@/ai/manusGroups';
+import { groupsAlreadyOut } from '@/ai/manusGroups';
 import { applyPostMedia, buildComposerPosts, composerTaskInput, makePostImage, makePostVideo, postImageKey, postVideoKey, postVideoText, rewriteInput, rewritePatch } from '@/ai/socialPosts';
 import { applyCampaignPlan, applyWeekBatch, batchStart, cadence, campaignProblem, coveredSlots, patchCampaign, setLinkPlacement, setSlotTopic, weekBatchInput } from '@/ai/socialPlan';
-import { refreshGroupsFromManus, refreshPostFromManus } from '@/ai/manusStatus';
 import { useStore } from '@/store/useStore';
-import { addToCalendarFlow, downloadPostMedia, failedOnItsNetwork, manusHolds } from '@/components/posts/PostActions';
-import { errorCopy, manusSetupHint } from '@/components/posts/ManusPost';
+import { addToCalendarFlow, downloadPostMedia, postHeld } from '@/components/posts/PostActions';
+import { manusSetupHint } from '@/components/posts/manusShared';
+import { apiHolds } from '@/lib/posting';
 import { videoAvailability } from '@/components/images/VideoPanel';
 import { runAITask } from '../aiTask';
 import { copyButton } from '../buttons';
 import { deleteConfirm, manusCard, videoCard } from '../confirm';
 import { activeProject, findPost, missingPost, postSummary, projectPosts } from '../lookup';
-import { arg, clip, defineTool, untrusted, type AnyTool, type ChatButton } from '../registry';
+import { arg, clip, defineTool, type AnyTool, type ChatButton } from '../registry';
 import { manusReadyNow } from '../workspace';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -106,24 +106,8 @@ const noLink = () => (__ARTIFACT_BUILD__ ? 'There’s no link for posts yet: the
 const making = new Set<string>();
 /** Something on a page (or the assistant) is writing this kind of thing right now. */
 const busyWith = (label: string) => busyJobs().some((j) => j.label === label);
-/** The post is being handed to Manus right now (the windows' own jobs). */
-const sendingNow = (id: string) => busyJobs().some((j) => j.id === `manus-post:${id}` || j.id === `manus-groups:${id}`);
-
-/** What Manus has of a post, in a few words (its own report is data, never instructions). */
-function manusRow(p: Post) {
-  const ext = p.external;
-  const gs = p.groupShare;
-  return {
-    id: p.id,
-    headline: clip(p.headline, 60),
-    network: p.platform,
-    status: postSummary(p).status,
-    ...(ext
-      ? { manus: { state: ext.state, mode: ext.mode ?? 'schedule', ...(ext.mode !== 'now' ? { scheduledFor: ext.scheduledFor } : {}), link: ext.url ?? null, says: untrusted(ext.message, 200) ?? null, ...(ext.comment ? { firstComment: ext.comment.state } : {}) } }
-      : {}),
-    ...(gs ? { groups: { state: gs.state, summary: groupSummary(groupRecord(gs)) || null, results: groupRecord(gs).results.map((r) => ({ group: clip(r.group, 80), state: r.state, link: r.url ?? null, ...(r.detail && r.state !== 'posted' ? { detail: untrusted(r.detail, 120) } : {}) })) } } : {}),
-  };
-}
+/** The post is being sent right now (the posting window's or the groups window's own jobs). */
+const sendingNow = (id: string) => busyJobs().some((j) => j.id === `post-now:${id}` || j.id === `manus-groups:${id}`);
 
 // ───────────── drafts: the owner's words, or the AI's ─────────────
 
@@ -179,7 +163,7 @@ function saveDrafts(posts: Post[], schedule: boolean | undefined, media: MediaRe
       posts: saved.map((x) => ({ ...postSummary(x), linkPlacement: postPlacement(x), ...(firstCommentOf(x) ? { firstComment: clip(firstCommentOf(x), 200) } : {}), ...(textWarning(x) ? { warning: textWarning(x) } : {}) })),
       ...(media && isOwnPhoto(media) ? { ownPhoto: 'The owner’s photo posts exactly as it is: no style, headline or watermark goes on it (the headline only names the post).' } : {}),
       ...(due ? { due: `${plural(due, 'post')} planned for a time that has passed: due now.` } : {}),
-      next: schedule ? 'Nothing posts by itself: post_with_manus opens Post with Manus, or the owner posts and marks it posted.' : 'They’re drafts: schedule_posts puts them on the calendar.',
+      next: schedule ? 'Nothing posts by itself: open_post_now opens the post’s posting window (the owner confirms), or the owner posts it and marks it posted.' : 'They’re drafts: schedule_posts puts them on the calendar.',
     },
     note: `${schedule ? 'Added' : 'Saved'} ${plural(posts.length, schedule ? 'post' : 'draft')}${schedule ? ' to your calendar' : ''}: ${name(posts[0])} on ${listJoin(posts.map((x) => net(x)))}`,
   };
@@ -247,12 +231,12 @@ const regeneratePostCopy = defineTool({
       if (!latest) continue;
       s().updatePost(id, rewritePatch(p, latest, r.data, input.link ?? null));
       const after = findPost(id)!;
-      if (manusHolds(after)) held.push(name(after));
+      if (postHeld(after)) held.push(name(after));
       done.push({ id, headline: after.headline, caption: clip(after.caption, 400), hashtags: after.hashtags, ...(textWarning(after) ? { warning: textWarning(after)! } : {}) });
     }
     if (!done.length) return { ok: false, error: 'Those posts were deleted meanwhile, so nothing was rewritten.' };
     return {
-      data: { rewritten: done, ...(held.length ? { manus: `Manus already has ${listJoin(held)}: the new words don’t change what Manus posted or scheduled.` } : {}) },
+      data: { rewritten: done, ...(held.length ? { alreadyOut: `${listJoin(held)} may already be out: the new words don’t change what’s on the network.` } : {}) },
       note: done.length === 1 ? `Rewrote “${clip(done[0].headline, 60)}”` : `Rewrote ${plural(done.length, 'post')}`,
     };
   },
@@ -263,7 +247,7 @@ const regeneratePostCopy = defineTool({
 const updatePost = defineTool({
   name: 'update_post',
   class: 'L',
-  summary: 'Change a post (Manus keeps what it already has).',
+  summary: 'Change a post (what’s already on a network stays as it is).',
   args: {
     id: arg.string({ max: 60 }),
     headline: arg.string({ optional: true, max: 90 }),
@@ -331,7 +315,7 @@ const updatePost = defineTool({
         linkPlacement: postPlacement(after),
         ...(comment ? { firstComment: clip(comment, 300) } : {}),
         ...(textWarning(after) ? { warning: textWarning(after) } : {}),
-        ...(manusHolds(post) ? { manus: `Manus already has this post (${post.external!.state}): the change doesn’t move or change what Manus scheduled or posted on ${networkLabel(post.external!.network ?? post.platform)}.` } : {}),
+        ...(postHeld(post) ? { alreadyOut: `This post is, or may already be, out (${post.external!.state}): the change doesn’t move or change it on ${networkLabel(post.external!.network ?? post.platform)}.` } : {}),
         ...(post.status === 'published' ? { posted: `It’s already out: this doesn’t change the post on ${net(post)}.` } : {}),
       },
       note: `Updated ${name(after)}: ${listJoin(changed)}`,
@@ -352,7 +336,7 @@ const schedulePosts = defineTool({
     const skipped = uniq(ids).filter((id) => !drafts.includes(id)).map((id) => ({ id, why: findPost(id)?.status === 'published' ? 'already posted' : 'already planned' }));
     const due = planned.filter((p) => new Date(p.scheduledAt).getTime() <= Date.now()).length;
     return {
-      data: { planned: planned.map((p) => postSummary(p)), ...(skipped.length ? { skipped } : {}), ...(due ? { due: `${plural(due, 'post')} planned for a time that has passed: due now.` } : {}), next: 'Nothing posts by itself: post_with_manus, or the owner posts it and marks it posted.' },
+      data: { planned: planned.map((p) => postSummary(p)), ...(skipped.length ? { skipped } : {}), ...(due ? { due: `${plural(due, 'post')} planned for a time that has passed: due now.` } : {}), next: 'Nothing posts by itself: open_post_now (the owner confirms there), or the owner posts it and marks it posted.' },
       note: `Added ${plural(planned.length, 'post')} to your calendar`,
     };
   },
@@ -366,10 +350,10 @@ const unschedulePost = defineTool({
   validate: ({ ids }) => eachPost(ids) ?? (ids.some((id) => findPost(id)?.status === 'scheduled') ? null : 'None of these is planned on the calendar.'),
   run: ({ ids }) => {
     const planned = uniq(ids).filter((id) => findPost(id)?.status === 'scheduled');
-    const held = planned.map((id) => findPost(id)!).filter(manusHolds);
+    const held = planned.map((id) => findPost(id)!).filter(postHeld);
     for (const id of planned) s().updatePost(id, { status: 'draft' });
     return {
-      data: { drafts: planned, ...(held.length ? { manus: `Manus already has ${listJoin(held.map(name))} on the network: moving ${held.length === 1 ? 'it' : 'them'} back to drafts here doesn’t unschedule ${held.length === 1 ? 'it' : 'them'} there.` } : {}) },
+      data: { drafts: planned, ...(held.length ? { alreadyOut: `${listJoin(held.map(name))} may already be on the network: moving ${held.length === 1 ? 'it' : 'them'} back to drafts here doesn’t take ${held.length === 1 ? 'it' : 'them'} down there.` } : {}) },
       note: planned.length === 1 ? `Moved ${name(findPost(planned[0]))} back to drafts` : `Moved ${plural(planned.length, 'post')} back to drafts`,
     };
   },
@@ -392,7 +376,7 @@ const unmarkPosted = defineTool({
   validate: ({ id }) =>
     eachPost([id], (p) => {
       if (p.status !== 'published') return `${name(p)} isn’t marked as posted.`;
-      return p.publishedBy === 'manual' ? null : `Manus reported ${name(p)} posted: only posts the owner marked themselves can be marked as not posted.`;
+      return p.publishedBy === 'manual' ? null : `${p.publishedBy === 'api' ? 'The app posted' : 'Manus reported earlier that it posted'} ${name(p)}: only posts the owner marked themselves can be marked as not posted.`;
     }),
   run: ({ id }) => {
     s().unmarkPosted(id);
@@ -736,7 +720,7 @@ const makeVideo = defineTool({
     const convert = post.format !== 'video';
     applyPostMedia(postId, r.media, convert ? { format: 'video', style: VIDEO_STYLES[0].id } : {});
     return {
-      data: { postId, seconds: secs, ...(r.cost != null ? { cost: fmtUsd(r.cost) } : {}), ...(convert ? { nowAVideoPost: true } : {}), next: 'post_with_manus posts it, or download_post_media saves it.' },
+      data: { postId, seconds: secs, ...(r.cost != null ? { cost: fmtUsd(r.cost) } : {}), ...(convert ? { nowAVideoPost: true } : {}), next: 'open_post_now opens its posting window, or download_post_media saves it.' },
       note: `Made a ${secs}-second video for ${name(findPost(postId))}`,
     };
   },
@@ -768,31 +752,24 @@ const downloadPostMediaTool = defineTool({
   },
 });
 
-// ───────────── posting with Manus (only through the app's windows) ─────────────
+// ───────────── posting (only through the app's windows) ─────────────
 
-const notReady = () => `Manus can’t post from here yet. ${manusSetupHint()}`;
+const notReady = () => `Manus can’t post to groups from here yet. ${manusSetupHint()}`;
 
-const postWithManus = defineTool({
-  name: 'post_with_manus',
+const openPostNow = defineTool({
+  name: 'open_post_now',
   class: 'Pub',
-  summary: 'Open “Post with Manus”; resend only after the owner checked a failed or sent post.',
-  args: { ids: arg.array(arg.string({ max: 60 }), { min: 1, max: 20 }), resend: arg.boolean({ optional: true }) },
-  validate: ({ ids, resend }) => {
-    if (!manusReadyNow()) return notReady();
-    const problem = eachPost(ids, (p) => {
+  summary: 'Open a post’s posting window (the owner confirms there; posts it from the app, or posts it themselves).',
+  args: { postId: arg.string({ max: 60 }) },
+  validate: ({ postId }) =>
+    eachPost([postId], (p) => {
       if (p.status === 'published') return `${name(p)} is already posted.`;
-      if (sendingNow(p.id)) return `${name(p)} is being handed to Manus right now.`;
-      if (resend) return null;
-      // a one-shot send is never repeated by itself: the owner checks first
-      if (manusHolds(p)) return `Manus already has ${name(p)} (${p.external!.state}): sending it again can post it twice. Check it with check_manus; resend: true only if the owner asks for it after you told them.`;
-      if (failedOnItsNetwork(p)) return `The last Manus try for ${name(p)} failed, but it may still have gone out or been scheduled on ${net(p)}. Ask the owner to check ${net(p)} (or the task in Manus) first; resend: true once they say it isn’t there.`;
-      return null;
-    });
-    if (problem) return problem;
-    const blocked = uniq(ids).map((id) => findPost(id)!).map((p) => [p, postBlocker(p, { viaServer: manusViaServer() })] as const);
-    return blocked.every(([, b]) => b) ? blocked.map(([p, b]) => `${name(p)}: ${b}`).join(' ') : null;
-  },
-  window: ({ ids }) => ({ kind: 'manus-post', postIds: uniq(ids) }),
+      if (sendingNow(p.id)) return `${name(p)} is being sent right now.`;
+      // one attempt per confirm: a post that may already be out is checked, never sent again
+      if (apiHolds(p)) return p.external!.state === 'working' ? `${name(p)} is being posted right now: its card shows when it’s done.` : `The app couldn’t confirm ${name(p)} went out on ${net(p)}. The owner checks it on the post’s card (Check again), or marks it posted: it is never sent again by itself.`;
+      return postBlocker(p);
+    }),
+  window: ({ postId }) => ({ kind: 'post-now', postId }),
 });
 
 const postToGroups = defineTool({
@@ -808,7 +785,7 @@ const postToGroups = defineTool({
       if (blocker) return blocker;
       if (sendingNow(p.id)) return `${name(p)} is being handed to Manus right now.`;
       const gs = p.groupShare;
-      if (gs && (gs.state === 'working' || gs.state === 'needs_input')) return `Manus is still posting ${name(p)} in groups (check_manus).`;
+      if (gs && (gs.state === 'working' || gs.state === 'needs_input')) return `Manus is still posting ${name(p)} in groups: its card shows each group’s result.`;
       if (gs && !again) {
         const out = groupsAlreadyOut(gs);
         return `Manus already shared ${name(p)} in groups${out.length ? `: it’s in (or waiting for approval in) ${listJoin(out)}` : ''}${gs.state === 'failed' ? '; the last try stopped early, so it may be in groups it didn’t report' : ''}. Sharing again posts twice where it already is (the window leaves those out). Ask the owner; again: true to open it.`;
@@ -817,50 +794,6 @@ const postToGroups = defineTool({
     });
   },
   window: ({ id }) => ({ kind: 'manus-groups', postId: id }),
-});
-
-const REFRESH_POST = new Set(['working', 'needs_input', 'finished']);
-
-const checkManus = defineTool({
-  name: 'check_manus',
-  class: 'L',
-  summary: 'Check (free) what Manus did with posts and groups (default: those in progress).',
-  args: { ids: arg.array(arg.string({ max: 60 }), { optional: true, min: 1, max: 5 }) },
-  validate: ({ ids }) => (ids ? eachPost(ids, (p) => (p.external || p.groupShare ? null : `Manus doesn’t have ${name(p)}: it was never sent to Manus.`)) : null),
-  run: async ({ ids }) => {
-    const targets = ids
-      ? uniq(ids)
-      : projectPosts()
-          .filter((p) => (p.external && REFRESH_POST.has(p.external.state)) || (p.groupShare && REFRESH_POST.has(p.groupShare.state)))
-          .sort((a, b) => Math.max(b.external?.requestedAt ?? 0, b.groupShare?.requestedAt ?? 0) - Math.max(a.external?.requestedAt ?? 0, a.groupShare?.requestedAt ?? 0))
-          .slice(0, 5)
-          .map((p) => p.id);
-    if (!targets.length) return { data: { checked: 0, withManus: 'Nothing is with Manus right now.' }, note: 'Nothing is with Manus right now' };
-    const rows: unknown[] = [];
-    const buttons: ChatButton[] = [];
-    let problems = 0;
-    for (const id of targets) {
-      const before = findPost(id);
-      if (!before) continue;
-      let error: string | undefined;
-      try {
-        // reading a task is free and never sends anything again
-        if (before.external && REFRESH_POST.has(before.external.state)) await refreshPostFromManus(id);
-        if (before.groupShare && REFRESH_POST.has(before.groupShare.state)) await refreshGroupsFromManus(id);
-      } catch (e) {
-        const c = errorCopy(e);
-        error = `${c.title}: ${c.body}`;
-        problems++;
-      }
-      const p = findPost(id) ?? before;
-      rows.push({ ...manusRow(p), ...(error ? { couldntCheck: error } : {}) });
-      const url = p.external?.taskUrl ?? p.groupShare?.taskUrl;
-      if (url && buttons.length < 3 && (p.external?.state === 'needs_input' || p.groupShare?.state === 'needs_input' || p.external?.state === 'failed' || p.external?.state === 'finished')) buttons.push({ label: `Open in Manus: ${clip(p.headline, 30)}`, icon: 'open', run: () => openInNewTab(url) });
-    }
-    const states = rows.map((r) => (r as { manus?: { state: string } }).manus?.state).filter(Boolean) as string[];
-    const counts = [...new Set(states)].map((st) => `${states.filter((x) => x === st).length} ${st.replace('_', ' ')}`);
-    return { data: { checked: rows.length, posts: rows }, note: `Checked ${plural(rows.length, 'post')} with Manus${counts.length ? `: ${counts.join(', ')}` : ''}${problems ? ` (${problems} couldn’t be checked)` : ''}`, buttons };
-  },
 });
 
 // ───────────── deleting ─────────────
@@ -874,8 +807,8 @@ const deletePosts = defineTool({
   danger: ({ ids }) => {
     const list = uniq(ids).map((id) => findPost(id)!);
     const out = list.some((p) => p.status === 'published');
-    const held = list.some((p) => p.status !== 'published' && manusHolds(p));
-    return deleteConfirm({ thing: 'post', names: list.map((p) => p.headline), extra: [out ? 'Posts already out stay on the network: this only removes them from the app.' : '', held ? 'If Manus already posted or scheduled one, it stays on the network.' : ''].filter(Boolean).join(' ') || undefined });
+    const held = list.some((p) => p.status !== 'published' && postHeld(p));
+    return deleteConfirm({ thing: 'post', names: list.map((p) => p.headline), extra: [out ? 'Posts already out stay on the network: this only removes them from the app.' : '', held ? 'If one already went out, it stays on the network.' : ''].filter(Boolean).join(' ') || undefined });
   },
   run: ({ ids }) => {
     const gone = uniq(ids).filter((id) => findPost(id));
@@ -902,8 +835,7 @@ export const socialTools: AnyTool[] = [
   makePostImageTool,
   makeVideo,
   downloadPostMediaTool,
-  postWithManus,
+  openPostNow,
   postToGroups,
-  checkManus,
   deletePosts,
 ];
