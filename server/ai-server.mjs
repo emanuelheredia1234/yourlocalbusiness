@@ -21,6 +21,14 @@
 //   PAGES_DNS_SERVERS, TRUSTED_PROXY_HOPS).
 // Hosts: the app and /api answer only on the app's own hosts (*.replit.app, localhost, IP addresses, ALLOWED_ORIGIN's host,
 //   APP_HOSTS). Any other host shows only published pages of a verified domain, so the app's own custom domain goes in APP_HOSTS.
+// Connected accounts, posting from the app, analytics, usage and "publish my page to Google" (server/integrations/wiring.mjs,
+//   docs/integrations-setup.md; they need supabase/migrations/20261105000000_integrations.sql). Secrets: TREG_TOKEN (treg
+//   member-role agent token), TREG_ADMIN_TOKEN (admin-role, billing only), CUSTOMER_TAG_SECRET (32+ random bytes, never
+//   rotated), MEDIA_URL_SECRET (32+ random bytes), NANGO_SECRET_KEY (turns connected accounts on), NANGO_WEBHOOK_SIGNING_KEY,
+//   NANGO_WEBHOOK_SIGNING_KEY_PREVIOUS (only while rotating). Plain env: TREG_ORG_ID, META_LOGIN_CONFIG_ID, CONNECTIONS_PROVIDER
+//   (unset; "off" keeps connected accounts off), NANGO_INTEGRATIONS (JSON), NANGO_RPM (150), GSC_APP_PROPERTY,
+//   GSC_APP_VERIFICATION_FILE, LINKEDIN_ORG_APPROVED, LINKEDIN_MEMBER_ANALYTICS_APPROVED, TIKTOK_UPLOAD_MODE (FILE_UPLOAD),
+//   LINKEDIN_UPLOAD_BEARER; for tests NANGO_BASE_URL, TREG_BASE_URL. Keys are never printed: the startup notes name what's missing.
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -34,6 +42,7 @@ import { userKeysFromEnv } from './userKeys.mjs';
 import { limitsFromEnv } from './limits.mjs';
 import { MIGRATION, appStateFromEnv } from './appState.mjs';
 import { pagesFromEnv } from './pages.mjs';
+import { createIntegrations } from './integrations/wiring.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(here, '..', 'dist');
@@ -174,6 +183,18 @@ const omnisend = createOmnisendRoutes({
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
   clientKey: (req) => pages.visitor(req),
 });
+// connected accounts, posting, analytics, usage and SEO on Google (server/integrations/wiring.mjs)
+const integrations = createIntegrations({
+  auth,
+  appState,
+  omnisend,
+  send,
+  readJson,
+  rateLimited,
+  corsHeaders,
+  sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
+  clientKey: (req) => pages.visitor(req),
+});
 // keys and settings saved in Supabase (when its secret key is set) before the first request
 // (never more than a few seconds: a slow Supabase must not keep the app from starting)
 const settingsFrom = await Promise.race([ai.init(), new Promise((r) => setTimeout(() => r('slow'), 5000))]);
@@ -185,15 +206,30 @@ async function deleteAccount(req, res) {
   if (!ident) return;
   if (!ident.who) return send(res, 401, { error: 'Sign in first.', code: 'AUTH_REQUIRED' }, corsHeaders(req));
   try {
-    await omnisend.forgetUser(ident.who.id);
+    // connected accounts first (their vendor connections are deleted while the ids are still known), then
+    // posting, analytics, SEO and billing, then Omnisend
+    try {
+      await integrations.forgetUser(ident.who.id);
+    } catch (e) {
+      await integrations.unforgetUser(ident.who.id);
+      throw e;
+    }
+    try {
+      await omnisend.forgetUser(ident.who.id);
+    } catch (e) {
+      await integrations.unforgetUser(ident.who.id);
+      throw e;
+    }
     try {
       await auth.deleteUser(ident.who.id);
     } catch (e) {
       // the account stays: don't keep it from connecting Omnisend for a week
       await omnisend.unforgetUser(ident.who.id);
+      await integrations.unforgetUser(ident.who.id);
       throw e;
     }
     pages.forgetUser(ident.who.id);
+    await integrations.userDeleted(ident.who.id);
     return send(res, 200, { ok: true }, corsHeaders(req));
   } catch (e) {
     return send(res, e.status || 500, { error: e.message, code: e.code || 'UPSTREAM' }, corsHeaders(req));
@@ -201,7 +237,8 @@ async function deleteAccount(req, res) {
 }
 
 // published pages: the signed-in API, the pages themselves, and people's own domains
-const pages = pagesFromEnv(process.env, { auth, whoIs: ai.whoIs, send, readJson, rateLimited, corsHeaders, allowedOrigin: ALLOWED_ORIGIN, distDir: DIST });
+// (appHostExtras: the app host's /sitemap.xml, /robots.txt and Search Console file, server/seo/sitemap.mjs)
+const pages = pagesFromEnv(process.env, { auth, whoIs: ai.whoIs, send, readJson, rateLimited, corsHeaders, allowedOrigin: ALLOWED_ORIGIN, distDir: DIST, appHostExtras: integrations.appHostExtras });
 
 const crashed = (req, res, e) => {
   console.error(e);
@@ -226,6 +263,8 @@ function route(req, res, url) {
       .catch((e) => crashed(req, res, e));
   }
   if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url).catch((e) => crashed(req, res, e));
+  // connected accounts, the Nango webhook (raw body), posting, public media links, analytics, SEO on Google, billing
+  if (integrations.match(url)) return void integrations.handle(req, res, url).catch((e) => crashed(req, res, e));
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res).catch((e) => crashed(req, res, e));
   if (pages.matchApi(url)) return void pages.handleApi(req, res, url).catch((e) => crashed(req, res, e));
   if (ai.match(url)) {
@@ -237,6 +276,11 @@ function route(req, res, url) {
   // a visitor sending a published page's form (/<name>/lead; server/leads.mjs)
   if (req.method === 'POST' && pages.matchLead(url)) return void pages.receiveLead(req, res, url).then((handled) => handled || send(res, 405, 'Method not allowed'), (e) => crashed(req, res, e));
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
+  // the app host's /sitemap.xml, /robots.txt and Search Console file (server/seo/sitemap.mjs), then pages and the app
+  return void pages.serveAppHostExtras(req, res, url).then((handled) => handled || servePageOrApp(req, res, url), (e) => crashed(req, res, e));
+}
+
+function servePageOrApp(req, res, url) {
   // a published page (/<name>, /<name>/img/…), unless the name is one of the app's own paths
   if (pages.matchPage(url)) return void pages.servePage(req, res, url).then((handled) => handled || serveStatic(req, res, url), (e) => crashed(req, res, e));
   return serveStatic(req, res, url);
@@ -287,6 +331,9 @@ server.listen(PORT, HOST, async () => {
   );
   if (auth.enabled && pages.enabled) console.log('Lead forms: on (they need supabase/migrations/20261103050000_page_leads.sql in Supabase too; limits: LEADS_PER_IP_PER_HOUR, LEADS_PER_PAGE_PER_HOUR).');
   if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
+  for (const line of integrations.notes()) console.log(line);
+  // the startup sweeps: stuck posting jobs and analytics runs, unsettled treg calls (never a resend)
+  void integrations.start();
   if (!fs.existsSync(DIST)) console.log('No ./dist yet: run `npm run build` to serve the app from here, or use `npm run dev` (it proxies /api to this server).');
 });
 
