@@ -18,7 +18,6 @@ import { ManusLink, PostImagePanel } from '../images/PostImagePanel';
 import { VideoPanel } from '../images/VideoPanel';
 import { useImageJob } from '../images/useImageJob';
 import { ExternalBadge, ManusPostButton, useCanOfferManus, useManusPost } from './ManusPost';
-import { MetaPublishButton } from './MetaPublish';
 import { GroupShareBadge, useManusGroups } from './ManusGroups';
 import { DueBadge, PostedBy, addToCalendarFlow, isDue, manusHolds, postMenuEntries, useMarkPosted } from './PostActions';
 import { postVideoPrompt } from '@/ai/image';
@@ -453,7 +452,7 @@ export function PostEditorHost() {
     if (canSend) second = markPosted;
     else main = markPosted;
     extra.push({ label: 'Move to drafts', icon: <Undo2 />, onSelect: () => update(post.id, { status: 'draft' }) });
-  } else if (post.publishedBy === 'manual' || post.publishedBy === 'meta') second = unmark;
+  } else if (post.publishedBy === 'manual') second = unmark;
   if (groupsOpen(post, offer)) extra.push({ label: 'Post to groups', icon: <Users />, onSelect: () => useManusGroups.getState().open(post.id) });
   const asEntry = (a: FooterAction): MenuEntry => ({ label: a.label, icon: a.icon, onSelect: a.run });
   const button = (a: FooterAction, primary: boolean) => (
@@ -463,12 +462,9 @@ export function PostEditorHost() {
   );
   const filled = canSend ? <ManusPostButton post={post} primary /> : main ? button(main, true) : null;
   const footer = phone ? (
-    <div className="flex w-full flex-col gap-2">
-      <div className="flex w-full items-center gap-2">
-        <MoreMenu items={[...(filled && second ? [asEntry(second)] : []), ...extra, 'separator', { label: 'Delete', icon: <Trash2 />, danger: true, onSelect: () => void remove() }]} />
-        <span className="flex min-w-0 flex-1 [&>.btn]:w-full">{filled ?? (second ? button(second, false) : null)}</span>
-      </div>
-      <MetaPublishButton post={post} />
+    <div className="flex w-full items-center gap-2">
+      <MoreMenu items={[...(filled && second ? [asEntry(second)] : []), ...extra, 'separator', { label: 'Delete', icon: <Trash2 />, danger: true, onSelect: () => void remove() }]} />
+      <span className="flex min-w-0 flex-1 [&>.btn]:w-full">{filled ?? (second ? button(second, false) : null)}</span>
     </div>
   ) : (
     <>
@@ -478,7 +474,6 @@ export function PostEditorHost() {
       {extra.length > 0 && <MoreMenu items={extra} />}
       {second && button(second, false)}
       {filled}
-      <MetaPublishButton post={post} />
     </>
   );
   return (

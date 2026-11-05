@@ -20,7 +20,6 @@ import { AccountSettings } from '@/components/auth/Account';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, Badge, Callout, ChipInput, InfoTip, MoreMenu, PageHeader, Segmented, SettingsRow, SettingsSection, Toggle, confirmAction } from '@/components/ui/primitives';
 import { BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
-import { MetaConnections } from './MetaConnections';
 import { LogoMark } from '@/components/brand/Logo';
 import { manusSetupHint, useManusReady } from '@/components/posts/ManusPost';
 import { download } from '@/components/ui/download';
@@ -315,7 +314,6 @@ function Accounts() {
   const networks = POST_PLATFORMS.map((p) => PLATFORMS[p].label.replace(' (Twitter)', '')).join(', ');
   return (
     <div className="flex max-w-[880px] flex-col gap-6">
-      {!__ARTIFACT_BUILD__ && <MetaConnections />}
       {ready ? (
         <Callout tone="good" title="Manus is ready to post for you.">
           It posts on {networks}, right away or scheduled, using your Manus credits.
@@ -342,7 +340,7 @@ function Accounts() {
           <span className="flex items-center gap-1">
             <Saved shown={saved} />
             <InfoTip title="How posting works" label="How posting works">
-              These links only identify your profiles; they don’t authorize posting. Connect a Facebook Page or Instagram professional account above for direct publishing. Manus can also open its own browser to post to supported networks. Otherwise, copy the post text and download its image from the ⋯ menu, post it yourself, then choose Mark as posted.
+              This app doesn’t log in to your social accounts and never posts on its own. Manus, an AI agent, opens each network in its own browser, where you sign in once, and posts exactly the text and image or video you confirm. Without Manus, copy a post’s text and download its image from the post’s ⋯ menu, post it yourself, then choose Mark as posted.
             </InfoTip>
           </span>
         }

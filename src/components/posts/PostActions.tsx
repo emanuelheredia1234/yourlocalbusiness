@@ -62,7 +62,7 @@ export function DueBadge({ post, now }: { post: Post; now?: number }) {
 /** Who posted it, and the link when there is a real one. */
 export function PostedBy({ post, className }: { post: Post; className?: string }) {
   if (post.status !== 'published') return null;
-  const by = post.publishedBy === 'manus' ? `Posted by Manus (its report)` : post.publishedBy === 'manual' ? 'Marked as posted by you' : post.publishedBy === 'meta' ? 'Posted through Meta' : 'Posted';
+  const by = post.publishedBy === 'manus' ? `Posted by Manus (its report)` : post.publishedBy === 'manual' ? 'Marked as posted by you' : 'Posted';
   return (
     <p className={cn('flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted', className)}>
       <span>
@@ -184,7 +184,7 @@ export function postMenuEntries(post: Post, opts: { onDeleted?: () => void } = {
   const comment = firstCommentOf(post);
   const out: MenuEntry[] = [];
   if (post.status !== 'published') out.push({ label: 'Mark as posted…', icon: <CheckCheck />, onSelect: () => useMarkPosted.getState().open(post.id) });
-  if (post.status === 'published' && (post.publishedBy === 'manual' || post.publishedBy === 'meta'))
+  if (post.status === 'published' && post.publishedBy === 'manual')
     out.push({
       label: 'Mark as not posted',
       icon: <Undo2 />,
