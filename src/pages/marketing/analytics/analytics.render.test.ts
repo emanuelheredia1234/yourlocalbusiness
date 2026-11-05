@@ -46,7 +46,7 @@ function project(): Project {
   return p;
 }
 
-const snap = <T,>(source: AnalyticsSnapshot['source'], data: T, extra: Partial<AnalyticsSnapshot> = {}): AnalyticsSnapshot<T> => ({ projectId: 'proj_an1', source, status: 'ok', fetchedAt: iso(0.01), costMicro: 20000, data, ...extra });
+const snap = <T,>(source: AnalyticsSnapshot['source'], data: T, extra: Partial<Omit<AnalyticsSnapshot, 'data'>> = {}): AnalyticsSnapshot<T> => ({ projectId: 'proj_an1', source, status: 'ok', fetchedAt: iso(0.01), costMicro: 20000, data, ...extra });
 
 const SOCIAL: SocialData = {
   networks: [
