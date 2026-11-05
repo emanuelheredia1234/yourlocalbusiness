@@ -1,0 +1,30 @@
+{
+ "endpointId": "treg.web.url.metrics",
+ "routed": true,
+ "served_by": "seranking.web.url.metrics",
+ "body": {
+  "output": {
+   "metrics": {
+    "url": "seranking.com",
+    "inlink_rank": 20,
+    "domain_inlink_rank": 90
+   }
+  },
+  "raw": {
+   "pages": [
+    {
+     "url": "seranking.com",
+     "inlink_rank": 20,
+     "domain_inlink_rank": 90
+    }
+   ]
+  },
+  "_treg": {
+   "served_by": "seranking.web.url.metrics",
+   "tried": [
+    "seranking.web.url.metrics"
+   ],
+   "charged_micro": null
+  }
+ }
+}
