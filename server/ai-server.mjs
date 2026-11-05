@@ -28,6 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
 import { createOmnisendRoutes } from './omnisend.mjs';
+import { createRateLimiter } from './rateLimit.mjs';
 import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
 import { limitsFromEnv } from './limits.mjs';
@@ -92,15 +93,8 @@ function readJson(req, limit = MAX_BODY) {
   });
 }
 
-const hits = new Map();
-/** Over the per-minute limit for this key (a bucket and a user or address)? factor: reads get a multiple of it. */
-function rateLimited(key, factor = 1) {
-  const now = Date.now();
-  const recent = (hits.get(key) || []).filter((t) => now - t < 60_000);
-  recent.push(now);
-  hits.set(key, recent);
-  return recent.length > RATE_LIMIT * factor;
-}
+/** Over the per-minute limit for this key (a bucket and a user or address)? factor: reads get a multiple of it. Bounded: see rateLimit.mjs. */
+const rateLimited = createRateLimiter({ limit: RATE_LIMIT });
 
 // ───────────── static files (production build) ─────────────
 
