@@ -186,7 +186,13 @@ async function deleteAccount(req, res) {
   if (!ident.who) return send(res, 401, { error: 'Sign in first.', code: 'AUTH_REQUIRED' }, corsHeaders(req));
   try {
     await omnisend.forgetUser(ident.who.id);
-    await auth.deleteUser(ident.who.id);
+    try {
+      await auth.deleteUser(ident.who.id);
+    } catch (e) {
+      // the account stays: don't keep it from connecting Omnisend for a week
+      await omnisend.unforgetUser(ident.who.id);
+      throw e;
+    }
     pages.forgetUser(ident.who.id);
     return send(res, 200, { ok: true }, corsHeaders(req));
   } catch (e) {

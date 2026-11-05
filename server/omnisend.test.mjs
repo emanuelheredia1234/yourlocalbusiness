@@ -754,6 +754,38 @@ describe('forgetting an account (account deletion)', () => {
     });
   });
 
+  it('doesn’t hold up account deletion when Omnisend was never set up, though it still tries to overwrite', async () => {
+    const { service, storage } = makeService({ env: {} });
+    storage.fail.put = 'UNREACHABLE';
+    await expect(service.forgetUser('account-alpha')).resolves.toBeUndefined();
+    expect(storage.calls.filter((c) => c.op === 'put')).toHaveLength(1);
+    // and when storage works, a connection left from before the credentials were removed goes too
+    storage.fail.put = null;
+    storage.documents.set(userKey('account-alpha'), { value: { accessToken: 'private-at-old', scopes: OMNISEND_SCOPES }, updatedAt: 'v0' });
+    await service.forgetUser('account-alpha');
+    expect(storage.documents.get(userKey('account-alpha')).value).toEqual({ forgottenAt: new Date(NOW).toISOString() });
+  });
+
+  it('lifts the block at once when the account wasn’t deleted after all', async () => {
+    const { service, storage } = makeService({ fetch: omnisendFetch() });
+    await connected(service, 'Bearer beta');
+    const betaConnection = structuredClone(storage.documents.get(userKey('account-beta')));
+    await service.forgetUser('account-alpha');
+    await service.unforgetUser('account-alpha');
+    // connecting works now, not in a week
+    await connected(service);
+    // and an account that wasn't being deleted is left alone
+    await service.unforgetUser('account-beta');
+    expect(storage.documents.get(userKey('account-beta'))).toEqual(betaConnection);
+  });
+
+  it('lifting the block is best effort when storage is down', async () => {
+    const { service, storage } = makeService();
+    await service.forgetUser('account-alpha');
+    storage.fail.get = 'UNREACHABLE';
+    await expect(service.unforgetUser('account-alpha')).resolves.toBeUndefined();
+  });
+
   it('drops the connections the account started, so a sign-in finished afterwards stores nothing', async () => {
     const fetch = omnisendFetch();
     const { service, storage } = makeService({ fetch });
@@ -954,6 +986,33 @@ describe('the real server', () => {
       expect(outcomes.at(-1)).toEqual(['busy', 0]);
       expect(server.calls().filter((c) => c.kind === 'blocked')).toEqual([]);
       expect(server.output()).not.toMatch(/fake-at-|fake-rt-|fake-client-secret/);
+    } finally {
+      await server.stop();
+    }
+  }, 30_000);
+
+  it('leaves Omnisend usable when the account deletion itself fails', async () => {
+    const server = await startServer(supa);
+    try {
+      const { port } = server;
+      const carol = await supa.tokenFor('omnisend-carol@example.com');
+      // deleting the account's files fails, so the account stays
+      supa.behavior.fail = (method, pathname) => (pathname.startsWith('/storage/v1/') ? { status: 500, body: { message: 'mock storage failure' } } : null);
+      let deleted;
+      try {
+        deleted = await request(port, 'DELETE', '/api/account', { token: carol.token, origin: APP });
+      } finally {
+        supa.behavior.fail = null;
+      }
+      expect(deleted.status).toBe(502);
+      expect(supa.users.has(carol.user.id)).toBe(true);
+      // and can connect Omnisend now, not in a week
+      const start = await request(port, 'POST', `${API}/connect`, { token: carol.token, origin: APP, body: {} });
+      expect(start.status).toBe(200);
+      const cookie = start.headers['set-cookie'][0].split(';')[0];
+      const state = encodeURIComponent(new URL(start.json.authorizationUrl).searchParams.get('state'));
+      expect(returned(await request(port, 'GET', `${API}/callback?code=carol-code&state=${state}`, { cookie }))).toBe('connected');
+      expect((await request(port, 'GET', `${API}/status`, { token: carol.token, origin: APP })).json.connected).toBe(true);
     } finally {
       await server.stop();
     }

@@ -646,6 +646,10 @@ export function createOmnisendRoutes({
    * Before an account is deleted: its connection and the connections it started are overwritten without being
    * read (an unreadable one goes too), and for FORGOTTEN_FOR_MS nothing can be connected to it, so a sign-in
    * still open in Omnisend's tab can't store a token for it. No app_state table means nothing was ever stored.
+   *
+   * A storage failure stops the deletion only while Omnisend is set up (a sign-in could still store a token).
+   * Without the OAuth credentials no sign-in can finish, so the overwrite is tried and the deletion goes on
+   * either way: an app that never set Omnisend up doesn't make account deletion depend on it.
    */
   async function forgetUser(userId) {
     if (!storageReady || !userId) return;
@@ -654,10 +658,23 @@ export function createOmnisendRoutes({
       await storage.put(userDocumentKey(userId), tombstone);
       await storage.put(pendingKey(pendingTag(userId)), { ...tombstone, states: {} });
     } catch (error) {
-      if (error?.code === 'NO_TABLE') return;
+      if (error?.code === 'NO_TABLE' || !credentialsConfigured) return;
       throw new OmnisendError(503, 'OMNISEND_FORGET_FAILED', 'Couldn’t remove your Omnisend connection just now, so your account wasn’t deleted. Try again shortly.');
     }
   }
 
-  return { handle, forgetUser };
+  /**
+   * The account deletion that forgetUser prepared for didn't happen: lift its block, so the account can connect
+   * Omnisend again now rather than in FORGOTTEN_FOR_MS. (Its old connection is gone: they connect again.)
+   * Best effort: if storage is down, the block simply lasts until it expires.
+   */
+  async function unforgetUser(userId) {
+    if (!storageReady || !userId) return;
+    const lift = (key, cleared) =>
+      updateDocument(key, (current) => (current.forgottenAt ? { value: cleared } : { write: false })).catch(() => {});
+    await lift(userDocumentKey(userId), {});
+    await lift(pendingKey(pendingTag(userId)), { states: {} });
+  }
+
+  return { handle, forgetUser, unforgetUser };
 }
