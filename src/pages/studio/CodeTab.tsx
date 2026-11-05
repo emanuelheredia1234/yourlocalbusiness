@@ -952,9 +952,9 @@ function EditComposer({
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const images = asset.images ?? [];
-  return (
+  const form = (
     <form
-      className={cn('mx-auto flex w-full max-w-[760px] flex-col gap-2', sticky && 'sticky bottom-3 z-10 mt-4')}
+      className="mx-auto flex w-full max-w-[760px] flex-col gap-2"
       aria-label="Edit with AI"
       onSubmit={(e) => {
         e.preventDefault();
@@ -1025,6 +1025,8 @@ function EditComposer({
       )}
     </form>
   );
+  // docked at the bottom of the canvas while it scrolls by, on a fade of the canvas colour (so nothing shows through)
+  return sticky ? <div className="sticky bottom-0 z-10 -mx-3 -mb-3 mt-4 rounded-b-pop bg-gradient-to-t from-surface-2 from-70% to-transparent px-3 pb-3 pt-8 sm:-mx-6 sm:-mb-6 sm:px-6 sm:pb-6">{form}</div> : form;
 }
 
 /** Who made an asset from a page of theirs (Manus or Viktor), with a link to the task or thread. Their code is theirs: check it before you publish. */
