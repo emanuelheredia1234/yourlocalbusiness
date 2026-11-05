@@ -39,14 +39,18 @@ async function omnisendRequest<T>(path: string, method = 'GET', body?: unknown):
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof result?.error === 'string' ? result.error : 'The Omnisend request failed.');
+  if (!response.ok) throw Object.assign(new Error(typeof result?.error === 'string' ? result.error : 'The Omnisend request failed.'), { status: response.status });
   return result as T;
 }
+
+/** The server has no Omnisend routes (an older server, or no server at all): the card stays out of the way. */
+const notOffered = (e: unknown) => e instanceof TypeError || (e as { status?: number })?.status === 404;
 
 /** Omnisend: connect your own brand and create campaign drafts from the sequence (the app never sends). */
 function useOmnisend() {
   const [status, setStatus] = useState<OmnisendStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [unavailable, setUnavailable] = useState(__ARTIFACT_BUILD__);
+  const [loading, setLoading] = useState(!__ARTIFACT_BUILD__);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -57,13 +61,15 @@ function useOmnisend() {
       setStatus(await omnisendRequest<OmnisendStatus>('/api/integrations/omnisend/status'));
       setError('');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load the Omnisend connection.');
+      if (notOffered(e)) setUnavailable(true);
+      else setError(e instanceof Error ? e.message : 'Could not load the Omnisend connection.');
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
+    if (__ARTIFACT_BUILD__) return;
     // back from Omnisend's sign-in: say how it went, then drop the marker from the address
     const params = new URLSearchParams(window.location.search);
     const outcome = params.get('omnisend');
@@ -111,13 +117,14 @@ function useOmnisend() {
     }
   }
 
-  return { status, loading, busy, error, notice, setNotice, connect, disconnect };
+  return { status, unavailable, loading, busy, error, notice, setNotice, connect, disconnect };
 }
 
 type Omnisend = ReturnType<typeof useOmnisend>;
 
 function OmnisendCard({ omnisend }: { omnisend: Omnisend }) {
-  const { status, loading, busy, error, notice, setNotice, connect, disconnect } = omnisend;
+  const { status, unavailable, loading, busy, error, notice, setNotice, connect, disconnect } = omnisend;
+  if (unavailable) return null;
   const isPublishedApp = typeof window !== 'undefined' && window.location.origin === OMNISEND_PUBLIC_APP_URL;
   const canConnect = !!status && !status.connected && status.credentialsConfigured && status.storageReady && isPublishedApp;
   const needsSetup = !loading && !!status && !status.credentialsConfigured;
@@ -268,9 +275,11 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
           </button>
         }
       />
-      <div className="mb-6">
-        <OmnisendCard omnisend={omnisend} />
-      </div>
+      {!omnisend.unavailable && (
+        <div className="mb-6">
+          <OmnisendCard omnisend={omnisend} />
+        </div>
+      )}
       <ol className="flex flex-col gap-6">
         {emails.map((e, i) => {
           const draft = drafts[e.id];
