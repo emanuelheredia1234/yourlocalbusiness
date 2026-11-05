@@ -16,6 +16,10 @@
 // The callback is tied to the browser that started the connection: /connect sets a __Host- cookie with a
 // random value and keeps its hash with the state, and the callback needs that cookie. So a sign-in link made by
 // one account, approved by someone else in Omnisend, never attaches their Omnisend brand to that account.
+//
+// The cookie and the state each carry a MAC (a key derived from OMNISEND_CLIENT_SECRET, which every copy of the
+// server has), so a callback with a made-up cookie or state is turned away before any storage read: only the
+// values /connect handed out, to a signed-in customer and within its rate limit, can cost one.
 
 import crypto from 'node:crypto';
 
@@ -39,10 +43,10 @@ const MAX_PENDING_PER_USER = 3;
 const FORGOTTEN_FOR_MS = 7 * 24 * 60 * 60 * 1000;
 /** Draft fields: Omnisend's own limits for the name, subject and preheader; the app's for the rest. */
 const LIMITS = { name: 250, subject: 250, preheader: 250, body: 24_000, ctaLabel: 100, ctaUrl: 2048 };
-/** A state: 32 random bytes, then its owner's pending-document tag (both base64url). */
-const STATE_RE = /^[A-Za-z0-9_-]{43}\.([A-Za-z0-9_-]{22})$/;
-/** The binding cookie's value: 32 random bytes, base64url. */
-const NONCE_RE = /^[A-Za-z0-9_-]{43}$/;
+/** A state: 32 random bytes, its owner's pending-document tag, and the server's MAC of both (all base64url). */
+const STATE_RE = /^([A-Za-z0-9_-]{43}\.([A-Za-z0-9_-]{22}))\.([A-Za-z0-9_-]{22})$/;
+/** The binding cookie's value: 32 random bytes, then the server's MAC of them (base64url). */
+const NONCE_RE = /^([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{22})$/;
 /** fetch failures that mean the request never reached Omnisend (no address, refused, no TLS): nothing was done there. */
 const NOT_SENT = /^(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT|CERT_|ERR_TLS_|UNABLE_TO_|DEPTH_ZERO_|SELF_SIGNED_)/;
 
@@ -90,13 +94,25 @@ function failStorage(error) {
 
 const bindingCookie = (value, maxAgeSeconds) => `${BINDING_COOKIE}=${value}; Path=/; Max-Age=${maxAgeSeconds}; Secure; HttpOnly; SameSite=Lax`;
 
-/** The binding value this browser sent, or ''. */
-function bindingFrom(req) {
+/** Signs and checks the values this server hands out (the cookie, the state); with no client secret, nothing checks. */
+function createSigner(clientSecret) {
+  const key = clientSecret ? crypto.createHmac('sha256', clientSecret).update('ylb-omnisend-callback-mac-v1').digest() : null;
+  const mac = (label, text) => crypto.createHmac('sha256', key).update(`${label}\n${text}`).digest('base64url').slice(0, 22);
+  return {
+    sign: (label, text) => `${text}.${mac(label, text)}`,
+    /** text's MAC is the given one (compared in constant time). */
+    verify: (label, text, given) => !!key && crypto.timingSafeEqual(Buffer.from(mac(label, text)), Buffer.from(given)),
+  };
+}
+
+/** The binding value this browser sent, if this server made it; '' otherwise (nothing is read for it). */
+function bindingFrom(req, signer) {
   for (const part of String(req.headers?.cookie || '').split(';')) {
     const at = part.indexOf('=');
     if (at > 0 && part.slice(0, at).trim() === BINDING_COOKIE) {
       const value = part.slice(at + 1).trim();
-      return NONCE_RE.test(value) ? value : '';
+      const match = NONCE_RE.exec(value);
+      return match && signer.verify('binding', match[1], match[2]) ? value : '';
     }
   }
   return '';
@@ -167,6 +183,7 @@ export function createOmnisendRoutes({
     ...(!clientSecret ? ['OMNISEND_CLIENT_SECRET'] : []),
   ];
   const storageReady = storage?.enabled === true;
+  const signer = createSigner(clientSecret);
   const reply = (req, res, status, body, headers = {}) => send(res, status, body, { ...corsHeaders(req), ...headers });
 
   /**
@@ -258,9 +275,9 @@ export function createOmnisendRoutes({
       throw new OmnisendError(400, 'USE_PUBLISHED_APP', `Start the Omnisend connection from ${OMNISEND_PUBLIC_BASE_URL} so the callback returns to the same app.`);
     }
     // this browser's binding value: the one it already has (a connection started in another tab stays valid), or a new one
-    const nonce = bindingFrom(req) || crypto.randomBytes(32).toString('base64url');
+    const nonce = bindingFrom(req, signer) || signer.sign('binding', crypto.randomBytes(32).toString('base64url'));
     const tag = pendingTag(user.id);
-    const state = `${crypto.randomBytes(32).toString('base64url')}.${tag}`;
+    const state = signer.sign('state', `${crypto.randomBytes(32).toString('base64url')}.${tag}`);
     const createdAt = now();
     const refused = await updateDocument(pendingKey(tag), (current) => {
       if (forgotten(current, createdAt)) return { write: false, result: true };
@@ -327,9 +344,10 @@ export function createOmnisendRoutes({
   /** The started connection this state names, used once, if this browser started it; null otherwise. */
   async function consumeState(state, nonce) {
     const match = STATE_RE.exec(state);
-    if (!match || !nonce) return null;
+    // a made-up state or cookie (no valid MAC) costs no storage read
+    if (!match || !nonce || !signer.verify('state', match[1], match[3])) return null;
     const hash = sha256(state);
-    return updateDocument(pendingKey(match[1]), (current) => {
+    return updateDocument(pendingKey(match[2]), (current) => {
       const states = isRecord(current.states) ? current.states : {};
       const entry = states[hash];
       // (another copy of the server may have made it, its clock a moment ahead: only an old one is refused)
@@ -349,7 +367,7 @@ export function createOmnisendRoutes({
       // per caller (no sign-in here): each one costs a storage read, and may cost a token exchange
       if (rateLimited(`omnisend-callback:${clientKey(req)}`)) return callbackRedirect(res, 'busy');
       if (!storageReady) return callbackRedirect(res, 'invalid_state');
-      const entry = await consumeState(url.searchParams.get('state') || '', bindingFrom(req));
+      const entry = await consumeState(url.searchParams.get('state') || '', bindingFrom(req, signer));
       if (!entry) return callbackRedirect(res, 'invalid_state');
       done = { 'set-cookie': bindingCookie('', 0) };
       if (url.searchParams.has('error')) {

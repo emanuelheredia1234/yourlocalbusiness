@@ -268,10 +268,11 @@ describe('connecting Omnisend', () => {
     expect(authorization.origin).toBe('https://app.omnisend.com');
     expect(authorization.searchParams.get('redirect_uri')).toBe(OMNISEND_REDIRECT_URI);
     expect(authorization.searchParams.get('scope').split(' ').sort()).toEqual([...OMNISEND_SCOPES].sort());
-    expect(state).toMatch(/^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{22}$/);
+    // random, its owner's document tag, and the server's MAC of both
+    expect(state).toMatch(/^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{22}$/);
     // the binding cookie: random, HTTPS-only, out of scripts' reach, sent on Omnisend's redirect back, ten minutes
-    expect(started.headers['set-cookie']).toMatch(new RegExp(`^${COOKIE}=[A-Za-z0-9_-]{43}; Path=/; Max-Age=600; Secure; HttpOnly; SameSite=Lax$`));
-    expect(b.jar.get(COOKIE)).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(started.headers['set-cookie']).toMatch(new RegExp(`^${COOKIE}=[A-Za-z0-9_-]{43}\\.[A-Za-z0-9_-]{22}; Path=/; Max-Age=600; Secure; HttpOnly; SameSite=Lax$`));
+    expect(b.jar.get(COOKIE)).toMatch(/^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{22}$/);
 
     const back = await backFromOmnisend(service, state, { b });
     expect(back.statusCode).toBe(303);
@@ -406,24 +407,45 @@ describe('connections waiting for Omnisend', () => {
     expect(outcome(await backFromOmnisend(service, states[3], { b }))).toBe('connected');
   });
 
-  it('are read one small document at a time, and a malformed state reads nothing', async () => {
+  it('are read one small document at a time, and a malformed or made-up state or cookie reads nothing', async () => {
     const { service, storage } = makeService({ fetch: omnisendFetch() });
-    await startConnect(service, browser(), 'Bearer beta');
+    const { state: betaState } = await startConnect(service, browser(), 'Bearer beta');
+    const { browser: mine } = await startConnect(service);
     storage.calls.length = 0;
-    const b = browser();
-    b.jar.set(COOKIE, crypto.randomBytes(32).toString('base64url'));
-    for (const bad of ['', 'x', 'a'.repeat(300), `${'a'.repeat(43)}.${'b'.repeat(21)}`, `${'a'.repeat(43)}.${'b'.repeat(22)}x`]) {
-      expect(outcome(await backFromOmnisend(service, bad, { b }))).toBe('invalid_state');
+    const random = () => crypto.randomBytes(32).toString('base64url');
+    const tag = crypto.randomBytes(16).toString('base64url').slice(0, 22);
+    const mac = () => crypto.randomBytes(16).toString('base64url').slice(0, 22);
+    // a cookie this server made, with states that are malformed or made up (a guessed MAC)
+    for (const bad of ['', 'x', 'a'.repeat(300), `${random()}.${tag}`, `${'a'.repeat(43)}.${'b'.repeat(21)}.${mac()}`, `${random()}.${tag}.${mac()}`, `${betaState.slice(0, -22)}${mac()}`, `${betaState}x`]) {
+      expect(outcome(await backFromOmnisend(service, bad, { b: mine }))).toBe('invalid_state');
     }
     expect(storage.calls).toHaveLength(0);
-    const tag = crypto.randomBytes(16).toString('base64url').slice(0, 22);
-    expect(outcome(await backFromOmnisend(service, `${crypto.randomBytes(32).toString('base64url')}.${tag}`, { b }))).toBe('invalid_state');
-    expect(storage.calls).toEqual([{ op: 'get', key: `omnisend:oauth:pending:${tag}` }]);
-    // without the browser's cookie, nothing is read at all
-    storage.calls.length = 0;
-    expect(outcome(await backFromOmnisend(service, `${crypto.randomBytes(32).toString('base64url')}.${tag}`))).toBe('invalid_state');
+    // a real state, with a made-up cookie of the right form, another form, or none: nothing is read either
+    for (const cookie of [`${random()}.${mac()}`, random(), null]) {
+      const b = browser();
+      if (cookie) b.jar.set(COOKIE, cookie);
+      expect(outcome(await backFromOmnisend(service, betaState, { b }))).toBe('invalid_state');
+    }
     expect(storage.calls).toHaveLength(0);
+    // both real, but not the same browser's: only the state's owner's small document is read
+    expect(outcome(await backFromOmnisend(service, betaState, { b: mine }))).toBe('invalid_state');
+    expect(storage.calls).toEqual([{ op: 'get', key: `omnisend:oauth:pending:${betaState.split('.')[1]}` }]);
     expect([...storage.documents.keys()].some((key) => key === 'omnisend:oauth:states')).toBe(false);
+  });
+
+  it('turn away a cookie or state made with another client secret', async () => {
+    const fetch = omnisendFetch();
+    const storage = makeStorage();
+    const before = makeService({ fetch, storage, env: { OMNISEND_CLIENT_ID: 'client-id-test', OMNISEND_CLIENT_SECRET: 'old-secret' } }).service;
+    const { state, browser: b } = await startConnect(before);
+    const after = makeService({ fetch, storage }).service;
+    storage.calls.length = 0;
+    expect(outcome(await backFromOmnisend(after, state, { b }))).toBe('invalid_state');
+    expect(storage.calls).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+    // and a fresh start in the same browser works with the new one
+    const again = await startConnect(after, b);
+    expect(outcome(await backFromOmnisend(after, again.state, { b }))).toBe('connected');
   });
 
   it('don’t conflict when different accounts connect at the same time', async () => {
@@ -879,7 +901,7 @@ describe('the real server', () => {
       const start = await request(port, 'POST', `${API}/connect`, { token: alice.token, origin: APP, body: {} });
       expect(start.status).toBe(200);
       expect(start.headers['set-cookie']).toHaveLength(1);
-      expect(start.headers['set-cookie'][0]).toMatch(new RegExp(`^${COOKIE}=[A-Za-z0-9_-]{43}; Path=/; Max-Age=600; Secure; HttpOnly; SameSite=Lax$`));
+      expect(start.headers['set-cookie'][0]).toMatch(new RegExp(`^${COOKIE}=[A-Za-z0-9_-]{43}\\.[A-Za-z0-9_-]{22}; Path=/; Max-Age=600; Secure; HttpOnly; SameSite=Lax$`));
       const cookie = start.headers['set-cookie'][0].split(';')[0];
       const state = encodeURIComponent(new URL(start.json.authorizationUrl).searchParams.get('state'));
 
@@ -919,15 +941,16 @@ describe('the real server', () => {
       expect(JSON.parse(createSecretBox(supa.SECRET, 'ylb-app-state').open(row.ciphertext, `app_state:${key}`))).toEqual({ forgottenAt: expect.any(String) });
       expect(server.calls().filter((c) => c.kind === 'token').map((c) => c.code)).toEqual(['alice-code']);
 
-      // callbacks from one caller: over RATE_LIMIT_PER_MIN, they're turned away before any storage read
+      // callbacks from one caller with made-up states: none reads storage, and over RATE_LIMIT_PER_MIN they're turned away
       const reads = () => supa.calls.filter((c) => c.method === 'GET' && c.path === '/rest/v1/app_state').length;
       const outcomes = [];
       for (let i = 0; i < 8; i += 1) {
-        const randomState = `${crypto.randomBytes(32).toString('base64url')}.${crypto.randomBytes(16).toString('base64url').slice(0, 22)}`;
+        const randomState = `${crypto.randomBytes(32).toString('base64url')}.${crypto.randomBytes(16).toString('base64url').slice(0, 22)}.${crypto.randomBytes(16).toString('base64url').slice(0, 22)}`;
         const before = reads();
         const res = await request(port, 'GET', `${API}/callback?code=x&state=${randomState}`, { cookie });
         outcomes.push([returned(res), reads() - before]);
       }
+      expect(outcomes.every(([, read]) => read === 0)).toBe(true);
       expect(outcomes.at(-1)).toEqual(['busy', 0]);
       expect(server.calls().filter((c) => c.kind === 'blocked')).toEqual([]);
       expect(server.output()).not.toMatch(/fake-at-|fake-rt-|fake-client-secret/);
