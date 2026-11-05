@@ -81,6 +81,24 @@ sitemap, and the Omnisend reporting scope._
 _Filled in by the app work (WP5, WP6): Settings → Connected accounts, the Update button, the Analytics tabs,
 posting buttons, and the owner's Customer usage page._
 
+### Posting buttons (WP6)
+
+Every post shows one posting button, by its state:
+
+- **Post on Facebook** (or the post's network) when that account is connected. It opens a confirm window with the
+  account, exactly what goes out, the image or video, where the link goes and the first comment. Nothing is sent
+  until the customer confirms, and each confirm is one attempt.
+- **Posting…** while the server sends it, then **Posted** with **View post**.
+- **Try again** only when the network refused the post (nothing went out). It opens a new confirm.
+- **Check again** when the app couldn't confirm the post went out. It is a read-only check, and the post is never
+  sent again by itself. The customer can also **Mark as posted** or **Post it yourself**.
+- **Post it yourself** when the account isn't connected: copy the text, download the image or video, open the
+  network, then **Mark as posted**.
+
+Manus only posts in Facebook groups (**Post to groups** on a Facebook post). Posts sent with Manus by older
+versions show **Sent with Manus earlier**, read-only. There is no bulk send: each post is confirmed on its own.
+Nothing to set up for this beyond the connected accounts (§3) and the posting backend (§4).
+
 ## 8. What works on day one (no Nango, no approvals)
 
 - Manual posting: **Post it yourself**, then **Mark as posted**.
