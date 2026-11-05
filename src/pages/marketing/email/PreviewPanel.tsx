@@ -1,27 +1,35 @@
 import { useEffect, useState } from 'react';
 import { Download, ExternalLink, Mail } from 'lucide-react';
-import type { Project } from '@/lib/types';
-import { slugify } from '@/lib/utils';
+import type { EmailStep, Project } from '@/lib/types';
+import { cn, slugify } from '@/lib/utils';
 import { renderTokens } from '@/ai/local/email';
+import { serverFetch } from '@/ai/claude';
 import { delayLabel, sequenceCsv } from '@/lib/emailFunnel';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Callout, CopyButton, Empty, InfoTip, Section, StatusDot } from '@/components/ui/primitives';
 import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
-import { authHeaders } from '@/lib/cloud/auth';
+import { serverBaseNow } from '@/lib/cloud/auth';
 import { EmailView, PanelHead, emailTokens } from './shared';
 
 const OMNISEND_CALLBACK_URL = 'https://yourlocalbusiness.replit.app/api/integrations/omnisend/callback';
 const OMNISEND_PUBLIC_APP_URL = 'https://yourlocalbusiness.replit.app';
+const API = '/api/integrations/omnisend';
+
+/** Why a saved connection can't be used until it's made again. */
+type Reconnect = 'revoked' | 'scopes' | 'unreadable';
 
 type OmnisendStatus = {
   credentialsConfigured: boolean;
   missingCredentials: string[];
   storageReady: boolean;
   connected: boolean;
+  reconnect: Reconnect | null;
   scopes: string[];
+  /** the app's owner: the one who can set Omnisend up */
+  owner: boolean;
 };
 
-type DraftState = { busy?: boolean; message?: string; url?: string };
+type DraftState = { busy?: boolean; message?: string; url?: string; tone?: 'done' | 'warn' | 'bad' };
 
 const PROVIDERS = [
   { name: 'Kit (ConvertKit)', url: 'https://kit.com' },
@@ -30,21 +38,110 @@ const PROVIDERS = [
   { name: 'Brevo', url: 'https://www.brevo.com' },
 ];
 
-async function omnisendRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const headers = new Headers(await authHeaders(path));
-  if (body !== undefined) headers.set('content-type', 'application/json');
-  const response = await fetch(path, {
-    method,
-    headers,
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(typeof result?.error === 'string' ? result.error : 'The Omnisend request failed.'), { status: response.status });
-  return result as T;
+/** How the sign-in at Omnisend went (?omnisend=… when it sends the browser back). */
+const OUTCOMES: Record<string, string> = {
+  connected: 'Omnisend is connected. You can create drafts here; nothing has been sent.',
+  cancelled: 'Omnisend connection was cancelled.',
+  invalid_state: 'The Omnisend sign-in couldn’t be matched to this browser, or took longer than 10 minutes. Connect again from this browser.',
+  scopes: 'Omnisend didn’t grant the campaign and email-template permissions this app needs. Connect again and allow both.',
+  busy: 'Too many Omnisend sign-ins at once. Wait a minute, then connect again.',
+  setup: 'Omnisend isn’t set up on this app yet.',
+  error: 'Omnisend couldn’t complete the connection. Try connecting again.',
+};
+/** The same, for the app's owner, where there's something to check. */
+const OWNER_OUTCOMES: Record<string, string> = {
+  setup: 'Omnisend OAuth credentials are not configured yet. Add them in Replit Secrets after Omnisend issues them.',
+  error: 'Omnisend couldn’t complete the connection. Try again; if it keeps failing, check the OAuth credentials and the registered redirect URI.',
+};
+const outcomeText = (outcome: string, owner: boolean) =>
+  (owner && Object.hasOwn(OWNER_OUTCOMES, outcome) ? OWNER_OUTCOMES[outcome] : Object.hasOwn(OUTCOMES, outcome) ? OUTCOMES[outcome] : '') || 'Returned from Omnisend.';
+
+const RECONNECT: Record<Reconnect, string> = {
+  revoked: 'Omnisend no longer accepts this app’s connection. Connect Omnisend again to keep creating drafts.',
+  scopes: 'Omnisend didn’t grant every permission this app needs. Connect Omnisend again and allow campaigns and email templates.',
+  unreadable: 'This app can’t use your saved Omnisend connection anymore. Connect Omnisend again.',
+};
+
+/** Refusals after which something may already be in Omnisend: the server's message says what to check. */
+const CHECK_OMNISEND = new Set(['OUTCOME_UNKNOWN', 'TEMPLATE_UNCONFIRMED', 'DRAFT_CREATE_FAILED', 'SENDER_REQUIRED']);
+/** Refusals that mean the connection has to be made again (the card then offers Connect). */
+const RECONNECT_CODES = new Set(['RECONNECT_REQUIRED', 'SCOPE_REQUIRED', 'NOT_CONNECTED']);
+
+class OmnisendRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string,
+  ) {
+    super(message);
+  }
+}
+
+/** A request to the app's server (as Publish and Leads make them), or to `base`. Throws OmnisendRequestError. */
+async function omnisendRequest(path: string, { method = 'GET', body, base, credentials }: { method?: string; body?: unknown; base?: string; credentials?: RequestCredentials } = {}): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await serverFetch(base ?? serverBaseNow(), path, {
+      method,
+      ...(body !== undefined ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}),
+      ...(credentials ? { credentials } : {}),
+    });
+  } catch {
+    throw new OmnisendRequestError('Couldn’t reach the server. Check your connection, then try again.', 0, 'NETWORK');
+  }
+  const result = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    const r = (result && typeof result === 'object' ? result : {}) as { error?: unknown; code?: unknown };
+    throw new OmnisendRequestError(typeof r.error === 'string' && r.error ? r.error : `The Omnisend request failed (error ${response.status}).`, response.status, typeof r.code === 'string' ? r.code : '');
+  }
+  return result;
+}
+
+/** The status, when it is one (a static host's page, or an older server's other shape, isn't). */
+function toStatus(raw: unknown): OmnisendStatus | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.credentialsConfigured !== 'boolean' || typeof r.storageReady !== 'boolean' || typeof r.connected !== 'boolean' || !Array.isArray(r.missingCredentials)) return null;
+  const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  return {
+    credentialsConfigured: r.credentialsConfigured,
+    missingCredentials: strings(r.missingCredentials),
+    storageReady: r.storageReady,
+    connected: r.connected,
+    reconnect: r.reconnect === 'revoked' || r.reconnect === 'scopes' || r.reconnect === 'unreadable' ? r.reconnect : null,
+    scopes: strings(r.scopes),
+    owner: r.owner === true,
+  };
 }
 
 /** The server has no Omnisend routes (an older server, or no server at all): the card stays out of the way. */
-const notOffered = (e: unknown) => e instanceof TypeError || (e as { status?: number })?.status === 404;
+const notOffered = (e: unknown) => e instanceof OmnisendRequestError && (e.code === 'NETWORK' || e.status === 404);
+
+const isWebAddress = (value: string) => {
+  try {
+    const url = new URL(value.trim());
+    return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+};
+
+/** One email as its Omnisend draft: every field with the values the preview shows. */
+export function omnisendDraft(project: Project, email: EmailStep, index: number, tokens: Record<string, string>) {
+  const ctaLabel = renderTokens(email.ctaLabel, tokens).trim();
+  return {
+    name: `${project.brand.name} — Email ${index + 1}`,
+    subject: renderTokens(email.subject, tokens),
+    preheader: renderTokens(email.preview, tokens),
+    body: renderTokens(email.body, tokens),
+    ctaLabel,
+    // the preview shows no button without a label: neither does the draft
+    ctaUrl: ctaLabel ? renderTokens(email.ctaUrl, tokens).trim() : '',
+  };
+}
+
+/** Values in [brackets] (a name, a link the brand has no address for): the owner fills them in before sending. */
+const hasPlaceholders = (draft: ReturnType<typeof omnisendDraft>) => [draft.subject, draft.preheader, draft.body, draft.ctaLabel].some((text) => /\[[^\]\n]{1,60}\]/.test(text));
 
 /** Omnisend: connect your own brand and create campaign drafts from the sequence (the app never sends). */
 function useOmnisend() {
@@ -54,11 +151,15 @@ function useOmnisend() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [outcome, setOutcome] = useState('');
 
   async function refresh() {
     setLoading(true);
     try {
-      setStatus(await omnisendRequest<OmnisendStatus>('/api/integrations/omnisend/status'));
+      const next = toStatus(await omnisendRequest(`${API}/status`));
+      // an answer that isn't a status (a static host's page): no Omnisend here
+      if (!next) setUnavailable(true);
+      setStatus(next);
       setError('');
     } catch (e) {
       if (notOffered(e)) setUnavailable(true);
@@ -70,18 +171,11 @@ function useOmnisend() {
 
   useEffect(() => {
     if (__ARTIFACT_BUILD__) return;
-    // back from Omnisend's sign-in: say how it went, then drop the marker from the address
+    // back from Omnisend's sign-in: say how it went (once the status says who's asking), then drop the marker from the address
     const params = new URLSearchParams(window.location.search);
-    const outcome = params.get('omnisend');
-    if (outcome) {
-      const messages: Record<string, string> = {
-        connected: 'Omnisend is connected. You can create drafts here; nothing has been sent.',
-        cancelled: 'Omnisend connection was cancelled.',
-        invalid_state: 'The Omnisend sign-in could not be validated. Start the connection again.',
-        setup: 'Omnisend OAuth credentials are not configured yet. Add them in Replit Secrets after Omnisend issues them.',
-        error: 'Omnisend could not complete the connection. Check the registered callback URL and OAuth credentials.',
-      };
-      setNotice(messages[outcome] || 'Returned from Omnisend.');
+    const back = params.get('omnisend');
+    if (back) {
+      setOutcome(back);
       params.delete('omnisend');
       const query = params.toString();
       window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
@@ -93,9 +187,17 @@ function useOmnisend() {
     setBusy(true);
     setError('');
     try {
-      const result = await omnisendRequest<{ authorizationUrl: string }>('/api/integrations/omnisend/connect', 'POST', {});
-      const target = new URL(result.authorizationUrl);
-      if (target.origin !== 'https://app.omnisend.com') throw new Error('Omnisend returned an unexpected sign-in URL.');
+      // started on the published app's own server: Omnisend sends the browser back there, and the cookie that
+      // ties the return to this browser is set there (a same-origin request, so the browser keeps it)
+      const result = await omnisendRequest(`${API}/connect`, { method: 'POST', body: {}, base: OMNISEND_PUBLIC_APP_URL, credentials: 'same-origin' });
+      const url = (result as { authorizationUrl?: unknown } | null)?.authorizationUrl;
+      let target: URL | null = null;
+      try {
+        target = typeof url === 'string' ? new URL(url) : null;
+      } catch {
+        // not an address at all: refused below like any other
+      }
+      if (!target || target.origin !== 'https://app.omnisend.com') throw new Error('Omnisend returned an unexpected sign-in URL.');
       window.location.assign(target.toString());
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not start the Omnisend connection.');
@@ -107,8 +209,9 @@ function useOmnisend() {
     setBusy(true);
     setError('');
     try {
-      await omnisendRequest('/api/integrations/omnisend/connection', 'DELETE');
+      await omnisendRequest(`${API}/connection`, { method: 'DELETE' });
       await refresh();
+      setOutcome('');
       setNotice('Omnisend was disconnected from this app. To revoke the grant completely, also remove the app in Omnisend.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not disconnect Omnisend.');
@@ -117,17 +220,24 @@ function useOmnisend() {
     }
   }
 
-  return { status, unavailable, loading, busy, error, notice, setNotice, connect, disconnect };
+  const dismiss = () => {
+    setNotice('');
+    setOutcome('');
+  };
+  // what came back from Omnisend is said once the status is in (the owner gets the setup details)
+  const shown = notice || (outcome && !loading ? outcomeText(outcome, !!status?.owner) : '');
+  return { status, unavailable, loading, busy, error, notice: shown, dismiss, connect, disconnect, refresh };
 }
 
 type Omnisend = ReturnType<typeof useOmnisend>;
 
 function OmnisendCard({ omnisend }: { omnisend: Omnisend }) {
-  const { status, unavailable, loading, busy, error, notice, setNotice, connect, disconnect } = omnisend;
+  const { status, unavailable, loading, busy, error, notice, dismiss, connect, disconnect } = omnisend;
   if (unavailable) return null;
   const isPublishedApp = typeof window !== 'undefined' && window.location.origin === OMNISEND_PUBLIC_APP_URL;
-  const canConnect = !!status && !status.connected && status.credentialsConfigured && status.storageReady && isPublishedApp;
-  const needsSetup = !loading && !!status && !status.credentialsConfigured;
+  const ready = !!status && status.credentialsConfigured && status.storageReady;
+  const canConnect = ready && !status.connected && isPublishedApp;
+  const owner = !!status?.owner;
   return (
     <section className="card flex flex-col gap-3 p-4" aria-labelledby="omnisend-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -142,6 +252,8 @@ function OmnisendCard({ omnisend }: { omnisend: Omnisend }) {
             <span className="text-small text-muted">Checking connection…</span>
           ) : status?.connected ? (
             <StatusDot tone="good">Connected</StatusDot>
+          ) : status?.reconnect ? (
+            <StatusDot tone="warn">Reconnect needed</StatusDot>
           ) : (
             <StatusDot tone="faint">Not connected</StatusDot>
           )}
@@ -151,31 +263,38 @@ function OmnisendCard({ omnisend }: { omnisend: Omnisend }) {
             </button>
           ) : canConnect ? (
             <button type="button" className="btn btn-secondary btn-sm" disabled={busy || loading} onClick={() => void connect()}>
-              {busy ? 'Connecting…' : 'Connect Omnisend'}
+              {busy ? 'Connecting…' : status.reconnect ? 'Connect again' : 'Connect Omnisend'}
             </button>
           ) : null}
         </div>
       </div>
       {notice && (
         <div role="status">
-          <Callout tone="info" onDismiss={() => setNotice('')}>
+          <Callout tone="info" onDismiss={dismiss}>
             {notice}
           </Callout>
         </div>
       )}
       {error && <Callout tone="bad">{error}</Callout>}
-      {!loading && status && !status.storageReady && (
+      {!loading && status && !ready && !owner && <p className="text-small text-muted">Omnisend isn’t set up on this app yet.</p>}
+      {!loading && status && owner && !status.storageReady && (
         <Callout tone="warn">Secure token storage is unavailable. Check the Supabase server secret and confirm the app_state migration is applied.</Callout>
       )}
-      {!loading && status?.credentialsConfigured && status.storageReady && !status.connected && !isPublishedApp && (
-        <Callout tone="info">
-          Connect from the published app, so Omnisend returns to the same place:{' '}
-          <a className="link" href={`${OMNISEND_PUBLIC_APP_URL}/#marketing-email`}>
-            {OMNISEND_PUBLIC_APP_URL.replace(/^https:\/\//, '')}
-          </a>
+      {!loading && ready && !status.connected && (status.reconnect || !isPublishedApp) && (
+        <Callout tone={status.reconnect ? 'warn' : 'info'}>
+          {status.reconnect && RECONNECT[status.reconnect]}
+          {status.reconnect && !isPublishedApp && ' '}
+          {!isPublishedApp && (
+            <>
+              Connect from the published app, so Omnisend returns to the same place:{' '}
+              <a className="link" href={`${OMNISEND_PUBLIC_APP_URL}/#marketing-email`}>
+                {OMNISEND_PUBLIC_APP_URL.replace(/^https:\/\//, '')}
+              </a>
+            </>
+          )}
         </Callout>
       )}
-      {needsSetup && (
+      {!loading && status && owner && !status.credentialsConfigured && (
         <Accordion type="single" collapsible>
           <AccordionItem value="setup" className="border-b-0">
             <AccordionTrigger className="py-2 text-small">How to set up Omnisend</AccordionTrigger>
@@ -206,26 +325,29 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
   const tokens = emailTokens(project);
   const omnisend = useOmnisend();
   const [drafts, setDrafts] = useState<Record<string, DraftState>>({});
+  const settle = (emailId: string, state: DraftState) => setDrafts((current) => ({ ...current, [emailId]: state }));
 
   async function createOmnisendDraft(emailId: string, index: number) {
     const email = emails[index];
     if (!email) return;
-    setDrafts((current) => ({ ...current, [emailId]: { busy: true } }));
+    const draft = omnisendDraft(project, email, index, tokens);
+    // the draft is what the preview shows, so its button needs somewhere to go first
+    if (draft.ctaLabel && !isWebAddress(draft.ctaUrl)) {
+      settle(emailId, { tone: 'bad', message: 'This email’s button has no web address yet. Add your website in Settings → Brand, or a full https:// link as its Button link in Sequence.' });
+      return;
+    }
+    settle(emailId, { busy: true });
     try {
-      const result = await omnisendRequest<{ campaign: { name: string; url?: string } }>('/api/integrations/omnisend/campaign-drafts', 'POST', {
-        name: `${project.brand.name} — Email ${index + 1}`,
-        subject: renderTokens(email.subject, tokens),
-        preheader: renderTokens(email.preview, tokens),
-        body: email.body,
-        ctaLabel: email.ctaLabel,
-        ctaUrl: email.ctaUrl,
-      });
-      setDrafts((current) => ({
-        ...current,
-        [emailId]: { message: `Draft created in Omnisend: ${result.campaign.name}. Nothing has been sent.`, url: result.campaign.url || '' },
-      }));
+      const result = (await omnisendRequest(`${API}/campaign-drafts`, { method: 'POST', body: draft })) as { campaign?: { name?: unknown; url?: unknown } } | null;
+      const name = typeof result?.campaign?.name === 'string' ? result.campaign.name : draft.name;
+      const url = typeof result?.campaign?.url === 'string' && result.campaign.url.startsWith('https://app.omnisend.com/') ? result.campaign.url : '';
+      const fill = hasPlaceholders(draft) ? ' Before you send it, replace the values in [brackets] in Omnisend.' : '';
+      settle(emailId, { tone: 'done', message: `Draft created in Omnisend: ${name}. Nothing has been sent.${fill}`, url });
     } catch (e) {
-      setDrafts((current) => ({ ...current, [emailId]: { message: e instanceof Error ? e.message : 'Could not create the Omnisend draft.' } }));
+      const code = e instanceof OmnisendRequestError ? e.code : '';
+      settle(emailId, { tone: CHECK_OMNISEND.has(code) ? 'warn' : 'bad', message: e instanceof Error ? e.message : 'Could not create the Omnisend draft.' });
+      // the connection has to be made again: the card says so and offers Connect
+      if (RECONNECT_CODES.has(code)) void omnisend.refresh();
     }
   }
 
@@ -300,7 +422,7 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
                   )}
                 </div>
                 {draft?.message && (
-                  <p role="status" className="text-caption text-muted lg:max-w-[180px]">
+                  <p role={draft.tone === 'done' ? 'status' : 'alert'} className={cn('text-caption lg:max-w-[180px]', draft.tone === 'bad' ? 'text-bad' : draft.tone === 'warn' ? 'text-warn' : 'text-muted')}>
                     {draft.message}
                     {draft.url && (
                       <>

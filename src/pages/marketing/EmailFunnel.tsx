@@ -16,8 +16,19 @@ export default function EmailFunnel() {
   const project = useActiveProject()!;
   const m = project.marketing;
   const newLeads = useNewLeadCount(project);
-  // new leads from the page's form: the bell's notice opens Email, and lands here on Leads
-  const [tab, setTab] = useState<Tab>(() => (!__ARTIFACT_BUILD__ && newLeads > 0 ? 'leads' : !m.leadMagnet ? 'magnet' : m.emails.length < 5 ? 'sequence' : 'preview'));
+  // back from Omnisend's sign-in (?omnisend=…): Preview & export, where its card says how it went; new leads from the
+  // page's form: the bell's notice opens Email, and lands here on Leads
+  const [tab, setTab] = useState<Tab>(() =>
+    !__ARTIFACT_BUILD__ && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('omnisend')
+      ? 'preview'
+      : !__ARTIFACT_BUILD__ && newLeads > 0
+        ? 'leads'
+        : !m.leadMagnet
+          ? 'magnet'
+          : m.emails.length < 5
+            ? 'sequence'
+            : 'preview',
+  );
   // a tab asked for from elsewhere (the assistant)
   useTabRequest<Tab>('marketing-email', (tabsOf('marketing-email') as Tab[]).filter((t) => !__ARTIFACT_BUILD__ || t !== 'leads'), setTab);
   const label = (t: Tab) => tabLabel('marketing-email', t);
