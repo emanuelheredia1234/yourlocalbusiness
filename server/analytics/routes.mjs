@@ -8,7 +8,7 @@
 // Every query names the signed-in user; someone else's project or run answers 404.
 // onStart: runs left `running` by a restart are ended the same way.
 
-import { fail, isUuid } from '../integrations/common.mjs';
+import { fail, isUuid, notSetUp } from '../integrations/common.mjs';
 import { createKit } from './http.mjs';
 import { createRefresher } from './refresh.mjs';
 import { cleanSettings, loadProject, projectIdFrom, readRun, readSettings, readSnapshots, runOut, sweepStuckRuns, writeSettings } from './snapshots.mjs';
@@ -64,6 +64,9 @@ export function createAnalyticsRoutes(deps = {}) {
       const who = await kit.user(req, res);
       if (!who) return true;
       try {
+        // everything here reads through treg (server/treg.mjs): until that wrapper is in this copy of the app,
+        // these routes are plainly not set up (the owner's hint says why)
+        if (treg?.stub) throw notSetUp('The treg wrapper (server/treg.mjs) isn’t built into this copy of the app yet.', 'Analytics aren’t available yet.');
         await route(req, res, url, who);
       } catch (e) {
         kit.failWith(req, res, e, who);

@@ -216,6 +216,9 @@ export function createSeoGoogleRoutes(deps = {}) {
       const who = await kit.user(req, res);
       if (!who) return true;
       try {
+        // everything here reads through treg (server/treg.mjs): until that wrapper is in this copy of the app,
+        // these routes are plainly not set up (the owner's hint says why)
+        if (treg?.stub) throw notSetUp('The treg wrapper (server/treg.mjs) isn’t built into this copy of the app yet.', 'Sending pages to Google isn’t available yet.');
         if (url.pathname === `${PREFIX}publish` && req.method === 'POST') {
           if (kit.limited(req, res, { key: `seo-google:user:${who.id}` })) return true;
           const result = await publish(who, await kit.body(req));

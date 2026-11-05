@@ -383,3 +383,15 @@ describe('rank matching', () => {
     expect(mapsPosition([{ position: 3, name: 'Other' }], { name: 'Joe' })).toBeNull();
   });
 });
+
+describe('before the treg wrapper is built', () => {
+  it('answers 503 NOT_SET_UP (the reason for the owner only) and spends nothing', async () => {
+    project(A.id, 'p1');
+    const { createTreg } = await import('../treg.mjs');
+    const { routes } = makeRoutes({ treg: createTreg({ env: ENV }) });
+    const r = await call(routes, 'POST', '/api/analytics/refresh', { token: 'a', body: { projectId: 'p1' } });
+    expect(r.status).toBe(503);
+    expect(r.body).toEqual({ error: expect.any(String), code: 'NOT_SET_UP' });
+    expect(rows('analytics_runs')).toHaveLength(0);
+  });
+});
