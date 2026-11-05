@@ -221,6 +221,15 @@ describe('the built-in engine never takes over what an AI wrote on its own', () 
     expect(useUI.getState().toasts.at(-1)).toMatchObject({ kind: 'error', title: 'Strategy stopped at step 1' });
   });
 
+  it('the key is taken off Strategy halfway: the run stops there, keeps what the AI wrote, and says why', async () => {
+    answer({ onStep: (step) => step === 'research' && useRuntime.getState().set({ ai: { ...NO_AI_SERVER, reachable: true, ready: true, routing: {} } }) });
+    expect(await runStrategy('p1')).toBe('failed');
+    const s = strategyOf('p1');
+    expect(s.research?.provider).toBe('server');
+    expect(s.promote).toBeUndefined();
+    expect(s.run).toMatchObject({ stoppedAt: 'promote', done: ['research'], note: 'No API key powers Strategy now. In Settings → AI, tick Strategy for one of your keys.' });
+  });
+
   it('with no key for Strategy: only when the owner chose it (replaceAI) does the built-in engine replace the AI’s sections', async () => {
     const before = await aiStrategy();
     useRuntime.getState().set({ ai: { ...NO_AI_SERVER, reachable: true, ready: true, routing: {} } });

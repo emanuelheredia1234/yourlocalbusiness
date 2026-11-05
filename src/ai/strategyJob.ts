@@ -63,14 +63,15 @@ export function aiWritten(s: StrategyState, steps: StrategyStep[]): StrategyStep
   return steps.filter((k) => !!s[k] && s[k]!.provider !== 'local');
 }
 
-/** Why no AI can write the run now (from a step's result code, else from the runtime), and that nothing changed. */
-export function noAIText(code?: string): string {
+/** Why no AI can write the run now (from a step's result code, else from the runtime), and that nothing changed when nothing did. */
+export function noAIText(code?: string, unchanged = true): string {
   const cause = code
     ? code === 'no_provider' ? 'key' : code === 'server_down' || code === 'network' ? 'server' : 'claude'
     : __ARTIFACT_BUILD__ ? 'claude' : useRuntime.getState().server === 'down' ? 'server' : 'key';
-  if (cause === 'server') return 'Your AI server can’t be reached right now, so nothing was changed. Check that it’s running, then try again.';
-  if (cause === 'key') return 'No API key powers Strategy now, so nothing was changed. In Settings → AI, tick Strategy for one of your keys.';
-  return 'Claude isn’t available here right now, so nothing was changed.';
+  const so = unchanged ? ', so nothing was changed' : '';
+  if (cause === 'server') return `Your AI server can’t be reached right now${so}. Check that it’s running, then try again.`;
+  if (cause === 'key') return `No API key powers Strategy now${so}. In Settings → AI, tick Strategy for one of your keys.`;
+  return `Claude isn’t available here right now${so}.`;
 }
 
 /**
@@ -238,7 +239,7 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
         const noAI = !res.code || NO_AI.includes(res.code);
         // the built-in engine stands in only for a run no AI is here for, and over sections an AI wrote only when the owner chose it
         if (noAI && !aiWrote && (o.replaceAI || !aiWritten(s, list).length)) builtinMode = true;
-        else return fail(noAI && !aiWrote ? noAIText(res.code) : stopNote(res.note));
+        else return fail(noAI ? noAIText(res.code, !aiWrote) : stopNote(res.note));
       }
       // the latest project: a project deleted meanwhile ends the run quietly
       const latest = project(projectId);
