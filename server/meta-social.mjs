@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { serviceHeaders } from './secretBox.mjs';
 
 // Direct publishing for Facebook Pages and Instagram professional accounts.
 // Facebook Login connects Pages (and any linked Instagram account); Instagram Login
@@ -331,9 +332,7 @@ export function createMetaSocialRoutes({
       response = await fetchImpl(`${supabaseUrl}/storage/v1/object/sign/media/${path}`, {
         method: 'POST',
         headers: {
-          apikey: supabaseSecret,
-          ...(supabaseSecret.startsWith('sb_secret_') ? {} : { authorization: `Bearer ${supabaseSecret}` }),
-          'content-type': 'application/json',
+          ...serviceHeaders(supabaseSecret),
         },
         body: JSON.stringify({ expiresIn: 1800 }),
         signal: AbortSignal.timeout(12_000),
@@ -501,6 +500,13 @@ export function createMetaSocialRoutes({
     let job = null;
     try {
       job = await queueChange((jobs) => {
+        const expired = jobs.find((j) => j.status === 'publishing' && Number(j.lockUntil) <= now());
+        if (expired) {
+          expired.status = 'uncertain';
+          expired.error = 'The server stopped during publishing. Check the social account before retrying.';
+          expired.lockUntil = 0;
+          return { jobs, result: null };
+        }
         const item = jobs.find((j) => j.status === 'scheduled' && Number(j.scheduledAt) <= now());
         if (!item) return { write: false, result: null };
         item.status = 'publishing';

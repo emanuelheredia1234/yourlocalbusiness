@@ -342,7 +342,7 @@ function Accounts() {
           <span className="flex items-center gap-1">
             <Saved shown={saved} />
             <InfoTip title="How posting works" label="How posting works">
-              This app doesn’t log in to your social accounts and never posts on its own. Manus, an AI agent, opens each network in its own browser, where you sign in once, and posts exactly the text and image or video you confirm. Without Manus, copy a post’s text and download its image from the post’s ⋯ menu, post it yourself, then choose Mark as posted.
+              These links only identify your profiles; they don’t authorize posting. Connect a Facebook Page or Instagram professional account above for direct publishing. Manus can also open its own browser to post to supported networks. Otherwise, copy the post text and download its image from the ⋯ menu, post it yourself, then choose Mark as posted.
             </InfoTip>
           </span>
         }
