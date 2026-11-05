@@ -23,7 +23,7 @@ function Findings({ list, s }: { list: StrategyFinding[]; s: StrategyState }) {
             {TOPIC_LABEL[topic]}
             <BasisTip items={items} />
           </h3>
-          <ul className="mt-1 divide-y divide-line">
+          <ul className="mt-1 max-w-[80ch] divide-y divide-line">
             {items.map((f) => (
               <li key={f.text} className="py-2.5 text-body text-ink-2">
                 {f.text}

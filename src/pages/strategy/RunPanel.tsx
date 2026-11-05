@@ -193,18 +193,19 @@ export function RunDetailsLink({ project, s, who, children = 'Details' }: { proj
   );
 }
 
-/** "Updated Nov 4 · Details" (or "Details" before anything is written). */
-export function RunMeta({ project, s, who }: { project: Project; s: StrategyState; who: StrategyWho }) {
+/** "Updated Nov 4 · Details" once something is written, else "Who writes it and the cost". */
+export function RunMeta({ project, s, who, saved }: { project: Project; s: StrategyState; who: StrategyWho; saved: boolean }) {
+  const updated = saved && s.updatedAt > 0;
   return (
     <>
-      {s.updatedAt > 0 && (
+      {updated && (
         <>
           <span>Updated {fmtDate(s.updatedAt)}</span>
           <span aria-hidden="true">·</span>
         </>
       )}
       <RunDetailsLink project={project} s={s} who={who}>
-        {s.updatedAt > 0 ? 'Details' : 'Who writes it and the cost'}
+        {updated ? 'Details' : 'Who writes it and the cost'}
       </RunDetailsLink>
     </>
   );

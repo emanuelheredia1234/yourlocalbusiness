@@ -44,7 +44,6 @@ function details(project: Project, s: StrategyState, o: { useBrain?: boolean } =
   use(project, o);
   return html(createElement(RunDetails, { project, s, who: strategyWho({ maxSearches: s.maxSearches }) }));
 }
-const strategyOf = (p: Project) => (p as Project & { strategy: StrategyState }).strategy;
 const emptyStrategy = (p: Project): StrategyState => ({ ...qaSavedStrategy(p), research: undefined, promote: undefined, content: undefined, assets: undefined, outreach: undefined, plan: undefined, run: undefined, sources: [] });
 
 beforeEach(() => {

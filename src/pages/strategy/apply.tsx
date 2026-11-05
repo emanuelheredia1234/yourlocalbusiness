@@ -82,12 +82,12 @@ export function PreviewHost() {
 
 /** Exactly the text that is written, as it will read. */
 export function Exact({ text }: { text: string }) {
-  return <pre className="scroll-thin max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-surface-2 p-3 font-sans text-[12.5px] leading-relaxed text-ink-2">{text}</pre>;
+  return <pre className="well scroll-thin max-h-[50vh] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-sans text-small text-ink-2">{text}</pre>;
 }
 
 function Lines({ lines }: { lines: string[] }) {
   return (
-    <ul className="flex list-disc flex-col gap-1 pl-5 text-[13px] text-ink-2">
+    <ul className="flex list-disc flex-col gap-1.5 pl-5 text-body text-ink-2 marker:text-faint">
       {lines.map((l) => (
         <li key={l}>{l}</li>
       ))}
@@ -106,12 +106,12 @@ function SkillPreview({ pid, area }: { pid: string; area: SkillArea }) {
   if (!p) return null;
   const k = strategySkill(p, area, readStrategy(p));
   return (
-    <div className="flex flex-col gap-3 text-[13px]">
+    <div className="flex flex-col gap-3 text-body">
       <p className="text-ink-2">
-        <b className="font-semibold text-ink">{k.name}</b> · Applies to: {AREA_NAME[area]} · only for {p.brand.name || 'this project'}
+        <span className="font-medium text-ink">{k.name}</span> · Applies to: {AREA_NAME[area]} · only for {p.brand.name || 'this project'}
       </p>
       <Exact text={`${k.instructions}\n\n${k.doc?.excerpt ?? ''}`} />
-      <p className="text-xs text-muted">Notes are the strategy’s recommendations, not facts about your business: no findings, sources, prices or links. You can change it or turn it off in the Brain any time.</p>
+      <p className="text-caption text-muted">Notes are the strategy’s recommendations, not facts about your business: no findings, sources, prices or links. You can change it or turn it off in the Brain any time.</p>
     </div>
   );
 }
@@ -172,7 +172,7 @@ export async function seoFlow(pid: string): Promise<void> {
     const choice = await preview({
       title: 'You changed the block Strategy added',
       body: (
-        <div className="flex flex-col gap-3 text-[13px]">
+        <div className="flex flex-col gap-3 text-body">
           <p className="text-ink-2">Your edits stay as they are. You can add the strategy’s direction again as a new block below them:</p>
           <Exact text={fresh.block} />
         </div>
@@ -185,7 +185,7 @@ export async function seoFlow(pid: string): Promise<void> {
     const choice = await preview({
       title: 'Add this to the SEO page’s guidance?',
       body: (
-        <div className="flex flex-col gap-3 text-[13px]">
+        <div className="flex flex-col gap-3 text-body">
           <p className="text-ink-2">{r.mode === 'replace' ? 'It replaces the block Strategy added before. ' : ''}The SEO page’s AI reads it when it writes your page and its metadata. You can edit it there.</p>
           <Exact text={r.block} />
         </div>
@@ -215,7 +215,7 @@ export async function campaignFlow(pid: string): Promise<void> {
     body: (
       <div className="flex flex-col gap-3">
         <Lines lines={r.lines} />
-        <p className="text-xs text-muted">Your days, times, watermark and start date stay. Undo puts these back.</p>
+        <p className="text-caption text-muted">Your days, times, watermark and start date stay. Undo puts these back.</p>
       </div>
     ),
     actions: [{ id: 'go', label: 'Use these settings', primary: true }],
@@ -246,7 +246,7 @@ export async function linksFlow(pid: string): Promise<void> {
     body: (
       <div className="flex flex-col gap-3">
         <Lines lines={lines} />
-        <p className="text-xs text-muted">New posts use these. Each post can still choose its own, and posts you already made keep theirs.</p>
+        <p className="text-caption text-muted">New posts use these. Each post can still choose its own, and posts you already made keep theirs.</p>
       </div>
     ),
     actions: [{ id: 'go', label: 'Use these link settings', primary: true }],

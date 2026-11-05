@@ -148,7 +148,7 @@ export function StrategyPage({ project }: { project: Project }) {
   if (empty) {
     return (
       <div>
-        <PageHeader title="Strategy" meta={<RunMeta project={project} s={s} who={who} />} />
+        <PageHeader title="Strategy" meta={<RunMeta project={project} s={s} who={who} saved={false} />} />
         <section aria-label="Plan my strategy">
           <Empty
             variant="ai"
@@ -157,15 +157,12 @@ export function StrategyPage({ project }: { project: Project }) {
             body="Research, where to promote, and a 4-week plan. About two minutes."
             summary={
               <>
-                {sub.map((x) => (
-                  <span key={x} className="inline-flex items-center gap-2">
-                    <span>{x}</span>
-                    <span aria-hidden="true">·</span>
-                  </span>
-                ))}
-                <button type="button" className="link" onClick={() => setDrawer(true)}>
-                  Edit details
-                </button>
+                {sub.length > 0 && <span>{sub.join(' · ')}</span>}
+                <span className="basis-full">
+                  <button type="button" className="link" onClick={() => setDrawer(true)}>
+                    Edit details
+                  </button>
+                </span>
               </>
             }
             action={
@@ -198,7 +195,7 @@ export function StrategyPage({ project }: { project: Project }) {
         className="mb-4"
         title={saved ? (biz ? `How ${brand} gets clients` : `How ${brand} makes sales`) : 'Strategy'}
         description={sub.join(' · ') || undefined}
-        meta={<RunMeta project={project} s={s} who={who} />}
+        meta={<RunMeta project={project} s={s} who={who} saved={saved} />}
         actions={
           <>
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => setDrawer(true)}>

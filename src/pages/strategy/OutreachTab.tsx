@@ -65,7 +65,7 @@ export function OutreachTab({ project, s }: { project: Project; s: StrategyState
           <div className="mb-4">
             <Toggle checked={fill && !!link} disabled={!link} onChange={setFill} label="Fill in my page link" description={link ? `Copies put ${link.url} where the email says ${PLACEHOLDER}. The emails here stay as written.` : 'No page yet: publish your page first, then copies can carry its link.'} />
           </div>
-          <div className="grid grid-cols-1 items-start gap-4">
+          <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
             {o.templates.map((t) => (
               <article key={t.id} className="card flex min-w-0 flex-col gap-3 p-5">
                 <div>
