@@ -15,7 +15,9 @@ import { PAGE_TYPE_DESC, PAGE_TYPE_LABEL, PAGE_TYPE_LINKS, bookingLink, missingL
 import { navigate } from '@/lib/router';
 import { usePublishAccess } from '@/lib/publish';
 import { getActiveProject, useActiveProject, useStore } from '@/store/useStore';
-import { toast, useUI } from '@/store/ui';
+import { toast, useTabRequest, useUI } from '@/store/ui';
+import { tabLabel, tabsOf } from '@/lib/pageTabs';
+import { SeoAnalytics } from './seo/SeoAnalytics';
 import { AIComposer, AIResultBar, AIThinking, GenerateButton, Spark } from '@/components/ai/AI';
 import { PromptImages, usePasteImages } from '@/components/ai/PromptImages';
 import { PublishPanel } from '@/components/publish/PublishPanel';
@@ -41,6 +43,7 @@ import {
   Spinner,
   StatusDot,
   StickyActionBar,
+  Tabs,
   Tooltip,
   confirmAction,
   type MenuEntry,
@@ -82,7 +85,45 @@ function firstPanel(o: { html: boolean; published: boolean; unplaced: number }):
   return o.published ? 'score' : 'publish';
 }
 
+type SeoTab = 'builder' | 'analytics';
+
+/**
+ * The SEO page: Page (the builder) and, in the full app, Analytics (Google, Search Console and rankings).
+ * The builder stays mounted while Analytics is shown, so what it's writing isn't lost.
+ */
 export default function SeoSalesPage() {
+  const project = useActiveProject()!;
+  const [tab, setTab] = useState<SeoTab>('builder');
+  useTabRequest<SeoTab>('marketing-seo', (tabsOf('marketing-seo') as SeoTab[]).filter((t) => !__ARTIFACT_BUILD__ || t !== 'analytics'), setTab);
+  if (__ARTIFACT_BUILD__) return <SeoBuilder />;
+  const tabs = (
+    <Tabs<SeoTab>
+      className="mb-5"
+      value={tab}
+      onChange={setTab}
+      tabs={[
+        { id: 'builder', label: tabLabel('marketing-seo', 'builder') },
+        { id: 'analytics', label: tabLabel('marketing-seo', 'analytics') },
+      ]}
+    />
+  );
+  return (
+    <>
+      <div hidden={tab !== 'builder'}>
+        <SeoBuilder tabs={tabs} />
+      </div>
+      {tab === 'analytics' && (
+        <div>
+          <PageHeader className="mb-4" title="SEO page" description="Whether Google knows your page, and where it ranks." />
+          {tabs}
+          <SeoAnalytics project={project} />
+        </div>
+      )}
+    </>
+  );
+}
+
+function SeoBuilder({ tabs }: { tabs?: ReactNode }) {
   const project = useActiveProject()!;
   const updateMarketing = useStore((s) => s.updateMarketing);
   const meta = project.marketing.seo;
@@ -344,6 +385,7 @@ export default function SeoSalesPage() {
           ) : undefined
         }
       />
+      {tabs}
 
       {htmlMode ? (
         <SeoHtmlMode project={project} publishRef={publishRef} rail={rail} onRail={setRail} />
