@@ -68,8 +68,40 @@ before each approval._
 
 ## 5. treg, caps and billing
 
-_Filled in by the treg and billing work (WP3): topping up, minting the two tokens, "Set up caps", the default
-caps ($0.25 a day, $3.00 a month, 400 calls a day; 50 posts a day, 20 on X), reconcile and the CSV._
+treg supplies the public social data, competitor ads, Google rank and Maps position, and Search Console for
+pages on the app's own address. Every call goes through one server function (`server/treg.mjs`), is tagged with
+the customer's opaque tag (`cust_…`, never an email), and is written to the usage ledger, success or failure.
+
+**Once, before customers press Update**
+1. In treg: top up the balance and turn on auto top-up (Team → Billing). The prepaid balance is the only hard
+   limit; when it runs out, customers see "Analytics are temporarily unavailable" and you see a notice on the
+   Customer usage page and the Marketing hub.
+2. Mint two agent tokens and paste each **only** into Replit Secrets:
+   - `TREG_TOKEN`: member role, for the app's calls (`treg org agent-new ylb-app`). Not your own dashboard key.
+   - `TREG_ADMIN_TOKEN`: admin role, for caps and the usage check only (only a team owner can mint it).
+   - `TREG_ORG_ID`: your team id (`treg org ls`; not secret).
+   Usage tracking needs `CUSTOMER_TAG_SECRET` too (32+ random bytes; never change it).
+3. Open **Settings → Billing (owner)** and press **Set up caps**. That declares the `customer` budget dimension
+   at treg once and sends the default caps. The app never calls treg's `public-token` route.
+
+**Caps.** Defaults: $0.25 a day, $3.00 a month and 400 calls a day per customer for analytics data; 50 posts a
+day (20 on X) for posting from the app. A customer's own cap overrides a default field by field (an empty field
+uses the default); **Block** stops their analytics at once; **Reset to default** removes their override. Each
+change is sent to treg, whose budget is the authoritative ceiling; if that fails the row says "Not synced" and
+saving it again retries. The app also checks before each paid call, counting real treg spend only: the
+estimated costs of connected accounts and X posts are shown, labelled estimated, but never block anyone.
+Several calls at once can go over a cap by about one call each, so each customer runs at most 4 at a time.
+
+**Slow answers.** A treg answer that is still running after a minute comes back as "pending": it is never sent
+again. Every 5 minutes the server asks treg what it finally charged and adds a correcting ledger row.
+
+**Check against treg.** The owner page compares the ledger with treg's usage by customer over closed UTC days:
+"attributed + unattributed = total" must hold, unattributed spend should be $0 (anything else means a call that
+wasn't tagged), and a difference counts only if a one-day lag doesn't explain it. Pending calls are listed apart.
+
+**CSV.** **Download CSV** gives one line per customer for a month: `customer_tag, email, month, treg_usd,
+treg_calls, estimated_connections_usd, estimated_x_usd, total_usd, status`. The app doesn't charge cards or
+send invoices: bill customers from the CSV outside the app.
 
 ## 6. Analytics, Search Console and email stats
 

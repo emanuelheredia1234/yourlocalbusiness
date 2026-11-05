@@ -417,6 +417,12 @@ describe('settling pending answers', () => {
     // a fresh pending row (under 2 minutes) waits
     await db.insert('usage_ledger', row('ana', { outcome: 'pending', cost_micro: 2000, call_id: 'f'.repeat(32) }));
     expect(await settlePending({ ledger, admin })).toBe(0);
+    // a 410 "uncertain" answer (recorded at 0) is settled the same way
+    const lost = crypto.randomBytes(16).toString('hex');
+    mock.ledger.push({ callId: lost, customer: tagOf('ana'), endpointId: 'treg.x.user.posts', charged: 900, reserved: 900, at: iso(Date.now()), outcome: 'ok' });
+    await db.insert('usage_ledger', row('ana', { outcome: 'error:uncertain', cost_micro: 0, call_id: lost, created_at: iso(Date.now() - 5 * 60_000) }));
+    expect(await settlePending({ ledger, admin })).toBe(1);
+    expect((await db.select('usage_ledger', { call_id: lost, outcome: 'settled' }))[0].cost_micro).toBe(900);
     expect(chargedFrom({ outcome: 'pending', charged_micro: 5 })).toBeNull();
     expect(chargedFrom({ ledger: { charged_micro: 7 } })).toBe(7);
   });

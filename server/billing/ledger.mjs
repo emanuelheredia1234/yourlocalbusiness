@@ -6,7 +6,7 @@
 //   await ledger.spend(tag)              → { todayMicro, monthMicro, todayCalls }   (vendor 'treg' only: what caps count)
 //   await ledger.rows({ customer_tag, since, until, vendor })   every row in a window (paged past PostgREST's 1000)
 //   await ledger.byIdempotencyKey(key)   earlier rows for that key (timeout replays, spec §1.4)
-//   await ledger.pending(olderThanIso)   'pending' rows not settled yet
+//   await ledger.pending(olderThanIso)   'pending' (and 410 'error:uncertain') rows not settled yet
 //   await ledger.clearUser(userId)       after an account is deleted: user_id → null, the customer tag stays
 //
 // Rows are never updated except clearUser: a settlement or a correction is a new row with the same call_id.
@@ -101,9 +101,12 @@ export function createLedger({ db, now = () => Date.now(), log = console } = {})
       return db.select('usage_ledger', { idempotency_key: key }, { order: 'id.asc', limit: 20 });
     },
 
-    /** 'pending' treg rows older than `olderThanIso` that have no 'settled' row yet (by call_id). */
+    /**
+     * Rows whose charge treg hasn't told us yet, older than `olderThanIso`, with no 'settled' row (by call_id):
+     * 'pending' (a 202) and 'error:uncertain' (a 410 idempotency_* answer: it may have been charged).
+     */
     async pending(olderThanIso) {
-      const rows = await selectAll({ outcome: 'pending', created_at: ['lt', olderThanIso] });
+      const rows = await selectAll({ outcome: ['in', ['pending', 'error:uncertain']], created_at: ['lt', olderThanIso] });
       const ids = [...new Set(rows.map((r) => r.call_id).filter(Boolean))];
       if (!ids.length) return [];
       const settled = new Set();
