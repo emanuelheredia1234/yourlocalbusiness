@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
+import { createOmnisendRoutes } from './omnisend.mjs';
 import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
 import { limitsFromEnv } from './limits.mjs';
@@ -166,7 +167,15 @@ function requestUrl(req) {
 // ───────────── router ─────────────
 
 const auth = authFromEnv();
-const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv(), appState: appStateFromEnv(), limits: limitsFromEnv() });
+const appState = appStateFromEnv();
+const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv(), appState, limits: limitsFromEnv() });
+const omnisend = createOmnisendRoutes({
+  auth,
+  storage: appState,
+  send,
+  readJson,
+  sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
+});
 // keys and settings saved in Supabase (when its secret key is set) before the first request
 // (never more than a few seconds: a slow Supabase must not keep the app from starting)
 const settingsFrom = await Promise.race([ai.init(), new Promise((r) => setTimeout(() => r('slow'), 5000))]);
@@ -178,6 +187,7 @@ async function deleteAccount(req, res) {
   if (!ident) return;
   if (!ident.who) return send(res, 401, { error: 'Sign in first.', code: 'AUTH_REQUIRED' }, corsHeaders(req));
   try {
+    await omnisend.forgetUser(ident.who.id);
     await auth.deleteUser(ident.who.id);
     pages.forgetUser(ident.who.id);
     return send(res, 200, { ok: true }, corsHeaders(req));
@@ -211,6 +221,7 @@ function route(req, res, url) {
       .then(async (ident) => ident && send(res, 200, { ok: true, ai: await ai.health(ident.who, req) }, corsHeaders(req)))
       .catch((e) => crashed(req, res, e));
   }
+  if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url);
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res).catch((e) => crashed(req, res, e));
   if (pages.matchApi(url)) return void pages.handleApi(req, res, url).catch((e) => crashed(req, res, e));
   if (ai.match(url)) {
