@@ -176,7 +176,7 @@ export function StepBrand({ project }: { project: Project }) {
             </Field>
           </Section>
 
-          <section className="rounded-2xl border border-line bg-surface p-5 sm:p-6" aria-labelledby="brand-board-title">
+          <section className="rounded-2xl border border-line bg-surface p-5" aria-labelledby="brand-board-title">
             <div className="mb-5">
               <h2 id="brand-board-title" className="text-h3 text-ink">
                 Logo, colours &amp; banner

@@ -65,9 +65,10 @@ function ChoiceCard({ icon, title, body, examples, onClick, selected }: { icon: 
 function Progress({ index, total, label }: { index: number; total: number; label: string }) {
   return (
     <div className="flex min-w-0 items-center gap-3" title={label}>
-      <div role="progressbar" aria-label="Setup progress" aria-valuemin={1} aria-valuemax={total} aria-valuenow={index + 1} aria-valuetext={`Step ${index + 1} of ${total}: ${label}`} className="flex gap-1">
+      {/* (the segments give way on a narrow phone with Cancel setup beside them, so "Step 2 of 5" stays clear of it) */}
+      <div role="progressbar" aria-label="Setup progress" aria-valuemin={1} aria-valuemax={total} aria-valuenow={index + 1} aria-valuetext={`Step ${index + 1} of ${total}: ${label}`} className="flex min-w-0 gap-1">
         {Array.from({ length: total }, (_, i) => (
-          <span key={i} className={cn('h-1 w-8 rounded-full transition-colors duration-240 sm:w-12', i <= index ? 'bg-ink' : 'bg-line-2')} />
+          <span key={i} className={cn('h-1 w-8 min-w-3 rounded-full transition-colors duration-240 sm:w-12', i <= index ? 'bg-ink' : 'bg-line-2')} />
         ))}
       </div>
       <span className="num whitespace-nowrap font-mono text-caption text-muted">

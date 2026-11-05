@@ -1481,44 +1481,45 @@ function PeopleUsage({ call }: { call: Call }) {
   );
 }
 
-/** Signed in as someone other than the owner: what powers each function (from /api/health), behind a disclosure. */
+/**
+ * Signed in as someone other than the owner: what powers each function (from /api/health), behind a disclosure.
+ * (Open, the disclosure's content is the region of that name: no second region around it.)
+ */
 function OwnerManaged() {
   const ai = useRuntime((s) => s.ai);
   const byId = new Map(ai.providers.map((p) => [p.id, p]));
   return (
-    <Region name="What powers each function">
-      <div className="card px-5">
-        <Accordion type="single" collapsible>
-          <AccordionItem value="powers" className="border-b-0">
-            <AccordionTrigger>What powers each function</AccordionTrigger>
-            <AccordionContent>
-              <p className="mb-3 text-small text-muted">Only the app’s owner can change keys, models and effort. Where nothing is set up, the built-in engine writes.</p>
-              <div className="grid grid-cols-1 gap-x-8 gap-y-4 md:grid-cols-2">
-                {AI_FUNCTION_GROUPS.map((g) => (
-                  <div key={g.id}>
-                    <p className="mb-1 text-caption font-medium text-muted">{g.label}</p>
-                    <ul className="flex flex-col divide-y divide-line">
-                      {AI_FUNCTIONS.filter((f) => f.group === g.id).map((f) => {
-                        const p = byId.get(ai.routing[f.id]?.[0] ?? '');
-                        const model = p?.models[f.kind];
-                        return (
-                          <li key={f.id} className="flex items-baseline justify-between gap-3 py-1.5 text-small">
-                            <span className="text-ink-2">{f.label}</span>
-                            <span className={cn('min-w-0 truncate text-right', p ? 'text-ink' : 'text-muted')} title={p && model ? `${p.label} · ${model}` : undefined}>
-                              {p ? p.label : 'Built-in engine'}
-                              {p && model && <span className="text-muted"> · {model}</span>}
-                            </span>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            </AccordionContent>
-          </AccordionItem>
-        </Accordion>
-      </div>
-    </Region>
+    <div className="card px-5">
+      <Accordion type="single" collapsible>
+        <AccordionItem value="powers" className="border-b-0">
+          <AccordionTrigger>What powers each function</AccordionTrigger>
+          <AccordionContent>
+            <p className="mb-3 text-small text-muted">Only the app’s owner can change keys, models and effort. Where nothing is set up, the built-in engine writes.</p>
+            <div className="grid grid-cols-1 gap-x-8 gap-y-4 md:grid-cols-2">
+              {AI_FUNCTION_GROUPS.map((g) => (
+                <div key={g.id}>
+                  <p className="mb-1 text-caption font-medium text-muted">{g.label}</p>
+                  <ul className="flex flex-col divide-y divide-line">
+                    {AI_FUNCTIONS.filter((f) => f.group === g.id).map((f) => {
+                      const p = byId.get(ai.routing[f.id]?.[0] ?? '');
+                      const model = p?.models[f.kind];
+                      return (
+                        <li key={f.id} className="flex items-baseline justify-between gap-3 py-1.5 text-small">
+                          <span className="text-ink-2">{f.label}</span>
+                          <span className={cn('min-w-0 truncate text-right', p ? 'text-ink' : 'text-muted')} title={p && model ? `${p.label} · ${model}` : undefined}>
+                            {p ? p.label : 'Built-in engine'}
+                            {p && model && <span className="text-muted"> · {model}</span>}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    </div>
   );
 }

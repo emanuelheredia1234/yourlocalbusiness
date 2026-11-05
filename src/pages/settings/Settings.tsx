@@ -72,14 +72,18 @@ export default function Settings() {
     setOpen(true);
     document.getElementById('main-scroll')?.scrollTo({ top: 0 });
   };
-  // a vertical tab list: up and down move between sections
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+  // a vertical tab list: up and down move between sections (the focus goes with the selection); in the
+  // phones' list they only move the focus, and Enter opens a section
+  const onKey = (e: KeyboardEvent<HTMLDivElement>, select: boolean) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
     e.preventDefault();
-    const i = items.findIndex((s) => s.id === shown);
+    // (React clears currentTarget once the handler returns: keep the list for the next frame)
+    const list = e.currentTarget;
+    const at = list.querySelector<HTMLElement>('[data-section]:focus')?.dataset.section;
+    const i = items.findIndex((s) => s.id === (select ? shown : at ?? shown));
     const j = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : (i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-    choose(items[j].id);
-    requestAnimationFrame(() => e.currentTarget.querySelector<HTMLElement>(`[data-section="${items[j].id}"]`)?.focus());
+    if (select) choose(items[j].id);
+    requestAnimationFrame(() => list.querySelector<HTMLElement>(`[data-section="${items[j].id}"]`)?.focus());
   };
 
   return (
@@ -90,7 +94,7 @@ export default function Settings() {
       <PageHeader title={current.label} back={{ label: 'Settings', onClick: () => setOpen(false) }} className={cn('lg:hidden', !open && 'hidden')} />
 
       <div className="lg:grid lg:grid-cols-[200px_minmax(0,1fr)] lg:gap-8">
-        <div role="tablist" aria-orientation="vertical" aria-label="Settings sections" onKeyDown={onKey} className="hidden flex-col gap-0.5 self-start lg:sticky lg:top-0 lg:flex">
+        <div role="tablist" aria-orientation="vertical" aria-label="Settings sections" onKeyDown={(e) => onKey(e, true)} className="hidden flex-col gap-0.5 self-start lg:sticky lg:top-0 lg:flex">
           {items.map((s) => {
             const on = s.id === shown;
             return (
@@ -115,7 +119,7 @@ export default function Settings() {
         </div>
 
         {/* phones: every section as a row */}
-        <div role="tablist" aria-orientation="vertical" aria-label="Settings sections" onKeyDown={onKey} className={cn('card flex flex-col divide-y divide-line overflow-hidden lg:hidden', open && 'hidden')}>
+        <div role="tablist" aria-orientation="vertical" aria-label="Settings sections" onKeyDown={(e) => onKey(e, false)} className={cn('card flex flex-col divide-y divide-line overflow-hidden lg:hidden', open && 'hidden')}>
           {items.map((s) => (
             <button key={s.id} type="button" role="tab" data-section={s.id} aria-selected={s.id === shown} aria-controls="settings-panel" onClick={() => choose(s.id)} className="flex min-h-14 items-center gap-3 px-4 py-2.5 text-left transition-colors duration-120 hover:bg-surface-2">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-3 text-ink-2 [&>svg]:size-4">{s.icon}</span>
@@ -251,7 +255,7 @@ function BrandSettings({ project }: { project: Project }) {
         <SettingsRow label="File name" description="Used in the names of files you download." htmlFor="b-slug">
           <input id="b-slug" className="input font-mono" value={brand.slug} onChange={(e) => set({ slug: slugify(e.target.value) })} />
         </SettingsRow>
-        <SettingsRow label="Refresh the copy" description="Rewrites the tagline, pitch, value proposition, audience and mission. Keeps your name, logo and colours.">
+        <SettingsRow label="Refresh the copy" description="Rewrites the words that describe you. Keeps your name, logo and colours.">
           <GenerateButton running={ai.running} onClick={refreshCopy} size="sm" runningLabel="Writing…">
             Refresh brand copy with AI
           </GenerateButton>
@@ -377,21 +381,24 @@ function ProjectsData() {
     setTimeout(() => document.getElementById('b-name')?.focus(), 80);
   };
 
+  const newProjectButtons = (
+    <>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => createProject('business', 'new')}>
+        <Plus /> New business
+      </button>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => createProject('product', 'new')}>
+        <Plus /> New product
+      </button>
+    </>
+  );
+
   return (
     <div className="flex max-w-[880px] flex-col gap-6">
       <SettingsSection
         title="Projects"
         description="Each project has its own brand, studio, marketing and analytics."
-        actions={
-          <>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => createProject('business', 'new')}>
-              <Plus /> New business
-            </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => createProject('product', 'new')}>
-              <Plus /> New product
-            </button>
-          </>
-        }
+        // phones: the two buttons go under the list (beside the title they'd squeeze it to a word per line)
+        actions={<span className="hidden items-center gap-2 sm:flex">{newProjectButtons}</span>}
       >
         <ul className="-mx-5 mt-3 flex flex-col border-t border-line" aria-label="Your projects">
           {projects.map((p) => {
@@ -426,6 +433,7 @@ function ProjectsData() {
             );
           })}
         </ul>
+        <div className="-mx-5 flex flex-wrap gap-2 border-t border-line px-5 py-4 sm:hidden">{newProjectButtons}</div>
       </SettingsSection>
 
       <SettingsSection title="Backup & restore" description={signedIn ? 'Your workspace is saved to your account. A backup is your own copy.' : 'Everything lives in this browser. A backup moves it or keeps it safe.'}>

@@ -8,7 +8,8 @@ import { toast } from '@/store/ui';
 
 /**
  * Settings › Domains: the owner's own domains, where their published pages can also show. Only where
- * publishing is on (never in the claude.ai build). `focus` (from a page's Publish panel) opens Add domain.
+ * publishing is on (never in the claude.ai build). `focus` (from a page's Publish panel: "Add a domain…",
+ * or "Check it…" for one that isn't verified) brings the list and its Add domain button into view.
  */
 export function DomainsCard({ focus, onFocused }: { focus?: boolean; onFocused?: () => void }) {
   const { access } = usePublishAccess();
@@ -38,12 +39,20 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
 
   const focused = useRef(onFocused);
   focused.current = onFocused;
+  // the section, not the side sheet: "Check it" comes here to see a domain's row and its TXT record; the
+  // Add domain button takes the focus once the list is in (it waits for it)
+  const focusAdd = useRef(false);
   useEffect(() => {
     if (!focus) return;
+    focusAdd.current = true;
     addButton.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    if (signedIn) setDrawer(true);
     focused.current?.();
-  }, [focus, signedIn]);
+  }, [focus]);
+  useEffect(() => {
+    if (!focusAdd.current || !list) return;
+    focusAdd.current = false;
+    addButton.current?.focus({ preventScroll: true });
+  }, [list]);
 
   /** Put a domain in the list as the server describes it now (it may have just moved to this account). */
   const keepDomain = (info: DomainInfo) => {

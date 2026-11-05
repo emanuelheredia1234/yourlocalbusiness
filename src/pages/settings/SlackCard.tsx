@@ -216,8 +216,11 @@ export function SlackCardView({ info, error = null, busy = null, bots = null, ch
     setReached(i + 1);
     setView(null);
   };
+  // before the token, a step counts as done when the server says so, or (steps 1–2, done in Slack) when the
+  // owner has moved past it; opening a later step never marks the token or Viktor as done
+  const doneAt = (i: number) => done[i] || (i < current && !s?.configured && i < 2);
   const title = (i: number) => {
-    const doneHere = done[i] || (i < current && !s?.configured && i < 2);
+    const doneHere = doneAt(i);
     const label = (
       <>
         <span className="sr-only">
@@ -235,7 +238,7 @@ export function SlackCardView({ info, error = null, busy = null, bots = null, ch
       </button>
     );
   };
-  const stateOf = (i: number): 'done' | 'current' | 'upcoming' => (i === current ? 'current' : done[i] || (i < current && !s?.configured) ? 'done' : 'upcoming');
+  const stateOf = (i: number): 'done' | 'current' | 'upcoming' => (i === current ? 'current' : doneAt(i) ? 'done' : 'upcoming');
 
   const tokenSummary = !s ? '' : s.source === 'secrets' ? (
     <>

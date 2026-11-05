@@ -76,20 +76,25 @@ function Frame({ children }: { children: ReactNode }) {
         <main className="flex flex-1 items-start py-12 sm:items-center sm:py-14">
           <div className="w-full max-w-[400px] animate-rise-in">{children}</div>
         </main>
-        <p className="text-caption text-muted">© 2026 Yourlocalbusiness</p>
+        <p className="text-caption text-muted">© {new Date().getFullYear()} Yourlocalbusiness</p>
       </div>
       <Showcase />
     </div>
   );
 }
 
+/** Loading, opening the workspace, logging out: the mark and one line, centred (no showcase: a signed-in reload passes through here). */
 function Waiting({ text }: { text: string }) {
   return (
-    <Frame>
-      <p className="flex items-center gap-2 text-body-lg text-muted" role="status">
-        <Spinner size={18} /> {text}
+    <div className="flex min-h-full flex-col items-center justify-center gap-6 bg-surface px-6 py-10">
+      <div className="flex items-center gap-2.5">
+        <AppMark size={28} />
+        <span className="text-h3 text-ink">Yourlocalbusiness</span>
+      </div>
+      <p className="flex items-center gap-2 text-body text-muted" role="status">
+        <Spinner size={16} /> {text}
       </p>
-    </Frame>
+    </div>
   );
 }
 

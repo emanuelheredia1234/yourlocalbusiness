@@ -54,6 +54,17 @@ describe('the Viktor (Slack) card', () => {
     expect(html).not.toContain('Also revoke the token in Slack');
   });
 
+  it('not connected, a later step opened: the steps done in Slack show as done, never the token or Viktor', () => {
+    const html = render({}, { initialStep: 4 });
+    expect(html).toContain('Step 1, done');
+    expect(html).toContain('Step 2, done');
+    expect(html).not.toContain('Step 3, done');
+    expect(html).not.toContain('Step 4, done');
+    // no "Connected to your workspace as you" for a token that was never saved
+    expect(html).not.toContain('Connected to');
+    expect(html).toMatch(/<input type="radio" name="slack-where"/);
+  });
+
   it('with the token from the server’s secrets: no Remove, where to remove it instead', () => {
     const html = render({ configured: true, source: 'secrets', tokenHint: '••••0001', team: 'QA Workspace', user: 'owner', scopes: ALL, channelScopes: true, reason: 'no_viktor' });
     expect(html).toContain('From the server’s secrets (SLACK_USER_TOKEN)');
