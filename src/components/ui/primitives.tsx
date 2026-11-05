@@ -46,6 +46,28 @@ function keepForToasts(e: { target: EventTarget | null; preventDefault: () => vo
   if (t && typeof t.closest === 'function' && t.closest('[data-sonner-toaster]')) e.preventDefault();
 }
 
+/** Hands the focus back to `el` once an overlay closes, when the focus was dropped (not moved somewhere on purpose). */
+function focusBack(el: Element | null) {
+  if (!(el instanceof HTMLElement) || !el.isConnected || (el as HTMLButtonElement).disabled) return;
+  const at = document.activeElement;
+  if (!at || at === document.body) el.focus({ preventScroll: true });
+}
+
+/**
+ * The element that had the focus when an overlay opened (its trigger). Radix dialogs without a
+ * DialogTrigger hand the focus to nothing on close; pass the returned handler as onCloseAutoFocus.
+ */
+function useReturnFocus(open: boolean) {
+  const opener = useRef<Element | null>(null);
+  useLayoutEffect(() => {
+    if (open && typeof document !== 'undefined') opener.current = document.activeElement;
+  }, [open]);
+  return (e: Event) => {
+    e.preventDefault();
+    focusBack(opener.current);
+  };
+}
+
 const SIZES = { sm: 'max-w-[440px]', md: 'max-w-[600px]', lg: 'max-w-[820px]', xl: 'max-w-[1080px]', full: 'max-w-[1280px]' } as const;
 
 /**
@@ -77,6 +99,7 @@ export function Modal({
   icon?: ReactNode;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  const returnFocus = useReturnFocus(open);
   if (!open) return null;
   const header = !!(title || subtitle);
   return (
@@ -91,6 +114,7 @@ export function Modal({
             el.focus({ preventScroll: true });
           }
         }}
+        onCloseAutoFocus={returnFocus}
         onEscapeKeyDown={(e) => persistent && e.preventDefault()}
         onPointerDownOutside={(e) => (persistent ? e.preventDefault() : keepForToasts(e))}
         onInteractOutside={(e) => (persistent ? e.preventDefault() : keepForToasts(e))}
@@ -126,8 +150,9 @@ export function Modal({
   );
 }
 
-/** A side sheet: inset on the right on wide screens, full screen on phones. */
+/** A side sheet: inset on the right on wide screens, full screen on phones. Closing hands the focus back to the button that opened it. */
 export function Drawer({ open, onClose, title, children, footer, width = 440 }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode; width?: number }) {
+  const returnFocus = useReturnFocus(open);
   if (!open) return null;
   return (
     <Sheet open onOpenChange={(v) => !v && onClose()}>
@@ -136,6 +161,7 @@ export function Drawer({ open, onClose, title, children, footer, width = 440 }: 
         aria-describedby={undefined}
         onPointerDownOutside={keepForToasts}
         onInteractOutside={keepForToasts}
+        onCloseAutoFocus={returnFocus}
         className="text-ink"
         style={{ maxWidth: width, paddingTop: 'env(safe-area-inset-top, 0px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
       >
@@ -546,14 +572,18 @@ interface ConfirmReq {
   cancelLabel?: string;
   danger?: boolean;
   resolve: (v: boolean) => void;
+  /** what had the focus when the question was asked: it gets the focus back */
+  opener?: Element | null;
 }
 const useConfirmStore = create<{ req: ConfirmReq | null; set: (r: ConfirmReq | null) => void }>((set) => ({ req: null, set: (req) => set({ req }) }));
 
 export function confirmAction(opts: Omit<ConfirmReq, 'resolve'>): Promise<boolean> {
   return new Promise((resolve) => {
     // only one question at a time: one still open counts as "no"
-    useConfirmStore.getState().req?.resolve(false);
-    useConfirmStore.getState().set({ ...opts, resolve });
+    const prev = useConfirmStore.getState().req;
+    const opener = prev ? prev.opener : typeof document !== 'undefined' ? document.activeElement : null;
+    prev?.resolve(false);
+    useConfirmStore.getState().set({ ...opts, resolve, opener });
   });
 }
 
@@ -571,6 +601,10 @@ export function ConfirmHost() {
     <AlertDialog open onOpenChange={(v) => !v && close(false)}>
       <AlertDialogContent
         {...(req.body ? {} : { 'aria-describedby': undefined })}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          focusBack(req.opener ?? null);
+        }}
         onOpenAutoFocus={(e) => {
           // a destructive question starts on Cancel (the Radix default); any other on Confirm
           if (req.danger) return;

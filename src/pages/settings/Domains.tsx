@@ -5,7 +5,6 @@ import { PublishError, addDomain, checkDomain, isValidDomain, listPublished, nor
 import { cn } from '@/lib/utils';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Badge, Callout, CopyButton, Drawer, Empty, Field, MoreMenu, SettingsRow, SettingsSection, Spinner, confirmAction } from '@/components/ui/primitives';
 import { toast } from '@/store/ui';
-import { useFocusBack } from './sheetFocus';
 
 /**
  * Settings › Domains: the owner's own domains, where their published pages can also show. Only where
@@ -57,7 +56,6 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
     addButton.current?.focus({ preventScroll: true });
   }, [list]);
   // the Add domain side sheet gives the focus back to the button when it closes
-  const openedFrom = useFocusBack(drawer);
 
   /** Put a domain in the list as the server describes it now (it may have just moved to this account). */
   const keepDomain = (info: DomainInfo) => {
@@ -187,10 +185,7 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
               type="button"
               className="btn btn-secondary btn-sm"
               disabled={!list}
-              onClick={(e) => {
-                openedFrom(e.currentTarget);
-                setDrawer(true);
-              }}
+              onClick={() => setDrawer(true)}
             >
               <Plus /> Add domain
             </button>
