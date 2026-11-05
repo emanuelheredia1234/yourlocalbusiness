@@ -120,7 +120,7 @@ export default function MarketingHub() {
         <StatStrip
           items={[
             { label: 'Posted', value: k.posted },
-            { label: 'Posted by Manus', value: k.byManus },
+            { label: 'Posted from the app', value: k.byApp },
             { label: 'Planned', value: k.upcoming },
             { label: 'Made with AI', value: k.made },
           ]}

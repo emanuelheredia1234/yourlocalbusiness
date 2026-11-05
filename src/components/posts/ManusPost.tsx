@@ -408,6 +408,7 @@ const STATE_UI: Record<NonNullable<Post['external']>['state'], { label: (n: stri
   scheduled: { label: (n) => `Manus scheduled it on ${n}`, tone: 'good', icon: CircleCheck },
   failed: { label: (n) => `The ${n} post didn’t go through`, tone: 'bad', icon: CircleAlert },
   finished: { label: () => 'Manus finished: check the result', tone: 'neutral', icon: CircleCheck },
+  unknown: { label: (n) => `We couldn’t confirm the ${n} post went out`, tone: 'warn', icon: CircleAlert },
 };
 
 /**

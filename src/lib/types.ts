@@ -685,10 +685,10 @@ export interface Post {
   hashtags: string[];
   /** when the post is planned on your calendar (nothing posts by itself at this time) */
   scheduledAt: string;
-  /** when it went out: set only when Manus reported it posted, or you marked it posted */
+  /** when it went out: set only when the app posted it (or Manus reported it posted, older posts), or you marked it posted */
   publishedAt?: string;
-  /** who said it was posted: Manus (its own report) or you */
-  publishedBy?: 'manus' | 'manual';
+  /** who said it was posted: the app through your connected account ('api'), you ('manual'), or Manus (older posts, its own report) */
+  publishedBy?: 'manus' | 'manual' | 'api';
   /** where it was before you marked it posted (so "Mark as not posted" puts it back) */
   statusBeforePosted?: 'draft' | 'scheduled';
   /** the post's address on the network, when Manus reported one or you pasted it */
@@ -696,7 +696,7 @@ export interface Post {
   media?: MediaRef;
   storyboard?: Scene[];
   watermark: boolean;
-  /** the post handed to Manus, which posts it on the network in its own browser */
+  /** the post sent out by the app through your connected account (via 'api'), or handed to Manus (older posts) */
   external?: ExternalPublish;
   /** the post shared in Facebook groups by Manus (separate from posting it on the Page) */
   groupShare?: GroupShare;
@@ -740,15 +740,22 @@ export interface GroupShare {
   checkedAt: number;
 }
 
+/**
+ * A post sent out for you. via 'api': the app posted it through your connected account (jobId: the server's
+ * publish job; state 'unknown': it may have gone out, check before doing anything else). via 'manus': older
+ * posts that Manus posted in its own browser (shown read-only).
+ */
 export interface ExternalPublish {
-  via: 'manus';
+  via: 'manus' | 'api';
+  /** the server's publish job (via 'api'; GET /api/posting/jobs/:jobId) */
+  jobId?: string;
   network: PostPlatform;
   taskId: string;
   taskUrl: string;
   /** what Manus was asked to do: post right away, or schedule for scheduledFor (older posts: schedule) */
   mode?: 'now' | 'schedule';
   /** working: Manus is on it · needs_input: Manus paused for you · finished: done without a clear result line */
-  state: 'working' | 'needs_input' | 'posted' | 'scheduled' | 'failed' | 'finished';
+  state: 'working' | 'needs_input' | 'posted' | 'scheduled' | 'failed' | 'finished' | 'unknown';
   message: string;
   /** the account Manus was asked to post as (a Page, profile or handle) */
   page: string;

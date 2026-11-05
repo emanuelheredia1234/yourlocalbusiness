@@ -574,7 +574,7 @@ describe('analytics', () => {
       result: {
         days: 30,
         posted: 2,
-        byManus: 1,
+        byApp: 1,
         markedByOwner: 1,
         plannedAhead: 1,
         due: 1,

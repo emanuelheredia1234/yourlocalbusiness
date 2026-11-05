@@ -704,7 +704,7 @@ const tally = <K extends string>(keys: K[]) => Object.fromEntries(countBy(keys).
 const getAnalytics = defineTool({
   name: 'get_analytics',
   class: 'R',
-  summary: 'Real counts for the last N days (default 30), as Analytics shows them: posted (by Manus or marked), planned, due, made with AI, change vs the days before, by network, type and format.',
+  summary: 'Real counts for the last N days (default 30), as Analytics shows them: posted (from the app or marked), planned, due, made with AI, change vs the days before, by network, type and format.',
   args: { days: arg.number({ optional: true, int: true, min: 1, max: 365, desc: 'default 30' }) },
   run: ({ days = 30 }) => {
     const p = activeProject();
@@ -718,8 +718,8 @@ const getAnalytics = defineTool({
         from: k.series[0].date,
         to: k.series[k.series.length - 1].date,
         posted: k.posted,
-        byManus: k.byManus,
-        markedByOwner: k.posted - k.byManus,
+        byApp: k.byApp,
+        markedByOwner: k.posted - k.byApp,
         plannedAhead: k.upcoming,
         due: k.due,
         madeWithAI: k.made,
