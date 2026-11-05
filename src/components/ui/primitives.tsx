@@ -762,9 +762,9 @@ export function PageHeader({
           {back.label}
         </button>
       )}
-      {/* phones: the title, then meta and actions on one row; wider: meta under the title, actions at the right */}
-      <div className={cn('grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-4', meta || actions ? 'gap-y-3 md:gap-y-2' : '')}>
-        <div className="col-span-2 min-w-0 md:col-span-1">
+      {/* phones: the title, then meta and actions on one row when they fit (actions wrap under otherwise); wider: meta under the title, actions at the right */}
+      <div className={cn('flex flex-wrap items-end gap-x-4 md:grid md:grid-cols-[minmax(0,1fr)_auto]', meta || actions ? 'gap-y-3 md:gap-y-2' : '')}>
+        <div className="min-w-0 basis-full md:col-start-1 md:row-start-1">
           <h1 className={cn('text-ink', size === 'display' ? 'text-phone-display sm:text-display' : 'text-phone-h1 sm:text-h1')}>{title}</h1>
           {description && (
             <p className={cn('mt-1 truncate text-body-lg text-muted', text && text.length > 48 && 'max-sm:hidden')} title={text}>
@@ -772,18 +772,9 @@ export function PageHeader({
             </p>
           )}
         </div>
-        {meta && <div className="col-start-1 row-start-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted">{meta}</div>}
+        {meta && <div className="flex min-w-0 flex-[1_1_auto] flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted md:col-start-1 md:row-start-2">{meta}</div>}
         {/* empty:hidden: actions that render nothing leave no gap */}
-        {actions && (
-          <div
-            className={cn(
-              'flex flex-wrap items-center gap-2 empty:hidden md:col-start-2 md:row-span-2 md:row-start-1 md:shrink-0 md:justify-end md:self-end',
-              meta ? 'col-start-2 row-start-2 justify-end' : 'col-span-2 col-start-1 row-start-2 md:col-span-1',
-            )}
-          >
-            {actions}
-          </div>
-        )}
+        {actions && <div className={cn('flex flex-wrap items-center gap-2 empty:hidden md:col-start-2 md:row-span-2 md:row-start-1 md:ml-0 md:shrink-0 md:justify-end md:self-end', meta && 'ml-auto')}>{actions}</div>}
       </div>
     </header>
   );
