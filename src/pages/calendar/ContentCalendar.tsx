@@ -235,9 +235,9 @@ function Filters({ q, setQ, platform, setPlatform, type, setType, format, setFor
   const sel = stacked ? 'w-full' : 'w-auto min-w-[148px]';
   return (
     <div className={cn('flex gap-2', stacked ? 'flex-col' : 'flex-wrap items-center')}>
-      <div className={cn('relative', stacked ? 'w-full' : 'w-60')}>
+      <div className={cn('relative', stacked ? 'w-full' : 'w-48 lg:w-60')}>
         <Search size={16} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
-        <input className="input input-sm w-full pl-8" placeholder="Search captions and hashtags" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search posts" />
+        <input className="input input-sm w-full pl-8" placeholder="Search posts" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search posts" />
       </div>
       <Select<PostPlatform | 'all'>
         size="sm"
