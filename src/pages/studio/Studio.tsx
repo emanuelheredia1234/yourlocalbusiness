@@ -10,6 +10,7 @@ import { StructureTab } from './StructureTab';
 import { CodeTab } from './CodeTab';
 import { PublishTab } from './PublishTab';
 import { leadPrice, priceLabel } from '@/lib/listing';
+import { useMediaQuery } from '@/lib/hooks';
 
 type Tab = 'structure' | 'code' | 'publish';
 const KEY = 'ylb-studio-tab';
@@ -43,6 +44,9 @@ export default function Studio() {
   const structureCount = isBiz ? project.studio.packages.length : project.studio.outline.length;
   // "Copper & Comb · $75/session · Austin" (a product: its format instead of a city)
   const description = [project.brand.name, priceLabel(lp.price, lp.model), isBiz ? project.location?.city : fmt?.label].filter(Boolean).join(' · ');
+  // "Live on Marketplace" sits at the header's right edge from 768px, so the tabs start where every tabbed page's do;
+  // narrower, the Listing & publish tab shows it (a row of its own here would push the content down)
+  const wide = useMediaQuery('(min-width: 768px)');
 
   return (
     <div>
@@ -50,9 +54,9 @@ export default function Studio() {
         className="mb-4"
         title={isBiz ? 'Business Studio' : 'Product Studio'}
         description={description}
-        meta={
-          live ? (
-            <>
+        actions={
+          live && wide ? (
+            <span className="flex items-center gap-1">
               <StatusDot tone="good">Live on Marketplace</StatusDot>
               <Tooltip content="View in the Marketplace">
                 <button
@@ -67,7 +71,7 @@ export default function Studio() {
                   <ExternalLink size={14} aria-hidden="true" />
                 </button>
               </Tooltip>
-            </>
+            </span>
           ) : undefined
         }
       />
