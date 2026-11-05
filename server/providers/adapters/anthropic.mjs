@@ -56,10 +56,29 @@ const textOf = (blocks) =>
     .map((b) => b.text)
     .join('');
 
+/** What the calls of one turn used: tokens, and searches (as each call's usage reports them, or else its results). */
+function tally(answers) {
+  let input = 0;
+  let output = 0;
+  let searches = 0;
+  for (const m of answers) {
+    const u = m?.usage;
+    input += (num(u?.input_tokens) ?? 0) + (num(u?.cache_creation_input_tokens) ?? 0) + (num(u?.cache_read_input_tokens) ?? 0);
+    output += num(u?.output_tokens) ?? 0;
+    searches += num(u?.server_tool_use?.web_search_requests) ?? (m?.content ?? []).filter((b) => b?.type === 'web_search_tool_result' && Array.isArray(b.content)).length;
+  }
+  return { usage: { input, output, reasoning: null }, searches };
+}
+
 /**
  * A research request: the web_search tool, never retried by the SDK (the searches may be billed).
  * Only free 400s are sent again (at most twice): with allowed_callers ['direct'], with the basic tool
- * version, or without the tool (`refused`). pause_turn continues the same turn, at most 3 times.
+ * version, or without the tool (`refused`). pause_turn continues the same turn, at most 3 times, each
+ * time with max_uses lowered to the searches left: max_uses counts the searches of one request and
+ * can't be 0, and the tool has to stay on a continuation, so once every search ran the turn ends there.
+ * Once the first call has answered, its searches are billed: any failure after it is paid work (never
+ * notStarted, so no other key searches again) and carries `used`, what the finished calls used
+ * (all: nothing else can have been billed).
  */
 async function researchText(ctx, params, research, { model, signal, timeoutMs }) {
   const opts = { signal, maxRetries: 0, timeout: timeoutMs };
@@ -92,43 +111,43 @@ async function researchText(ctx, params, research, { model, signal, timeoutMs })
       }
     }
   }
+  const answers = [message];
   const content = [...(message.content ?? [])];
-  const usages = [message.usage];
+  const paid = (err, all) => Object.assign(err, { notStarted: false, used: { ...tally(answers), all } });
   for (let i = 0; message.stop_reason === 'pause_turn' && i < MAX_CONTINUATIONS; i += 1) {
-    // the same turn goes on: everything so far goes back unchanged, with the same system prompt and tools
-    message = await call({ ...params, messages: [params.messages[0], { role: 'assistant', content: [...content] }] });
+    const left = research.maxSearches - tally(answers).searches;
+    if (params.tools && left < 1) break;
+    // the same turn goes on: everything so far goes back unchanged, with the same system prompt and tool
+    const next = { ...params, messages: [params.messages[0], { role: 'assistant', content: [...content] }] };
+    if (params.tools) next.tools = [{ ...params.tools[0], max_uses: left }];
+    try {
+      message = await call(next);
+    } catch (err) {
+      // a continuation refused before it did anything (a 4xx) billed nothing more
+      throw paid(err, err.notStarted);
+    }
+    answers.push(message);
     content.push(...(message.content ?? []));
-    usages.push(message.usage);
   }
-  if (message.stop_reason === 'refusal') throw new ProviderError('REFUSAL', 'Claude declined this request.', { status: 422, provider: ctx.label });
+  if (message.stop_reason === 'refusal') throw paid(new ProviderError('REFUSAL', 'Claude declined this request.', { status: 422, provider: ctx.label }), true);
   // the answer is the text after the last search ("Let me look that up." before it is narration)
   const lastTool = content.findLastIndex((b) => !NOT_TOOL.has(b?.type));
   const final = textOf(content.slice(lastTool + 1));
   const paused = message.stop_reason === 'pause_turn';
   const text = final.trim() ? final : paused ? '' : textOf(content);
   if (!text.trim()) {
-    if (paused || message.stop_reason === 'max_tokens') throw new ProviderError('CUT_OFF', 'Claude ran out of room before answering. Try fewer searches or a lower effort.', { provider: ctx.label });
-    throw new ProviderError('NO_OUTPUT', 'Claude returned an empty answer.', { provider: ctx.label });
+    if (paused || message.stop_reason === 'max_tokens') throw paid(new ProviderError('CUT_OFF', 'Claude ran out of room before answering. Try fewer searches or a lower effort.', { provider: ctx.label }), true);
+    throw paid(new ProviderError('NO_OUTPUT', 'Claude returned an empty answer.', { provider: ctx.label }), true);
   }
-  let input = 0;
-  let output = 0;
-  let reported = null;
-  for (const u of usages) {
-    input += (num(u?.input_tokens) ?? 0) + (num(u?.cache_creation_input_tokens) ?? 0) + (num(u?.cache_read_input_tokens) ?? 0);
-    output += num(u?.output_tokens) ?? 0;
-    const n = num(u?.server_tool_use?.web_search_requests);
-    if (n !== null) reported = (reported ?? 0) + n;
-  }
+  const { usage, searches } = tally(answers);
   // what the searches found: URLs, titles, page ages and Claude's cited text (never encrypted_content or encrypted_index)
   const sources = [];
   const queries = [];
   const errors = [];
-  let ran = 0;
   for (const b of content) {
     if (b?.type === 'server_tool_use' && b.name === 'web_search' && typeof b.input?.query === 'string') queries.push(b.input.query);
     if (b?.type === 'web_search_tool_result') {
       if (Array.isArray(b.content)) {
-        ran += 1;
         for (const x of b.content) if (x?.type === 'web_search_result' && typeof x.url === 'string') sources.push({ url: x.url, title: x.title, pageAge: x.page_age });
       } else if (b.content?.type === 'web_search_tool_result_error') errors.push(String(b.content.error_code || 'error'));
     }
@@ -138,7 +157,7 @@ async function researchText(ctx, params, research, { model, signal, timeoutMs })
       }
     }
   }
-  return { text, model: message.model || model, usage: { input, output, reasoning: null }, research: { searches: reported ?? ran, sources, queries, errors, refused } };
+  return { text, model: message.model || model, usage, research: { searches, sources, queries, errors, refused } };
 }
 
 export default {

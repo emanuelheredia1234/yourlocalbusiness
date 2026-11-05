@@ -7,12 +7,14 @@
 //
 // Web research (Strategy, research.mjs): keys that can search go first. Once a key was asked to
 // search, a failure moves on only when the provider certainly started nothing (a 4xx): after a
-// timeout or a cut-off answer the searches may already be billed, so the owner decides.
+// timeout, a Stop or a cut-off answer the searches may already be billed, so the owner decides, and
+// the failure is logged and metered at an estimate (see failedResearchCost).
 //
 // A signed-in user's own keys (ownKeys: { provider: key }) go first: if any of them can do the
 // request's kind, only those are used (with the registry's default model and effort), never the
 // owner's keys. `meter` hears when a request reaches a provider (start) and what it cost (cost),
-// so the routes can count it against the owner's daily limits.
+// so the routes can count it against the owner's daily limits; cost(usd, { unsure: true }) is a
+// research request that failed after it started, whose real cost nobody will report.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -79,6 +81,8 @@ const WATCH_MS = 15_000;
 const RESEARCH_TOKENS = { input: 40_000, output: 6_000 };
 /** …and what it's assumed to cost when the price list can't say. */
 const RESEARCH_FALLBACK = 0.15;
+/** What a research request on this key and model may cost: a research-sized request plus every search it may run. */
+const researchEstimate = (id, model, research) => (estimateCost(id, 'text', model, RESEARCH_TOKENS) ?? RESEARCH_FALLBACK) + searchPrice(id) * research.maxSearches;
 
 /** The label a user's own key is shown with. */
 export const ownLabel = (id) => `${PROVIDERS[id].label} (your key)`;
@@ -229,7 +233,7 @@ export class AIRouter {
       let usd = null;
       if (kind === 'video') usd = estimateCost(id, 'video', model, null, { seconds: duration, effort: s.effort?.[kind] }) ?? FALLBACK_ESTIMATE.videoPerSecond * duration;
       else if (kind === 'image') usd = estimateCost(id, 'image', model, null) ?? FALLBACK_ESTIMATE.image;
-      else if (searching && canResearch(id, model)) usd = (estimateCost(id, 'text', model, RESEARCH_TOKENS) ?? RESEARCH_FALLBACK) + searchPrice(id) * research.maxSearches;
+      else if (searching && canResearch(id, model)) usd = researchEstimate(id, model, research);
       else usd = FALLBACK_ESTIMATE.text;
       best = Math.max(best, usd);
     }
@@ -274,6 +278,19 @@ export class AIRouter {
       params: params ?? null,
       note: note || '',
     };
+  }
+
+  /**
+   * What a web research attempt that failed after it started (timed out, stopped, cut off) likely cost: its
+   * searches may be billed, and no provider will say. What the adapter says the finished calls used (err.used)
+   * when nothing else can have been billed (used.all), else at least a research-sized request with every
+   * search it may have run. Only for a failure that isn't notStarted.
+   */
+  failedResearchCost(id, model, research, err) {
+    const used = err.used;
+    const known = used ? this.describe(id, 'text', '', { model, usage: used.usage, searches: used.searches ?? 0 }).cost : null;
+    if (used?.all) return known;
+    return { usd: round6(Math.max(known?.usd ?? 0, researchEstimate(id, model, research))), source: 'estimate' };
   }
 
   /** Logs what a request used (never its sources or queries: the log is synced and holds no research). */
@@ -322,7 +339,13 @@ export class AIRouter {
         return { text: r.text, meta };
       } catch (e) {
         last = asProviderError(e, step.own ? ownLabel(id) : PROVIDERS[id].label);
-        this.logFailure(id, 'text', fn, model, effort, t0, last, { brain, userId, ...this.ownExtra(step), ...flag });
+        // a key asked to search that failed after it started (a Stop too) may have billed searches: logged
+        // and metered at an estimate, never one that certainly started nothing
+        const paid = !!web && !last.notStarted;
+        const cost = paid ? this.failedResearchCost(id, model, web, last) : null;
+        const used = paid && last.used ? { usage: last.used.usage, searches: last.used.searches } : {};
+        this.logFailure(id, 'text', fn, model, effort, t0, last, { brain, userId, ...this.ownExtra(step), ...flag, ...(cost ? { cost } : {}), ...used });
+        if (paid) meter?.cost?.(cost?.usd, { unsure: true });
         attempts.push({ provider: id, providerLabel: step.own ? ownLabel(id) : PROVIDERS[id].label, code: last.code, error: last.message });
         // a key asked to search may have run (and billed) searches: move on only if it certainly started nothing
         const next = web ? last.notStarted && !['CONTENT_POLICY', 'REFUSAL', 'ABORTED'].includes(last.code) : canFallBack(last, 'text');
