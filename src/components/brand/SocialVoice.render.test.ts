@@ -52,7 +52,8 @@ describe('the profile switch', () => {
     const html = render({ instagram: '@copper' });
     expect(html).toMatch(/role="switch" aria-checked="false" disabled/);
     expect(html).toContain('Manus can’t read your posts yet: it uses the same Manus setup as posting. Add your Manus API key in Settings → AI.');
-    expect(html).toContain('Open Settings → AI');
+    // the way there is named after the section (Settings › AI keys)
+    expect(html).toContain('>Open AI keys</button>');
   });
 
   it('follows the read: reading, needs you, failed', () => {

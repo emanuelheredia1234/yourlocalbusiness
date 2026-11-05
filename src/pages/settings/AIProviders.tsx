@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Brain, ChevronDown, CircleAlert, ExternalLink, FlaskConical, KeyRound, ListChecks, Plug, RefreshCw, Route, ShieldCheck, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, CircleAlert, ExternalLink, FlaskConical, Power, PowerOff, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { cn, fmtRelative } from '@/lib/utils';
 import { safeStorage } from '@/lib/storage';
 import { useRuntime } from '@/lib/platform';
@@ -10,8 +10,9 @@ import { fmtTokens, fmtUsdSmall } from '@/ai/meta';
 import { countersNote, limitPercent, ownKeyCapability, parseMyKeys, requestsInUse, resetLabel, type CountersProblem, type MyKeys, type OwnKeyProvider } from '@/ai/usageLimits';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
-import { Field, Popover, Spinner, Toggle, confirmAction } from '@/components/ui/primitives';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Badge, Callout, Drawer, Field, InfoTip, MoreMenu, Popover, SettingsRow, SettingsSection, Spinner, Toggle, Tooltip, confirmAction } from '@/components/ui/primitives';
 import { SlackCard } from './SlackCard';
+import { useFocusBack } from './sheetFocus';
 
 // ───────────── what the server sends ─────────────
 
@@ -153,11 +154,17 @@ function useAIServer() {
 
 // ───────────── page ─────────────
 
-/** Settings → AI (self-hosted): one AI, powered by your API keys. */
+/** A section other places find by its name (the QA scripts and screen readers): a named region around a SettingsSection. */
+function Region({ name, children }: { name: string; children: React.ReactNode }) {
+  return (
+    <div role="region" aria-label={name}>
+      {children}
+    </div>
+  );
+}
+
+/** Settings › AI keys (self-hosted): one AI, powered by your API keys. */
 export function AIProviders() {
-  const settings = useStore((s) => s.settings);
-  const updateSettings = useStore((s) => s.updateSettings);
-  const setAI = (patch: Partial<typeof settings.ai>) => updateSettings((s) => ({ ...s, ai: { ...s.ai, ...patch } }));
   const { call, adminToken, setAdminToken, serverUrl } = useAIServer();
   const [catalog, setCatalog] = useState<CatalogProvider[] | null>(null);
   const [state, setState] = useState<AIState | null>(null);
@@ -218,63 +225,33 @@ export function AIProviders() {
     return true;
   };
 
-  const brainCard = (
-    <section className="panel p-4 sm:p-5" aria-label="Brain">
-      <div className="flex flex-wrap items-start gap-4">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-ink text-accent">
-          <Brain size={18} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <Toggle
-            checked={settings.ai.useBrain}
-            onChange={(v) => setAI({ useBrain: v })}
-            label={settings.ai.useBrain ? 'Brain is on' : 'Brain is off'}
-            description="One switch for every key that’s on: writing follows your Brain skills, and photos and videos get the Brain’s art direction."
-          />
-        </div>
-      </div>
-    </section>
-  );
-
   return (
-    <div className="flex flex-col gap-5">
-      <section className="panel p-4 sm:p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="section-title flex items-center gap-2">
-              <KeyRound size={17} className="text-primary" /> {role === 'user' ? 'Your AI' : 'AI, powered by your keys'}
-            </h2>
-            <p className="mt-0.5 max-w-3xl text-[13px] text-muted">
-              {role === 'user'
-                ? 'The app’s owner set up the AI for everyone. Here’s what powers each part of the app.'
-                : 'One AI for the whole app. Add a key, tick what it powers, and pick its model and effort: the effort is sent in that provider’s own setting, so it changes the answer and what you pay. Keys stay on your server and are never shown again.'}
-            </p>
-          </div>
-          <button className="btn btn-ghost btn-sm" onClick={() => void load()}>
-            <RefreshCw size={14} /> Refresh
-          </button>
-        </div>
-      </section>
-
-      {brainCard}
+    <div className="flex max-w-[880px] flex-col gap-6">
+      <BrainSection />
 
       {status === 'loading' && (
-        <p className="flex items-center gap-2 text-[13px] text-muted">
+        <p className="flex items-center gap-2 text-small text-muted">
           <Spinner size={14} /> Checking your server…
         </p>
       )}
       {status === 'offline' && (
-        <Note icon={<Plug size={16} />} title="Your AI server isn’t running">
-          Start it with <code className="rounded bg-surface-2 px-1">npm run server</code> (on Replit, press Run), then press Refresh. Until then the built-in engine writes everything.
-        </Note>
+        <Callout
+          tone="warn"
+          title="Your AI server isn’t running"
+          action={
+            <button type="button" className="btn btn-secondary btn-xs" onClick={() => void load()}>
+              <RefreshCw /> Refresh
+            </button>
+          }
+        >
+          Start it with <code className="rounded-xs bg-surface-3 px-1 font-mono text-caption">npm run server</code>, then press Refresh. Until then the built-in engine writes everything.
+        </Callout>
       )}
 
       {status === 'ready' && role === 'user' && (
         <>
-          <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <OwnKeys call={call} serverUrl={serverUrl} onChange={() => setUsageTick((n) => n + 1)} />
-            <MyUsageCard call={call} refresh={usageTick} />
-          </div>
+          <OwnKeys call={call} serverUrl={serverUrl} onChange={() => setUsageTick((n) => n + 1)} />
+          <MyUsageCard call={call} refresh={usageTick} />
           <OwnerManaged />
         </>
       )}
@@ -282,74 +259,11 @@ export function AIProviders() {
       {status === 'ready' && catalog && state && (
         <>
           {!state.canManage && !accounts && <AdminAccess adminTokenSet={state.adminTokenSet} token={adminToken} onToken={setAdminToken} onCheck={() => void load()} />}
-          {state.canManage && state.storage === 'disk' && (state.ephemeralDisk || state.accounts) && (
-            <Note icon={<CircleAlert size={16} />} title="Keys you add here can disappear">
-              They’re kept in this server’s files, which {state.ephemeralDisk ? 'this host wipes' : 'hosts like Replit’s published apps wipe'} when the app restarts or sleeps. To keep them in Supabase, encrypted:{' '}
-              {state.supabaseUrlSet ? (
-                <>
-                  add the <code className="rounded bg-surface-2 px-1">SUPABASE_SECRET_KEY</code> Secret (Supabase → Project Settings → API Keys, the <code className="rounded bg-surface-2 px-1">sb_secret_…</code> key)
-                </>
-              ) : (
-                <>
-                  add the <code className="rounded bg-surface-2 px-1">SUPABASE_URL</code> and <code className="rounded bg-surface-2 px-1">SUPABASE_SECRET_KEY</code> Secrets (Supabase → Project Settings → API)
-                </>
-              )}
-              , run the files in <code className="rounded bg-surface-2 px-1">supabase/migrations</code> in Supabase → SQL Editor if you haven’t, and republish. Keys added as Secrets (like <code className="rounded bg-surface-2 px-1">OPENAI_API_KEY</code>) always stay.
-            </Note>
-          )}
-          {state.canManage && state.storage === 'supabase' && state.storageProblem && (
-            <Note icon={<CircleAlert size={16} />} title="Your keys aren’t being kept in Supabase right now">
-              {state.storageProblem.message} Until then they live in this server’s files{state.ephemeralDisk ? ', which this host wipes when the app restarts' : ''}.
-            </Note>
-          )}
-          {state.canManage && state.storage === 'supabase' && !state.storageProblem && (
-            <p className="flex items-center gap-1.5 text-[12.5px] text-muted">
-              <ShieldCheck size={14} className="text-good" /> Keys and settings are saved in your Supabase project, encrypted, so they stay through restarts.
-            </p>
-          )}
-          {state.imported && <Note icon={<ListChecks size={16} />} title="Your image keys moved here">Keys from the old “Image generation” settings now power Photos. Tick more functions to use them for writing too.</Note>}
-          <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
-            <div className="flex min-w-0 flex-col gap-3">
-              <p className="text-[12.5px] text-muted">Keys are tried in this order. If one fails (outage, rate limit, no credit), the next key that powers the same function answers. Videos and agent tasks only move on when the first key certainly started nothing.</p>
-              {state.order.map((id, i) => {
-                const def = catalog.find((c) => c.id === id);
-                const st = state.providers.find((p) => p.id === id);
-                if (!def || !st) return null;
-                return (
-                  <KeyCard
-                    key={id}
-                    def={def}
-                    st={st}
-                    rank={i + 1}
-                    first={i === 0}
-                    last={i === state.order.length - 1}
-                    canManage={state.canManage}
-                    call={call}
-                    save={(body, success) => save(id, body, success)}
-                    move={(dir) => {
-                      const order = [...state.order];
-                      const j = i + dir;
-                      [order[i], order[j]] = [order[j], order[i]];
-                      void save(null, { order });
-                    }}
-                    onUsage={() => void loadUsage()}
-                  />
-                );
-              })}
-            </div>
-            <div className="flex min-w-0 flex-col gap-5">
-              <RoutingSummary state={state} catalog={catalog} />
-              <UsageCard usage={usage} locked={usageLocked} catalog={catalog} onRefresh={() => void loadUsage()} />
-            </div>
-          </div>
+          <StorageNote state={state} />
+          <Providers state={state} catalog={catalog} usage={usage} usageLocked={usageLocked} call={call} save={save} onReload={() => void load()} onUsage={() => void loadUsage()} />
           {/* Viktor (viktor.com) through the owner's own Slack app: the owner's, and self-hosted only */}
           {state.canManage && !__ARTIFACT_BUILD__ && <SlackCard call={call} serverUrl={serverUrl} />}
-          {state.accounts && state.canManage && (
-            <div className="grid grid-cols-1 gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
-              <DailyLimitsCard call={call} />
-              <PeopleUsageCard call={call} />
-            </div>
-          )}
+          {state.accounts && state.canManage && <DailyLimitsCard call={call} />}
         </>
       )}
 
@@ -358,34 +272,200 @@ export function AIProviders() {
   );
 }
 
+/** One switch for the Brain (every key that's on follows it). */
+function BrainSection({ short }: { short?: boolean }) {
+  const useBrain = useStore((s) => s.settings.ai.useBrain);
+  const updateSettings = useStore((s) => s.updateSettings);
+  return (
+    <Region name="Brain">
+      <div className="card px-5">
+        <SettingsRow label={useBrain ? 'Brain is on' : 'Brain is off'} description={short ? 'Writing follows your Brain skills; photos and videos get its art direction.' : 'Writing follows your Brain skills, and photos and videos get its art direction, for every key that’s on.'} htmlFor="ai-brain">
+          <Toggle id="ai-brain" checked={useBrain} onChange={(v) => updateSettings((s) => ({ ...s, ai: { ...s.ai, useBrain: v } }))} />
+        </SettingsRow>
+      </div>
+    </Region>
+  );
+}
+
 /** claude.ai: Claude is the AI here; keys are for the self-hosted app. */
 export function ArtifactAI() {
-  const settings = useStore((s) => s.settings);
-  const updateSettings = useStore((s) => s.updateSettings);
-  const setAI = (patch: Partial<typeof settings.ai>) => updateSettings((s) => ({ ...s, ai: { ...s.ai, ...patch } }));
   return (
-    <div className="flex flex-col gap-5">
-      <Note icon={<KeyRound size={16} />} title="AI in claude.ai">
-        Here, Claude writes everything through your claude.ai account, photos come from Meta Muse Image and videos from HeyGen (both through OpenRouter in your Zapier connector), and Manus posts on your social accounts. To use your own API keys (OpenRouter, Google, xAI, Anthropic, Meta, Manus and OpenAI), with what each key powers and its effort, run the self-hosted app (for example on Replit) and open Settings → AI there.
-      </Note>
-      <section className="panel flex flex-col gap-4 p-4 sm:p-5" aria-label="Brain">
-        <Toggle checked={settings.ai.useBrain} onChange={(v) => setAI({ useBrain: v })} label={settings.ai.useBrain ? 'Brain is on' : 'Brain is off'} description="Writing follows your Brain skills, and photos and videos get the Brain’s art direction." />
-      </section>
+    <div className="flex max-w-[880px] flex-col gap-6">
+      <Callout tone="info" title="AI in claude.ai">
+        <span className="inline-flex flex-wrap items-center gap-x-1">
+          Claude writes everything through your claude.ai account; photos and videos come through your Zapier connector, and Manus posts for you.
+          <InfoTip title="Your own keys" label="About AI keys">
+            Photos come from Meta Muse Image and videos from HeyGen, both through OpenRouter in your Zapier connector. To use your own API keys (OpenRouter, Google, xAI, Anthropic, Meta, Manus and OpenAI), with what each key powers and its effort, run the self-hosted app and open Settings › AI keys there.
+          </InfoTip>
+        </span>
+      </Callout>
+      <BrainSection short />
     </div>
   );
 }
 
-// ───────────── one key ─────────────
+/** Where the keys are kept, when that needs the owner's attention (at most one note). */
+function StorageNote({ state }: { state: AIState }) {
+  if (state.canManage && state.storage === 'disk' && (state.ephemeralDisk || state.accounts)) {
+    return (
+      <Callout tone="warn" title="Keys you add here can disappear">
+        <span className="inline-flex flex-wrap items-center gap-x-1">
+          They’re kept in this server’s files, which {state.ephemeralDisk ? 'this host wipes' : 'some hosts wipe'} when the app restarts or sleeps.
+          <InfoTip title="Keep them in Supabase" label="How to keep your keys">
+            {state.supabaseUrlSet ? 'Add the SUPABASE_SECRET_KEY secret (Supabase › Project Settings › API Keys, the sb_secret_… key)' : 'Add the SUPABASE_URL and SUPABASE_SECRET_KEY secrets (Supabase › Project Settings › API)'}, run the files in supabase/migrations in Supabase’s SQL Editor if you haven’t, and restart the app. Keys set as server secrets (like OPENAI_API_KEY) always stay.
+          </InfoTip>
+        </span>
+      </Callout>
+    );
+  }
+  if (state.canManage && state.storage === 'supabase' && state.storageProblem) {
+    return (
+      <Callout tone="warn" title="Your keys aren’t being kept in Supabase right now">
+        {state.storageProblem.message} Until then they live in this server’s files{state.ephemeralDisk ? ', which this host wipes when the app restarts' : ''}.
+      </Callout>
+    );
+  }
+  if (state.imported) {
+    return (
+      <Callout tone="info" title="Your image keys moved here">
+        Keys from the old “Image generation” settings now power Photos. Choose more functions to use them for writing too.
+      </Callout>
+    );
+  }
+  return null;
+}
+
+// ───────────── the owner's keys ─────────────
 
 type Call = ReturnType<typeof useAIServer>['call'];
+type Save = (id: string | null, body: Record<string, unknown>, success?: string) => Promise<boolean>;
 
-function KeyCard({ def, st, rank, first, last, canManage, call, save, move, onUsage }: { def: CatalogProvider; st: ProviderState; rank: number; first: boolean; last: boolean; canManage: boolean; call: Call; save: (body: Record<string, unknown>, success?: string) => Promise<boolean>; move: (dir: -1 | 1) => void; onUsage: () => void }) {
+/** The functions a key powers, by name, in the app's order. */
+const poweredNames = (functions: string[]) => {
+  const on = new Set(functions);
+  return AI_FUNCTIONS.filter((f) => on.has(f.id)).map((f) => f.label);
+};
+
+function statusOf(st: ProviderState): { text: string; tone: 'good' | 'neutral' } {
+  if (!st.configured) return { text: 'No key', tone: 'neutral' };
+  if (!st.enabled) return { text: 'Off', tone: 'neutral' };
+  return { text: 'On', tone: 'good' };
+}
+
+/** The keys as a table, in the order they're tried; Configure opens one in a side sheet. */
+function Providers({ state, catalog, usage, usageLocked, call, save, onReload, onUsage }: { state: AIState; catalog: CatalogProvider[]; usage: { recent: UsageEntry[]; totals: UsageTotals } | null; usageLocked: boolean; call: Call; save: Save; onReload: () => void; onUsage: () => void }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const locked = !state.canManage;
+  const move = (i: number, dir: -1 | 1) => {
+    const order = [...state.order];
+    const j = i + dir;
+    [order[i], order[j]] = [order[j], order[i]];
+    void save(null, { order });
+  };
+  const def = open ? catalog.find((c) => c.id === open) : undefined;
+  const st = open ? state.providers.find((p) => p.id === open) : undefined;
+  const at = open ? state.order.indexOf(open) : -1;
+  // the side sheet gives the focus back to the row's Configure button when it closes
+  const openedFrom = useFocusBack(!!(def && st));
+  return (
+    <>
+      <SettingsSection
+        title="Your keys"
+        description="One AI for the whole app: add a key, choose what it powers and its model. Keys stay on your server."
+        actions={
+          <>
+            <InfoTip title="How keys take turns" label="How keys take turns">
+              Keys are tried in this order. If one fails (an outage, a rate limit, no credit), the next key that powers the same function answers. Videos and agent tasks only move on when the first key certainly started nothing. Each key’s effort is sent in its provider’s own setting, so it changes the answer and what you pay.
+            </InfoTip>
+            <Tooltip content="Check your server again">
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={onReload} aria-label="Refresh">
+                <RefreshCw />
+              </button>
+            </Tooltip>
+          </>
+        }
+      >
+        <div className="-mx-5 mt-3 border-t border-line">
+          <div className="hidden grid-cols-[20px_minmax(0,1.1fr)_72px_minmax(0,1.5fr)_128px] gap-4 border-b border-line px-5 py-2 text-caption text-muted md:grid" aria-hidden="true">
+            <span>#</span>
+            <span>Provider</span>
+            <span>Status</span>
+            <span>Used for</span>
+            <span />
+          </div>
+          <ul aria-label="Your keys">
+            {state.order.map((id, i) => {
+              const d = catalog.find((c) => c.id === id);
+              const p = state.providers.find((x) => x.id === id);
+              if (!d || !p) return null;
+              const names = poweredNames(p.functions);
+              const s = statusOf(p);
+              return (
+                <li key={id} aria-label={`${d.label} key`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-b border-line px-5 py-2.5 md:grid-cols-[20px_minmax(0,1.1fr)_72px_minmax(0,1.5fr)_128px]">
+                  <span className="num font-mono text-caption text-muted max-md:hidden">{i + 1}</span>
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate text-ui text-ink">{d.label}</span>
+                      <Badge tone={s.tone} className="md:hidden">
+                        {s.text}
+                      </Badge>
+                    </span>
+                    <span className="block truncate font-mono text-caption text-muted">{p.source === 'secrets' ? 'Server secret' : p.configured ? p.keyHint || 'Saved' : 'Not set'}</span>
+                  </span>
+                  <span className="max-md:hidden">
+                    <Badge tone={s.tone}>{s.text}</Badge>
+                  </span>
+                  <span className="min-w-0 truncate text-small text-muted max-md:col-span-2 max-md:row-start-2" title={names.join(', ')}>
+                    {names.length ? `${names.slice(0, 3).join(', ')}${names.length > 3 ? ` +${names.length - 3}` : ''}` : 'Nothing yet'}
+                  </span>
+                  <span className="flex items-center justify-end gap-1 max-md:col-start-2 max-md:row-start-1">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-xs"
+                      onClick={(e) => {
+                        openedFrom(e.currentTarget);
+                        setOpen(id);
+                      }}
+                    >
+                      Configure
+                    </button>
+                    <MoreMenu
+                      size="xs"
+                      label={`More actions for ${d.label}`}
+                      items={[
+                        { label: p.enabled ? 'Turn off' : 'Turn on', icon: p.enabled ? <PowerOff /> : <Power />, disabled: locked, onSelect: () => void save(id, { enabled: !p.enabled }) },
+                        'separator',
+                        { label: 'Move up', icon: <ArrowUp />, disabled: locked || i === 0, onSelect: () => move(i, -1) },
+                        { label: 'Move down', icon: <ArrowDown />, disabled: locked || i === state.order.length - 1, onSelect: () => move(i, 1) },
+                      ]}
+                    />
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+        <RoutingAndUsage state={state} catalog={catalog} usage={usage} usageLocked={usageLocked} call={call} people={!!state.accounts && state.canManage} onRefreshUsage={onUsage} />
+        {state.canManage && state.storage === 'supabase' && !state.storageProblem && (
+          <p className="flex items-center gap-1.5 border-t border-line py-3 text-caption text-muted">
+            <ShieldCheck size={14} className="shrink-0 text-good" aria-hidden="true" /> Keys and settings are saved in your Supabase project, encrypted, so they stay through restarts.
+          </p>
+        )}
+      </SettingsSection>
+      <Drawer open={!!(def && st)} onClose={() => setOpen(null)} title={def ? `${def.label} key` : ''} width={640}>
+        {def && st && <KeyDetails def={def} st={st} rank={at + 1} canManage={state.canManage} call={call} save={(body, success) => save(def.id, body, success)} totals={usage?.totals.providers.find((t) => t.provider === def.id)} onUsage={onUsage} />}
+      </Drawer>
+    </>
+  );
+}
+
+/** One key, in its side sheet: on or off, the key, what it powers, model and effort per kind, a test, its usage. */
+function KeyDetails({ def, st, rank, canManage, call, save, totals, onUsage }: { def: CatalogProvider; st: ProviderState; rank: number; canManage: boolean; call: Call; save: (body: Record<string, unknown>, success?: string) => Promise<boolean>; totals?: UsageTotals['providers'][number]; onUsage: () => void }) {
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const kinds = Object.keys(def.kinds) as AIKind[];
-  const statusChip = !st.configured ? { text: 'No key', cls: 'bg-surface-2 text-muted' } : !st.enabled ? { text: 'Off', cls: 'bg-surface-2 text-ink-2' } : { text: 'On', cls: 'bg-good-soft text-good' };
   const locked = !canManage;
 
   const saveKey = async () => {
@@ -408,89 +488,98 @@ function KeyCard({ def, st, rank, first, last, canManage, call, save, move, onUs
   };
 
   return (
-    <article className={cn('panel flex flex-col gap-3 p-4', st.ready ? '' : 'opacity-[0.92]')} aria-label={`${def.label} key`}>
-      <header className="flex flex-wrap items-center gap-2">
-        <span className="num flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-surface-2 text-[12px] font-bold text-ink-2" title="Priority">
-          {rank}
-        </span>
-        <h3 className="text-[15px] font-semibold text-ink">{def.label}</h3>
-        <span className={cn('badge', statusChip.cls)}>{statusChip.text}</span>
-        <span className="ml-auto flex items-center gap-1">
-          <button className="btn btn-ghost btn-xs" aria-label={`Move ${def.label} up`} disabled={first || locked} onClick={() => move(-1)}>
-            <ArrowUp size={13} />
-          </button>
-          <button className="btn btn-ghost btn-xs" aria-label={`Move ${def.label} down`} disabled={last || locked} onClick={() => move(1)}>
-            <ArrowDown size={13} />
-          </button>
-          <Toggle checked={st.enabled} disabled={locked} onChange={(v) => void save({ enabled: v })} id={`ai-on-${def.id}`} />
-        </span>
-      </header>
-      <p className="-mt-1 text-[12.5px] text-muted">{def.note}</p>
+    <div className="flex flex-col gap-6">
+      <p className="text-small text-muted">{def.note}</p>
 
-      {/* key */}
-      {st.source === 'secrets' ? (
-        <p className="flex flex-wrap items-center gap-2 rounded-md bg-surface-2/70 px-3 py-2 text-[12.5px]">
-          <ShieldCheck size={14} className="text-good" /> Key from Replit Secrets (<code>{st.envKey}</code>) <span className="num text-muted">{st.keyHint}</span>
-        </p>
-      ) : (
-        <div className="flex flex-wrap items-end gap-2">
-          <Field label={st.configured ? `Saved key ${st.keyHint}` : 'API key'} htmlFor={`ai-key-${def.id}`} className="min-w-[220px] flex-1">
-            <input
-              id={`ai-key-${def.id}`}
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              className="input"
-              value={key}
-              disabled={locked}
-              onChange={(e) => setKey(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && void saveKey()}
-              placeholder={st.configured ? 'Paste a new key to replace it' : `Paste your ${def.label} key`}
-            />
-          </Field>
-          <button className="btn btn-primary btn-sm" disabled={locked || busy || !key.trim()} onClick={() => void saveKey()}>
-            {busy ? <Spinner size={14} /> : null} Save key
-          </button>
-          {st.source === 'app' && (
-            <button
-              className="btn btn-ghost btn-sm text-muted hover:text-bad"
-              disabled={locked}
-              onClick={async () => {
-                if (await confirmAction({ title: `Remove the ${def.label} key?`, body: 'Functions it powers move to your next key, or to the built-in engine.', confirmLabel: 'Remove key', danger: true })) void save({ removeKey: true }, 'Key removed');
+      <div className="flex flex-col">
+        <SettingsRow label="Use this key" description={`Tried ${rank === 1 ? 'first' : `${rank}${rank === 2 ? 'nd' : rank === 3 ? 'rd' : 'th'}`} for the functions it powers.`} htmlFor={`ai-on-${def.id}`}>
+          <Toggle checked={st.enabled} disabled={locked} onChange={(v) => void save({ enabled: v })} id={`ai-on-${def.id}`} />
+        </SettingsRow>
+        {st.source === 'secrets' ? (
+          <SettingsRow label="Key" description="Set on the server, so it can’t be changed here.">
+            <span className="flex items-center gap-1.5 text-small text-ink-2">
+              <ShieldCheck size={14} className="shrink-0 text-good" aria-hidden="true" />
+              <span className="font-mono">{st.envKey}</span> <span className="num font-mono text-muted">{st.keyHint}</span>
+            </span>
+          </SettingsRow>
+        ) : (
+          <SettingsRow
+            label={st.configured ? `Saved key ${st.keyHint}` : 'API key'}
+            htmlFor={`ai-key-${def.id}`}
+            description={
+              <a href={def.keyUrl} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1">
+                Get a key <ExternalLink size={12} aria-hidden="true" />
+              </a>
+            }
+          >
+            <form
+              className="flex w-full flex-col gap-2 md:max-w-[420px]"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void saveKey();
               }}
             >
-              <Trash2 size={14} /> Remove
-            </button>
-          )}
-          <a href={def.keyUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 pb-2 text-[12px] font-semibold text-primary hover:underline">
-            Get a key <ExternalLink size={11} />
-          </a>
-        </div>
-      )}
-      {st.source !== 'secrets' && <p className="-mt-1 text-[11.5px] text-muted">On Replit, a Secret named {def.envKeys.map((k) => <code key={k}>{k}</code>).reduce<React.ReactNode[]>((a, c, i) => (i ? [...a, ' or ', c] : [c]), [])} keeps this key through restarts and publishing.</p>}
-
-      {/* what it powers */}
-      <PowersDropdown def={def} st={st} disabled={locked} onChange={(functions) => void save({ functions })} />
-
-      {/* model + effort per kind */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        {kinds.map((kind) => (
-          <KindSettings key={kind} def={def} st={st} kind={kind} disabled={locked} call={call} save={save} />
-        ))}
+              <input id={`ai-key-${def.id}`} type="password" autoComplete="off" spellCheck={false} className="input" value={key} disabled={locked} onChange={(e) => setKey(e.target.value)} placeholder={st.configured ? 'Paste a new key to replace it' : `Paste your ${def.label} key`} />
+              <span className="flex flex-wrap items-center justify-end gap-2">
+                {st.source === 'app' && (
+                  <button
+                    type="button"
+                    className="btn btn-danger-ghost btn-sm mr-auto"
+                    disabled={locked}
+                    onClick={async () => {
+                      if (await confirmAction({ title: `Remove the ${def.label} key?`, body: 'Functions it powers move to your next key, or to the built-in engine.', confirmLabel: 'Remove key', danger: true })) void save({ removeKey: true }, 'Key removed');
+                    }}
+                  >
+                    <Trash2 /> Remove
+                  </button>
+                )}
+                <button type="submit" className="btn btn-primary btn-sm" disabled={locked || busy || !key.trim()}>
+                  {busy && <Spinner size={14} />} Save key
+                </button>
+              </span>
+            </form>
+          </SettingsRow>
+        )}
+        <SettingsRow label="Powers" description="The functions this key answers.">
+          <div className="w-full md:max-w-[420px]">
+            <PowersDropdown def={def} st={st} disabled={locked} onChange={(functions) => void save({ functions })} />
+          </div>
+        </SettingsRow>
       </div>
 
-      <footer className="flex flex-wrap items-center gap-2 border-t border-line pt-3">
-        <button className="btn btn-secondary btn-sm" disabled={!st.configured || testing || locked} onClick={() => void testKey()}>
-          {testing ? <Spinner size={14} /> : <ShieldCheck size={14} />} Test key
-        </button>
-        {def.kinds.text && <CompareEfforts def={def} st={st} disabled={!st.configured || locked} call={call} onDone={onUsage} />}
-        {test && <span className={cn('text-[12.5px] font-medium', test.ok ? 'text-good' : 'text-bad')}>{test.text}</span>}
-      </footer>
-    </article>
+      <div className="flex flex-col gap-3">
+        <h4 className="text-h4 text-ink">Models and effort</h4>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {kinds.map((kind) => (
+            <KindSettings key={kind} def={def} st={st} kind={kind} disabled={locked} call={call} save={save} />
+          ))}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-3 border-t border-line pt-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="btn btn-secondary btn-sm" disabled={!st.configured || testing || locked} onClick={() => void testKey()}>
+            {testing ? <Spinner size={14} /> : <ShieldCheck />} Test key
+          </button>
+          {def.kinds.text && <CompareEfforts def={def} st={st} disabled={!st.configured || locked} call={call} onDone={onUsage} />}
+        </div>
+        {test && (
+          <p className={cn('flex items-center gap-1.5 text-small', test.ok ? 'text-good' : 'text-bad')} role="status">
+            {!test.ok && <CircleAlert size={14} className="shrink-0" aria-hidden="true" />} {test.text}
+          </p>
+        )}
+        {totals && totals.requests > 0 && (
+          <p className="num text-small text-muted">
+            Last 14 days: <span className="font-mono text-ink-2">{totals.requests}</span> request{totals.requests === 1 ? '' : 's'}
+            {totals.failed ? ` (${totals.failed} failed)` : ''} · <span className="font-mono text-ink-2">{totals.costUsd ? fmtUsdSmall(totals.costUsd) : totals.credits ? `${totals.credits} credits` : '–'}</span>
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
-/** The "Powers" dropdown: every function, stacked, with the ones this key can't do greyed out. */
+/** The "Powers" list: every function, grouped, with the ones this key can't do switched off. */
 function PowersDropdown({ def, st, disabled, onChange }: { def: CatalogProvider; st: ProviderState; disabled: boolean; onChange: (functions: string[]) => void }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
@@ -499,34 +588,32 @@ function PowersDropdown({ def, st, disabled, onChange }: { def: CatalogProvider;
   const toggle = (id: string) => onChange(on.has(id) ? st.functions.filter((x) => x !== id) : [...st.functions, id]);
   const names = AI_FUNCTIONS.filter((f) => on.has(f.id)).map((f) => f.label);
   return (
-    <div>
-      <p className="label mb-1">Powers</p>
-      <button ref={anchor} type="button" className="input flex h-auto min-h-[38px] w-full items-center gap-2 py-1.5 text-left" disabled={disabled} aria-haspopup="true" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <span className="min-w-0 flex-1 truncate text-[13px]">{names.length ? `${names.length} of ${supported.length}: ${names.join(', ')}` : <span className="text-muted">Nothing yet: choose what this key powers</span>}</span>
-        <ChevronDown size={15} className="shrink-0 text-muted" />
+    <>
+      <button ref={anchor} type="button" className="select flex h-auto min-h-9 w-full items-center py-1.5 text-left" disabled={disabled} aria-haspopup="true" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <span className="min-w-0 flex-1 truncate text-small">{names.length ? `${names.length} of ${supported.length}: ${names.join(', ')}` : <span className="text-muted">Nothing yet: choose what this key powers</span>}</span>
       </button>
       <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} align="start" className="w-[min(440px,calc(100vw-24px))] p-2">
-        <div className="mb-1 flex items-center gap-2 px-1.5 pb-1">
-          <span className="text-[12px] font-semibold text-ink-2">What {def.label} powers</span>
-          <button type="button" className="ml-auto text-[12px] font-semibold text-primary hover:underline" onClick={() => onChange(supported)}>
+        <div className="mb-1 flex items-center gap-3 px-1.5 pb-1">
+          <span className="text-small font-medium text-ink">What {def.label} powers</span>
+          <button type="button" className="link ml-auto text-caption" onClick={() => onChange(supported)}>
             Everything it can
           </button>
-          <button type="button" className="text-[12px] font-semibold text-primary hover:underline" onClick={() => onChange([])}>
+          <button type="button" className="link text-caption" onClick={() => onChange([])}>
             None
           </button>
         </div>
         {AI_FUNCTION_GROUPS.map((g) => (
           <fieldset key={g.id} className="mb-1">
-            <legend className="eyebrow px-1.5 pb-0.5 pt-1.5">{g.label}</legend>
+            <legend className="px-1.5 pb-0.5 pt-2 text-caption font-medium text-muted">{g.label}</legend>
             {AI_FUNCTIONS.filter((f) => f.group === g.id).map((f) => {
               const sup = def.functions[f.id];
               const id = `pw-${def.id}-${f.id}`;
               return (
-                <label key={f.id} htmlFor={id} className={cn('flex items-start gap-2.5 rounded-md px-1.5 py-1.5', sup?.ok ? 'cursor-pointer hover:bg-surface-2' : 'cursor-not-allowed opacity-55')}>
-                  <input id={id} type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[rgb(var(--primary))]" checked={on.has(f.id)} disabled={!sup?.ok} onChange={() => toggle(f.id)} />
+                <label key={f.id} htmlFor={id} className={cn('flex items-start gap-2.5 rounded px-1.5 py-1.5', sup?.ok ? 'cursor-pointer hover:bg-surface-2' : 'cursor-not-allowed')}>
+                  <input id={id} type="checkbox" className="mt-0.5 h-4 w-4 shrink-0" checked={on.has(f.id)} disabled={!sup?.ok} onChange={() => toggle(f.id)} />
                   <span className="min-w-0">
-                    <span className="block text-[13px] font-medium text-ink">{f.label}</span>
-                    <span className="block text-[11.5px] text-muted">{sup?.ok ? f.desc : sup?.reason}</span>
+                    <span className={cn('block text-small font-medium', sup?.ok ? 'text-ink' : 'text-faint')}>{f.label}</span>
+                    <span className="block text-caption text-muted">{sup?.ok ? f.desc : sup?.reason}</span>
                   </span>
                 </label>
               );
@@ -534,7 +621,7 @@ function PowersDropdown({ def, st, disabled, onChange }: { def: CatalogProvider;
           </fieldset>
         ))}
       </Popover>
-    </div>
+    </>
   );
 }
 
@@ -564,83 +651,84 @@ function KindSettings({ def, st, kind, disabled, call, save }: { def: CatalogPro
   };
 
   return (
-    <section className={cn('rounded-md border border-line p-3', !inUse && 'opacity-60')} aria-label={`${def.label} ${KIND_TITLE[kind]}`}>
-      <p className="mb-2 flex items-center gap-1.5 text-[12.5px] font-semibold text-ink">
+    <section className="well flex flex-col gap-3 p-3" aria-label={`${def.label} ${KIND_TITLE[kind]}`}>
+      <p className="flex flex-wrap items-baseline gap-x-2 text-small font-medium text-ink">
         {KIND_TITLE[kind]}
-        {!inUse && <span className="text-[11px] font-normal text-muted">· not used: no ticked function needs it</span>}
+        {!inUse && <span className="text-caption font-normal text-muted">Not used: nothing it powers needs it</span>}
       </p>
-      <div className="flex flex-col gap-2">
-        {showModelPicker && (
-          <div>
-            <label className="label" htmlFor={`m-${def.id}-${kind}`}>
-              Model
-            </label>
-            {custom ? (
-              <div className="flex gap-1.5">
-                <input id={`m-${def.id}-${kind}`} className="input h-9 text-[13px]" value={customModel} onChange={(e) => setCustomModel(e.target.value)} placeholder="model id, e.g. gpt-6.1-sol" />
-                <button
-                  className="btn btn-secondary btn-sm"
-                  disabled={!customModel.trim() || disabled}
-                  onClick={async () => {
-                    if (await save({ models: { [kind]: customModel.trim() } })) setCustom(false);
-                  }}
-                >
-                  Use
-                </button>
-                <button className="btn btn-ghost btn-sm" onClick={() => setCustom(false)}>
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <div className="flex gap-1.5">
-                <select id={`m-${def.id}-${kind}`} className="input h-9 min-w-0 flex-1 text-[13px]" value={model} disabled={disabled} onChange={(e) => (e.target.value === '__custom' ? setCustom(true) : void save({ models: { [kind]: e.target.value } }))}>
-                  <optgroup label="Recommended">
-                    {info.models.map((m) => (
+      {showModelPicker && (
+        <div>
+          <label className="label" htmlFor={`m-${def.id}-${kind}`}>
+            Model
+          </label>
+          {custom ? (
+            <div className="flex gap-1.5">
+              <input id={`m-${def.id}-${kind}`} className="input input-sm font-mono" value={customModel} onChange={(e) => setCustomModel(e.target.value)} placeholder="model id, e.g. gpt-6.1-sol" />
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={!customModel.trim() || disabled}
+                onClick={async () => {
+                  if (await save({ models: { [kind]: customModel.trim() } })) setCustom(false);
+                }}
+              >
+                Use
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCustom(false)}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-1.5">
+              <select id={`m-${def.id}-${kind}`} className="select input-sm min-w-0 flex-1" value={model} disabled={disabled} onChange={(e) => (e.target.value === '__custom' ? setCustom(true) : void save({ models: { [kind]: e.target.value } }))}>
+                <optgroup label="Recommended">
+                  {info.models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </optgroup>
+                {!known && !live?.some((m) => m.id === model) && <option value={model}>{model}</option>}
+                {live && live.length > 0 && (
+                  <optgroup label="From your account">
+                    {live.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.label}
                       </option>
                     ))}
                   </optgroup>
-                  {!known && !live?.some((m) => m.id === model) && <option value={model}>{model}</option>}
-                  {live && live.length > 0 && (
-                    <optgroup label="From your account">
-                      {live.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  <option value="__custom">Another model id…</option>
-                </select>
-                <button className="btn btn-ghost btn-sm" title="Load every model your key can use" disabled={!st.configured || loading || disabled} onClick={() => void loadModels()}>
-                  {loading ? <Spinner size={13} /> : <RefreshCw size={13} />}
+                )}
+                <option value="__custom">Another model id…</option>
+              </select>
+              <Tooltip content="Load every model your key can use">
+                <button type="button" className="btn btn-ghost btn-icon btn-sm" aria-label="Load every model your key can use" disabled={!st.configured || loading || disabled} onClick={() => void loadModels()}>
+                  {loading ? <Spinner size={14} /> : <RefreshCw />}
                 </button>
-              </div>
-            )}
-          </div>
-        )}
-        <div>
-          <label className="label" htmlFor={`e-${def.id}-${kind}`}>
-            {effortTitle(def.id, kind)}
-          </label>
-          {efforts.length ? (
-            <select id={`e-${def.id}-${kind}`} className="input h-9 text-[13px]" value={effort} disabled={disabled} onChange={(e) => void save({ effort: { [kind]: e.target.value } })}>
-              {efforts.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.label}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <p className="rounded-md bg-surface-2 px-2.5 py-2 text-[12.5px] text-muted">Set by the model (it has no effort setting).</p>
-          )}
-          {chosen && (
-            <p className="mt-1 text-[11.5px] text-muted">
-              {chosen.note} {info.field && <span className="whitespace-nowrap">Sent as <code>{info.field}</code>.</span>}
-            </p>
+              </Tooltip>
+            </div>
           )}
         </div>
+      )}
+      <div>
+        <label className="label" htmlFor={`e-${def.id}-${kind}`}>
+          {effortTitle(def.id, kind)}
+        </label>
+        {efforts.length ? (
+          <select id={`e-${def.id}-${kind}`} className="select input-sm" value={effort} disabled={disabled} onChange={(e) => void save({ effort: { [kind]: e.target.value } })}>
+            {efforts.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <p className="text-small text-muted">Set by the model (it has no effort setting).</p>
+        )}
+        {chosen && (
+          <p className="hint">
+            {chosen.note} {info.field && <span className="whitespace-nowrap">Sent as <code className="font-mono">{info.field}</code>.</span>}
+          </p>
+        )}
       </div>
     </section>
   );
@@ -673,28 +761,28 @@ function CompareEfforts({ def, st, disabled, call, onDone }: { def: CatalogProvi
   };
   return (
     <>
-      <button className="btn btn-secondary btn-sm" disabled={disabled || running} onClick={() => void run()}>
-        {running ? <Spinner size={14} /> : <FlaskConical size={14} />} Compare efforts
+      <button type="button" className="btn btn-secondary btn-sm" disabled={disabled || running} onClick={() => void run()}>
+        {running ? <Spinner size={14} /> : <FlaskConical />} Compare efforts
       </button>
       {result && (
         <div className="w-full overflow-x-auto">
-          <table className="w-full min-w-[420px] text-left text-[12.5px]">
-            <caption className="pb-1 text-left text-[11.5px] text-muted">
-              {result.model}, effort sent as <code>{result.field}</code>
+          <table className="w-full min-w-[420px] text-left text-small">
+            <caption className="pb-1.5 text-left text-caption text-muted">
+              {result.model}, effort sent as <code className="font-mono">{result.field}</code>
             </caption>
-            <thead className="text-[11px] uppercase tracking-wide text-muted">
+            <thead className="border-b border-line text-caption text-muted">
               <tr>
-                <th className="py-1 pr-3 font-semibold">Effort</th>
-                <th className="py-1 pr-3 font-semibold">Time</th>
-                <th className="py-1 pr-3 font-semibold">Reasoning</th>
-                <th className="py-1 pr-3 font-semibold">Output tokens</th>
-                <th className="py-1 font-semibold">Cost</th>
+                <th className="py-1.5 pr-3 font-medium">Effort</th>
+                <th className="py-1.5 pr-3 font-medium">Time</th>
+                <th className="py-1.5 pr-3 font-medium">Reasoning</th>
+                <th className="py-1.5 pr-3 font-medium">Output tokens</th>
+                <th className="py-1.5 font-medium">Cost</th>
               </tr>
             </thead>
-            <tbody className="num">
+            <tbody className="num divide-y divide-line font-mono">
               {result.results.map((x) => (
-                <tr key={x.effort} className="border-t border-line">
-                  <td className="py-1.5 pr-3 font-semibold text-ink">{x.effortLabel}</td>
+                <tr key={x.effort}>
+                  <td className="py-1.5 pr-3 font-sans font-medium text-ink">{x.effortLabel}</td>
                   {x.ok ? (
                     <>
                       <td className="py-1.5 pr-3">{((x.ms ?? 0) / 1000).toFixed(1)}s</td>
@@ -703,7 +791,7 @@ function CompareEfforts({ def, st, disabled, call, onDone }: { def: CatalogProvi
                       <td className="py-1.5">{x.cost ? `${x.cost.source === 'estimate' ? '≈' : ''}${fmtUsdSmall(x.cost.usd)}` : '–'}</td>
                     </>
                   ) : (
-                    <td colSpan={4} className="py-1.5 text-bad">
+                    <td colSpan={4} className="py-1.5 font-sans text-bad">
                       {x.error}
                     </td>
                   )}
@@ -717,32 +805,57 @@ function CompareEfforts({ def, st, disabled, call, onDone }: { def: CatalogProvi
   );
 }
 
-// ───────────── side panels ─────────────
+// ───────────── routing and usage (behind an accordion) ─────────────
 
+function RoutingAndUsage({ state, catalog, usage, usageLocked, call, people, onRefreshUsage }: { state: AIState; catalog: CatalogProvider[]; usage: { recent: UsageEntry[]; totals: UsageTotals } | null; usageLocked: boolean; call: Call; people: boolean; onRefreshUsage: () => void }) {
+  return (
+    <Accordion type="multiple" className="-mx-5 border-t border-line px-5">
+      <AccordionItem value="routing" className="last:border-b-0">
+        <AccordionTrigger>Routing</AccordionTrigger>
+        <AccordionContent>
+          <RoutingSummary state={state} catalog={catalog} />
+        </AccordionContent>
+      </AccordionItem>
+      <AccordionItem value="recent" className="last:border-b-0">
+        <AccordionTrigger>Recent usage</AccordionTrigger>
+        <AccordionContent>
+          <UsageList usage={usage} locked={usageLocked} catalog={catalog} onRefresh={onRefreshUsage} />
+        </AccordionContent>
+      </AccordionItem>
+      {people && (
+        <AccordionItem value="people" className="last:border-b-0">
+          <AccordionTrigger>Usage by person</AccordionTrigger>
+          <AccordionContent>
+            <PeopleUsage call={call} />
+          </AccordionContent>
+        </AccordionItem>
+      )}
+    </Accordion>
+  );
+}
+
+/** "Strategy · xAI Grok → OpenAI": which key answers each function, then the ones after it. */
 function RoutingSummary({ state, catalog }: { state: AIState; catalog: CatalogProvider[] }) {
   const name = (id: string) => catalog.find((c) => c.id === id)?.label ?? id;
   return (
-    <section className="panel p-4" aria-label="What powers each function">
-      <h3 className="section-title mb-2 flex items-center gap-2 text-[15px]">
-        <Route size={16} className="text-primary" /> What powers each function
-      </h3>
+    <div className="grid grid-cols-1 gap-x-8 gap-y-4 md:grid-cols-2" role="region" aria-label="What powers each function">
       {AI_FUNCTION_GROUPS.map((g) => (
-        <div key={g.id} className="mb-2">
-          <p className="eyebrow mb-1">{g.label}</p>
-          <ul className="flex flex-col">
+        <div key={g.id}>
+          <p className="mb-1 text-caption font-medium text-muted">{g.label}</p>
+          <ul className="flex flex-col divide-y divide-line">
             {AI_FUNCTIONS.filter((f) => f.group === g.id).map((f) => {
               const route = state.routing[f.id] ?? [];
               return (
-                <li key={f.id} className="flex items-baseline gap-2 border-t border-line py-1.5 text-[12.5px] first:border-t-0">
+                <li key={f.id} className="flex items-baseline gap-3 py-1.5 text-small">
                   <span className="min-w-0 flex-1 text-ink-2">{f.label}</span>
                   {route.length ? (
-                    <span className="text-right font-semibold text-ink">
+                    <span className="text-right text-ink">
                       {name(route[0])}
-                      {route.length > 1 && <span className="font-normal text-muted"> then {route.slice(1).map(name).join(', ')}</span>}
+                      {route.length > 1 && <span className="text-muted"> → {route.slice(1).map(name).join(' → ')}</span>}
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1 text-right text-warn">
-                      <CircleAlert size={12} /> {f.kind === 'text' ? 'No key: built-in engine' : 'No key: off'}
+                      <CircleAlert size={14} className="shrink-0" aria-hidden="true" /> {f.kind === 'text' ? 'Built-in engine' : 'Off: no key'}
                     </span>
                   )}
                 </li>
@@ -751,48 +864,47 @@ function RoutingSummary({ state, catalog }: { state: AIState; catalog: CatalogPr
           </ul>
         </div>
       ))}
-    </section>
+    </div>
   );
 }
 
-function UsageCard({ usage, locked, catalog, onRefresh }: { usage: { recent: UsageEntry[]; totals: UsageTotals } | null; locked: boolean; catalog: CatalogProvider[]; onRefresh: () => void }) {
+function UsageList({ usage, locked, catalog, onRefresh }: { usage: { recent: UsageEntry[]; totals: UsageTotals } | null; locked: boolean; catalog: CatalogProvider[]; onRefresh: () => void }) {
   const name = (id: string) => catalog.find((c) => c.id === id)?.label ?? id;
   const fnName = (id: string) => (id === 'test' ? 'Effort comparison' : AI_FUNCTIONS.find((f) => f.id === id)?.label ?? id);
   return (
-    <section className="panel p-4" aria-label="Recent AI usage">
-      <div className="mb-2 flex items-center gap-2">
-        <h3 className="section-title text-[15px]">Recent usage</h3>
-        <button className="btn btn-ghost btn-xs ml-auto" onClick={onRefresh}>
-          <RefreshCw size={12} /> Refresh
+    <section aria-label="Recent AI usage" className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <p className="text-small text-muted">Last 14 days. Costs are what the provider reported, or estimates from list prices.</p>
+        <button type="button" className="btn btn-ghost btn-xs ml-auto" onClick={onRefresh}>
+          <RefreshCw /> Refresh
         </button>
       </div>
       {!usage || !usage.recent.length ? (
-        <p className="text-[12.5px] text-muted">{locked ? 'Enter the admin token above to see usage: it can show details of your provider accounts.' : 'Nothing yet. Each request your keys answer shows up here with its effort, tokens and cost.'}</p>
+        <p className="text-small text-muted">{locked ? 'Enter the admin token above to see usage: it can show details of your provider accounts.' : 'Nothing yet. Each request your keys answer shows up here with its effort, tokens and cost.'}</p>
       ) : (
         <>
           {usage.totals.providers.length > 0 && (
-            <ul className="mb-3 flex flex-col gap-1 text-[12px]">
+            <ul className="well flex flex-col gap-1 px-3 py-2.5 text-small">
               {usage.totals.providers.map((t) => (
-                <li key={t.provider} className="num flex items-baseline gap-2">
-                  <span className="min-w-0 flex-1 font-semibold text-ink-2">{name(t.provider)}</span>
-                  <span className="text-muted">
+                <li key={t.provider} className="flex items-baseline gap-2">
+                  <span className="min-w-0 flex-1 text-ink-2">{name(t.provider)}</span>
+                  <span className="num font-mono text-caption text-muted">
                     {t.requests} request{t.requests === 1 ? '' : 's'}
                     {t.reasoningTokens ? ` · ${fmtTokens(t.reasoningTokens)} reasoning` : ''}
                   </span>
-                  <span className="font-semibold text-ink">{t.costUsd ? fmtUsdSmall(t.costUsd) : t.credits ? `${t.credits} credits` : '–'}</span>
+                  <span className="num w-16 text-right font-mono text-caption text-ink">{t.costUsd ? fmtUsdSmall(t.costUsd) : t.credits ? `${t.credits} cr` : '–'}</span>
                 </li>
               ))}
-              <li className="text-[11px] text-muted">Last 14 days. Costs are what the provider reported, or estimates from list prices.</li>
             </ul>
           )}
-          <ul className="flex flex-col">
+          <ul className="flex flex-col divide-y divide-line">
             {usage.recent.map((e) => (
-              <li key={e.id} className="border-t border-line py-1.5 text-[12px]">
+              <li key={e.id} className="py-2 text-small">
                 <p className="flex items-baseline gap-2">
-                  <span className={cn('min-w-0 flex-1 truncate font-semibold', e.ok ? 'text-ink' : 'text-bad')}>{fnName(e.fn)}</span>
-                  <span className="num shrink-0 text-muted">{fmtRelative(e.at)}</span>
+                  <span className={cn('min-w-0 flex-1 truncate font-medium', e.ok ? 'text-ink' : 'text-bad')}>{fnName(e.fn)}</span>
+                  <span className="num shrink-0 font-mono text-caption text-muted">{fmtRelative(e.at)}</span>
                 </p>
-                <p className="num truncate text-muted" title={e.error || undefined}>
+                <p className="num truncate font-mono text-caption text-muted" title={e.error || undefined}>
                   {[name(e.provider), e.model, e.effort ? `effort ${e.effort}` : '', e.usage?.reasoning ? `${fmtTokens(e.usage.reasoning)} reasoning` : e.usage?.output ? `${fmtTokens(e.usage.output)} out` : '', e.cost ? `${e.cost.source === 'estimate' ? '≈' : ''}${fmtUsdSmall(e.cost.usd)}` : e.credits ? `${e.credits} credits` : '', e.pending ? 'running' : '', !e.ok ? e.error ?? 'failed' : '']
                     .filter(Boolean)
                     .join(' · ')}
@@ -809,31 +921,36 @@ function UsageCard({ usage, locked, catalog, onRefresh }: { usage: { recent: Usa
 function AdminAccess({ adminTokenSet, token, onToken, onCheck }: { adminTokenSet: boolean; token: string; onToken: (t: string) => void; onCheck: () => void }) {
   const [value, setValue] = useState(token);
   return (
-    <section className="rounded-lg border border-warn/40 bg-warn-soft/50 p-4 text-[13px]" aria-label="Admin access">
-      <p className="flex items-center gap-1.5 font-semibold text-ink">
-        <ShieldCheck size={15} className="text-primary" /> {adminTokenSet ? 'Enter your admin token to change AI settings' : 'AI settings are read-only from this browser'}
-      </p>
-      <p className="mt-1 text-ink-2">
-        {adminTokenSet
-          ? 'For safety, keys and settings can only be changed with the server’s admin token.'
-          : 'For safety, keys and settings can only be changed from the machine running the server. On Replit: open Tools → Secrets, add a Secret named ADMIN_TOKEN with any long password, restart the app (Stop, then Run), and enter the same password here.'}
-      </p>
-      <div className="mt-2 flex flex-wrap items-end gap-2">
-        <Field label="Admin token" htmlFor="ai-admin" className="min-w-[220px] max-w-sm flex-1">
-          <input id="ai-admin" type="password" autoComplete="off" className="input" value={value} onChange={(e) => setValue(e.target.value)} />
-        </Field>
-        <button
-          className="btn btn-primary btn-sm"
-          disabled={!value.trim()}
-          onClick={() => {
-            onToken(value.trim());
-            onCheck();
-          }}
-        >
-          Unlock
-        </button>
-      </div>
-    </section>
+    <Region name="Admin access">
+      <SettingsSection
+        title={adminTokenSet ? 'Enter your admin token to change AI settings' : 'AI settings are read-only from this browser'}
+        description={adminTokenSet ? 'For safety, keys and settings can only be changed with the server’s admin token.' : 'For safety, keys and settings can only be changed from the machine running the server.'}
+        actions={
+          !adminTokenSet && (
+            <InfoTip title="Change them from this browser" label="How to unlock">
+              Set an ADMIN_TOKEN secret on the server (any long password), restart the app, and enter the same password here.
+            </InfoTip>
+          )
+        }
+      >
+        <SettingsRow label="Admin token" htmlFor="ai-admin">
+          <form
+            className="flex w-full gap-2 md:max-w-[420px]"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!value.trim()) return;
+              onToken(value.trim());
+              onCheck();
+            }}
+          >
+            <input id="ai-admin" type="password" autoComplete="off" className="input min-w-0 flex-1" value={value} onChange={(e) => setValue(e.target.value)} />
+            <button type="submit" className="btn btn-primary" disabled={!value.trim()}>
+              Unlock
+            </button>
+          </form>
+        </SettingsRow>
+      </SettingsSection>
+    </Region>
   );
 }
 
@@ -842,28 +959,35 @@ function ServerAddress() {
   const updateSettings = useStore((s) => s.updateSettings);
   const [testing, setTesting] = useState(false);
   return (
-    <details className="panel p-4 text-[13px]">
-      <summary className="cursor-pointer font-semibold text-ink">Advanced: AI server address</summary>
-      <div className="mt-3 flex flex-wrap items-end gap-2">
-        <Field label="Server URL" htmlFor="ai-url" hint="Leave blank when the app and the server run together (the usual setup, including Replit). For a separate server, press Test connection: that lets it know who’s signed in." className="min-w-[240px] flex-1">
-          <input id="ai-url" className="input" value={serverUrl} onChange={(e) => updateSettings((s) => ({ ...s, ai: { ...s.ai, serverUrl: e.target.value.trim() } }))} placeholder="https://your-server.example.com" />
-        </Field>
-        <button
-          className="btn btn-secondary"
-          disabled={testing}
-          onClick={async () => {
-            setTesting(true);
-            // choosing this server: it may now receive your sign-in (only this account, on this device)
-            if (serverUrl) trustServer(serverUrl);
-            const ok = await pingServer(serverUrl);
-            setTesting(false);
-            toast(ok ? { kind: 'success', title: 'Server is reachable' } : { kind: 'error', title: 'Couldn’t reach the server', body: 'Check the URL and that the server is running.' });
-          }}
-        >
-          {testing ? <Spinner size={14} /> : <RefreshCw size={14} />} Test connection
-        </button>
-      </div>
-    </details>
+    <div className="card px-5">
+      <Accordion type="single" collapsible>
+        <AccordionItem value="server" className="border-b-0">
+          <AccordionTrigger>Advanced: AI server address</AccordionTrigger>
+          <AccordionContent>
+            <div className="flex flex-wrap items-end gap-2">
+              <Field label="Server URL" htmlFor="ai-url" hint="Leave it blank when the app and the server run together (the usual setup). For a separate server, press Test connection: that lets it know who’s signed in." className="min-w-[240px] flex-1">
+                <input id="ai-url" className="input" value={serverUrl} onChange={(e) => updateSettings((s) => ({ ...s, ai: { ...s.ai, serverUrl: e.target.value.trim() } }))} placeholder="https://your-server.example.com" />
+              </Field>
+              <button
+                type="button"
+                className="btn btn-secondary mb-[22px]"
+                disabled={testing}
+                onClick={async () => {
+                  setTesting(true);
+                  // choosing this server: it may now receive your sign-in (only this account, on this device)
+                  if (serverUrl) trustServer(serverUrl);
+                  const ok = await pingServer(serverUrl);
+                  setTesting(false);
+                  toast(ok ? { kind: 'success', title: 'Server is reachable' } : { kind: 'error', title: 'Couldn’t reach the server', body: 'Check the URL and that the server is running.' });
+                }}
+              >
+                {testing ? <Spinner size={14} /> : <RefreshCw />} Test connection
+              </button>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    </div>
   );
 }
 
@@ -890,6 +1014,7 @@ interface MyUsage {
 function OwnKeys({ call, serverUrl, onChange }: { call: Call; serverUrl: string; onChange: () => void }) {
   const [info, setInfo] = useState<MyKeys | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
   const apply = (j: unknown) => setInfo(parseMyKeys(j));
   useEffect(() => {
     void call<MyKeys>('GET', '/api/ai/my-keys').then((r) => (r.ok ? apply(r.json) : setFailed(r.json?.error ?? 'Couldn’t load your keys.')));
@@ -899,41 +1024,108 @@ function OwnKeys({ call, serverUrl, onChange }: { call: Call; serverUrl: string;
     void pingServer(serverUrl);
     onChange();
   };
+  const editing = open ? info?.providers.find((p) => p.id === open) : undefined;
+  // the side sheet gives the focus back to the row's Add key / Replace button when it closes
+  const openedFrom = useFocusBack(!!(info && editing));
   return (
-    <section className="panel p-4 sm:p-5" aria-label="Your own keys">
-      <h3 className="flex items-center gap-2 text-[14px] font-semibold">
-        <KeyRound size={15} className="text-primary" /> Your own keys
-      </h3>
-      <p className="mt-1 max-w-3xl text-[13px] leading-relaxed text-muted">
-        Optional. Writing, photos and videos one of your keys can do run in <strong className="text-ink-2">your own account</strong>, on your credits, and aren’t limited. Everything else uses the app’s keys, within the daily limit. A Manus key is only for Manus tasks (agent photos, social posts, building pages and assets, and chat). Keys are checked with the provider, stored encrypted on the server and never shown again (only their last 4 characters).
-      </p>
-      {failed && !info && (
-        <p role="alert" className="mt-3 text-[13px] text-bad">
-          {failed}
-        </p>
+    <Region name="Your own keys">
+      <SettingsSection
+        title="Your own keys"
+        description="Optional: what your own keys can do runs in your account, on your credits, without the daily limit."
+        actions={
+          <InfoTip title="Your own keys" label="About your own keys">
+            Writing, photos and videos one of your keys can do run in your own account and aren’t limited; everything else uses the app’s keys, within the daily limit. A Manus key is only for Manus tasks (agent photos, social posts, building pages and assets, and chat). Keys are checked with the provider, stored encrypted on the server and never shown again (only their last 4 characters).
+          </InfoTip>
+        }
+      >
+        {failed && !info && (
+          <p role="alert" className="flex items-center gap-1.5 py-4 text-small text-bad">
+            <CircleAlert size={14} className="shrink-0" aria-hidden="true" /> {failed}
+          </p>
+        )}
+        {!info && !failed && (
+          <p className="flex items-center gap-2 py-4 text-small text-muted">
+            <Spinner size={14} /> Loading your keys…
+          </p>
+        )}
+        {info && !info.available && (
+          <div className="pb-2 pt-3">
+            <Callout tone="warn">The app’s owner needs to add the SUPABASE_SECRET_KEY secret before you can save your own keys.</Callout>
+          </div>
+        )}
+        {info && (
+          <div className="-mx-5 mt-3 border-t border-line">
+            <div className="hidden grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_112px_88px] gap-4 border-b border-line px-5 py-2 text-caption text-muted md:grid" aria-hidden="true">
+              <span>Provider</span>
+              <span>Used for</span>
+              <span>Key</span>
+              <span />
+            </div>
+            <ul aria-label="Your keys">
+              {info.providers.map((p) => {
+                const saved = info.byProvider[p.id] ?? null;
+                return (
+                  <li key={p.id} aria-label={`Your ${p.label} key`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-0.5 border-b border-line px-5 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_112px_88px]">
+                    <span className="min-w-0 truncate text-ui text-ink">{p.label}</span>
+                    <span className="min-w-0 truncate text-small text-muted max-md:col-start-1 max-md:row-start-2" title={ownKeyCapability(p).short}>
+                      {ownKeyCapability(p).short}
+                    </span>
+                    <span className="min-w-0 max-md:col-start-1 max-md:row-start-3">
+                      {saved ? (
+                        <>
+                          <span aria-hidden="true" className="num font-mono text-small text-ink-2">
+                            •••• {saved.last4}
+                          </span>
+                          <span className="sr-only">Key ending in {saved.last4}</span>
+                        </>
+                      ) : (
+                        <span className="text-small text-muted">Not set</span>
+                      )}
+                    </span>
+                    <span className="flex justify-end max-md:col-start-2 max-md:row-span-3 max-md:row-start-1">
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-xs"
+                        disabled={!info.available}
+                        onClick={(e) => {
+                          openedFrom(e.currentTarget);
+                          setOpen(p.id);
+                        }}
+                        aria-label={`${saved ? 'Replace' : 'Add'} your ${p.label} key`}
+                      >
+                        {saved ? 'Replace' : 'Add key'}
+                      </button>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+      </SettingsSection>
+      {info && editing && (
+        <OwnKeyDrawer
+          p={editing}
+          saved={info.byProvider[editing.id] ?? null}
+          call={call}
+          onClose={() => setOpen(null)}
+          onSaved={(j) => {
+            changed(j);
+            setOpen(null);
+          }}
+        />
       )}
-      {!info && !failed && (
-        <p className="mt-3 flex items-center gap-2 text-[13px] text-muted">
-          <Spinner size={14} /> Loading your keys…
-        </p>
-      )}
-      {info && !info.available && <p className="mt-3 text-[12.5px] text-warn">The app’s owner needs to add the SUPABASE_SECRET_KEY Secret before you can save your own keys.</p>}
-      {info && (
-        <ul className="mt-3 flex flex-col">
-          {info.providers.map((p) => (
-            <OwnKeyRow key={p.id} p={p} saved={info.byProvider[p.id] ?? null} available={info.available} call={call} onSaved={changed} />
-          ))}
-        </ul>
-      )}
-    </section>
+    </Region>
   );
 }
 
-function OwnKeyRow({ p, saved, available, call, onSaved }: { p: OwnKeyProvider; saved: { last4: string } | null; available: boolean; call: Call; onSaved: (j: MyKeys | null) => void }) {
+/** Add or replace one of your own keys (or remove it), in a side sheet. */
+function OwnKeyDrawer({ p, saved, call, onClose, onSaved }: { p: OwnKeyProvider; saved: { last4: string } | null; call: Call; onClose: () => void; onSaved: (j: MyKeys | null) => void }) {
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputId = `own-key-${p.id}`;
+  const formId = `${inputId}-form`;
   const save = async () => {
     setBusy(true);
     setError(null);
@@ -954,72 +1146,85 @@ function OwnKeyRow({ p, saved, available, call, onSaved }: { p: OwnKeyProvider; 
     toast({ kind: 'success', title: `Your ${p.label} key was removed` });
   };
   return (
-    <li className="flex flex-col gap-2 border-t border-line py-3 first:border-t-0 first:pt-0" aria-label={`Your ${p.label} key`}>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-[13.5px] font-semibold text-ink">{p.label}</span>
-        <span className="text-[12px] text-muted">{ownKeyCapability(p).short}</span>
-        {saved ? <span className="badge bg-good-soft text-good">Key ending in {saved.last4}</span> : <span className="badge bg-surface-2 text-muted">No key</span>}
-        <a href={p.id === 'manus' ? 'https://manus.im' : p.keyUrl} target="_blank" rel="noopener noreferrer" className="ml-auto inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline">
-          Get a key <ExternalLink size={11} />
-        </a>
-      </div>
-      {p.id === 'manus' && <ManusExplainer />}
-      {available && (
-        <form
-          className="flex flex-wrap items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (key.trim()) void save();
-          }}
-        >
-          <Field label={saved ? `Replace your ${p.label} key` : `Your ${p.label} API key`} htmlFor={inputId} className="min-w-[220px] flex-1">
-            <input id={inputId} className="input" type="password" autoComplete="off" spellCheck={false} placeholder={saved ? 'Paste a new key to replace it' : `Paste your ${p.label} key`} value={key} onChange={(e) => setKey(e.target.value)} />
-          </Field>
-          <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !key.trim()}>
-            {busy && <Spinner size={14} />} {saved ? 'Replace key' : 'Save key'}
-          </button>
+    <Drawer
+      open
+      onClose={onClose}
+      title={`Your ${p.label} key`}
+      footer={
+        <>
           {saved && (
-            <button type="button" className="btn btn-ghost btn-sm text-muted hover:text-bad" disabled={busy} aria-label={`Remove your ${p.label} key`} onClick={() => void remove()}>
-              <Trash2 size={14} /> Remove
+            <button type="button" className="btn btn-danger-ghost mr-auto" disabled={busy} aria-label={`Remove your ${p.label} key`} onClick={() => void remove()}>
+              <Trash2 /> Remove
             </button>
           )}
-        </form>
-      )}
-      {error && (
-        <p role="alert" className="text-[12.5px] text-bad">
-          {error}
+          <button type="button" className="btn btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" form={formId} className="btn btn-primary" disabled={busy || !key.trim()}>
+            {busy && <Spinner size={16} />} Save key
+          </button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (key.trim()) void save();
+        }}
+      >
+        <p className="text-body text-muted">
+          {ownKeyCapability(p).short}. {saved ? `Your key ending in ${saved.last4} is saved.` : 'Runs in your own account, on your credits.'}
         </p>
-      )}
-    </li>
+        <Field
+          label={saved ? `Replace your ${p.label} key` : `Your ${p.label} API key`}
+          htmlFor={inputId}
+          right={
+            <a href={p.id === 'manus' ? 'https://manus.im' : p.keyUrl} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1">
+              Get a key <ExternalLink size={12} aria-hidden="true" />
+            </a>
+          }
+        >
+          <input id={inputId} className="input" type="password" autoComplete="off" spellCheck={false} autoFocus placeholder={saved ? 'Paste a new key to replace it' : `Paste your ${p.label} key`} value={key} onChange={(e) => setKey(e.target.value)} aria-invalid={!!error || undefined} />
+        </Field>
+        {error && (
+          <p role="alert" className="flex items-start gap-1.5 text-small text-bad">
+            <CircleAlert size={14} className="mt-[3px] shrink-0" aria-hidden="true" /> {error}
+          </p>
+        )}
+        {p.id === 'manus' && <ManusExplainer />}
+      </form>
+    </Drawer>
   );
 }
 
 /** What Manus does with your own account, and how to get its key. */
 function ManusExplainer() {
   return (
-    <details className="rounded-md bg-surface-2/60 px-3 py-2 text-[12.5px]">
-      <summary className="cursor-pointer font-semibold text-ink-2">Manus: your photos, social posts, pages and chats, in your own account</summary>
-      <p className="mt-1.5 leading-relaxed text-muted">
-        Manus is an AI agent with its own browser. With your own Manus account it can make product photos, post on <strong className="text-ink-2">your</strong> Facebook, Instagram, TikTok, LinkedIn and X accounts (right away or scheduled), build pages and assets for you, and chat with you in the assistant. Tasks run in your Manus account and use your Manus credits.
+    <div className="well flex flex-col gap-2 px-3 py-3 text-small">
+      <p className="font-medium text-ink">Manus: your photos, social posts, pages and chats, in your own account</p>
+      <p className="text-muted">
+        Manus is an AI agent with its own browser. With your own Manus account it can make product photos, post on your Facebook, Instagram, TikTok, LinkedIn and X accounts (right away or scheduled), build pages and assets for you, and chat with you in the assistant. Tasks use your Manus credits.
       </p>
-      <ol className="mt-2 flex list-decimal flex-col gap-1 pl-5 text-ink-2">
+      <ol className="flex list-decimal flex-col gap-1 pl-5 text-ink-2">
         <li>
           Create a Manus account at{' '}
-          <a className="font-semibold text-primary hover:underline" href="https://manus.im" target="_blank" rel="noreferrer">
-            manus.im <ExternalLink size={11} className="inline" />
+          <a className="link" href="https://manus.im" target="_blank" rel="noreferrer">
+            manus.im
           </a>{' '}
           (free to start; tasks use Manus credits).
         </li>
         <li>
-          In Manus, open <strong>Settings → Developers (API keys)</strong>, press <strong>Create API Key</strong>, name it (for example “Yourlocalbusiness”) and copy it. Manus shows it only once.{' '}
-          <a className="text-primary hover:underline" href="https://open.manus.ai/docs/v2/authentication" target="_blank" rel="noreferrer">
-            Manus’s guide <ExternalLink size={11} className="inline" />
+          In Manus, open Settings › Developers (API keys), press Create API Key, name it (for example “Yourlocalbusiness”) and copy it. Manus shows it only once.{' '}
+          <a className="link" href="https://open.manus.ai/docs/v2/authentication" target="_blank" rel="noreferrer">
+            Manus’s guide
           </a>
         </li>
-        <li>Paste it below and press Save.</li>
+        <li>Paste it above and press Save key.</li>
         <li>For posting: in Manus, sign in to each network once in its browser (Manus asks the first time it posts there for you).</li>
       </ol>
-    </details>
+    </div>
   );
 }
 
@@ -1028,13 +1233,13 @@ function Meter({ label, used, limit, text }: { label: string; used: number; limi
   const full = limit > 0 && used >= limit;
   return (
     <div>
-      <p className="flex items-baseline justify-between gap-2 text-[12.5px]">
-        <span className="font-semibold text-ink-2">{label}</span>
-        <span className={cn('num', full ? 'font-semibold text-bad' : 'text-muted')}>{text}</span>
+      <p className="flex items-baseline justify-between gap-2 text-small">
+        <span className="text-ink-2">{label}</span>
+        <span className={cn('num font-mono text-caption', full ? 'text-bad' : 'text-muted')}>{text}</span>
       </p>
       {limit > 0 && (
-        <div className="mt-1 h-2 overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
-          <div className={cn('h-full rounded-full', full ? 'bg-bad' : pct >= 80 ? 'bg-warn' : 'bg-primary')} style={{ width: `${pct}%` }} />
+        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-surface-3" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+          <div className={cn('h-full rounded-full transition-[width] duration-240 ease-out', full ? 'bg-bad-solid' : pct >= 80 ? 'bg-warn-solid' : 'bg-primary')} style={{ width: `${pct}%` }} />
         </div>
       )}
     </div>
@@ -1058,83 +1263,80 @@ function MyUsageCard({ call, refresh }: { call: Call; refresh: number }) {
   const lim = u?.limits;
   const own = (u?.days ?? []).some((d) => d.ownRequests > 0);
   return (
-    <section className="panel p-4 sm:p-5" aria-label="Your usage">
-      <div className="flex items-center gap-2">
-        <h3 className="flex items-center gap-2 text-[14px] font-semibold">
-          <ListChecks size={15} className="text-primary" /> Your usage
-        </h3>
-        <button className="btn btn-ghost btn-xs ml-auto" onClick={() => void load()}>
-          <RefreshCw size={12} /> Refresh
-        </button>
-      </div>
-      {error && !u && (
-        <p role="alert" className="mt-2 text-[13px] text-bad">
-          {error}
-        </p>
-      )}
-      {!u && !error && (
-        <p className="mt-2 flex items-center gap-2 text-[13px] text-muted">
-          <Spinner size={14} /> Loading…
-        </p>
-      )}
-      {u && lim && (
-        <>
-          <p className="mt-0.5 text-[12.5px] text-muted">
-            {lim.unlimited
-              ? 'You have no daily limit.'
-              : `Today on the app’s keys. Resets ${resetLabel(lim.resetsAt)} (midnight UTC).`}
+    <Region name="Your usage">
+      <SettingsSection
+        title="Your usage"
+        description={lim ? (lim.unlimited ? 'You have no daily limit.' : `Today on the app’s keys. Resets ${resetLabel(lim.resetsAt)} (midnight UTC).`) : undefined}
+        actions={
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => void load()}>
+            <RefreshCw /> Refresh
+          </button>
+        }
+      >
+        {error && !u && (
+          <p role="alert" className="flex items-center gap-1.5 py-4 text-small text-bad">
+            <CircleAlert size={14} className="shrink-0" aria-hidden="true" /> {error}
           </p>
-          {!lim.unlimited && (
-            <div className="mt-3 flex flex-col gap-3">
-              <Meter
-                label="Requests"
-                used={requestsInUse(lim)}
-                limit={lim.requestsPerDay}
-                text={`${requestsInUse(lim)}${lim.requestsPerDay > 0 ? ` of ${lim.requestsPerDay}` : ' · no limit'}${lim.running ? ` (${lim.running} running)` : ''}`}
-              />
-              <Meter label="Cost" used={lim.usedUsd} limit={lim.usdPerDay} text={lim.usdPerDay > 0 ? `${fmtUsdSmall(lim.usedUsd)} of ${fmtUsdSmall(lim.usdPerDay)}` : `${fmtUsdSmall(lim.usedUsd)} · no limit`} />
-              {lim.reached && (
-                <p role="status" className="rounded-md bg-warn-soft/60 px-3 py-2 text-[12.5px] text-ink-2">
-                  You’ve reached today’s limit on the app’s keys. Add your own key above to keep going now, or wait until it resets.
-                </p>
-              )}
-            </div>
-          )}
-          {u.today.ownRequests > 0 && (
-            <p className="mt-2 text-[12.5px] text-muted">
-              Plus <span className="num font-semibold text-ink-2">{u.today.ownRequests}</span> request{u.today.ownRequests === 1 ? '' : 's'} on your own keys today
-              {u.today.ownUsd > 0 ? ` (${fmtUsdSmall(u.today.ownUsd)}, billed to your accounts)` : ''}, not limited.
-            </p>
-          )}
-          <table className="mt-3 w-full text-left text-[12.5px]">
-            <caption className="pb-1 text-left text-[11.5px] text-muted">Last 7 days (UTC)</caption>
-            <thead className="text-[11px] uppercase tracking-wide text-muted">
-              <tr>
-                <th className="py-1 pr-3 font-semibold">Day</th>
-                <th className="py-1 pr-3 text-right font-semibold">App’s keys</th>
-                {own && <th className="py-1 text-right font-semibold">Your keys</th>}
-              </tr>
-            </thead>
-            <tbody className="num">
-              {u.days.map((d) => (
-                <tr key={d.day} className="border-t border-line">
-                  <td className="py-1.5 pr-3 text-ink-2">{dayName(d.day, u.day)}</td>
-                  <td className="py-1.5 pr-3 text-right">
-                    {d.requests} · {fmtUsdSmall(d.usd)}
-                  </td>
-                  {own && (
-                    <td className="py-1.5 text-right">
-                      {d.ownRequests} · {fmtUsdSmall(d.ownUsd)}
-                    </td>
-                  )}
+        )}
+        {!u && !error && (
+          <p className="flex items-center gap-2 py-4 text-small text-muted">
+            <Spinner size={14} /> Loading…
+          </p>
+        )}
+        {u && lim && (
+          <div className="flex flex-col gap-4 pb-5 pt-3">
+            {!lim.unlimited && (
+              <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+                <Meter
+                  label="Requests"
+                  used={requestsInUse(lim)}
+                  limit={lim.requestsPerDay}
+                  text={`${requestsInUse(lim)}${lim.requestsPerDay > 0 ? ` of ${lim.requestsPerDay}` : ' · no limit'}${lim.running ? ` (${lim.running} running)` : ''}`}
+                />
+                <Meter label="Cost" used={lim.usedUsd} limit={lim.usdPerDay} text={lim.usdPerDay > 0 ? `${fmtUsdSmall(lim.usedUsd)} of ${fmtUsdSmall(lim.usdPerDay)}` : `${fmtUsdSmall(lim.usedUsd)} · no limit`} />
+              </div>
+            )}
+            {!lim.unlimited && lim.reached && (
+              <div role="status">
+                <Callout tone="warn">You’ve reached today’s limit on the app’s keys. Add your own key above to keep going now, or wait until it resets.</Callout>
+              </div>
+            )}
+            {u.today.ownRequests > 0 && (
+              <p className="text-small text-muted">
+                Plus <span className="num font-mono text-ink-2">{u.today.ownRequests}</span> request{u.today.ownRequests === 1 ? '' : 's'} on your own keys today
+                {u.today.ownUsd > 0 ? ` (${fmtUsdSmall(u.today.ownUsd)}, billed to your accounts)` : ''}, not limited.
+              </p>
+            )}
+            <table className="w-full text-left text-small">
+              <caption className="pb-1.5 text-left text-caption text-muted">Last 7 days (UTC)</caption>
+              <thead className="border-b border-line text-caption text-muted">
+                <tr>
+                  <th className="py-1.5 pr-3 font-medium">Day</th>
+                  <th className="py-1.5 pr-3 text-right font-medium">App’s keys</th>
+                  {own && <th className="py-1.5 text-right font-medium">Your keys</th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {countersNote(u.storage, u.storageProblem) && <p className="mt-2 text-[11.5px] text-muted">{countersNote(u.storage, u.storageProblem)}</p>}
-        </>
-      )}
-    </section>
+              </thead>
+              <tbody className="num divide-y divide-line">
+                {u.days.map((d) => (
+                  <tr key={d.day}>
+                    <td className="py-1.5 pr-3 text-ink-2">{dayName(d.day, u.day)}</td>
+                    <td className="py-1.5 pr-3 text-right font-mono text-caption text-ink-2">
+                      {d.requests} · {fmtUsdSmall(d.usd)}
+                    </td>
+                    {own && (
+                      <td className="py-1.5 text-right font-mono text-caption text-ink-2">
+                        {d.ownRequests} · {fmtUsdSmall(d.ownUsd)}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {countersNote(u.storage, u.storageProblem) && <p className="text-caption text-muted">{countersNote(u.storage, u.storageProblem)}</p>}
+          </div>
+        )}
+      </SettingsSection>
+    </Region>
   );
 }
 
@@ -1194,43 +1396,37 @@ function DailyLimitsCard({ call }: { call: Call }) {
     setProblem(r.json.storageProblem ?? null);
     toast({ kind: 'success', title: 'Daily limits saved' });
   };
+  const note = countersNote(storage, problem, { owner: true });
   return (
-    <section className="panel p-4 sm:p-5" aria-label="Daily limits for other people">
-      <h3 className="flex items-center gap-2 text-[14px] font-semibold">
-        <ShieldCheck size={15} className="text-primary" /> Daily limits for other people
-      </h3>
-      <p className="mt-1 text-[12.5px] leading-relaxed text-muted">
-        How much each signed-in person can use your keys per day (UTC). Requests on their own keys don’t count, and you’re never limited. 0 means no limit.
-      </p>
-      <form
-        className="mt-3 flex flex-wrap items-end gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (dirty) void save();
-        }}
-      >
-        <Field label="Requests per day" htmlFor="limit-requests" className="w-[150px]">
-          <input id="limit-requests" className="input num" type="number" min={0} max={100000} step={1} inputMode="numeric" value={reqs} disabled={!limits} onChange={(e) => setReqs(e.target.value)} />
-        </Field>
-        <Field label="Cost per day ($)" htmlFor="limit-usd" className="w-[150px]">
-          <input id="limit-usd" className="input num" type="number" min={0} max={10000} step={0.01} inputMode="decimal" value={usd} disabled={!limits} onChange={(e) => setUsd(e.target.value)} />
-        </Field>
-        <button type="submit" className="btn btn-primary btn-sm mb-0.5" disabled={busy || !dirty}>
-          {busy && <Spinner size={14} />} Save limits
-        </button>
-      </form>
-      {!valid && limits && <p className="mt-1.5 text-[12px] text-bad">Use numbers of 0 or more.</p>}
-      {error && (
-        <p role="alert" className="mt-2 text-[12.5px] text-bad">
-          {error}
-        </p>
-      )}
-      {countersNote(storage, problem, { owner: true }) && (
-        <p role={problem ? 'alert' : undefined} className={cn('mt-2 text-[11.5px]', problem ? 'text-warn' : 'text-muted')}>
-          {countersNote(storage, problem, { owner: true })}
-        </p>
-      )}
-    </section>
+    <Region name="Daily limits for other people">
+      <SettingsSection title="Daily limits for other people" description="How much each signed-in person can use your keys per day (UTC). Their own keys don’t count; you’re never limited. 0 means no limit.">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (dirty) void save();
+          }}
+        >
+          <SettingsRow label="Each person, per day" description={note && !error && valid ? <span role={problem ? 'alert' : undefined} className={problem ? 'text-warn' : undefined}>{note}</span> : undefined}>
+            <div className="flex w-full flex-wrap items-end gap-2 md:max-w-[420px] md:justify-end">
+              <Field label="Requests per day" htmlFor="limit-requests" className="w-[120px]">
+                <input id="limit-requests" className="input num font-mono" type="number" min={0} max={100000} step={1} inputMode="numeric" value={reqs} disabled={!limits} onChange={(e) => setReqs(e.target.value)} aria-invalid={!valid && !!limits ? true : undefined} />
+              </Field>
+              <Field label="Cost per day ($)" htmlFor="limit-usd" className="w-[120px]">
+                <input id="limit-usd" className="input num font-mono" type="number" min={0} max={10000} step={0.01} inputMode="decimal" value={usd} disabled={!limits} onChange={(e) => setUsd(e.target.value)} aria-invalid={!valid && !!limits ? true : undefined} />
+              </Field>
+              <button type="submit" className="btn btn-secondary" disabled={busy || !dirty}>
+                {busy && <Spinner size={14} />} Save limits
+              </button>
+            </div>
+          </SettingsRow>
+          {(!valid && limits) || error ? (
+            <p role={error ? 'alert' : undefined} className="flex items-center gap-1.5 pb-4 text-caption text-bad">
+              <CircleAlert size={14} className="shrink-0" aria-hidden="true" /> {error ?? 'Use numbers of 0 or more.'}
+            </p>
+          ) : null}
+        </form>
+      </SettingsSection>
+    </Region>
   );
 }
 
@@ -1244,7 +1440,7 @@ interface PersonRow {
   ownUsd: number;
 }
 
-function PeopleUsageCard({ call }: { call: Call }) {
+function PeopleUsage({ call }: { call: Call }) {
   const [data, setData] = useState<{ rows: PersonRow[]; users: PersonRow[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
@@ -1260,46 +1456,43 @@ function PeopleUsageCard({ call }: { call: Call }) {
   const today = new Date().toISOString().slice(0, 10);
   const todayOf = (id: string) => data?.rows.find((r) => r.userId === id && r.day === today);
   return (
-    <section className="panel p-4 sm:p-5" aria-label="Usage by person">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <h3 className="flex items-center gap-2 text-[14px] font-semibold">
-          <ListChecks size={15} className="text-primary" /> Usage by person
-        </h3>
-        <button className="btn btn-ghost btn-xs ml-auto" onClick={() => void load()}>
-          <RefreshCw size={12} /> Refresh
+        <p className="text-small text-muted">Requests and cost on your keys. Requests on their own keys are separate; they pay for those.</p>
+        <button type="button" className="btn btn-ghost btn-xs ml-auto" onClick={() => void load()}>
+          <RefreshCw /> Refresh
         </button>
       </div>
-      <p className="mt-0.5 text-[12.5px] text-muted">Requests and cost on your keys. Requests on their own keys are shown separately; they pay for those.</p>
       {error && (
-        <p role="alert" className="mt-2 text-[12.5px] text-bad">
-          {error}
+        <p role="alert" className="flex items-center gap-1.5 text-small text-bad">
+          <CircleAlert size={14} className="shrink-0" aria-hidden="true" /> {error}
         </p>
       )}
-      {data && !data.users.length && <p className="mt-3 text-[12.5px] text-muted">Nobody else has used the AI in the last 7 days.</p>}
+      {data && !data.users.length && <p className="text-small text-muted">Nobody else has used the AI in the last 7 days.</p>}
       {data && data.users.length > 0 && (
-        <div className="mt-3 w-full overflow-x-auto">
-          <table className="w-full min-w-[480px] text-left text-[12.5px]">
-            <thead className="text-[11px] uppercase tracking-wide text-muted">
+        <div className="scroll-thin max-h-[360px] w-full overflow-auto">
+          <table className="w-full min-w-[480px] text-left text-small">
+            <thead className="sticky top-0 border-b border-line bg-surface text-caption text-muted">
               <tr>
-                <th className="py-1 pr-3 font-semibold">Person</th>
-                <th className="py-1 pr-3 text-right font-semibold">Today</th>
-                <th className="py-1 pr-3 text-right font-semibold">Last 7 days</th>
-                <th className="py-1 text-right font-semibold">Own keys (7 days)</th>
+                <th className="py-1.5 pr-3 font-medium">Person</th>
+                <th className="py-1.5 pr-3 text-right font-medium">Today</th>
+                <th className="py-1.5 pr-3 text-right font-medium">Last 7 days</th>
+                <th className="py-1.5 text-right font-medium">Own keys (7 days)</th>
               </tr>
             </thead>
-            <tbody className="num">
+            <tbody className="num divide-y divide-line">
               {data.users.map((u) => {
                 const t = todayOf(u.userId);
                 return (
-                  <tr key={u.userId} className="border-t border-line">
-                    <td className="max-w-[220px] truncate py-1.5 pr-3 font-semibold text-ink" title={u.email || u.userId}>
+                  <tr key={u.userId}>
+                    <td className="max-w-[220px] truncate py-1.5 pr-3 text-ink" title={u.email || u.userId}>
                       {u.email || `${u.userId.slice(0, 8)}…`}
                     </td>
-                    <td className="py-1.5 pr-3 text-right">{t ? `${t.requests} · ${fmtUsdSmall(t.usd)}` : '0'}</td>
-                    <td className="py-1.5 pr-3 text-right">
+                    <td className="py-1.5 pr-3 text-right font-mono text-caption">{t ? `${t.requests} · ${fmtUsdSmall(t.usd)}` : '0'}</td>
+                    <td className="py-1.5 pr-3 text-right font-mono text-caption">
                       {u.requests} · {fmtUsdSmall(u.usd)}
                     </td>
-                    <td className="py-1.5 text-right text-muted">{u.ownRequests ? `${u.ownRequests} · ${fmtUsdSmall(u.ownUsd)}` : '–'}</td>
+                    <td className="py-1.5 text-right font-mono text-caption text-muted">{u.ownRequests ? `${u.ownRequests} · ${fmtUsdSmall(u.ownUsd)}` : '–'}</td>
                   </tr>
                 );
               })}
@@ -1307,51 +1500,49 @@ function PeopleUsageCard({ call }: { call: Call }) {
           </table>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
-/** Signed in as someone other than the owner: what powers each function (from /api/health). */
+/**
+ * Signed in as someone other than the owner: what powers each function (from /api/health), behind a disclosure.
+ * (Open, the disclosure's content is the region of that name: no second region around it.)
+ */
 function OwnerManaged() {
   const ai = useRuntime((s) => s.ai);
   const byId = new Map(ai.providers.map((p) => [p.id, p]));
   return (
-    <section className="panel p-4 sm:p-5" aria-label="What powers each function">
-      <h3 className="flex items-center gap-2 text-[14px] font-semibold">
-        <Route size={15} className="text-primary" /> What powers each function
-      </h3>
-      <p className="mt-0.5 text-[12.5px] text-muted">Only the owner can change keys, models and effort. Where nothing is set up, the built-in engine writes instead.</p>
-      <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-3 md:grid-cols-2">
-        {AI_FUNCTION_GROUPS.map((g) => (
-          <div key={g.id}>
-            <p className="eyebrow mb-1">{g.label}</p>
-            <ul className="flex flex-col gap-1">
-              {AI_FUNCTIONS.filter((f) => f.group === g.id).map((f) => {
-                const p = byId.get(ai.routing[f.id]?.[0] ?? '');
-                const model = p?.models[f.kind];
-                return (
-                  <li key={f.id} className="flex items-baseline justify-between gap-3 text-[13px]">
-                    <span className="text-ink-2">{f.label}</span>
-                    <span className={cn('truncate text-right text-[12.5px]', p ? 'font-semibold text-ink' : 'text-muted')}>{p ? `${p.label}${model ? ` · ${model}` : ''}` : 'Built-in engine'}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function Note({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
-  return (
-    <section className="panel flex gap-3 p-4 text-[13px]">
-      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-2 text-primary">{icon}</span>
-      <div className="min-w-0">
-        <p className="font-semibold text-ink">{title}</p>
-        <p className="mt-0.5 leading-relaxed text-muted">{children}</p>
-      </div>
-    </section>
+    <div className="card px-5">
+      <Accordion type="single" collapsible>
+        <AccordionItem value="powers" className="border-b-0">
+          <AccordionTrigger>What powers each function</AccordionTrigger>
+          <AccordionContent>
+            <p className="mb-3 text-small text-muted">Only the app’s owner can change keys, models and effort. Where nothing is set up, the built-in engine writes.</p>
+            <div className="grid grid-cols-1 gap-x-8 gap-y-4 md:grid-cols-2">
+              {AI_FUNCTION_GROUPS.map((g) => (
+                <div key={g.id}>
+                  <p className="mb-1 text-caption font-medium text-muted">{g.label}</p>
+                  <ul className="flex flex-col divide-y divide-line">
+                    {AI_FUNCTIONS.filter((f) => f.group === g.id).map((f) => {
+                      const p = byId.get(ai.routing[f.id]?.[0] ?? '');
+                      const model = p?.models[f.kind];
+                      return (
+                        <li key={f.id} className="flex items-baseline justify-between gap-3 py-1.5 text-small">
+                          <span className="text-ink-2">{f.label}</span>
+                          <span className={cn('min-w-0 truncate text-right', p ? 'text-ink' : 'text-muted')} title={p && model ? `${p.label} · ${model}` : undefined}>
+                            {p ? p.label : 'Built-in engine'}
+                            {p && model && <span className="text-muted"> · {model}</span>}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    </div>
   );
 }

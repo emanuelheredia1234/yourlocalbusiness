@@ -1,7 +1,7 @@
 // "Learn my brand voice from these posts": the switch under each social profile (onboarding and Settings), what
 // Manus is doing or found, and the watcher that picks up finished reads while the app is open.
 import { useEffect, useState } from 'react';
-import { CheckCircle2, CircleAlert, ExternalLink, Hand, Loader2, RefreshCw } from 'lucide-react';
+import { CheckCircle2, CircleAlert, ExternalLink, RefreshCw } from 'lucide-react';
 import type { SocialPlatform, VoiceReport } from '@/lib/types';
 import { cn, fmtDate, fmtRelative } from '@/lib/utils';
 import { navigate } from '@/lib/router';
@@ -9,7 +9,7 @@ import { VOICE_POSTS, profileTarget, sameProfile, voiceNetworkName, voiceSkillNa
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { applyLatestVoiceRead, isStartingVoiceRead, profileLabel, readVoice, refreshVoice, runningVoiceReads, setVoiceLearn, voiceReadRunning, voiceSkillEdited } from '@/store/voice';
-import { Spinner, Toggle, confirmAction } from '../ui/primitives';
+import { Callout, InfoTip, Spinner, Toggle, confirmAction } from '../ui/primitives';
 import { errorCopy, manusSetupHint, useCanOfferManus, useManusReady } from '../posts/ManusPost';
 
 type ErrorCopy = { title: string; body: string; uncertain?: boolean };
@@ -20,7 +20,7 @@ export function voiceErrorCopy(e: unknown): ErrorCopy {
   return c.uncertain ? { title: 'Not sure the read started', body: 'The connection dropped while starting it, so Manus may be reading anyway. Check your Manus tasks before trying again: another read uses more credits.', uncertain: true } : c;
 }
 
-const linkCls = 'inline-flex items-center gap-1 font-semibold text-primary hover:underline disabled:opacity-60';
+const linkCls = 'link inline-flex items-center gap-1 disabled:cursor-not-allowed disabled:text-faint disabled:no-underline';
 
 /** The switch and status under one profile. */
 export function VoiceSwitch({ projectId, platform }: { projectId: string; platform: SocialPlatform }) {
@@ -108,12 +108,12 @@ export function VoiceSwitch({ projectId, platform }: { projectId: string; platfo
   const taskLink = (label: string) =>
     task?.taskUrl ? (
       <a href={task.taskUrl} target="_blank" rel="noopener noreferrer" className={linkCls}>
-        {label} <ExternalLink size={11} />
+        {label} <ExternalLink size={12} aria-hidden="true" />
       </a>
     ) : null;
   const checkButton = (
     <button type="button" className={linkCls} onClick={check} disabled={checking}>
-      <RefreshCw size={11} className={cn(checking && 'animate-spin')} /> Check now
+      <RefreshCw size={12} className={cn(checking && 'animate-spin')} aria-hidden="true" /> Check now
     </button>
   );
   const analyzeButton = (label: string) =>
@@ -124,62 +124,62 @@ export function VoiceSwitch({ projectId, platform }: { projectId: string; platfo
     ) : null;
 
   return (
-    <div className="mt-2 flex flex-col gap-1.5 text-[12px]">
+    <div className="mt-3 flex flex-col gap-2 text-small">
       <Toggle
         checked={on}
         disabled={on ? starting : !canTurnOn}
         onChange={toggle}
         label={
-          <span className="text-[12.5px] font-medium">
+          <span className="text-small font-medium">
             Learn my brand voice from these posts<span className="sr-only"> ({name})</span>
           </span>
         }
       />
-      {target && 'error' in target && <p className="font-medium text-warn">{target.error}</p>}
+      {target && 'error' in target && (
+        <p className="flex items-center gap-1.5 text-caption text-warn">
+          <CircleAlert size={14} className="shrink-0" aria-hidden="true" /> {target.error}
+        </p>
+      )}
       {starting && (
-        <p className="flex items-center gap-1.5 text-info">
+        <p className="flex items-center gap-1.5 text-caption text-muted">
           <Spinner size={12} /> Starting the Manus task…
         </p>
       )}
       {err && (
-        <div className="rounded-md border border-bad/30 bg-bad-soft px-2.5 py-1.5" role="alert">
-          <p className="font-semibold text-bad">{err.title}</p>
-          <p className="text-ink-2">{err.body}</p>
-        </div>
+        <Callout tone="bad" title={err.title}>
+          {err.body}
+        </Callout>
       )}
       {task && running && (
-        <div role="status" className={cn('rounded-md px-2.5 py-1.5', task.state === 'needs_input' ? 'bg-warn/15 text-warn' : 'bg-info/10 text-info')}>
-          <p className="flex items-center gap-1.5 font-semibold">
-            {task.state === 'needs_input' ? <Hand size={12} /> : <Loader2 size={12} className="animate-spin" />}
-            {task.state === 'needs_input' ? 'Manus needs you' : `Manus is reading your ${name} posts`}
-          </p>
-          {task.state === 'needs_input' && task.message && <p className="mt-0.5 break-words text-ink-2">{task.message}</p>}
-          <p className="mt-1 flex flex-wrap items-center gap-3">
-            {taskLink(task.state === 'needs_input' ? 'Open in Manus' : 'Watch in Manus')}
-            {checkButton}
-            <span className="text-muted">Checked {fmtRelative(task.checkedAt)}</span>
-          </p>
+        <div role="status">
+          <Callout tone={task.state === 'needs_input' ? 'warn' : 'info'} title={task.state === 'needs_input' ? 'Manus needs you' : `Manus is reading your ${name} posts`}>
+            {task.state === 'needs_input' && task.message && <p className="break-words">{task.message}</p>}
+            <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+              {taskLink(task.state === 'needs_input' ? 'Open in Manus' : 'Watch in Manus')}
+              {checkButton}
+              <span className="text-caption text-muted">Checked {fmtRelative(task.checkedAt)}</span>
+            </p>
+          </Callout>
         </div>
       )}
       {task && !running && (task.state === 'failed' || task.state === 'finished') && (
-        <div role="status" className="rounded-md bg-bad-soft px-2.5 py-1.5">
-          <p className="flex items-center gap-1.5 font-semibold text-bad">
-            <CircleAlert size={12} /> {task.state === 'failed' ? `Couldn’t read the ${name} posts` : 'Manus finished without a report'}
-          </p>
-          {task.message && <p className="mt-0.5 break-words text-ink-2">{task.message}</p>}
-          <p className="mt-1 flex flex-wrap items-center gap-3">
-            {taskLink('Open in Manus')}
-            {task.state === 'finished' && checkButton}
-            {analyzeButton('Try again')}
-          </p>
-          {report && <p className="mt-1 text-muted">{on ? 'Still using' : 'Kept'} what Manus learned on {fmtDate(voice?.analyzedAt ?? Date.now())}.</p>}
+        <div role="status">
+          <Callout tone="bad" title={task.state === 'failed' ? `Couldn’t read the ${name} posts` : 'Manus finished without a report'}>
+            {task.message && <p className="break-words">{task.message}</p>}
+            <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+              {taskLink('Open in Manus')}
+              {task.state === 'finished' && checkButton}
+              {analyzeButton('Try again')}
+            </p>
+            {report && <p className="mt-1 text-muted">{on ? 'Still using' : 'Kept'} what Manus learned on {fmtDate(voice?.analyzedAt ?? Date.now())}.</p>}
+          </Callout>
         </div>
       )}
-      {dropped && <p className="text-warn">{task.message}</p>}
+      {dropped && <p className="text-caption text-warn">{task.message}</p>}
       {report && (
-        <div role="status" className="rounded-md border border-line px-2.5 py-1.5">
-          <p className="flex items-center gap-1.5 font-semibold text-ink">
-            <CheckCircle2 size={12} className={on ? 'text-good' : 'text-muted'} />
+        <div role="status" className="well px-3 py-2.5">
+          <p className="flex items-center gap-1.5 font-medium text-ink">
+            <CheckCircle2 size={14} className={cn('shrink-0', on ? 'text-good' : 'text-muted')} aria-hidden="true" />
             {on ? 'Learned' : 'Read'} from {voice?.postsRead ? `${voice.postsRead} posts` : 'recent posts'} by {profileLabel(platform, voice?.profile)} · {fmtRelative(voice?.analyzedAt ?? Date.now())}
           </p>
           {!on && <p className="text-muted">Not used while this is off.</p>}
@@ -203,7 +203,7 @@ export function VoiceSwitch({ projectId, platform }: { projectId: string; platfo
           )}
           {on && !useBrain && <p className="mt-1 text-warn">The Brain is off, so nothing uses this voice until you turn the Brain on.</p>}
           {report && valid && !sameAsRead && <p className="mt-1 text-warn">This profile changed since Manus read {profileLabel(platform, voice?.profile)}.</p>}
-          <p className="mt-1 flex flex-wrap items-center gap-3">
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
             {skill && onboarded && (
               <button type="button" className={linkCls} onClick={() => void navigate('brain')}>
                 View in Brain
@@ -241,18 +241,18 @@ function VoiceDetails({ report: r }: { report: VoiceReport }) {
   if (!shown.length && !r.examples.length) return null;
   return (
     <details className="mt-1">
-      <summary className="cursor-pointer font-semibold text-primary">What Manus learned</summary>
-      <dl className="mt-1 flex flex-col gap-0.5 text-ink-2">
+      <summary className="link cursor-pointer">What Manus learned</summary>
+      <dl className="mt-1.5 flex flex-col gap-0.5 text-ink-2">
         {shown.map(([k, v]) => (
           <div key={k}>
-            <dt className="inline font-semibold text-ink">{k}: </dt>
+            <dt className="inline font-medium text-ink">{k}: </dt>
             <dd className="inline break-words">{v}</dd>
           </div>
         ))}
       </dl>
       {r.examples.length > 0 && (
         <>
-          <p className="mt-1.5 font-semibold text-ink">New example captions in this voice (written by Manus, style only)</p>
+          <p className="mt-1.5 font-medium text-ink">New example captions in this voice (written by Manus, style only)</p>
           <ul className="mt-0.5 flex list-disc flex-col gap-0.5 pl-4 text-ink-2">
             {r.examples.map((x) => (
               <li key={x} className="break-words">
@@ -267,8 +267,9 @@ function VoiceDetails({ report: r }: { report: VoiceReport }) {
 }
 
 /**
- * What the switches do, once under the profiles, and what's missing when Manus isn't set up.
- * setup: 'button' adds "Open Settings → AI" (Settings → Brand); 'none' when the page already says it (Social accounts).
+ * What the switches do, once under the profiles (one line, the rest behind ⓘ), and what's missing when Manus
+ * isn't set up. setup: 'button' adds "Open AI keys" (Settings › Brand); 'none' when the page already says it
+ * (Social accounts).
  */
 export function VoiceNote({ projectId, setup = 'text' }: { projectId: string; setup?: 'button' | 'text' | 'none' }) {
   const offer = useCanOfferManus();
@@ -276,19 +277,31 @@ export function VoiceNote({ projectId, setup = 'text' }: { projectId: string; se
   const anyOn = useStore((s) => Object.values(s.projects.find((p) => p.id === projectId)?.brand.voiceFrom ?? {}).some((v) => v?.learn));
   if (!offer && !anyOn) return null;
   return (
-    <div className="flex flex-col gap-2 text-[12.5px]">
-      <p className="text-muted">
-        <b className="font-semibold text-ink-2">Learn my brand voice:</b> turn it on under a profile you added, and Manus opens that profile in its own browser and reads its {VOICE_POSTS} latest posts. It only reads: it never posts, likes, follows, comments or messages. Each profile is one Manus task, on your Manus credits. What it learns becomes a Brain skill for this project, so new posts, captions, emails and pages continue that voice. Manus may ask you to sign in the first time.
+    <div className="flex flex-col gap-3 text-small">
+      <p className="flex items-start gap-1 text-muted">
+        <span>
+          <span className="font-medium text-ink-2">Learn my brand voice:</span> Manus opens a profile you added and reads its {VOICE_POSTS} latest posts. It only reads: it never posts, likes, follows, comments or messages.
+        </span>
+        <span className="-my-0.5">
+          <InfoTip title="Learn my brand voice" label="About learning your brand voice">
+            Each profile is one Manus task, on your Manus credits. What it learns becomes a Brain skill for this project, so new posts, captions, emails and pages continue that voice. Manus may ask you to sign in the first time.
+          </InfoTip>
+        </span>
       </p>
       {!ready && offer && setup !== 'none' && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-warn/40 bg-warn-soft px-3 py-2" role="alert">
-          <p className="min-w-0 flex-1 font-medium text-warn">Manus can’t read your posts yet: it uses the same Manus setup as posting. {manusSetupHint()}</p>
-          {setup === 'button' && !__ARTIFACT_BUILD__ && (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => useUI.getState().setSettingsTab('ai')}>
-              Open Settings → AI
-            </button>
-          )}
-        </div>
+        <Callout
+          tone="warn"
+          action={
+            setup === 'button' &&
+            !__ARTIFACT_BUILD__ && (
+              <button type="button" className="btn btn-secondary btn-xs" onClick={() => useUI.getState().setSettingsTab('ai')}>
+                Open AI keys
+              </button>
+            )
+          }
+        >
+          <span role="alert">Manus can’t read your posts yet: it uses the same Manus setup as posting. {manusSetupHint()}</span>
+        </Callout>
       )}
     </div>
   );

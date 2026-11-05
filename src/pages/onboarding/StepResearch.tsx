@@ -7,7 +7,7 @@ import { productIdeasTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useStore } from '@/store/useStore';
 import { Icon } from '@/components/ui/Icon';
-import { Field, Segmented } from '@/components/ui/primitives';
+import { Badge, Field, Segmented } from '@/components/ui/primitives';
 import { AIResultBar, AIThinking, GenerateButton, RegenerateButton } from '@/components/ai/AI';
 
 export function StepResearch({ project, onNext }: { project: Project; onNext: () => void }) {
@@ -44,7 +44,7 @@ export function StepResearch({ project, onNext }: { project: Project; onNext: ()
   };
 
   return (
-    <div className="flex flex-col gap-7">
+    <div className="flex flex-col gap-8">
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="1. Your niche" htmlFor="niche" hint="The market you want to serve.">
           <input id="niche" className="input" placeholder="e.g. Personal Finance" value={niche} onChange={(e) => setNiche(e.target.value)} />
@@ -73,43 +73,48 @@ export function StepResearch({ project, onNext }: { project: Project; onNext: ()
       <section>
         <p className="label">3. What type of digital product do you want to sell?</p>
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-          {FORMAT_LIST.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => setFormat(f.id)}
-              aria-pressed={format === f.id}
-              className={cn('group flex min-w-0 flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-all', format === f.id ? 'border-primary bg-primary-soft ring-1 ring-primary' : 'border-line bg-surface hover:border-line-2 hover:bg-surface-2')}
-            >
-              <span className="flex w-full items-center justify-between">
-                <span className={cn('flex h-8 w-8 items-center justify-center rounded-md', format === f.id ? 'bg-primary text-on-primary' : 'bg-surface-2 text-ink-2')}>
+          {FORMAT_LIST.map((f) => {
+            const on = format === f.id;
+            return (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFormat(f.id)}
+                aria-pressed={on}
+                className={cn('relative flex min-w-0 flex-col items-start gap-1.5 rounded-lg border p-3 text-left transition-[border-color,box-shadow,background-color] duration-120', on ? 'border-transparent bg-primary-soft/50 ring-[1.5px] ring-inset ring-primary' : 'border-line bg-surface hover:border-line-3 hover:shadow-sm')}
+              >
+                {on && (
+                  <span className="absolute right-3 top-3 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-on-primary" aria-hidden="true">
+                    <Check size={12} strokeWidth={3} />
+                  </span>
+                )}
+                <span className="flex h-8 w-8 items-center justify-center rounded-md bg-surface-3 text-ink-2">
                   <Icon name={f.icon} size={16} />
                 </span>
-                {format === f.id && <Check size={16} className="text-primary" />}
-              </span>
-              <span className="text-[13.5px] font-semibold text-ink">{f.label}</span>
-              <span className="text-xs leading-snug text-muted">{f.desc}</span>
-              <span className="num text-[11px] font-semibold text-ink-2">
-                ${f.price[0]}–${f.price[1]}
-                {f.model === 'monthly' ? '/mo' : ''}
-              </span>
-            </button>
-          ))}
+                <span className="text-ui text-ink">{f.label}</span>
+                <span className="text-small text-muted">{f.desc}</span>
+                <span className="num font-mono text-caption text-ink-2">
+                  ${f.price[0]}–${f.price[1]}
+                  {f.model === 'monthly' ? '/mo' : ''}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </section>
 
-      <section className="flex flex-col gap-3 rounded-xl border border-line bg-surface-2/60 p-4">
+      <section className="card flex flex-col gap-4 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="font-display text-[16px] font-semibold">AI product ideas</p>
-            <p className="text-xs text-muted">Ideas built from your niche, category and format. They’re suggestions, not market research.</p>
+          <div className="min-w-0">
+            <h2 className="text-h3 text-ink">AI product ideas</h2>
+            <p className="mt-0.5 text-small text-muted">Built from your niche, category and format: suggestions, not market research.</p>
           </div>
           <div className="flex items-center gap-2">
             <Segmented size="sm" options={[{ id: '3', label: '3 ideas' }, { id: '4', label: '4' }, { id: '5', label: '5' }]} value={count} onChange={setCount} />
-            {ideas.length > 0 ? <RegenerateButton onClick={find} running={ai.running} label="New ideas" /> : <GenerateButton running={ai.running} onClick={find} disabled={!ready}>Suggest product ideas</GenerateButton>}
+            {ideas.length > 0 ? <RegenerateButton onClick={find} running={ai.running} label="New ideas" /> : <GenerateButton variant="ai" running={ai.running} onClick={find} disabled={!ready} runningLabel="Researching…">Suggest product ideas</GenerateButton>}
           </div>
         </div>
-        {!ready && !ideas.length && <p className="text-xs text-muted">Add a niche, a category and a format to start.</p>}
+        {!ready && !ideas.length && <p className="text-small text-muted">Add a niche, a category and a format to start.</p>}
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
         {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
       </section>
@@ -117,58 +122,58 @@ export function StepResearch({ project, onNext }: { project: Project; onNext: ()
       {ideas.length > 0 && (
         <section className="grid grid-cols-1 gap-3 lg:grid-cols-2" aria-label="Product ideas">
           {ideas.map((idea, i) => (
-            <article key={idea.id} className={cn('panel flex flex-col gap-3 p-4', project.idea?.id === idea.id && 'ring-2 ring-primary')} style={{ animationDelay: `${i * 60}ms` }}>
+            <article key={idea.id} className={cn('card flex flex-col gap-4 p-5', project.idea?.id === idea.id && 'border-transparent ring-[1.5px] ring-inset ring-primary')} style={{ animationDelay: `${i * 60}ms` }}>
               <div className="min-w-0">
-                <div className="mb-1 flex flex-wrap items-center gap-1.5">
-                  <span className="badge bg-accent-soft text-on-accent">{idea.angle}</span>
-                  <span className="badge bg-surface-2 text-ink-2">{FORMATS[idea.format].short}</span>
+                <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                  <Badge>{idea.angle}</Badge>
+                  <Badge>{FORMATS[idea.format].short}</Badge>
                 </div>
-                <h3 className="font-display text-[17px] font-semibold leading-snug">{idea.title}</h3>
-                <p className="mt-1 text-[13px] text-ink-2">{idea.hook}</p>
+                <h3 className="text-h3 text-ink">{idea.title}</h3>
+                <p className="mt-1 text-body text-ink-2">{idea.hook}</p>
               </div>
-              <dl className="grid grid-cols-2 gap-2 text-[12.5px]">
-                <div className="rounded-md bg-surface-2 p-2.5">
-                  <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted">Audience</dt>
-                  <dd className="mt-0.5 font-medium text-ink">{idea.audience}</dd>
+              <dl className="well grid grid-cols-2 gap-x-4 gap-y-3 p-3 text-small">
+                <div>
+                  <dt className="text-caption text-muted">Audience</dt>
+                  <dd className="mt-0.5 text-ink">{idea.audience}</dd>
                 </div>
-                <div className="rounded-md bg-surface-2 p-2.5">
-                  <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted">Pain solved</dt>
-                  <dd className="mt-0.5 font-medium text-ink">{idea.pain}</dd>
+                <div>
+                  <dt className="text-caption text-muted">Pain solved</dt>
+                  <dd className="mt-0.5 text-ink">{idea.pain}</dd>
                 </div>
-                <div className="col-span-2 rounded-md bg-surface-2 p-2.5">
-                  <dt className="text-[11px] font-semibold uppercase tracking-wide text-muted">Suggested price</dt>
+                <div className="col-span-2">
+                  <dt className="text-caption text-muted">Suggested price</dt>
                   <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-2">
-                    <span className="num text-[15px] font-bold text-ink">
+                    <span className="num font-mono text-ui text-ink">
                       {fmtMoney(idea.price)}
                       {idea.priceModel === 'monthly' ? '/mo' : ''}
                     </span>
-                    <span className="text-[11.5px] text-muted">A starting point. You set the price in the Studio.</span>
+                    <span className="text-caption text-muted">A starting point. You set the price in the Studio.</span>
                   </dd>
                 </div>
               </dl>
-              <ul className="flex flex-col gap-1 text-[12.5px] text-ink-2">
+              <ul className="flex flex-col gap-1 text-small text-ink-2">
                 {idea.features.map((f) => (
                   <li key={f} className="flex gap-2">
-                    <Check size={14} className="mt-0.5 shrink-0 text-primary" /> {f}
+                    <Check size={14} className="mt-[3px] shrink-0 text-primary" aria-hidden="true" /> {f}
                   </li>
                 ))}
               </ul>
               {(idea.fit ?? []).length > 0 && (
-                <div className="rounded-md border border-dashed border-line-2 p-2.5">
-                  <p className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-                    <Lightbulb size={12} /> Why this could fit you
+                <div>
+                  <p className="mb-1 flex items-center gap-1.5 text-caption font-medium text-muted">
+                    <Lightbulb size={12} aria-hidden="true" /> Why this could fit you
                   </p>
-                  <ul className="flex flex-col gap-0.5 text-xs text-ink-2">
+                  <ul className="flex flex-col gap-0.5 text-small text-ink-2">
                     {idea.fit.map((s) => (
                       <li key={s} className="flex gap-1.5">
-                        <Check size={12} className="mt-0.5 shrink-0 text-accent" /> {s}
+                        <Check size={14} className="mt-[3px] shrink-0 text-muted" aria-hidden="true" /> {s}
                       </li>
                     ))}
                   </ul>
                 </div>
               )}
-              <button className="btn btn-primary mt-auto" onClick={() => select(idea)}>
-                Select &amp; build this product <ArrowRight size={16} />
+              <button type="button" className="btn btn-secondary mt-auto" onClick={() => select(idea)}>
+                Select &amp; build this product <ArrowRight />
               </button>
             </article>
           ))}
