@@ -24,7 +24,7 @@ vi.mock('@/components/ui/primitives', async (orig) => ({
 }));
 
 import { PLAN_STEPS, runStrategy, useStrategyJobs } from '@/ai/strategyJob';
-import { replaceConfirm, startRun, type RunKind } from './runs';
+import { replaceConfirm, startRun, useServerCheck, type RunKind } from './runs';
 
 const ANTHROPIC = { id: 'anthropic', label: 'Anthropic Claude', ready: true, models: { text: 'claude-opus-5-5' }, effort: { text: { id: 'medium', label: 'Medium' } }, research: { perSearch: 0.01 } };
 const fetchMock = vi.fn();
@@ -103,6 +103,42 @@ describe('Continue after a request couldn’t reach your server', () => {
     const after = strategyOf();
     for (const step of ['research', ...PLAN_STEPS] as const) expect(after[step]).toEqual(s[step]);
     expect(useUI.getState().toasts.at(-1)).toMatchObject({ kind: 'error', title: 'Couldn’t continue from step 2', body: 'Your AI server can’t be reached right now, so nothing was changed. Check that it’s running, then try again.' });
+  });
+});
+
+describe('while your server is asked again', () => {
+  it('the button that started the run says so (your server was marked down), and stops saying so once it answers', async () => {
+    const { k } = await blipAtStep2();
+    serve();
+    // the health check answers only when the test lets it
+    let answer: () => void = () => {};
+    const gate = new Promise<void>((res) => (answer = res));
+    const real = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (String(url).endsWith('/api/health')) await gate;
+      return real(url, init);
+    });
+    const started = startRun('p1', k);
+    await vi.waitFor(() => expect(useServerCheck.getState().checking).toEqual({ p1: 'continue' }));
+    expect(confirm.asked).toEqual([]);
+    answer();
+    expect(await started).toBe(true);
+    expect(useServerCheck.getState().checking).toEqual({});
+    await idle();
+  });
+
+  it('nothing to say when your server is up (no check), and none left behind when it still doesn’t answer', async () => {
+    serve();
+    const seen: unknown[] = [];
+    const off = useServerCheck.subscribe((st) => seen.push(st.checking));
+    expect(await startRun('p1', { kind: 'all' })).toBe(true);
+    await idle();
+    expect(seen).toEqual([]);
+    const { s } = await blipAtStep2();
+    health.up = false;
+    expect(await startRun('p1', { kind: 'continue', steps: s.run!.steps, from: 2 })).toBe(false);
+    expect(seen).toEqual([{ p1: 'continue' }, {}]);
+    off();
   });
 });
 

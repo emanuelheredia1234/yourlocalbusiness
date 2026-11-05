@@ -2,8 +2,10 @@
 // costs (spec §2.5). Paid runs always ask first; with the built-in engine (free) they start right away,
 // unless it would replace sections an AI wrote: then it says which, and asks. Nothing here runs by itself
 // or again on its own: every run is one click.
+import { create } from 'zustand';
 import type { StrategyState, StrategyStep } from '@/lib/strategyTypes';
 import { readStrategy } from '@/lib/strategy';
+import { useRuntime } from '@/lib/platform';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { confirmAction } from '@/components/ui/primitives';
@@ -84,6 +86,25 @@ export function replaceConfirm(k: RunKind, s: StrategyState, maxSearches: number
 /** The last run was written by the built-in engine (it never stops halfway on its own: an AI's run is what usually needs Continue). */
 const builtinRun = (s: StrategyState) => !!s.run?.done.length && s.run.done.every((k) => s[k]?.provider === 'local');
 
+/** Which button started a run: "all", "research", "plan", "refresh:<step>" or "continue". */
+export type RunKey = 'all' | 'research' | 'plan' | 'continue' | `refresh:${StrategyStep}`;
+export const runKey = (k: RunKind): RunKey => (k.kind === 'refresh' ? `refresh:${k.step}` : k.kind);
+
+/**
+ * Runs waiting on a fresh check of your AI server (it was marked down: the check can take up to 8 seconds)
+ * before they ask or start, by project, with the button that started each: that button says so meanwhile.
+ */
+export const useServerCheck = create<{ checking: Record<string, RunKey> }>(() => ({ checking: {} }));
+/** The button whose run is checking your AI server for this project (null when none is). */
+export const useCheckingServer = (projectId: string): RunKey | null => useServerCheck((s) => s.checking[projectId] ?? null);
+const setChecking = (projectId: string, key: RunKey | null) =>
+  useServerCheck.setState((s) => {
+    const { [projectId]: _done, ...rest } = s.checking;
+    return { checking: key ? { ...rest, [projectId]: key } : rest };
+  });
+/** What a run button says while its run checks your AI server. */
+export const CHECKING_LABEL = 'Checking your AI server…';
+
 /**
  * Start a run after its confirm (none with the built-in engine when it replaces nothing an AI wrote: it's
  * free). Your server, if it was marked down, is asked again first: one dropped request mustn't turn a run
@@ -93,7 +114,14 @@ const builtinRun = (s: StrategyState) => !!s.run?.done.length && s.run.done.ever
  */
 export async function startRun(projectId: string, k: RunKind): Promise<boolean> {
   if (useStrategyJobs.getState().jobs[projectId]) return false;
-  await recheckServer(useStore.getState().settings.ai.serverUrl, 0);
+  // a server marked down is asked again, which can take a while: the button says so meanwhile
+  const slow = !__ARTIFACT_BUILD__ && useRuntime.getState().server === 'down';
+  if (slow) setChecking(projectId, runKey(k));
+  try {
+    await recheckServer(useStore.getState().settings.ai.serverUrl, 0);
+  } finally {
+    if (slow) setChecking(projectId, null);
+  }
   const p = useStore.getState().projects.find((x) => x.id === projectId);
   if (!p || useStrategyJobs.getState().jobs[projectId]) return false;
   const s = readStrategy(p);

@@ -4,9 +4,10 @@ import type { Project } from '@/lib/types';
 import type { StrategyChannel, StrategyState } from '@/lib/strategyTypes';
 import { CHANNEL_LABEL } from '@/lib/strategy';
 import { channelTarget, runTarget } from '@/lib/strategyActions';
-import { PLATFORMS } from '@/ai/knowledge';
-import { PlatformGlyph } from '@/components/posts/PlatformIcon';
-import { Backing, LinksCard, PageCard, SectionFooter, SourcesList, StaleBanners, citedBy } from './parts';
+import { Empty } from '@/components/ui/primitives';
+import { Megaphone } from 'lucide-react';
+import { BasisTip, Cite, LinksCard, NamedSection, PageCard, SectionFooter, SourcesList, StaleNote, citedBy } from './parts';
+import { ChannelTile } from './PlanTab';
 
 const GROUPS: { priority: 1 | 2 | 3; title: string }[] = [
   { priority: 1, title: 'Start here' },
@@ -18,23 +19,27 @@ function ChannelCard({ c, s }: { c: StrategyChannel; s: StrategyState }) {
   const t = channelTarget(c, s);
   const inApp = !!t && 'target' in t;
   return (
-    <li className="flex flex-col gap-2 rounded-md border border-line bg-surface p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {c.platform && (
-          <span className="flex h-6 w-6 items-center justify-center rounded text-white" style={{ background: PLATFORMS[c.platform].color }} aria-hidden="true">
-            <PlatformGlyph platform={c.platform} size={12} />
-          </span>
-        )}
-        <h4 className="text-[14px] font-semibold text-ink">{c.name}</h4>
-        <span className="badge bg-surface-2 text-ink-2">{CHANNEL_LABEL[c.channelType]}</span>
-        <span className="badge bg-surface-2 text-muted">{inApp ? 'In the app' : 'Outside the app'}</span>
+    <li className="card flex min-w-0 flex-col gap-3 p-5">
+      <div className="flex items-start gap-3">
+        <ChannelTile platform={c.platform} type={c.channelType} />
+        <div className="min-w-0 flex-1">
+          <h3 className="flex items-center gap-1 text-h3 text-ink">
+            <span className="min-w-0">{c.name}</span>
+            <BasisTip items={[c]} />
+          </h3>
+          <p className="text-small text-muted">
+            {CHANNEL_LABEL[c.channelType]} · {inApp ? 'In the app' : 'Outside the app'}
+          </p>
+        </div>
       </div>
-      <p className="text-[13px] text-ink-2">{c.why}</p>
-      <Backing item={c} all={s.sources} />
+      <p className="text-body text-ink-2">
+        {c.why}
+        <Cite item={c} all={s.sources} />
+      </p>
       {c.how.length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-muted">How to start</p>
-          <ul className="mt-0.5 flex list-disc flex-col gap-0.5 pl-5 text-[13px] text-ink-2">
+          <p className="text-small font-medium text-ink">How to start</p>
+          <ul className="mt-1 flex list-disc flex-col gap-1 pl-5 text-small text-ink-2 marker:text-faint">
             {c.how.map((h) => (
               <li key={h}>{h}</li>
             ))}
@@ -42,13 +47,13 @@ function ChannelCard({ c, s }: { c: StrategyChannel; s: StrategyState }) {
         </div>
       )}
       {t && 'target' in t ? (
-        <div>
+        <div className="mt-auto pt-1">
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void runTarget(t.target)}>
             {t.label}
           </button>
         </div>
       ) : t ? (
-        <p className="text-xs text-muted">{t.hint}</p>
+        <p className="mt-auto text-small text-muted">{t.hint}</p>
       ) : null}
     </li>
   );
@@ -58,43 +63,53 @@ export function PromoteTab({ project, s }: { project: Project; s: StrategyState 
   const pr = s.promote;
   if (!pr) {
     return (
-      <div className="flex flex-col gap-4">
-        <p className="rounded-md bg-surface-2 px-3 py-6 text-center text-[13px] text-muted">Not written yet. It’s step 2 of 6.</p>
+      <div>
+        <Empty icon={<Megaphone />} title="Not written yet" body="It’s step 2 of 6." />
         <LinksCard project={project} s={s} />
-        <PageCard project={project} s={s} />
+        <PageCard project={project} s={s} className="mt-10" />
       </div>
     );
   }
   const pos = pr.positioning;
   return (
-    <div className="flex flex-col gap-5">
-      <StaleBanners project={project} s={s} step="promote" />
-      <section className="panel flex flex-col gap-2 p-4 sm:p-5" aria-label="Your angle">
-        <p className="eyebrow">Your angle</p>
-        <p className="font-display text-[17px] font-semibold text-ink">{pos.line}</p>
-        {pos.who && <p className="text-[13px] text-ink-2">Who: {pos.who}</p>}
-        {pos.why && <p className="text-[13px] text-ink-2">{pos.why}</p>}
-        <Backing item={pos} all={s.sources} />
-      </section>
+    <div>
+      <StaleNote project={project} s={s} step="promote" />
+      <NamedSection
+        label="Your angle"
+        title={
+          <span className="inline-flex items-center gap-1">
+            Your angle
+            <BasisTip items={[pos]} />
+          </span>
+        }
+      >
+        <div className="well px-5 py-4">
+          <p className="text-title text-ink">
+            {pos.line}
+            <Cite item={pos} all={s.sources} />
+          </p>
+          {pos.who && <p className="mt-2 text-small text-muted">Who: {pos.who}</p>}
+          {pos.why && <p className="mt-1 text-small text-ink-2">{pos.why}</p>}
+        </div>
+      </NamedSection>
 
       {GROUPS.map((g) => {
         const list = pr.channels.filter((c) => c.priority === g.priority);
         if (!list.length) return null;
         return (
-          <section key={g.priority} aria-label={g.title}>
-            <h2 className="section-title mb-2">{g.title}</h2>
-            <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <NamedSection key={g.priority} label={g.title} title={g.title}>
+            <ul className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
               {list.map((c) => (
                 <ChannelCard key={c.name} c={c} s={s} />
               ))}
             </ul>
-          </section>
+          </NamedSection>
         );
       })}
 
       <LinksCard project={project} s={s} />
-      <PageCard project={project} s={s} />
-      <SourcesList ns={citedBy([pos, ...pr.channels, pr.page, ...Object.values(pr.links)])} all={s.sources} title="Sources this section cites" />
+      <PageCard project={project} s={s} className="mt-10" />
+      <SourcesList ns={citedBy([pos, ...pr.channels, pr.page, ...Object.values(pr.links)])} all={s.sources} />
       <SectionFooter project={project} s={s} step="promote" />
     </div>
   );

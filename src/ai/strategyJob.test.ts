@@ -10,7 +10,7 @@ import { useStore } from '@/store/useStore';
 import { defaultSettings } from '@/store/defaults';
 import { newSkill } from './brain';
 import { readStrategy, stale, strategyFactsHash } from '@/lib/strategy';
-import { setStrategyInputs, tickAction, writeStrategy } from '@/lib/strategyWrite';
+import { setMaxSearches, setStrategyInputs, tickAction, writeStrategy } from '@/lib/strategyWrite';
 import { useUI } from '@/store/ui';
 import { STRATEGY_QA, qaMeta, qaProject, qaResearchMeta, qaSavedStrategy } from '@/test/strategyQa';
 
@@ -27,7 +27,7 @@ const runs = vi.mocked(runTask);
 const voice: Skill = { ...newSkill({ name: 'QA Bakery brand voice', scope: ['all'], instructions: 'Warm and plain.' }), id: 'skill_voice' };
 const ANTHROPIC = { id: 'anthropic', label: 'Anthropic Claude', ready: true, models: { text: 'claude-opus-5-5' }, effort: { text: { id: 'medium', label: 'Medium' } }, research: { perSearch: 0.01 } };
 
-type Fail = 'daily' | 'abort' | 'stop' | 'network';
+type Fail = 'daily' | 'abort' | 'stop' | 'network' | 'upstream';
 /**
  * Your server, faked: each step's QA answer (or `reply[step]` instead), the failures asked for, and its health
  * check (the same key powers Strategy).
@@ -41,6 +41,7 @@ function answer(o: { fail?: Partial<Record<StrategyStep, Fail>>; onStep?: (step:
     const fail = o.fail?.[step];
     if (fail === 'network') throw new TypeError('Failed to fetch');
     if (fail === 'daily') return new Response(JSON.stringify({ error: 'You’ve reached today’s limit on the app’s AI keys.', code: 'DAILY_LIMIT' }), { status: 429 });
+    if (fail === 'upstream') return new Response(JSON.stringify({ error: 'Anthropic Claude took too long to answer.', code: 'TIMEOUT' }), { status: 504 });
     if (fail === 'stop' || fail === 'abort') {
       if (fail === 'stop') setTimeout(() => stopStrategy('p1'), 0);
       return new Promise((_res, rej) => {
@@ -282,6 +283,55 @@ describe('an answer in the wrong shape never replaces a section', () => {
     expect(await runStrategy('p1', ['assets'])).toBe('failed');
     expect(strategyOf('p1').assets).toEqual(before.assets);
     expect(strategyOf('p1').run?.note).toBe('The answer had no assets or SEO page direction the app could use, so “Assets to create” and “SEO page” stay as they were. Try again.');
+  });
+});
+
+describe('what a step that wasn’t saved may still cost (the run’s summary)', () => {
+  beforeEach(() => useStrategyJobs.setState({ jobs: {}, unsaved: {} }));
+  const unsaved = () => useStrategyJobs.getState().unsaved.p1;
+
+  it('a web research step that was stopped: its searches at list price, as an estimate', async () => {
+    answer({ fail: { research: 'stop' } });
+    expect(await runStrategy('p1')).toBe('stopped');
+    const run = strategyOf('p1').run!;
+    expect(run).toMatchObject({ stoppedAt: 'research', done: [] });
+    // the most searches step 1 may make (5 by default) at the key's $0.01 each
+    expect(unsaved()).toEqual({ runAt: run.startedAt, step: 'research', usd: 0.05, estimate: true, searches: 5, perSearch: 0.01 });
+  });
+
+  it('…or that failed after your server took it (a timeout): the same estimate, with the run’s own search limit', async () => {
+    setMaxSearches('p1', 3);
+    answer({ fail: { research: 'upstream' } });
+    expect(await runStrategy('p1')).toBe('failed');
+    expect(unsaved()).toMatchObject({ runAt: strategyOf('p1').run!.startedAt, step: 'research', usd: 0.03, estimate: true, searches: 3 });
+  });
+
+  it('nothing when the request never reached a key (a daily limit, your server unreachable), or the step wasn’t research', async () => {
+    answer({ fail: { research: 'daily' } });
+    expect(await runStrategy('p1')).toBe('failed');
+    expect(unsaved()).toBeUndefined();
+    answer({ fail: { research: 'network' } });
+    expect(await runStrategy('p1')).toBe('failed');
+    expect(unsaved()).toBeUndefined();
+    useRuntime.getState().set({ server: 'ok' });
+    answer({ fail: { content: 'stop' } });
+    expect(await runStrategy('p1')).toBe('stopped');
+    expect(unsaved()).toBeUndefined();
+  });
+
+  it('an answer that came back unusable was billed: what it reported, not an estimate', async () => {
+    answer({ reply: { promote: { channels: 'none' } } });
+    expect(await runStrategy('p1')).toBe('failed');
+    expect(unsaved()).toEqual({ runAt: strategyOf('p1').run!.startedAt, step: 'promote', usd: 0.0412, estimate: false });
+  });
+
+  it('a new run clears the last one’s', async () => {
+    answer({ fail: { research: 'stop' } });
+    await runStrategy('p1');
+    expect(unsaved()).toBeDefined();
+    answer();
+    expect(await runStrategy('p1')).toBe('done');
+    expect(unsaved()).toBeUndefined();
   });
 });
 
