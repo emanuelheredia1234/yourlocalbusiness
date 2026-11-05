@@ -277,6 +277,11 @@ describe('an answer in the wrong shape never replaces a section', () => {
     expect(strategyOf('p1').sources).toEqual(before.sources);
     expect(stepsCalled().slice(-1)).toEqual(['research']);
     expect(useStore.getState().genLog).toHaveLength(6);
+    // the assets step fills two tabs: the note names both
+    answer({ reply: { assets: { assets: [], seo: {} } } });
+    expect(await runStrategy('p1', ['assets'])).toBe('failed');
+    expect(strategyOf('p1').assets).toEqual(before.assets);
+    expect(strategyOf('p1').run?.note).toBe('The answer had no assets or SEO page direction the app could use, so “Assets to create” and “SEO page” stay as they were. Try again.');
   });
 });
 

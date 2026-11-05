@@ -6,7 +6,8 @@
 // tasks are paid jobs, so they move on only when the provider certainly started nothing.
 //
 // Web research (Strategy, research.mjs): keys that can search go first. Once a key was asked to
-// search, a failure moves on only when the provider certainly started nothing (a 4xx): after a
+// search, a failure moves on only when the provider certainly started nothing (a 4xx; on Anthropic's
+// streamed answers, any HTTP error status, a 529 too, or a request never sent): after a
 // timeout, a Stop or a cut-off answer the searches may already be billed, so the owner decides, and
 // the failure is logged and metered at an estimate (see failedResearchCost).
 //

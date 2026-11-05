@@ -119,7 +119,7 @@ describe('built-in guidance in place of what an AI wrote', () => {
     expect(confirm.asked).toEqual([
       {
         title: 'Replace what your AI wrote with built-in guidance?',
-        body: 'No API key powers Strategy yet, so the built-in engine writes a starter plan: free, general guidance, not research. It replaces “Research”, “Where to promote”, “Social content”, “Assets to create”, “Email outreach” and “Plan”, which your AI wrote. Your web research is replaced by general guidance without sources. Ticks stay only on steps that are still in the new plan.',
+        body: 'No API key powers Strategy yet, so the built-in engine writes a starter plan: free, general guidance, not research. It replaces “Research”, “Where to promote”, “Social content”, “Assets to create”, “SEO page”, “Email outreach” and “Plan”, which your AI wrote. Your web research is replaced by general guidance without sources. Ticks stay only on steps that are still in the new plan.',
         confirmLabel: 'Replace',
         danger: true,
       },

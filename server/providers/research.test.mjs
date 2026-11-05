@@ -440,6 +440,8 @@ describe('Anthropic specifics', () => {
     // max_uses can't be 0 and the tool has to stay on a continuation, so the turn ends where it paused
     expect(callsTo('anthropic', '/v1/messages')).toHaveLength(1);
     expect(err.code).toBe('CUT_OFF');
+    // it says the searches ran out (never "try fewer searches")
+    expect(err.message).toBe('Claude used all 1 web search before it finished answering. Try again, or choose more web searches.');
     // what the call used is known (4,200 in, 120 out, one search): logged at list prices
     expect(usage.recent(1)[0]).toMatchObject({ ok: false, code: 'CUT_OFF', research: true, searches: 1, usage: { input: 4200, output: 120 }, cost: { usd: 0.0292, source: 'estimate' } });
   });
@@ -620,6 +622,52 @@ describe('routing a research request', () => {
     expect(out.meta.attempts).toEqual([expect.objectContaining({ provider: 'anthropic', code: 'RATE_LIMIT' })]);
     // the SDK didn't retry the 429 either
     expect(callsTo('anthropic', '/v1/messages')).toHaveLength(1);
+  });
+
+  it('an HTTP error before Anthropic’s stream starts (529 overloaded, 500) or a request never sent ran nothing: no cost, and the next key searches', async () => {
+    const overloaded = async (url, init) => (String(url).endsWith('/v1/messages') ? new Response(JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }), { status: 529, headers: { 'content-type': 'application/json' } }) : fetch(url, init));
+    const refused = async (url, init) => {
+      if (String(url).endsWith('/v1/messages')) throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:443'), { code: 'ECONNREFUSED' }) });
+      return fetch(url, init);
+    };
+    const cases = [
+      ['overloaded', { fetch: overloaded }, 'UPSTREAM'],
+      ['outage', {}, 'UPSTREAM'],
+      ['refused', { fetch: refused }, 'NETWORK'],
+    ];
+    for (const [name, o, code] of cases) {
+      mock.reset();
+      if (name === 'outage') mock.behavior.anthropic = 'fail500';
+      const metered = [];
+      const meter = { start() {}, cost: (usd, x) => metered.push([usd, !!x?.unsure]) };
+      const { router, usage } = setup(['anthropic', 'openai'], { ...o, env: { ANTHROPIC_API_KEY: `${ENV.ANTHROPIC_API_KEY}-${name}`, OPENAI_API_KEY: ENV.OPENAI_API_KEY } });
+      const out = await router.text('strategy', { prompt: PROMPT, research: RESEARCH, meter });
+      expect(out.meta.provider).toBe('openai');
+      expect(out.meta.attempts).toEqual([expect.objectContaining({ provider: 'anthropic', code })]);
+      const failed = usage.recent(2).find((e) => !e.ok);
+      expect(failed).toMatchObject({ provider: 'anthropic', code, research: true });
+      expect(failed).not.toHaveProperty('cost');
+      // only what OpenAI's answer cost: nothing for Anthropic, and no estimate
+      expect(metered).toEqual([[out.meta.cost.usd, false]]);
+    }
+  });
+
+  it('an error once Anthropic’s stream has started (an error event, no HTTP status) is still paid work', async () => {
+    const f = async (url, init) => {
+      if (!String(url).endsWith('/v1/messages')) return fetch(url, init);
+      const events = [
+        { type: 'message_start', message: { id: 'msg_qa_err', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 4200, output_tokens: 1 } } },
+        { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } },
+      ];
+      return new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+    const metered = [];
+    const meter = { start() {}, cost: (usd, x) => metered.push([usd, !!x?.unsure]) };
+    const { router, usage } = setup(['anthropic', 'openai'], { fetch: f, env: { ANTHROPIC_API_KEY: `${ENV.ANTHROPIC_API_KEY}-midstream`, OPENAI_API_KEY: ENV.OPENAI_API_KEY } });
+    await expect(router.text('strategy', { prompt: PROMPT, research: RESEARCH, meter })).rejects.toMatchObject({ code: 'UPSTREAM', notStarted: false });
+    expect(callsTo('openai')).toHaveLength(0);
+    expect(usage.recent(1)[0]).toMatchObject({ ok: false, provider: 'anthropic', research: true, cost: { usd: 0.33, source: 'estimate' } });
+    expect(metered).toEqual([[0.33, true]]);
   });
 
   it('degrades on every provider: not used, failed, refused', async () => {

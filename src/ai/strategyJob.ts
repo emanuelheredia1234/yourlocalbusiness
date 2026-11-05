@@ -58,6 +58,11 @@ export function stopAllStrategies(): void {
 /** Codes that mean "no AI here" (not a failure of an AI that was asked): the built-in engine may write the whole run. */
 export const NO_AI = ['no_provider', 'server_down', 'unavailable', 'not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'];
 
+/** A step's sections as their tabs name them: the assets step writes two, “Assets to create” and “SEO page”. */
+export const sectionNames = (step: StrategyStep): string[] => (step === 'assets' ? ['assets', 'seo'] : [step]).map((t) => `“${tabLabel('strategy', t)}”`);
+/** "a", "a and b", "a, b and c" */
+export const listOf = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+
 /** The steps whose section an AI wrote: the built-in engine never replaces them unless the owner chose it (startRun asks). */
 export function aiWritten(s: StrategyState, steps: StrategyStep[]): StrategyStep[] {
   return steps.filter((k) => !!s[k] && s[k]!.provider !== 'local');
@@ -247,7 +252,10 @@ export async function runStrategy(projectId: string, steps: StrategyStep[] = STR
       const ls = readStrategy(latest);
       const out = renormalize(step, res.data, normCtx(latest, ls, { fallback: res.provider === 'local' ? 'builtin' : 'ai' }));
       // valid JSON in the wrong shape (or all of it dropped by the checks) never replaces a section
-      if (!CORE[step].has(out)) return fail(`The answer had no ${CORE[step].what} the app could use, so “${tabLabel('strategy', step)}” stays as it was. Try again.`);
+      if (!CORE[step].has(out)) {
+        const names = sectionNames(step);
+        return fail(`The answer had no ${CORE[step].what} the app could use, so ${listOf(names)} ${names.length > 1 ? 'stay as they were' : 'stays as it was'}. Try again.`);
+      }
       if (res.provider !== 'local') aiWrote = true;
       const now = Date.now();
       const meta = res.meta ? compactMeta(res.meta) : undefined;

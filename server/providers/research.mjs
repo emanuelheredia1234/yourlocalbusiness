@@ -11,7 +11,8 @@ import { fnById, kindDef, modelDef } from './registry.mjs';
 export const RESEARCH_TIMEOUT_MS = 10 * 60_000;
 /** Sources returned per request, at most. */
 export const MAX_SOURCES = 30;
-const MAX_SEARCHES = 8;
+/** The most web searches a research request may ask for (Strategy offers 3, 5 or 8). */
+export const MAX_SEARCHES = 8;
 const MAX_URL = 2000;
 /**
  * A source's URL is at most this long: the app keeps no longer one (STRATEGY_CAPS.sources.url in

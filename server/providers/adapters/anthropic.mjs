@@ -3,10 +3,10 @@
 // Web research (Strategy): Anthropic's server-side web_search tool (see ../research.mjs).
 
 import Anthropic from '@anthropic-ai/sdk';
-import { ProviderError, errorFromResponse, num, parseDataUrl } from '../http.mjs';
+import { NOT_SENT, ProviderError, errorFromResponse, num, parseDataUrl } from '../http.mjs';
 import { listModelIds } from './chat.mjs';
 import { modelDef } from '../registry.mjs';
-import { RESEARCH_TIMEOUT_MS, TOOL_REFUSED, TOOL_VERSION, userLocation } from '../research.mjs';
+import { MAX_SEARCHES, RESEARCH_TIMEOUT_MS, TOOL_REFUSED, TOOL_VERSION, userLocation } from '../research.mjs';
 
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const clients = new Map();
@@ -45,6 +45,13 @@ function toProviderError(e, signal, label) {
   return new ProviderError('UPSTREAM', `${label} had an error: ${e?.message || 'unknown'}`, { provider: label });
 }
 
+/**
+ * A streamed call that certainly ran nothing: answered with an HTTP error status (a stream's status comes
+ * before its first event, so a 5xx such as 529 "overloaded" too; once it streams, an error arrives as an
+ * event, without a status), or never sent (connection refused, host not found).
+ */
+const ranNothing = (e) => (e instanceof Anthropic.APIError && !!e.status) || NOT_SENT.has(e?.cause?.cause?.code ?? e?.cause?.code ?? '');
+
 function webSearchTool(research) {
   return { type: WEB_SEARCH_TOOL, name: 'web_search', max_uses: research.maxSearches, ...(research.location ? { user_location: userLocation(research.location) } : {}) };
 }
@@ -76,6 +83,7 @@ function tally(answers) {
  * version, or without the tool (`refused`). pause_turn continues the same turn, at most 3 times, each
  * time with max_uses lowered to the searches left: max_uses counts the searches of one request and
  * can't be 0, and the tool has to stay on a continuation, so once every search ran the turn ends there.
+ * A call answered with an HTTP error status (a 529 too) or never sent ran nothing (ranNothing: notStarted).
  * Once the first call has answered, its searches are billed: any failure after it is paid work (never
  * notStarted, so no other key searches again) and carries `used`, what the finished calls used
  * (all: nothing else can have been billed).
@@ -86,7 +94,10 @@ async function researchText(ctx, params, research, { model, signal, timeoutMs })
     try {
       return await client(ctx).beta.messages.stream(p, opts).finalMessage();
     } catch (e) {
-      throw toProviderError(e, signal, ctx.label);
+      const err = toProviderError(e, signal, ctx.label);
+      // nothing ran, so nothing was billed: another key may search instead (a 4xx was already this)
+      if (!signal?.aborted && ranNothing(e)) err.notStarted = true;
+      throw err;
     }
   };
   let tool = webSearchTool(research);
@@ -115,9 +126,14 @@ async function researchText(ctx, params, research, { model, signal, timeoutMs })
   const content = [...(message.content ?? [])];
   // from here on searches may be billed: a failure is paid work and says what the finished calls used
   const paid = (err, all) => Object.assign(err, { notStarted: false, used: { ...tally(answers), all } });
+  // the turn paused with every search it may run already run: it isn't continued
+  let searchedOut = false;
   for (let i = 0; message.stop_reason === 'pause_turn' && i < MAX_CONTINUATIONS; i += 1) {
     const left = research.maxSearches - tally(answers).searches;
-    if (params.tools && left < 1) break;
+    if (params.tools && left < 1) {
+      searchedOut = true;
+      break;
+    }
     // the same turn goes on: everything so far goes back unchanged, with the same system prompt and tool
     const next = { ...params, messages: [params.messages[0], { role: 'assistant', content: [...content] }] };
     if (params.tools) next.tools = [{ ...params.tools[0], max_uses: left }];
@@ -137,6 +153,10 @@ async function researchText(ctx, params, research, { model, signal, timeoutMs })
   const paused = message.stop_reason === 'pause_turn';
   const text = final.trim() ? final : paused ? '' : textOf(content);
   if (!text.trim()) {
+    if (searchedOut) {
+      const n = research.maxSearches;
+      throw paid(new ProviderError('CUT_OFF', `Claude used all ${n} web search${n === 1 ? '' : 'es'} before it finished answering. Try again${n < MAX_SEARCHES ? ', or choose more web searches' : ''}.`, { provider: ctx.label }), true);
+    }
     if (paused || message.stop_reason === 'max_tokens') throw paid(new ProviderError('CUT_OFF', 'Claude ran out of room before answering. Try fewer searches or a lower effort.', { provider: ctx.label }), true);
     throw paid(new ProviderError('NO_OUTPUT', 'Claude returned an empty answer.', { provider: ctx.label }), true);
   }
