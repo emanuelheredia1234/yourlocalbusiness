@@ -1,23 +1,613 @@
-import { useMemo } from 'react';
-import { ArrowRight, Brain, CalendarClock, Check, CircleAlert, Compass, ExternalLink, Globe, Mail, Megaphone, PenSquare, Search, Send, ShoppingBag, Sparkles, Store, TrendingUp, WandSparkles } from 'lucide-react';
-import type { GenerationLog, Project } from '@/lib/types';
-import { cn, ensureUrl, fmtDateTime, fmtMoney, fmtRelative, greeting, stripProtocol } from '@/lib/utils';
-import { navigate, type Route } from '@/lib/router';
-import { FORMATS, PLATFORMS, POST_TYPE_MAP } from '@/ai/knowledge';
-import { useKpis } from '@/lib/kpis';
+// The Dashboard: a greeting, this week's plan (the page's one AI card), the next post in its frame with
+// the one thing to do with it, the week's numbers, what's up next and the brand. A brand-new project
+// (nothing posted, no strategy yet) gets one hero instead: its first three steps.
+import { useMemo, type ReactNode } from 'react';
+import {
+  ArrowRight,
+  AtSign,
+  Brain,
+  CalendarDays,
+  CheckCheck,
+  Check,
+  Clock,
+  CodeXml,
+  Compass,
+  ExternalLink,
+  Globe,
+  Link2,
+  Mail,
+  MapPin,
+  Megaphone,
+  PenSquare,
+  Pencil,
+  Plus,
+  Store,
+  Target,
+} from 'lucide-react';
+import type { Post, Project } from '@/lib/types';
+import type { ActionKind, StrategyAction, StrategyState } from '@/lib/strategyTypes';
+import { cn, ensureUrl, stripProtocol } from '@/lib/utils';
+import { navigate } from '@/lib/router';
+import { useNow } from '@/lib/hooks';
+import { brandHandle } from '@/lib/brandMark';
+import { PAGE_TYPE_LABEL } from '@/lib/pageTypes';
+import { postedSince, useKpis } from '@/lib/kpis';
+import { readiness } from '@/lib/readiness';
+import { STEP_LABEL, actionDone, currentWeek, hasAnySection, readStrategy, strategyNextSteps, strategyProgress, type ActionCtx } from '@/lib/strategy';
+import { actionTarget, runTarget } from '@/lib/strategyActions';
+import { networkLabel } from '@/ai/manusPost';
+import { recommendPageType } from '@/ai/local/strategy';
+import { openPage } from '@/ai/assistant/nav';
+import { stopStrategy, useStrategyJob } from '@/ai/strategyJob';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
-import { StatTile } from '@/components/charts/Charts';
-import { BrandLogo } from '@/components/brand/Logo';
-import { ProgressRing, Spinner } from '@/components/ui/primitives';
-import { PlatformGlyph } from '@/components/posts/PlatformIcon';
-import { DueBadge } from '@/components/posts/PostActions';
-import { suggestTopics } from '@/ai/local/social';
-import { readiness } from '@/lib/readiness';
-import { currentWeek, readStrategy, strategyNextSteps, strategyProgress, strategyStatusLine, type ActionCtx } from '@/lib/strategy';
-import { actionTarget, runTarget } from '@/lib/strategyActions';
-import { openPage } from '@/ai/assistant/nav';
-import { useStrategyJob } from '@/ai/strategyJob';
+import { BrandLogo, LogoMark } from '@/components/brand/Logo';
+import { PostFrame } from '@/components/frames/Frames';
+import { PostVisual } from '@/components/visuals/PostVisual';
+import { PlatformMark } from '@/components/posts/PlatformIcon';
+import { DueBadge, goesOutAt, isDue, manusHolds, useMarkPosted } from '@/components/posts/PostActions';
+import { ExternalBadge, ManusPostButton, useCanOfferManus } from '@/components/posts/ManusPost';
+import { AIThinking, AiCard, GenerateButton, Spark } from '@/components/ai/AI';
+import { Badge, Empty, MoreMenu, PageHeader, ProgressBar, Section, Skeleton, StatStrip, StatusDot, Swatch } from '@/components/ui/primitives';
+import { CHECKING_LABEL, startRun, useCheckingServer } from '@/pages/strategy/runs';
+
+/** "Good morning" before noon, "Good afternoon" before 6 pm, then "Good evening". */
+function greetingFor(d: Date): string {
+  const h = d.getHours();
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+}
+
+/** The end of this week (Monday to Sunday), local time. */
+function endOfWeek(now: number): number {
+  const d = new Date(now);
+  d.setDate(d.getDate() + ((7 - d.getDay()) % 7));
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
+}
+
+/** "Thu 12:30 PM" */
+const dayTime = (iso: string) => {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+};
+/** "Thu, Nov 5 · 12:00 PM" */
+const dayDateTime = (iso: string) => {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} · ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+};
+
+/** The name a post shows on its network: a page's name on Facebook and LinkedIn, else the brand's own handle there, else its name (never a made-up handle). */
+const handleFor = (p: Project, post?: Post) =>
+  (post && post.platform !== 'facebook' && post.platform !== 'linkedin' ? brandHandle(p.brand, [post.platform]).replace(/^@/, '') : '') || p.brand.name || 'Your brand';
+
+/** Start a strategy as Strategy's own button does: go there, then the run (with its confirm when it's paid). */
+function planMyStrategy(projectId: string) {
+  void openPage('strategy', 'plan').then((ok) => ok && startRun(projectId, { kind: 'all' }));
+}
+
+export function Dashboard() {
+  const project = useActiveProject()!;
+  const posts = useStore((s) => s.posts);
+  const ads = useStore((s) => s.ads);
+  const myListings = useStore((s) => s.myListings);
+  const job = useStrategyJob(project.id);
+  const now = useNow(60_000);
+  const k = useKpis(project, 7);
+  const s = useMemo(() => readStrategy(project), [project]);
+  const ctx: ActionCtx = useMemo(() => ({ posts, ads, myListings, now }), [posts, ads, myListings, now]);
+
+  const mine = useMemo(() => posts.filter((p) => p.projectId === project.id), [posts, project.id]);
+  const planned = useMemo(() => mine.filter((p) => p.status === 'scheduled').sort((a, b) => goesOutAt(a).localeCompare(goesOutAt(b))), [mine]);
+  const next = planned[0];
+  const weekEnd = endOfWeek(now);
+  const thisWeek = planned.filter((p) => {
+    const t = new Date(goesOutAt(p)).getTime();
+    return t >= now && t <= weekEnd;
+  }).length;
+  const fresh = mine.length === 0 && !hasAnySection(s) && !job;
+  const brand = project.brand.name || 'Your business';
+  const today = new Date(now).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const week = thisWeek ? `${thisWeek} post${thisWeek === 1 ? ' goes' : 's go'} out this week` : 'Nothing planned this week';
+
+  return (
+    <div>
+      <PageHeader
+        size="display"
+        title={greetingFor(new Date(now))}
+        description={
+          <>
+            <span className="max-sm:hidden">
+              {brand} · {today} ·{' '}
+            </span>
+            {week}
+          </>
+        }
+        actions={
+          <button type="button" className="btn btn-secondary max-sm:hidden" onClick={() => navigate('calendar')}>
+            <CalendarDays /> View calendar
+          </button>
+        }
+      />
+
+      {fresh ? (
+        <FirstSteps project={project} />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+            <PlanCard project={project} s={s} ctx={ctx} className="lg:col-span-8" primaryTaken={!!next && !manusHolds(next)} />
+            <NextPost project={project} post={next} now={now} className="lg:col-span-4" />
+          </div>
+          {mine.length > 0 && <Numbers project={project} posts={mine} planned={planned} now={now} k={k} />}
+          <Readiness project={project} posts={mine} listed={myListings.some((l) => l.projectId === project.id)} />
+          <div className="mt-10 grid grid-cols-1 items-start gap-x-4 gap-y-10 lg:grid-cols-12">
+            <UpNext project={project} posts={planned.slice(0, 5)} now={now} className="lg:col-span-8" />
+            <BrandCard project={project} className="lg:col-span-4" />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ───────────── a brand-new project ─────────────
+
+/** "Let's get {Brand} its first customers": three first steps and Plan my strategy. */
+function FirstSteps({ project }: { project: Project }) {
+  const checking = useCheckingServer(project.id);
+  const job = useStrategyJob(project.id);
+  const page = recommendPageType(project).pageType;
+  const m = project.marketing;
+  const steps: { icon: ReactNode; title: string; done: boolean; action: string; run: () => void }[] = [
+    { icon: <Compass />, title: 'Plan your strategy', done: false, action: 'Open Strategy', run: () => void openPage('strategy', 'plan') },
+    { icon: <PenSquare />, title: 'Create your first post', done: false, action: 'Create a post', run: () => useUI.getState().openComposer() },
+    {
+      icon: <Globe />,
+      title: `Publish your ${PAGE_TYPE_LABEL[page].toLowerCase()}`,
+      done: !!m.seoPublished,
+      action: m.salesPage ? 'Open SEO page' : 'Build it',
+      run: () => void (m.salesPage ? navigate('marketing-seo') : useUI.getState().openSeoBuilder({ pageType: page })),
+    },
+  ];
+  return (
+    <Empty
+      variant="ai"
+      title={`Let’s get ${project.brand.name || 'your business'} its first customers`}
+      body="Three steps, about ten minutes."
+      action={
+        <div className="flex w-full flex-col items-center gap-6">
+          <ol className="card w-full divide-y divide-line text-left">
+            {steps.map((x) => (
+              <li key={x.title} className="flex items-center gap-3 px-4 py-3">
+                {x.done ? (
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center">
+                    <CheckCircle done />
+                  </span>
+                ) : (
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-3 text-ink-2 [&>svg]:size-4" aria-hidden="true">
+                    {x.icon}
+                  </span>
+                )}
+                <span className={cn('min-w-0 flex-1 text-ui', x.done ? 'text-muted' : 'text-ink')}>{x.title}</span>
+                {x.done ? (
+                  <span className="shrink-0 text-small text-muted">Done</span>
+                ) : (
+                  <button type="button" className="link shrink-0 text-small" onClick={x.run}>
+                    {x.action}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ol>
+          <GenerateButton variant="ai" size="lg" running={!!job || checking === 'all'} runningLabel={checking === 'all' ? CHECKING_LABEL : 'Researching…'} onClick={() => planMyStrategy(project.id)}>
+            Plan my strategy
+          </GenerateButton>
+        </div>
+      }
+    />
+  );
+}
+
+// ───────────── this week's plan ─────────────
+
+/** Where an action happens, for its row's meta line. */
+const AREA: Record<ActionKind, string> = {
+  build_page: 'Your page',
+  publish_page: 'Your page',
+  link_settings: 'Links',
+  campaign_setup: 'Social',
+  plan_30: 'Social',
+  batch_7: 'Social',
+  write_post: 'Social post',
+  calendar: 'Calendar',
+  lead_magnet: 'Email',
+  welcome_emails: 'Email',
+  outreach: 'Email',
+  code_asset: 'Studio',
+  listing: 'Marketplace',
+  listing_images: 'Marketplace',
+  product_file: 'Studio',
+  packages: 'Studio',
+  socials: 'Settings',
+  website: 'Settings',
+  brain: 'Brain',
+  ads: 'Ads',
+  offline: 'Outside the app',
+};
+const ICON: Partial<Record<ActionKind, ReactNode>> = {
+  build_page: <Globe />,
+  publish_page: <Globe />,
+  link_settings: <Link2 />,
+  campaign_setup: <Megaphone />,
+  plan_30: <CalendarDays />,
+  batch_7: <CalendarDays />,
+  write_post: <PenSquare />,
+  calendar: <CalendarDays />,
+  lead_magnet: <Mail />,
+  welcome_emails: <Mail />,
+  outreach: <Mail />,
+  code_asset: <CodeXml />,
+  listing: <Store />,
+  listing_images: <Store />,
+  socials: <AtSign />,
+  website: <Globe />,
+  brain: <Brain />,
+  ads: <Target />,
+  offline: <MapPin />,
+};
+/** The actions whose button leads to the AI writing something (the rest open a page). */
+const WRITES = new Set<ActionKind>(['write_post', 'build_page', 'plan_30', 'batch_7', 'lead_magnet', 'welcome_emails', 'ads']);
+
+/** A 20px check circle: filled when done, an empty ring when not. */
+function CheckCircle({ done }: { done: boolean }) {
+  return done ? (
+    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-on-primary" aria-hidden="true">
+      <Check size={14} strokeWidth={3} />
+    </span>
+  ) : (
+    <span className="h-5 w-5 shrink-0 rounded-full border-[1.5px] border-line-3" aria-hidden="true" />
+  );
+}
+
+/** The rows the card shows: the next open steps first (this week's), then this week's done ones, in plan order. */
+function planRows(p: Project, s: StrategyState, ctx: ActionCtx, w: number): StrategyAction[] {
+  const actions = s.plan?.actions ?? [];
+  const open = strategyNextSteps(p, s, ctx, 3);
+  const done = actions.filter((a) => a.week === w && !open.includes(a) && actionDone(a, p, s, ctx).done);
+  const picked = [...open, ...done].slice(0, 3);
+  return actions.filter((a) => picked.includes(a));
+}
+
+function PlanRow({ project, s, a, ctx }: { project: Project; s: StrategyState; a: StrategyAction; ctx: ActionCtx }) {
+  const done = actionDone(a, project, s, ctx).done;
+  const t = actionTarget(a, project, s);
+  const meta = [a.platform ? networkLabel(a.platform) : '', AREA[a.kind]].filter(Boolean).join(' · ');
+  const action = done ? (
+    <span className="text-small text-muted">{actionDone(a, project, s, ctx).by === 'app' ? 'Done in the app' : 'Done'}</span>
+  ) : t ? (
+    WRITES.has(a.kind) ? (
+      <GenerateButton variant="ai-ghost" size="sm" onClick={() => void runTarget(t.target)}>
+        {t.label}
+      </GenerateButton>
+    ) : (
+      <button type="button" className="link inline-flex items-center gap-1 text-small" onClick={() => void runTarget(t.target)}>
+        {t.label} <ArrowRight size={14} aria-hidden="true" />
+      </button>
+    )
+  ) : null;
+  return (
+    <li className="flex items-start gap-3 py-3 sm:items-center">
+      {done ? (
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center">
+          <CheckCircle done />
+          <span className="sr-only">Done: </span>
+        </span>
+      ) : (
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-3 text-ink-2 [&>svg]:size-4" aria-hidden="true">
+          {ICON[a.kind] ?? <Compass />}
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className={cn('text-ui sm:truncate', done ? 'text-muted' : 'text-ink')} title={a.title}>
+          {a.title}
+        </p>
+        <p className="truncate text-small text-muted">{meta}</p>
+        {action && <div className="mt-1.5 sm:hidden [&>.btn]:-ml-3">{action}</div>}
+      </div>
+      {action && <div className="shrink-0 max-sm:hidden [&>.btn]:-mr-3">{action}</div>}
+    </li>
+  );
+}
+
+/** "This week's plan": the week's goal and its next steps, each with the button that does it. */
+function PlanCard({ project, s, ctx, className, primaryTaken }: { project: Project; s: StrategyState; ctx: ActionCtx; className?: string; primaryTaken: boolean }) {
+  const job = useStrategyJob(project.id);
+  const checking = useCheckingServer(project.id);
+  const title = (
+    <span className="flex min-w-0 items-center gap-2">
+      <Spark size={18} />
+      <h2 className="truncate text-h3 text-ink">This week’s plan</h2>
+    </span>
+  );
+  if (job) {
+    const step = job.steps[job.index] ?? job.steps[0];
+    return (
+      <AiCard className={className}>
+        <section aria-label="This week’s plan">
+          {title}
+          <AIThinking running stage={`${STEP_LABEL[step]}…`} step={`Step ${job.index + 1} of ${job.steps.length}`} onStop={() => stopStrategy(project.id)} className="mt-4" />
+          <div className="mt-5 flex flex-col gap-3" aria-hidden="true">
+            <Skeleton ai className="h-6 w-2/3" />
+            <Skeleton ai className="h-4 w-11/12" />
+            <Skeleton ai className="h-4 w-4/5" />
+            <Skeleton ai className="h-4 w-3/5" />
+          </div>
+        </section>
+      </AiCard>
+    );
+  }
+  const plan = s.plan;
+  if (!plan) {
+    return (
+      <AiCard className={className}>
+        <section aria-label="This week’s plan">
+          <Empty
+            variant="ai"
+            className="bg-none py-6 sm:py-8"
+            title={`Plan how ${project.brand.name || 'your business'} gets customers`}
+            body="Research, where to promote, and a 4-week plan. About two minutes."
+            action={
+              <GenerateButton variant={primaryTaken ? 'ai-outline' : 'ai'} running={checking === 'all'} runningLabel={CHECKING_LABEL} onClick={() => planMyStrategy(project.id)}>
+                Plan my strategy
+              </GenerateButton>
+            }
+          />
+        </section>
+      </AiCard>
+    );
+  }
+  const pr = strategyProgress(project, s, ctx);
+  const w = currentWeek(plan, ctx.now);
+  const week = plan.weeks.find((x) => x.week === w);
+  const rows = planRows(project, s, ctx, w);
+  const headline = w <= 4 && week ? week.goal || week.focus : 'Keep going with the steps still open.';
+  return (
+    <AiCard className={className}>
+      <section aria-label="This week’s plan">
+        <div className="flex items-center gap-2">
+          {title}
+          <Badge className="shrink-0">{w <= 4 ? `Week ${w} of 4` : 'After week 4'}</Badge>
+          <span className="num ml-auto shrink-0 text-small text-muted">
+            {pr.done} of {pr.total} done
+          </span>
+        </div>
+        <p className="clamp-2 mt-3 text-h2 text-ink">{headline}</p>
+        {rows.length > 0 ? (
+          <ul className="mt-4 divide-y divide-line border-t border-line">
+            {rows.map((a) => (
+              <PlanRow key={a.id} project={project} s={s} a={a} ctx={ctx} />
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-4 border-t border-line pt-4 text-small text-muted">Every step is done. Keep the habits going.</p>
+        )}
+        <div className="mt-3 border-t border-line pt-3">
+          <button type="button" className="link inline-flex items-center gap-1 text-small" onClick={() => void openPage('strategy', 'plan')}>
+            Open plan <ArrowRight size={14} aria-hidden="true" />
+          </button>
+        </div>
+      </section>
+    </AiCard>
+  );
+}
+
+// ───────────── the next post ─────────────
+
+/** The next planned post as it will look, with the one thing to do with it (the page's only filled button). */
+function NextPost({ project, post, now, className }: { project: Project; post?: Post; now: number; className?: string }) {
+  const offer = useCanOfferManus();
+  const b = project.brand;
+  if (!post) {
+    return (
+      <section aria-label="Next post" className={cn('flex min-w-0 flex-col items-center', className)}>
+        <PostFrame handle={handleFor(project)} avatar={<LogoMark colors={b.colors} logo={b.logo} name={b.name} size={24} />} meta="Your next post shows here" className="w-full max-w-[300px]">
+          <div className="relative aspect-square w-full" style={{ background: `linear-gradient(140deg, ${b.colors.paper} 0%, ${b.colors.primary} 100%)` }}>
+            <span className="absolute inset-0 flex items-center justify-center">
+              <LogoMark colors={b.colors} logo={b.logo} name={b.name} size={72} />
+            </span>
+            <span className="absolute right-3 top-3">
+              <Badge className="shadow-xs">Preview</Badge>
+            </span>
+          </div>
+        </PostFrame>
+        <button type="button" className="btn btn-secondary btn-sm mt-3" onClick={() => useUI.getState().openComposer()}>
+          <Plus /> Create a post
+        </button>
+      </section>
+    );
+  }
+  const held = manusHolds(post);
+  const due = isDue(post, now);
+  const openEditor = () => useUI.getState().openPostEditor(post.id);
+  return (
+    <section aria-label="Next post" className={cn('flex min-w-0 flex-col items-center', className)}>
+      <PostFrame
+        handle={handleFor(project, post)}
+        avatar={<LogoMark colors={b.colors} logo={b.logo} name={b.name} size={24} />}
+        meta={networkLabel(post.platform)}
+        corner={<PlatformMark platform={post.platform} size={20} />}
+        footer={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="inline-flex items-center gap-1.5">
+              <Clock size={14} aria-hidden="true" />
+              {due ? 'Was due' : 'Next post'} · <span className="num font-mono">{dayTime(goesOutAt(post))}</span>
+            </span>
+            <DueBadge post={post} now={now} />
+          </span>
+        }
+        className="w-full max-w-[300px]"
+      >
+        <PostVisual style={post.style} headline={post.headline} brand={b} watermark={post.watermark} media={post.media} storyboard={post.storyboard} aspect="1/1" className="!rounded-none" />
+        {post.caption && (
+          <div className="px-3 py-2.5">
+            <p className="clamp-2 text-small text-ink-2">
+              <span className="mr-1 font-semibold text-ink">{handleFor(project, post)}</span>
+              {post.caption}
+            </p>
+          </div>
+        )}
+      </PostFrame>
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+        {held ? (
+          <ExternalBadge post={post} compact />
+        ) : offer ? (
+          <ManusPostButton post={post} primary />
+        ) : (
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => useMarkPosted.getState().open(post.id)}>
+            <CheckCheck /> Mark as posted
+          </button>
+        )}
+        <button type="button" className="btn btn-ghost btn-sm" onClick={openEditor}>
+          <Pencil /> Edit
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// ───────────── the week's numbers ─────────────
+
+function Numbers({ project, posts, planned, now, k }: { project: Project; posts: Post[]; planned: Post[]; now: number; k: ReturnType<typeof useKpis> }) {
+  const sum = (key: 'posted' | 'made') => k.prev.reduce((t, d) => t + d[key], 0);
+  const prevPosted = sum('posted');
+  const prevMade = sum('made');
+  const networks = [...new Set(postedSince(posts, project.id, k.since).map((p) => networkLabel(p.platform)))];
+  const upcoming = planned.find((p) => new Date(goesOutAt(p)).getTime() > now);
+  // posts the owner still has to get out (not the ones Manus holds): today's, and the ones whose day has passed
+  const today = new Date(now).toDateString();
+  const open = planned.filter((p) => !manusHolds(p));
+  const dueToday = open.filter((p) => new Date(goesOutAt(p)).toDateString() === today).length;
+  const overdue = open.filter((p) => isDue(p, now) && new Date(goesOutAt(p)).toDateString() !== today).length;
+  return (
+    <StatStrip
+      className="mt-6"
+      items={[
+        { label: 'Posted · 7 days', value: k.posted, sub: networks.length ? networks.join(', ') : 'Nothing in the last 7 days', delta: prevPosted > 0 ? k.posted - prevPosted : null, onClick: () => navigate('analytics') },
+        { label: 'Planned', value: k.upcoming, sub: upcoming ? `Next: ${dayTime(goesOutAt(upcoming))}` : 'Nothing planned', onClick: () => navigate('calendar') },
+        { label: 'Due today', value: dueToday, sub: overdue ? `${overdue} overdue` : 'Nothing overdue', onClick: () => navigate('calendar') },
+        { label: 'Made with AI · 7 days', value: k.made, sub: 'Posts, emails, pages', delta: prevMade > 0 ? k.made - prevMade : null },
+      ]}
+    />
+  );
+}
+
+// ───────────── launch readiness ─────────────
+
+/** The steps from a brand to a first post, only while some are open. */
+function Readiness({ project, posts, listed }: { project: Project; posts: Post[]; listed: boolean }) {
+  const r = readiness(project, { scheduled: posts.filter((p) => p.status !== 'draft').length, posted: posts.filter((p) => p.status === 'published').length, listed });
+  const total = r.items.length;
+  if (r.done >= total) return null;
+  return (
+    <section aria-label="Launch readiness" className="card mt-6 p-4 sm:px-5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <h2 className="text-h4 text-ink">Launch readiness</h2>
+        <ProgressBar value={r.done} max={total} label={`${r.done} of ${total}`} className="min-w-[160px] flex-1" />
+      </div>
+      <ul className="mt-3 grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-4">
+        {r.items.map((it) => (
+          <li key={it.label} className={cn(it.done && 'max-sm:hidden')}>
+            {it.done ? (
+              <span className="flex min-h-8 items-center gap-2.5 text-small text-muted">
+                <CheckCircle done />
+                <span className="min-w-0 truncate" title={it.label}>
+                  {it.label}
+                </span>
+              </span>
+            ) : (
+              <button type="button" className="group flex min-h-8 w-full items-center gap-2.5 text-left text-small text-ink" onClick={() => navigate(it.route)}>
+                <CheckCircle done={false} />
+                <span className="min-w-0 flex-1 truncate group-hover:underline" title={it.label}>
+                  {it.label}
+                </span>
+                <ArrowRight size={14} className="shrink-0 text-muted" aria-hidden="true" />
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+// ───────────── up next ─────────────
+
+/** A planned post's state as a dot and a word (a due one shows its badge). */
+function RowState({ post, now }: { post: Post; now: number }) {
+  if (isDue(post, now) && (!post.external || post.external.state === 'failed' || post.external.state === 'scheduled')) return <DueBadge post={post} now={now} />;
+  return <StatusDot tone="primary">{manusHolds(post) ? 'With Manus' : 'Planned'}</StatusDot>;
+}
+
+function UpNext({ project, posts, now, className }: { project: Project; posts: Post[]; now: number; className?: string }) {
+  const openEditor = (id: string) => useUI.getState().openPostEditor(id);
+  return (
+    <Section
+      title="Up next"
+      className={cn('mt-0', className)}
+      actions={
+        <button type="button" className="link text-small" onClick={() => navigate('calendar')}>
+          Open calendar
+        </button>
+      }
+    >
+      {posts.length ? (
+        <ul className="card divide-y divide-line">
+          {posts.map((p) => (
+            <li key={p.id} className="relative flex min-w-0 items-center gap-3 px-4 py-3 transition-colors duration-120 hover:bg-surface-2">
+              <span className="w-10 shrink-0 overflow-hidden rounded-md" aria-hidden="true">
+                <PostVisual style={p.style} headline={p.headline} brand={project.brand} media={p.media} storyboard={p.storyboard} aspect="1/1" className="!rounded-none" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <button type="button" className="block w-full truncate text-left text-ui text-ink after:absolute after:inset-0" onClick={() => openEditor(p.id)} title={p.headline}>
+                  {p.headline}
+                </button>
+                <span className="mt-0.5 block truncate text-small text-muted">
+                  {networkLabel(p.platform)} · <span className="num">{dayDateTime(goesOutAt(p))}</span>
+                </span>
+              </span>
+              <span className="shrink-0 max-sm:hidden">
+                <RowState post={p} now={now} />
+              </span>
+              {/* above the row's stretched title button */}
+              <span className="relative z-[1] -mr-1 shrink-0">
+                <MoreMenu
+                  label={`More for ${p.headline}`}
+                  items={[
+                    { label: 'Edit', icon: <Pencil />, onSelect: () => openEditor(p.id) },
+                    { label: 'Open in calendar', icon: <CalendarDays />, onSelect: () => void openPage('calendar', 'scheduled') },
+                  ]}
+                />
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="card px-4 py-3">
+          <Empty
+            variant="inline"
+            title="Nothing planned yet."
+            action={
+              <button type="button" className="link" onClick={() => void navigate('marketing-social').then((ok) => ok && useUI.getState().setSocialTab('batch'))}>
+                Plan my week
+              </button>
+            }
+          />
+        </div>
+      )}
+    </Section>
+  );
+}
+
+// ───────────── the brand ─────────────
 
 /** Your website as you entered it. One that older versions made up from your name is asked about once. */
 function WebsiteLink({ project }: { project: Project }) {
@@ -30,22 +620,24 @@ function WebsiteLink({ project }: { project: Project }) {
     });
   if (b.websiteUrl) {
     return (
-      <a href={ensureUrl(b.websiteUrl)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-[13px] font-medium text-primary hover:underline">
-        <Globe size={13} /> {stripProtocol(b.websiteUrl)} <ExternalLink size={11} />
+      <a href={ensureUrl(b.websiteUrl)} target="_blank" rel="noopener noreferrer" className="link inline-flex max-w-full items-center gap-1.5 text-small">
+        <Globe size={14} className="shrink-0" aria-hidden="true" />
+        <span className="truncate">{stripProtocol(b.websiteUrl)}</span>
+        <ExternalLink size={12} className="shrink-0" aria-hidden="true" />
       </a>
     );
   }
   if (b.guessedWebsite) {
     return (
-      <div className="rounded-md border border-line bg-surface-2/60 p-2.5 text-[12.5px]">
+      <div className="well px-3 py-2.5 text-small text-ink-2">
         <p>
-          Is <b className="font-semibold">{stripProtocol(b.guessedWebsite)}</b> your website? It was filled in from your brand name, not by you, so it’s no longer shown on your posts, ads or listing.
+          Is <span className="font-medium text-ink">{stripProtocol(b.guessedWebsite)}</span> your website? It was filled in from your brand name, not by you, so it’s no longer shown on your posts, ads or listing.
         </p>
         <div className="mt-2 flex flex-wrap gap-2">
-          <button className="btn btn-secondary btn-sm" onClick={() => answer(true)}>
+          <button type="button" className="btn btn-secondary btn-xs" onClick={() => answer(true)}>
             Yes, it’s mine
           </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => answer(false)}>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={() => answer(false)}>
             No
           </button>
         </div>
@@ -53,325 +645,39 @@ function WebsiteLink({ project }: { project: Project }) {
     );
   }
   return (
-    <button className="link inline-flex items-center gap-1.5 text-[13px]" onClick={() => navigate('workspace-settings')}>
-      <Globe size={13} /> Add your website
+    <button type="button" className="link inline-flex items-center gap-1.5 text-small" onClick={() => void openPage('workspace-settings', 'brand')}>
+      <Globe size={14} aria-hidden="true" /> Add your website
     </button>
   );
 }
 
-/** Who made it: the AI that answered (its provider and model when known), or the built-in templates. */
-function madeBy(g: GenerationLog): string {
-  if (g.provider === 'local') return 'Built-in templates';
-  if (g.meta?.providerLabel) return g.meta.model ? `${g.meta.providerLabel} · ${g.meta.model}` : g.meta.providerLabel;
-  return g.provider === 'claude' ? 'Claude' : 'AI';
-}
-
-export function Dashboard() {
-  const project = useActiveProject()!;
-  const profile = useStore((s) => s.settings.profile);
-  const posts = useStore((s) => s.posts);
-  const listed = useStore((s) => s.myListings.some((l) => l.projectId === project.id));
-  const genLog = useStore((s) => s.genLog);
-  const notices = useStore((s) => s.notices);
-  const openComposer = useUI((s) => s.openComposer);
-  const k = useKpis(project, 7);
-  const projectPosts = posts.filter((p) => p.projectId === project.id);
-  const upcoming = projectPosts.filter((p) => p.status === 'scheduled').sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)).slice(0, 5);
-  const ready = readiness(project, { scheduled: projectPosts.filter((p) => p.status !== 'draft').length, posted: projectPosts.filter((p) => p.status === 'published').length, listed });
-  const nextStep = ready.items.find((i) => !i.done);
-  const activity = useMemo(
-    () =>
-      [
-        ...genLog.filter((g) => g.projectId === project.id).slice(0, 6).map((g) => ({ id: g.id, at: g.createdAt, text: `${g.label}`, sub: madeBy(g), icon: <Sparkles size={14} /> })),
-        ...notices.slice(0, 6).map((n) => ({ id: n.id, at: n.createdAt, text: n.title, sub: n.body ?? '', icon: n.kind === 'sale' ? <ShoppingBag size={14} /> : n.kind === 'post' ? <Megaphone size={14} /> : <Sparkles size={14} /> })),
-      ]
-        .sort((a, b) => b.at - a.at)
-        .slice(0, 7),
-    [genLog, notices, project.id],
-  );
-
-  const ads = useStore((s) => s.ads);
-  const myListings = useStore((s) => s.myListings);
-  const actx: ActionCtx = { posts, ads, myListings, now: Date.now() };
-  const shortcuts: { route: Route; title: string; desc: string; icon: React.ReactNode; status: string }[] = [
-    { route: 'strategy', title: 'Strategy', desc: 'Where to find clients, what to post, your plan', icon: <Compass size={18} />, status: strategyStatusLine(project, actx) },
-    { route: 'studio', title: project.track === 'business' ? 'Business Studio' : 'Product Studio', desc: 'Outline, code assets, publish', icon: <WandSparkles size={18} />, status: project.studio.outline.length || project.studio.packages.length ? 'In progress' : 'Start here' },
-    { route: 'marketing-seo', title: 'SEO sales page', desc: 'Meta, score, HTML export', icon: <Search size={18} />, status: project.marketing.salesPage ? 'Drafted' : 'Not started' },
-    { route: 'marketing-email', title: 'Email funnel', desc: 'Lead magnet + 5 emails', icon: <Mail size={18} />, status: project.marketing.emails.length ? 'Drafted' : 'Not started' },
-    { route: 'marketing-social', title: 'Social media engine', desc: '30-day plan, 7-day batch, individual posts', icon: <Megaphone size={18} />, status: project.marketing.plan ? `${project.marketing.plan.summary.total} posts planned` : 'Not started' },
-    { route: 'store', title: 'Marketplace', desc: 'List and browse', icon: <Store size={18} />, status: listed ? 'Listed' : 'Not listed' },
-    { route: 'brain', title: 'Brain', desc: 'Skills that shape the AI', icon: <Brain size={18} />, status: 'Train it' },
-  ];
-
+function BrandCard({ project, className }: { project: Project; className?: string }) {
+  const b = project.brand;
+  const markOnly = b.logo.layout === 'mark';
+  const palette = [b.colors.primary, b.colors.secondary, b.colors.accent, b.colors.ink, b.colors.paper];
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0">
-          <p className="eyebrow mb-1">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
-          <h1 className="page-title">
-            {greeting()}
-            {profile.name ? `, ${profile.name.split(' ')[0]}` : ''}.
-          </h1>
-          <p className="mt-1 text-[14px] text-muted">
-            {nextStep ? (
-              <>
-                Next up for <b className="text-ink">{project.brand.name}</b>: {nextStep.label.toLowerCase()}.{' '}
-                <button className="link" onClick={() => navigate(nextStep.route)}>
-                  {nextStep.cta} →
-                </button>
-              </>
-            ) : (
-              <>Everything is set up. Keep posting, and check how each post does on its network.</>
-            )}
-          </p>
+    <Section
+      title="Your brand"
+      className={cn('mt-0', className)}
+      actions={
+        <button type="button" className="btn btn-ghost btn-sm -mr-2" onClick={() => void openPage('workspace-settings', 'brand')}>
+          <Pencil /> Edit brand
+        </button>
+      }
+    >
+      <div className="card flex flex-col gap-4 p-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <BrandLogo brand={b} size={40} layout={markOnly ? 'mark' : 'horizontal'} className="min-w-0" />
+          {markOnly && <p className="min-w-0 truncate text-h3 text-ink">{b.name}</p>}
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button className="btn btn-secondary" onClick={() => navigate('analytics')}>
-            <TrendingUp size={16} /> Analytics
-          </button>
-          <button className="btn btn-primary" onClick={() => openComposer()}>
-            <Sparkles size={16} className="text-accent" /> Create post
-          </button>
-        </div>
-      </div>
-
-      <section aria-label="This week" className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatTile label="Posted, last 7 days" value={String(k.posted)} delta={k.delta.posted} deltaLabel="vs prior 7d" trend={k.series.map((d) => d.posted)} icon={<Send size={13} />} />
-        <StatTile label="Planned" value={String(k.upcoming)} hint="Coming up on your calendar" icon={<CalendarClock size={13} />} />
-        <StatTile label="Due" value={String(k.due)} hint={k.due ? 'Past their time, not posted' : 'Nothing overdue'} icon={<CircleAlert size={13} />} />
-        <StatTile label="Made with AI, last 7 days" value={String(k.made)} delta={k.delta.made} deltaLabel="vs prior 7d" trend={k.series.map((d) => d.made)} icon={<Sparkles size={13} />} />
-      </section>
-
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <CreatePostCard project={project} />
-
-        <div className="flex min-w-0 flex-col gap-5">
-          <section className="panel overflow-hidden" aria-label="Active project">
-            <div className="flex items-center gap-3 border-b border-line p-4" style={{ background: project.brand.colors.paper, color: project.brand.colors.ink }}>
-              <BrandLogo brand={project.brand} size={40} layout="horizontal" />
-            </div>
-            <div className="flex flex-col gap-3 p-4">
-              <div className="flex flex-wrap gap-1.5">
-                <span className="badge bg-primary-soft text-primary">{project.track === 'product' ? 'Digital product' : 'Business'}</span>
-                {project.format && <span className="badge bg-surface-2 text-ink-2">{FORMATS[project.format].short}</span>}
-                {project.location?.city && <span className="badge bg-surface-2 text-ink-2">{project.location.city}</span>}
-              </div>
-              {project.brand.tagline && <p className="text-[13.5px] italic text-ink-2">“{project.brand.tagline}”</p>}
-              <dl className="grid grid-cols-2 gap-2 text-[12.5px]">
-                <div>
-                  <dt className="text-muted">Niche</dt>
-                  <dd className="truncate font-semibold">{project.category || project.niche || project.businessType}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted">Price</dt>
-                  <dd className="font-semibold">{project.studio.price ? fmtMoney(project.studio.price) : '—'}</dd>
-                </div>
-              </dl>
-              <WebsiteLink project={project} />
-            </div>
-          </section>
-
-          <StrategyCard project={project} ctx={actx} />
-
-          <section className="panel p-4" aria-label="Launch readiness">
-            <div className="mb-3 flex items-center gap-3">
-              <ProgressRing value={ready.done / ready.items.length} size={46} />
-              <div>
-                <h2 className="section-title">Launch readiness</h2>
-                <p className="text-xs text-muted">
-                  {ready.done} of {ready.items.length} steps done
-                </p>
-              </div>
-            </div>
-            <ul className="flex flex-col gap-0.5">
-              {ready.items.map((it) => (
-                <li key={it.label}>
-                  <button onClick={() => navigate(it.route)} className="flex w-full items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left text-[13px] hover:bg-surface-2">
-                    <span className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded-full border', it.done ? 'border-good bg-good text-white' : 'border-line-2')}>{it.done && <Check size={12} />}</span>
-                    <span className={cn('flex-1', it.done ? 'text-muted line-through' : 'font-medium text-ink')}>{it.label}</span>
-                    {!it.done && <ArrowRight size={13} className="text-muted" />}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </div>
-      </div>
-
-      <section aria-label="Shortcuts">
-        <h2 className="section-title mb-3">Project shortcuts</h2>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {shortcuts.map((s) => (
-            <button key={s.route} onClick={() => navigate(s.route)} className="panel group flex items-center gap-3 p-4 text-left transition-colors hover:border-line-2 hover:bg-surface-2/50">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary">{s.icon}</span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[14px] font-semibold text-ink">{s.title}</span>
-                <span className="block truncate text-xs text-muted">{s.desc}</span>
-              </span>
-              <span className="shrink-0 text-right text-[11.5px] font-semibold text-muted group-hover:text-ink">{s.status}</span>
-            </button>
+        {b.tagline && <p className="text-small text-muted">{b.tagline}</p>}
+        <div className="flex items-center gap-2">
+          {palette.map((c, i) => (
+            <Swatch key={`${c}-${i}`} color={c} size={20} />
           ))}
         </div>
-      </section>
-
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <section className="panel p-4 sm:p-5" aria-label="Upcoming posts">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="section-title">Upcoming posts</h2>
-            <button className="link text-[13px]" onClick={() => navigate('calendar')}>
-              Open calendar
-            </button>
-          </div>
-          {upcoming.length === 0 ? (
-            <p className="rounded-md bg-surface-2 px-3 py-6 text-center text-[13px] text-muted">
-              Nothing planned.{' '}
-              <button className="link" onClick={() => navigate('marketing-social')}>
-                Generate a 7-day content batch
-              </button>
-            </p>
-          ) : (
-            <ul className="flex flex-col divide-y divide-line">
-              {upcoming.map((p) => (
-                <li key={p.id}>
-                  <button className="flex w-full items-center gap-3 py-2.5 text-left hover:opacity-80" onClick={() => useUI.getState().openPostEditor(p.id)}>
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white" style={{ background: PLATFORMS[p.platform].color }}>
-                      <PlatformGlyph platform={p.platform} size={15} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] font-semibold">{p.headline}</span>
-                      <span className="flex items-center gap-1.5 text-xs text-muted">
-                        <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: `rgb(var(--${POST_TYPE_MAP[p.postType].slot}))` }} />
-                        {POST_TYPE_MAP[p.postType].short} · {p.format}
-                      </span>
-                    </span>
-                    <span className="flex shrink-0 flex-col items-end gap-0.5">
-                      <span className="num flex items-center gap-1 text-xs text-muted">
-                        <CalendarClock size={12} /> {fmtDateTime(p.scheduledAt)}
-                      </span>
-                      <DueBadge post={p} />
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-        <section className="panel p-4 sm:p-5" aria-label="Recent activity">
-          <h2 className="section-title mb-3">Recent activity</h2>
-          {activity.length === 0 ? (
-            <p className="rounded-md bg-surface-2 px-3 py-6 text-center text-[13px] text-muted">What you make with AI, and posts going out, appear here.</p>
-          ) : (
-            <ul className="flex flex-col gap-1">
-              {activity.map((a) => (
-                <li key={a.id} className="flex items-start gap-3 rounded-md px-1.5 py-2">
-                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-surface-2 text-ink-2">{a.icon}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium text-ink">{a.text}</span>
-                    {a.sub && <span className="block truncate text-xs text-muted">{a.sub}</span>}
-                  </span>
-                  <span className="shrink-0 text-[11px] text-muted">{fmtRelative(a.at)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <WebsiteLink project={project} />
       </div>
-    </div>
-  );
-}
-
-/** This week in the plan from Strategy: the next open steps, each with the button that does it. */
-function StrategyCard({ project, ctx }: { project: Project; ctx: ActionCtx }) {
-  const job = useStrategyJob(project.id);
-  const s = useMemo(() => readStrategy(project), [project]);
-  const biz = project.track === 'business';
-  if (job) {
-    return (
-      <section className="panel flex items-center gap-3 p-4" aria-label="Your plan this week">
-        <Spinner size={18} className="text-primary" />
-        <p className="text-[13px] font-medium text-ink">
-          Writing your strategy… step {job.index + 1} of {job.steps.length}
-        </p>
-      </section>
-    );
-  }
-  if (!s.plan) {
-    return (
-      <section className="panel p-4" aria-label="Your plan this week">
-        <h2 className="section-title">{biz ? 'Your plan to win clients' : 'Your plan to make sales'}</h2>
-        <p className="mt-1 text-[13px] text-muted">Strategy researches where your buyers are and plans what to do each week.</p>
-        <button className="btn btn-secondary btn-sm mt-3" onClick={() => void openPage('strategy', 'plan')}>
-          <Compass size={14} /> Open Strategy
-        </button>
-      </section>
-    );
-  }
-  const pr = strategyProgress(project, s, ctx);
-  const w = currentWeek(s.plan, ctx.now);
-  const week = s.plan.weeks.find((x) => x.week === w);
-  const next = strategyNextSteps(project, s, ctx, 3);
-  return (
-    <section className="panel p-4" aria-label="Your plan this week">
-      <div className="mb-3 flex items-center gap-3">
-        <ProgressRing value={pr.total ? pr.done / pr.total : 0} size={46} label={`${pr.done}/${pr.total}`} />
-        <div className="min-w-0">
-          <h2 className="section-title">Your plan this week</h2>
-          <p className="truncate text-xs text-muted">{w <= 4 && week ? `Week ${w}: ${week.focus}` : 'Your 4 weeks are up: keep going with the steps still open.'}</p>
-        </div>
-      </div>
-      {next.length > 0 ? (
-        <ul className="flex flex-col gap-2">
-          {next.map((a) => {
-            const t = actionTarget(a, project, s);
-            return (
-              <li key={a.id} className="flex flex-wrap items-center gap-2 text-[13px]">
-                <span className="min-w-0 flex-1 font-medium text-ink">{a.title}</span>
-                {t && (
-                  <button className="btn btn-ghost btn-xs" onClick={() => void runTarget(t.target)}>
-                    {t.label}
-                  </button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <p className="text-[13px] text-muted">Every step is done. Keep the habits going.</p>
-      )}
-      <button className="link mt-3 text-[13px]" onClick={() => void openPage('strategy', 'plan')}>
-        Open plan →
-      </button>
-    </section>
-  );
-}
-
-/** "Create individual post" lives in the Social media engine: start one there, from an idea or blank. */
-function CreatePostCard({ project }: { project: Project }) {
-  const openComposer = useUI((s) => s.openComposer);
-  const ideas = useMemo(() => suggestTopics(project).slice(0, 4), [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
-  return (
-    <section className="panel flex flex-col gap-3 p-4 sm:p-5" aria-label="Create individual post">
-      <div>
-        <h2 className="section-title">Create individual post</h2>
-        <p className="text-[13px] text-muted">One post at a time, in the Social media engine: an AI caption and visual, or your own photo or video with an AI caption.</p>
-      </div>
-      {ideas.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <p className="text-xs font-semibold text-muted">Start from an idea</p>
-          {ideas.map((t) => (
-            <button key={t} type="button" className="flex items-center gap-2 rounded-md border border-line px-3 py-2 text-left text-[13px] text-ink-2 hover:border-primary/40 hover:bg-surface-2" onClick={() => openComposer({ topic: t })}>
-              <Sparkles size={13} className="shrink-0 text-accent" />
-              <span className="min-w-0 flex-1">{t}</span>
-              <ArrowRight size={13} className="shrink-0 text-muted" />
-            </button>
-          ))}
-        </div>
-      )}
-      <div>
-        <button className="btn btn-primary" onClick={() => openComposer()}>
-          <PenSquare size={15} /> Create individual post
-        </button>
-      </div>
-    </section>
+    </Section>
   );
 }
