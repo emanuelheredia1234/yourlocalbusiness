@@ -1,27 +1,33 @@
-// Pieces the Strategy tabs share: how a statement is backed (from the web, the AI's general knowledge,
-// built-in guidance) with its sources, who wrote a section and its Refresh button, the staleness banners,
-// a plan action with its "Do it" button, the page to build first and where its link goes.
-// Everything an AI or a web page wrote is rendered as plain text; links only after isHttpUrl.
-import { useMemo, useState, type ReactNode } from 'react';
-import { Check, ChevronDown, ExternalLink, Globe, RefreshCw, Undo2 } from 'lucide-react';
-import type { PostPlatform, Project } from '@/lib/types';
-import type { Backed, ResearchReason, StepInfo, StrategyAction, StrategySource, StrategyState, StrategyStep } from '@/lib/strategyTypes';
+// Pieces the Strategy tabs share: how a statement is backed (superscript source numbers, or an ⓘ when it's
+// the AI's general knowledge or the app's built-in guidance), the sources list at a tab's end, who wrote a
+// section and its Refresh button, the note when a section is out of date, a plan step with its check circle
+// and its button, the page to build first and where its link goes, and the run buttons (each says when its
+// run is checking your AI server first). Everything an AI or a web page wrote is rendered as plain text;
+// links only after isHttpUrl.
+import { useMemo, type ReactNode } from 'react';
+import { ArrowRight, Check, Undo2 } from 'lucide-react';
+import type { Brand, PostPlatform, Project } from '@/lib/types';
+import type { ActionKind, Backed, ResearchReason, StepInfo, StrategyAction, StrategySource, StrategyState, StrategyStep } from '@/lib/strategyTypes';
 import { actionDone, isHttpUrl, strategyFactsHash, type ActionCtx } from '@/lib/strategy';
 import { actionTarget, runTarget } from '@/lib/strategyActions';
 import { tickAction } from '@/lib/strategyWrite';
 import { recommendPageType, defaultLinkPlacement } from '@/ai/local/strategy';
-import { PAGE_TYPE_DESC, PAGE_TYPE_LABEL, missingLink } from '@/lib/pageTypes';
+import { PAGE_TYPE_LABEL, missingLink } from '@/lib/pageTypes';
 import { LINK_PLACEMENT_LABEL, pageLink, placementFor } from '@/lib/pageLink';
-import { cn, fmtDate, fmtRelative } from '@/lib/utils';
+import { useMediaUrl } from '@/lib/media';
+import { navigate } from '@/lib/router';
+import { cn, fmtDate, fmtRelative, stripProtocol } from '@/lib/utils';
 import { PLATFORMS } from '@/ai/knowledge';
 import { openPage } from '@/ai/assistant/nav';
 import { useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
 import { useStrategyJob } from '@/ai/strategyJob';
-import { CopyButton } from '@/components/ui/primitives';
-import { PlatformGlyph } from '@/components/posts/PlatformIcon';
+import { GenerateButton } from '@/components/ai/AI';
+import { BrowserFrame } from '@/components/frames/Frames';
+import { Badge, Callout, CopyButton, InfoTip, Section } from '@/components/ui/primitives';
+import { PlatformMark } from '@/components/posts/PlatformIcon';
 import { linksFlow, undoLinksFlow } from './apply';
-import { startRun } from './runs';
+import { CHECKING_LABEL, runKey, startRun, useCheckingServer, type RunKind } from './runs';
 
 /** The workspace things the "done in the app" checks read. */
 export function useActionCtx(): ActionCtx {
@@ -33,8 +39,15 @@ export function useActionCtx(): ActionCtx {
 
 export const netLabel = (n: string) => (n === 'x' ? 'X' : PLATFORMS[n as PostPlatform]?.label ?? n);
 
-/** A link to Settings → AI (where keys and what they power are set). */
-export function SettingsAILink({ children = 'Settings → AI' }: { children?: ReactNode }) {
+// ───────────── Settings › AI keys ─────────────
+
+/** Where keys and what they power are set, as the app names it. */
+export const SETTINGS_AI = 'Settings › AI keys';
+/** The AI layer's sentences still say "Settings → AI": they're shown (and linked) with the page's name. */
+const SETTINGS_RX = /Settings (?:→|›) AI(?: keys)?/;
+
+/** A link to Settings › AI keys. */
+export function SettingsAILink({ children = SETTINGS_AI }: { children?: ReactNode }) {
   return (
     <button type="button" className="link" onClick={() => void openPage('workspace-settings', 'ai')}>
       {children}
@@ -42,65 +55,67 @@ export function SettingsAILink({ children = 'Settings → AI' }: { children?: Re
   );
 }
 
-/** Text with "Settings → AI" turned into a link (not in the claude.ai build, which has no keys to set). */
+/** Text with "Settings › AI keys" as a link (in the claude.ai build, which has no keys to set, as plain words). */
 export function WithSettingsLink({ text }: { text: string }) {
-  const at = text.indexOf('Settings → AI');
-  if (at < 0 || __ARTIFACT_BUILD__) return <>{text}</>;
+  const m = SETTINGS_RX.exec(text);
+  if (!m) return <>{text}</>;
+  if (__ARTIFACT_BUILD__) return <>{text.replace(SETTINGS_RX, SETTINGS_AI)}</>;
   return (
     <>
-      {text.slice(0, at)}
+      {text.slice(0, m.index)}
       <SettingsAILink />
-      {text.slice(at + 'Settings → AI'.length)}
+      {text.slice(m.index + m[0].length)}
     </>
   );
 }
 
 // ───────────── how a statement is backed ─────────────
 
-const BASIS_CHIP = { web: 'From the web', ai: 'AI’s general knowledge', builtin: 'Built-in guidance' } as const;
-const BASIS_CLASS = { web: 'bg-good-soft text-good', ai: 'bg-warn-soft text-warn', builtin: 'bg-surface-2 text-ink-2' } as const;
-
-/** "From the web" (with when it was found), "AI's general knowledge" or "Built-in guidance". */
-export function BasisBadge({ basis, sources, all, manus }: { basis: Backed['basis']; sources?: number[]; all: StrategySource[]; manus?: boolean }) {
-  const cited = all.filter((x) => sources?.includes(x.n));
-  const found = cited.length ? Math.min(...cited.map((x) => x.at || Date.now())) : 0;
-  const tip =
-    basis === 'web'
-      ? `Found by a web search on ${found ? fmtDate(found, { month: 'short', day: 'numeric', year: 'numeric' }) : 'the date shown'}. Pages change: check them before you rely on them.${manus || cited.some((x) => x.via === 'manus') ? ' Manus read this page.' : ''}`
-      : basis === 'ai'
-        ? 'Not from a search. It may be out of date or wrong for your area.'
-        : 'The app’s general starter notes, not research.';
-  return (
-    <span className={cn('badge w-fit', BASIS_CLASS[basis])} title={tip}>
-      {BASIS_CHIP[basis]}
-      <span className="sr-only">. {tip}</span>
-    </span>
-  );
-}
-
-/** "[1] example.com" chips, each opening its page in a new tab. */
-export function SourceChips({ ns, all }: { ns?: number[]; all: StrategySource[] }) {
-  const list = (ns ?? []).map((n) => all.find((x) => x.n === n)).filter((x): x is StrategySource => !!x && isHttpUrl(x.url));
+/** Superscript source numbers after a statement found on the web, each opening its page in a new tab. */
+export function Cite({ item, all }: { item?: Pick<Backed, 'basis' | 'sources'>; all: StrategySource[] }) {
+  if (!item || item.basis !== 'web') return null;
+  const list = (item.sources ?? []).map((n) => all.find((x) => x.n === n)).filter((x): x is StrategySource => !!x && isHttpUrl(x.url));
   if (!list.length) return null;
   return (
-    <span className="inline-flex flex-wrap items-center gap-1">
-      {list.map((x) => (
-        <a key={x.n} href={x.url} target="_blank" rel="noopener noreferrer nofollow" className="badge bg-surface-2 text-ink-2 hover:text-primary" title={x.title}>
-          [{x.n}] {x.domain}
-          <span className="sr-only"> (opens in a new tab)</span>
-        </a>
+    <sup className="ml-0.5 whitespace-nowrap text-micro">
+      {list.map((x, i) => (
+        <span key={x.n}>
+          {i > 0 && (
+            <span aria-hidden="true" className="text-muted">
+              ,
+            </span>
+          )}
+          <a href={x.url} target="_blank" rel="noopener noreferrer nofollow" className="num px-px font-medium text-primary hover:underline" title={`${x.title} · ${x.domain}`} aria-label={`Source ${x.n}: ${x.title}, ${x.domain} (opens in a new tab)`}>
+            {x.n}
+          </a>
+        </span>
       ))}
-    </span>
+    </sup>
   );
 }
 
-/** The basis badge and the sources of one point. */
-export function Backing({ item, all, className, manus }: { item: Backed; all: StrategySource[]; className?: string; manus?: boolean }) {
+/**
+ * An ⓘ for points that aren't from the web (spec: the "AI's general knowledge" and "Built-in guidance" chips
+ * become this): all of them, or the ones without a source number when the list is mixed.
+ */
+export function BasisTip({ items }: { items: (Pick<Backed, 'basis' | 'sources'> | undefined)[] }) {
+  const bases = new Set(items.filter((x): x is Pick<Backed, 'basis' | 'sources'> => !!x).map((x) => (x.basis === 'web' && !x.sources?.length ? 'ai' : x.basis)));
+  const ai = bases.has('ai');
+  const builtin = bases.has('builtin');
+  if (!ai && !builtin) return null;
+  const mixed = bases.has('web');
+  const label = mixed ? 'About these sources' : ai ? 'Based on general knowledge' : 'Built-in guidance';
+  const text = mixed
+    ? 'Points without a source number are based on general knowledge, not a web source. They may be out of date or wrong for your area.'
+    : ai && builtin
+      ? 'Based on general knowledge and the app’s starter notes, not on a web source.'
+      : ai
+        ? 'Based on general knowledge, not a web source. It may be out of date or wrong for your area.'
+        : 'Built-in guidance: the app’s general starter notes, not research.';
   return (
-    <span className={cn('inline-flex flex-wrap items-center gap-1.5', className)}>
-      <BasisBadge basis={item.basis} sources={item.sources} all={all} manus={manus} />
-      {item.basis === 'web' && <SourceChips ns={item.sources} all={all} />}
-    </span>
+    <InfoTip label={label} title={mixed ? 'Sources' : label}>
+      {text}
+    </InfoTip>
   );
 }
 
@@ -109,35 +124,42 @@ export function citedBy(items: (Backed | undefined)[]): number[] {
   return [...new Set(items.flatMap((x) => x?.sources ?? []))].sort((a, b) => a - b);
 }
 
-/** The sources, as found: title, site, when, the page's own date, and whether Manus read it. */
-export function SourcesList({ ns, all, title = 'Sources', manusRead }: { ns?: number[]; all: StrategySource[]; title?: string; manusRead?: Set<number> }) {
+/** The sources a tab cites, at its end: number, title (opening the page), site, when it was found, the page's own date, and whether Manus read it. */
+export function SourcesList({ ns, all, manusRead }: { ns?: number[]; all: StrategySource[]; manusRead?: Set<number> }) {
   const list = (ns ? all.filter((x) => ns.includes(x.n)) : all).filter((x) => isHttpUrl(x.url)).sort((a, b) => a.n - b.n);
   if (!list.length) return null;
   return (
-    <section className="flex flex-col gap-2" aria-label={title}>
-      <h3 className="text-[13px] font-semibold text-ink">
-        {title} ({list.length})
-      </h3>
-      <ol className="flex flex-col gap-1.5">
-        {list.map((x) => (
-          <li key={x.n} className="text-[12.5px] leading-snug text-ink-2">
-            <a href={x.url} target="_blank" rel="noopener noreferrer nofollow" className="font-medium text-ink hover:text-primary hover:underline">
-              [{x.n}] {x.title}
-              <ExternalLink size={11} className="ml-1 inline-block align-[-1px] text-muted" aria-hidden="true" />
+    <section aria-label="Sources" className="mt-10 border-t border-line pt-4">
+      <h2 className="flex items-center gap-1 text-caption font-medium text-muted">
+        Sources
+        <InfoTip label="About the sources">Links open the original pages. The app shows them as found and doesn’t vouch for them: pages change, so check them before you rely on them.</InfoTip>
+      </h2>
+      <SourceItems list={list} manusRead={manusRead} />
+    </section>
+  );
+}
+
+/** The list itself (also in the page's Sources window). */
+export function SourceItems({ list, manusRead }: { list: StrategySource[]; manusRead?: Set<number> }) {
+  return (
+    <ol className="mt-1 flex flex-col gap-1">
+      {list.map((x) => (
+        <li key={x.n} className="flex gap-2 text-caption text-muted">
+          <span className="num w-4 shrink-0 text-right font-mono text-ink-2">{x.n}</span>
+          <span className="min-w-0 break-words">
+            <a href={x.url} target="_blank" rel="noopener noreferrer nofollow" className="font-medium text-ink-2 hover:text-primary hover:underline">
+              {x.title}
               <span className="sr-only"> (opens in a new tab)</span>
             </a>
-            <span className="text-muted">
-              {' '}
-              — {x.domain}
-              {x.at ? ` · found ${fmtDate(x.at, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
-              {x.pageAge ? ` · page date ${x.pageAge}` : ''}
-              {x.via === 'manus' || manusRead?.has(x.n) ? ' · Manus read this page' : ''}
-            </span>
-          </li>
-        ))}
-      </ol>
-      <p className="text-xs text-muted">Links open the original pages. The app shows them as found and doesn’t vouch for them.</p>
-    </section>
+            {' · '}
+            {x.domain}
+            {x.at ? ` · found ${fmtDate(x.at, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+            {x.pageAge ? ` · page date ${x.pageAge}` : ''}
+            {x.via === 'manus' || manusRead?.has(x.n) ? ' · Manus read this page' : ''}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -147,7 +169,7 @@ export function SourcesList({ ns, all, title = 'Sources', manusRead }: { ns?: nu
 export function reasonCopy(reason: ResearchReason, p = 'Your AI'): string {
   switch (reason) {
     case 'unsupported':
-      return `${p} can’t search the web for Strategy, so these notes come from its general knowledge. For sources, tick Strategy for a key that can search (Anthropic, OpenAI, xAI, Meta or OpenRouter) in Settings → AI.`;
+      return `${p} can’t search the web for Strategy, so these notes come from its general knowledge. For sources, tick Strategy for a key that can search (Anthropic, OpenAI, xAI, Meta or OpenRouter) in ${SETTINGS_AI}.`;
     case 'provider_refused':
       return `${p} turned the web search down (it may be off for your account), so these notes come from the AI’s general knowledge.`;
     case 'not_used':
@@ -163,10 +185,6 @@ export function reasonCopy(reason: ResearchReason, p = 'Your AI'): string {
     default:
       return '';
   }
-}
-
-export function Banner({ children, tone = 'warn', className }: { children: ReactNode; tone?: 'warn' | 'info'; className?: string }) {
-  return <div className={cn('rounded-md px-3 py-2.5 text-[13px] text-ink', tone === 'warn' ? 'bg-warn-soft' : 'bg-info-soft', className)}>{children}</div>;
 }
 
 // ───────────── who wrote a section ─────────────
@@ -188,125 +206,209 @@ export function beforeResearch(s: StrategyState, step: StrategyStep): boolean {
   return !!at && (info.researchAt ?? 0) < at;
 }
 
-/** The banners above a section: the owner's details changed, or newer research came in. */
-export function StaleBanners({ project, s, step }: { project: Project; s: StrategyState; step: StrategyStep }) {
+/** The note above a section that's out of date: your details changed since it was written, or newer research came in. */
+export function StaleNote({ project, s, step, action, className }: { project: Project; s: StrategyState; step: StrategyStep; action?: ReactNode; className?: string }) {
   const info = s[step];
   const details = detailsChanged(project, s, info);
   const older = beforeResearch(s, step);
   if (!details && !older) return null;
+  const what = step === 'plan' ? 'this plan was' : 'this was';
+  const text = details && older ? `Your details changed and newer research came in since ${what} written.` : details ? `Your details changed since ${what} written.` : `${step === 'plan' ? 'This plan was' : 'This was'} written before your latest research.`;
   return (
-    <div className="flex flex-col gap-1.5">
-      {details && <Banner>Your details changed since this was written.</Banner>}
-      {older && <Banner>Written before your latest research.</Banner>}
-    </div>
+    <Callout tone="warn" action={action} className={cn('mb-6', className)}>
+      {text}
+    </Callout>
   );
 }
 
-/** "Written 2h ago by … · Brain: …" and the paid Refresh button (after its confirm). */
+/**
+ * A button that starts a paid run (after its confirm): disabled while a run goes, and saying "Checking your AI
+ * server…" while the run it started waits on that check.
+ */
+export function RunButton({
+  projectId,
+  kind,
+  children,
+  variant = 'ai-outline',
+  size = 'sm',
+  className,
+  runningLabel = 'Researching…',
+}: {
+  projectId: string;
+  kind: RunKind;
+  children: ReactNode;
+  variant?: 'ai' | 'ai-outline' | 'ai-ghost' | 'secondary';
+  size?: 'sm' | 'md' | 'lg';
+  className?: string;
+  runningLabel?: string;
+}) {
+  const job = useStrategyJob(projectId);
+  const checking = useCheckingServer(projectId);
+  const mine = checking === runKey(kind);
+  return (
+    <GenerateButton variant={variant} size={size} className={className} running={mine} runningLabel={mine ? CHECKING_LABEL : runningLabel} disabled={!!job || !!checking} onClick={() => void startRun(projectId, kind)}>
+      {children}
+    </GenerateButton>
+  );
+}
+
+/** "Written 2h ago" (who wrote it, and the Brain skills, in its ⓘ) and the paid Refresh button (after its confirm). */
 export function SectionFooter({ project, s, step }: { project: Project; s: StrategyState; step: StrategyStep }) {
   const info = s[step];
-  const job = useStrategyJob(project.id);
   if (!info) return null;
   return (
-    <footer className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-xs text-muted">
-      <p className="min-w-0">
-        Written {fmtRelative(info.at)} by {writtenBy(info)}
-        {info.skills?.length ? ` · Brain applied: ${info.skills.join(', ')}` : ''}
-        {info.note && info.provider !== 'local' ? <span className="block">{info.note}</span> : null}
-      </p>
-      <button type="button" className="btn btn-ghost btn-sm" disabled={!!job} onClick={() => void startRun(project.id, step === 'research' ? { kind: 'research' } : { kind: 'refresh', step })}>
-        <RefreshCw size={14} /> {step === 'research' ? 'Search again' : 'Refresh this section'}
-      </button>
+    <footer className="mt-10 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-line pt-3">
+      <div className="flex items-center gap-1 text-small text-muted">
+        <span>Written {fmtRelative(info.at)}</span>
+        <InfoTip label="Who wrote this" title="Who wrote this">
+          <p>By {writtenBy(info)}.</p>
+          {info.skills?.length ? <p className="mt-1">Brain skills applied: {info.skills.join(', ')}.</p> : null}
+          {info.note && info.provider !== 'local' ? <p className="mt-1">{info.note}</p> : null}
+        </InfoTip>
+      </div>
+      <RunButton projectId={project.id} kind={step === 'research' ? { kind: 'research' } : { kind: 'refresh', step }} variant="ai-ghost" className="-mr-3" runningLabel={step === 'research' ? 'Researching…' : 'Writing…'}>
+        {step === 'research' ? 'Search again' : 'Refresh this section'}
+      </RunButton>
     </footer>
   );
 }
 
-// ───────────── a plan action ─────────────
+// ───────────── a plan step ─────────────
 
-/** One step of the plan: done in the app (the app can see it), or "I did this"; and its "Do it" button. */
-export function ActionRow({ project, s, action, ctx, tickable = true }: { project: Project; s: StrategyState; action: StrategyAction; ctx: ActionCtx; tickable?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const done = actionDone(action, project, s, ctx);
+/** A 20px check circle: done is filled with a check, open is an empty ring. */
+export function CheckCircle({ done, className }: { done: boolean; className?: string }) {
+  return done ? (
+    <span className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-on-primary', className)} aria-hidden="true">
+      <Check size={14} strokeWidth={3} />
+    </span>
+  ) : (
+    <span className={cn('h-5 w-5 shrink-0 rounded-full border-[1.5px] border-line-3', className)} aria-hidden="true" />
+  );
+}
+
+/** The kinds whose button leads to the AI writing something (the rest open a page). */
+export const WRITES = new Set<ActionKind>(['write_post', 'build_page', 'plan_30', 'batch_7', 'lead_magnet', 'welcome_emails', 'ads']);
+
+/** A step's "Do it": an AI-writing button for the steps that write, else a link to where it's done. */
+function DoIt({ project, s, action }: { project: Project; s: StrategyState; action: StrategyAction }) {
   const t = actionTarget(action, project, s);
-  const checkId = `tick-${action.id}`;
+  if (!t) return null;
+  return WRITES.has(action.kind) ? (
+    <GenerateButton variant="ai-ghost" size="sm" onClick={() => void runTarget(t.target)}>
+      {t.label}
+    </GenerateButton>
+  ) : (
+    <button type="button" className="link inline-flex items-center gap-1 text-small" onClick={() => void runTarget(t.target)}>
+      {t.label} <ArrowRight size={14} aria-hidden="true" />
+    </button>
+  );
+}
+
+/**
+ * One step of the plan: its check circle (you tick it, unless the app can see it's done), the title and detail
+ * with their sources, and its button. Done reads muted with "Done", never struck out.
+ */
+export function ActionRow({ project, s, action, ctx, tickable = true }: { project: Project; s: StrategyState; action: StrategyAction; ctx: ActionCtx; tickable?: boolean }) {
+  const done = actionDone(action, project, s, ctx);
+  const right = done.done ? <span className="text-small text-muted">{done.by === 'app' ? 'Done in the app' : 'Done'}</span> : <DoIt project={project} s={s} action={action} />;
   return (
-    <li className="rounded-md border border-line bg-surface px-3 py-2.5">
-      <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
-        <div className="min-w-0 flex-1">
-          <p className={cn('text-[13.5px] font-semibold', done.done ? 'text-muted line-through decoration-line-2' : 'text-ink')}>{action.title}</p>
-          {action.detail && (
-            <>
-              <button type="button" className="mt-0.5 inline-flex items-center gap-1 text-xs text-muted hover:text-ink" aria-expanded={open} onClick={() => setOpen(!open)}>
-                <ChevronDown size={12} className={cn('transition-transform', open && 'rotate-180')} /> {open ? 'Less' : 'More'}
-              </button>
-              {open && <p className="mt-1 text-[13px] text-ink-2">{action.detail}</p>}
-            </>
-          )}
-          <div className="mt-1.5">
-            <Backing item={action} all={s.sources} />
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {t && !done.done && (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => void runTarget(t.target)}>
-              {t.label}
-            </button>
-          )}
-          {done.by === 'app' ? (
-            <span className="inline-flex items-center gap-1 text-xs font-semibold text-good">
-              <Check size={14} /> Done in the app
-            </span>
-          ) : tickable ? (
-            <label htmlFor={checkId} className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-ink-2">
-              <input id={checkId} type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={done.done} onChange={(e) => tickAction(project.id, action.id, e.target.checked)} />
-              I did this
-            </label>
-          ) : null}
-        </div>
+    <li className="flex items-start gap-3 py-3">
+      {done.by === 'app' || !tickable ? (
+        <span className="mt-0.5 flex shrink-0">
+          <CheckCircle done={done.done} />
+          {done.done && <span className="sr-only">Done in the app: </span>}
+        </span>
+      ) : (
+        <label className="relative mt-0.5 flex h-5 w-5 shrink-0 cursor-pointer">
+          <input type="checkbox" className="absolute inset-0 m-0 h-5 w-5 cursor-pointer appearance-none rounded-full" checked={done.done} onChange={(e) => tickAction(project.id, action.id, e.target.checked)} aria-label={`I did this: ${action.title}`} />
+          <CheckCircle done={done.done} className="pointer-events-none" />
+        </label>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className={cn('text-ui', done.done ? 'text-muted' : 'text-ink')}>
+          {action.title}
+          <Cite item={action} all={s.sources} />
+        </p>
+        {action.detail && <p className="mt-0.5 text-small text-muted">{action.detail}</p>}
+        <div className="mt-1.5 sm:hidden [&>.btn]:-ml-3">{right}</div>
       </div>
+      <div className="shrink-0 max-sm:hidden [&>.btn]:-mr-3">{right}</div>
     </li>
   );
 }
 
 // ───────────── the page to build first ─────────────
 
-/** Which page to build first, why, what it needs, whether it's built, and Build this page. */
-export function PageCard({ project, s }: { project: Project; s: StrategyState }) {
+/** A small browser window with the business's photo (or colours): what a page of theirs looks like. */
+function PageThumb({ brand }: { brand: Brand }) {
+  const photo = (brand.images ?? []).find((m) => m.kind === 'image') ?? null;
+  const src = useMediaUrl(photo);
+  const c = brand.colors;
+  return (
+    <div className="relative h-[90px] w-[120px] shrink-0" aria-hidden="true">
+      <div className="absolute left-0 top-0 w-[240px] origin-top-left scale-50">
+        <BrowserFrame>
+          <div className="h-20 w-full bg-cover bg-center" style={{ backgroundImage: src ? `url("${src}")` : `linear-gradient(135deg, ${c.primary}, ${c.secondary})` }} />
+          <div className="flex flex-col gap-2 p-3">
+            <span className="h-2.5 w-3/4 rounded-full bg-surface-3" />
+            <span className="h-2 w-1/2 rounded-full bg-surface-3" />
+            <span className="mt-1 h-5 w-20 rounded" style={{ background: c.primary }} />
+          </div>
+        </BrowserFrame>
+      </div>
+    </div>
+  );
+}
+
+/** Which page to build first, why, what it needs, whether it's built and published, and the button to it. */
+export function PageCard({ project, s, className }: { project: Project; s: StrategyState; className?: string }) {
   const rec = s.promote?.page ?? recommendPageType(project);
   const m = project.marketing;
   const need = missingLink(project, rec.pageType);
   const built = !!m.salesPage && (m.pageType ?? 'landing') === rec.pageType;
+  const published = built && !!m.seoPublished;
+  const link = published ? pageLink(project) : null;
   return (
-    <section className="panel flex flex-col gap-2.5 p-4" aria-label="The page to build first">
-      <div className="flex items-start gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-soft text-primary">
-          <Globe size={17} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <h3 className="section-title">Build this page first: {PAGE_TYPE_LABEL[rec.pageType]}</h3>
-          <p className="text-[12.5px] text-muted">{PAGE_TYPE_DESC[rec.pageType]}</p>
+    <section aria-label="The page to build first" className={cn('card flex flex-col gap-4 p-5 sm:flex-row sm:gap-5', className)}>
+      <PageThumb brand={project.brand} />
+      <div className="min-w-0 flex-1">
+        <p className="text-caption text-muted">Build this page first</p>
+        <h2 className="mt-0.5 flex items-center gap-1 text-h2 text-ink">
+          {PAGE_TYPE_LABEL[rec.pageType]}
+          <BasisTip items={[rec]} />
+        </h2>
+        <p className="mt-1 text-body text-ink-2">
+          {rec.why}
+          <Cite item={rec} all={s.sources} />
+        </p>
+        {rec.secondType && (
+          <p className="mt-1.5 text-small text-muted">
+            Second choice: {PAGE_TYPE_LABEL[rec.secondType]}. {rec.secondWhy}
+          </p>
+        )}
+        {need === 'booking' && <p className="mt-1.5 text-small text-muted">You’ll need your booking link (Calendly, Square, Acuity…). Without it, the page offers a “Request a time” form.</p>}
+        {need === 'payment' && <p className="mt-1.5 text-small text-muted">You’ll need your own payment link (Stripe, Square, PayPal, Gumroad, Shopify…). The app never takes payments.</p>}
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+          {built && (
+            <Badge tone={published ? 'good' : 'neutral'} dot>
+              {published ? 'Published' : 'Written, not published'}
+            </Badge>
+          )}
+          {link && (
+            <a href={link.url} target="_blank" rel="noopener noreferrer nofollow" className="link min-w-0 truncate text-small">
+              {stripProtocol(link.url)}
+            </a>
+          )}
+          {built ? (
+            <button type="button" className="btn btn-secondary btn-sm sm:ml-auto" onClick={() => void navigate('marketing-seo')}>
+              Open in SEO page
+            </button>
+          ) : (
+            <button type="button" className="btn btn-secondary btn-sm sm:ml-auto" onClick={() => void useUI.getState().openSeoBuilder({ pageType: rec.pageType })}>
+              Build this page
+            </button>
+          )}
         </div>
-      </div>
-      <p className="text-[13px] text-ink-2">{rec.why}</p>
-      <Backing item={rec} all={s.sources} />
-      {rec.secondType && (
-        <p className="text-[13px] text-ink-2">
-          Second choice: {PAGE_TYPE_LABEL[rec.secondType]} — {rec.secondWhy}
-        </p>
-      )}
-      {need === 'booking' && <p className="text-[13px] text-ink-2">You’ll need your booking link (Calendly, Square, Acuity…). Without it, the page offers a “Request a time” form.</p>}
-      {need === 'payment' && <p className="text-[13px] text-ink-2">You’ll need your own payment link (Stripe, Square, PayPal, Gumroad, Shopify…). The app never takes payments.</p>}
-      {built && (
-        <p className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-good">
-          <Check size={14} /> Built: your SEO page is a {PAGE_TYPE_LABEL[rec.pageType].toLowerCase()}
-          {m.seoPublished ? ' · Published' : ''}
-        </p>
-      )}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => useUI.getState().openSeoBuilder({ pageType: rec.pageType })}>
-          Build this page
-        </button>
-        <span className="text-xs text-muted">Opens the SEO page builder with this type chosen. Nothing is written until you press Write page.</span>
       </div>
     </section>
   );
@@ -325,69 +427,67 @@ export function LinksCard({ project, s }: { project: Project; s: StrategyState }
   const bio = rows.filter((r) => r.rec.placement === 'bio').map((r) => netLabel(r.net));
   const applied = s.applied.links;
   return (
-    <section id="strategy-links" className="panel flex scroll-mt-20 flex-col gap-3 p-4" aria-label="Where the link goes">
-      <h3 className="section-title">Where the link goes</h3>
-      <ul className="flex flex-col divide-y divide-line">
-        {rows.map(({ net, rec }) => {
-          const now = placementFor(project, net);
-          return (
-            <li key={net} className="flex items-start gap-3 py-2.5">
-              <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-white" style={{ background: PLATFORMS[net].color }}>
-                <PlatformGlyph platform={net} size={14} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-[13.5px] font-semibold text-ink">
-                  {netLabel(net)}: {LINK_PLACEMENT_LABEL[rec.placement]}
-                  {now !== rec.placement && <span className="font-normal text-muted"> (now: {LINK_PLACEMENT_LABEL[now]})</span>}
-                </p>
-                <p className="text-[13px] text-ink-2">{rec.why}</p>
-                <Backing item={rec} all={s.sources} className="mt-1" />
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-      <div className="rounded-md bg-surface-2 px-3 py-2.5 text-[13px]">
-        <span className="font-semibold text-ink">Your link: </span>
+    <Section
+      id="strategy-links"
+      className="scroll-mt-16"
+      title={
+        <span className="inline-flex items-center gap-1">
+          Where the link goes
+          <BasisTip items={rows.map((r) => r.rec)} />
+        </span>
+      }
+      description="On each network: in the post, its first comment, or your profile’s bio."
+    >
+      {rows.length > 0 && (
+        <ul className="card divide-y divide-line">
+          {rows.map(({ net, rec }) => {
+            const now = placementFor(project, net);
+            return (
+              <li key={net} className="flex items-start gap-3 px-4 py-3">
+                <PlatformMark platform={net} size={24} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-ui text-ink">
+                    {netLabel(net)}: {LINK_PLACEMENT_LABEL[rec.placement]}
+                    {now !== rec.placement && <span className="text-small text-muted"> (now: {LINK_PLACEMENT_LABEL[now]})</span>}
+                  </p>
+                  <p className="mt-0.5 text-small text-muted">
+                    {rec.why}
+                    <Cite item={rec} all={s.sources} />
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <div className="well mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5 text-small">
+        <span className="font-medium text-ink">Your link</span>
         {link ? (
-          <span className="inline-flex flex-wrap items-center gap-2">
-            <span className="break-all text-ink-2">{link.url}</span>
+          <>
+            <span className="min-w-0 break-all font-mono text-caption text-ink-2">{link.url}</span>
             <span className="text-muted">({SOURCE_WORDS[link.source]})</span>
-            <CopyButton text={link.url} size="xs" />
-          </span>
+            <CopyButton text={link.url} size="xs" className="ml-auto" />
+          </>
         ) : (
           <span className="text-ink-2">No page yet. Build and publish your page first; posts carry its link once it’s published.</span>
         )}
       </div>
-      {bio.length > 0 && (
-        <p className="flex flex-wrap items-center gap-2 text-[13px] text-ink-2">
-          Put your link in your profile bio on {bio.join(', ')}. The app never changes your profile.
-          {link && <CopyButton text={link.url} label="Copy link" size="xs" />}
-        </p>
-      )}
+      {bio.length > 0 && <p className="mt-3 text-small text-ink-2">Put your link in your profile bio on {bio.join(', ')}. The app never changes your profile.</p>}
       {s.promote && (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => void linksFlow(project.id)}>
             Use these link settings
           </button>
           {applied && (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => undoLinksFlow(project.id)}>
-              <Undo2 size={14} /> Undo
-            </button>
+            <>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => undoLinksFlow(project.id)}>
+                <Undo2 /> Undo
+              </button>
+              <span className="text-small text-muted">Set {fmtRelative(applied.at)}.</span>
+            </>
           )}
-          {applied && <span className="text-xs text-muted">Set {fmtRelative(applied.at)}.</span>}
         </div>
       )}
-    </section>
-  );
-}
-
-/** A small card heading with an optional note. */
-export function CardTitle({ children, note }: { children: ReactNode; note?: ReactNode }) {
-  return (
-    <div className="mb-2">
-      <h3 className="section-title">{children}</h3>
-      {note && <p className="mt-0.5 text-[12.5px] text-muted">{note}</p>}
-    </div>
+    </Section>
   );
 }

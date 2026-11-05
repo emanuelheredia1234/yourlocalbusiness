@@ -8,7 +8,7 @@ import { fmtDate, fmtRelative } from '@/lib/utils';
 import { checkNow, startDeepResearch } from '@/ai/strategyManus';
 import { strategyWho } from '@/ai/strategyWho';
 import { useRuntime } from '@/lib/platform';
-import { Spinner } from '@/components/ui/primitives';
+import { Callout, InfoTip, Section, Spinner } from '@/components/ui/primitives';
 import { WithSettingsLink } from './parts';
 
 export function DeepResearch({ project, s }: { project: Project; s: StrategyState }) {
@@ -20,42 +20,53 @@ export function DeepResearch({ project, s }: { project: Project; s: StrategyStat
   const what = project.track === 'business' ? 'business type' : 'product type';
   const busy = m?.state === 'working' || m?.state === 'needs_input';
   return (
-    <section className="panel flex flex-col gap-3 p-4 sm:p-5" aria-label="Deep research with Manus">
-      <div>
-        <p className="eyebrow mb-1">Optional</p>
-        <h2 className="section-title">Deep research with Manus</h2>
-      </div>
-      <p className="text-[13px] text-ink-2">Manus, an AI agent with its own browser, opens up to 15 public pages about your market and reports what each page says, with its link. It takes several minutes and uses your Manus credits (the amount depends on the task; the app shows it when it’s done). It only reads: it never signs in, posts, messages or buys.</p>
-      <p className="text-xs text-muted">
-        What Manus gets: your niche, your {what}
-        {project.track === 'business' && project.location?.city ? ', and your city' : ''} — nothing else from your project.
-      </p>
-
+    <Section
+      divider
+      title={
+        <span className="inline-flex items-center gap-1">
+          Deep research with Manus
+          <InfoTip label="About deep research" title="Deep research with Manus">
+            <p>Manus, an AI agent with its own browser, opens up to 15 public pages about your market and reports what each page says, with its link. It takes several minutes and uses your Manus credits (the amount depends on the task; the app shows it when it’s done). It only reads: it never signs in, posts, messages or buys.</p>
+            <p className="mt-2">
+              What Manus gets: your niche, your {what}
+              {project.track === 'business' && project.location?.city ? ', and your city' : ''}, nothing else from your project.
+            </p>
+          </InfoTip>
+        </span>
+      }
+      description="Optional: Manus reads public pages about your market and reports what each says, with its link."
+    >
       {m?.state === 'working' && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2.5 text-[13px]" role="status">
+        <div className="well flex flex-wrap items-center gap-2 px-3 py-2.5 text-small" role="status">
           <Spinner size={14} className="text-primary" />
-          <span className="min-w-0 flex-1">Manus is reading pages… checked {fmtRelative(m.checkedAt ?? m.requestedAt)}.</span>
+          <span className="min-w-0 flex-1 text-ink-2">Manus is reading pages… checked {fmtRelative(m.checkedAt ?? m.requestedAt)}.</span>
           <button type="button" className="btn btn-secondary btn-xs" onClick={() => void checkNow(project.id)}>
-            <RefreshCw size={12} /> Check now
+            <RefreshCw /> Check now
           </button>
           <a className="btn btn-ghost btn-xs" href={m.taskUrl} target="_blank" rel="noopener noreferrer">
-            Open in Manus <ExternalLink size={12} />
+            Open in Manus <ExternalLink />
           </a>
         </div>
       )}
       {m?.state === 'needs_input' && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md bg-warn-soft px-3 py-2.5 text-[13px]" role="status">
-          <span className="min-w-0 flex-1">Manus is waiting for you.</span>
-          <button type="button" className="btn btn-secondary btn-xs" onClick={() => void checkNow(project.id)}>
-            <RefreshCw size={12} /> Check now
-          </button>
-          <a className="btn btn-secondary btn-xs" href={m.taskUrl} target="_blank" rel="noopener noreferrer">
-            Open in Manus <ExternalLink size={12} />
-          </a>
-        </div>
+        <Callout
+          tone="warn"
+          action={
+            <>
+              <button type="button" className="btn btn-secondary btn-xs" onClick={() => void checkNow(project.id)}>
+                <RefreshCw /> Check now
+              </button>
+              <a className="btn btn-secondary btn-xs" href={m.taskUrl} target="_blank" rel="noopener noreferrer">
+                Open in Manus <ExternalLink />
+              </a>
+            </>
+          }
+        >
+          <span role="status">Manus is waiting for you.</span>
+        </Callout>
       )}
       {m?.state === 'done' && (
-        <p className="num text-[13px] text-ink-2">
+        <p className="num text-small text-ink-2">
           Manus read {m.pagesRead ?? 0} page{m.pagesRead === 1 ? '' : 's'}
           {m.credits ? ` · ${m.credits} credits` : ''} · {fmtDate(m.doneAt ?? m.checkedAt ?? m.requestedAt, { month: 'short', day: 'numeric', year: 'numeric' })}
           {m.taskUrl && (
@@ -68,20 +79,20 @@ export function DeepResearch({ project, s }: { project: Project; s: StrategyStat
           )}
         </p>
       )}
-      {m?.state === 'failed' && <p className="rounded-md bg-warn-soft px-3 py-2.5 text-[13px] text-ink">{m.message || 'Manus stopped without a report.'}</p>}
+      {m?.state === 'failed' && <Callout tone="warn">{m.message || 'Manus stopped without a report.'}</Callout>}
 
       {!busy && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="btn btn-secondary" disabled={!deep.ok} onClick={() => void startDeepResearch(project.id)}>
-            <Telescope size={15} /> {m?.state === 'failed' || m?.state === 'done' ? 'Start again…' : 'Start deep research…'}
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <button type="button" className="btn btn-secondary btn-sm" disabled={!deep.ok} onClick={() => void startDeepResearch(project.id)}>
+            <Telescope /> {m?.state === 'failed' || m?.state === 'done' ? 'Start again…' : 'Start deep research…'}
           </button>
           {!deep.ok && deep.reason && (
-            <span className="text-xs text-muted">
+            <span className="text-small text-muted">
               <WithSettingsLink text={deep.reason} />
             </span>
           )}
         </div>
       )}
-    </section>
+    </Section>
   );
 }

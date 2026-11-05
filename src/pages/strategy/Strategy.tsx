@@ -1,12 +1,14 @@
-// The Strategy tab: research and a plan to get clients and sales. Your details and a free starter checklist
-// first; then six AI steps, each saved as it lands (research with sources when the key can search), in
-// seven tabs. Nothing runs, refreshes or retries by itself, and nothing outside Strategy changes until the
-// owner chooses (Guide my other tabs, Build this page, Use these link settings…).
-import { useMemo, useRef, useState } from 'react';
-import { ChevronDown, FileDown, Globe, ListChecks, Mail, Megaphone, MessageSquareText, Package, RefreshCw, Search, Sparkles } from 'lucide-react';
+// The Strategy tab: research and a plan to get clients and sales. Before the first run, one AI hero (your
+// details as a summary line, Plan my strategy) with the free starter checklist folded under it; then six AI
+// steps, each saved as it lands (research with sources when the key can search), in seven tabs. Who writes
+// it, what it costs and the run's numbers sit behind the header's Details. Nothing runs, refreshes or
+// retries by itself, and nothing outside Strategy changes until the owner chooses (Guide my other tabs,
+// Build this page, Use these link settings…).
+import { useMemo, useState } from 'react';
+import { BookOpen, ChevronDown, FileDown, ListChecks } from 'lucide-react';
 import type { Project } from '@/lib/types';
 import type { StrategyState } from '@/lib/strategyTypes';
-import { hasAnySection, readStrategy } from '@/lib/strategy';
+import { hasAnySection, isHttpUrl, readStrategy } from '@/lib/strategy';
 import { tabLabel, tabsOf } from '@/lib/pageTabs';
 import { FORMATS, matchBusinessType } from '@/ai/knowledge';
 import { starterChecklist } from '@/ai/local/strategy';
@@ -14,11 +16,12 @@ import { strategyHas } from '@/ai/strategyTasks';
 import { useStrategyJob } from '@/ai/strategyJob';
 import { useActiveProject } from '@/store/useStore';
 import { useTabRequest } from '@/store/ui';
-import { MenuItem, Popover, Tabs } from '@/components/ui/primitives';
+import { GenerateButton, Spark } from '@/components/ai/AI';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Empty, InfoTip, Menu, Modal, MoreMenu, PageHeader, Tabs } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
-import { ActionRow, useActionCtx } from './parts';
-import { DetailsDrawer, DetailsForm, useDetailsDraft } from './DetailsDrawer';
-import { RunPanel, useWho } from './RunPanel';
+import { ActionRow, RunButton, SourceItems, useActionCtx } from './parts';
+import { DetailsDrawer, useDetailsDraft } from './DetailsDrawer';
+import { RunMeta, RunningBlock, StoppedNote, useWho } from './RunPanel';
 import { PlanTab } from './PlanTab';
 import { ResearchTab } from './ResearchTab';
 import { PromoteTab } from './PromoteTab';
@@ -28,7 +31,7 @@ import { OutreachTab } from './OutreachTab';
 import { SeoTab } from './SeoTab';
 import { PreviewHost } from './apply';
 import { exportName, strategyMarkdown } from './exportMarkdown';
-import { startRun } from './runs';
+import { CHECKING_LABEL, runKey, startRun, useCheckingServer, type RunKind } from './runs';
 
 type Tab = 'plan' | 'research' | 'promote' | 'content' | 'assets' | 'outreach' | 'seo';
 
@@ -39,51 +42,83 @@ export default function Strategy() {
   return <StrategyPage key={project.id} project={project} />;
 }
 
-/** "Bakery · Austin · for busy families nearby" (each part only when there is one). */
+/** "Salon · Austin · for busy families nearby" (each part only when there is one). */
 function subline(p: Project): string[] {
   const type = p.track === 'business' ? matchBusinessType(`${p.businessType} ${p.category} ${p.niche}`).label : p.format ? FORMATS[p.format]?.label : '';
   const aud = (p.brand.audience || '').trim();
   return [type ?? '', p.location?.city ?? '', aud ? `for ${aud.length > 60 ? `${aud.slice(0, 59).trimEnd()}…` : aud}` : ''].filter(Boolean);
 }
 
-function UpdateMenu({ project, disabled }: { project: Project; disabled: boolean }) {
-  const [open, setOpen] = useState(false);
-  const anchor = useRef<HTMLButtonElement>(null);
-  const go = (k: Parameters<typeof startRun>[1]) => {
-    setOpen(false);
-    void startRun(project.id, k);
-  };
+const UPDATES: { label: string; kind: RunKind }[] = [
+  { label: 'Update everything (6 steps)', kind: { kind: 'all' } },
+  { label: 'Search again (research only)', kind: { kind: 'research' } },
+  { label: 'Update the plan from the research (5 steps)', kind: { kind: 'plan' } },
+];
+
+/** "Update plan": the three ways to update (each a paid run after its confirm), or the run under way. */
+function UpdateButton({ project }: { project: Project }) {
+  const job = useStrategyJob(project.id);
+  const checking = useCheckingServer(project.id);
+  const mine = !!checking && UPDATES.some((u) => runKey(u.kind) === checking);
+  if (job || mine) {
+    const researching = job && job.steps[job.index] === 'research';
+    return (
+      <GenerateButton size="sm" running={job ? true : mine} runningLabel={mine ? CHECKING_LABEL : researching ? 'Researching…' : 'Writing…'} onClick={() => {}}>
+        Update plan
+      </GenerateButton>
+    );
+  }
   return (
-    <>
-      <button ref={anchor} type="button" className="btn btn-secondary" disabled={disabled} aria-haspopup="true" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <RefreshCw size={15} /> Update… <ChevronDown size={14} />
-      </button>
-      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} className="w-[280px]">
-        <MenuItem onClick={() => go({ kind: 'all' })}>Update everything (6 steps)</MenuItem>
-        <MenuItem onClick={() => go({ kind: 'research' })}>Search again (research only)</MenuItem>
-        <MenuItem onClick={() => go({ kind: 'plan' })}>Update the plan from the research (5 steps)</MenuItem>
-      </Popover>
-    </>
+    <Menu
+      align="end"
+      trigger={
+        <button type="button" className="btn btn-ai-outline btn-sm" disabled={!!checking}>
+          <Spark size={16} />
+          Update plan
+          <ChevronDown className="-mr-1 text-muted" />
+        </button>
+      }
+      items={UPDATES.map((u) => ({ label: u.label, onSelect: () => void startRun(project.id, u.kind) }))}
+    />
   );
 }
 
-function StarterChecklist({ project, s }: { project: Project; s: StrategyState }) {
+/** The free starter checklist: general first steps from the project's details, not research. */
+export function StarterChecklist({ project, s }: { project: Project; s: StrategyState }) {
   const ctx = useActionCtx();
   const items = useMemo(() => starterChecklist(project, strategyHas(project, ctx)), [project, ctx]);
   if (!items.length) return null;
   return (
-    <section className="panel flex flex-col gap-3 p-4 sm:p-5" aria-label="Free starter checklist">
-      <div>
-        <p className="eyebrow mb-1">Built-in guidance, not research</p>
-        <h2 className="section-title">Free starter checklist</h2>
-        <p className="mt-0.5 text-[13px] text-muted">General first steps from your project details. Plan my strategy replaces them with a plan for your market.</p>
-      </div>
-      <ul className="flex flex-col gap-2">
+    <section aria-label="Free starter checklist">
+      <p className="flex items-center gap-1 text-small text-muted">
+        General first steps from your project details. Plan my strategy replaces them with a plan for your market.
+        <InfoTip label="Built-in guidance">Built-in guidance, not research: the app’s general starter notes.</InfoTip>
+      </p>
+      <ul className="mt-1 divide-y divide-line">
         {items.map((a) => (
           <ActionRow key={a.id} project={project} s={s} action={a} ctx={ctx} tickable={false} />
         ))}
       </ul>
     </section>
+  );
+}
+
+/** Ghosts of what the run writes, under the first visit's hero. */
+function Preview() {
+  const card = (title: string, lines: string[]) => (
+    <div className="card flex flex-col gap-3 p-4 text-left">
+      <p className="text-small font-medium text-ink-2">{title}</p>
+      {lines.map((w) => (
+        <span key={w} className={`h-2.5 rounded-full bg-surface-3 ${w}`} />
+      ))}
+    </div>
+  );
+  return (
+    <div className="mx-auto grid max-w-[720px] grid-cols-3 gap-4 max-md:hidden">
+      {card('Your 4-week plan', ['w-11/12', 'w-3/4', 'w-5/6'])}
+      {card('Where to promote', ['w-4/5', 'w-11/12', 'w-2/3'])}
+      {card('Posts to make', ['w-5/6', 'w-2/3', 'w-3/4'])}
+    </div>
   );
 }
 
@@ -96,79 +131,109 @@ export function StrategyPage({ project }: { project: Project }) {
   useTabRequest<Tab>('strategy', tabsOf('strategy') as Tab[], setTab);
   const details = useDetailsDraft(project.id, s.inputs);
   const [drawer, setDrawer] = useState(false);
+  const [sources, setSources] = useState(false);
   const saved = hasAnySection(s);
   const empty = !saved && !job;
   const biz = project.track === 'business';
   const brand = project.brand.name || 'your business';
   const findings = (s.research?.findings.length ?? 0) + (s.manus?.state === 'done' ? s.manus.findings?.length ?? 0 : 0);
   const sub = subline(project);
+  const allSources = s.sources.filter((x) => isHttpUrl(x.url)).sort((a, b) => a.n - b.n);
 
   const exportPlan = () => {
     const md = strategyMarkdown(project, s, ctx);
     void download(exportName(project), new Blob([md], { type: 'text/markdown' }));
   };
 
-  return (
-    <div className="flex flex-col gap-5">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0">
-          <p className="eyebrow mb-1">Strategy</p>
-          <h1 className="page-title">{biz ? `How ${brand} gets clients` : `How ${brand} makes sales`}</h1>
-          {sub.length > 0 && (
-            <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-muted">
-              {sub.map((x, i) => (
-                <span key={x} className="inline-flex items-center gap-2">
-                  {i > 0 && <span aria-hidden="true">·</span>}
-                  <span>{x}</span>
-                </span>
-              ))}
-            </p>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {saved ? (
-            <UpdateMenu project={project} disabled={!!job || who.mode === 'checking'} />
-          ) : (
-            <button type="button" className="btn btn-ai" disabled={!!job || who.mode === 'checking'} onClick={() => void startRun(project.id, { kind: 'all' })}>
-              <Sparkles size={15} className="text-accent" /> Plan my strategy
-            </button>
-          )}
-          <button type="button" className="btn btn-secondary" onClick={() => setDrawer(true)}>
-            <ListChecks size={15} /> Your details
-          </button>
-          <button type="button" className="btn btn-ghost" disabled={!saved} onClick={exportPlan}>
-            <FileDown size={15} /> Export plan
-          </button>
-        </div>
-      </header>
-
-      {empty ? (
-        <>
-          <section className="panel p-4 sm:p-5" aria-label="Your details">
-            <h2 className="section-title">Your details</h2>
-            <p className="mb-4 mt-0.5 text-[13px] text-muted">All optional. Your own words: the AI reads them and never writes them.</p>
-            <DetailsForm project={project} d={details} idPrefix="strategy-page" />
-          </section>
-          <RunPanel project={project} s={s} />
-          <StarterChecklist project={project} s={s} />
-        </>
-      ) : (
-        <>
-          <Tabs<Tab>
-            value={tab}
-            onChange={setTab}
-            tabs={[
-              { id: 'plan', label: 'Plan', icon: <ListChecks size={15} /> },
-              { id: 'research', label: 'Research', icon: <Search size={15} />, count: findings || undefined },
-              { id: 'promote', label: 'Where to promote', icon: <Megaphone size={15} /> },
-              { id: 'content', label: 'Social content', icon: <MessageSquareText size={15} /> },
-              { id: 'assets', label: 'Assets to create', icon: <Package size={15} /> },
-              { id: 'outreach', label: 'Email outreach', icon: <Mail size={15} /> },
-              { id: 'seo', label: 'SEO page', icon: <Globe size={15} /> },
-            ]}
+  if (empty) {
+    return (
+      <div>
+        <PageHeader title="Strategy" meta={<RunMeta project={project} s={s} who={who} />} />
+        <section aria-label="Plan my strategy">
+          <Empty
+            variant="ai"
+            className="pb-10 pt-8"
+            title={`Plan how ${project.brand.name || 'your business'} gets customers`}
+            body="Research, where to promote, and a 4-week plan. About two minutes."
+            summary={
+              <>
+                {sub.map((x) => (
+                  <span key={x} className="inline-flex items-center gap-2">
+                    <span>{x}</span>
+                    <span aria-hidden="true">·</span>
+                  </span>
+                ))}
+                <button type="button" className="link" onClick={() => setDrawer(true)}>
+                  Edit details
+                </button>
+              </>
+            }
+            action={
+              <RunButton projectId={project.id} kind={{ kind: 'all' }} variant="ai" size="lg">
+                Plan my strategy
+              </RunButton>
+            }
+            preview={<Preview />}
           />
-          <RunPanel project={project} s={s} compact />
-          <div role="tabpanel" aria-label={tabLabel('strategy', tab)}>
+        </section>
+        <Accordion type="single" collapsible className="mx-auto mt-2 max-w-[720px]">
+          <AccordionItem value="free">
+            <AccordionTrigger>Start without AI</AccordionTrigger>
+            <AccordionContent>
+              <StarterChecklist project={project} s={s} />
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+        <DetailsDrawer open={drawer} onClose={() => setDrawer(false)} project={project} d={details} />
+        <PreviewHost />
+      </div>
+    );
+  }
+
+  // the tab's own section isn't written yet: the run's skeletons stand where it will appear
+  const written = { plan: !!s.plan, research: !!s.research, promote: !!s.promote, content: !!s.content, assets: !!s.assets, outreach: !!s.outreach, seo: !!s.assets }[tab];
+  return (
+    <div>
+      <PageHeader
+        className="mb-4"
+        title={saved ? (biz ? `How ${brand} gets clients` : `How ${brand} makes sales`) : 'Strategy'}
+        description={sub.join(' · ') || undefined}
+        meta={<RunMeta project={project} s={s} who={who} />}
+        actions={
+          <>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setDrawer(true)}>
+              <ListChecks /> Your details
+            </button>
+            <MoreMenu
+              label="More strategy actions"
+              items={[
+                { label: 'Export plan', icon: <FileDown />, onSelect: exportPlan, disabled: !saved },
+                { label: 'Sources', icon: <BookOpen />, onSelect: () => setSources(true), disabled: !allSources.length },
+              ]}
+            />
+            <UpdateButton project={project} />
+          </>
+        }
+      />
+      <Tabs<Tab>
+        sticky
+        className="mb-6"
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { id: 'plan', label: 'Plan' },
+          { id: 'research', label: 'Research', count: findings || undefined },
+          { id: 'promote', label: 'Where to promote' },
+          { id: 'content', label: 'Social content' },
+          { id: 'assets', label: 'Assets to create' },
+          { id: 'outreach', label: 'Email outreach' },
+          { id: 'seo', label: 'SEO page' },
+        ]}
+      />
+      {job ? <RunningBlock job={job} skeleton={!written} /> : <StoppedNote project={project} s={s} />}
+      <div role="tabpanel" aria-label={tabLabel('strategy', tab)}>
+        {(written || !job) && (
+          <>
             {tab === 'plan' && <PlanTab project={project} s={s} ctx={ctx} />}
             {tab === 'research' && <ResearchTab project={project} s={s} />}
             {tab === 'promote' && <PromoteTab project={project} s={s} />}
@@ -176,10 +241,13 @@ export function StrategyPage({ project }: { project: Project }) {
             {tab === 'assets' && <AssetsTab project={project} s={s} ctx={ctx} />}
             {tab === 'outreach' && <OutreachTab project={project} s={s} />}
             {tab === 'seo' && <SeoTab project={project} s={s} />}
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
 
+      <Modal open={sources} onClose={() => setSources(false)} title="Sources" subtitle="Every page the research found, as found. Links open the original pages." size="md">
+        <SourceItems list={allSources} />
+      </Modal>
       <DetailsDrawer open={drawer} onClose={() => setDrawer(false)} project={project} d={details} />
       <PreviewHost />
     </div>
