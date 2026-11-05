@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import type { EmailStep, Project, Subscriber } from '@/lib/types';
 import { ensureUrl, readableOn } from '@/lib/utils';
 import { renderTokens } from '@/ai/local/email';
@@ -19,32 +20,45 @@ export function emailTokens(p: Project, sub?: Pick<Subscriber, 'name' | 'email'>
   };
 }
 
+// The email as a subscriber's inbox shows it: the business's content, so its colours are the email's own
+// (a white message in both themes), not the app's.
+const INK = '#1d2420';
+const META = '#5b6861';
+const RULE = '#e6ebe8';
+const FINE = '#8a968f';
+const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+
 /** An email rendered the way a subscriber’s inbox shows it. */
 export function EmailView({ project, email, tokens, compact }: { project: Project; email: EmailStep; tokens: Record<string, string>; compact?: boolean }) {
   const c = project.brand.colors;
   const body = renderTokens(email.body, tokens);
+  const row: CSSProperties = { fontSize: 13, lineHeight: '20px', color: META };
   return (
-    <div className="overflow-hidden rounded-md border border-line bg-white text-[#1d2420]" style={{ fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif' }}>
+    <div className="overflow-hidden" style={{ background: '#ffffff', color: INK, fontFamily: FONT }}>
       {!compact && (
-        <div className="border-b border-[#e6ebe8] px-4 py-3 text-[12.5px] text-[#5b6861]">
-          <p>
-            <b className="text-[#1d2420]">{project.brand.name}</b> &lt;{tokens.sender_email}&gt;
+        <div style={{ borderBottom: `1px solid ${RULE}`, padding: '12px 20px' }}>
+          <p style={row}>
+            <span style={{ display: 'inline-block', width: 56, color: FINE }}>From</span>
+            <b style={{ color: INK, fontWeight: 600 }}>{project.brand.name}</b> &lt;{tokens.sender_email}&gt;
           </p>
-          <p>To: {tokens.email}</p>
-          <p className="mt-1 text-[15px] font-semibold text-[#1d2420]">{renderTokens(email.subject, tokens)}</p>
+          <p style={row}>
+            <span style={{ display: 'inline-block', width: 56, color: FINE }}>To</span>
+            {tokens.email}
+          </p>
+          <p style={{ ...row, marginTop: 4, fontSize: 16, lineHeight: '24px', fontWeight: 600, color: INK }}>{renderTokens(email.subject, tokens)}</p>
         </div>
       )}
-      <div className="px-5 py-5">
-        <div className="mb-4" style={{ color: c.ink }}>
+      <div style={{ padding: '20px 24px 22px' }}>
+        <div style={{ marginBottom: 16, color: c.ink }}>
           <BrandLogo brand={project.brand} size={26} layout="horizontal" />
         </div>
-        <div className="whitespace-pre-line text-[14px] leading-relaxed">{body}</div>
+        <div className="whitespace-pre-line" style={{ fontSize: 14, lineHeight: 1.65 }}>
+          {body}
+        </div>
         {email.ctaLabel && (
-          <span className="mt-5 inline-block rounded-md px-5 py-2.5 text-[14px] font-bold" style={{ background: c.primary, color: readableOn(c.primary) }}>
-            {renderTokens(email.ctaLabel, tokens)}
-          </span>
+          <span style={{ display: 'inline-block', marginTop: 20, borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700, background: c.primary, color: readableOn(c.primary) }}>{renderTokens(email.ctaLabel, tokens)}</span>
         )}
-        <p className="mt-6 border-t border-[#e6ebe8] pt-3 text-[11px] text-[#8a968f]">
+        <p style={{ marginTop: 24, borderTop: `1px solid ${RULE}`, paddingTop: 12, fontSize: 11, lineHeight: '16px', color: FINE }}>
           You’re receiving this because you signed up at {tokens.lead_magnet_link.replace(/^https?:\/\//, '')}. Unsubscribe anytime.
         </p>
       </div>

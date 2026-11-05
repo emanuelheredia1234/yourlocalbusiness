@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { TooltipProvider } from '@/components/ui/shadcn/tooltip';
 import type { MediaRef, PageType, Project, PromptImage, SalesPage } from '@/lib/types';
 import type { PublishAccess } from '@/lib/publish';
 
@@ -45,7 +46,7 @@ function project(): Project {
 
 const render = (p: Project) => {
   useStore.setState({ projects: [p], activeProjectId: p.id, settings: defaultSettings() });
-  return renderToStaticMarkup(createElement(SeoSalesPage));
+  return renderToStaticMarkup(createElement(TooltipProvider, null, createElement(SeoSalesPage)));
 };
 
 beforeEach(() => {

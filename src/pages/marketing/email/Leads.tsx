@@ -8,7 +8,7 @@ import { LEADS_EXPORT_MAX, LEADS_PAGE_SIZE, MAX_EMAIL, allLeads, deleteLead, lea
 import { addLeadToSubscribers, leadProject, markLeadsSeen, useLeads } from '@/store/leads';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
-import { Empty, Segmented, Spinner, confirmAction } from '@/components/ui/primitives';
+import { Callout, Empty, InfoTip, Segmented, Spinner, Tooltip, confirmAction } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
 import { safeEmail, safePhone } from '@/lib/listingActions';
 
@@ -62,8 +62,10 @@ export function Leads({ project }: { project: Project }) {
 
 function AccessNote({ children, action }: { children: string; action?: JSX.Element }) {
   return (
-    <section className="panel flex flex-wrap items-center gap-3 p-4" aria-label="Leads">
-      <Inbox size={18} className="shrink-0 text-muted" aria-hidden="true" />
+    <section className="card flex flex-wrap items-center gap-3 p-4" aria-label="Leads">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-3 text-ink-2" aria-hidden="true">
+        <Inbox size={16} />
+      </span>
       <p className="min-w-0 flex-1 text-small text-ink-2">{children}</p>
       {action}
     </section>
@@ -217,82 +219,101 @@ function LeadList({ project }: { project: Project }) {
 
   const count = leads?.length ?? 0;
   return (
-    <div className="flex flex-col gap-4">
-      <p className="rounded-md border border-line bg-surface-2/60 px-3 py-2 text-small text-ink-2">Messages people send with the form on your published page. Reply from your own email or phone: the app doesn’t send email.</p>
-      <section className="panel overflow-hidden" aria-labelledby={`${ids}-title`}>
-        <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
-          <h2 id={`${ids}-title`} className="text-small font-semibold">
+    <section aria-labelledby={`${ids}-title`}>
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex items-center gap-1">
+          <h2 id={`${ids}-title`} className="text-h3 text-ink">
             {leads ? `${count}${more ? '+' : ''} lead${count === 1 && !more ? '' : 's'}` : 'Leads'}
           </h2>
-          <div role="group" aria-label="Which pages">
-            <Segmented<Scope>
-              size="sm"
-              value={scope}
-              onChange={changeScope}
-              options={[
-                { id: 'page', label: 'This page' },
-                { id: 'all', label: 'All pages' },
-              ]}
-            />
-          </div>
-          <div className="ml-auto flex flex-wrap gap-1.5">
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLoads((n) => n + 1)} disabled={loading}>
-              <RefreshCw size={14} className={cn(loading && 'animate-spin')} aria-hidden="true" /> Refresh
-            </button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => void exportCsv()} disabled={!count || exporting}>
-              {exporting ? <Spinner size={14} /> : <Download size={14} aria-hidden="true" />} Export CSV
-            </button>
-          </div>
+          <InfoTip label="About replying">Messages people send with the form on your published page. Reply from your own email or phone: the app doesn’t send email.</InfoTip>
         </div>
-        {error && (
-          <div role="alert" className="flex flex-wrap items-center gap-2 border-b border-line bg-bad-soft px-4 py-2 text-small text-bad">
-            <span className="min-w-0 flex-1 break-words">{error}</span>
+        {/* what the ⓘ says, read out with the list for everyone using a screen reader */}
+        <p className="sr-only">Reply from your own email or phone: the app doesn’t send email.</p>
+        <div role="group" aria-label="Which pages">
+          <Segmented<Scope>
+            size="sm"
+            value={scope}
+            onChange={changeScope}
+            options={[
+              { id: 'page', label: 'This page' },
+              { id: 'all', label: 'All pages' },
+            ]}
+          />
+        </div>
+        <div className="ml-auto flex flex-wrap gap-1.5">
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLoads((n) => n + 1)} disabled={loading}>
+            <RefreshCw className={cn(loading && 'animate-spin')} aria-hidden="true" /> Refresh
+          </button>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void exportCsv()} disabled={!count || exporting}>
+            {exporting ? <Spinner size={16} /> : <Download aria-hidden="true" />} Export CSV
+          </button>
+        </div>
+      </div>
+      {error && (
+        <Callout
+          tone="bad"
+          className="mb-3"
+          action={
             <button type="button" className="btn btn-secondary btn-xs" onClick={() => setLoads((n) => n + 1)}>
               Try again
             </button>
+          }
+        >
+          <span className="break-words">{error}</span>
+        </Callout>
+      )}
+      {leads === null ? (
+        error ? null : (
+          <div className="card flex h-32 items-center justify-center text-muted" role="status" aria-label="Loading your leads">
+            <Spinner size={20} />
           </div>
-        )}
-        {leads === null ? (
-          error ? null : (
-            <div className="flex h-32 items-center justify-center text-muted" role="status" aria-label="Loading your leads">
-              <Spinner size={20} />
-            </div>
-          )
-        ) : leads.length === 0 ? (
+        )
+      ) : leads.length === 0 ? (
+        <div className="card">
           <Empty
-            className="m-4"
-            icon={<Inbox size={20} />}
+            icon={<Inbox />}
             title="No leads yet"
             body="When someone sends the form on your published page, it shows here. Lead form pages have a form, and so do booking pages without a booking link."
             action={
               scope === 'page' ? (
-                <button type="button" className="btn btn-primary btn-sm" onClick={() => void useUI.getState().openSeoBuilder({ pageType: 'lead' })}>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => void useUI.getState().openSeoBuilder({ pageType: 'lead' })}>
                   Build a lead form page
                 </button>
               ) : undefined
             }
           />
-        ) : (
-          <>
-            <p className="px-4 pt-3 text-caption text-muted">Add only people who asked to hear from you.</p>
-            <ul ref={listRef} tabIndex={-1} aria-label="Leads" className="divide-y divide-line">
-              {leads.map((lead) => (
-                <LeadItem key={lead.id} lead={lead} project={project} projects={projects} from={ownerOf(lead)} who={who(lead)} busy={busy.has(lead.id)} onSubscribe={() => subscribe(lead)} onDelete={() => void remove(lead)} />
-              ))}
-            </ul>
+        </div>
+      ) : (
+        <div className="card overflow-hidden">
+          <div aria-hidden="true" className={cn(ROW_GRID, 'hidden border-b border-line bg-surface-2 px-4 py-2 text-caption font-medium text-muted')}>
+            <span>Name</span>
+            <span>Contact</span>
+            <span>Message</span>
+            <span>From page</span>
+            <span>Received</span>
+            <span />
+          </div>
+          <ul ref={listRef} tabIndex={-1} aria-label="Leads" className="divide-y divide-line outline-none">
+            {leads.map((lead) => (
+              <LeadItem key={lead.id} lead={lead} project={project} projects={projects} from={ownerOf(lead)} who={who(lead)} busy={busy.has(lead.id)} onSubscribe={() => subscribe(lead)} onDelete={() => void remove(lead)} />
+            ))}
+          </ul>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-2.5">
+            <p className="text-caption text-muted">Add only people who asked to hear from you.</p>
             {more && (
-              <div className="border-t border-line px-4 py-3 text-center">
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadMore()} disabled={loading}>
-                  {loading ? <Spinner size={14} /> : null} Load more
-                </button>
-              </div>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadMore()} disabled={loading}>
+                {loading ? <Spinner size={16} /> : null} Load more
+              </button>
             )}
-          </>
-        )}
-      </section>
-    </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
+
+/** The list's columns on wide screens (it reads as a table; each lead is still one list item). */
+const ROW_GRID = 'lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,2fr)_minmax(0,1fr)_76px_auto] lg:items-start lg:gap-4';
 
 function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDelete }: { lead: Lead; project: Project; projects: Project[]; from: Project | null; who: string; busy: boolean; onSubscribe: () => void; onDelete: () => void }) {
   const ids = useId();
@@ -305,34 +326,33 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
   const target = leadProject(lead, projects) ?? project;
   const subscribed = canSubscribe && target.marketing.subscribers.some((s) => s.email.trim().toLowerCase() === leadEmail(lead));
   const long = lead.message.split('\n').length > LONG_LINES || lead.message.length > LONG_CHARS;
+  const when = lead.createdAt ? (
+    <time dateTime={lead.createdAt} title={t ? fmtDateTime(t) : undefined} className="num font-mono text-caption text-muted">
+      {t ? fmtRelative(t) : lead.createdAt}
+    </time>
+  ) : null;
   return (
-    <li className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
-      <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className={cn('min-w-0 break-words text-small font-semibold', !lead.name && 'text-muted')}>{lead.name ? <bdi>{lead.name}</bdi> : 'No name given'}</span>
-          {lead.createdAt && (
-            <time dateTime={lead.createdAt} title={t ? fmtDateTime(t) : undefined} className="text-caption text-muted">
-              {t ? fmtRelative(t) : lead.createdAt}
-            </time>
-          )}
-        </p>
+    <li className={cn(ROW_GRID, 'flex flex-col gap-2 px-4 py-3.5')}>
+      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-1 lg:block">
+        <p className={cn('min-w-0 break-words text-ui', lead.name ? 'text-ink' : 'text-muted')}>{lead.name ? <bdi>{lead.name}</bdi> : 'No name given'}</p>
+        <span className="lg:hidden">{when}</span>
         {lead.time && (
-          <p className="mt-1">
-            <span className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-info-soft px-2.5 py-0.5 text-caption font-medium text-info">
-              <CalendarClock size={13} aria-hidden="true" className="shrink-0" />
-              <span className="min-w-0 break-words">
-                Preferred time: <bdi>{lead.time}</bdi>
-              </span>
+          <p className="mt-1 flex w-full items-start gap-1.5 text-small text-ink-2">
+            <CalendarClock size={14} aria-hidden="true" className="mt-[3px] shrink-0 text-muted" />
+            <span className="min-w-0 break-words">
+              Preferred time: <bdi>{lead.time}</bdi>
             </span>
           </p>
         )}
+      </div>
+      <div className="min-w-0">
         {(lead.email || lead.phone) && (
-          <p className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-small">
+          <p className="flex flex-col gap-1 text-small">
             {lead.email && (
               <span className="inline-flex min-w-0 items-center gap-1.5">
-                <Mail size={13} aria-hidden="true" className="shrink-0 text-muted" />
+                <Mail size={14} aria-hidden="true" className="shrink-0 text-muted" />
                 {email ? (
-                  <a href={mailHref(email)} className="min-w-0 break-all font-medium text-primary hover:underline">
+                  <a href={mailHref(email)} className="link min-w-0 break-all">
                     <bdi>{lead.email}</bdi>
                   </a>
                 ) : (
@@ -342,9 +362,9 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
             )}
             {lead.phone && (
               <span className="inline-flex min-w-0 items-center gap-1.5">
-                <Phone size={13} aria-hidden="true" className="shrink-0 text-muted" />
+                <Phone size={14} aria-hidden="true" className="shrink-0 text-muted" />
                 {phone ? (
-                  <a href={`tel:${phone.tel}`} className="min-w-0 break-all font-medium text-primary hover:underline">
+                  <a href={`tel:${phone.tel}`} className="link min-w-0 break-all">
                     <bdi>{lead.phone}</bdi>
                   </a>
                 ) : (
@@ -354,35 +374,40 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
             )}
           </p>
         )}
+      </div>
+      <div className="min-w-0">
         {lead.message && (
-          <div className="mt-1.5">
+          <>
             <p id={`${ids}-msg`} dir="auto" className={cn('whitespace-pre-line break-words text-small text-ink-2', long && !open && 'line-clamp-6')}>
               {lead.message}
             </p>
             {long && (
-              <button type="button" className="mt-0.5 text-caption font-semibold text-primary hover:underline" aria-expanded={open} aria-controls={`${ids}-msg`} onClick={() => setOpen((v) => !v)}>
+              <button type="button" className="link mt-0.5 text-caption" aria-expanded={open} aria-controls={`${ids}-msg`} onClick={() => setOpen((v) => !v)}>
                 {open ? 'Show less' : 'Show all'}
               </button>
             )}
-          </div>
+          </>
         )}
-        <p className="mt-1.5 break-words text-caption text-muted">
-          From /{lead.slug} · {from ? from.brand.name : 'a page that isn’t in your projects'}
-        </p>
       </div>
-      <div className="flex shrink-0 items-center gap-1.5">
+      <p className="min-w-0 break-words text-small text-muted">
+        From /{lead.slug} · {from ? from.brand.name : 'a page that isn’t in your projects'}
+      </p>
+      <div className="hidden lg:block">{when}</div>
+      <div className="flex shrink-0 items-center gap-1 lg:justify-end">
         {subscribed ? (
           <button type="button" className="btn btn-secondary btn-xs" disabled>
-            <Check size={13} className="text-good" aria-hidden="true" /> Subscribed
+            <Check className="text-good" aria-hidden="true" /> Subscribed
           </button>
         ) : (
           <button type="button" className="btn btn-secondary btn-xs" onClick={onSubscribe} disabled={!canSubscribe} title={canSubscribe ? undefined : 'No email address to add'}>
-            <UserPlus size={13} aria-hidden="true" /> Add to subscribers
+            <UserPlus aria-hidden="true" /> Add to subscribers
           </button>
         )}
-        <button type="button" data-delete={lead.id} className="btn btn-ghost btn-icon btn-xs text-muted hover:text-bad" aria-label={`Delete the lead from ${who}`} onClick={onDelete} disabled={busy}>
-          {busy ? <Spinner size={13} /> : <Trash2 size={13} aria-hidden="true" />}
-        </button>
+        <Tooltip content="Delete">
+          <button type="button" data-delete={lead.id} className="btn btn-danger-ghost btn-icon btn-xs" aria-label={`Delete the lead from ${who}`} onClick={onDelete} disabled={busy}>
+            {busy ? <Spinner size={14} /> : <Trash2 aria-hidden="true" />}
+          </button>
+        </Tooltip>
       </div>
     </li>
   );

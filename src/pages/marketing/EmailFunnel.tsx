@@ -1,11 +1,9 @@
 import { useState } from 'react';
-import { Eye, Gift, Inbox, Mail, Users } from 'lucide-react';
 import { useActiveProject } from '@/store/useStore';
-import { Tabs } from '@/components/ui/primitives';
+import { PageHeader, Tabs } from '@/components/ui/primitives';
 import { useTabRequest } from '@/store/ui';
 import { useNewLeadCount } from '@/store/leads';
-import { tabsOf } from '@/lib/pageTabs';
-import { MarketingHeader } from './MarketingNav';
+import { tabLabel, tabsOf } from '@/lib/pageTabs';
 import { LeadMagnetPanel } from './email/LeadMagnetPanel';
 import { SequencePanel } from './email/SequencePanel';
 import { PreviewPanel } from './email/PreviewPanel';
@@ -22,19 +20,25 @@ export default function EmailFunnel() {
   const [tab, setTab] = useState<Tab>(() => (!__ARTIFACT_BUILD__ && newLeads > 0 ? 'leads' : !m.leadMagnet ? 'magnet' : m.emails.length < 5 ? 'sequence' : 'preview'));
   // a tab asked for from elsewhere (the assistant)
   useTabRequest<Tab>('marketing-email', (tabsOf('marketing-email') as Tab[]).filter((t) => !__ARTIFACT_BUILD__ || t !== 'leads'), setTab);
+  const label = (t: Tab) => tabLabel('marketing-email', t);
 
   return (
-    <div className="flex flex-col gap-5">
-      <MarketingHeader eyebrow="Marketing Hub · Email" title="Email funnel" desc={`Write a free lead magnet, its opt-in page and a 5-email welcome sequence, then set them up in your email provider (Kit, Mailchimp, MailerLite…), which collects sign-ups and sends the emails. This app doesn’t send email.${__ARTIFACT_BUILD__ ? '' : ' Messages from your published page’s form show under Leads.'}`} />
+    <div>
+      <PageHeader
+        className="mb-4"
+        title="Email"
+        description={__ARTIFACT_BUILD__ ? 'This app doesn’t send email: set these up in your email tool, which sends them.' : 'This app doesn’t send email. Messages from your published page’s form show under Leads.'}
+      />
       <Tabs<Tab>
+        className="mb-5"
         value={tab}
         onChange={setTab}
         tabs={[
-          { id: 'magnet', label: 'Lead magnet & opt-in', icon: <Gift size={15} /> },
-          { id: 'sequence', label: 'Email sequence', icon: <Mail size={15} />, count: m.emails.length || undefined },
-          { id: 'preview', label: 'Preview & export', icon: <Eye size={15} /> },
-          { id: 'subscribers', label: 'Subscribers', icon: <Users size={15} />, count: m.subscribers.length || undefined },
-          ...(__ARTIFACT_BUILD__ ? [] : [{ id: 'leads' as const, label: 'Leads', icon: <Inbox size={15} />, count: newLeads || undefined }]),
+          { id: 'magnet', label: label('magnet') },
+          { id: 'sequence', label: label('sequence'), count: m.emails.length || undefined },
+          { id: 'preview', label: label('preview') },
+          { id: 'subscribers', label: label('subscribers'), count: m.subscribers.length || undefined },
+          ...(__ARTIFACT_BUILD__ ? [] : [{ id: 'leads' as const, label: label('leads'), count: newLeads || undefined }]),
         ]}
       />
       {tab === 'magnet' && <LeadMagnetPanel project={project} />}

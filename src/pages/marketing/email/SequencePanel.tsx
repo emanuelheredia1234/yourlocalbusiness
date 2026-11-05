@@ -1,16 +1,27 @@
 import { useState } from 'react';
-import { ChevronDown, Clock, Download, Eye, Mail, PenLine } from 'lucide-react';
+import { ChevronDown, Copy, Download, Eye, PenLine } from 'lucide-react';
 import type { EmailStep, Project } from '@/lib/types';
 import { cn, slugify } from '@/lib/utils';
 import { delayToMs, renderTokens } from '@/ai/local/email';
 import { emailSequenceTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { applyEmailSequence, delayLabel, sequenceText } from '@/lib/emailFunnel';
+import { copyText } from '@/lib/platform';
 import { getActiveProject, useStore } from '@/store/useStore';
+import { toast } from '@/store/ui';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { AutoTextarea, CopyButton, Empty, Field, confirmAction } from '@/components/ui/primitives';
+import { AutoTextarea, Empty, Field, MoreMenu, Section, Segmented, confirmAction } from '@/components/ui/primitives';
+import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
 import { EmailView, emailTokens } from './shared';
+
+/** "Day 3" (or "Day 0 · 2h"): when an email goes out, counted from sign-up. */
+function dayMarker(emails: EmailStep[], i: number): string {
+  const ms = emails.slice(0, i + 1).reduce((n, e) => n + delayToMs(e.delay), 0);
+  const days = Math.floor(ms / 86_400_000);
+  const hours = Math.round((ms % 86_400_000) / 3_600_000);
+  return days === 0 && hours > 0 ? `Day 0 · ${hours}h` : `Day ${days}`;
+}
 
 export function SequencePanel({ project, onPreview }: { project: Project; onPreview: () => void }) {
   const updateMarketing = useStore((s) => s.updateMarketing);
@@ -21,6 +32,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
   const patch = (id: string, p: Partial<EmailStep>) => updateMarketing({ emails: getActiveProject()!.marketing.emails.map((e) => (e.id === id ? { ...e, ...p } : e)) });
   const totalDays = emails.reduce((n, e) => n + delayToMs(e.delay), 0) / 86_400_000;
   const tokens = emailTokens(project);
+  const magnet = project.marketing.leadMagnet;
 
   const generate = async () => {
     if (emails.length && !(await confirmAction({ title: 'Rewrite all five emails?', body: 'Your edited subject lines, bodies and delays will be replaced.', confirmLabel: 'Rewrite sequence' }))) return;
@@ -30,118 +42,142 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
       setOpen(r[0]?.id ?? null);
     }
   };
+  const copyAll = async () => {
+    if (await copyText(sequenceText(getActiveProject()!))) toast({ kind: 'success', title: 'All five emails copied' });
+    else toast({ kind: 'error', title: 'Copy was blocked', body: 'Use Export instead.' });
+  };
+  const copyOne = async (e: EmailStep) => {
+    if (await copyText(`Subject: ${e.subject}\n\n${e.body}`)) toast({ kind: 'success', title: 'Email copied' });
+    else toast({ kind: 'error', title: 'Copy was blocked', body: 'Select the text and copy it yourself.' });
+  };
+  const span = totalDays < 1 ? `${Math.round(totalDays * 24)} hours` : `${Math.round(totalDays * 10) / 10} days`;
+
+  if (!emails.length) {
+    return (
+      <div className="flex flex-col gap-4">
+        {ai.running ? (
+          <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
+        ) : (
+          <Empty
+            variant="ai"
+            title="Write your welcome emails"
+            body={magnet ? `Five emails for everyone who claims “${magnet.title}”: delivery, a quick win, myths, objections, then your offer.` : 'Five emails: delivery, a quick win, myths, objections, then your offer. Write the lead magnet first so email 1 can deliver it.'}
+            action={
+              <GenerateButton variant="ai" size="lg" running={ai.running} runningLabel="Writing…" onClick={generate}>
+                Write the 5 emails
+              </GenerateButton>
+            }
+          />
+        )}
+        {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="section-title">5-email nurture sequence</h2>
-          <p className="text-small text-muted">
-            {project.marketing.leadMagnet ? <>For everyone who claims “{project.marketing.leadMagnet.title}”: set it up as an automation in your email provider.</> : 'Tip: create the lead magnet first so email 1 can deliver it.'} Delivery → quick win → myth-busting → objections → offer.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {emails.length > 0 && (
-            <>
-              <CopyButton text={() => sequenceText(getActiveProject()!)} label="Copy all" />
-              <button className="btn btn-secondary btn-sm" onClick={() => download(`${slugify(project.brand.name)}-email-sequence.txt`, sequenceText(project))}>
-                <Download size={14} /> Export
-              </button>
-              <button className="btn btn-primary btn-sm" onClick={onPreview}>
-                <Eye size={14} /> Preview & export
-              </button>
-            </>
-          )}
-          <GenerateButton running={ai.running} onClick={generate} size="sm">
-            {emails.length ? 'Rewrite sequence' : 'Write the 5 emails'}
-          </GenerateButton>
-        </div>
-      </div>
-      <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
-      {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
-
-      {!emails.length && !ai.running ? (
-        <Empty icon={<Mail size={20} />} title="No emails yet" body="Generate the sequence: every subject, preview line, body, call to action and send delay is editable." action={<GenerateButton running={ai.running} onClick={generate}>Write the 5 emails</GenerateButton>} />
-      ) : (
+    <Section
+      title="Welcome sequence"
+      description={`${magnet ? `For everyone who claims “${magnet.title}” · ` : ''}Runs over ${span}`}
+      actions={
         <>
-          {emails.length > 0 && (
-            <p className="flex items-center gap-1.5 text-caption text-muted">
-              <Clock size={13} /> The full sequence runs over <b className="num text-ink">{totalDays < 1 ? `${Math.round(totalDays * 24)} hours` : `${Math.round(totalDays * 10) / 10} days`}</b>.
-            </p>
-          )}
-          <ol className="relative flex flex-col gap-3 before:absolute before:bottom-6 before:left-[19px] before:top-6 before:w-px before:bg-line">
-            {emails.map((e, i) => {
-              const isOpen = open === e.id;
-              const pv = preview[e.id];
-              return (
-                <li key={e.id} className="relative pl-12">
-                  <span className="num absolute left-0 top-3 flex h-10 w-10 items-center justify-center rounded-full border-2 border-surface bg-primary text-body font-semibold text-on-primary shadow-card">{i + 1}</span>
-                  <div className="panel overflow-hidden">
-                    <button className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-left" onClick={() => setOpen(isOpen ? null : e.id)} aria-expanded={isOpen}>
-                      <span className="badge bg-primary-soft text-primary">{e.purpose}</span>
-                      <span className="flex items-center gap-1 text-caption text-muted">
-                        <Clock size={12} /> {delayLabel(e, i)}
-                      </span>
-                      <span className="w-full min-w-0 truncate text-body font-semibold sm:w-auto sm:flex-1">{renderTokens(e.subject, tokens)}</span>
-                      <ChevronDown size={16} className={cn('ml-auto shrink-0 text-muted transition-transform', isOpen && 'rotate-180')} />
-                    </button>
-                    {isOpen && (
-                      <div className="border-t border-line p-4">
-                        <div className="mb-3 flex flex-wrap items-center gap-2">
-                          <div className="inline-flex rounded-md border border-line p-0.5">
-                            <button className={cn('flex items-center gap-1 rounded px-2.5 py-1 text-caption font-semibold', !pv ? 'bg-ink text-surface' : 'text-muted')} onClick={() => setPreview((x) => ({ ...x, [e.id]: false }))}>
-                              <PenLine size={12} /> Edit
-                            </button>
-                            <button className={cn('flex items-center gap-1 rounded px-2.5 py-1 text-caption font-semibold', pv ? 'bg-ink text-surface' : 'text-muted')} onClick={() => setPreview((x) => ({ ...x, [e.id]: true }))}>
-                              <Eye size={12} /> Preview
-                            </button>
-                          </div>
-                          <CopyButton text={() => `Subject: ${e.subject}\n\n${e.body}`} size="xs" />
-                        </div>
-                        {pv ? (
-                          <EmailView project={project} email={e} tokens={tokens} />
-                        ) : (
-                          <div className="grid gap-3">
-                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
-                              <Field label="Subject line" htmlFor={`sub-${e.id}`} right={<span className={e.subject.length > 50 ? 'text-warn' : ''}>{e.subject.length}/50</span>}>
-                                <input id={`sub-${e.id}`} className="input font-semibold" value={e.subject} onChange={(ev) => patch(e.id, { subject: ev.target.value })} />
-                              </Field>
-                              <Field label={i === 0 ? 'Send after sign-up' : `Send after email ${i}`}>
-                                <div className="flex gap-1.5">
-                                  <input type="number" min={0} max={90} className="input num w-20" value={e.delay.value} onChange={(ev) => patch(e.id, { delay: { ...e.delay, value: Math.max(0, Math.min(90, Number(ev.target.value) || 0)) } })} aria-label="Delay amount" />
-                                  <select className="select w-[110px]" value={e.delay.unit} onChange={(ev) => patch(e.id, { delay: { ...e.delay, unit: ev.target.value as EmailStep['delay']['unit'] } })} aria-label="Delay unit">
-                                    <option value="minutes">minutes</option>
-                                    <option value="hours">hours</option>
-                                    <option value="days">days</option>
-                                  </select>
-                                </div>
-                              </Field>
-                            </div>
-                            <Field label="Preview text" htmlFor={`pre-${e.id}`} right={<span className={e.preview.length > 90 ? 'text-warn' : ''}>{e.preview.length}/90</span>} hint="Shown next to the subject in most inboxes.">
-                              <input id={`pre-${e.id}`} className="input" value={e.preview} onChange={(ev) => patch(e.id, { preview: ev.target.value })} />
-                            </Field>
-                            <Field label="Body" htmlFor={`body-${e.id}`} hint="Merge tags: {{first_name}}, {{lead_magnet_link}}, {{product_link}}, {{sender_name}}">
-                              <AutoTextarea id={`body-${e.id}`} value={e.body} onChange={(v) => patch(e.id, { body: v })} minRows={8} className="text-small leading-relaxed" />
-                            </Field>
-                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                              <Field label="Button label" htmlFor={`cta-${e.id}`}>
-                                <input id={`cta-${e.id}`} className="input" value={e.ctaLabel} onChange={(ev) => patch(e.id, { ctaLabel: ev.target.value })} />
-                              </Field>
-                              <Field label="Button link" htmlFor={`url-${e.id}`}>
-                                <input id={`url-${e.id}`} className="input text-small" value={e.ctaUrl} onChange={(ev) => patch(e.id, { ctaUrl: ev.target.value })} />
-                              </Field>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
+          <GenerateButton size="sm" running={ai.running} runningLabel="Writing…" onClick={generate}>
+            Rewrite sequence
+          </GenerateButton>
+          <button type="button" className="btn btn-primary btn-sm" onClick={onPreview}>
+            <Eye /> Preview & export
+          </button>
+          <MoreMenu
+            items={[
+              { label: 'Copy all', icon: <Copy />, onSelect: () => void copyAll() },
+              { label: 'Export .txt', icon: <Download />, onSelect: () => void download(`${slugify(project.brand.name)}-email-sequence.txt`, sequenceText(project)) },
+            ]}
+          />
         </>
-      )}
-    </div>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
+        {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
+        <ol className="relative flex flex-col gap-3 before:absolute before:bottom-5 before:left-[39px] before:top-5 before:w-px before:bg-line max-sm:before:hidden">
+          {emails.map((e, i) => {
+            const isOpen = open === e.id;
+            const pv = preview[e.id];
+            return (
+              <li key={e.id} className="relative flex flex-col gap-2 sm:flex-row sm:gap-4">
+                <div className="flex shrink-0 items-center gap-2 sm:w-[80px] sm:flex-col sm:items-center sm:gap-1 sm:pt-3">
+                  <span className="num relative z-[1] rounded-full bg-surface px-1.5 font-mono text-caption text-muted">{dayMarker(emails, i)}</span>
+                </div>
+                <div className="card min-w-0 flex-1 overflow-hidden">
+                  <div className="flex items-start gap-2 px-4 py-3">
+                    <button type="button" className="flex min-w-0 flex-1 items-start gap-3 text-left" onClick={() => setOpen(isOpen ? null : e.id)} aria-expanded={isOpen}>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-h4 text-ink">{renderTokens(e.subject, tokens)}</span>
+                        <span className="clamp-2 mt-0.5 block text-small text-muted">{e.preview || e.purpose}</span>
+                        <span className="mt-1 block text-caption text-muted">
+                          Email {i + 1} · {e.purpose} · {delayLabel(e, i)}
+                        </span>
+                      </span>
+                      <ChevronDown size={16} className={cn('mt-0.5 shrink-0 text-muted transition-transform duration-180', isOpen && 'rotate-180')} aria-hidden="true" />
+                    </button>
+                    <MoreMenu size="xs" label={`More actions for email ${i + 1}`} items={[{ label: 'Copy email', icon: <Copy />, onSelect: () => void copyOne(e) }]} />
+                  </div>
+                  {isOpen && (
+                    <div className="border-t border-line p-4">
+                      <Segmented
+                        size="sm"
+                        className="mb-4"
+                        value={pv ? 'preview' : 'edit'}
+                        onChange={(v) => setPreview((x) => ({ ...x, [e.id]: v === 'preview' }))}
+                        options={[
+                          { id: 'edit', label: 'Edit', icon: <PenLine /> },
+                          { id: 'preview', label: 'Preview', icon: <Eye /> },
+                        ]}
+                      />
+                      {pv ? (
+                        <BrowserFrame>
+                          <EmailView project={project} email={e} tokens={tokens} />
+                        </BrowserFrame>
+                      ) : (
+                        <div className="grid gap-4">
+                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_auto]">
+                            <Field label="Subject line" htmlFor={`sub-${e.id}`} right={<span className={cn('num font-mono', e.subject.length > 50 && 'text-warn')}>{e.subject.length}/50</span>}>
+                              <input id={`sub-${e.id}`} className="input" value={e.subject} onChange={(ev) => patch(e.id, { subject: ev.target.value })} />
+                            </Field>
+                            <Field label={i === 0 ? 'Send after sign-up' : `Send after email ${i}`}>
+                              <div className="flex gap-1.5">
+                                <input type="number" min={0} max={90} className="input num w-20" value={e.delay.value} onChange={(ev) => patch(e.id, { delay: { ...e.delay, value: Math.max(0, Math.min(90, Number(ev.target.value) || 0)) } })} aria-label="Delay amount" />
+                                <select className="select w-[110px]" value={e.delay.unit} onChange={(ev) => patch(e.id, { delay: { ...e.delay, unit: ev.target.value as EmailStep['delay']['unit'] } })} aria-label="Delay unit">
+                                  <option value="minutes">minutes</option>
+                                  <option value="hours">hours</option>
+                                  <option value="days">days</option>
+                                </select>
+                              </div>
+                            </Field>
+                          </div>
+                          <Field label="Preview text" htmlFor={`pre-${e.id}`} right={<span className={cn('num font-mono', e.preview.length > 90 && 'text-warn')}>{e.preview.length}/90</span>} hint="Shown next to the subject in most inboxes.">
+                            <input id={`pre-${e.id}`} className="input" value={e.preview} onChange={(ev) => patch(e.id, { preview: ev.target.value })} />
+                          </Field>
+                          <Field label="Body" htmlFor={`body-${e.id}`} hint="Merge tags: {{first_name}}, {{lead_magnet_link}}, {{product_link}}, {{sender_name}}">
+                            <AutoTextarea id={`body-${e.id}`} value={e.body} onChange={(v) => patch(e.id, { body: v })} minRows={8} />
+                          </Field>
+                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <Field label="Button label" htmlFor={`cta-${e.id}`}>
+                              <input id={`cta-${e.id}`} className="input" value={e.ctaLabel} onChange={(ev) => patch(e.id, { ctaLabel: ev.target.value })} />
+                            </Field>
+                            <Field label="Button link" htmlFor={`url-${e.id}`}>
+                              <input id={`url-${e.id}`} className="input font-mono" value={e.ctaUrl} onChange={(ev) => patch(e.id, { ctaUrl: ev.target.value })} />
+                            </Field>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </Section>
   );
 }
