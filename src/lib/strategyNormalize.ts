@@ -286,7 +286,7 @@ export const TICK_KEY = /^a_[a-z0-9]{1,13}$/;
 
 /**
  * Caps on every field (strings in characters, lists in items). The whole strategy stays ≤ 60,000 characters of JSON.
- * A source's URL: the server passes on none longer (MAX_SOURCE_URL in server/providers/research.mjs), so none is dropped here.
+ * A source's URL: the server passes on none longer, from a search or from Manus (MAX_SOURCE_URL in server/providers/research.mjs), so none is dropped here.
  */
 export const STRATEGY_CAPS = {
   json: 60_000,

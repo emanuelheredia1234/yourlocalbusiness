@@ -87,6 +87,18 @@ describe('reading the report', () => {
     expect(readManusResearch('x')).toBeNull();
   });
 
+  it('keeps a finding only with a page address the strategy keeps as a source (at most 400 characters, as the server)', () => {
+    const at = (n: number) => `https://example.com/${'a'.repeat(n - 'https://example.com/'.length)}`;
+    const r = readManusResearch({ state: 'done', pagesRead: 2, reason: '', findings: [{ topic: 'buyers', text: 'QA: at the limit.', url: at(400) }, { topic: 'buyers', text: 'QA: one longer.', url: at(401) }] })!;
+    expect(r.findings.map((f) => f.url)).toEqual([at(400)]);
+    // and the one it keeps is saved with its page
+    const p = qaProject();
+    const s = { ...qaSavedStrategy(p), manus: { taskId: 'task_qa_1', taskUrl: 'https://manus.im/app/task_qa_1', state: 'working' as const, requestedAt: 1 } };
+    const done = applyManusCheck(s, p, { status: 'stopped', done: true, waiting: false, error: '', creditUsage: 3 }, r);
+    expect(done.manus!.findings!.map((f) => [f.text, f.basis, f.sources])).toEqual([['QA: at the limit.', 'web', [3]]]);
+    expect(done.sources.at(-1)).toMatchObject({ n: 3, url: at(400), via: 'manus' });
+  });
+
   it('a finished task is written once: findings with their pages, credits, pages read', async () => {
     useStore.getState().updateProject('p1', (p) => ({ ...p, strategy: { ...readStrategy(p), manus: { taskId: 'task_qa_1', taskUrl: 'https://manus.im/app/task_qa_1', state: 'working', requestedAt: Date.now() - 60_000 } } }));
     fetchMock.mockResolvedValue(ok(DONE));

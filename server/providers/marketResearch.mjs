@@ -6,7 +6,7 @@
 // can't step out of its quotes. The report is untrusted web content: every value is checked and capped
 // here (and again by the app), and it's never sent back to Manus or written into the Brain.
 
-import { isHttpUrl, sourceKey } from './research.mjs';
+import { MAX_SOURCE_URL, isHttpUrl, sourceKey } from './research.mjs';
 
 const TOPICS = ['buyers', 'social', 'promote', 'offers', 'outreach', 'seo', 'other'];
 const MAX_FINDINGS = 20;
@@ -116,7 +116,7 @@ const topicOf = (v) => {
   return TOPICS.includes(t) ? t : 'other';
 };
 
-/** The page address in a report value: an http(s) URL of at most 600 characters, or ''. */
+/** The page address in a report value: an http(s) URL of at most 400 characters (MAX_SOURCE_URL: no longer one is a source the app keeps), or ''. */
 function urlOf(v) {
   if (typeof v !== 'string') return '';
   const m = /https?:\/\/[^\s<>"'`\])]+/i.exec(v);
@@ -126,7 +126,7 @@ function urlOf(v) {
   const opened = (url.match(/\(/g) ?? []).length;
   if (v[m.index + url.length] === ')' && opened > (url.match(/\)/g) ?? []).length) url += ')';
   url = url.replace(/[.,;:!?]+$/, '');
-  return url.length <= 600 && isHttpUrl(url) ? url : '';
+  return url.length <= MAX_SOURCE_URL && isHttpUrl(url) ? url : '';
 }
 
 /** Checked, capped, de-duplicated findings ({ topic, text, url, quote? }), at most 20. */

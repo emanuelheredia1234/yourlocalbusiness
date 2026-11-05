@@ -217,7 +217,11 @@ describe('sources', () => {
     const s = emptyStrategy();
     expect(addSource(s, { url: at(400) }, 'search', 1)).toBe(1);
     expect(addSource(s, { url: at(401) }, 'search', 1)).toBeNull();
-    expect(readStrategy(withStrategy({ ...s, sources: [...s.sources, { n: 2, url: at(401), title: 't', domain: 'example.com', via: 'search', at: 1 }] })).sources.map((x) => x.url)).toEqual([at(400)]);
+    // a cited page at the limit reads back as the web
+    const saved = qaSavedStrategy(p);
+    const back = readStrategy(withStrategy({ ...saved, sources: saved.sources.map((x) => (x.n === 1 ? { ...x, url: at(400) } : x)) }));
+    expect(back.sources.map((x) => x.url)).toEqual([at(400), saved.sources[1].url]);
+    expect(back.promote!.positioning).toMatchObject({ basis: 'web', sources: [1] });
   });
 });
 
