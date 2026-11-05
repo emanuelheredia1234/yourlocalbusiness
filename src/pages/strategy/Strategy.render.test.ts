@@ -129,6 +129,15 @@ describe('the Strategy page', () => {
     for (const m of research.matchAll(/<a [^>]*href="https?:[^"]*"[^>]*>/g)) expect(m[0]).toContain('rel="noopener noreferrer nofollow"');
   });
 
+  it('all 4 weeks: this week’s opens by default, the others stay folded', () => {
+    const p = qaProject('p1');
+    const saved = qaSavedStrategy(p);
+    const project = { ...p, strategy: { ...saved, plan: { ...saved.plan!, startAt: Date.now() - 8 * 86_400_000 } } };
+    const page = render(project);
+    const open = [...page.matchAll(/<button[^>]*aria-expanded="(true|false)"[^>]*>([\s\S]*?)<\/button>/g)].filter((m) => /Week \d:/.test(m[2]));
+    expect(open.map((m) => [m[2].match(/Week \d/)![0], m[1]])).toEqual([['Week 1', 'false'], ['Week 2', 'true'], ['Week 3', 'false'], ['Week 4', 'false']]);
+  });
+
   it('outreach: the emails as written, with [link to your page] for the owner to fill in', () => {
     const p = qaProject('p1');
     const project = { ...p, strategy: qaSavedStrategy(p) };

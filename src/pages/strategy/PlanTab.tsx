@@ -165,7 +165,7 @@ export function PlanTab({ project, s, ctx }: { project: Project; s: StrategyStat
               <Markdown text={plan.summary} />
             </div>
             <ProgressBar className="mt-4 max-w-sm" value={pr.done} max={pr.total || 1} label={`${pr.done} of ${pr.total} done`} />
-            <Accordion type="multiple" className="mt-3 border-t border-line" role="region" aria-label="All 4 weeks">
+            <Accordion type="multiple" defaultValue={w <= 4 ? [`week-${w}`] : []} className="mt-3 border-t border-line" role="region" aria-label="All 4 weeks">
               {plan.weeks.map((wk) => {
                 const list = plan.actions.filter((a) => a.week === wk.week);
                 const doneN = list.filter((a) => actionDone(a, project, s, ctx).done).length;
