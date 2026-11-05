@@ -7,7 +7,7 @@
 // the app (an app link there is plain text), and only https links work, in a new tab.
 
 import { Fragment, type ReactNode } from 'react';
-import { ArrowUpRight } from 'lucide-react';
+import { ArrowRight, ArrowUpRight } from 'lucide-react';
 import { ROUTES, type Route } from '@/lib/router';
 import { cn } from '@/lib/utils';
 
@@ -33,7 +33,7 @@ function inline(text: string, key: string, open: OpenPage | null): ReactNode[] {
     const t = m[0];
     const k = `${key}-${i++}`;
     if (t.startsWith('**')) out.push(<strong key={k} className="font-semibold text-ink">{t.slice(2, -2)}</strong>);
-    else if (t.startsWith('`')) out.push(<code key={k} className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[0.9em]">{t.slice(1, -1)}</code>);
+    else if (t.startsWith('`')) out.push(<code key={k} className="rounded-sm bg-surface-3 px-1 font-mono text-caption">{t.slice(1, -1)}</code>);
     else if (t.startsWith('[')) {
       const [, label, href] = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(t) ?? [];
       const page = open ? appLink(href ?? '') : null;
@@ -49,13 +49,15 @@ function inline(text: string, key: string, open: OpenPage | null): ReactNode[] {
             }}
           >
             {label}
+            {/* an app page opens here, in the app */}
+            <ArrowRight size={12} aria-hidden="true" className="ml-0.5 inline align-[-1px]" />
           </a>,
         );
       } else if (/^https?:\/\/[^\s]+$/i.test(href ?? '')) {
         out.push(
-          <a key={k} href={href} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-0.5">
+          <a key={k} href={href} target="_blank" rel="noopener noreferrer" className="link">
             {label}
-            <ArrowUpRight size={12} aria-hidden="true" />
+            <ArrowUpRight size={12} aria-hidden="true" className="ml-0.5 inline align-[-1px]" />
             <span className="sr-only"> (opens in a new tab)</span>
           </a>,
         );
@@ -122,5 +124,5 @@ export function ChatText({ text, onOpenPage, appLinks = true, className }: { tex
   }
   flushPara();
   flushList();
-  return <div className={cn('flex flex-col gap-2 break-words text-[13.5px] leading-relaxed text-ink-2', className)}>{blocks.map((b, i) => <Fragment key={i}>{b}</Fragment>)}</div>;
+  return <div className={cn('flex min-w-0 flex-col gap-2 break-words text-body text-ink', className)}>{blocks.map((b, i) => <Fragment key={i}>{b}</Fragment>)}</div>;
 }

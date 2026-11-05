@@ -31,6 +31,8 @@ vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
 });
 
 const { defaultSettings, newProject } = await import('@/store/defaults');
+// rows have a ⋯ menu with a tooltip: the app mounts the tooltip provider in main.tsx
+const { TooltipProvider } = await import('@/components/ui/shadcn/tooltip');
 const { BuildForm, BuildConfirm, checkWebsite, confirmWhat } = await import('./AgentBuildWindow');
 const { BuildCard } = await import('./AgentBuildList');
 const { AgentButtons } = await import('./AgentButtons');
@@ -69,7 +71,8 @@ describe('the build window, step 1', () => {
     expect(html).toContain('value="our studio"');
     expect(html).toContain('Your images go to Slack with your request. The page shows each one as {{img-N}}; add a note to say where it goes.');
     expect(html).toContain('<legend class="label">Facts Viktor may use</legend>');
-    expect(html).toContain('Business name:</span> <span class="break-words text-ink-2">Calm Studio</span>');
+    // each fact is a checkbox, its value under its name
+    expect(html).toMatch(/role="checkbox" aria-checked="true"[\s\S]*?Business name<\/span><span[^>]*><span[^>]*>Calm Studio<\/span>/);
     expect(html).toContain('Only these facts go: the page must not add reviews, prices or numbers of its own.');
     expect(html).toContain('In your DM with Viktor.');
     expect(nextButton(html)).not.toContain('disabled');
@@ -87,7 +90,7 @@ describe('the build window, step 1', () => {
     fake.runtime = { server: 'ok', ai: { reachable: true, ready: true, providers: [], routing: {}, agents: health({ manus: { build: { ready: false, reason: 'no_key' }, chat: { ready: false, reason: 'no_key' }, own: false, profile: '' } }) } };
     const html = form(fields({ via: 'manus' }));
     expect(html).toContain('Add a Manus API key in Settings → AI.');
-    expect(html).toContain('Open Settings → AI');
+    expect(html).toContain('Open Settings › AI keys');
     expect(nextButton(html)).toContain('disabled');
   });
 
@@ -148,7 +151,7 @@ const build = (patch: Partial<AgentBuild> = {}): AgentBuild => ({
   permalink: 'https://slack.example/p1',
   ...patch,
 });
-const card = (b: AgentBuild) => renderToStaticMarkup(createElement(BuildCard, { projectId: 'p1', build: b }));
+const card = (b: AgentBuild) => renderToStaticMarkup(createElement(TooltipProvider, null, createElement(BuildCard, { projectId: 'p1', build: b })));
 
 describe('the build cards', () => {
   it('sending', () => {

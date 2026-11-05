@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { CircleAlert, ExternalLink, Globe, RefreshCw } from 'lucide-react';
+import { CircleAlert, CircleCheck, ExternalLink, RefreshCw } from 'lucide-react';
 import type { Published } from '@/lib/types';
 import { cn, fmtRelative } from '@/lib/utils';
 import { copyText } from '@/lib/platform';
@@ -26,7 +26,7 @@ import {
   type PublishedList,
   type ServerPage,
 } from '@/lib/publish';
-import { CopyButton, Field, Spinner, confirmAction } from '@/components/ui/primitives';
+import { CopyButton, Field, Spinner, StatusDot, confirmAction } from '@/components/ui/primitives';
 import { toast, useUI } from '@/store/ui';
 
 /** Open Settings at the Domains card. */
@@ -57,6 +57,8 @@ const originOf = (url: string) => {
   }
 };
 const hostOf = (origin: string) => origin.replace(/^https?:\/\//, '');
+/** An address as people read it: without https:// (the link itself keeps it). */
+const bare = (url: string) => url.replace(/^https?:\/\//, '');
 
 /**
  * Publish a page (the sales page or an artifact) at a public address, with a name the owner chooses,
@@ -284,11 +286,11 @@ export function PublishPanel({
       <section className={cn('flex flex-col gap-2', className)} aria-label="Publish">
         <PanelTitle published={published} />
         {access === 'checking' ? (
-          <p className="flex items-center gap-2 text-[13px] text-muted">
+          <p className="flex items-center gap-2 text-small text-muted">
             <Spinner size={14} /> Checking whether you can publish…
           </p>
         ) : (
-          <p className="text-[13px] text-muted">
+          <p className="text-small text-muted">
             {access === 'unavailable'
               ? 'Publishing at a public address isn’t available in this version of the app.'
               : access === 'unreachable'
@@ -320,16 +322,20 @@ export function PublishPanel({
   const working = !!busy;
   const domainOff = published?.domain ? domainInfo(published.domain) : undefined;
 
+  const target = finalSlug && isValidSlug(finalSlug) ? publishTarget(appOrigin, finalSlug, domain || null, !!domain && home) : null;
+  const check = AVAILABILITY[avail];
+
   return (
-    <section className={cn('flex flex-col gap-3', className)} aria-label="Publish">
+    <section className={cn('flex flex-col gap-4', className)} aria-label="Publish">
       <PanelTitle published={published} />
       {notice && (
-        <p className="rounded-md border border-line bg-surface-2/60 px-3 py-2 text-[12.5px] text-ink-2" role="status">
+        <p className="well px-3 py-2.5 text-small text-ink-2" role="status">
           {notice}
         </p>
       )}
       {listError && (
-        <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-bad" role="alert">
+        <div className="flex flex-wrap items-center gap-2 text-small text-bad" role="alert">
+          <CircleAlert size={14} className="shrink-0" aria-hidden="true" />
           <span className="min-w-0 flex-1">{listError}</span>
           <button type="button" className="btn btn-secondary btn-xs" onClick={() => setLoads((n) => n + 1)}>
             Try again
@@ -341,16 +347,16 @@ export function PublishPanel({
         <>
           <Links published={published} />
           {domainOff && !domainOff.verified && (
-            <p className="text-[12.5px] text-warn">
+            <p className="text-small text-warn">
               {published.domain} isn’t verified yet, so that address won’t open until it is.{' '}
               <button type="button" className="link" onClick={openDomainSettings}>
-                Check it in Settings → Domains
+                Check it in Settings › Domains
               </button>
             </p>
           )}
           {stale && (
-            <p className="flex items-center gap-1.5 text-[12.5px] font-medium text-warn" role="status">
-              <CircleAlert size={14} /> Changes not published yet.
+            <p className="flex items-center gap-1.5 text-small font-medium text-warn" role="status">
+              <CircleAlert size={14} aria-hidden="true" /> Changes not published yet.
             </p>
           )}
           <div className="flex flex-wrap items-center gap-2">
@@ -360,18 +366,18 @@ export function PublishPanel({
             <button type="button" className="btn btn-secondary btn-sm" disabled={working} onClick={startEditing}>
               Change address
             </button>
-            <button type="button" className="btn btn-ghost btn-sm text-muted hover:text-bad" disabled={working} onClick={() => void unpublish()}>
+            <button type="button" className="btn btn-danger-ghost btn-sm" disabled={working} onClick={() => void unpublish()}>
               {busy === 'unpublish' && <Spinner size={14} />} Unpublish
             </button>
           </div>
-          <p className="text-xs text-muted">Published {fmtRelative(published.publishedAt)}. Update sends your latest changes.</p>
+          <p className="text-caption text-muted">Published {fmtRelative(published.publishedAt)}. Update sends your latest changes.</p>
         </>
       )}
 
       {/* ───────────── choosing the address ───────────── */}
       {showForm && (
         <form
-          className="flex flex-col gap-3"
+          className="flex flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
             if (!working && (avail === 'ok' || avail === 'mine')) void publish({ slug: finalSlug, domain, home: !!domain && home });
@@ -381,18 +387,20 @@ export function PublishPanel({
             label="Address"
             htmlFor={`${ids}-slug`}
             hint={
-              <span id={`${ids}-slug-check`} className={cn(AVAILABILITY[avail].tone === 'good' && 'text-good', AVAILABILITY[avail].tone === 'bad' && 'text-bad')} aria-live="polite">
-                {AVAILABILITY[avail].text}
+              <span id={`${ids}-slug-check`} className={cn('inline-flex items-start gap-1.5', check.tone === 'good' && 'text-good', check.tone === 'bad' && 'text-bad')} aria-live="polite">
+                {avail === 'checking' ? <Spinner size={14} className="mt-px shrink-0" /> : check.tone === 'good' ? <CircleCheck size={14} className="mt-px shrink-0" aria-hidden="true" /> : check.tone === 'bad' ? <CircleAlert size={14} className="mt-px shrink-0" aria-hidden="true" /> : null}
+                {check.text}
               </span>
             }
           >
-            <div className="flex h-9 min-w-0 items-center rounded-md border border-line-2 bg-surface focus-within:border-primary focus-within:shadow-focus">
-              <span className="max-w-[55%] shrink-0 truncate pl-3 text-[13px] text-muted" title={`${appOrigin}/`}>
-                {hostOf(appOrigin)}/
+            {/* the input look, split: the app's host (fixed) and the page's name */}
+            <div className="input flex min-w-0 items-stretch overflow-hidden p-0 focus-within:border-ring focus-within:shadow-focus">
+              <span className="flex max-w-[55%] shrink-0 items-center border-r border-line bg-surface-2 px-3 font-mono text-caption text-muted dark:bg-surface-3" title={`${appOrigin}/`}>
+                <span className="truncate">{hostOf(appOrigin)}/</span>
               </span>
               <input
                 id={`${ids}-slug`}
-                className="h-full min-w-0 flex-1 bg-transparent pr-3 text-sm text-ink outline-none placeholder:text-faint"
+                className="h-full min-w-0 flex-1 bg-transparent px-3 font-mono text-small text-ink outline-none placeholder:text-faint max-sm:text-body-lg"
                 value={slug}
                 placeholder="your-page-name"
                 autoComplete="off"
@@ -412,7 +420,7 @@ export function PublishPanel({
           </Field>
 
           {domains.length > 0 ? (
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2.5">
               <Field label="Also show it on your domain" htmlFor={`${ids}-domain`} right={<DomainsLink />}>
                 <select id={`${ids}-domain`} className="select" value={domain} disabled={working} onChange={(e) => setDomain(e.target.value)}>
                   <option value="">No, only this app’s address</option>
@@ -425,34 +433,37 @@ export function PublishPanel({
                 </select>
               </Field>
               {domain && (
-                <label className="flex items-start gap-2 text-[13px] text-ink-2">
-                  <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[rgb(var(--primary))]" checked={home} disabled={working} onChange={(e) => setHome(e.target.checked)} />
+                <label className="flex items-start gap-2.5 text-small text-ink-2">
+                  <input type="checkbox" className="mt-[3px] h-4 w-4 shrink-0" checked={home} disabled={working} onChange={(e) => setHome(e.target.checked)} />
                   <span>
                     Make it this domain’s home page (https://{domain}/)
-                    {otherHome && <span className="block text-xs text-muted">This replaces “{otherHome.title || otherHome.slug}” as its home page.</span>}
+                    {otherHome && <span className="mt-0.5 block text-caption text-muted">This replaces “{otherHome.title || otherHome.slug}” as its home page.</span>}
                   </span>
                 </label>
               )}
             </div>
           ) : (
             list && (
-              <p className="text-xs text-muted">
-                Have your own domain? <DomainsLink label="Add it in Settings → Domains" />
+              <p className="text-caption text-muted">
+                Have your own domain? <DomainsLink label="Add it in Settings › Domains" />
               </p>
             )
           )}
 
-          {finalSlug && isValidSlug(finalSlug) && (
-            <p className="break-all text-xs text-muted">
-              It will be at <span className="font-medium text-ink-2">{publishTarget(appOrigin, finalSlug).url}</span>
-              {domain && (
-                <>
-                  {' '}
-                  and <span className="font-medium text-ink-2">{publishTarget(appOrigin, finalSlug, domain, home).domainUrl}</span>
-                </>
-              )}
-              .{published && finalSlug !== published.slug && ' The old address stops working right away.'}
-            </p>
+          {target && (
+            <div>
+              <p className="mb-1.5 text-caption text-muted">{published ? 'Its new address' : 'It will be at'}</p>
+              <ul className="flex flex-col gap-1.5">
+                {[target.url, ...(domain && target.domainUrl ? [target.domainUrl] : [])].map((url) => (
+                  <li key={url} className="well flex min-w-0 flex-wrap items-center gap-2 py-1 pl-3 pr-1">
+                    {/* the whole address, wrapped in a narrow column (cut short, the page's name is what goes) */}
+                    <span className="min-w-[150px] flex-1 break-all py-1 font-mono text-caption text-ink">{bare(url)}</span>
+                    <CopyButton text={url} size="xs" label="Copy" />
+                  </li>
+                ))}
+              </ul>
+              {published && finalSlug !== published.slug && <p className="mt-1.5 text-caption text-warn">The old address stops working right away.</p>}
+            </div>
           )}
 
           <div className="flex flex-wrap items-center gap-2">
@@ -461,17 +472,18 @@ export function PublishPanel({
               {published ? 'Save new address' : 'Publish'}
             </button>
             {published && (
-              <button type="button" className="btn btn-ghost btn-sm" disabled={working} onClick={() => setEditing(false)}>
+              <button type="button" className="btn btn-secondary btn-sm" disabled={working} onClick={() => setEditing(false)}>
                 Cancel
               </button>
             )}
-            {busy === 'publish' && <span className="text-xs text-muted">Getting your page and images ready…</span>}
+            {busy === 'publish' && <span className="text-caption text-muted">Getting your page and images ready…</span>}
           </div>
         </form>
       )}
 
       {error && (
-        <p className="text-[12.5px] text-bad" role="alert">
+        <p className="flex items-start gap-1.5 text-small text-bad" role="alert">
+          <CircleAlert size={14} className="mt-[3px] shrink-0" aria-hidden="true" />
           {error}
         </p>
       )}
@@ -481,39 +493,37 @@ export function PublishPanel({
 
 function PanelTitle({ published }: { published?: Published }) {
   return (
-    <div className="flex items-center gap-2">
-      <Globe size={15} className="text-primary" aria-hidden="true" />
-      <h3 className="text-[14px] font-semibold text-ink">Public page</h3>
-      {published ? <span className="badge bg-good-soft text-good">Published</span> : <span className="badge bg-surface-2 text-muted">Not published</span>}
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+      <h3 className="text-h4 text-ink">Public page</h3>
+      {published ? <StatusDot tone="good">Published</StatusDot> : <StatusDot tone="faint">Not published</StatusDot>}
     </div>
   );
 }
 
-/** The page's address(es), each with Copy and Open. */
+/** The page's address(es), each in a well with Copy and Open. */
 function Links({ published }: { published: Published }) {
   const links = [published.url, ...(published.domainUrl ? [published.domainUrl] : [])];
   return (
     <ul className="flex flex-col gap-1.5">
       {links.map((url) => (
-        <li key={url} className="flex min-w-0 flex-wrap items-center gap-2">
-          <a href={url} target="_blank" rel="noopener noreferrer" className="link min-w-0 flex-1 break-all text-[13px]">
-            {url}
+        <li key={url} className="well flex min-w-0 flex-wrap items-center gap-1.5 py-1 pl-3 pr-1">
+          {/* the whole address, wrapped in a narrow column (cut short, the page's name is what goes) */}
+          <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-[150px] flex-1 break-all py-1 font-mono text-caption text-ink underline-offset-[3px] hover:underline">
+            {bare(url)}
           </a>
-          <span className="flex shrink-0 gap-1.5">
-            <CopyButton text={url} size="xs" label="Copy" />
-            <a href={url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-xs" aria-label={`Open ${url} in a new tab`}>
-              <ExternalLink size={12} /> Open
-            </a>
-          </span>
+          <CopyButton text={url} size="xs" label="Copy" />
+          <a href={url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-xs" aria-label={`Open ${url} in a new tab`}>
+            <ExternalLink aria-hidden="true" /> Open
+          </a>
         </li>
       ))}
     </ul>
   );
 }
 
-function DomainsLink({ label = 'Add a domain in Settings → Domains' }: { label?: string }) {
+function DomainsLink({ label = 'Add a domain in Settings › Domains' }: { label?: string }) {
   return (
-    <button type="button" className="link text-xs" onClick={openDomainSettings}>
+    <button type="button" className="link text-caption" onClick={openDomainSettings}>
       {label}
     </button>
   );

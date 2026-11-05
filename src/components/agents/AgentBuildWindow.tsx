@@ -4,7 +4,7 @@
 // one click and one request: never retried. The fields are kept per project and target while the app is open.
 
 import { useEffect, useId, useMemo, useState } from 'react';
-import { Bot, ChevronDown, Globe, MessagesSquare, Send } from 'lucide-react';
+import { CircleAlert, Globe, Send } from 'lucide-react';
 import type { AgentId, AgentPreview, BuildFactId, BuildTarget } from '@/lib/agentTypes';
 import type { MediaRef, PageType, Project } from '@/lib/types';
 import { cn, plural } from '@/lib/utils';
@@ -22,11 +22,11 @@ import { openPage } from '@/ai/assistant/nav';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { PromptImages, usePasteImages } from '@/components/ai/PromptImages';
-import { AutoTextarea, Field, Modal, Spinner } from '@/components/ui/primitives';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, AutoTextarea, Callout, Checkbox, Field, Modal, OptionCards, Spinner } from '@/components/ui/primitives';
 import { PageTypeLinks, PageTypePicker } from '@/pages/marketing/PageTypePicker';
 import { closeAgentBuild, setWindowFields, useAgentBuildWindow, windowKey, type BuildWindowFields } from './buildWindow';
+import { AgentAvatar } from './AgentButtons';
 
-const ICON: Record<AgentId, typeof Bot> = { manus: Bot, viktor: MessagesSquare };
 const AGENTS: AgentId[] = ['manus', 'viktor'];
 
 /** The owner's website as a style reference: an https address with a real public host ('' for none). */
@@ -113,64 +113,59 @@ export function BuildForm({ project, target, f, onNext }: { project: Project; ta
   const toggleFact = (id: BuildFactId, on: boolean) => setWindowFields({ unticked: on ? f.unticked.filter((x) => x !== id) : [...new Set([...f.unticked, id])] });
   const factIds = [...new Set(facts.map((x) => x.id))];
 
+  const settingsLink = (
+    <button type="button" className="link" onClick={() => void openPage('workspace-settings', 'ai').then((ok) => ok && closeAgentBuild())}>
+      Open Settings › AI keys
+    </button>
+  );
+
   return (
     <Modal
       open
       onClose={() => closeAgentBuild()}
       size="lg"
       title={target === 'asset' ? 'Build an asset with Manus or Viktor' : 'Build your SEO page with Manus or Viktor'}
-      subtitle="They get your request on the app’s fixed template, with your own words and facts only. You confirm before anything is sent."
+      subtitle="Step 1 of 2"
       footer={
         <>
           {problem && (
-            <p className="mr-auto text-xs text-bad" role="alert">
+            <p className="mr-auto flex min-w-0 basis-full items-start gap-1.5 text-caption text-bad sm:basis-auto" role="alert">
+              <CircleAlert size={14} className="mt-px shrink-0" aria-hidden="true" />
               {problem}
             </p>
           )}
           <button type="button" className="btn btn-secondary btn-sm" onClick={() => closeAgentBuild()}>
             Cancel
           </button>
-          <button type="button" className="btn btn-primary btn-sm" disabled={!r.ready || !!problem || adding} onClick={onNext}>
+          <button type="button" className="btn btn-ai btn-sm" disabled={!r.ready || !!problem || adding} onClick={onNext}>
             Next
           </button>
         </>
       }
     >
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-6">
         <fieldset className="min-w-0">
           <legend className="label">Who builds it</legend>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Who builds it">
-            {AGENTS.filter((via) => ready[via].show).map((via) => {
-              const Icon = ICON[via];
-              const on = f.via === via;
+          <OptionCards
+            aria-label="Who builds it"
+            value={f.via}
+            onChange={(via) => setWindowFields({ via })}
+            columns={2}
+            options={AGENTS.filter((via) => ready[via].show).map((via) => {
               const a = ready[via];
-              return (
-                <button
-                  key={via}
-                  type="button"
-                  role="radio"
-                  aria-checked={on}
-                  disabled={!a.ready && !on}
-                  onClick={() => setWindowFields({ via })}
-                  className={cn('flex items-start gap-2.5 rounded-md border p-3 text-left transition-colors', on ? 'border-primary bg-primary-soft' : 'border-line hover:border-line-2 hover:bg-surface-2', !a.ready && 'opacity-70')}
-                >
-                  <Icon size={16} className={cn('mt-0.5 shrink-0', on ? 'text-primary' : 'text-muted')} aria-hidden="true" />
-                  <span className="min-w-0">
-                    <span className="block text-[13px] font-semibold text-ink">{agentName(via)}</span>
-                    <span className="mt-0.5 block text-[11.5px] leading-snug text-muted">{a.ready ? (via === 'manus' ? 'An AI agent with its own computer and browser, in your Manus account.' : 'The AI employee from viktor.com, in your Slack.') : a.text}</span>
-                  </span>
-                </button>
-              );
+              return {
+                value: via,
+                title: agentName(via),
+                icon: <span className="text-h3 text-ink-2">{via === 'manus' ? 'M' : 'V'}</span>,
+                description: a.ready ? (via === 'manus' ? 'An AI agent with its own computer and browser, in your Manus account.' : 'The AI employee from viktor.com, in your Slack.') : a.text,
+                disabled: !a.ready && f.via !== via,
+              };
             })}
-          </div>
+          />
           {!r.ready && (
-            <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-bad" role="status">
-              {r.text}
-              {r.settings && (
-                <button type="button" className="link text-xs" onClick={() => void openPage('workspace-settings', 'ai').then((ok) => ok && closeAgentBuild())}>
-                  Open Settings → AI
-                </button>
-              )}
+            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-bad" role="status">
+              <span>{r.text}</span>
+              {r.settings && settingsLink}
             </p>
           )}
         </fieldset>
@@ -192,20 +187,13 @@ export function BuildForm({ project, target, f, onNext }: { project: Project; ta
           </div>
         )}
 
-        <Field label="Your website (reference)" htmlFor={`${ids}-site`} error={websiteError} hint={f.website.trim() ? `${name} opens it only to see your colors, fonts and style. They don’t sign in or change anything there.` : 'No reference: leave it empty, or add your website’s https address.'}>
-          <div className="relative">
-            <Globe size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
-            <input id={`${ids}-site`} className="input pl-8" type="url" inputMode="url" autoComplete="url" placeholder="https://example.com" value={f.website} onChange={(e) => setWindowFields({ website: e.target.value })} onBlur={blurWebsite} aria-invalid={!!websiteError} />
-          </div>
-        </Field>
-
         <Field
           label="What to build and the features you want"
           htmlFor={`${ids}-request`}
-          right={<span className={cn('num', f.request.trim().length > cap && 'text-bad')}>{`${f.request.trim().length.toLocaleString('en-US')} / ${cap.toLocaleString('en-US')}`}</span>}
+          right={<span className={cn('num font-mono', f.request.trim().length > cap && 'text-bad')}>{`${f.request.trim().length.toLocaleString('en-US')} / ${cap.toLocaleString('en-US')}`}</span>}
           hint="Your own words, sent as you write them inside the app’s template. Paste or drop images here too."
         >
-          <AutoTextarea id={`${ids}-request`} value={f.request} onChange={(v) => setWindowFields({ request: v })} minRows={4} className="text-[13px]" placeholder={target === 'asset' ? 'For example: a booking widget for my yoga classes, with my three class types and a short note about what to bring.' : 'For example: a calm, friendly page for first-time customers. Show my three services with photos.'} {...paste} />
+          <AutoTextarea id={`${ids}-request`} value={f.request} onChange={(v) => setWindowFields({ request: v })} minRows={4} placeholder={target === 'asset' ? 'For example: a booking widget for my yoga classes, with my three class types and a short note about what to bring.' : 'For example: a calm, friendly page for first-time customers. Show my three services with photos.'} {...paste} />
         </Field>
 
         <PromptImages
@@ -217,23 +205,24 @@ export function BuildForm({ project, target, f, onNext }: { project: Project; ta
           hint={`Your images go to ${f.via === 'manus' ? 'Manus' : 'Slack'} with your request. The page shows each one as {{img-N}}; add a note to say where it goes.`}
         />
 
+        <Field label="Your website (reference)" htmlFor={`${ids}-site`} error={websiteError} hint={f.website.trim() ? `${name} opens it only to see your colors, fonts and style. They don’t sign in or change anything there.` : 'No reference: leave it empty, or add your website’s https address.'}>
+          <div className="relative">
+            <Globe size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" aria-hidden="true" />
+            <input id={`${ids}-site`} className="input pl-9" type="url" inputMode="url" autoComplete="url" placeholder="https://example.com" value={f.website} onChange={(e) => setWindowFields({ website: e.target.value })} onBlur={blurWebsite} aria-invalid={!!websiteError} />
+          </div>
+        </Field>
+
         <fieldset className="min-w-0">
           <legend className="label">Facts {name} may use</legend>
           {facts.length === 0 ? (
-            <p className="hint mt-0">No facts yet: add your business details in Settings → Brand and Studio.</p>
+            <p className="text-small text-muted">No facts yet: add your business details in Settings › Brand and Studio.</p>
           ) : (
-            <ul className="flex flex-col gap-1.5">
+            <ul className="well grid gap-x-6 gap-y-3 p-4 sm:grid-cols-2">
               {factIds.map((id) => {
                 const lines = facts.filter((x) => x.id === id);
-                const on = !f.unticked.includes(id);
                 return (
-                  <li key={id}>
-                    <label className="flex cursor-pointer items-start gap-2 text-[13px]">
-                      <input type="checkbox" className="mt-0.5" checked={on} onChange={(e) => toggleFact(id, e.target.checked)} />
-                      <span className="min-w-0">
-                        <span className="font-semibold text-ink">{lines[0].label}:</span> <span className="break-words text-ink-2">{lines.map((x) => x.value).join('; ')}</span>
-                      </span>
-                    </label>
+                  <li key={id} className="min-w-0">
+                    <Checkbox checked={!f.unticked.includes(id)} onChange={(on) => toggleFact(id, on)} label={lines[0].label} description={<span className="clamp-2 break-words">{lines.map((x) => x.value).join('; ')}</span>} />
                   </li>
                 );
               })}
@@ -243,7 +232,7 @@ export function BuildForm({ project, target, f, onNext }: { project: Project; ta
         </fieldset>
 
         {f.via === 'manus' ? (
-          <Field label="Agent" htmlFor={`${ids}-profile`} hint={chosenProfile ? chosenProfile.note : defaultProfile ? `${defaultProfile.label}: ${defaultProfile.note}` : 'The agent set for your Manus key in Settings → AI.'}>
+          <Field label="Agent" htmlFor={`${ids}-profile`} hint={chosenProfile ? chosenProfile.note : defaultProfile ? `${defaultProfile.label}: ${defaultProfile.note}` : 'The agent set for your Manus key in Settings › AI keys.'}>
             <select id={`${ids}-profile`} className="select" value={f.profile} onChange={(e) => setWindowFields({ profile: e.target.value })}>
               <option value="">{defaultProfile ? `${defaultProfile.label} (your Settings default)` : '(your Settings default)'}</option>
               {MANUS_PROFILES.map((x) => (
@@ -254,9 +243,10 @@ export function BuildForm({ project, target, f, onNext }: { project: Project; ta
             </select>
           </Field>
         ) : (
-          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-2">
-            <MessagesSquare size={13} className="text-muted" aria-hidden="true" /> In {agentPlace() || 'the place you chose in Settings'}.
-            <button type="button" className="link text-xs" onClick={() => void openPage('workspace-settings', 'ai').then((ok) => ok && closeAgentBuild())}>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-ink-2">
+            <AgentAvatar via="viktor" size={16} />
+            {`In ${agentPlace() || 'the place you chose in Settings'}.`}
+            <button type="button" className="link" onClick={() => void openPage('workspace-settings', 'ai').then((ok) => ok && closeAgentBuild())}>
               Change in Settings
             </button>
           </p>
@@ -278,7 +268,9 @@ export function BuildConfirm({ project, target, f, onBack }: { project: Project;
   const name = agentName(f.via);
   // one Ref for the exact message shown and the one sent
   const [ref] = useState(() => newRef());
-  const [show, setShow] = useState(false);
+  // the open sections: "message" (the exact message, fetched the first time it opens) and "who"
+  const [open, setOpen] = useState<string[]>([]);
+  const show = open.includes('message');
   const [preview, setPreview] = useState<{ state: 'idle' | 'loading' | 'done' | 'error'; data?: AgentPreview; error?: string }>({ state: 'idle' });
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<{ title: string; body: string; settings: boolean } | null>(null);
@@ -327,59 +319,67 @@ export function BuildConfirm({ project, target, f, onBack }: { project: Project;
       onClose={() => !sending && closeAgentBuild()}
       size="lg"
       title={`Send this to ${name}?`}
+      subtitle="Step 2 of 2"
       footer={
         <>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={sending} onClick={onBack}>
+          <button type="button" className="btn btn-secondary btn-sm mr-auto" disabled={sending} onClick={onBack}>
             Back
           </button>
-          <button type="button" className="btn btn-primary btn-sm" disabled={sending || over} onClick={() => void send()}>
-            {sending ? <Spinner size={14} /> : <Send size={14} />} {sending ? `Sending to ${name}…` : `Send to ${name}`}
+          <button type="button" className="btn btn-secondary btn-sm" disabled={sending} onClick={() => closeAgentBuild()}>
+            Cancel
+          </button>
+          <button type="button" className={cn('btn btn-ai btn-sm', sending && 'is-running')} disabled={sending || over} aria-busy={sending || undefined} onClick={() => void send()}>
+            {sending ? <Spinner /> : <Send />} {sending ? `Sending to ${name}…` : `Send to ${name}`}
           </button>
         </>
       }
     >
-      <div className="flex flex-col gap-3 text-[13px]">
-        <p className="font-semibold text-ink">{confirmWhat(target, f.kind, { words: !!f.request.trim(), images: f.images.length, facts: facts.length, website: !!website })}</p>
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2">
-          <dt className="font-semibold text-ink-2">Who</dt>
-          <dd className="text-ink-2">{agentWho(f.via, 'build')}</dd>
-          <dt className="font-semibold text-ink-2">Cost</dt>
-          <dd className="text-ink-2">{agentCost(f.via)}</dd>
-        </dl>
-        <div className="rounded-md border border-line">
-          <button type="button" className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] font-semibold" aria-expanded={show} onClick={() => setShow((s) => !s)}>
-            <ChevronDown size={14} className={cn('transition-transform', !show && '-rotate-90')} aria-hidden="true" /> Show the exact message
-          </button>
-          {show && (
-            <div className="border-t border-line p-3">
+      <div className="flex flex-col gap-4">
+        <div className="flex items-start gap-3">
+          <AgentAvatar via={f.via} size={28} className="mt-px" />
+          <p className="min-w-0 text-body text-ink">{confirmWhat(target, f.kind, { words: !!f.request.trim(), images: f.images.length, facts: facts.length, website: !!website })}</p>
+        </div>
+        <Accordion type="multiple" value={open} onValueChange={setOpen} className="border-y border-line">
+          <AccordionItem value="message">
+            <AccordionTrigger className="py-2.5 text-small font-medium text-ink-2 hover:text-ink">Show the exact message</AccordionTrigger>
+            <AccordionContent className="pb-3">
               {preview.state === 'loading' && (
-                <p className="flex items-center gap-2 text-xs text-muted" role="status">
-                  <Spinner size={12} /> Writing it the way the server sends it…
+                <p className="flex items-center gap-2 text-small text-muted" role="status">
+                  <Spinner size={14} /> Writing it the way the server sends it…
                 </p>
               )}
               {preview.state === 'error' && (
-                <p className="text-xs text-bad" role="alert">
+                <p className="flex items-start gap-1.5 text-small text-bad" role="alert">
+                  <CircleAlert size={14} className="mt-[3px] shrink-0" aria-hidden="true" />
                   {preview.error}
                 </p>
               )}
               {preview.data && (
                 <>
-                  <pre className="max-h-[300px] overflow-auto whitespace-pre-wrap break-words rounded bg-surface-2 p-2.5 font-mono text-[11.5px] leading-relaxed text-ink-2 scroll-thin">{preview.data.text}</pre>
-                  <p className={cn('mt-1.5 text-xs', over ? 'text-bad' : 'text-muted')}>
-                    {`${preview.data.chars.toLocaleString('en-US')} of ${preview.data.limit.toLocaleString('en-US')} characters`}
+                  <pre className="well scroll-thin max-h-[300px] overflow-auto whitespace-pre-wrap break-words px-3 py-2.5 font-mono text-caption text-ink-2">{preview.data.text}</pre>
+                  <p className={cn('mt-1.5 text-caption', over ? 'text-bad' : 'text-muted')}>
+                    <span className="num">{`${preview.data.chars.toLocaleString('en-US')} of ${preview.data.limit.toLocaleString('en-US')} characters`}</span>
                     {over && ` · Too long for one ${f.via === 'manus' ? 'Manus' : 'Slack'} message: shorten your words or untick some facts.`}
                   </p>
                 </>
               )}
-            </div>
-          )}
-        </div>
-        {error && (
-          <p className="rounded-md border border-bad/30 bg-bad-soft px-3 py-2 text-xs text-bad" role="alert">
-            {error.body}
-          </p>
-        )}
-        <p className="text-xs text-muted">One click sends it once. Nothing is published: you preview the page here when it’s back, then use it or ask for changes.</p>
+            </AccordionContent>
+          </AccordionItem>
+          <AccordionItem value="who" className="border-b-0">
+            <AccordionTrigger className="py-2.5 text-small font-medium text-ink-2 hover:text-ink">Who does it and what it costs</AccordionTrigger>
+            {/* kept in the page while closed (hidden), so it's there to find and to read the moment it opens */}
+            <AccordionContent forceMount hidden={!open.includes('who')} className="pb-3">
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-small">
+                <dt className="text-muted">Who</dt>
+                <dd className="text-ink-2">{agentWho(f.via, 'build')}</dd>
+                <dt className="text-muted">Cost</dt>
+                <dd className="text-ink-2">{agentCost(f.via)}</dd>
+              </dl>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+        {error && <Callout tone="bad">{error.body}</Callout>}
+        <p className="text-caption text-muted">One click sends it once. Nothing is published: you preview the page here when it’s back, then use it or ask for changes.</p>
       </div>
     </Modal>
   );

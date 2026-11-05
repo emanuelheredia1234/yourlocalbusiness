@@ -1,19 +1,23 @@
-// The assistant's round chat button at the bottom right, and its panel (loaded the first time it opens).
-// A chat turn isn't tied to the panel: closing it leaves a turn running (the button shows it), and
-// the panel shows where it is when opened again. Chats waiting for Manus or Viktor are checked from here
-// (every 45 seconds, panel open or not), and a reply that came while the panel was closed puts a dot on
-// the button.
+// The assistant's panel (loaded the first time it opens) and, on phones, its round launcher at the bottom right.
+// From 768px wide the way in is the top bar's "Ask AI", ⌘/Ctrl+J and the command palette, so the launcher never
+// sits on a page there. A chat turn isn't tied to the panel: closing it leaves a turn running (the launcher shows
+// it), and the panel shows where it is when opened again. Chats waiting for Manus or Viktor are checked from here
+// (every 45 seconds, panel open or not), and a reply that came while the panel was closed puts a dot on the launcher.
 
-import { Component, Suspense, lazy, useEffect, useRef, type ReactNode } from 'react';
-import { MessageCircle, RotateCcw, X } from 'lucide-react';
+import { Component, Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react';
+import { RotateCcw, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/cloud/auth';
 import { useStore } from '@/store/useStore';
 import { loadChats, useAssistant, type ChatMessage } from '@/store/assistant';
 import { useAgentChatWatcher } from '@/ai/agents/chat';
+import { Spark } from '../ai/Spark';
 import { Spinner } from '../ui/primitives';
 
 const AssistantPanel = lazy(() => import('./AssistantPanel'));
+
+/** Where the launcher sits: the bottom-right corner, clear of the phone's safe area. */
+const CORNER = { right: 'max(16px, env(safe-area-inset-right, 0px))', bottom: 'max(16px, env(safe-area-inset-bottom, 0px))' };
 
 /** Keeps a broken assistant from taking the app down with it; offers to start it again. */
 class AssistantBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -30,7 +34,7 @@ class AssistantBoundary extends Component<{ children: ReactNode }, { error: Erro
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div role="alert" className="fixed z-[45] flex max-w-[300px] items-center gap-2 rounded-lg border border-line bg-surface p-3 text-[12.5px] text-ink-2 shadow-pop" style={{ right: 'max(16px, env(safe-area-inset-right, 0px))', bottom: 'max(16px, env(safe-area-inset-bottom, 0px))' }}>
+      <div role="alert" className="fixed z-overlay flex max-w-[300px] items-center gap-3 rounded-pop border border-line bg-elevated px-3.5 py-3 text-small text-ink-2 shadow-pop" style={CORNER}>
         <span className="min-w-0 flex-1">The assistant hit a snag. Your work is safe.</span>
         <button
           className="btn btn-secondary btn-xs"
@@ -39,15 +43,22 @@ class AssistantBoundary extends Component<{ children: ReactNode }, { error: Erro
             this.setState({ error: null });
           }}
         >
-          <RotateCcw size={13} /> Restart
+          <RotateCcw /> Restart
         </button>
       </div>
     );
   }
 }
 
-/** Set when the panel closes, so the button that replaces it takes the focus back. */
+/** Set when the panel closes, so the focus goes back: to what opened it (the top bar's Ask AI), else the launcher. */
 const refocus = { next: false };
+/** What had the focus when the panel opened (read as the store opens it, before the panel takes the focus). */
+let opener: HTMLElement | null = null;
+if (typeof document !== 'undefined') {
+  useAssistant.subscribe?.((s, prev) => {
+    if (s.open && !prev.open) opener = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+  });
+}
 
 const NO_MESSAGES: ChatMessage[] = [];
 
@@ -55,6 +66,40 @@ const NO_MESSAGES: ChatMessage[] = [];
 function newestReplyFrom(list: ChatMessage[]): string {
   for (let i = list.length - 1; i >= 0; i--) if (list[i].role === 'external' && (list[i].from === 'manus' || list[i].from === 'viktor')) return list[i].via === 'manus' ? 'Manus' : 'Viktor';
   return '';
+}
+
+/**
+ * The launcher steps out of the way while the page scrolls down (it would sit on the content being read) and comes
+ * back on the way up, and it rises above a phone's bottom action bar (body[data-bottom-bar], set by StickyActionBar).
+ */
+function useLauncherPlace(): { hidden: boolean; lifted: boolean; show: () => void } {
+  const [hidden, setHidden] = useState(false);
+  const [lifted, setLifted] = useState(false);
+  useEffect(() => {
+    const body = document.body;
+    const read = () => setLifted(body.dataset.bottomBar !== undefined);
+    read();
+    const mo = typeof MutationObserver === 'undefined' ? null : new MutationObserver(read);
+    mo?.observe(body, { attributes: true, attributeFilter: ['data-bottom-bar'] });
+    const main = document.getElementById('main-scroll');
+    let last = main?.scrollTop ?? 0;
+    const onScroll = () => {
+      if (!main) return;
+      const top = main.scrollTop;
+      const delta = top - last;
+      // near the top it always shows; elsewhere it follows the direction, ignoring small jitters
+      if (top < 64) setHidden(false);
+      else if (delta > 8) setHidden(true);
+      else if (delta < -8) setHidden(false);
+      if (Math.abs(delta) > 8 || top < 64) last = top;
+    };
+    main?.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      mo?.disconnect();
+      main?.removeEventListener('scroll', onScroll);
+    };
+  }, []);
+  return { hidden, lifted, show: () => setHidden(false) };
 }
 
 function Launcher({ onOpen }: { onOpen: () => void }) {
@@ -67,42 +112,55 @@ function Launcher({ onOpen }: { onOpen: () => void }) {
   const from = unread ? newestReplyFrom(thread) : '';
   const news = unread ? `New reply from ${from || 'Manus or Viktor'}` : '';
   const ref = useRef<HTMLButtonElement>(null);
+  const place = useLauncherPlace();
   useEffect(() => {
     if (!refocus.next) return;
     refocus.next = false;
-    ref.current?.focus({ preventScroll: true });
+    const back = opener;
+    opener = null;
+    // the opener when it's still on screen (a hidden element can't take the focus), else this launcher (phones)
+    const target = back?.isConnected && back.getClientRects().length ? back : ref.current;
+    target?.focus({ preventScroll: true });
   }, []);
   return (
     <button
       ref={ref}
       type="button"
       onClick={onOpen}
+      onFocus={place.show}
       aria-label={news ? `Open assistant: ${news.toLowerCase()}` : 'Open assistant'}
       aria-controls="assistant-panel"
       aria-expanded={false}
       title={waiting ? 'The assistant is waiting for you to confirm' : running ? 'The assistant is working' : news || 'Ask the assistant'}
-      className="fixed z-[45] flex h-14 w-14 items-center justify-center rounded-full bg-primary text-on-primary shadow-pop transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/30 motion-reduce:transition-none motion-reduce:hover:scale-100"
-      style={{ right: 'max(16px, env(safe-area-inset-right, 0px))', bottom: 'max(16px, env(safe-area-inset-bottom, 0px))' }}
-    >
-      <MessageCircle size={26} aria-hidden="true" />
-      <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 rounded-full border-2 border-surface bg-accent px-1 text-[9px] font-bold leading-[14px] text-on-accent">
-        AI
-      </span>
-      {(running || waiting) && (
-        <span aria-hidden="true" className={cn('absolute -bottom-0.5 -left-0.5 h-3.5 w-3.5 rounded-full border-2 border-surface', waiting ? 'bg-warn' : 'animate-pulse-dot bg-good')} />
+      className={cn(
+        'fixed z-launcher flex h-12 w-12 items-center justify-center rounded-full shadow-ai transition-[transform,box-shadow] duration-180 ease-out md:hidden',
+        // the ink fill with the aura edge; while a turn runs the edge turns (it stops under reduced motion)
+        'btn-ai',
+        running && 'is-running',
+        place.hidden && (place.lifted ? 'translate-y-[152px]' : 'translate-y-20'),
       )}
-      {!!news && <span aria-hidden="true" data-unread="" className="absolute -left-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-surface bg-info" />}
+      style={place.lifted ? { ...CORNER, bottom: `calc(${CORNER.bottom} + 72px)` } : CORNER}
+    >
+      <Spark size={20} />
+      {/* waiting for the owner's yes (warn), or a reply from Manus or Viktor (iris): a 10px dot with a ring of the canvas */}
+      {waiting ? (
+        <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-2.5 w-2.5 rounded-full bg-warn-solid ring-2 ring-bg" />
+      ) : news ? (
+        <span aria-hidden="true" data-unread="" className="absolute right-0.5 top-0.5 h-2.5 w-2.5 rounded-full bg-primary ring-2 ring-bg" />
+      ) : null}
     </button>
   );
 }
 
+/** While the panel's code loads: the same frame (see AssistantPanel's FRAME), with a spinner. */
 function PanelFallback({ onClose }: { onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-[45] flex flex-col bg-surface sm:inset-auto sm:bottom-4 sm:right-4 sm:h-[600px] sm:max-h-[calc(100dvh-32px)] sm:w-[400px] sm:rounded-xl sm:border sm:border-line sm:shadow-pop">
-      <div className="flex items-center justify-between border-b border-line px-4 py-3">
-        <p className="font-display text-[16px] font-semibold">Assistant</p>
+    <div className="fixed inset-0 z-overlay flex flex-col bg-surface sm:inset-auto sm:bottom-2 sm:right-2 sm:top-2 sm:w-[400px] sm:rounded-stage sm:border sm:border-line sm:shadow-dialog min-[1440px]:shadow-xs">
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-line pl-4 pr-2">
+        <Spark size={18} />
+        <p className="min-w-0 flex-1 text-h4 text-ink">Assistant</p>
         <button className="btn btn-ghost btn-icon btn-sm" onClick={onClose} aria-label="Close assistant">
-          <X size={18} />
+          <X />
         </button>
       </div>
       <div className="flex flex-1 items-center justify-center text-muted">
@@ -112,7 +170,7 @@ function PanelFallback({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** The chat button and panel (signed-in workspace only, not during setup). */
+/** The launcher (phones) and the panel (signed-in workspace only, not during setup). */
 export function Assistant() {
   const open = useAssistant((s) => s.open);
   const setOpen = useAssistant((s) => s.setOpen);
