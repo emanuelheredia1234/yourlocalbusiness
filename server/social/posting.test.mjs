@@ -500,3 +500,32 @@ describe('connections switched off', () => {
     }
   });
 });
+
+describe('TikTok when TikTok fetches the file itself', () => {
+  it('a photo post goes by PULL_FROM_URL with the link in the body; an init that times out is unknown, never resent', async () => {
+    const pull = await startPosting({ env: { TIKTOK_UPLOAD_MODE: 'PULL_FROM_URL' } });
+    try {
+      const u = await pull.user('erin@example.com');
+      await pull.project(u);
+      const media = pull.file(u, 'img-tt-1', JPEG, 'image/jpeg');
+      const post = await pull.post(u, { platform: 'tiktok', media });
+      const r = await pull.publish(u, post);
+      await pull.settled();
+      expect((await pull.call(u, 'GET', `/api/posting/jobs/${r.body.job.id}`)).body.job.state).toBe('sent');
+      const init = pull.social.callsTo('POST', '/v2/post/publish/content/init/')[0];
+      expect(init.query).toEqual({});
+      expect(init.body).toMatchObject({ post_mode: 'DIRECT_POST', media_type: 'PHOTO', source_info: { source: 'PULL_FROM_URL', photo_images: [expect.stringMatching(/^https:\/\/app\.test\/api\/media\/public\//)] } });
+
+      const video = pull.file(u, 'vid-tt-pull', MP4, 'video/mp4');
+      const vpost = await pull.post(u, { platform: 'tiktok', format: 'video', media: video });
+      pull.social.fail({ path: '/v2/post/publish/video/init/', method: 'POST', mode: 'timeout', delayMs: 10_000 });
+      const v = await pull.publish(u, vpost);
+      await pull.settled();
+      expect((await pull.call(u, 'GET', `/api/posting/jobs/${v.body.job.id}`)).body.job.state).toBe('unknown');
+      expect(pull.social.callsTo('POST', '/v2/post/publish/video/init/')).toHaveLength(1);
+      expect(pull.social.calls.filter((c) => c.method === 'PUT')).toHaveLength(0);
+    } finally {
+      await pull.close();
+    }
+  });
+});

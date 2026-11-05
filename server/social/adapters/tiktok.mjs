@@ -73,8 +73,9 @@ export const tiktok = {
       init = await ctx.write({ method: 'POST', path: '/v2/post/publish/video/init/', body: { post_info: postInfo, source_info: { source: 'FILE_UPLOAD', video_size: file.bytes.length, chunk_size: chunkSize, total_chunk_count: count } } });
     }
     if (init.outcome === 'failed') return { state: 'failed', errorCode: init.code };
-    // nothing goes out until TikTok has the file: an unclear init isn't a post
-    if (init.outcome === 'unknown') return { state: 'failed', errorCode: 'REFUSED' };
+    // FILE_UPLOAD: nothing goes out until we send the file, so an unclear init isn't a post. When TikTok fetches
+    // the file itself (PULL_FROM_URL, photos) an init that timed out may still turn into a post: unknown.
+    if (init.outcome === 'unknown') return file ? { state: 'failed', errorCode: 'REFUSED' } : { state: 'unknown' };
     if (!tiktokOk(init.res)) return { state: 'failed', errorCode: 'REFUSED' };
     const publishId = str(init.res.body?.data?.publish_id);
     if (!publishId) return { state: 'failed', errorCode: 'REFUSED' };
