@@ -406,13 +406,16 @@ const STATE_UI: Record<NonNullable<Post['external']>['state'], { label: (n: stri
   finished: { label: () => 'Manus finished: check the result', tone: 'neutral', icon: CircleCheck },
 };
 
-/** The tones of a Manus status: a badge (rows) and a block with a hairline (the post card and editor). */
+/**
+ * The tones of a Manus status: a badge (rows) and a block with a hairline (the post card and editor). Only what
+ * needs the owner (Manus needs you, it didn't go through) is tinted; the rest is a quiet block with a coloured icon.
+ */
 export type Tone = 'primary' | 'warn' | 'good' | 'bad' | 'neutral';
 export const TONE_BADGE: Record<Tone, string> = { primary: 'bg-primary-soft text-primary', warn: 'bg-warn-soft text-warn', good: 'bg-good-soft text-good', bad: 'bg-bad-soft text-bad', neutral: 'bg-surface-3 text-ink-2' };
 export const TONE_BLOCK: Record<Tone, { box: string; icon: string }> = {
-  primary: { box: 'border-primary-line bg-primary-soft', icon: 'text-primary' },
+  primary: { box: 'border-line bg-surface-2', icon: 'text-primary' },
   warn: { box: 'border-warn-line bg-warn-soft', icon: 'text-warn' },
-  good: { box: 'border-good-line bg-good-soft', icon: 'text-good' },
+  good: { box: 'border-line bg-surface-2', icon: 'text-good' },
   bad: { box: 'border-bad-line bg-bad-soft', icon: 'text-bad' },
   neutral: { box: 'border-line bg-surface-2', icon: 'text-muted' },
 };

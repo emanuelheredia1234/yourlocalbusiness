@@ -31,7 +31,7 @@ function useResolvedTheme(): 'light' | 'dark' {
 function ToastCard({ t }: { t: Toast }) {
   const dismiss = () => useUI.getState().dismissToast(t.id);
   return (
-    <div className="toast-card group flex w-full items-start gap-3 rounded-pop px-3.5 py-3">
+    <div className="group flex w-full items-start gap-3 px-3.5 py-3">
       <span className="mt-0.5 flex shrink-0" aria-hidden="true">
         {t.kind === 'success' ? (
           <CircleCheck size={16} className="toast-icon-success" />
@@ -111,7 +111,10 @@ export function Toaster({ placement = 'corner' }: { placement?: ToastPlacement }
       mobileOffset={{ top: 'max(64px, calc(env(safe-area-inset-top, 0px) + 60px))', left: 12, right: 12 }}
       className="ylb-toaster"
       style={{ '--width': '360px', zIndex: 80 } as CSSProperties}
-      toastOptions={{ unstyled: true, className: 'w-full' }}
+      // the card's look is on Sonner's own toast element, which clips: a taller toast stacked behind a shorter
+      // one stays hidden under it, and the ones behind show only their edge (their words come back when the
+      // stack expands on hover)
+      toastOptions={{ unstyled: true, className: 'toast-card w-full overflow-hidden rounded-pop [&>*]:transition-opacity [&>*]:duration-180 [&[data-expanded=false][data-front=false]>*]:opacity-0' }}
     />
   );
 }
