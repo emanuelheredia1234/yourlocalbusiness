@@ -1433,7 +1433,7 @@ function PeopleUsage({ call }: { call: Call }) {
   const today = new Date().toISOString().slice(0, 10);
   const todayOf = (id: string) => data?.rows.find((r) => r.userId === id && r.day === today);
   return (
-    <section aria-label="Usage by person" className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <p className="text-small text-muted">Requests and cost on your keys. Requests on their own keys are separate; they pay for those.</p>
         <button type="button" className="btn btn-ghost btn-xs ml-auto" onClick={() => void load()}>
@@ -1477,7 +1477,7 @@ function PeopleUsage({ call }: { call: Call }) {
           </table>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 

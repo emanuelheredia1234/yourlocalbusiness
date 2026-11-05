@@ -130,7 +130,7 @@ export function AccountRow({ onNavigate }: { onNavigate?: () => void }) {
   const sync = useSyncLine();
   if (phase === 'guest') {
     return (
-      <button className="mt-1 flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-ui font-semibold text-ink-2 hover:bg-surface-2 hover:text-ink" onClick={showSignIn}>
+      <button className="mt-1 flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-[13.5px] font-semibold text-ink-2 hover:bg-surface-2 hover:text-ink" onClick={showSignIn}>
         <LogIn size={18} /> Sign in to save your work
       </button>
     );
@@ -148,8 +148,8 @@ export function AccountRow({ onNavigate }: { onNavigate?: () => void }) {
       >
         <Avatar email={email} size={28} />
         <span className="min-w-0">
-          <span className="block truncate text-small font-semibold text-ink">{email}</span>
-          <span className={cn('block truncate text-caption', sync.tone === 'warn' ? 'text-warn' : 'text-muted')}>{sync.text}</span>
+          <span className="block truncate text-[12.5px] font-semibold text-ink">{email}</span>
+          <span className={cn('block truncate text-[11px]', sync.tone === 'warn' ? 'text-warn' : 'text-muted')}>{sync.text}</span>
         </span>
       </button>
       <button className="btn btn-ghost btn-icon btn-sm shrink-0" onClick={() => void logOut()} aria-label="Log out" title="Log out">
@@ -166,7 +166,7 @@ export function AccountChip() {
   if (phase !== 'ready') return null;
   return (
     <div className="flex items-center gap-1.5">
-      <span className="hidden max-w-[200px] truncate text-small text-muted md:inline">{email}</span>
+      <span className="hidden max-w-[200px] truncate text-[12.5px] text-muted md:inline">{email}</span>
       <button className="btn btn-ghost btn-sm" onClick={() => void logOut()}>
         <LogOut size={15} /> Log out
       </button>

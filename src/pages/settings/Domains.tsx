@@ -221,7 +221,7 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
                     return (
                       <li key={d.domain} className="border-b border-line px-5 py-3 last:border-b-0">
                         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 md:grid-cols-[minmax(0,1.3fr)_136px_minmax(0,1fr)_100px]">
-                          <span className="min-w-0 break-all font-mono text-small text-ink">{d.domain}</span>
+                          <span className="min-w-0 break-all font-mono text-small text-ink max-md:col-span-2">{d.domain}</span>
                           <span aria-live="polite" className="md:order-none max-md:col-start-1 max-md:row-start-2">
                             {busy ? (
                               <Badge>
@@ -238,7 +238,7 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
                           <span className="min-w-0 truncate text-small text-muted max-md:hidden" title={pages.length ? pagesText(pages) : undefined}>
                             {claim ? '–' : pages.length ? pagesText(pages) : 'No pages yet'}
                           </span>
-                          <span className="flex items-center justify-end gap-1 max-md:col-start-2 max-md:row-span-2 max-md:row-start-1">
+                          <span className="flex items-center justify-end gap-1 max-md:col-start-2 max-md:row-start-2">
                             {(claim || !d.verified) && (
                               <button type="button" className="btn btn-secondary btn-xs" disabled={busy} onClick={() => void check(d.domain, claim)}>
                                 <RefreshCw /> Check again
