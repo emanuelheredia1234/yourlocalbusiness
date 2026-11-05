@@ -81,6 +81,24 @@ sitemap, and the Omnisend reporting scope._
 _Filled in by the app work (WP5, WP6): Settings → Connected accounts, the Update button, the Analytics tabs,
 posting buttons, and the owner's Customer usage page._
 
+### Analytics, Settings and Customer usage (WP5)
+
+- **Marketing → Overview → Update** (top right, the only filled button there) fetches every source for the
+  active business, once per 15 minutes. A row under the header shows Social, Ads, SEO and Email as they finish;
+  after 5 minutes the button comes back and the row says "Still updating in the background". Nothing is retried
+  by the app: a refusal (today's limit, nothing to update yet, too soon) shows as a Callout or a toast.
+- **Analytics tabs** on Social, Ads (Campaigns | Analytics), SEO page (Page | Analytics) and Email show the last
+  fetched numbers with their "as of" time and a 7/30-day range (remembered in the browser under
+  `ylb-analytics-range`). Competitors (up to 3) and keywords (up to 10) are edited in a drawer on the Ads and SEO
+  tabs. **Submit to Google** on the SEO tab is one confirmed press; Google decides when to index.
+- **Settings → Connected accounts** lists Social, Ads and Search Console with each account's state. Until
+  `NANGO_SECRET_KEY` is set it says "Connecting accounts is coming soon" and shows no Connect buttons; the owner
+  also sees which Replit Secret is missing (the name only).
+- **Settings → AI keys → Analytics data costs**: each signed-in person's own usage against their caps, estimated
+  costs labelled. The owner also sees **Billing (owner)**, which opens **Customer usage**: per-customer totals,
+  caps (edit, block, reset), "Check against treg", and the monthly CSV. It tracks usage only; it charges nothing.
+- The artifact build shows "Connected accounts and live analytics need the full app" instead of any of this.
+
 ## 8. What works on day one (no Nango, no approvals)
 
 - Manual posting: **Post it yourself**, then **Mark as posted**.
