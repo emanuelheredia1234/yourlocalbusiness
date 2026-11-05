@@ -126,7 +126,8 @@ inside the network itself (that is done in the network's own settings).
 - Deleting a customer's account deletes each of their connections at Nango once. A failure is logged as
   `nango_forget_delete_failed` with the customer tag: delete that connection by hand in the Nango dashboard.
 
-**Testing without Nango.** `node server/test/mock-nango.mjs 9921` runs a stand-in (set
+**Testing without Nango.** `NANGO_WEBHOOK_URL=http://127.0.0.1:<server port>/api/webhooks/nango node
+server/test/mock-nango.mjs 9921` runs a stand-in (then set
 `NANGO_BASE_URL=http://127.0.0.1:9921`, `NANGO_SECRET_KEY=test-nango-key`,
 `NANGO_WEBHOOK_SIGNING_KEY=test-nango-signing-key`); its connect page has a **Complete** button that sends the
 signed webhook. Nothing in the tests calls Nango or a network.
