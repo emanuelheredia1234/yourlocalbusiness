@@ -287,7 +287,7 @@ function DueCallout({ posts, offer }: { posts: Post[]; offer: boolean }) {
     // on phones the button goes under the words, so they keep the callout's width
     <Callout tone="warn" className="mb-5" action={wide ? action : undefined}>
       {due.length} planned post{many ? 's are' : ' is'} past {many ? 'their' : 'its'} time and not posted. {offer ? `Post ${many ? 'them' : 'it'} with Manus, or post ${many ? 'them' : 'it'} yourself and mark ${many ? 'them' : 'it'} posted.` : `Post ${many ? 'them' : 'it'} yourself and mark ${many ? 'them' : 'it'} posted.`}
-      {failed > 0 && ` ${failed} failed last time and may already be out: check before sending ${failed === 1 ? 'it' : 'them'} again.`}
+      {failed > 0 && ` ${failed} failed last time and may already be out or scheduled: check before sending ${failed === 1 ? 'it' : 'them'} again.`}
       {!wide && action && <span className="mt-2 flex">{action}</span>}
     </Callout>
   );
