@@ -289,7 +289,11 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
                 </button>
               )}
             </div>
-            {post.hashtags.length > 0 && <p className="text-small text-primary">{post.hashtags.join(' ')}</p>}
+            {post.hashtags.length > 0 && (
+              <p className="truncate text-small text-primary" title={post.hashtags.join(' ')}>
+                {post.hashtags.join(' ')}
+              </p>
+            )}
             <PostLinkNote post={post} />
           </>
         )}
