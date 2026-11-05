@@ -443,11 +443,12 @@ describe('rank matching', () => {
   });
 });
 
-describe('before the treg wrapper is built', () => {
+describe('with a placeholder treg wrapper (stub)', () => {
   it('answers 503 NOT_SET_UP (the reason for the owner only) and spends nothing', async () => {
     project(A.id, 'p1');
-    const { createTreg } = await import('../treg.mjs');
-    const { routes } = makeRoutes({ treg: createTreg({ env: ENV }) });
+    // the real wrapper (WP3) is in this copy; a stub-shaped one still has to be refused before any work
+    const stub = { stub: true, async call() { throw new Error('must not be called'); }, health: () => ({ setUp: false, billingSetUp: false }) };
+    const { routes } = makeRoutes({ treg: stub });
     const r = await call(routes, 'POST', '/api/analytics/refresh', { token: 'a', body: { projectId: 'p1' } });
     expect(r.status).toBe(503);
     expect(r.body).toEqual({ error: expect.any(String), code: 'NOT_SET_UP' });

@@ -340,15 +340,13 @@ describe('ai-server.mjs with the integrations', () => {
     expect((await fetch(`${base}/api/integrations/connections`, { headers: { authorization: `Bearer ${user.token}`, origin: 'https://evil.example' } })).status).toBe(403);
   });
 
-  it('answers 503 NOT_SET_UP on every route not built yet', async () => {
+  it('answers 503 NOT_SET_UP where a route still needs a missing Secret, and the built routes answer for themselves', async () => {
     const user = await supa.tokenFor('stubs@example.com');
     const auth = { authorization: `Bearer ${user.token}` };
     for (const [method, p] of [
+      // posting needs connected accounts, and connecting is off here (no NANGO_SECRET_KEY)
       ['POST', '/api/posting/publish'],
       ['GET', '/api/posting/jobs?projectId=p1'],
-      ['POST', '/api/analytics/refresh'],
-      ['GET', '/api/analytics/snapshots?projectId=p1'],
-      ['POST', '/api/seo/google/publish'],
       // /api/billing/me is built (WP3) and needs only Supabase and CUSTOMER_TAG_SECRET; the owner routes still
       // need TREG_ADMIN_TOKEN and TREG_ORG_ID, which this server doesn't have
       ['GET', '/api/billing/customers'],
@@ -356,6 +354,17 @@ describe('ai-server.mjs with the integrations', () => {
       const r = await fetch(`${base}${p}`, { method, headers: auth, ...(method === 'POST' ? { body: '{}' } : {}) });
       expect([p, r.status]).toEqual([p, 503]);
       expect((await r.json()).code).toBe('NOT_SET_UP');
+    }
+    // analytics and Submit to Google read through treg (WP3), which this server has a TREG_TOKEN for: they are
+    // live and refuse a bad request plainly, spending nothing
+    for (const [method, p, status, code] of [
+      ['POST', '/api/analytics/refresh', 400, 'BAD_REQUEST'],
+      ['GET', '/api/analytics/snapshots?projectId=p1', 404, 'NOT_FOUND'],
+      ['POST', '/api/seo/google/publish', 400, 'BAD_REQUEST'],
+    ]) {
+      const r = await fetch(`${base}${p}`, { method, headers: auth, ...(method === 'POST' ? { body: '{}' } : {}) });
+      expect([p, r.status]).toEqual([p, status]);
+      expect((await r.json()).code).toBe(code);
     }
   });
 
