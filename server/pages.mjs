@@ -671,6 +671,9 @@ export function pagesFromEnv(env = process.env, deps = {}) {
  * corsHeaders: the server's own (see ai-server.mjs). distDir: the built app, whose top-level names
  * can't be page names. resolveTxt: dns.promises.resolveTxt's shape (tests give their own).
  * trustedHops: see clientOf. lookupLimits and tuning: see LOOKUP_LIMITS and TUNING.
+ * appHostExtras(req, res, url) → boolean | Promise<boolean>: more GET/HEAD paths on the app's own host, asked
+ * before page names (the app-host /sitemap.xml, /robots.txt and the Search Console verification file, from
+ * server/seo/sitemap.mjs); true when it answered. Never asked on people's own domains (serveDomain has theirs).
  */
 export function createPages({
   supabaseUrl = '',
@@ -691,6 +694,7 @@ export function createPages({
   lookupLimits = LOOKUP_LIMITS,
   tuning = {},
   fetch = globalThis.fetch,
+  appHostExtras = null,
 } = {}) {
   const tune = { ...TUNING, ...tuning };
   const hops = trustedHops;
@@ -1317,6 +1321,24 @@ export function createPages({
     return got;
   }
 
+  /**
+   * GET|HEAD on the app's own host, before page names: whether appHostExtras answered (false: carry on with
+   * matchPage / the app). A failing extra answers 503 rather than taking the request down.
+   */
+  async function serveAppHostExtras(req, res, url) {
+    if (typeof appHostExtras !== 'function' || (req.method !== 'GET' && req.method !== 'HEAD')) return false;
+    try {
+      return (await appHostExtras(req, res, url)) === true;
+    } catch (e) {
+      console.error('App-host extra failed:', e?.name || 'Error');
+      if (!res.headersSent) {
+        res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...COMMON });
+        res.end('Try again in a minute.');
+      }
+      return true;
+    }
+  }
+
   /** GET|HEAD /<slug>, /<slug>/ and /<slug>/img/<name> on the app's host (call servePage for them). */
   const matchPage = (url) => enabled && PAGE_PATH.test(url.pathname);
 
@@ -1740,6 +1762,7 @@ export function createPages({
     handleApi,
     matchPage,
     servePage,
+    serveAppHostExtras,
     /** What the visitors' caches hold (tests, diagnostics): pages' rows, their HTML (big pages' apart), domains, names. */
     cacheStats: () => ({ pages: pageCache.stats(), html: htmlCache.stats(), bigHtml: bigHtmlCache.stats(), domains: domainCache.stats(), onDomain: onDomainCache.stats(), names: { pages: pageNames.stats(), domains: domainNames.stats() } }),
     close: () => clearInterval(sweeper),

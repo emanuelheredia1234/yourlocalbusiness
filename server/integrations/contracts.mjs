@@ -1,0 +1,140 @@
+// The server's copy of the shared contracts (src/lib/integrations/types.ts is the app's): the shapes every
+// integration route answers with, as JSDoc, plus the constants both sides agree on. A test keeps the lists
+// here and in types.ts the same.
+
+/**
+ * @typedef {'facebook'|'instagram'|'linkedin'|'tiktok'|'x'|'youtube'|'pinterest'|'google_ads'|'meta_ads'|'microsoft_ads'|'tiktok_ads'|'google_search_console'} Platform
+ * @typedef {'not_connected'|'pending'|'connected'|'limited'|'needs_reconnect'|'coming_soon'} ConnectionState
+ * @typedef {'missing_permissions'|'no_page_role'|'app_not_approved'|'insights_unavailable'|'private_only'} LimitedReason
+ * @typedef {'fb_page'|'ig_account'|'li_person'|'li_org'|'yt_channel'|'ads_account'|'gsc_site'|'tt_account'|'x_account'} TargetKind
+ *
+ * @typedef {object} ConnectionStatus  What the browser sees of a connection (never its id or token).
+ * @property {Platform} platform
+ * @property {ConnectionState} state
+ * @property {LimitedReason} [limitedReason]
+ * @property {string} [targetLabel]
+ * @property {TargetKind} [targetKind]
+ * @property {number} [targetsAvailable]
+ * @property {boolean} [expiresSoon]
+ * @property {string} [connectedAt]
+ * @property {string} [lastError]
+ *
+ * @typedef {object} Target
+ * @property {string} id  opaque server handle: HMAC of the real id, never the raw id
+ * @property {string} label
+ * @property {TargetKind} kind
+ *
+ * @typedef {'queued'|'sending'|'sent'|'failed'|'unknown'} PublishState
+ *
+ * @typedef {object} PublishRequest
+ * @property {string} projectId
+ * @property {string} postId
+ * @property {'instagram'|'facebook'|'tiktok'|'linkedin'|'x'|'youtube'} platform
+ * @property {true} confirm
+ * @property {string} clientRequestId  uuid; dedupes double clicks
+ * @property {{text: string, hashtags?: string[], link?: string, linkPlacement?: 'in_post'|'first_comment'|'bio'|'none', firstComment?: string, mediaIds?: string[], title?: string}} content
+ *
+ * @typedef {object} PublishJob
+ * @property {string} id
+ * @property {string} postId
+ * @property {string} platform
+ * @property {PublishState} state
+ * @property {string} [url]
+ * @property {string} [errorCode]
+ * @property {string} [errorMessage]
+ * @property {string} requestedAt
+ * @property {string} [finishedAt]
+ * @property {string} [checkedAt]
+ *
+ * @typedef {'social'|'ads'|'seo'|'email'} AnalyticsSource
+ * @typedef {'ok'|'partial'|'error'|'not_connected'|'skipped'|'pending'} SourceStatus
+ *
+ * @typedef {object} AnalyticsSnapshot
+ * @property {string} projectId
+ * @property {AnalyticsSource} source
+ * @property {SourceStatus} status
+ * @property {string} [errorCode]
+ * @property {string} [fetchedAt]
+ * @property {number} costMicro
+ * @property {object} data  SocialData | AdsData | SeoData | EmailData (src/lib/integrations/types.ts)
+ *
+ * @typedef {object} RefreshRun
+ * @property {string} id
+ * @property {string} projectId
+ * @property {'running'|'done'|'done_with_errors'} state
+ * @property {Record<AnalyticsSource, 'queued'|'running'|SourceStatus>} sources
+ * @property {string} startedAt
+ * @property {string} [finishedAt]
+ *
+ * @typedef {object} CustomerUsage
+ * @property {{costMicro: number, calls: number}} today
+ * @property {{costMicro: number, calls: number}} month
+ * @property {{dailyCapMicro: number, monthlyCapMicro: number, status: 'active'|'blocked'}} caps
+ * @property {{feature: string, costMicro: number, calls: number}[]} byFeature
+ * @property {{at: string, feature: string, label: string, costMicro: number, estimated: boolean}[]} recent
+ *
+ * @typedef {object} ApiError
+ * @property {string} error
+ * @property {string} code  one of API_ERROR_CODES
+ * @property {string} [nextAt]
+ * @property {'day'|'month'} [period]
+ * @property {string} [hint]  admins only
+ */
+
+/** @type {readonly Platform[]} */
+export const PLATFORMS = Object.freeze(['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'pinterest', 'google_ads', 'meta_ads', 'microsoft_ads', 'tiktok_ads', 'google_search_console']);
+/** @type {readonly Platform[]} shown as "Coming soon" */
+export const PHASE2_PLATFORMS = Object.freeze(['pinterest', 'microsoft_ads', 'tiktok_ads']);
+export const PHASE1_PLATFORMS = Object.freeze(PLATFORMS.filter((p) => !PHASE2_PLATFORMS.includes(p)));
+export const CONNECTION_STATES = Object.freeze(['not_connected', 'pending', 'connected', 'limited', 'needs_reconnect', 'coming_soon']);
+export const LIMITED_REASONS = Object.freeze(['missing_permissions', 'no_page_role', 'app_not_approved', 'insights_unavailable', 'private_only']);
+export const PUBLISH_STATES = Object.freeze(['queued', 'sending', 'sent', 'failed', 'unknown']);
+export const PUBLISH_PLATFORMS = Object.freeze(['instagram', 'facebook', 'tiktok', 'linkedin', 'x', 'youtube']);
+export const ANALYTICS_SOURCES = Object.freeze(['social', 'ads', 'seo', 'email']);
+export const SOURCE_STATUSES = Object.freeze(['ok', 'partial', 'error', 'not_connected', 'skipped', 'pending']);
+export const LEDGER_FEATURES = Object.freeze(['social', 'seo', 'ads', 'gsc', 'email', 'posting', 'connections']);
+export const LEDGER_VENDORS = Object.freeze(['treg', 'nango', 'x', 'omnisend']);
+export const API_ERROR_CODES = Object.freeze([
+  'AUTH_REQUIRED',
+  'FORBIDDEN',
+  'NOT_FOUND',
+  'NOT_SET_UP',
+  'CONNECTIONS_NOT_ENABLED',
+  'CONNECTIONS_UNAVAILABLE',
+  'NOT_CONNECTED',
+  'NEEDS_RECONNECT',
+  'ALREADY_PUBLISHING',
+  'POST_CHANGED',
+  'MEDIA_UNSUPPORTED',
+  'PLATFORM_LIMIT',
+  'REFRESH_TOO_SOON',
+  'NOTHING_TO_UPDATE',
+  'CUSTOMER_CAP',
+  'CUSTOMER_BLOCKED',
+  'INSPECTION_QUOTA',
+  'UNAVAILABLE',
+  'RATE_LIMITED',
+  'BAD_REQUEST',
+]);
+
+/** The route prefixes the server hands to the integration modules (server/integrations/wiring.mjs). */
+export const ROUTE_PREFIXES = Object.freeze({
+  connections: '/api/integrations/connections',
+  nangoWebhook: '/api/webhooks/nango',
+  posting: '/api/posting/',
+  publicMedia: '/api/media/public/',
+  analytics: '/api/analytics/',
+  seoGoogle: '/api/seo/google/',
+  billing: '/api/billing/',
+});
+
+/** Rate-limit buckets (per user unless noted), as `${bucket}:user:<id>` keys for rateLimited(key, factor). */
+export const RATE_BUCKETS = Object.freeze({
+  connect: 'integrations-connect', // 10 per hour
+  publish: 'posting-publish', // 30 per hour
+  refresh: 'analytics-refresh', // 1 per business per 15 min (analytics_runs) + 10 per hour
+  publicMedia: 'media-public', // 120 per minute per IP
+  billingRead: 'billing-read', // 60 per minute
+  nangoWebhook: 'nango-webhook', // 600 per minute per IP
+  postingCheck: 'posting-check', // 1 per job per 30 s + 60 per hour
+});
