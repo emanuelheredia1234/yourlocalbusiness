@@ -680,7 +680,7 @@ describe('projects', () => {
       skills: [newSkill({ name: 'Voice for p2', projectId: 'p2' }), newSkill({ name: 'Everywhere' })],
       myListings: [listing('l2', { origin: 'mine', projectId: 'p2' })],
     });
-    expect((await runTool('delete_project', { id: 'p1' })).error).toBe('“Copper Kettle” is the project this chat is in. To delete it, the owner switches to another project first, or deletes it in Settings → Projects & data.');
+    expect((await runTool('delete_project', { id: 'p1' })).error).toBe('“Copper Kettle” is the project this chat is in. To delete it, the owner switches to another project first, or deletes it in Settings › Projects & data.');
     expect((await runTool('delete_project', { id: 'p9' })).error).toBe('There’s no project with id "p9". Use list_projects.');
     expect(await runTool('delete_project', { id: 'p2' })).toMatchObject({ ok: false, status: 'declined' });
     expect(host.calls.dangers[0]).toEqual({ title: 'Delete this project?', body: '“Tax Tracker” will be deleted. Its posts, campaigns, the Brain skill made only for it and Marketplace listing are removed too. This can’t be undone.', confirmLabel: 'Delete project' });

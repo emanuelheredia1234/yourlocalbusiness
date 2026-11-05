@@ -1,4 +1,4 @@
-// The workspace backup (Settings → Projects & data → Export backup): one JSON file the owner saves with
+// The workspace backup (Settings › Projects & data › Export backup): one JSON file the owner saves with
 // a click. Only the export lives here; importing a backup stays on the Settings page, done by the owner.
 // It holds the workspace as the app stores it: no API keys or sign-in tokens (those never live here),
 // and no uploaded images or videos.

@@ -75,7 +75,7 @@ function inProject(projectId: string, label: string, fn: () => void): ChatButton
 }
 
 /**
- * Why leads or published pages can't be read here right now, in the words the Leads tab and Settings → Domains
+ * Why leads or published pages can't be read here right now, in the words the Leads tab and Settings › Domains
  * use (null when they can): they need the app's own server with publishing on, and the owner signed in.
  */
 async function accountProblem(what: 'leads' | 'pages'): Promise<ToolResult | null> {
@@ -1043,9 +1043,9 @@ const listPublishedTool = defineTool({
     const data = fitting(pages, (shown) => ({
       total: list.pages.length,
       pages: shown,
-      ...(shown.length < list.pages.length ? { notShown: 'the others: the owner sees them all in Settings → Domains and on each page' } : {}),
+      ...(shown.length < list.pages.length ? { notShown: 'the others: the owner sees them all in Settings › Domains and on each page' } : {}),
       domains,
-      ...(domains.some((d) => !d.verified) ? { aboutDomains: 'An unverified domain’s addresses don’t open until its TXT record is found: the owner checks it in Settings → Domains.' } : {}),
+      ...(domains.some((d) => !d.verified) ? { aboutDomains: 'An unverified domain’s addresses don’t open until its TXT record is found: the owner checks it in Settings › Domains.' } : {}),
     }));
     return { data, note: pages.length ? `Looked at your ${plural(list.pages.length, 'published page')}` : 'You have no published pages yet' };
   },

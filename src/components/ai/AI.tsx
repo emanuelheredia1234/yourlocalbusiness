@@ -15,7 +15,7 @@ import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { navigate } from '@/lib/router';
 import { cn as mergeCn } from '../ui/shadcn/utils';
-import { AutoTextarea, Badge, Callout, Popover, Spinner, Tooltip } from '../ui/primitives';
+import { AutoTextarea, Callout, Popover, Spinner, Tooltip } from '../ui/primitives';
 import { PromptImages, usePasteImages, usePromptImageAdder } from './PromptImages';
 import { Spark } from './Spark';
 
@@ -66,7 +66,7 @@ export function GenerateButton({
       onClick={onClick}
       className={cn('btn', VARIANT[variant], size === 'sm' && 'btn-sm', size === 'lg' && 'btn-lg', running && 'is-running', className)}
     >
-      {running ? aiLook ? <span className="orb" aria-hidden="true" /> : <Spinner /> : icon ?? <Spark size={size === 'lg' ? 18 : 16} />}
+      {running ? aiLook ? <span className="orb" aria-hidden="true" /> : <Spinner /> : icon ?? <Spark size={size === 'lg' ? 18 : 16} mono={disabled} />}
       {running ? runningLabel : children}
     </button>
   );
@@ -91,11 +91,14 @@ function ThinkingStrip({ stage, step, onStop, className, compact }: { stage: str
     return () => clearInterval(t);
   }, []);
   return (
-    <div className={mergeCn('thinking', compact && 'min-h-9 gap-2.5 py-1.5 pl-3 pr-1.5', className)} role="status" aria-live="polite">
+    <div className={mergeCn('thinking', compact && 'min-h-9 gap-2.5 py-1.5 pl-3 pr-1.5', className)}>
       <span className="orb" aria-hidden="true" />
-      <p className="shimmer-text min-w-0 flex-1 truncate text-ui">{stage || 'Thinking…'}</p>
-      <span className="num shrink-0 font-mono text-caption text-muted">
-        {!compact && step ? `${step} · ` : ''}
+      {/* only the stage is announced; the clock ticks every second and stays out of the live region */}
+      <p className={cn('shimmer-text min-w-0 flex-1 text-ui', compact ? 'truncate' : 'clamp-2 break-words')} role="status" aria-live="polite">
+        {stage || 'Thinking…'}
+      </p>
+      <span className="num shrink-0 font-mono text-caption text-muted" aria-hidden="true">
+        {!compact && step ? <span className="max-sm:hidden">{step} · </span> : null}
         {fmtElapsed(secs)}
       </span>
       {onStop && (
@@ -111,11 +114,6 @@ function ThinkingStrip({ stage, step, onStop, className, compact }: { stage: str
 export function AIThinking({ running, stage, onStop, className, compact, step }: { running: boolean; stage: string; chars?: number; onStop?: () => void; className?: string; compact?: boolean; step?: string }) {
   if (!running) return null;
   return <ThinkingStrip stage={stage} step={step} onStop={onStop} className={className} compact={compact} />;
-}
-
-/** Who answered, as a neutral badge (still exported; the result footer keeps this behind Details). */
-export function ProviderBadge({ provider, meta }: { provider: ProviderId; meta?: GenMeta }) {
-  return <Badge>{provider === 'server' && meta ? `AI · ${meta.providerLabel}` : providerLabel(provider)}</Badge>;
 }
 
 /** Which key, model and effort answered, and what it used (tokens, cost), from the generation log. */

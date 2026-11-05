@@ -102,13 +102,6 @@
   --ord-2: 107 95 255;
   --ord-3: 78 41 224;
   --ord-4: 43 25 128;
-  /* legacy aliases, kept until Phase 3 deletes their last uses */
-  --primary-2: var(--primary-hover);
-  --info: var(--primary);
-  --info-soft: var(--primary-soft);
-  --accent: var(--warn-solid);
-  --accent-soft: var(--warn-soft);
-  --on-accent: var(--on-warn);
   /* elevation */
   --shadow-xs: 0 1px 2px rgb(var(--shadow) / 0.06);
   --shadow-card: 0 1px 2px rgb(var(--shadow) / 0.03);
@@ -200,8 +193,6 @@
   --ord-2: 107 95 255;
   --ord-3: 165 172 254;
   --ord-4: 223 226 254;
-  /* pinned dark iris: the legacy "white text on primary-2" uses stay legible (onboarding rail) until Phase 2 removes them */
-  --primary-2: 60 51 132;
   --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.5);
   --shadow-card: inset 0 1px 0 rgb(255 255 255 / 0.04);
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.5), 0 2px 8px -2px rgb(0 0 0 / 0.5);
@@ -313,29 +304,23 @@
   .btn-primary:not(:disabled):active {
     background-color: rgb(var(--action-active));
   }
-  /* .btn-accent is legacy: it now looks exactly like .btn-secondary (Phase 2 removes it) */
-  .btn-secondary,
-  .btn-accent {
+  .btn-secondary {
     background-color: rgb(var(--surface));
     border-color: rgb(var(--line-2));
     color: rgb(var(--ink));
     box-shadow: var(--shadow-xs);
   }
-  :root[data-theme='dark'] .btn-secondary:not(:disabled),
-  :root[data-theme='dark'] .btn-accent:not(:disabled) {
+  :root[data-theme='dark'] .btn-secondary:not(:disabled) {
     background-color: rgb(var(--surface-2));
   }
-  .btn-secondary:not(:disabled):hover,
-  .btn-accent:not(:disabled):hover {
+  .btn-secondary:not(:disabled):hover {
     background-color: rgb(var(--surface-2));
     border-color: rgb(var(--line-3));
   }
-  :root[data-theme='dark'] .btn-secondary:not(:disabled):hover,
-  :root[data-theme='dark'] .btn-accent:not(:disabled):hover {
+  :root[data-theme='dark'] .btn-secondary:not(:disabled):hover {
     background-color: rgb(var(--surface-3));
   }
-  .btn-secondary:not(:disabled):active,
-  .btn-accent:not(:disabled):active {
+  .btn-secondary:not(:disabled):active {
     background-color: rgb(var(--surface-3));
   }
   .btn-ghost {
@@ -511,10 +496,13 @@
     color: rgb(var(--muted));
     opacity: 1;
   }
-  .input:hover,
-  .select:hover,
-  .textarea:hover {
-    border-color: rgb(var(--line-3));
+  /* hover only where there is a pointer that hovers: on touch screens the border would stick after a tap */
+  @media (hover: hover) {
+    .input:hover,
+    .select:hover,
+    .textarea:hover {
+      border-color: rgb(var(--line-3));
+    }
   }
   .input:focus,
   .select:focus,
@@ -698,10 +686,6 @@
   :root[data-theme='dark'] .toast-card .toast-icon-info {
     color: rgb(var(--ink-2));
   }
-  /* legacy: Phase 2 removes eyebrows from headers */
-  .eyebrow {
-    @apply text-caption font-medium text-muted;
-  }
   .kbd {
     @apply inline-flex h-5 min-w-5 items-center justify-center rounded-sm border border-line bg-surface px-[5px] font-mono text-micro text-muted;
   }
@@ -720,14 +704,6 @@
   .skeleton {
     @apply animate-shimmer rounded-sm;
     background: linear-gradient(90deg, rgb(var(--surface-3)) 0%, rgb(var(--surface-2)) 50%, rgb(var(--surface-3)) 100%) 0 0 / 200% 100%;
-  }
-  /* legacy: the old storefront awning and dot grid are gone */
-  .awning,
-  .awning-scallop {
-    display: none;
-  }
-  .dotgrid {
-    background: rgb(var(--surface-2));
   }
   .clamp-2 {
     display: -webkit-box;
@@ -769,6 +745,19 @@
   }
   .scroll-fade-x::-webkit-scrollbar {
     display: none;
+  }
+  /* with useEdgeFade (primitives): fade only the edges that have more to scroll to */
+  .scroll-fade-x[data-fade='none'] {
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .scroll-fade-x[data-fade='end'] {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  }
+  .scroll-fade-x[data-fade='start'] {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 24px);
+    mask-image: linear-gradient(to right, transparent, #000 24px);
   }
 
   /* ───────────── Shell ───────────── */
@@ -942,11 +931,12 @@
   .ai-arrive > :nth-child(6) {
     animation-delay: 200ms;
   }
+  /* the wash peaks a little inside the box, so its top edge never reads as a hard line */
   .ai-hero-glow {
-    background: radial-gradient(60% 50% at 50% 0%, rgb(var(--ai-1) / 0.06), rgb(var(--ai-2) / 0.04) 40%, transparent 70%);
+    background: radial-gradient(60% 55% at 50% 20%, rgb(var(--ai-1) / 0.06), rgb(var(--ai-2) / 0.04) 40%, transparent 70%);
   }
   :root[data-theme='dark'] .ai-hero-glow {
-    background: radial-gradient(60% 50% at 50% 0%, rgb(var(--ai-1) / 0.12), rgb(var(--ai-2) / 0.08) 40%, transparent 70%);
+    background: radial-gradient(60% 55% at 50% 20%, rgb(var(--ai-1) / 0.12), rgb(var(--ai-2) / 0.08) 40%, transparent 70%);
   }
 }
 
@@ -1117,7 +1107,7 @@
   50% { transform: translateY(-4%); }
 }
 
-/* Inline editing in the visual page editor (iris through --info) */
+/* Inline editing in the visual page editor (iris) */
 .ylb-editable {
   border-radius: 4px;
   cursor: text;
@@ -1126,10 +1116,10 @@
   transition: outline-color 0.15s ease;
 }
 .ylb-editable:hover {
-  outline-color: rgb(var(--info) / 0.65);
+  outline-color: rgb(var(--primary) / 0.65);
 }
 .ylb-editable:focus {
-  outline: 2px solid rgb(var(--info));
+  outline: 2px solid rgb(var(--primary));
 }
 .ylb-editable:empty::before {
   content: attr(data-placeholder);

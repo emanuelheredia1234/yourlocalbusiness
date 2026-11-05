@@ -154,7 +154,7 @@ export async function sendToAgent(projectId: string, via: AgentId, o: AgentSend)
   if (!text || isSendingTo(projectId, via)) return 'cancelled';
   const ready = agentReady(via, 'chat');
   if (!ready.ready) {
-    addMessage(projectId, { role: 'error', via, text: ready.text || `${name} isn’t set up yet: see Settings → AI.`, settings: ready.settings });
+    addMessage(projectId, { role: 'error', via, text: ready.text || `${name} isn’t set up yet: see Settings › AI keys.`, settings: ready.settings });
     return 'failed';
   }
   if (unsettledFirst(projectId, via)) {

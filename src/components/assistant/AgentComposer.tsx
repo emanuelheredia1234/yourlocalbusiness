@@ -6,7 +6,7 @@
 // (the claude.ai build shows no To: switch), and Viktor only for the owner.
 
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
-import { ArrowUp, Globe, Lock, Paperclip, X } from 'lucide-react';
+import { ArrowUp, Globe, Paperclip, X } from 'lucide-react';
 import type { AgentId } from '@/lib/agentTypes';
 import type { MediaRef, Project, PromptImage } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -20,7 +20,7 @@ import { agentCost, agentName, agentWho, useAgentReady, type AgentReadiness } fr
 import { MediaThumb } from '../media/MediaUpload';
 import { usePasteImages } from '../ai/PromptImages';
 import { Spark } from '../ai/Spark';
-import { Spinner } from '../ui/primitives';
+import { Segmented, Spinner } from '../ui/primitives';
 
 const count = (n: number) => n.toLocaleString('en-US');
 /** The box grows with what's typed, up to this height (then it scrolls). */
@@ -28,7 +28,7 @@ const MAX_BOX = 200;
 
 /**
  * "To: Assistant · Manus · Viktor" as a segmented control: an agent that isn't ready is shown but can't be chosen,
- * with a lock and its reason (the wrapper's title, since a disabled button shows no tooltip).
+ * with a lock and its reason (the Segmented primitive).
  */
 export function ToSwitch({ projectId, to, ready, onSetup }: { projectId: string; to: AgentTo; ready: Record<AgentId, AgentReadiness>; onSetup: () => void }) {
   const ids = useId();
@@ -41,38 +41,14 @@ export function ToSwitch({ projectId, to, ready, onSetup }: { projectId: string;
       <span id={`${ids}-label`} className="text-caption font-medium text-muted">
         To:
       </span>
-      <div role="radiogroup" aria-labelledby={`${ids}-label`} className="inline-flex max-w-full gap-0.5 rounded-md bg-surface-3 p-0.5">
-        {options.map((o) => {
-          const on = to === o.id;
-          // an agent that isn't ready can stay chosen (it was ready before): sending then says why
-          const off = !!o.why && !on;
-          return (
-            // a disabled button shows no tooltip: the wrapper carries it
-            <span key={o.id} title={o.why || undefined} className="inline-flex">
-              <button
-                type="button"
-                role="radio"
-                aria-checked={on}
-                disabled={off}
-                aria-describedby={o.why ? `${ids}-${o.id}` : undefined}
-                onClick={() => setAgentTo(projectId, o.id)}
-                className={cn(
-                  'inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded px-2.5 text-caption font-medium transition-colors duration-120',
-                  on ? 'segmented-on text-ink' : off ? 'cursor-not-allowed text-faint' : 'text-muted hover:text-ink',
-                )}
-              >
-                {o.id === 'assistant' ? <Spark size={14} /> : o.why ? <Lock size={12} className="shrink-0" aria-hidden="true" /> : null}
-                {o.label}
-              </button>
-              {o.why && (
-                <span id={`${ids}-${o.id}`} className="sr-only">
-                  {o.why}
-                </span>
-              )}
-            </span>
-          );
-        })}
-      </div>
+      <Segmented<AgentTo>
+        size="sm"
+        aria-labelledby={`${ids}-label`}
+        value={to}
+        onChange={(v) => setAgentTo(projectId, v)}
+        // an agent that isn't ready can stay chosen (it was ready before): sending then says why
+        options={options.map((o) => ({ id: o.id, label: o.label, icon: o.id === 'assistant' ? <Spark size={14} /> : undefined, reason: o.why || undefined, disabled: !!o.why && to !== o.id }))}
+      />
       {setup && (
         <button type="button" className="link text-caption" onClick={onSetup}>
           Set up

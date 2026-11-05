@@ -40,6 +40,13 @@ describe('page structure', () => {
     expect(out).toContain('Create post');
   });
 
+  it('PageHeader: actions span the meta row only when there is meta (no empty grid row under the title)', () => {
+    const bare = html(h(PageHeader, { title: 'Brain', actions: h('button', { className: 'btn btn-primary' }, 'New skill') }));
+    expect(bare).not.toContain('md:row-span-2');
+    const withMeta = html(h(PageHeader, { title: 'Strategy', meta: 'Updated today', actions: h('button', { className: 'btn btn-primary' }, 'Run') }));
+    expect(withMeta).toMatch(/class="[^"]*ml-auto md:row-span-2[^"]*"><button/);
+  });
+
   it('PageHeader: a caller’s margin replaces the default (classes merge)', () => {
     const out = html(h(PageHeader, { title: 'Strategy', className: 'mb-4' }));
     expect(out).toContain('<header class="mb-4">');
@@ -97,11 +104,11 @@ describe('AI moments', () => {
     expect(out).not.toContain('Write page');
   });
 
-  it('AIThinking: a status strip with the stage text, the step and a timer, and Stop', () => {
+  it('AIThinking: a strip whose stage text is the status, the step and a timer kept out of it, and Stop', () => {
     const out = html(h(AIThinking, { running: true, stage: 'Researching where your customers are…', step: 'Step 2 of 6', onStop: () => {} }));
-    expect(out).toMatch(/class="thinking" role="status" aria-live="polite"/);
-    expect(out).toContain('Researching where your customers are…');
-    expect(out).toContain('Step 2 of 6 · 0:00');
+    expect(out).toMatch(/<div class="thinking"><span class="orb"/);
+    expect(out).toMatch(/<p class="[^"]*" role="status" aria-live="polite">Researching where your customers are…<\/p>/);
+    expect(out).toMatch(/aria-hidden="true"><span class="max-sm:hidden">Step 2 of 6 · <\/span>0:00<\/span>/);
     expect(out).toContain('Stop');
     expect(html(h(AIThinking, { running: false, stage: 'x' }))).toBe('');
   });

@@ -57,7 +57,7 @@ describe('running an AI task for a tool', () => {
     const c = ctx();
     const r = await runAITask(skillTestTask, { sample: 'caption' }, c);
     expect(r).toMatchObject({ provider: 'local', limitReached: true });
-    expect(r.note).toMatch(/Settings → AI/);
+    expect(r.note).toMatch(/Settings › AI keys/);
     expect(c.ai[0]).toMatchObject({ provider: 'local', note: r.note });
   });
 

@@ -12,7 +12,6 @@ import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Badge, Callout, Drawer, Field, InfoTip, MoreMenu, Popover, SettingsRow, SettingsSection, Spinner, Toggle, Tooltip, confirmAction } from '@/components/ui/primitives';
 import { SlackCard } from './SlackCard';
-import { useFocusBack } from './sheetFocus';
 
 // ───────────── what the server sends ─────────────
 
@@ -366,7 +365,6 @@ function Providers({ state, catalog, usage, usageLocked, call, save, onReload, o
   const st = open ? state.providers.find((p) => p.id === open) : undefined;
   const at = open ? state.order.indexOf(open) : -1;
   // the side sheet gives the focus back to the row's Configure button when it closes
-  const openedFrom = useFocusBack(!!(def && st));
   return (
     <>
       <SettingsSection
@@ -422,10 +420,7 @@ function Providers({ state, catalog, usage, usageLocked, call, save, onReload, o
                     <button
                       type="button"
                       className="btn btn-secondary btn-xs"
-                      onClick={(e) => {
-                        openedFrom(e.currentTarget);
-                        setOpen(id);
-                      }}
+                      onClick={() => setOpen(id)}
                     >
                       Configure
                     </button>
@@ -1026,7 +1021,6 @@ function OwnKeys({ call, serverUrl, onChange }: { call: Call; serverUrl: string;
   };
   const editing = open ? info?.providers.find((p) => p.id === open) : undefined;
   // the side sheet gives the focus back to the row's Add key / Replace button when it closes
-  const openedFrom = useFocusBack(!!(info && editing));
   return (
     <Region name="Your own keys">
       <SettingsSection
@@ -1087,10 +1081,7 @@ function OwnKeys({ call, serverUrl, onChange }: { call: Call; serverUrl: string;
                         type="button"
                         className="btn btn-secondary btn-xs"
                         disabled={!info.available}
-                        onClick={(e) => {
-                          openedFrom(e.currentTarget);
-                          setOpen(p.id);
-                        }}
+                        onClick={() => setOpen(p.id)}
                         aria-label={`${saved ? 'Replace' : 'Add'} your ${p.label} key`}
                       >
                         {saved ? 'Replace' : 'Add key'}

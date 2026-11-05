@@ -34,9 +34,9 @@ describe('readiness', () => {
 
   it('reads the server’s reasons, with the fix to make', () => {
     serve(agents({ manus: { build: { ready: false, reason: 'not_ticked' }, chat: { ready: false, reason: 'no_key' } }, viktor: { ready: false, reason: 'no_place' } }));
-    expect(agentReady('manus', 'build')).toMatchObject({ show: true, ready: false, settings: true, text: 'Tick “Building pages & assets” for your Manus key in Settings → AI.' });
-    expect(agentReady('manus', 'chat').text).toBe('Add a Manus API key in Settings → AI.');
-    expect(agentReady('viktor', 'chat').text).toBe('Choose where to talk to Viktor (your DM or a channel) in Settings → AI → Viktor (Slack).');
+    expect(agentReady('manus', 'build')).toMatchObject({ show: true, ready: false, settings: true, text: 'Tick “Building pages & assets” for your Manus key in Settings › AI keys.' });
+    expect(agentReady('manus', 'chat').text).toBe('Add a Manus API key in Settings › AI keys.');
+    expect(agentReady('viktor', 'chat').text).toBe('Choose where to talk to Viktor (your DM or a channel) in Settings › AI keys › Viktor (Slack).');
     serve(agents());
     expect(agentReady('viktor', 'build')).toEqual({ show: true, ready: true, reason: 'ok', text: '', settings: false });
   });

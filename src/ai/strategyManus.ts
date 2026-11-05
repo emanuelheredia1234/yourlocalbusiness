@@ -89,7 +89,7 @@ export async function startDeepResearch(pid: string, o: { confirm?: (c: { title:
       writeStrategy(pid, (s) => ({ ...s, manus: { taskId: 'unknown_start', taskUrl: 'https://manus.im/app', state: 'failed', message: 'The connection dropped while starting. Check your Manus tasks before you start again.', requestedAt: now, checkedAt: now } }));
       return 'failed';
     }
-    toast({ kind: 'error', title: 'Manus couldn’t start the research', body: err?.message || 'Check your Manus key in Settings → AI.' });
+    toast({ kind: 'error', title: 'Manus couldn’t start the research', body: err?.message || 'Check your Manus key in Settings › AI keys.' });
     return 'refused';
   }
 }

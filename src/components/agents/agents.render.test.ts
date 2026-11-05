@@ -89,7 +89,7 @@ describe('the build window, step 1', () => {
   it('an agent that isn’t set up is disabled and says why, with Settings', () => {
     fake.runtime = { server: 'ok', ai: { reachable: true, ready: true, providers: [], routing: {}, agents: health({ manus: { build: { ready: false, reason: 'no_key' }, chat: { ready: false, reason: 'no_key' }, own: false, profile: '' } }) } };
     const html = form(fields({ via: 'manus' }));
-    expect(html).toContain('Add a Manus API key in Settings → AI.');
+    expect(html).toContain('Add a Manus API key in Settings › AI keys.');
     expect(html).toContain('Open Settings › AI keys');
     expect(nextButton(html)).toContain('disabled');
   });
@@ -205,7 +205,7 @@ describe('the buttons', () => {
     fake.runtime = { server: 'ok', ai: { reachable: true, ready: true, providers: [], routing: {}, agents: health({ viktor: { ready: false, reason: 'no_token', where: '', place: '' } }) } };
     const html = renderToStaticMarkup(createElement(AgentButtons, { target: 'asset' }));
     expect(html).toMatch(/<button[^>]*class="btn btn-secondary btn-sm"[^>]*>.*Build with Manus<\/button>/);
-    expect(html).toMatch(/title="Connect Slack in Settings → AI → Viktor \(Slack\)\."[^>]*><button[^>]*disabled=""/);
+    expect(html).toMatch(/title="Connect Slack in Settings › AI keys › Viktor \(Slack\)\."[^>]*><button[^>]*disabled=""/);
     expect(html).toContain('Set up');
   });
 

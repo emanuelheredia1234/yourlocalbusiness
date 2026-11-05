@@ -28,10 +28,10 @@ export const PAGE_LABELS: Record<Route, string> = {
   'workspace-settings': 'Settings',
 };
 
-/** "Settings → AI keys", "Content calendar". */
+/** "Settings › AI keys", "Content calendar". */
 export function pageName(route: Route, tab?: string): string {
   const t = tab ? tabLabel(route, tab) : '';
-  return t ? `${PAGE_LABELS[route]} → ${t}` : PAGE_LABELS[route];
+  return t ? `${PAGE_LABELS[route]} › ${t}` : PAGE_LABELS[route];
 }
 
 /** Why a tab can't be opened on a page ('' when it can). */

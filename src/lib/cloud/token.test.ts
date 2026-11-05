@@ -1,5 +1,5 @@
 // Where the sign-in token may go: the app's own server, or a server the signed-in person chose
-// (Settings → AI → Test connection). Never a half-typed address or one from an imported backup.
+// (Settings › AI keys › Test connection). Never a half-typed address or one from an imported backup.
 import { describe, expect, it } from 'vitest';
 import { tokenAllowed } from './auth';
 

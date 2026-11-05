@@ -17,12 +17,13 @@ export function brandHandle(brand: Pick<Brand, 'socials'>, networks: SocialPlatf
   for (const n of networks) {
     const raw = (brand.socials?.[n] ?? '').trim();
     if (!raw) continue;
-    const h = raw
-      .replace(/^https?:\/\//i, '')
-      .replace(/^(www\.)?(instagram|tiktok|x|twitter)\.com\//i, '')
-      .replace(/^@/, '')
-      .replace(/[/?#].*$/, '');
-    if (/^[A-Za-z0-9._]{1,30}$/.test(h)) return `@${h}`;
+    const bare = raw.replace(/^https?:\/\//i, '');
+    const known = /^(www\.)?(instagram|tiktok|x|twitter)\.com\//i;
+    // any other address ("facebook.com/SparkleCo", "linkedin.com/company/…") is a link, not a handle: its host never is one
+    if (!known.test(bare) && /^[\w-]+(\.[\w-]+)+[/?#]/.test(bare)) continue;
+    const h = bare.replace(known, '').replace(/^@/, '');
+    const hh = h.replace(/[/?#].*$/, '');
+    if (/^[A-Za-z0-9._]{1,30}$/.test(hh)) return `@${hh}`;
   }
   return '';
 }

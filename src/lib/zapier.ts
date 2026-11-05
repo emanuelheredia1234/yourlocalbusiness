@@ -93,10 +93,10 @@ export async function zapierCall(action: string, params: Record<string, unknown>
 export function zapierErrorMessage(code: string, message = ''): { title: string; body: string } {
   switch (code) {
     case 'needs_reauth':
-      return { title: 'Reconnect Zapier', body: 'Your Zapier connection expired. Reconnect it in claude.ai Settings → Connectors, then try again.' };
+      return { title: 'Reconnect Zapier', body: 'Your Zapier connection expired. Reconnect it in claude.ai Settings › Connectors, then try again.' };
     case 'server_not_connected':
     case 'missing':
-      return { title: 'Zapier isn’t connected', body: 'Add the Zapier connector in claude.ai Settings → Connectors and connect Manus in Zapier.' };
+      return { title: 'Zapier isn’t connected', body: 'Add the Zapier connector in claude.ai Settings › Connectors and connect Manus in Zapier.' };
     case 'selection_required':
       return { title: 'Choose your Zapier connector', body: 'You have more than one Zapier connector. Pick one when claude.ai asks, then try again.' };
     case 'approval_required':

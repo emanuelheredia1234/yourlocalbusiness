@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Brand, BrandColors, LogoConfig, LogoFont, LogoShape, MiniLogo } from '@/lib/types';
 import { cn, darken, initials, lighten, readableOn } from '@/lib/utils';
 import { useMediaUrl } from '@/lib/media';
@@ -41,7 +41,9 @@ export function shapeEl(shape: LogoShape, fill: string) {
 
 /** The symbol part of a logo, rendered as SVG so it can be exported. */
 export function LogoMark({ colors, logo, name, size = 40, className }: { colors: BrandColors; logo: LogoConfig; name: string; size?: number; className?: string }) {
-  const gid = `g${Math.abs(hashCode(colors.primary + colors.secondary + logo.shape))}`;
+  // one id per instance: two marks with the same id share one gradient, and when the first is hidden
+  // (the phone sidebar) the others lose their fill
+  const gid = `g${Math.abs(hashCode(colors.primary + colors.secondary + logo.shape))}-${useId().replace(/:/g, '')}`;
   if (logo.mode === 'upload' && logo.uploadDataUrl) {
     return <img src={logo.uploadDataUrl} alt={`${name} logo`} width={size} height={size} className={cn('shrink-0 rounded-md object-contain', className)} style={{ width: size, height: size }} />;
   }
@@ -207,7 +209,7 @@ export function BrandBanner({ brand, className, rounded = true }: { brand: Brand
   const dark = style !== 'blobs';
   const ink = dark ? '#ffffff' : c.ink;
   const name = brand.name || 'Your Brand';
-  const id = `b${Math.abs(hashCode(name + c.primary + style))}`;
+  const id = `b${Math.abs(hashCode(name + c.primary + style))}-${useId().replace(/:/g, '')}`;
   const nameFit = bannerNameSize(name, font);
   return (
     <svg viewBox="0 0 1500 500" className={cn('block h-auto w-full', rounded && 'rounded-lg', className)} role="img" aria-label={`${name} cover banner`} preserveAspectRatio="xMidYMid slice">

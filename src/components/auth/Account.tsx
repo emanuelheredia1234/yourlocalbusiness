@@ -1,7 +1,7 @@
 // Who's signed in, with Log out: the account button in the top bar, a row at the bottom of the
-// sidebar, a chip during setup, and Settings → Account.
+// sidebar, a chip during setup, and Settings › Account.
 
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useState, type FormEvent } from 'react';
 import { CircleAlert, Cloud, CloudOff, LogIn, LogOut, Monitor, Moon, Settings as SettingsIcon, Sun, Trash2 } from 'lucide-react';
 import { cn, fmtRelative } from '@/lib/utils';
 import { navigate } from '@/lib/router';
@@ -123,71 +123,7 @@ export function AccountButton() {
   );
 }
 
-/** Bottom of the sidebar (and the mobile menu): who's signed in, and Log out. */
-export function AccountRow({ onNavigate }: { onNavigate?: () => void }) {
-  const phase = useAuth((s) => s.phase);
-  const email = useAuth((s) => s.user?.email ?? '');
-  const sync = useSyncLine();
-  if (phase === 'guest') {
-    return (
-      <button className="mt-1 flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-[13.5px] font-semibold text-ink-2 hover:bg-surface-2 hover:text-ink" onClick={showSignIn}>
-        <LogIn size={18} /> Sign in to save your work
-      </button>
-    );
-  }
-  if (phase !== 'ready') return null;
-  return (
-    <div className="mt-1 flex items-center gap-1 rounded-md px-1.5 py-1">
-      <button
-        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-1 py-1 text-left hover:bg-surface-2"
-        onClick={() => {
-          openAccountSettings();
-          onNavigate?.();
-        }}
-        title="Account settings"
-      >
-        <Avatar email={email} size={28} />
-        <span className="min-w-0">
-          <span className="block truncate text-[12.5px] font-semibold text-ink">{email}</span>
-          <span className={cn('block truncate text-[11px]', sync.tone === 'warn' ? 'text-warn' : 'text-muted')}>{sync.text}</span>
-        </span>
-      </button>
-      <button className="btn btn-ghost btn-icon btn-sm shrink-0" onClick={() => void logOut()} aria-label="Log out" title="Log out">
-        <LogOut size={16} />
-      </button>
-    </div>
-  );
-}
-
-/** During setup (no sidebar yet). */
-export function AccountChip() {
-  const phase = useAuth((s) => s.phase);
-  const email = useAuth((s) => s.user?.email ?? '');
-  if (phase !== 'ready') return null;
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className="hidden max-w-[200px] truncate text-[12.5px] text-muted md:inline">{email}</span>
-      <button className="btn btn-ghost btn-sm" onClick={() => void logOut()}>
-        <LogOut size={15} /> Log out
-      </button>
-    </div>
-  );
-}
-
 // ───────────── Settings › Account ─────────────
-
-/** A settings card for things that can't be undone: a red hairline and title (Account, Projects & data). */
-export function DangerSection({ title, description, children }: { title: ReactNode; description?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="rounded-lg border border-bad-line bg-surface shadow-card">
-      <div className="px-5 pb-1 pt-5">
-        <h3 className="text-h3 text-bad">{title}</h3>
-        {description && <p className="mt-0.5 text-small text-muted">{description}</p>}
-      </div>
-      <div className="px-5 pb-1">{children}</div>
-    </section>
-  );
-}
 
 export function AccountSettings() {
   const email = useAuth((s) => s.user?.email ?? '');
@@ -274,7 +210,7 @@ function DeleteAccount({ email }: { email: string }) {
   const [busy, setBusy] = useState(false);
   const match = typed.trim().toLowerCase() === email.toLowerCase();
   return (
-    <DangerSection title="Delete account" description="Deletes your account, every project, post and listing in it, and all your files. This can’t be undone.">
+    <SettingsSection tone="danger" title="Delete account" description="Deletes your account, every project, post and listing in it, and all your files. This can’t be undone.">
       <SettingsRow label="Type your email to confirm" description="Export a backup first (Projects & data) if you might need anything." htmlFor="del-confirm">
         <input id="del-confirm" className="input" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={email} />
       </SettingsRow>
@@ -294,6 +230,6 @@ function DeleteAccount({ email }: { email: string }) {
           {busy ? <Spinner size={14} /> : <Trash2 />} Delete my account
         </button>
       </div>
-    </DangerSection>
+    </SettingsSection>
   );
 }

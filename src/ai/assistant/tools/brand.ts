@@ -67,7 +67,7 @@ function liveNote(): { marketplace?: string } {
   return p && listingChanged(p, liveListing(p)) ? { marketplace: 'The Marketplace shows the old listing until it’s updated (publish_listing).' } : {};
 }
 
-/** New colors as the color pickers set them (Settings → Brand): a new primary recolors the palette, a new secondary its ink. */
+/** New colors as the color pickers set them (Settings › Brand): a new primary recolors the palette, a new secondary its ink. */
 function withColors(c: BrandColors, patch: { primary?: string; secondary?: string; accent?: string }): BrandColors {
   let out = c;
   // the pickers write lowercase #rrggbb
@@ -687,7 +687,7 @@ const readVoiceNow = defineTool({
       throw readFailure(e);
     }
     const task = voiceOf(p.id, platform)?.task;
-    if (!task || task.taskId === before) return { ok: false, error: 'No new read started (another one may be starting). Check the profile in Settings → Brand.' };
+    if (!task || task.taskId === before) return { ok: false, error: 'No new read started (another one may be starting). Check the profile in Settings › Brand.' };
     return {
       data: { platform, read: 'started', profile: profileLabel(platform, p.brand.socials[platform]), next: 'The app checks every 45 seconds while it’s open; the learned skill updates when Manus is done.' },
       note: `Manus is reading your ${name} posts again (it only reads; usually a few minutes)`,
@@ -883,7 +883,7 @@ const deleteProject = defineTool({
     const st = s();
     const p = st.projects.find((x) => x.id === id);
     if (!p) return `There’s no project with id "${id}". Use list_projects.`;
-    if (id === st.activeProjectId) return `“${projectName(id)}” is the project this chat is in. To delete it, the owner switches to another project first, or deletes it in Settings → Projects & data.`;
+    if (id === st.activeProjectId) return `“${projectName(id)}” is the project this chat is in. To delete it, the owner switches to another project first, or deletes it in Settings › Projects & data.`;
     return null;
   },
   danger: ({ id }) => {

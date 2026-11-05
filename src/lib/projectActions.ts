@@ -1,5 +1,5 @@
 // Starting and deleting projects outside the pages that do it (the project menu, the command palette,
-// Settings → Projects & data, and the assistant), with the same steps each time.
+// Settings › Projects & data, and the assistant), with the same steps each time.
 
 import type { Track } from './types';
 import { navigate } from './router';

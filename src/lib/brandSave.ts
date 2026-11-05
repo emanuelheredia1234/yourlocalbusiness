@@ -1,4 +1,4 @@
-// Changing the brand kit outside the Settings page (the assistant), the way Settings → Brand does it:
+// Changing the brand kit outside the Settings page (the assistant), the way Settings › Brand does it:
 // the active project's brand changes, and when it's listed on the Marketplace its shared listing is
 // brought up to date. A brand-copy refresh rewrites only the words: name, logo and colors are kept.
 

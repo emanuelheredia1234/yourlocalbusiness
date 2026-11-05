@@ -423,7 +423,7 @@ export function createOmnisendRoutes({
       connected: !reconnect && !!doc.accessToken,
       reconnect,
       scopes: !reconnect && Array.isArray(doc.scopes) ? doc.scopes.filter((scope) => OMNISEND_SCOPES.includes(scope)) : [],
-      // the app's owner (ADMIN_EMAILS, as for Settings → AI) is the one who can set Omnisend up
+      // the app's owner (ADMIN_EMAILS, as for Settings › AI keys) is the one who can set Omnisend up
       owner: user.isAdmin === true,
     });
   }

@@ -67,7 +67,7 @@ describe('the who-and-cost line', () => {
     const w = strategyWho();
     expect(w).toMatchObject({ mode: 'general', settings: true });
     expect(w.who).toBe('Google Gemini writes your strategy with gemini-3.8-flash (effort Medium): 6 steps, 6 requests.');
-    expect(w.cost).toBe('Google Gemini can’t search the web for Strategy, so the research comes from its general knowledge (no sources). For sources, tick Strategy for a key that can search (Anthropic, OpenAI, xAI, Meta or OpenRouter) in Settings → AI.');
+    expect(w.cost).toBe('Google Gemini can’t search the web for Strategy, so the research comes from its general knowledge (no sources). For sources, tick Strategy for a key that can search (Anthropic, OpenAI, xAI, Meta or OpenRouter) in Settings › AI keys.');
   });
 
   it('no key, server down, still checking', () => {
@@ -101,10 +101,10 @@ describe('deep research with Manus', () => {
     useRuntime.getState().set({ server: 'down' });
     expect(strategyWho().deep).toMatchObject({ ok: false, reason: 'Your AI server isn’t running.' });
     server([ANTHROPIC], { strategy: ['anthropic'] }, { posting: { reason: 'own_key_needed' } });
-    expect(strategyWho().deep.reason).toBe('Deep research uses your own Manus account: add your Manus API key in Settings → AI.');
+    expect(strategyWho().deep.reason).toBe('Deep research uses your own Manus account: add your Manus API key in Settings › AI keys.');
     server([ANTHROPIC, MANUS], { strategy: ['anthropic'], marketResearch: [] });
-    expect(strategyWho().deep.reason).toBe('Tick Deep research (Manus) for your Manus key in Settings → AI.');
+    expect(strategyWho().deep.reason).toBe('Tick Deep research (Manus) for your Manus key in Settings › AI keys.');
     server([ANTHROPIC], { strategy: ['anthropic'] });
-    expect(strategyWho().deep).toEqual({ show: true, ok: false, reason: 'Add a Manus key in Settings → AI to use deep research.', own: false });
+    expect(strategyWho().deep).toEqual({ show: true, ok: false, reason: 'Add a Manus key in Settings › AI keys to use deep research.', own: false });
   });
 });

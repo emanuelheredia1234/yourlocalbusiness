@@ -14,7 +14,7 @@ import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import type { AIError } from './claude';
 import { runTask } from './engine';
-import { compactMeta, fmtUsdSmall, readResearchMeta, type AIMeta } from './meta';
+import { compactMeta, readResearchMeta, type AIMeta } from './meta';
 import { openPage } from './assistant/nav';
 import { STEP_TASK, renormalize, stepInput } from './strategyTasks';
 import { strategyWho } from './strategyWho';
@@ -101,7 +101,7 @@ export function noAIText(code?: string, unchanged = true): string {
     : __ARTIFACT_BUILD__ ? 'claude' : useRuntime.getState().server === 'down' ? 'server' : 'key';
   const so = unchanged ? ', so nothing was changed' : '';
   if (cause === 'server') return `Your AI server can’t be reached right now${so}. Check that it’s running, then try again.`;
-  if (cause === 'key') return `No API key powers Strategy now${so}. In Settings → AI, tick Strategy for one of your keys.`;
+  if (cause === 'key') return `No API key powers Strategy now${so}. In Settings › AI keys, tick Strategy for one of your keys.`;
   return `Claude isn’t available here right now${so}.`;
 }
 
@@ -348,7 +348,7 @@ function notifyEnd(pid: string, result: 'done' | 'stopped' | 'failed' | 'missing
     return;
   }
   const parts = `${o.written} part${o.written === 1 ? '' : 's'}`;
-  toast({ kind: 'ai', title: 'Your strategy is ready', body: `${brand}: ${parts} written${o.cost > 0 ? ` · ≈${fmtUsdSmall(o.cost)}` : ''}`, action: active ? { label: 'Open', run: () => void openPage('strategy', 'plan') } : undefined });
+  toast({ kind: 'ai', title: 'Your strategy is ready', body: `${brand}: ${parts} written`, action: active ? { label: 'Open', run: () => void openPage('strategy', 'plan') } : undefined });
   if (currentRoute() !== 'strategy' || !active) useStore.getState().notify({ kind: 'ai', title: `Strategy ready for ${brand}`, body: `${parts} written.`, route: 'strategy' });
 }
 

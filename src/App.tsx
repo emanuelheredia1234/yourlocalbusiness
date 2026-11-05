@@ -42,7 +42,7 @@ const SettingsPage = lazy(() => import('@/pages/settings/Settings'));
 const StrategyPage = lazy(() => import('@/pages/strategy/Strategy'));
 
 /**
- * Keeps <html data-theme> in step with Settings → Theme. The boot script in index.html sets it before
+ * Keeps <html data-theme> in step with Settings › Theme. The boot script in index.html sets it before
  * the first paint (and marks it data-theme-source="app"); a theme the host set (claude.ai) wins for
  * "System". The choice is saved under ylb-theme so the next load paints right away.
  */

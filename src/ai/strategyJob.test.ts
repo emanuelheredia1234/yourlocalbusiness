@@ -228,7 +228,7 @@ describe('the built-in engine never takes over what an AI wrote on its own', () 
     const s = strategyOf('p1');
     expect(s.research?.provider).toBe('server');
     expect(s.promote).toBeUndefined();
-    expect(s.run).toMatchObject({ stoppedAt: 'promote', done: ['research'], note: 'No API key powers Strategy now. In Settings → AI, tick Strategy for one of your keys.' });
+    expect(s.run).toMatchObject({ stoppedAt: 'promote', done: ['research'], note: 'No API key powers Strategy now. In Settings › AI keys, tick Strategy for one of your keys.' });
   });
 
   it('with no key for Strategy: only when the owner chose it (replaceAI) does the built-in engine replace the AI’s sections', async () => {
@@ -238,7 +238,7 @@ describe('the built-in engine never takes over what an AI wrote on its own', () 
     expect(strategyOf('p1').research).toEqual(before.research);
     expect(strategyOf('p1').plan).toEqual(before.plan);
     expect(strategyOf('p1').sources).toHaveLength(2);
-    expect(strategyOf('p1').run!.note).toBe('No API key powers Strategy now, so nothing was changed. In Settings → AI, tick Strategy for one of your keys.');
+    expect(strategyOf('p1').run!.note).toBe('No API key powers Strategy now, so nothing was changed. In Settings › AI keys, tick Strategy for one of your keys.');
     expect(await runStrategy('p1', undefined, { replaceAI: true })).toBe('done');
     const s = strategyOf('p1');
     for (const k of ['research', 'promote', 'content', 'assets', 'outreach', 'plan'] as const) expect(s[k]?.provider).toBe('local');

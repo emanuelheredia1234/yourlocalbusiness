@@ -1,4 +1,4 @@
-// What AI does in the app, grouped the way Settings → AI shows it. Each API key on your server
+// What AI does in the app, grouped the way Settings › AI keys shows it. Each API key on your server
 // powers some of these functions; every AI task belongs to exactly one.
 
 import catalog from '../../shared/ai-functions.json';

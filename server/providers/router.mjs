@@ -249,7 +249,7 @@ export class AIRouter {
 
   noProvider(fn) {
     const label = fnById[fn]?.label ?? fn;
-    return new ProviderError('NO_PROVIDER', `No API key powers ${label} yet. Add one in Settings → AI and tick ${label} in its “Powers” list.`, { status: 409 });
+    return new ProviderError('NO_PROVIDER', `No API key powers ${label} yet. Add one in Settings › AI keys and tick ${label} in its “Powers” list.`, { status: 409 });
   }
 
   /**
@@ -540,7 +540,7 @@ export class AIRouter {
   /** The key a job is followed with: the owner's, or (ownKey jobs) the user's own key, passed in as apiKey. */
   jobCtx(job, apiKey) {
     if (!job.ownKey) return this.ctx(job.provider);
-    if (!apiKey) throw new ProviderError('OWN_KEY_NEEDED', `The ${PROVIDERS[job.provider].label} key this video was started with was removed. Add it again in Settings → AI.`, { status: 409 });
+    if (!apiKey) throw new ProviderError('OWN_KEY_NEEDED', `The ${PROVIDERS[job.provider].label} key this video was started with was removed. Add it again in Settings › AI keys.`, { status: 409 });
     return this.ctx(job.provider, apiKey);
   }
 
@@ -592,12 +592,12 @@ export class AIRouter {
    * account's connected apps. Builds and chats (fn 'build', 'agentchat'): the prompt is the server's fixed
    * template too (server/agents/templates.mjs); they run without the account's connected apps, a build never
    * asks questions, and `profile` (a Manus agent profile) picks the agent for this task, else the key's
-   * agent profile in Settings → AI. `ref` ends the task's title, so /verify can find it after an uncertain start.
+   * agent profile in Settings › AI keys. `ref` ends the task's title, so /verify can find it after an uncertain start.
    */
   async manusCreate({ fn, prompt, title, interactive, hidden, image, files = [], signal, owner = null, apiKey = null, profile: wanted = '', ref = '' }) {
     const kind = fnById[fn]?.kind;
     if (!MANUS_FUNCTIONS.has(fn)) throw new ProviderError('BAD_REQUEST', 'Unknown Manus task.', { status: 400 });
-    if (!apiKey && !this.store.powers('manus', fn)) throw new ProviderError('NO_PROVIDER', `Your Manus key isn’t set to power ${fnById[fn].label}. Turn it on in Settings → AI.`, { status: 409 });
+    if (!apiKey && !this.store.powers('manus', fn)) throw new ProviderError('NO_PROVIDER', `Your Manus key isn’t set to power ${fnById[fn].label}. Turn it on in Settings › AI keys.`, { status: 409 });
     const agentTask = AGENT_FNS.has(fn);
     const profile = agentTask && wanted && effortIds('manus', 'agent', 'manus').includes(wanted) ? wanted : this.store.settings('manus').effort[kind];
     const research = fn === 'marketResearch';
@@ -642,7 +642,7 @@ export class AIRouter {
 
   /** Upload a file to the Manus account behind this key (the owner's, or a user's own). */
   async manusUpload({ filename, size, body, signal, apiKey = null }) {
-    if (!apiKey && !['facebook', 'photos', 'build', 'agentchat'].some((fn) => this.store.powers('manus', fn))) throw new ProviderError('NO_PROVIDER', 'Your Manus key is off, or isn’t set to power Social posting or Building pages & assets. Turn it on in Settings → AI.', { status: 409 });
+    if (!apiKey && !['facebook', 'photos', 'build', 'agentchat'].some((fn) => this.store.powers('manus', fn))) throw new ProviderError('NO_PROVIDER', 'Your Manus key is off, or isn’t set to power Social posting or Building pages & assets. Turn it on in Settings › AI keys.', { status: 409 });
     return this.adapters.manus.uploadFile(this.manusCtx(apiKey), { filename, size, body, signal });
   }
 

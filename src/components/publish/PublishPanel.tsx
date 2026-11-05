@@ -296,7 +296,7 @@ export function PublishPanel({
               : access === 'unreachable'
                 ? 'Couldn’t reach the app’s server, so publishing isn’t available right now.'
                 : access === 'off'
-                  ? 'Publishing isn’t set up on this app’s server yet. The app’s owner turns it on with accounts and the SUPABASE_SECRET_KEY Secret.'
+                  ? 'Publishing isn’t set up on this app’s server yet. The app’s owner can turn it on (README › Publishing pages).'
                   : published
                     ? 'Sign in to update or unpublish this page.'
                     : 'Sign in to publish this page at its own address.'}

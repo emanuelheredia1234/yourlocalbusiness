@@ -260,36 +260,6 @@ export function Sparkline({ values, width = 96, height = 28, color = 'rgb(var(--
   );
 }
 
-/**
- * One key number, drawn like a StatStrip cell: label, value, and a muted line under it. The change
- * against the period before shows only when that period had something to compare with (`delta` is a
- * fraction; null means no baseline). `trend` and `icon` are accepted and not drawn.
- */
-export function StatTile({ label, value, delta, deltaLabel = 'vs previous period', upIsGood = true, hint }: { label: string; value: string; delta?: number | null; deltaLabel?: string; trend?: number[]; upIsGood?: boolean; hint?: string; icon?: ReactNode }) {
-  const d = typeof delta === 'number' && Number.isFinite(delta) && Math.abs(delta) > 0.0005 ? delta : null;
-  const good = d === null ? null : d > 0 === upIsGood;
-  return (
-    <div className="card min-w-0 px-5 py-4">
-      <span className="block truncate text-small text-muted" title={label}>
-        {label}
-      </span>
-      <span className="num mt-1 block text-phone-kpi text-ink sm:text-kpi">{value}</span>
-      <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 text-caption text-muted">
-        {d !== null ? (
-          <>
-            <span className={cn('font-mono', good ? 'text-good' : 'text-bad')}>
-              {d > 0 ? '↑' : '↓'} {Math.abs(d * 100).toFixed(Math.abs(d) < 0.1 ? 1 : 0)}%
-            </span>
-            <span className="truncate">{deltaLabel}</span>
-          </>
-        ) : (
-          hint && <span className="truncate">{hint}</span>
-        )}
-      </span>
-    </div>
-  );
-}
-
 /** Parts of a whole on one bar (2px gaps), with a legend of 8px swatches, counts and shares. */
 export function StackedBar({ parts, height = 14 }: { parts: { key: string; label: string; value: number; color: string }[]; height?: number }) {
   const total = parts.reduce((s, p) => s + p.value, 0) || 1;

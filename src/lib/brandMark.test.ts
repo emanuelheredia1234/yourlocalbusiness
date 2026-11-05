@@ -20,4 +20,12 @@ describe('brandMark', () => {
     expect(brandHandle(brand({ socials: { facebook: 'facebook.com/SparkleCo' } }))).toBe('');
     expect(brandHandle(brand({ socials: { instagram: 'my insta' } }))).toBe('');
   });
+
+  it('never makes a handle of a link’s host, even when asked for that network', () => {
+    expect(brandHandle(brand({ socials: { facebook: 'facebook.com/SparkleCo' } }), ['facebook'])).toBe('');
+    expect(brandHandle(brand({ socials: { facebook: 'https://www.facebook.com/SparkleCo/' } }), ['facebook'])).toBe('');
+    expect(brandHandle(brand({ socials: { linkedin: 'linkedin.com/company/sparkle' } }), ['linkedin'])).toBe('');
+    expect(brandHandle(brand({ socials: { facebook: 'SparkleCo' } }), ['facebook'])).toBe('@SparkleCo');
+    expect(brandHandle(brand({ socials: { instagram: 'instagram.com/sparkle.co?hl=en' } }), ['instagram'])).toBe('@sparkle.co');
+  });
 });

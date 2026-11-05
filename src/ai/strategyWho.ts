@@ -9,7 +9,7 @@ export interface StrategyWho {
   who: string;
   /** one sentence ('' for builtin/checking) */
   cost: string;
-  /** show "Open Settings → AI" */
+  /** show "Open Settings › AI keys" */
   settings: boolean;
   searchKey?: { id: string; label: string; model: string; perSearch: number; own: boolean };
   /** Deep research with Manus: hidden in the Artifact build */
@@ -40,9 +40,9 @@ function deepOf(): StrategyWho['deep'] {
   if (rt.server === 'down') return { show: true, ok: false, reason: 'Your AI server isn’t running.', own };
   if (!rt.ai.reachable) return { show: true, ok: false, reason: 'Checking your AI server…', own };
   if (routeFor('marketResearch').length > 0) return { show: true, ok: true, reason: '', own };
-  if (rt.ai.posting?.reason === 'own_key_needed') return { show: true, ok: false, reason: 'Deep research uses your own Manus account: add your Manus API key in Settings → AI.', own };
-  if (manus) return { show: true, ok: false, reason: 'Tick Deep research (Manus) for your Manus key in Settings → AI.', own };
-  return { show: true, ok: false, reason: 'Add a Manus key in Settings → AI to use deep research.', own };
+  if (rt.ai.posting?.reason === 'own_key_needed') return { show: true, ok: false, reason: 'Deep research uses your own Manus account: add your Manus API key in Settings › AI keys.', own };
+  if (manus) return { show: true, ok: false, reason: 'Tick Deep research (Manus) for your Manus key in Settings › AI keys.', own };
+  return { show: true, ok: false, reason: 'Add a Manus key in Settings › AI keys to use deep research.', own };
 }
 
 /** Who writes the strategy, with what, and what the run costs. */
@@ -90,5 +90,5 @@ export function strategyWho(o: WhoOptions = {}): StrategyWho {
     const cost = research ? `Step 1 searches the web: up to ${maxSearches} searches at ${searchPriceText(perSearch)} each (list price), plus the pages it reads, billed as tokens.${/^openrouter\d*$/.test(searchId) ? ' OpenRouter reports the exact cost after.' : ''}${billed}` : billed.trim();
     return { mode: 'web', who, cost, settings: false, searchKey: { id: searchId, label: w.label, model: w.model, perSearch, own: w.own }, deep };
   }
-  return { mode: 'general', who, cost: research ? `${label} can’t search the web for Strategy, so the research comes from its general knowledge (no sources). For sources, tick Strategy for a key that can search (${SEARCH_KEYS}) in Settings → AI.` : '', settings: research, deep };
+  return { mode: 'general', who, cost: research ? `${label} can’t search the web for Strategy, so the research comes from its general knowledge (no sources). For sources, tick Strategy for a key that can search (${SEARCH_KEYS}) in Settings › AI keys.` : '', settings: research, deep };
 }

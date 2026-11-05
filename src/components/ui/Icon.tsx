@@ -45,6 +45,7 @@ import {
   Layers,
   LayoutTemplate,
   Leaf,
+  Circle,
   Lightbulb,
   ListChecks,
   Mail,
@@ -173,6 +174,7 @@ export const ICONS: Record<string, LucideIcon> = {
 };
 
 export function Icon({ name, ...props }: { name: string } & LucideProps) {
-  const C = ICONS[name] ?? Sparkles;
+  // an unknown name draws a plain dot, never the AI glyph
+  const C = ICONS[name] ?? Circle;
   return <C aria-hidden="true" {...props} />;
 }

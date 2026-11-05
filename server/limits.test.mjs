@@ -156,7 +156,7 @@ describe('limits, own keys and usage with accounts on', () => {
     expect(j.code).toBe('DAILY_LIMIT');
     expect(j.error).toMatch(/limit on the app’s AI keys/);
     expect(j.error).toMatch(/midnight UTC/);
-    expect(j.error).toMatch(/Settings → AI/);
+    expect(j.error).toMatch(/Settings › AI keys/);
     expect(j.limits).toMatchObject({ requestsPerDay: 2, usedRequests: 2, reached: true });
     expect(rowFor(alice.user.id)).toMatchObject({ requests: 2, email: 'alice@example.com' });
     // photos and videos on the owner's keys are limited too
@@ -234,7 +234,7 @@ describe('limits, own keys and usage with accounts on', () => {
       const j = await r.json();
       expect(j.code).toBe('DAILY_LIMIT');
       expect(j.error).toMatch(/cost about \$0\.16/);
-      expect(j.error).toMatch(/Settings → AI/);
+      expect(j.error).toMatch(/Settings › AI keys/);
       expect(rowFor(gina.user.id)).toBeUndefined();
       // $0.25 a day: one 8-second video, then the next is refused before anyone polls the first
       await setLimits({ requestsPerDay: 0, usdPerDay: 0.25 });

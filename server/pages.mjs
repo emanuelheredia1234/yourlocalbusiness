@@ -1450,7 +1450,7 @@ export function createPages({
     const holder = holders?.[0];
     const current = currents?.[0];
     if (holder && !(holder.user_id === uid && holder.page_id === pageId)) throw fail(409, 'SLUG_TAKEN', 'That name is taken. Choose another.');
-    if (domain && !owned?.length) throw fail(400, 'DOMAIN_NOT_YOURS', 'Add that domain in Settings → Domains first.');
+    if (domain && !owned?.length) throw fail(400, 'DOMAIN_NOT_YOURS', 'Add that domain in Settings › Domains first.');
     if (!current) {
       const mine = await rest(`published_pages?user_id=eq.${uid}&select=slug&limit=${MAX_PAGES_PER_USER}`);
       if ((mine?.length ?? 0) >= MAX_PAGES_PER_USER) throw fail(400, 'TOO_MANY', `You can publish up to ${MAX_PAGES_PER_USER} pages. Unpublish one first.`);
@@ -1471,7 +1471,7 @@ export function createPages({
       if (domain) {
         // the domain may have changed hands while the images went up: it must still be this account's…
         const still = await rest(`published_domains?domain=eq.${d}&user_id=eq.${uid}&select=domain`);
-        if (!still?.length) throw fail(400, 'DOMAIN_NOT_YOURS', 'That domain isn’t in your account anymore. Add it again in Settings → Domains.');
+        if (!still?.length) throw fail(400, 'DOMAIN_NOT_YOURS', 'That domain isn’t in your account anymore. Add it again in Settings › Domains.');
         // …and nothing of another account's stays on it: a publish of its previous owner's that was under way
         // when it changed hands can land after that, and keep the domain's one home page (they stay published
         // at their own names on the app's address)
@@ -1497,7 +1497,7 @@ export function createPages({
       if (e.code === 'CONFLICT' && e.constraint === 'home') throw fail(409, 'HOME_TAKEN', `Another page just became the home page of ${domain}. Publish again to make this page its home page.`);
       if (e.code === 'CONFLICT') throw fail(409, 'SLUG_TAKEN', 'That name was just taken. Choose another.');
       if (e.code === 'REFERENCE' && e.ref === 'user') throw accountGone();
-      if (e.code === 'REFERENCE' && e.ref === 'domain') throw fail(400, 'DOMAIN_NOT_YOURS', 'That domain isn’t in your account anymore. Add it again in Settings → Domains.');
+      if (e.code === 'REFERENCE' && e.ref === 'domain') throw fail(400, 'DOMAIN_NOT_YOURS', 'That domain isn’t in your account anymore. Add it again in Settings › Domains.');
       throw e;
     } finally {
       // (what was swept stays swept: none of it belonged on this account's domain)

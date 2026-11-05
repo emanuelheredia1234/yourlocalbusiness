@@ -1,6 +1,6 @@
 // Server modules (plain JS under server/) that client tests read, to check the app and the server agree.
 declare module '*/server/providers/registry.mjs' {
-  /** Settings → AI's catalog: per provider and kind, the effort options with their labels and notes. */
+  /** Settings › AI keys's catalog: per provider and kind, the effort options with their labels and notes. */
   export function describeProviders(): { id: string; kinds: Record<string, { efforts: { id: string; label: string; note: string }[] } | undefined> }[];
 }
 declare module '*/server/agents/templates.mjs' {

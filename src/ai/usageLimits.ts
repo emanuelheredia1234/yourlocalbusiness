@@ -1,4 +1,4 @@
-// Daily limits on the app's AI keys (server/limits.mjs): what Settings → AI shows a signed-in user.
+// Daily limits on the app's AI keys (server/limits.mjs): what Settings › AI keys shows a signed-in user.
 
 /** The next midnight UTC after `now`, when today's counters reset. */
 export function nextUtcMidnight(now: number = Date.now()): Date {
@@ -23,7 +23,7 @@ export function limitPercent(used: number, limit: number): number {
 }
 
 
-// ───────────── Settings → AI: what the server's answers mean ─────────────
+// ───────────── Settings › AI keys: what the server's answers mean ─────────────
 
 const KIND_NAMES: Record<string, string> = { text: 'Writing', image: 'Photos', video: 'Videos', agent: 'Agent tasks' };
 

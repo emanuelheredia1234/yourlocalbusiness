@@ -14,7 +14,7 @@ export const CATEGORY_META: Record<SkillCategory, { label: string; icon: string;
   visual: { label: 'Visual style', icon: 'palette', desc: 'Imagery, colors and art direction' },
   rules: { label: 'Rules & compliance', icon: 'shield-check', desc: 'Words to avoid, claims you cannot make' },
   knowledge: { label: 'Knowledge', icon: 'book-open', desc: 'Facts, documents and product details' },
-  learned: { label: 'Learned from feedback', icon: 'sparkles', desc: 'Preferences the Brain picked up from your ratings' },
+  learned: { label: 'Learned from feedback', icon: 'lightbulb', desc: 'Preferences the Brain picked up from your ratings' },
 };
 
 export const SCOPE_META: Record<ModuleScope, string> = {
@@ -24,7 +24,7 @@ export const SCOPE_META: Record<ModuleScope, string> = {
   brand: 'Brand identity',
   studio: 'Creation studio',
   code: 'Code generator',
-  email: 'Email funnel',
+  email: 'Email',
   seo: 'SEO sales page',
   social: 'Social posts',
   ads: 'Paid ads',

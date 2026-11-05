@@ -275,7 +275,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
             <p className="mt-1.5 font-mono text-caption text-muted [overflow-wrap:anywhere] sm:hidden">{linkText(link.url)}</p>
           </Field>
         ) : (
-          <p className="text-small text-muted">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings → Brand.' : 'No link in your posts yet. Publish your page (Marketing → SEO page), or add your website in Settings → Brand.'}</p>
+          <p className="text-small text-muted">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings › Brand.' : 'No link in your posts yet. Publish your page (Marketing → SEO page), or add your website in Settings › Brand.'}</p>
         )}
 
         <div className="flex flex-wrap items-center gap-3">

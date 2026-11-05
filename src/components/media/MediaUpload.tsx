@@ -10,12 +10,14 @@ import { Spinner } from '../ui/primitives';
 export function MediaThumb({ media, className, onRemove }: { media: MediaRef; className?: string; onRemove?: () => void }) {
   const url = useMediaUrl(media);
   return (
-    <div className={cn('group relative overflow-hidden rounded-md bg-surface-2 ring-1 ring-inset ring-ink/5', className)}>
+    <div className={cn('group relative overflow-hidden rounded-md bg-surface-2', className)}>
       {media.kind === 'video' ? (
         url && !url.startsWith('data:') ? <video src={url} muted playsInline className="h-full w-full object-cover" /> : <img src={media.thumb} alt="" className="h-full w-full object-cover" />
       ) : (
         url && <img src={url} alt={media.name} className="h-full w-full object-cover" />
       )}
+      {/* the hairline is an overlay: an inset ring would be painted under the image */}
+      <span className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-ink/5" style={{ borderRadius: 'inherit' }} aria-hidden="true" />
       {media.kind === 'video' && (
         <span data-media className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-micro text-white">
           <Video size={10} aria-hidden="true" /> Video

@@ -12,7 +12,7 @@ import { workspaceSummary } from './workspace';
 describe('Strategy in the assistant', () => {
   it('knows the page, its tabs, and what it does', () => {
     expect(PAGE_LABELS.strategy).toBe('Strategy');
-    expect(pageName('strategy', 'promote')).toBe('Strategy → Where to promote');
+    expect(pageName('strategy', 'promote')).toBe('Strategy › Where to promote');
     expect(APP_GUIDE).toContain('- #strategy (tabs plan, research, promote, content, assets, outreach, seo):');
     expect(HELP_TOPICS.strategy).toMatch(/^Strategy \(#strategy\): fill in Your details/);
     for (const t of [APP_GUIDE, HELP_TOPICS.strategy]) {

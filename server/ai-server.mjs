@@ -2,14 +2,14 @@
 //
 // Keeps your AI provider keys on the server. The web app calls /api/ai/… (see providers/routes.mjs):
 // writing, photos, videos and Manus agent tasks, each sent to the keys that power that function in
-// Settings → AI, with each key's own model and effort. GET /api/health says which keys are ready.
+// Settings › AI keys, with each key's own model and effort. GET /api/health says which keys are ready.
 // When ./dist exists (npm run build), everything else is served from it.
 //
 // Keys: Replit Secrets / env vars OPENROUTER_API_KEY, GEMINI_API_KEY (or GOOGLE_API_KEY), XAI_API_KEY,
 //   ANTHROPIC_API_KEY, META_MODEL_API_KEY, MANUS_API_KEY, OPENAI_API_KEY; or add them in the app
 //   (saved in DATA_DIR/ai-providers.json, never sent back to the browser). Secrets win over keys typed in the app.
 //   SLACK_USER_TOKEN: the User OAuth Token (xoxp-…) of the owner's own Slack app, so the app can talk to Viktor
-//   (viktor.com) as the owner (server/slack/routes.mjs); or paste it in Settings → AI → Viktor (Slack).
+//   (viktor.com) as the owner (server/slack/routes.mjs); or paste it in Settings › AI keys › Viktor (Slack).
 // Optional env: PORT (8787), HOST (0.0.0.0), ALLOWED_ORIGIN (enable CORS for one origin), RATE_LIMIT_PER_MIN (30),
 //   DATA_DIR (./.data), ADMIN_TOKEN (lets a remote browser change AI settings; otherwise only this machine can),
 //   AI_PROVIDER_BASE_URLS (JSON map of provider id → base URL, for a proxy or a test server; "slack" is Slack's
@@ -266,7 +266,7 @@ server.listen(PORT, HOST, async () => {
   const h = await ai.health({ id: 'startup' });
   console.log(`Yourlocalbusiness server on http://localhost:${PORT}`);
   const ready = h.providers.filter((p) => p.ready).map((p) => p.label);
-  console.log(ready.length ? `AI keys ready: ${ready.join(', ')}` : 'No AI keys yet: add them in Settings → AI, or as Secrets (e.g. OPENROUTER_API_KEY).');
+  console.log(ready.length ? `AI keys ready: ${ready.join(', ')}` : 'No AI keys yet: add them in Settings › AI keys, or as Secrets (e.g. OPENROUTER_API_KEY).');
   console.log(auth.enabled ? `Accounts: on (Supabase)${auth.signInRequired ? ', sign-in required' : ''}` : 'Accounts: off (add SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY to turn them on).');
   if (auth.enabled) console.log(pages.enabled ? 'Publishing pages: on (needs supabase/migrations/20261103040000_published_pages.sql in Supabase). Own domains are proven with a TXT record, _ylb-domain.<domain>.' : 'Publishing pages: off (add the SUPABASE_SECRET_KEY Secret to turn it on).');
   console.log(pages.appHostsNote());
@@ -278,7 +278,7 @@ server.listen(PORT, HOST, async () => {
           uploaded: 'AI keys and settings: kept in Supabase, encrypted (this server’s keys were uploaded).',
           empty: 'AI keys and settings: kept in Supabase, encrypted (none saved yet).',
           'no-table': `AI keys and settings: NOT kept yet. Run ${MIGRATION} in Supabase → SQL Editor, then restart.`,
-          unreadable: 'AI keys and settings: the copy in Supabase was encrypted with a different secret and can’t be read (see Settings → AI).',
+          unreadable: 'AI keys and settings: the copy in Supabase was encrypted with a different secret and can’t be read (see Settings › AI keys).',
           slow: 'AI keys and settings: Supabase is slow to answer; using this server’s copy until it does.',
         }[settingsFrom] ?? 'AI keys and settings: Supabase couldn’t be reached; using this server’s copy for now.'
       : process.env.SUPABASE_URL

@@ -2,7 +2,7 @@
 //
 //   photo         → in the claude.ai artifact: Meta Muse Image through OpenRouter in the viewer's
 //                   Zapier connector. Self-hosted: your server, with the keys that power Photos
-//                   in Settings → AI (OpenAI, Google, xAI, Meta, OpenRouter, or a Manus task).
+//                   in Settings › AI keys (OpenAI, Google, xAI, Meta, OpenRouter, or a Manus task).
 //   illustration  → the AI draws an SVG (Claude in claude.ai, or your server's keys); without
 //                   either a built-in brand illustration is used and labelled as such.
 //
@@ -51,13 +51,6 @@ export function photoRoute(): 'muse' | 'server' | 'manus' | 'none' {
   return route[0] === 'manus' ? 'manus' : 'server';
 }
 
-export function photoLabel(): string {
-  const route = photoRoute();
-  if (route === 'muse') return 'Photo · Muse';
-  const p = primaryProvider('photos');
-  return p ? `Photo · ${p.label.split(' ')[0]}` : 'Photo';
-}
-
 /** One line on who makes photos here and what it costs, for under the controls. */
 export function photoSourceNote(): string {
   const route = photoRoute();
@@ -72,9 +65,9 @@ export function photoAvailability(): { ok: boolean; reason: string } {
   if (photoRoute() === 'muse') {
     switch (useRuntime.getState().zapier) {
       case 'needs_reauth':
-        return { ok: false, reason: 'Photos are made by Meta Muse Image through OpenRouter in Zapier. Reconnect Zapier in claude.ai Settings → Connectors.' };
+        return { ok: false, reason: 'Photos are made by Meta Muse Image through OpenRouter in Zapier. Reconnect Zapier in claude.ai Settings › Connectors.' };
       case 'missing':
-        return { ok: false, reason: 'Photos are made by Meta Muse Image through Zapier. Add the Zapier connector in claude.ai Settings → Connectors, with OpenRouter connected in Zapier.' };
+        return { ok: false, reason: 'Photos are made by Meta Muse Image through Zapier. Add the Zapier connector in claude.ai Settings › Connectors, with OpenRouter connected in Zapier.' };
       case 'unavailable':
         return { ok: false, reason: 'Photos are made by Meta Muse Image through your Zapier connector, which this view can’t reach. Open the app in claude.ai.' };
       default:
@@ -82,8 +75,8 @@ export function photoAvailability(): { ok: boolean; reason: string } {
     }
   }
   const rt = useRuntime.getState();
-  if (!rt.ai.reachable) return { ok: false, reason: 'Start the Yourlocalbusiness server (npm run server) to generate photos.' };
-  if (photoRoute() === 'none') return { ok: false, reason: 'No API key makes photos yet. In Settings → AI, tick Photos for an OpenAI, Google, xAI, Meta, OpenRouter or Manus key.' };
+  if (!rt.ai.reachable) return { ok: false, reason: 'Your AI server isn’t running. Start it to generate photos.' };
+  if (photoRoute() === 'none') return { ok: false, reason: 'No API key makes photos yet. In Settings › AI keys, tick Photos for an OpenAI, Google, xAI, Meta, OpenRouter or Manus key.' };
   return { ok: true, reason: '' };
 }
 
@@ -682,9 +675,9 @@ export function imageErrorMessage(e: unknown): { title: string; body: string; co
   if (/^[a-z_]+$/.test(code) && code !== 'cancelled') return { code, ...zapierErrorMessage(code, msg) };
   switch (code) {
     case 'NO_KEY':
-      return { code, title: 'No image API key yet', body: 'Add your Meta (or other) API key in Settings → Image generation, or switch to Illustration.' };
+      return { code, title: 'No image API key yet', body: 'Add your Meta (or other) API key in Settings › Image generation, or switch to Illustration.' };
     case 'AUTH':
-      return { code, title: 'The image API key was rejected', body: 'Check or replace it in Settings → Image generation.' };
+      return { code, title: 'The image API key was rejected', body: 'Check or replace it in Settings › Image generation.' };
     case 'CONTENT_POLICY':
       return { code, title: 'The image provider blocked this description', body: 'Rephrase the image description and try again.' };
     case 'DAILY_LIMIT':
@@ -692,7 +685,7 @@ export function imageErrorMessage(e: unknown): { title: string; body: string; co
     case 'RATE_LIMIT':
       return { code, title: 'The image provider is busy or out of credit', body: 'Wait a minute, or check your account balance.' };
     case 'NETWORK':
-      return { code, title: 'Your server isn’t reachable', body: 'Start it with npm run server, then try again.' };
+      return { code, title: 'Your server isn’t reachable', body: 'Check that it’s running, then try again.' };
     case 'TIMEOUT':
       return { code, title: 'The image took too long', body: 'Try again; simpler descriptions are faster.' };
     default:

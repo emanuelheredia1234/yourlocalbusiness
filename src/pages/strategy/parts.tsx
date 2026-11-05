@@ -24,7 +24,6 @@ import { useStrategyJob } from '@/ai/strategyJob';
 import { GenerateButton } from '@/components/ai/AI';
 import { BrowserFrame } from '@/components/frames/Frames';
 import { Badge, Callout, CopyButton, InfoTip, Section } from '@/components/ui/primitives';
-import { cn as mergeCn } from '@/components/ui/shadcn/utils';
 import { PlatformMark } from '@/components/posts/PlatformIcon';
 import { linksFlow, undoLinksFlow } from './apply';
 import { CHECKING_LABEL, runKey, startRun, useCheckingServer, type RunKind } from './runs';
@@ -39,23 +38,16 @@ export function useActionCtx(): ActionCtx {
 
 export const netLabel = (n: string) => (n === 'x' ? 'X' : PLATFORMS[n as PostPlatform]?.label ?? n);
 
-/**
- * A page Section that keeps the region name the page had (the Section primitive takes no aria-label yet: a
- * design-system follow-up). The name sits on a wrapper that takes the Section's place, spacing and id.
- */
-export function NamedSection({ label, className, id, ...rest }: { label: string } & ComponentProps<typeof Section>) {
-  return (
-    <section aria-label={label} id={id} className={mergeCn('mt-10 first:mt-0', className)}>
-      <Section {...rest} className="mt-0" />
-    </section>
-  );
+/** A page Section named as a region (`label`). */
+export function NamedSection({ label, ...rest }: { label: string } & ComponentProps<typeof Section>) {
+  return <Section {...rest} aria-label={label} />;
 }
 
 // ───────────── Settings › AI keys ─────────────
 
 /** Where keys and what they power are set, as the app names it. */
 export const SETTINGS_AI = 'Settings › AI keys';
-/** The AI layer's sentences still say "Settings → AI": they're shown (and linked) with the page's name. */
+/** The AI layer's sentences name "Settings › AI keys" (older saved text may still say "Settings → AI"): shown and linked with the page's name. */
 const SETTINGS_RX = /Settings (?:→|›) AI(?: keys)?/;
 
 /** A link to Settings › AI keys. */

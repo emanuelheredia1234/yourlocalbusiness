@@ -34,7 +34,7 @@ export interface RunResult<O> {
 
 /**
  * One AI for the whole app. In claude.ai it's Claude; self-hosted it's your server, which sends
- * each task to the API keys that power its function (Settings → AI). Without either, the
+ * each task to the API keys that power its function (Settings › AI keys). Without either, the
  * built-in engine answers.
  */
 export function resolveProvider(_settings: AppSettings, forceLocal = false): ProviderId {
@@ -102,10 +102,10 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
     // no request to make: say what to set up
     ask = false;
     code = 'no_provider';
-    note = `No API key powers ${fn.label} yet, so the built-in engine answered. In Settings → AI, tick ${fn.label} for one of your keys.`;
+    note = `No API key powers ${fn.label} yet, so the built-in engine answered. In Settings › AI keys, tick ${fn.label} for one of your keys.`;
   } else if (!__ARTIFACT_BUILD__ && provider === 'local' && !opts.forceLocal && task.claude && rt.server === 'down') {
     code = 'server_down';
-    note = 'Your AI server isn’t running (npm run server), so the built-in engine answered.';
+    note = 'Your AI server isn’t running, so the built-in engine answered.';
   }
 
   if (ask && task.claude) {
