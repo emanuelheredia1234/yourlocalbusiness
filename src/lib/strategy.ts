@@ -24,7 +24,7 @@ import type {
 } from './strategyTypes';
 import { hashStr, fmtRelative } from './utils';
 import { pageTypeOf } from './pageTypes';
-import { LINK_PLACEMENTS } from './pageLink';
+import { LINK_PLACEMENTS, placementFor } from './pageLink';
 import {
   POST_NETWORKS,
   STRATEGY_CAPS as C,
@@ -567,8 +567,9 @@ export function derivedDone(a: { kind: ActionKind; pageType?: PageType; codeKind
     case 'publish_page':
       return !!m.seoPublished;
     case 'link_settings': {
+      // where each network's link goes now: the owner's setting, else the default (advice that matches the default is done)
       const links = Object.entries(s.promote?.links ?? {});
-      return links.length > 0 && links.every(([n, rec]) => m.linkPlacement?.[n as PostPlatform] === rec?.placement);
+      return links.length > 0 && links.every(([n, rec]) => placementFor(p, n as PostPlatform) === rec?.placement);
     }
     case 'campaign_setup':
       return !!s.applied.campaign || !!m.plan;

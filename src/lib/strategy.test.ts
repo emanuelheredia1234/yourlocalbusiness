@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { Project } from './types';
 import type { StrategyState } from './strategyTypes';
 import { STRATEGY_CAPS as C } from './strategyNormalize';
-import { addSource, capStrategy, currentWeek, emptyStrategy, gcSources, isHttpUrl, readStrategy, sourceKey, stale, strategyFactsHash, strategyProgress, strategyStatusLine } from './strategy';
+import { addSource, capStrategy, currentWeek, derivedDone, emptyStrategy, gcSources, isHttpUrl, readStrategy, sourceKey, stale, strategyFactsHash, strategyProgress, strategyStatusLine } from './strategy';
 import { qaProject, qaSavedStrategy } from '@/test/strategyQa';
 
 const p = qaProject();
@@ -171,6 +171,23 @@ describe('weeks, progress and what changed', () => {
     expect(stale(p, later).beforeResearch).toEqual(['promote', 'content', 'assets', 'outreach', 'plan']);
     const manus = { ...s, manus: { taskId: 'task_abc123', taskUrl: 'https://manus.im/app/x', state: 'done' as const, requestedAt: 1, doneAt: s.plan!.at + 5 } };
     expect(stale(p, manus).beforeResearch).toContain('plan');
+  });
+
+  it('"Set where links go" is done when each link already goes where the strategy says, by default or by the owner’s setting', () => {
+    const s = qaSavedStrategy(p);
+    const action = { kind: 'link_settings' as const };
+    const same = { ...s, promote: { ...s.promote!, links: { instagram: { placement: 'bio' as const, why: 'x', basis: 'builtin' as const }, facebook: { placement: 'post' as const, why: 'y', basis: 'builtin' as const } } } };
+    // nothing set: Instagram's link goes in the bio and Facebook's in the post by default, as advised
+    expect(p.marketing.linkPlacement).toBeUndefined();
+    expect(derivedDone(action, p, same, ctx)).toBe(true);
+    // the QA strategy wants Facebook's in the first comment
+    expect(s.promote!.links).toMatchObject({ instagram: { placement: 'bio' }, facebook: { placement: 'comment' } });
+    expect(derivedDone(action, p, s, ctx)).toBe(false);
+    const set = (linkPlacement: Project['marketing']['linkPlacement']): Project => ({ ...p, marketing: { ...p.marketing, linkPlacement } });
+    expect(derivedDone(action, set({ facebook: 'comment' }), s, ctx)).toBe(true);
+    expect(derivedDone(action, set({ instagram: 'comment' }), same, ctx)).toBe(false);
+    // no advice: nothing to see done
+    expect(derivedDone(action, p, { ...s, promote: { ...s.promote!, links: {} } }, ctx)).toBe(false);
   });
 
   it('progress and the Dashboard line', () => {
