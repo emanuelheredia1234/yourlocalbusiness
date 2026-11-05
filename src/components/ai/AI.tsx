@@ -15,7 +15,7 @@ import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { navigate } from '@/lib/router';
 import { cn as mergeCn } from '../ui/shadcn/utils';
-import { AutoTextarea, Badge, Callout, Popover, Spinner, Tooltip } from '../ui/primitives';
+import { AutoTextarea, Callout, Popover, Spinner, Tooltip } from '../ui/primitives';
 import { PromptImages, usePasteImages, usePromptImageAdder } from './PromptImages';
 import { Spark } from './Spark';
 
@@ -111,11 +111,6 @@ function ThinkingStrip({ stage, step, onStop, className, compact }: { stage: str
 export function AIThinking({ running, stage, onStop, className, compact, step }: { running: boolean; stage: string; chars?: number; onStop?: () => void; className?: string; compact?: boolean; step?: string }) {
   if (!running) return null;
   return <ThinkingStrip stage={stage} step={step} onStop={onStop} className={className} compact={compact} />;
-}
-
-/** Who answered, as a neutral badge (still exported; the result footer keeps this behind Details). */
-export function ProviderBadge({ provider, meta }: { provider: ProviderId; meta?: GenMeta }) {
-  return <Badge>{provider === 'server' && meta ? `AI · ${meta.providerLabel}` : providerLabel(provider)}</Badge>;
 }
 
 /** Which key, model and effort answered, and what it used (tokens, cost), from the generation log. */

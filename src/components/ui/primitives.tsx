@@ -606,20 +606,6 @@ export function Swatch({ color, size = 14, className }: { color: string; size?: 
   return <span className={cn('inline-block shrink-0 rounded-full ring-1 ring-ink/10', className)} style={{ width: size, height: size, background: color }} />;
 }
 
-/** A section's header (title, description, actions): the same look as <Section>'s. */
-export function SectionHeader({ title, desc, action, eyebrow }: { title: ReactNode; desc?: ReactNode; action?: ReactNode; eyebrow?: ReactNode }) {
-  return (
-    <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-      <div className="min-w-0">
-        {eyebrow && <p className="mb-1 text-caption text-muted">{eyebrow}</p>}
-        <h2 className="text-h2 text-ink">{title}</h2>
-        {desc && <p className="mt-1 text-small text-muted">{desc}</p>}
-      </div>
-      {action && <div className="flex flex-wrap items-center gap-2">{action}</div>}
-    </div>
-  );
-}
-
 export function rgbaFromHex(hex: string, a: number): string {
   const [r, g, b] = hexToRgb(hex);
   return `rgba(${r},${g},${b},${a})`;

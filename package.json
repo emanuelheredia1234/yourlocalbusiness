@@ -11,8 +11,8 @@
     "preview": "vite preview",
     "server": "node server/ai-server.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "lint:design": "node scripts/design-lint.mjs"
+    "test": "node scripts/design-lint.mjs --strict && vitest run",
+    "lint:design": "node scripts/design-lint.mjs --strict"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.3.0",

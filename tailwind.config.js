@@ -11,8 +11,7 @@ const names = ['bg', 'surface', 'surface-2', 'surface-3', 'elevated', 'selected'
   'inverse', 'on-inverse', 'action', 'action-hover', 'action-active', 'on-action', 'primary', 'primary-hover', 'on-primary', 'primary-soft', 'primary-line',
   'ring', 'ring-offset', 'thumb', 'good', 'good-solid', 'good-soft', 'good-line', 'warn', 'warn-solid', 'on-warn', 'warn-soft', 'warn-line',
   'bad', 'bad-solid', 'bad-solid-hover', 'on-bad', 'bad-soft', 'bad-line', 'ai-1', 'ai-2', 'ai-3', 'overlay', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8',
-  'ord-1', 'ord-2', 'ord-3', 'ord-4',
-  'primary-2', 'info', 'info-soft', 'accent', 'accent-soft', 'on-accent']; // last six: legacy aliases (Phase 3 deletes)
+  'ord-1', 'ord-2', 'ord-3', 'ord-4'];
 const sans = ['"Geist Variable"', '"Geist Fallback"', 'ui-sans-serif', 'system-ui', '-apple-system', '"Segoe UI"', 'sans-serif'];
 const type = (size, line, extra = {}) => [size, { lineHeight: line, ...extra }];
 
@@ -29,7 +28,7 @@ export default {
         popover: token('elevated'), 'popover-foreground': token('ink'),
         'primary-foreground': token('on-primary'),
         secondary: token('surface-3'), 'secondary-foreground': token('ink'),
-        'accent-foreground': token('ink'),
+        accent: token('surface-3'), 'accent-foreground': token('ink'),
         'muted-foreground': token('muted'),
         border: token('line'), input: token('line-2'),
         destructive: token('bad-solid'), 'destructive-foreground': token('on-bad'),
