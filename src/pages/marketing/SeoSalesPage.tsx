@@ -298,6 +298,8 @@ export default function SeoSalesPage() {
   const live = liveAddress(published);
   const hasPage = htmlMode || (!!page && !!meta);
   const menu: MenuEntry[] = [
+    // on a phone the header keeps only the title: Rewrite page moves in here (the canvas shows its progress)
+    ...(phone && !htmlMode ? ([{ label: 'Rewrite page', icon: <Spark />, onSelect: () => void generateAll(), disabled: busy }, 'separator'] as MenuEntry[]) : []),
     { label: 'Copy HTML', icon: <Copy />, onSelect: () => void file.copy() },
     { label: 'Export HTML', icon: <Download />, onSelect: () => void file.save() },
     ...(undoStack.length > 0 ? (['separator', { label: htmlMode ? 'Undo the last change' : 'Undo the last AI change', icon: <Undo2 />, onSelect: undo, disabled: busy }] as MenuEntry[]) : []),
@@ -326,7 +328,7 @@ export default function SeoSalesPage() {
         actions={
           hasPage ? (
             <>
-              {!htmlMode && (
+              {!htmlMode && !phone && (
                 <GenerateButton size="sm" running={running} runningLabel="Rewriting…" disabled={busy} onClick={() => void generateAll()}>
                   Rewrite page
                 </GenerateButton>

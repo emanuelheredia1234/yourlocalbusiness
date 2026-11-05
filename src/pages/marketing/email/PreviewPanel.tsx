@@ -36,7 +36,8 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
     );
   }
   return (
-    <Section>
+    // the panel sits right under the tabs (a Section's own top margin is for a section after another)
+    <Section className="mt-0">
       <PanelHead
         title={
           <span className="inline-flex items-center gap-1">

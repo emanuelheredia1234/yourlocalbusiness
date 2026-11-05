@@ -39,7 +39,7 @@ export default function AdsEngine() {
   return (
     <div>
       <PageHeader
-        className={campaigns.length > 1 ? 'mb-4' : undefined}
+        className={campaigns.length > 1 ? 'mb-4' : 'max-sm:mb-4'}
         title="Ads"
         description="Plan a campaign here, then run it in each platform’s ads manager."
         actions={

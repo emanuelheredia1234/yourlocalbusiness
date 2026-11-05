@@ -75,7 +75,8 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
   }
 
   return (
-    <Section>
+    // the panel sits right under the tabs (a Section's own top margin is for a section after another)
+    <Section className="mt-0">
       <PanelHead
         title="Welcome sequence"
         description={`${magnet ? `For everyone who claims “${magnet.title}” · ` : ''}Runs over ${span}`}
