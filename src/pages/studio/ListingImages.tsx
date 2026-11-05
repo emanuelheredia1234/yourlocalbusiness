@@ -266,7 +266,7 @@ export function ListingImages({ project, children }: { project: Project; childre
             {artLine && <span className="mt-1.5 block text-muted">{artLine}</span>}
           </InfoTip>
           <GenerateButton size="sm" running={job.running} runningLabel="Designing…" disabled={!toMake.length} onClick={() => void generate(toMake)}>
-            {toMake.length === shots.length ? 'Generate images' : `Generate ${toMake.length} image${toMake.length === 1 ? '' : 's'}`}
+            {toMake.length === shots.length || !toMake.length ? 'Generate images' : `Generate ${toMake.length} image${toMake.length === 1 ? '' : 's'}`}
           </GenerateButton>
         </div>
       </div>

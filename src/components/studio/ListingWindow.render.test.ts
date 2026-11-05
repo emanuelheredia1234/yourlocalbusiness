@@ -47,7 +47,9 @@ describe('the publish window', () => {
   it('says what’s missing and keeps Publish off until the listing passes the page’s checks', () => {
     const html = render('publish');
     expect(html).toContain('Publish your listing to the Marketplace');
-    expect(html).toContain('This is exactly what goes public. Only you can see your listings here for now');
+    // a one-line subtitle, then who will see it
+    expect(html).toContain('This is exactly what goes public.');
+    expect(html).toContain('Only you can see your listings here for now');
     expect(html).toContain('Finish these first:');
     for (const s of ['Title', 'Description (80+ characters)', '3+ search tags', 'Service packages (Structure tab)']) expect(html).toContain(`<li>${s}</li>`);
     expect(publishButton(html)).toContain('disabled');

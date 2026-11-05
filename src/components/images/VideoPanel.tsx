@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Clapperboard, Download, RefreshCw, Trash2, WandSparkles } from 'lucide-react';
+import { Download, Trash2 } from 'lucide-react';
 import type { MediaRef } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { deleteBlob, getBlob } from '@/lib/storage';
@@ -8,9 +8,9 @@ import { useMediaUrl } from '@/lib/media';
 import { fmtUsd, pendingVideos, VIDEO_DURATIONS, VIDEO_RESOLUTIONS, videoCost, videoTransport, type VideoAspect, type VideoJob, type VideoResolution } from '@/ai/video';
 import { primaryProvider } from '@/ai/functions';
 import { metaLine } from '@/ai/meta';
-import { AIThinking } from '@/components/ai/AI';
+import { AIThinking, GenerateButton } from '@/components/ai/AI';
 import { download } from '@/components/ui/download';
-import { AutoTextarea, Field, Segmented, Spinner, Toggle } from '@/components/ui/primitives';
+import { AutoTextarea, Callout, InfoTip, Segmented, Toggle, Tooltip } from '@/components/ui/primitives';
 import { artDirectionLabel, useArtDirection, useImageJob } from './useImageJob';
 import { videoWithArtDirection } from '@/ai/socialPosts';
 
@@ -28,7 +28,7 @@ const ASPECTS: { id: VideoAspect; label: string; hint: string }[] = [
 export function videoAvailability(zapier: string, ai = useRuntime.getState().ai): { ok: boolean; reason: string } {
   if (videoTransport.server) {
     if (!ai.reachable) return { ok: false, reason: 'Start the Yourlocalbusiness server (npm run server) to make videos.' };
-    if (!ai.routing.videos?.length) return { ok: false, reason: 'No API key makes videos yet. In Settings → AI, tick Videos for an OpenRouter, Google or xAI key.' };
+    if (!ai.routing.videos?.length) return { ok: false, reason: 'No API key makes videos yet. In Settings › AI keys, tick Videos for an OpenRouter, Google or xAI key.' };
     return { ok: true, reason: '' };
   }
   switch (zapier) {
@@ -36,9 +36,9 @@ export function videoAvailability(zapier: string, ai = useRuntime.getState().ai)
     case 'checking':
       return { ok: true, reason: '' };
     case 'needs_reauth':
-      return { ok: false, reason: 'Videos are made by HeyGen through OpenRouter in Zapier. Reconnect Zapier in claude.ai Settings → Connectors.' };
+      return { ok: false, reason: 'Videos are made by HeyGen through OpenRouter in Zapier. Reconnect Zapier in claude.ai Settings › Connectors.' };
     case 'missing':
-      return { ok: false, reason: 'Videos are made by HeyGen through Zapier. Add the Zapier connector in claude.ai Settings → Connectors, with OpenRouter connected in Zapier.' };
+      return { ok: false, reason: 'Videos are made by HeyGen through Zapier. Add the Zapier connector in claude.ai Settings › Connectors, with OpenRouter connected in Zapier.' };
     default:
       return { ok: false, reason: 'Videos are made by HeyGen through your Zapier connector, which this view can’t reach. Open the app in claude.ai.' };
   }
@@ -115,52 +115,77 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
     if (old) setTimeout(() => deleteBlob(old.id), 0);
   };
 
+  // who makes it, how long it takes and what it costs: behind the ⓘ, never on the panel
+  const about = [
+    avail.ok ? (server ? (maker ? `${maker.label} makes the clip with ${maker.models.video} at ${maker.effort.video?.label ?? 'its default'} quality (set per key in Settings › AI keys). It takes a minute or more.` : 'Your AI keys make the clip.') : 'HeyGen Video makes the clip, with sound, through OpenRouter in your Zapier. It takes about a minute.') : '',
+    avail.ok && !server ? `About ${fmtUsd(cost)} on OpenRouter (list price; it has billed less so far).` : '',
+    art.skills.length > 0 ? artDirectionLabel(art.skills.map((k) => k.name)) : '',
+  ].filter(Boolean);
+
   return (
-    <section className={cn('flex flex-col gap-3 rounded-lg border border-line bg-surface p-3', className)} aria-label={title}>
-      <h3 className="flex items-center gap-1.5 text-[13px] font-semibold text-ink">
-        <Clapperboard size={15} className="text-primary" /> {title}
+    <section className={cn('flex flex-col gap-3 rounded-lg border border-line bg-surface p-4', className)} aria-label={title}>
+      <h3 className="flex items-center gap-1 text-h4 text-ink">
+        {title}
+        {about.length > 0 && (
+          <InfoTip label="Who makes the video">
+            {about.map((t, i) => (
+              <span key={t} className={cn('block', i > 0 && 'mt-1.5')}>
+                {t}
+              </span>
+            ))}
+          </InfoTip>
+        )}
       </h3>
-      {!avail.ok ? (
-        <p className="text-[11.5px] leading-snug text-muted">{avail.reason}</p>
-      ) : server ? (
-        <p className="text-[11.5px] leading-snug text-muted">
-          {maker ? `${maker.label} makes the clip with ${maker.models.video} at ${maker.effort.video?.label ?? 'its default'} quality (set per key in Settings → AI). It takes a minute or more.` : 'Your AI keys make the clip.'}
-        </p>
-      ) : (
-        <p className="text-[11.5px] leading-snug text-muted">HeyGen Video makes the clip, with sound, through OpenRouter in your Zapier. It takes about a minute.</p>
-      )}
+      {!avail.ok && <p className="text-small text-muted">{avail.reason}</p>}
       {resumable && !job.running && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-[12.5px]">
-          <span className="min-w-0 flex-1 text-ink-2">A video you started is still on its way.</span>
-          <button type="button" className="btn btn-secondary btn-xs" onClick={() => generate(resumable)}>
-            Pick it up
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs text-muted"
-            onClick={() => {
-              if (pendingKey) pendingVideos.clear(pendingKey);
-              setResumable(null);
-            }}
-          >
-            Dismiss
-          </button>
-        </div>
+        <Callout
+          tone="info"
+          onDismiss={() => {
+            if (pendingKey) pendingVideos.clear(pendingKey);
+            setResumable(null);
+          }}
+          action={
+            <button type="button" className="btn btn-secondary btn-xs" onClick={() => generate(resumable)}>
+              Pick it up
+            </button>
+          }
+        >
+          A video you started is still on its way.
+        </Callout>
       )}
-      <Field label="What happens in the video" htmlFor={`${fid}-p`} hint="Describe the scene, the action and the camera. Captions are added on top, so leave words out.">
-        <AutoTextarea id={`${fid}-p`} value={text} onChange={(v) => { setText(v); onPromptChange?.(v); }} minRows={2} className="text-[13px]" placeholder="e.g. a slow push-in on a barista pouring latte art in a sunny cafe" />
-      </Field>
-      <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Video shape">
-        {ASPECTS.map((a) => (
-          <button key={a.id} type="button" role="radio" aria-checked={aspect === a.id} title={a.hint} className={cn('chip', aspect === a.id && 'chip-active')} onClick={() => setAspect(a.id)}>
-            {a.label}
-          </button>
-        ))}
+      <div>
+        <label htmlFor={`${fid}-p`} className="label">
+          What happens in the video
+        </label>
+        <div className="ai-composer px-3 pb-2 pt-2.5">
+          <AutoTextarea
+            id={`${fid}-p`}
+            value={text}
+            onChange={(v) => {
+              setText(v);
+              onPromptChange?.(v);
+            }}
+            minRows={2}
+            className="!border-0 !bg-transparent !px-1 !py-0.5 !shadow-none"
+            placeholder="e.g. a slow push-in on a barista pouring latte art in a sunny cafe"
+            aria-describedby={`${fid}-hint`}
+          />
+          <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Video shape">
+            {ASPECTS.map((a) => (
+              <button key={a.id} type="button" role="radio" aria-checked={aspect === a.id} title={a.hint} className={cn('chip', aspect === a.id && 'chip-active')} onClick={() => setAspect(a.id)}>
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p id={`${fid}-hint`} className="hint">
+          The scene, the action and the camera. Captions go on top, so leave words out.
+        </p>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-1.5 text-xs text-ink-2" htmlFor={`${fid}-d`}>
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-small font-medium text-ink-2" htmlFor={`${fid}-d`}>
           Length
-          <select id={`${fid}-d`} className="input h-8 w-auto py-0 text-xs" value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
+          <select id={`${fid}-d`} className="select input-sm w-auto" value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
             {VIDEO_DURATIONS.map((d) => (
               <option key={d} value={d}>
                 {d} seconds
@@ -170,39 +195,34 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
         </label>
         {!server && <Segmented<VideoResolution> size="sm" value={resolution} onChange={setResolution} options={VIDEO_RESOLUTIONS.map((r) => ({ id: r.id, label: r.label }))} />}
       </div>
-      {art.skills.length > 0 && (
-        <p className="text-[11.5px] text-muted" title={art.text}>
-          {artDirectionLabel(art.skills.map((k) => k.name))}
-        </p>
-      )}
       {startImage && <Toggle checked={fromImage} onChange={setFromImage} label="Start from the cover photo" />}
-      {!server && (
-        <p className="text-[11.5px] text-muted">
-          About {fmtUsd(cost)} on OpenRouter (list price; it has billed less so far).
-        </p>
-      )}
       <AIThinking running={job.running} stage={job.stage} onStop={job.stop} compact />
       {job.error && (
-        <div className="rounded-md border border-bad/30 bg-bad-soft px-3 py-2 text-[12.5px]" role="alert">
-          <p className="font-semibold text-bad">{job.error.title}</p>
-          <p className="text-ink-2">{job.error.body}</p>
-        </div>
+        <Callout tone="bad" title={job.error.title}>
+          {job.error.body}
+        </Callout>
       )}
-      {!job.running && job.done && <p className="text-[11.5px] text-muted">{job.done}</p>}
       {isVideo && !job.running && <VideoPreview media={media!} />}
+      {!job.running && job.done && (
+        <p className="flex items-center gap-1 text-small text-muted" role="status">
+          Your video is ready.
+          <InfoTip label="How this video was made">{job.done}</InfoTip>
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn btn-ai btn-sm" onClick={() => generate()} disabled={job.running || !avail.ok || text.trim().length < 4}>
-          {job.running ? <Spinner size={14} /> : isVideo ? <RefreshCw size={14} /> : <WandSparkles size={14} className="text-accent" />}
+        <GenerateButton size="sm" running={job.running} runningLabel="Making…" disabled={!avail.ok || text.trim().length < 4} onClick={() => void generate()}>
           {isVideo ? 'Regenerate video' : 'Generate video'}
-        </button>
+        </GenerateButton>
         {isVideo && (
           <>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={save} aria-label="Download video">
-              <Download size={14} /> Download
+            <button type="button" className="btn btn-secondary btn-sm" onClick={save} aria-label="Download video">
+              <Download /> Download
             </button>
-            <button type="button" className="btn btn-ghost btn-sm ml-auto text-muted hover:text-bad" onClick={remove} aria-label="Remove video">
-              <Trash2 size={14} />
-            </button>
+            <Tooltip content="Remove the video">
+              <button type="button" className="btn btn-danger-ghost btn-icon btn-sm ml-auto" onClick={remove} aria-label="Remove video">
+                <Trash2 />
+              </button>
+            </Tooltip>
           </>
         )}
       </div>
@@ -213,5 +233,6 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
 function VideoPreview({ media }: { media: MediaRef }) {
   const url = useMediaUrl(media);
   if (!url || url === media.thumb) return null;
-  return <video src={url} controls playsInline className="max-h-[360px] w-full rounded-md bg-ink object-contain" aria-label="Generated video" />;
+  // a 16:9 player (any shape fits inside, letterboxed)
+  return <video src={url} controls playsInline className="aspect-video w-full rounded-pop bg-black object-contain" aria-label="Generated video" />;
 }

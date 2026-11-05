@@ -12,12 +12,11 @@ import { getActiveProject, useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, Callout, ChipInput, Empty, Field, InfoTip, Section, Segmented, Skeleton, Spinner, StatusDot, StickyActionBar, Toggle, confirmAction } from '@/components/ui/primitives';
-import { MediaDrop, MediaThumb } from '@/components/media/MediaUpload';
+import { MediaThumb } from '@/components/media/MediaUpload';
 import { ListingCard } from '@/pages/store/ListingParts';
 import { buildListing, galleryIds, leadPrice, listingSuggestions, MAX_GALLERY, priceLabel } from '@/lib/listing';
 import { listingChanged, listingChecks, openInStore, publishProjectListing, setListingsShared, UNPUBLISH_CONFIRM, unpublishProjectListing } from '@/lib/listingPublish';
 import { ListingImages, PhotoUploadButton } from './ListingImages';
-import { PHOTO_ACCEPT } from '@/ai/listingPhotos';
 import { VideoPanel } from '@/components/images/VideoPanel';
 
 /** A starting description for the listing's demo video. */
@@ -328,13 +327,11 @@ export function PublishTab({ project }: { project: Project }) {
                   .map((m) => (
                     <PickThumb key={m.id} media={m} on={d.coverImageId === m.id} onClick={() => setD({ coverImageId: d.coverImageId === m.id ? undefined : m.id })} label={`Use ${m.name} as cover`} />
                   ))}
-                <MediaDrop
-                  compact
-                  accept={PHOTO_ACCEPT}
+                <PhotoUploadButton
                   label="Upload"
-                  sub="JPG, PNG or WebP"
-                  className="h-[60px]"
-                  onFiles={(media) => {
+                  ariaLabel="Upload a cover photo"
+                  className="btn btn-secondary btn-sm"
+                  onPhotos={(media) => {
                     const m = media[0];
                     if (!m) return;
                     updateBrand({ images: [...getActiveProject()!.brand.images, m] });
