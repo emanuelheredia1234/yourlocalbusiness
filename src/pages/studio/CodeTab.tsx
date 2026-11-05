@@ -234,6 +234,8 @@ export function CodeTab({ project }: { project: Project }) {
   const [newOpen, setNewOpen] = useState(false);
   // phones: the list, then one asset (its preview), then the AI composer in a sheet
   const phone = useMediaQuery('(max-width: 639px)');
+  // ≥ 1280 the agents' builds sit under the list; narrower (not a phone) they sit under the asset picker
+  const wideList = useMediaQuery('(min-width: 1280px)');
   const [phoneAsset, setPhoneAsset] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [canvasRef, canvasWidth] = useWidth();
@@ -541,6 +543,7 @@ export function CodeTab({ project }: { project: Project }) {
         {assetList}
         <AgentBuildList target="asset" />
         {!newOpen && <AIThinking running={gen.running} stage={gen.stage} onStop={gen.stop} />}
+        {!newOpen && gen.error && <Callout tone="bad">{gen.error}</Callout>}
         {newAssetDialog}
       </div>
     );
@@ -650,7 +653,7 @@ export function CodeTab({ project }: { project: Project }) {
       {!phone && (
         <aside className="hidden min-w-0 flex-col gap-6 xl:sticky xl:top-6 xl:flex" aria-label="Assets">
           {assetList}
-          <AgentBuildList target="asset" />
+          {wideList && <AgentBuildList target="asset" />}
         </aside>
       )}
 
@@ -702,6 +705,8 @@ export function CodeTab({ project }: { project: Project }) {
           </div>
         </div>
 
+        {!phone && !wideList && <AgentBuildList target="asset" />}
+
         {active.outdated && (
           <Callout
             tone="warn"
@@ -728,6 +733,10 @@ export function CodeTab({ project }: { project: Project }) {
             {missingImagesNote(missing)}
           </Callout>
         )}
+
+        {/* a regeneration (Outdated) or a New asset run whose window was closed: its progress and any error show here */}
+        {!newOpen && <AIThinking running={gen.running} stage={gen.stage} onStop={gen.stop} compact />}
+        {!newOpen && gen.error && <Callout tone="bad">{gen.error}</Callout>}
 
         {publishOpen && !__ARTIFACT_BUILD__ && (
           <div id="code-publish" className="card p-4 outline-none focus-visible:shadow-focus sm:p-5" tabIndex={-1}>
