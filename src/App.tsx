@@ -38,6 +38,7 @@ const CalendarPage = lazy(() => import('@/pages/calendar/ContentCalendar'));
 const AnalyticsPage = lazy(() => import('@/pages/analytics/Analytics'));
 const StorePage = lazy(() => import('@/pages/store/Marketplace'));
 const BrainPage = lazy(() => import('@/pages/brain/Brain'));
+const AdminBillingPage = lazy(() => import('@/pages/admin/Billing'));
 const SettingsPage = lazy(() => import('@/pages/settings/Settings'));
 const StrategyPage = lazy(() => import('@/pages/strategy/Strategy'));
 
@@ -167,6 +168,9 @@ export default function App() {
       break;
     case 'workspace-settings':
       page = <SettingsPage />;
+      break;
+    case 'admin-billing':
+      page = <AdminBillingPage />;
       break;
     default:
       page = <Dashboard />;

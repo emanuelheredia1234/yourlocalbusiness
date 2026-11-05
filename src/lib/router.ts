@@ -17,6 +17,8 @@ export const ROUTES = [
   'store',
   'brain',
   'workspace-settings',
+  // the owner's per-customer usage (Settings › Billing (owner)); the page checks isAdmin itself
+  'admin-billing',
 ] as const;
 
 export type Route = (typeof ROUTES)[number];

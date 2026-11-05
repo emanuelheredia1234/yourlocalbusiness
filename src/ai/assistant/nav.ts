@@ -7,8 +7,8 @@ import { useStore } from '@/store/useStore';
 import { useUI, type SocialTab } from '@/store/ui';
 import { confirmLeave } from '@/components/ui/leave';
 
-/** Pages the assistant can open (onboarding opens by itself for a project still being set up). */
-export const OPENABLE_ROUTES = ROUTES.filter((r) => r !== 'onboarding') as Exclude<Route, 'onboarding'>[];
+/** Pages the assistant can open (onboarding opens by itself for a project still being set up; the owner's billing page only from Settings). */
+export const OPENABLE_ROUTES = ROUTES.filter((r) => r !== 'onboarding' && r !== 'admin-billing') as Exclude<Route, 'onboarding' | 'admin-billing'>[];
 
 /** What people call each page. */
 export const PAGE_LABELS: Record<Route, string> = {
@@ -26,6 +26,7 @@ export const PAGE_LABELS: Record<Route, string> = {
   store: 'Marketplace',
   brain: 'Brain',
   'workspace-settings': 'Settings',
+  'admin-billing': 'Customer usage',
 };
 
 /** "Settings › AI keys", "Content calendar". */
