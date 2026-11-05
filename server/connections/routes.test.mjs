@@ -251,3 +251,36 @@ describe('connecting switched off', () => {
     }
   });
 });
+
+describe('through the server wiring (server/integrations/wiring.mjs)', () => {
+  it('selects Nango from NANGO_SECRET_KEY, and the webhook route reaches the same instance', async () => {
+    const { createIntegrations } = await import('../integrations/wiring.mjs');
+    const appState = makeStorage();
+    const wdb = makeDb();
+    const env = { NANGO_SECRET_KEY: TEST_NANGO_KEY, NANGO_WEBHOOK_SIGNING_KEY: TEST_SIGNING_KEY, CUSTOMER_TAG_SECRET: TAG_SECRET, NANGO_BASE_URL: mock.base };
+    const auth = { enabled: true, identify: async (req) => USERS[req.headers['x-test-user']] ?? null };
+    const integrations = createIntegrations({ env, auth, appState, db: wdb, send: sendLike, readJson, log: makeLog() });
+    expect(integrations.connectionsProvider).toBe('nango');
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://local');
+      if (integrations.match(url)) return void integrations.handle(req, res, url);
+      sendLike(res, 404, {});
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    mock.webhookUrl = `${base}/api/webhooks/nango`;
+    try {
+      const r = await fetch(`${base}/api/integrations/connections/linkedin/connect`, { method: 'POST', headers: { 'x-test-user': 'alice', 'content-type': 'application/json' }, body: '{}' });
+      expect(r.status).toBe(200);
+      const { connectLink } = await r.json();
+      const sent = await mock.complete(new URL(connectLink).searchParams.get('session_token'));
+      expect(sent.status).toBe(200);
+      await new Promise((res) => setTimeout(res, 50));
+      const list = await (await fetch(`${base}/api/integrations/connections`, { headers: { 'x-test-user': 'alice' } })).json();
+      expect(list.connections.find((c) => c.platform === 'linkedin')).toMatchObject({ state: 'connected', targetKind: 'li_person' });
+    } finally {
+      mock.webhookUrl = `${app.base}/api/webhooks/nango`;
+      await new Promise((r) => server.close(r));
+    }
+  });
+});
