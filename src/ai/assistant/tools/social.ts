@@ -19,7 +19,7 @@ import { campaignPlanTask, contentBatchTask, postTask } from '@/ai/tasks';
 import { imageErrorMessage, photoAvailability, photoRoute, defaultImageKind } from '@/ai/image';
 import { manusViaServer, pendingManus } from '@/ai/manus';
 import { VIDEO_DURATIONS, fmtUsd, pendingVideos } from '@/ai/video';
-import { networkLabel, postBlocker, postText, textWarning } from '@/ai/manusPost';
+import { networkLabel, postBlocker, postText, textWarning } from '@/ai/postShared';
 import { groupRecord, groupSummary, groupsAlreadyOut } from '@/ai/manusGroups';
 import { applyPostMedia, buildComposerPosts, composerTaskInput, makePostImage, makePostVideo, postImageKey, postVideoKey, postVideoText, rewriteInput, rewritePatch } from '@/ai/socialPosts';
 import { applyCampaignPlan, applyWeekBatch, batchStart, cadence, campaignProblem, coveredSlots, patchCampaign, setLinkPlacement, setSlotTopic, weekBatchInput } from '@/ai/socialPlan';

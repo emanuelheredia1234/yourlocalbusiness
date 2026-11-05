@@ -1,5 +1,5 @@
-// What you can do with a post besides Manus: put it on your calendar, mark it posted when you posted
-// it yourself, copy its text, download its image or video, open it on the network.
+// What you can do with a post besides posting it from the app: put it on your calendar, mark it posted when
+// you posted it yourself, copy its text, download its image or video, open it on the network.
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { CalendarClock, CheckCheck, Copy, Download, ExternalLink, MessageSquare, Trash2, Undo2 } from 'lucide-react';
@@ -8,29 +8,32 @@ import { cn, fmtDateTime, isoToDateStr, toDateStr } from '@/lib/utils';
 import { copyText } from '@/lib/platform';
 import { getBlob } from '@/lib/storage';
 import { firstCommentOf } from '@/lib/pageLink';
-import { networkLabel, postText } from '@/ai/manusPost';
+import { networkLabel, postText } from '@/ai/postShared';
+import { apiHolds } from '@/lib/posting';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { Badge, Field, Modal, MoreMenu, confirmAction, type MenuEntry } from '../ui/primitives';
 import { download } from '../ui/download';
 
-/** Put drafts on your calendar. Nothing posts by itself: Manus posts them, or you do. */
+/** Put drafts on your calendar. Nothing posts by itself: you post them from the app, or yourself. */
 export function addToCalendarFlow(ids: string[]): boolean {
   const posts = useStore.getState().posts.filter((p) => ids.includes(p.id) && p.status === 'draft');
   if (!posts.length) return false;
   useStore.getState().schedulePosts(posts.map((p) => p.id));
-  toast({ kind: 'success', title: posts.length > 1 ? `${posts.length} posts added to your calendar` : 'Added to your calendar', body: 'When one is due, post it with Manus, or post it yourself and mark it posted.' });
+  toast({ kind: 'success', title: posts.length > 1 ? `${posts.length} posts added to your calendar` : 'Added to your calendar', body: 'When one is due, post it from the app, or post it yourself and mark it posted.' });
   return true;
 }
 
-/** Its last Manus try on its own network failed. Manus doesn't look for an earlier copy before posting, so that
- *  try may still have gone out (or been scheduled) before it stopped. */
+/** Its last try on its own network failed (nothing went out). */
 export const failedOnItsNetwork = (post: Post) => post.external?.state === 'failed' && post.external.network === post.platform;
 
-/** Manus has (or may have) the post on the network for a set time: changing it here doesn't move it there. */
-export const manusHolds = (post: Post) => !!post.external && post.external.state !== 'failed';
+/**
+ * The post is (or may be) out of the app's hands: the app is sending it, or couldn't confirm whether it went out
+ * (apiHolds), or an older version handed it to Manus. Moving or re-timing it here changes nothing there.
+ */
+export const postHeld = (post: Post) => apiHolds(post) || (post.external?.via === 'manus' && post.external.state !== 'failed');
 
-/** When the post goes out: the time Manus scheduled it on the network, if it did, else its calendar time. */
+/** When the post goes out: the time Manus scheduled it on the network (older posts), else its calendar time. */
 export const goesOutAt = (post: Post) => (post.external?.state === 'scheduled' && post.external.scheduledFor ? post.external.scheduledFor : post.scheduledAt);
 
 /** A planned post whose time has come and gone without being posted. */
@@ -46,14 +49,14 @@ export function DueBadge({ post, now }: { post: Post; now?: number }) {
   if (!isDue(post, now)) return null;
   if (post.external?.state === 'scheduled')
     return (
-      <span className="inline-flex" title="Manus scheduled it on the network for this time. Mark it posted once you’ve seen it there.">
+      <span className="inline-flex" title="It was sent with Manus earlier, scheduled on the network for this time. Mark it posted once you’ve seen it there.">
         <Badge tone="good">Should be live on {networkLabel(post.platform)}</Badge>
       </span>
     );
   if (post.external && post.external.state !== 'failed') return null;
   const today = isoToDateStr(goesOutAt(post)) === toDateStr(new Date(now ?? Date.now()));
   return (
-    <span className="inline-flex" title="Its time has passed and it hasn’t been posted. Post it with Manus, or post it yourself and mark it posted.">
+    <span className="inline-flex" title="Its time has passed and it hasn’t been posted. Post it from the app, or post it yourself and mark it posted.">
       <Badge tone={today ? 'primary' : 'bad'}>{today ? 'Due today' : 'Didn’t post'}</Badge>
     </span>
   );
@@ -62,7 +65,7 @@ export function DueBadge({ post, now }: { post: Post; now?: number }) {
 /** Who posted it, and the link when there is a real one. */
 export function PostedBy({ post, className }: { post: Post; className?: string }) {
   if (post.status !== 'published') return null;
-  const by = post.publishedBy === 'manus' ? `Posted by Manus (its report)` : post.publishedBy === 'manual' ? 'Marked as posted by you' : 'Posted';
+  const by = post.publishedBy === 'api' ? 'Posted from the app' : post.publishedBy === 'manus' ? 'Sent with Manus earlier' : post.publishedBy === 'manual' ? 'Marked as posted by you' : 'Posted';
   return (
     <p className={cn('flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted', className)}>
       <span>
@@ -219,7 +222,7 @@ export function postMenuEntries(post: Post, opts: { onDeleted?: () => void } = {
     icon: <Trash2 />,
     danger: true,
     onSelect: async () => {
-      const extra = post.status === 'published' ? ' It stays on the network: this only removes it from the app.' : post.external && post.external.state !== 'failed' ? ' If Manus already posted or scheduled it, it stays on the network.' : '';
+      const extra = post.status === 'published' ? ' It stays on the network: this only removes it from the app.' : post.external && post.external.state !== 'failed' ? ' If it already went out, it stays on the network.' : '';
       if (await confirmAction({ title: 'Delete this post?', body: `This can’t be undone.${extra}`, confirmLabel: 'Delete', danger: true })) {
         store().deletePosts([post.id]);
         opts.onDeleted?.();

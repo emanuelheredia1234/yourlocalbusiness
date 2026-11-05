@@ -6,7 +6,7 @@ import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES, isVi
 import { suggestTopics } from '@/ai/local/social';
 import { buildComposerPosts, composerTaskInput } from '@/ai/socialPosts';
 import { LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, linkText, pageLink, postLinkFor } from '@/lib/pageLink';
-import { networkLabel } from '@/ai/manusPost';
+import { networkLabel } from '@/ai/postShared';
 import { postTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore } from '@/store/useStore';

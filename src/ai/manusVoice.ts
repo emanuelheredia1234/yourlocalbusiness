@@ -9,7 +9,7 @@ import { hashStr } from '@/lib/utils';
 import { PLATFORMS } from './knowledge';
 import { TONES, parseDirectives } from './brain';
 import { ManusError, createManusTask, readManusTask, type ManusState } from './manus';
-import { WAITING_COPY } from './manusPost';
+import { WAITING_COPY } from './manusShared';
 
 /** How many of the latest posts Manus reads: enough to hear the voice, without spending credits on more. */
 export const VOICE_POSTS = 15;

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
-import { CalendarClock, CalendarDays, CheckCheck, ChevronLeft, ChevronRight, FileEdit, Pencil, Plus, Search, Send, SlidersHorizontal, Users } from 'lucide-react';
+import { CalendarClock, CalendarDays, ChevronLeft, ChevronRight, FileEdit, Pencil, Plus, Search, Send, SlidersHorizontal, Users } from 'lucide-react';
 import type { Brand, Post, PostFormat, PostPlatform, PostType } from '@/lib/types';
 import { addDays, cn, combineDateTime, fmtDate, fmtDateTime, isoToDateStr, isoToTime, todayStr, WEEKDAYS, weekdayIndex } from '@/lib/utils';
 import { PLATFORMS, POST_PLATFORMS, POST_TYPES } from '@/ai/knowledge';
@@ -10,18 +10,19 @@ import { toast, useTabRequest, useUI } from '@/store/ui';
 import { tabsOf } from '@/lib/pageTabs';
 import { Callout, DateTimeButton, Drawer, Empty, InfoTip, MoreMenu, PageHeader, Popover, Segmented, Select, StatusDot, Tabs, Tooltip, type MenuEntry } from '@/components/ui/primitives';
 import { PostCard, PostTypeTag, styleLabel } from '@/components/posts/PostCard';
-import { ExternalBadge, ManusPostButton, useCanOfferManus, useManusPost, useManusReady } from '@/components/posts/ManusPost';
+import { useCanOfferManus } from '@/components/posts/manusShared';
+import { PostNowButton, PublishStatus } from '@/components/posts/PostNowButton';
 import { GroupShareBadge, useManusGroups } from '@/components/posts/ManusGroups';
-import { DueBadge, PostedBy, addToCalendarFlow, failedOnItsNetwork, isDue, manusHolds, postMenuEntries, useMarkPosted } from '@/components/posts/PostActions';
-import { PlatformMark } from '@/components/posts/PlatformIcon';
+import { DueBadge, PostedBy, addToCalendarFlow, failedOnItsNetwork, isDue, postHeld, postMenuEntries } from '@/components/posts/PostActions';
+import { PlatformChip, PlatformMark } from '@/components/posts/PlatformIcon';
 import { PostLinkNote } from '@/components/posts/PostLinkNote';
 import { PostVisual } from '@/components/visuals/PostVisual';
-import { networkLabel } from '@/ai/manusPost';
+import { networkLabel } from '@/ai/postShared';
 
 type Tab = 'scheduled' | 'published' | 'drafts';
 type View = 'calendar' | 'list';
 
-/** Planned posts Manus could take now (not handed over yet, or the last try failed). */
+/** Planned posts not sent yet (or whose last try failed: nothing went out). */
 const notSent = (p: Post) => !p.external || p.external.state === 'failed';
 
 /** "Post to groups" applies: a Facebook post, Manus reachable, no group share running. */
@@ -38,15 +39,12 @@ function openBatch() {
 }
 
 const HOW =
-  'Plan posts on your calendar, then post them with Manus (it posts on your accounts for you) or post them yourself and mark them posted. Nothing goes out on its own. Drag posts between days to move them; click any post to edit it.';
+  'Plan posts on your calendar, then post each one from the app (on the accounts you connected) or post it yourself and mark it posted. Nothing goes out on its own. Drag posts between days to move them; click any post to edit it.';
 
 export default function ContentCalendar() {
   const project = useActiveProject()!;
   const allPosts = useStore((s) => s.posts);
   const openComposer = useUI((s) => s.openComposer);
-  const manusReady = useManusReady();
-  // offer the buttons even when Manus isn't ready: the window explains what's missing
-  const offer = useCanOfferManus() || manusReady;
   const wide = useMediaQuery('(min-width: 640px)');
   const posts = useMemo(() => allPosts.filter((p) => p.projectId === project.id), [allPosts, project.id]);
   const [tab, setTab] = useState<Tab>('scheduled');
@@ -67,7 +65,6 @@ export default function ContentCalendar() {
   const published = filtered.filter((p) => p.status === 'published').sort((a, b) => (b.publishedAt ?? '').localeCompare(a.publishedAt ?? ''));
   const drafts = filtered.filter((p) => p.status === 'draft').sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt));
   const counts = { scheduled: posts.filter((p) => p.status === 'scheduled').length, published: posts.filter((p) => p.status === 'published').length, drafts: posts.filter((p) => p.status === 'draft').length };
-  const ready = scheduled.filter(notSent);
   const active = (platform !== 'all' ? 1 : 0) + (type !== 'all' ? 1 : 0) + (format !== 'all' ? 1 : 0) + (q.trim() ? 1 : 0);
   const clearFilters = () => {
     setPlatform('all');
@@ -141,11 +138,6 @@ export default function ContentCalendar() {
             </button>
           )}
           <span className="ml-auto flex items-center gap-2">
-            {tab === 'scheduled' && offer && ready.length > 1 && (
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => useManusPost.getState().open(ready.map((p) => p.id))}>
-                <Send /> Send all {ready.length} to Manus
-              </button>
-            )}
             {tab === 'drafts' && drafts.length > 0 && (
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => addToCalendarFlow(drafts.map((d) => d.id))}>
                 <CalendarClock /> Add all {drafts.length} to calendar
@@ -177,13 +169,13 @@ export default function ContentCalendar() {
           noMatches
         ) : (
           <>
-            <DueCallout posts={scheduled} offer={offer} />
+            <DueCallout posts={scheduled} />
             {view === 'list' && wide ? <QueueList posts={scheduled} /> : <PlannedCalendar posts={scheduled} />}
           </>
         ))}
       {tab === 'published' &&
         (counts.published === 0 ? (
-          <Empty icon={<Send />} title="Nothing posted yet" body="Posts show up here once Manus reports them posted, or once you mark a post you posted yourself." />
+          <Empty icon={<Send />} title="Nothing posted yet" body="Posts show up here once the app posts them, or once you mark a post you posted yourself." />
         ) : published.length === 0 ? (
           noMatches
         ) : (
@@ -269,26 +261,32 @@ function Filters({ q, setQ, platform, setPlatform, type, setType, format, setFor
   );
 }
 
-/** Planned posts whose time has passed: the one note on the page that asks for something. */
-function DueCallout({ posts, offer }: { posts: Post[]; offer: boolean }) {
+/**
+ * Planned posts whose time has passed: the one note on the page that asks for something. "N posts due", each
+ * with its own posting button (no bulk send: every post the app sends is confirmed on its own).
+ */
+function DueCallout({ posts }: { posts: Post[] }) {
   const now = useNow(60_000);
-  const wide = useMediaQuery('(min-width: 640px)');
   const due = posts.filter((p) => isDue(p, now) && notSent(p));
   if (!due.length) return null;
-  // a failed try may still have gone out: Manus doesn't look for an earlier copy before posting
   const failed = due.filter(failedOnItsNetwork).length;
   const many = due.length > 1;
-  const action = offer ? (
-    <button type="button" className="btn btn-secondary btn-xs" onClick={() => useManusPost.getState().open(due.map((p) => p.id))}>
-      <Send /> Post {many ? `${due.length} due` : 'it'} with Manus
-    </button>
-  ) : undefined;
   return (
-    // on phones the button goes under the words, so they keep the callout's width
-    <Callout tone="warn" className="mb-5" action={wide ? action : undefined}>
-      {due.length} planned post{many ? 's are' : ' is'} past {many ? 'their' : 'its'} time and not posted. {offer ? `Post ${many ? 'them' : 'it'} with Manus, or post ${many ? 'them' : 'it'} yourself and mark ${many ? 'them' : 'it'} posted.` : `Post ${many ? 'them' : 'it'} yourself and mark ${many ? 'them' : 'it'} posted.`}
-      {failed > 0 && ` ${failed} failed last time and may already be out or scheduled: check before sending ${failed === 1 ? 'it' : 'them'} again.`}
-      {!wide && action && <span className="mt-2 flex">{action}</span>}
+    <Callout tone="warn" className="mb-5" title={`${due.length} post${many ? 's' : ''} due`}>
+      <p>
+        {many ? 'These are' : 'It’s'} past {many ? 'their' : 'its'} time and not posted. Post {many ? 'each one' : 'it'} from here, or post {many ? 'them' : 'it'} yourself and mark {many ? 'them' : 'it'} posted.
+        {failed > 0 && ` ${failed} didn’t go out last time.`}
+      </p>
+      <ul className="mt-2 flex flex-col gap-2" aria-label="Posts due">
+        {due.slice(0, 5).map((p) => (
+          <li key={p.id} className="flex flex-wrap items-center gap-2">
+            <PlatformChip platform={p.platform} />
+            <span className="min-w-0 flex-1 truncate text-ink">{p.headline}</span>
+            <PostNowButton post={p} size="xs" />
+          </li>
+        ))}
+      </ul>
+      {due.length > 5 && <p className="mt-1.5 text-caption text-muted">And {due.length - 5} more below.</p>}
     </Callout>
   );
 }
@@ -297,8 +295,8 @@ function reschedule(id: string, date: string) {
   const s = useStore.getState();
   const p = s.posts.find((x) => x.id === id);
   if (!p || isoToDateStr(p.scheduledAt) === date) return;
-  if (manusHolds(p)) {
-    toast({ kind: 'info', title: 'Manus already has this post', body: `Moving it here won’t change it on ${PLATFORMS[p.platform].label}. Change it there, or wait for Manus’s result.` });
+  if (postHeld(p)) {
+    toast({ kind: 'info', title: 'This post may already be out', body: `Moving it here won’t change it on ${PLATFORMS[p.platform].label}. Check it there first.` });
     return;
   }
   const at = combineDateTime(date, isoToTime(p.scheduledAt));
@@ -552,7 +550,9 @@ function WeekView({ posts }: { posts: Post[] }) {
 /** The post's state as one dot and a word (Due posts show their badge instead). */
 function RowState({ post, now }: { post: Post; now: number }) {
   if (isDue(post, now) && (!post.external || post.external.state === 'failed' || post.external.state === 'scheduled')) return <DueBadge post={post} now={now} />;
-  return <StatusDot tone="primary">{manusHolds(post) ? 'With Manus' : 'Planned'}</StatusDot>;
+  if (post.external?.via === 'api' && post.external.state === 'working') return <StatusDot tone="primary" pulse>Posting…</StatusDot>;
+  if (post.external?.via === 'api' && post.external.state === 'unknown') return <StatusDot tone="warn">Check it</StatusDot>;
+  return <StatusDot tone="primary">{postHeld(post) ? 'Sent earlier' : 'Planned'}</StatusDot>;
 }
 
 function groupByDay(posts: Post[]): [string, Post[]][] {
@@ -664,7 +664,6 @@ function QueueRow({ post: p }: { post: Post }) {
   const openEditor = useUI((s) => s.openPostEditor);
   const offer = useCanOfferManus();
   const now = useNow(60_000);
-  const held = manusHolds(p);
   const menu = plannedMenu(p, offer, openEditor);
   return (
     <li className="flex flex-col gap-3 px-4 py-3 md:flex-row md:items-center">
@@ -677,7 +676,7 @@ function QueueRow({ post: p }: { post: Post }) {
           <p className="truncate text-small text-muted">{p.caption.split('\n')[0]}</p>
           <PostMeta post={p}>
             <DueBadge post={p} now={now} />
-            <ExternalBadge post={p} compact />
+            <PublishStatus post={p} compact />
             <GroupShareBadge post={p} compact />
           </PostMeta>
           <PostLinkNote post={p} compact className="mt-1.5" />
@@ -685,15 +684,7 @@ function QueueRow({ post: p }: { post: Post }) {
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2 pl-[68px] md:pl-0">
         <DateTimeButton value={new Date(p.scheduledAt).getTime()} onChange={(ms) => update(p.id, { scheduledAt: new Date(ms).toISOString() })} min={Date.now()} aria-label="Reschedule" />
-        {offer && !held ? (
-          <ManusPostButton post={p} />
-        ) : (
-          !held && (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => useMarkPosted.getState().open(p.id)}>
-              <CheckCheck /> Mark as posted
-            </button>
-          )
-        )}
+        <PostNowButton post={p} />
         <MoreMenu items={menu} />
       </div>
     </li>
@@ -705,16 +696,17 @@ function PublishedList({ posts }: { posts: Post[] }) {
   const project = useActiveProject()!;
   const openEditor = useUI((s) => s.openPostEditor);
   const offer = useCanOfferManus();
-  const byManus = posts.filter((p) => p.publishedBy === 'manus').length;
+  // posted from the app (older posts sent with Manus count here too) or marked by you
+  const byApp = posts.filter((p) => p.publishedBy === 'api' || p.publishedBy === 'manus').length;
   const networks = POST_PLATFORMS.map((n) => ({ n, count: posts.filter((p) => p.platform === n).length })).filter((x) => x.count);
   return (
     <div className="flex flex-col gap-4">
       <p className="num flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted">
         <span>{posts.length} posted</span>
         <span aria-hidden="true">·</span>
-        <span>{byManus} by Manus</span>
+        <span>{byApp} posted from the app</span>
         <span aria-hidden="true">·</span>
-        <span>{posts.length - byManus} marked by you</span>
+        <span>{posts.length - byApp} marked by you</span>
         {networks.length > 0 && (
           <>
             <span aria-hidden="true">·</span>
@@ -735,7 +727,7 @@ function PublishedList({ posts }: { posts: Post[] }) {
               </button>
               <p className="truncate text-small text-muted">{p.caption.split('\n')[0]}</p>
               <PostMeta post={p}>
-                {p.external && <ExternalBadge post={p} compact />}
+                {p.external && <PublishStatus post={p} compact />}
                 {p.groupShare && <GroupShareBadge post={p} compact />}
               </PostMeta>
               <PostedBy post={p} className="mt-1.5" />

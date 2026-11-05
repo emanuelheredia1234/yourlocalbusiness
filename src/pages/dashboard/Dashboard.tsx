@@ -35,7 +35,7 @@ import { postedSince, useKpis } from '@/lib/kpis';
 import { readiness } from '@/lib/readiness';
 import { STEP_LABEL, actionDone, currentWeek, hasAnySection, readStrategy, strategyNextSteps, strategyProgress, type ActionCtx } from '@/lib/strategy';
 import { actionTarget, runTarget } from '@/lib/strategyActions';
-import { networkLabel } from '@/ai/manusPost';
+import { networkLabel } from '@/ai/postShared';
 import { recommendPageType } from '@/ai/local/strategy';
 import { openPage } from '@/ai/assistant/nav';
 import { stopStrategy, useStrategyJob } from '@/ai/strategyJob';

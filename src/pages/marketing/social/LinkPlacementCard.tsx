@@ -5,7 +5,7 @@ import { useId } from 'react';
 import { Link2 } from 'lucide-react';
 import type { LinkPlacement, PostPlatform, Project } from '@/lib/types';
 import { POST_PLATFORMS } from '@/ai/knowledge';
-import { networkLabel } from '@/ai/manusPost';
+import { networkLabel } from '@/ai/postShared';
 import { DEFAULT_LINK_PLACEMENT, LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, linkText, pageLink, placementFor } from '@/lib/pageLink';
 import { navigate } from '@/lib/router';
 import { useStore } from '@/store/useStore';

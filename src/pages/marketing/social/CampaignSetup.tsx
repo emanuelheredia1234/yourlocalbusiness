@@ -11,7 +11,7 @@ import { DateTimeButton, Segmented, SettingsRow, Toggle } from '@/components/ui/
 import { StackedBar } from '@/components/charts/Charts';
 import { PostVisual, orderStyles } from '@/components/visuals/PostVisual';
 import { PlatformChip } from '@/components/posts/PlatformIcon';
-import { NETWORKS } from '@/ai/manusPost';
+import { NETWORKS } from '@/ai/postShared';
 import { LinkPlacementCard } from './LinkPlacementCard';
 
 const WEIGHTS = [

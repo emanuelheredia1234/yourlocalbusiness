@@ -12,7 +12,7 @@ import { addDays, combineDateTime, todayStr } from '@/lib/utils';
 import { xLength } from '@/lib/pageLink';
 import { pendingManus } from '@/ai/manus';
 import { pendingVideos } from '@/ai/video';
-import { postText } from '@/ai/manusPost';
+import { postText } from '@/ai/postShared';
 import { buildComposerPosts } from '@/ai/socialPosts';
 import { useStore } from '@/store/useStore';
 import { answerCard, pressButton } from '@/store/assistant';
