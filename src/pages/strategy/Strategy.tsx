@@ -56,7 +56,7 @@ const UPDATES: { label: string; kind: RunKind }[] = [
 ];
 
 /** "Update plan": the three ways to update (each a paid run after its confirm), or the run under way. */
-function UpdateButton({ project }: { project: Project }) {
+function UpdateButton({ project, disabled }: { project: Project; disabled: boolean }) {
   const job = useStrategyJob(project.id);
   const checking = useCheckingServer(project.id);
   const mine = !!checking && UPDATES.some((u) => runKey(u.kind) === checking);
@@ -72,7 +72,7 @@ function UpdateButton({ project }: { project: Project }) {
     <Menu
       align="end"
       trigger={
-        <button type="button" className="btn btn-ai-outline btn-sm" disabled={!!checking}>
+        <button type="button" className="btn btn-ai-outline btn-sm" disabled={disabled || !!checking}>
           <Spark size={16} />
           Update plan
           <ChevronDown className="-mr-1 text-muted" />
@@ -166,7 +166,7 @@ export function StrategyPage({ project }: { project: Project }) {
               </>
             }
             action={
-              <RunButton projectId={project.id} kind={{ kind: 'all' }} variant="ai" size="lg">
+              <RunButton projectId={project.id} kind={{ kind: 'all' }} variant="ai" size="lg" disabled={who.mode === 'checking'}>
                 Plan my strategy
               </RunButton>
             }
@@ -208,7 +208,7 @@ export function StrategyPage({ project }: { project: Project }) {
                 { label: 'Sources', icon: <BookOpen />, onSelect: () => setSources(true), disabled: !allSources.length },
               ]}
             />
-            <UpdateButton project={project} />
+            <UpdateButton project={project} disabled={who.mode === 'checking'} />
           </>
         }
       />

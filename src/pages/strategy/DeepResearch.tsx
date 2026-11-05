@@ -8,8 +8,8 @@ import { fmtDate, fmtRelative } from '@/lib/utils';
 import { checkNow, startDeepResearch } from '@/ai/strategyManus';
 import { strategyWho } from '@/ai/strategyWho';
 import { useRuntime } from '@/lib/platform';
-import { Callout, InfoTip, Section, Spinner } from '@/components/ui/primitives';
-import { WithSettingsLink } from './parts';
+import { Callout, InfoTip, Spinner } from '@/components/ui/primitives';
+import { NamedSection, WithSettingsLink } from './parts';
 
 export function DeepResearch({ project, s }: { project: Project; s: StrategyState }) {
   useRuntime((r) => r.ai);
@@ -20,7 +20,8 @@ export function DeepResearch({ project, s }: { project: Project; s: StrategyStat
   const what = project.track === 'business' ? 'business type' : 'product type';
   const busy = m?.state === 'working' || m?.state === 'needs_input';
   return (
-    <Section
+    <NamedSection
+      label="Deep research with Manus"
       divider
       title={
         <span className="inline-flex items-center gap-1">
@@ -93,6 +94,6 @@ export function DeepResearch({ project, s }: { project: Project; s: StrategyStat
           )}
         </div>
       )}
-    </Section>
+    </NamedSection>
   );
 }

@@ -6,8 +6,8 @@ import type { StrategyState } from '@/lib/strategyTypes';
 import { CTA_LABEL } from '@/lib/strategy';
 import { navigate } from '@/lib/router';
 import { fmtDate } from '@/lib/utils';
-import { Empty, Section } from '@/components/ui/primitives';
-import { BasisTip, Cite, PageCard, SectionFooter, SourcesList, StaleNote, citedBy } from './parts';
+import { Empty } from '@/components/ui/primitives';
+import { BasisTip, Cite, NamedSection, PageCard, SectionFooter, SourcesList, StaleNote, citedBy } from './parts';
 import { seoFlow } from './apply';
 
 export function SeoTab({ project, s }: { project: Project; s: StrategyState }) {
@@ -19,7 +19,8 @@ export function SeoTab({ project, s }: { project: Project; s: StrategyState }) {
       {!seo ? (
         <Empty className="mt-6" icon={<Globe />} title="No direction yet" body="The direction for your SEO page comes with “Assets to create”, step 4 of 6." />
       ) : (
-        <Section
+        <NamedSection
+          label="Guidance for your SEO page"
           title={
             <span className="inline-flex items-center gap-1">
               Guidance for your SEO page
@@ -85,7 +86,7 @@ export function SeoTab({ project, s }: { project: Project; s: StrategyState }) {
             </button>
             {s.applied.seo && <span className="text-small text-muted">Added {fmtDate(s.applied.seo.at)}.</span>}
           </div>
-        </Section>
+        </NamedSection>
       )}
       {seo && <SourcesList ns={citedBy([seo])} all={s.sources} />}
       <SectionFooter project={project} s={s} step="assets" />

@@ -4,9 +4,9 @@ import type { Project } from '@/lib/types';
 import type { StrategyChannel, StrategyState } from '@/lib/strategyTypes';
 import { CHANNEL_LABEL } from '@/lib/strategy';
 import { channelTarget, runTarget } from '@/lib/strategyActions';
-import { Empty, Section } from '@/components/ui/primitives';
+import { Empty } from '@/components/ui/primitives';
 import { Megaphone } from 'lucide-react';
-import { BasisTip, Cite, LinksCard, PageCard, SectionFooter, SourcesList, StaleNote, citedBy } from './parts';
+import { BasisTip, Cite, LinksCard, NamedSection, PageCard, SectionFooter, SourcesList, StaleNote, citedBy } from './parts';
 import { ChannelTile } from './PlanTab';
 
 const GROUPS: { priority: 1 | 2 | 3; title: string }[] = [
@@ -74,7 +74,8 @@ export function PromoteTab({ project, s }: { project: Project; s: StrategyState 
   return (
     <div>
       <StaleNote project={project} s={s} step="promote" />
-      <Section
+      <NamedSection
+        label="Your angle"
         title={
           <span className="inline-flex items-center gap-1">
             Your angle
@@ -90,19 +91,19 @@ export function PromoteTab({ project, s }: { project: Project; s: StrategyState 
           {pos.who && <p className="mt-2 text-small text-muted">Who: {pos.who}</p>}
           {pos.why && <p className="mt-1 text-small text-ink-2">{pos.why}</p>}
         </div>
-      </Section>
+      </NamedSection>
 
       {GROUPS.map((g) => {
         const list = pr.channels.filter((c) => c.priority === g.priority);
         if (!list.length) return null;
         return (
-          <Section key={g.priority} title={g.title}>
-            <ul className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2" aria-label={g.title}>
+          <NamedSection key={g.priority} label={g.title} title={g.title}>
+            <ul className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
               {list.map((c) => (
                 <ChannelCard key={c.name} c={c} s={s} />
               ))}
             </ul>
-          </Section>
+          </NamedSection>
         );
       })}
 

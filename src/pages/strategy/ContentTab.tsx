@@ -8,9 +8,9 @@ import { POST_TYPE_IDS } from '@/lib/strategyNormalize';
 import { openPage } from '@/ai/assistant/nav';
 import { useUI } from '@/store/ui';
 import { GenerateButton } from '@/components/ai/AI';
-import { Empty, InfoTip, Section } from '@/components/ui/primitives';
+import { Empty, InfoTip } from '@/components/ui/primitives';
 import { PlatformMark } from '@/components/posts/PlatformIcon';
-import { BasisTip, Cite, SectionFooter, SourcesList, StaleNote, citedBy, netLabel } from './parts';
+import { BasisTip, Cite, NamedSection, SectionFooter, SourcesList, StaleNote, citedBy, netLabel } from './parts';
 import { campaignFlow, undoCampaignFlow } from './apply';
 
 /** Post types as Strategy names them. */
@@ -27,7 +27,8 @@ export function ContentTab({ project, s }: { project: Project; s: StrategyState 
       <StaleNote project={project} s={s} step="content" />
 
       {c.pillars.length > 0 && (
-        <Section
+        <NamedSection
+          label="Content pillars"
           title={
             <span className="inline-flex items-center gap-1">
               Content pillars
@@ -57,11 +58,12 @@ export function ContentTab({ project, s }: { project: Project; s: StrategyState 
               </li>
             ))}
           </ul>
-        </Section>
+        </NamedSection>
       )}
 
       {c.formats.length > 0 && (
-        <Section
+        <NamedSection
+          label="What gets attention on each network"
           title={
             <span className="inline-flex items-center gap-1">
               What gets attention on each network
@@ -83,10 +85,11 @@ export function ContentTab({ project, s }: { project: Project; s: StrategyState 
               </li>
             ))}
           </ul>
-        </Section>
+        </NamedSection>
       )}
 
-      <Section
+      <NamedSection
+        label="Campaign"
         title={
           <span className="inline-flex items-center gap-1">
             Campaign
@@ -130,10 +133,10 @@ export function ContentTab({ project, s }: { project: Project; s: StrategyState 
             Regenerate your 30-day plan to use it
           </button>
         </div>
-      </Section>
+      </NamedSection>
 
       {c.ideas.length > 0 && (
-        <Section title="Post ideas">
+        <NamedSection label="Post ideas" title="Post ideas">
           <ul className="divide-y divide-line border-y border-line">
             {c.ideas.map((i) => (
               <li key={i.headline} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:gap-4">
@@ -156,7 +159,7 @@ export function ContentTab({ project, s }: { project: Project; s: StrategyState 
               </li>
             ))}
           </ul>
-        </Section>
+        </NamedSection>
       )}
 
       <SourcesList ns={citedBy([...c.formats, camp])} all={s.sources} />

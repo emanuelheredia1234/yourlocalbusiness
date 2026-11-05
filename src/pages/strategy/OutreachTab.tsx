@@ -7,8 +7,8 @@ import type { StrategyState } from '@/lib/strategyTypes';
 import { LEAD_MAGNET_LABEL, PURPOSE_LABEL } from '@/lib/strategy';
 import { pageLink } from '@/lib/pageLink';
 import { openPage } from '@/ai/assistant/nav';
-import { CopyButton, Empty, Section, Toggle } from '@/components/ui/primitives';
-import { BasisTip, Cite, SectionFooter, SourcesList, StaleNote, citedBy } from './parts';
+import { CopyButton, Empty, Toggle } from '@/components/ui/primitives';
+import { BasisTip, Cite, NamedSection, SectionFooter, SourcesList, StaleNote, citedBy } from './parts';
 
 const PLACEHOLDER = '[link to your page]';
 
@@ -23,7 +23,8 @@ export function OutreachTab({ project, s }: { project: Project; s: StrategyState
     <div>
       <StaleNote project={project} s={s} step="outreach" />
 
-      <Section
+      <NamedSection
+        label="Your email funnel"
         title={
           <span className="inline-flex items-center gap-1">
             Your email funnel
@@ -58,10 +59,10 @@ export function OutreachTab({ project, s }: { project: Project; s: StrategyState
             <Cite item={e} all={s.sources} />
           </p>
         )}
-      </Section>
+      </NamedSection>
 
       {o.templates.length > 0 && (
-        <Section title="Emails to send" description="Emails you send yourself, from your own email. The app never sends email. Fill in the [brackets] before you send.">
+        <NamedSection label="Emails to send" title="Emails to send" description="Emails you send yourself, from your own email. The app never sends email. Fill in the [brackets] before you send.">
           <div className="mb-4">
             <Toggle checked={fill && !!link} disabled={!link} onChange={setFill} label="Fill in my page link" description={link ? `Copies put ${link.url} where the email says ${PLACEHOLDER}. The emails here stay as written.` : 'No page yet: publish your page first, then copies can carry its link.'} />
           </div>
@@ -96,7 +97,7 @@ export function OutreachTab({ project, s }: { project: Project; s: StrategyState
               </article>
             ))}
           </div>
-        </Section>
+        </NamedSection>
       )}
       <SourcesList ns={citedBy([e])} all={s.sources} />
       <SectionFooter project={project} s={s} step="outreach" />

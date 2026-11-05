@@ -7,8 +7,8 @@ import { FINDING_TOPICS } from '@/lib/strategyNormalize';
 import { TOPIC_LABEL } from '@/lib/strategy';
 import { fmtDate } from '@/lib/utils';
 import { Markdown } from '@/components/ui/Markdown';
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Callout, Empty, InfoTip, Section } from '@/components/ui/primitives';
-import { BasisTip, Cite, RunButton, SectionFooter, SourcesList, WithSettingsLink, beforeResearch, citedBy, reasonCopy } from './parts';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Callout, Empty, InfoTip } from '@/components/ui/primitives';
+import { BasisTip, Cite, NamedSection, RunButton, SectionFooter, SourcesList, WithSettingsLink, beforeResearch, citedBy, reasonCopy } from './parts';
 import { DeepResearch } from './DeepResearch';
 
 const DAY = 86_400_000;
@@ -63,7 +63,8 @@ export function ResearchTab({ project, s }: { project: Project; s: StrategyState
       {!r ? (
         <Empty icon={<Search />} title="No research yet" body="It’s the first of the six steps: Plan my strategy writes it." />
       ) : (
-        <Section
+        <NamedSection
+          label="Research"
           title={
             <span className="inline-flex items-center gap-1">
               What the research found
@@ -130,13 +131,13 @@ export function ResearchTab({ project, s }: { project: Project; s: StrategyState
               </AccordionItem>
             </Accordion>
           )}
-        </Section>
+        </NamedSection>
       )}
 
       {manusFindings.length > 0 && (
-        <Section title="Findings Manus read" description="Manus reports what each page says; the app can’t check it.">
+        <NamedSection label="Findings Manus read" title="Findings Manus read" description="Manus reports what each page says; the app can’t check it.">
           <Findings list={manusFindings} s={s} />
-        </Section>
+        </NamedSection>
       )}
 
       <DeepResearch project={project} s={s} />

@@ -4,7 +4,7 @@
 // and its button, the page to build first and where its link goes, and the run buttons (each says when its
 // run is checking your AI server first). Everything an AI or a web page wrote is rendered as plain text;
 // links only after isHttpUrl.
-import { useMemo, type ReactNode } from 'react';
+import { useId, useMemo, type ComponentProps, type ReactNode } from 'react';
 import { ArrowRight, Check, Undo2 } from 'lucide-react';
 import type { Brand, PostPlatform, Project } from '@/lib/types';
 import type { ActionKind, Backed, ResearchReason, StepInfo, StrategyAction, StrategySource, StrategyState, StrategyStep } from '@/lib/strategyTypes';
@@ -15,7 +15,6 @@ import { recommendPageType, defaultLinkPlacement } from '@/ai/local/strategy';
 import { PAGE_TYPE_LABEL, missingLink } from '@/lib/pageTypes';
 import { LINK_PLACEMENT_LABEL, pageLink, placementFor } from '@/lib/pageLink';
 import { useMediaUrl } from '@/lib/media';
-import { navigate } from '@/lib/router';
 import { cn, fmtDate, fmtRelative, stripProtocol } from '@/lib/utils';
 import { PLATFORMS } from '@/ai/knowledge';
 import { openPage } from '@/ai/assistant/nav';
@@ -25,6 +24,7 @@ import { useStrategyJob } from '@/ai/strategyJob';
 import { GenerateButton } from '@/components/ai/AI';
 import { BrowserFrame } from '@/components/frames/Frames';
 import { Badge, Callout, CopyButton, InfoTip, Section } from '@/components/ui/primitives';
+import { cn as mergeCn } from '@/components/ui/shadcn/utils';
 import { PlatformMark } from '@/components/posts/PlatformIcon';
 import { linksFlow, undoLinksFlow } from './apply';
 import { CHECKING_LABEL, runKey, startRun, useCheckingServer, type RunKind } from './runs';
@@ -38,6 +38,18 @@ export function useActionCtx(): ActionCtx {
 }
 
 export const netLabel = (n: string) => (n === 'x' ? 'X' : PLATFORMS[n as PostPlatform]?.label ?? n);
+
+/**
+ * A page Section that keeps the region name the page had (the Section primitive takes no aria-label yet: a
+ * design-system follow-up). The name sits on a wrapper that takes the Section's place, spacing and id.
+ */
+export function NamedSection({ label, className, id, ...rest }: { label: string } & ComponentProps<typeof Section>) {
+  return (
+    <section aria-label={label} id={id} className={mergeCn('mt-10 first:mt-0', className)}>
+      <Section {...rest} className="mt-0" />
+    </section>
+  );
+}
 
 // ───────────── Settings › AI keys ─────────────
 
@@ -233,6 +245,7 @@ export function RunButton({
   size = 'sm',
   className,
   runningLabel = 'Researching…',
+  disabled,
 }: {
   projectId: string;
   kind: RunKind;
@@ -241,12 +254,14 @@ export function RunButton({
   size?: 'sm' | 'md' | 'lg';
   className?: string;
   runningLabel?: string;
+  /** e.g. while the app is still finding out which key powers Strategy */
+  disabled?: boolean;
 }) {
   const job = useStrategyJob(projectId);
   const checking = useCheckingServer(projectId);
   const mine = checking === runKey(kind);
   return (
-    <GenerateButton variant={variant} size={size} className={className} running={mine} runningLabel={mine ? CHECKING_LABEL : runningLabel} disabled={!!job || !!checking} onClick={() => void startRun(projectId, kind)}>
+    <GenerateButton variant={variant} size={size} className={className} running={mine} runningLabel={mine ? CHECKING_LABEL : runningLabel} disabled={disabled || !!job || !!checking} onClick={() => void startRun(projectId, kind)}>
       {children}
     </GenerateButton>
   );
@@ -309,6 +324,7 @@ function DoIt({ project, s, action }: { project: Project; s: StrategyState; acti
  * with their sources, and its button. Done reads muted with "Done", never struck out.
  */
 export function ActionRow({ project, s, action, ctx, tickable = true }: { project: Project; s: StrategyState; action: StrategyAction; ctx: ActionCtx; tickable?: boolean }) {
+  const titleId = useId();
   const done = actionDone(action, project, s, ctx);
   const right = done.done ? <span className="text-small text-muted">{done.by === 'app' ? 'Done in the app' : 'Done'}</span> : <DoIt project={project} s={s} action={action} />;
   return (
@@ -320,12 +336,12 @@ export function ActionRow({ project, s, action, ctx, tickable = true }: { projec
         </span>
       ) : (
         <label className="relative mt-0.5 flex h-5 w-5 shrink-0 cursor-pointer">
-          <input type="checkbox" className="absolute inset-0 m-0 h-5 w-5 cursor-pointer appearance-none rounded-full" checked={done.done} onChange={(e) => tickAction(project.id, action.id, e.target.checked)} aria-label={`I did this: ${action.title}`} />
+          <input type="checkbox" className="absolute inset-0 m-0 h-5 w-5 cursor-pointer appearance-none rounded-full" checked={done.done} onChange={(e) => tickAction(project.id, action.id, e.target.checked)} aria-label="I did this" aria-describedby={titleId} />
           <CheckCircle done={done.done} className="pointer-events-none" />
         </label>
       )}
       <div className="min-w-0 flex-1">
-        <p className={cn('text-ui', done.done ? 'text-muted' : 'text-ink')}>
+        <p id={titleId} className={cn('text-ui', done.done ? 'text-muted' : 'text-ink')}>
           {action.title}
           <Cite item={action} all={s.sources} />
         </p>
@@ -399,15 +415,10 @@ export function PageCard({ project, s, className }: { project: Project; s: Strat
               {stripProtocol(link.url)}
             </a>
           )}
-          {built ? (
-            <button type="button" className="btn btn-secondary btn-sm sm:ml-auto" onClick={() => void navigate('marketing-seo')}>
-              Open in SEO page
-            </button>
-          ) : (
-            <button type="button" className="btn btn-secondary btn-sm sm:ml-auto" onClick={() => void useUI.getState().openSeoBuilder({ pageType: rec.pageType })}>
-              Build this page
-            </button>
-          )}
+          {/* the SEO page builder with this type chosen, as before (on a built page, its type picker opens) */}
+          <button type="button" className="btn btn-secondary btn-sm sm:ml-auto" onClick={() => void useUI.getState().openSeoBuilder({ pageType: rec.pageType })}>
+            {built ? 'Open in SEO page' : 'Build this page'}
+          </button>
         </div>
       </div>
     </section>
@@ -427,7 +438,8 @@ export function LinksCard({ project, s }: { project: Project; s: StrategyState }
   const bio = rows.filter((r) => r.rec.placement === 'bio').map((r) => netLabel(r.net));
   const applied = s.applied.links;
   return (
-    <Section
+    <NamedSection
+      label="Where the link goes"
       id="strategy-links"
       className="scroll-mt-16"
       title={
@@ -488,6 +500,6 @@ export function LinksCard({ project, s }: { project: Project; s: StrategyState }
           )}
         </div>
       )}
-    </Section>
+    </NamedSection>
   );
 }

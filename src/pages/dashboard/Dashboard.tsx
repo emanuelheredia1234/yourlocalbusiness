@@ -332,7 +332,7 @@ function PlanCard({ project, s, ctx, className, primaryTaken }: { project: Proje
     const step = job.steps[job.index] ?? job.steps[0];
     return (
       <AiCard className={className}>
-        <section aria-label="This week’s plan">
+        <section aria-label="Your plan this week">
           {title}
           <AIThinking running stage={`${STEP_LABEL[step]}…`} step={`Step ${job.index + 1} of ${job.steps.length}`} onStop={() => stopStrategy(project.id)} className="mt-4" />
           <div className="mt-5 flex flex-col gap-3" aria-hidden="true">
@@ -349,7 +349,7 @@ function PlanCard({ project, s, ctx, className, primaryTaken }: { project: Proje
   if (!plan) {
     return (
       <AiCard className={className}>
-        <section aria-label="This week’s plan">
+        <section aria-label="Your plan this week">
           <Empty
             variant="ai"
             className="bg-none py-6 sm:py-8"
@@ -372,7 +372,7 @@ function PlanCard({ project, s, ctx, className, primaryTaken }: { project: Proje
   const headline = w <= 4 && week ? week.goal || week.focus : 'Keep going with the steps still open.';
   return (
     <AiCard className={className}>
-      <section aria-label="This week’s plan">
+      <section aria-label="Your plan this week">
         <div className="flex items-center gap-2">
           {title}
           <Badge className="shrink-0">{w <= 4 ? `Week ${w} of 4` : 'After week 4'}</Badge>
@@ -444,17 +444,10 @@ function NextPost({ project, post, now, className }: { project: Project; post?: 
             <DueBadge post={post} now={now} />
           </span>
         }
+        caption={post.caption || undefined}
         className="w-full max-w-[300px]"
       >
         <PostVisual style={post.style} headline={post.headline} brand={b} watermark={post.watermark} media={post.media} storyboard={post.storyboard} aspect="1/1" className="!rounded-none" />
-        {post.caption && (
-          <div className="px-3 py-2.5">
-            <p className="clamp-2 text-small text-ink-2">
-              <span className="mr-1 font-semibold text-ink">{handleFor(project, post)}</span>
-              {post.caption}
-            </p>
-          </div>
-        )}
       </PostFrame>
       <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
         {held ? (
@@ -488,15 +481,16 @@ function Numbers({ project, posts, planned, now, k }: { project: Project; posts:
   const dueToday = open.filter((p) => new Date(goesOutAt(p)).toDateString() === today).length;
   const overdue = open.filter((p) => isDue(p, now) && new Date(goesOutAt(p)).toDateString() !== today).length;
   return (
-    <StatStrip
-      className="mt-6"
-      items={[
-        { label: 'Posted · 7 days', value: k.posted, sub: networks.length ? networks.join(', ') : 'Nothing in the last 7 days', delta: prevPosted > 0 ? k.posted - prevPosted : null, onClick: () => navigate('analytics') },
-        { label: 'Planned', value: k.upcoming, sub: upcoming ? `Next: ${dayTime(goesOutAt(upcoming))}` : 'Nothing planned', onClick: () => navigate('calendar') },
-        { label: 'Due today', value: dueToday, sub: overdue ? `${overdue} overdue` : 'Nothing overdue', onClick: () => navigate('calendar') },
-        { label: 'Made with AI · 7 days', value: k.made, sub: 'Posts, emails, pages', delta: prevMade > 0 ? k.made - prevMade : null },
-      ]}
-    />
+    <section aria-label="This week" className="mt-6">
+      <StatStrip
+        items={[
+          { label: 'Posted · 7 days', value: k.posted, sub: networks.length ? networks.join(', ') : 'Nothing in the last 7 days', delta: prevPosted > 0 ? k.posted - prevPosted : null, onClick: () => navigate('analytics') },
+          { label: 'Planned', value: k.upcoming, sub: upcoming ? `Next: ${dayTime(goesOutAt(upcoming))}` : 'Nothing planned', onClick: () => navigate('calendar') },
+          { label: 'Due today', value: dueToday, sub: overdue ? `${overdue} overdue` : 'Nothing overdue', onClick: () => navigate('calendar') },
+          { label: 'Made with AI · 7 days', value: k.made, sub: 'Posts, emails, pages', delta: prevMade > 0 ? k.made - prevMade : null },
+        ]}
+      />
+    </section>
   );
 }
 
@@ -547,63 +541,74 @@ function RowState({ post, now }: { post: Post; now: number }) {
   return <StatusDot tone="primary">{manusHolds(post) ? 'With Manus' : 'Planned'}</StatusDot>;
 }
 
+/** A grid cell that keeps the region name the page had (the Section primitive takes no aria-label yet). */
+function Region({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
+  return (
+    <section aria-label={label} className={cn('min-w-0', className)}>
+      {children}
+    </section>
+  );
+}
+
 function UpNext({ project, posts, now, className }: { project: Project; posts: Post[]; now: number; className?: string }) {
   const openEditor = (id: string) => useUI.getState().openPostEditor(id);
   return (
-    <Section
-      title="Up next"
-      className={cn('mt-0', className)}
-      actions={
-        <button type="button" className="link text-small" onClick={() => navigate('calendar')}>
-          Open calendar
-        </button>
-      }
-    >
-      {posts.length ? (
-        <ul className="card divide-y divide-line">
-          {posts.map((p) => (
-            <li key={p.id} className="relative flex min-w-0 items-center gap-3 px-4 py-3 transition-colors duration-120 hover:bg-surface-2">
-              <span className="w-10 shrink-0 overflow-hidden rounded-md" aria-hidden="true">
-                <PostVisual style={p.style} headline={p.headline} brand={project.brand} media={p.media} storyboard={p.storyboard} aspect="1/1" className="!rounded-none" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <button type="button" className="block w-full truncate text-left text-ui text-ink after:absolute after:inset-0" onClick={() => openEditor(p.id)} title={p.headline}>
-                  {p.headline}
-                </button>
-                <span className="mt-0.5 block truncate text-small text-muted">
-                  {networkLabel(p.platform)} · <span className="num">{dayDateTime(goesOutAt(p))}</span>
+    <Region label="Upcoming posts" className={className}>
+      <Section
+        title="Up next"
+        className="mt-0"
+        actions={
+          <button type="button" className="link text-small" onClick={() => navigate('calendar')}>
+            Open calendar
+          </button>
+        }
+      >
+        {posts.length ? (
+          <ul className="card divide-y divide-line">
+            {posts.map((p) => (
+              <li key={p.id} className="relative flex min-w-0 items-center gap-3 px-4 py-3 transition-colors duration-120 hover:bg-surface-2">
+                <span className="w-10 shrink-0 overflow-hidden rounded-md" aria-hidden="true">
+                  <PostVisual style={p.style} headline={p.headline} brand={project.brand} media={p.media} storyboard={p.storyboard} aspect="1/1" className="!rounded-none" />
                 </span>
-              </span>
-              <span className="shrink-0 max-sm:hidden">
-                <RowState post={p} now={now} />
-              </span>
-              {/* above the row's stretched title button */}
-              <span className="relative z-[1] -mr-1 shrink-0">
-                <MoreMenu
-                  label={`More for ${p.headline}`}
-                  items={[
-                    { label: 'Edit', icon: <Pencil />, onSelect: () => openEditor(p.id) },
-                    { label: 'Open in calendar', icon: <CalendarDays />, onSelect: () => void openPage('calendar', 'scheduled') },
-                  ]}
-                />
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="card px-4 py-3">
-          <Empty
-            variant="inline"
-            title="Nothing planned yet."
-            action={
-              <button type="button" className="link" onClick={() => void navigate('marketing-social').then((ok) => ok && useUI.getState().setSocialTab('batch'))}>
-                Plan my week
-              </button>
-            }
-          />
-        </div>
-      )}
-    </Section>
+                <span className="min-w-0 flex-1">
+                  <button type="button" className="block w-full truncate text-left text-ui text-ink after:absolute after:inset-0" onClick={() => openEditor(p.id)} title={p.headline}>
+                    {p.headline}
+                  </button>
+                  <span className="mt-0.5 block truncate text-small text-muted">
+                    {networkLabel(p.platform)} · <span className="num">{dayDateTime(goesOutAt(p))}</span>
+                  </span>
+                </span>
+                <span className="shrink-0 max-sm:hidden">
+                  <RowState post={p} now={now} />
+                </span>
+                {/* above the row's stretched title button */}
+                <span className="relative z-[1] -mr-1 shrink-0">
+                  <MoreMenu
+                    label={`More for ${p.headline}`}
+                    items={[
+                      { label: 'Edit', icon: <Pencil />, onSelect: () => openEditor(p.id) },
+                      { label: 'Open in calendar', icon: <CalendarDays />, onSelect: () => void openPage('calendar', 'scheduled') },
+                    ]}
+                  />
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="card px-4 py-3">
+            <Empty
+              variant="inline"
+              title="Nothing planned yet."
+              action={
+                <button type="button" className="link" onClick={() => void navigate('marketing-social').then((ok) => ok && useUI.getState().setSocialTab('batch'))}>
+                  Plan my week
+                </button>
+              }
+            />
+          </div>
+        )}
+      </Section>
+    </Region>
   );
 }
 
@@ -656,28 +661,30 @@ function BrandCard({ project, className }: { project: Project; className?: strin
   const markOnly = b.logo.layout === 'mark';
   const palette = [b.colors.primary, b.colors.secondary, b.colors.accent, b.colors.ink, b.colors.paper];
   return (
-    <Section
-      title="Your brand"
-      className={cn('mt-0', className)}
-      actions={
-        <button type="button" className="btn btn-ghost btn-sm -mr-2" onClick={() => void openPage('workspace-settings', 'brand')}>
-          <Pencil /> Edit brand
-        </button>
-      }
-    >
-      <div className="card flex flex-col gap-4 p-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <BrandLogo brand={b} size={40} layout={markOnly ? 'mark' : 'horizontal'} className="min-w-0" />
-          {markOnly && <p className="min-w-0 truncate text-h3 text-ink">{b.name}</p>}
+    <Region label="Active project" className={className}>
+      <Section
+        title="Your brand"
+        className="mt-0"
+        actions={
+          <button type="button" className="btn btn-ghost btn-sm -mr-2" onClick={() => void openPage('workspace-settings', 'brand')}>
+            <Pencil /> Edit brand
+          </button>
+        }
+      >
+        <div className="card flex flex-col gap-4 p-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <BrandLogo brand={b} size={40} layout={markOnly ? 'mark' : 'horizontal'} className="min-w-0" />
+            {markOnly && <p className="min-w-0 truncate text-h3 text-ink">{b.name}</p>}
+          </div>
+          {b.tagline && <p className="text-small text-muted">{b.tagline}</p>}
+          <div className="flex items-center gap-2">
+            {palette.map((c, i) => (
+              <Swatch key={`${c}-${i}`} color={c} size={20} />
+            ))}
+          </div>
+          <WebsiteLink project={project} />
         </div>
-        {b.tagline && <p className="text-small text-muted">{b.tagline}</p>}
-        <div className="flex items-center gap-2">
-          {palette.map((c, i) => (
-            <Swatch key={`${c}-${i}`} color={c} size={20} />
-          ))}
-        </div>
-        <WebsiteLink project={project} />
-      </div>
-    </Section>
+      </Section>
+    </Region>
   );
 }

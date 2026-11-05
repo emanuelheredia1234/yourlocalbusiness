@@ -10,9 +10,9 @@ import { CHANNEL_LABEL, WHERE_LABEL, actionDone, currentWeek, strategyProgress, 
 import { restartPlan } from '@/lib/strategyWrite';
 import { openPage } from '@/ai/assistant/nav';
 import { Markdown } from '@/components/ui/Markdown';
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Empty, InfoTip, ProgressBar, Section } from '@/components/ui/primitives';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Empty, InfoTip, ProgressBar } from '@/components/ui/primitives';
 import { PlatformMark } from '@/components/posts/PlatformIcon';
-import { ActionRow, BasisTip, Cite, PageCard, RunButton, SectionFooter, SourcesList, StaleNote, citedBy } from './parts';
+import { ActionRow, BasisTip, Cite, NamedSection, PageCard, RunButton, SectionFooter, SourcesList, StaleNote, citedBy } from './parts';
 import { ApplyPanel } from './ApplyPanel';
 
 /** A neutral 32px tile for a channel without a network of its own. */
@@ -119,7 +119,8 @@ export function PlanTab({ project, s, ctx }: { project: Project; s: StrategyStat
         <div className="min-w-0 xl:col-span-8">
           <PageCard project={project} s={s} />
 
-          <Section
+          <NamedSection
+            label="This week"
             className="mt-10"
             title="This week"
             actions={
@@ -149,9 +150,10 @@ export function PlanTab({ project, s, ctx }: { project: Project; s: StrategyStat
             ) : (
               <p className="py-3 text-small text-muted">{w <= 4 ? 'Nothing planned this week.' : 'Every step is done.'}</p>
             )}
-          </Section>
+          </NamedSection>
 
-          <Section
+          <NamedSection
+            label="Your plan"
             title={
               <span className="inline-flex items-center gap-1">
                 {biz ? 'Your plan to win clients' : 'Your plan to make sales'}
@@ -163,7 +165,7 @@ export function PlanTab({ project, s, ctx }: { project: Project; s: StrategyStat
               <Markdown text={plan.summary} />
             </div>
             <ProgressBar className="mt-4 max-w-sm" value={pr.done} max={pr.total || 1} label={`${pr.done} of ${pr.total} done`} />
-            <Accordion type="multiple" className="mt-3 border-t border-line">
+            <Accordion type="multiple" className="mt-3 border-t border-line" role="region" aria-label="All 4 weeks">
               {plan.weeks.map((wk) => {
                 const list = plan.actions.filter((a) => a.week === wk.week);
                 const doneN = list.filter((a) => actionDone(a, project, s, ctx).done).length;
@@ -192,21 +194,22 @@ export function PlanTab({ project, s, ctx }: { project: Project; s: StrategyStat
                 );
               })}
             </Accordion>
-          </Section>
+          </NamedSection>
 
           {(plan.habits.length > 0 || plan.measure.length > 0) && (
             <div className="mt-10 grid grid-cols-1 items-start gap-x-8 gap-y-10 lg:grid-cols-2">
               {plan.habits.length > 0 && (
-                <Section title="Keep doing" className="mt-0">
+                <NamedSection label="Keep doing" title="Keep doing" className="mt-0">
                   <ul className="flex list-disc flex-col gap-1.5 pl-5 text-body text-ink-2 marker:text-faint">
                     {plan.habits.map((h) => (
                       <li key={h}>{h}</li>
                     ))}
                   </ul>
-                </Section>
+                </NamedSection>
               )}
               {plan.measure.length > 0 && (
-                <Section
+                <NamedSection
+                  label="What to measure"
                   className="mt-0"
                   title={
                     <span className="inline-flex items-center gap-1">
@@ -235,7 +238,7 @@ export function PlanTab({ project, s, ctx }: { project: Project; s: StrategyStat
                       .
                     </p>
                   )}
-                </Section>
+                </NamedSection>
               )}
             </div>
           )}

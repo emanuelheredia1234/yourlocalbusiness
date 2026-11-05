@@ -9,8 +9,9 @@ import { fmtDate } from '@/lib/utils';
 import { areaAt, skillState, type SkillArea } from '@/lib/strategyApply';
 import { openPage } from '@/ai/assistant/nav';
 import { useStore } from '@/store/useStore';
-import { InfoTip, Section } from '@/components/ui/primitives';
+import { InfoTip } from '@/components/ui/primitives';
 import { campaignFlow, linksFlow, replaceSkillFlow, seoFlow, skillFlow, skillOnFlow, undoCampaignFlow, undoLinksFlow } from './apply';
+import { NamedSection } from './parts';
 
 function Row({ title, sub, status, children }: { title: string; sub: string; status?: ReactNode; children: ReactNode }) {
   return (
@@ -119,7 +120,8 @@ export function ApplyPanel({ project, s }: { project: Project; s: StrategyState 
   const a = s.applied;
   const added = (at?: number) => (at ? `Added ${fmtDate(at)}` : 'Not added');
   return (
-    <Section
+    <NamedSection
+      label="Guide my other tabs with this strategy"
       title={
         <span className="inline-flex items-center gap-1">
           Guide my other tabs with this strategy
@@ -165,6 +167,6 @@ export function ApplyPanel({ project, s }: { project: Project; s: StrategyState 
           </button>
         </p>
       )}
-    </Section>
+    </NamedSection>
   );
 }
