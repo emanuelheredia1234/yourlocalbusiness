@@ -28,7 +28,7 @@ const ASPECTS: { id: VideoAspect; label: string; hint: string }[] = [
  */
 export function videoAvailability(zapier: string, ai = useRuntime.getState().ai): { ok: boolean; reason: string } {
   if (videoTransport.server) {
-    if (!ai.reachable) return { ok: false, reason: 'Start the Yourlocalbusiness server (npm run server) to make videos.' };
+    if (!ai.reachable) return { ok: false, reason: 'Your AI server isn’t running. Start it to make videos.' };
     if (!ai.routing.videos?.length) return { ok: false, reason: 'No API key makes videos yet. In Settings › AI keys, tick Videos for an OpenRouter, Google or xAI key.' };
     return { ok: true, reason: '' };
   }

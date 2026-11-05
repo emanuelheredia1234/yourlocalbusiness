@@ -46,7 +46,7 @@ export function manusSetupHint(): string {
   if (!ai.reachable) return 'The app can’t reach its AI server right now, so it can’t send posts to Manus. Reload the page, and check that the app is running.';
   switch (ai.posting?.reason) {
     case 'no_key':
-      return 'No Manus API key is saved on the server. Add it in Settings › AI keys › Manus (create a Manus account at manus.im first). On Replit, also add the SUPABASE_SECRET_KEY Secret so keys stay saved when the app restarts.';
+      return 'No Manus API key is saved on the server. Add it in Settings › AI keys › Manus (create a Manus account at manus.im first).';
     case 'not_ticked':
       return 'Your Manus key is saved, but it isn’t set to post. In Settings › AI keys › Manus, open its “Powers” list and tick Social posting.';
     case 'own_key_needed':

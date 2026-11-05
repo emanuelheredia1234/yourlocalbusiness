@@ -14,7 +14,7 @@ import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import type { AIError } from './claude';
 import { runTask } from './engine';
-import { compactMeta, fmtUsdSmall, readResearchMeta, type AIMeta } from './meta';
+import { compactMeta, readResearchMeta, type AIMeta } from './meta';
 import { openPage } from './assistant/nav';
 import { STEP_TASK, renormalize, stepInput } from './strategyTasks';
 import { strategyWho } from './strategyWho';
@@ -348,7 +348,7 @@ function notifyEnd(pid: string, result: 'done' | 'stopped' | 'failed' | 'missing
     return;
   }
   const parts = `${o.written} part${o.written === 1 ? '' : 's'}`;
-  toast({ kind: 'ai', title: 'Your strategy is ready', body: `${brand}: ${parts} written${o.cost > 0 ? ` · ≈${fmtUsdSmall(o.cost)}` : ''}`, action: active ? { label: 'Open', run: () => void openPage('strategy', 'plan') } : undefined });
+  toast({ kind: 'ai', title: 'Your strategy is ready', body: `${brand}: ${parts} written`, action: active ? { label: 'Open', run: () => void openPage('strategy', 'plan') } : undefined });
   if (currentRoute() !== 'strategy' || !active) useStore.getState().notify({ kind: 'ai', title: `Strategy ready for ${brand}`, body: `${parts} written.`, route: 'strategy' });
 }
 

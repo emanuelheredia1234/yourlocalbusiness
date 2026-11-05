@@ -80,14 +80,14 @@ export function areaAt(s: StrategyState, area: SkillArea): number {
 export function strategySkill(p: Project, area: SkillArea, s: StrategyState, at = Date.now()): Partial<Skill> & Pick<Skill, 'name'> {
   const excerpt = cleanNotes(area === 'social' ? socialNotes(s) : emailNotes(s), ownerFacts(p, s.inputs), 1500);
   return {
-    name: area === 'social' ? 'Strategy · Social posts' : 'Strategy · Email funnel',
+    name: area === 'social' ? 'Strategy · Social posts' : 'Strategy · Email',
     category: area,
     description: `From your Strategy (${new Date(at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}). Change it in Strategy, or turn it off here.`,
     instructions: HEADER[area],
     scope: [area],
     priority: 1,
     directives: {},
-    doc: { name: `Strategy notes: ${area === 'social' ? 'social posts' : 'email funnel'}`, size: excerpt.length, keywords: [], excerpt },
+    doc: { name: `Strategy notes: ${area === 'social' ? 'social posts' : 'email'}`, size: excerpt.length, keywords: [], excerpt },
     source: 'custom',
     libraryId: `strategy-${area}-${p.id}`,
     projectId: p.id,

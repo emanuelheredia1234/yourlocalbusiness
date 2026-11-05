@@ -322,7 +322,7 @@ export function videoErrorMessage(code: string, message = ''): { title: string; 
     case 'VIDEO_SETUP':
       return { title: 'No key makes videos yet', body: message || 'In Settings › AI keys, tick Videos for an OpenRouter, Google or xAI key.' };
     case 'VIDEO_NETWORK':
-      return { title: 'Couldn’t reach your AI server', body: 'Check that the server is running (npm run server), then try again.' };
+      return { title: 'Couldn’t reach your AI server', body: 'Check that the server is running, then try again.' };
     case 'VIDEO_DAILY_LIMIT':
       return { title: 'Today’s AI limit is reached', body: dailyLimitText(message) };
     case 'VIDEO_LOST':

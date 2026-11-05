@@ -51,13 +51,6 @@ export function photoRoute(): 'muse' | 'server' | 'manus' | 'none' {
   return route[0] === 'manus' ? 'manus' : 'server';
 }
 
-export function photoLabel(): string {
-  const route = photoRoute();
-  if (route === 'muse') return 'Photo · Muse';
-  const p = primaryProvider('photos');
-  return p ? `Photo · ${p.label.split(' ')[0]}` : 'Photo';
-}
-
 /** One line on who makes photos here and what it costs, for under the controls. */
 export function photoSourceNote(): string {
   const route = photoRoute();
@@ -82,7 +75,7 @@ export function photoAvailability(): { ok: boolean; reason: string } {
     }
   }
   const rt = useRuntime.getState();
-  if (!rt.ai.reachable) return { ok: false, reason: 'Start the Yourlocalbusiness server (npm run server) to generate photos.' };
+  if (!rt.ai.reachable) return { ok: false, reason: 'Your AI server isn’t running. Start it to generate photos.' };
   if (photoRoute() === 'none') return { ok: false, reason: 'No API key makes photos yet. In Settings › AI keys, tick Photos for an OpenAI, Google, xAI, Meta, OpenRouter or Manus key.' };
   return { ok: true, reason: '' };
 }
@@ -692,7 +685,7 @@ export function imageErrorMessage(e: unknown): { title: string; body: string; co
     case 'RATE_LIMIT':
       return { code, title: 'The image provider is busy or out of credit', body: 'Wait a minute, or check your account balance.' };
     case 'NETWORK':
-      return { code, title: 'Your server isn’t reachable', body: 'Start it with npm run server, then try again.' };
+      return { code, title: 'Your server isn’t reachable', body: 'Check that it’s running, then try again.' };
     case 'TIMEOUT':
       return { code, title: 'The image took too long', body: 'Try again; simpler descriptions are faster.' };
     default:

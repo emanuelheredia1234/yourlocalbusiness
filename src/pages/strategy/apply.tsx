@@ -96,7 +96,7 @@ function Lines({ lines }: { lines: string[] }) {
 }
 
 const projectOf = (pid: string) => useStore.getState().projects.find((p) => p.id === pid) ?? null;
-const AREA_NAME: Record<SkillArea, string> = { social: 'Social posts', email: 'Email funnel' };
+const AREA_NAME: Record<SkillArea, string> = { social: 'Social posts', email: 'Email' };
 
 // ───────────── the two Brain skills ─────────────
 

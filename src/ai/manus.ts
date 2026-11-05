@@ -251,7 +251,7 @@ const SERVER_UPLOAD_LIMIT = 8_000_000;
  * 32 MB); otherwise the browser sends it. Returns what createManusTask's `files` needs.
  */
 export async function sendFileToManus(o: { blob: Blob; name?: string; mediaId?: string; signal?: AbortSignal }): Promise<{ file_id: string; filename: string }> {
-  if (!manusViaServer()) throw new ManusError('Videos can only be sent to Manus from the self-hosted app (for example on Replit).', 'MANUS_CREATE');
+  if (!manusViaServer()) throw new ManusError('Videos can only be sent to Manus from the self-hosted app.', 'MANUS_CREATE');
   const type = o.blob.type || 'application/octet-stream';
   const ext = type === 'video/quicktime' ? 'mov' : type === 'video/webm' ? 'webm' : type.startsWith('video/') ? 'mp4' : type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : type.startsWith('image/') ? 'jpg' : 'bin';
   const filename = `${(o.name || 'file').replace(/\.[a-z0-9]+$/i, '').slice(0, 80) || 'file'}.${ext}`;
@@ -289,7 +289,7 @@ export async function createManusTask(o: CreateManusOptions): Promise<ManusTask>
     }
     return parseManusCreate(await serverManus('create', body));
   }
-  if (o.files?.length) throw new ManusError('Videos can only be sent to Manus from the self-hosted app (for example on Replit).', 'MANUS_CREATE');
+  if (o.files?.length) throw new ManusError('Videos can only be sent to Manus from the self-hosted app.', 'MANUS_CREATE');
   // the code action declares every field as text
   const params: Record<string, unknown> = {
     prompt: o.prompt,
@@ -450,7 +450,7 @@ export function manusErrorMessage(code: string, message = ''): { title: string; 
     case 'MANUS_CREATE_UNKNOWN':
       return { title: 'Not sure the task started', body: `${message ? `${message} ` : ''}The task may have started anyway: check your Manus tasks before sending it again, or it could be posted twice.` };
     case 'MANUS_NETWORK':
-      return { title: 'Couldn’t reach your AI server', body: 'Check that the server is running (npm run server), then try again.' };
+      return { title: 'Couldn’t reach your AI server', body: 'Check that the server is running, then try again.' };
     case 'MANUS_ERROR':
       return { title: 'Manus reported an error', body: message || 'Open the task in Manus to see what happened.' };
     case 'MANUS_TIMEOUT':

@@ -184,7 +184,7 @@ export function scheduleWindowError(network: PostPlatform, iso: string, now = Da
 export function postBlocker(post: Pick<Post, 'platform' | 'format' | 'media'>, o: { viaServer: boolean }): string | null {
   const n = NETWORKS[post.platform];
   if (post.format === 'video' && post.media?.kind !== 'video') return 'Make or add the video first: a storyboard can’t be posted.';
-  if (post.media?.kind === 'video' && !o.viaServer) return 'Videos go to Manus through your own server, so post this one from the self-hosted app (for example on Replit).';
+  if (post.media?.kind === 'video' && !o.viaServer) return 'Videos go to Manus through your own server, so post this one from the self-hosted app.';
   if (n.needsMedia && !post.media) return `${label(post.platform)} needs an image or a video. Add one first.`;
   return null;
 }

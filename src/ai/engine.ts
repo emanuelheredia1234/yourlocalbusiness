@@ -105,7 +105,7 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
     note = `No API key powers ${fn.label} yet, so the built-in engine answered. In Settings › AI keys, tick ${fn.label} for one of your keys.`;
   } else if (!__ARTIFACT_BUILD__ && provider === 'local' && !opts.forceLocal && task.claude && rt.server === 'down') {
     code = 'server_down';
-    note = 'Your AI server isn’t running (npm run server), so the built-in engine answered.';
+    note = 'Your AI server isn’t running, so the built-in engine answered.';
   }
 
   if (ask && task.claude) {
