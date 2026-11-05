@@ -9,7 +9,7 @@ import type { FindingTopic, StrategyFinding, StrategyManus, StrategyState } from
 import { FORMATS, matchBusinessType } from './knowledge';
 import { ManusError, parseManusCreate, parseManusState, serverManus } from './manus';
 import { addSource, domainOf, isHttpUrl, normCtx, readStrategy } from '@/lib/strategy';
-import { FINDING_TOPICS, clip, enumOf, normalizeFindings } from '@/lib/strategyNormalize';
+import { FINDING_TOPICS, STRATEGY_CAPS, clip, enumOf, normalizeFindings } from '@/lib/strategyNormalize';
 import { writeStrategy } from '@/lib/strategyWrite';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
@@ -41,7 +41,8 @@ export function readManusResearch(v: unknown): ManusResearch | null {
     const f = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
     const url = typeof f.url === 'string' ? f.url.trim() : '';
     const text = clip(f.text, 300);
-    if (!text || !isHttpUrl(url) || url.length > 600) continue;
+    // a page address the strategy can't keep as a source (the server's limit too) is no finding
+    if (!text || !isHttpUrl(url) || url.length > STRATEGY_CAPS.sources.url) continue;
     const quote = clip(f.quote, 200);
     findings.push({ topic: enumOf(f.topic, FINDING_TOPICS, 'other'), text, url, ...(quote ? { quote } : {}) });
     if (findings.length >= 12) break;

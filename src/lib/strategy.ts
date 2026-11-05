@@ -24,12 +24,13 @@ import type {
 } from './strategyTypes';
 import { hashStr, fmtRelative } from './utils';
 import { pageTypeOf } from './pageTypes';
-import { LINK_PLACEMENTS } from './pageLink';
+import { LINK_PLACEMENTS, knownLinks, placementFor } from './pageLink';
 import {
   POST_NETWORKS,
   STRATEGY_CAPS as C,
   STRATEGY_STEPS,
   TICK_KEY,
+  cleanText,
   clip,
   domainOf,
   enumOf,
@@ -136,8 +137,11 @@ export function emptyStrategy(): StrategyState {
   return { v: 1, inputs: { goal: '', budget: '', timePerWeek: '', competitors: [], tried: '', notes: '' }, useBrain: true, maxSearches: 5, sources: [], nextSource: 1, ticks: {}, applied: {}, updatedAt: 0 };
 }
 
-/** The owner's own numbers and words (prices, budget, goal, their texts): claims and numbers in them are facts the owner gave. */
-export function ownerFacts(p: Project, inputs: StrategyInputs): OwnerFacts {
+/**
+ * The owner's own numbers and words (prices, budget, goal, their texts): claims and numbers in them are facts the
+ * owner gave. With them, the links the app has checked: the business's own addresses and the strategy's `sources`.
+ */
+export function ownerFacts(p: Project, inputs: StrategyInputs, sources: readonly Pick<StrategySource, 'url'>[] = []): OwnerFacts {
   const words = [
     inputs.goal,
     inputs.budget,
@@ -158,7 +162,10 @@ export function ownerFacts(p: Project, inputs: StrategyInputs): OwnerFacts {
   const nums = new Set<string>();
   for (const n of [p.studio.price, p.studio.compareAt, ...p.studio.packages.map((x) => x.price)]) if (Number.isFinite(n) && n > 0) nums.add(String(Math.round(n * 1000) / 1000));
   for (const t of [inputs.budget, inputs.goal, inputs.timePerWeek, inputs.notes]) for (const n of numbersIn(t)) nums.add(n);
-  return { nums, text: words.filter(Boolean).join('\n').toLowerCase() };
+  // a website typed without https:// is still the business's
+  const sites = knownLinks(p).map((u) => sourceKey(/^[a-z][a-z\d+.-]*:/i.test(u.trim()) ? u.trim() : `https://${u.trim()}`)).filter(Boolean);
+  const pages = new Set(sources.map((x) => sourceKey(x.url)).filter(Boolean));
+  return { nums, text: words.filter(Boolean).join('\n').toLowerCase(), ...(sites.length ? { sites } : {}), ...(pages.size ? { pages } : {}) };
 }
 
 const normInputs = (raw: unknown): StrategyInputs => {
@@ -170,9 +177,10 @@ const normInputs = (raw: unknown): StrategyInputs => {
   return { goal: clip(r.goal, C.inputs.goal), budget: clip(r.budget, C.inputs.budget), timePerWeek: clip(r.timePerWeek, C.inputs.timePerWeek), competitors, tried: clip(r.tried, C.inputs.tried, true), notes: clip(r.notes, C.inputs.notes, true) };
 };
 
+/** Stored sources, checked (a few dozen at most: which of them stay is capStrategy's call, once it knows what's cited). */
 function normSources(raw: unknown): StrategySource[] {
   const out: StrategySource[] = [];
-  for (const x of Array.isArray(raw) ? raw : []) {
+  for (const x of Array.isArray(raw) ? raw.slice(-C.sources.items * 3) : []) {
     const s = obj(x);
     const n = typeof s.n === 'number' && Number.isInteger(s.n) && s.n > 0 ? s.n : 0;
     const url = typeof s.url === 'string' ? s.url : '';
@@ -182,7 +190,7 @@ function normSources(raw: unknown): StrategySource[] {
     const domain = clip(s.domain, C.sources.domain) || domainOf(url);
     out.push({ n, url, title: clip(s.title, C.sources.title) || domain, domain, ...(quote ? { quote } : {}), ...(pageAge ? { pageAge } : {}), via: s.via === 'manus' ? 'manus' : 'search', at: typeof s.at === 'number' && Number.isFinite(s.at) ? s.at : 0 });
   }
-  return out.sort((a, b) => a.n - b.n).slice(-C.sources.items);
+  return out.sort((a, b) => a.n - b.n);
 }
 
 const PLACEMENTS: readonly LinkPlacement[] = LINK_PLACEMENTS;
@@ -260,7 +268,7 @@ function normManus(raw: unknown, ctx: NormCtx): StrategyManus | undefined {
 
 /** The context the normalizers read a project's strategy with. */
 export function normCtx(p: Project, s: Pick<StrategyState, 'inputs' | 'sources'> & { promote?: { page?: { pageType?: PageType } } }, o: Partial<NormCtx> = {}): NormCtx {
-  return { ns: new Set(s.sources.map((x) => x.n)), fallback: 'ai', trustBasis: true, owner: ownerFacts(p, s.inputs), networks: strategyNetworks(p), project: p, pageType: s.promote?.page?.pageType, ...o };
+  return { ns: new Set(s.sources.map((x) => x.n)), fallback: 'ai', trustBasis: true, owner: ownerFacts(p, s.inputs, s.sources), networks: strategyNetworks(p), project: p, pageType: s.promote?.page?.pageType, ...o };
 }
 
 /**
@@ -302,7 +310,8 @@ export function readStrategy(p: Project): StrategyState {
       // the summary is never sourced: the rules of an unsourced statement
       summary: statementText(rr.summary, C.research.summary, ctx.owner),
       findings: normalizeFindings(rr.findings, ctx),
-      checks: (Array.isArray(rr.checks) ? rr.checks : []).map((c) => clip(c, C.research.check)).filter(Boolean).slice(0, C.research.checks),
+      // the built-in engine's, with the same rule as when they were written (no links)
+      checks: (Array.isArray(rr.checks) ? rr.checks : []).map((c) => cleanText(clip(c, C.research.check))).filter(Boolean).slice(0, C.research.checks),
     };
   }
   const pi = normalizeStepInfo(promoteRaw);
@@ -357,28 +366,30 @@ export function addSource(s: StrategyState, src: { url: string; title?: string; 
   return n;
 }
 
-/** Every source number the strategy cites somewhere. */
-export function citedSources(s: StrategyState): Set<number> {
+/** Every source number the strategy cites somewhere (only in `steps`' sections when given; Manus's findings count as research). */
+export function citedSources(s: StrategyState, steps: readonly StrategyStep[] = STRATEGY_STEPS): Set<number> {
   const out = new Set<number>();
   const add = (x?: { sources?: number[] }) => x?.sources?.forEach((n) => out.add(n));
-  s.research?.findings.forEach(add);
-  s.manus?.findings?.forEach(add);
-  if (s.promote) {
+  if (steps.includes('research')) {
+    s.research?.findings.forEach(add);
+    s.manus?.findings?.forEach(add);
+  }
+  if (s.promote && steps.includes('promote')) {
     add(s.promote.positioning);
     s.promote.channels.forEach(add);
     add(s.promote.page);
     Object.values(s.promote.links).forEach(add);
   }
-  if (s.content) {
+  if (s.content && steps.includes('content')) {
     s.content.formats.forEach(add);
     add(s.content.campaign);
   }
-  if (s.assets) {
+  if (s.assets && steps.includes('assets')) {
     s.assets.assets.forEach(add);
     add(s.assets.seo);
   }
-  if (s.outreach) add(s.outreach.email);
-  s.plan?.actions.forEach(add);
+  if (s.outreach && steps.includes('outreach')) add(s.outreach.email);
+  if (steps.includes('plan')) s.plan?.actions.forEach(add);
   return out;
 }
 
@@ -427,15 +438,36 @@ function keepSources(s: StrategyState, keep: Set<number>): StrategyState {
   };
 }
 
+/**
+ * The sections whose pages a cap keeps first: the five after the research (a new search never takes a page the
+ * plan or another section cites: "Your plan stays as it is"), except those the run under way writes again.
+ */
+function heldSteps(s: StrategyState): StrategyStep[] {
+  const r = s.run;
+  const again = r && !r.finishedAt && !r.stoppedAt ? r.steps.filter((k) => !r.done.includes(k)) : [];
+  return STRATEGY_STEPS.filter((k) => k !== 'research' && !again.includes(k));
+}
+
+/**
+ * At most `max` sources, all of them cited: the uncited go first; past `max`, the pages heldSteps' sections cite
+ * stay, then the newest. A dropped page's citations go with it (keepSources), so none points at a page that's gone.
+ */
+function capSources(s: StrategyState, max: number): StrategyState {
+  const g = gcSources(s);
+  if (g.sources.length <= max) return g;
+  const held = citedSources(g, heldSteps(g));
+  const keep = [...g.sources].sort((a, b) => Number(held.has(b.n)) - Number(held.has(a.n)) || b.n - a.n).slice(0, max);
+  return keepSources(g, new Set(keep.map((x) => x.n)));
+}
+
 const cs = (v: string, n: number, nl = false) => (v.length > n ? clip(v, n, nl) : v);
 
-/** Every list and text within its cap (structure only: the content rules ran when it was written or read). */
+/** Every list and text within its cap, then the sources (capSources: what's cited, at most 24). Structure only: the content rules ran when it was written or read. */
 function capFields(s: StrategyState): StrategyState {
   const i = s.inputs;
   const out: StrategyState = {
     ...s,
     inputs: { goal: cs(i.goal, C.inputs.goal), budget: cs(i.budget, C.inputs.budget), timePerWeek: cs(i.timePerWeek, C.inputs.timePerWeek), competitors: i.competitors.slice(0, C.inputs.competitors).map((c) => cs(c, C.inputs.competitor)), tried: cs(i.tried, C.inputs.tried, true), notes: cs(i.notes, C.inputs.notes, true) },
-    sources: s.sources.slice(-C.sources.items),
     ticks: Object.fromEntries(Object.entries(s.ticks).slice(0, C.ticks)),
   };
   if (out.research) out.research = { ...out.research, summary: cs(out.research.summary, C.research.summary), findings: out.research.findings.slice(0, C.research.findings), queries: out.research.queries.slice(0, C.research.queries), checks: out.research.checks.slice(0, C.research.checks) };
@@ -446,13 +478,14 @@ function capFields(s: StrategyState): StrategyState {
   if (out.outreach) out.outreach = { ...out.outreach, templates: out.outreach.templates.slice(0, C.outreach.templates).map((t) => ({ ...t, body: cs(t.body, C.outreach.body, true), followUp: cs(t.followUp, C.outreach.followUp, true) })) };
   if (out.plan) out.plan = { ...out.plan, weeks: out.plan.weeks.slice(0, C.plan.weeks), actions: out.plan.actions.slice(0, C.plan.actions), habits: out.plan.habits.slice(0, C.plan.habits), measure: out.plan.measure.slice(0, C.plan.measure) };
   if (out.run?.note) out.run = { ...out.run, note: cs(out.run.note, C.runNote) };
-  return out;
+  // after the lists: a page cited only by a point cut above is no longer cited
+  return capSources(out, C.sources.items);
 }
 
 /**
  * Caps, then unused sources out, then the size guard: until the strategy fits in 60,000 characters of JSON,
- * drop quotes, shorten email bodies, keep fewer findings, ideas and actions, then only the 16 newest
- * sources. Deterministic and idempotent; the owner's own facts (inputs, ticks, the switches) are never cut.
+ * drop quotes, shorten email bodies, keep fewer findings, ideas and actions, then only 16 sources (chosen
+ * as capSources chooses). Deterministic and idempotent; the owner's own facts (inputs, ticks, the switches) are never cut.
  */
 export function capStrategy(input: StrategyState): StrategyState {
   let s = gcSources(capFields(input));
@@ -472,8 +505,8 @@ export function capStrategy(input: StrategyState): StrategyState {
       const keep = new Set([...x.plan.actions.filter((a) => a.week <= 2), ...x.plan.actions.filter((a) => a.week > 2)].slice(0, 16).map((a) => a.id));
       return { ...x, plan: { ...x.plan, actions: x.plan.actions.filter((a) => keep.has(a.id)) } };
     },
-    // 7. the sixteen newest sources (highest n)
-    (x) => keepSources(x, new Set(x.sources.map((y) => y.n).sort((a, b) => b - a).slice(0, 16))),
+    // 7. sixteen sources: the sections' pages first, then the newest
+    (x) => capSources(x, 16),
     // further, rarely needed: shorter texts the AI wrote (never the owner's)
     (x) => shortenTexts(x, 0.6),
     (x) => shortenTexts(x, 0.35),
@@ -567,8 +600,9 @@ export function derivedDone(a: { kind: ActionKind; pageType?: PageType; codeKind
     case 'publish_page':
       return !!m.seoPublished;
     case 'link_settings': {
+      // where each network's link goes now: the owner's setting, else the default (advice that matches the default is done)
       const links = Object.entries(s.promote?.links ?? {});
-      return links.length > 0 && links.every(([n, rec]) => m.linkPlacement?.[n as PostPlatform] === rec?.placement);
+      return links.length > 0 && links.every(([n, rec]) => placementFor(p, n as PostPlatform) === rec?.placement);
     }
     case 'campaign_setup':
       return !!s.applied.campaign || !!m.plan;

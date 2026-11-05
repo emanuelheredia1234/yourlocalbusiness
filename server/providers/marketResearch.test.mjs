@@ -138,6 +138,10 @@ describe('reading the report', () => {
     expect(out.pagesRead).toBe(20);
     const long = parseMarketResearch(`FINDING: seo | A long address. | https://example.com/${'a'.repeat(700)}\nRESULT: RESEARCH DONE | 1`, null);
     expect(long.findings).toEqual([]);
+    // a page address the app keeps as a source: at most 400 characters (MAX_SOURCE_URL, as for web research)
+    const at = (n) => `https://example.com/${'a'.repeat(n - 'https://example.com/'.length)}`;
+    const edge = parseMarketResearch('', { success: true, value: { pages_read: 2, failed_reason: null, findings: [{ topic: 'seo', finding: 'QA: at the limit.', url: at(400), quote: null }, { topic: 'seo', finding: 'QA: one longer.', url: at(401), quote: null }] } });
+    expect(edge.findings.map((f) => f.url)).toEqual([at(400)]);
     const quoted = parseMarketResearch('', { success: true, value: { pages_read: 1, failed_reason: null, findings: [{ topic: 'seo', finding: 'QA.', url: 'https://example.com/q', quote: 'q'.repeat(500) }] } });
     expect(quoted.findings[0].quote).toHaveLength(200);
   });

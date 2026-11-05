@@ -1,16 +1,22 @@
 // "Export plan": the whole strategy as a Markdown file, every point with its label (web with its source
 // numbers, general knowledge, built-in), the plan's steps ticked or not, and the sources with their dates.
-// Plain Markdown, no HTML: angle brackets in any text are escaped.
+// Plain Markdown, no HTML, and no link but the sources' own: angle brackets, square brackets and backslashes
+// in any text are escaped, and a page's title loses any link in it (the source check never saw those).
 import type { Project } from '@/lib/types';
 import type { Backed, StrategyState } from '@/lib/strategyTypes';
-import { ASSET_LABEL, CHANNEL_LABEL, CTA_LABEL, GOAL_LABEL, LEAD_MAGNET_LABEL, MIX_WORD, PURPOSE_LABEL, TOPIC_LABEL, WHERE_LABEL, actionDone, type ActionCtx } from '@/lib/strategy';
-import { FINDING_TOPICS, POST_TYPE_IDS } from '@/lib/strategyNormalize';
+import { ASSET_LABEL, CHANNEL_LABEL, CTA_LABEL, GOAL_LABEL, LEAD_MAGNET_LABEL, MIX_WORD, PURPOSE_LABEL, TOPIC_LABEL, WHERE_LABEL, actionDone, domainOf, type ActionCtx } from '@/lib/strategy';
+import { FINDING_TOPICS, POST_TYPE_IDS, noLinks } from '@/lib/strategyNormalize';
 import { PAGE_TYPE_LABEL } from '@/lib/pageTypes';
 import { LINK_PLACEMENT_LABEL } from '@/lib/pageLink';
 import { slugify } from '@/lib/utils';
 import { PLATFORMS } from '@/ai/knowledge';
 
-const esc = (t: string) => t.replace(/</g, '&lt;').replace(/\r/g, '');
+/** Text as text: no HTML (angle brackets as entities) and no Markdown link or image syntax (brackets escaped). */
+const esc = (t: string) => t.replace(/\r/g, '').replace(/[\\[\]]/g, '\\$&').replace(/</g, '&lt;');
+/** A web page's own words (its title, its date): without links, then as text. */
+const pageText = (t: string) => esc(noLinks(t, 'drop').trim());
+/** A source's address as found, with the characters that could make Markdown read another link into it encoded. */
+const address = (u: string) => u.replace(/[\s<>[\]\\`"]/g, (c) => encodeURIComponent(c));
 const day = (at: number) => new Date(at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 const net = (n: string) => (n === 'x' ? 'X' : PLATFORMS[n as keyof typeof PLATFORMS]?.label ?? n);
 const POST_TYPE = { educational: 'How-to', tip: 'Tip', question: 'Question', sales: 'Sales', bts: 'Behind the scenes' } as const;
@@ -117,7 +123,10 @@ export function strategyMarkdown(p: Project, s: StrategyState, ctx: ActionCtx): 
   const manusRead = new Set((s.manus?.findings ?? []).flatMap((f) => f.sources ?? []));
   if (sources.length) {
     add('## Sources', '');
-    for (const x of sources) add(`[${x.n}] ${esc(x.title)} — ${esc(x.url)} (found ${day(x.at || ctx.now)}${x.pageAge ? `, page date ${esc(x.pageAge)}` : ''}${x.via === 'manus' || manusRead.has(x.n) ? ', via Manus' : ''})`);
+    for (const x of sources) {
+      const age = x.pageAge ? pageText(x.pageAge) : '';
+      add(`[${x.n}] ${pageText(x.title) || esc(domainOf(x.url))} — ${address(x.url)} (found ${day(x.at || ctx.now)}${age ? `, page date ${age}` : ''}${x.via === 'manus' || manusRead.has(x.n) ? ', via Manus' : ''})`);
+    }
     add('', 'Links open the original pages. The app shows them as found and doesn’t vouch for them.');
   }
   return `${L.join('\n').replace(/\n{3,}/g, '\n\n').trim()}\n`;
