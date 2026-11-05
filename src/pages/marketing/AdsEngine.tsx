@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Check, Download, ExternalLink, PenLine, Plus, Target, Trash2 } from 'lucide-react';
+import { Check, Download, ExternalLink, PenLine, Plus, Trash2 } from 'lucide-react';
 import type { AdCampaign, AdCreative, AdObjective, AdPlatform, Project, SearchAd, StyleId } from '@/lib/types';
 import { cn, ensureUrl, fmtMoney, fmtRelative, parseDateStr, slugify, stripProtocol } from '@/lib/utils';
 import { AD_CTAS as CTAS, adFinalUrl, adsCsv, adsText, applyAds } from '@/lib/ads';
@@ -43,25 +43,26 @@ export default function AdsEngine() {
         title="Ads"
         description="Plan a campaign here, then run it in each platform’s ads manager."
         actions={
-          // with no campaign yet, the empty state's Create campaign is the one way in
-          campaigns.length > 0 ? (
-            <button type="button" className="btn btn-secondary btn-sm" onClick={create}>
-              <Plus /> New campaign
-            </button>
-          ) : undefined
+          <button type="button" className="btn btn-secondary btn-sm" onClick={create}>
+            <Plus /> New campaign
+          </button>
         }
       />
-      {campaigns.length > 1 && active && <Tabs className="mb-5" size="sm" value={active.id} onChange={setActiveId} tabs={campaigns.map((c) => ({ id: c.id, label: c.name || 'Untitled campaign' }))} />}
+      {campaigns.length > 1 && active && (
+        // the tab row keeps its name for screen readers ("Campaigns")
+        <div role="group" aria-label="Campaigns" className="mb-5">
+          <Tabs size="sm" value={active.id} onChange={setActiveId} tabs={campaigns.map((c) => ({ id: c.id, label: c.name || 'Untitled campaign' }))} />
+        </div>
+      )}
       {!active ? (
         <Empty
-          variant="page"
-          icon={<Target />}
+          variant="ai"
           title="Plan a local ad campaign"
-          body="A budget, an audience and three ad versions to test. The AI writes the versions once you’ve set the basics."
+          body="A budget, an audience and three ad versions to test."
           action={
-            <button type="button" className="btn btn-primary" onClick={create}>
-              <Plus /> Create campaign
-            </button>
+            <GenerateButton variant="ai" size="lg" onClick={create}>
+              Plan my campaign
+            </GenerateButton>
           }
         />
       ) : (

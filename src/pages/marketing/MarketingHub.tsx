@@ -7,7 +7,7 @@ import { useKpis } from '@/lib/kpis';
 import { CHANNEL_ROUTES, navigate } from '@/lib/router';
 import { useNewLeadCount } from '@/store/leads';
 import { useActiveProject, useStore } from '@/store/useStore';
-import { InfoTip, PageHeader, ProgressBar, Section, StatStrip } from '@/components/ui/primitives';
+import { InfoTip, PageHeader, ProgressBar, StatStrip } from '@/components/ui/primitives';
 
 /** The four channels, with the sidebar's names and icons. */
 const CHANNELS: { id: Channel; label: string; icon: ReactNode; desc: string }[] = [
@@ -112,15 +112,11 @@ export default function MarketingHub() {
         })}
       </section>
 
-      <Section
-        className="mt-10"
-        title={
-          <span className="inline-flex items-center gap-1">
-            Last 30 days
-            <InfoTip label="What’s counted">Real counts only. Reach, likes and clicks live on each network, and sales on your own checkout: open them there.</InfoTip>
-          </span>
-        }
-      >
+      <section className="mt-10" aria-label="Last 30 days">
+        <h2 className="mb-4 inline-flex items-center gap-1 text-h2 text-ink">
+          Last 30 days
+          <InfoTip label="What’s counted">Real counts only. Reach, likes and clicks live on each network, and sales on your own checkout: open them there.</InfoTip>
+        </h2>
         <StatStrip
           items={[
             { label: 'Posted', value: k.posted },
@@ -129,7 +125,7 @@ export default function MarketingHub() {
             { label: 'Made with AI', value: k.made },
           ]}
         />
-      </Section>
+      </section>
     </div>
   );
 }

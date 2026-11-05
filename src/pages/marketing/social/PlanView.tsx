@@ -5,7 +5,7 @@ import { fmtDate, fmtTime } from '@/lib/utils';
 import { PLATFORMS, POST_TYPE_MAP, POST_TYPES, STYLE_LABEL } from '@/ai/knowledge';
 import { setSlotTopic } from '@/ai/socialPlan';
 import { StackedBar } from '@/components/charts/Charts';
-import { Badge, Section, StatStrip, Tooltip } from '@/components/ui/primitives';
+import { Badge, StatStrip, Tooltip } from '@/components/ui/primitives';
 import { PlatformGlyph } from '@/components/posts/PlatformIcon';
 
 /** The 30-day plan as an agenda: the strategy and its numbers, then each week's theme and its posts (topics editable). */
@@ -34,7 +34,8 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
         ]}
       />
 
-      <Section title="Strategy" className="mt-10">
+      <section className="mt-10" aria-label="Campaign strategy">
+        <h2 className="mb-4 text-h2 text-ink">Strategy</h2>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           <p className="max-w-[72ch] text-body text-ink-2 lg:col-span-7">{plan.strategy}</p>
           <div className="lg:col-span-5">
@@ -42,37 +43,39 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
             <StackedBar parts={POST_TYPES.map((t) => ({ key: t.id, label: t.short, value: s.byType[t.id], color: `rgb(var(--${t.slot}))` }))} />
           </div>
         </div>
-      </Section>
+      </section>
 
-      {weeks.map((w) => {
-        const slots = w.days.flatMap((d) => d.slots.map((sl) => ({ d, sl })));
-        return (
-          <section key={w.week} className="mt-10" aria-label={`Week ${w.week}`}>
-            <div className="mb-3">
-              <h3 className="text-h4 text-ink">
-                Week {w.week} <span className="text-ink-2">· {w.theme}</span>
-              </h3>
-              <p className="mt-0.5 text-small text-muted">{w.goal}</p>
-              {(w.kpi || w.keyMessage) && (
-                <p className="mt-0.5 text-caption text-muted">
-                  {w.kpi && <>Watch: {w.kpi}</>}
-                  {w.kpi && w.keyMessage && ' · '}
-                  {w.keyMessage && <>“{w.keyMessage}”</>}
-                </p>
+      <section aria-label="30-day calendar">
+        {weeks.map((w) => {
+          const slots = w.days.flatMap((d) => d.slots.map((sl) => ({ d, sl })));
+          return (
+            <section key={w.week} className="mt-10" aria-label={`Week ${w.week}`}>
+              <div className="mb-3">
+                <h3 className="text-h4 text-ink">
+                  Week {w.week} <span className="text-ink-2">· {w.theme}</span>
+                </h3>
+                <p className="mt-0.5 text-small text-muted">{w.goal}</p>
+                {(w.kpi || w.keyMessage) && (
+                  <p className="mt-0.5 text-caption text-muted">
+                    {w.kpi && <>Watch: {w.kpi}</>}
+                    {w.kpi && w.keyMessage && ' · '}
+                    {w.keyMessage && <>“{w.keyMessage}”</>}
+                  </p>
+                )}
+              </div>
+              {slots.length ? (
+                <ul className="card divide-y divide-line overflow-hidden">
+                  {slots.map(({ d, sl }) => (
+                    <SlotRow key={sl.id} day={d} slot={sl} done={covered.has(sl.id)} />
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-small text-muted">Rest week: no posts planned.</p>
               )}
-            </div>
-            {slots.length ? (
-              <ul className="card divide-y divide-line overflow-hidden">
-                {slots.map(({ d, sl }) => (
-                  <SlotRow key={sl.id} day={d} slot={sl} done={covered.has(sl.id)} />
-                ))}
-              </ul>
-            ) : (
-              <p className="text-small text-muted">Rest week: no posts planned.</p>
-            )}
-          </section>
-        );
-      })}
+            </section>
+          );
+        })}
+      </section>
     </div>
   );
 }
@@ -90,10 +93,9 @@ function SlotRow({ day, slot: sl, done }: { day: PlanDay; slot: PlanSlot; done: 
           {type.short}
         </Badge>
       </span>
-      <label className="col-span-2 flex min-w-0 items-center gap-2 md:col-span-1">
-        <span className="sr-only">Topic for {when}</span>
-        <input className="input input-inline min-w-0 flex-1 text-ui" defaultValue={sl.topic} onBlur={(e) => e.target.value.trim() && e.target.value !== sl.topic && setSlotTopic(sl.id, e.target.value.trim())} />
-      </label>
+      <span className="col-span-2 flex min-w-0 items-center gap-2 md:col-span-1">
+        <input className="input input-inline min-w-0 flex-1 text-ui" defaultValue={sl.topic} onBlur={(e) => e.target.value.trim() && e.target.value !== sl.topic && setSlotTopic(sl.id, e.target.value.trim())} aria-label={`Topic for ${fmtDate(day.date)}`} />
+      </span>
       <span className="col-span-2 flex items-center justify-end gap-2.5 text-caption text-muted md:col-span-1">
         <Tooltip content={`${p.label} · ${sl.format === 'video' ? 'Video' : 'Image'} · ${STYLE_LABEL[sl.style]}`}>
           <span className="flex items-center gap-1.5" tabIndex={0} aria-label={`${p.label}, ${sl.format === 'video' ? 'video' : 'image'}, ${STYLE_LABEL[sl.style]}`}>

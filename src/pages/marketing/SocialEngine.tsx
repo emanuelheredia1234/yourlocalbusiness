@@ -120,7 +120,7 @@ export default function SocialEngine() {
         </div>
       )}
       {shown.has('create') && (
-        <section hidden={tab !== 'create'} aria-label="Create post">
+        <section hidden={tab !== 'create'} aria-label="Create individual post">
           <QuickComposer key={`${project.id}:${preset?.n ?? 0}`} initialTopic={preset?.topic} />
         </section>
       )}

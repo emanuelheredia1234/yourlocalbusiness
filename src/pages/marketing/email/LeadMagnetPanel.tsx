@@ -73,7 +73,7 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
   return (
     <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-12">
       <div className="flex min-w-0 flex-col lg:col-span-7">
-        <Section>
+        <section aria-label="Lead magnet content">
           <PanelHead
             title="Lead magnet"
             description={`A quick win people trade their email for, leading to ${project.studio.listing.title || project.brand.name}.`}
@@ -130,7 +130,7 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
               <AutoTextarea id="lm-cta" value={lm.cta} onChange={(v) => set({ cta: v })} minRows={2} />
             </Field>
           </div>
-        </Section>
+        </section>
 
         <Section title="Opt-in page" description="The words on the page where people sign up." divider>
           <div className="flex flex-col gap-4" aria-label="Opt-in copy" role="group">

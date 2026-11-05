@@ -313,7 +313,8 @@ function LeadList({ project }: { project: Project }) {
 }
 
 /** The list's columns on wide screens (it reads as a table; each lead is still one list item). */
-const ROW_GRID = 'lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,2fr)_minmax(0,1fr)_76px_auto] lg:items-start lg:gap-4';
+// (the actions column has a fixed width: each row is its own grid, so an auto column would size differently per row and the headings would drift)
+const ROW_GRID = 'xl:grid xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1.3fr)_minmax(0,2fr)_minmax(0,1fr)_76px_176px] xl:items-start xl:gap-4';
 
 function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDelete }: { lead: Lead; project: Project; projects: Project[]; from: Project | null; who: string; busy: boolean; onSubscribe: () => void; onDelete: () => void }) {
   const ids = useId();
@@ -333,9 +334,9 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
   ) : null;
   return (
     <li className={cn(ROW_GRID, 'flex flex-col gap-2 px-4 py-3.5')}>
-      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-1 lg:block">
+      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-1 xl:block">
         <p className={cn('min-w-0 break-words text-ui', lead.name ? 'text-ink' : 'text-muted')}>{lead.name ? <bdi>{lead.name}</bdi> : 'No name given'}</p>
-        <span className="lg:hidden">{when}</span>
+        <span className="xl:hidden">{when}</span>
         {lead.time && (
           <p className="mt-1 flex w-full items-start gap-1.5 text-small text-ink-2">
             <CalendarClock size={14} aria-hidden="true" className="mt-[3px] shrink-0 text-muted" />
@@ -392,8 +393,8 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
       <p className="min-w-0 break-words text-small text-muted">
         From /{lead.slug} · {from ? from.brand.name : 'a page that isn’t in your projects'}
       </p>
-      <div className="hidden lg:block">{when}</div>
-      <div className="flex shrink-0 items-center gap-1 lg:justify-end">
+      <div className="hidden xl:block">{when}</div>
+      <div className="flex shrink-0 items-center gap-1 xl:justify-end">
         {subscribed ? (
           <button type="button" className="btn btn-secondary btn-xs" disabled>
             <Check className="text-good" aria-hidden="true" /> Subscribed
