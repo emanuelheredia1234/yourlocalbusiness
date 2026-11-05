@@ -32,7 +32,7 @@ Real:
 - Lead forms: a published page's form sends what visitors type to the app's server, and it shows in Marketing Hub → Email → Leads. The app doesn't reply or send email.
 
 Not done by the app (it says so where it matters):
-- Sending email: you export the sequence to your email provider (Kit, Mailchimp, MailerLite…), which collects sign-ups and sends it.
+- Sending email: you export the sequence to your email provider (Kit, Mailchimp, MailerLite…), which collects sign-ups and sends it. With Omnisend connected, the app can create campaign drafts there, which you review and send yourself (see "Omnisend: campaign drafts from the email sequence").
 - Running ads: you copy the campaign into Meta Ads Manager, Google Ads, TikTok or LinkedIn, where you launch and pay for it. The app shows only your own budget, never estimated reach or results.
 - Taking payments: buyers pay on each seller's own checkout link.
 
@@ -241,7 +241,7 @@ Set it up once:
    - `user_docs`: one row per project, post, listing, etc.; each user can only read and change their own rows.
    - a private `media` bucket: each user can only use their own folder.
    - `user_secrets`: each user's own AI keys (OpenAI, Anthropic, Google, xAI, OpenRouter, Meta, Manus), encrypted by the server. Browsers can't read or write it at all.
-   - `app_state`: the server's own settings (your AI keys and their settings, the daily limits, the Manus task list, the usage log), encrypted. Browsers can't reach it either.
+   - `app_state`: the server's own settings (your AI keys and their settings, the daily limits, the Manus task list, the usage log) and each person's Omnisend connection, encrypted. Browsers can't reach it either.
    - `ai_usage_daily` and the `ylb_add_ai_usage` function (`20261103030000_ai_usage_daily.sql`): each user's AI requests and dollars per day (UTC), for the daily limits. Server-only, like `user_secrets`. **Already set up before this version? Run this one file**: it also lets `user_secrets` hold keys for every provider, not just Manus. Until it's run, the counters live in the server's memory (they reset when it restarts) and only Manus keys can be saved.
    - `published_pages` and `published_domains` (`20261103040000_published_pages.sql`): published pages and people's own domains (see "Publishing pages"). Server-only.
    - `page_leads` (`20261103050000_page_leads.sql`): what visitors send with a published page's form. Server-only.
@@ -344,6 +344,25 @@ Lead forms: a page with a form (a lead form page, a booking page's "Request a ti
 - Every input is bounded before it's checked, and nothing a visitor typed, nor their email or address, goes into the server's log.
 - Owners see leads in Marketing Hub → Email → Leads: add one to subscribers, delete it or export a CSV. The bell says when new ones arrive.
 
+## Omnisend: campaign drafts from the email sequence
+
+Each signed-in person can connect their own Omnisend brand in Marketing Hub → Email → Preview & export, then press **Create Omnisend draft** on an email. The app only creates drafts: an email template and a campaign draft in their Omnisend, with the subject, preview text, body and button the preview shows. It never sends; they review and send in Omnisend. Values in [brackets] (such as [First name]) are filled in there before sending.
+
+Set it up once (the owner):
+1. Ask Omnisend for OAuth app credentials with their developer form (https://forms.gle/axz6ychcELUuPrR28; the answer takes 1–3 business days). Register this exact redirect URI: `https://yourlocalbusiness.replit.app/api/integrations/omnisend/callback`. The scopes are `campaigns.write` and `email-templates.write`.
+2. Replit → Tools → **Secrets**: add `OMNISEND_CLIENT_ID` and `OMNISEND_CLIENT_SECRET`. Don't paste them anywhere else: not in the app, a chat, a file or a commit. The server keeps them, and the browser never sees them.
+3. It needs accounts and `SUPABASE_SECRET_KEY` (see "Accounts"), and the `app_state` table: run `supabase/migrations/20261103010000_app_state.sql` in Supabase → SQL Editor if it isn't there yet. Each person's connection is kept there, encrypted.
+4. Republish. Until then, the owner sees these steps in the Omnisend card, and everyone else sees "Omnisend isn't set up on this app yet."
+
+How it behaves:
+- **Connecting only works on the published app** (`https://yourlocalbusiness.replit.app`): Connect starts only from there, and Omnisend sends people back to that one redirect URI. The return is tied to the browser that pressed Connect by a `__Host-` cookie (Secure, HttpOnly, SameSite=Lax, 10 minutes), so a sign-in link someone else made can't attach your Omnisend to their account. The cookie and the `state` are signed with a key derived from `OMNISEND_CLIENT_SECRET`, so a callback with a made-up cookie or state is turned away without any database read (changing the secret only cancels connections started in the last 10 minutes). So on `http://localhost` (or the workspace preview) the card links to the published app instead; there, `npm test` runs the whole flow, cookie included, against the real server with a stand-in Omnisend (`server/omnisend.test.mjs`, `server/test/mock-omnisend.mjs`), and never calls Omnisend.
+- Disconnect forgets the connection in the app; to revoke it completely, also remove the app in Omnisend. When Omnisend no longer accepts a connection, the card says so and offers Connect again.
+- A draft that Omnisend didn't confirm (a timeout, a lost connection, an error on its side) "may have been created": check Omnisend before trying again. Nothing is ever sent twice by itself.
+- Deleting an account deletes its Omnisend connection too. If the deletion itself then fails, the account keeps working and can connect Omnisend again right away. While Omnisend isn't set up (no credentials), account deletion never waits on it.
+- Limits: connecting and drafts per person, the callback per address (`RATE_LIMIT_PER_MIN`).
+
+API (signed in, same site only): `GET /api/integrations/omnisend/status`, `POST /api/integrations/omnisend/connect`, `DELETE /api/integrations/omnisend/connection`, `POST /api/integrations/omnisend/campaign-drafts`. Public: `GET /api/integrations/omnisend/callback` (Omnisend's redirect).
+
 ## Run it
 
 ```bash
@@ -375,6 +394,7 @@ Server environment:
 - `APP_HOSTS`: the app's own custom domains, comma-separated. The app and `/api` answer only on the app's own hosts (see "Publishing pages")
 - `PAGES_DNS_SERVERS` (optional): the DNS servers the domain check asks (see "Publishing pages")
 - `TRUSTED_PROXY_HOPS` (optional, default 2): how many `X-Forwarded-For` addresses the platform's proxies add at its end, so visitors are told apart by the address they connected from (see "Publishing pages")
+- `OMNISEND_CLIENT_ID` and `OMNISEND_CLIENT_SECRET`: the OAuth credentials Omnisend issues (see "Omnisend: campaign drafts from the email sequence")
 
 `GET /api/config` tells the app whether accounts are on and whether it can publish pages, and `DELETE /api/account` deletes the signed-in user, with their saved workspace, files, published pages and leads.
 

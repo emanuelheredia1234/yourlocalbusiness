@@ -1730,6 +1730,8 @@ export function createPages({
     matchLead: leads.matchLead,
     receiveLead: leads.receiveLead,
     forgetUser,
+    /** Who a request comes from, as the per-address limits count it (clientOf, with TRUSTED_PROXY_HOPS). */
+    visitor,
     isAppHost,
     appHostsNote,
     visitorsNote,

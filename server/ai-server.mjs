@@ -28,6 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
 import { createOmnisendRoutes } from './omnisend.mjs';
+import { createRateLimiter } from './rateLimit.mjs';
 import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
 import { limitsFromEnv } from './limits.mjs';
@@ -92,15 +93,8 @@ function readJson(req, limit = MAX_BODY) {
   });
 }
 
-const hits = new Map();
-/** Over the per-minute limit for this key (a bucket and a user or address)? factor: reads get a multiple of it. */
-function rateLimited(key, factor = 1) {
-  const now = Date.now();
-  const recent = (hits.get(key) || []).filter((t) => now - t < 60_000);
-  recent.push(now);
-  hits.set(key, recent);
-  return recent.length > RATE_LIMIT * factor;
-}
+/** Over the per-minute limit for this key (a bucket and a user or address)? factor: reads get a multiple of it. Bounded: see rateLimit.mjs. */
+const rateLimited = createRateLimiter({ limit: RATE_LIMIT });
 
 // ───────────── static files (production build) ─────────────
 
@@ -169,12 +163,16 @@ function requestUrl(req) {
 const auth = authFromEnv();
 const appState = appStateFromEnv();
 const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv(), appState, limits: limitsFromEnv() });
+// Omnisend campaign drafts (server/omnisend.mjs): the callback's per-caller limit counts callers as published pages do
 const omnisend = createOmnisendRoutes({
   auth,
   storage: appState,
   send,
   readJson,
+  rateLimited,
+  corsHeaders,
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
+  clientKey: (req) => pages.visitor(req),
 });
 // keys and settings saved in Supabase (when its secret key is set) before the first request
 // (never more than a few seconds: a slow Supabase must not keep the app from starting)
@@ -188,7 +186,13 @@ async function deleteAccount(req, res) {
   if (!ident.who) return send(res, 401, { error: 'Sign in first.', code: 'AUTH_REQUIRED' }, corsHeaders(req));
   try {
     await omnisend.forgetUser(ident.who.id);
-    await auth.deleteUser(ident.who.id);
+    try {
+      await auth.deleteUser(ident.who.id);
+    } catch (e) {
+      // the account stays: don't keep it from connecting Omnisend for a week
+      await omnisend.unforgetUser(ident.who.id);
+      throw e;
+    }
     pages.forgetUser(ident.who.id);
     return send(res, 200, { ok: true }, corsHeaders(req));
   } catch (e) {
@@ -221,7 +225,7 @@ function route(req, res, url) {
       .then(async (ident) => ident && send(res, 200, { ok: true, ai: await ai.health(ident.who, req) }, corsHeaders(req)))
       .catch((e) => crashed(req, res, e));
   }
-  if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url);
+  if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url).catch((e) => crashed(req, res, e));
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res).catch((e) => crashed(req, res, e));
   if (pages.matchApi(url)) return void pages.handleApi(req, res, url).catch((e) => crashed(req, res, e));
   if (ai.match(url)) {

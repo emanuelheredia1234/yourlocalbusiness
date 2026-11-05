@@ -1,39 +1,127 @@
+// Omnisend: each signed-in customer connects their own Omnisend brand (OAuth), and the app creates email
+// campaign drafts there from their email sequence. It never sends: they review and send in Omnisend.
+//
+// Routes, under /api/integrations/omnisend/: GET status, POST connect, GET callback (where Omnisend sends the
+// browser back), DELETE connection, POST campaign-drafts. Every route but the callback needs the app's own
+// page (sameOrigin) and the customer's sign-in (a bearer token, never a cookie).
+//
+// Storage (appState: encrypted, server-only), per customer:
+//   omnisend:user:<sha256(user id)>     their connection (the tokens), or a marker: disconnected, needs a
+//                                       reconnect, or forgotten (the account was deleted)
+//   omnisend:oauth:pending:<tag>        the connections they started and haven't finished: at most
+//                                       MAX_PENDING_PER_USER, each valid STATE_TTL_MS, used once
+// A state is <32 random bytes>.<tag>, so a callback reads its owner's small document and nobody else's, and
+// one account starting connections can only ever push out its own.
+//
+// The callback is tied to the browser that started the connection: /connect sets a __Host- cookie with a
+// random value and keeps its hash with the state, and the callback needs that cookie. So a sign-in link made by
+// one account, approved by someone else in Omnisend, never attaches their Omnisend brand to that account.
+//
+// The cookie and the state each carry a MAC (a key derived from OMNISEND_CLIENT_SECRET, which every copy of the
+// server has), so a callback with a made-up cookie or state is turned away before any storage read: only the
+// values /connect handed out, to a signed-in customer and within its rate limit, can cost one.
+
 import crypto from 'node:crypto';
 
 export const OMNISEND_PUBLIC_BASE_URL = 'https://yourlocalbusiness.replit.app';
 export const OMNISEND_REDIRECT_URI = `${OMNISEND_PUBLIC_BASE_URL}/api/integrations/omnisend/callback`;
 export const OMNISEND_SCOPES = ['campaigns.write', 'email-templates.write'];
+/** The cookie that ties a callback to the browser that started the connection (HTTPS only: Secure, host-only). */
+export const BINDING_COOKIE = '__Host-ylb_omnisend';
+/** The most a draft request may send: a little over the largest draft the field limits below allow. */
+export const DRAFT_BODY_LIMIT = 128 * 1024;
 
 const OAUTH_AUTHORIZE_URL = 'https://app.omnisend.com/oauth2/authorize';
 const OAUTH_TOKEN_URL = 'https://app.omnisend.com/oauth2/token';
 const API_BASE_URL = 'https://api.omnisend.com/api';
 const API_VERSION = '2026-03-15';
 const API_PREFIX = '/api/integrations/omnisend';
-const OAUTH_STATES_KEY = 'omnisend:oauth:states';
 const STATE_TTL_MS = 10 * 60 * 1000;
-const MAX_PENDING_STATES = 500;
+/** Connections one customer can have started at once (the newest are kept). */
+const MAX_PENDING_PER_USER = 3;
+/** A deleted account's Omnisend documents refuse new tokens this long: the longest a sign-in token can last. */
+const FORGOTTEN_FOR_MS = 7 * 24 * 60 * 60 * 1000;
+/** Draft fields: Omnisend's own limits for the name, subject and preheader; the app's for the rest. */
+const LIMITS = { name: 250, subject: 250, preheader: 250, body: 24_000, ctaLabel: 100, ctaUrl: 2048 };
+/** A state: 32 random bytes, its owner's pending-document tag, and the server's MAC of both (all base64url). */
+const STATE_RE = /^([A-Za-z0-9_-]{43}\.([A-Za-z0-9_-]{22}))\.([A-Za-z0-9_-]{22})$/;
+/** The binding cookie's value: 32 random bytes, then the server's MAC of them (base64url). */
+const NONCE_RE = /^([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{22})$/;
+/** fetch failures that mean the request never reached Omnisend (no address, refused, no TLS): nothing was done there. */
+const NOT_SENT = /^(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT|CERT_|ERR_TLS_|UNABLE_TO_|DEPTH_ZERO_|SELF_SIGNED_)/;
 
 class OmnisendError extends Error {
-  constructor(status, code, message) {
+  constructor(status, code, message, headers = undefined) {
     super(message);
     this.status = status;
     this.code = code;
     this.publicMessage = message;
+    this.headers = headers;
+  }
+}
+
+/** How one call to Omnisend's API failed: 'not_sent', 'unknown' (it may have been done) or what Omnisend answered. */
+class CallFailure extends Error {
+  constructor(kind, status = 0) {
+    super(`Omnisend call failed: ${kind}`);
+    this.kind = kind;
+    this.status = status;
   }
 }
 
 const isRecord = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
-const stateHash = (state) => crypto.createHash('sha256').update(state).digest('hex');
-const userDocumentKey = (userId) => `omnisend:user:${stateHash(userId)}`;
+const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
+const userDocumentKey = (userId) => `omnisend:user:${sha256(userId)}`;
+/** The tag of a customer's pending document: derived from their id, and the second half of each of their states. */
+const pendingTag = (userId) => crypto.createHash('sha256').update(`omnisend-pending:${userId}`).digest('base64url').slice(0, 22);
+const pendingKey = (tag) => `omnisend:oauth:pending:${tag}`;
+const iso = (ms) => new Date(ms).toISOString();
+/** Characters as Omnisend counts them (code points, so an emoji is one). */
+const chars = (text) => [...text];
+
+/** The document says its account was deleted recently: nothing may be connected to it. */
+function forgotten(doc, at) {
+  const when = Date.parse(doc?.forgottenAt);
+  return Number.isFinite(when) && at - when < FORGOTTEN_FOR_MS;
+}
 
 function failStorage(error) {
   if (error?.code === 'NO_TABLE') {
     return new OmnisendError(503, 'STORAGE_NOT_READY', 'Secure integration storage is not set up yet. Run the app_state Supabase migration before connecting Omnisend.');
   }
-  if (error?.code === 'UNREADABLE') {
-    return new OmnisendError(503, 'STORAGE_UNREADABLE', 'Secure integration storage cannot be read. Check that the Supabase encryption secret has not changed.');
-  }
   return new OmnisendError(503, 'STORAGE_UNAVAILABLE', 'Secure integration storage is unavailable. Try again shortly.');
+}
+
+const bindingCookie = (value, maxAgeSeconds) => `${BINDING_COOKIE}=${value}; Path=/; Max-Age=${maxAgeSeconds}; Secure; HttpOnly; SameSite=Lax`;
+
+/** Signs and checks the values this server hands out (the cookie, the state); with no client secret, nothing checks. */
+function createSigner(clientSecret) {
+  const key = clientSecret ? crypto.createHmac('sha256', clientSecret).update('ylb-omnisend-callback-mac-v1').digest() : null;
+  const mac = (label, text) => crypto.createHmac('sha256', key).update(`${label}\n${text}`).digest('base64url').slice(0, 22);
+  return {
+    sign: (label, text) => `${text}.${mac(label, text)}`,
+    /** text's MAC is the given one (compared in constant time). */
+    verify: (label, text, given) => !!key && crypto.timingSafeEqual(Buffer.from(mac(label, text)), Buffer.from(given)),
+  };
+}
+
+/** The binding value this browser sent, if this server made it; '' otherwise (nothing is read for it). */
+function bindingFrom(req, signer) {
+  for (const part of String(req.headers?.cookie || '').split(';')) {
+    const at = part.indexOf('=');
+    if (at > 0 && part.slice(0, at).trim() === BINDING_COOKIE) {
+      const value = part.slice(at + 1).trim();
+      const match = NONCE_RE.exec(value);
+      return match && signer.verify('binding', match[1], match[2]) ? value : '';
+    }
+  }
+  return '';
+}
+
+/** The cookie's value hashes to what was kept with the state (compared in constant time). */
+function matchesBinding(storedHex, nonce) {
+  if (!nonce || typeof storedHex !== 'string' || !/^[a-f0-9]{64}$/.test(storedHex)) return false;
+  return crypto.timingSafeEqual(Buffer.from(storedHex, 'hex'), crypto.createHash('sha256').update(nonce).digest());
 }
 
 function escapeHtml(text) {
@@ -54,24 +142,35 @@ function safeHttpUrl(value) {
   }
 }
 
+// Omnisend needs [[unsubscribe_link]] in every template; the app's preview shows the same line under each email.
+const FOOTER = '<p style="margin:24px 0 0;border-top:1px solid #e6ebe8;padding-top:12px;font-size:12px;line-height:1.5;color:#6b7280">You’re receiving this because you signed up. <a href="[[unsubscribe_link]]" style="color:#6b7280">Unsubscribe</a> anytime.</p>';
+
+/** The email as the app's preview shows it: its paragraphs, its button, and the footer (no heading: the subject is the subject). */
 function campaignHtml({ subject, body, ctaLabel, ctaUrl }) {
   const paragraphs = body
     .split(/\n{2,}/)
-    .map((part) => `<p>${escapeHtml(part).replaceAll('\n', '<br>')}</p>`)
+    .map((part) => `<p style="margin:0 0 14px">${escapeHtml(part).replaceAll('\n', '<br>')}</p>`)
     .join('\n');
-  const url = safeHttpUrl(ctaUrl);
-  const button = url && ctaLabel
-    ? `<p><a href="${escapeHtml(url)}" style="display:inline-block;padding:12px 20px;background:#176b52;color:#fff;text-decoration:none;border-radius:6px">${escapeHtml(ctaLabel)}</a></p>`
+  const button = ctaUrl && ctaLabel
+    ? `<p style="margin:20px 0 0"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;padding:10px 20px;background:#176b52;color:#fff;font-weight:bold;text-decoration:none;border-radius:8px">${escapeHtml(ctaLabel)}</a></p>`
     : '';
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(subject)}</title></head><body style="margin:0;padding:24px;font-family:Arial,sans-serif;line-height:1.6;color:#17221d"><main style="max-width:600px;margin:0 auto"><h1 style="font-size:24px;line-height:1.25">${escapeHtml(subject)}</h1>${paragraphs}${button}</main></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(subject)}</title></head><body style="margin:0;padding:24px;font-family:Arial,sans-serif;font-size:14px;line-height:1.65;color:#1d2420"><main style="max-width:600px;margin:0 auto">${paragraphs}${button}${FOOTER}</main></body></html>`;
 }
 
+/**
+ * auth: server/auth.mjs. storage: appState (get, put with ifVersion). send, readJson(req, limit), rateLimited(key, factor)
+ * and corsHeaders: the server's own (ai-server.mjs). sameOrigin(req): the app's own page. clientKey(req): who an
+ * unauthenticated caller is, for the callback's limit (the address the platform's proxies saw).
+ */
 export function createOmnisendRoutes({
   auth,
   storage,
   send,
   readJson,
   sameOrigin = () => true,
+  rateLimited = () => false,
+  clientKey = (req) => req.socket?.remoteAddress || 'unknown',
+  corsHeaders = () => ({}),
   env = process.env,
   fetch: fetchImpl = globalThis.fetch,
   now = () => Date.now(),
@@ -84,23 +183,30 @@ export function createOmnisendRoutes({
     ...(!clientSecret ? ['OMNISEND_CLIENT_SECRET'] : []),
   ];
   const storageReady = storage?.enabled === true;
+  const signer = createSigner(clientSecret);
+  const reply = (req, res, status, body, headers = {}) => send(res, status, body, { ...corsHeaders(req), ...headers });
 
+  /**
+   * A document and its version. One this server can't decrypt any more (the encryption secret changed) is
+   * { unreadable: true } with its version, so it can be replaced; its contents are lost either way.
+   */
   async function readDocument(key) {
+    if (!storageReady) throw new OmnisendError(503, 'STORAGE_NOT_READY', 'Secure integration storage needs Supabase server storage.');
+    let result;
     try {
-      if (!storageReady) throw new OmnisendError(503, 'STORAGE_NOT_READY', 'Secure integration storage needs Supabase server storage.');
-      const result = await storage.get(key);
-      if (result?.unreadable) throw Object.assign(new Error('Unreadable encrypted value'), { code: 'UNREADABLE' });
-      return { value: isRecord(result?.value) ? result.value : {}, version: result?.updatedAt ?? null };
+      result = await storage.get(key);
     } catch (error) {
-      if (error instanceof OmnisendError) throw error;
       throw failStorage(error);
     }
+    if (result?.unreadable) return { value: {}, version: result.updatedAt ?? null, unreadable: true };
+    return { value: isRecord(result?.value) ? result.value : {}, version: result?.updatedAt ?? null, unreadable: false };
   }
 
+  /** Change a document only if nobody else changed it meanwhile (read again and retry if they did). */
   async function updateDocument(key, change) {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const current = await readDocument(key);
-      const result = change(current.value);
+      const result = change(current.value, current);
       if (result?.write === false) return result.result;
       try {
         await storage.put(key, result.value, { ifVersion: current.version });
@@ -115,58 +221,85 @@ export function createOmnisendRoutes({
 
   async function requireUser(req, res) {
     if (!auth?.enabled) {
-      send(res, 503, { error: 'Customer sign-in must be enabled before connecting Omnisend.', code: 'ACCOUNTS_NOT_CONFIGURED' });
+      reply(req, res, 503, { error: 'Customer sign-in must be enabled before connecting Omnisend.', code: 'ACCOUNTS_NOT_CONFIGURED' });
       return null;
     }
     try {
       const user = await auth.identify(req);
       if (!user?.id) {
-        send(res, 401, { error: 'Sign in to connect your Omnisend account.', code: 'AUTH_REQUIRED' });
+        reply(req, res, 401, { error: 'Sign in to connect your Omnisend account.', code: 'AUTH_REQUIRED' });
         return null;
       }
       return user;
     } catch {
-      send(res, 503, { error: 'Could not verify your sign-in. Try again shortly.', code: 'AUTH_UNAVAILABLE' });
+      reply(req, res, 503, { error: 'Could not verify your sign-in. Try again shortly.', code: 'AUTH_UNAVAILABLE' });
       return null;
     }
   }
 
-  async function connectionFor(userId) {
-    const { value } = await readDocument(userDocumentKey(userId));
-    return value;
+  /** Omnisend isn't set up: the owner is told which Secrets to add; everyone else, only that it isn't set up yet. */
+  function notSetUp(user) {
+    return new OmnisendError(503, 'CREDENTIALS_NOT_CONFIGURED', user?.isAdmin === true
+      ? 'Add OMNISEND_CLIENT_ID and OMNISEND_CLIENT_SECRET in Replit Secrets after Omnisend issues them.'
+      : 'Omnisend isn’t set up on this app yet.');
   }
 
-  async function saveOAuthState(state, userId) {
-    const hash = stateHash(state);
+  /** Over this minute's limit: answered with 429 here. */
+  function limited(req, res, key, factor = 1) {
+    if (!rateLimited(key, factor)) return false;
+    reply(req, res, 429, { error: 'Too many requests. Try again in a minute.', code: 'RATE_LIMIT' });
+    return true;
+  }
+
+  /** Why a stored connection can't be used until the customer connects again, or null. */
+  function reconnectReason(doc, unreadable) {
+    if (unreadable) return 'unreadable';
+    if (doc.needsReconnect === 'revoked' || doc.needsReconnect === 'scopes') return doc.needsReconnect;
+    if (doc.accessToken && OMNISEND_SCOPES.some((scope) => !Array.isArray(doc.scopes) || !doc.scopes.includes(scope))) return 'scopes';
+    return null;
+  }
+
+  /** Omnisend refused this token (or its permissions): forget it, so status asks for a new connection. */
+  async function markReconnect(userId, accessToken, reason) {
+    await updateDocument(userDocumentKey(userId), (current) =>
+      current.accessToken === accessToken ? { value: { needsReconnect: reason, markedAt: iso(now()) } } : { write: false },
+    );
+  }
+
+  // ───────────── connecting ─────────────
+
+  async function connect(req, res, user) {
+    if (!credentialsConfigured) throw notSetUp(user);
+    if (!storageReady) throw new OmnisendError(503, 'STORAGE_NOT_READY', 'Secure Omnisend token storage is not configured. Check the Supabase server secret and app_state migration.');
+    if (req.headers.origin !== OMNISEND_PUBLIC_BASE_URL) {
+      throw new OmnisendError(400, 'USE_PUBLISHED_APP', `Start the Omnisend connection from ${OMNISEND_PUBLIC_BASE_URL} so the callback returns to the same app.`);
+    }
+    // this browser's binding value: the one it already has (a connection started in another tab stays valid), or a new one
+    const nonce = bindingFrom(req, signer) || signer.sign('binding', crypto.randomBytes(32).toString('base64url'));
+    const tag = pendingTag(user.id);
+    const state = signer.sign('state', `${crypto.randomBytes(32).toString('base64url')}.${tag}`);
     const createdAt = now();
-    await updateDocument(OAUTH_STATES_KEY, (current) => {
-      const existing = isRecord(current.states) ? current.states : {};
-      const active = Object.entries(existing)
+    const refused = await updateDocument(pendingKey(tag), (current) => {
+      if (forgotten(current, createdAt)) return { write: false, result: true };
+      const kept = Object.entries(isRecord(current.states) ? current.states : {})
         .filter(([, entry]) => isRecord(entry) && Number(entry.createdAt) > createdAt - STATE_TTL_MS)
         .sort((a, b) => Number(a[1].createdAt) - Number(b[1].createdAt))
-        .slice(-MAX_PENDING_STATES);
-      const states = Object.fromEntries(active);
-      states[hash] = { userId, createdAt, scopes: [...OMNISEND_SCOPES] };
-      return { value: { states }, result: undefined };
+        .slice(-(MAX_PENDING_PER_USER - 1));
+      const states = Object.fromEntries(kept);
+      states[sha256(state)] = { userId: user.id, createdAt, binding: sha256(nonce), scopes: [...OMNISEND_SCOPES] };
+      return { value: { states }, result: false };
     });
+    if (refused) throw new OmnisendError(403, 'ACCOUNT_GONE', 'This account is being deleted, so Omnisend can’t be connected to it.');
+    const authUrl = new URL(OAUTH_AUTHORIZE_URL);
+    authUrl.searchParams.set('client_id', clientId);
+    authUrl.searchParams.set('redirect_uri', OMNISEND_REDIRECT_URI);
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set('scope', OMNISEND_SCOPES.join(' '));
+    authUrl.searchParams.set('state', state);
+    return reply(req, res, 200, { authorizationUrl: authUrl.toString() }, { 'set-cookie': bindingCookie(nonce, STATE_TTL_MS / 1000) });
   }
 
-  async function consumeOAuthState(state) {
-    if (!state || state.length > 256) return null;
-    const hash = stateHash(state);
-    return updateDocument(OAUTH_STATES_KEY, (current) => {
-      const states = isRecord(current.states) ? current.states : {};
-      const record = states[hash];
-      if (!isRecord(record) || !record.userId || now() - Number(record.createdAt) > STATE_TTL_MS) {
-        return { write: false, result: null };
-      }
-      const nextStates = { ...states };
-      delete nextStates[hash];
-      return { value: { states: nextStates }, result: record };
-    });
-  }
-
-  function callbackRedirect(res, outcome) {
+  function callbackRedirect(res, outcome, headers = {}) {
     const target = new URL('/', `${OMNISEND_PUBLIC_BASE_URL}/`);
     target.searchParams.set('omnisend', outcome);
     target.hash = 'marketing-email';
@@ -174,6 +307,7 @@ export function createOmnisendRoutes({
       location: target.toString(),
       'cache-control': 'no-store',
       'referrer-policy': 'no-referrer',
+      ...headers,
     });
     res.end();
   }
@@ -207,62 +341,104 @@ export function createOmnisendRoutes({
     return payload;
   }
 
+  /** The started connection this state names, used once, if this browser started it; null otherwise. */
+  async function consumeState(state, nonce) {
+    const match = STATE_RE.exec(state);
+    // a made-up state or cookie (no valid MAC) costs no storage read
+    if (!match || !nonce || !signer.verify('state', match[1], match[3])) return null;
+    const hash = sha256(state);
+    return updateDocument(pendingKey(match[2]), (current) => {
+      const states = isRecord(current.states) ? current.states : {};
+      const entry = states[hash];
+      // (another copy of the server may have made it, its clock a moment ahead: only an old one is refused)
+      const age = now() - Number(entry?.createdAt);
+      if (!isRecord(entry) || typeof entry.userId !== 'string' || !entry.userId || !(age <= STATE_TTL_MS)) return { write: false, result: null };
+      if (!matchesBinding(entry.binding, nonce)) return { write: false, result: null };
+      const rest = { ...states };
+      delete rest[hash];
+      return { value: { ...current, states: rest }, result: entry };
+    });
+  }
+
   async function callback(req, res, url) {
+    // once a started connection is used up, this browser's cookie has done its job
+    let done = {};
     try {
-      const state = await consumeOAuthState(url.searchParams.get('state') || '');
-      if (!state) return callbackRedirect(res, 'invalid_state');
+      // per caller (no sign-in here): each one costs a storage read, and may cost a token exchange
+      if (rateLimited(`omnisend-callback:${clientKey(req)}`)) return callbackRedirect(res, 'busy');
+      if (!storageReady) return callbackRedirect(res, 'invalid_state');
+      const entry = await consumeState(url.searchParams.get('state') || '', bindingFrom(req, signer));
+      if (!entry) return callbackRedirect(res, 'invalid_state');
+      done = { 'set-cookie': bindingCookie('', 0) };
       if (url.searchParams.has('error')) {
-        return callbackRedirect(res, url.searchParams.get('error') === 'access_denied' ? 'cancelled' : 'error');
+        return callbackRedirect(res, url.searchParams.get('error') === 'access_denied' ? 'cancelled' : 'error', done);
       }
+      if (!credentialsConfigured) return callbackRedirect(res, 'setup', done);
       const code = url.searchParams.get('code') || '';
-      if (!code || code.length > 2048 || !credentialsConfigured) return callbackRedirect(res, 'setup');
+      if (!code || code.length > 2048) return callbackRedirect(res, 'error', done);
       const token = await exchangeCode(code);
-      const returnedScopes = typeof token.scope === 'string' && token.scope.trim()
-        ? token.scope.trim().split(/\s+/)
-        : state.scopes;
-      const connection = {
-        accessToken: token.access_token,
-        // Omnisend documents non-expiring access tokens and no refresh grant endpoint; retain the returned refresh token securely, but do not invent a refresh flow.
-        refreshToken: typeof token.refresh_token === 'string' ? token.refresh_token : '',
-        scopes: returnedScopes.filter((scope) => OMNISEND_SCOPES.includes(scope)),
-        connectedAt: new Date(now()).toISOString(),
-      };
-      await storage.put(userDocumentKey(state.userId), connection);
-      return callbackRedirect(res, 'connected');
+      const requested = Array.isArray(entry.scopes) ? entry.scopes : OMNISEND_SCOPES;
+      const granted = typeof token.scope === 'string' && token.scope.trim() ? token.scope.trim().split(/\s+/) : requested;
+      const scopes = OMNISEND_SCOPES.filter((scope) => granted.includes(scope));
+      const complete = scopes.length === OMNISEND_SCOPES.length;
+      const connection = complete
+        ? {
+            accessToken: token.access_token,
+            // Omnisend documents non-expiring access tokens and no refresh grant endpoint; retain the returned refresh token securely, but do not invent a refresh flow.
+            refreshToken: typeof token.refresh_token === 'string' ? token.refresh_token : '',
+            scopes,
+            connectedAt: iso(now()),
+          }
+        : { needsReconnect: 'scopes', markedAt: iso(now()) };
+      // never for an account deleted meanwhile (its documents say so)
+      const stored = await updateDocument(userDocumentKey(entry.userId), (current) => (forgotten(current, now()) ? { write: false, result: false } : { value: connection, result: true }));
+      if (!stored) return callbackRedirect(res, 'invalid_state', done);
+      return callbackRedirect(res, complete ? 'connected' : 'scopes', done);
     } catch {
-      return callbackRedirect(res, 'error');
+      return callbackRedirect(res, 'error', done);
     }
   }
 
+  // ───────────── status and disconnecting ─────────────
+
   async function status(req, res, user) {
-    let connection = {};
+    let doc = {};
+    let unreadable = false;
     let statusStorageReady = storageReady;
     if (storageReady) {
       try {
-        connection = await connectionFor(user.id);
+        ({ value: doc, unreadable } = await readDocument(userDocumentKey(user.id)));
       } catch (error) {
-        if (credentialsConfigured) throw error;
+        // the app_state table isn't there yet (the owner is told how to fix it); other trouble is passing
+        if (credentialsConfigured && error?.code !== 'STORAGE_NOT_READY') throw error;
         statusStorageReady = false;
       }
     }
-    return send(res, 200, {
+    const reconnect = reconnectReason(doc, unreadable);
+    return reply(req, res, 200, {
       credentialsConfigured,
-      missingCredentials,
+      // which Secrets are missing is the owner's business only
+      missingCredentials: user.isAdmin === true ? missingCredentials : [],
       storageReady: statusStorageReady,
-      connected: !!connection.accessToken,
-      scopes: Array.isArray(connection.scopes) ? connection.scopes.filter((scope) => OMNISEND_SCOPES.includes(scope)) : [],
+      connected: !reconnect && !!doc.accessToken,
+      reconnect,
+      scopes: !reconnect && Array.isArray(doc.scopes) ? doc.scopes.filter((scope) => OMNISEND_SCOPES.includes(scope)) : [],
+      // the app's owner (ADMIN_EMAILS, as for Settings → AI) is the one who can set Omnisend up
+      owner: user.isAdmin === true,
     });
   }
 
   async function disconnect(req, res, user) {
-    await updateDocument(userDocumentKey(user.id), () => ({
-      value: { disconnectedAt: new Date(now()).toISOString() },
-      result: undefined,
-    }));
-    return send(res, 200, { connected: false });
+    if (!storageReady) throw new OmnisendError(503, 'STORAGE_NOT_READY', 'Secure Omnisend token storage is not configured.');
+    // a connection that can't be read any more is replaced all the same
+    await updateDocument(userDocumentKey(user.id), (current) => (forgotten(current, now()) ? { write: false } : { value: { disconnectedAt: iso(now()) } }));
+    return reply(req, res, 200, { connected: false });
   }
 
-  async function omnisendRequest(accessToken, path, payload) {
+  // ───────────── campaign drafts ─────────────
+
+  /** One call to Omnisend's API: its answer, or a CallFailure saying whether it may have been done. Never retried. */
+  async function omnisendCall(accessToken, path, payload) {
     let response;
     try {
       response = await fetchImpl(`${API_BASE_URL}${path}`, {
@@ -275,73 +451,153 @@ export function createOmnisendRoutes({
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(20_000),
       });
-    } catch {
-      throw new OmnisendError(502, 'OMNISEND_UNAVAILABLE', 'Could not reach Omnisend. Try again shortly.');
+    } catch (error) {
+      // a timeout, or a connection lost after the request went out: Omnisend may have done it
+      throw new CallFailure(NOT_SENT.test(String(error?.cause?.code || error?.code || '')) ? 'not_sent' : 'unknown');
     }
     const result = await response.json().catch(() => null);
-    if (!response.ok) {
-      if (response.status === 401) {
-        throw new OmnisendError(401, 'RECONNECT_REQUIRED', 'Omnisend no longer accepts this connection. Reconnect the account.');
-      }
-      throw new OmnisendError(502, 'OMNISEND_REQUEST_FAILED', `Omnisend could not complete this request (HTTP ${response.status}).`);
-    }
-    return result;
+    if (response.ok) return result;
+    if (response.status === 401) throw new CallFailure('revoked', 401);
+    if (response.status === 403) throw new CallFailure('forbidden', 403);
+    if (response.status === 429) throw new CallFailure('rate_limited', 429);
+    if (response.status >= 500) throw new CallFailure('unknown', response.status);
+    // Omnisend's problem type, matched against fixed names only (its text is never passed on)
+    if (response.status === 422 && typeof result?.type === 'string' && result.type.endsWith('/sender-email-not-available')) throw new CallFailure('sender', 422);
+    throw new CallFailure('refused', response.status);
   }
 
-  function cleanInput(value, limit) {
-    return typeof value === 'string' ? value.replace(/\u0000/g, '').trim().slice(0, limit) : '';
+  /** What to tell the customer about a failed step: whether something may now exist in Omnisend, never Omnisend's own text. */
+  async function draftFailure(failure, step, userId, accessToken) {
+    if (!(failure instanceof CallFailure)) return failure;
+    const campaign = step === 'campaign';
+    switch (failure.kind) {
+      case 'revoked':
+        await markReconnect(userId, accessToken, 'revoked').catch(() => {});
+        return new OmnisendError(409, 'RECONNECT_REQUIRED', campaign
+          ? 'The email template was imported, but Omnisend no longer accepts this connection, so no campaign draft was created. Connect Omnisend again.'
+          : 'Omnisend no longer accepts this connection, so nothing was created. Connect Omnisend again.');
+      case 'forbidden':
+        await markReconnect(userId, accessToken, 'scopes').catch(() => {});
+        return new OmnisendError(409, 'SCOPE_REQUIRED', campaign
+          ? 'The email template was imported, but this connection may not create campaigns, so no campaign draft was created. Connect Omnisend again and allow campaigns and email templates.'
+          : 'This connection may not create email templates, so nothing was created. Connect Omnisend again and allow campaigns and email templates.');
+      case 'rate_limited':
+        return new OmnisendError(429, 'OMNISEND_RATE_LIMIT', campaign
+          ? 'The email template was imported, but Omnisend is limiting requests right now, so no campaign draft was created. Wait a minute and check Omnisend before trying again.'
+          : 'Omnisend is limiting requests right now, so nothing was created. Wait a minute, then try again.');
+      case 'sender':
+        return new OmnisendError(422, 'SENDER_REQUIRED', 'The email template was imported, but Omnisend can’t create a campaign until this brand has a verified sender email. Add one in Omnisend’s sender settings; the template is already there to use.');
+      case 'not_sent':
+        return new OmnisendError(502, 'OMNISEND_UNAVAILABLE', campaign
+          ? 'The email template was imported, but Omnisend couldn’t be reached to create the campaign draft. Check Omnisend before trying again.'
+          : 'Couldn’t reach Omnisend, so nothing was created. Try again shortly.');
+      case 'unknown':
+        return new OmnisendError(502, 'OUTCOME_UNKNOWN', campaign
+          ? 'The email template was imported, and the campaign draft may have been created: Omnisend didn’t confirm it. Check Omnisend before trying again.'
+          : 'The email template may have been created: Omnisend didn’t confirm it. Check Omnisend before trying again.');
+      default:
+        return campaign
+          ? new OmnisendError(502, 'DRAFT_CREATE_FAILED', `The email template was imported, but Omnisend refused the campaign draft (HTTP ${failure.status}), so none was created. Check Omnisend before trying again.`)
+          : new OmnisendError(502, 'TEMPLATE_CREATE_FAILED', `Omnisend refused the email template (HTTP ${failure.status}), so nothing was created.`);
+    }
+  }
+
+  /** The draft request's JSON object; a body over DRAFT_BODY_LIMIT is refused before it's read. */
+  async function readDraftBody(req) {
+    const tooLarge = () => new OmnisendError(413, 'TOO_LARGE', 'This email is too large for an Omnisend draft.', { connection: 'close' });
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > DRAFT_BODY_LIMIT) throw tooLarge();
+    let body;
+    try {
+      body = await readJson(req, DRAFT_BODY_LIMIT);
+    } catch (error) {
+      if (error?.status === 413) throw tooLarge();
+      throw new OmnisendError(400, 'BAD_REQUEST', 'The draft request couldn’t be read.');
+    }
+    if (!isRecord(body)) throw new OmnisendError(400, 'INVALID_DRAFT', 'Send the draft as a JSON object.');
+    return body;
+  }
+
+  /** The draft's fields, checked: anything too long is refused, never cut (the draft must be what the preview shows). */
+  function draftFrom(body) {
+    const text = (value) => (typeof value === 'string' ? value.replace(/\u0000/g, '').replace(/\r\n?/g, '\n').trim() : '');
+    const draft = {
+      subject: text(body.subject),
+      preheader: text(body.preheader),
+      body: text(body.body),
+      ctaLabel: text(body.ctaLabel),
+      ctaUrl: text(body.ctaUrl),
+    };
+    if (!draft.subject || !draft.body) throw new OmnisendError(400, 'INVALID_DRAFT', 'A subject and email body are required.');
+    const words = { subject: 'The subject', preheader: 'The preview text', body: 'The email body', ctaLabel: 'The button label', ctaUrl: 'The button link' };
+    for (const field of Object.keys(words)) {
+      if (chars(draft[field]).length > LIMITS[field]) {
+        throw new OmnisendError(400, 'INVALID_DRAFT', `${words[field]} can be up to ${LIMITS[field].toLocaleString('en-US')} characters.`);
+      }
+    }
+    if (draft.ctaUrl) {
+      const url = safeHttpUrl(draft.ctaUrl);
+      if (!url) throw new OmnisendError(400, 'INVALID_CTA', 'The button link must be a full web address (https://…).');
+      draft.ctaUrl = url;
+    }
+    if (draft.ctaLabel && !draft.ctaUrl) throw new OmnisendError(400, 'INVALID_CTA', 'The button needs a link: a full web address (https://…).');
+    // the campaign's name isn't part of the email, so a long one is shortened to Omnisend's limit
+    const name = chars(text(body.name) || `Email campaign — ${draft.subject}`).slice(0, LIMITS.name).join('').trim();
+    return { ...draft, name };
   }
 
   async function createCampaignDraft(req, res, user) {
-    if (!credentialsConfigured) {
-      throw new OmnisendError(503, 'CREDENTIALS_NOT_CONFIGURED', 'Add OMNISEND_CLIENT_ID and OMNISEND_CLIENT_SECRET in Replit Secrets after Omnisend issues them.');
-    }
+    if (!credentialsConfigured) throw notSetUp(user);
     if (!storageReady) throw new OmnisendError(503, 'STORAGE_NOT_READY', 'Secure Omnisend token storage is not configured.');
-    const connection = await connectionFor(user.id);
+    const { value: connection, unreadable } = await readDocument(userDocumentKey(user.id));
+    const reason = reconnectReason(connection, unreadable);
+    if (reason === 'scopes') {
+      if (connection.accessToken) await markReconnect(user.id, connection.accessToken, 'scopes').catch(() => {});
+      throw new OmnisendError(409, 'SCOPE_REQUIRED', 'Connect Omnisend again and allow campaigns and email templates.');
+    }
+    if (reason) throw new OmnisendError(409, 'RECONNECT_REQUIRED', 'This app can’t use the saved Omnisend connection anymore. Connect Omnisend again.');
     if (!connection.accessToken) throw new OmnisendError(409, 'NOT_CONNECTED', 'Connect your Omnisend account before creating a draft.');
-    const missingScopes = OMNISEND_SCOPES.filter((scope) => !connection.scopes?.includes(scope));
-    if (missingScopes.length) throw new OmnisendError(403, 'SCOPE_REQUIRED', 'Reconnect Omnisend to grant the campaign and email-template permissions.');
+    const accessToken = connection.accessToken;
 
-    const body = await readJson(req, res);
-    if (!body) return;
-    const subject = cleanInput(body.subject, 250);
-    const emailBody = cleanInput(body.body, 24_000);
-    const preheader = cleanInput(body.preheader, 250);
-    const name = cleanInput(body.name, 255) || `Email campaign — ${subject || 'Draft'}`;
-    const ctaLabel = cleanInput(body.ctaLabel, 100);
-    const ctaUrl = safeHttpUrl(body.ctaUrl);
-    if (!subject || !emailBody) throw new OmnisendError(400, 'INVALID_DRAFT', 'A subject and email body are required.');
+    const draft = draftFrom(await readDraftBody(req));
 
-    const template = await omnisendRequest(connection.accessToken, '/email-templates/import', {
-      name: `${name} — email content`.slice(0, 255),
-      html: campaignHtml({ subject, body: emailBody, ctaLabel, ctaUrl }),
-    });
+    let template;
+    try {
+      template = await omnisendCall(accessToken, '/email-templates/import', {
+        name: chars(`${draft.name} — email content`).slice(0, 255).join(''),
+        html: campaignHtml(draft),
+      });
+    } catch (failure) {
+      throw await draftFailure(failure, 'template', user.id, accessToken);
+    }
     const templateId = template?.id;
     if (typeof templateId !== 'string' || !/^[a-f0-9]{24}$/i.test(templateId)) {
-      throw new OmnisendError(502, 'TEMPLATE_CREATE_FAILED', 'Omnisend did not return a usable email template ID. No campaign draft was created.');
+      throw new OmnisendError(502, 'TEMPLATE_UNCONFIRMED', 'Omnisend didn’t return the new template’s ID, so no campaign draft was created. The template may have been created: check Omnisend before trying again.');
     }
 
     let campaign;
     try {
-      campaign = await omnisendRequest(connection.accessToken, '/campaigns', {
+      campaign = await omnisendCall(accessToken, '/campaigns', {
         channel: 'email',
         type: 'regular',
-        name,
+        name: draft.name,
         language: 'en_US',
-        content: { email: { templateID: templateId, subject, ...(preheader ? { preheader } : {}) } },
+        content: { email: { templateID: templateId, subject: draft.subject, ...(draft.preheader ? { preheader: draft.preheader } : {}) } },
       });
-    } catch {
-      throw new OmnisendError(502, 'DRAFT_CREATE_FAILED', 'The email template was imported, but Omnisend did not create the campaign draft. Check Omnisend before retrying.');
+    } catch (failure) {
+      throw await draftFailure(failure, 'campaign', user.id, accessToken);
     }
-    return send(res, 201, {
+    return reply(req, res, 201, {
       campaign: {
         id: typeof campaign?.id === 'string' ? campaign.id : '',
-        name: typeof campaign?.name === 'string' ? campaign.name : name,
+        name: typeof campaign?.name === 'string' ? campaign.name : draft.name,
         status: typeof campaign?.status === 'string' ? campaign.status : 'draft',
         url: typeof campaign?.url === 'string' && campaign.url.startsWith('https://app.omnisend.com/') ? campaign.url : '',
       },
     });
   }
+
+  // ───────────── the routes ─────────────
 
   async function handle(req, res, url) {
     const path = url.pathname;
@@ -350,59 +606,75 @@ export function createOmnisendRoutes({
     if (path === `${API_PREFIX}/callback` && method === 'GET') return callback(req, res, url);
 
     if (!sameOrigin(req)) {
-      return send(res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
+      return reply(req, res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
     }
 
     try {
       const user = await requireUser(req, res);
       if (!user) return true;
 
-      if (path === `${API_PREFIX}/status` && method === 'GET') return await status(req, res, user);
+      if (path === `${API_PREFIX}/status` && method === 'GET') {
+        if (limited(req, res, `omnisend-read:user:${user.id}`, 3)) return true;
+        return await status(req, res, user);
+      }
       if (path === `${API_PREFIX}/connect` && method === 'POST') {
-        if (!credentialsConfigured) {
-          throw new OmnisendError(503, 'CREDENTIALS_NOT_CONFIGURED', 'Add OMNISEND_CLIENT_ID and OMNISEND_CLIENT_SECRET in Replit Secrets after Omnisend issues them.');
-        }
-        if (!storageReady) throw new OmnisendError(503, 'STORAGE_NOT_READY', 'Secure Omnisend token storage is not configured. Check the Supabase server secret and app_state migration.');
-        if (req.headers.origin !== OMNISEND_PUBLIC_BASE_URL) {
-          throw new OmnisendError(400, 'USE_PUBLISHED_APP', `Start the Omnisend connection from ${OMNISEND_PUBLIC_BASE_URL} so the callback returns to the same app.`);
-        }
-        const state = crypto.randomBytes(32).toString('base64url');
-        await saveOAuthState(state, user.id);
-        const authUrl = new URL(OAUTH_AUTHORIZE_URL);
-        authUrl.searchParams.set('client_id', clientId);
-        authUrl.searchParams.set('redirect_uri', OMNISEND_REDIRECT_URI);
-        authUrl.searchParams.set('response_type', 'code');
-        authUrl.searchParams.set('scope', OMNISEND_SCOPES.join(' '));
-        authUrl.searchParams.set('state', state);
-        return send(res, 200, { authorizationUrl: authUrl.toString() });
+        if (limited(req, res, `omnisend-connect:user:${user.id}`)) return true;
+        return await connect(req, res, user);
       }
-      if (path === `${API_PREFIX}/connection` && method === 'DELETE') return await disconnect(req, res, user);
-      if (path === `${API_PREFIX}/campaign-drafts` && method === 'POST') return await createCampaignDraft(req, res, user);
+      if (path === `${API_PREFIX}/connection` && method === 'DELETE') {
+        if (limited(req, res, `omnisend-connect:user:${user.id}`)) return true;
+        return await disconnect(req, res, user);
+      }
+      if (path === `${API_PREFIX}/campaign-drafts` && method === 'POST') {
+        if (limited(req, res, `omnisend-drafts:user:${user.id}`)) return true;
+        return await createCampaignDraft(req, res, user);
+      }
       if (path === `${API_PREFIX}/send` || path.startsWith(`${API_PREFIX}/campaigns/`) && path.endsWith('/send')) {
-        return send(res, 404, { error: 'Campaign sending is not enabled. Review and confirmation must be implemented first.', code: 'SEND_NOT_AVAILABLE' });
+        return reply(req, res, 404, { error: 'Campaign sending is not enabled. Review and confirmation must be implemented first.', code: 'SEND_NOT_AVAILABLE' });
       }
-      return send(res, 404, { error: 'Not found.', code: 'NOT_FOUND' });
+      return reply(req, res, 404, { error: 'Not found.', code: 'NOT_FOUND' });
     } catch (error) {
-      const status = Number.isInteger(error?.status) ? error.status : 500;
-      const message = error?.publicMessage || (status >= 500 ? 'Omnisend could not complete the request. Try again shortly.' : 'The Omnisend request was not accepted.');
-      return send(res, status, { error: message, code: error?.code || 'OMNISEND_ERROR' });
+      if (res.headersSent) return true;
+      const known = error instanceof OmnisendError;
+      const status = known ? error.status : 500;
+      const message = known ? error.publicMessage : 'Omnisend could not complete the request. Try again shortly.';
+      return reply(req, res, status, { error: message, code: known ? error.code : 'OMNISEND_ERROR' }, known ? error.headers : undefined);
     }
   }
 
+  /**
+   * Before an account is deleted: its connection and the connections it started are overwritten without being
+   * read (an unreadable one goes too), and for FORGOTTEN_FOR_MS nothing can be connected to it, so a sign-in
+   * still open in Omnisend's tab can't store a token for it. No app_state table means nothing was ever stored.
+   *
+   * A storage failure stops the deletion only while Omnisend is set up (a sign-in could still store a token).
+   * Without the OAuth credentials no sign-in can finish, so the overwrite is tried and the deletion goes on
+   * either way: an app that never set Omnisend up doesn't make account deletion depend on it.
+   */
   async function forgetUser(userId) {
     if (!storageReady || !userId) return;
+    const tombstone = { forgottenAt: iso(now()) };
     try {
-      const connection = await connectionFor(userId);
-      if (!connection.accessToken && !connection.refreshToken) return;
-      await updateDocument(userDocumentKey(userId), () => ({
-        value: { disconnectedAt: new Date(now()).toISOString() },
-        result: undefined,
-      }));
+      await storage.put(userDocumentKey(userId), tombstone);
+      await storage.put(pendingKey(pendingTag(userId)), { ...tombstone, states: {} });
     } catch (error) {
-      if (error?.code === 'NO_TABLE') return;
-      throw error;
+      if (error?.code === 'NO_TABLE' || !credentialsConfigured) return;
+      throw new OmnisendError(503, 'OMNISEND_FORGET_FAILED', 'Couldn’t remove your Omnisend connection just now, so your account wasn’t deleted. Try again shortly.');
     }
   }
 
-  return { handle, forgetUser };
+  /**
+   * The account deletion that forgetUser prepared for didn't happen: lift its block, so the account can connect
+   * Omnisend again now rather than in FORGOTTEN_FOR_MS. (Its old connection is gone: they connect again.)
+   * Best effort: if storage is down, the block simply lasts until it expires.
+   */
+  async function unforgetUser(userId) {
+    if (!storageReady || !userId) return;
+    const lift = (key, cleared) =>
+      updateDocument(key, (current) => (current.forgottenAt ? { value: cleared } : { write: false })).catch(() => {});
+    await lift(userDocumentKey(userId), {});
+    await lift(pendingKey(pendingTag(userId)), { states: {} });
+  }
+
+  return { handle, forgetUser, unforgetUser };
 }
