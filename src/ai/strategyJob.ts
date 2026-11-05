@@ -121,7 +121,10 @@ const titleKey = (title: string) => title.toLowerCase().replace(/[^\p{L}\p{N}]+/
 function keptTicks(st: StrategyState, actions: StrategyAction[]): Record<string, number> {
   const ids = new Set(actions.map((a) => a.id));
   const byTitle = new Map<string, string>();
-  for (const a of actions) if (titleKey(a.title) && !byTitle.has(titleKey(a.title))) byTitle.set(titleKey(a.title), a.id);
+  for (const a of actions) {
+    const key = titleKey(a.title);
+    if (key && !byTitle.has(key)) byTitle.set(key, a.id);
+  }
   const oldTitle = new Map((st.plan?.actions ?? []).map((a) => [a.id, a.title] as const));
   const ticks = Object.entries(st.ticks);
   const out: Record<string, number> = Object.fromEntries(ticks.filter(([id]) => ids.has(id)));
