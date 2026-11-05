@@ -74,7 +74,7 @@ describe('what the server says about a post the app sent', () => {
     useStore.setState({ posts: [post('a', { external: { ...apiExt('working', 'job_new'), requestedAt: Date.parse('2026-11-05T11:00:00.000Z') } })] });
     useStore.getState().applyPublishJob('a', job('failed'));
     expect(useStore.getState().posts[0].external).toMatchObject({ jobId: 'job_new', state: 'working' });
-    useStore.getState().applyPublishJob('a', { ...job('sent'), postId: 'b' } as never);
+    useStore.getState().applyPublishJob('a', { ...(job('sent') as object), postId: 'b' } as never);
     expect(useStore.getState().posts[0].status).toBe('scheduled');
   });
 

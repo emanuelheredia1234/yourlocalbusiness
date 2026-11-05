@@ -15,7 +15,7 @@ const live = <S>(store: { getState: () => S }) => Object.assign(<T>(select: (s: 
 vi.mock('zustand', async (original) => {
   const real = await original<typeof import('zustand')>();
   const wrap = (store: ReturnType<typeof real.create>) => live(store as unknown as { getState: () => unknown });
-  const create = ((init?: unknown) => (init === undefined ? (i: unknown) => wrap((real.create as (x: unknown) => never)(i)) : wrap((real.create as (x: unknown) => never)(init)))) as typeof real.create;
+  const create = ((init?: unknown) => (init === undefined ? (i: unknown) => wrap((real.create as unknown as (x: unknown) => never)(i)) : wrap((real.create as unknown as (x: unknown) => never)(init)))) as typeof real.create;
   return { ...real, create };
 });
 // the Modal as plain sections (Radix renders nothing on the server)

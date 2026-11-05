@@ -109,7 +109,7 @@ describe('following a job', () => {
     expect(last?.state).toBe('sent');
     expect(seen).toEqual(['queued', 'sending', 'sent']);
     expect(read).toHaveBeenCalledTimes(3);
-    expect(read.mock.calls.every(([id]) => id === 'job_1')).toBe(true);
+    expect((read.mock.calls as unknown as string[][]).every(([id]) => id === 'job_1')).toBe(true);
   });
 
   it('gives up after its time, and skips a failed read', async () => {
