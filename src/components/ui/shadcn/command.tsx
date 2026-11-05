@@ -26,15 +26,19 @@ const CommandDialog = ({
   children,
   title = "Command palette",
   commandProps,
+  onCloseAutoFocus,
   ...props
 }: DialogProps & {
   title?: string
   commandProps?: React.ComponentPropsWithoutRef<typeof CommandPrimitive>
+  /** Where the focus goes on close (the palette has no DialogTrigger to hand it back to). */
+  onCloseAutoFocus?: (e: Event) => void
 }) => {
   return (
     <Dialog {...props}>
       <DialogContent
         aria-describedby={undefined}
+        onCloseAutoFocus={onCloseAutoFocus}
         className="inset-0 z-palette flex flex-col overflow-hidden bg-elevated shadow-dialog data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.97] data-[state=closed]:zoom-out-[0.97] data-[state=open]:duration-240 data-[state=closed]:duration-150 sm:inset-auto sm:inset-x-0 sm:top-[12vh] sm:mx-auto sm:max-h-[min(560px,76vh)] sm:w-[calc(100vw-32px)] sm:max-w-[640px] sm:rounded-stage sm:border sm:border-line dark:sm:border-line-2"
       >
         <DialogTitle className="sr-only">{title}</DialogTitle>

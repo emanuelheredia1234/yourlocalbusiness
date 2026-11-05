@@ -238,6 +238,8 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
         <>
           <span className="sr-only">{PLATFORMS[post.platform].label} · </span>
           <span className="num font-mono">{fmtWhen(when)}</span>
+          {/* the format is metadata, not a badge over the visual (where it collided with the watermark and story bars) */}
+          {(post.format === 'video' || ownPhotoPost(post)) && <span> · {post.format === 'video' ? 'Video' : 'Your photo'}</span>}
         </>
       }
       corner={
@@ -266,11 +268,6 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
           <div className="absolute left-2.5 top-2.5 z-10 flex h-8 items-center rounded-md bg-surface pl-2 shadow-xs">
             <Checkbox checked={!!selected} onChange={(v) => onSelect?.(v)} label={<span className="sr-only">Select post</span>} />
           </div>
-        )}
-        {(post.format === 'video' || ownPhotoPost(post)) && (
-          <span className="absolute right-2.5 top-2.5 z-10">
-            <Badge className="shadow-xs">{post.format === 'video' ? 'Video' : 'Your photo'}</Badge>
-          </span>
         )}
       </div>
       <div className="flex flex-col gap-2.5 px-3 pb-3 pt-2.5">

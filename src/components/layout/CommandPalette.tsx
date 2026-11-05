@@ -9,7 +9,7 @@ import { useActiveProject } from '@/store/useStore';
 import { useUI } from '@/store/ui';
 import { useAssistant } from '@/store/assistant';
 import { CommandDialog, CommandGroup, CommandInput, CommandItem, CommandList } from '../ui/shadcn/command';
-import { Kbd } from '../ui/primitives';
+import { Kbd, useReturnFocus } from '../ui/primitives';
 import { AiTile } from '../ai/Spark';
 import { createActions, studioName, useModKey } from './Shell';
 
@@ -76,6 +76,7 @@ export function CommandPalette() {
   const mod = useModKey();
   const [q, setQ] = useState('');
   const recent = useRecentPages();
+  const returnFocus = useReturnFocus(open);
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -108,7 +109,7 @@ export function CommandPalette() {
     return { label: route === 'studio' ? studioName(project?.track) : p?.label ?? route, icon: p?.icon ?? <LayoutDashboard />, hint: p?.hint };
   };
   return (
-    <CommandDialog open={open} onOpenChange={setOpen} title="Search pages and actions" commandProps={{ loop: true }}>
+    <CommandDialog open={open} onOpenChange={setOpen} onCloseAutoFocus={returnFocus} title="Search pages and actions" commandProps={{ loop: true }}>
       <CommandInput value={q} onValueChange={setQ} placeholder="Search pages and actions, or ask AI…" aria-label="Search pages and actions" trailing={<Kbd>Esc</Kbd>} />
       <CommandList>
         {/* no "No matches" line: while typing, "Ask AI" is always offered */}

@@ -67,7 +67,7 @@ function openerOf(el: Element | null): Element | null {
  * The element that had the focus when an overlay opened (its trigger). Radix dialogs without a
  * DialogTrigger hand the focus to nothing on close; pass the returned handler as onCloseAutoFocus.
  */
-function useReturnFocus(open: boolean) {
+export function useReturnFocus(open: boolean) {
   const opener = useRef<Element | null>(null);
   useLayoutEffect(() => {
     if (open && typeof document !== 'undefined') opener.current = openerOf(document.activeElement);
