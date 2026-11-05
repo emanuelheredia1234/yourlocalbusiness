@@ -46,8 +46,13 @@ function IconInput({ icon, children }: { icon: ReactNode; children: ReactNode })
 /** A brand image to pick (the cover, or one for the gallery): selected ones get the option-card ring and a check. */
 function PickThumb({ media, on, onClick, label }: { media: MediaRef; on: boolean; onClick: () => void; label: string }) {
   return (
-    <button type="button" className={cn('relative h-[60px] w-20 overflow-hidden rounded-md transition-shadow duration-120', on ? 'ring-2 ring-primary ring-offset-2 ring-offset-surface' : 'hover:ring-1 hover:ring-line-3')} onClick={onClick} aria-pressed={on} aria-label={label}>
+    <button type="button" className="group relative h-[60px] w-20 overflow-hidden rounded-md" onClick={onClick} aria-pressed={on} aria-label={label}>
       <MediaThumb media={media} className="h-full w-full rounded-none" />
+      {/* over the picture, so it shows: the option-card ring when picked, a hairline otherwise */}
+      <span
+        className={cn('pointer-events-none absolute inset-0 rounded-md transition-shadow duration-120', on ? 'shadow-[inset_0_0_0_1.5px_rgb(var(--primary))]' : 'shadow-[inset_0_0_0_1px_rgb(var(--ink)/0.06)] group-hover:shadow-[inset_0_0_0_1px_rgb(var(--line-3))]')}
+        aria-hidden="true"
+      />
       {on && (
         <span className="absolute right-1 top-1 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-on-primary" aria-hidden="true">
           <Check size={12} strokeWidth={3} />
@@ -372,6 +377,7 @@ export function PublishTab({ project }: { project: Project }) {
 
         <Section title="Video" divider>
           <VideoPanel
+            className="border-0 bg-transparent p-0"
             title="Product demo video"
             prompt={demoPrompt}
             onPromptChange={setDemoPrompt}

@@ -10,6 +10,7 @@ import { openPage } from '@/ai/assistant/nav';
 import { MediaThumb } from '@/components/media/MediaUpload';
 import { download } from '@/components/ui/download';
 import { AutoTextarea, Callout, InfoTip, Segmented, Toggle, Tooltip } from '@/components/ui/primitives';
+import { cn as mergeCn } from '@/components/ui/shadcn/utils';
 import { artDirectionLabel, useArtDirection, useImageJob, usePhotoAvailability } from './useImageJob';
 
 export const POST_ASPECTS: { id: ImageAspect; label: string; hint: string }[] = [
@@ -132,7 +133,7 @@ export function PostImagePanel({ project, headline, prompt, onPromptChange, styl
   const made = job.done || describeGenerated(media);
 
   return (
-    <section className={cn('flex flex-col gap-3 rounded-lg border border-line bg-surface p-4', className)} aria-label="AI image">
+    <section className={mergeCn('flex flex-col gap-3 rounded-lg border border-line bg-surface p-4', className)} aria-label="AI image">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="flex items-center gap-1 text-h4 text-ink">
           AI image
@@ -214,9 +215,10 @@ export function PostImagePanel({ project, headline, prompt, onPromptChange, styl
       )}
       {media && !job.running && (
         <div className="flex min-w-0 items-center gap-3">
-          {/* the image in use, with the selection ring */}
-          <span className="shrink-0 rounded-md ring-2 ring-primary ring-offset-2 ring-offset-surface">
+          {/* the image in use, with the option-card ring (over the picture, so it shows) */}
+          <span className="relative shrink-0">
             <MediaThumb media={media} className="h-12 w-12 rounded-md" />
+            <span className="pointer-events-none absolute inset-0 rounded-md shadow-[inset_0_0_0_1.5px_rgb(var(--primary))]" aria-hidden="true" />
           </span>
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-1 text-small font-medium text-ink">

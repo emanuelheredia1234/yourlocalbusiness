@@ -448,7 +448,11 @@ function ShotTile({
     <article className="flex min-w-0 flex-col gap-2.5" aria-label={shot.label}>
       <div className="group relative aspect-[4/3] w-full overflow-hidden rounded-pop bg-surface-3 ring-1 ring-inset ring-ink/5">
         {m ? (
-          <MediaThumb media={m} className="absolute inset-0 h-full w-full rounded-none ring-0" />
+          <>
+            <MediaThumb media={m} className="absolute inset-0 h-full w-full rounded-none ring-0" />
+            {/* the tile's hairline, over the picture */}
+            <span className="pointer-events-none absolute inset-0 rounded-pop ring-1 ring-inset ring-ink/5" aria-hidden="true" />
+          </>
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-muted">
             <ImagePlus size={24} aria-hidden="true" />

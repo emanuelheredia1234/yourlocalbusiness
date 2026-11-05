@@ -11,6 +11,7 @@ import { metaLine } from '@/ai/meta';
 import { AIThinking, GenerateButton } from '@/components/ai/AI';
 import { download } from '@/components/ui/download';
 import { AutoTextarea, Callout, InfoTip, Segmented, Toggle, Tooltip } from '@/components/ui/primitives';
+import { cn as mergeCn } from '@/components/ui/shadcn/utils';
 import { artDirectionLabel, useArtDirection, useImageJob } from './useImageJob';
 import { videoWithArtDirection } from '@/ai/socialPosts';
 
@@ -123,7 +124,8 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
   ].filter(Boolean);
 
   return (
-    <section className={cn('flex flex-col gap-3 rounded-lg border border-line bg-surface p-4', className)} aria-label={title}>
+    // a box of its own by default; a page that already frames it can take the box away (className merges)
+    <section className={mergeCn('flex flex-col gap-3 rounded-lg border border-line bg-surface p-4', className)} aria-label={title}>
       <h3 className="flex items-center gap-1 text-h4 text-ink">
         {title}
         {about.length > 0 && (

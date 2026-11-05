@@ -66,6 +66,22 @@ const SHORT_LABEL: Record<CodeKind, string> = {
   roi: 'ROI calculator',
 };
 
+/** One line each on the type cards in the New asset window (the long descriptions wrap to four lines there). */
+const SHORT_DESC: Record<CodeKind, string> = {
+  calculator: 'Instant estimates',
+  leadform: 'Collects emails',
+  pricing: 'Plans side by side',
+  hero: 'Headline and button',
+  countdown: 'Counts down to a date',
+  quiz: 'Recommends an offer',
+  checklist: 'Remembers ticks',
+  testimonials: 'Rotating reviews',
+  booking: 'Service, date and time',
+  spreadsheet: 'Formulas and a script',
+  faq: 'Answers questions',
+  roi: 'Shows what they save',
+};
+
 const QUICK_EDITS = ['Switch to a dark theme', 'Make the button bigger and rounder', 'Add a phone number field', 'Use my accent color for highlights', 'Tighten the spacing', 'Add a subtle entrance animation'];
 
 /** What the built-in engine takes from a description (shown when it answered a guided request). */
@@ -541,7 +557,8 @@ export function CodeTab({ project }: { project: Project }) {
   const publishButton = !__ARTIFACT_BUILD__ && (
     <button
       type="button"
-      className={cn('btn btn-sm', active.published ? 'btn-secondary' : 'btn-primary', phone && 'flex-1')}
+      // filled only while its panel is closed: the panel has its own primary Publish (one filled button per view)
+      className={cn('btn btn-sm', active.published || publishOpen ? 'btn-secondary' : 'btn-primary', phone && 'flex-1')}
       aria-expanded={publishOpen}
       aria-controls="code-publish"
       onClick={() => {
@@ -652,7 +669,7 @@ export function CodeTab({ project }: { project: Project }) {
 
         <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
           <div className="min-w-0 flex-1 basis-[240px]">
-            <input className="input input-inline -ml-2 h-9 w-full px-2 text-h3" value={active.name} onChange={(e) => patchAsset(active.id, { name: e.target.value })} aria-label="Asset name" />
+            <input className="input input-inline -ml-2 h-9 w-full px-2 text-h4" value={active.name} onChange={(e) => patchAsset(active.id, { name: e.target.value })} aria-label="Asset name" />
             <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-small text-muted">
               <span>{codeKindLabel(active.kind)}</span>
               {active.source && (
@@ -818,6 +835,8 @@ export function NewAssetForm({ project, running, onGenerate }: { project: Projec
   const ideas = useMemo(() => promptIdeas(project), [project]);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  // phones: the type is a select (twelve cards would fill the sheet before the description box)
+  const phone = useMediaQuery('(max-width: 639px)');
   const setDraft = (patch: Partial<Draft>) =>
     useCodeTabMemory.setState((s) => ({ drafts: { ...s.drafts, [project.id]: { ...(s.drafts[project.id] ?? NO_DRAFT), ...patch } } }));
   const setKind = (k: CodeKind) => setDraft({ kind: k });
@@ -830,13 +849,22 @@ export function NewAssetForm({ project, running, onGenerate }: { project: Projec
 
   return (
     <section className="flex flex-col gap-5" aria-label="Generate a new asset">
-      <OptionCards<CodeKind>
-        aria-label="Asset type"
-        columns={4}
-        value={kind}
-        onChange={setKind}
-        options={kinds.map((k) => ({ value: k.id, title: SHORT_LABEL[k.id], description: k.desc, icon: <Icon name={k.icon} /> }))}
-      />
+      {phone ? (
+        <div>
+          <label htmlFor="code-kind" className="label">
+            Type
+          </label>
+          <Select<CodeKind> id="code-kind" aria-label="Asset type" value={kind} onChange={setKind} options={kinds.map((k) => ({ value: k.id, label: SHORT_LABEL[k.id], description: SHORT_DESC[k.id], icon: <Icon name={k.icon} /> }))} />
+        </div>
+      ) : (
+        <OptionCards<CodeKind>
+          aria-label="Asset type"
+          columns={4}
+          value={kind}
+          onChange={setKind}
+          options={kinds.map((k) => ({ value: k.id, title: SHORT_LABEL[k.id], description: SHORT_DESC[k.id], icon: <Icon name={k.icon} /> }))}
+        />
+      )}
       <div>
         <label htmlFor="code-prompt" className="label">
           Describe it
@@ -952,6 +980,10 @@ function EditComposer({
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const images = asset.images ?? [];
+  // quick edits: four at a time (one row), "More ideas" shows the next ones
+  const [ideasPage, setIdeasPage] = useState(0);
+  const pages = Math.ceil(QUICK_EDITS.length / 4);
+  const ideas = QUICK_EDITS.slice((ideasPage % pages) * 4, (ideasPage % pages) * 4 + 4);
   const form = (
     <form
       className="mx-auto flex w-full max-w-[760px] flex-col gap-2"
@@ -1015,18 +1047,23 @@ function EditComposer({
         </div>
       </div>
       {!instruction.trim() && (
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Quick edits">
-          {QUICK_EDITS.map((q) => (
-            <button key={q} type="button" className="chip" disabled={busy} onClick={() => onApply(q)}>
-              {q}
+        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Quick edits">
+          {ideas.map((q) => (
+            <button key={q} type="button" className="chip max-w-[40ch]" title={q} disabled={busy} onClick={() => onApply(q)}>
+              <span className="truncate">{q}</span>
             </button>
           ))}
+          {pages > 1 && (
+            <button type="button" className="btn btn-ghost btn-xs" onClick={() => setIdeasPage((p) => p + 1)}>
+              More ideas
+            </button>
+          )}
         </div>
       )}
     </form>
   );
   // docked at the bottom of the canvas while it scrolls by, on a fade of the canvas colour (so nothing shows through)
-  return sticky ? <div className="sticky bottom-0 z-10 -mx-3 -mb-3 mt-4 rounded-b-pop bg-gradient-to-t from-surface-2 from-70% to-transparent px-3 pb-3 pt-8 sm:-mx-6 sm:-mb-6 sm:px-6 sm:pb-6">{form}</div> : form;
+  return sticky ? <div className="sticky bottom-0 z-10 -mx-3 -mb-3 mt-4 rounded-b-pop bg-gradient-to-t from-surface-2 from-75% to-transparent px-3 pb-3 pt-6 sm:-mx-6 sm:-mb-6 sm:px-6 sm:pb-5">{form}</div> : form;
 }
 
 /** Who made an asset from a page of theirs (Manus or Viktor), with a link to the task or thread. Their code is theirs: check it before you publish. */
