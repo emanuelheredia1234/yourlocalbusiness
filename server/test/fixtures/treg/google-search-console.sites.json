@@ -1,0 +1,19 @@
+{
+ "endpointId": "google-search-console.sites",
+ "routed": false,
+ "served_by": "google-search-console.sites",
+ "body": {
+  "siteEntry": [
+   {
+    "siteUrl": "sc-domain:example.org",
+    "permissionLevel": "siteOwner"
+   },
+   {
+    "siteUrl": "sc-domain:example.net",
+    "permissionLevel": "siteOwner"
+   },
+   "… 2 more item(s) truncated"
+  ],
+  "_scrubbed": true
+ }
+}

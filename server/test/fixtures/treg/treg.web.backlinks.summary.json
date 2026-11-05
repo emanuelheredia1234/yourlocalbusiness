@@ -1,0 +1,20 @@
+{
+ "endpointId": "treg.web.backlinks.summary",
+ "routed": true,
+ "served_by": "serpstat.web.backlinks.summary",
+ "body": {
+  "output": {
+   "summary": {},
+   "backlinks": 5400,
+   "referring_domains": 210
+  },
+  "raw": {},
+  "_treg": {
+   "served_by": "serpstat.web.backlinks.summary",
+   "tried": [
+    "serpstat.web.backlinks.summary"
+   ],
+   "charged_micro": null
+  }
+ }
+}

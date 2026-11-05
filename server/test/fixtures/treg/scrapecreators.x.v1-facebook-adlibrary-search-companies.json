@@ -1,0 +1,14 @@
+{
+ "endpointId": "scrapecreators.x.v1-facebook-adlibrary-search-companies",
+ "routed": false,
+ "served_by": "scrapecreators.x.v1-facebook-adlibrary-search-companies",
+ "body": {
+  "searchResults": [
+   {
+    "pageId": "15087023444",
+    "name": "Example Competitor",
+    "likes": 1200
+   }
+  ]
+ }
+}

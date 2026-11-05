@@ -1,0 +1,17 @@
+{
+ "endpointId": "google-search-console.performance",
+ "routed": false,
+ "served_by": "google-search-console.performance",
+ "body": {
+  "rows": [
+   {
+    "clicks": 1234,
+    "impressions": 1234,
+    "ctr": 1234,
+    "position": 1234
+   }
+  ],
+  "responseAggregationType": "byProperty",
+  "_scrubbed": true
+ }
+}
