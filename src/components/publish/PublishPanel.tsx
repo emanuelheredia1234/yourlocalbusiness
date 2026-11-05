@@ -57,6 +57,8 @@ const originOf = (url: string) => {
   }
 };
 const hostOf = (origin: string) => origin.replace(/^https?:\/\//, '');
+/** An address as people read it: without https:// (the link itself keeps it). */
+const bare = (url: string) => url.replace(/^https?:\/\//, '');
 
 /**
  * Publish a page (the sales page or an artifact) at a public address, with a name the owner chooses,
@@ -453,9 +455,9 @@ export function PublishPanel({
               <p className="mb-1.5 text-caption text-muted">{published ? 'Its new address' : 'It will be at'}</p>
               <ul className="flex flex-col gap-1.5">
                 {[target.url, ...(domain && target.domainUrl ? [target.domainUrl] : [])].map((url) => (
-                  <li key={url} className="well flex min-w-0 items-center gap-2 py-1 pl-3 pr-1">
-                    <span className="min-w-0 flex-1 truncate font-mono text-caption text-ink" title={url}>
-                      {url}
+                  <li key={url} className="well flex min-w-0 flex-wrap items-center gap-2 py-1 pl-3 pr-1">
+                    <span className="min-w-[150px] flex-1 truncate py-1 font-mono text-caption text-ink" title={url}>
+                      {bare(url)}
                     </span>
                     <CopyButton text={url} size="xs" label="Copy" />
                   </li>
@@ -505,9 +507,9 @@ function Links({ published }: { published: Published }) {
   return (
     <ul className="flex flex-col gap-1.5">
       {links.map((url) => (
-        <li key={url} className="well flex min-w-0 items-center gap-1.5 py-1 pl-3 pr-1">
-          <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate font-mono text-caption text-ink underline-offset-[3px] hover:underline" title={url}>
-            {url}
+        <li key={url} className="well flex min-w-0 flex-wrap items-center gap-1.5 py-1 pl-3 pr-1">
+          <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-[150px] flex-1 truncate py-1 font-mono text-caption text-ink underline-offset-[3px] hover:underline" title={url}>
+            {bare(url)}
           </a>
           <CopyButton text={url} size="xs" label="Copy" />
           <a href={url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-xs" aria-label={`Open ${url} in a new tab`}>

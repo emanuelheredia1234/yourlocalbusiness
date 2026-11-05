@@ -271,8 +271,9 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
 
   return (
     <li className="py-3">
-      <div className="flex flex-col gap-2 md:flex-row md:items-start md:gap-4">
-        <div className="flex min-w-0 flex-1 items-start gap-2.5">
+      {/* one line where there's room, the actions under the words in a narrow column (the pages place this list in columns of any width) */}
+      <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+        <div className="flex min-w-[220px] flex-1 items-start gap-2.5">
           <AgentAvatar via={b.via} size={20} className="mt-px" />
           <div className="flex min-w-0 flex-col gap-1">
             <p className="text-small text-muted">
@@ -282,7 +283,7 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
           </div>
         </div>
         {(actions || more.length > 0 || dismissible) && (
-          <div className="flex shrink-0 flex-wrap items-center gap-1 pl-[30px] md:pl-0">
+          <div className="flex flex-wrap items-center gap-1 pl-[30px]">
             {actions}
             {more.length > 0 && <MoreMenu items={more} size="xs" label={`More for ${name}’s ${what}`} />}
             {dismissible && dismiss}

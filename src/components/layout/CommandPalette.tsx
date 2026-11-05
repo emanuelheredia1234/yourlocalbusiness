@@ -1,9 +1,10 @@
-// The command palette (⌘/Ctrl+K): ask the assistant, create something, go to a page or a Settings
-// section. ⌘/Ctrl+J toggles the assistant from anywhere. Page names match the sidebar (Appendix A).
+// The command palette (⌘/Ctrl+K): ask the assistant, go back to a recent page, create something, go to a page
+// or a Settings section. ⌘/Ctrl+J toggles the assistant from anywhere. Page names match the sidebar (Appendix A).
+// "Ask AI: …" hands the words to the assistant's box (useAssistant's draft); the owner sends them there.
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { Brain, CalendarDays, ChartColumn, Compass, Globe, Layers, LayoutDashboard, Mail, Megaphone, PencilRuler, Settings2, Store, Target } from 'lucide-react';
-import { navigate, type Route } from '@/lib/router';
+import { navigate, useRoute, type Route } from '@/lib/router';
 import { useActiveProject } from '@/store/useStore';
 import { useUI } from '@/store/ui';
 import { useAssistant } from '@/store/assistant';
@@ -26,6 +27,24 @@ const PAGES: { route: Route; label: string; icon: ReactNode; hint?: string }[] =
   { route: 'store', label: 'Marketplace', icon: <Store /> },
   { route: 'brain', label: 'Brain', icon: <Brain />, hint: 'Skills the AI follows' },
 ];
+
+/** The pages visited in this tab, newest first (in memory only: a reload starts over). */
+const visited: Route[] = [];
+
+/** The last 3 pages visited before this one. */
+function useRecentPages(): Route[] {
+  const route = useRoute();
+  const [list, setList] = useState<Route[]>([]);
+  useEffect(() => {
+    if (!route || route === 'onboarding') return;
+    const i = visited.indexOf(route);
+    if (i !== -1) visited.splice(i, 1);
+    visited.unshift(route);
+    visited.length = Math.min(visited.length, 4);
+    setList([...visited]);
+  }, [route]);
+  return list.filter((r) => r !== route).slice(0, 3);
+}
 
 const SETTINGS: { id: string; label: string }[] = [
   { id: 'brand', label: 'Brand' },
@@ -56,6 +75,7 @@ export function CommandPalette() {
   const project = useActiveProject();
   const mod = useModKey();
   const [q, setQ] = useState('');
+  const recent = useRecentPages();
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -82,6 +102,11 @@ export function CommandPalette() {
     void fn();
   };
   const query = q.trim();
+  const page = (route: Route) => {
+    if (route === 'workspace-settings') return { label: 'Settings', icon: <Settings2 />, hint: undefined };
+    const p = PAGES.find((x) => x.route === route);
+    return { label: route === 'studio' ? studioName(project?.track) : p?.label ?? route, icon: p?.icon ?? <LayoutDashboard />, hint: p?.hint };
+  };
   return (
     <CommandDialog open={open} onOpenChange={setOpen} title="Search pages and actions" commandProps={{ loop: true }}>
       <CommandInput value={q} onValueChange={setQ} placeholder="Search pages and actions, or ask AI…" aria-label="Search pages and actions" trailing={<Kbd>Esc</Kbd>} />
@@ -100,6 +125,15 @@ export function CommandPalette() {
               }
               onSelect={() => run(() => useAssistant.getState().openWith(query))}
             />
+          </CommandGroup>
+        )}
+        {/* where the owner just was (typing searches every page instead) */}
+        {!query && recent.length > 0 && (
+          <CommandGroup heading="Recent">
+            {recent.map((r) => {
+              const p = page(r);
+              return <Row key={r} value={`recent ${p.label}`} icon={<Tile>{p.icon}</Tile>} label={p.label} onSelect={() => run(() => navigate(r))} />;
+            })}
           </CommandGroup>
         )}
         <CommandGroup heading="Create">

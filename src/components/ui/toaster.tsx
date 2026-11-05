@@ -10,8 +10,8 @@ import { useUI, type Toast } from '@/store/ui';
 import { Spark } from '../ai/Spark';
 
 /**
- * Where toasts go: the corner, above the assistant's chat button (so they don't cover it), or, while its
- * panel is open, beside the docked panel on wide screens and at the top on smaller ones.
+ * Where toasts go: the corner, above the assistant's launcher (so they don't cover it; the launcher shows only
+ * below 768px), or, while its panel is open, beside the docked panel on wide screens and at the top on smaller ones.
  */
 export type ToastPlacement = 'corner' | 'above-launcher' | 'beside-panel';
 
@@ -76,6 +76,8 @@ export function Toaster({ placement = 'corner' }: { placement?: ToastPlacement }
   const theme = useResolvedTheme();
   const phone = useMediaQuery('(max-width: 639px)');
   const docked = useMediaQuery('(min-width: 1440px)');
+  // the assistant's launcher (Assistant.tsx) is on screen below 768px only
+  const launcher = useMediaQuery('(max-width: 767px)');
   const shown = useRef(new Set<string>());
 
   // mirror the store into Sonner
@@ -94,10 +96,11 @@ export function Toaster({ placement = 'corner' }: { placement?: ToastPlacement }
   }, [toasts]);
 
   // phones: always top-centre under the header; the assistant open below 1440: top-centre;
-  // docked beside the assistant (≥ 1440): bottom-right, left of the panel; otherwise bottom-right
+  // docked beside the assistant (≥ 1440): bottom-right, left of the panel (24px from it);
+  // otherwise bottom-right, lifted above the launcher where there is one (640–767px)
   const top = phone || (placement === 'beside-panel' && !docked);
   const right = placement === 'beside-panel' && docked ? 24 + 408 : 24;
-  const bottom = placement === 'above-launcher' ? 24 + 72 : 24;
+  const bottom = placement === 'above-launcher' && launcher ? 24 + 72 : 24;
   return (
     <Sonner
       position={top ? 'top-center' : 'bottom-right'}

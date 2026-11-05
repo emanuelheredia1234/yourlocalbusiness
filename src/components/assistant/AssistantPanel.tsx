@@ -386,7 +386,7 @@ export default function AssistantPanel({ onClose }: { onClose: () => void }) {
           </h2>
           {project && <p className="min-w-0 truncate text-caption text-muted">For {project.brand.name || 'this project'}</p>}
         </div>
-        <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => pid && newChat(pid)} disabled={!messages.length} title="Start over with an empty chat" aria-label="New chat">
+        <button type="button" className="btn btn-ghost btn-icon btn-sm disabled:bg-transparent" onClick={() => pid && newChat(pid)} disabled={!messages.length} title="Start over with an empty chat" aria-label="New chat">
           <SquarePen />
         </button>
         <Tooltip content="Close" kbd="Esc">
