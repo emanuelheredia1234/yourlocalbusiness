@@ -140,6 +140,15 @@ describe('sources', () => {
     expect(addSource(gone, { url: 'https://example.com/c' }, 'manus', 4)).toBe(3);
     expect(gone.sources.at(-1)).toMatchObject({ n: 3, via: 'manus', domain: 'example.com' });
   });
+
+  it('keep every URL the server passes on: the same 400-character limit (server/providers/research.test.mjs)', () => {
+    const at = (n: number) => `https://example.com/${'a'.repeat(n - 'https://example.com/'.length)}`;
+    expect(C.sources.url).toBe(400);
+    const s = emptyStrategy();
+    expect(addSource(s, { url: at(400) }, 'search', 1)).toBe(1);
+    expect(addSource(s, { url: at(401) }, 'search', 1)).toBeNull();
+    expect(readStrategy(withStrategy({ ...s, sources: [...s.sources, { n: 2, url: at(401), title: 't', domain: 'example.com', via: 'search', at: 1 }] })).sources.map((x) => x.url)).toEqual([at(400)]);
+  });
 });
 
 describe('weeks, progress and what changed', () => {

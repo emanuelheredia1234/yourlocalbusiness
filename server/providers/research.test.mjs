@@ -12,7 +12,7 @@ import { AIRouter } from './router.mjs';
 import { createAIRoutes } from './routes.mjs';
 import { createAuth } from '../auth.mjs';
 import { createLimits } from '../limits.mjs';
-import { RESEARCH_TIMEOUT_MS, TOOL_REFUSED, TOOL_VERSION, canResearch, isHttpUrl, normalizeSources, researchFromBody, researchInfo, researchMeta, searchPrice, sourceKey, userLocation } from './research.mjs';
+import { MAX_SOURCE_URL, RESEARCH_TIMEOUT_MS, TOOL_REFUSED, TOOL_VERSION, canResearch, isHttpUrl, normalizeSources, researchFromBody, researchInfo, researchMeta, searchPrice, sourceKey, userLocation } from './research.mjs';
 import { responsesOutput, responsesUsage } from './adapters/responses.mjs';
 import { createMockProviders } from '../test/mock-providers.mjs';
 import { createMockSupabase } from '../test/mock-supabase.mjs';
@@ -178,6 +178,16 @@ describe('sources', () => {
     ]);
     expect(out.map((s) => s.url)).toEqual(['https://example.com/ok']);
     expect(normalizeSources('nope')).toEqual([]);
+  });
+
+  it('pass on only URLs the app keeps: at most 400 characters (the same limit as src/lib/strategy.test.ts)', () => {
+    const at = (n) => `https://example.com/${'a'.repeat(n - 'https://example.com/'.length)}`;
+    expect(MAX_SOURCE_URL).toBe(400);
+    const out = normalizeSources([{ url: at(401), cited: true }, { url: at(400) }, { url: 'https://example.org/short' }]);
+    expect(out.map((s) => s.url)).toEqual([at(400), 'https://example.org/short']);
+    expect(out.map((s) => s.n)).toEqual([1, 2]);
+    // a search whose only source is longer brings nothing back
+    expect(researchMeta(true, { searches: 1, sources: [{ url: at(401), cited: true }] })).toMatchObject({ web: false, reason: 'no_results', sources: [] });
   });
 
   it('de-duplicate the same page however it’s written, keeping the URL as the provider sent it', () => {
