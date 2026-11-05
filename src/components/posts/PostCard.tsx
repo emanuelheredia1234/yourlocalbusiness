@@ -161,7 +161,7 @@ export function PostFields({ post, onChange }: EditableProps) {
   );
 }
 
-/** Whether "Post to groups" applies (a Facebook post, Manus reachable, no group share running). Manus posts only in groups. */
+/** Whether "Post to groups" applies (a Facebook post, Manus reachable, no group share running). Groups are all Manus does now. */
 function groupsOpen(post: Post, offer: boolean): boolean {
   return offer && post.platform === 'facebook' && !(post.groupShare && (post.groupShare.state === 'working' || post.groupShare.state === 'needs_input'));
 }

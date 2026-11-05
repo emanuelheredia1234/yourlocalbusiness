@@ -1,6 +1,6 @@
 // The assistant's chat panel: docked at the right of the window from 1440px wide (the stage makes room for it),
 // a sheet over the page from 640px, full screen on phones. Loaded the first time the chat opens. Escape closes it
-// only while focus is inside it, so closing a window the assistant opened (a confirm, "Post with Manus") never
+// only while focus is inside it, so closing a window the assistant opened (a confirm, "Post on Facebook") never
 // closes the chat too.
 //
 // The same chat talks to Manus and Viktor (its To: switch, AgentComposer): their replies show as their own
