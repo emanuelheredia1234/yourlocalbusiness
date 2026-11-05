@@ -68,3 +68,16 @@ describe('the job watcher', () => {
     expect(calls.get).toEqual(['job_a', 'job_a']);
   });
 });
+
+describe('a job still sending after the first two minutes', () => {
+  it('is read again, slower, until the server says how it ended: GET only', async () => {
+    useStore.setState({ posts: [post('a', { external: ext('working', 'job_a') })] });
+    // the first follow gives up while it's still sending; the slow one sees the server's "unknown"
+    calls.answers = ['sending', 'sending', 'unknown'];
+    await trackJob('a', 'job_a', { intervalMs: 1, maxMs: 0, slow: { intervalMs: 1, maxMs: 1000 } });
+    expect(calls.get.length).toBe(3);
+    expect(calls.check).toEqual([]);
+    expect(calls.publish).toBe(0);
+    expect(useStore.getState().posts[0].external).toMatchObject({ state: 'unknown' });
+  });
+});

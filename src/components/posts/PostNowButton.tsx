@@ -106,8 +106,9 @@ export function PostNowButton({ post, primary, size = 'sm' }: { post: Post; prim
       </span>
     );
   }
-  // sent with Manus by an older version: only "Mark as posted"
-  if (legacyManus(post) && ext?.state !== 'failed')
+  // sent with Manus by an older version, in any state: only "Mark as posted". Even a "failed" Manus try may have
+  // gone out (Manus didn't look for an earlier copy), so the app never sends it again.
+  if (legacyManus(post))
     return (
       <button type="button" className={btn(false, size)} onClick={() => useMarkPosted.getState().open(post.id)}>
         Mark as posted

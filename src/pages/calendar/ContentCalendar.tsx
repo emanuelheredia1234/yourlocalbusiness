@@ -13,7 +13,7 @@ import { PostCard, PostTypeTag, styleLabel } from '@/components/posts/PostCard';
 import { useCanOfferManus } from '@/components/posts/manusShared';
 import { PostNowButton, PublishStatus } from '@/components/posts/PostNowButton';
 import { GroupShareBadge, useManusGroups } from '@/components/posts/ManusGroups';
-import { DueBadge, PostedBy, addToCalendarFlow, failedOnItsNetwork, isDue, postHeld, postMenuEntries } from '@/components/posts/PostActions';
+import { DueBadge, PostedBy, addToCalendarFlow, failedOnItsNetwork, isDue, legacyManusFailed, postHeld, postMenuEntries } from '@/components/posts/PostActions';
 import { PlatformChip, PlatformMark } from '@/components/posts/PlatformIcon';
 import { PostLinkNote } from '@/components/posts/PostLinkNote';
 import { PostVisual } from '@/components/visuals/PostVisual';
@@ -270,12 +270,15 @@ function DueCallout({ posts }: { posts: Post[] }) {
   const due = posts.filter((p) => isDue(p, now) && notSent(p));
   if (!due.length) return null;
   const failed = due.filter(failedOnItsNetwork).length;
+  // an older Manus try that failed may still have gone out: check before anything else
+  const earlier = due.filter(legacyManusFailed).length;
   const many = due.length > 1;
   return (
     <Callout tone="warn" className="mb-5" title={`${due.length} post${many ? 's' : ''} due`}>
       <p>
         {many ? 'These are' : 'It’s'} past {many ? 'their' : 'its'} time and not posted. Post {many ? 'each one' : 'it'} from here, or post {many ? 'them' : 'it'} yourself and mark {many ? 'them' : 'it'} posted.
         {failed > 0 && ` ${failed} didn’t go out last time.`}
+        {earlier > 0 && ` ${earlier} sent with Manus earlier may already be out: check ${earlier === 1 ? 'it' : 'them'} on the network, then mark ${earlier === 1 ? 'it' : 'them'} posted.`}
       </p>
       <ul className="mt-2 flex flex-col gap-2" aria-label="Posts due">
         {due.slice(0, 5).map((p) => (

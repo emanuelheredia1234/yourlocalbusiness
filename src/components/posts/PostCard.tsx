@@ -27,7 +27,7 @@ import { brandHandle } from '@/lib/brandMark';
 import { isOwnPhoto } from '@/lib/media';
 import { firstCommentOf, networkMovePatch, xLength } from '@/lib/pageLink';
 import { networkLabel, postText } from '@/ai/postShared';
-import { canPostFrom } from '@/lib/posting';
+import { canPostFrom, legacyManus } from '@/lib/posting';
 import { useConnections } from '@/store/analytics';
 import { usePublishConfirm } from './PublishConfirm';
 import { usePostItYourself } from './PostItYourselfModal';
@@ -222,7 +222,7 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
   const menu: MenuEntry[] = [
     ...writing,
     ...(post.status === 'draft' && !postHeld(post)
-      ? [canPost ? { label: `Post on ${networkLabel(post.platform)} now`, icon: <Send />, onSelect: () => usePublishConfirm.getState().open(post.id) } : { label: 'Post it yourself…', icon: <Hand />, onSelect: () => usePostItYourself.getState().open(post.id) }]
+      ? [canPost && !legacyManus(post) ? { label: `Post on ${networkLabel(post.platform)} now`, icon: <Send />, onSelect: () => usePublishConfirm.getState().open(post.id) } : { label: 'Post it yourself…', icon: <Hand />, onSelect: () => usePostItYourself.getState().open(post.id) }]
       : []),
     ...(groupsOpen(post, offer) ? [{ label: 'Post to groups', icon: <Users />, onSelect: () => useManusGroups.getState().open(post.id) }] : []),
     ...postMenuEntries(post),

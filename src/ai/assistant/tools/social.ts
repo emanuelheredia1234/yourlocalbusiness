@@ -26,7 +26,7 @@ import { applyCampaignPlan, applyWeekBatch, batchStart, cadence, campaignProblem
 import { useStore } from '@/store/useStore';
 import { addToCalendarFlow, downloadPostMedia, postHeld } from '@/components/posts/PostActions';
 import { manusSetupHint } from '@/components/posts/manusShared';
-import { apiHolds } from '@/lib/posting';
+import { apiHolds, legacyManus } from '@/lib/posting';
 import { videoAvailability } from '@/components/images/VideoPanel';
 import { runAITask } from '../aiTask';
 import { copyButton } from '../buttons';
@@ -766,6 +766,7 @@ const openPostNow = defineTool({
       if (p.status === 'published') return `${name(p)} is already posted.`;
       if (sendingNow(p.id)) return `${name(p)} is being sent right now.`;
       // one attempt per confirm: a post that may already be out is checked, never sent again
+      if (legacyManus(p)) return `${name(p)} was sent with Manus by an older version and may already be out on ${net(p)}: the owner checks there and marks it posted. The app never sends it again.`;
       if (apiHolds(p)) return p.external!.state === 'working' ? `${name(p)} is being posted right now: its card shows when it’s done.` : `The app couldn’t confirm ${name(p)} went out on ${net(p)}. The owner checks it on the post’s card (Check again), or marks it posted: it is never sent again by itself.`;
       return postBlocker(p);
     }),

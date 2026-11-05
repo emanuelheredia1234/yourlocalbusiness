@@ -7,11 +7,12 @@ import { Send, TriangleAlert, Type } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { IntegrationApiError, publishPost } from '@/lib/integrations/api';
 import { useConnections } from '@/store/analytics';
-import { buildPublishRequest, canPostFrom, captionPreview, newClientRequestId, targetText } from '@/lib/posting';
+import { buildPublishRequest, canPostFrom, captionPreview, legacyManus, newClientRequestId, targetText } from '@/lib/posting';
 import { ensureJpegVariant, ensureUploaded } from '@/lib/cloud/media';
 import { networkLabel } from '@/ai/postShared';
 import { beginBusy, endBusy } from '@/lib/busy';
 import { useStore } from '@/store/useStore';
+import type { PublishJob } from '@/lib/integrations/types';
 import { Callout, InfoTip, Modal, Spinner } from '../ui/primitives';
 import { MediaThumb } from '../media/MediaUpload';
 import { PlatformChip } from './PlatformIcon';
@@ -26,13 +27,27 @@ export const usePublishConfirm = create<{ id: string | null; open: (id: string) 
 /** Posts whose publish request is on its way right now (outside the window, so reopening it can't send twice). */
 const sending = new Set<string>();
 
+/**
+ * The request id of a post whose last send ended without a definite answer (the server couldn't be reached, or
+ * answered with a gateway error): it may have been sent. The next confirm for that post, even after closing and
+ * reopening the window, carries the same id, so the server answers with the job it already has instead of
+ * making a second post. Cleared once the server gives a definite answer.
+ */
+const uncertainRequest = new Map<string, string>();
+
+/** The request id for a new opening of the window: the uncertain one if there is one, else a fresh one. */
+export const requestIdFor = (postId: string) => uncertainRequest.get(postId) ?? newClientRequestId();
+
+/** No definite answer: the server may have taken the request (it can't be reached, or a gateway timed out). */
+export const mayHaveBeenSent = (e: unknown) => e instanceof IntegrationApiError && (e.code === 'NETWORK' || (e.status >= 500 && e.code === 'UNAVAILABLE'));
+
 /** The words for a refused request (the server's codes; never a provider's own text). */
 function refusal(e: unknown, network: string): { title: string; body: string; uncertain?: boolean } {
   if (!(e instanceof IntegrationApiError)) return { title: 'Something went wrong', body: 'Nothing was sent. Try again shortly, or post it yourself.' };
+  if (mayHaveBeenSent(e))
+    // the request may have reached the server: pressing again sends the same request id
+    return { title: 'We couldn’t confirm it was sent', body: `It may have gone out. Check ${network} before trying again: pressing Post again can’t post it twice.`, uncertain: true };
   switch (e.code) {
-    case 'NETWORK':
-      // the request may have reached the server: pressing again in this window sends the same request id
-      return { title: 'We couldn’t reach the app’s server', body: `It may not have been sent. Check ${network} before trying again: pressing Post again from this window can’t post it twice.`, uncertain: true };
     case 'ALREADY_PUBLISHING':
       return { title: 'Already posting', body: `This post is already going out on ${network}. Close this and watch its card.` };
     case 'POST_CHANGED':
@@ -53,6 +68,49 @@ function refusal(e: unknown, network: string): { title: string; body: string; un
   }
 }
 
+export type SendOutcome = { ok: true; job: PublishJob } | { ok: false; error: { title: string; body: string; uncertain?: boolean } };
+
+/**
+ * One confirm: save the file to the account, then ONE publish request with this window's request id. Never
+ * retried here. A post already on its way returns without sending.
+ */
+export async function sendPublish(postId: string, requestId: string, onStage: (s: string) => void = () => {}): Promise<SendOutcome | null> {
+  const post = useStore.getState().posts.find((p) => p.id === postId);
+  if (!post || sending.has(postId)) return null;
+  const project = useStore.getState().projects.find((p) => p.id === post.projectId);
+  const network = networkLabel(post.platform);
+  sending.add(postId);
+  beginBusy(`post-now:${postId}`, `Posting on ${network}`, 'app');
+  try {
+    // the file goes to your account's storage first (Instagram gets a JPEG copy): the server reads it there
+    let mediaIds: string[] | undefined;
+    if (post.media) {
+      onStage('Saving the file to your account…');
+      const mid = post.platform === 'instagram' && post.media.kind === 'image' ? await ensureJpegVariant(post.media.id, post.media.mime) : post.media.id;
+      if (!mid || !(await ensureUploaded(mid))) return { ok: false, error: { title: `The ${post.media.kind} isn’t in your account yet`, body: 'Nothing was sent. Check that you’re signed in and online, then try again, or post it yourself.' } };
+      mediaIds = [mid];
+    }
+    onStage(`Sending to ${network}…`);
+    const latest = useStore.getState().posts.find((p) => p.id === postId) ?? post;
+    try {
+      const { job } = await publishPost(buildPublishRequest(latest, project, { clientRequestId: requestId, mediaIds }));
+      uncertainRequest.delete(postId);
+      useStore.getState().applyPublishJob(postId, job);
+      if (job.state === 'queued' || job.state === 'sending') void trackJob(postId, job.id);
+      return { ok: true, job };
+    } catch (e) {
+      if (mayHaveBeenSent(e)) uncertainRequest.set(postId, requestId);
+      else uncertainRequest.delete(postId);
+      return { ok: false, error: refusal(e, network) };
+    }
+  } catch {
+    return { ok: false, error: refusal(null, network) };
+  } finally {
+    sending.delete(postId);
+    endBusy(`post-now:${postId}`);
+  }
+}
+
 export function PublishConfirmHost() {
   const id = usePublishConfirm((s) => s.id);
   const close = usePublishConfirm((s) => s.close);
@@ -66,7 +124,7 @@ export function PublishConfirmHost() {
   const requestId = useRef('');
   useEffect(() => {
     if (!id) return;
-    requestId.current = newClientRequestId();
+    requestId.current = requestIdFor(id);
     setBusy(false);
     setStage('');
     setErr(null);
@@ -76,40 +134,19 @@ export function PublishConfirmHost() {
   const status = byPlatform[post.platform];
   const preview = captionPreview(post, project);
   const inFlight = busy || sending.has(post.id);
-  const blocked = preview.blockers.length > 0 || !canPostFrom(status) || post.status === 'published';
+  const legacy = legacyManus(post);
+  const blocked = preview.blockers.length > 0 || !canPostFrom(status) || post.status === 'published' || legacy;
 
   const confirm = async () => {
     if (inFlight || blocked) return;
-    sending.add(post.id);
-    beginBusy(`post-now:${post.id}`, `Posting on ${network}`, 'app');
     setBusy(true);
     setErr(null);
-    try {
-      // the file goes to your account's storage first (Instagram gets a JPEG copy): the server reads it there
-      let mediaIds: string[] | undefined;
-      if (post.media) {
-        setStage('Saving the file to your account…');
-        const mid = post.platform === 'instagram' && post.media.kind === 'image' ? await ensureJpegVariant(post.media.id, post.media.mime) : post.media.id;
-        if (!mid || !(await ensureUploaded(mid))) {
-          setErr({ title: `The ${post.media.kind} isn’t in your account yet`, body: 'Nothing was sent. Check that you’re signed in and online, then try again, or post it yourself.' });
-          return;
-        }
-        mediaIds = [mid];
-      }
-      setStage(`Sending to ${network}…`);
-      const latest = useStore.getState().posts.find((p) => p.id === post.id) ?? post;
-      const { job } = await publishPost(buildPublishRequest(latest, project, { clientRequestId: requestId.current, mediaIds }));
-      useStore.getState().applyPublishJob(post.id, job);
-      close();
-      if (job.state === 'queued' || job.state === 'sending') void trackJob(post.id, job.id);
-    } catch (e) {
-      setErr(refusal(e, network));
-    } finally {
-      sending.delete(post.id);
-      endBusy(`post-now:${post.id}`);
-      setBusy(false);
-      setStage('');
-    }
+    const r = await sendPublish(post.id, requestId.current, setStage);
+    setBusy(false);
+    setStage('');
+    if (!r) return;
+    if (r.ok) close();
+    else setErr(r.error);
   };
 
   const word = post.platform === 'x' ? 'reply' : 'comment';
@@ -187,6 +224,11 @@ export function PublishConfirmHost() {
             {b}
           </p>
         ))}
+        {legacy && (
+          <Callout tone="warn" title="Sent with Manus earlier">
+            It may already be out on {network}. Check there, then mark it as posted. The app doesn’t send it again.
+          </Callout>
+        )}
         {!canPostFrom(status) && (
           <Callout tone="warn" title={`${network} isn’t connected`}>
             Connect it in Settings › Connected accounts, or post it yourself.

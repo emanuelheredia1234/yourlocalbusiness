@@ -164,6 +164,13 @@ describe('the posting button', () => {
     expect(words(status(post({ external: manus('scheduled') })))).toContain('Sent with Manus earlier');
   });
 
+  it('an older Manus try that failed may still have gone out: still only “Mark as posted”, never sent from the app', () => {
+    const b = button(post({ external: manus('failed') }), [connected('facebook')]);
+    expect(words(b)).toContain('Mark as posted');
+    expect(words(b)).not.toContain('Post on Facebook');
+    expect(words(b)).not.toContain('Try again');
+  });
+
   it('keeps “Post to groups” (Manus) on a Facebook post, and only there', () => {
     use([post()]);
     expect(words(html(createElement(PostToGroupsButton, { post: post() })))).toContain('Post to groups');
@@ -211,6 +218,15 @@ describe('the windows', () => {
     expect(w).toContain(`First comment Order here: ${PAGE}`);
     expect(out.match(/btn-primary/g)).toHaveLength(1);
     expect(w).not.toMatch(/Nango|treg/);
+  });
+
+  it('the confirm, opened on an older Manus post (say by the assistant): explains, and its Post button is disabled', () => {
+    const p = post({ external: manus('failed') });
+    use([p], [connected('facebook')]);
+    usePublishConfirm.getState().open(p.id);
+    const out = html(createElement(PublishConfirmHost));
+    expect(words(out)).toContain('Sent with Manus earlier');
+    expect(out).toMatch(/<button[^>]*btn-primary[^>]*disabled/);
   });
 
   it('the confirm: X’s link cost is behind an InfoTip; TikTok private posting is said plainly', () => {

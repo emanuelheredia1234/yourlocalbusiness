@@ -24,8 +24,11 @@ export function addToCalendarFlow(ids: string[]): boolean {
   return true;
 }
 
-/** Its last try on its own network failed (nothing went out). */
-export const failedOnItsNetwork = (post: Post) => post.external?.state === 'failed' && post.external.network === post.platform;
+/** The app's last try on the post's own network failed (nothing went out). */
+export const failedOnItsNetwork = (post: Post) => post.external?.via === 'api' && post.external.state === 'failed' && post.external.network === post.platform;
+
+/** An older version's Manus try failed: it may still have gone out, so the app never sends it again. */
+export const legacyManusFailed = (post: Post) => post.external?.via === 'manus' && post.external.state === 'failed';
 
 /**
  * The post is (or may be) out of the app's hands: the app is sending it, or couldn't confirm whether it went out

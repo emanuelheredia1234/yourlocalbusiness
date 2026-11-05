@@ -441,6 +441,12 @@ describe('posting: only the app’s own windows', () => {
     expect(await runTool('open_post_now', { postId: 'post_a' })).toMatchObject({ status: 'opened' });
   });
 
+  it('never opens it for a post an older version sent with Manus, even one whose Manus try failed (it may be out)', async () => {
+    useStore.getState().updatePost('post_a', { media: photo('pic_1'), external: ext('failed', { via: 'manus' }) });
+    expect((await runTool('open_post_now', { postId: 'post_a' })).error).toMatch(/sent with Manus by an older version .*never sends it again/);
+    expect(host.calls.windows).toEqual([]);
+  });
+
   it('says what’s missing: the image a network needs, a post already out', async () => {
     expect((await runTool('open_post_now', { postId: 'post_b' })).error).toMatch(/Instagram needs an image or a video/);
     useStore.getState().markPosted('post_b');

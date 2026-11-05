@@ -29,19 +29,24 @@ export function announceJob(postId: string, job: PublishJob) {
   }
 }
 
+/** After the first two minutes, a job still sending is read every 30 s for up to 5 more minutes (the server marks
+ *  one stuck for 3 minutes "unknown"), so its card never stays on "Posting…" for the rest of the visit. */
+const SLOW = { intervalMs: 30_000, maxMs: 300_000 };
+const stillSending = (job: PublishJob | null) => !!job && (job.state === 'queued' || job.state === 'sending');
+
 /** Follow one job until it's no longer sending (GET only), putting each answer on its post. */
-export function trackJob(postId: string, jobId: string, o: { intervalMs?: number; maxMs?: number } = {}): Promise<void> {
+export function trackJob(postId: string, jobId: string, o: { intervalMs?: number; maxMs?: number; slow?: { intervalMs: number; maxMs: number } } = {}): Promise<void> {
   if (following.has(jobId)) return Promise.resolve();
   following.add(jobId);
   let lastState: PublishJob['state'] | null = null;
-  return followJob(jobId, {
-    ...o,
-    onUpdate: (job) => {
-      useStore.getState().applyPublishJob(postId, job);
-      lastState = job.state;
-    },
-  })
-    .then((job) => {
+  const onUpdate = (job: PublishJob) => {
+    useStore.getState().applyPublishJob(postId, job);
+    lastState = job.state;
+  };
+  return followJob(jobId, { intervalMs: o.intervalMs, maxMs: o.maxMs, onUpdate })
+    .then(async (job) => {
+      // still sending after the first follow: keep reading, slower (still GET only)
+      if (stillSending(job) || (!job && lastState === null)) job = (await followJob(jobId, { ...(o.slow ?? SLOW), onUpdate })) ?? job;
       if (job && lastState && lastState !== 'queued' && lastState !== 'sending') announceJob(postId, job);
     })
     .finally(() => following.delete(jobId));
