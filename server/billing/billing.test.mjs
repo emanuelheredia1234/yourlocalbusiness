@@ -428,6 +428,39 @@ describe('settling pending answers', () => {
   });
 });
 
+describe('the settle job’s rules', () => {
+  it('runs one settle at a time per server, so a slow round can’t write a second settled row', async () => {
+    const callId = crypto.randomBytes(16).toString('hex');
+    mock.ledger.push({ callId, customer: tagOf('ana'), endpointId: 'treg.instagram.user.posts', charged: 1500, reserved: 2000, at: iso(Date.now()), outcome: 'ok' });
+    await db.insert('usage_ledger', row('ana', { outcome: 'pending', cost_micro: 2000, call_id: callId, created_at: iso(Date.now() - 5 * 60_000) }));
+    const s = await serve();
+    try {
+      const [a, b] = await Promise.all([s.routes.settle(), s.routes.settle()]);
+      expect([a, b]).toEqual([1, 1]); // the same run, shared
+      expect(await db.select('usage_ledger', { call_id: callId, outcome: 'settled' })).toHaveLength(1);
+    } finally {
+      s.routes.stop();
+      await s.close();
+    }
+  });
+
+  it('looks back 7 days only, newest first, so rows treg never settles can’t crowd out new ones', async () => {
+    const ledger = createLedger({ db });
+    const admin = createTregAdmin({ env: envFor() });
+    for (let i = 0; i < 3; i++) await db.insert('usage_ledger', row('ana', { outcome: 'pending', cost_micro: 1, call_id: crypto.randomBytes(16).toString('hex'), created_at: iso(Date.now() - 2 * DAY) }));
+    const fresh = crypto.randomBytes(16).toString('hex');
+    mock.ledger.push({ callId: fresh, customer: tagOf('ana'), endpointId: 'treg.x.user.posts', charged: 900, reserved: 1000, at: iso(Date.now()), outcome: 'ok' });
+    await db.insert('usage_ledger', row('ana', { outcome: 'pending', cost_micro: 1000, call_id: fresh, created_at: iso(Date.now() - 5 * 60_000) }));
+    const old = crypto.randomBytes(16).toString('hex');
+    mock.ledger.push({ callId: old, customer: tagOf('ana'), endpointId: 'treg.x.user.posts', charged: 900, reserved: 1000, at: iso(Date.now()), outcome: 'ok' });
+    await db.insert('usage_ledger', row('ana', { outcome: 'pending', cost_micro: 1000, call_id: old, created_at: iso(Date.now() - 8 * DAY) }));
+    expect(await settlePending({ ledger, admin, max: 1 })).toBe(1);
+    expect(await db.select('usage_ledger', { call_id: fresh, outcome: 'settled' })).toHaveLength(1);
+    expect(await settlePending({ ledger, admin })).toBe(0);
+    expect(await db.select('usage_ledger', { call_id: old, outcome: 'settled' })).toHaveLength(0);
+  });
+});
+
 describe('the admin client', () => {
   it('uses the admin token, never public-token, and treats a missing budget or call as nothing', async () => {
     const admin = createTregAdmin({ env: envFor() });

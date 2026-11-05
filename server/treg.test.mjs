@@ -146,6 +146,41 @@ describe('a call', () => {
     await expect(wrong.call('ig.profile', { body: {} }, ctx(), { maxCostUsd: 0.01, idempotencyKey: key() })).rejects.toMatchObject({ kind: 'config' });
   });
 
+  it('checks the caps inside the customer’s 4 slots, so a burst can’t all pass the check on the same spend', async () => {
+    // treg answers slowly, so no answer (and no ledger row) lands before the whole burst has been queued
+    const slowFetch = async (...args) => {
+      await new Promise((r) => setTimeout(r, 60));
+      return fetch(...args);
+    };
+    const { treg } = setup({ opts: { fetch: slowFetch } });
+    await db.insert('billing_caps', { customer_tag: '*', daily_cap_micro: 10_000_000, monthly_cap_micro: 10_000_000, calls_per_day: 2, status: 'active' });
+    const results = await Promise.allSettled(Array.from({ length: 10 }, () => treg.call('ig.posts', { body: { username: 'a' } }, ctx(), { maxCostUsd: 0.01, idempotencyKey: key() })));
+    expect(callsTo('treg.instagram.user.posts').length).toBeLessThanOrEqual(4);
+    expect(results.filter((r) => r.status === 'rejected').every((r) => r.reason.kind === 'customer_cap')).toBe(true);
+    expect(results.filter((r) => r.status === 'rejected').length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('never sends a ceiling above the table’s, and only calls an endpoint the way the table says', async () => {
+    const { treg } = setup();
+    await treg.call('ig.profile', { body: { username: 'a' } }, ctx(), { maxCostUsd: 5, idempotencyKey: key() });
+    expect(callsTo('treg.instagram.user.profile')[0].headers['x-treg-route-max-cost']).toBe('0.01');
+    await expect(treg.call('gsc.submit', { method: 'GET', query: { siteUrl: 'https://a/' } }, ctx({ feature: 'gsc' }), { idempotencyKey: key() })).rejects.toMatchObject({ kind: 'config' });
+    await expect(treg.call('ig.profile', { method: 'DELETE' }, ctx(), { maxCostUsd: 0.01, idempotencyKey: key() })).rejects.toMatchObject({ kind: 'config' });
+    expect(callsTo('google-search-console.x.webmasters-sitemaps-submit')).toHaveLength(0);
+  });
+
+  it('keeps only a plain error code from treg’s refusal: its prose never reaches the alert, the ledger or the logs', async () => {
+    const { treg, tag, storage, log } = setup();
+    mock.fail('treg.x.user.profile', { status: 402, error: 'insufficient_balance' });
+    await treg.call('x.profile', { body: { username: 'a' } }, ctx(), { maxCostUsd: 0.01, idempotencyKey: key() }).catch(() => {});
+    expect(storage.docs.get('treg:alert').kind).toBe('insufficient_balance');
+    mock.fail('treg.x.user.profile', { status: 429, error: 'platform_daily_cap_reached Top up at https://evil.example now' });
+    const err = await treg.call('x.profile', { body: { username: 'a' } }, ctx(), { maxCostUsd: 0.01, idempotencyKey: key() }).catch((e) => e);
+    expect(err.reason).toBeNull();
+    const everything = JSON.stringify({ rows: await ledgerRows(tag), logs: log.log.mock.calls, alert: [...storage.docs.values()] });
+    expect(everything).not.toMatch(/evil\.example|Top up/);
+  });
+
   it('runs at most 4 calls at a time per customer', async () => {
     let inFlight = 0;
     let peak = 0;
@@ -203,11 +238,38 @@ describe('the ledger on replays, timeouts and pending answers', () => {
   });
 
   it('a second timeout gives up with kind timeout and two timeout rows', async () => {
+    // a fetch that never answers: both attempts time out (the same key both times)
+    const sent = [];
+    const hanging = (url, init) => {
+      sent.push(init.headers['idempotency-key']);
+      return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)));
+    };
+    const { treg, tag } = setup({ opts: { fetch: hanging } });
+    const k = key();
+    await expect(treg.call('tt.profile', { body: { username: 'a' } }, ctx(), { maxCostUsd: 0.01, idempotencyKey: k, timeoutMs: 30 })).rejects.toMatchObject({ kind: 'timeout' });
+    expect(sent).toEqual([k, k]);
+    expect((await ledgerRows(tag)).map((r) => [r.outcome, r.cost_micro])).toEqual([
+      ['timeout', 0],
+      ['timeout', 0],
+    ]);
+  });
+
+  it('a repeat that finds the first call still running (409) is left for the billing job to settle by call id, not lost', async () => {
     const { treg, tag } = setup();
-    mock.fail('treg.tiktok.user.profile', { delayMs: 400, times: 2 });
-    await expect(treg.call('tt.profile', { body: { username: 'a' } }, ctx(), { maxCostUsd: 0.01, idempotencyKey: key(), timeoutMs: 40 })).rejects.toMatchObject({ kind: expect.stringMatching(/timeout|in_progress/) });
+    mock.fail('treg.tiktok.user.profile', { delayMs: 300 });
+    await expect(treg.call('tt.profile', { body: { username: 'a' } }, ctx(), { maxCostUsd: 0.01, idempotencyKey: key(), timeoutMs: 40 })).rejects.toMatchObject({ kind: 'in_progress' });
+    await new Promise((r) => setTimeout(r, 350));
     const rows = await ledgerRows(tag);
-    expect(rows[0].outcome).toBe('timeout');
+    expect(rows.map((r) => r.outcome)).toEqual(['timeout', 'error:uncertain']);
+    expect(rows[1].call_id).toBe(mock.ledger[0].callId);
+    // the settle job then records treg's charge for it
+    const { settlePending } = await import('./billing/reconcile.mjs');
+    const { createTregAdmin } = await import('./billing/tregAdmin.mjs');
+    const later = Date.now() + 5 * 60_000;
+    const settled = await settlePending({ ledger: createLedger({ db }), admin: createTregAdmin({ env: setup().env }), now: () => later });
+    expect(settled).toBe(1);
+    const sum = (await ledgerRows(tag)).reduce((a, r) => a + Number(r.cost_micro), 0);
+    expect(sum).toBe(mock.ledger[0].charged);
   });
 
   it('a 202 pending answer is returned as pending, recorded with the reserved amount, and not retried [R E5]', async () => {

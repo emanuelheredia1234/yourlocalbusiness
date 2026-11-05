@@ -133,7 +133,8 @@ export function createMockTreg({ token = MOCK_TREG.token, adminToken = MOCK_TREG
     if (key && state.idem.has(key)) {
       const prev = state.idem.get(key);
       if (prev.fingerprint !== fingerprint) return refuse(res, 422, 'idempotency_key_reused');
-      if (prev.running) return refuse(res, 409, 'idempotency_in_progress');
+      // the first call's id (UNVERIFIED that treg sends it on a 409; the billing job settles by it when it does)
+      if (prev.running) return send(res, 409, { error: 'idempotency_in_progress' }, { 'x-treg-error': '1', ...(prev.callId ? { 'x-treg-call-id': prev.callId } : {}) });
       return send(res, prev.status, prev.body, { ...prev.headers, 'x-treg-idempotent-replay': 'true', 'x-treg-cost-micro': '0', 'x-treg-original-cost-micro': String(prev.cost) });
     }
 
@@ -146,9 +147,9 @@ export function createMockTreg({ token = MOCK_TREG.token, adminToken = MOCK_TREG
     if (caps.monthly_cap_micro != null && spent.month + price > caps.monthly_cap_micro) return refuse(res, 429, 'tag_spend_cap_reached', { dim: 'customer', val: meta.customer, spent_micro: spent.month, cap_micro: caps.monthly_cap_micro, period: 'month' });
     if (caps.calls_per_day != null && spent.calls + 1 > caps.calls_per_day) return refuse(res, 429, 'tag_spend_cap_reached', { dim: 'customer', val: meta.customer, period: 'day' });
 
-    if (key) state.idem.set(key, { fingerprint, running: true });
-    if (fault?.delayMs) await new Promise((r) => setTimeout(r, fault.delayMs));
     const callId = crypto.randomBytes(16).toString('hex');
+    if (key) state.idem.set(key, { fingerprint, running: true, callId });
+    if (fault?.delayMs) await new Promise((r) => setTimeout(r, fault.delayMs));
     const finish = (status, body, headers, cost) => {
       if (key) {
         if (status >= 400) state.idem.delete(key); // a failed call frees its key

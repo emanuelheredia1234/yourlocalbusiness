@@ -58,6 +58,9 @@ export function createBillingRoutes({
   const caps = createCaps({ db, ledger, admin, storage, now, log });
   const reply = (req, res, status, body, headers = {}) => send(res, status, body, { ...corsHeaders(req), ...headers });
   let timer = null;
+  // one settle run at a time in this server: an overlapping run would write a second 'settled' row for a call
+  let settling = null;
+  const settleOnce = () => (settling ??= settlePending({ ledger, admin, now, log }).finally(() => (settling = null)));
 
   /** What's missing for usage tracking and billing, by Secret name (empty when ready). */
   function missing() {
@@ -320,13 +323,13 @@ export function createBillingRoutes({
     caps,
     admin,
     /** Settle pending treg rows now (also every 5 minutes after onStart). */
-    settle: () => (missing().length ? Promise.resolve(0) : settlePending({ ledger, admin, now, log })),
+    settle: () => (missing().length ? Promise.resolve(0) : settleOnce()),
     async onStart() {
       if (missing().length) return;
-      await settlePending({ ledger, admin, now, log });
+      await settleOnce();
       if (!timer) {
         timer = setInterval(() => {
-          settlePending({ ledger, admin, now, log }).catch(() => {});
+          settleOnce().catch(() => {});
         }, SETTLE_EVERY_MS);
         timer.unref?.();
       }

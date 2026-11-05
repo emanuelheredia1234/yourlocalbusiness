@@ -114,14 +114,22 @@ export function chargedFrom(info) {
   return null;
 }
 
-/** Settle 'pending' rows older than 2 minutes. Returns how many were settled. One read per row; no retries. */
+/** How far back the settle job looks: older unsettled rows stay listed in the reconcile report for the owner. */
+export const SETTLE_LOOKBACK_MS = 7 * 86_400_000;
+
+/**
+ * Settle 'pending' rows older than 2 minutes (and no older than SETTLE_LOOKBACK_MS, newest first, so rows treg
+ * never settles can't crowd out new ones). Returns how many were settled. One read per row; no retries.
+ */
 export async function settlePending({ ledger, admin, now = () => Date.now(), log = console, max = 100 } = {}) {
   if (!admin?.setUp || !ledger?.enabled) return 0;
-  const cutoff = new Date(now() - 120_000).toISOString();
+  const at = now();
+  const cutoff = new Date(at - 120_000).toISOString();
+  const since = new Date(at - SETTLE_LOOKBACK_MS).toISOString();
   let settled = 0;
   let rows;
   try {
-    rows = await ledger.pending(cutoff);
+    rows = (await ledger.pending(cutoff, since)).reverse();
   } catch (e) {
     safeLog('billing_settle_failed', { code: e?.code }, log);
     return 0;

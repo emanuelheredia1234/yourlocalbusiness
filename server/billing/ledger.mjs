@@ -103,10 +103,11 @@ export function createLedger({ db, now = () => Date.now(), log = console } = {})
 
     /**
      * Rows whose charge treg hasn't told us yet, older than `olderThanIso`, with no 'settled' row (by call_id):
-     * 'pending' (a 202) and 'error:uncertain' (a 410 idempotency_* answer: it may have been charged).
+     * 'pending' (a 202) and 'error:uncertain' (a 410 idempotency_* answer, or a 409 to our repeat after a
+   * timeout: it may have been charged). `sinceIso` leaves out older rows.
      */
-    async pending(olderThanIso) {
-      const rows = await selectAll({ outcome: ['in', ['pending', 'error:uncertain']], created_at: ['lt', olderThanIso] });
+    async pending(olderThanIso, sinceIso = null) {
+      const rows = (await selectAll({ outcome: ['in', ['pending', 'error:uncertain']], created_at: ['lt', olderThanIso] })).filter((r) => !sinceIso || String(r.created_at) >= sinceIso);
       const ids = [...new Set(rows.map((r) => r.call_id).filter(Boolean))];
       if (!ids.length) return [];
       const settled = new Set();

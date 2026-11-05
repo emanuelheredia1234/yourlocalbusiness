@@ -49,6 +49,10 @@ const ENDPOINT_ID = /^[a-z0-9][a-z0-9._-]{0,200}$/i;
 const META_VALUE = /^[A-Za-z0-9._:-]{1,128}$/;
 
 const GENERIC_UNAVAILABLE = 'Analytics are temporarily unavailable. Try again later.';
+/** treg's error codes are third-party text: only a plain code is kept (for the logs and kind mapping), never prose. */
+const ERROR_CODE = /^[a-z][a-z0-9_.-]{0,63}$/;
+/** The team-level refusals the owner alert may name; anything else is stored as 'team_unavailable'. */
+const ALERT_KINDS = new Set(['insufficient_balance', 'platform_daily_cap_reached', 'trial_allowance_reached']);
 
 /**
  * treg's refusal (X-Treg-Error: 1) as a kind. `code` is the body's `error` string (e.g. 'tag_blocked').
@@ -222,15 +226,18 @@ export function createTreg({ env = process.env, fetch = globalThis.fetch, now = 
     const token = String(env.TREG_TOKEN || '');
     if (!token) throw config('Analytics data isn’t set up.', 'Add the TREG_TOKEN Secret (a member-role agent token) in Replit Secrets.');
     const metered = entry.maxCostUsd != null;
-    const maxCostUsd = Number(opts.maxCostUsd);
-    if (metered && !(Number.isFinite(maxCostUsd) && maxCostUsd > 0)) throw config('A metered treg call needs a price ceiling.');
+    const asked = Number(opts.maxCostUsd);
+    if (metered && !(Number.isFinite(asked) && asked > 0)) throw config('A metered treg call needs a price ceiling.');
+    // never above the table's ceiling for that endpoint: a caller can lower it, not raise it
+    const maxCostUsd = metered ? Math.min(asked, entry.maxCostUsd) : null;
     const idempotencyKey = String(opts.idempotencyKey || '');
     if (!idempotencyKey || idempotencyKey.length > 255) throw config('A treg call needs an Idempotency-Key.');
     const { tag, meta: metaHeader } = identity(ctx);
     if (!book?.enabled) throw config('Usage tracking needs Supabase.', 'Add SUPABASE_URL and SUPABASE_SECRET_KEY, and run the integrations migration.');
-    if (metered) await checkCaps(ctx.userId, Math.round(maxCostUsd * 1e6));
 
     const verb = String(method || entry.method || 'POST').toUpperCase();
+    // the table's method only: a write can't be dressed up as a read (and repeated after a timeout)
+    if (verb !== entry.method) throw config('That analytics source is called another way.');
     const url = `${base}/call/${entry.endpointId}${queryString(query)}`;
     const headers = {
       'x-treg-token': token,
@@ -247,7 +254,8 @@ export function createTreg({ env = process.env, fetch = globalThis.fetch, now = 
       headers['content-type'] = 'application/json';
       init.body = JSON.stringify(body);
     }
-    const oneShot = entry.oneShot === true || opts.oneShot === true;
+    // treg's routed tools are reads (GET or POST); anything else is a write and is never repeated
+    const oneShot = entry.oneShot === true || opts.oneShot === true || (verb !== 'GET' && verb !== 'POST');
     const timeoutMs = Math.max(1, Number(opts.timeoutMs) || DEFAULT_TIMEOUT_MS);
     const row = {
       customer_tag: tag,
@@ -261,25 +269,30 @@ export function createTreg({ env = process.env, fetch = globalThis.fetch, now = 
     };
 
     return gate(tag, async () => {
+      // the cap check runs inside the customer's slot, so at most `maxInFlight` calls can pass it on the same
+      // spend (spec §3.1: overshoot is about one call each), however many the caller queues at once
+      if (metered) await checkCaps(ctx.userId, Math.round(maxCostUsd * 1e6));
       let got = await attempt(url, init, timeoutMs);
+      let afterTimeout = false;
       if (got.timedOut) {
         await book.write({ ...row, outcome: 'timeout', cost_micro: 0, http_status: null });
         // a read may be asked once more with the same key: treg answers the stored result for free
         if (oneShot) throw new TregError('timeout', KIND_COPY.timeout, { status: 504 });
         // give treg a moment to finish the first one (a 409 means it's still running: the caller tries later)
         await new Promise((r) => setTimeout(r, replayDelayMs));
+        afterTimeout = true;
         got = await attempt(url, init, timeoutMs);
         if (got.timedOut) {
           await book.write({ ...row, outcome: 'timeout', cost_micro: 0, http_status: null });
           throw new TregError('timeout', KIND_COPY.timeout, { status: 504 });
         }
       }
-      return settle(got, row);
+      return settle(got, row, { afterTimeout });
     });
   }
 
   /** Read the answer, write its ledger row, and return it or throw the mapped error. */
-  async function settle({ res, body }, row) {
+  async function settle({ res, body }, row, { afterTimeout = false } = {}) {
     const h = res.headers;
     const callId = h.get('x-treg-call-id') || null;
     const replay = /^(1|true)$/i.test(h.get('x-treg-idempotent-replay') || '');
@@ -318,7 +331,7 @@ export function createTreg({ env = process.env, fetch = globalThis.fetch, now = 
     let reason = null;
     let period;
     if (tregRefusal) {
-      reason = typeof body?.error === 'string' ? body.error.slice(0, 64) : null;
+      reason = typeof body?.error === 'string' && ERROR_CODE.test(body.error) ? body.error : null;
       kind = tregErrorKind(res.status, reason);
       if (kind === 'customer_cap') period = /month/i.test(String(body?.period ?? '')) ? 'month' : 'day';
     } else if (res.ok || res.status >= 500) {
@@ -326,9 +339,12 @@ export function createTreg({ env = process.env, fetch = globalThis.fetch, now = 
     } else {
       kind = 'bad_request';
     }
-    await book.write({ ...base, outcome: `error:${kind}`, cost_micro: cost });
+    // our repeat after a timeout found the first call still running: treg will charge it, so the row is left
+    // for the billing job to settle by call id (GET /calls/<id>), like a 410 (outcome 'error:uncertain')
+    const outcome = kind === 'in_progress' && afterTimeout ? 'error:uncertain' : `error:${kind}`;
+    await book.write({ ...base, outcome, cost_micro: cost });
     safeLog('treg_call_refused', { endpoint: row.endpoint, status: res.status, kind, reason }, log);
-    if (kind === 'team_unavailable') await raiseAlert(reason || 'team_unavailable');
+    if (kind === 'team_unavailable') await raiseAlert(ALERT_KINDS.has(reason) ? reason : 'team_unavailable');
     throw new TregError(kind, kind === 'customer_cap' && period === 'month' ? 'You’ve reached this month’s analytics limit.' : KIND_COPY[kind], {
       status: res.status,
       callId,
