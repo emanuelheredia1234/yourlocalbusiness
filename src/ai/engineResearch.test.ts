@@ -19,6 +19,7 @@ vi.mock('./claude', async (orig) => ({
 }));
 
 import { runTask } from './engine';
+import { RECHECK_AFTER_MS } from './claude';
 import { stepInput, strategyResearchTask } from './strategyTasks';
 
 const fetchMock = vi.fn();
@@ -98,10 +99,38 @@ describe('why the built-in engine answered (RunResult.code)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('server_down: your AI server isn’t running', async () => {
+  it('server_down: your AI server isn’t running (asked again, it doesn’t answer)', async () => {
     useRuntime.getState().set({ server: 'down' });
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
     const res = await runTask(strategyResearchTask, input(), opts());
     expect(res).toMatchObject({ provider: 'local', code: 'server_down' });
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(['/api/health']);
+  });
+
+  it('one request that couldn’t reach your server doesn’t turn the AI off: a few seconds on, the next task asks it again and uses it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+      expect(await runTask(strategyResearchTask, input(), opts())).toMatchObject({ provider: 'local', code: 'network' });
+      expect(useRuntime.getState().server).toBe('down');
+      // straight after, it isn't asked again yet
+      fetchMock.mockClear();
+      expect(await runTask(strategyResearchTask, input(), opts())).toMatchObject({ provider: 'local', code: 'server_down' });
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.setSystemTime(Date.now() + RECHECK_AFTER_MS);
+      fetchMock.mockImplementation(async (url: string) =>
+        String(url).endsWith('/api/health')
+          ? new Response(JSON.stringify({ ok: true, ai: { ready: true, providers: [], routing: { strategy: ['anthropic'] } } }), { status: 200 })
+          : new Response(JSON.stringify({ text: JSON.stringify(STRATEGY_QA.research), meta: qaMeta(qaResearchMeta()) }), { status: 200 }),
+      );
+      const res = await runTask(strategyResearchTask, input(), opts());
+      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(['/api/health', '/api/ai/generate']);
+      expect(res).toMatchObject({ provider: 'server' });
+      expect(res.code).toBeUndefined();
+      expect(useRuntime.getState().server).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('daily_limit: the server refused before sending anything', async () => {

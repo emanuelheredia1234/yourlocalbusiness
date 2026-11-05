@@ -97,6 +97,9 @@ const SERVER_CODES: Record<string, string> = {
   DAILY_LIMIT: 'daily_limit',
 };
 
+/** When your server last failed to answer (a request or a health check); 0 once it answers. */
+let unreachableAt = 0;
+
 /**
  * Ask your server's AI (server/ai-server.mjs): it sends the prompt to the keys that power this
  * function, with each key's model and effort, and says which one answered and what it used.
@@ -113,9 +116,11 @@ export async function callServerAI(fn: string, prompt: string, opts: ServerCallO
     });
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw new AIError('Stopped.', 'cancelled');
+    unreachableAt = Date.now();
     useRuntime.getState().set({ server: 'down' });
     throw new AIError('Could not reach your AI server.', 'network');
   }
+  unreachableAt = 0;
   useRuntime.getState().set({ server: 'ok' });
   const body = (await res.json().catch(() => null)) as { text?: string; meta?: unknown; error?: string; code?: string } | null;
   if (!res.ok) {
@@ -162,22 +167,42 @@ function agentsHealth(v: unknown): AgentsHealth | undefined {
   };
 }
 
-/** Ask the server which keys are ready and what powers each function. */
-export async function pingServer(serverUrl: string): Promise<boolean> {
+/** Ask the server which keys are ready and what powers each function (`timeoutMs`: no answer by then counts as down). */
+export async function pingServer(serverUrl: string, o: { timeoutMs?: number } = {}): Promise<boolean> {
   try {
-    const res = await serverFetch(serverUrl, '/api/health', { method: 'GET' });
+    const res = await serverFetch(serverUrl, '/api/health', { method: 'GET', ...(o.timeoutMs ? { signal: AbortSignal.timeout(o.timeoutMs) } : {}) });
     const body = res.ok ? ((await res.json().catch(() => null)) as { ok?: boolean; ai?: Partial<AIServerState> } | null) : null;
     const ok = body?.ok === true;
     const ai = body?.ai;
+    unreachableAt = ok ? 0 : Date.now();
     useRuntime.getState().set({
       server: ok ? 'ok' : 'down',
       ai: ok && ai ? { reachable: true, ready: ai.ready === true, providers: Array.isArray(ai.providers) ? ai.providers : [], routing: ai.routing && typeof ai.routing === 'object' ? ai.routing : {}, posting: ai.posting && typeof ai.posting === 'object' ? ai.posting : undefined, agents: agentsHealth(ai.agents) } : { ...NO_AI_SERVER, reachable: ok },
     });
     return ok;
   } catch {
+    unreachableAt = Date.now();
     useRuntime.getState().set({ server: 'down', ai: NO_AI_SERVER });
     return false;
   }
+}
+
+let rechecking: Promise<boolean> | null = null;
+/** A "server down" older than this is checked again before the app decides without your server. */
+export const RECHECK_AFTER_MS = 5_000;
+
+/**
+ * One request that couldn't reach your server marks it down, and the app pings it again only when the tab
+ * opens or comes back. Before deciding without it (the built-in engine instead, a free Strategy run), ask
+ * again: only when it's marked down and the last failure is at least `olderThanMs` old (0: whenever it's
+ * marked down), one health check at a time. True when your server answers.
+ */
+export async function recheckServer(serverUrl: string, olderThanMs = RECHECK_AFTER_MS): Promise<boolean> {
+  const rt = useRuntime.getState();
+  if (__ARTIFACT_BUILD__ || rt.server !== 'down') return rt.server === 'ok';
+  if (Date.now() - unreachableAt < olderThanMs) return false;
+  rechecking ??= pingServer(serverUrl, { timeoutMs: 8_000 }).finally(() => (rechecking = null));
+  return rechecking;
 }
 
 /** Same tolerance as the runtime: whole reply, a fenced block, or first { / [ to last } / ]. */
