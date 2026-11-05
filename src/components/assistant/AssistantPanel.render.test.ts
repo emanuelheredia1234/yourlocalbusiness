@@ -19,13 +19,15 @@ vi.mock('@/store/assistant', async (importOriginal) => ({
 
 import { afterEach } from 'vitest';
 import type { AgentsHealth } from '@/lib/agentTypes';
+import { TooltipProvider } from '@/components/ui/shadcn/tooltip';
 import { newProject } from '@/store/defaults';
 import { defaultSettings } from '@/store/defaults';
 import { NO_AI_SERVER, useRuntime } from '@/lib/platform';
 import AssistantPanel from './AssistantPanel';
 
 const m = (role: ChatMessage['role'], text: string, extra: Partial<ChatMessage> = {}): ChatMessage => ({ id: `m-${role}-${text.length}`, role, text, at: 1, ...extra });
-const render = () => renderToStaticMarkup(createElement(AssistantPanel, { onClose: () => {} }));
+// the panel's icon buttons have tooltips: the app mounts their provider in main.tsx
+const render = () => renderToStaticMarkup(createElement(TooltipProvider, null, createElement(AssistantPanel, { onClose: () => {} })));
 
 beforeEach(() => {
   const project = { ...newProject('business', 'existing'), id: 'p1', onboarded: true };
@@ -58,8 +60,8 @@ describe('the chat panel', () => {
     expect(html).toContain('Help me write my first post');
     expect(html).toContain('<label for="assistant-input" class="sr-only">Message the assistant</label>');
     expect(html).toContain('Enter sends, Shift+Enter starts a new line.');
-    // a full-height sheet on phones, about 400×600 at the bottom right from tablets up
-    expect(html).toMatch(/class="fixed inset-0 z-\[45\][^"]*sm:bottom-4 sm:right-4 sm:h-\[600px\][^"]*sm:w-\[400px\]/);
+    // full screen on phones, a 400px sheet at the right from 640px, docked beside the stage from 1440px (no scrim)
+    expect(html).toMatch(/class="fixed inset-0 z-overlay[^"]*sm:bottom-2 sm:right-2 sm:top-2 sm:w-\[400px\][^"]*sm:shadow-dialog min-\[1440px\]:shadow-xs/);
   });
 
   it('shows each kind of message', () => {
@@ -82,7 +84,7 @@ describe('the chat panel', () => {
     };
     const html = render();
     expect(html).toContain('What is due?</p>');
-    expect(html).toContain('<a href="#calendar" class="link">calendar</a>');
+    expect(html).toMatch(/<a href="#calendar" class="link">calendar<svg/);
     expect(html).toContain('<span class="sr-only">Done:</span>');
     expect(html).toContain('Used your AI');
     // a button from before a reload can't be pressed
@@ -92,7 +94,7 @@ describe('the chat panel', () => {
     expect(html).toContain('About $0.18');
     expect(html).toContain('You said no.');
     expect(html).toContain('role="alert"');
-    expect(html).toContain('Open Settings → AI');
+    expect(html).toContain('Open Settings › AI keys');
     expect(html).toContain('Stopped.');
     expect(html).toContain('Thinking…');
     expect(html).toContain('aria-label="Stop the assistant"');

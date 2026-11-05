@@ -20,14 +20,16 @@ describe('the chat button', () => {
     fake.chat = { open: false, running: false, threads: {}, runProjectId: null, setOpen: () => {} };
   });
 
-  it('is a round button at the bottom right, above the page and below windows, named “Open assistant”, with an AI mark', () => {
+  it('is a round button at the bottom right (phones only), above the page and below windows, named “Open assistant”, with the AI mark and no badge', () => {
     const html = renderToStaticMarkup(createElement(Assistant));
     expect(html).toContain('aria-label="Open assistant"');
     expect(html).toContain('aria-controls="assistant-panel"');
-    expect(html).toMatch(/class="fixed z-\[45\][^"]*rounded-full/);
+    expect(html).toMatch(/class="fixed z-launcher[^"]*rounded-full[^"]*md:hidden/);
     expect(html).toContain('right:max(16px, env(safe-area-inset-right, 0px))');
     expect(html).toContain('bottom:max(16px, env(safe-area-inset-bottom, 0px))');
-    expect(html).toMatch(/aria-hidden="true"[^>]*>AI<\/span>/);
+    // the Spark in the aura, and no "AI" badge that reads like a count
+    expect(html).toContain('fill="url(#ylb-aura)"');
+    expect(html).not.toMatch(/>AI<\/span>/);
   });
 
   it('shows that it’s working while a turn runs with the panel closed', () => {
@@ -66,8 +68,9 @@ describe('a reply', () => {
 
   it('links app pages in the app, and https pages in a new tab', () => {
     const html = text('Open the [calendar](#calendar), [AI settings](#workspace-settings/ai) or [Manus](https://manus.im).');
-    expect(html).toContain('<a href="#calendar" class="link">calendar</a>');
-    expect(html).toContain('<a href="#workspace-settings" class="link">AI settings</a>');
+    // an app page opens in the app, with an arrow after its name
+    expect(html).toMatch(/<a href="#calendar" class="link">calendar<svg[^>]*aria-hidden="true"[^>]*>[\s\S]*?<\/svg><\/a>/);
+    expect(html).toMatch(/<a href="#workspace-settings" class="link">AI settings<svg/);
     expect(html).toMatch(/<a href="https:\/\/manus.im" target="_blank" rel="noopener noreferrer"[^>]*>Manus/);
     expect(appLink('#workspace-settings/ai')).toEqual({ route: 'workspace-settings', tab: 'ai' });
     expect(appLink('#marketing-social:create')).toEqual({ route: 'marketing-social', tab: 'create' });
