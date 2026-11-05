@@ -44,6 +44,12 @@ export function createConnectionRoutes(deps = {}) {
       reply(req, res, 429, { error: 'Too many requests.', code: 'RATE_LIMITED' });
       return true;
     }
+    // a declared size over the limit is refused before reading (readRaw drops the connection mid-body)
+    if (Number(req.headers['content-length']) > WEBHOOK_LIMIT) {
+      reply(req, res, 413, { error: 'Request too large.', code: 'BAD_REQUEST' }, { connection: 'close' });
+      req.resume();
+      return true;
+    }
     let raw;
     try {
       raw = await readRaw(req, WEBHOOK_LIMIT);
