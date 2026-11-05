@@ -170,7 +170,7 @@ export function ConnectedAccounts() {
   return (
     <div className="flex flex-col gap-6">
       {hint && (
-        <Callout tone="warn" title="Not set up yet">
+        <Callout tone="warn" title="Owner setup">
           {hint}
         </Callout>
       )}
