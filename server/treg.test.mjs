@@ -324,6 +324,33 @@ describe('errors', () => {
     });
   }
 
+  it('a key reused for a different request (422) is our mistake: config with an admin hint, never left to settle as uncertain', async () => {
+    const { treg, tag } = setup();
+    const k = key();
+    await treg.call('x.profile', { body: { username: 'a' } }, ctx(), { maxCostUsd: 0.01, idempotencyKey: k });
+    const err = await treg.call('x.profile', { body: { username: 'b' } }, ctx(), { maxCostUsd: 0.01, idempotencyKey: k }).catch((e) => e);
+    expect(err).toMatchObject({ kind: 'config', status: 422 });
+    expect(tregErrorKind(422, 'idempotency_key_reused')).toBe('config');
+    expect(tregErrorKind(410, 'idempotency_outcome_unknown')).toBe('uncertain');
+    expect((await ledgerRows(tag)).map((r) => r.outcome)).toEqual(['ok', 'error:config']);
+  });
+
+  it('stores X-Treg-Call-Id only when it is a treg call id (32 hex), never other text from the answer', async () => {
+    const odd = async (url, init) => {
+      const res = await fetch(url, init);
+      const headers = new Headers(res.headers);
+      headers.set('x-treg-call-id', 'call id with spaces https://evil.example');
+      return new Response(await res.text(), { status: res.status, headers });
+    };
+    const { treg, tag } = setup({ opts: { fetch: odd } });
+    const out = await treg.call('x.profile', { body: { username: 'a' } }, ctx(), { maxCostUsd: 0.01, idempotencyKey: key() });
+    expect(out.meta.callId).toBeNull();
+    expect((await ledgerRows(tag))[0].call_id).toBeNull();
+    const plain = setup();
+    const ok = await plain.treg.call('x.profile', { body: { username: 'a' } }, ctx(), { maxCostUsd: 0.01, idempotencyKey: key() });
+    expect(ok.meta.callId).toMatch(/^[0-9a-f]{32}$/);
+  });
+
   it('the X-Treg-Upstream-Failed header inside a 200 is upstream', async () => {
     const { treg } = setup();
     mock.fail('treg.x.user.profile', { upstreamFailed: true });

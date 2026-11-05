@@ -76,7 +76,8 @@ export async function reconcile({ ledger, admin, now = () => Date.now(), days = 
           const found = await admin.call(id);
           checked += 1;
           if (!found) missing += 1;
-        } catch {
+        } catch (e) {
+          if (e?.kind === 'bad_request' || e?.kind === 'not_found') continue; // that one id only
           break; // treg busy: the totals above still stand
         }
       }
@@ -143,6 +144,9 @@ export async function settlePending({ ledger, admin, now = () => Date.now(), log
       info = await admin.call(r.call_id);
     } catch (e) {
       safeLog('billing_settle_failed', { kind: e?.kind }, log);
+      // a refusal about this one call (a bad id, treg refusing that lookup) mustn't stall every other row;
+      // treg busy, down or the token refused: stop this round and try again in 5 minutes
+      if (e?.kind === 'bad_request' || e?.kind === 'not_found') continue;
       break;
     }
     const charged = chargedFrom(info);

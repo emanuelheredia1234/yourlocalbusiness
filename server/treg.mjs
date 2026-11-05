@@ -51,6 +51,8 @@ const META_VALUE = /^[A-Za-z0-9._:-]{1,128}$/;
 const GENERIC_UNAVAILABLE = 'Analytics are temporarily unavailable. Try again later.';
 /** treg's error codes are third-party text: only a plain code is kept (for the logs and kind mapping), never prose. */
 const ERROR_CODE = /^[a-z][a-z0-9_.-]{0,63}$/;
+/** X-Treg-Call-Id is 32 hex (treg-digest §7); anything else is third-party text and isn't stored or looked up. */
+const CALL_ID = /^[0-9a-f]{32}$/i;
 /** The team-level refusals the owner alert may name; anything else is stored as 'team_unavailable'. */
 const ALERT_KINDS = new Set(['insufficient_balance', 'platform_daily_cap_reached', 'trial_allowance_reached']);
 
@@ -68,7 +70,8 @@ export function tregErrorKind(status, code) {
   if (status === 429 && (c === 'share_busy' || c === 'provider_rate_limited')) return 'busy';
   if ((status === 503 && c === 'provider_capacity_unavailable') || (status === 502 && c === 'route_failed')) return 'unavailable';
   if (status === 409) return 'in_progress';
-  if (status === 410 || /^idempotency_/.test(c)) return 'uncertain';
+  // 410 idempotency_* only: a 422 for a key reused on another request is our own mistake (config), not a charge
+  if (status === 410) return 'uncertain';
   if (status === 429) return 'busy';
   if (status >= 500) return 'unavailable';
   return 'config';
@@ -294,7 +297,8 @@ export function createTreg({ env = process.env, fetch = globalThis.fetch, now = 
   /** Read the answer, write its ledger row, and return it or throw the mapped error. */
   async function settle({ res, body }, row, { afterTimeout = false } = {}) {
     const h = res.headers;
-    const callId = h.get('x-treg-call-id') || null;
+    const rawCallId = h.get('x-treg-call-id') || '';
+    const callId = CALL_ID.test(rawCallId) ? rawCallId.toLowerCase() : null;
     const replay = /^(1|true)$/i.test(h.get('x-treg-idempotent-replay') || '');
     let cost = intHeader(h, 'x-treg-cost-micro') ?? 0;
     if (replay) {

@@ -44,7 +44,8 @@ export function createTregAdmin({ env = process.env, fetch = globalThis.fetch, l
       data = null;
     }
     if (res.ok) return { status: res.status, data };
-    const reason = typeof data?.error === 'string' ? data.error.slice(0, 64) : null;
+    // treg's body is third-party text (a 402 carries the balance and a top-up link): keep a plain code only
+    const reason = typeof data?.error === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/.test(data.error) ? data.error : null;
     safeLog('treg_admin_refused', { path: path.replace(/cust_[0-9a-f]{24}|[0-9a-f]{32}/g, ':id'), status: res.status, reason }, log);
     if (res.status === 404) throw new TregError('not_found', 'treg doesn’t have that.', { status: 404 });
     if (res.status === 401 || res.status === 403) throw new TregError('config', 'treg refused the billing token.', { status: res.status, hint: 'Check TREG_ADMIN_TOKEN (an admin-role agent token) and TREG_ORG_ID in Replit Secrets.' });

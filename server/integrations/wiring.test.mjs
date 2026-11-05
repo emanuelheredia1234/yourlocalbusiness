@@ -349,7 +349,8 @@ describe('ai-server.mjs with the integrations', () => {
       ['POST', '/api/analytics/refresh'],
       ['GET', '/api/analytics/snapshots?projectId=p1'],
       ['POST', '/api/seo/google/publish'],
-      ['GET', '/api/billing/me'],
+      // /api/billing/me is built (WP3) and needs only Supabase and CUSTOMER_TAG_SECRET; the owner routes still
+      // need TREG_ADMIN_TOKEN and TREG_ORG_ID, which this server doesn't have
       ['GET', '/api/billing/customers'],
     ]) {
       const r = await fetch(`${base}${p}`, { method, headers: auth, ...(method === 'POST' ? { body: '{}' } : {}) });

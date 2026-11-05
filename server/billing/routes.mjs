@@ -62,11 +62,16 @@ export function createBillingRoutes({
   let settling = null;
   const settleOnce = () => (settling ??= settlePending({ ledger, admin, now, log }).finally(() => (settling = null)));
 
-  /** What's missing for usage tracking and billing, by Secret name (empty when ready). */
-  function missing() {
+  /**
+   * What's missing, by Secret name (empty when ready). A user's own usage needs only the ledger and the tag
+   * secret: their treg calls are tracked (and charged) without the admin token, so they must see them too.
+   * The owner routes and the settle job also need treg's admin token and team id.
+   */
+  function missing({ ownUsageOnly = false } = {}) {
     const out = [];
     if (!db?.enabled) out.push('SUPABASE_URL and SUPABASE_SECRET_KEY (and the integrations migration)');
     if (String(env.CUSTOMER_TAG_SECRET || '').length < 16) out.push('CUSTOMER_TAG_SECRET');
+    if (ownUsageOnly) return out;
     if (!env.TREG_ADMIN_TOKEN) out.push('TREG_ADMIN_TOKEN');
     if (!env.TREG_ORG_ID) out.push('TREG_ORG_ID');
     return out;
@@ -279,9 +284,9 @@ export function createBillingRoutes({
       return true;
     }
     try {
-      const gaps = missing();
-      if (gaps.length) throw notSetUp(`Usage tracking needs these in Replit Secrets: ${gaps.join(', ')}.`, 'Usage isn’t available yet.');
       const sub = path.slice(BILLING_PREFIX.length);
+      const gaps = missing({ ownUsageOnly: sub === 'me' });
+      if (gaps.length) throw notSetUp(`Usage tracking needs these in Replit Secrets: ${gaps.join(', ')}.`, 'Usage isn’t available yet.');
       const m = req.method;
       if (sub === 'me') {
         if (m !== 'GET') return false;

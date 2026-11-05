@@ -138,14 +138,25 @@ describe('the routes', () => {
   it('answer 503 NOT_SET_UP until billing is set up, naming the Secrets to the owner only', async () => {
     const s = await serve({ env: envFor({ TREG_ORG_ID: '', TREG_ADMIN_TOKEN: '' }) });
     try {
-      const forUser = await s.as('ana')('GET', '/api/billing/me');
-      expect(forUser.status).toBe(503);
-      expect(forUser.json).toEqual({ error: expect.any(String), code: 'NOT_SET_UP' });
+      // a user's own usage needs only the ledger and the tag secret: their calls are charged without the admin token
+      const own = await s.as('ana')('GET', '/api/billing/me');
+      expect(own.status).toBe(200);
+      expect(own.json.usage.today).toEqual({ costMicro: 0, calls: 0 });
       const forOwner = await s.as('owner')('GET', '/api/billing/customers');
+      expect(forOwner.status).toBe(503);
       expect(forOwner.json.hint).toMatch(/TREG_ADMIN_TOKEN, TREG_ORG_ID/);
       expect(forOwner.text).not.toContain(MOCK_TREG.adminToken);
     } finally {
       await s.close();
+    }
+    const noTag = await serve({ env: envFor({ CUSTOMER_TAG_SECRET: '' }) });
+    try {
+      const forUser = await noTag.as('ana')('GET', '/api/billing/me');
+      expect(forUser.status).toBe(503);
+      expect(forUser.json).toEqual({ error: expect.any(String), code: 'NOT_SET_UP' });
+      expect((await noTag.as('owner')('GET', '/api/billing/me')).json.hint).toMatch(/CUSTOMER_TAG_SECRET/);
+    } finally {
+      await noTag.close();
     }
   });
 
@@ -461,6 +472,27 @@ describe('the settle job’s rules', () => {
   });
 });
 
+describe('the settle job and one bad call', () => {
+  it('a lookup refused for one call (a bad id or a 4xx) skips that row only; treg down stops the round', async () => {
+    const ledger = createLedger({ db });
+    const good = crypto.randomBytes(16).toString('hex');
+    mock.ledger.push({ callId: good, customer: tagOf('ana'), endpointId: 'treg.x.user.posts', charged: 900, reserved: 1000, at: iso(Date.now()), outcome: 'ok' });
+    await db.insert('usage_ledger', row('ana', { outcome: 'pending', cost_micro: 1000, call_id: good, created_at: iso(Date.now() - 10 * 60_000) }));
+    // a newer row (looked at first) whose lookup is refused
+    await db.insert('usage_ledger', row('ana', { outcome: 'pending', cost_micro: 1000, call_id: 'not-a-treg-id', created_at: iso(Date.now() - 5 * 60_000) }));
+    const real = createTregAdmin({ env: envFor() });
+    const refusing = { ...real, setUp: true, call: async (id) => (id === good ? real.call(id) : Promise.reject(Object.assign(new Error('x'), { name: 'TregError', kind: 'bad_request' }))) };
+    expect(await settlePending({ ledger, admin: refusing })).toBe(1);
+    expect(await db.select('usage_ledger', { call_id: good, outcome: 'settled' })).toHaveLength(1);
+    // treg unreachable: the round stops at the first row (nothing is asked twice in a round)
+    const asked = [];
+    const down = { setUp: true, call: async (id) => { asked.push(id); throw Object.assign(new Error('x'), { name: 'TregError', kind: 'unavailable' }); } };
+    await db.insert('usage_ledger', row('ana', { outcome: 'pending', cost_micro: 1, call_id: crypto.randomBytes(16).toString('hex'), created_at: iso(Date.now() - 4 * 60_000) }));
+    expect(await settlePending({ ledger, admin: down })).toBe(0);
+    expect(asked).toHaveLength(1);
+  });
+});
+
 describe('the admin client', () => {
   it('uses the admin token, never public-token, and treats a missing budget or call as nothing', async () => {
     const admin = createTregAdmin({ env: envFor() });
@@ -471,6 +503,18 @@ describe('the admin client', () => {
     const off = createTregAdmin({ env: { TREG_BASE_URL: mock.url } });
     await expect(off.budgets.list()).rejects.toMatchObject({ kind: 'config', hint: expect.stringMatching(/TREG_ADMIN_TOKEN/) });
     expect(Object.keys(admin)).not.toContain('publicToken');
+  });
+
+  it('keeps only a plain error code from a refusal: treg’s prose (a balance, a top-up link) never reaches the logs', async () => {
+    const lines = [];
+    const log = { log: (l) => lines.push(l) };
+    const fetch = async () => new Response(JSON.stringify({ error: 'balance 1.23 USD, top up at https://treg.example/topup/x', topup_url: 'https://treg.example/topup/x' }), { status: 400 });
+    const admin = createTregAdmin({ env: envFor(), fetch, log });
+    const err = await admin.budgets.put(`cust_${'a'.repeat(24)}`, { status: 'active' }).catch((e) => e);
+    expect(err).toMatchObject({ kind: 'bad_request', reason: null });
+    expect(lines.join('\n')).not.toMatch(/topup|1\.23/);
+    const coded = createTregAdmin({ env: envFor(), fetch: async () => new Response(JSON.stringify({ error: 'invalid_budget' }), { status: 400 }), log });
+    expect(await coded.budgets.put(`cust_${'a'.repeat(24)}`, {}).catch((e) => e.reason)).toBe('invalid_budget');
   });
 });
 
