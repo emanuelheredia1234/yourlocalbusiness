@@ -40,6 +40,13 @@ describe('page structure', () => {
     expect(out).toContain('Create post');
   });
 
+  it('PageHeader: actions span the meta row only when there is meta (no empty grid row under the title)', () => {
+    const bare = html(h(PageHeader, { title: 'Brain', actions: h('button', { className: 'btn btn-primary' }, 'New skill') }));
+    expect(bare).not.toContain('md:row-span-2');
+    const withMeta = html(h(PageHeader, { title: 'Strategy', meta: 'Updated today', actions: h('button', { className: 'btn btn-primary' }, 'Run') }));
+    expect(withMeta).toMatch(/class="[^"]*ml-auto md:row-span-2[^"]*"><button/);
+  });
+
   it('PageHeader: a caller’s margin replaces the default (classes merge)', () => {
     const out = html(h(PageHeader, { title: 'Strategy', className: 'mb-4' }));
     expect(out).toContain('<header class="mb-4">');

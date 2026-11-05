@@ -8,7 +8,8 @@
 //   - arbitrary text sizes/colours, radii and shadows (text-[…], rounded-[…], shadow-[…]; shadow-[inset…] is
 //     allowed in primitives.tsx) and raw #hex colours in class strings;
 //   - bg-white / text-white (except on media overlays marked data-media), bg-ink + text-surface/text-accent blocks;
-//   - legacy classes: eyebrow, btn-accent, text-accent, bg-accent, accent-soft, on-accent, primary-2;
+//   - legacy classes (Phase 3 deleted them, so they would render unstyled): eyebrow, btn-accent, dotgrid, awning,
+//     text-accent, bg-accent, accent-soft, on-accent, primary-2, info and info-soft;
 //     font-bold, font-extrabold; uppercase (except kbd and font-mono values);
 //   - lucide Sparkles / WandSparkles outside src/components/ai (the Spark glyph is the one AI icon; the brand-logo
 //     icon set in ui/Icon.tsx is content and may offer a sparkles logo);
@@ -31,7 +32,7 @@ const ALLOW = [/^src\/components\/visuals\//, /^src\/components\/brand\/Logo\.ts
 /** where the raw aura recipes may appear (the AI layer itself, the assistant, sign-in, onboarding, and the primitives that wrap them) */
 const AURA_OK = [/^src\/components\/ai\//, /^src\/components\/assistant\//, /^src\/components\/auth\/AuthGate\.tsx$/, /^src\/pages\/onboarding\//, /^src\/components\/ui\/primitives\.tsx$/];
 const AURA_CLASSES = new Set(['aura-edge', 'ai-card', 'thinking', 'orb', 'shimmer-text', 'ai-hero-glow']);
-const LEGACY = new Set(['eyebrow', 'btn-accent', 'font-bold', 'font-extrabold']);
+const LEGACY = new Set(['eyebrow', 'btn-accent', 'dotgrid', 'awning', 'awning-scallop', 'font-bold', 'font-extrabold']);
 
 function walk(p, out) {
   let st;
@@ -78,7 +79,7 @@ for (const file of files) {
       if (/#[0-9a-fA-F]{3,8}\b/.test(tokens[i])) report(file, src, at, 'raw hex colour', tokens[i]);
       if ((b === 'bg-white' || b === 'text-white' || b.startsWith('bg-white/') || b.startsWith('text-white/')) && !/data-media/.test(tagAround(src, s.start))) report(file, src, at, 'white instead of a token', tokens[i]);
       if (LEGACY.has(b)) report(file, src, at, 'legacy class', tokens[i]);
-      if (/^(text|bg|border|ring|from|to|via)-accent(\/|$|-soft)/.test(b) || /^(bg|text)-on-accent/.test(b) || /(^|-)primary-2(\/|$)/.test(b) || b === 'accent-soft') report(file, src, at, 'legacy colour', tokens[i]);
+      if (/^(text|bg|border|ring|from|to|via)-accent(\/|$|-soft)/.test(b) || /^(bg|text)-on-accent/.test(b) || /(^|-)primary-2(\/|$)/.test(b) || /^(text|bg|border|ring|from|to|via)-info(\/|$|-soft)/.test(b) || b === 'accent-soft') report(file, src, at, 'legacy colour', tokens[i]);
       if (b === 'uppercase' && !has('kbd') && !has('font-mono')) report(file, src, at, 'uppercase text', tokens[i]);
       if (!auraOk && AURA_CLASSES.has(b)) report(file, src, at, 'raw aura recipe outside the AI layer', tokens[i]);
     }

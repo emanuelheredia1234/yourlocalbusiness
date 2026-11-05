@@ -54,13 +54,23 @@ function focusBack(el: Element | null) {
 }
 
 /**
+ * The control to give the focus back to: the focused element, or, for an item of a dropdown menu (which is gone
+ * once the menu closes), the button that opened that menu.
+ */
+function openerOf(el: Element | null): Element | null {
+  const menu = el instanceof HTMLElement ? el.closest('[role="menu"]') : null;
+  const by = menu?.getAttribute('aria-labelledby');
+  return (by && document.getElementById(by)) || el;
+}
+
+/**
  * The element that had the focus when an overlay opened (its trigger). Radix dialogs without a
  * DialogTrigger hand the focus to nothing on close; pass the returned handler as onCloseAutoFocus.
  */
 function useReturnFocus(open: boolean) {
   const opener = useRef<Element | null>(null);
   useLayoutEffect(() => {
-    if (open && typeof document !== 'undefined') opener.current = document.activeElement;
+    if (open && typeof document !== 'undefined') opener.current = openerOf(document.activeElement);
   }, [open]);
   return (e: Event) => {
     e.preventDefault();
@@ -651,7 +661,7 @@ export function confirmAction(opts: Omit<ConfirmReq, 'resolve'>): Promise<boolea
   return new Promise((resolve) => {
     // only one question at a time: one still open counts as "no"
     const prev = useConfirmStore.getState().req;
-    const opener = prev ? prev.opener : typeof document !== 'undefined' ? document.activeElement : null;
+    const opener = prev ? prev.opener : typeof document !== 'undefined' ? openerOf(document.activeElement) : null;
     prev?.resolve(false);
     useConfirmStore.getState().set({ ...opts, resolve, opener });
   });
@@ -774,7 +784,7 @@ export function PageHeader({
         </div>
         {meta && <div className="flex min-w-0 flex-[1_1_auto] flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted md:col-start-1 md:row-start-2">{meta}</div>}
         {/* empty:hidden: actions that render nothing leave no gap */}
-        {actions && <div className={cn('flex flex-wrap items-center gap-2 empty:hidden md:col-start-2 md:row-span-2 md:row-start-1 md:ml-0 md:shrink-0 md:justify-end md:self-end', meta && 'ml-auto')}>{actions}</div>}
+        {actions && <div className={cn('flex flex-wrap items-center gap-2 empty:hidden md:col-start-2 md:row-start-1 md:ml-0 md:shrink-0 md:justify-end md:self-end', meta && 'ml-auto md:row-span-2')}>{actions}</div>}
       </div>
     </header>
   );
