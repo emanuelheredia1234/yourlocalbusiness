@@ -59,7 +59,7 @@ export function LogoDesigner({ brand, onChange, iconOptions, paletteOptions, wit
                     </button>
                   );
                 })}
-                <button type="button" onClick={() => setLogo({ monogram: !logo.monogram })} className={cn('flex h-10 min-w-10 items-center justify-center rounded-md border px-2 font-brand text-[13px] font-bold transition-colors duration-120', picked(logo.monogram))} aria-pressed={logo.monogram} aria-label="Use your initials">
+                <button type="button" onClick={() => setLogo({ monogram: !logo.monogram })} className={cn('flex h-10 min-w-10 items-center justify-center rounded-md border px-2 font-brand text-ui font-bold transition-colors duration-120', picked(logo.monogram))} aria-pressed={logo.monogram} aria-label="Use your initials">
                   Aa
                 </button>
               </div>
