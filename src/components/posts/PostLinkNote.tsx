@@ -1,38 +1,45 @@
 // Where a post's link goes when it isn't in the post: the first comment to add, or the link to keep in the
-// profile's bio, each with Copy. The app never comments or changes a profile by itself; Manus adds the first
-// comment only when it posts the post right away.
+// profile's bio, each with Copy. The app adds the first comment when your account is connected; otherwise add it
+// yourself. The app never changes a profile.
 import { Link2, MessageSquare } from 'lucide-react';
 import type { LinkPlacement, Post } from '@/lib/types';
 import { cn, truncate } from '@/lib/utils';
 import { LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, linkMovePatch, linkText, pageLink, postPlacement } from '@/lib/pageLink';
-import { networkLabel } from '@/ai/manusPost';
+import { networkLabel } from '@/ai/postShared';
+import { canPostFrom } from '@/lib/posting';
+import { useConnections } from '@/store/analytics';
 import { useStore } from '@/store/useStore';
 import { AutoTextarea, CopyButton, Field } from '../ui/primitives';
 
 /** "comment", or "reply" on X (the first comment there is a reply to your own post). */
 const commentWord = (post: Pick<Post, 'platform'>) => (post.platform === 'x' ? 'reply' : 'comment');
 
-/** The post's Manus try, unless it failed (a failed try never got to the comment). */
-const manusTry = (post: Post) => (post.external && post.external.state !== 'failed' ? post.external : undefined);
+/** The post's last try, unless it failed (a failed try never got to the comment). */
+const lastTry = (post: Post) => (post.external && post.external.state !== 'failed' ? post.external : undefined);
 
-/** Whether the owner still has to add the comment themselves (Manus isn't adding it, or didn't). */
-function ownerAdds(post: Post): boolean {
-  const c = manusTry(post)?.comment;
-  return c?.state !== 'added' && c?.state !== 'asked';
+/** Whether the owner still has to add the comment themselves. */
+function ownerAdds(post: Post, connected: boolean): boolean {
+  const ext = lastTry(post);
+  if (ext?.via === 'manus') return ext.comment?.state !== 'added';
+  if (ext?.via === 'api') return ext.state !== 'working';
+  return !connected || post.platform === 'tiktok';
 }
 
-/** What the first comment needs from you now. Manus's reason is its own words: shown as text, clipped. */
-function commentStatus(post: Post): string {
+/** What the first comment needs from you now (an older Manus report is its own words: shown as text, clipped). */
+function commentStatus(post: Post, connected: boolean): string {
   const word = commentWord(post);
-  const ext = manusTry(post);
-  const c = ext?.comment;
-  if (c?.state === 'added') return 'Manus added it.';
-  if (c?.state === 'failed') return `Manus couldn’t add it${c.detail ? ` (${truncate(c.detail, 120)})` : ''}. Add it yourself.`;
-  if (c?.state === 'unknown') return `Check that it’s on ${networkLabel(post.platform)}. If not, add it yourself.`;
-  if (c?.state === 'asked') return 'Manus adds it right after posting.';
-  if (ext?.mode === 'now') return post.status === 'published' ? `Manus posted it without this ${word}: add it yourself.` : `Manus is posting it without this ${word}: add it yourself once it’s live.`;
-  if (ext) return `Manus only schedules the post. Once it’s live, add this as the first ${word}.`;
-  return post.status === 'published' ? `If it isn’t there yet, add this as the first ${word}.` : `Add this as the first ${word} when you post.`;
+  const name = networkLabel(post.platform);
+  const ext = lastTry(post);
+  if (ext?.via === 'manus') {
+    const c = ext.comment;
+    if (c?.state === 'added') return 'It was added with the post (sent with Manus earlier).';
+    if (c?.state === 'failed') return `It wasn’t added${c.detail ? ` (${truncate(c.detail, 120)})` : ''}. Add it yourself.`;
+    return `Check that it’s on ${name}. If not, add it yourself.`;
+  }
+  if (ext?.via === 'api') return ext.state === 'working' ? 'The app adds it right after posting.' : `Check that it’s on ${name}. If not, add it yourself.`;
+  if (post.status === 'published') return `If it isn’t there yet, add this as the first ${word}.`;
+  if (post.platform === 'tiktok') return `Add this as the first ${word} in TikTok after posting.`;
+  return connected ? `The app adds it when it posts this. Otherwise add it yourself.` : `Add this as the first ${word} when you post.`;
 }
 
 /**
@@ -41,20 +48,22 @@ function commentStatus(post: Post): string {
  */
 export function PostLinkNote({ post, compact, className }: { post: Post; compact?: boolean; className?: string }) {
   const project = useStore((s) => s.projects.find((p) => p.id === post.projectId));
+  const { byPlatform } = useConnections();
+  const connected = !__ARTIFACT_BUILD__ && canPostFrom(byPlatform[post.platform]);
   const placement = postPlacement(post);
   if (!project || placement === 'post') return null;
   if (placement === 'comment') {
     const text = post.firstComment?.trim();
     if (!text) return null;
     const word = commentWord(post);
-    const title = ownerAdds(post) ? `Add this as the first ${word}` : post.platform === 'x' ? 'First reply' : 'First comment';
+    const title = ownerAdds(post, connected) ? `Add this as the first ${word}` : post.platform === 'x' ? 'First reply' : 'First comment';
     if (compact)
       return (
         <div role="note" aria-label={title} className={cn('flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-small', className)}>
           <p className="flex min-w-0 items-center gap-1.5 font-medium text-ink-2">
             <MessageSquare size={14} aria-hidden="true" className="shrink-0 text-muted" /> {title}
           </p>
-          <span className="min-w-0 flex-1 truncate text-muted">{commentStatus(post)}</span>
+          <span className="min-w-0 flex-1 truncate text-muted">{commentStatus(post, connected)}</span>
           <CopyButton text={text} label={`Copy ${word}`} size="xs" />
         </div>
       );
@@ -65,7 +74,7 @@ export function PostLinkNote({ post, compact, className }: { post: Post; compact
         </p>
         <p className="clamp-2 mt-1 whitespace-pre-line break-words text-ink-2">{text}</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="min-w-[11rem] flex-1 text-caption text-muted">{commentStatus(post)}</span>
+          <span className="min-w-[11rem] flex-1 text-caption text-muted">{commentStatus(post, connected)}</span>
           <CopyButton text={text} label={`Copy ${word}`} size="xs" />
         </div>
       </div>
@@ -119,7 +128,7 @@ export function LinkFields({ post, onChange }: { post: Post; onChange: (patch: P
         </select>
       </Field>
       {placement === 'comment' && (
-        <Field label={label('comment')} htmlFor={`fc-${post.id}`} hint="When Manus posts it right away, it adds this too. Otherwise, add it yourself after posting.">
+        <Field label={label('comment')} htmlFor={`fc-${post.id}`} hint="The app adds this right after posting when your account is connected. Otherwise, add it yourself after posting.">
           <AutoTextarea id={`fc-${post.id}`} value={post.firstComment ?? ''} onChange={(v) => onChange({ firstComment: v })} minRows={2} />
         </Field>
       )}

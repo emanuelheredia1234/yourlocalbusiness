@@ -60,8 +60,8 @@ function plainCard(tool: AnyTool, kind: MediaKind): ConfirmCardSpec {
 
 function windowNote(w: PubWindow): string {
   switch (w.kind) {
-    case 'manus-post':
-      return `Opened “Post with Manus” for ${w.postIds.length === 1 ? 'the post' : `${w.postIds.length} posts`}: check the account and when, then confirm there`;
+    case 'post-now':
+      return 'Opened the post’s posting window: check what goes out, then confirm there (or post it yourself and mark it posted)';
     case 'manus-groups':
       return 'Opened “Post to groups”: choose the groups, then confirm there';
     case 'mark-posted':

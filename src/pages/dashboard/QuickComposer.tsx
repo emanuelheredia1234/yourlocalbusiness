@@ -6,7 +6,7 @@ import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES, isVi
 import { suggestTopics } from '@/ai/local/social';
 import { buildComposerPosts, composerTaskInput } from '@/ai/socialPosts';
 import { LINK_FACTS, LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, linkText, pageLink, postLinkFor } from '@/lib/pageLink';
-import { networkLabel } from '@/ai/manusPost';
+import { networkLabel } from '@/ai/postShared';
 import { postTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore } from '@/store/useStore';
@@ -24,7 +24,8 @@ import { LogoMark } from '@/components/brand/Logo';
 import { PostImagePanel } from '@/components/images/PostImagePanel';
 import { VideoPanel } from '@/components/images/VideoPanel';
 import { postVideoPrompt, releaseMedia } from '@/ai/image';
-import { manusSetupHint, useCanOfferManus, useManusPost, useManusReady } from '@/components/posts/ManusPost';
+import { PostNowButton } from '@/components/posts/PostNowButton';
+import { PlatformChip } from '@/components/posts/PlatformIcon';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 /** "2026-11-06" + "12:30" as a time in ms (the person's own time zone). */
@@ -38,8 +39,10 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
   const project = useActiveProject()!;
   const fid = useId();
   const phone = useMediaQuery('(max-width: 639px)');
-  const manusReady = useManusReady();
-  const offerManus = useCanOfferManus();
+  // the posts just saved: each gets its own posting button (posting is always one confirmed post at a time)
+  const [savedIds, setSavedIds] = useState<string[]>([]);
+  const allPosts = useStore((s) => s.posts);
+  const saved = savedIds.map((id) => allPosts.find((p) => p.id === id)).filter((p): p is Post => !!p && p.status === 'scheduled');
   const addPosts = useStore((s) => s.addPosts);
   const schedule = useStore((s) => s.schedulePosts);
   const ai = useAI(postTask);
@@ -137,8 +140,8 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
     ai.reset();
   };
 
-  /** manus: on your calendar, then straight to Manus (it posts them, now or at their time) */
-  const act = (mode: 'calendar' | 'draft' | 'manus') => {
+  /** calendar: on your calendar (then post each one from here, or later); draft: saved as a draft */
+  const act = (mode: 'calendar' | 'draft') => {
     if (!hasDraft) return;
     if (!platforms.length) {
       toast({ kind: 'info', title: 'Pick at least one platform' });
@@ -148,9 +151,9 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
     addPosts(posts);
     if (mode !== 'draft') schedule(posts.map((p) => p.id));
     reset();
+    setSavedIds(mode === 'calendar' ? posts.map((p) => p.id) : []);
     onDone?.();
-    if (mode === 'manus') useManusPost.getState().open(posts.map((p) => p.id));
-    else if (mode === 'calendar') toast({ kind: 'success', title: posts.length > 1 ? `${posts.length} posts added to your calendar` : 'Added to your calendar', body: `For ${date} at ${time}. When it’s time, post with Manus, or post it yourself and mark it posted.`, action: { label: 'Open calendar', run: () => navigate('calendar') } });
+    if (mode === 'calendar') toast({ kind: 'success', title: posts.length > 1 ? `${posts.length} posts added to your calendar` : 'Added to your calendar', body: `For ${date} at ${time}. Post ${posts.length > 1 ? 'each one' : 'it'} from the app when you’re ready, or post it yourself and mark it posted.`, action: { label: 'Open calendar', run: () => navigate('calendar') } });
     else toast({ kind: 'success', title: 'Saved to drafts', action: { label: 'Open calendar', run: () => navigate('calendar') } });
   };
 
@@ -339,15 +342,24 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
           />
         )}
 
+        {!hasDraft && saved.length > 0 && (
+          <section aria-label="Just added" className="flex flex-col gap-2 border-t border-line pt-5">
+            <p className="text-small font-medium text-ink">Added to your calendar</p>
+            <ul className="flex flex-col gap-2">
+              {saved.map((p) => (
+                <li key={p.id} className="flex flex-wrap items-center gap-2">
+                  <PlatformChip platform={p.platform} />
+                  <span className="min-w-0 flex-1 truncate text-small text-ink-2">{p.headline}</span>
+                  <PostNowButton post={p} />
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
         {hasDraft && (
           <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
-            {offerManus && (
-              <button type="button" className="btn btn-secondary" onClick={() => act('manus')} title="Manus posts it on your accounts, in its own browser: right away, or scheduled for this date and time">
-                <Send /> Post with Manus
-              </button>
-            )}
             <span className="ml-auto flex items-center gap-2 max-sm:hidden">{footer}</span>
-            <InfoTip label="How posting works">{manusReady ? 'Nothing posts by itself: Manus posts it when you confirm (now, or scheduled for this time), or you post it yourself and mark it posted.' : `Nothing posts by itself. ${manusSetupHint()} Until then, copy the text and post it yourself, then mark it posted.`}</InfoTip>
+            <InfoTip label="How posting works">Nothing posts by itself. Once it’s saved, post it from the app on an account you connected (you confirm each post), or post it yourself and mark it posted.</InfoTip>
             <MoreMenu label="More post actions" items={[{ label: 'Clear the draft', icon: <X />, onSelect: () => reset(true), danger: true }]} />
             {phone && (
               <div className="sm:hidden">

@@ -13,7 +13,9 @@ import { PageErrorBoundary } from '@/components/layout/ErrorBoundary';
 import { ConfirmHost, Toaster } from '@/components/ui/primitives';
 import { installLeaveGuard } from '@/components/ui/leave';
 import { PostEditorHost } from '@/components/posts/PostCard';
-import { ManusPostHost, useManusPostWatcher } from '@/components/posts/ManusPost';
+import { PublishConfirmHost } from '@/components/posts/PublishConfirm';
+import { PostItYourselfHost } from '@/components/posts/PostItYourselfModal';
+import { PublishJobWatcher } from '@/components/posts/PublishJobWatcher';
 import { MarkPostedHost } from '@/components/posts/PostActions';
 import { ManusGroupsHost, useGroupShareWatcher } from '@/components/posts/ManusGroups';
 import { ListingWindowHost } from '@/components/studio/ListingWindowHost';
@@ -89,7 +91,6 @@ export default function App() {
   // the assistant docks beside the stage at 1440px and wider
   const docked = assistantOpen && wide;
   useThemeSync();
-  useManusPostWatcher();
   useLeadsWatcher();
   useGroupShareWatcher();
   useVoiceReadWatcher();
@@ -197,7 +198,9 @@ export default function App() {
       <MobileNav />
       <CommandPalette />
       <PostEditorHost />
-      <ManusPostHost />
+      <PublishConfirmHost />
+      <PostItYourselfHost />
+      <PublishJobWatcher />
       <AgentBuildHost />
       <HtmlPreviewHost />
       <ManusGroupsHost />

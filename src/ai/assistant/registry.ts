@@ -244,7 +244,7 @@ export interface DangerSpec {
 
 /** The app's own windows a public (Pub) tool may open; the owner confirms there. */
 export type PubWindow =
-  | { kind: 'manus-post'; postIds: string[] }
+  | { kind: 'post-now'; postId: string }
   | { kind: 'manus-groups'; postId: string }
   | { kind: 'mark-posted'; postId: string }
   /** the open project's Marketplace listing: publish it (the window shows exactly what goes public), or show or hide your listings to other people */

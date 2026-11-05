@@ -1,5 +1,6 @@
-// Nothing in the app marks a post published by itself any more: only Manus's report, or you.
-// Workspaces saved by older versions get their made-up "published" posts back on the calendar.
+// Nothing in the app marks a post published by itself: only the server's publish job after you confirmed
+// (applyPublishJob), an older Manus report, or you. Workspaces saved by older versions get their made-up
+// "published" posts back on the calendar.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useStore } from './useStore';
 import { cleanWorkspace, isInventedNotice, purgeInventedData } from './cleanup';
@@ -7,7 +8,11 @@ import { defaultSettings, newProject } from './defaults';
 
 const post = (id: string, extra: object = {}) =>
   ({ id, projectId: 'p1', status: 'scheduled', platform: 'facebook', format: 'image', style: 'minimal', postType: 'tip', headline: id, visualPrompt: '', caption: '', hashtags: [], scheduledAt: '2026-11-03T10:00:00.000Z', watermark: false, source: 'composer', createdAt: 1, updatedAt: 1, seed: 1, ...extra }) as never;
+// an older post sent with Manus (read-only now)
 const ext = (state: string) => ({ via: 'manus', network: 'facebook', mode: 'now', taskId: 't', taskUrl: 'https://manus.im/app/t', state, message: '', page: '', scheduledFor: '', requestedAt: 1, checkedAt: 1 });
+// a post the app sent through the connected account
+const apiExt = (state: string, jobId = 'job_1') => ({ via: 'api', jobId, network: 'facebook', mode: 'now', taskId: jobId, taskUrl: '', state, message: '', page: '', scheduledFor: '', requestedAt: 1, checkedAt: 1 });
+const job = (state: string, extra: object = {}) => ({ id: 'job_1', postId: 'a', platform: 'facebook', state, requestedAt: '2026-11-05T10:00:00.000Z', ...extra }) as never;
 
 beforeEach(() => {
   const project = { ...newProject('product', 'new'), id: 'p1' };
@@ -45,6 +50,42 @@ describe('marking posts posted', () => {
   });
 });
 
+describe('what the server says about a post the app sent', () => {
+  it('follows the job: sending, then posted by the app with its link', () => {
+    useStore.setState({ posts: [post('a')] });
+    useStore.getState().applyPublishJob('a', job('sending'));
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'scheduled', external: { via: 'api', jobId: 'job_1', state: 'working', network: 'facebook' } });
+    useStore.getState().applyPublishJob('a', job('sent', { url: 'https://facebook.com/p/1', finishedAt: '2026-11-05T10:00:05.000Z' }));
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'published', publishedBy: 'api', publishedAt: '2026-11-05T10:00:05.000Z', postUrl: 'https://facebook.com/p/1', statusBeforePosted: 'scheduled', external: { via: 'api', state: 'posted', url: 'https://facebook.com/p/1' } });
+    // a post the app posted isn't the owner's mark to undo
+    useStore.getState().unmarkPosted('a');
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'published', publishedBy: 'api' });
+  });
+
+  it('keeps failed and unknown apart, with the server’s plain reason', () => {
+    useStore.setState({ posts: [post('a')] });
+    useStore.getState().applyPublishJob('a', job('failed', { errorCode: 'MEDIA_UNSUPPORTED', errorMessage: 'Facebook refused the image format' }));
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'scheduled', external: { state: 'failed', message: 'Facebook refused the image format' } });
+    useStore.getState().applyPublishJob('a', job('unknown'));
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'scheduled', external: { state: 'unknown' } });
+  });
+
+  it('ignores another post’s job and an older job', () => {
+    useStore.setState({ posts: [post('a', { external: { ...apiExt('working', 'job_new'), requestedAt: Date.parse('2026-11-05T11:00:00.000Z') } })] });
+    useStore.getState().applyPublishJob('a', job('failed'));
+    expect(useStore.getState().posts[0].external).toMatchObject({ jobId: 'job_new', state: 'working' });
+    useStore.getState().applyPublishJob('a', { ...(job('sent') as object), postId: 'b' } as never);
+    expect(useStore.getState().posts[0].status).toBe('scheduled');
+  });
+
+  it('a post you marked yourself while it was unknown stays yours when the check finds it', () => {
+    useStore.setState({ posts: [post('a', { external: apiExt('unknown') })] });
+    useStore.getState().markPosted('a', { url: 'https://facebook.com/mine' });
+    useStore.getState().applyPublishJob('a', job('sent', { url: 'https://facebook.com/p/1' }));
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'published', publishedBy: 'manual', postUrl: 'https://facebook.com/mine', external: { state: 'posted' } });
+  });
+});
+
 describe('cleaning up what older versions made up', () => {
   it('puts pretend-published posts back on the calendar and keeps real ones', () => {
     useStore.setState({
@@ -52,6 +93,7 @@ describe('cleaning up what older versions made up', () => {
         post('fake', { status: 'published', publishedAt: '2026-11-01T10:00:00.000Z' }),
         post('fbscheduled', { status: 'published', publishedAt: '2026-11-01T10:00:00.000Z', external: { ...ext('scheduled'), mode: 'schedule' } }),
         post('manus', { status: 'published', publishedAt: '2026-11-01T10:00:00.000Z', external: ext('posted') }),
+        post('app', { status: 'published', publishedBy: 'api', publishedAt: '2026-11-01T10:00:00.000Z', external: apiExt('posted') }),
         post('mine', { status: 'published', publishedBy: 'manual', publishedAt: '2026-11-01T10:00:00.000Z' }),
         post('sample', { status: 'published', source: 'sample' }),
         post('draft', { status: 'draft' }),
@@ -59,7 +101,8 @@ describe('cleaning up what older versions made up', () => {
     });
     expect(cleanWorkspace()).toBe(true);
     const byId = Object.fromEntries(useStore.getState().posts.map((p) => [p.id, p]));
-    expect(Object.keys(byId).sort()).toEqual(['draft', 'fake', 'fbscheduled', 'manus', 'mine']);
+    expect(Object.keys(byId).sort()).toEqual(['app', 'draft', 'fake', 'fbscheduled', 'manus', 'mine']);
+    expect(byId.app).toMatchObject({ status: 'published', publishedBy: 'api' });
     expect(byId.fake).toMatchObject({ status: 'scheduled', publishedAt: undefined });
     expect(byId.fbscheduled).toMatchObject({ status: 'scheduled', publishedAt: undefined, external: { state: 'scheduled' } });
     expect(byId.manus).toMatchObject({ status: 'published', publishedBy: 'manus', publishedAt: '2026-11-01T10:00:00.000Z' });

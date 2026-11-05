@@ -7,7 +7,7 @@ import type { GroupResult, GroupShare, Post } from '@/lib/types';
 import { getBlob } from '@/lib/storage';
 import { linkText, placeLink } from '@/lib/pageLink';
 import { ManusError, createManusTask, readManusTask, sendFileToManus, type ManusState } from './manus';
-import { postText } from './manusPost';
+import { postText } from './postShared';
 
 /**
  * The text for groups: the link goes in the text (Manus never comments in groups, and a "bio" there is the

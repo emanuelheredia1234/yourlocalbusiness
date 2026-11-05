@@ -70,8 +70,8 @@ export const excludedTools: AnyTool[] = [
     args: why,
     refusal: {
       text: __ARTIFACT_BUILD__
-        ? 'Manus only gets the app’s own fixed instructions: posting, groups, photos and brand voice, from their buttons. I don’t start Manus tasks myself. Talking to Manus and Build with Manus work in the self-hosted app.'
-        : 'Manus only gets the app’s fixed instructions or your own words: posting, groups, photos and brand voice from their buttons, pages and assets from Build with Manus, and anything else from you, with the chat’s To: Manus switch. I don’t start Manus tasks myself, but I can draft a message for you to send.',
+        ? 'Manus only gets the app’s own fixed instructions: Facebook groups, photos and brand voice, from their buttons. I don’t start Manus tasks myself. Talking to Manus and Build with Manus work in the self-hosted app.'
+        : 'Manus only gets the app’s fixed instructions or your own words: Facebook groups, photos and brand voice from their buttons, pages and assets from Build with Manus, and anything else from you, with the chat’s To: Manus switch. I don’t start Manus tasks myself, but I can draft a message for you to send.',
     },
   }),
 ];

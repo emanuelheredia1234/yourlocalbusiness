@@ -9,7 +9,7 @@ import { hashStr } from '@/lib/utils';
 import { PLATFORMS } from './knowledge';
 import { TONES, parseDirectives } from './brain';
 import { ManusError, createManusTask, readManusTask, type ManusState } from './manus';
-import { WAITING_COPY } from './manusPost';
+import { WAITING_COPY } from './manusShared';
 
 /** How many of the latest posts Manus reads: enough to hear the voice, without spending credits on more. */
 export const VOICE_POSTS = 15;
@@ -525,7 +525,7 @@ export function voiceSummary(r: VoiceReport): string {
 // ───────────── the task ─────────────
 
 /**
- * Hand the profile to Manus: one read-only task. It runs on the Manus key's Social posting power (its work on
+ * Hand the profile to Manus: one read-only task. It runs on the Manus key's Facebook groups posting power (its work on
  * your social accounts), so it's ready wherever posting with Manus is. One-shot: never retried.
  */
 export async function startVoiceRead(o: { platform: SocialPlatform; profile: string; brandName: string; replace?: boolean }): Promise<VoiceRead> {

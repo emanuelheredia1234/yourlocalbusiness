@@ -134,7 +134,7 @@ const listPosts = defineTool({
 const getPost = defineTool({
   name: 'get_post',
   class: 'R',
-  summary: 'One post in full: text, hashtags, where its link goes (post, first comment or bio) and its first comment, media, when, and what Manus reported for it.',
+  summary: 'One post in full: text, hashtags, where its link goes (post, first comment or bio) and its first comment, media, when, and what happened when it was sent (by the app, or by Manus earlier).',
   args: { id: arg.string({ desc: 'a post id' }) },
   validate: ({ id }) => (findPost(id) ? null : missingPost(id)),
   run: ({ id }) => {
@@ -158,7 +158,11 @@ const getPost = defineTool({
         media: p.media ? { kind: p.media.kind, name: p.media.name, madeBy: p.media.generated?.provider ?? 'uploaded' } : null,
         watermark: p.watermark,
         source: p.source,
-        manus: ext ? { state: ext.state, network: ext.network, mode: ext.mode ?? 'schedule', account: ext.page, scheduledFor: ext.scheduledFor, link: ext.url ?? null, report: untrusted(ext.message), comment: ext.comment ? { state: ext.comment.state, report: untrusted(ext.comment.detail, 160) ?? null } : null } : null,
+        sent: !ext
+          ? null
+          : ext.via === 'api'
+            ? { by: 'the app', state: ext.state, network: ext.network, link: ext.url ?? null, ...(ext.state === 'unknown' ? { next: 'It may have gone out: the owner checks it (Check again on the post) or marks it posted. Never send it again.' } : {}), ...(ext.message ? { reason: untrusted(ext.message, 200) } : {}) }
+            : { by: 'Manus (earlier, read-only)', state: ext.state, network: ext.network, mode: ext.mode ?? 'schedule', account: ext.page, scheduledFor: ext.scheduledFor, link: ext.url ?? null, report: untrusted(ext.message), comment: ext.comment ? { state: ext.comment.state, report: untrusted(ext.comment.detail, 160) ?? null } : null },
         facebookGroups: gs ? { state: gs.state, groups: gs.groups.length, results: gs.results.map((r) => ({ group: clip(r.group, 80), state: r.state, link: r.url ?? null, detail: untrusted(r.detail, 160) })) } : null,
       },
       note: `Read the post “${clip(p.headline, 60) || 'Untitled'}”`,
@@ -204,7 +208,7 @@ async function myUsage(signal: AbortSignal): Promise<unknown> {
 const getAIStatus = defineTool({
   name: 'get_ai_status',
   class: 'R',
-  summary: 'What the AI here can do: which functions have a key (self-hosted), photos, videos, Manus posting, the Brain switch, and today’s AI use and limits when signed in.',
+  summary: 'What the AI here can do: which functions have a key (self-hosted), photos, videos, connected accounts for posting, the Brain switch, and today’s AI use and limits when signed in.',
   args: {},
   run: async (_a, ctx) => {
     const rt = useRuntime.getState();

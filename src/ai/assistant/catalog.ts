@@ -20,7 +20,7 @@ export type ToolGroupName = (typeof TOOL_GROUP_NAMES)[number];
 
 /** What each group covers, in a few words (shown with its tools' names). */
 export const GROUP_ABOUT: Record<ToolGroupName, string> = {
-  social: 'posts, the calendar, campaign setup, 30-day plan, 7-day batch, post images and videos, posting with Manus',
+  social: 'posts, the calendar, campaign setup, 30-day plan, 7-day batch, post images and videos, posting from the app (the owner confirms), Facebook groups with Manus',
   studio: 'prices and packages, the Marketplace listing (copy, images, publishing), outline and chapters or business model, PDF and workbook',
   marketing: 'lead magnet, emails, subscribers, leads, ad campaigns, the SEO page, code & assets, published pages',
   brand: 'brand kit, Brain skills and documents, brand voice, analytics, the Marketplace, product ideas, projects, backup',

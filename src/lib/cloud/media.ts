@@ -3,7 +3,7 @@
 // Uploads and deletions wait in a queue that survives reloads; files from other devices download
 // the first time they're shown.
 
-import { CLOUD_FILE_LIMIT as LIMIT, getLocalBlob, type MediaCloud } from '@/lib/storage';
+import { CLOUD_FILE_LIMIT as LIMIT, getBlob, getLocalBlob, putBlob, type MediaCloud } from '@/lib/storage';
 import { safeStorage } from '@/lib/storage';
 import { useSyncStatus } from './sync';
 
@@ -34,6 +34,9 @@ export type MediaSync = MediaCloud & {
   /** stop for good without forgetting the queue (another tab takes over) */
   dispose(): void;
 };
+
+/** The signed-in account's file sync (the latest one started), for ensureUploaded. */
+let active: MediaSync | null = null;
 
 export function createMediaSync(client: StorageApi, userId: string): MediaSync {
   const qKey = `ylb-media-sync:${userId}`;
@@ -121,7 +124,7 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
     report();
   }
 
-  return {
+  const api: MediaSync = {
     upload(id) {
       if (!q.up.includes(id)) q.up.push(id);
       q.del = q.del.filter((x) => x !== id);
@@ -224,6 +227,7 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
     },
     dispose() {
       disposed = true;
+      if (active === api) active = null;
       running = false;
       if (timer) clearTimeout(timer);
       timer = null;
@@ -231,7 +235,68 @@ export function createMediaSync(client: StorageApi, userId: string): MediaSync {
     forget() {
       disposed = true;
       running = false;
+      if (active === api) active = null;
       safeStorage.removeItem(qKey);
     },
   };
+  active = api;
+  return api;
+}
+
+/**
+ * Before the app posts a file through your connected account: make sure it's in your account's storage (the
+ * server reads it from there). Saves it now if it's waiting, and waits for this one file only. False when
+ * signed out, when the file is too big for the account or isn't on this device, or when time's up.
+ */
+export async function ensureUploaded(mediaId: string, timeoutMs = 120_000): Promise<boolean> {
+  const sync = active;
+  if (!sync || !/^[A-Za-z0-9_-]{1,80}$/.test(mediaId)) return false;
+  const blob = await getLocalBlob(mediaId);
+  if (blob) {
+    if (blob.size > CLOUD_FILE_LIMIT) return false;
+    // upsert: saving a file that's already there again is harmless
+    sync.upload(mediaId);
+  }
+  return sync.settleFile(mediaId, timeoutMs);
+}
+
+/** The id of a post image's JPEG copy (Instagram takes JPEG only). */
+export const jpegVariantId = (mediaId: string) => `${mediaId.slice(0, 75)}-jpg`;
+
+/**
+ * Instagram takes JPEG images only: a JPEG copy of the image, saved as its own file next to it (the original is
+ * kept). Returns the id to post: the original when it's already a JPEG, the copy otherwise, or null when the
+ * image isn't available or can't be converted in this browser.
+ */
+export async function ensureJpegVariant(mediaId: string, mime?: string): Promise<string | null> {
+  if (/^image\/jpe?g$/i.test(mime ?? '')) return mediaId;
+  const id = jpegVariantId(mediaId);
+  if (await getLocalBlob(id)) return id;
+  const blob = await getBlob(mediaId);
+  if (!blob) return null;
+  if (/^image\/jpe?g$/i.test(blob.type)) return mediaId;
+  const jpeg = await toJpeg(blob);
+  if (!jpeg) return null;
+  await putBlob(id, jpeg);
+  return id;
+}
+
+async function toJpeg(blob: Blob): Promise<Blob | null> {
+  if (typeof document === 'undefined' || typeof createImageBitmap === 'undefined') return null;
+  try {
+    const bmp = await createImageBitmap(blob);
+    const canvas = document.createElement('canvas');
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    // JPEG has no transparency: transparent parts become white, not black
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close?.();
+    return await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.9));
+  } catch {
+    return null;
+  }
 }

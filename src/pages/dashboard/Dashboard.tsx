@@ -35,7 +35,7 @@ import { postedSince, useKpis } from '@/lib/kpis';
 import { readiness } from '@/lib/readiness';
 import { STEP_LABEL, actionDone, currentWeek, hasAnySection, readStrategy, strategyNextSteps, strategyProgress, type ActionCtx } from '@/lib/strategy';
 import { actionTarget, runTarget } from '@/lib/strategyActions';
-import { networkLabel } from '@/ai/manusPost';
+import { networkLabel } from '@/ai/postShared';
 import { recommendPageType } from '@/ai/local/strategy';
 import { openPage } from '@/ai/assistant/nav';
 import { stopStrategy, useStrategyJob } from '@/ai/strategyJob';
@@ -45,8 +45,10 @@ import { BrandLogo, LogoMark } from '@/components/brand/Logo';
 import { PostFrame } from '@/components/frames/Frames';
 import { PostVisual } from '@/components/visuals/PostVisual';
 import { PlatformMark } from '@/components/posts/PlatformIcon';
-import { DueBadge, goesOutAt, isDue, manusHolds, useMarkPosted } from '@/components/posts/PostActions';
-import { ExternalBadge, ManusPostButton, useCanOfferManus } from '@/components/posts/ManusPost';
+import { DueBadge, goesOutAt, isDue, postHeld, useMarkPosted } from '@/components/posts/PostActions';
+import { PostNowButton, PublishStatus } from '@/components/posts/PostNowButton';
+import { canPostFrom } from '@/lib/posting';
+import { useConnections } from '@/store/analytics';
 import { AIThinking, AiCard, GenerateButton, Spark } from '@/components/ai/AI';
 import { Badge, Empty, MoreMenu, PageHeader, ProgressBar, Section, Skeleton, StatStrip, StatusDot, Swatch } from '@/components/ui/primitives';
 import { CHECKING_LABEL, startRun, useCheckingServer } from '@/pages/strategy/runs';
@@ -134,7 +136,7 @@ export function Dashboard() {
       ) : (
         <>
           <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
-            <PlanCard project={project} s={s} ctx={ctx} className="lg:col-span-8" primaryTaken={!!next && !manusHolds(next)} />
+            <PlanCard project={project} s={s} ctx={ctx} className="lg:col-span-8" primaryTaken={!!next && !postHeld(next)} />
             <NextPost project={project} post={next} now={now} className="lg:col-span-4" />
           </div>
           {mine.length > 0 && <Numbers project={project} posts={mine} planned={planned} now={now} k={k} />}
@@ -407,7 +409,7 @@ function PlanCard({ project, s, ctx, className, primaryTaken }: { project: Proje
 
 /** The next planned post as it will look, with the one thing to do with it (the page's only filled button). */
 function NextPost({ project, post, now, className }: { project: Project; post?: Post; now: number; className?: string }) {
-  const offer = useCanOfferManus();
+  const { byPlatform } = useConnections();
   const b = project.brand;
   if (!post) {
     return (
@@ -428,7 +430,8 @@ function NextPost({ project, post, now, className }: { project: Project; post?: 
       </section>
     );
   }
-  const held = manusHolds(post);
+  const held = postHeld(post);
+  const connected = !__ARTIFACT_BUILD__ && canPostFrom(byPlatform[post.platform]);
   const due = isDue(post, now);
   const openEditor = () => useUI.getState().openPostEditor(post.id);
   return (
@@ -462,13 +465,19 @@ function NextPost({ project, post, now, className }: { project: Project; post?: 
       </PostFrame>
       <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
         {held ? (
-          <ExternalBadge post={post} compact />
-        ) : offer ? (
-          <ManusPostButton post={post} primary />
+          <>
+            <PublishStatus post={post} compact />
+            <PostNowButton post={post} />
+          </>
+        ) : connected ? (
+          <PostNowButton post={post} primary />
         ) : (
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => useMarkPosted.getState().open(post.id)}>
-            <CheckCheck /> Mark as posted
-          </button>
+          <>
+            <PostNowButton post={post} />
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => useMarkPosted.getState().open(post.id)}>
+              <CheckCheck /> Mark as posted
+            </button>
+          </>
         )}
         <button type="button" className="btn btn-ghost btn-sm" onClick={openEditor}>
           <Pencil /> Edit
@@ -486,9 +495,9 @@ function Numbers({ project, posts, planned, now, k }: { project: Project; posts:
   const prevMade = sum('made');
   const networks = [...new Set(postedSince(posts, project.id, k.since).map((p) => networkLabel(p.platform)))];
   const upcoming = planned.find((p) => new Date(goesOutAt(p)).getTime() > now);
-  // posts the owner still has to get out (not the ones Manus holds): today's, and the ones whose day has passed
+  // posts the owner still has to get out (not the ones that are, or may be, out already): today's, and the ones whose day has passed
   const today = new Date(now).toDateString();
-  const open = planned.filter((p) => !manusHolds(p));
+  const open = planned.filter((p) => !postHeld(p));
   const dueToday = open.filter((p) => new Date(goesOutAt(p)).toDateString() === today).length;
   const overdue = open.filter((p) => isDue(p, now) && new Date(goesOutAt(p)).toDateString() !== today).length;
   return (
@@ -549,7 +558,9 @@ function Readiness({ project, posts, listed }: { project: Project; posts: Post[]
 /** A planned post's state as a dot and a word (a due one shows its badge). */
 function RowState({ post, now }: { post: Post; now: number }) {
   if (isDue(post, now) && (!post.external || post.external.state === 'failed' || post.external.state === 'scheduled')) return <DueBadge post={post} now={now} />;
-  return <StatusDot tone="primary">{manusHolds(post) ? 'With Manus' : 'Planned'}</StatusDot>;
+  if (post.external?.via === 'api' && post.external.state === 'working') return <StatusDot tone="primary" pulse>Posting…</StatusDot>;
+  if (post.external?.via === 'api' && post.external.state === 'unknown') return <StatusDot tone="warn">Check it</StatusDot>;
+  return <StatusDot tone="primary">{postHeld(post) ? 'Sent earlier' : 'Planned'}</StatusDot>;
 }
 
 /** A grid cell that keeps the region name the page had (the Section primitive takes no aria-label yet). */

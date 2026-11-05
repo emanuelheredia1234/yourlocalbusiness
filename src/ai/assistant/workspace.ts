@@ -15,20 +15,28 @@ import { getActiveProject, useStore } from '@/store/useStore';
 import { AI_FUNCTIONS, routeFor } from '../functions';
 import { clip } from './registry';
 import { assistantAvailability } from './transport';
+import { useAnalytics } from '@/store/analytics';
+import { canPostFrom } from '@/lib/posting';
+
+/** The networks the app can post on (connected accounts); the rest the owner posts and marks posted. */
+export function connectedAccounts(): string[] {
+  if (__ARTIFACT_BUILD__) return [];
+  return useAnalytics.getState().connections.filter((c) => canPostFrom(c)).map((c) => c.platform);
+}
 
 const DAY = 86_400_000;
 
-/** Planned, its time has passed, and not posted (Manus doesn't have it, or its last try failed): the calendar's "Due". */
+/** Planned, its time has passed, and not posted (not sent, or its last try failed): the calendar's "Due". */
 export const isDueNow = (p: Post, now = Date.now()) => isDue(p, now) && (!p.external || p.external.state === 'failed');
 
-/** Whether Manus can post from this view (the same test as the posting buttons, outside React). */
+/** Whether Manus can post to Facebook groups from this view (the same test as the groups button, outside React). */
 export function manusReadyNow(): boolean {
   const rt = useRuntime.getState();
   if (manusViaServer()) return !!rt.ai.routing.facebook?.includes('manus');
   return rt.zapier === 'ready' || (__ARTIFACT_BUILD__ && rt.zapier === 'checking');
 }
 
-/** What the AI here can do: writing, photos, videos and posting, in a few words each. */
+/** What the AI here can do: writing, photos, videos, and which accounts the app posts on, in a few words each. */
 export function aiSummary() {
   const rt = useRuntime.getState();
   const assistant = assistantAvailability();
@@ -42,7 +50,7 @@ export function aiSummary() {
     writing: __ARTIFACT_BUILD__ ? (rt.claude === 'available' || rt.claude === 'checking' ? 'Claude' : 'built-in engine only') : rt.server === 'down' ? 'AI server unreachable: built-in engine only' : unpowered.length ? `no key for: ${unpowered.join(', ')} (built-in engine writes those)` : 'all writing has a key',
     photos: photos.ok ? (photoRoute() === 'manus' ? 'Manus (a task, minutes, Manus credits)' : 'ready') : photos.reason,
     videos: videos.ok ? 'ready (paid per second)' : videos.reason,
-    manusPosting: manusReadyNow() ? 'ready' : 'not set up',
+    connectedAccounts: connectedAccounts(),
   };
 }
 
@@ -101,7 +109,8 @@ export function workspaceSummary(now = Date.now()) {
       posted: count('published'),
       due: due.length,
       plannedNext7Days: upcoming.filter((x) => new Date(goesOutAt(x)).getTime() < now + 7 * DAY).length,
-      withManusNow: posts.filter((x) => x.external && ['working', 'needs_input'].includes(x.external.state)).length,
+      sendingNow: posts.filter((x) => x.external?.via === 'api' && x.external.state === 'working').length,
+      notConfirmed: posts.filter((x) => x.external?.via === 'api' && x.external.state === 'unknown' && x.status !== 'published').length,
     },
     // a few posts by id, so the AI can act on them without listing first
     somePosts: [...due.slice(0, 3), ...upcoming.slice(0, 3), ...drafts.slice(0, 2)].map((x) => postLine(x, now)),
