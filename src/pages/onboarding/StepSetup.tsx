@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { Sparkles } from 'lucide-react';
 import type { Brand, ProductFormat, Project } from '@/lib/types';
 import { cn, ensureUrl, slugify } from '@/lib/utils';
 import { BUSINESS_NICHE_SUGGESTIONS, CITIES, findCity, FORMAT_LIST, matchNiche, NICHE_SUGGESTIONS } from '@/ai/knowledge';
@@ -11,17 +10,18 @@ import { AutoTextarea, Field } from '@/components/ui/primitives';
 import { BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
 import { AIThinking, GenerateButton } from '@/components/ai/AI';
 
-export function Section({ n, title, desc, children }: { n?: number; title: string; desc?: string; children: React.ReactNode }) {
+/** A titled card in a setup step (the n prop is kept for callers and no longer drawn: steps aren't numbered). */
+export function Section({ title, desc, children, actions }: { n?: number; title: string; desc?: string; children: React.ReactNode; actions?: React.ReactNode }) {
   return (
-    <section className="panel p-4 sm:p-5">
-      <div className="mb-4 flex items-start gap-3">
-        {n !== undefined && <span className="num flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-ink text-[12px] font-bold text-surface">{n}</span>}
+    <section className="card">
+      <div className="flex items-start justify-between gap-3 px-5 pb-4 pt-5">
         <div className="min-w-0">
-          <h3 className="font-display text-[16px] font-semibold leading-tight">{title}</h3>
-          {desc && <p className="mt-0.5 text-[13px] text-muted">{desc}</p>}
+          <h2 className="text-h3 text-ink">{title}</h2>
+          {desc && <p className="mt-0.5 text-small text-muted">{desc}</p>}
         </div>
+        {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
       </div>
-      {children}
+      <div className="px-5 pb-5">{children}</div>
     </section>
   );
 }
@@ -78,7 +78,7 @@ export function StepSetup({ project }: { project: Project }) {
   return (
     <div className="flex flex-col gap-4">
       <Section n={1} title={isBiz ? 'Your business' : 'Your product'} desc="This becomes the Project Context every module uses.">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
           <Field label={isBiz ? 'Business name' : 'Product or brand name'} htmlFor="bname">
             <input id="bname" className="input" placeholder={isBiz ? 'e.g. Copper & Crumb Bakery' : 'e.g. Ledgerly Tax Tracker'} value={brand.name} onChange={(e) => setBrand({ name: e.target.value, slug: slugify(e.target.value) })} />
           </Field>
@@ -89,7 +89,7 @@ export function StepSetup({ project }: { project: Project }) {
             <input id="bniche" className="input" placeholder={isBiz ? 'e.g. Bakery, Home Cleaning, Hair Salon' : 'e.g. Personal Finance'} value={isBiz ? project.businessType || project.niche : project.niche} onChange={(e) => (isBiz ? set({ businessType: e.target.value, niche: e.target.value }) : set({ niche: e.target.value }))} />
             <div className="mt-2 flex flex-wrap gap-1.5">
               {(isBiz ? BUSINESS_NICHE_SUGGESTIONS : NICHE_SUGGESTIONS).slice(0, 6).map((n) => (
-                <button key={n} type="button" className="chip" onClick={() => (isBiz ? set({ businessType: n, niche: n }) : set({ niche: n }))}>
+                <button key={n} type="button" className={cn('chip', (isBiz ? project.businessType || project.niche : project.niche) === n && 'chip-active')} onClick={() => (isBiz ? set({ businessType: n, niche: n }) : set({ niche: n }))}>
                   {n}
                 </button>
               ))}
@@ -139,16 +139,19 @@ export function StepSetup({ project }: { project: Project }) {
         <LogoDesigner brand={brand} onChange={setBrand} />
       </Section>
 
-      <Section n={3} title="Brand voice (optional)" desc="Let the AI draft your tagline, pitch and audience summary from the details above.">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <GenerateButton running={ai.running} onClick={writeCopy} size="sm">
-              Write my tagline &amp; pitch
-            </GenerateButton>
-            <span className="text-xs text-muted">Everything stays editable.</span>
-          </div>
+      <Section
+        n={3}
+        title="Brand voice (optional)"
+        desc="The AI can draft your tagline, pitch and audience from the details above. Everything stays editable."
+        actions={
+          <GenerateButton running={ai.running} onClick={writeCopy} size="sm" runningLabel="Writing…">
+            Write my tagline &amp; pitch
+          </GenerateButton>
+        }
+      >
+        <div className="flex flex-col gap-4">
           <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Tagline" htmlFor="btag">
               <input id="btag" className="input" value={brand.tagline} onChange={(e) => setBrand({ tagline: e.target.value })} />
             </Field>
@@ -166,13 +169,12 @@ export function StepSetup({ project }: { project: Project }) {
         <BrandImagesEditor brand={brand} onChange={(images) => setBrand({ images })} />
       </Section>
 
-      <Section n={5} title="Your social profiles" desc="Add your profile links or handles. Nothing gets connected: they show in post previews and tell Manus which account to post as, from its own browser where you sign in.">
-        <SocialLinksEditor socials={brand.socials} onChange={(socials) => setBrand({ socials })} projectId={project.id} />
+      <Section n={5} title="Your social profiles" desc="Links or handles. Nothing gets connected: they show in post previews and tell Manus which account to post as.">
+        <div className="-mt-4">
+          <SocialLinksEditor socials={brand.socials} onChange={(socials) => setBrand({ socials })} projectId={project.id} />
+        </div>
       </Section>
-      <p className={cn('text-xs text-muted')}>
-        <Sparkles size={12} className="mr-1 inline text-accent" />
-        Tip: you can change all of this later in Settings → Brand.
-      </p>
+      <p className="text-small text-muted">You can change all of this later in Settings › Brand.</p>
     </div>
   );
 }

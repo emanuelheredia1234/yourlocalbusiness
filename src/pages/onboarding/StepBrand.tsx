@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { Check, Globe, RefreshCw } from 'lucide-react';
+import { Check, Globe } from 'lucide-react';
 import type { Brand, Project } from '@/lib/types';
 import { cn, ensureUrl, slugify, stripProtocol } from '@/lib/utils';
 import { BUSINESS_NICHE_SUGGESTIONS } from '@/ai/knowledge';
@@ -7,8 +7,8 @@ import { generateBrandKit } from '@/ai/local/brand';
 import { brandKitTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useStore } from '@/store/useStore';
-import { AutoTextarea, ChipInput, Field } from '@/components/ui/primitives';
-import { BannerDesigner, LogoDesigner } from '@/components/brand/BrandEditors';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, AutoTextarea, ChipInput, Field, Skeleton } from '@/components/ui/primitives';
+import { LogoDesigner } from '@/components/brand/BrandEditors';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { CityInput, Section } from './StepSetup';
 
@@ -72,10 +72,20 @@ export function StepBrand({ project }: { project: Project }) {
     setBrand({ name, slug, domainIdeas: [`${slug.replace(/-/g, '')}.com`, `get${slug.replace(/-/g, '')}.com`, `${slug.replace(/-/g, '')}.co`] });
   };
 
+  const kitButton = generated ? (
+    <GenerateButton running={ai.running} onClick={generate} size="sm" runningLabel="Designing…">
+      Regenerate kit
+    </GenerateButton>
+  ) : (
+    <GenerateButton variant="ai" size="lg" running={ai.running} onClick={generate} disabled={!bizReady} runningLabel="Designing…">
+      Generate brand kit
+    </GenerateButton>
+  );
+
   return (
-    <div className="flex flex-col gap-4">
-      {isBiz && (
-        <Section n={0} title="Tell us about your business idea" desc="The brand kit is generated from these details.">
+    <div className="flex flex-col gap-6">
+      {isBiz ? (
+        <Section title="Tell us about your business idea" desc="Your brand kit is made from these details.">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Field label="Type of business" htmlFor="btype">
               <input id="btype" className="input" placeholder="e.g. Coffee shop" value={project.businessType} onChange={(e) => set({ businessType: e.target.value, niche: e.target.value })} />
@@ -87,115 +97,170 @@ export function StepBrand({ project }: { project: Project }) {
               <CityInput id="bcity2" value={cityText} onChange={(city, region, lat, lng) => set({ location: city ? { city, region, lat, lng } : null })} />
             </Field>
           </div>
-          <div className="mt-3 flex flex-wrap gap-1.5">
+          <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Quick picks">
             {BUSINESS_NICHE_SUGGESTIONS.map((n) => (
-              <button key={n} type="button" className={cn('chip', project.businessType === n && 'chip-active')} onClick={() => set({ businessType: n, niche: n })}>
+              <button key={n} type="button" className={cn('chip', project.businessType === n && 'chip-active')} aria-pressed={project.businessType === n} onClick={() => set({ businessType: n, niche: n })}>
+                {project.businessType === n && <Check aria-hidden="true" />}
                 {n}
               </button>
             ))}
           </div>
+          <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-line pt-5">
+            {!bizReady && <p className="mr-auto text-small text-muted">Add your business type and city to generate.</p>}
+            {generated && <p className="mr-auto text-small text-muted">Names, logo, palette, banner and messaging: edit anything below.</p>}
+            {kitButton}
+          </div>
         </Section>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-small text-muted">Names, logo, palette, banner and messaging, made from your product idea.</p>
+          {kitButton}
+        </div>
       )}
 
-      <div className="flex flex-col gap-3 rounded-xl border border-line bg-surface-2/60 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="font-display text-[16px] font-semibold">AI Brand Identity Generator</p>
-            <p className="text-xs text-muted">Names, logo concept, palette, cover banner, pitch and domain ideas, all editable.</p>
+      {ai.running && (
+        <div className="ai-hero-glow flex flex-col gap-5 rounded-2xl border border-line p-5 sm:p-6" aria-busy="true">
+          <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,1fr)_272px]" aria-hidden="true">
+            <div className="flex flex-col gap-3">
+              <div className="flex gap-2">
+                <Skeleton ai className="h-7 w-28 rounded-full" />
+                <Skeleton ai className="h-7 w-32 rounded-full" />
+                <Skeleton ai className="h-7 w-24 rounded-full" />
+              </div>
+              <Skeleton ai className="h-28 w-full rounded-pop" />
+              <Skeleton ai className="h-9 w-2/3 rounded-md" />
+              <Skeleton ai className="h-9 w-1/2 rounded-md" />
+            </div>
+            <div className="flex flex-col gap-3">
+              <Skeleton ai className="aspect-[3/1] w-full rounded-stage" />
+              <Skeleton ai className="h-16 w-full rounded-pop" />
+              <div className="flex gap-1">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <Skeleton key={i} ai className="h-6 flex-1 rounded-xs" />
+                ))}
+              </div>
+            </div>
           </div>
-          {generated ? (
-            <button className="btn btn-secondary btn-sm" onClick={generate} disabled={ai.running}>
-              <RefreshCw size={14} /> Regenerate kit
-            </button>
-          ) : (
-            <GenerateButton running={ai.running} onClick={generate} disabled={!bizReady}>
-              Generate brand kit
-            </GenerateButton>
-          )}
         </div>
-        {!bizReady && <p className="text-xs text-muted">Add your business type and city to generate.</p>}
-        <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
-        {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
-      </div>
+      )}
+      {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
 
-      {generated && (
-        <>
-          <Section n={1} title="Brand name" desc="Pick one of the suggestions or type your own.">
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+      {generated && !ai.running && (
+        <div className={cn('flex flex-col gap-6 rounded-2xl', ai.result && 'ai-arrive')}>
+          <Section title="Brand name" desc="Pick one of the ideas or type your own.">
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Name ideas">
               {brand.nameOptions.map((n) => {
                 const active = brand.name === n.name;
                 return (
-                  <button key={n.name} type="button" onClick={() => pickName(n.name)} aria-pressed={active} className={cn('flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors', active ? 'border-primary bg-primary-soft ring-1 ring-primary' : 'border-line hover:bg-surface-2')}>
-                    <span className="flex w-full items-center justify-between gap-2">
-                      <span className="font-display text-[17px] font-bold tracking-[-0.01em]">{n.name}</span>
-                      {active && <Check size={16} className="shrink-0 text-primary" />}
-                    </span>
-                    <span className="text-xs leading-snug text-muted">{n.rationale}</span>
-                    <span className="mt-1 inline-flex items-center gap-1 font-mono text-[11px] text-ink-2">
-                      <Globe size={11} /> {n.domain}
-                    </span>
+                  <button key={n.name} type="button" onClick={() => pickName(n.name)} aria-pressed={active} title={n.rationale} className={cn('chip h-9 px-3.5 text-ui', active && 'chip-active')}>
+                    {active && <Check aria-hidden="true" />}
+                    {n.name}
                   </button>
                 );
               })}
             </div>
-            <Field label="Or use a custom name" htmlFor="customname" className="mt-3 max-w-md">
+            {(() => {
+              const chosen = brand.nameOptions.find((n) => n.name === brand.name);
+              return chosen ? (
+                <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted">
+                  {chosen.rationale}
+                  <span className="inline-flex items-center gap-1 font-mono text-caption text-ink-2">
+                    <Globe size={12} aria-hidden="true" /> {chosen.domain}
+                  </span>
+                </p>
+              ) : null;
+            })()}
+            <Field label="Or use a custom name" htmlFor="customname" className="mt-5 max-w-md">
               <input id="customname" className="input" value={brand.name} onChange={(e) => setBrand({ name: e.target.value, slug: slugify(e.target.value) })} onBlur={(e) => pickName(e.target.value)} />
             </Field>
           </Section>
 
-          <Section n={2} title="Logo concept" desc="Rendered live from your icon, shape, type and palette. Export it or upload your own later.">
-            <LogoDesigner brand={brand} onChange={setBrand} iconOptions={localKit.iconOptions} paletteOptions={[brand.colors, ...localKit.paletteOptions].filter((p, i, a) => a.findIndex((x) => x.primary === p.primary && x.accent === p.accent) === i)} />
-          </Section>
-
-          <Section n={3} title="Cover banner" desc="Used on your store listing and social profiles.">
-            <BannerDesigner brand={brand} onChange={setBrand} />
-          </Section>
-
-          <Section n={4} title="Description" desc="Your elevator pitch, value proposition and target audience.">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Tagline" htmlFor="tg">
-                <input id="tg" className="input" value={brand.tagline} onChange={(e) => setBrand({ tagline: e.target.value })} />
-              </Field>
-              <Field label="Personality">
-                <ChipInput values={brand.personality} onChange={(v) => setBrand({ personality: v })} placeholder="Warm, Practical…" max={5} />
-              </Field>
-              <Field label="Elevator pitch" htmlFor="pt" className="sm:col-span-2">
-                <AutoTextarea id="pt" value={brand.pitch} onChange={(v) => setBrand({ pitch: v })} minRows={2} />
-              </Field>
-              <Field label="Value proposition" htmlFor="vp">
-                <AutoTextarea id="vp" value={brand.valueProp} onChange={(v) => setBrand({ valueProp: v })} minRows={2} />
-              </Field>
-              <Field label="Target audience" htmlFor="au">
-                <AutoTextarea id="au" value={brand.audience} onChange={(v) => setBrand({ audience: v })} minRows={2} />
-              </Field>
-              <Field label="Mission" htmlFor="ms" className="sm:col-span-2">
-                <input id="ms" className="input" value={brand.mission} onChange={(e) => setBrand({ mission: e.target.value })} />
-              </Field>
+          <section className="rounded-2xl border border-line bg-surface p-5 sm:p-6" aria-labelledby="brand-board-title">
+            <div className="mb-5">
+              <h2 id="brand-board-title" className="text-h3 text-ink">
+                Logo, colours &amp; banner
+              </h2>
+              <p className="mt-0.5 text-small text-muted">Drawn live from your icon, shape, type and palette. Export it, or upload your own later.</p>
             </div>
-          </Section>
+            <LogoDesigner brand={brand} onChange={setBrand} iconOptions={localKit.iconOptions} paletteOptions={[brand.colors, ...localKit.paletteOptions].filter((p, i, a) => a.findIndex((x) => x.primary === p.primary && x.accent === p.accent) === i)} withBanner />
+          </section>
 
-          <Section n={5} title="Website" desc="Add your website if you have one. Leave it empty if not: posts then say “link in bio”.">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <Section title="Website" desc="Add yours if you have one. Without it, posts say “link in bio”.">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="Website URL (optional)" htmlFor="web">
                 <input id="web" className="input" placeholder="https://yourbusiness.com" value={brand.websiteUrl} onChange={(e) => setBrand({ websiteUrl: e.target.value })} onBlur={(e) => e.target.value && setBrand({ websiteUrl: ensureUrl(e.target.value) })} />
               </Field>
-              <Field label="URL slug" htmlFor="slug" hint="Used in the names of files you download.">
+              <Field label="File name" htmlFor="slug" hint="Used in the names of files you download.">
                 <input id="slug" className="input font-mono" value={brand.slug} onChange={(e) => setBrand({ slug: slugify(e.target.value, 40) })} />
               </Field>
             </div>
             {brand.domainIdeas.length > 0 && (
-              <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                <span className="text-xs text-muted">Domain ideas (availability not checked). Use one once you own it:</span>
+              <div className="mt-4 flex flex-wrap items-center gap-1.5">
+                <span className="mr-1 text-small text-muted">Domain ideas (not checked; use one once you own it):</span>
                 {brand.domainIdeas.map((d) => (
-                  <button key={d} className={cn('chip font-mono', stripProtocol(brand.websiteUrl) === d && 'chip-active')} onClick={() => setBrand({ websiteUrl: `https://${d}` })}>
+                  <button key={d} type="button" className={cn('chip font-mono', stripProtocol(brand.websiteUrl) === d && 'chip-active')} aria-pressed={stripProtocol(brand.websiteUrl) === d} onClick={() => setBrand({ websiteUrl: `https://${d}` })}>
                     {d}
                   </button>
                 ))}
               </div>
             )}
           </Section>
-        </>
+
+          <div className="card px-5">
+            <Accordion type="single" collapsible>
+              <AccordionItem value="words" className="border-b-0">
+                <AccordionTrigger>
+                  <span>
+                    Words that describe you
+                    <span className="mt-0.5 block text-small font-normal text-muted">Tagline, pitch, value proposition, audience and mission.</span>
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent>
+                  <div className="flex flex-col divide-y divide-line">
+                    <InlineRow label="Tagline" htmlFor="tg">
+                      <input id="tg" className={cn('input', INLINE)} value={brand.tagline} onChange={(e) => setBrand({ tagline: e.target.value })} />
+                    </InlineRow>
+                    <InlineRow label="Personality">
+                      <ChipInput values={brand.personality} onChange={(v) => setBrand({ personality: v })} placeholder="Warm, Practical…" max={5} />
+                    </InlineRow>
+                    <InlineRow label="Elevator pitch" htmlFor="pt">
+                      <AutoTextarea id="pt" rows={2} value={brand.pitch} onChange={(v) => setBrand({ pitch: v })} minRows={2} className={INLINE} />
+                    </InlineRow>
+                    <InlineRow label="Value proposition" htmlFor="vp">
+                      <AutoTextarea id="vp" rows={1} value={brand.valueProp} onChange={(v) => setBrand({ valueProp: v })} minRows={1} className={INLINE} />
+                    </InlineRow>
+                    <InlineRow label="Target audience" htmlFor="au">
+                      <AutoTextarea id="au" rows={1} value={brand.audience} onChange={(v) => setBrand({ audience: v })} minRows={1} className={INLINE} />
+                    </InlineRow>
+                    <InlineRow label="Mission" htmlFor="ms">
+                      <input id="ms" className={cn('input', INLINE)} value={brand.mission} onChange={(e) => setBrand({ mission: e.target.value })} />
+                    </InlineRow>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+          </div>
+        </div>
       )}
+    </div>
+  );
+}
+
+/** Long text edited in place: borderless until hover or focus, its text lined up with the label. */
+const INLINE = 'input-inline -mx-3 w-[calc(100%+24px)]';
+
+function InlineRow({ label, htmlFor, children }: { label: string; htmlFor?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1 py-3">
+      {htmlFor ? (
+        <label htmlFor={htmlFor} className="text-small font-medium text-ink-2">
+          {label}
+        </label>
+      ) : (
+        <p className="text-small font-medium text-ink-2">{label}</p>
+      )}
+      {children}
     </div>
   );
 }

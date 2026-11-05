@@ -1,14 +1,15 @@
-import { useEffect, useMemo } from 'react';
-import { ArrowLeft, ArrowRight, Check, Compass, Package, PartyPopper, Rocket, Search, Store, Upload, Wand2, X } from 'lucide-react';
+import { useEffect, useMemo, type ReactNode } from 'react';
+import { ArrowLeft, ArrowRight, Check, Compass, LogOut, Megaphone, Package, PencilRuler, Search, Store, Upload, X } from 'lucide-react';
 import type { Origin, Project, Track } from '@/lib/types';
 import { cn, fmtMoney, stripProtocol } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { FORMATS, matchBusinessType } from '@/ai/knowledge';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { AppMark } from '@/components/layout/Shell';
-import { AccountChip } from '@/components/auth/Account';
+import { logOut } from '@/components/auth/Account';
 import { useAuth } from '@/lib/cloud/auth';
 import { BrandBanner, LogoMark } from '@/components/brand/Logo';
+import { Spark } from '@/components/ai/Spark';
 import { StepResearch } from './StepResearch';
 import { StepSetup } from './StepSetup';
 import { StepBrand } from './StepBrand';
@@ -30,80 +31,49 @@ const STEP_LABEL: Record<StepId, string> = {
   done: 'Launch',
 };
 
-function OptionCard({ icon, title, body, examples, onClick, selected }: { icon: React.ReactNode; title: string; body: string; examples?: string[]; onClick: () => void; selected?: boolean }) {
+/**
+ * A choice that moves you on (a button, like OptionCards looks): a 40px tile, the title, one line, and
+ * examples as plain text.
+ */
+function ChoiceCard({ icon, title, body, examples, onClick, selected }: { icon: ReactNode; title: string; body: string; examples?: string[]; onClick: () => void; selected?: boolean }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      className={cn('group flex min-w-0 flex-col items-start gap-3 rounded-xl border-2 bg-surface p-5 text-left transition-all hover:-translate-y-0.5 hover:shadow-pop', selected ? 'border-primary' : 'border-line hover:border-line-2')}
+      className={cn(
+        'relative flex min-w-0 flex-col items-start gap-4 rounded-lg border bg-surface p-5 text-left transition-[border-color,box-shadow,background-color] duration-120 sm:p-6',
+        selected ? 'border-transparent bg-primary-soft/50 ring-[1.5px] ring-inset ring-primary' : 'border-line hover:border-line-3 hover:shadow-sm',
+      )}
     >
-      <span className={cn('flex h-12 w-12 items-center justify-center rounded-xl transition-colors', selected ? 'bg-primary text-on-primary' : 'bg-primary-soft text-primary group-hover:bg-primary group-hover:text-on-primary')}>{icon}</span>
-      <span className="font-display text-[20px] font-bold leading-tight tracking-[-0.01em]">{title}</span>
-      <span className="text-[13.5px] leading-relaxed text-muted">{body}</span>
-      {examples && (
-        <span className="flex flex-wrap gap-1.5">
-          {examples.map((e) => (
-            <span key={e} className="rounded-full bg-surface-2 px-2.5 py-1 text-[11.5px] font-medium text-ink-2">
-              {e}
-            </span>
-          ))}
+      {selected && (
+        <span className="absolute right-4 top-4 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-primary text-on-primary" aria-hidden="true">
+          <Check size={12} strokeWidth={3} />
         </span>
       )}
-      <span className="mt-auto inline-flex items-center gap-1.5 pt-1 text-[13px] font-semibold text-primary">
-        Choose <ArrowRight size={14} className="transition-transform group-hover:translate-x-0.5" />
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-pop bg-surface-3 text-ink-2 [&>svg]:size-5">{icon}</span>
+      <span className="min-w-0">
+        <span className="block text-title text-ink">{title}</span>
+        <span className="mt-1 block text-body text-muted">{body}</span>
+        {examples && <span className="mt-3 block text-small text-muted">{examples.join(' · ')}</span>}
       </span>
     </button>
   );
 }
 
-function Rail({ project, path, step }: { project: Project; path: StepId[]; step: StepId }) {
-  const idx = path.indexOf(step);
-  const signedIn = useAuth((s) => s.phase === 'ready');
-  const b = project.brand;
+/** Where you are: one short segment per step (ink up to here, a hairline after). */
+function Progress({ index, total, label }: { index: number; total: number; label: string }) {
   return (
-    <aside className="relative hidden w-[300px] shrink-0 flex-col overflow-hidden bg-[rgb(var(--primary-2))] text-white lg:flex" style={{ paddingLeft: 'env(safe-area-inset-left, 0px)' }}>
-      <div className="h-3 shrink-0" style={{ backgroundImage: 'repeating-linear-gradient(90deg, rgb(var(--accent)) 0 16px, #fff 16px 32px)' }} />
-      <div className="h-2.5 shrink-0" style={{ backgroundImage: 'radial-gradient(circle at 8px 0, rgb(var(--accent)) 7.5px, transparent 8px), radial-gradient(circle at 24px 0, #fff 7.5px, transparent 8px)', backgroundSize: '32px 10px', backgroundRepeat: 'repeat-x' }} />
-      <div className="flex items-center gap-2.5 px-6 pt-5">
-        <AppMark size={32} />
-        <span className="font-display text-[18px] font-bold tracking-[-0.02em]">Yourlocalbusiness</span>
+    <div className="flex min-w-0 items-center gap-3" title={label}>
+      <div role="progressbar" aria-label="Setup progress" aria-valuemin={1} aria-valuemax={total} aria-valuenow={index + 1} aria-valuetext={`Step ${index + 1} of ${total}: ${label}`} className="flex gap-1">
+        {Array.from({ length: total }, (_, i) => (
+          <span key={i} className={cn('h-1 w-8 rounded-full transition-colors duration-240 sm:w-12', i <= index ? 'bg-ink' : 'bg-line-2')} />
+        ))}
       </div>
-      <div className="px-6 pt-8">
-        <p className="font-display text-[26px] font-bold leading-[1.1] tracking-[-0.02em]">Let’s set up your project.</p>
-        <p className="mt-2 text-[13.5px] text-white/70">A few guided steps. Every answer feeds the AI that builds and markets what you sell.</p>
-      </div>
-      <ol className="mt-8 flex flex-col gap-1 px-4">
-        {path.map((s, i) => {
-          const done = i < idx;
-          const current = i === idx;
-          return (
-            <li key={s} className={cn('flex items-center gap-3 rounded-lg px-2.5 py-2', current && 'bg-white/10')}>
-              <span className={cn('num flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[12px] font-bold', done ? 'bg-[rgb(var(--accent))] text-[rgb(var(--on-accent))]' : current ? 'bg-white text-[rgb(var(--primary-2))]' : 'border border-white/30 text-white/60')}>
-                {done ? <Check size={14} /> : i + 1}
-              </span>
-              <span className={cn('text-[13.5px] font-semibold', current ? 'text-white' : done ? 'text-white/85' : 'text-white/55')}>{STEP_LABEL[s]}</span>
-            </li>
-          );
-        })}
-      </ol>
-      <div className="mt-auto px-5 pb-6">
-        {(b.name || project.niche) && (
-          <div className="rounded-xl border border-white/15 bg-white/[0.07] p-4">
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-white/60">Project context</p>
-            <div className="flex items-center gap-3">
-              <LogoMark colors={b.colors} logo={b.logo} name={b.name || 'Brand'} size={38} />
-              <div className="min-w-0">
-                <p className="truncate font-display text-[15px] font-bold">{b.name || 'Unnamed brand'}</p>
-                <p className="truncate text-xs text-white/65">{[project.niche, project.category].filter(Boolean).join(' · ') || project.businessType}</p>
-              </div>
-            </div>
-            {b.tagline && <p className="mt-2 text-xs italic text-white/75">“{b.tagline}”</p>}
-          </div>
-        )}
-        <p className="mt-3 text-[11.5px] text-white/50">{signedIn ? 'Progress saves to your account automatically.' : 'Progress saves automatically on this device.'}</p>
-      </div>
-    </aside>
+      <span className="num whitespace-nowrap font-mono text-caption text-muted">
+        Step {index + 1} of {total}
+      </span>
+    </div>
   );
 }
 
@@ -118,46 +88,50 @@ function Done({ project }: { project: Project }) {
     ['Price', project.studio.price ? `${fmtMoney(project.studio.price)}${project.studio.priceModel === 'monthly' ? '/mo' : ''}` : 'Set in the Studio'],
     ['Website', stripProtocol(b.websiteUrl) || 'None yet'],
   ];
+  const next: [typeof PencilRuler, string][] = [
+    [PencilRuler, project.track === 'product' ? 'Build the product in the Studio: an outline, drafts and interactive code assets.' : 'Shape your packages, how you work and your booking widget in the Studio.'],
+    [Store, 'Publish your listing to the Marketplace in one click.'],
+    [Megaphone, 'Launch marketing: an SEO page, an email funnel and a 30-day social campaign.'],
+    [Compass, 'Plan how you’ll get clients: Strategy finds where your buyers are, what to post and which page to build first.'],
+  ];
   return (
-    <div className="flex flex-col gap-5">
-      <div className="overflow-hidden rounded-xl border border-line">
+    <div className="flex flex-col gap-6">
+      <div className="overflow-hidden rounded-2xl shadow-product">
         <BrandBanner brand={b} rounded={false} />
       </div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div className="panel p-5">
-          <p className="eyebrow mb-3">Your Project Context</p>
-          <dl className="flex flex-col divide-y divide-line">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <section className="card px-5 py-4" aria-labelledby="launch-context">
+          <h2 id="launch-context" className="text-h4 text-ink">
+            Your project
+          </h2>
+          <dl className="mt-2 flex flex-col divide-y divide-line">
             {rows.map(([k, v]) => (
-              <div key={k} className="flex justify-between gap-4 py-2 text-[13.5px]">
+              <div key={k} className="flex justify-between gap-4 py-2.5 text-small">
                 <dt className="text-muted">{k}</dt>
-                <dd className="min-w-0 truncate text-right font-semibold">{v}</dd>
+                <dd className="min-w-0 truncate text-right font-medium text-ink">{v}</dd>
               </div>
             ))}
           </dl>
-        </div>
-        <div className="panel p-5">
-          <p className="eyebrow mb-3">What happens next</p>
-          <ol className="flex flex-col gap-3 text-[13.5px]">
-            {[
-              [Wand2, project.track === 'product' ? 'Build the product in the Studio: AI outline, drafts and interactive code assets.' : 'Shape your packages, operating model and booking widget in the Studio.'],
-              [Store, 'Publish your listing to the Marketplace in one click.'],
-              [Rocket, 'Launch marketing: SEO sales page, email funnel and a 30-day social campaign.'],
-              [Compass, 'Plan how you’ll get clients: Strategy researches where your buyers are, what to post and which page to build first.'],
-            ].map(([I, t], i) => {
-              const Ico = I as typeof Wand2;
-              return (
-                <li key={i} className="flex gap-3">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary-soft text-primary">
-                    <Ico size={15} />
-                  </span>
-                  <span className="pt-1 text-ink-2">{t as string}</span>
-                </li>
-              );
-            })}
+        </section>
+        <section className="card px-5 py-4" aria-labelledby="launch-next">
+          <h2 id="launch-next" className="text-h4 text-ink">
+            What happens next
+          </h2>
+          <ol className="mt-3 flex flex-col gap-3">
+            {next.map(([Ico, t], i) => (
+              <li key={i} className="flex gap-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-3 text-ink-2">
+                  <Ico size={16} aria-hidden="true" />
+                </span>
+                <span className="pt-1.5 text-small text-ink-2">{t}</span>
+              </li>
+            ))}
           </ol>
-          <p className="mt-4 rounded-md bg-accent-soft px-3 py-2 text-xs text-on-accent">Your Brain has been seeded with a “{b.name} brand voice” skill. Every generation will sound like you.</p>
-        </div>
+        </section>
       </div>
+      <p className="flex items-center gap-2 text-small text-ink-2">
+        <Spark size={16} /> Your Brain learned {b.name || 'your brand'}’s voice: every post, page and email will sound like you.
+      </p>
     </div>
   );
 }
@@ -169,6 +143,7 @@ export function Onboarding() {
   const update = useStore((s) => s.updateProject);
   const setActive = useStore((s) => s.setActiveProject);
   const del = useStore((s) => s.deleteProject);
+  const signedIn = useAuth((s) => s.phase === 'ready');
 
   useEffect(() => {
     if (!project) create();
@@ -212,36 +187,42 @@ export function Onboarding() {
     navigate(dest);
   };
 
-  const header: Record<StepId, { title: string; sub: string }> = {
+  const name = project.brand.name.trim();
+  const header: Record<StepId, { title: ReactNode; sub: string }> = {
     goal: { title: 'What would you like to promote today?', sub: 'Pick a track. You can run more projects later.' },
     start:
       project.track === 'product'
         ? { title: 'Do you already have a product, or do you want to discover and create a new one?', sub: 'Existing products go straight to brand setup. New ones start with AI product ideas.' }
-        : { title: 'Do you already have an existing business, or do you want to start a new one?', sub: 'Existing businesses import their brand. New ones get an AI-generated identity.' },
+        : { title: 'Do you already have an existing business, or do you want to start a new one?', sub: 'Existing businesses bring their brand. New ones get an AI-made identity.' },
     research: { title: 'Pick a product idea', sub: 'Tell the AI your niche, a specific category and the format you want to sell.' },
-    setup: { title: project.track === 'product' ? 'Set up your existing product' : 'Set up your existing business', sub: 'Add your name, logo, website, images and social accounts.' },
-    brand: { title: 'Generate your brand identity', sub: 'Names, logo, palette, banner and messaging, generated from your niche and fully editable.' },
-    done: { title: `${project.brand.name || 'Your project'} is ready to launch`, sub: 'Here’s what the AI will use across the Studio, Marketing Hub, Store and Analytics.' },
+    setup: { title: project.track === 'product' ? 'Set up your existing product' : 'Set up your existing business', sub: 'Your name, logo, website, images and social accounts.' },
+    brand: { title: 'Generate your brand identity', sub: 'Names, a logo, palette, banner and messaging, made from your details and all editable.' },
+    done: {
+      title: (
+        <>
+          {name || 'Your project'} is{' '}
+          <span className="font-editorial font-normal italic tracking-[-0.02em]" style={{ fontSize: '1.1em' }}>
+            ready to launch.
+          </span>
+        </>
+      ),
+      sub: 'What the AI will use across the Studio, Marketing and the Marketplace.',
+    },
   };
 
+  const wide = step === 'brand' || step === 'research';
+
   return (
-    <div className="flex h-full">
-      <Rail project={project} path={path} step={step} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex shrink-0 items-center gap-3 border-b border-line bg-surface gutter py-3" style={{ paddingTop: 'max(12px, env(safe-area-inset-top, 0px))' }}>
-          <div className="flex items-center gap-2 lg:hidden">
-            <AppMark size={26} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="eyebrow">
-              Step {idx + 1} of {path.length} · {STEP_LABEL[step]}
-            </p>
-            <div className="mt-1.5 h-1 w-full max-w-[420px] overflow-hidden rounded-full bg-surface-3">
-              <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${((idx + 1) / path.length) * 100}%` }} />
-            </div>
-          </div>
+    <div className="flex h-full flex-col bg-surface">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line gutter" style={{ paddingTop: 'env(safe-area-inset-top, 0px)', boxSizing: 'content-box' }}>
+        <AppMark size={24} />
+        <span className="hidden text-h4 text-ink sm:inline">Yourlocalbusiness</span>
+        <span className="hidden h-4 w-px bg-line-2 sm:block" aria-hidden="true" />
+        <Progress index={idx} total={path.length} label={STEP_LABEL[step]} />
+        <span className="ml-auto flex items-center gap-1">
           {others.length > 0 && (
             <button
+              type="button"
               className="btn btn-ghost btn-sm"
               onClick={() => {
                 del(project.id);
@@ -249,70 +230,91 @@ export function Onboarding() {
                 navigate('dashboard');
               }}
             >
-              <X size={15} /> Cancel setup
+              <X /> <span className="max-sm:sr-only">Cancel setup</span>
             </button>
           )}
-          <AccountChip />
-        </div>
-        <div id="wizard-scroll" className="scroll-thin relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <div className="mx-auto w-full max-w-[1000px] gutter pb-10 pt-8">
-            <div className="mb-6 animate-rise-in">
-              <h1 className="page-title max-w-[28ch]">{header[step].title}</h1>
-              <p className="mt-2 max-w-[60ch] text-[14.5px] text-muted">{header[step].sub}</p>
-            </div>
-            <div key={step} className="animate-rise-in">
-              {step === 'goal' && (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <OptionCard selected={project.track === 'product' && project.wizardStep !== 'goal'} icon={<Package size={24} />} title="Promote a Product" body="Digital products you sell online: get AI product ideas or launch the one you have." examples={['Courses', 'Templates', 'Ebooks', 'Spreadsheets', 'Software']} onClick={() => chooseTrack('product')} />
-                  <OptionCard selected={project.track === 'business' && project.wizardStep !== 'goal'} icon={<Store size={24} />} title="Promote a Business" body="Local shops, services and studios, or online businesses that sell services." examples={['Cafés', 'Salons', 'Home services', 'Agencies', 'Studios']} onClick={() => chooseTrack('business')} />
-                </div>
-              )}
-              {step === 'start' && (
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {project.track === 'product' ? (
-                    <>
-                      <OptionCard icon={<Upload size={22} />} title="I already have a product" body="Import your name, logo, website, images and social accounts, then go straight to marketing." onClick={() => chooseOrigin('existing')} />
-                      <OptionCard icon={<Search size={22} />} title="Help me find & create one" body="AI suggests product ideas for your niche and builds a brand around the one you pick." onClick={() => chooseOrigin('new')} />
-                    </>
-                  ) : (
-                    <>
-                      <OptionCard icon={<Store size={22} />} title="I have an existing business" body="Bring your brand assets and accounts. We’ll set up your listing, funnel and campaigns." onClick={() => chooseOrigin('existing')} />
-                      <OptionCard icon={<Compass size={22} />} title="I want to start a new business" body="Describe your idea and city. AI generates names, logo, palette, banner and pitch." onClick={() => chooseOrigin('new')} />
-                    </>
-                  )}
-                </div>
-              )}
-              {step === 'research' && <StepResearch project={project} onNext={() => go('brand')} />}
-              {step === 'setup' && <StepSetup project={project} />}
-              {step === 'brand' && <StepBrand project={project} />}
-              {step === 'done' && <Done project={project} />}
-            </div>
+          {signedIn && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void logOut()}>
+              <LogOut /> <span className="max-sm:sr-only">Log out</span>
+            </button>
+          )}
+        </span>
+      </header>
+
+      <div id="wizard-scroll" className="scroll-thin relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div className={cn('mx-auto w-full gutter pb-12 pt-10 sm:pt-14', wide ? 'max-w-[960px]' : 'max-w-[720px]')}>
+          <div className="mb-8 animate-rise-in">
+            <h1 className={cn('max-w-[24ch] text-ink', step === 'done' ? 'text-phone-display sm:text-display-xl' : 'text-phone-display sm:text-display')}>{header[step].title}</h1>
+            <p className="mt-3 max-w-[60ch] text-body-lg text-muted">{header[step].sub}</p>
+          </div>
+          <div key={step} className="animate-rise-in">
+            {step === 'goal' && (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <ChoiceCard selected={project.track === 'product' && project.wizardStep !== 'goal'} icon={<Package />} title="Promote a Product" body="Digital products you sell online: get AI product ideas or launch the one you have." examples={['Courses', 'Templates', 'Ebooks', 'Spreadsheets', 'Software']} onClick={() => chooseTrack('product')} />
+                <ChoiceCard selected={project.track === 'business' && project.wizardStep !== 'goal'} icon={<Store />} title="Promote a Business" body="Local shops, services and studios, or online businesses that sell services." examples={['Cafés', 'Salons', 'Home services', 'Agencies', 'Studios']} onClick={() => chooseTrack('business')} />
+              </div>
+            )}
+            {step === 'start' && (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {project.track === 'product' ? (
+                  <>
+                    <ChoiceCard icon={<Upload />} title="I already have a product" body="Bring your name, logo, website, images and social accounts, then go straight to marketing." onClick={() => chooseOrigin('existing')} />
+                    <ChoiceCard icon={<Search />} title="Help me find & create one" body="AI suggests product ideas for your niche and builds a brand around the one you pick." onClick={() => chooseOrigin('new')} />
+                  </>
+                ) : (
+                  <>
+                    <ChoiceCard icon={<Store />} title="I have an existing business" body="Bring your brand and accounts. We’ll set up your listing, funnel and campaigns." onClick={() => chooseOrigin('existing')} />
+                    <ChoiceCard icon={<Compass />} title="I want to start a new business" body="Describe your idea and city. AI makes names, a logo, palette, banner and pitch." onClick={() => chooseOrigin('new')} />
+                  </>
+                )}
+              </div>
+            )}
+            {step === 'research' && <StepResearch project={project} onNext={() => go('brand')} />}
+            {step === 'setup' && <StepSetup project={project} />}
+            {step === 'brand' && <StepBrand project={project} />}
+            {step === 'done' && <Done project={project} />}
           </div>
         </div>
-        {step !== 'goal' && (
-          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-surface gutter py-3" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))' }}>
-            <button className="btn btn-secondary" onClick={back}>
-              <ArrowLeft size={16} /> Back
-            </button>
+      </div>
+
+      {step !== 'goal' && (
+        <footer className="flex min-h-16 shrink-0 items-center gap-3 border-t border-line bg-surface gutter py-3" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))' }}>
+          <button type="button" className="btn btn-ghost max-sm:btn-icon" onClick={back} aria-label="Back">
+            <ArrowLeft /> <span className="max-sm:hidden">Back</span>
+          </button>
+          {name && step !== 'start' && (
+            <span className="hidden min-w-0 items-center gap-2 rounded-full border border-line py-1 pl-1 pr-3 md:flex">
+              <LogoMark colors={project.brand.colors} logo={project.brand.logo} name={name} size={22} />
+              <span className="truncate text-small font-medium text-ink">{name}</span>
+            </span>
+          )}
+          <span className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2 sm:flex-none">
             {step === 'done' ? (
-              <div className="flex flex-wrap justify-end gap-2">
-                <button className="btn btn-secondary" onClick={() => finish('dashboard')}>
+              <>
+                <button type="button" className="btn btn-secondary btn-lg max-sm:hidden" onClick={() => finish('dashboard')}>
                   Go to dashboard
                 </button>
-                <button className="btn btn-primary" onClick={() => finish('studio')}>
-                  <PartyPopper size={16} /> Open {project.track === 'business' ? 'Business' : 'Product'} Studio
+                <button type="button" className="btn btn-primary btn-lg max-sm:w-full" onClick={() => finish('studio')}>
+                  Open {project.track === 'business' ? 'Business' : 'Product'} Studio
                 </button>
-              </div>
+              </>
             ) : step === 'start' ? (
-              <span className="text-xs text-muted">Choose an option to continue</span>
+              <span className="text-small text-muted">Choose an option to continue</span>
             ) : (
-              <button className="btn btn-primary" disabled={!canContinue} onClick={next}>
-                {step === 'research' && !project.idea ? 'Select an idea to continue' : 'Continue'} <ArrowRight size={16} />
+              <button type="button" className="btn btn-primary btn-lg max-sm:w-full" disabled={!canContinue} onClick={next}>
+                {step === 'research' && !project.idea ? 'Select an idea to continue' : 'Continue'} <ArrowRight />
               </button>
             )}
-          </div>
-        )}
-      </div>
+          </span>
+        </footer>
+      )}
+      {step === 'done' && (
+        <div className="flex shrink-0 justify-center pb-3 sm:hidden" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))' }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => finish('dashboard')}>
+            Go to dashboard
+          </button>
+        </div>
+      )}
     </div>
   );
 }
