@@ -72,6 +72,18 @@ export default function Settings() {
     setOpen(true);
     document.getElementById('main-scroll')?.scrollTo({ top: 0 });
   };
+  // phones: the list and the open section take each other's place, so the focus goes along (to the way back,
+  // then back to the section's row) instead of dropping to the page
+  const backBar = useRef<HTMLDivElement>(null);
+  const phoneList = useRef<HTMLDivElement>(null);
+  const openFromList = (id: Tab) => {
+    choose(id);
+    requestAnimationFrame(() => backBar.current?.querySelector<HTMLElement>('button')?.focus());
+  };
+  const backToList = () => {
+    setOpen(false);
+    requestAnimationFrame(() => phoneList.current?.querySelector<HTMLElement>(`[data-section="${shown}"]`)?.focus());
+  };
   // a vertical tab list: up and down move between sections (the focus goes with the selection); in the
   // phones' list they only move the focus, and Enter opens a section
   const onKey = (e: KeyboardEvent<HTMLDivElement>, select: boolean) => {
@@ -91,7 +103,9 @@ export default function Settings() {
       {/* wide screens, and the list of sections on phones */}
       <PageHeader title="Settings" className={cn(open && 'max-lg:hidden')} />
       {/* phones: one section, with the way back to the list */}
-      <PageHeader title={current.label} back={{ label: 'Settings', onClick: () => setOpen(false) }} className={cn('lg:hidden', !open && 'hidden')} />
+      <div ref={backBar} className={cn('lg:hidden', !open && 'hidden')}>
+        <PageHeader title={current.label} back={{ label: 'Settings', onClick: backToList }} />
+      </div>
 
       <div className="lg:grid lg:grid-cols-[200px_minmax(0,1fr)] lg:gap-8">
         <div role="tablist" aria-orientation="vertical" aria-label="Settings sections" onKeyDown={(e) => onKey(e, true)} className="hidden flex-col gap-0.5 self-start lg:sticky lg:top-0 lg:flex">
@@ -119,9 +133,9 @@ export default function Settings() {
         </div>
 
         {/* phones: every section as a row */}
-        <div role="tablist" aria-orientation="vertical" aria-label="Settings sections" onKeyDown={(e) => onKey(e, false)} className={cn('card flex flex-col divide-y divide-line overflow-hidden lg:hidden', open && 'hidden')}>
+        <div ref={phoneList} role="tablist" aria-orientation="vertical" aria-label="Settings sections" onKeyDown={(e) => onKey(e, false)} className={cn('card flex flex-col divide-y divide-line overflow-hidden lg:hidden', open && 'hidden')}>
           {items.map((s) => (
-            <button key={s.id} type="button" role="tab" data-section={s.id} aria-selected={s.id === shown} aria-controls="settings-panel" onClick={() => choose(s.id)} className="flex min-h-14 items-center gap-3 px-4 py-2.5 text-left transition-colors duration-120 hover:bg-surface-2">
+            <button key={s.id} type="button" role="tab" data-section={s.id} aria-selected={s.id === shown} aria-controls="settings-panel" onClick={() => openFromList(s.id)} className="flex min-h-14 items-center gap-3 px-4 py-2.5 text-left transition-colors duration-120 hover:bg-surface-2">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-3 text-ink-2 [&>svg]:size-4">{s.icon}</span>
               <span className="min-w-0 flex-1">
                 <span className="block text-ui text-ink">{s.label}</span>
@@ -133,14 +147,15 @@ export default function Settings() {
         </div>
 
         <div role="tabpanel" id="settings-panel" aria-labelledby={`settings-tab-${shown}`} className={cn('min-w-0', !open && 'max-lg:hidden')}>
-          {shown === 'brand' && <BrandSettings project={project} />}
+          {/* (per project: switching projects starts the section afresh, so nothing says "Saved" for an edit nobody made) */}
+          {shown === 'brand' && <BrandSettings key={project.id} project={project} />}
           {shown === 'domains' && (
             <div className="max-w-[880px]">
               <DomainsCard focus={focusDomains} onFocused={() => setFocusDomains(false)} />
             </div>
           )}
           {shown === 'ai' && <AISettings />}
-          {shown === 'accounts' && <Accounts />}
+          {shown === 'accounts' && <Accounts key={project.id} />}
           {shown === 'projects' && <ProjectsData />}
           {shown === 'prefs' && <Preferences />}
           {shown === 'account' && signedIn && (
@@ -404,17 +419,20 @@ function ProjectsData() {
           {projects.map((p) => {
             const active = p.id === activeId;
             const name = p.brand.name || 'Untitled project';
+            const meta = `${p.track === 'business' ? 'Business' : p.format ? FORMATS[p.format].label : 'Digital product'} · updated ${fmtRelative(p.updatedAt)}`;
             return (
               <li key={p.id} className="flex min-h-14 items-center gap-3 border-b border-line px-5 py-2.5 last:border-b-0">
                 <LogoMark colors={p.brand.colors} logo={p.brand.logo} name={p.brand.name || 'P'} size={32} />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-2">
-                    <span className="truncate text-ui text-ink">{name}</span>
+                    <span className="truncate text-ui text-ink" title={name}>
+                      {name}
+                    </span>
                     {active && <Badge tone="primary">Open now</Badge>}
                     {!p.onboarded && <Badge>Setup</Badge>}
                   </span>
-                  <span className="block truncate text-small text-muted">
-                    {p.track === 'business' ? 'Business' : p.format ? FORMATS[p.format].label : 'Digital product'} · updated {fmtRelative(p.updatedAt)}
+                  <span className="block truncate text-small text-muted" title={meta}>
+                    {meta}
                   </span>
                 </span>
                 {!active && (

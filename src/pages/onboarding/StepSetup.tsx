@@ -14,7 +14,8 @@ import { AIThinking, GenerateButton } from '@/components/ai/AI';
 export function Section({ title, desc, children, actions }: { n?: number; title: string; desc?: string; children: React.ReactNode; actions?: React.ReactNode }) {
   return (
     <section className="card">
-      <div className="flex items-start justify-between gap-3 px-5 pb-4 pt-5">
+      {/* (phones: the actions go under the title; beside it they'd squeeze it to a word or two per line) */}
+      <div className="flex flex-col gap-3 px-5 pb-4 pt-5 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h2 className="text-h3 text-ink">{title}</h2>
           {desc && <p className="mt-0.5 text-small text-muted">{desc}</p>}

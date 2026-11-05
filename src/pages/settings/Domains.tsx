@@ -5,6 +5,7 @@ import { PublishError, addDomain, checkDomain, isValidDomain, listPublished, nor
 import { cn } from '@/lib/utils';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Badge, Callout, CopyButton, Drawer, Empty, Field, MoreMenu, SettingsRow, SettingsSection, Spinner, confirmAction } from '@/components/ui/primitives';
 import { toast } from '@/store/ui';
+import { useFocusBack } from './sheetFocus';
 
 /**
  * Settings › Domains: the owner's own domains, where their published pages can also show. Only where
@@ -39,20 +40,24 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
 
   const focused = useRef(onFocused);
   focused.current = onFocused;
-  // the section, not the side sheet: "Check it" comes here to see a domain's row and its TXT record; the
-  // Add domain button takes the focus once the list is in (it waits for it)
+  // the section, not the side sheet: "Check it" comes here to see a domain's row and its TXT record. The Add
+  // domain button takes the focus: now when the list is in, else as soon as it arrives (it's disabled until
+  // then), never later (a request that waited would pull the focus away when a check or an add changes the list)
   const focusAdd = useRef(false);
   useEffect(() => {
     if (!focus) return;
-    focusAdd.current = true;
     addButton.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (list) addButton.current?.focus({ preventScroll: true });
+    else focusAdd.current = true;
     focused.current?.();
-  }, [focus]);
+  }, [focus]); // eslint-disable-line react-hooks/exhaustive-deps -- the list as it is when the request arrives
   useEffect(() => {
     if (!focusAdd.current || !list) return;
     focusAdd.current = false;
     addButton.current?.focus({ preventScroll: true });
   }, [list]);
+  // the Add domain side sheet gives the focus back to the button when it closes
+  const openedFrom = useFocusBack(drawer);
 
   /** Put a domain in the list as the server describes it now (it may have just moved to this account). */
   const keepDomain = (info: DomainInfo) => {
@@ -177,7 +182,16 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
         description="Show your published pages on a domain you own, like yourbrand.com. Your domains work for all your projects."
         actions={
           signedIn && (
-            <button ref={addButton} type="button" className="btn btn-secondary btn-sm" disabled={!list} onClick={() => setDrawer(true)}>
+            <button
+              ref={addButton}
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={!list}
+              onClick={(e) => {
+                openedFrom(e.currentTarget);
+                setDrawer(true);
+              }}
+            >
               <Plus /> Add domain
             </button>
           )

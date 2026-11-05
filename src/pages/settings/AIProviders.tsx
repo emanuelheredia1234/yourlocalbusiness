@@ -12,6 +12,7 @@ import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Badge, Callout, Drawer, Field, InfoTip, MoreMenu, Popover, SettingsRow, SettingsSection, Spinner, Toggle, Tooltip, confirmAction } from '@/components/ui/primitives';
 import { SlackCard } from './SlackCard';
+import { useFocusBack } from './sheetFocus';
 
 // ───────────── what the server sends ─────────────
 
@@ -364,6 +365,8 @@ function Providers({ state, catalog, usage, usageLocked, call, save, onReload, o
   const def = open ? catalog.find((c) => c.id === open) : undefined;
   const st = open ? state.providers.find((p) => p.id === open) : undefined;
   const at = open ? state.order.indexOf(open) : -1;
+  // the side sheet gives the focus back to the row's Configure button when it closes
+  const openedFrom = useFocusBack(!!(def && st));
   return (
     <>
       <SettingsSection
@@ -416,7 +419,14 @@ function Providers({ state, catalog, usage, usageLocked, call, save, onReload, o
                     {names.length ? `${names.slice(0, 3).join(', ')}${names.length > 3 ? ` +${names.length - 3}` : ''}` : 'Nothing yet'}
                   </span>
                   <span className="flex items-center justify-end gap-1 max-md:col-start-2 max-md:row-start-1">
-                    <button type="button" className="btn btn-secondary btn-xs" onClick={() => setOpen(id)}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-xs"
+                      onClick={(e) => {
+                        openedFrom(e.currentTarget);
+                        setOpen(id);
+                      }}
+                    >
                       Configure
                     </button>
                     <MoreMenu
@@ -1015,6 +1025,8 @@ function OwnKeys({ call, serverUrl, onChange }: { call: Call; serverUrl: string;
     onChange();
   };
   const editing = open ? info?.providers.find((p) => p.id === open) : undefined;
+  // the side sheet gives the focus back to the row's Add key / Replace button when it closes
+  const openedFrom = useFocusBack(!!(info && editing));
   return (
     <Region name="Your own keys">
       <SettingsSection
@@ -1055,7 +1067,9 @@ function OwnKeys({ call, serverUrl, onChange }: { call: Call; serverUrl: string;
                 return (
                   <li key={p.id} aria-label={`Your ${p.label} key`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-0.5 border-b border-line px-5 py-3 last:border-b-0 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_112px_88px]">
                     <span className="min-w-0 truncate text-ui text-ink">{p.label}</span>
-                    <span className="min-w-0 truncate text-small text-muted max-md:col-start-1 max-md:row-start-2">{ownKeyCapability(p).short}</span>
+                    <span className="min-w-0 truncate text-small text-muted max-md:col-start-1 max-md:row-start-2" title={ownKeyCapability(p).short}>
+                      {ownKeyCapability(p).short}
+                    </span>
                     <span className="min-w-0 max-md:col-start-1 max-md:row-start-3">
                       {saved ? (
                         <>
@@ -1069,7 +1083,16 @@ function OwnKeys({ call, serverUrl, onChange }: { call: Call; serverUrl: string;
                       )}
                     </span>
                     <span className="flex justify-end max-md:col-start-2 max-md:row-span-3 max-md:row-start-1">
-                      <button type="button" className="btn btn-secondary btn-xs" disabled={!info.available} onClick={() => setOpen(p.id)} aria-label={`${saved ? 'Replace' : 'Add'} your ${p.label} key`}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-xs"
+                        disabled={!info.available}
+                        onClick={(e) => {
+                          openedFrom(e.currentTarget);
+                          setOpen(p.id);
+                        }}
+                        aria-label={`${saved ? 'Replace' : 'Add'} your ${p.label} key`}
+                      >
                         {saved ? 'Replace' : 'Add key'}
                       </button>
                     </span>
