@@ -1083,8 +1083,16 @@ function EditComposer({
       )}
     </form>
   );
-  // docked at the bottom of the canvas while it scrolls by, on a fade of the canvas colour (so nothing shows through)
-  return sticky ? <div className="sticky bottom-0 z-10 -mx-3 -mb-3 mt-4 rounded-b-pop bg-gradient-to-t from-surface-2 from-75% to-transparent px-3 pb-3 pt-6 sm:-mx-6 sm:-mb-6 sm:px-6 sm:pb-5">{form}</div> : form;
+  // docked at the bottom of the canvas while it scrolls by: a short fade, then the canvas colour behind the status
+  // lines, the box and the quick edits (so no code or preview shows through them)
+  return sticky ? (
+    <div className="sticky bottom-0 z-10 -mx-3 -mb-3 mt-4 sm:-mx-6 sm:-mb-6">
+      <div className="pointer-events-none h-6 bg-gradient-to-t from-surface-2 to-transparent" aria-hidden="true" />
+      <div className="rounded-b-pop bg-surface-2 px-3 pb-3 sm:px-6 sm:pb-5">{form}</div>
+    </div>
+  ) : (
+    form
+  );
 }
 
 /** Who made an asset from a page of theirs (Manus or Viktor), with a link to the task or thread. Their code is theirs: check it before you publish. */
