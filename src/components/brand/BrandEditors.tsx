@@ -18,7 +18,7 @@ import { VoiceNote, VoiceSwitch } from './SocialVoice';
  * The logo, its colours and how they look together: the controls, and beside them (on wide screens, sticky)
  * the brand as people see it: banner, logo and name, tagline and palette, with the mark at small sizes.
  */
-export function LogoDesigner({ brand, onChange, iconOptions, paletteOptions }: { brand: Brand; onChange: (patch: Partial<Brand>) => void; iconOptions?: string[]; paletteOptions?: BrandColors[] }) {
+export function LogoDesigner({ brand, onChange, iconOptions, paletteOptions, withBanner }: { brand: Brand; onChange: (patch: Partial<Brand>) => void; iconOptions?: string[]; paletteOptions?: BrandColors[]; withBanner?: boolean }) {
   const [showAll, setShowAll] = useState(false);
   const logo = brand.logo;
   const setLogo = (p: Partial<LogoConfig>) => onChange({ logo: { ...logo, ...p } });
@@ -96,6 +96,11 @@ export function LogoDesigner({ brand, onChange, iconOptions, paletteOptions }: {
           </Field>
         </div>
         <PaletteEditor colors={brand.colors} onChange={(colors) => onChange({ colors })} options={paletteOptions} />
+        {withBanner && (
+          <Field label="Cover banner">
+            <BannerControls brand={brand} onChange={onChange} />
+          </Field>
+        )}
       </div>
     </div>
   );
@@ -254,6 +259,16 @@ function LogoExport({ brand }: { brand: Brand }) {
 }
 
 export function BannerDesigner({ brand, onChange }: { brand: Brand; onChange: (patch: Partial<Brand>) => void }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <BrandBanner brand={brand} className="rounded-pop border border-line" />
+      <BannerControls brand={brand} onChange={onChange} />
+    </div>
+  );
+}
+
+/** The banner's style, its tagline, and (for a photo banner) which photo. */
+function BannerControls({ brand, onChange }: { brand: Brand; onChange: (patch: Partial<Brand>) => void }) {
   const styles: { id: Brand['banner']['style']; label: string }[] = [
     { id: 'waves', label: 'Waves' },
     { id: 'grid', label: 'Grid glow' },
@@ -263,8 +278,7 @@ export function BannerDesigner({ brand, onChange }: { brand: Brand; onChange: (p
   ];
   const photos = brand.images.filter((m) => m.kind === 'image');
   return (
-    <div className="flex flex-col gap-4">
-      <BrandBanner brand={brand} className="rounded-pop border border-line" />
+    <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Banner style">
           {styles.map((s) => {
@@ -286,9 +300,7 @@ export function BannerDesigner({ brand, onChange }: { brand: Brand; onChange: (p
             );
           })}
         </div>
-        <span className="sm:ml-auto">
-          <Toggle checked={brand.banner.showTagline} onChange={(v) => onChange({ banner: { ...brand.banner, showTagline: v } })} label="Show tagline" />
-        </span>
+        <Toggle checked={brand.banner.showTagline} onChange={(v) => onChange({ banner: { ...brand.banner, showTagline: v } })} label="Show tagline" />
       </div>
       {brand.banner.style === 'photo' && photos.length > 1 && (
         <div className="flex flex-wrap gap-2 p-0.5" role="group" aria-label="Banner photo">
@@ -296,7 +308,7 @@ export function BannerDesigner({ brand, onChange }: { brand: Brand; onChange: (p
             const on = brand.banner.imageId === m.id;
             return (
               <button key={m.id} type="button" aria-pressed={on} aria-label={m.name || 'Photo'} onClick={() => onChange({ banner: { ...brand.banner, imageId: m.id } })} className={cn('h-12 w-16 overflow-hidden rounded-md ring-offset-2 ring-offset-surface', on ? 'ring-[1.5px] ring-primary' : 'ring-1 ring-line-2 hover:ring-line-3')}>
-                <MediaThumb media={m} className="h-full w-full rounded-none" />
+                <MediaThumb media={m} className="h-full w-full" />
               </button>
             );
           })}
@@ -412,7 +424,7 @@ export function BrandImagesEditor({ brand, onChange }: { brand: Brand; onChange:
     <div className="flex flex-col gap-4">
       <MediaDrop multiple onFiles={(m) => onChange([...brand.images, ...m].slice(0, 24))} label="Drop product or brand photos" sub="Images or short videos · used in posts, banners and listings" compact />
       {brand.images.length > 0 && (
-        <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+        <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-8">
           {brand.images.map((m) => (
             <MediaThumb key={m.id} media={m} className="aspect-square" onRemove={() => onChange(brand.images.filter((x) => x.id !== m.id))} />
           ))}

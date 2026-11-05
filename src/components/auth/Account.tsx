@@ -246,7 +246,6 @@ function ChangePassword({ email }: { email: string }) {
   return (
     <SettingsSection title="Change password" description="At least 8 characters.">
       <form onSubmit={(e) => void submit(e)} noValidate>
-        <input type="email" autoComplete="username" value={email} readOnly hidden />
         <SettingsRow label="New password" htmlFor="cp-1">
           <input id="cp-1" className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={!!error || undefined} />
         </SettingsRow>
@@ -264,6 +263,7 @@ function ChangePassword({ email }: { email: string }) {
             {busy && <Spinner size={14} />} Change password
           </button>
         </div>
+        <input type="email" autoComplete="username" value={email} readOnly hidden />
       </form>
     </SettingsSection>
   );

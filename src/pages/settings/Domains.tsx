@@ -266,13 +266,16 @@ function Domains({ signedIn, focus, onFocused }: { signedIn: boolean; focus?: bo
                         {!claim && pages.length > 0 && <p className="mt-1 truncate text-small text-muted md:hidden">{pagesText(pages)}</p>}
                         {showRecord && (
                           <div className="mt-3 flex flex-col gap-2">
-                            {!busy && !d.verified && problem && <p className="text-small text-muted">{problem}</p>}
                             {claim ? (
-                              <p className="text-small text-ink-2">Another account added this domain first. If it’s yours, add this TXT record at your registrar, then press “Check again”: the domain moves to your account.</p>
+                              <>
+                                <p className="text-small text-ink-2">Another account added this domain first. If it’s yours, add this TXT record at your registrar, then press “Check again”: the domain moves to your account.</p>
+                                {!busy && problem && <p className="text-small text-muted">{problem}</p>}
+                              </>
                             ) : d.verified ? (
                               <p className="text-small text-ink-2">Keep this record at your registrar: the app looks at it every few hours, and without it the domain stops showing your pages.</p>
                             ) : (
-                              <p className="text-small text-ink-2">Add this TXT record at your registrar, then press “Check again”. New records can take from a few minutes to a few hours to show up.</p>
+                              // what the last check found (it says what to do), else the plain step
+                              <p className="text-small text-ink-2">{(!busy && problem) || 'Add this TXT record at your registrar, then press “Check again”. New records can take from a few minutes to a few hours to show up.'}</p>
                             )}
                             <TxtRecord record={d.record} />
                           </div>

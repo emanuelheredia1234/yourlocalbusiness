@@ -19,8 +19,8 @@ import { useAuth } from '@/lib/cloud/auth';
 import { AccountSettings, DangerSection } from '@/components/auth/Account';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, Badge, Callout, ChipInput, InfoTip, MoreMenu, PageHeader, Segmented, SettingsRow, SettingsSection, Toggle, confirmAction } from '@/components/ui/primitives';
-import { BannerDesigner, BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
-import { BrandBanner, BrandLogo, LogoMark } from '@/components/brand/Logo';
+import { BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
+import { LogoMark } from '@/components/brand/Logo';
 import { manusSetupHint, useManusReady } from '@/components/posts/ManusPost';
 import { download } from '@/components/ui/download';
 import { AIProviders, ArtifactAI } from './AIProviders';
@@ -188,7 +188,7 @@ function Saved({ shown }: { shown: boolean }) {
 // ───────────────────────── Brand ─────────────────────────
 
 /** Long text edited in place: a borderless field that shows its edge on hover and focus. */
-const INLINE = 'input-inline -mx-3 w-[calc(100%+24px)] !max-w-none';
+const INLINE = 'input-inline -mx-3 -mt-1.5 w-[calc(100%+24px)] !max-w-none';
 
 function BrandSettings({ project }: { project: Project }) {
   const brand = project.brand;
@@ -197,9 +197,7 @@ function BrandSettings({ project }: { project: Project }) {
   // the active project's brand, and its shared Marketplace listing when it's listed
   const set = (patch: Partial<Brand>) => saveBrand(patch);
   const identitySaved = useSaved([brand.name, brand.websiteUrl, brand.tagline, brand.pitch, brand.valueProp, brand.audience, brand.mission, brand.personality, brand.slug]);
-  const lookSaved = useSaved([brand.logo, brand.colors]);
-  const bannerSaved = useSaved(brand.banner);
-  const socialsSaved = useSaved(brand.socials);
+  const lookSaved = useSaved([brand.logo, brand.colors, brand.banner]);
 
   const refreshCopy = async () => {
     const r = await ai.run({});
@@ -210,108 +208,74 @@ function BrandSettings({ project }: { project: Project }) {
   };
 
   return (
-    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_240px]">
-      <div className="flex min-w-0 flex-col gap-6">
-        <SettingsSection title="Identity" description="Your name and the words that describe you. Changes save as you type." actions={<Saved shown={identitySaved} />}>
-          <SettingsRow label="Brand name" htmlFor="b-name">
+    <div className="flex max-w-[880px] flex-col gap-6">
+      <SettingsSection title="Identity" description="Your name and the words that describe you. Changes save as you type." actions={<Saved shown={identitySaved} />}>
+        <SettingsRow label="Brand name" htmlFor="b-name" description={brand.nameOptions.length > 1 ? 'Or one of your brand kit’s ideas.' : undefined}>
+          <div className="flex w-full flex-col gap-2 md:max-w-[420px]">
             <input id="b-name" className="input" value={brand.name} onChange={(e) => set({ name: e.target.value })} />
-          </SettingsRow>
-          {brand.nameOptions.length > 1 && (
-            <SettingsRow label="Other name ideas" description="From your brand kit.">
-              <div className="flex flex-wrap gap-1.5 md:justify-end">
+            {brand.nameOptions.length > 1 && (
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Other name ideas">
                 {brand.nameOptions.map((n) => (
-                  <button key={n.name} type="button" className={cn('chip', brand.name === n.name && 'chip-active')} title={n.rationale} onClick={() => set({ name: n.name, slug: slugify(n.name) })}>
+                  <button key={n.name} type="button" className={cn('chip', brand.name === n.name && 'chip-active')} aria-pressed={brand.name === n.name} title={n.rationale} onClick={() => set({ name: n.name, slug: slugify(n.name) })}>
+                    {brand.name === n.name && <Check aria-hidden="true" />}
                     {n.name}
                   </button>
                 ))}
               </div>
-            </SettingsRow>
-          )}
-          <SettingsRow label="Website" htmlFor="b-url">
-            <input id="b-url" className="input" value={brand.websiteUrl} onChange={(e) => set({ websiteUrl: e.target.value })} onBlur={(e) => e.target.value && set({ websiteUrl: ensureUrl(e.target.value) })} placeholder="https://yourbrand.com" />
-          </SettingsRow>
-          <SettingsRow label="Tagline" htmlFor="b-tag">
-            <input id="b-tag" className="input" value={brand.tagline} onChange={(e) => set({ tagline: e.target.value })} />
-          </SettingsRow>
-          <SettingsRow label="Elevator pitch" htmlFor="b-pitch" stack>
-            <AutoTextarea id="b-pitch" value={brand.pitch} onChange={(v) => set({ pitch: v })} minRows={2} className={INLINE} placeholder="What you do, for whom, and why it’s different" />
-          </SettingsRow>
-          <SettingsRow label="Value proposition" htmlFor="b-vp" stack>
-            <AutoTextarea id="b-vp" value={brand.valueProp} onChange={(v) => set({ valueProp: v })} minRows={1} className={INLINE} placeholder="The one result people get from you" />
-          </SettingsRow>
-          <SettingsRow label="Target audience" htmlFor="b-aud" stack>
-            <AutoTextarea id="b-aud" value={brand.audience} onChange={(v) => set({ audience: v })} minRows={1} className={INLINE} placeholder="Who you serve, as specifically as you can" />
-          </SettingsRow>
-          <SettingsRow label="Mission" htmlFor="b-mission" stack>
-            <AutoTextarea id="b-mission" value={brand.mission} onChange={(v) => set({ mission: v })} minRows={1} className={INLINE} placeholder="Why you do it, in one sentence" />
-          </SettingsRow>
-          <SettingsRow label="Personality" description="Up to 8 words for how you sound.">
-            <div className="w-full md:max-w-[420px]">
-              <ChipInput values={brand.personality} onChange={(v) => set({ personality: v })} placeholder="e.g. warm, expert, playful" max={8} />
-            </div>
-          </SettingsRow>
-          <SettingsRow label="File name" description="Used in the names of files you download." htmlFor="b-slug">
-            <input id="b-slug" className="input font-mono" value={brand.slug} onChange={(e) => set({ slug: slugify(e.target.value) })} />
-          </SettingsRow>
-          <SettingsRow label="Refresh the copy" description="Rewrites your tagline, pitch, value proposition, audience and mission. Keeps your name, logo and colours.">
-            <GenerateButton running={ai.running} onClick={refreshCopy} size="sm" runningLabel="Writing…">
-              Refresh brand copy with AI
-            </GenerateButton>
-          </SettingsRow>
-          {(ai.running || (ai.result && !ai.running)) && (
-            <div className="pb-4">
-              <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact />
-              {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
-            </div>
-          )}
-        </SettingsSection>
-
-        <SettingsSection title="Logo & colours" description="Upload your own logo or design one from an icon, a shape and a font." actions={<Saved shown={lookSaved} />}>
-          <div className="pb-4 pt-3">
-            <LogoDesigner brand={brand} onChange={set} paletteOptions={palettes} />
+            )}
           </div>
-        </SettingsSection>
-
-        <SettingsSection title="Cover banner" description="Shown on your listing and social profiles." actions={<Saved shown={bannerSaved} />}>
-          <div className="pb-4 pt-3">
-            <BannerDesigner brand={brand} onChange={set} />
+        </SettingsRow>
+        <SettingsRow label="Website" htmlFor="b-url">
+          <input id="b-url" className="input" value={brand.websiteUrl} onChange={(e) => set({ websiteUrl: e.target.value })} onBlur={(e) => e.target.value && set({ websiteUrl: ensureUrl(e.target.value) })} placeholder="https://yourbrand.com" />
+        </SettingsRow>
+        <SettingsRow label="Tagline" htmlFor="b-tag">
+          <input id="b-tag" className="input" value={brand.tagline} onChange={(e) => set({ tagline: e.target.value })} />
+        </SettingsRow>
+        <SettingsRow label="Elevator pitch" htmlFor="b-pitch" stack>
+          <AutoTextarea id="b-pitch" rows={2} value={brand.pitch} onChange={(v) => set({ pitch: v })} minRows={2} className={INLINE} placeholder="What you do, for whom, and why it’s different" />
+        </SettingsRow>
+        <SettingsRow label="Value proposition" htmlFor="b-vp" stack>
+          <AutoTextarea id="b-vp" rows={1} value={brand.valueProp} onChange={(v) => set({ valueProp: v })} minRows={1} className={INLINE} placeholder="The one result people get from you" />
+        </SettingsRow>
+        <SettingsRow label="Target audience" htmlFor="b-aud" stack>
+          <AutoTextarea id="b-aud" rows={1} value={brand.audience} onChange={(v) => set({ audience: v })} minRows={1} className={INLINE} placeholder="Who you serve, as specifically as you can" />
+        </SettingsRow>
+        <SettingsRow label="Mission" htmlFor="b-mission" stack>
+          <AutoTextarea id="b-mission" rows={1} value={brand.mission} onChange={(v) => set({ mission: v })} minRows={1} className={INLINE} placeholder="Why you do it, in one sentence" />
+        </SettingsRow>
+        <SettingsRow label="Personality" description="Up to 8 words for how you sound.">
+          <div className="w-full md:max-w-[420px]">
+            <ChipInput values={brand.personality} onChange={(v) => set({ personality: v })} placeholder="e.g. warm, expert, playful" max={8} />
           </div>
-        </SettingsSection>
-
-        <SettingsSection title="Brand images" description="Photos and product shots for posts, listings and covers.">
-          <div className="pb-4 pt-3">
-            <BrandImagesEditor brand={brand} onChange={(images) => set({ images })} />
+        </SettingsRow>
+        <SettingsRow label="File name" description="Used in the names of files you download." htmlFor="b-slug">
+          <input id="b-slug" className="input font-mono" value={brand.slug} onChange={(e) => set({ slug: slugify(e.target.value) })} />
+        </SettingsRow>
+        <SettingsRow label="Refresh the copy" description="Rewrites the tagline, pitch, value proposition, audience and mission. Keeps your name, logo and colours.">
+          <GenerateButton running={ai.running} onClick={refreshCopy} size="sm" runningLabel="Writing…">
+            Refresh brand copy with AI
+          </GenerateButton>
+        </SettingsRow>
+        {(ai.running || (ai.result && !ai.running)) && (
+          <div className="pb-4">
+            <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact />
+            {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
           </div>
-        </SettingsSection>
+        )}
+      </SettingsSection>
 
-        <SettingsSection title="Social profiles" description="Shown in post previews; they tell Manus which account to post as." actions={<Saved shown={socialsSaved} />}>
-          <SocialLinksEditor socials={brand.socials} onChange={(socials) => set({ socials })} projectId={project.id} voiceSetup="button" />
-        </SettingsSection>
-      </div>
-
-      <BrandPreview brand={brand} />
-    </div>
-  );
-}
-
-/** The brand as people see it: banner, logo, name, tagline and palette (wide screens, beside the form). */
-function BrandPreview({ brand }: { brand: Brand }) {
-  return (
-    <aside className="hidden min-w-0 xl:sticky xl:top-0 xl:block xl:self-start" aria-label="Brand preview">
-      <div className="overflow-hidden rounded-stage border border-line bg-surface shadow-product">
-        <BrandBanner brand={brand} rounded={false} className="aspect-[3/1] w-full" />
-        <div className="flex flex-col gap-2.5 p-4" style={{ background: brand.colors.paper, color: brand.colors.ink }}>
-          <BrandLogo brand={brand} size={34} layout="horizontal" />
-          {brand.tagline && <p className="clamp-2 text-small opacity-80">{brand.tagline}</p>}
-          <div className="mt-1 flex gap-1">
-            {(['primary', 'secondary', 'accent', 'ink', 'paper'] as const).map((k) => (
-              <span key={k} className="h-6 flex-1 rounded-xs ring-1 ring-inset ring-ink/10" style={{ background: brand.colors[k] }} title={`${k}: ${brand.colors[k]}`} />
-            ))}
-          </div>
+      <SettingsSection title="Logo, colours & banner" description="Upload your logo or design one from an icon, a shape and a font." actions={<Saved shown={lookSaved} />}>
+        <div className="pb-5 pt-3">
+          <LogoDesigner brand={brand} onChange={set} paletteOptions={palettes} withBanner />
         </div>
-      </div>
-      <p className="mt-3 text-caption text-muted">Updates your Studio, pages, emails, posts and listing.</p>
-    </aside>
+      </SettingsSection>
+
+      <SettingsSection title="Brand images" description="Photos and product shots for posts, listings and covers.">
+        <div className="pb-5 pt-3">
+          <BrandImagesEditor brand={brand} onChange={(images) => set({ images })} />
+        </div>
+      </SettingsSection>
+    </div>
   );
 }
 
