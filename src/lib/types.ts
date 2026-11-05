@@ -687,8 +687,8 @@ export interface Post {
   scheduledAt: string;
   /** when it went out: set only when Manus reported it posted, or you marked it posted */
   publishedAt?: string;
-  /** who said it was posted: Manus (its own report) or you */
-  publishedBy?: 'manus' | 'manual';
+  /** who published or marked it as posted */
+  publishedBy?: 'manus' | 'manual' | 'meta';
   /** where it was before you marked it posted (so "Mark as not posted" puts it back) */
   statusBeforePosted?: 'draft' | 'scheduled';
   /** the post's address on the network, when Manus reported one or you pasted it */

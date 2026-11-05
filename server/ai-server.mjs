@@ -28,6 +28,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
 import { createOmnisendRoutes } from './omnisend.mjs';
+import { createMetaSocialRoutes } from './meta-social.mjs';
 import { createRateLimiter } from './rateLimit.mjs';
 import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
@@ -174,6 +175,15 @@ const omnisend = createOmnisendRoutes({
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
   clientKey: (req) => pages.visitor(req),
 });
+const metaSocial = createMetaSocialRoutes({
+  auth,
+  storage: appState,
+  send,
+  readJson,
+  rateLimited,
+  sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
+});
+metaSocial.startWorker();
 // keys and settings saved in Supabase (when its secret key is set) before the first request
 // (never more than a few seconds: a slow Supabase must not keep the app from starting)
 const settingsFrom = await Promise.race([ai.init(), new Promise((r) => setTimeout(() => r('slow'), 5000))]);
@@ -187,12 +197,21 @@ async function deleteAccount(req, res) {
   try {
     await omnisend.forgetUser(ident.who.id);
     try {
+      await metaSocial.forgetUser(ident.who.id);
+    } catch (e) {
+      await omnisend.unforgetUser(ident.who.id);
+      await metaSocial.unforgetUser(ident.who.id);
+      throw e;
+    }
+    try {
       await auth.deleteUser(ident.who.id);
     } catch (e) {
       // the account stays: don't keep it from connecting Omnisend for a week
       await omnisend.unforgetUser(ident.who.id);
+      await metaSocial.unforgetUser(ident.who.id);
       throw e;
     }
+    metaSocial.finishForgetUser(ident.who.id);
     pages.forgetUser(ident.who.id);
     return send(res, 200, { ok: true }, corsHeaders(req));
   } catch (e) {
@@ -226,6 +245,7 @@ function route(req, res, url) {
       .catch((e) => crashed(req, res, e));
   }
   if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url).catch((e) => crashed(req, res, e));
+  if (url.pathname.startsWith('/api/integrations/meta/')) return void metaSocial.handle(req, res, url).catch((e) => crashed(req, res, e));
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res).catch((e) => crashed(req, res, e));
   if (pages.matchApi(url)) return void pages.handleApi(req, res, url).catch((e) => crashed(req, res, e));
   if (ai.match(url)) {
