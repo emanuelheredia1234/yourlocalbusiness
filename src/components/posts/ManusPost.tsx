@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
-import { CalendarClock, CheckCircle2, CircleAlert, ExternalLink, Hand, Loader2, RefreshCw, Send } from 'lucide-react';
+import { CalendarClock, CircleAlert, CircleCheck, ExternalLink, Hand, Loader2, RefreshCw, Send, Type } from 'lucide-react';
 import type { Post, PostPlatform } from '@/lib/types';
 import { cn, fmtRelative, truncate } from '@/lib/utils';
 import { firstCommentOf, linkText, pageLink, postPlacement } from '@/lib/pageLink';
@@ -27,7 +27,7 @@ import { beginBusy, endBusy } from '@/lib/busy';
 import { useStore } from '@/store/useStore';
 import { navigate } from '@/lib/router';
 import { toast, useUI } from '@/store/ui';
-import { CopyButton, Field, Modal, Segmented, Spinner } from '../ui/primitives';
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Callout, CopyButton, Field, Modal, Segmented, Spinner } from '../ui/primitives';
 import { MediaThumb } from '../media/MediaUpload';
 import { PlatformChip } from './PlatformIcon';
 
@@ -46,13 +46,13 @@ export function manusSetupHint(): string {
   if (!ai.reachable) return 'The app can’t reach its AI server right now, so it can’t send posts to Manus. Reload the page, and check that the app is running.';
   switch (ai.posting?.reason) {
     case 'no_key':
-      return 'No Manus API key is saved on the server. Add it in Settings → AI → Manus (create a Manus account at manus.im first). On Replit, also add the SUPABASE_SECRET_KEY Secret so keys stay saved when the app restarts.';
+      return 'No Manus API key is saved on the server. Add it in Settings › AI keys › Manus (create a Manus account at manus.im first). On Replit, also add the SUPABASE_SECRET_KEY Secret so keys stay saved when the app restarts.';
     case 'not_ticked':
-      return 'Your Manus key is saved, but it isn’t set to post. In Settings → AI → Manus, open its “Powers” list and tick Social posting.';
+      return 'Your Manus key is saved, but it isn’t set to post. In Settings › AI keys › Manus, open its “Powers” list and tick Social posting.';
     case 'own_key_needed':
-      return 'The app’s Manus key is only for its owner’s accounts. Add your own Manus API key in Settings → AI → “Use your own Manus” to post on your accounts.';
+      return 'The app’s Manus key is only for its owner’s accounts. Add your own Manus API key in Settings › AI keys › “Use your own Manus” to post on your accounts.';
     default:
-      return 'To post from here, add your Manus API key in Settings → AI (create a Manus account at manus.im first) and tick Social posting in its “Powers” list.';
+      return 'To post from here, add your Manus API key in Settings › AI keys (create a Manus account at manus.im first) and tick Social posting in its “Powers” list.';
   }
 }
 
@@ -202,27 +202,33 @@ export function ManusPostHost() {
   const verb = mode === 'now' ? 'Post' : 'Schedule';
   const buttonLabel = busy ? 'Sending…' : sendable.length > 1 ? `${verb} ${sendable.length} with Manus` : mode === 'now' ? 'Post now with Manus' : 'Schedule with Manus';
   const title = single ? `Post on ${networkLabel(posts[0].platform)} with Manus` : `Post ${posts.length} posts with Manus`;
+  const anySent = Object.values(progress).some((x) => x.sent);
 
   return (
     <Modal
       open
       onClose={() => !inFlight && close()}
-      size="lg"
+      size="md"
       title={title}
-      subtitle="Manus opens each network in its own browser, signed in as you, and posts exactly this: the text, and the image or video."
+      subtitle="Manus posts exactly this, signed in as you: the text, and the image or video."
       footer={
         <>
-          <button className="btn btn-ghost btn-sm mr-auto" disabled={inFlight} onClick={close}>
-            {Object.values(progress).some((x) => x.sent) ? 'Close' : 'Cancel'}
+          <button className="btn btn-secondary btn-sm" disabled={inFlight} onClick={close}>
+            {anySent ? 'Close' : 'Cancel'}
           </button>
-          <button className="btn btn-primary btn-sm" disabled={inFlight || !sendable.length || !ready} onClick={confirm}>
-            {busy ? <Spinner size={14} /> : <Send size={14} />} {buttonLabel}
+          <button className={cn('btn btn-ai btn-sm', busy && 'is-running')} disabled={inFlight || !sendable.length || !ready} aria-busy={busy || undefined} onClick={confirm}>
+            {busy ? <Spinner /> : <Send />} {buttonLabel}
           </button>
         </>
       }
     >
-      <div className="flex flex-col gap-4">
-        <div className={cn('grid gap-3', networks.length > 1 && 'sm:grid-cols-2')}>
+      <div className="flex flex-col gap-5">
+        <ul className="flex flex-col divide-y divide-line" aria-label={single ? 'The post' : 'The posts'}>
+          {posts.map((p) => (
+            <PostRow key={p.id} post={p} mode={mode} tz={tz} problem={problem(p)} progress={progress[p.id]} disabled={inFlight} onEdit={() => { close(); useUI.getState().openPostEditor(p.id); }} onRetry={() => setProgress((x) => ({ ...x, [p.id]: {} }))} />
+          ))}
+        </ul>
+        <div className={cn('grid gap-4', networks.length > 1 && 'sm:grid-cols-2')}>
           {networks.map((n) => (
             <Field key={n} label={NETWORKS[n].account} htmlFor={`acct-${n}`} hint={networks.length === 1 ? `${NETWORKS[n].hint} Manus asks you if it can’t tell which one to use.` : undefined}>
               <input id={`acct-${n}`} className="input" disabled={inFlight} value={accounts[n] ?? ''} onChange={(e) => setAccounts((a) => ({ ...a, [n]: e.target.value }))} placeholder={NETWORKS[n].placeholder} />
@@ -240,41 +246,48 @@ export function ManusPostHost() {
               { id: 'schedule', label: single ? 'Schedule' : 'Schedule each at its time' },
             ]}
           />
-          <p className="mt-2 text-[12.5px] text-muted">
+          <p className="mt-2 text-small text-muted">
             {mode === 'now' ? 'Manus posts as soon as it’s ready, usually within a few minutes.' : `Manus schedules ${single ? 'it' : 'each post'} on the network for the time on your calendar (${tz} time). Change a time in the post editor.`}
           </p>
-          {laterNow > 0 && <p className="mt-1 text-[12.5px] font-medium text-warn">{laterNow} of these {laterNow === 1 ? 'is' : 'are'} planned for later: Post now sends {laterNow === 1 ? 'it' : 'them'} out right away.</p>}
-          {failedBefore > 0 && <p className="mt-1 text-[12.5px] font-medium text-warn">{failedBefore} of these failed last time and may already be out or scheduled: check {failedBefore === 1 ? 'it' : 'them'} below before sending.</p>}
+          {laterNow > 0 && <p className="mt-1.5 text-small font-medium text-warn">{laterNow} of these {laterNow === 1 ? 'is' : 'are'} planned for later: Post now sends {laterNow === 1 ? 'it' : 'them'} out right away.</p>}
+          {failedBefore > 0 && <p className="mt-1.5 text-small font-medium text-warn">{failedBefore} of these failed last time and may already be out or scheduled: check {failedBefore === 1 ? 'it' : 'them'} below before sending.</p>}
         </div>
-        <ul className="flex flex-col gap-3">
-          {posts.map((p) => (
-            <PostRow key={p.id} post={p} mode={mode} tz={tz} problem={problem(p)} progress={progress[p.id]} disabled={inFlight} onEdit={() => { close(); useUI.getState().openPostEditor(p.id); }} onRetry={() => setProgress((x) => ({ ...x, [p.id]: {} }))} />
-          ))}
-        </ul>
-        <ul className="flex list-disc flex-col gap-1 pl-5 text-[12.5px] text-muted">
-          <li>{viaServer ? 'Each post is a Manus task on your Manus API key (its agent profile is set in Settings → AI), and uses your Manus credits.' : 'Each post is a Manus task through your Zapier connection, and uses your Manus credits.'}</li>
-          <li>The first time, sign in to each network inside Manus. If Manus needs you, the post card says so, with a link.</li>
-          <li>{mode === 'now' ? 'Manus posts each one once, right away, on the account you name.' : 'Manus schedules each one on the network for its time; it never publishes right away.'}</li>
-          {posts.some((p) => p.media?.kind === 'video') && <li>Videos go to Manus first (through your server). Big videos take a little longer.</li>}
-          {mode === 'now' && posts.some((p) => firstCommentOf(p)) && <li>Right after posting, Manus adds the first comment you see on the post (a reply on X). It’s part of the same task.</li>}
-          {mode === 'schedule' && posts.some((p) => firstCommentOf(p)) && <li>Manus can’t comment on a scheduled post. Once it’s live, add the first comment yourself: the post card has it, with Copy.</li>}
-        </ul>
+        <Accordion type="single" collapsible className="-my-1 border-t border-line">
+          <AccordionItem value="before" className="border-0">
+            <AccordionTrigger className="py-2.5 text-small font-medium text-ink-2 hover:text-ink">Before you send</AccordionTrigger>
+            <AccordionContent className="pb-2">
+              <ul className="flex list-disc flex-col gap-1.5 pl-5 text-small text-muted">
+                <li>{viaServer ? 'Each post is a Manus task on your Manus API key (its agent profile is set in Settings › AI keys), and uses your Manus credits.' : 'Each post is a Manus task through your Zapier connection, and uses your Manus credits.'}</li>
+                <li>The first time, sign in to each network inside Manus. If Manus needs you, the post card says so, with a link.</li>
+                <li>{mode === 'now' ? 'Manus posts each one once, right away, on the account you name.' : 'Manus schedules each one on the network for its time; it never publishes right away.'}</li>
+                {posts.some((p) => p.media?.kind === 'video') && <li>Videos go to Manus first (through your server). Big videos take a little longer.</li>}
+                {mode === 'now' && posts.some((p) => firstCommentOf(p)) && <li>Right after posting, Manus adds the first comment you see on the post (a reply on X). It’s part of the same task.</li>}
+                {mode === 'schedule' && posts.some((p) => firstCommentOf(p)) && <li>Manus can’t comment on a scheduled post. Once it’s live, add the first comment yourself: the post card has it, with Copy.</li>}
+              </ul>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
         {!ready && (
-          <div className="flex flex-wrap items-center gap-2 rounded-md border border-warn/40 bg-warn-soft px-3 py-2 text-[12.5px]" role="alert">
-            <p className="min-w-0 flex-1 font-medium text-warn">Manus can’t post yet. {manusSetupHint()}</p>
-            {!__ARTIFACT_BUILD__ && (
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => {
-                  close();
-                  useUI.getState().setSettingsTab('ai');
-                  navigate('workspace-settings');
-                }}
-              >
-                Open Settings → AI
-              </button>
-            )}
-          </div>
+          <Callout
+            tone="warn"
+            title="Manus can’t post yet"
+            action={
+              !__ARTIFACT_BUILD__ && (
+                <button
+                  className="btn btn-secondary btn-xs"
+                  onClick={() => {
+                    close();
+                    useUI.getState().setSettingsTab('ai');
+                    navigate('workspace-settings');
+                  }}
+                >
+                  Open Settings › AI keys
+                </button>
+              )
+            }
+          >
+            {manusSetupHint()}
+          </Callout>
         )}
       </div>
     </Modal>
@@ -287,22 +300,30 @@ function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry 
   const resend = !!last && last.state !== 'failed';
   const failedBefore = failedTry(post, progress);
   return (
-    <li className="grid grid-cols-[72px_minmax(0,1fr)] gap-3 rounded-md border border-line p-2.5">
-      {post.media ? <MediaThumb media={post.media} className="aspect-[4/5] w-full" /> : <div className="flex aspect-[4/5] w-full items-center justify-center rounded-md border border-dashed border-line-2 px-1 text-center text-[10.5px] text-muted">Text only</div>}
-      <div className="flex min-w-0 flex-col gap-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <PlatformChip platform={post.platform} />
-          {mode === 'schedule' && <span className="text-xs text-muted">{fmtWhen(post.scheduledAt, tz)}</span>}
+    <li className="flex gap-3 py-3 first:pt-0 last:pb-0">
+      {post.media ? (
+        <MediaThumb media={post.media} className="h-14 w-14 shrink-0" />
+      ) : (
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-surface-2 text-muted ring-1 ring-inset ring-line" title="Text only">
+          <Type size={20} aria-hidden="true" />
+          <span className="sr-only">Text only</span>
         </div>
-        <p className="clamp-3 whitespace-pre-line text-[12.5px] leading-relaxed text-ink-2">{postText(post)}</p>
+      )}
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <PlatformChip platform={post.platform} />
+          {mode === 'schedule' && <span className="num text-caption text-muted">· {fmtWhen(post.scheduledAt, tz)}</span>}
+        </div>
+        <p className="clamp-2 whitespace-pre-line text-small text-ink-2">{postText(post)}</p>
         <LinkLine post={post} mode={mode} />
         {problem && (
-          <p className="text-[12.5px] font-medium text-warn">
+          <p className="text-small font-medium text-warn">
             {problem}{' '}
-            <button type="button" className="font-semibold text-primary hover:underline disabled:opacity-60" disabled={disabled} onClick={onEdit}>
+            <button type="button" className="link disabled:cursor-not-allowed disabled:text-faint" disabled={disabled} onClick={onEdit}>
               {mode === 'schedule' && !postBlocker(post, { viaServer: manusViaServer() }) ? (
                 <>
-                  <CalendarClock size={12} className="inline" /> Change the time
+                  <CalendarClock size={12} className="mr-0.5 inline align-[-1px]" aria-hidden="true" />
+                  Change the time
                 </>
               ) : (
                 'Open the post'
@@ -310,42 +331,41 @@ function PostRow({ post, mode, tz, problem, progress, disabled, onEdit, onRetry 
             </button>
           </p>
         )}
-        {!problem && warning && <p className="text-[12.5px] text-warn">{warning}</p>}
-        {resend && <p className="text-[12.5px] font-medium text-warn">Already sent to Manus. Sending it again can post it twice.</p>}
+        {!problem && warning && <p className="text-small text-warn">{warning}</p>}
+        {resend && <p className="text-small font-medium text-warn">Already sent to Manus. Sending it again can post it twice.</p>}
         {failedBefore && (
-          <p className="text-[12.5px] font-medium text-warn">
+          <p className="text-small font-medium text-warn">
             {failedTryCopy(failedBefore, post.platform, tz)} or{' '}
-            <a href={failedBefore.taskUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">
+            <a href={failedBefore.taskUrl} target="_blank" rel="noopener noreferrer" className="link">
               the task in Manus
             </a>{' '}
             before sending it again.
           </p>
         )}
         {progress?.stage && (
-          <p className="flex items-center gap-1.5 text-[12.5px] text-info">
+          <p className="flex items-center gap-1.5 text-small text-primary" role="status">
             <Spinner size={12} /> {progress.stage}
           </p>
         )}
         {progress?.sent && (
-          <p className="flex items-center gap-1.5 text-[12.5px] font-semibold text-good">
-            <CheckCircle2 size={13} /> Sent to Manus{' '}
+          <p className="flex flex-wrap items-center gap-x-1.5 text-small font-medium text-good">
+            <CircleCheck size={14} aria-hidden="true" /> Sent to Manus
             {progress.taskUrl && (
-              <a href={progress.taskUrl} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary hover:underline">
-                Watch <ExternalLink size={11} className="inline" />
+              <a href={progress.taskUrl} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1">
+                Watch <ExternalLink size={12} aria-hidden="true" />
               </a>
             )}
           </p>
         )}
         {progress?.error && (
-          <div className="rounded-md border border-bad/30 bg-bad-soft px-2.5 py-1.5 text-[12.5px]" role="alert">
-            <p className="font-semibold text-bad">{progress.error.title}</p>
-            <p className="text-ink-2">{progress.error.body}</p>
+          <Callout tone="bad" title={progress.error.title}>
+            <p>{progress.error.body}</p>
             {progress.error.uncertain && onRetry && (
-              <button type="button" className="mt-1 font-semibold text-primary hover:underline disabled:opacity-60" disabled={disabled} onClick={onRetry}>
+              <button type="button" className="link mt-1 disabled:cursor-not-allowed disabled:text-faint" disabled={disabled} onClick={onRetry}>
                 I checked Manus: it didn’t start. Allow sending again
               </button>
             )}
-          </div>
+          </Callout>
         )}
       </div>
     </li>
@@ -359,15 +379,15 @@ function LinkLine({ post, mode }: { post: Post; mode: PostMode }) {
   const word = post.platform === 'x' ? 'reply' : 'comment';
   if (comment)
     return (
-      <p className="text-[12.5px] text-ink-2">
-        <b>First {word}:</b> <span className="break-words">{truncate(comment, 140)}</span>{' '}
+      <p className="text-small text-ink-2">
+        <span className="font-medium text-ink">First {word}:</span> <span className="break-words">{truncate(comment, 140)}</span>{' '}
         <span className="text-muted">{mode === 'now' ? 'Manus adds it right after posting.' : `Manus can’t ${post.platform === 'x' ? 'reply to' : 'comment on'} a scheduled post: add it yourself once it’s live.`}</span>
       </p>
     );
   const link = project && postPlacement(post) === 'bio' ? pageLink(project) : null;
   if (!link) return null;
   return (
-    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted">
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted">
       <span className="min-w-0">
         Manus doesn’t change your profile: check that your {networkLabel(post.platform)} bio has <span className="[overflow-wrap:anywhere]">{linkText(link.url)}</span>.
       </span>
@@ -376,13 +396,25 @@ function LinkLine({ post, mode }: { post: Post; mode: PostMode }) {
   );
 }
 
-const STATE_UI: Record<NonNullable<Post['external']>['state'], { label: (n: string, mode?: PostMode) => string; cls: string; icon: typeof Loader2 }> = {
-  working: { label: (n, mode) => (mode === 'now' ? `Manus is posting on ${n}` : `Manus is scheduling on ${n}`), cls: 'bg-info/10 text-info', icon: Loader2 },
-  needs_input: { label: () => 'Manus needs you', cls: 'bg-warn/15 text-warn', icon: Hand },
-  posted: { label: (n) => `Manus posted it on ${n}`, cls: 'bg-good-soft text-good', icon: CheckCircle2 },
-  scheduled: { label: (n) => `Manus scheduled it on ${n}`, cls: 'bg-good-soft text-good', icon: CheckCircle2 },
-  failed: { label: (n) => `The ${n} post didn’t go through`, cls: 'bg-bad-soft text-bad', icon: CircleAlert },
-  finished: { label: () => 'Manus finished: check the result', cls: 'bg-surface-2 text-ink-2', icon: CheckCircle2 },
+/** Each state's words, tone (a status colour always comes with an icon and words) and icon. */
+const STATE_UI: Record<NonNullable<Post['external']>['state'], { label: (n: string, mode?: PostMode) => string; tone: Tone; icon: typeof Loader2 }> = {
+  working: { label: (n, mode) => (mode === 'now' ? `Manus is posting on ${n}` : `Manus is scheduling on ${n}`), tone: 'primary', icon: Loader2 },
+  needs_input: { label: () => 'Manus needs you', tone: 'warn', icon: Hand },
+  posted: { label: (n) => `Manus posted it on ${n}`, tone: 'good', icon: CircleCheck },
+  scheduled: { label: (n) => `Manus scheduled it on ${n}`, tone: 'good', icon: CircleCheck },
+  failed: { label: (n) => `The ${n} post didn’t go through`, tone: 'bad', icon: CircleAlert },
+  finished: { label: () => 'Manus finished: check the result', tone: 'neutral', icon: CircleCheck },
+};
+
+/** The tones of a Manus status: a badge (rows) and a block with a hairline (the post card and editor). */
+export type Tone = 'primary' | 'warn' | 'good' | 'bad' | 'neutral';
+export const TONE_BADGE: Record<Tone, string> = { primary: 'bg-primary-soft text-primary', warn: 'bg-warn-soft text-warn', good: 'bg-good-soft text-good', bad: 'bg-bad-soft text-bad', neutral: 'bg-surface-3 text-ink-2' };
+export const TONE_BLOCK: Record<Tone, { box: string; icon: string }> = {
+  primary: { box: 'border-primary-line bg-primary-soft', icon: 'text-primary' },
+  warn: { box: 'border-warn-line bg-warn-soft', icon: 'text-warn' },
+  good: { box: 'border-good-line bg-good-soft', icon: 'text-good' },
+  bad: { box: 'border-bad-line bg-bad-soft', icon: 'text-bad' },
+  neutral: { box: 'border-line bg-surface-2', icon: 'text-muted' },
 };
 
 const stateUi = (ext: NonNullable<Post['external']>) => {
@@ -408,32 +440,34 @@ export function ExternalBadge({ post, compact }: { post: Post; compact?: boolean
   };
   if (compact) {
     return (
-      <span className={cn('badge inline-flex items-center gap-1', ui.cls)} title={ext.message}>
-        <ui.icon size={11} className={cn(ext.state === 'working' && 'animate-spin')} /> {ui.label}
+      <span className={cn('badge', TONE_BADGE[ui.tone])} title={ext.message}>
+        <ui.icon className={cn(ext.state === 'working' && 'animate-spin')} aria-hidden="true" /> {ui.label}
       </span>
     );
   }
+  const t = TONE_BLOCK[ui.tone];
   return (
-    <div className={cn('rounded-md px-2.5 py-2 text-[12.5px]', ui.cls)} role="status">
-      <p className="flex items-center gap-1.5 font-semibold">
-        <ui.icon size={13} className={cn(ext.state === 'working' && 'animate-spin')} /> {ui.label}
-      </p>
-      {ext.message && <p className="mt-0.5 break-words text-ink-2">{ext.message}</p>}
-      <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
-        <a href={ext.taskUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-semibold text-primary hover:underline">
-          Open in Manus <ExternalLink size={11} />
-        </a>
-        {(ext.state === 'working' || ext.state === 'needs_input' || ext.state === 'finished') && (
-          <button type="button" className="inline-flex items-center gap-1 font-semibold text-primary hover:underline disabled:opacity-60" onClick={check} disabled={checking}>
-            <RefreshCw size={11} className={cn(checking && 'animate-spin')} /> Check now
-          </button>
-        )}
-        {ext.state === 'failed' && post.status !== 'published' && (
-          <button type="button" className="font-semibold text-primary hover:underline" onClick={() => useManusPost.getState().open(post.id)}>
-            Try again
-          </button>
-        )}
-        <span className="text-muted">Checked {fmtRelative(ext.checkedAt)}</span>
+    <div className={cn('flex items-start gap-2.5 rounded-pop border px-3 py-2.5', t.box)} role="status">
+      <ui.icon size={16} className={cn('mt-0.5 shrink-0', t.icon, ext.state === 'working' && 'animate-spin')} aria-hidden="true" />
+      <div className="min-w-0 flex-1 text-small text-ink-2">
+        <p className="font-medium text-ink">{ui.label}</p>
+        {ext.message && <p className="mt-0.5 break-words">{ext.message}</p>}
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-caption">
+          <a href={ext.taskUrl} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1">
+            Open in Manus <ExternalLink size={12} aria-hidden="true" />
+          </a>
+          {(ext.state === 'working' || ext.state === 'needs_input' || ext.state === 'finished') && (
+            <button type="button" className="link inline-flex items-center gap-1 disabled:cursor-not-allowed disabled:text-faint" onClick={check} disabled={checking}>
+              <RefreshCw size={12} className={cn(checking && 'animate-spin')} aria-hidden="true" /> Check now
+            </button>
+          )}
+          {ext.state === 'failed' && post.status !== 'published' && (
+            <button type="button" className="link" onClick={() => useManusPost.getState().open(post.id)}>
+              Try again
+            </button>
+          )}
+          <span className="num text-muted">Checked {fmtRelative(ext.checkedAt)}</span>
+        </div>
       </div>
     </div>
   );
@@ -446,7 +480,7 @@ export function ManusPostButton({ post, size = 'sm', primary }: { post: Post; si
   if (post.external && post.external.state !== 'failed') return null;
   return (
     <button type="button" className={cn('btn', primary ? 'btn-primary' : 'btn-secondary', size === 'xs' ? 'btn-xs' : 'btn-sm')} onClick={() => useManusPost.getState().open(post.id)}>
-      <Send size={size === 'xs' ? 12 : 14} /> Post on {networkLabel(post.platform)}
+      <Send aria-hidden="true" /> Post on {networkLabel(post.platform)}
     </button>
   );
 }
