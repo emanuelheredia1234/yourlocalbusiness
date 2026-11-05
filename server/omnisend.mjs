@@ -26,6 +26,17 @@ import crypto from 'node:crypto';
 export const OMNISEND_PUBLIC_BASE_URL = 'https://yourlocalbusiness.replit.app';
 export const OMNISEND_REDIRECT_URI = `${OMNISEND_PUBLIC_BASE_URL}/api/integrations/omnisend/callback`;
 export const OMNISEND_SCOPES = ['campaigns.write', 'email-templates.write'];
+/**
+ * Scopes asked for on every new connect and reconnect, but never required: only the Email Analytics tab checks
+ * them ("Reconnect Omnisend to see email stats"); drafts keep working without them, so an existing connection
+ * missing one is NOT sent to reconnect (reconnectReason looks at OMNISEND_SCOPES only). The scope Omnisend wants
+ * for POST /api/analytics/reports isn't confirmed yet (UNVERIFIED): add it here once it is.
+ */
+export const OMNISEND_OPTIONAL_SCOPES = [];
+/** Email analytics: at most one live reports call per Omnisend brand per hour, and at most this many a day (Omnisend allows 55). */
+export const REPORTS_PER_DAY = 40;
+export const REPORTS_EVERY_MS = 60 * 60 * 1000;
+const CAMPAIGN_NAMES_TTL_MS = 24 * 60 * 60 * 1000;
 /** The cookie that ties a callback to the browser that started the connection (HTTPS only: Secure, host-only). */
 export const BINDING_COOKIE = '__Host-ylb_omnisend';
 /** The most a draft request may send: a little over the largest draft the field limits below allow. */
@@ -174,7 +185,9 @@ export function createOmnisendRoutes({
   env = process.env,
   fetch: fetchImpl = globalThis.fetch,
   now = () => Date.now(),
+  optionalScopes = OMNISEND_OPTIONAL_SCOPES,
 } = {}) {
+  const askedScopes = [...OMNISEND_SCOPES, ...optionalScopes.filter((scope) => !OMNISEND_SCOPES.includes(scope))];
   const clientId = String(env.OMNISEND_CLIENT_ID || '').trim();
   const clientSecret = String(env.OMNISEND_CLIENT_SECRET || '').trim();
   const credentialsConfigured = !!(clientId && clientSecret);
@@ -286,7 +299,7 @@ export function createOmnisendRoutes({
         .sort((a, b) => Number(a[1].createdAt) - Number(b[1].createdAt))
         .slice(-(MAX_PENDING_PER_USER - 1));
       const states = Object.fromEntries(kept);
-      states[sha256(state)] = { userId: user.id, createdAt, binding: sha256(nonce), scopes: [...OMNISEND_SCOPES] };
+      states[sha256(state)] = { userId: user.id, createdAt, binding: sha256(nonce), scopes: [...askedScopes] };
       return { value: { states }, result: false };
     });
     if (refused) throw new OmnisendError(403, 'ACCOUNT_GONE', 'This account is being deleted, so Omnisend can’t be connected to it.');
@@ -294,7 +307,7 @@ export function createOmnisendRoutes({
     authUrl.searchParams.set('client_id', clientId);
     authUrl.searchParams.set('redirect_uri', OMNISEND_REDIRECT_URI);
     authUrl.searchParams.set('response_type', 'code');
-    authUrl.searchParams.set('scope', OMNISEND_SCOPES.join(' '));
+    authUrl.searchParams.set('scope', askedScopes.join(' '));
     authUrl.searchParams.set('state', state);
     return reply(req, res, 200, { authorizationUrl: authUrl.toString() }, { 'set-cookie': bindingCookie(nonce, STATE_TTL_MS / 1000) });
   }
@@ -379,8 +392,8 @@ export function createOmnisendRoutes({
       const token = await exchangeCode(code);
       const requested = Array.isArray(entry.scopes) ? entry.scopes : OMNISEND_SCOPES;
       const granted = typeof token.scope === 'string' && token.scope.trim() ? token.scope.trim().split(/\s+/) : requested;
-      const scopes = OMNISEND_SCOPES.filter((scope) => granted.includes(scope));
-      const complete = scopes.length === OMNISEND_SCOPES.length;
+      const scopes = askedScopes.filter((scope) => granted.includes(scope));
+      const complete = OMNISEND_SCOPES.every((scope) => scopes.includes(scope));
       const connection = complete
         ? {
             accessToken: token.access_token,
@@ -676,5 +689,139 @@ export function createOmnisendRoutes({
     await lift(pendingKey(pendingTag(userId)), { states: {} });
   }
 
-  return { handle, forgetUser, unforgetUser };
+  // ───────────── email analytics (server/analytics/sources/email.mjs) ─────────────
+
+  /** A brand's opaque tag for the rate counters: the same connection, the same brand (never the token itself). */
+  const brandTag = (accessToken) => sha256(`omnisend-brand:${accessToken}`).slice(0, 24);
+  const reportsKey = (brand, day) => `omnisend:reports:${brand}:${day}`;
+  const namesKey = (brand) => `omnisend:campaigns:${brand}`;
+
+  /** One read from Omnisend's API (GET or a read-only POST): { status, body }, or { status: 0 } when it never answered. */
+  async function omnisendRead(accessToken, method, path, payload) {
+    try {
+      const response = await fetchImpl(`${API_BASE_URL}${path}`, {
+        method,
+        headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'omnisend-version': API_VERSION, ...(payload ? { 'content-type': 'application/json' } : {}) },
+        ...(payload ? { body: JSON.stringify(payload) } : {}),
+        signal: AbortSignal.timeout(20_000),
+      });
+      return { status: response.status, body: await response.json().catch(() => null) };
+    } catch {
+      return { status: 0, body: null };
+    }
+  }
+
+  /** Campaign names by id (GET /api/campaigns?limit=100), kept for a day per brand. Names are shown as text. */
+  async function campaignNames(accessToken, brand) {
+    const key = namesKey(brand);
+    const cached = await readDocument(key).catch(() => null);
+    if (cached && Number(cached.value.at) > now() - CAMPAIGN_NAMES_TTL_MS && isRecord(cached.value.names)) return cached.value.names;
+    const got = await omnisendRead(accessToken, 'GET', '/campaigns?limit=100');
+    if (got.status !== 200) return isRecord(cached?.value?.names) ? cached.value.names : {};
+    const list = Array.isArray(got.body?.campaigns) ? got.body.campaigns : Array.isArray(got.body) ? got.body : [];
+    const names = {};
+    for (const c of list.slice(0, 100)) if (isRecord(c) && typeof c.id === 'string') names[c.id.slice(0, 64)] = String(c.name ?? '').slice(0, 200);
+    await storage.put(key, { at: now(), names }).catch(() => {});
+    return names;
+  }
+
+  /**
+   * The customer's email stats for the last 30 days (EmailData without leads), within Omnisend's limits: at most
+   * one live call per brand per hour (inside the hour the last answer is served again, cached: true) and
+   * REPORTS_PER_DAY a day. Never retried. Returns { status: 'ok', data, fetchedAt, cached? } |
+   * { status: 'not_connected', errorCode: 'NOT_CONNECTED'|'NEEDS_RECONNECT' } | { status: 'skipped', errorCode:
+   * 'RATE_LIMITED' } | { status: 'error', errorCode: 'UNAVAILABLE' }. Omnisend's own text never comes back.
+   */
+  async function reports(userId) {
+    if (!storageReady || !userId) return { status: 'not_connected', errorCode: 'NOT_CONNECTED' };
+    const { value: doc, unreadable } = await readDocument(userDocumentKey(userId));
+    if (!doc.accessToken && !unreadable && !doc.needsReconnect) return { status: 'not_connected', errorCode: 'NOT_CONNECTED' };
+    if (reconnectReason(doc, unreadable)) return { status: 'not_connected', errorCode: 'NEEDS_RECONNECT' };
+    if (optionalScopes.some((scope) => !Array.isArray(doc.scopes) || !doc.scopes.includes(scope))) return { status: 'not_connected', errorCode: 'NEEDS_RECONNECT' };
+    const brand = brandTag(doc.accessToken);
+    const day = iso(now()).slice(0, 10);
+    const key = reportsKey(brand, day);
+    // claim the call before making it (compare-and-set): two Updates at once make one call
+    const claim = await updateDocument(key, (current) => {
+      const lastAt = Number(current.lastAt) || 0;
+      if (lastAt > now() - REPORTS_EVERY_MS) return { write: false, result: { cached: current.last ?? null } };
+      if ((Number(current.count) || 0) >= REPORTS_PER_DAY) return { write: false, result: { limited: true } };
+      return { value: { ...current, count: (Number(current.count) || 0) + 1, lastAt: now() }, result: { go: true } };
+    });
+    if (claim.limited) return { status: 'skipped', errorCode: 'RATE_LIMITED' };
+    if (!claim.go) return claim.cached?.data ? { status: 'ok', data: claim.cached.data, fetchedAt: claim.cached.fetchedAt, cached: true } : { status: 'ok', cached: true };
+    const got = await omnisendRead(doc.accessToken, 'POST', '/analytics/reports', REPORTS_QUERY);
+    if (got.status === 401) {
+      await markReconnect(userId, doc.accessToken, 'revoked').catch(() => {});
+      return { status: 'not_connected', errorCode: 'NEEDS_RECONNECT' };
+    }
+    if (got.status === 403) return { status: 'not_connected', errorCode: 'NEEDS_RECONNECT' };
+    if (got.status === 429) return { status: 'skipped', errorCode: 'RATE_LIMITED' };
+    if (got.status !== 200 || !Array.isArray(got.body?.reports)) return { status: 'error', errorCode: 'UNAVAILABLE' };
+    const names = await campaignNames(doc.accessToken, brand).catch(() => ({}));
+    const data = emailDataFrom(got.body.reports, names);
+    const fetchedAt = iso(now());
+    await updateDocument(key, (current) => ({ value: { ...current, last: { data, fetchedAt } } })).catch(() => {});
+    return { status: 'ok', data, fetchedAt };
+  }
+
+  /** Whether the customer has a usable Omnisend connection (for "nothing to update"). */
+  async function connected(userId) {
+    if (!storageReady || !userId) return false;
+    try {
+      const { value: doc, unreadable } = await readDocument(userDocumentKey(userId));
+      return !!doc.accessToken && !reconnectReason(doc, unreadable);
+    } catch {
+      return false;
+    }
+  }
+
+  return { handle, forgetUser, unforgetUser, reports, connected };
+}
+
+/** The reports request for the Email Analytics tab (spec §1.5): campaign totals and sends per day, last 30 days. */
+export const REPORTS_QUERY = Object.freeze({
+  queries: [
+    {
+      alias: 'campaigns-30d',
+      metrics: [{ name: 'sent' }, { name: 'openRate' }, { name: 'clickRate' }, { name: 'unsubscribeRate' }, { name: 'attributedRevenue' }, { name: 'attributedOrders' }],
+      dimensions: [{ name: 'marketingActivityID' }],
+      dateRange: { interval: 'last30Days' },
+      filters: [{ name: 'marketingActivityType', operator: 'in', values: ['Campaign'] }],
+    },
+    {
+      alias: 'daily-30d',
+      metrics: [{ name: 'sent' }, { name: 'openedUnique' }, { name: 'clickedUnique' }],
+      dimensions: [{ name: 'timestamp', granularity: 'day' }],
+      dateRange: { interval: 'last30Days' },
+    },
+  ],
+});
+
+/** EmailData (without leads) from Omnisend's reports answer: rates are ratios (0–1); totals weighted by sends. */
+export function emailDataFrom(reportList, names = {}) {
+  const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : 0);
+  const rowsOf = (alias) => {
+    const r = reportList.find((x) => isRecord(x) && x.alias === alias);
+    return Array.isArray(r?.rows) ? r.rows.filter(isRecord).slice(0, 500) : [];
+  };
+  const campaigns = rowsOf('campaigns-30d').map((r) => {
+    const id = String(r.marketingActivityID ?? '').slice(0, 64);
+    return { id, name: String(names[id] ?? 'Campaign').slice(0, 200), sent: n(r.sent), openRate: n(r.openRate), clickRate: n(r.clickRate), unsubscribeRate: n(r.unsubscribeRate), revenue: n(r.attributedRevenue) };
+  });
+  const sent = campaigns.reduce((a, c) => a + c.sent, 0);
+  const weighted = (field) => (sent ? campaigns.reduce((a, c) => a + c[field] * c.sent, 0) / sent : 0);
+  const series = rowsOf('daily-30d')
+    .map((r) => ({ date: String(r.timestamp ?? '').slice(0, 10), sent: n(r.sent), opened: n(r.openedUnique), clicked: n(r.clickedUnique) }))
+    .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.date))
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+  return {
+    sent,
+    openRate: weighted('openRate'),
+    clickRate: weighted('clickRate'),
+    unsubscribeRate: weighted('unsubscribeRate'),
+    revenue: campaigns.reduce((a, c) => a + c.revenue, 0),
+    series,
+    campaigns: campaigns.map(({ unsubscribeRate, ...c }) => c),
+  };
 }
