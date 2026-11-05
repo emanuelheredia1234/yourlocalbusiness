@@ -212,21 +212,23 @@ export function StrategyPage({ project }: { project: Project }) {
           </>
         }
       />
-      <Tabs<Tab>
-        sticky
-        className="mb-5"
-        value={tab}
-        onChange={setTab}
-        tabs={[
-          { id: 'plan', label: 'Plan' },
-          { id: 'research', label: 'Research', count: findings || undefined },
-          { id: 'promote', label: 'Where to promote' },
-          { id: 'content', label: 'Social content' },
-          { id: 'assets', label: 'Assets to create' },
-          { id: 'outreach', label: 'Email outreach' },
-          { id: 'seo', label: 'SEO page' },
-        ]}
-      />
+      {/* sticky through an opaque wrapper: on phones the tab row fades at its edges, and a sticky row that fades
+          its own background lets the page scrolling under it show through */}
+      <div className="sticky top-0 z-10 mb-5 bg-surface">
+        <Tabs<Tab>
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { id: 'plan', label: 'Plan' },
+            { id: 'research', label: 'Research', count: findings || undefined },
+            { id: 'promote', label: 'Where to promote' },
+            { id: 'content', label: 'Social content' },
+            { id: 'assets', label: 'Assets to create' },
+            { id: 'outreach', label: 'Email outreach' },
+            { id: 'seo', label: 'SEO page' },
+          ]}
+        />
+      </div>
       {job ? <RunningBlock job={job} skeleton={!written} /> : <StoppedNote project={project} s={s} />}
       <div role="tabpanel" aria-label={tabLabel('strategy', tab)}>
         {(written || !job) && (
