@@ -15,8 +15,21 @@ import { sameStart } from '../caption.mjs';
 export const LINKEDIN_VERSION = '202610';
 const HEADERS = { 'LinkedIn-Version': LINKEDIN_VERSION, 'X-Restli-Protocol-Version': '2.0.0' };
 
-/** The author urn of the chosen account (person or organization), with the {target} placeholder. */
-const authorOf = (ctx) => (ctx.status?.targetKind === 'li_org' ? 'urn:li:organization:{target}' : 'urn:li:person:{target}');
+/**
+ * The author urn of the chosen account, read back through the proxy (the id never leaves the connections
+ * implementation, so it's asked for by placeholder): an organization's id from /rest/organizations/{target}, the
+ * member's from /v2/userinfo. '' when it couldn't be read (nothing is sent then).
+ */
+async function authorOf(ctx) {
+  if (isOrg(ctx)) {
+    const res = await ctx.read({ method: 'GET', path: '/rest/organizations/{target}', headers: HEADERS });
+    const id = ok(res) && isObj(res.body) ? str(res.body.id) : '';
+    return /^\d{1,20}$/.test(id) ? `urn:li:organization:${id}` : '';
+  }
+  const res = await ctx.read({ method: 'GET', path: '/v2/userinfo' });
+  const sub = ok(res) && isObj(res.body) ? str(res.body.sub) : '';
+  return /^[A-Za-z0-9_-]{1,64}$/.test(sub) ? `urn:li:person:${sub}` : '';
+}
 /** LinkedIn's times are epoch milliseconds. */
 const msIso = (ms) => (Number.isFinite(Number(ms)) ? new Date(Number(ms)).toISOString() : '');
 const isOrg = (ctx) => ctx.status?.targetKind === 'li_org';
@@ -44,7 +57,8 @@ async function uploadImage(ctx, owner) {
 
 export const linkedin = {
   async publish(ctx) {
-    const author = authorOf(ctx);
+    const author = await authorOf(ctx);
+    if (!author) return { state: 'failed', errorCode: 'NEEDS_RECONNECT' };
     let image = '';
     if (ctx.media) {
       const up = await uploadImage(ctx, author);
@@ -77,7 +91,9 @@ export const linkedin = {
   async check(ctx, job) {
     // a member's own posts can't be read back by a new app: no call, the job stays as it is
     if (!isOrg(ctx)) return null;
-    const res = await ctx.read({ method: 'GET', path: '/rest/posts', query: { q: 'author', author: 'urn:li:organization:{target}', count: '10' }, headers: HEADERS });
+    const author = await authorOf(ctx);
+    if (!author) return { found: false };
+    const res = await ctx.read({ method: 'GET', path: '/rest/posts', query: { q: 'author', author, count: '10' }, headers: HEADERS });
     if (!ok(res)) return { found: false };
     const list = Array.isArray(res.body?.elements) ? res.body.elements : [];
     const hit = list.find((p) => isObj(p) && sameStart(ctx.composed.text, p.commentary) && recentEnough(msIso(p.createdAt ?? p.publishedAt), job.requested_at));
