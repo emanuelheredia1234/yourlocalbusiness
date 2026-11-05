@@ -7,7 +7,7 @@ import type { StepInputBase, StrategyState } from '@/lib/strategyTypes';
 import { emptyStrategy, readStrategy, STRATEGY_STEPS } from '@/lib/strategy';
 import { STRATEGY_CAPS as C, CLAIMS, NUMBER_CLAIM, PREDICTION, URL_RE } from '@/lib/strategyNormalize';
 import { QA_SOURCES, STRATEGY_QA, qaEnv, qaMeta, qaProductProject, qaProject, qaResearchMeta, qaSavedStrategy } from '@/test/strategyQa';
-import { INPUT_BUDGET, STEP_TASK, STRATEGY_RULES, mapResearchUrls, renormalize, stepInput, stepMarker, strategyResearchTask } from './strategyTasks';
+import { INPUT_BUDGET, STEP_TASK, STRATEGY_RULES, mapResearchUrls, renormalize, stepInput, stepMarker, strategyResearchTask, unwrapAnswer } from './strategyTasks';
 import { ctxFrom } from './strategyTasks';
 import type { TaskEnv } from './tasks';
 
@@ -55,10 +55,31 @@ describe('the prompts', () => {
 
   it('stay within 24,000 characters for a strategy filled to every cap', () => {
     const big = maxed(p);
+    // every step of a full plan ticked, with titles at their cap: the plan step gets them all
+    const actions = Array.from({ length: C.plan.actions }, (_, i) => ({ ...big.plan!.actions[0], id: `a_max${i}`, title: `${i} ${'word '.repeat(20)}`.slice(0, C.plan.title) }));
+    const ticked = { ...big, plan: { ...big.plan!, actions }, ticks: Object.fromEntries(actions.map((a) => [a.id, 1])) };
+    expect((stepInput('plan', p, ticked, rt()) as unknown as { earlier: { done: string[] } }).earlier.done).toHaveLength(C.plan.actions);
     for (const step of STRATEGY_STEPS) {
-      const prompt = task(step).claude.prompt(stepInput(step, p, big, rt()), qaEnv(p), undefined);
-      expect(prompt.length).toBeLessThanOrEqual(24_000);
+      for (const s of [big, ticked]) {
+        const prompt = task(step).claude.prompt(stepInput(step, p, s, rt()), qaEnv(p), undefined);
+        expect(prompt.length).toBeLessThanOrEqual(24_000);
+      }
     }
+  });
+
+  it('plan: the steps of the current plan the owner ticked go in, with the rule to keep them under the same titles', () => {
+    const [a, , c] = s.plan!.actions;
+    const ticked = { ...s, ticks: { [a.id]: 1, [c.id]: 2 } };
+    const input = stepInput('plan', p, ticked, rt()) as unknown as { earlier: Record<string, unknown> };
+    expect(input.earlier.done).toEqual([a.title, c.title]);
+    const prompt = task('plan').claude.prompt(input, qaEnv(p), undefined);
+    expect(prompt).toContain('INPUT.earlier.done lists steps of the current plan the owner already did. Keep each one that still applies in the new plan, with exactly the same title, so it stays marked as done.');
+    // nothing ticked: neither the list nor the rule
+    const none = stepInput('plan', p, s, rt()) as unknown as { earlier: Record<string, unknown> };
+    expect(none.earlier).not.toHaveProperty('done');
+    expect(task('plan').claude.prompt(none, qaEnv(p), undefined)).not.toContain('INPUT.earlier.done');
+    // other steps never get it
+    expect(stepInput('content', p, ticked, rt())).not.toHaveProperty('earlier.done');
   });
 
   it('a long research is shortened to fit, never the owner’s words', () => {
@@ -234,6 +255,45 @@ describe('the QA answers through each merge (spec §7.4)', () => {
   it('reads back unchanged (the stored strategy is already normalized)', () => {
     const back = readStrategy({ ...p, strategy: s });
     expect(back).toEqual(s);
+  });
+});
+
+describe('an answer wrapped in one key', () => {
+  const p = qaProject();
+  const s = qaSavedStrategy(p);
+
+  it('is read as the answer inside it (one or two levels down), whatever the wrapper is called', () => {
+    expect(unwrapAnswer('plan', { plan: STRATEGY_QA.plan })).toBe(STRATEGY_QA.plan);
+    expect(unwrapAnswer('plan', { result: { plan: STRATEGY_QA.plan } })).toBe(STRATEGY_QA.plan);
+    expect(unwrapAnswer('research', { data: STRATEGY_QA.research })).toBe(STRATEGY_QA.research);
+    // the wrapper has the same name as one of the step's own keys
+    expect(unwrapAnswer('assets', { assets: STRATEGY_QA.assets })).toBe(STRATEGY_QA.assets);
+  });
+
+  it('leaves alone an answer that is already the right shape, or that has nothing to unwrap', () => {
+    const findingsOnly = { findings: STRATEGY_QA.research.findings };
+    expect(unwrapAnswer('research', findingsOnly)).toBe(findingsOnly);
+    const positioningOnly = { positioning: STRATEGY_QA.promote.positioning };
+    expect(unwrapAnswer('promote', positioningOnly)).toBe(positioningOnly);
+    const campaignOnly = { campaign: STRATEGY_QA.content.campaign };
+    expect(unwrapAnswer('content', campaignOnly)).toBe(campaignOnly);
+    for (const odd of [{ answer: 'Here is your plan.' }, { plan: [STRATEGY_QA.plan] }, { plan: {} }, [STRATEGY_QA.plan], 'text', null]) expect(unwrapAnswer('plan', odd)).toBe(odd);
+    expect(unwrapAnswer('plan', STRATEGY_QA.plan)).toBe(STRATEGY_QA.plan);
+  });
+
+  it('each step’s merge reads the answer inside the wrapper', () => {
+    for (const step of STRATEGY_STEPS) {
+      if (step === 'research') continue;
+      const input = stepInput(step, p, s, rt());
+      const wrapped = task(step).claude.merge({ [step]: JSON.parse(JSON.stringify(STRATEGY_QA[step])) }, undefined, input, qaEnv(p));
+      const plain = task(step).claude.merge(JSON.parse(JSON.stringify(STRATEGY_QA[step])), undefined, input, qaEnv(p));
+      expect(wrapped).toEqual(plain);
+    }
+    const meta = qaMeta(qaResearchMeta());
+    const input = stepInput('research', p, s, rt());
+    const research = task('research').claude.merge({ research: JSON.parse(JSON.stringify(STRATEGY_QA.research)) }, undefined, input, qaEnv(p, meta)) as { findings: unknown[]; summary: string };
+    expect(research.findings).toHaveLength(4);
+    expect(research.summary).toBe(STRATEGY_QA.research.summary);
   });
 });
 
