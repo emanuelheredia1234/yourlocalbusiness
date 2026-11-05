@@ -363,6 +363,10 @@ How it behaves:
 
 API (signed in, same site only): `GET /api/integrations/omnisend/status`, `POST /api/integrations/omnisend/connect`, `DELETE /api/integrations/omnisend/connection`, `POST /api/integrations/omnisend/campaign-drafts`. Public: `GET /api/integrations/omnisend/callback` (Omnisend's redirect).
 
+## Connected accounts, analytics and usage (being built)
+
+Customers will connect their own social, ads and Search Console accounts (through Nango, which holds their logins), post from the app after a confirm, see Social, Ads, SEO page and Email analytics (public data and competitor ads through treg), send their SEO page to Google, and the owner will see each customer's usage and caps. The server already answers these routes; each part says "not set up yet" until it's built and its Secrets are set, and until then posting stays manual (Post it yourself, then Mark as posted) and Manus keeps posting to Facebook groups. Setup, Secrets and the database migration: [docs/integrations-setup.md](docs/integrations-setup.md).
+
 ## Run it
 
 ```bash
