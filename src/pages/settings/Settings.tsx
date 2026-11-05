@@ -8,7 +8,7 @@ import { saveBrand, brandCopyFrom } from '@/lib/brandSave';
 import { EXPORT_KEYS, backupFileName, backupJson } from '@/lib/backup';
 import { deleteProjectEverywhere } from '@/lib/projectActions';
 import { usePublishAccess } from '@/lib/publish';
-import { PLATFORMS, POST_PLATFORMS, FORMATS } from '@/ai/knowledge';
+import { FORMATS } from '@/ai/knowledge';
 import { brandKitTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore, type StoreState } from '@/store/useStore';
@@ -18,13 +18,14 @@ import { toast, useUI } from '@/store/ui';
 import { useAuth } from '@/lib/cloud/auth';
 import { AccountSettings } from '@/components/auth/Account';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { AutoTextarea, Badge, Callout, ChipInput, InfoTip, MoreMenu, PageHeader, Segmented, SettingsRow, SettingsSection, Toggle, confirmAction } from '@/components/ui/primitives';
+import { AutoTextarea, Badge, ChipInput, MoreMenu, PageHeader, Segmented, SettingsRow, SettingsSection, Toggle, confirmAction } from '@/components/ui/primitives';
 import { BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
 import { LogoMark } from '@/components/brand/Logo';
-import { manusSetupHint, useManusReady } from '@/components/posts/ManusPost';
 import { download } from '@/components/ui/download';
 import { AIProviders, ArtifactAI } from './AIProviders';
 import { DomainsCard } from './Domains';
+import { ConnectedAccounts } from './ConnectedAccounts';
+import { UsageSection } from './UsageSection';
 
 type Tab = 'brand' | 'domains' | 'ai' | 'accounts' | 'projects' | 'prefs' | 'account';
 
@@ -33,7 +34,7 @@ const SECTIONS: { id: Tab; label: string; hint: string; icon: ReactNode }[] = [
   { id: 'brand', label: 'Brand', hint: 'Name, logo, colours and photos', icon: <Palette /> },
   { id: 'domains', label: 'Domains', hint: 'Your own web addresses', icon: <Globe /> },
   { id: 'ai', label: 'AI keys', hint: 'What powers the AI', icon: <KeyRound /> },
-  { id: 'accounts', label: 'Social accounts', hint: 'Profiles and posting with Manus', icon: <Link2 /> },
+  { id: 'accounts', label: 'Connected accounts', hint: 'Connect your accounts to post and see your own stats', icon: <Link2 /> },
   { id: 'projects', label: 'Projects & data', hint: 'Projects, backups and reset', icon: <Database /> },
   { id: 'prefs', label: 'Preferences', hint: 'Your name, theme and Marketplace', icon: <SlidersHorizontal /> },
   { id: 'account', label: 'Account', hint: 'Sign-in, password and deletion', icon: <CircleUserRound /> },
@@ -301,49 +302,38 @@ function BrandSettings({ project }: { project: Project }) {
 // ───────────────────────── AI ─────────────────────────
 
 function AISettings() {
-  return __ARTIFACT_BUILD__ ? <ArtifactAI /> : <AIProviders />;
+  if (__ARTIFACT_BUILD__) return <ArtifactAI />;
+  return <AIWithUsage />;
 }
 
-// ───────────────────────── Social accounts ─────────────────────────
+/** The AI keys, then (signed in) what analytics data has cost, beside the AI limits. */
+function AIWithUsage() {
+  const signedIn = useAuth((s) => s.phase === 'ready');
+  return (
+    <>
+      <AIProviders />
+      {signedIn && (
+        <div className="mt-6 flex max-w-[880px] flex-col gap-6">
+          <UsageSection />
+        </div>
+      )}
+    </>
+  );
+}
+
+// ───────────────────────── Connected accounts ─────────────────────────
 
 function Accounts() {
   const project = useActiveProject()!;
   const updateBrand = useStore((s) => s.updateBrand);
-  const ready = useManusReady();
   const saved = useSaved(project.brand.socials);
-  const networks = POST_PLATFORMS.map((p) => PLATFORMS[p].label.replace(' (Twitter)', '')).join(', ');
   return (
     <div className="flex max-w-[880px] flex-col gap-6">
-      {ready ? (
-        <Callout tone="good" title="Manus is ready to post for you.">
-          It posts on {networks}, right away or scheduled, using your Manus credits.
-        </Callout>
-      ) : (
-        <Callout
-          tone="warn"
-          title="Manus isn’t set up yet."
-          action={
-            !__ARTIFACT_BUILD__ && (
-              <button type="button" className="btn btn-secondary btn-xs" onClick={() => useUI.getState().setSettingsTab('ai')}>
-                Open AI keys
-              </button>
-            )
-          }
-        >
-          {manusSetupHint()}
-        </Callout>
-      )}
+      <ConnectedAccounts />
       <SettingsSection
         title="Your profiles"
-        description={`For ${project.brand.name || 'this project'}. Shown in post previews; they tell Manus which account to post as.`}
-        actions={
-          <span className="flex items-center gap-1">
-            <Saved shown={saved} />
-            <InfoTip title="How posting works" label="How posting works">
-              This app doesn’t log in to your social accounts and never posts on its own. Manus, an AI agent, opens each network in its own browser, where you sign in once, and posts exactly the text and image or video you confirm. Without Manus, copy a post’s text and download its image from the post’s ⋯ menu, post it yourself, then choose Mark as posted.
-            </InfoTip>
-          </span>
-        }
+        description={`For ${project.brand.name || 'this project'}. Shown in post previews, and used for public stats when an account isn’t connected.`}
+        actions={<Saved shown={saved} />}
       >
         <SocialLinksEditor socials={project.brand.socials} onChange={(socials) => updateBrand({ socials })} projectId={project.id} voiceSetup="none" />
       </SettingsSection>
