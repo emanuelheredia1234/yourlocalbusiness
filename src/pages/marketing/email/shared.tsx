@@ -10,7 +10,7 @@ import { BrandLogo } from '@/components/brand/Logo';
 export function PanelHead({ title, description, actions }: { title: ReactNode; description?: ReactNode; actions?: ReactNode }) {
   return (
     <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-      <div className="min-w-0 flex-1 basis-72">
+      <div className="min-w-0 flex-1 basis-60">
         <h2 className="text-h2 text-ink">{title}</h2>
         {description && <p className="mt-1 text-small text-muted">{description}</p>}
       </div>
