@@ -1,14 +1,16 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Camera, Download, ExternalLink, ImagePlus, Palette, RefreshCw, Trash2, Type, WandSparkles } from 'lucide-react';
+import { Camera, Download, ExternalLink, Palette, Trash2, Type } from 'lucide-react';
 import type { ImageAspect, ImageKind, MediaRef, PostPlatform, Project, StyleId } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
-import { navigate } from '@/lib/router';
-import { artMetaLine, aspectForPlatform, createPostImage, defaultImageKind, photoLabel, photoSourceNote, postSubject, releaseMedia, retypesetPostImage } from '@/ai/image';
+import { artMetaLine, aspectForPlatform, createPostImage, defaultImageKind, photoSourceNote, postSubject, releaseMedia, retypesetPostImage } from '@/ai/image';
 import { pendingManus, type ManusTask } from '@/ai/manus';
-import { AIThinking } from '@/components/ai/AI';
+import { AIThinking, GenerateButton } from '@/components/ai/AI';
+import { openPage } from '@/ai/assistant/nav';
+import { MediaThumb } from '@/components/media/MediaUpload';
 import { download } from '@/components/ui/download';
-import { AutoTextarea, Field, Segmented, Spinner, Toggle } from '@/components/ui/primitives';
+import { AutoTextarea, Callout, InfoTip, Segmented, Toggle, Tooltip } from '@/components/ui/primitives';
+import { cn as mergeCn } from '@/components/ui/shadcn/utils';
 import { artDirectionLabel, useArtDirection, useImageJob, usePhotoAvailability } from './useImageJob';
 
 export const POST_ASPECTS: { id: ImageAspect; label: string; hint: string }[] = [
@@ -49,11 +51,14 @@ export interface PostImagePanelProps {
 export function ManusLink({ url, label = 'Open in Manus' }: { url?: string; label?: string }) {
   if (!url) return null;
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline">
-      {label} <ExternalLink size={11} />
+    <a href={url} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1 text-small">
+      {label} <ExternalLink size={12} aria-hidden="true" />
     </a>
   );
 }
+
+/** The text box inside an AI composer frame: no border or fill of its own. */
+const COMPOSER_TEXT = '!border-0 !bg-transparent !px-1 !py-0.5 !shadow-none';
 
 /** Generate, re-typeset, download or remove the AI image of one post. */
 export function PostImagePanel({ project, headline, prompt, onPromptChange, style, watermark, platform, media, onChange, pendingKey, className }: PostImagePanelProps) {
@@ -123,127 +128,140 @@ export function PostImagePanel({ project, headline, prompt, onPromptChange, styl
     if (old) setTimeout(() => releaseMedia(old), 0);
   };
 
+  // who makes it and what it costs: behind the ⓘ, never on the panel
+  const about = [!photo.ok ? photo.reason : '', source || (kind === 'illustration' ? 'Illustrations are drawn in your brand colors; your headline and logo go on top.' : ''), kind === 'photo' ? artDirectionLabel(art.skills.map((k) => k.name)) : ''].filter(Boolean);
+  const made = job.done || describeGenerated(media);
+
   return (
-    <section className={cn('flex flex-col gap-3 rounded-lg border border-line bg-surface p-3', className)} aria-label="AI image">
+    <section className={mergeCn('flex flex-col gap-3 rounded-lg border border-line bg-surface p-4', className)} aria-label="AI image">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-1.5 text-[13px] font-semibold text-ink">
-          <ImagePlus size={15} className="text-primary" /> AI image
+        <h3 className="flex items-center gap-1 text-h4 text-ink">
+          AI image
+          {about.length > 0 && (
+            <InfoTip label="Who makes the image" link={!photo.ok && !__ARTIFACT_BUILD__ ? { label: 'Open Settings › AI keys', onClick: () => void openPage('workspace-settings', 'ai') } : undefined}>
+              {about.map((t, i) => (
+                <span key={t} className={cn('block', i > 0 && 'mt-1.5')}>
+                  {t}
+                </span>
+              ))}
+            </InfoTip>
+          )}
         </h3>
         <Segmented<ImageKind>
           size="sm"
           value={kind}
           onChange={(v) => (v === 'photo' && !photo.ok ? undefined : setKind(v))}
           options={[
-            { id: 'illustration', label: 'Illustration', icon: <Palette size={13} /> },
-            { id: 'photo', label: <span className={cn(!photo.ok && 'opacity-50')}>{photoLabel()}</span>, icon: <Camera size={13} className={cn(!photo.ok && 'opacity-50')} /> },
+            { id: 'illustration', label: 'Illustration', icon: <Palette /> },
+            // who makes the photo is in the ⓘ, not on the switch
+            { id: 'photo', label: <span className={cn(!photo.ok && 'text-faint')}>Photo</span>, icon: <Camera className={cn(!photo.ok && 'text-faint')} /> },
           ]}
         />
       </div>
-      {!photo.ok && (
-        <p className="text-[11.5px] leading-snug text-muted">
-          {photo.reason}{' '}
-          {!__ARTIFACT_BUILD__ && (
-            <button type="button" className="font-semibold text-primary hover:underline" onClick={() => navigate('workspace-settings')}>
-              Open settings
-            </button>
-          )}
-        </p>
-      )}
-      {source && <p className="text-[11.5px] leading-snug text-muted">{source}</p>}
       {resumable && !job.running && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-[12.5px]">
-          <span className="min-w-0 flex-1 text-ink-2">A Manus photo you started is still on its way.</span>
-          <button type="button" className="btn btn-secondary btn-xs" onClick={() => generate(resumable)}>
-            Pick it up
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs text-muted"
-            onClick={() => {
-              if (pendingKey) pendingManus.clear(pendingKey);
-              setResumable(null);
-            }}
-          >
-            Dismiss
-          </button>
-        </div>
+        <Callout
+          tone="info"
+          onDismiss={() => {
+            if (pendingKey) pendingManus.clear(pendingKey);
+            setResumable(null);
+          }}
+          action={
+            <button type="button" className="btn btn-secondary btn-xs" onClick={() => generate(resumable)}>
+              Pick it up
+            </button>
+          }
+        >
+          A Manus photo you started is still on its way.
+        </Callout>
       )}
-      {uploaded && <p className="text-xs text-muted">This post uses your own photo. Generating replaces it with an AI image.</p>}
-      <Field label="Image description" htmlFor={`${fid}-desc`} hint="Describe the scene. Your headline and logo are added on top, so leave words out.">
-        <AutoTextarea id={`${fid}-desc`} value={description} onChange={onPromptChange} minRows={2} className="text-[13px]" placeholder="e.g. a sunlit desk with a laptop showing a tidy budget dashboard" />
-      </Field>
-      <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Image shape">
-        {POST_ASPECTS.map((a) => (
-          <button key={a.id} type="button" role="radio" aria-checked={aspect === a.id} title={a.hint} className={cn('chip', aspect === a.id && 'chip-active')} onClick={() => setAspect(a.id)}>
-            {a.label}
-          </button>
-        ))}
+      {uploaded && <p className="text-small text-muted">This post uses your own photo. Generating replaces it with an AI image.</p>}
+      <div>
+        <label htmlFor={`${fid}-desc`} className="label">
+          Image description
+        </label>
+        <div className="ai-composer px-3 pb-2 pt-2.5">
+          <AutoTextarea id={`${fid}-desc`} value={description} onChange={onPromptChange} minRows={2} className={COMPOSER_TEXT} placeholder="e.g. a sunlit desk with a laptop showing a tidy budget dashboard" aria-describedby={`${fid}-hint`} />
+          <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Image shape">
+            {POST_ASPECTS.map((a) => (
+              <button key={a.id} type="button" role="radio" aria-checked={aspect === a.id} title={a.hint} className={cn('chip', aspect === a.id && 'chip-active')} onClick={() => setAspect(a.id)}>
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p id={`${fid}-hint`} className="hint">
+          Describe the scene. Your headline and logo go on top, so leave words out.
+        </p>
       </div>
       <Toggle checked={overlay} onChange={setOverlay} label="Headline and logo on the image" />
-      {kind === 'photo' && art.skills.length > 0 && (
-        <p className="text-[11.5px] text-muted" title={art.text}>
-          {artDirectionLabel(art.skills.map((k) => k.name))}
-        </p>
-      )}
       <AIThinking running={job.running} stage={job.stage} onStop={job.stop} compact />
       {job.running && job.task && <ManusLink url={job.task.taskUrl} label="Watch it in Manus" />}
       {job.error && (
-        <div className="rounded-md border border-bad/30 bg-bad-soft px-3 py-2 text-[12.5px]" role="alert">
-          <p className="font-semibold text-bad">{job.error.title}</p>
-          <p className="text-ink-2">{job.error.body}</p>
-          <div className="mt-1 flex flex-wrap items-center gap-3">
+        <Callout tone="bad" title={job.error.title}>
+          {job.error.body}
+          <span className="mt-1 flex flex-wrap items-center gap-3">
             <ManusLink url={job.error.taskUrl} label="Open the task in Manus" />
             {job.error.code === 'MANUS_TIMEOUT' && job.task && (
-              <button type="button" className="text-xs font-semibold text-primary hover:underline" onClick={() => generate(job.task!)}>
+              <button type="button" className="link text-small" onClick={() => generate(job.task!)}>
                 Keep waiting
               </button>
             )}
             {kind === 'photo' && (
-              <button type="button" className="text-xs font-semibold text-primary hover:underline" onClick={() => setKind('illustration')}>
+              <button type="button" className="link text-small" onClick={() => setKind('illustration')}>
                 Make an illustration instead
               </button>
+            )}
+          </span>
+        </Callout>
+      )}
+      {media && !job.running && (
+        <div className="flex min-w-0 items-center gap-3">
+          {/* the image in use, with the option-card ring (over the picture, so it shows) */}
+          <span className="relative shrink-0">
+            <MediaThumb media={media} className="h-12 w-12 rounded-md" />
+            <span className="pointer-events-none absolute inset-0 rounded-md ring-[1.5px] ring-inset ring-primary" aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-1 text-small font-medium text-ink">
+              {uploaded ? 'Your photo' : g?.kind === 'design' ? 'Brand design' : g?.kind === 'photo' ? 'AI photo' : 'AI illustration'}
+              {made && !uploaded && (
+                <InfoTip label="How this image was made">
+                  {made}
+                  {g?.taskUrl && (
+                    <span className="mt-1.5 block">
+                      <ManusLink url={g.taskUrl} label="View task" />
+                    </span>
+                  )}
+                </InfoTip>
+              )}
+            </p>
+            {stale ? (
+              <p className="text-caption text-ink-2">The headline or layout changed since it was made.</p>
+            ) : (
+              job.note && <p className="text-caption text-warn">{job.note}</p>
             )}
           </div>
         </div>
       )}
-      {!job.running && (job.done || job.note) && (
-        <p className="text-[11.5px] text-muted">
-          {job.done}
-          {job.note && <span className="block text-warn">{job.note}</span>}
-        </p>
-      )}
-      {!job.running && !job.done && g && (
-        <p className="flex flex-wrap items-center gap-2 text-[11.5px] text-muted">
-          {describeGenerated(media)} <ManusLink url={g.taskUrl} label="View task" />
-        </p>
-      )}
-      {stale && !job.running && (
-        <p className="text-[11.5px] text-ink-2">
-          The headline or layout changed since this image was made.{' '}
-          <button type="button" className="font-semibold text-primary hover:underline" onClick={retypeset}>
-            Update the image text
-          </button>{' '}
-          (no new generation).
-        </p>
-      )}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn btn-ai btn-sm" onClick={() => generate()} disabled={job.running}>
-          {job.running ? <Spinner size={14} /> : g ? <RefreshCw size={14} /> : <WandSparkles size={14} className="text-accent" />}
+        <GenerateButton size="sm" running={job.running} runningLabel="Designing…" onClick={() => void generate()}>
           {g ? 'Regenerate' : 'Generate image'}
-        </button>
+        </GenerateButton>
         {stale && (
           <button type="button" className="btn btn-secondary btn-sm" onClick={retypeset} disabled={job.running}>
-            <Type size={14} /> Update text
+            <Type /> Update text
           </button>
         )}
         {media && (
           <>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={save} aria-label="Download image">
-              <Download size={14} /> Download
+            <button type="button" className="btn btn-secondary btn-sm" onClick={save} aria-label="Download image">
+              <Download /> Download
             </button>
-            <button type="button" className="btn btn-ghost btn-sm ml-auto text-muted hover:text-bad" onClick={remove} aria-label="Remove image">
-              <Trash2 size={14} />
-            </button>
+            <Tooltip content="Remove the image">
+              <button type="button" className="btn btn-danger-ghost btn-icon btn-sm ml-auto" onClick={remove} aria-label="Remove image">
+                <Trash2 />
+              </button>
+            </Tooltip>
           </>
         )}
       </div>

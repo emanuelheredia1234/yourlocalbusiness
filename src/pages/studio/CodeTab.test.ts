@@ -1,6 +1,7 @@
-// What the Code & assets tab shows (rendered once, as on the server: no effects run): a multi-line box to
-// describe and guide a new asset with images, a multi-line "Edit with AI" box with the asset's images,
-// each published asset's link, a way to publish, and a warning when the code uses an image that's gone.
+// What the Code & assets tab shows (rendered once, as on the server: no effects run): the New asset window's
+// multi-line box to describe and guide a new asset with images, a multi-line "Edit with AI" box with the
+// asset's images, each published asset's link, a way to publish, and a warning when the code uses an image
+// that's gone. (Tooltips need their provider, as in the app.)
 import { describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -8,7 +9,8 @@ import type { CodeAsset, MediaRef, Project } from '@/lib/types';
 import { newProject } from '@/store/defaults';
 import { useStore } from '@/store/useStore';
 import { STORAGE_SHIM } from '@/ai/local/code';
-import { CodeTab } from './CodeTab';
+import { TooltipProvider } from '@/components/ui/shadcn/tooltip';
+import { CodeTab, NewAssetForm } from './CodeTab';
 
 // the text boxes size themselves in a layout effect, which a server render skips (and React says so)
 const consoleError = console.error;
@@ -42,20 +44,23 @@ const hero: CodeAsset = {
   updatedAt: 1,
 };
 
-const render = (p: Project) => renderToStaticMarkup(createElement(CodeTab, { project: p }));
+const render = (p: Project) => renderToStaticMarkup(createElement(TooltipProvider, null, createElement(CodeTab, { project: p })));
+// the New asset window's form (a closed window renders nothing, and an open one renders in a portal)
+const renderForm = (p: Project) => renderToStaticMarkup(createElement(TooltipProvider, null, createElement(NewAssetForm, { project: p, running: false, onGenerate: () => {} })));
 
 describe('the Code & assets tab', () => {
   it('has a multi-line box to describe a new asset and guide the AI, with images and the type to pick', () => {
-    const html = render(project());
-    expect(html).toMatch(/<label for="code-prompt"[^>]*>Describe it and guide the AI<\/label>/);
+    const html = renderForm(project());
+    expect(html).toMatch(/<label for="code-prompt"[^>]*>Describe it<\/label>/);
     expect(html).toMatch(/<textarea[^>]*id="code-prompt"[^>]*aria-describedby="code-prompt-hint"/);
     expect(html).toContain('id="code-prompt-hint"');
     expect(html).toContain('Paste or drop images here too.');
-    expect(html).toContain('Images (optional)');
-    expect(html).toContain('Add images');
-    expect(html).toContain('role="radiogroup" aria-label="Asset type"');
+    expect(html).toMatch(/<button[^>]*aria-label="Add images"/);
+    expect(html).toContain('accept="image/jpeg,image/png,image/webp,image/gif"');
+    expect(html).toMatch(/role="radiogroup"[^>]*aria-label="Asset type"/);
     expect(html).toContain('Booking widget for Crumb &amp; Co with my packages');
-    expect(html).toContain('Generate your first interactive asset');
+    // with no assets yet, the tab says what to make and opens the window
+    expect(render(project())).toContain('Make your first page or widget');
   });
 
   it('edits an asset with a multi-line "Edit with AI" box and the asset’s images', () => {
@@ -84,7 +89,8 @@ describe('the Code & assets tab', () => {
     expect(html.match(/the public page of/g)).toHaveLength(1);
     expect(html).toMatch(/aria-expanded="false" aria-controls="code-publish"[^>]*>.*Public page/);
     expect(html).toContain('Copy HTML');
-    expect(html).toContain('Export .html');
+    // Export .html, Duplicate and Delete are in the asset's ⋯ menu
+    expect(html).toContain('aria-label="More asset actions"');
   });
 
   it('previews the page in a sandbox, with the images shown and storage that works', () => {
@@ -98,9 +104,9 @@ describe('the Code & assets tab', () => {
     expect(STORAGE_SHIM).toContain('defineProperty');
   });
 
-  it('offers Build with Manus and Build with Viktor beside Generate (until the server answers, they wait, saying why)', () => {
+  it('offers Build with Manus and Build with Viktor beside New asset (until the server answers, they wait, saying why)', () => {
     const html = render(project());
-    expect(html).toMatch(/Generate booking widget[\s\S]*Build with Manus[\s\S]*Build with Viktor/);
+    expect(html).toMatch(/New asset[\s\S]*Build with Manus[\s\S]*Build with Viktor/);
     expect(html).toContain('title="Checking your AI server…"');
   });
 
@@ -108,7 +114,7 @@ describe('the Code & assets tab', () => {
     vi.stubGlobal('__ARTIFACT_BUILD__', true);
     try {
       const html = render(project());
-      expect(html).toContain('Generate booking widget');
+      expect(html).toContain('New asset');
       expect(html).not.toContain('Build with');
     } finally {
       vi.unstubAllGlobals();

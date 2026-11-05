@@ -5,7 +5,7 @@
 // one opens (ListingWindowHost).
 
 import { useState } from 'react';
-import { CircleAlert, Eye, EyeOff, Rocket } from 'lucide-react';
+import { Eye, EyeOff, Rocket, Users } from 'lucide-react';
 import type { Listing, MediaRef, Project } from '@/lib/types';
 import { fmtMoney } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
@@ -17,7 +17,7 @@ import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { noteInChat } from '@/ai/assistant/buttons';
 import { openPage } from '@/ai/assistant/nav';
-import { Modal, Spinner } from '../ui/primitives';
+import { Callout, Modal, Spinner } from '../ui/primitives';
 import { MediaThumb } from '../media/MediaUpload';
 import type { ListingWindowAction } from './ListingWindowHost';
 
@@ -31,9 +31,9 @@ export function audienceLine(community: string, share: boolean): string {
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-1 gap-0.5 border-b border-line py-2 last:border-0 sm:grid-cols-[130px_minmax(0,1fr)] sm:gap-3">
-      <dt className="text-[12px] font-semibold text-muted">{label}</dt>
-      <dd className="min-w-0 break-words text-[13px] text-ink">{children}</dd>
+    <div className="grid grid-cols-1 gap-0.5 border-b border-line py-2.5 last:border-0 sm:grid-cols-[140px_minmax(0,1fr)] sm:gap-4">
+      <dt className="text-small text-muted">{label}</dt>
+      <dd className="min-w-0 break-words text-small text-ink">{children}</dd>
     </div>
   );
 }
@@ -46,11 +46,11 @@ export function ListingPublicSummary({ listing, cover, gallery }: { listing: Lis
     <dl className="flex flex-col">
       <Row label="Images">
         <div className="flex flex-wrap items-center gap-2">
-          {cover ? <MediaThumb media={cover} className="h-14 w-20" /> : <span className="text-muted">Cover made from your brand colors and logo</span>}
+          {cover ? <MediaThumb media={cover} className="h-[60px] w-20" /> : <span className="text-muted">Cover made from your brand colors and logo</span>}
           {gallery.map((m) => (
-            <MediaThumb key={m.id} media={m} className="h-14 w-20" />
+            <MediaThumb key={m.id} media={m} className="h-[60px] w-20" />
           ))}
-          <span className="text-[12px] text-muted">{cover ? 'Cover' : ''}{gallery.length ? `${cover ? ' and ' : ''}${gallery.length} gallery image${gallery.length === 1 ? '' : 's'}` : ''}</span>
+          <span className="text-caption text-muted">{cover ? 'Cover' : ''}{gallery.length ? `${cover ? ' and ' : ''}${gallery.length} gallery image${gallery.length === 1 ? '' : 's'}` : ''}</span>
         </div>
       </Row>
       <Row label="Seller">{listing.seller.name || 'Your brand'}</Row>
@@ -74,7 +74,7 @@ export function ListingPublicSummary({ listing, cover, gallery }: { listing: Lis
       <Row label="Category">{listing.category}</Row>
       <Row label="Search tags">{listing.tags.length ? listing.tags.join(', ') : <span className="text-muted">None</span>}</Row>
       <Row label="Description">
-        <p className="max-h-48 overflow-y-auto whitespace-pre-line scroll-thin">{listing.description}</p>
+        <p className="scroll-thin max-h-48 overflow-y-auto whitespace-pre-line">{listing.description}</p>
       </Row>
       {!!listing.includes?.length && (
         <Row label={isBiz ? 'What you get' : 'What’s inside'}>
@@ -114,18 +114,22 @@ export function ListingPublicSummary({ listing, cover, gallery }: { listing: Lis
 /** The required checks the listing doesn't pass, with a way to fix them on the page. */
 function Blocking({ checks, onOpen }: { checks: ListingCheck[]; onOpen: () => void }) {
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-warn/40 bg-warn-soft px-3 py-2 text-[12.5px]" role="alert">
-      <p className="flex items-center gap-1.5 font-semibold text-warn">
-        <CircleAlert size={14} /> Finish {checks.length === 1 ? 'this' : 'these'} first:
-      </p>
-      <ul className="list-disc pl-5 text-ink-2">
-        {checks.map((c) => (
-          <li key={c.label}>{c.label}</li>
-        ))}
-      </ul>
-      <button type="button" className="btn btn-secondary btn-xs self-start" onClick={onOpen}>
-        Open Listing & publish
-      </button>
+    <div role="alert">
+      <Callout
+        tone="warn"
+        title={`Finish ${checks.length === 1 ? 'this' : 'these'} first:`}
+        action={
+          <button type="button" className="btn btn-secondary btn-xs" onClick={onOpen}>
+            Open Listing & publish
+          </button>
+        }
+      >
+        <ul className="mt-0.5 list-disc pl-4">
+          {checks.map((c) => (
+            <li key={c.label}>{c.label}</li>
+          ))}
+        </ul>
+      </Callout>
     </div>
   );
 }
@@ -165,20 +169,21 @@ function PublishWindow({ project, close }: { project: Project; close: () => void
       onClose={() => !busy && close()}
       size="lg"
       title={live ? 'Update your Marketplace listing' : 'Publish your listing to the Marketplace'}
-      subtitle={`This is exactly what goes public. ${audienceLine(community, share)}`}
-      icon={<Rocket size={18} className="text-primary" />}
+      subtitle="This is exactly what goes public."
+      icon={<Rocket size={20} />}
       footer={
         <>
-          <button type="button" className="btn btn-ghost btn-sm mr-auto" disabled={busy} onClick={close}>
-            Not now
+          <button type="button" className="btn btn-secondary" disabled={busy} onClick={close}>
+            Cancel
           </button>
-          <button type="button" className="btn btn-primary btn-sm" disabled={busy || blocking.length > 0} onClick={publish}>
-            {busy ? <Spinner size={14} /> : <Rocket size={14} />} {label}
+          <button type="button" className="btn btn-primary" disabled={busy || blocking.length > 0} onClick={publish}>
+            {busy && <Spinner size={16} />}
+            {label}
           </button>
         </>
       }
     >
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-4">
         {blocking.length > 0 && (
           <Blocking
             checks={blocking}
@@ -188,8 +193,12 @@ function PublishWindow({ project, close }: { project: Project; close: () => void
             }}
           />
         )}
+        <p className="flex items-start gap-2 text-small text-ink-2">
+          <Users size={16} className="mt-0.5 shrink-0 text-muted" aria-hidden="true" />
+          {audienceLine(community, share)}
+        </p>
         <ListingPublicSummary listing={listing} cover={cover} gallery={gallery} />
-        <p className="text-[12px] text-muted">This app takes no payments and sends no messages: buyers go to your own page, email or phone. You can unpublish anytime from Listing & publish.</p>
+        <p className="text-caption text-muted">This app takes no payments and sends no messages: buyers go to your own page, email or phone. You can unpublish anytime from Listing & publish.</p>
       </div>
     </Modal>
   );
@@ -216,21 +225,21 @@ function VisibilityWindow({ on, close }: { on: boolean; close: () => void }) {
       onClose={close}
       size="sm"
       title={on ? 'Show your listings to other people?' : 'Hide your listings from other people?'}
-      icon={on ? <Eye size={18} className="text-primary" /> : <EyeOff size={18} className="text-primary" />}
+      icon={on ? <Eye size={20} /> : <EyeOff size={20} />}
       footer={
         <>
-          <button type="button" className="btn btn-ghost btn-sm mr-auto" onClick={close}>
-            {live && !already ? 'Not now' : 'Close'}
+          <button type="button" className="btn btn-secondary" onClick={close}>
+            {live && !already ? 'Cancel' : 'Close'}
           </button>
           {live && !already && (
-            <button type="button" className="btn btn-primary btn-sm" onClick={confirm}>
+            <button type="button" className="btn btn-primary" onClick={confirm}>
               {on ? 'Show my listings' : 'Hide my listings'}
             </button>
           )}
         </>
       }
     >
-      <p className="text-[13.5px] text-ink-2">
+      <p className="text-body text-ink-2">
         {!live
           ? 'The shared Marketplace isn’t on in this view, so only you can see your listings. There’s nothing to show or hide.'
           : already

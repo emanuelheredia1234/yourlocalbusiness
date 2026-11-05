@@ -1,15 +1,16 @@
 import { useState } from 'react';
-import { Code2, ExternalLink, ListTree, Rocket, Store } from 'lucide-react';
-import { FORMATS, matchBusinessType } from '@/ai/knowledge';
+import { ExternalLink } from 'lucide-react';
+import { FORMATS } from '@/ai/knowledge';
 import { navigate } from '@/lib/router';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { useTabRequest, useUI } from '@/store/ui';
 import { tabsOf } from '@/lib/pageTabs';
-import { Tabs } from '@/components/ui/primitives';
+import { PageHeader, StatusDot, Tabs, Tooltip } from '@/components/ui/primitives';
 import { StructureTab } from './StructureTab';
 import { CodeTab } from './CodeTab';
 import { PublishTab } from './PublishTab';
 import { leadPrice, priceLabel } from '@/lib/listing';
+import { useMediaQuery } from '@/lib/hooks';
 
 type Tab = 'structure' | 'code' | 'publish';
 const KEY = 'ylb-studio-tab';
@@ -39,59 +40,50 @@ export default function Studio() {
   useTabRequest<Tab>('studio', tabsOf('studio') as Tab[], setTab);
   const isBiz = project.track === 'business';
   const fmt = project.format ? FORMATS[project.format] : null;
-  const bt = isBiz ? matchBusinessType(`${project.businessType} ${project.category} ${project.niche}`) : null;
   const lp = leadPrice(project);
   const structureCount = isBiz ? project.studio.packages.length : project.studio.outline.length;
+  // "Copper & Comb · $75/session · Austin" (a product: its format instead of a city)
+  const description = [project.brand.name, priceLabel(lp.price, lp.model), isBiz ? project.location?.city : fmt?.label].filter(Boolean).join(' · ');
+  // "Live on Marketplace" sits at the header's right edge from 768px, so the tabs start where every tabbed page's do;
+  // narrower, the Listing & publish tab shows it (a row of its own here would push the content down)
+  const wide = useMediaQuery('(min-width: 768px)');
 
   return (
-    <div className="flex flex-col gap-5">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0">
-          <p className="eyebrow mb-1">{isBiz ? 'Business Studio' : 'Product Studio'}</p>
-          <h1 className="page-title truncate">{isBiz ? project.brand.name : project.idea?.title ?? project.brand.name}</h1>
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13.5px] text-muted">
-            <span>{isBiz ? bt?.label : fmt?.label ?? 'Digital product'}</span>
-            <span aria-hidden="true">·</span>
-            <span className="num">{priceLabel(lp.price, lp.model)}</span>
-            {project.location?.city && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span>{project.location.city}</span>
-              </>
-            )}
-            {(project.idea?.audience || project.brand.audience) && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span className="max-w-[420px] truncate">for {project.idea?.audience || project.brand.audience}</span>
-              </>
-            )}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {live ? (
-            <button
-              className="btn btn-secondary"
-              onClick={() => {
-                navigate('store');
-                setTimeout(() => useUI.getState().openListing(live.id), 60);
-              }}
-            >
-              <span className="h-2 w-2 rounded-full bg-good" aria-hidden="true" /> Live on Marketplace <ExternalLink size={14} />
-            </button>
-          ) : null}
-          <button className="btn btn-primary" onClick={() => setTab('publish')}>
-            <Rocket size={16} /> {live ? 'Update listing' : 'Publish to Store'}
-          </button>
-        </div>
-      </header>
+    <div>
+      <PageHeader
+        className="mb-4"
+        title={isBiz ? 'Business Studio' : 'Product Studio'}
+        description={description}
+        actions={
+          live && wide ? (
+            <span className="flex items-center gap-1">
+              <StatusDot tone="good">Live on Marketplace</StatusDot>
+              <Tooltip content="View in the Marketplace">
+                <button
+                  type="button"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded text-primary transition-colors duration-120 hover:bg-primary-soft"
+                  aria-label="View your listing in the Marketplace"
+                  onClick={() => {
+                    navigate('store');
+                    setTimeout(() => useUI.getState().openListing(live.id), 60);
+                  }}
+                >
+                  <ExternalLink size={14} aria-hidden="true" />
+                </button>
+              </Tooltip>
+            </span>
+          ) : undefined
+        }
+      />
 
       <Tabs<Tab>
+        className="mb-5"
         value={tab}
         onChange={setTab}
         tabs={[
-          { id: 'structure', label: isBiz ? 'Business model' : 'Structure & outline', icon: <ListTree size={15} />, count: structureCount || undefined },
-          { id: 'code', label: 'Code & assets', icon: <Code2 size={15} />, count: project.studio.codeAssets.length || undefined },
-          { id: 'publish', label: 'Listing & publish', icon: <Store size={15} /> },
+          { id: 'structure', label: isBiz ? 'Business model' : 'Structure & outline', count: structureCount || undefined },
+          { id: 'code', label: 'Code & assets', count: project.studio.codeAssets.length || undefined },
+          { id: 'publish', label: 'Listing & publish' },
         ]}
       />
 

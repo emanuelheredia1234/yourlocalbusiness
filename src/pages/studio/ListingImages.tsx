@@ -1,21 +1,21 @@
-import { useMemo, useRef, useState } from 'react';
-import { Camera, Check, ChevronDown, Download, ImagePlus, Images, Palette, RefreshCw, Square, Star, Type, Upload, WandSparkles } from 'lucide-react';
+import { forwardRef, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Camera, ChevronDown, Download, ImagePlus, Images, Palette, PenLine, Star, Type, Upload } from 'lucide-react';
 import type { ImageKind, ListingShotId, MediaRef, Project } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { getBlob } from '@/lib/storage';
 import { isOwnPhoto } from '@/lib/media';
-import { navigate } from '@/lib/router';
 import { galleryIds, MAX_GALLERY } from '@/lib/listing';
-import { composeOwnListingPhoto, defaultImageKind, listingShots, photoLabel, photoRoute, photoSourceNote, type ListingShot } from '@/ai/image';
+import { composeOwnListingPhoto, defaultImageKind, listingShots, photoRoute, photoSourceNote, type ListingShot } from '@/ai/image';
 import { fromOwnPhoto, listingShotMedia, PHOTO_ACCEPT } from '@/ai/listingPhotos';
 import { ALL_SHOTS, listingPendingKey, makeListingShot, ownPhotoPlaced, placeListingShot, savePhotoFile, shotText } from '@/ai/listingImages';
 import { pendingManus, type ManusTask } from '@/ai/manus';
+import { openPage } from '@/ai/assistant/nav';
 import { ManusLink } from '@/components/images/PostImagePanel';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
-import { AIThinking } from '@/components/ai/AI';
+import { AIThinking, GenerateButton, Spark } from '@/components/ai/AI';
 import { download } from '@/components/ui/download';
-import { AutoTextarea, Segmented, Spinner } from '@/components/ui/primitives';
+import { AutoTextarea, Badge, Callout, InfoTip, Menu, Modal, MoreMenu, Segmented, Spinner, type MenuEntry } from '@/components/ui/primitives';
 import { MediaThumb } from '@/components/media/MediaUpload';
 import { artDirectionLabel, useArtDirection, useImageJob, usePhotoAvailability } from '@/components/images/useImageJob';
 
@@ -31,48 +31,93 @@ export function PhotoUploadButton({ onPhotos, multiple, label, ariaLabel, classN
   const add = async (files: File[]) => {
     if (!files.length) return;
     setBusy(true);
-    const out: MediaRef[] = [];
-    for (const f of files.slice(0, multiple ? 12 : 1)) {
-      try {
-        out.push(await savePhotoFile(f));
-      } catch (e) {
-        toast({ kind: 'error', title: `Couldn’t add ${f.name}`, body: (e as Error).message });
-      }
-    }
+    const out = await savePhotos(files, multiple);
     setBusy(false);
     if (out.length) onPhotos(out);
   };
   return (
     <>
-      <button type="button" className={className ?? 'btn btn-ghost btn-xs'} disabled={disabled || busy} aria-label={ariaLabel} onClick={() => input.current?.click()}>
-        {busy ? <Spinner size={12} /> : <Upload size={12} />} {label}
+      <button type="button" className={className ?? 'btn btn-secondary btn-xs'} disabled={disabled || busy} aria-label={ariaLabel} onClick={() => input.current?.click()}>
+        {busy ? <Spinner size={12} /> : <Upload />} {label}
       </button>
-      <input
-        ref={input}
-        type="file"
-        accept={PHOTO_ACCEPT}
-        multiple={multiple}
-        className="hidden"
-        tabIndex={-1}
-        aria-hidden="true"
-        onChange={(e) => {
-          const files = Array.from(e.target.files ?? []);
-          // let the same file be picked again later
-          e.target.value = '';
-          void add(files);
-        }}
-      />
+      <PhotoInput ref={input} multiple={multiple} onFiles={(files) => void add(files)} />
     </>
   );
 }
 
-export function ListingImages({ project }: { project: Project }) {
+/** Your photos, saved (each one that can't be says why). */
+async function savePhotos(files: File[], multiple?: boolean): Promise<MediaRef[]> {
+  const out: MediaRef[] = [];
+  for (const f of files.slice(0, multiple ? 12 : 1)) {
+    try {
+      out.push(await savePhotoFile(f));
+    } catch (e) {
+      toast({ kind: 'error', title: `Couldn’t add ${f.name}`, body: (e as Error).message });
+    }
+  }
+  return out;
+}
+
+/** The hidden file picker for your photos (JPG, PNG or WebP). */
+const PhotoInput = forwardRef<HTMLInputElement, { multiple?: boolean; onFiles: (files: File[]) => void }>(function PhotoInput({ multiple, onFiles }, ref) {
+  return (
+    <input
+      ref={ref}
+      type="file"
+      accept={PHOTO_ACCEPT}
+      multiple={multiple}
+      className="hidden"
+      tabIndex={-1}
+      aria-hidden="true"
+      onChange={(e) => {
+        const files = Array.from(e.target.files ?? []);
+        // let the same file be picked again later
+        e.target.value = '';
+        onFiles(files);
+      }}
+    />
+  );
+});
+
+/** What a listing image offers: its Replace menu (make or upload one, your details, its description) and its ⋯ menu. */
+export type ShotAction = 'generate' | 'regenerate' | 'generate-instead' | 'upload' | 'add-details' | 'update-details' | 'describe' | 'make-cover' | 'add-to-gallery' | 'remove-from-gallery' | 'download';
+
+export const SHOT_ACTION_LABEL: Record<ShotAction, string> = {
+  generate: 'Generate',
+  regenerate: 'Regenerate',
+  'generate-instead': 'Generate instead',
+  upload: 'Upload my photo',
+  'add-details': 'Add my details',
+  'update-details': 'Update my details',
+  describe: 'Edit description',
+  'make-cover': 'Make cover',
+  'add-to-gallery': 'Add to gallery',
+  'remove-from-gallery': 'Remove from gallery',
+  download: 'Download',
+};
+
+/**
+ * The actions a listing image offers, in menu order (the component adds what each one does). Your details can go
+ * on your own photo for the checklist and offer graphics only.
+ */
+export function shotActions(project: Project, shot: ListingShot): { replace: ShotAction[]; more: ShotAction[] } {
+  const m = listingShotMedia(project, shot.id);
+  const own = fromOwnPhoto(m);
+  const isCover = !!m && project.studio.listing.coverImageId === m.id;
+  const inGallery = !!m && galleryIds(project).includes(m.id);
+  const details = shot.layout !== 'clean' && !!m && (isOwnPhoto(m) || (own && !!m.generated?.artId));
+  return {
+    replace: [own ? 'generate-instead' : m ? 'regenerate' : 'generate', 'upload', ...(details ? [isOwnPhoto(m) ? ('add-details' as const) : ('update-details' as const)] : []), 'describe'],
+    more: m ? [...(isCover ? [] : (['make-cover', inGallery ? 'remove-from-gallery' : 'add-to-gallery'] as const)), 'download'] : [],
+  };
+}
+
+export function ListingImages({ project, children }: { project: Project; children?: ReactNode }) {
   const updateStudio = useStore((s) => s.updateStudio);
   const photo = usePhotoAvailability();
   const shots = useMemo(() => listingShots(project), [project]);
   const [kind, setKind] = useState<ImageKind>(() => defaultImageKind());
-  const [selected, setSelected] = useState<ListingShotId[]>(ALL_SHOTS);
-  const [open, setOpen] = useState<ListingShotId | null>(null);
+  const [describing, setDescribing] = useState<ListingShotId | null>(null);
   const [busy, setBusy] = useState<ListingShotId[]>([]);
   const [composing, setComposing] = useState<ListingShotId | null>(null);
   const [progress, setProgress] = useState('');
@@ -93,12 +138,12 @@ export function ListingImages({ project }: { project: Project }) {
   // photos from an image API come back in seconds, so a set is made all at once (Manus tasks one by one)
   const fastPhotos = effKind === 'photo' && (photoRoute() === 'muse' || photoRoute() === 'server');
   const d = project.studio.listing;
-  const gallery = galleryIds(project);
   const isBiz = project.track === 'business';
-  // "Generate full set" leaves the shots that show your own photo alone
-  const keepOwn = selected.filter((id) => fromOwnPhoto(listingShotMedia(project, id)));
-  const toMake = selected.filter((id) => !keepOwn.includes(id));
+  // "Generate images" leaves the shots that show your own photo alone
+  const keepOwn = shots.filter((s) => fromOwnPhoto(listingShotMedia(project, s.id))).map((s) => s.id);
+  const toMake = shots.map((s) => s.id).filter((id) => !keepOwn.includes(id));
   const labelOf = (id: ListingShotId) => shots.find((s) => s.id === id)?.label ?? id;
+  const described = shots.find((s) => s.id === describing);
 
   /** Keep an edited image description with the listing; the suggested one when it matches again. */
   const setPrompt = (shot: ListingShot, v: string | undefined) => {
@@ -192,191 +237,272 @@ export function ListingImages({ project }: { project: Project }) {
     if (blob) await download(m.name, blob);
   };
 
+  const source = effKind === 'photo' ? photoSourceNote() : __ARTIFACT_BUILD__ ? 'Illustrations are drawn by Claude in your brand colors.' : 'Illustrations are drawn by your AI in your brand colors.';
+  const artLine = effKind === 'photo' && art.skills.length > 0 ? artDirectionLabel(art.skills.map((k) => k.name)) : '';
+
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-line bg-surface-2/40 p-3 sm:p-4" aria-label="Listing images">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    // the page's "Images" section (it holds the cover and gallery pickers too)
+    <section className="mt-10 border-t border-line pt-8" aria-label="Listing images">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="flex items-center gap-1.5 text-[14px] font-semibold text-ink">
-            <Images size={16} className="text-primary" /> Listing images
-          </h3>
-          <p className="text-[12.5px] text-muted">
-            {isBiz ? 'A cover photo, a photo of your business in action and two branded graphics, made from your business details.' : 'A cover mockup, an in-use shot and two branded graphics, made from your product details.'} Or upload your own photos (JPG, PNG or WebP).
+          <h2 className="text-h2 text-ink">Images</h2>
+          <p className="mt-1 text-small text-muted">
+            {isBiz ? 'A cover, your business at work and two branded graphics.' : 'A cover mockup, an in-use shot and two branded graphics.'} Or your own photos (JPG, PNG or WebP).
           </p>
         </div>
-        <Segmented<ImageKind>
-          size="sm"
-          value={effKind}
-          onChange={(v) => (v === 'photo' && !photo.ok ? undefined : setKind(v))}
-          options={[
-            { id: 'illustration', label: 'Illustration', icon: <Palette size={13} /> },
-            { id: 'photo', label: <span className={cn(!photo.ok && 'opacity-50')}>{photoLabel()}</span>, icon: <Camera size={13} className={cn(!photo.ok && 'opacity-50')} /> },
-          ]}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <Segmented<ImageKind>
+            size="sm"
+            value={effKind}
+            onChange={(v) => (v === 'photo' && !photo.ok ? undefined : setKind(v))}
+            options={[
+              { id: 'illustration', label: 'Illustration', icon: <Palette /> },
+              // who makes the photos is in the ⓘ, not on the switch
+              { id: 'photo', label: <span className={cn(!photo.ok && 'text-faint')}>Photo</span>, icon: <Camera className={cn(!photo.ok && 'text-faint')} /> },
+            ]}
+          />
+          <InfoTip label="How listing images are made" link={!photo.ok && !__ARTIFACT_BUILD__ ? { label: 'Open Settings › AI keys', onClick: () => void openPage('workspace-settings', 'ai') } : undefined}>
+            {!photo.ok && <span className="mb-1.5 block">{photo.reason}</span>}
+            {source}
+            {artLine && <span className="mt-1.5 block text-muted">{artLine}</span>}
+          </InfoTip>
+          <GenerateButton size="sm" running={job.running} runningLabel="Designing…" disabled={!toMake.length} onClick={() => void generate(toMake)}>
+            {toMake.length === shots.length || !toMake.length ? 'Generate images' : `Generate ${toMake.length} image${toMake.length === 1 ? '' : 's'}`}
+          </GenerateButton>
+        </div>
       </div>
-      {!photo.ok && (
-        <p className="text-[11.5px] leading-snug text-muted">
-          {photo.reason}{' '}
-          {!__ARTIFACT_BUILD__ && (
-            <button type="button" className="font-semibold text-primary hover:underline" onClick={() => navigate('workspace-settings')}>
-              Open settings
-            </button>
-          )}
-        </p>
-      )}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2">
         {shots.map((shot) => {
           const m = listingShotMedia(project, shot.id);
           const own = fromOwnPhoto(m);
           const isCover = !!m && d.coverImageId === m.id;
-          const inGallery = !!m && gallery.includes(m.id);
-          const on = selected.includes(shot.id);
+          const inGallery = !!m && galleryIds(project).includes(m.id);
           const isBusy = (busy.includes(shot.id) && job.running) || composing === shot.id;
-          const saved = d.shotPrompts?.[shot.id];
-          // your details can go on your own photo (checklist and offer graphics only)
-          const detailsFrom = shot.layout === 'clean' || !m ? undefined : isOwnPhoto(m) ? m.id : own ? m.generated?.artId : undefined;
+          const acts = shotActions(project, shot);
+          // your details go on your own photo, or on the photo a details image was made from
+          const detailsFrom = !m ? undefined : isOwnPhoto(m) ? m.id : own ? m.generated?.artId : undefined;
+          const run: Record<ShotAction, () => void> = {
+            generate: () => void generate([shot.id]),
+            regenerate: () => void generate([shot.id]),
+            'generate-instead': () => void generate([shot.id]),
+            upload: () => undefined,
+            'add-details': () => detailsFrom && void addDetails(shot, detailsFrom),
+            'update-details': () => detailsFrom && void addDetails(shot, detailsFrom),
+            describe: () => setDescribing(shot.id),
+            'make-cover': () => m && updateStudio({ listing: { ...getActiveProject()!.studio.listing, coverImageId: m.id } }),
+            'add-to-gallery': () => m && toggleGallery(m.id),
+            'remove-from-gallery': () => m && toggleGallery(m.id),
+            download: () => m && void save(m),
+          };
           return (
-            <article key={shot.id} className={cn('flex min-w-0 flex-col overflow-hidden rounded-lg border bg-surface', on ? 'border-line-2' : 'border-line opacity-80')}>
-              <div className={cn('relative w-full bg-surface-3', shot.aspect === '1:1' ? 'aspect-square' : 'aspect-[3/2]')}>
-                {m ? (
-                  <MediaThumb media={m} className="absolute inset-0 h-full w-full rounded-none border-0" />
-                ) : (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-muted">
-                    <ImagePlus size={22} />
-                    <span className="text-xs">{shot.aspect === '1:1' ? 'Square graphic' : 'Landscape image'}</span>
-                  </div>
-                )}
-                {isBusy && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-surface/70 backdrop-blur-[1px]">
-                    <Spinner size={22} className="text-primary" />
-                    {tasks[shot.id] && <ManusLink url={tasks[shot.id]!.taskUrl} label="Watch in Manus" />}
-                  </div>
-                )}
-                <div className="absolute left-2 top-2 flex flex-wrap gap-1">
-                  {isCover && <span className="badge bg-primary text-on-primary"><Star size={10} className="fill-current" /> Cover</span>}
-                  {inGallery && <span className="badge bg-black/55 text-white">In gallery</span>}
-                  {own && <span className="badge bg-black/55 text-white">Your photo</span>}
-                </div>
-              </div>
-              <div className="flex flex-1 flex-col gap-2 p-2.5">
-                <div className="flex items-start justify-between gap-2">
-                  <label className="flex min-w-0 cursor-pointer items-start gap-2">
-                    <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 accent-[rgb(var(--primary))]" checked={on} onChange={(e) => setSelected((x) => (e.target.checked ? [...x, shot.id] : x.filter((y) => y !== shot.id)))} />
-                    <span className="min-w-0">
-                      <span className="block text-[13px] font-semibold text-ink">{shot.label}</span>
-                      <span className="block text-[11.5px] leading-snug text-muted">{shot.desc}</span>
-                    </span>
-                  </label>
-                  <button type="button" className="btn btn-ghost btn-xs shrink-0" aria-expanded={open === shot.id} onClick={() => setOpen(open === shot.id ? null : shot.id)}>
-                    Edit <ChevronDown size={12} className={cn('transition-transform', open === shot.id && 'rotate-180')} />
-                  </button>
-                </div>
-                {open === shot.id && (
-                  <div className="flex flex-col gap-1">
-                    <AutoTextarea aria-label={`${shot.label} image description`} value={saved ?? shot.prompt} onChange={(v) => setPrompt(shot, v)} minRows={3} className="text-[12.5px]" />
-                    {saved !== undefined && saved !== shot.prompt && (
-                      <button type="button" className="self-start text-[11.5px] font-semibold text-primary hover:underline" onClick={() => setPrompt(shot, undefined)}>
-                        Reset to suggested
-                      </button>
-                    )}
-                    <p className="text-[11px] text-muted">
-                      Saved with your listing.{shot.layout !== 'clean' && ` Your title, ${shot.layout === 'offer' ? 'price and button' : 'checklist and price'} are typeset on top.`}
-                    </p>
-                  </div>
-                )}
-                <div className="mt-auto flex flex-wrap items-center gap-1.5">
-                  <button type="button" className="btn btn-secondary btn-xs" disabled={job.running || isBusy} onClick={() => generate([shot.id])} title={own ? 'Your photo stays in your brand images.' : undefined}>
-                    {m && !own ? <RefreshCw size={12} /> : <WandSparkles size={12} />} {own ? 'Generate instead' : m ? 'Regenerate' : 'Generate'}
-                  </button>
-                  <PhotoUploadButton label="Upload my photo" ariaLabel={`Upload my photo for ${shot.label}`} disabled={isBusy} onPhotos={(ms) => putOwnPhoto(shot, ms[0])} />
-                  {detailsFrom && (
-                    <button type="button" className="btn btn-ghost btn-xs" disabled={isBusy} onClick={() => addDetails(shot, detailsFrom)}>
-                      <Type size={12} /> {isOwnPhoto(m) ? 'Add my details' : 'Update my details'}
-                    </button>
-                  )}
-                  {m && !isCover && (
-                    <button type="button" className="btn btn-ghost btn-xs" onClick={() => updateStudio({ listing: { ...getActiveProject()!.studio.listing, coverImageId: m.id } })}>
-                      <Star size={12} /> Make cover
-                    </button>
-                  )}
-                  {m && !isCover && (
-                    <button type="button" className="btn btn-ghost btn-xs" aria-pressed={inGallery} onClick={() => toggleGallery(m.id)}>
-                      {inGallery ? <Check size={12} /> : <Images size={12} />} {inGallery ? 'In gallery' : 'Add to gallery'}
-                    </button>
-                  )}
-                  {m && (
-                    <button type="button" className="btn btn-ghost btn-xs ml-auto" onClick={() => save(m)} aria-label={`Download ${shot.label}`}>
-                      <Download size={12} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            </article>
+            <ShotTile
+              key={shot.id}
+              shot={shot}
+              media={m}
+              own={own}
+              isCover={isCover}
+              inGallery={inGallery}
+              busy={isBusy}
+              task={tasks[shot.id]}
+              actions={acts}
+              disabled={job.running || isBusy}
+              run={run}
+              onPhoto={(media) => putOwnPhoto(shot, media)}
+            />
           );
         })}
       </div>
 
-      {Object.keys(resumable).length > 0 && !job.running && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-[12.5px]">
-          <span className="min-w-0 flex-1 text-ink-2">
-            {Object.keys(resumable).length === 1 ? 'A Manus image you started is' : `${Object.keys(resumable).length} Manus images you started are`} still on the way.
-          </span>
-          <button type="button" className="btn btn-secondary btn-xs" onClick={() => generate(Object.keys(resumable) as ListingShotId[], resumable)}>
-            Pick {Object.keys(resumable).length === 1 ? 'it' : 'them'} up
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs text-muted"
-            onClick={() => {
+      <div className="mt-4 flex flex-col gap-3 empty:hidden">
+        {keepOwn.length > 0 && (
+          <p className="text-small text-muted" role="note">
+            {keepOwn.length === 1 ? 'Your photo stays' : 'Your photos stay'} on {andList(keepOwn.map(labelOf))}. To replace {keepOwn.length === 1 ? 'it' : 'one'}, use “Generate instead” on its card.
+          </p>
+        )}
+        {Object.keys(resumable).length > 0 && !job.running && (
+          <Callout
+            tone="info"
+            onDismiss={() => {
               for (const id of Object.keys(resumable)) pendingManus.clear(pendingKey(id as ListingShotId));
               setResumable({});
             }}
+            action={
+              <button type="button" className="btn btn-secondary btn-xs" onClick={() => void generate(Object.keys(resumable) as ListingShotId[], resumable)}>
+                Pick {Object.keys(resumable).length === 1 ? 'it' : 'them'} up
+              </button>
+            }
           >
-            Dismiss
-          </button>
-        </div>
-      )}
-      <AIThinking running={job.running} stage={progress ? `${progress} · ${job.stage}` : job.stage} onStop={job.stop} compact />
-      {job.error && (
-        <div className="rounded-md border border-bad/30 bg-bad-soft px-3 py-2 text-[12.5px]" role="alert">
-          <p className="font-semibold text-bad">{job.error.title}</p>
-          <p className="text-ink-2">{job.error.body}</p>
-          <ManusLink url={job.error.taskUrl} label="Open the task in Manus" />
-          {effKind === 'photo' && (
-            <button type="button" className="mt-1 text-xs font-semibold text-primary hover:underline" onClick={() => setKind('illustration')}>
-              Use illustrations instead
-            </button>
-          )}
-        </div>
-      )}
-      {!job.running && (job.done || job.note) && (
-        <p className="text-[11.5px] text-muted">
-          {job.done}
-          {job.note && <span className="block text-warn">{job.note}</span>}
-        </p>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn btn-ai btn-sm" disabled={job.running || !toMake.length} onClick={() => generate(toMake)}>
-          {job.running ? <Spinner size={14} /> : <WandSparkles size={14} className="text-accent" />}
-          {toMake.length === shots.length ? 'Generate full set' : `Generate ${toMake.length} image${toMake.length === 1 ? '' : 's'}`}
-        </button>
-        {job.running && (
-          <button type="button" className="btn btn-secondary btn-sm" onClick={job.stop}>
-            <Square size={11} className="fill-current" /> Stop
-          </button>
+            {Object.keys(resumable).length === 1 ? 'A Manus image you started is' : `${Object.keys(resumable).length} Manus images you started are`} still on the way.
+          </Callout>
         )}
-        <span className="text-[11.5px] text-muted">{effKind === 'photo' ? photoSourceNote() : __ARTIFACT_BUILD__ ? 'Illustrations are drawn by Claude in your brand colors.' : 'Illustrations are drawn by your AI in your brand colors.'}</span>
-        {keepOwn.length > 0 && (
-          <span className="w-full text-[11.5px] text-muted" role="note">
-            {keepOwn.length === 1 ? 'Your photo stays' : 'Your photos stay'} on {andList(keepOwn.map(labelOf))}. To replace {keepOwn.length === 1 ? 'it' : 'one'}, use “Generate instead” on its card.
-          </span>
+        <AIThinking running={job.running} stage={progress ? `${progress} · ${job.stage}` : job.stage} onStop={job.stop} compact />
+        {job.error && (
+          <Callout
+            tone="bad"
+            title={job.error.title}
+            action={
+              effKind === 'photo' ? (
+                <button type="button" className="btn btn-secondary btn-xs" onClick={() => setKind('illustration')}>
+                  Use illustrations instead
+                </button>
+              ) : undefined
+            }
+          >
+            {job.error.body} <ManusLink url={job.error.taskUrl} label="Open the task in Manus" />
+          </Callout>
         )}
-        {effKind === 'photo' && art.skills.length > 0 && (
-          <span className="w-full text-[11.5px] text-muted" title={art.text}>
-            {artDirectionLabel(art.skills.map((k) => k.name))}
-          </span>
+        {!job.running && (job.done || job.note) && (
+          <p className="text-small text-muted" role="status">
+            {job.done}
+            {job.note && <span className="block text-warn">{job.note}</span>}
+          </p>
         )}
       </div>
+
+      {children}
+
+      {described && (
+        <Modal
+          open
+          onClose={() => setDescribing(null)}
+          size="sm"
+          title={`${described.label} image`}
+          subtitle="What the AI makes for this image. Saved with your listing."
+          footer={
+            <>
+              {d.shotPrompts?.[described.id] !== undefined && d.shotPrompts[described.id] !== described.prompt && (
+                <button type="button" className="btn btn-ghost btn-sm mr-auto" onClick={() => setPrompt(described, undefined)}>
+                  Reset to suggested
+                </button>
+              )}
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setDescribing(null)}>
+                Done
+              </button>
+            </>
+          }
+        >
+          <AutoTextarea aria-label={`${described.label} image description`} value={d.shotPrompts?.[described.id] ?? described.prompt} onChange={(v) => setPrompt(described, v)} minRows={5} data-autofocus />
+          {described.layout !== 'clean' && <p className="hint">Your title, {described.layout === 'offer' ? 'price and button' : 'checklist and price'} are typeset on top.</p>}
+        </Modal>
+      )}
     </section>
+  );
+}
+
+/** One listing image: the picture (4:3), its badges, and Replace ▾ and ⋯ on hover (always on touch). */
+function ShotTile({
+  shot,
+  media: m,
+  own,
+  isCover,
+  inGallery,
+  busy,
+  task,
+  actions,
+  disabled,
+  run,
+  onPhoto,
+}: {
+  shot: ListingShot;
+  media: MediaRef | undefined;
+  own: boolean;
+  isCover: boolean;
+  inGallery: boolean;
+  busy: boolean;
+  task?: ManusTask;
+  actions: { replace: ShotAction[]; more: ShotAction[] };
+  disabled: boolean;
+  run: Record<ShotAction, () => void>;
+  onPhoto: (media: MediaRef) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const pick = async (files: File[]) => {
+    if (!files.length) return;
+    setUploading(true);
+    const [media] = await savePhotos(files);
+    setUploading(false);
+    if (media) onPhoto(media);
+  };
+  const ICON: Partial<Record<ShotAction, ReactNode>> = {
+    generate: <Spark size={16} />,
+    regenerate: <Spark size={16} />,
+    'generate-instead': <Spark size={16} />,
+    upload: <Upload />,
+    'add-details': <Type />,
+    'update-details': <Type />,
+    describe: <PenLine />,
+    'make-cover': <Star />,
+    'add-to-gallery': <Images />,
+    'remove-from-gallery': <Images />,
+    download: <Download />,
+  };
+  const entry = (a: ShotAction): MenuEntry => ({
+    label: a === 'describe' ? `${SHOT_ACTION_LABEL[a]}…` : SHOT_ACTION_LABEL[a],
+    icon: ICON[a],
+    disabled: (a === 'generate' || a === 'regenerate' || a === 'generate-instead' || a === 'add-details' || a === 'update-details') && disabled,
+    onSelect: a === 'upload' ? () => input.current?.click() : run[a],
+  });
+  const replaceItems: MenuEntry[] = actions.replace.flatMap((a) => (a === 'describe' ? (['separator', entry(a)] as MenuEntry[]) : [entry(a)]));
+  return (
+    <article className="flex min-w-0 flex-col gap-2.5" aria-label={shot.label}>
+      <div className="group relative aspect-[4/3] w-full overflow-hidden rounded-pop bg-surface-3 ring-1 ring-inset ring-ink/5">
+        {m ? (
+          <>
+            <MediaThumb media={m} className="absolute inset-0 h-full w-full rounded-none ring-0" />
+            {/* the tile's hairline, over the picture */}
+            <span className="pointer-events-none absolute inset-0 rounded-pop ring-1 ring-inset ring-ink/5" aria-hidden="true" />
+          </>
+        ) : (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-muted">
+            <ImagePlus size={24} aria-hidden="true" />
+            <span className="text-caption">{shot.aspect === '1:1' ? 'Square graphic' : 'Landscape image'}</span>
+          </div>
+        )}
+        {(isCover || inGallery || own) && (
+          <div className="absolute left-2 top-2 flex flex-wrap gap-1">
+            {isCover && (
+              <Badge tone="primary" className="shadow-xs">
+                Cover
+              </Badge>
+            )}
+            {inGallery && <Badge className="bg-surface shadow-xs">In gallery</Badge>}
+            {own && <Badge className="bg-surface shadow-xs">Your photo</Badge>}
+          </div>
+        )}
+        {(busy || uploading) && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-surface/75" role="status">
+            <Spinner size={20} className="text-ink-2" />
+            <span className="text-caption text-ink-2">{uploading ? 'Adding your photo…' : 'Making it…'}</span>
+            {task && <ManusLink url={task.taskUrl} label="Watch in Manus" />}
+          </div>
+        )}
+        {!busy && !uploading && (
+          // shown on hover or focus (always on touch), and while one of its menus is open
+          <div className={cn('absolute bottom-2 right-2 flex items-center gap-1.5 transition-opacity duration-120', m && 'opacity-0 focus-within:opacity-100 group-hover:opacity-100 has-[[data-state=open]]:opacity-100 [@media(pointer:coarse)]:opacity-100')}>
+            <Menu
+              align="end"
+              items={replaceItems}
+              trigger={
+                <button type="button" className="btn btn-secondary btn-xs shadow-xs" aria-label={`${m ? 'Replace' : 'Add'} the ${shot.label} image`}>
+                  {m ? 'Replace' : 'Add image'} <ChevronDown />
+                </button>
+              }
+            />
+            {actions.more.length > 0 && (
+              <span className="rounded-md bg-surface shadow-xs">
+                <MoreMenu size="xs" label={`More for the ${shot.label} image`} items={actions.more.map(entry)} />
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="min-w-0">
+        <p className="text-ui text-ink">{shot.label}</p>
+        <p className="text-small text-muted">{shot.desc}</p>
+      </div>
+      <PhotoInput ref={input} onFiles={(files) => void pick(files)} />
+    </article>
   );
 }
