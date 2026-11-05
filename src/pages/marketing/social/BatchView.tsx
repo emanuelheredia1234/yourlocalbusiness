@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { CalendarCheck, CalendarClock, CheckSquare, Square, Trash2 } from 'lucide-react';
 import type { Post, Project } from '@/lib/types';
 import { cn, fmtDate, isoToDateStr } from '@/lib/utils';
@@ -16,7 +16,7 @@ import { applyWeekBatch, batchStart, weekBatchInput } from '@/ai/socialPlan';
 /** How many grid columns a day takes (its posts, up to the row's width), so days sit side by side. */
 const SPAN: Record<number, string> = { 1: '', 2: 'sm:col-span-2', 3: 'sm:col-span-2 xl:col-span-3' };
 
-export function BatchView({ project, posts, covered }: { project: Project; posts: Post[]; covered: Set<string> }) {
+export function BatchView({ project, posts, covered, planAction }: { project: Project; posts: Post[]; covered: Set<string>; /** the 30-day plan's button, offered here before there's a plan */ planAction?: ReactNode }) {
   const plan = project.marketing.plan;
   const deletePosts = useStore((s) => s.deletePosts);
   const ai = useAI(contentBatchTask);
@@ -66,9 +66,12 @@ export function BatchView({ project, posts, covered }: { project: Project; posts
         title="Plan your month first"
         body="The 7-day batch turns the first week of your 30-day plan into posts that are ready to go out."
         action={
-          <button type="button" className="btn btn-secondary" onClick={() => useUI.getState().setSocialTab('setup')}>
-            Set up the campaign
-          </button>
+          <>
+            {planAction}
+            <button type="button" className={planAction ? 'btn btn-ghost' : 'btn btn-secondary'} onClick={() => useUI.getState().setSocialTab('setup')}>
+              Review the setup
+            </button>
+          </>
         }
       />
     );

@@ -116,7 +116,7 @@ export default function SocialEngine() {
         ))}
       {shown.has('batch') && (
         <div hidden={tab !== 'batch'}>
-          <BatchView project={project} posts={batchPosts} covered={covered} />
+          <BatchView project={project} posts={batchPosts} covered={covered} planAction={plan ? undefined : planButton()} />
         </div>
       )}
       {shown.has('create') && (
