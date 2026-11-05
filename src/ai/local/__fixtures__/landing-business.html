@@ -78,16 +78,21 @@
 ]
 </script>
 <style>
-:root { --brand: #1F6F5C; --brand-dark: #19594a; --on-brand: #ffffff; --accent: #F2B33D; --bg: #ffffff; --ink: #14201B; --muted: #5b6861; --soft: #eff5f4; --radius: 12px; }
+:root { --brand: #1F6F5C; --brand-dark: #19594a; --on-brand: #ffffff; --link: #1F6F5C; --accent: #F2B33D; --bg: #ffffff; --ink: #14201B; --muted: #5b6861; --soft: #eff5f4; --rule: rgba(17,24,20,.1); --radius: 12px; }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 "Helvetica Neue", Arial, system-ui, sans-serif; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 "Helvetica Neue", Arial, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: var(--link); text-underline-offset: 3px; }
+.mark { display: inline-grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--brand); color: var(--on-brand); font-size: 13px; font-weight: 800; letter-spacing: .02em; }
+.mark-rounded { border-radius: 9px; } .mark-img { display: block; flex: none; width: 32px; height: 32px; border-radius: 8px; object-fit: contain; }
+.topbar-cta { flex: none; display: inline-block; background: var(--brand); color: var(--on-brand); padding: 9px 16px; border-radius: var(--radius); font-size: 15px; font-weight: 700; line-height: 1.3; text-decoration: none; white-space: nowrap; }
+.topbar-cta:hover { background: var(--brand-dark); }
 .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
 .wrap.narrow { max-width: 720px; }
 section, header { padding: 72px 0; }
 h1 { font-size: clamp(34px, 5vw, 56px); line-height: 1.05; letter-spacing: -0.02em; margin: 10px 0 18px; max-width: 18ch; }
 h2 { font-size: clamp(26px, 3.4vw, 38px); line-height: 1.15; letter-spacing: -0.01em; margin: 0 0 12px; }
 h3 { margin: 0 0 6px; font-size: 19px; }
-.eyebrow { text-transform: uppercase; letter-spacing: .12em; font-size: 13px; font-weight: 700; color: var(--brand); margin: 0; }
+.eyebrow { text-transform: uppercase; letter-spacing: .12em; font-size: 13px; font-weight: 700; color: var(--link); margin: 0; }
 .lead { font-size: 19px; color: var(--muted); max-width: 60ch; margin: 0 0 24px; }
 .hero { background: radial-gradient(900px 400px at 90% 0%, var(--soft), transparent), var(--bg); }
 .btn { display: inline-block; background: var(--brand); color: var(--on-brand); padding: 15px 26px; border-radius: var(--radius); font-weight: 700; text-decoration: none; }
@@ -95,16 +100,16 @@ h3 { margin: 0 0 6px; font-size: 19px; }
 .btn.block { display: block; text-align: center; }
 .fine { font-size: 14px; color: var(--muted); }
 .ticks { list-style: none; padding: 0; margin: 0 0 26px; display: grid; gap: 8px; }
-.ticks li::before { content: "✓"; color: var(--brand); font-weight: 800; margin-right: 10px; }
+.ticks li::before { content: "✓"; color: var(--link); font-weight: 800; margin-right: 10px; }
 .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-top: 28px; }
 .card, .feature { background: var(--soft); border-radius: var(--radius); padding: 22px; margin: 0; }
-.feature svg { color: var(--brand); }
+.feature svg { color: var(--link); }
 .agitate { margin-top: 28px; font-size: 19px; font-weight: 600; }
 .problem { background: var(--bg); }
 .solution, .faq { background: var(--soft); }
 .solution .feature { background: var(--bg); }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 24px; text-align: center; }
-.stats b { display: block; font-size: 34px; color: var(--brand); }
+.stats b { display: block; font-size: 34px; color: var(--link); }
 .stats span { color: var(--muted); font-size: 14px; }
 blockquote { margin: 8px 0 12px; font-size: 18px; }
 .stars { color: var(--accent); letter-spacing: 2px; }
@@ -114,16 +119,25 @@ blockquote { margin: 8px 0 12px; font-size: 18px; }
 .price s { color: var(--muted); font-size: 22px; }
 .price span { color: var(--muted); font-size: 15px; }
 details { background: var(--bg); border-radius: var(--radius); padding: 0 20px; margin: 10px 0; }
-summary { cursor: pointer; padding: 18px 0; font-weight: 700; }
+summary { cursor: pointer; padding: 18px 0; font-weight: 700; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: ""; flex: none; width: 8px; height: 8px; margin: -4px 4px 0 0; border-right: 2px solid var(--link); border-bottom: 2px solid var(--link); transform: rotate(45deg); transition: transform .2s ease; }
+details[open] summary::after { margin-top: 4px; transform: rotate(225deg); }
+summary:focus-visible { outline: 2px solid var(--link); outline-offset: 4px; border-radius: 4px; }
 details p { margin: 0 0 18px; color: var(--muted); }
 .guarantee { text-align: center; }
 .seal { width: 92px; height: 92px; border-radius: 50%; margin: 0 auto 16px; background: var(--brand); color: var(--on-brand); display: grid; place-content: center; font-size: 30px; font-weight: 800; line-height: 1; }
 .seal small { font-size: 11px; letter-spacing: .14em; }
 footer { padding: 30px 0; text-align: center; color: var(--muted); font-size: 14px; }
-@media (max-width: 640px) { section, header { padding: 52px 0; } .stats { grid-template-columns: 1fr; } }
+.topbar { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--rule); }
+.topbar-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 60px; }
+.site-brand { display: inline-flex; min-width: 0; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); }
+@media (max-width: 640px) { section, header { padding: 52px 0; } .stats { grid-template-columns: 1fr; } .topbar-cta { padding: 8px 14px; font-size: 14px; } }
+@media (prefers-reduced-motion: reduce) { summary::after { transition: none; } }
 </style>
 </head>
 <body>
+  <div class="topbar"><div class="wrap topbar-row"><span class="site-brand"><span class="mark" aria-hidden="true">SC</span><span>Sparkle &amp; Co &quot;Home&quot;</span></span><a class="topbar-cta" href="#pricing">Book now</a></div></div>
   <header class="hero">
     <div class="wrap">
       <p class="eyebrow">Serving Austin, TX</p>
