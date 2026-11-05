@@ -90,7 +90,7 @@ export function SeoBody({ data, range, now }: { data: SeoData; range: number; no
             }
             table={{ columns: ['Date', 'Clicks', 'Impressions'], rows: series.map((s) => [fmtDate(s.date), s.clicks, s.impressions]) }}
           >
-            {series.length ? <AreaChart data={series.map((s) => ({ x: fmtDate(s.date), y: s[metric] }))} label={metric === 'clicks' ? 'Clicks' : 'Impressions'} /> : <p className="py-6 text-center text-small text-muted">No search data in this range yet.</p>}
+            {series.length ? <AreaChart data={series.map((s) => ({ x: s.date, y: s[metric] }))} label={metric === 'clicks' ? 'Clicks' : 'Impressions'} /> : <p className="py-6 text-center text-small text-muted">No search data in this range yet.</p>}
           </ChartCard>
         </>
       ) : (

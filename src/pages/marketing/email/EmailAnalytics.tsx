@@ -76,7 +76,7 @@ export function EmailBody({ data, range, now }: { data: EmailData; range: number
       />
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
         <ChartCard className="lg:col-span-2" title="Emails sent per day" subtitle={`Last ${range} days`} table={{ columns: ['Date', 'Sent', 'Opened', 'Clicked'], rows: series.map((s) => [fmtDate(s.date), s.sent, s.opened, s.clicked]) }}>
-          {series.length ? <ColumnChart data={series.map((s) => ({ x: fmtDate(s.date), y: s.sent }))} label="Sent" /> : <p className="py-6 text-center text-small text-muted">Nothing sent in this range.</p>}
+          {series.length ? <ColumnChart data={series.map((s) => ({ x: s.date, y: s.sent }))} label="Sent" /> : <p className="py-6 text-center text-small text-muted">Nothing sent in this range.</p>}
         </ChartCard>
         <section className="card p-4 sm:p-5" aria-label="Leads">
           <h3 className="text-h3 text-ink">Leads</h3>

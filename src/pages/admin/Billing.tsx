@@ -96,11 +96,13 @@ export default function Billing() {
     <PageHeader
       className="mb-4"
       title="Customer usage"
-      description="What each customer’s analytics cost, to bill from."
-      meta={
-        <InfoTip label="About this page" title="About this page">
-          This page tracks usage. It doesn’t charge cards. Billing customers is done outside the app for now.
-        </InfoTip>
+      description={
+        <span className="inline-flex flex-wrap items-center gap-1">
+          What each customer’s analytics cost, to bill from.
+          <InfoTip label="About this page" title="About this page">
+            This page tracks usage. It doesn’t charge cards. Billing customers is done outside the app for now.
+          </InfoTip>
+        </span>
       }
       actions={
         data ? (
@@ -109,7 +111,7 @@ export default function Billing() {
               {checking ? <Spinner size={14} /> : <RefreshCw />}
               Check against treg
             </button>
-            <Select size="sm" aria-label="Month" value={month} onChange={setMonth} options={recentMonths().map((m) => ({ value: m, label: monthLabel(m) }))} />
+            <Select size="sm" className="w-44" aria-label="Month" value={month} onChange={setMonth} options={recentMonths().map((m) => ({ value: m, label: monthLabel(m) }))} />
             <button type="button" className="btn btn-primary btn-sm" disabled={downloading} onClick={() => void csv()}>
               {downloading ? <Spinner size={14} /> : <Download />}
               Download CSV

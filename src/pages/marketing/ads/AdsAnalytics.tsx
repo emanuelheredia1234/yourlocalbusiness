@@ -94,7 +94,7 @@ export function AdsBody({ data, range, onCompetitors, now }: { data: AdsData; ra
               ]}
             />
             <ChartCard title="Spend per day" subtitle={`Google and Meta, last ${range} days`} table={{ columns: ['Date', 'Spend', 'Clicks'], rows: t.series.map((s) => [fmtDate(s.date), money(s.spend, t.currency), s.clicks]) }}>
-              {t.series.length ? <AreaChart data={t.series.map((s) => ({ x: fmtDate(s.date), y: s.spend }))} label="Spend" format={(v) => money(v, t.currency)} /> : <p className="py-6 text-center text-small text-muted">No spend in this range.</p>}
+              {t.series.length ? <AreaChart data={t.series.map((s) => ({ x: s.date, y: s.spend }))} label="Spend" format={(v) => money(v, t.currency)} /> : <p className="py-6 text-center text-small text-muted">No spend in this range.</p>}
             </ChartCard>
             <DataTable
               caption="Campaigns"

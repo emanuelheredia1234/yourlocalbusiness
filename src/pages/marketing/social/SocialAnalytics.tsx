@@ -8,7 +8,7 @@ import type { SocialData, SocialNetworkStats } from '@/lib/integrations/types';
 import { PLATFORMS } from '@/ai/knowledge';
 import { useStore } from '@/store/useStore';
 import { useConnections } from '@/store/analytics';
-import { BarList, ChartCard, ColumnChart } from '@/components/charts/Charts';
+import { BarList, ChartCard } from '@/components/charts/Charts';
 import { PlatformMark } from '@/components/posts/PlatformIcon';
 import { Badge, Empty, StatStrip } from '@/components/ui/primitives';
 import { AnalyticsShell, DataTable } from '../analytics/AnalyticsShell';
@@ -77,7 +77,20 @@ export function SocialBody({ data, range, appPosted, now }: { data: SocialData; 
       />
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
         <ChartCard title="Followers by network" subtitle="Now" table={{ columns: ['Network', 'Followers'], rows: t.byNetwork.map((r) => [name(r.network), r.followers]) }}>
-          {t.byNetwork.length ? <ColumnChart data={t.byNetwork.map((r) => ({ x: name(r.network), y: r.followers }))} label="Followers" /> : <p className="py-6 text-center text-small text-muted">No follower counts yet.</p>}
+          {t.byNetwork.length ? (
+            <BarList
+              rows={t.byNetwork.map((r) => ({
+                key: r.network,
+                value: r.followers,
+                label: (
+                  <>
+                    <PlatformMark platform={r.network as SocialPlatform} size={16} />
+                    <span className="truncate">{name(r.network)}</span>
+                  </>
+                ),
+              }))}
+            />
+          ) :  <p className="py-6 text-center text-small text-muted">No follower counts yet.</p>}
         </ChartCard>
         <ChartCard title="Top posts" subtitle={`By engagement, last ${range} days`}>
           {t.topPosts.length ? (

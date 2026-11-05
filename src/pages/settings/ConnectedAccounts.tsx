@@ -81,7 +81,8 @@ export function rowView(
     const reason = st?.limitedReason;
     return {
       tone: 'warn',
-      status: reason ? LIMITED_COPY[reason](name) : 'Limited',
+      status: 'Limited',
+      ...(reason ? { note: LIMITED_COPY[reason](name) } : {}),
       action: off ? 'none' : reason === 'missing_permissions' || reason === 'no_page_role' ? 'reconnect' : 'menu',
     };
   }
