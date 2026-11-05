@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarCheck, Check, Clock, ExternalLink, Mail, MapPin, Phone, ShoppingBag } from 'lucide-react';
+import { CalendarCheck, Check, Clock, ExternalLink, Mail, Phone, ShoppingBag } from 'lucide-react';
 import { cn, fmtMoney } from '@/lib/utils';
 import { FORMATS } from '@/ai/knowledge';
 import { useUI } from '@/store/ui';
@@ -75,19 +75,10 @@ function ListingModal() {
               </ul>
             </div>
           )}
-          {(l.hours || place) && (
-            <div className="mt-5 flex flex-wrap gap-x-5 gap-y-1.5 text-small text-ink-2">
-              {place && (
-                <span className="inline-flex items-center gap-1.5">
-                  <MapPin size={14} className="text-muted" aria-hidden="true" /> {place}
-                </span>
-              )}
-              {l.hours && (
-                <span className="inline-flex items-center gap-1.5">
-                  <Clock size={14} className="text-muted" aria-hidden="true" /> {l.hours}
-                </span>
-              )}
-            </div>
+          {l.hours && (
+            <p className="mt-5 inline-flex items-center gap-1.5 text-small text-ink-2">
+              <Clock size={14} className="text-muted" aria-hidden="true" /> {l.hours}
+            </p>
           )}
           {l.tags.length > 0 && <p className="mt-4 text-small text-muted">{l.tags.map((t) => `#${t.replace(/\s+/g, '')}`).join(' · ')}</p>}
         </div>

@@ -71,12 +71,15 @@ export default function Marketplace() {
       <PageHeader
         className="mb-4"
         title="Marketplace"
-        description="Local businesses and digital products. This app takes no payments."
         meta={
           <>
             <StatusDot tone={shared ? 'good' : 'faint'}>{shared ? 'Shared marketplace' : 'Only you can see this'}</StatusDot>
+            <span aria-hidden="true" className="max-md:hidden">
+              ·
+            </span>
+            <span className="max-md:hidden">{shared ? 'Listings here are shared with everyone who uses this app.' : 'Right now only you can see your listings here.'}</span>
             <span aria-hidden="true">·</span>
-            <span>{shared ? 'Listings here are shared with everyone who uses this app.' : 'Right now only you can see your listings here.'}</span>
+            <span>This app takes no payments.</span>
           </>
         }
         actions={
@@ -185,15 +188,17 @@ export default function Marketplace() {
               </div>
             )}
             {showMap && kind !== 'product' && (
-              <UsMap
-                listings={listings.filter((l) => l.kind === 'business')}
-                selected={city}
-                onSelect={(c) => {
-                  setCity(c);
-                  setKind('business');
-                  setNear(0);
-                }}
-              />
+              <div className="max-w-[720px]">
+                <UsMap
+                  listings={listings.filter((l) => l.kind === 'business')}
+                  selected={city}
+                  onSelect={(c) => {
+                    setCity(c);
+                    setKind('business');
+                    setNear(0);
+                  }}
+                />
+              </div>
             )}
           </div>
 

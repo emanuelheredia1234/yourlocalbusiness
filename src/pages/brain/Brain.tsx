@@ -52,7 +52,6 @@ export default function Brain() {
         className="mb-4"
         title="Brain"
         description="What the AI reads before it writes: your voice, customers, rules and facts."
-        meta={<span className="num max-sm:hidden">{summary}</span>}
         actions={
           <>
             <Toggle checked={useBrain} onChange={(v) => updateSettings((s) => ({ ...s, ai: { ...s.ai, useBrain: v } }))} label={useBrain ? 'Brain on' : 'Brain off'} />
@@ -82,7 +81,7 @@ export default function Brain() {
         </Callout>
       )}
 
-      {tab === 'skills' && <SkillList onEdit={openEditor} onNew={() => openEditor(null)} />}
+      {tab === 'skills' && <SkillList onEdit={openEditor} onNew={() => openEditor(null)} summary={summary} />}
       {tab === 'library' && <LibraryGrid />}
       {tab === 'docs' && <KnowledgeDocs />}
       {tab === 'playground' && <Playground />}
@@ -102,7 +101,7 @@ function CategoryTile({ category }: { category: SkillCategory }) {
   );
 }
 
-function SkillList({ onEdit, onNew }: { onEdit: (s: Skill) => void; onNew: () => void }) {
+function SkillList({ onEdit, onNew, summary }: { onEdit: (s: Skill) => void; onNew: () => void; summary: string }) {
   const skills = useStore((s) => s.skills);
   const [filter, setFilter] = useState<SkillCategory | 'all'>('all');
   const cats = [...new Set(skills.map((s) => s.category))];
@@ -125,18 +124,21 @@ function SkillList({ onEdit, onNew }: { onEdit: (s: Skill) => void; onNew: () =>
 
   return (
     <div>
-      {cats.length > 1 && (
-        <div className="scroll-fade-x -mx-4 mb-4 flex gap-1.5 px-4 py-0.5 sm:mx-0 sm:flex-wrap sm:px-0">
-          <button type="button" className={cn('chip', filter === 'all' && 'chip-active')} onClick={() => setFilter('all')} aria-pressed={filter === 'all'}>
-            All <span className="num font-mono text-caption">{skills.length}</span>
-          </button>
-          {cats.map((c) => (
-            <button type="button" key={c} className={cn('chip', filter === c && 'chip-active')} onClick={() => setFilter(c)} aria-pressed={filter === c}>
-              {CATEGORY_META[c].label} <span className="num font-mono text-caption">{skills.filter((s) => s.category === c).length}</span>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        {cats.length > 1 && (
+          <div className="scroll-fade-x -mx-4 flex min-w-0 max-w-[calc(100%+2rem)] gap-1.5 px-4 py-0.5 sm:mx-0 sm:max-w-full sm:flex-wrap sm:px-0">
+            <button type="button" className={cn('chip', filter === 'all' && 'chip-active')} onClick={() => setFilter('all')} aria-pressed={filter === 'all'}>
+              All <span className="num font-mono text-caption">{skills.length}</span>
             </button>
-          ))}
-        </div>
-      )}
+            {cats.map((c) => (
+              <button type="button" key={c} className={cn('chip', filter === c && 'chip-active')} onClick={() => setFilter(c)} aria-pressed={filter === c}>
+                {CATEGORY_META[c].label} <span className="num font-mono text-caption">{skills.filter((s) => s.category === c).length}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <p className="num text-small text-muted">{summary}</p>
+      </div>
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
         {shown.map((s) => (
           <SkillCard key={s.id} skill={s} onEdit={() => onEdit(s)} />
@@ -239,7 +241,9 @@ function LibraryGrid() {
               </div>
             </div>
             <p className="clamp-2 text-small text-ink-2">{l.description}</p>
-            <p className="well clamp-3 whitespace-pre-line px-3 py-2.5 text-caption text-muted">{l.instructions}</p>
+            <div className="well px-3 py-2.5">
+              <p className="clamp-3 whitespace-pre-line text-caption text-muted">{l.instructions}</p>
+            </div>
             <div className="mt-auto flex items-center justify-end">
               {has ? (
                 <span className="inline-flex h-8 items-center gap-1.5 text-small font-medium text-muted">
@@ -414,7 +418,7 @@ function Playground() {
             options={[{ value: '__none', label: 'No skills at all (Brain off)' }, ...skills.map((s) => ({ value: s.id, label: `Without “${s.name}”` }))]}
           />
         </Field>
-        <GenerateButton variant="ai" running={running} onClick={run} runningLabel="Writing…" className="self-start">
+        <GenerateButton running={running} onClick={run} runningLabel="Writing…" className="self-start">
           Run comparison
         </GenerateButton>
         <p className="text-caption text-muted">Highlighted words are what your skills changed. Playground runs aren’t saved to your project or the activity log.</p>

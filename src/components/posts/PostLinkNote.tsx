@@ -104,9 +104,9 @@ export function LinkFields({ post, onChange }: { post: Post; onChange: (patch: P
               {LINK_FACTS[post.platform]} Your link: <span className="[overflow-wrap:anywhere]">{linkText(link.url)}</span>
             </>
           ) : __ARTIFACT_BUILD__ ? (
-            'No link yet: add your website in Settings → Brand.'
+            'No link yet: add your website in Settings › Brand.'
           ) : (
-            'No link yet: publish your page (Marketing → SEO page), or add your website in Settings → Brand.'
+            'No link yet: publish your page (Marketing › SEO page), or add your website in Settings › Brand.'
           )
         }
       >

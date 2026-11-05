@@ -122,7 +122,7 @@ export default function Analytics() {
         table={{ columns: ['Date', m.label], rows: k.series.map((d) => [fmtDate(d.date), d[metric]]) }}
       >
         {total < 5 ? (
-          <div className="flex h-[220px] flex-col items-center justify-center gap-1 text-center">
+          <div className="flex h-40 flex-col items-center justify-center gap-1 text-center">
             <p className="text-small text-muted">{m.few}</p>
             {metric !== 'made' && (
               <button type="button" className="link text-small" onClick={() => navigate('calendar')}>
