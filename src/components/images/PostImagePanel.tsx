@@ -219,7 +219,7 @@ export function PostImagePanel({ project, headline, prompt, onPromptChange, styl
           {/* the image in use, with the option-card ring (over the picture, so it shows) */}
           <span className="relative shrink-0">
             <MediaThumb media={media} className="h-12 w-12 rounded-md" />
-            <span className="pointer-events-none absolute inset-0 rounded-md shadow-[inset_0_0_0_1.5px_rgb(var(--primary))]" aria-hidden="true" />
+            <span className="pointer-events-none absolute inset-0 rounded-md ring-[1.5px] ring-inset ring-primary" aria-hidden="true" />
           </span>
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-1 text-small font-medium text-ink">

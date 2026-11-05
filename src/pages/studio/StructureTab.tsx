@@ -350,7 +350,8 @@ function SectionCard({ section, index, total, onChange, onMove, onRemove }: { se
                     {index + 1}.{j + 1}
                   </span>
                   <input className="input input-sm min-w-[160px] flex-1" value={it.title} onChange={(e) => patchItem(it.id, { title: e.target.value })} aria-label="Item title" />
-                  <input className="input input-sm w-[130px]" value={it.meta ?? ''} onChange={(e) => patchItem(it.id, { meta: e.target.value })} placeholder="Video · 8 min" aria-label="Item format or length" />
+                  {/* a blank the AI left ("[pages]") is an empty field with that hint */}
+                  <input className="input input-sm w-[130px]" value={blankHint(it.meta ?? '') ? '' : it.meta ?? ''} onChange={(e) => patchItem(it.id, { meta: e.target.value })} placeholder={blankHint(it.meta ?? '') ?? 'Video · 8 min'} aria-label="Item format or length" />
                   <GenerateButton variant="ai-ghost" size="sm" running={expanding === it.id} runningLabel="Writing…" disabled={!!expanding} onClick={() => void expand(it)}>
                     Expand
                   </GenerateButton>

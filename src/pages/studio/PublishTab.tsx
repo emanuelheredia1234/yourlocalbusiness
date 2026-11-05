@@ -52,7 +52,7 @@ function PickThumb({ media, on, onClick, label }: { media: MediaRef; on: boolean
       <MediaThumb media={media} className="h-full w-full rounded-none" />
       {/* over the picture, so it shows: the option-card ring when picked, a hairline otherwise */}
       <span
-        className={cn('pointer-events-none absolute inset-0 rounded-md transition-shadow duration-120', on ? 'shadow-[inset_0_0_0_1.5px_rgb(var(--primary))]' : 'shadow-[inset_0_0_0_1px_rgb(var(--ink)/0.06)] group-hover:shadow-[inset_0_0_0_1px_rgb(var(--line-3))]')}
+        className={cn('pointer-events-none absolute inset-0 rounded-md ring-inset transition-shadow duration-120', on ? 'ring-[1.5px] ring-primary' : 'ring-1 ring-ink/5 group-hover:ring-line-3')}
         aria-hidden="true"
       />
       {on && (
