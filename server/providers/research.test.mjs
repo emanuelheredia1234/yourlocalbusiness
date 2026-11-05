@@ -578,6 +578,16 @@ describe('routing a research request', () => {
     expect(entry).toMatchObject({ ok: false, code: 'TIMEOUT', research: true, cost: { usd: 0.33, source: 'estimate' } });
     expect(entry).not.toHaveProperty('searches');
     expect(metered).toEqual([[0.33, true]]);
+    // stopped (the browser went away) on the Responses API: the same kind of estimate (GPT-6.1 Sol: $0.14 + 5 × $0.01)
+    metered.length = 0;
+    const openai = setup(['openai']);
+    const stop = new AbortController();
+    const stopped = openai.router.text('strategy', { prompt: `${PROMPT} qa-research-slow`, research: RESEARCH, meter, signal: stop.signal }).catch((e) => e);
+    for (let i = 0; i < 200 && !callsTo('openai', '/responses').length; i++) await new Promise((r) => setTimeout(r, 10));
+    stop.abort();
+    expect(await stopped).toMatchObject({ code: 'ABORTED' });
+    expect(openai.usage.recent(1)[0]).toMatchObject({ ok: false, provider: 'openai', code: 'ABORTED', research: true, cost: { usd: 0.19, source: 'estimate' } });
+    expect(metered).toEqual([[0.19, true]]);
     // refused before it did anything (429): no cost, and nothing for the meter
     metered.length = 0;
     mock.behavior.anthropic = 'rate';
