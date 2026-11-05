@@ -10,7 +10,7 @@ import crypto from 'node:crypto';
 import { ensureCustomer, fail, safeLog } from '../integrations/common.mjs';
 import { ANALYTICS_SOURCES } from '../integrations/contracts.mjs';
 import { appOrigin } from '../seo/sitemap.mjs';
-import { createRunner } from './runner.mjs';
+import { createRunner, publicCode } from './runner.mjs';
 import { handlesOf } from './handles.mjs';
 import { socialPlan, socialSource } from './sources/social.mjs';
 import { adsPlan, adsSource } from './sources/ads.mjs';
@@ -25,9 +25,7 @@ const iso = (ms) => new Date(ms).toISOString();
 
 /** A source's outcome code from a thrown error (a TregError kind, a DbError or anything else). */
 function codeOf(e) {
-  if (e?.kind) return String(e.kind).toUpperCase();
-  if (e?.code && /^[A-Z_]+$/.test(e.code)) return e.code;
-  return 'UNAVAILABLE';
+  return publicCode(e) ?? 'UNAVAILABLE';
 }
 
 /**
@@ -134,7 +132,7 @@ export function createRefresher({ db, treg, connections, omnisend = null, env = 
         // shows what was spent while it ran
         const cost = Math.max(0, runner.costMicro() - before);
         try {
-          await writeSnapshot(db, ctx.userId, ctx.projectId, source, { status: result.status, errorCode: result.errorCode ?? null, data: result.data, costMicro: cost, fetchedAt: result.fetchedAt }, now());
+          await writeSnapshot(db, ctx.userId, ctx.projectId, source, { status: result.status, errorCode: result.errorCode ? publicCode(result.errorCode) : null, data: result.data, costMicro: cost, fetchedAt: result.fetchedAt }, now());
           if ((result.status === 'ok' || result.status === 'partial') && result.summary) await appendHistory(db, ctx.userId, ctx.projectId, source, result.summary, now());
           if (result.resolved) resolvedPatch = { ...resolvedPatch, ...result.resolved };
         } catch (e) {

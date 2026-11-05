@@ -25,6 +25,28 @@ export async function writeStep(db, userId, pageId, step, outcome, detail, now) 
   await db.upsert('seo_google_steps', { user_id: userId, page_id: pageId, step, outcome, detail: detail ?? {}, at: iso(now) }, { onConflict: 'user_id,page_id,step' });
 }
 
+/** How long a step marked as being sent counts as still in flight (a write's own timeout is 120 s). */
+export const SENDING_MS = 3 * 60_000;
+
+/**
+ * Claim a one-shot step BEFORE its call: the stored row becomes outcome 'unknown' with detail.sending, in one
+ * conditional write (insert when there is no row, else update only if the row is still what we read). Of two
+ * presses at once only one wins, and a crash between the call and the answer leaves 'unknown' (so the next press
+ * reads first and asks before sending again) instead of no record at all. → true when this request won.
+ */
+export async function claimStep(db, userId, pageId, step, before, now) {
+  const row = { outcome: 'unknown', detail: { ...(before?.detail ?? {}), sending: true }, at: iso(now) };
+  if (!before) {
+    const got = await db.insert('seo_google_steps', { user_id: userId, page_id: pageId, step, ...row }, { returning: true, ignoreDuplicates: true, onConflict: 'user_id,page_id,step' });
+    return Array.isArray(got) && got.length === 1;
+  }
+  const got = await db.update('seo_google_steps', { user_id: userId, page_id: pageId, step, outcome: before.outcome, at: before.at }, row, { returning: true });
+  return Array.isArray(got) && got.length === 1;
+}
+
+/** Whether a stored step is a claim another request is still sending. */
+export const stillSending = (stored, now) => stored?.outcome === 'unknown' && stored.detail?.sending === true && now - Date.parse(stored.at) < SENDING_MS;
+
 /**
  * Change an appState document only if nobody else changed it meanwhile. change(value) → { value } to write and
  * win, or { result } to stop without writing. A CONFLICT means someone else wrote first: read again and decide.
@@ -56,18 +78,21 @@ export function claimSubmit(storage, now) {
   });
 }
 
-/** Take one inspection from today's budgets (property, then customer). true when both had room. */
+/**
+ * Take one inspection from today's budgets (customer, then property). true when both had room. The customer's
+ * counter goes first so a customer already at 20 never uses up the property's shared budget for everyone else.
+ */
 export async function claimInspection(storage, customerTag, now) {
   const day = utcDay(now);
-  const property = await casDocument(storage, `gsc:app:inspect:${day}`, (doc) => {
-    const count = Number(doc.count) || 0;
-    if (count >= INSPECT_PROPERTY_PER_DAY) return { result: false };
-    return { value: { count: count + 1 }, result: true };
-  });
-  if (!property) return false;
-  return casDocument(storage, `gsc:app:inspect:${day}:${customerTag}`, (doc) => {
+  const customer = await casDocument(storage, `gsc:app:inspect:${day}:${customerTag}`, (doc) => {
     const count = Number(doc.count) || 0;
     if (count >= INSPECT_CUSTOMER_PER_DAY) return { result: false };
+    return { value: { count: count + 1 }, result: true };
+  });
+  if (!customer) return false;
+  return casDocument(storage, `gsc:app:inspect:${day}`, (doc) => {
+    const count = Number(doc.count) || 0;
+    if (count >= INSPECT_PROPERTY_PER_DAY) return { result: false };
     return { value: { count: count + 1 }, result: true };
   });
 }

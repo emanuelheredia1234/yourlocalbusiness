@@ -209,7 +209,10 @@ describe('POST /api/analytics/refresh', () => {
     await routes.refresher.idle();
     const after = rows('analytics_snapshots').find((s) => s.source === 'social');
     expect(after.status).toBe('error');
-    expect(after.error_code).toBe('TEAM_UNAVAILABLE');
+    // a team-level treg problem (balance, platform cap) reads as plain UNAVAILABLE: never which one it was
+    expect(after.error_code).toBe('UNAVAILABLE');
+    const seen = await call(routes, 'GET', '/api/analytics/snapshots?projectId=p1', { token: 'a' });
+    expect(seen.raw).not.toMatch(/team|balance|config/i);
     expect(after.data).toEqual(good.data);
     expect(after.fetched_at).toBe(good.fetched_at);
     expect(rows('analytics_runs').find((x) => x.id === r.body.run.id).state).toBe('done_with_errors');

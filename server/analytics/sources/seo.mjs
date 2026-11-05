@@ -9,6 +9,7 @@ import { readSteps } from '../../seo/steps.mjs';
 import { itemsOf } from '../normalize/index.mjs';
 import { num } from '../normalize/util.mjs';
 import { noteFor } from './social-public.mjs';
+import { publicCode } from '../runner.mjs';
 
 const MONTH_MS = 30 * 86_400_000;
 const FALLBACK_KINDS = new Set(['busy', 'unavailable', 'upstream']);
@@ -139,7 +140,7 @@ export async function seoSource({ db, userId, projectId, project, settings, reso
   if (!anything && stop) throw stop;
   return {
     status: problems ? (anything ? 'partial' : 'error') : 'ok',
-    errorCode: stop?.kind ? String(stop.kind).toUpperCase() : problems && !anything ? 'UNAVAILABLE' : null,
+    errorCode: stop?.kind ? publicCode(stop) : problems && !anything ? 'UNAVAILABLE' : null,
     data,
     summary: { clicks: data.gsc?.clicks ?? null, impressions: data.gsc?.impressions ?? null, ranks: Object.fromEntries(data.keywords.map((k) => [k.keyword, k.rank])) },
     resolved: Object.keys(patch).length ? patch : null,

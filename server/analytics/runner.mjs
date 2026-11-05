@@ -38,6 +38,24 @@ const connectionSlots = createSemaphores(CONNECTIONS_PER_USER);
 /** Errors that end the whole Update for this customer (no more treg calls are made). */
 export const STOPPING_KINDS = new Set(['customer_cap', 'customer_blocked', 'team_unavailable', 'config']);
 
+/** TregError kinds a customer may see as they are (as a code); every other kind reads as plain UNAVAILABLE. */
+const PUBLIC_KINDS = { customer_cap: 'CUSTOMER_CAP', customer_blocked: 'CUSTOMER_BLOCKED', too_expensive: 'OVER_COST', not_found: 'NOT_FOUND', reconnect: 'NEEDS_RECONNECT' };
+/** Codes a source may store as they are. */
+const PUBLIC_CODES = new Set(['CUSTOMER_CAP', 'CUSTOMER_BLOCKED', 'OVER_COST', 'NOT_FOUND', 'NEEDS_RECONNECT', 'NOT_CONNECTED', 'RATE_LIMITED', 'INTERRUPTED', 'NO_HANDLES', 'NOTHING_TO_UPDATE', 'UNAVAILABLE']);
+
+/**
+ * The code a customer may see for an error (snapshot error_code, a step's detail). Team-level treg problems
+ * (insufficient_balance, platform_daily_cap_reached, trial_allowance_reached → team_unavailable), our own config
+ * and provider failures all read as UNAVAILABLE: never which of them it was.
+ */
+export function publicCode(e) {
+  if (e == null) return null;
+  if (typeof e === 'string') return PUBLIC_CODES.has(e) ? e : 'UNAVAILABLE';
+  if (e.kind) return PUBLIC_KINDS[e.kind] ?? 'UNAVAILABLE';
+  if (typeof e.code === 'string' && PUBLIC_CODES.has(e.code)) return e.code;
+  return 'UNAVAILABLE';
+}
+
 /** A stable JSON text (sorted keys) for the idempotency key. */
 function stable(value) {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;

@@ -4,6 +4,7 @@
 import { itemsOf } from '../normalize/index.mjs';
 import { first, link, num, text, when } from '../normalize/util.mjs';
 import { noteFor } from './social-public.mjs';
+import { publicCode } from '../runner.mjs';
 
 const usable = (s) => s?.state === 'connected' && !!s.targetLabel;
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -172,7 +173,7 @@ export async function adsSource({ settings, statuses, runner, resolved }) {
   const summary = { spend: own.reduce((a, o) => a + o.spend, 0), clicks: own.reduce((a, o) => a + o.clicks, 0), competitorAds: competitors.reduce((a, c) => a + c.activeAds, 0) };
   return {
     status: problems ? 'partial' : 'ok',
-    errorCode: stop?.kind ? String(stop.kind).toUpperCase() : null,
+    errorCode: stop?.kind ? publicCode(stop) : null,
     data: { own, competitors },
     summary,
     resolved: Object.keys(patch).length ? { competitors: { ...(resolved?.competitors || {}), ...patch } } : null,

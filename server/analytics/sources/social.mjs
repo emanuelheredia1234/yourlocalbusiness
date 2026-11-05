@@ -5,6 +5,7 @@
 import { handlesOf } from '../handles.mjs';
 import { publicStats } from './social-public.mjs';
 import { ownStats } from './social-own.mjs';
+import { publicCode } from '../runner.mjs';
 
 const isOwnUsable = (s) => s?.state === 'connected' && !!s.targetLabel;
 const needsReconnect = (s) => s?.state === 'needs_reconnect' || s?.state === 'limited';
@@ -71,5 +72,5 @@ export async function socialSource({ project, statuses, runner, resolved, env, f
     engagement: results.reduce((a, r) => a + (r.engagement ?? 0), 0),
     byNetwork: Object.fromEntries(results.filter((r) => r.followers !== undefined).map((r) => [r.network, r.followers])),
   };
-  return { status, errorCode: stop?.kind ? String(stop.kind).toUpperCase() : null, data: { networks: results }, summary, resolved: Object.keys(patch).length ? patch : null };
+  return { status, errorCode: stop?.kind ? publicCode(stop) : null, data: { networks: results }, summary, resolved: Object.keys(patch).length ? patch : null };
 }

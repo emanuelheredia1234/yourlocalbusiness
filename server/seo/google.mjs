@@ -19,11 +19,11 @@
 import crypto from 'node:crypto';
 import { ensureCustomer, fail, notSetUp, oneShot, seoPageIdFor } from '../integrations/common.mjs';
 import { createKit } from '../analytics/http.mjs';
-import { createRunner } from '../analytics/runner.mjs';
+import { createRunner, publicCode } from '../analytics/runner.mjs';
 import { loadProject, ownSeoPage, projectIdFrom } from '../analytics/snapshots.mjs';
 import { appOrigin } from './sitemap.mjs';
 import { domainProperty, inspectionFields } from './gsc.mjs';
-import { claimInspection, claimSubmit, inspectionDue, readSteps, writeStep } from './steps.mjs';
+import { claimInspection, claimStep, claimSubmit, inspectionDue, readSteps, stillSending, writeStep } from './steps.mjs';
 
 const PREFIX = '/api/seo/google/';
 const STEP_ORDER = ['verify_token', 'verify', 'site_add', 'sitemap', 'inspect'];
@@ -108,7 +108,7 @@ export function createSeoGoogleRoutes(deps = {}) {
         await writeStep(db, who.id, pageId, 'inspect', 'ok', fields, now());
         steps.push({ step: 'inspect', outcome: 'ok', ...fields });
       } catch (e) {
-        steps.push({ step: 'inspect', outcome: 'failed', detail: String(e?.kind || 'error').toUpperCase() });
+        steps.push({ step: 'inspect', outcome: 'failed', detail: publicCode(e) });
       }
     }
     return { host: 'app', steps };
@@ -166,9 +166,12 @@ export function createSeoGoogleRoutes(deps = {}) {
         continue;
       }
       if (before?.outcome === 'unknown') {
+        // another press is sending this step right now: never a second send
+        if (stillSending(before, now())) throw fail(409, 'ALREADY_PUBLISHING', 'This page is already being sent to Google. Check again in a few minutes.');
         const done = await happened(step).catch(() => null);
         if (done === true) {
-          await writeStep(db, who.id, pageId, step, 'ok', before.detail, now());
+          const { sending: _sending, ...kept } = before.detail ?? {};
+          await writeStep(db, who.id, pageId, step, 'ok', kept, now());
           steps.push({ step, outcome: 'ok' });
           continue;
         }
@@ -177,6 +180,9 @@ export function createSeoGoogleRoutes(deps = {}) {
           return { host: 'custom', steps };
         }
       }
+      // claimed before the call (stored 'unknown'): two presses at once send once, and a crash mid-call leaves
+      // 'unknown' for the next press to read and confirm, never a silent second send
+      if (!(await claimStep(db, who.id, pageId, step, before ?? null, now()))) throw fail(409, 'ALREADY_PUBLISHING', 'This page is already being sent to Google. Check again in a few minutes.');
       const got = await attempt(WRITES[step]);
       let detail = {};
       if (step === 'verify_token' && got.outcome === 'ok') {
