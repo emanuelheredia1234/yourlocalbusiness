@@ -84,7 +84,7 @@ export async function runTask<I, O>(task: TaskDef<I, O>, input: I, opts: RunOpti
   const brain = resolveBrain(opts.skills, task.module, opts.settings.ai.useBrain, opts.project.id);
   const env: TaskEnv = { project: opts.project, directives: brain.directives, brainPrompt: brain.prompt, variation: opts.variation ?? 0 };
   // a request that couldn't reach your server a while ago may have been a blip: ask it again before going without it
-  if (!opts.forceLocal) await recheckServer(opts.settings.ai.serverUrl);
+  if (!opts.forceLocal && task.claude) await recheckServer(opts.settings.ai.serverUrl);
   const provider = resolveProvider(opts.settings, opts.forceLocal);
   opts.onStage?.(brain.skills.length ? `Reading ${brain.skills.length} Brain skill${brain.skills.length > 1 ? 's' : ''}…` : 'Reading your project context…');
 
