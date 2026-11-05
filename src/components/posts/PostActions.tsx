@@ -1,17 +1,17 @@
 // What you can do with a post besides Manus: put it on your calendar, mark it posted when you posted
 // it yourself, copy its text, download its image or video, open it on the network.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { create } from 'zustand';
-import { CalendarClock, CheckCheck, Copy, Download, ExternalLink, MessageSquare, MoreHorizontal, Trash2, Undo2 } from 'lucide-react';
+import { CalendarClock, CheckCheck, Copy, Download, ExternalLink, MessageSquare, Trash2, Undo2 } from 'lucide-react';
 import type { Post } from '@/lib/types';
-import { cn, fmtDateTime } from '@/lib/utils';
+import { cn, fmtDateTime, isoToDateStr, toDateStr } from '@/lib/utils';
 import { copyText } from '@/lib/platform';
 import { getBlob } from '@/lib/storage';
 import { firstCommentOf } from '@/lib/pageLink';
 import { networkLabel, postText } from '@/ai/manusPost';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
-import { Field, MenuItem, Modal, Popover, confirmAction } from '../ui/primitives';
+import { Badge, Field, Modal, MoreMenu, confirmAction, type MenuEntry } from '../ui/primitives';
 import { download } from '../ui/download';
 
 /** Put drafts on your calendar. Nothing posts by itself: Manus posts them, or you do. */
@@ -38,12 +38,25 @@ export function isDue(post: Post, now = Date.now()): boolean {
   return post.status === 'scheduled' && new Date(goesOutAt(post)).getTime() <= now;
 }
 
-/** "Due" on a planned post whose time has passed (or "should be live" when Manus scheduled it there). */
+/**
+ * On a planned post whose time has passed: "Due today" while it's still that day, "Didn't post" once
+ * the day is over (or "Should be live" when Manus scheduled it on the network for that time).
+ */
 export function DueBadge({ post, now }: { post: Post; now?: number }) {
   if (!isDue(post, now)) return null;
-  if (post.external?.state === 'scheduled') return <span className="badge bg-good-soft text-good" title="Manus scheduled it on the network for this time. Mark it posted once you’ve seen it there.">Should be live on {networkLabel(post.platform)}</span>;
+  if (post.external?.state === 'scheduled')
+    return (
+      <span className="inline-flex" title="Manus scheduled it on the network for this time. Mark it posted once you’ve seen it there.">
+        <Badge tone="good">Should be live on {networkLabel(post.platform)}</Badge>
+      </span>
+    );
   if (post.external && post.external.state !== 'failed') return null;
-  return <span className="badge bg-warn-soft text-warn" title="Its time has passed and it hasn’t been posted. Post it with Manus, or post it yourself and mark it posted.">Due</span>;
+  const today = isoToDateStr(goesOutAt(post)) === toDateStr(new Date(now ?? Date.now()));
+  return (
+    <span className="inline-flex" title="Its time has passed and it hasn’t been posted. Post it with Manus, or post it yourself and mark it posted.">
+      <Badge tone={today ? 'primary' : 'bad'}>{today ? 'Due today' : 'Didn’t post'}</Badge>
+    </span>
+  );
 }
 
 /** Who posted it, and the link when there is a real one. */
@@ -51,10 +64,15 @@ export function PostedBy({ post, className }: { post: Post; className?: string }
   if (post.status !== 'published') return null;
   const by = post.publishedBy === 'manus' ? `Posted by Manus (its report)` : post.publishedBy === 'manual' ? 'Marked as posted by you' : 'Posted';
   return (
-    <p className={cn('flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted', className)}>
+    <p className={cn('flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted', className)}>
       <span>
         {by}
-        {post.publishedAt ? ` · ${fmtDateTime(post.publishedAt)}` : ''}
+        {post.publishedAt && (
+          <>
+            {' · '}
+            <span className="num font-mono">{fmtDateTime(post.publishedAt)}</span>
+          </>
+        )}
       </span>
       {post.postUrl && <PostLink post={post} />}
     </p>
@@ -64,8 +82,8 @@ export function PostedBy({ post, className }: { post: Post; className?: string }
 export function PostLink({ post, className }: { post: Post; className?: string }) {
   if (!post.postUrl) return null;
   return (
-    <a href={post.postUrl} target="_blank" rel="noopener noreferrer" className={cn('inline-flex items-center gap-1 font-semibold text-primary hover:underline', className)}>
-      Open on {networkLabel(post.platform)} <ExternalLink size={11} />
+    <a href={post.postUrl} target="_blank" rel="noopener noreferrer" className={cn('link inline-flex items-center gap-1', className)}>
+      Open on {networkLabel(post.platform)} <ExternalLink size={12} aria-hidden="true" />
     </a>
   );
 }
@@ -120,26 +138,26 @@ export function MarkPostedHost() {
     <Modal
       open
       onClose={close}
-      size="sm"
+      size="md"
       title="Mark as posted"
       subtitle={`Posted this on ${networkLabel(post.platform)} yourself? Mark it here so your calendar shows what’s really out.`}
       footer={
         <>
-          <button className="btn btn-ghost btn-sm mr-auto" onClick={close}>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={close}>
             Cancel
           </button>
-          <button className="btn btn-primary btn-sm" disabled={clean === null || future} onClick={save}>
-            <CheckCheck size={14} /> Mark as posted
+          <button type="button" className="btn btn-primary btn-sm" disabled={clean === null || future} onClick={save}>
+            Mark as posted
           </button>
         </>
       }
     >
-      <div className="flex flex-col gap-3">
+      <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,220px)]">
         <Field label="Link to the post (optional)" htmlFor="mp-url" error={clean === null ? 'That isn’t a web address.' : undefined}>
           <input id="mp-url" className="input" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={`https://www.${post.platform === 'x' ? 'x' : post.platform}.com/…`} inputMode="url" />
         </Field>
         <Field label="When you posted it" htmlFor="mp-when" error={future ? 'That’s in the future.' : undefined}>
-          <input id="mp-when" type="datetime-local" className="input" value={when} max={localInput(new Date())} onChange={(e) => setWhen(e.target.value)} />
+          <input id="mp-when" type="datetime-local" className="input num" value={when} max={localInput(new Date())} onChange={(e) => setWhen(e.target.value)} />
         </Field>
       </div>
     </Modal>
@@ -159,90 +177,62 @@ export async function downloadPostMedia(post: Post) {
   await download(m.name || `${post.headline || 'post'}.${m.kind === 'video' ? 'mp4' : 'png'}`, blob);
 }
 
-export function PostMoreMenu({ post, onDeleted, className }: { post: Post; onDeleted?: () => void; className?: string }) {
-  const [openMenu, setOpen] = useState(false);
-  const ref = useRef<HTMLButtonElement>(null);
+/** What a post's "⋯" menu offers (the calendar's rows put Edit and Post to groups in front). */
+export function postMenuEntries(post: Post, opts: { onDeleted?: () => void } = {}): MenuEntry[] {
   const store = useStore.getState;
-  const run = (fn: () => void | Promise<void>) => () => {
-    setOpen(false);
-    void fn();
-  };
+  const word = post.platform === 'x' ? 'reply' : 'comment';
+  const comment = firstCommentOf(post);
+  const out: MenuEntry[] = [];
+  if (post.status !== 'published') out.push({ label: 'Mark as posted…', icon: <CheckCheck />, onSelect: () => useMarkPosted.getState().open(post.id) });
+  if (post.status === 'published' && post.publishedBy === 'manual')
+    out.push({
+      label: 'Mark as not posted',
+      icon: <Undo2 />,
+      onSelect: () => {
+        store().unmarkPosted(post.id);
+        toast({ kind: 'info', title: 'Back on your calendar', body: 'It’s marked as not posted.' });
+      },
+    });
+  if (post.status === 'scheduled') out.push({ label: 'Move to drafts', icon: <Undo2 />, onSelect: () => store().updatePost(post.id, { status: 'draft' }) });
+  if (post.status === 'draft') out.push({ label: 'Add to calendar', icon: <CalendarClock />, onSelect: () => void addToCalendarFlow([post.id]) });
+  out.push({
+    label: 'Copy text and hashtags',
+    icon: <Copy />,
+    onSelect: async () => {
+      if (await copyText(postText(post))) toast({ kind: 'success', title: 'Post text copied' });
+      else toast({ kind: 'error', title: 'Copy was blocked', body: 'Open the post and copy the text from there.' });
+    },
+  });
+  if (comment)
+    out.push({
+      label: `Copy the first ${word}`,
+      icon: <MessageSquare />,
+      onSelect: async () => {
+        if (await copyText(comment)) toast({ kind: 'success', title: post.platform === 'x' ? 'First reply copied' : 'First comment copied' });
+        else toast({ kind: 'error', title: 'Copy was blocked', body: 'Open the post and copy it from there.' });
+      },
+    });
+  if (post.media) out.push({ label: `Download the ${post.media.kind}`, icon: <Download />, onSelect: () => void downloadPostMedia(post) });
+  if (post.postUrl) out.push({ label: `Open on ${networkLabel(post.platform)}`, icon: <ExternalLink />, onSelect: () => void window.open(post.postUrl, '_blank', 'noopener,noreferrer') });
+  out.push('separator', {
+    label: 'Delete',
+    icon: <Trash2 />,
+    danger: true,
+    onSelect: async () => {
+      const extra = post.status === 'published' ? ' It stays on the network: this only removes it from the app.' : post.external && post.external.state !== 'failed' ? ' If Manus already posted or scheduled it, it stays on the network.' : '';
+      if (await confirmAction({ title: 'Delete this post?', body: `This can’t be undone.${extra}`, confirmLabel: 'Delete', danger: true })) {
+        store().deletePosts([post.id]);
+        opts.onDeleted?.();
+      }
+    },
+  });
+  return out;
+}
+
+export function PostMoreMenu({ post, onDeleted, className }: { post: Post; onDeleted?: () => void; className?: string }) {
   return (
-    <>
-      <button ref={ref} type="button" className={cn('btn btn-ghost btn-icon btn-sm', className)} aria-label="More actions" aria-haspopup="menu" aria-expanded={openMenu} onClick={() => setOpen((o) => !o)}>
-        <MoreHorizontal size={16} />
-      </button>
-      <Popover open={openMenu} onClose={() => setOpen(false)} anchor={ref} className="w-60">
-        {post.status !== 'published' && (
-          <MenuItem icon={<CheckCheck size={15} />} onClick={run(() => useMarkPosted.getState().open(post.id))}>
-            Mark as posted…
-          </MenuItem>
-        )}
-        {post.status === 'published' && post.publishedBy === 'manual' && (
-          <MenuItem
-            icon={<Undo2 size={15} />}
-            onClick={run(() => {
-              store().unmarkPosted(post.id);
-              toast({ kind: 'info', title: 'Back on your calendar', body: 'It’s marked as not posted.' });
-            })}
-          >
-            Mark as not posted
-          </MenuItem>
-        )}
-        <MenuItem
-          icon={<Copy size={15} />}
-          onClick={run(async () => {
-            if (await copyText(postText(post))) toast({ kind: 'success', title: 'Post text copied' });
-            else toast({ kind: 'error', title: 'Copy was blocked', body: 'Open the post and copy the text from there.' });
-          })}
-        >
-          Copy text and hashtags
-        </MenuItem>
-        {firstCommentOf(post) && (
-          <MenuItem
-            icon={<MessageSquare size={15} />}
-            onClick={run(async () => {
-              if (await copyText(firstCommentOf(post)!)) toast({ kind: 'success', title: post.platform === 'x' ? 'First reply copied' : 'First comment copied' });
-              else toast({ kind: 'error', title: 'Copy was blocked', body: 'Open the post and copy it from there.' });
-            })}
-          >
-            Copy the first {post.platform === 'x' ? 'reply' : 'comment'}
-          </MenuItem>
-        )}
-        {post.media && (
-          <MenuItem icon={<Download size={15} />} onClick={run(() => downloadPostMedia(post))}>
-            Download the {post.media.kind}
-          </MenuItem>
-        )}
-        {post.postUrl && (
-          <MenuItem icon={<ExternalLink size={15} />} onClick={run(() => void window.open(post.postUrl, '_blank', 'noopener,noreferrer'))}>
-            Open on {networkLabel(post.platform)}
-          </MenuItem>
-        )}
-        {post.status === 'scheduled' && (
-          <MenuItem icon={<Undo2 size={15} />} onClick={run(() => store().updatePost(post.id, { status: 'draft' }))}>
-            Move back to drafts
-          </MenuItem>
-        )}
-        {post.status === 'draft' && (
-          <MenuItem icon={<CalendarClock size={15} />} onClick={run(() => void addToCalendarFlow([post.id]))}>
-            Add to calendar
-          </MenuItem>
-        )}
-        <MenuItem
-          danger
-          icon={<Trash2 size={15} />}
-          onClick={run(async () => {
-            const extra = post.status === 'published' ? ' It stays on the network: this only removes it from the app.' : post.external && post.external.state !== 'failed' ? ' If Manus already posted or scheduled it, it stays on the network.' : '';
-            if (await confirmAction({ title: 'Delete this post?', body: `This can’t be undone.${extra}`, confirmLabel: 'Delete', danger: true })) {
-              store().deletePosts([post.id]);
-              onDeleted?.();
-            }
-          })}
-        >
-          Delete
-        </MenuItem>
-      </Popover>
-    </>
+    <span className={cn('inline-flex', className)}>
+      <MoreMenu items={postMenuEntries(post, { onDeleted })} />
+    </span>
   );
 }

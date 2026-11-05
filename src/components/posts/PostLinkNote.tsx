@@ -35,7 +35,10 @@ function commentStatus(post: Post): string {
   return post.status === 'published' ? `If it isn’t there yet, add this as the first ${word}.` : `Add this as the first ${word} when you post.`;
 }
 
-/** On a post card or list row: the first comment (with Copy), or the bio reminder (with Copy). Nothing when the link is in the post. */
+/**
+ * On a post card (a well with the comment's text) or a list row (`compact`: one quiet line): the first
+ * comment to add (with Copy), or the bio reminder (with Copy). Nothing when the link is in the post.
+ */
 export function PostLinkNote({ post, compact, className }: { post: Post; compact?: boolean; className?: string }) {
   const project = useStore((s) => s.projects.find((p) => p.id === post.projectId));
   const placement = postPlacement(post);
@@ -45,14 +48,24 @@ export function PostLinkNote({ post, compact, className }: { post: Post; compact
     if (!text) return null;
     const word = commentWord(post);
     const title = ownerAdds(post) ? `Add this as the first ${word}` : post.platform === 'x' ? 'First reply' : 'First comment';
+    if (compact)
+      return (
+        <div role="note" aria-label={title} className={cn('flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-small', className)}>
+          <p className="flex min-w-0 items-center gap-1.5 font-medium text-ink-2">
+            <MessageSquare size={14} aria-hidden="true" className="shrink-0 text-muted" /> {title}
+          </p>
+          <span className="min-w-0 flex-1 truncate text-muted">{commentStatus(post)}</span>
+          <CopyButton text={text} label={`Copy ${word}`} size="xs" />
+        </div>
+      );
     return (
-      <div role="note" aria-label={title} className={cn('rounded-md border border-line bg-surface-2/60 px-2.5 py-2 text-[12.5px]', className)}>
-        <p className="flex items-center gap-1.5 font-semibold text-ink-2">
-          <MessageSquare size={13} aria-hidden="true" /> {title}
+      <div role="note" aria-label={title} className={cn('well px-3 py-2.5 text-small', className)}>
+        <p className="flex items-center gap-1.5 font-medium text-ink">
+          <MessageSquare size={14} aria-hidden="true" className="shrink-0 text-muted" /> {title}
         </p>
-        {!compact && <p className="clamp-2 mt-0.5 whitespace-pre-line break-words text-ink-2">{text}</p>}
-        <div className="mt-1 flex flex-wrap items-center gap-2">
-          <span className="min-w-[11rem] flex-1 text-muted">{commentStatus(post)}</span>
+        <p className="clamp-2 mt-1 whitespace-pre-line break-words text-ink-2">{text}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="min-w-[11rem] flex-1 text-caption text-muted">{commentStatus(post)}</span>
           <CopyButton text={text} label={`Copy ${word}`} size="xs" />
         </div>
       </div>
@@ -61,9 +74,9 @@ export function PostLinkNote({ post, compact, className }: { post: Post; compact
   const link = pageLink(project);
   if (!link) return null;
   return (
-    <div role="note" aria-label="Link in bio" className={cn('flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-2/60 px-2.5 py-1.5 text-[12.5px]', className)}>
-      <Link2 size={13} aria-hidden="true" className="shrink-0 text-muted" />
-      <span className="min-w-[11rem] flex-1 text-ink-2">
+    <div role="note" aria-label="Link in bio" className={cn('flex min-w-0 items-center gap-2 text-small', compact ? '' : 'well flex-wrap px-3 py-2', className)}>
+      <Link2 size={14} aria-hidden="true" className="shrink-0 text-muted" />
+      <span className={cn('min-w-0 flex-1 text-ink-2', compact ? 'truncate' : 'min-w-[11rem]')}>
         Link in bio: keep <span className="font-medium [overflow-wrap:anywhere]">{linkText(link.url)}</span> in your {networkLabel(post.platform)} bio.
       </span>
       <CopyButton text={link.url} label="Copy link" size="xs" />
@@ -91,9 +104,9 @@ export function LinkFields({ post, onChange }: { post: Post; onChange: (patch: P
               {LINK_FACTS[post.platform]} Your link: <span className="[overflow-wrap:anywhere]">{linkText(link.url)}</span>
             </>
           ) : __ARTIFACT_BUILD__ ? (
-            'No link yet: add your website in Settings → Brand.'
+            'No link yet: add your website in Settings › Brand.'
           ) : (
-            'No link yet: publish your page (Marketing → SEO page), or add your website in Settings → Brand.'
+            'No link yet: publish your page (Marketing › SEO page), or add your website in Settings › Brand.'
           )
         }
       >

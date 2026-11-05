@@ -1,22 +1,30 @@
-import { useMemo, useState } from 'react';
-import { Activity, BookOpen, Brain as BrainIcon, Check, Copy, FileUp, FlaskConical, Library, Pencil, Plus, Sparkles, ThumbsDown, ThumbsUp, Trash2, Upload } from 'lucide-react';
-import type { Skill, SkillCategory } from '@/lib/types';
-import { cn, fmtBytes, fmtRelative, readFileAsText, uid } from '@/lib/utils';
-import { CATEGORY_META, SCOPE_META, SKILL_LIBRARY, brainStrength, describeDirectives, effectiveDirectives, skillFromLibrary, templatePlaceholders } from '@/ai/brain';
+import { useMemo, useRef, useState } from 'react';
+import { Activity, Brain as BrainIcon, Check, Copy, FileUp, Pencil, Plus, ThumbsDown, ThumbsUp, Trash2, Upload } from 'lucide-react';
+import type { GenerationLog, Skill, SkillCategory } from '@/lib/types';
+import { cn, fmtBytes, fmtDateTime, fmtRelative, readFileAsText, uid } from '@/lib/utils';
+import { copyText } from '@/lib/platform';
+import { CATEGORY_META, SCOPE_META, SKILL_LIBRARY, describeDirectives, effectiveDirectives, skillFromLibrary, templatePlaceholders } from '@/ai/brain';
 import { MAX_DOC, knowledgeDocSkill, playgroundSets } from '@/ai/brainSkills';
 import { providerLabel } from '@/ai/engine';
-import { compactMeta, metaLine } from '@/ai/meta';
+import { metaDetails } from '@/ai/meta';
 import { skillTestTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
+import { useMediaQuery } from '@/lib/hooks';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useTabRequest } from '@/store/ui';
 import { tabsOf } from '@/lib/pageTabs';
-import { AIThinking, GenerateButton, ProviderBadge } from '@/components/ai/AI';
-import { AutoTextarea, Empty, Field, ProgressRing, Segmented, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
+import { AIResultBar, AIThinking, AiCard, GenerateButton } from '@/components/ai/AI';
+import { AutoTextarea, Callout, Empty, Field, MoreMenu, PageHeader, Popover, Section, Segmented, Select, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
 import { Icon } from '@/components/ui/Icon';
 import { SkillEditor } from './SkillEditor';
 
 type Tab = 'skills' | 'library' | 'docs' | 'playground' | 'log';
+
+const DAY = 24 * 3600_000;
+const PRIORITY: Record<Skill['priority'], string> = { 1: 'Low priority', 2: 'Normal priority', 3: 'High priority' };
+
+/** The rules a skill adds, as short phrases ("Tone: friendly", "Avoid: …"). */
+const rulesOf = (s: Skill) => describeDirectives(effectiveDirectives(s));
 
 export default function Brain() {
   const skills = useStore((s) => s.skills);
@@ -28,72 +36,60 @@ export default function Brain() {
   useTabRequest<Tab>('brain', tabsOf('brain') as Tab[], setTab);
   const [editing, setEditing] = useState<Skill | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
-  const strength = useMemo(() => brainStrength(skills), [skills]);
-  const active = skills.filter((s) => s.enabled);
-  const ups = skills.reduce((n, s) => n + s.stats.up, 0);
-  const downs = skills.reduce((n, s) => n + s.stats.down, 0);
-  const withSkills = genLog.filter((g) => g.skillIds.length).length;
+  const on = skills.filter((s) => s.enabled).length;
+  const weekAgo = Date.now() - 7 * DAY;
+  const usedThisWeek = genLog.filter((g) => g.createdAt >= weekAgo && g.skillIds.length > 0).length;
+  const learned = skills.filter((s) => s.source === 'feedback').reduce((n, s) => n + rulesOf(s).length, 0);
+  const summary = [`${on} skill${on === 1 ? '' : 's'} on`, `used ${usedThisWeek} time${usedThisWeek === 1 ? '' : 's'} this week`, learned ? `${learned} learned preference${learned === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
 
   const openEditor = (s: Skill | null) => {
     setEditing(s);
     setEditorOpen(true);
   };
+  const phone = useMediaQuery('(max-width: 639px)');
+  // with no skills, the Skills tab's empty state offers "Add a skill": one filled button per view
+  const empty = tab === 'skills' && !skills.length;
+  const actions = (
+    <>
+      <Toggle checked={useBrain} onChange={(v) => updateSettings((s) => ({ ...s, ai: { ...s.ai, useBrain: v } }))} label={useBrain ? 'Brain on' : 'Brain off'} />
+      {!empty && (
+        <button type="button" className={cn('btn btn-primary ml-2', phone && 'btn-sm ml-auto')} onClick={() => openEditor(null)}>
+          <Plus /> New skill
+        </button>
+      )}
+    </>
+  );
 
   return (
-    <div className="flex flex-col gap-5">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0">
-          <p className="eyebrow mb-1">Brain</p>
-          <h1 className="page-title">The Brain</h1>
-          <p className="mt-1 max-w-[700px] text-[13.5px] text-muted">Skills the AI reads before every generation: your voice, your customer, your rules and your facts. Add them once and every caption, email, page and ad gets sharper.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Toggle checked={useBrain} onChange={(v) => updateSettings((s) => ({ ...s, ai: { ...s.ai, useBrain: v } }))} label={useBrain ? 'Brain on' : 'Brain off'} />
-          <button className="btn btn-primary" onClick={() => openEditor(null)}>
-            <Plus size={16} /> New skill
-          </button>
-        </div>
-      </header>
-
-      {!useBrain && <p className="rounded-md border border-warn/30 bg-warn-soft px-3 py-2 text-[13px] text-warn">The Brain is off: generations ignore every skill until you turn it back on.</p>}
-
-      <section className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]" aria-label="Brain strength">
-        <div className="panel flex flex-wrap items-start gap-4 p-4">
-          <ProgressRing value={strength.score / 100} size={72} stroke={7} label={<span className="text-[18px]">{strength.score}</span>} />
-          <div className="min-w-[200px] flex-1">
-            <p className="text-[15px] font-semibold">Brain strength</p>
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {(['voice', 'audience', 'copywriting', 'offer', 'rules', 'knowledge'] as SkillCategory[]).map((c) => (
-                <span key={c} className={cn('badge', strength.covered.includes(c) ? 'bg-good-soft text-good' : 'bg-surface-2 text-muted')}>
-                  {strength.covered.includes(c) ? <Check size={10} /> : null}
-                  {CATEGORY_META[c].label}
-                </span>
-              ))}
-            </div>
-            {strength.tips.length > 0 && <p className="mt-2 text-[12.5px] text-ink-2">Next: {strength.tips[0]}</p>}
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Tile label="Active skills" value={`${active.length}/${skills.length}`} />
-          <Tile label="Generations shaped" value={String(withSkills)} />
-          <Tile label="Thumbs up" value={String(ups)} icon={<ThumbsUp size={12} className="text-good" />} />
-          <Tile label="Thumbs down" value={String(downs)} icon={<ThumbsDown size={12} className="text-bad" />} />
-        </div>
-      </section>
+    <div>
+      <PageHeader
+        className="mb-4"
+        title="Brain"
+        description="What the AI reads before it writes: your voice, customers, rules and facts."
+        meta={phone ? <span className="flex w-full items-center">{actions}</span> : undefined}
+        actions={phone ? undefined : actions}
+      />
 
       <Tabs<Tab>
+        className="mb-5"
         value={tab}
         onChange={setTab}
         tabs={[
-          { id: 'skills', label: 'Skills', icon: <BrainIcon size={15} />, count: skills.length },
-          { id: 'library', label: 'Skill library', icon: <Library size={15} /> },
-          { id: 'docs', label: 'Knowledge docs', icon: <BookOpen size={15} />, count: skills.filter((s) => s.source === 'document').length || undefined },
-          { id: 'playground', label: 'Playground', icon: <FlaskConical size={15} /> },
-          { id: 'log', label: 'Activity', icon: <Activity size={15} /> },
+          { id: 'skills', label: 'Skills', count: skills.length },
+          { id: 'library', label: 'Library' },
+          { id: 'docs', label: 'Knowledge', count: skills.filter((s) => s.source === 'document').length || undefined },
+          { id: 'playground', label: 'Playground' },
+          { id: 'log', label: 'Activity' },
         ]}
       />
 
-      {tab === 'skills' && <SkillList onEdit={openEditor} />}
+      {!useBrain && (
+        <Callout tone="warn" className="mb-5" action={<button type="button" className="btn btn-secondary btn-xs" onClick={() => updateSettings((s) => ({ ...s, ai: { ...s.ai, useBrain: true } }))}>Turn it on</button>}>
+          The Brain is off: generations ignore every skill until you turn it back on.
+        </Callout>
+      )}
+
+      {tab === 'skills' && <SkillList onEdit={openEditor} onNew={() => openEditor(null)} summary={summary} />}
       {tab === 'library' && <LibraryGrid />}
       {tab === 'docs' && <KnowledgeDocs />}
       {tab === 'playground' && <Playground />}
@@ -104,124 +100,133 @@ export default function Brain() {
   );
 }
 
-function Tile({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
+/** A 32px neutral tile with the category's icon. */
+function CategoryTile({ category }: { category: SkillCategory }) {
   return (
-    <div className="panel px-4 py-3">
-      <p className="flex items-center gap-1.5 text-xs font-medium text-muted">
-        {icon}
-        {label}
-      </p>
-      <p className="num text-[20px] font-bold">{value}</p>
-    </div>
+    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-3 text-ink-2">
+      <Icon name={CATEGORY_META[category].icon} size={16} />
+    </span>
   );
 }
 
-const SOURCE_LABEL: Record<Skill['source'], string> = { custom: 'Custom', library: 'Library', feedback: 'Learned', document: 'Document', social: 'Learned from your posts' };
-
-function SkillList({ onEdit }: { onEdit: (s: Skill) => void }) {
+function SkillList({ onEdit, onNew, summary }: { onEdit: (s: Skill) => void; onNew: () => void; summary: string }) {
   const skills = useStore((s) => s.skills);
-  const updateSkill = useStore((s) => s.updateSkill);
-  const deleteSkill = useStore((s) => s.deleteSkill);
-  const addSkill = useStore((s) => s.addSkill);
-  const projects = useStore((s) => s.projects);
   const [filter, setFilter] = useState<SkillCategory | 'all'>('all');
   const cats = [...new Set(skills.map((s) => s.category))];
   const shown = (filter === 'all' ? skills : skills.filter((s) => s.category === filter)).slice().sort((a, b) => Number(b.enabled) - Number(a.enabled) || b.priority - a.priority || b.updatedAt - a.updatedAt);
 
-  if (!skills.length) return <Empty icon={<BrainIcon size={20} />} title="Your Brain is empty" body="Add a skill or install one from the library. Even one brand-voice skill makes a visible difference." />;
+  if (!skills.length)
+    return (
+      <Empty
+        variant="page"
+        icon={<BrainIcon />}
+        title="Teach the AI how you talk"
+        body="Add your tone, your rules and your facts once; every caption and page will follow them."
+        action={
+          <button type="button" className="btn btn-primary" onClick={onNew}>
+            <Plus /> Add a skill
+          </button>
+        }
+      />
+    );
 
   return (
-    <div className="flex flex-col gap-3">
-      {cats.length > 1 && (
-        <div className="flex flex-wrap gap-1.5">
-          <button className={cn('chip', filter === 'all' && 'chip-active')} onClick={() => setFilter('all')}>
-            All ({skills.length})
-          </button>
-          {cats.map((c) => (
-            <button key={c} className={cn('chip', filter === c && 'chip-active')} onClick={() => setFilter(c)}>
-              {CATEGORY_META[c].label} ({skills.filter((s) => s.category === c).length})
+    <div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        {/* the chips scroll (and fade) on phones only: wider, they wrap */}
+        {cats.length > 1 && (
+          <div className="-mx-4 flex min-w-0 max-w-[calc(100%+2rem)] gap-1.5 px-4 py-0.5 max-sm:scroll-fade-x sm:mx-0 sm:max-w-full sm:flex-wrap sm:px-0">
+            <button type="button" className={cn('chip', filter === 'all' && 'chip-active')} onClick={() => setFilter('all')} aria-pressed={filter === 'all'}>
+              All <span className="num font-mono text-caption">{skills.length}</span>
             </button>
-          ))}
-        </div>
-      )}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        {shown.map((s) => {
-          const rules = describeDirectives(effectiveDirectives(s));
-          return (
-            <article key={s.id} className={cn('panel flex flex-col gap-3 p-4', !s.enabled && 'opacity-60')}>
-              <div className="flex items-start gap-3">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary-soft text-primary">
-                  <Icon name={CATEGORY_META[s.category].icon} size={17} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[14.5px] font-semibold">{s.name}</p>
-                  <p className="text-xs text-muted">
-                    {CATEGORY_META[s.category].label} · {SOURCE_LABEL[s.source]} · {s.priority === 3 ? 'High' : s.priority === 1 ? 'Low' : 'Normal'} priority
-                    {s.projectId && ` · only for ${projects.find((p) => p.id === s.projectId)?.brand.name || 'one project'}`}
-                  </p>
-                </div>
-                <Toggle
-                  checked={s.enabled}
-                  onChange={(v) => {
-                    const unfilled = v ? templatePlaceholders(s.instructions) : [];
-                    if (unfilled.length) {
-                      toast({ kind: 'error', title: 'Fill in this skill first', body: `Replace ${unfilled.join(', ')} with your real details, or delete those lines. The AI uses these facts as true.` });
-                      return;
-                    }
-                    updateSkill(s.id, { enabled: v });
-                  }} label={<span className="sr-only">{s.enabled ? 'Disable' : 'Enable'} {s.name}</span>} />
-              </div>
-              {s.description && <p className="text-[13px] text-ink-2">{s.description}</p>}
-              {s.doc && (
-                <p className="flex items-center gap-1.5 text-xs text-muted">
-                  <BookOpen size={12} /> {s.doc.name} · {fmtBytes(s.doc.size)} · {s.doc.keywords.slice(0, 4).join(', ')}
-                </p>
-              )}
-              {rules.length > 0 && (
-                <ul className="flex flex-wrap gap-1">
-                  {rules.slice(0, 8).map((r) => (
-                    <li key={r} className="rounded bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-ink-2">
-                      {r}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="text-[11.5px] text-muted">Applies to: {s.scope.map((x) => SCOPE_META[x]).join(', ')}</p>
-              <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-line pt-3">
-                <span className="num text-xs text-muted">
-                  Used {s.stats.applied}× {s.stats.lastApplied ? `· last ${fmtRelative(s.stats.lastApplied)}` : ''}
-                </span>
-                <span className="num flex items-center gap-2 text-xs text-muted">
-                  <span className="flex items-center gap-0.5">
-                    <ThumbsUp size={11} /> {s.stats.up}
-                  </span>
-                  <span className="flex items-center gap-0.5">
-                    <ThumbsDown size={11} /> {s.stats.down}
-                  </span>
-                </span>
-                <span className="ml-auto flex gap-1">
-                  <button className="btn btn-ghost btn-xs" onClick={() => onEdit(s)}>
-                    <Pencil size={12} /> Edit
-                  </button>
-                  <button className="btn btn-ghost btn-icon btn-xs" aria-label={`Duplicate ${s.name}`} onClick={() => addSkill({ ...s, id: uid('skill'), name: `${s.name} (copy)`, source: s.source === 'feedback' || s.source === 'social' ? 'custom' : s.source, stats: { applied: 0, up: 0, down: 0 }, createdAt: Date.now(), updatedAt: Date.now() })}>
-                    <Copy size={12} />
-                  </button>
-                  <button
-                    className="btn btn-ghost btn-icon btn-xs text-muted hover:text-bad"
-                    aria-label={`Delete ${s.name}`}
-                    onClick={async () => {
-                      if (await confirmAction({ title: `Delete “${s.name}”?`, body: 'Future generations will stop using it.', confirmLabel: 'Delete', danger: true })) deleteSkill(s.id);
-                    }}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </span>
-              </div>
-            </article>
-          );
-        })}
+            {cats.map((c) => (
+              <button type="button" key={c} className={cn('chip', filter === c && 'chip-active')} onClick={() => setFilter(c)} aria-pressed={filter === c}>
+                {CATEGORY_META[c].label} <span className="num font-mono text-caption">{skills.filter((s) => s.category === c).length}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <p className="num text-small text-muted">{summary}</p>
+      </div>
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+        {shown.map((s) => (
+          <SkillCard key={s.id} skill={s} onEdit={() => onEdit(s)} />
+        ))}
       </div>
     </div>
+  );
+}
+
+function SkillCard({ skill: s, onEdit }: { skill: Skill; onEdit: () => void }) {
+  const updateSkill = useStore((st) => st.updateSkill);
+  const deleteSkill = useStore((st) => st.deleteSkill);
+  const addSkill = useStore((st) => st.addSkill);
+  const projects = useStore((st) => st.projects);
+  const rules = rulesOf(s);
+  const scopes = s.scope.includes('all') ? '' : s.scope.map((x) => SCOPE_META[x]).join(', ');
+  const meta = [CATEGORY_META[s.category].label, PRIORITY[s.priority], s.projectId ? `Only ${projects.find((p) => p.id === s.projectId)?.brand.name || 'one project'}` : ''].filter(Boolean).join(' · ');
+  const toggle = (v: boolean) => {
+    const unfilled = v ? templatePlaceholders(s.instructions) : [];
+    if (unfilled.length) {
+      toast({ kind: 'error', title: 'Fill in this skill first', body: `Replace ${unfilled.join(', ')} with your real details, or delete those lines. The AI uses these facts as true.` });
+      return;
+    }
+    updateSkill(s.id, { enabled: v });
+  };
+  const duplicate = () => addSkill({ ...s, id: uid('skill'), name: `${s.name} (copy)`, source: s.source === 'feedback' || s.source === 'social' ? 'custom' : s.source, stats: { applied: 0, up: 0, down: 0 }, createdAt: Date.now(), updatedAt: Date.now() });
+  const remove = async () => {
+    if (await confirmAction({ title: `Delete “${s.name}”?`, body: 'Future generations will stop using it.', confirmLabel: 'Delete', danger: true })) deleteSkill(s.id);
+  };
+  return (
+    <article className={cn('card card-interactive flex min-w-0 flex-col gap-3 p-4 sm:p-5', !s.enabled && 'bg-surface-2')} onClick={onEdit}>
+      <div className="flex items-start gap-3">
+        <CategoryTile category={s.category} />
+        <div className="min-w-0 flex-1">
+          <h3 className={cn('text-h4', s.enabled ? 'text-ink' : 'text-muted')}>
+            <button type="button" className="max-w-full truncate text-left" onClick={(e) => (e.stopPropagation(), onEdit())}>
+              {s.name}
+            </button>
+          </h3>
+          <p className="truncate text-small text-muted">{meta}</p>
+        </div>
+        <span onClick={(e) => e.stopPropagation()}>
+          <Toggle checked={s.enabled} onChange={toggle} label={<span className="sr-only">{s.enabled ? 'Disable' : 'Enable'} {s.name}</span>} />
+        </span>
+      </div>
+      {s.description && <p className="clamp-2 text-small text-ink-2">{s.description}</p>}
+      {s.doc && (
+        <p className="truncate text-caption text-muted">
+          {s.doc.name} · {fmtBytes(s.doc.size)} · {s.doc.keywords.slice(0, 4).join(', ')}
+        </p>
+      )}
+      {rules.length > 0 && (
+        <ul className="well flex flex-col gap-1 px-3 py-2.5 text-small text-ink-2">
+          {rules.slice(0, 4).map((r) => (
+            <li key={r} className="clamp-2">
+              {r}
+            </li>
+          ))}
+          {rules.length > 4 && <li className="text-caption text-muted">+{rules.length - 4} more</li>}
+        </ul>
+      )}
+      <div className="mt-auto flex items-center gap-2 border-t border-line pt-3">
+        <span className="num min-w-0 flex-1 truncate font-mono text-caption text-muted">
+          Used {s.stats.applied}×{s.stats.lastApplied ? ` · ${fmtRelative(s.stats.lastApplied)}` : ''}
+          {scopes && ` · ${scopes}`}
+        </span>
+        <span onClick={(e) => e.stopPropagation()}>
+          <MoreMenu
+            label={`More for ${s.name}`}
+            items={[
+              { label: 'Edit', icon: <Pencil />, onSelect: onEdit },
+              { label: 'Duplicate', icon: <Copy />, onSelect: duplicate },
+              'separator',
+              { label: 'Delete', icon: <Trash2 />, danger: true, onSelect: () => void remove() },
+            ]}
+          />
+        </span>
+      </div>
+    </article>
   );
 }
 
@@ -230,42 +235,42 @@ function LibraryGrid() {
   const addSkill = useStore((s) => s.addSkill);
   const installed = new Set(skills.map((s) => s.libraryId).filter(Boolean));
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+    <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
       {SKILL_LIBRARY.map((l) => {
         const has = installed.has(l.libraryId);
         return (
-          <article key={l.libraryId} className="panel flex flex-col gap-2.5 p-4">
-            <div className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-md bg-surface-2 text-primary">
-                <Icon name={CATEGORY_META[l.category].icon} size={15} />
-              </span>
+          <article key={l.libraryId} className="card flex min-w-0 flex-col gap-3 p-4 sm:p-5">
+            <div className="flex items-start gap-3">
+              <CategoryTile category={l.category} />
               <div className="min-w-0">
-                <p className="truncate text-[14px] font-semibold">{l.name}</p>
-                <p className="text-[11.5px] text-muted">
+                <h3 className="truncate text-h4 text-ink">{l.name}</h3>
+                <p className="truncate text-small text-muted">
                   {CATEGORY_META[l.category].label} · {l.scope.map((x) => SCOPE_META[x]).join(', ')}
                 </p>
               </div>
             </div>
-            <p className="text-[13px] text-ink-2">{l.description}</p>
-            <p className="clamp-3 whitespace-pre-line rounded bg-surface-2 px-2.5 py-2 text-[12px] text-muted">{l.instructions}</p>
-            <button
-              className={cn('btn btn-sm mt-auto', has ? 'btn-secondary' : 'btn-primary')}
-              disabled={has}
-              onClick={() => {
-                addSkill(skillFromLibrary(l));
-                toast({ kind: 'ai', title: `“${l.name}” added`, body: 'Active from your next generation.' });
-              }}
-            >
+            <p className="clamp-2 text-small text-ink-2">{l.description}</p>
+            <div className="well px-3 py-2.5">
+              <p className="clamp-3 whitespace-pre-line text-caption text-muted">{l.instructions}</p>
+            </div>
+            <div className="mt-auto flex items-center justify-end">
               {has ? (
-                <>
-                  <Check size={14} /> In your Brain
-                </>
+                <span className="inline-flex h-8 items-center gap-1.5 text-small font-medium text-muted">
+                  <Check size={16} aria-hidden="true" /> In your Brain
+                </span>
               ) : (
-                <>
-                  <Plus size={14} /> Add to Brain
-                </>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => {
+                    addSkill(skillFromLibrary(l));
+                    toast({ kind: 'ai', title: `“${l.name}” added`, body: 'Active from your next generation.' });
+                  }}
+                >
+                  <Plus /> Add to Brain
+                </button>
               )}
-            </button>
+            </div>
           </article>
         );
       })}
@@ -280,6 +285,7 @@ function KnowledgeDocs() {
   const [name, setName] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const file = useRef<HTMLInputElement>(null);
 
   const ingest = (docName: string, body: string, size: number) => {
     const skill = knowledgeDocSkill(docName, body, size);
@@ -294,18 +300,20 @@ function KnowledgeDocs() {
   };
 
   return (
-    <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <section className="panel flex flex-col gap-3 p-4 sm:p-5" aria-label="Add a document">
-        <h2 className="section-title">Teach the Brain your facts</h2>
-        <p className="text-[13px] text-muted">Upload FAQs, product notes, reviews, service menus or policies (.txt, .md, .csv, .json), or paste text. The Brain extracts proof points and key terms and uses them in every output.</p>
-        <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line-2 px-4 py-6 text-center hover:border-primary hover:bg-primary-soft/40">
-          <FileUp size={22} className="text-primary" />
-          <span className="text-[13px] font-semibold">{busy ? 'Reading…' : 'Choose a text file'}</span>
-          <span className="text-xs text-muted">Up to 2 MB</span>
+    <div className="grid grid-cols-1 items-start gap-x-10 gap-y-8 lg:grid-cols-2">
+      <Section title="Teach the Brain your facts" description="FAQs, service menus, policies or reviews. The Brain pulls out proof points and key terms.">
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" className="btn btn-secondary" onClick={() => file.current?.click()} disabled={busy}>
+            <FileUp /> {busy ? 'Reading…' : 'Choose a text file'}
+          </button>
+          <span className="text-caption text-muted">.txt, .md, .csv or .json · up to 2 MB</span>
           <input
+            ref={file}
             type="file"
             accept=".txt,.md,.markdown,.csv,.json,text/plain,text/markdown,text/csv,application/json"
             className="sr-only"
+            tabIndex={-1}
+            aria-label="Choose a text file"
             onChange={async (e) => {
               const f = e.target.files?.[0];
               e.target.value = '';
@@ -325,50 +333,50 @@ function KnowledgeDocs() {
               }
             }}
           />
-        </label>
-        <div className="flex items-center gap-3 text-xs text-muted">
+        </div>
+        <div className="my-5 flex items-center gap-3 text-caption text-muted">
           <span className="h-px flex-1 bg-line" /> or paste text <span className="h-px flex-1 bg-line" />
         </div>
-        <Field label="Document name" htmlFor="doc-name">
-          <input id="doc-name" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Customer reviews, Service FAQ" />
-        </Field>
-        <Field label="Text" htmlFor="doc-text" right={`${text.length.toLocaleString()} chars`}>
-          <AutoTextarea id="doc-text" value={text} onChange={setText} minRows={6} className="text-[13px]" placeholder="Paste reviews, FAQs, product details…" />
-        </Field>
-        <button className="btn btn-primary self-start" disabled={text.trim().length < 40} onClick={() => ingest(name.trim(), text, new Blob([text]).size)}>
-          <Upload size={15} /> Add to Brain
-        </button>
-      </section>
-      <section className="flex flex-col gap-3" aria-label="Documents">
+        <div className="flex flex-col gap-4">
+          <Field label="Document name" htmlFor="doc-name">
+            <input id="doc-name" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Customer reviews, Service FAQ" />
+          </Field>
+          <Field label="Text" htmlFor="doc-text" right={<span className="num font-mono">{text.length.toLocaleString()}</span>}>
+            <AutoTextarea id="doc-text" value={text} onChange={setText} minRows={6} placeholder="Paste reviews, FAQs, product details…" />
+          </Field>
+          <div>
+            <button type="button" className="btn btn-secondary" disabled={text.trim().length < 40} onClick={() => ingest(name.trim(), text, new Blob([text]).size)}>
+              <Upload /> Add to Brain
+            </button>
+          </div>
+        </div>
+      </Section>
+      <Section title="Documents" description={docs.length ? `${docs.length} in your Brain` : undefined}>
         {docs.length === 0 ? (
-          <Empty icon={<BookOpen size={20} />} title="No documents yet" body="Real facts (years in business, numbers, guarantees, customer words) make every output more specific and believable." />
+          <Empty className="card" title="No documents yet" body="Real facts (years in business, numbers, guarantees, customer words) make every output more specific." />
         ) : (
-          docs.map((d) => (
-            <article key={d.id} className="panel flex flex-col gap-2 p-4">
-              <p className="flex items-center gap-2 text-[14px] font-semibold">
-                <BookOpen size={15} className="text-primary" /> {d.name}
-                <span className="ml-auto text-xs font-normal text-muted">{d.doc ? fmtBytes(d.doc.size) : ''}</span>
-              </p>
-              {d.directives.facts?.length ? (
-                <ul className="flex list-disc flex-col gap-1 pl-5 text-[12.5px] text-ink-2">
-                  {d.directives.facts.slice(0, 4).map((f) => (
-                    <li key={f}>{f}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-xs text-muted">No numeric proof points found; key terms and the excerpt are still used.</p>
-              )}
-              <div className="flex flex-wrap gap-1">
-                {d.doc?.keywords.slice(0, 10).map((k) => (
-                  <span key={k} className="rounded bg-surface-2 px-1.5 py-0.5 text-[11px] text-ink-2">
-                    {k}
-                  </span>
-                ))}
-              </div>
-            </article>
-          ))
+          <div className="flex flex-col gap-3">
+            {docs.map((d) => (
+              <article key={d.id} className="card flex flex-col gap-2 p-4">
+                <div className="flex items-baseline justify-between gap-3">
+                  <h3 className="min-w-0 truncate text-h4 text-ink">{d.name}</h3>
+                  <span className="num shrink-0 font-mono text-caption text-muted">{d.doc ? fmtBytes(d.doc.size) : ''}</span>
+                </div>
+                {d.directives.facts?.length ? (
+                  <ul className="flex list-disc flex-col gap-1 pl-5 text-small text-ink-2">
+                    {d.directives.facts.slice(0, 4).map((f) => (
+                      <li key={f}>{f}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-small text-muted">No numbers to quote found; its key terms and excerpt are still used.</p>
+                )}
+                {!!d.doc?.keywords.length && <p className="text-caption text-muted">{d.doc.keywords.slice(0, 10).join(' · ')}</p>}
+              </article>
+            ))}
+          </div>
         )}
-      </section>
+      </Section>
     </div>
   );
 }
@@ -391,49 +399,52 @@ function Playground() {
 
   const a = withAI.result?.data.text.trim();
   const b = withoutAI.result?.data.text.trim();
-  const same = !withAI.running && !withoutAI.running && !!a && a === b;
+  const running = withAI.running || withoutAI.running;
+  const same = !running && !!a && a === b;
 
   if (!project) return null;
   return (
-    <div className="flex flex-col gap-4">
-      <section className="panel flex flex-wrap items-end gap-3 p-4">
+    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[300px_minmax(0,1fr)]">
+      <div className="flex flex-col gap-4">
         <Field label="Write a sample">
           <Segmented
             size="sm"
             value={sample}
             onChange={setSample}
             options={[
-              { id: 'caption', label: 'Social caption' },
-              { id: 'email', label: 'Sales email' },
-              { id: 'ad', label: 'Ad copy' },
+              { id: 'caption', label: 'Caption' },
+              { id: 'email', label: 'Email' },
+              { id: 'ad', label: 'Ad' },
               { id: 'headline', label: 'SEO title' },
             ]}
           />
         </Field>
-        <Field label="Compare against" htmlFor="pg-compare" className="min-w-[220px] flex-1">
-          <select id="pg-compare" className="select" value={compare} onChange={(e) => setCompare(e.target.value)}>
-            <option value="__none">No skills at all (Brain off)</option>
-            {skills.map((s) => (
-              <option key={s.id} value={s.id}>
-                Without “{s.name}”
-              </option>
-            ))}
-          </select>
+        <Field label="Compare against" htmlFor="pg-compare">
+          <Select
+            id="pg-compare"
+            value={compare}
+            onChange={setCompare}
+            options={[{ value: '__none', label: 'No skills at all (Brain off)' }, ...skills.map((s) => ({ value: s.id, label: `Without “${s.name}”` }))]}
+          />
         </Field>
-        <GenerateButton running={withAI.running || withoutAI.running} onClick={run} icon={<FlaskConical size={15} className="text-accent" />}>
+        <GenerateButton running={running} onClick={run} runningLabel="Writing…" className="self-start">
           Run comparison
         </GenerateButton>
-      </section>
-      {same && (
-        <p className="rounded-md border border-line bg-surface-2 px-3 py-2 text-[13px] text-ink-2">
-          Same result: {compare === '__none' ? 'your active skills' : `“${target?.name ?? 'this skill'}”`} didn’t change this sample. Rules such as words to avoid only show when the AI would have used those words. Voice, hook, emoji and call-to-action skills from the Skill library make the clearest difference.
-        </p>
-      )}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Output title={`With your Brain (${withSet.length} skill${withSet.length === 1 ? '' : 's'})`} ai={withAI} highlight compareTo={withoutAI.result?.data.text} />
-        <Output title={compare === '__none' ? 'Without any skills' : `Without “${target?.name ?? ''}”`} ai={withoutAI} />
+        <p className="text-caption text-muted">Highlighted words are what your skills changed. Playground runs aren’t saved to your project or the activity log.</p>
       </div>
-      <p className="text-xs text-muted">Highlighted words are what your skills changed. Playground runs aren’t saved to your project or the activity log.</p>
+      <div className="flex min-w-0 flex-col gap-4">
+        <AiCard>
+          <Output title={`With your Brain · ${withSet.length} skill${withSet.length === 1 ? '' : 's'}`} ai={withAI} compareTo={withoutAI.result?.data.text} />
+        </AiCard>
+        <div className="card p-4 sm:p-5">
+          <Output title={compare === '__none' ? 'Without any skills' : `Without “${target?.name ?? ''}”`} ai={withoutAI} />
+        </div>
+        {same && (
+          <p className="text-small text-muted">
+            Same result: {compare === '__none' ? 'your active skills' : `“${target?.name ?? 'this skill'}”`} didn’t change this sample. Rules such as words to avoid only show when the AI would have used those words; voice, hook, emoji and call-to-action skills from the Library make the clearest difference.
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -462,67 +473,131 @@ function diffTokens(a: string, b: string): { text: string; added: boolean }[] {
   return out;
 }
 
-function Output({ title, ai, highlight, compareTo }: { title: string; ai: ReturnType<typeof useAI<{ sample: Sample }, { text: string }>>; highlight?: boolean; compareTo?: string }) {
+function Output({ title, ai, compareTo }: { title: string; ai: ReturnType<typeof useAI<{ sample: Sample }, { text: string }>>; compareTo?: string }) {
   const text = ai.result?.data.text ?? '';
   const parts = compareTo && text && compareTo.trim() !== text.trim() ? diffTokens(text, compareTo) : null;
   return (
-    <section className={cn('panel flex min-h-[220px] flex-col p-4', highlight && 'ring-2 ring-primary/40')}>
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="flex items-center gap-1.5 text-[13px] font-semibold">
-          {highlight ? <Sparkles size={14} className="text-accent" /> : null}
-          {title}
-        </h3>
-        {ai.result && <ProviderBadge provider={ai.result.provider} meta={ai.result.meta ? compactMeta(ai.result.meta) : undefined} />}
-      </div>
+    <section className="flex min-h-[180px] flex-col">
+      <h3 className="mb-3 text-h4 text-ink">{title}</h3>
       <AIThinking running={ai.running} stage={ai.stage} compact />
       {ai.result && !ai.running ? (
-        <p className="whitespace-pre-line text-[13.5px] leading-relaxed text-ink-2">
-          {parts
-            ? parts.map((t, k) =>
-                t.added ? (
-                  <mark key={k} className="rounded-sm bg-accent/30 px-0.5 text-ink">
-                    {t.text}
-                  </mark>
-                ) : (
-                  <span key={k}>{t.text}</span>
-                ),
-              )
-            : text}
-        </p>
+        <>
+          <p className="max-w-[72ch] whitespace-pre-line text-body text-ink-2">
+            {parts
+              ? parts.map((t, k) =>
+                  t.added ? (
+                    <mark key={k} className="rounded-xs bg-primary-soft px-0.5 text-ink">
+                      {t.text}
+                    </mark>
+                  ) : (
+                    <span key={k}>{t.text}</span>
+                  ),
+                )
+              : text}
+          </p>
+          <AIResultBar
+            className="mt-4"
+            provider={ai.result.provider}
+            skills={ai.result.skills}
+            ms={ai.result.ms}
+            note={ai.result.note}
+            logId={null}
+            onCopy={() => void copyText(text).then((ok) => toast(ok ? { kind: 'success', title: 'Copied' } : { kind: 'error', title: 'Copy was blocked', body: 'Select the text and copy it manually.' }))}
+          />
+        </>
       ) : (
-        !ai.running && <p className="m-auto text-[13px] text-muted">Run a comparison to see the difference.</p>
+        !ai.running && <p className="m-auto py-6 text-small text-muted">Run a comparison to see the difference.</p>
       )}
     </section>
+  );
+}
+
+/** Who wrote it, how long it took and what it used: behind a Details link, not on the row. */
+function ActivityDetails({ g }: { g: GenerationLog }) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <button ref={anchor} type="button" className="link text-small" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        Details
+      </button>
+      <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} className="w-80 p-3">
+        <p className="text-small font-semibold text-ink">{g.label}</p>
+        <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-small">
+          <dt className="text-muted">Written by</dt>
+          <dd className="min-w-0 text-ink-2">{g.meta ? `${g.meta.providerLabel} · ${g.meta.model}` : providerLabel(g.provider)}</dd>
+          <dt className="text-muted">When</dt>
+          <dd className="num font-mono text-ink-2">{fmtDateTime(g.createdAt)}</dd>
+          {g.ms > 0 && (
+            <>
+              <dt className="text-muted">Time</dt>
+              <dd className="num font-mono text-ink-2">{(g.ms / 1000).toFixed(1)}s</dd>
+            </>
+          )}
+        </dl>
+        {g.meta && <pre className="mt-2 whitespace-pre-wrap rounded-pop bg-surface-2 px-2.5 py-2 font-mono text-caption text-ink-2">{metaDetails(g.meta)}</pre>}
+      </Popover>
+    </>
   );
 }
 
 function ActivityLog() {
   const genLog = useStore((s) => s.genLog);
   const skills = useStore((s) => s.skills);
-  const names = new Map(skills.map((s) => [s.id, s.name]));
-  if (!genLog.length) return <Empty icon={<Activity size={20} />} title="No generations yet" body="Every AI generation is logged here with the skills that shaped it." />;
+  const names = useMemo(() => new Map(skills.map((s) => [s.id, s.name])), [skills]);
+  if (!genLog.length) return <Empty icon={<Activity />} title="No generations yet" body="Every AI generation is logged here with the skills that shaped it." />;
   return (
-    <section className="panel overflow-hidden">
-      <ul className="divide-y divide-line">
-        {genLog.slice(0, 80).map((g) => (
-          <li key={g.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[13px]">
-            <span className="min-w-[160px] flex-1">
-              <span className="block font-semibold">{g.label}</span>
-              <span className="block text-xs text-muted">
-                {SCOPE_META[g.module] ?? g.module} · {fmtRelative(g.createdAt)} · {(g.ms / 1000).toFixed(1)}s
-              </span>
-            </span>
-            <span className="max-w-[340px] truncate text-xs text-muted" title={g.skillIds.map((id) => names.get(id) ?? 'Deleted skill').join(', ')}>
-              {g.skillIds.length ? `${g.skillIds.length} skill${g.skillIds.length > 1 ? 's' : ''}: ${g.skillIds.map((id) => names.get(id) ?? 'deleted').join(', ')}` : 'No skills'}
-            </span>
-            <span className={cn('badge', g.provider === 'local' ? 'bg-surface-2 text-ink-2' : 'bg-ink text-surface')} title={g.meta ? metaLine(g.meta) : undefined}>
-              {g.provider === 'server' && g.meta ? `AI · ${g.meta.providerLabel} · ${g.meta.effortLabel}` : providerLabel(g.provider)}
-            </span>
-            {g.rating === 1 && <ThumbsUp size={13} className="text-good" />}
-            {g.rating === -1 && <ThumbsDown size={13} className="text-bad" />}
-          </li>
-        ))}
-      </ul>
-    </section>
+    <div className="card overflow-hidden">
+      <table className="w-full table-fixed text-left text-small">
+        <thead className="border-b border-line text-caption text-muted">
+          <tr>
+            <th className="w-[96px] px-4 py-2 font-medium">Time</th>
+            <th className="px-2 py-2 font-medium">What</th>
+            <th className="hidden px-2 py-2 font-medium md:table-cell">Skills used</th>
+            <th className="hidden w-[120px] px-2 py-2 font-medium sm:table-cell">Result</th>
+            <th className="w-[84px] px-4 py-2 font-medium">
+              <span className="sr-only">Details</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line">
+          {genLog.slice(0, 80).map((g) => {
+            const used = g.skillIds.map((id) => names.get(id) ?? 'Deleted skill');
+            return (
+              <tr key={g.id} className="transition-colors duration-120 hover:bg-surface-2">
+                <td className="num px-4 py-2.5 align-top font-mono text-caption text-muted" title={fmtDateTime(g.createdAt)}>
+                  {fmtRelative(g.createdAt)}
+                </td>
+                <td className="min-w-0 px-2 py-2.5 align-top">
+                  <span className="block truncate text-ui text-ink">{g.label}</span>
+                  <span className="block truncate text-caption text-muted">{SCOPE_META[g.module] ?? g.module}</span>
+                </td>
+                <td className="hidden px-2 py-2.5 align-top text-small text-ink-2 md:table-cell">
+                  <span className="clamp-2" title={used.join(', ')}>
+                    {used.length ? used.join(', ') : <span className="text-muted">None</span>}
+                  </span>
+                </td>
+                <td className="hidden px-2 py-2.5 align-top sm:table-cell">
+                  {g.rating === 1 ? (
+                    <span className="inline-flex items-center gap-1.5 text-small text-ink-2">
+                      <ThumbsUp size={14} className="text-good" aria-hidden="true" /> Good
+                    </span>
+                  ) : g.rating === -1 ? (
+                    <span className="inline-flex items-center gap-1.5 text-small text-ink-2">
+                      <ThumbsDown size={14} className="text-bad" aria-hidden="true" /> Needs work
+                    </span>
+                  ) : (
+                    <span className="text-faint">–</span>
+                  )}
+                </td>
+                <td className="px-4 py-2.5 text-right align-top">
+                  <ActivityDetails g={g} />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

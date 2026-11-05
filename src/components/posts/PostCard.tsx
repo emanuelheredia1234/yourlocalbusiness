@@ -1,43 +1,39 @@
-import { useMemo, useState } from 'react';
-import { CalendarClock, Check, CheckCheck, ImagePlus, Pencil, Trash2, Undo2 } from 'lucide-react';
+import { useMemo, useState, type ReactNode } from 'react';
+import { CalendarClock, Check, CheckCheck, Pencil, Send, Trash2, TriangleAlert, Undo2, Users } from 'lucide-react';
 import type { Brand, Post, PostPlatform, PostType, StyleId } from '@/lib/types';
-import { cn, combineDateTime, fmtDateTime, fmtRelative, isoToDateStr, isoToTime } from '@/lib/utils';
+import { cn, fmtDateTime, fmtRelative } from '@/lib/utils';
 import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, POST_TYPE_MAP, STYLE_LABEL, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
+import { useNow, useMediaQuery } from '@/lib/hooks';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { postTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { PostVisual, pointsFromCaption } from '../visuals/PostVisual';
-import { PlatformChip, PlatformGlyph } from './PlatformIcon';
-import { AutoTextarea, ChipInput, Field, Modal, confirmAction } from '../ui/primitives';
-import { AIThinking, RegenerateButton } from '../ai/AI';
+import { PlatformMark } from './PlatformIcon';
+import { AutoTextarea, Badge, Callout, Checkbox, ChipInput, DateTimeButton, Field, Modal, MoreMenu, StatusDot, confirmAction, type MenuEntry } from '../ui/primitives';
+import { AIThinking, Spark } from '../ai/AI';
+import { PhoneFrame, PostFrame } from '../frames/Frames';
 import { LogoMark } from '../brand/Logo';
 import { ManusLink, PostImagePanel } from '../images/PostImagePanel';
 import { VideoPanel } from '../images/VideoPanel';
 import { useImageJob } from '../images/useImageJob';
-import { ExternalBadge, ManusPostButton, useManusReady } from './ManusPost';
-import { GroupShareBadge, PostToGroupsButton } from './ManusGroups';
-import { DueBadge, PostMoreMenu, PostedBy, addToCalendarFlow, manusHolds, useMarkPosted } from './PostActions';
+import { ExternalBadge, ManusPostButton, useCanOfferManus, useManusPost } from './ManusPost';
+import { GroupShareBadge, useManusGroups } from './ManusGroups';
+import { DueBadge, PostedBy, addToCalendarFlow, isDue, manusHolds, postMenuEntries, useMarkPosted } from './PostActions';
 import { postVideoPrompt } from '@/ai/image';
 import { makePostImage, rewriteInput, rewritePatch } from '@/ai/socialPosts';
 import { brandHandle } from '@/lib/brandMark';
 import { isOwnPhoto } from '@/lib/media';
 import { firstCommentOf, networkMovePatch, xLength } from '@/lib/pageLink';
-import { postText } from '@/ai/manusPost';
+import { networkLabel, postText } from '@/ai/manusPost';
 import { LinkFields, PostLinkNote } from './PostLinkNote';
 
 export function PostTypeTag({ type, className }: { type: PostType; className?: string }) {
-  const def = POST_TYPE_MAP[type];
-  return (
-    <span className={cn('inline-flex items-center gap-1.5 text-xs font-medium text-ink-2', className)}>
-      <span className="inline-block h-2 w-2 rounded-full" style={{ background: `rgb(var(--${def.slot}))` }} />
-      {def.short}
-    </span>
-  );
+  return <Badge className={className}>{POST_TYPE_MAP[type].short}</Badge>;
 }
 
 export function FormatBadge({ format }: { format: Post['format'] }) {
-  return <span className={cn('badge', format === 'video' ? 'bg-ink text-surface' : 'bg-surface-2 text-ink-2')}>{format === 'video' ? 'Video' : 'Image'}</span>;
+  return <Badge>{format === 'video' ? 'Video' : 'Image'}</Badge>;
 }
 
 function styleOptions(format: Post['format']) {
@@ -50,6 +46,17 @@ const ownPhotoPost = (post: Post) => post.format === 'image' && isOwnPhoto(post.
 /** The post's look, as lists show it: "Your photo" for your own photo, else its visual style. */
 export const styleLabel = (post: Post) => (ownPhotoPost(post) ? 'Your photo' : STYLE_LABEL[post.style]);
 
+/** "Thu, Nov 5 · 9:00 AM": when a post goes out (or went out). */
+export function fmtWhen(iso: string): string {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} · ${d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+}
+
+/** A character count against the network's limit ("128/2200"), red once it's over. */
+function Count({ n, max }: { n: number; max: number }) {
+  return <span className={cn('num font-mono', n > max && 'text-bad')}>{`${n}/${max}`}</span>;
+}
+
 interface EditableProps {
   post: Post;
   onChange: (patch: Partial<Post>) => void;
@@ -59,12 +66,12 @@ export function PostFields({ post, onChange }: EditableProps) {
   const project = useStore((s) => s.projects.find((p) => p.id === post.projectId));
   const ownPhoto = ownPhotoPost(post);
   return (
-    <div className="grid gap-3">
-      <Field label={ownPhoto ? 'Headline' : 'On-image headline'} htmlFor={`h-${post.id}`} right={`${post.headline.length}/70`} hint={ownPhoto ? 'Names the post in your lists. It isn’t added to your photo.' : undefined}>
+    <div className="grid gap-4">
+      <Field label={ownPhoto ? 'Headline' : 'On-image headline'} htmlFor={`h-${post.id}`} right={<Count n={post.headline.length} max={70} />} hint={ownPhoto ? 'Names the post in your lists. It isn’t added to your photo.' : undefined}>
         <input id={`h-${post.id}`} className="input" value={post.headline} maxLength={90} onChange={(e) => onChange({ headline: e.target.value })} />
       </Field>
       {/* X counts the whole post (hashtags too), and every link as 23 characters */}
-      <Field label="Caption" htmlFor={`c-${post.id}`} right={post.platform === 'x' ? `${xLength(postText(post))}/280` : `${post.caption.length}/${PLATFORMS[post.platform].limit}`}>
+      <Field label="Caption" htmlFor={`c-${post.id}`} right={post.platform === 'x' ? <Count n={xLength(postText(post))} max={280} /> : <Count n={post.caption.length} max={PLATFORMS[post.platform].limit} />}>
         <AutoTextarea id={`c-${post.id}`} value={post.caption} onChange={(v) => onChange({ caption: v })} minRows={4} />
       </Field>
       <Field label="Hashtags">
@@ -84,16 +91,18 @@ export function PostFields({ post, onChange }: EditableProps) {
         />
       ) : (
         <Field label="Visual prompt" htmlFor={`v-${post.id}`} hint="Used to plan the shots for your video.">
-          <AutoTextarea id={`v-${post.id}`} value={post.visualPrompt} onChange={(v) => onChange({ visualPrompt: v })} minRows={2} className="text-[13px]" />
+          <AutoTextarea id={`v-${post.id}`} value={post.visualPrompt} onChange={(v) => onChange({ visualPrompt: v })} minRows={2} />
         </Field>
       )}
-      {manusHolds(post) && <p className="text-[12.5px] text-warn">Manus already has this post: changing the date or time here doesn’t change it on {PLATFORMS[post.platform].label}.</p>}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Field label="Date" htmlFor={`d-${post.id}`}>
-          <input id={`d-${post.id}`} type="date" className="input" value={isoToDateStr(post.scheduledAt)} onChange={(e) => e.target.value && onChange({ scheduledAt: combineDateTime(e.target.value, isoToTime(post.scheduledAt)) })} />
-        </Field>
-        <Field label="Time" htmlFor={`t-${post.id}`}>
-          <input id={`t-${post.id}`} type="time" className="input" value={isoToTime(post.scheduledAt)} onChange={(e) => e.target.value && onChange({ scheduledAt: combineDateTime(isoToDateStr(post.scheduledAt), e.target.value) })} />
+      {manusHolds(post) && (
+        <p className="flex items-start gap-1.5 text-small text-warn">
+          <TriangleAlert size={14} className="mt-[3px] shrink-0" aria-hidden="true" />
+          Manus already has this post: changing the date or time here doesn’t change it on {PLATFORMS[post.platform].label}.
+        </p>
+      )}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Field label="When">
+          <DateTimeButton value={new Date(post.scheduledAt).getTime()} onChange={(ms) => onChange({ scheduledAt: new Date(ms).toISOString() })} aria-label="When" />
         </Field>
         <Field label="Platform" htmlFor={`p-${post.id}`}>
           <select
@@ -133,7 +142,7 @@ export function PostFields({ post, onChange }: EditableProps) {
             <option value="video">Video</option>
           </select>
         </Field>
-        <Field label="Visual style" htmlFor={`s-${post.id}`} className="col-span-1 sm:col-span-3" hint={ownPhoto ? 'Only used if you replace your photo with an AI image. Your photo posts as it is.' : undefined}>
+        <Field label="Visual style" htmlFor={`s-${post.id}`} className="sm:col-span-2" hint={ownPhoto ? 'Only used if you replace your photo with an AI image. Your photo posts as it is.' : undefined}>
           <select id={`s-${post.id}`} className="select" value={post.style} onChange={(e) => onChange({ style: e.target.value as StyleId })}>
             {styleOptions(post.format).map((s) => (
               <option key={s.id} value={s.id}>
@@ -147,10 +156,29 @@ export function PostFields({ post, onChange }: EditableProps) {
   );
 }
 
+/** Whether "Post to groups" applies (a Facebook post, Manus reachable, no group share running). */
+function groupsOpen(post: Post, offer: boolean): boolean {
+  return offer && post.platform === 'facebook' && !(post.groupShare && (post.groupShare.state === 'working' || post.groupShare.state === 'needs_input'));
+}
+
+/** The post's state as one dot and a word (Due posts show their badge instead). */
+function PostState({ post, now }: { post: Post; now: number }) {
+  if (isDue(post, now) && (!post.external || post.external.state === 'failed' || post.external.state === 'scheduled')) return <DueBadge post={post} now={now} />;
+  if (post.status === 'published') return <StatusDot tone="good">Posted</StatusDot>;
+  if (post.status === 'draft') return <StatusDot tone="faint">Draft</StatusDot>;
+  return <StatusDot tone="primary">{manusHolds(post) ? 'With Manus' : 'Planned'}</StatusDot>;
+}
+
+/**
+ * A post as it will look on the network (the Social 7-day batch, the calendar's drafts): the brand's
+ * avatar and handle, the visual, the caption. The footer has its state, the one action that fits it,
+ * and Edit; everything else is in the "⋯" menu of the post's header.
+ */
 export function PostCard({ post, brand, selectable, selected, onSelect }: { post: Post; brand: Brand; selectable?: boolean; selected?: boolean; onSelect?: (v: boolean) => void }) {
   const [editing, setEditing] = useState(false);
   const update = useStore((s) => s.updatePost);
-  const manusReady = useManusReady();
+  const offer = useCanOfferManus();
+  const now = useNow(60_000);
   const ai = useAI(postTask);
   const points = useMemo(() => pointsFromCaption(post.caption), [post.caption]);
   const [expanded, setExpanded] = useState(false);
@@ -172,82 +200,116 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
     const r = await ai.run(input);
     if (r) update(post.id, rewritePatch(project, post, r, input.link ?? null));
   };
+  const held = manusHolds(post);
+  const canSend = offer && post.status !== 'published' && !held;
+  const handle = previewHandle(brand, post.platform);
+  const when = post.status === 'published' && post.publishedAt ? post.publishedAt : post.scheduledAt;
+  const writing: MenuEntry[] =
+    post.status === 'published'
+      ? []
+      : [
+          { label: 'Rewrite the caption', icon: <Spark size={16} />, onSelect: () => void regenerate(), disabled: ai.running },
+          ...(post.format === 'image' && !post.media ? [{ label: 'Make an AI image', icon: <Spark size={16} />, onSelect: () => void makeImage(), disabled: img.running }] : []),
+          'separator' as const,
+        ];
+  const menu: MenuEntry[] = [
+    ...writing,
+    ...(post.status === 'draft' && canSend ? [{ label: `Post on ${networkLabel(post.platform)} now`, icon: <Send />, onSelect: () => useManusPost.getState().open(post.id) }] : []),
+    ...(groupsOpen(post, offer) ? [{ label: 'Post to groups', icon: <Users />, onSelect: () => useManusGroups.getState().open(post.id) }] : []),
+    ...postMenuEntries(post),
+  ];
+  // the one action that fits the post's state (the rest is in the menu)
+  const action = editing ? null : post.status === 'draft' ? (
+    <button type="button" className="btn btn-secondary btn-sm" onClick={() => addToCalendarFlow([post.id])}>
+      <CalendarClock /> Add to calendar
+    </button>
+  ) : post.status === 'scheduled' && canSend ? (
+    <ManusPostButton post={post} />
+  ) : post.status === 'scheduled' && !held ? (
+    <button type="button" className="btn btn-secondary btn-sm" onClick={() => useMarkPosted.getState().open(post.id)}>
+      <CheckCheck /> Mark as posted
+    </button>
+  ) : null;
   return (
-    <article className={cn('panel flex min-w-0 flex-col overflow-hidden', selected && 'ring-2 ring-primary')}>
-      <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2">
-          {selectable && <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--primary))]" checked={!!selected} onChange={(e) => onSelect?.(e.target.checked)} aria-label="Select post" />}
-          <PlatformChip platform={post.platform} />
-        </div>
-        <span className="num flex shrink-0 items-center gap-1 text-xs text-muted">
-          <CalendarClock size={12} />
-          {fmtDateTime(post.status === 'published' && post.publishedAt ? post.publishedAt : post.scheduledAt)}
+    <PostFrame
+      handle={handle}
+      avatar={<LogoMark colors={brand.colors} logo={brand.logo} name={brand.name} size={24} />}
+      meta={
+        <>
+          <span className="sr-only">{PLATFORMS[post.platform].label} · </span>
+          <span className="num font-mono">{fmtWhen(when)}</span>
+        </>
+      }
+      corner={
+        <span className="-mr-1 flex shrink-0 items-center gap-1">
+          <PlatformMark platform={post.platform} size={20} />
+          <MoreMenu items={menu} size="xs" />
         </span>
-      </div>
+      }
+      className={cn('flex min-w-0 flex-col', selected && 'ring-[1.5px] ring-primary')}
+      footer={
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="mr-auto flex min-w-0 items-center">
+            <PostState post={post} now={now} />
+          </span>
+          {action}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditing((e) => !e)}>
+            {editing ? <Check /> : <Pencil />}
+            {editing ? 'Done' : 'Edit'}
+          </button>
+        </div>
+      }
+    >
       <div className="relative">
-        <PostVisual style={post.style} headline={post.headline} brand={brand} watermark={post.watermark} media={post.media} storyboard={post.storyboard} points={points} aspect="4/5" className="rounded-none" />
-        <div className="absolute left-2 top-2 flex gap-1">
-          <FormatBadge format={post.format} />
-        </div>
-      </div>
-      <div className="flex flex-1 flex-col gap-2 p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <PostTypeTag type={post.postType} />
-          <span className="text-[11px] text-muted">{styleLabel(post)}</span>
-        </div>
-        <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} compact />
-        <AIThinking running={img.running} stage={img.stage} onStop={img.stop} compact />
-        {img.running && img.task && <ManusLink url={img.task.taskUrl} label="Watch it in Manus" />}
-        {img.error && (
-          <p className="rounded-md bg-bad-soft px-2.5 py-1.5 text-xs text-bad" role="alert">
-            <b>{img.error.title}.</b> {img.error.body} <ManusLink url={img.error.taskUrl} label="Open in Manus" />
-          </p>
+        <PostVisual style={post.style} headline={post.headline} brand={brand} watermark={post.watermark} media={post.media} storyboard={post.storyboard} points={points} aspect="4/5" className="!rounded-none" />
+        {selectable && (
+          <div className="absolute left-2.5 top-2.5 z-10 flex h-8 items-center rounded-md bg-surface pl-2 shadow-xs">
+            <Checkbox checked={!!selected} onChange={(v) => onSelect?.(v)} label={<span className="sr-only">Select post</span>} />
+          </div>
         )}
+        {(post.format === 'video' || ownPhotoPost(post)) && (
+          <span className="absolute right-2.5 top-2.5 z-10">
+            <Badge className="shadow-xs">{post.format === 'video' ? 'Video' : 'Your photo'}</Badge>
+          </span>
+        )}
+      </div>
+      <div className="flex flex-col gap-2.5 px-3 pb-3 pt-2.5">
         {editing ? (
           <PostFields post={post} onChange={(patch) => update(post.id, patch)} />
         ) : (
           <>
-            <p className={cn('whitespace-pre-line text-[13px] leading-relaxed text-ink-2', !expanded && 'clamp-3')}>{post.caption}</p>
-            {post.caption.length > 160 && (
-              <button className="self-start text-xs font-semibold text-primary hover:underline" onClick={() => setExpanded((x) => !x)}>
-                {expanded ? 'Show less' : 'Show more'}
-              </button>
+            <div>
+              <p className={cn('whitespace-pre-line text-small text-ink-2', !expanded && 'clamp-3')}>
+                <span className="mr-1 font-semibold text-ink">{handle}</span>
+                {post.caption}
+              </p>
+              {post.caption.length > 160 && (
+                <button type="button" className="link mt-0.5 text-caption" onClick={() => setExpanded((x) => !x)}>
+                  {expanded ? 'Show less' : 'Show more'}
+                </button>
+              )}
+            </div>
+            {post.hashtags.length > 0 && (
+              <p className="truncate text-small text-primary" title={post.hashtags.join(' ')}>
+                {post.hashtags.join(' ')}
+              </p>
             )}
-            <p className="text-xs font-medium text-info">{post.hashtags.join(' ')}</p>
             <PostLinkNote post={post} />
           </>
         )}
-        <DueBadge post={post} />
+        <AIThinking running={ai.running} stage={ai.stage} onStop={ai.stop} compact />
+        <AIThinking running={img.running} stage={img.stage} onStop={img.stop} compact />
+        {img.running && img.task && <ManusLink url={img.task.taskUrl} label="Watch it in Manus" />}
+        {img.error && (
+          <Callout tone="bad">
+            <b>{img.error.title}.</b> {img.error.body} <ManusLink url={img.error.taskUrl} label="Open in Manus" />
+          </Callout>
+        )}
         <PostedBy post={post} />
         <ExternalBadge post={post} />
         <GroupShareBadge post={post} />
-        <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1">
-          {post.status === 'draft' && (
-            <button className={cn('btn btn-sm', manusReady ? 'btn-secondary' : 'btn-primary')} onClick={() => addToCalendarFlow([post.id])}>
-              <CalendarClock size={14} /> Add to calendar
-            </button>
-          )}
-          <ManusPostButton post={post} primary={post.status === 'scheduled'} />
-          <PostToGroupsButton post={post} />
-          {post.status === 'scheduled' && !manusReady && (
-            <button className="btn btn-secondary btn-sm" onClick={() => useMarkPosted.getState().open(post.id)}>
-              <CheckCheck size={14} /> Mark as posted
-            </button>
-          )}
-          <button className={cn('btn btn-secondary btn-sm', editing && 'bg-surface-2')} onClick={() => setEditing((e) => !e)}>
-            {editing ? <Check size={14} /> : <Pencil size={14} />}
-            {editing ? 'Done' : 'Edit'}
-          </button>
-          {post.status !== 'published' && <RegenerateButton onClick={regenerate} running={ai.running} label="Rewrite" />}
-          {post.status !== 'published' && post.format === 'image' && !post.media && !editing && (
-            <button className="btn btn-ai btn-sm" onClick={makeImage} disabled={img.running}>
-              <ImagePlus size={14} className="text-accent" /> AI image
-            </button>
-          )}
-          <PostMoreMenu post={post} className="ml-auto text-muted" />
-        </div>
       </div>
-    </article>
+    </PostFrame>
   );
 }
 
@@ -258,46 +320,87 @@ function previewHandle(brand: Brand, platform: PostPlatform): string {
   return brandHandle(brand, [platform]).replace(/^@/, '') || brand.name;
 }
 
-/** How the post will look on the network (a preview: no counts, no link until it's really out). */
-export function PlatformFrame({ post, brand }: { post: Post; brand: Brand }) {
-  const handle = previewHandle(brand, post.platform);
-  const p = PLATFORMS[post.platform];
+/** On Facebook and LinkedIn a Page posts under the business's name; elsewhere under the handle. */
+const pageName = (post: Post, brand: Brand, handle: string) => (post.platform === 'linkedin' || post.platform === 'facebook' ? brand.name : handle);
+
+/** "Planned · Nov 5, 9:00 AM · Instagram" (no counts: it isn't out yet, or the app doesn't read them). */
+function previewMeta(post: Post): string {
+  const when = post.status === 'published' && post.publishedAt ? `Posted ${fmtRelative(post.publishedAt)}` : post.status === 'scheduled' ? `Planned · ${fmtDateTime(post.scheduledAt)}` : 'Draft';
+  return `${when} · ${PLATFORMS[post.platform].label}`;
+}
+
+/** The post's body in the network's order: text first on Facebook, LinkedIn and X; the visual first elsewhere. */
+function PreviewBody({ post, brand, handle }: { post: Post; brand: Brand; handle: string }) {
   const points = pointsFromCaption(post.caption);
+  const textFirst = post.platform === 'linkedin' || post.platform === 'facebook' || post.platform === 'x';
+  const comment = firstCommentOf(post);
   return (
-    <div className="mx-auto w-full max-w-[420px] overflow-hidden rounded-xl border border-line bg-surface shadow-card">
-      <div className="flex items-center gap-2.5 px-3 py-2.5">
-        <LogoMark colors={brand.colors} logo={brand.logo} name={brand.name} size={34} />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] font-bold text-ink">{post.platform === 'linkedin' || post.platform === 'facebook' ? brand.name : handle}</p>
-          <p className="text-[11px] text-muted">
-            {post.status === 'published' && post.publishedAt ? `Posted ${fmtRelative(post.publishedAt)}` : post.status === 'scheduled' ? `Planned · ${fmtDateTime(post.scheduledAt)}` : 'Draft'} · {p.label}
-          </p>
-        </div>
-        <span className="flex h-6 w-6 items-center justify-center rounded-md text-white" style={{ background: p.color }}>
-          <PlatformGlyph platform={post.platform} size={13} />
-        </span>
-      </div>
-      {(post.platform === 'linkedin' || post.platform === 'facebook' || post.platform === 'x') && <p className="whitespace-pre-line px-3 pb-2.5 text-[13px] leading-relaxed text-ink">{post.caption}</p>}
-      <PostVisual style={post.style} headline={post.headline} brand={brand} watermark={post.watermark} media={post.media} storyboard={post.storyboard} points={points} aspect={post.format === 'video' && post.platform === 'tiktok' ? '9/16' : '4/5'} className="rounded-none" autoPlay={post.format === 'video'} />
-      {(post.platform === 'instagram' || post.platform === 'tiktok') && (
-        <p className="whitespace-pre-line px-3 pb-3 pt-2.5 text-[13px] leading-relaxed text-ink">
-          <b className="mr-1">{handle}</b>
+    <>
+      {textFirst && <p className="whitespace-pre-line break-words px-3 pb-2.5 text-small text-ink">{post.caption}</p>}
+      <PostVisual style={post.style} headline={post.headline} brand={brand} watermark={post.watermark} media={post.media} storyboard={post.storyboard} points={points} aspect={post.format === 'video' && post.platform === 'tiktok' ? '9/16' : '4/5'} className="!rounded-none" autoPlay={post.format === 'video'} />
+      {!textFirst && (
+        <p className="whitespace-pre-line break-words px-3 pt-2.5 text-small text-ink">
+          <span className="mr-1 font-semibold">{handle}</span>
           {post.caption}
         </p>
       )}
-      <p className={cn('px-3 pb-3 text-[12.5px] font-medium text-info', post.platform !== 'instagram' && post.platform !== 'tiktok' && 'pt-2.5')}>{post.hashtags.join(' ')}</p>
-      {firstCommentOf(post) && (
-        <div className="border-t border-line px-3 py-2.5 text-[12.5px] leading-relaxed text-ink">
-          <p className="mb-0.5 text-[11px] font-semibold text-muted">{post.platform === 'x' ? 'First reply' : 'First comment'}</p>
-          <p className="whitespace-pre-line break-words">
-            <b className="mr-1">{post.platform === 'linkedin' || post.platform === 'facebook' ? brand.name : handle}</b>
-            {firstCommentOf(post)}
+      {post.hashtags.length > 0 && <p className={cn('break-words px-3 text-small text-primary', textFirst ? 'pt-2.5' : 'pt-1')}>{post.hashtags.join(' ')}</p>}
+      {comment && (
+        <div className="mx-3 mt-3 border-t border-line pt-2.5 text-small text-ink">
+          <p className="text-caption font-medium text-muted">{post.platform === 'x' ? 'First reply' : 'First comment'}</p>
+          <p className="mt-0.5 whitespace-pre-line break-words">
+            <span className="mr-1 font-semibold">{pageName(post, brand, handle)}</span>
+            {comment}
           </p>
         </div>
       )}
-      <p className="border-t border-line bg-surface-2/60 px-3 py-2 text-[11px] text-muted">Preview: the network shows it in its own style.</p>
-    </div>
+      <div className="h-3" aria-hidden="true" />
+    </>
   );
+}
+
+/** How the post will look on the network (a preview: no counts, no link until it's really out). */
+export function PlatformFrame({ post, brand }: { post: Post; brand: Brand }) {
+  const handle = previewHandle(brand, post.platform);
+  return (
+    <PostFrame
+      handle={pageName(post, brand, handle)}
+      avatar={<LogoMark colors={brand.colors} logo={brand.logo} name={brand.name} size={24} />}
+      meta={previewMeta(post)}
+      corner={<PlatformMark platform={post.platform} size={20} />}
+      footer="Preview: the network shows it in its own style."
+      className="mx-auto w-full max-w-[420px]"
+    >
+      <PreviewBody post={post} brand={brand} handle={handle} />
+    </PostFrame>
+  );
+}
+
+/** The same preview on a phone, scrolling inside its screen. */
+function PhonePreview({ post, brand }: { post: Post; brand: Brand }) {
+  const handle = previewHandle(brand, post.platform);
+  return (
+    <PhoneFrame>
+      <div className="scroll-thin h-full overflow-y-auto pt-11">
+        <div className="flex items-center gap-2 px-3 pb-2.5">
+          <LogoMark colors={brand.colors} logo={brand.logo} name={brand.name} size={28} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-small font-semibold text-ink">{pageName(post, brand, handle)}</p>
+            <p className="truncate text-caption text-muted">{previewMeta(post)}</p>
+          </div>
+          <PlatformMark platform={post.platform} size={20} />
+        </div>
+        <PreviewBody post={post} brand={brand} handle={handle} />
+      </div>
+    </PhoneFrame>
+  );
+}
+
+/** An action in the editor's footer: a button on wide screens, a menu entry when it doesn't fit. */
+interface FooterAction {
+  label: string;
+  icon: ReactNode;
+  run: () => void;
 }
 
 export function PostEditorHost() {
@@ -307,76 +410,81 @@ export function PostEditorHost() {
   const project = useStore((s) => s.projects.find((p) => p.id === post?.projectId));
   const update = useStore((s) => s.updatePost);
   const del = useStore((s) => s.deletePosts);
+  const offer = useCanOfferManus();
+  const phone = useMediaQuery('(max-width: 639px)');
   if (!id || !post || !project) return null;
+  const held = manusHolds(post);
+  const canSend = offer && post.status !== 'published' && !held;
+  const remove = async () => {
+    const extra = post.status === 'published' ? ' It stays on the network: this only removes it from the app.' : '';
+    if (await confirmAction({ title: 'Delete this post?', body: `This can’t be undone.${extra}`, confirmLabel: 'Delete', danger: true })) {
+      del([post.id]);
+      close();
+    }
+  };
+  const addToCalendar: FooterAction = {
+    label: 'Add to calendar',
+    icon: <CalendarClock />,
+    run: () => {
+      if (addToCalendarFlow([post.id])) close();
+    },
+  };
+  const markPosted: FooterAction = { label: 'Mark as posted', icon: <CheckCheck />, run: () => useMarkPosted.getState().open(post.id) };
+  const unmark: FooterAction = {
+    label: 'Mark as not posted',
+    icon: <Undo2 />,
+    run: () => {
+      useStore.getState().unmarkPosted(post.id);
+      toast({ kind: 'info', title: 'Back on your calendar', body: 'It’s marked as not posted.' });
+    },
+  };
+  // the state's actions, as today: Manus posts it (the one filled button), or you do
+  let main: FooterAction | null = null;
+  let second: FooterAction | null = null;
+  const extra: MenuEntry[] = [];
+  if (post.status === 'draft') {
+    if (canSend) second = addToCalendar;
+    else main = addToCalendar;
+    extra.push({ label: 'Mark as posted…', icon: <CheckCheck />, onSelect: markPosted.run });
+  } else if (post.status === 'scheduled') {
+    if (canSend) second = markPosted;
+    else main = markPosted;
+    extra.push({ label: 'Move to drafts', icon: <Undo2 />, onSelect: () => update(post.id, { status: 'draft' }) });
+  } else if (post.publishedBy === 'manual') second = unmark;
+  if (groupsOpen(post, offer)) extra.push({ label: 'Post to groups', icon: <Users />, onSelect: () => useManusGroups.getState().open(post.id) });
+  const asEntry = (a: FooterAction): MenuEntry => ({ label: a.label, icon: a.icon, onSelect: a.run });
+  const button = (a: FooterAction, primary: boolean) => (
+    <button type="button" className={cn('btn btn-sm', primary ? 'btn-primary' : 'btn-secondary')} onClick={a.run}>
+      {a.icon} {a.label}
+    </button>
+  );
+  const filled = canSend ? <ManusPostButton post={post} primary /> : main ? button(main, true) : null;
+  const footer = phone ? (
+    <div className="flex w-full items-center gap-2">
+      <MoreMenu items={[...(filled && second ? [asEntry(second)] : []), ...extra, 'separator', { label: 'Delete', icon: <Trash2 />, danger: true, onSelect: () => void remove() }]} />
+      <span className="flex min-w-0 flex-1 [&>.btn]:w-full">{filled ?? (second ? button(second, false) : null)}</span>
+    </div>
+  ) : (
+    <>
+      <button type="button" className="btn btn-danger-ghost btn-sm mr-auto" onClick={() => void remove()}>
+        <Trash2 /> Delete
+      </button>
+      {extra.length > 0 && <MoreMenu items={extra} />}
+      {second && button(second, false)}
+      {filled}
+    </>
+  );
   return (
-    <Modal
-      open
-      onClose={close}
-      size="xl"
-      title={post.status === 'published' ? 'Posted' : post.status === 'scheduled' ? 'Planned post' : 'Draft post'}
-      subtitle={`${PLATFORMS[post.platform].label} · ${POST_TYPE_MAP[post.postType].label} · ${styleLabel(post)}`}
-      footer={
-        <>
-          <button
-            className="btn btn-ghost btn-sm mr-auto text-bad"
-            onClick={async () => {
-              const extra = post.status === 'published' ? ' It stays on the network: this only removes it from the app.' : '';
-              if (await confirmAction({ title: 'Delete this post?', body: `This can’t be undone.${extra}`, confirmLabel: 'Delete', danger: true })) {
-                del([post.id]);
-                close();
-              }
-            }}
-          >
-            <Trash2 size={14} /> Delete
-          </button>
-          {post.status === 'draft' && (
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => {
-                if (addToCalendarFlow([post.id])) close();
-              }}
-            >
-              <CalendarClock size={14} /> Add to calendar
-            </button>
-          )}
-          {post.status === 'scheduled' && (
-            <button className="btn btn-secondary btn-sm" onClick={() => update(post.id, { status: 'draft' })}>
-              <Undo2 size={14} /> Move to drafts
-            </button>
-          )}
-          {post.status !== 'published' && (
-            <button className="btn btn-secondary btn-sm" onClick={() => useMarkPosted.getState().open(post.id)}>
-              <CheckCheck size={14} /> Mark as posted
-            </button>
-          )}
-          {post.status === 'published' && post.publishedBy === 'manual' && (
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => {
-                useStore.getState().unmarkPosted(post.id);
-                toast({ kind: 'info', title: 'Back on your calendar', body: 'It’s marked as not posted.' });
-              }}
-            >
-              <Undo2 size={14} /> Mark as not posted
-            </button>
-          )}
-          <PostToGroupsButton post={post} />
-          <ManusPostButton post={post} primary />
-          <button className="btn btn-secondary btn-sm" onClick={close}>
-            Done
-          </button>
-        </>
-      }
-    >
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_400px]">
+    <Modal open onClose={close} size="xl" title={post.status === 'published' ? 'Posted' : post.status === 'scheduled' ? 'Planned post' : 'Draft post'} subtitle={`${PLATFORMS[post.platform].label} · ${POST_TYPE_MAP[post.postType].label} · ${styleLabel(post)}`} footer={footer}>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0">
           {(post.status === 'published' || post.status === 'scheduled') && (
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="mb-4 flex flex-wrap items-center gap-2 empty:hidden">
               <DueBadge post={post} />
               <PostedBy post={post} />
             </div>
           )}
-          {post.status === 'published' && <p className="mb-3 text-[12.5px] text-muted">It’s already out: editing it here doesn’t change the post on {PLATFORMS[post.platform].label.replace(' (Twitter)', '')}.</p>}
+          {post.status === 'published' && <p className="mb-4 text-small text-muted">It’s already out: editing it here doesn’t change the post on {PLATFORMS[post.platform].label.replace(' (Twitter)', '')}.</p>}
           {post.external && (
             <div className="mb-4">
               <ExternalBadge post={post} />
@@ -389,9 +497,11 @@ export function PostEditorHost() {
           )}
           <PostFields post={post} onChange={(patch) => update(post.id, patch)} />
         </div>
-        <div className="min-w-0">
-          <p className="eyebrow mb-2">Preview</p>
-          <PlatformFrame post={post} brand={project.brand} />
+        <div className="min-w-0 lg:sticky lg:top-0 lg:self-start">
+          <div className="flex justify-center">
+            <PhonePreview post={post} brand={project.brand} />
+          </div>
+          <p className="mt-3 text-center text-caption text-muted">Preview: the network shows it in its own style.</p>
         </div>
       </div>
     </Modal>

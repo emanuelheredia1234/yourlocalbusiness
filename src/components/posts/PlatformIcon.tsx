@@ -47,13 +47,32 @@ export function PlatformGlyph({ platform, size = 16, className }: { platform: So
   }
 }
 
+/** The glyph inside a tile of each size (the tile is the network's mark, so its glyph scales with it). */
+const GLYPH: Record<12 | 14 | 16 | 20 | 24 | 28 | 32, number> = { 12: 8, 14: 9, 16: 10, 20: 12, 24: 14, 28: 16, 32: 18 };
+
+/**
+ * The network's own mark: a tile in its colour with the glyph. It's the network's branding (content, not
+ * chrome), so it keeps its colour in both themes; a faint ring keeps the dark networks visible on dark.
+ */
+export function PlatformMark({ platform, size = 20, className }: { platform: SocialPlatform; size?: 12 | 14 | 16 | 20 | 24 | 28 | 32; className?: string }) {
+  const p = PLATFORMS[platform];
+  return (
+    <span
+      data-media
+      aria-hidden="true"
+      className={cn('inline-flex shrink-0 items-center justify-center text-white ring-1 ring-inset ring-ink/10', size <= 16 ? 'rounded-xs' : 'rounded-sm', className)}
+      style={{ width: size, height: size, background: p.color }}
+    >
+      <PlatformGlyph platform={platform} size={GLYPH[size]} />
+    </span>
+  );
+}
+
 export function PlatformChip({ platform, className, showLabel = true }: { platform: SocialPlatform; className?: string; showLabel?: boolean }) {
   const p = PLATFORMS[platform];
   return (
-    <span className={cn('inline-flex items-center gap-1.5 text-xs font-semibold text-ink-2', className)}>
-      <span className="flex h-5 w-5 items-center justify-center rounded-md text-white" style={{ background: p.color }}>
-        <PlatformGlyph platform={platform} size={12} />
-      </span>
+    <span className={cn('inline-flex items-center gap-1.5 text-small font-medium text-ink-2', className)}>
+      <PlatformMark platform={platform} size={20} />
       {showLabel && p.label}
     </span>
   );

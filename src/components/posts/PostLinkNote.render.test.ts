@@ -150,7 +150,7 @@ describe('the editor’s “Where the link goes”', () => {
     expect(fields(post({ platform: 'x' }))).toContain('<option value="comment" selected="">First reply</option>');
     const none = fields(post({ linkPlacement: undefined, firstComment: undefined }), project({ published: false }));
     expect(none).toMatch(/<select id="lp-post_1" class="select" disabled="">/);
-    expect(none).toContain('No link yet: publish your page (Marketing → SEO page), or add your website in Settings → Brand.');
+    expect(none).toContain('No link yet: publish your page (Marketing › SEO page), or add your website in Settings › Brand.');
   });
 });
 
