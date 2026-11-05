@@ -93,7 +93,10 @@ estimated costs of connected accounts and X posts are shown, labelled estimated,
 Several calls at once can go over a cap by about one call each, so each customer runs at most 4 at a time.
 
 **Slow answers.** A treg answer that is still running after a minute comes back as "pending": it is never sent
-again. Every 5 minutes the server asks treg what it finally charged and adds a correcting ledger row.
+again. Every 5 minutes the server asks treg what it finally charged and adds a correcting ledger row. The same
+goes for a call our server gave up waiting on whose one repeat found it still running at treg (whether treg
+names the call in that answer is to be confirmed on the first live check). Calls still unsettled after 7 days
+are no longer asked about; they stay listed as pending in the check against treg.
 
 **Check against treg.** The owner page compares the ledger with treg's usage by customer over closed UTC days:
 "attributed + unattributed = total" must hold, unattributed spend should be $0 (anything else means a call that
