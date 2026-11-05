@@ -9,6 +9,7 @@ import type { StrategyState, StrategyStep } from '@/lib/strategyTypes';
 import { STEP_LABEL } from '@/lib/strategy';
 import { setMaxSearches, setUseBrain } from '@/lib/strategyWrite';
 import { useRuntime } from '@/lib/platform';
+import { useMediaQuery } from '@/lib/hooks';
 import { fmtDate, fmtDateTime } from '@/lib/utils';
 import { resolveBrain } from '@/ai/brain';
 import { fmtUsdSmall } from '@/ai/meta';
@@ -214,10 +215,16 @@ export function RunMeta({ project, s, who, saved }: { project: Project; s: Strat
 /** While a run goes: the thinking strip with its step and Stop, where the plan appears, over AI skeletons when there's nothing to show yet. */
 export function RunningBlock({ job, skeleton }: { job: StrategyJob; skeleton: boolean }) {
   const step: StrategyStep = job.steps[job.index] ?? job.steps[0];
+  const of = `Step ${job.index + 1} of ${job.steps.length}`;
+  // a phone's strip keeps its width for the stage ("Researching your market…"): the step goes on the line under it
+  const wide = useMediaQuery('(min-width: 640px)');
   return (
     <section aria-label="Plan my strategy" className="mb-6">
-      <AIThinking running stage={`${STEP_LABEL[step]}…`} step={`Step ${job.index + 1} of ${job.steps.length}`} onStop={() => stopStrategy(job.projectId)} />
-      <p className="mt-2 text-caption text-muted">It keeps going while you use other pages. Closing or reloading this tab stops it.</p>
+      <AIThinking running stage={`${STEP_LABEL[step]}…`} step={wide ? of : undefined} onStop={() => stopStrategy(job.projectId)} />
+      <p className="mt-2 text-caption text-muted">
+        {!wide && <span className="num">{of} · </span>}
+        It keeps going while you use other pages. Closing or reloading this tab stops it.
+      </p>
       {skeleton && (
         <div className="mt-6 grid grid-cols-1 items-start gap-4 xl:grid-cols-12" aria-hidden="true">
           <div className="flex flex-col gap-4 xl:col-span-8">

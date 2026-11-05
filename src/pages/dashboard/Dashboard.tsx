@@ -28,7 +28,7 @@ import type { Post, Project } from '@/lib/types';
 import type { ActionKind, StrategyAction, StrategyState } from '@/lib/strategyTypes';
 import { cn, ensureUrl, stripProtocol } from '@/lib/utils';
 import { navigate } from '@/lib/router';
-import { useNow } from '@/lib/hooks';
+import { useMediaQuery, useNow } from '@/lib/hooks';
 import { brandHandle } from '@/lib/brandMark';
 import { PAGE_TYPE_LABEL } from '@/lib/pageTypes';
 import { postedSince, useKpis } from '@/lib/kpis';
@@ -322,6 +322,8 @@ function PlanRow({ project, s, a, ctx }: { project: Project; s: StrategyState; a
 function PlanCard({ project, s, ctx, className, primaryTaken }: { project: Project; s: StrategyState; ctx: ActionCtx; className?: string; primaryTaken: boolean }) {
   const job = useStrategyJob(project.id);
   const checking = useCheckingServer(project.id);
+  // a phone's strip keeps its width for the stage ("Researching your market…"), without the step
+  const wide = useMediaQuery('(min-width: 640px)');
   const title = (
     <span className="flex min-w-0 items-center gap-2">
       <Spark size={18} />
@@ -334,7 +336,7 @@ function PlanCard({ project, s, ctx, className, primaryTaken }: { project: Proje
       <AiCard className={className}>
         <section aria-label="Your plan this week">
           {title}
-          <AIThinking running stage={`${STEP_LABEL[step]}…`} step={`Step ${job.index + 1} of ${job.steps.length}`} onStop={() => stopStrategy(project.id)} className="mt-4" />
+          <AIThinking running stage={`${STEP_LABEL[step]}…`} step={wide ? `Step ${job.index + 1} of ${job.steps.length}` : undefined} onStop={() => stopStrategy(project.id)} className="mt-4" />
           <div className="mt-5 flex flex-col gap-3" aria-hidden="true">
             <Skeleton ai className="h-6 w-2/3" />
             <Skeleton ai className="h-4 w-11/12" />
@@ -352,7 +354,7 @@ function PlanCard({ project, s, ctx, className, primaryTaken }: { project: Proje
         <section aria-label="Your plan this week">
           <Empty
             variant="ai"
-            className="bg-none py-6 sm:py-8"
+            className="!bg-none py-6 sm:py-8"
             title={`Plan how ${project.brand.name || 'your business'} gets customers`}
             body="Research, where to promote, and a 4-week plan. About two minutes."
             action={
