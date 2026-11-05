@@ -23,12 +23,14 @@ import { createRunner, publicCode } from '../analytics/runner.mjs';
 import { loadProject, ownSeoPage, projectIdFrom } from '../analytics/snapshots.mjs';
 import { appOrigin } from './sitemap.mjs';
 import { domainProperty, inspectionFields } from './gsc.mjs';
-import { claimInspection, claimStep, claimSubmit, inspectionDue, readSteps, stillSending, writeStep } from './steps.mjs';
+import { claimInspection, claimStep, claimSubmit, inspectionDue, readSteps, recordSubmit, releaseSubmit, stillSending, writeStep } from './steps.mjs';
 
 const PREFIX = '/api/seo/google/';
 const STEP_ORDER = ['verify_token', 'verify', 'site_add', 'sitemap', 'inspect'];
 /** treg error kinds that mean Google was never asked (or refused outright): the step failed, nothing was done. */
 const DEFINITE = new Set(['bad_request', 'config', 'not_found', 'customer_cap', 'customer_blocked', 'too_expensive', 'team_unavailable']);
+/** Of those, the ones where treg itself refused, so Google was never asked at all. */
+const NEVER_SENT = new Set(['config', 'customer_cap', 'customer_blocked', 'too_expensive', 'team_unavailable']);
 
 /** One attempt of a write: 'ok' | 'failed' | 'unknown' (+ the value). A treg refusal before anything happened is failed. */
 async function attempt(fn) {
@@ -87,10 +89,13 @@ export function createSeoGoogleRoutes(deps = {}) {
     const claim = await claimSubmit(storage, now());
     if (!claim.won) {
       steps.push({ step: 'sitemap', outcome: 'skipped', alreadySubmittedAt: claim.at });
-      // the page was in the sitemap when it went: that submission covers it
-      if (stored.sitemap?.outcome !== 'ok' && Date.parse(page.updatedAt) <= Date.parse(claim.at)) await writeStep(db, who.id, pageId, 'sitemap', 'ok', { shared: true }, Date.parse(claim.at));
+      // the page was in the sitemap when it went, and Google took that submit: it covers this page too (a
+      // submit still in flight, failed or unknown covers nothing)
+      if (claim.outcome === 'ok' && stored.sitemap?.outcome !== 'ok' && Date.parse(page.updatedAt) <= Date.parse(claim.at)) await writeStep(db, who.id, pageId, 'sitemap', 'ok', { shared: true }, Date.parse(claim.at));
     } else {
       const got = await attempt(() => runner.treg('gsc.submit', { siteUrl: prop, feedpath: `${origin}/sitemap.xml` }, 'gsc'));
+      if (got.outcome === 'failed' && NEVER_SENT.has(got.value?.kind)) await releaseSubmit(storage, claim.at, claim.previous).catch(() => {});
+      else await recordSubmit(storage, claim.at, got.outcome).catch(() => {});
       await writeStep(db, who.id, pageId, 'sitemap', got.outcome, {}, now());
       steps.push({ step: 'sitemap', outcome: got.outcome });
     }

@@ -176,6 +176,62 @@ describe('POST /api/analytics/refresh', () => {
     expect(treg.maxInFlight).toBeGreaterThan(1);
   });
 
+  it('reads the shared sitemap’s status and re-inspects a sent page weekly until it is indexed, within the budget', async () => {
+    project(A.id, 'p1', { brand: { name: 'x', socials: {} } });
+    page(A.id, 'p1', 'joes-bakery');
+    const day = 86_400_000;
+    let t = Date.parse('2026-11-05T12:00:00Z');
+    // pressed "Submit to Google" 8 days ago: its sitemap submit was lost (unknown), its inspection not indexed yet
+    rows('seo_google_steps').push(
+      { user_id: A.id, page_id: seoPageIdFor('p1'), step: 'sitemap', outcome: 'unknown', detail: {}, at: new Date(t - 8 * day).toISOString() },
+      { user_id: A.id, page_id: seoPageIdFor('p1'), step: 'inspect', outcome: 'ok', detail: { verdict: 'NEUTRAL' }, at: new Date(t - 8 * day).toISOString() },
+    );
+    let verdict = 'PASS';
+    const treg = fakeTreg((id, req) => {
+      if (id === 'google-search-console.sitemaps') return { sitemap: [{ path: `${APP}/sitemap.xml`, lastSubmitted: '2026-11-02T00:00:00Z', isPending: false, errors: 0 }] };
+      if (id === 'google-search-console.url_inspection') return { inspectionResult: { indexStatusResult: { verdict, coverageState: 'Submitted and indexed' } } };
+      return standardAnswer(id, req);
+    });
+    const storage = makeStorage();
+    const routes = createAnalyticsRoutes({ auth: fakeAuth({ a: A }), db, treg, connections: fakeConnections(), env: ENV, send, readJson, limit: createBucketLimiter(), storage, now: () => t });
+    await call(routes, 'POST', '/api/analytics/refresh', { token: 'a', body: { projectId: 'p1' } });
+    await routes.refresher.idle();
+    const sm = treg.calls.find((c) => c.endpointId === 'google-search-console.sitemaps');
+    expect(sm.request).toEqual({ method: 'GET', query: { siteUrl: ENV.GSC_APP_PROPERTY } });
+    const inspects = () => treg.calls.filter((c) => c.endpointId === 'google-search-console.url_inspection');
+    expect(inspects()).toHaveLength(1);
+    expect(inspects()[0].request.body).toEqual({ inspectionUrl: `${APP}/joes-bakery`, siteUrl: ENV.GSC_APP_PROPERTY, languageCode: 'en-US' });
+    const seo = rows('analytics_snapshots').find((s) => s.source === 'seo');
+    // Google took the shared sitemap after this page was published: that covers it
+    expect(seo.data.google).toMatchObject({ submittedAt: '2026-11-02T00:00:00Z', verdict: 'PASS', coverageState: 'Submitted and indexed' });
+    expect(rows('seo_google_steps').find((s) => s.step === 'inspect').detail).toMatchObject({ verdict: 'PASS' });
+    const tag = rows('billing_customers').find((c) => c.user_id === A.id).customer_tag;
+    expect(storage.documents.get(`gsc:app:inspect:2026-11-05:${tag}`).value.count).toBe(1);
+    // indexed: never inspected again
+    t += 8 * day;
+    await call(routes, 'POST', '/api/analytics/refresh', { token: 'a', body: { projectId: 'p1' } });
+    await routes.refresher.idle();
+    expect(inspects()).toHaveLength(1);
+    // a page never sent to Google is not inspected by an Update
+    supa.tables.set('seo_google_steps', []);
+    verdict = 'NEUTRAL';
+    t += day;
+    await call(routes, 'POST', '/api/analytics/refresh', { token: 'a', body: { projectId: 'p1' } });
+    await routes.refresher.idle();
+    expect(inspects()).toHaveLength(1);
+  });
+
+  it('ends done_with_errors when a source it ran was skipped (done only when every one is ok or partial)', async () => {
+    project(A.id, 'p1');
+    const omnisend = { connected: async () => true, reports: async () => ({ status: 'skipped', errorCode: 'RATE_LIMITED' }) };
+    const { routes } = makeRoutes({ omnisend });
+    const r = await call(routes, 'POST', '/api/analytics/refresh', { token: 'a', body: { projectId: 'p1' } });
+    await routes.refresher.idle();
+    const run = (await call(routes, 'GET', `/api/analytics/runs/${r.body.run.id}`, { token: 'a' })).body.run;
+    expect(run.sources).toMatchObject({ social: 'ok', email: 'skipped' });
+    expect(run.state).toBe('done_with_errors');
+  });
+
   it('uses only this project’s page: a second business of the same user is not mixed in', async () => {
     project(A.id, 'p1');
     project(A.id, 'p2');

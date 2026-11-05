@@ -69,13 +69,30 @@ export async function casDocument(storage, key, change) {
   throw fail(409, 'UNAVAILABLE', 'Busy. Try again in a moment.');
 }
 
-/** Claim the shared sitemap submit: { won: true } or { won: false, at } when it was submitted in the last 24 h. */
+/**
+ * Claim the shared sitemap submit: { won: true, at, previous } or { won: false, at, outcome? } when it was claimed
+ * in the last 24 h (outcome: what that submit gave, once it is known: 'ok' | 'failed' | 'unknown').
+ */
 export function claimSubmit(storage, now) {
   return casDocument(storage, 'gsc:app:lastSubmit', (doc) => {
     const at = Date.parse(doc.at);
-    if (Number.isFinite(at) && now - at < SUBMIT_EVERY_MS) return { result: { won: false, at: doc.at } };
-    return { value: { at: iso(now) }, result: { won: true, at: iso(now) } };
+    if (Number.isFinite(at) && now - at < SUBMIT_EVERY_MS) return { result: { won: false, at: doc.at, ...(typeof doc.outcome === 'string' ? { outcome: doc.outcome } : {}) } };
+    return { value: { at: iso(now) }, result: { won: true, at: iso(now), previous: doc.at ? { ...doc } : null } };
   });
+}
+
+/** Store what our claimed submit gave (only while the claim is still ours). */
+export function recordSubmit(storage, at, outcome) {
+  return casDocument(storage, 'gsc:app:lastSubmit', (doc) => (doc.at === at ? { value: { ...doc, outcome }, result: true } : { result: false }));
+}
+
+/**
+ * Give the claim back when treg refused before Google was asked (this customer blocked or over their cap, the
+ * team's balance, our config): nothing was sent, so one customer's refusal never holds the shared sitemap back
+ * from everyone else for a day. Nothing is retried here; the next press by anyone claims again.
+ */
+export function releaseSubmit(storage, at, previous) {
+  return casDocument(storage, 'gsc:app:lastSubmit', (doc) => (doc.at === at ? { value: previous ?? {}, result: true } : { result: false }));
 }
 
 /**

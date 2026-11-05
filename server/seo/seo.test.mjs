@@ -161,6 +161,47 @@ describe('Submit to Google: app-host pages', () => {
     expect(treg.calls.filter((c) => c.endpointId.includes('sitemaps-submit'))).toHaveLength(1);
   });
 
+  it('a customer treg refuses (blocked, over their cap) never holds the shared sitemap back from everyone else', async () => {
+    project(A.id, 'p1');
+    project(B.id, 'p2');
+    page(A.id, 'p1', 'joe');
+    page(B.id, 'p2', 'tom');
+    const treg = fakeTreg((id, req, ctx) => {
+      if (id.includes('sitemaps-submit') && ctx.userId === A.id) throw tregError('customer_blocked');
+      return gscAnswer(id, req);
+    });
+    const { routes, storage } = makeRoutes({ treg });
+    const a = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
+    expect(a.body.result.steps[0]).toEqual({ step: 'sitemap', outcome: 'failed' });
+    // Google was never asked: the claim is given back (A's press is not repeated by itself)
+    expect(storage.documents.get('gsc:app:lastSubmit').value.at).toBeUndefined();
+    const b = await call(routes, 'POST', '/api/seo/google/publish', { token: 'b', body: { projectId: 'p2', confirm: true } });
+    expect(b.body.result.steps[0]).toEqual({ step: 'sitemap', outcome: 'ok' });
+    expect(treg.calls.filter((c) => c.endpointId.includes('sitemaps-submit')).map((c) => c.ctx.userId)).toEqual([A.id, B.id]);
+    expect(storage.documents.get('gsc:app:lastSubmit').value).toEqual({ at: expect.any(String), outcome: 'ok' });
+  });
+
+  it('counts a page as submitted through someone else’s submit only once Google took it', async () => {
+    project(A.id, 'p1');
+    project(B.id, 'p2');
+    page(A.id, 'p1', 'joe');
+    page(B.id, 'p2', 'tom');
+    const storage = makeStorage();
+    // a submit still in flight (or lost): it covers nothing yet
+    await storage.put('gsc:app:lastSubmit', { at: new Date().toISOString() });
+    const { routes, treg } = makeRoutes({ storage });
+    const first = await call(routes, 'POST', '/api/seo/google/publish', { token: 'b', body: { projectId: 'p2', confirm: true } });
+    expect(first.body.result.steps[0]).toMatchObject({ step: 'sitemap', outcome: 'skipped' });
+    expect(rows('seo_google_steps').find((s) => s.step === 'sitemap')).toBeUndefined();
+    expect((await call(routes, 'GET', '/api/seo/google/status?projectId=p2', { token: 'b' })).body.status.submittedAt).toBeUndefined();
+    // once it is known to be ok, it covers the pages that were in the sitemap then
+    const doc = storage.documents.get('gsc:app:lastSubmit');
+    await storage.put('gsc:app:lastSubmit', { ...doc.value, outcome: 'ok' }, { ifVersion: doc.updatedAt });
+    await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
+    expect(rows('seo_google_steps').find((s) => s.step === 'sitemap' && s.user_id === A.id)?.outcome).toBe('ok');
+    expect(treg.calls.filter((c) => c.endpointId.includes('sitemaps-submit'))).toHaveLength(0);
+  });
+
   it('refuses inspections above 1,500 for the property and 20 per customer; two at once at 1,499 make one call', async () => {
     project(A.id, 'p1');
     project(A.id, 'p2');

@@ -4,8 +4,8 @@
 
 import { seoPageIdFor } from '../../integrations/common.mjs';
 import { mapsPosition, organicRows, rankOf } from '../../seo/rank.mjs';
-import { pagePerformance } from '../../seo/gsc.mjs';
-import { readSteps } from '../../seo/steps.mjs';
+import { appSitemapStatus, inspectionFields, pagePerformance } from '../../seo/gsc.mjs';
+import { claimInspection, inspectionDue, readSteps, writeStep } from '../../seo/steps.mjs';
 import { itemsOf } from '../normalize/index.mjs';
 import { num } from '../normalize/util.mjs';
 import { noteFor } from './social-public.mjs';
@@ -39,9 +39,10 @@ export function seoPlan(settings, page, gscStatus) {
 
 /**
  * → { status, errorCode?, data: SeoData, summary, resolved }. page: ownSeoPage(...) or null. property:
- * GSC_APP_PROPERTY. gscStatus: the google_search_console ConnectionStatus.
+ * GSC_APP_PROPERTY. origin: the app's public origin (its sitemap). gscStatus: the google_search_console
+ * ConnectionStatus. storage + customerTag: the inspection budgets (steps.mjs), for the weekly re-inspection.
  */
-export async function seoSource({ db, userId, projectId, project, settings, resolved, page, property, gscStatus, runner, now }) {
+export async function seoSource({ db, userId, projectId, project, settings, resolved, page, property, origin = '', gscStatus, runner, now, storage = null, customerTag = '' }) {
   const plan = seoPlan(settings, page, gscStatus);
   if (!plan.keywords.length && !page) return { status: 'not_connected', errorCode: 'NOTHING_TO_UPDATE', data: { keywords: [] } };
   const data = { keywords: [] };
@@ -78,10 +79,38 @@ export async function seoSource({ db, userId, projectId, project, settings, reso
 
   if (page) {
     // what "Submit to Google" stored for this page (the route and the weekly check write it)
-    const steps = await readSteps(db, userId, seoPageIdFor(projectId)).catch(() => ({}));
+    const pageId = seoPageIdFor(projectId);
+    const steps = await readSteps(db, userId, pageId).catch(() => ({}));
     const google = {};
     if (steps.sitemap?.outcome === 'ok') google.submittedAt = steps.sitemap.at;
     if (steps.inspect?.detail) Object.assign(google, steps.inspect.detail);
+    if (page.host === 'app' && property && origin) {
+      // the shared sitemap's status in the owner's property (every Update): a submit Google took after the page
+      // was last published covers it, whoever pressed
+      try {
+        const sm = await appSitemapStatus(runner, property, `${origin}/sitemap.xml`);
+        if (!google.submittedAt && sm?.lastSubmitted && Date.parse(page.updatedAt) <= Date.parse(sm.lastSubmitted)) google.submittedAt = sm.lastSubmitted;
+      } catch (e) {
+        problems += 1;
+        if (!noteFor(e)) stop = stop ?? e;
+      }
+      // once the page was sent to Google: inspected again weekly until it is indexed, within the same daily
+      // budgets as "Submit to Google" (a read; never more than one per Update)
+      if (!stop && (steps.sitemap || steps.inspect) && inspectionDue(steps.inspect, now) && storage?.enabled === true && customerTag) {
+        const claimed = await claimInspection(storage, customerTag, now).catch(() => false);
+        if (claimed) {
+          try {
+            const got = await runner.treg('gsc.inspect', { inspectionUrl: page.url, siteUrl: property, languageCode: 'en-US' }, 'gsc');
+            const fields = inspectionFields(got.data);
+            await writeStep(db, userId, pageId, 'inspect', 'ok', fields, now).catch(() => {});
+            Object.assign(google, fields);
+          } catch (e) {
+            problems += 1;
+            if (!noteFor(e)) stop = stop ?? e;
+          }
+        }
+      }
+    }
     if (Object.keys(google).length) data.google = google;
     if (plan.gsc && (page.host === 'custom' || property)) {
       try {

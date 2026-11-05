@@ -16,9 +16,9 @@ import { cleanSettings, loadProject, projectIdFrom, readRun, readSettings, readS
 const PREFIX = '/api/analytics/';
 
 export function createAnalyticsRoutes(deps = {}) {
-  const { db, treg, connections, omnisend = null, env = process.env, now = () => Date.now(), log = console, fetch = globalThis.fetch } = deps;
+  const { db, storage = null, treg, connections, omnisend = null, env = process.env, now = () => Date.now(), log = console, fetch = globalThis.fetch } = deps;
   const kit = createKit(deps);
-  const refresher = createRefresher({ db, treg, connections, omnisend, env, now, log, fetch });
+  const refresher = createRefresher({ db, storage, treg, connections, omnisend, env, now, log, fetch });
 
   async function route(req, res, url, who) {
     const p = url.pathname;

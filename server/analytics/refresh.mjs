@@ -2,7 +2,7 @@
 // four sources fetched in the background, each writing its own snapshot (a failed source keeps its previous good
 // data), a history row per source, and the run row updated as each source finishes.
 //
-//   const refresher = createRefresher({ db, treg, connections, omnisend, storage, env, now, log });
+//   const refresher = createRefresher({ db, storage, treg, connections, omnisend, env, now, log });
 //   await refresher.start(user, projectId, sources?) → RefreshRun (the background work goes on)
 //   refresher.idle() → a promise that settles when no run is in progress (tests)
 
@@ -63,7 +63,7 @@ export async function precheckCaps(db, customerTag, now, estimateMicro = MIN_EST
   if (monthly != null && month + estimateMicro > Number(monthly)) throw fail(429, 'CUSTOMER_CAP', 'You’ve reached this month’s analytics limit.', { period: 'month' });
 }
 
-export function createRefresher({ db, treg, connections, omnisend = null, env = process.env, now = () => Date.now(), log = console, fetch = globalThis.fetch }) {
+export function createRefresher({ db, storage = null, treg, connections, omnisend = null, env = process.env, now = () => Date.now(), log = console, fetch = globalThis.fetch }) {
   const running = new Set();
 
   /** Everything a run reads up front (server-side only: never from the request body). */
@@ -113,7 +113,7 @@ export function createRefresher({ db, treg, connections, omnisend = null, env = 
     const SOURCES = {
       social: () => socialSource({ project: g.project, statuses: g.statuses, runner, resolved: g.resolved, env, fetch, now: now(), recordEstimate: estimator(ctx) }),
       ads: () => adsSource({ settings: g.settings, statuses: g.statuses, runner, resolved: g.resolved }),
-      seo: () => seoSource({ db, userId: ctx.userId, projectId: ctx.projectId, project: g.project, settings: g.settings, resolved: g.resolved, page: g.page, property: String(env.GSC_APP_PROPERTY || '').trim(), gscStatus: statusFor('google_search_console'), runner, now: now() }),
+      seo: () => seoSource({ db, userId: ctx.userId, projectId: ctx.projectId, project: g.project, settings: g.settings, resolved: g.resolved, page: g.page, property: String(env.GSC_APP_PROPERTY || '').trim(), origin: appOrigin(env), gscStatus: statusFor('google_search_console'), runner, now: now(), storage, customerTag: ctx.customerTag }),
       email: async () => emailSource({ db, userId: ctx.userId, projectId: ctx.projectId, omnisend, previous: await readSnapshot(db, ctx.userId, ctx.projectId, 'email').catch(() => null), now: now() }),
     };
 
@@ -143,7 +143,9 @@ export function createRefresher({ db, treg, connections, omnisend = null, env = 
       }),
     );
     if (Object.keys(resolvedPatch).length) await saveResolved(db, ctx.userId, ctx.projectId, resolvedPatch, now()).catch(() => {});
-    const failed = which.some((s) => sources[s] === 'error');
+    // done only when every source it ran is ok or partial (spec §1.5 step 7); skipped, not_connected and error
+    // all end done_with_errors, so the app shows the per-source note
+    const failed = which.some((s) => sources[s] !== 'ok' && sources[s] !== 'partial');
     await saveRun({ state: failed ? 'done_with_errors' : 'done', finished_at: iso(now()), cost_micro: runner.costMicro() });
   }
 
