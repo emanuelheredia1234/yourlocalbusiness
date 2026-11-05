@@ -232,7 +232,7 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
   ) : null;
   return (
     <PostFrame
-      handle={handle}
+      handle={pageName(post, brand, handle)}
       avatar={<LogoMark colors={brand.colors} logo={brand.logo} name={brand.name} size={24} />}
       meta={
         <>
