@@ -220,6 +220,13 @@ export function createOmnisendRoutes({
     }
   }
 
+  /** Omnisend isn't set up: the owner is told which Secrets to add; everyone else, only that it isn't set up yet. */
+  function notSetUp(user) {
+    return new OmnisendError(503, 'CREDENTIALS_NOT_CONFIGURED', user?.isAdmin === true
+      ? 'Add OMNISEND_CLIENT_ID and OMNISEND_CLIENT_SECRET in Replit Secrets after Omnisend issues them.'
+      : 'Omnisend isn’t set up on this app yet.');
+  }
+
   /** Over this minute's limit: answered with 429 here. */
   function limited(req, res, key, factor = 1) {
     if (!rateLimited(key, factor)) return false;
@@ -245,9 +252,7 @@ export function createOmnisendRoutes({
   // ───────────── connecting ─────────────
 
   async function connect(req, res, user) {
-    if (!credentialsConfigured) {
-      throw new OmnisendError(503, 'CREDENTIALS_NOT_CONFIGURED', 'Add OMNISEND_CLIENT_ID and OMNISEND_CLIENT_SECRET in Replit Secrets after Omnisend issues them.');
-    }
+    if (!credentialsConfigured) throw notSetUp(user);
     if (!storageReady) throw new OmnisendError(503, 'STORAGE_NOT_READY', 'Secure Omnisend token storage is not configured. Check the Supabase server secret and app_state migration.');
     if (req.headers.origin !== OMNISEND_PUBLIC_BASE_URL) {
       throw new OmnisendError(400, 'USE_PUBLISHED_APP', `Start the Omnisend connection from ${OMNISEND_PUBLIC_BASE_URL} so the callback returns to the same app.`);
@@ -394,7 +399,8 @@ export function createOmnisendRoutes({
     const reconnect = reconnectReason(doc, unreadable);
     return reply(req, res, 200, {
       credentialsConfigured,
-      missingCredentials,
+      // which Secrets are missing is the owner's business only
+      missingCredentials: user.isAdmin === true ? missingCredentials : [],
       storageReady: statusStorageReady,
       connected: !reconnect && !!doc.accessToken,
       reconnect,
@@ -523,9 +529,7 @@ export function createOmnisendRoutes({
   }
 
   async function createCampaignDraft(req, res, user) {
-    if (!credentialsConfigured) {
-      throw new OmnisendError(503, 'CREDENTIALS_NOT_CONFIGURED', 'Add OMNISEND_CLIENT_ID and OMNISEND_CLIENT_SECRET in Replit Secrets after Omnisend issues them.');
-    }
+    if (!credentialsConfigured) throw notSetUp(user);
     if (!storageReady) throw new OmnisendError(503, 'STORAGE_NOT_READY', 'Secure Omnisend token storage is not configured.');
     const { value: connection, unreadable } = await readDocument(userDocumentKey(user.id));
     const reason = reconnectReason(connection, unreadable);

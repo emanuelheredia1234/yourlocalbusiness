@@ -229,16 +229,34 @@ const DRAFT = { name: 'Copper & Comb — Email 1', subject: 'Your guide is insid
 describe('connecting Omnisend', () => {
   it('reports missing OAuth credentials and does not start authorization', async () => {
     const { service, storage } = makeService({ env: {}, fetch: vi.fn() });
-    const status = await call(service, 'GET', `${API}/status`);
+    const status = await call(service, 'GET', `${API}/status`, { authorization: 'Bearer owner' });
     expect(status.statusCode).toBe(200);
     expect(status.body.credentialsConfigured).toBe(false);
     expect(status.body.missingCredentials).toEqual(['OMNISEND_CLIENT_ID', 'OMNISEND_CLIENT_SECRET']);
 
-    const connect = await call(service, 'POST', `${API}/connect`, { body: {}, origin: OMNISEND_PUBLIC_BASE_URL });
+    const connect = await call(service, 'POST', `${API}/connect`, { authorization: 'Bearer owner', body: {}, origin: OMNISEND_PUBLIC_BASE_URL });
     expect(connect.statusCode).toBe(503);
-    expect(connect.body.code).toBe('CREDENTIALS_NOT_CONFIGURED');
+    expect(connect.body).toEqual({ code: 'CREDENTIALS_NOT_CONFIGURED', error: 'Add OMNISEND_CLIENT_ID and OMNISEND_CLIENT_SECRET in Replit Secrets after Omnisend issues them.' });
     expect(connect.headers['set-cookie']).toBeUndefined();
     expect(storage.calls.filter((c) => c.op === 'put')).toHaveLength(0);
+  });
+
+  it('tells customers who aren’t the owner only that Omnisend isn’t set up: no Secret names', async () => {
+    for (const env of [{}, { OMNISEND_CLIENT_ID: 'client-id-test' }, { OMNISEND_CLIENT_SECRET: 'client-secret-test' }]) {
+      const { service } = makeService({ env, fetch: vi.fn() });
+      const status = await call(service, 'GET', `${API}/status`);
+      expect(status.body).toMatchObject({ credentialsConfigured: false, missingCredentials: [], owner: false });
+      const connect = await call(service, 'POST', `${API}/connect`, { body: {}, origin: OMNISEND_PUBLIC_BASE_URL });
+      const draft = await call(service, 'POST', `${API}/campaign-drafts`, { body: DRAFT });
+      for (const res of [connect, draft]) {
+        expect(res.statusCode).toBe(503);
+        expect(res.body).toEqual({ code: 'CREDENTIALS_NOT_CONFIGURED', error: 'Omnisend isn’t set up on this app yet.' });
+      }
+      expect(JSON.stringify([status.body, connect.body, draft.body])).not.toMatch(/OMNISEND_|Secret/);
+    }
+    // the owner still sees exactly which one is missing
+    const { service } = makeService({ env: { OMNISEND_CLIENT_ID: 'client-id-test' }, fetch: vi.fn() });
+    expect((await call(service, 'GET', `${API}/status`, { authorization: 'Bearer owner' })).body.missingCredentials).toEqual(['OMNISEND_CLIENT_SECRET']);
   });
 
   it('ties the state to the account and this browser, exchanges the code at the registered callback, and hides tokens', async () => {
