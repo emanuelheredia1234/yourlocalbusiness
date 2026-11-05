@@ -169,12 +169,16 @@ function requestUrl(req) {
 const auth = authFromEnv();
 const appState = appStateFromEnv();
 const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv(), appState, limits: limitsFromEnv() });
+// Omnisend campaign drafts (server/omnisend.mjs): the callback's per-caller limit counts callers as published pages do
 const omnisend = createOmnisendRoutes({
   auth,
   storage: appState,
   send,
   readJson,
+  rateLimited,
+  corsHeaders,
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
+  clientKey: (req) => pages.visitor(req),
 });
 // keys and settings saved in Supabase (when its secret key is set) before the first request
 // (never more than a few seconds: a slow Supabase must not keep the app from starting)
@@ -221,7 +225,7 @@ function route(req, res, url) {
       .then(async (ident) => ident && send(res, 200, { ok: true, ai: await ai.health(ident.who, req) }, corsHeaders(req)))
       .catch((e) => crashed(req, res, e));
   }
-  if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url);
+  if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url).catch((e) => crashed(req, res, e));
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res).catch((e) => crashed(req, res, e));
   if (pages.matchApi(url)) return void pages.handleApi(req, res, url).catch((e) => crashed(req, res, e));
   if (ai.match(url)) {

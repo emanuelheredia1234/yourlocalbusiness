@@ -1,24 +1,62 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createOmnisendRoutes, OMNISEND_PUBLIC_BASE_URL, OMNISEND_REDIRECT_URI, OMNISEND_SCOPES } from './omnisend.mjs';
+import { createMockSupabase } from './test/mock-supabase.mjs';
+import { createSecretBox } from './secretBox.mjs';
 
-function makeStorage() {
+const API = '/api/integrations/omnisend';
+/** The cookie that ties Omnisend's callback to the browser that started the connection. */
+const COOKIE = '__Host-ylb_omnisend';
+/** The most a draft request may send (a little over the largest draft the field limits allow). */
+const BODY_LIMIT = 128 * 1024;
+const NOW = 1_800_000_000_000;
+const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
+const userKey = (id) => `omnisend:user:${sha256(id)}`;
+const conflict = () => Object.assign(new Error('Conflict'), { code: 'CONFLICT' });
+
+/** appState's contract: get → { value, updatedAt } (or { unreadable }), put with ifVersion compare-and-set. */
+function makeStorage({ latencyMs = 0 } = {}) {
   const documents = new Map();
+  const unreadable = new Set();
+  const calls = [];
+  const fail = { get: null, put: null };
   let version = 0;
+  const pause = () => (latencyMs ? new Promise((resolve) => setTimeout(resolve, latencyMs)) : Promise.resolve());
+  const failure = (which, key) => {
+    const code = typeof fail[which] === 'function' ? fail[which](key) : fail[which];
+    if (code) throw Object.assign(new Error(`storage ${which} failed`), { code });
+  };
   return {
     enabled: true,
     documents,
+    unreadable,
+    calls,
+    fail,
     async get(key) {
+      calls.push({ op: 'get', key });
+      await pause();
+      failure('get', key);
       const row = documents.get(key);
-      return row ? structuredClone(row) : null;
+      if (!row) return null;
+      if (unreadable.has(key)) return { unreadable: true, value: null, updatedAt: row.updatedAt };
+      return structuredClone(row);
     },
     async put(key, value, options = {}) {
+      calls.push({ op: 'put', key, conditional: Object.hasOwn(options, 'ifVersion') });
+      await pause();
+      failure('put', key);
       const current = documents.get(key);
       if (Object.hasOwn(options, 'ifVersion')) {
-        if (options.ifVersion === null && current) throw Object.assign(new Error('Conflict'), { code: 'CONFLICT' });
-        if (options.ifVersion !== null && current?.updatedAt !== options.ifVersion) {
-          throw Object.assign(new Error('Conflict'), { code: 'CONFLICT' });
-        }
+        if (options.ifVersion === null && current) throw conflict();
+        if (options.ifVersion !== null && current?.updatedAt !== options.ifVersion) throw conflict();
       }
+      unreadable.delete(key);
       const row = { value: structuredClone(value), updatedAt: String(++version) };
       documents.set(key, row);
       return row.updatedAt;
@@ -31,9 +69,10 @@ function makeResponse() {
     statusCode: 0,
     headers: {},
     body: null,
+    headersSent: false,
     writeHead(status, headers = {}) {
       this.statusCode = status;
-      this.headers = headers;
+      this.headers = { ...headers };
       this.headersSent = true;
       return this;
     },
@@ -45,206 +84,853 @@ function makeResponse() {
   };
 }
 
-function makeService({ env, fetch = vi.fn(), storage = makeStorage() } = {}) {
-  const send = (res, status, body, headers = {}) => {
-    res.statusCode = status;
-    res.headers = headers;
-    res.body = body;
-    res.ended = true;
-    return res;
-  };
+const send = (res, status, body, headers = {}) => {
+  res.statusCode = status;
+  res.headers = { ...headers };
+  res.body = body;
+  res.headersSent = true;
+  res.ended = true;
+  return res;
+};
+
+/** readJson as ai-server.mjs has it: (req, limit) → the body parsed; 413 over the limit, 400 when it isn't JSON. */
+async function readJsonLike(req, limit) {
+  if (typeof limit !== 'number' || !Number.isFinite(limit)) throw new Error('readJson takes the request and a byte limit');
+  const raw = req.rawBody ?? (req.body === undefined ? '' : JSON.stringify(req.body));
+  if (Buffer.byteLength(raw) > limit) throw Object.assign(new Error('Request too large'), { status: 413 });
+  try {
+    return JSON.parse(raw || '{}');
+  } catch {
+    throw Object.assign(new Error('Invalid JSON body'), { status: 400 });
+  }
+}
+
+const USERS = {
+  'Bearer alpha': { id: 'account-alpha', email: 'alpha@example.com', isAdmin: false },
+  'Bearer beta': { id: 'account-beta', email: 'beta@example.com', isAdmin: false },
+  'Bearer owner': { id: 'account-owner', email: 'owner@example.com', isAdmin: true },
+};
+
+function makeService({ env, fetch = vi.fn(), storage = makeStorage(), rateLimited, auth, clock = { now: NOW } } = {}) {
+  const readJson = vi.fn(readJsonLike);
   const service = createOmnisendRoutes({
     env: env || { OMNISEND_CLIENT_ID: 'client-id-test', OMNISEND_CLIENT_SECRET: 'client-secret-test' },
     storage,
     fetch,
     send,
-    readJson: async (req) => req.body || {},
-    sameOrigin: (req) => req.headers.origin === 'https://app.test' || req.headers.origin === OMNISEND_PUBLIC_BASE_URL,
-    auth: {
+    readJson,
+    rateLimited,
+    clientKey: (req) => req.socket?.remoteAddress || 'unknown',
+    corsHeaders: (req) => (req.headers.origin === 'https://app.test' ? { 'access-control-allow-origin': 'https://app.test' } : {}),
+    sameOrigin: (req) => !req.headers.origin || req.headers.origin === 'https://app.test' || req.headers.origin === OMNISEND_PUBLIC_BASE_URL,
+    auth: auth || {
       enabled: true,
       async identify(req) {
-        if (req.headers.authorization === 'Bearer alpha') return { id: 'account-alpha' };
-        if (req.headers.authorization === 'Bearer beta') return { id: 'account-beta' };
-        return null;
+        const user = USERS[req.headers.authorization];
+        if (user) return user;
+        const many = /^Bearer user-(\d+)$/.exec(req.headers.authorization || '');
+        return many ? { id: `account-${many[1]}`, isAdmin: false } : null;
       },
     },
-    now: () => 1_800_000_000_000,
+    now: () => clock.now,
   });
-  return { service, storage, fetch };
+  return { service, storage, fetch, readJson, clock };
 }
 
-function request(method, authorization = 'Bearer alpha', body = undefined, origin = 'https://app.test') {
-  return { method, headers: { authorization, origin }, body };
-}
-
-async function handle(service, method, path, options = {}) {
-  const req = request(method, options.authorization, options.body, options.origin);
+async function call(service, method, pathname, { authorization = 'Bearer alpha', origin = 'https://app.test', body, rawBody, cookie, headers = {} } = {}) {
+  const req = {
+    method,
+    headers: { ...(authorization ? { authorization } : {}), ...(origin ? { origin } : {}), ...(cookie ? { cookie } : {}), ...headers },
+    body,
+    rawBody,
+    socket: { remoteAddress: '203.0.113.7' },
+  };
   const res = makeResponse();
-  const url = new URL(path, 'https://app.test');
-  await service.handle(req, res, url);
+  await service.handle(req, res, new URL(pathname, 'https://app.test'));
   return res;
 }
 
-function jsonResponse(value, status = 200) {
-  return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+/** A browser: keeps the cookies the server sets (as one would for this host) and sends them back. */
+function browser() {
+  const jar = new Map();
+  return {
+    jar,
+    cookie: () => [...jar].map(([name, value]) => `${name}=${value}`).join('; '),
+    take(res) {
+      for (const line of [].concat(res.headers?.['set-cookie'] || [])) {
+        const [pair, ...attributes] = line.split(';');
+        const at = pair.indexOf('=');
+        const maxAge = attributes.map((a) => a.trim()).find((a) => /^max-age=/i.test(a));
+        if (maxAge && Number(maxAge.split('=')[1]) <= 0) jar.delete(pair.slice(0, at).trim());
+        else jar.set(pair.slice(0, at).trim(), pair.slice(at + 1).trim());
+      }
+    },
+  };
 }
 
-describe('Omnisend OAuth and campaign drafts', () => {
+/** Connect pressed in this browser on the published app: the state Omnisend will hand back. */
+async function startConnect(service, b = browser(), authorization = 'Bearer alpha') {
+  const res = await call(service, 'POST', `${API}/connect`, { authorization, origin: OMNISEND_PUBLIC_BASE_URL, body: {}, cookie: b.cookie() });
+  b.take(res);
+  const state = res.body?.authorizationUrl ? new URL(res.body.authorizationUrl).searchParams.get('state') : null;
+  return { res, state, browser: b };
+}
+
+/** Omnisend sends a browser back to the callback (a top-level navigation: no sign-in header). */
+async function backFromOmnisend(service, state, { b = null, code = 'oauth-code', params = {} } = {}) {
+  const query = new URLSearchParams({ ...(code ? { code } : {}), ...(state !== undefined ? { state } : {}), ...params });
+  const res = makeResponse();
+  await service.handle({ method: 'GET', headers: b?.cookie() ? { cookie: b.cookie() } : {}, socket: { remoteAddress: '198.51.100.4' } }, res, new URL(`${OMNISEND_REDIRECT_URI}?${query}`));
+  b?.take(res);
+  return res;
+}
+
+const outcome = (res) => new URL(res.headers.location).searchParams.get('omnisend');
+const jsonResponse = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+
+/** Omnisend's token endpoint and API, answered here; every call is kept in .log. */
+function omnisendFetch({ token, template, campaign } = {}) {
+  const log = [];
+  const fn = vi.fn(async (url, options = {}) => {
+    const u = String(url);
+    if (u === 'https://app.omnisend.com/oauth2/token') {
+      const form = new URLSearchParams(options.body);
+      log.push({ kind: 'token', form });
+      if (token) return token(form);
+      return jsonResponse({ access_token: `private-at-${form.get('code')}`, refresh_token: `private-rt-${form.get('code')}`, token_type: 'Bearer', scope: OMNISEND_SCOPES.join(' ') });
+    }
+    if (u === 'https://api.omnisend.com/api/email-templates/import') {
+      const body = JSON.parse(options.body);
+      log.push({ kind: 'template', body, headers: options.headers });
+      return template ? template(body) : jsonResponse({ id: 'a'.repeat(24) }, 201);
+    }
+    if (u === 'https://api.omnisend.com/api/campaigns') {
+      const body = JSON.parse(options.body);
+      log.push({ kind: 'campaign', body, headers: options.headers });
+      return campaign ? campaign(body) : jsonResponse({ id: 'b'.repeat(24), name: body.name, status: 'draft', url: `https://app.omnisend.com/campaigns/${'b'.repeat(24)}/settings` }, 201);
+    }
+    throw new Error(`Unexpected endpoint ${u}`);
+  });
+  fn.log = log;
+  return fn;
+}
+
+/** A connected account (the whole flow, in one browser). */
+async function connected(service, authorization = 'Bearer alpha', code = 'oauth-code') {
+  const { state, browser: b } = await startConnect(service, browser(), authorization);
+  const back = await backFromOmnisend(service, state, { b, code });
+  expect(outcome(back)).toBe('connected');
+}
+
+const DRAFT = { name: 'Copper & Comb — Email 1', subject: 'Your guide is inside', preheader: 'Start with page one.', body: 'Hi [First name],\n\nHere it is.', ctaLabel: 'Download your free guide', ctaUrl: 'https://copperandcomb.com/free' };
+
+// ───────────── connecting ─────────────
+
+describe('connecting Omnisend', () => {
   it('reports missing OAuth credentials and does not start authorization', async () => {
-    const { service } = makeService({ env: {}, fetch: vi.fn() });
-    const status = await handle(service, 'GET', '/api/integrations/omnisend/status');
+    const { service, storage } = makeService({ env: {}, fetch: vi.fn() });
+    const status = await call(service, 'GET', `${API}/status`);
     expect(status.statusCode).toBe(200);
     expect(status.body.credentialsConfigured).toBe(false);
     expect(status.body.missingCredentials).toEqual(['OMNISEND_CLIENT_ID', 'OMNISEND_CLIENT_SECRET']);
 
-    const connect = await handle(service, 'POST', '/api/integrations/omnisend/connect', { body: {} });
+    const connect = await call(service, 'POST', `${API}/connect`, { body: {}, origin: OMNISEND_PUBLIC_BASE_URL });
     expect(connect.statusCode).toBe(503);
     expect(connect.body.code).toBe('CREDENTIALS_NOT_CONFIGURED');
+    expect(connect.headers['set-cookie']).toBeUndefined();
+    expect(storage.calls.filter((c) => c.op === 'put')).toHaveLength(0);
   });
 
-  it('binds OAuth state to a user, exchanges the code at the exact registered callback, and hides tokens', async () => {
-    const fetch = vi.fn(async (url, options) => {
-      expect(String(url)).toBe('https://app.omnisend.com/oauth2/token');
-      const form = new URLSearchParams(options.body);
-      expect(form.get('redirect_uri')).toBe(OMNISEND_REDIRECT_URI);
-      expect(form.get('client_secret')).toBe('client-secret-test');
-      return jsonResponse({
-        access_token: 'private-alpha-access-token',
-        refresh_token: 'private-alpha-refresh-token',
-        token_type: 'Bearer',
-        scope: OMNISEND_SCOPES.join(' '),
-      });
-    });
+  it('ties the state to the account and this browser, exchanges the code at the registered callback, and hides tokens', async () => {
+    const fetch = omnisendFetch();
     const { service } = makeService({ fetch });
-    const started = await handle(service, 'POST', '/api/integrations/omnisend/connect', { body: {}, origin: OMNISEND_PUBLIC_BASE_URL });
+    const { res: started, state, browser: b } = await startConnect(service);
+    expect(started.statusCode).toBe(200);
     const authorization = new URL(started.body.authorizationUrl);
     expect(authorization.origin).toBe('https://app.omnisend.com');
     expect(authorization.searchParams.get('redirect_uri')).toBe(OMNISEND_REDIRECT_URI);
     expect(authorization.searchParams.get('scope').split(' ').sort()).toEqual([...OMNISEND_SCOPES].sort());
-    const state = authorization.searchParams.get('state');
-    expect(state).toBeTruthy();
+    expect(state).toMatch(/^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{22}$/);
+    // the binding cookie: random, HTTPS-only, out of scripts' reach, sent on Omnisend's redirect back, ten minutes
+    expect(started.headers['set-cookie']).toMatch(new RegExp(`^${COOKIE}=[A-Za-z0-9_-]{43}; Path=/; Max-Age=600; Secure; HttpOnly; SameSite=Lax$`));
+    expect(b.jar.get(COOKIE)).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
-    const callback = makeResponse();
-    await service.handle(
-      request('GET', undefined, undefined, ''),
-      callback,
-      new URL(`${OMNISEND_REDIRECT_URI}?code=oauth-code&state=${encodeURIComponent(state)}`),
-    );
-    expect(callback.statusCode).toBe(303);
-    expect(callback.headers.location).toBe('https://yourlocalbusiness.replit.app/?omnisend=connected#marketing-email');
+    const back = await backFromOmnisend(service, state, { b });
+    expect(back.statusCode).toBe(303);
+    expect(back.headers.location).toBe('https://yourlocalbusiness.replit.app/?omnisend=connected#marketing-email');
+    expect(back.headers['referrer-policy']).toBe('no-referrer');
+    // used up: the cookie goes
+    expect(back.headers['set-cookie']).toBe(`${COOKIE}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`);
+    expect(b.jar.has(COOKIE)).toBe(false);
 
-    const alphaStatus = await handle(service, 'GET', '/api/integrations/omnisend/status');
-    const betaStatus = await handle(service, 'GET', '/api/integrations/omnisend/status', { authorization: 'Bearer beta' });
-    expect(alphaStatus.body.connected).toBe(true);
+    const token = fetch.log.find((c) => c.kind === 'token').form;
+    expect(token.get('redirect_uri')).toBe(OMNISEND_REDIRECT_URI);
+    expect(token.get('client_secret')).toBe('client-secret-test');
+    expect(token.get('grant_type')).toBe('authorization_code');
+
+    const alphaStatus = await call(service, 'GET', `${API}/status`);
+    const betaStatus = await call(service, 'GET', `${API}/status`, { authorization: 'Bearer beta' });
+    expect(alphaStatus.body).toMatchObject({ connected: true, reconnect: null, scopes: OMNISEND_SCOPES });
     expect(betaStatus.body.connected).toBe(false);
-    expect(JSON.stringify(alphaStatus.body)).not.toContain('private-alpha');
+    expect(JSON.stringify([started, back, alphaStatus].map((r) => [r.body, r.headers]))).not.toContain('private-');
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('creates an email template and campaign draft only with the requesting user token', async () => {
-    const calls = [];
-    const fetch = vi.fn(async (url, options) => {
-      calls.push({ url: String(url), options });
-      if (String(url).endsWith('/oauth2/token')) {
-        return jsonResponse({
-          access_token: 'private-alpha-access-token',
-          refresh_token: 'private-alpha-refresh-token',
-          token_type: 'Bearer',
-          scope: OMNISEND_SCOPES.join(' '),
-        });
-      }
-      if (String(url).endsWith('/email-templates/import')) return jsonResponse({ id: 'a'.repeat(24) }, 201);
-      if (String(url).endsWith('/campaigns')) return jsonResponse({ id: 'b'.repeat(24), name: 'Draft', status: 'draft' }, 201);
-      throw new Error('Unexpected provider endpoint');
-    });
-    const { service } = makeService({ fetch });
-    const started = await handle(service, 'POST', '/api/integrations/omnisend/connect', { body: {}, origin: OMNISEND_PUBLIC_BASE_URL });
-    const authUrl = new URL(started.body.authorizationUrl);
-    const callback = makeResponse();
-    await service.handle(
-      request('GET', undefined, undefined, ''),
-      callback,
-      new URL(`${OMNISEND_REDIRECT_URI}?code=oauth-code&state=${encodeURIComponent(authUrl.searchParams.get('state'))}`),
-    );
+  it('refuses a callback in a browser that didn’t start the connection, and stores nothing', async () => {
+    const fetch = omnisendFetch();
+    const { service, storage } = makeService({ fetch });
+    // beta starts a connection (from a script, say) and sends the Omnisend link to someone else
+    const { state, browser: betas } = await startConnect(service, browser(), 'Bearer beta');
+    const puts = storage.calls.filter((c) => c.op === 'put').length;
 
-    const draft = await handle(service, 'POST', '/api/integrations/omnisend/campaign-drafts', {
-      body: {
-        name: 'Spring email',
-        subject: '<script>alert(1)</script>',
-        preheader: 'Preview',
-        body: 'Hello <script>bad()</script>\n\nThanks',
-        ctaLabel: 'Open site',
-        ctaUrl: 'javascript:alert(1)',
-      },
-    });
-    expect(draft.statusCode).toBe(201);
-    expect(draft.body.campaign.status).toBe('draft');
-    expect(JSON.stringify(draft.body)).not.toContain('private-alpha');
-    expect(calls.map((call) => call.url)).toEqual([
-      'https://app.omnisend.com/oauth2/token',
-      'https://api.omnisend.com/api/email-templates/import',
-      'https://api.omnisend.com/api/campaigns',
-    ]);
-    for (const call of calls.slice(1)) {
-      expect(call.options.headers.authorization).toBe('Bearer private-alpha-access-token');
-      expect(call.options.headers['omnisend-version']).toBe('2026-03-15');
-    }
-    const templateBody = JSON.parse(calls[1].options.body);
-    expect(templateBody.html).toContain('&lt;script&gt;');
-    expect(templateBody.html).not.toContain('javascript:');
-    const campaignBody = JSON.parse(calls[2].options.body);
-    expect(campaignBody.content.email.templateID).toBe('a'.repeat(24));
-    expect(campaignBody.type).toBe('regular');
+    // their browser comes back from Omnisend with their code: no cookie, or a cookie of its own
+    const victim = browser();
+    expect(outcome(await backFromOmnisend(service, state, { b: victim, code: 'victim-code' }))).toBe('invalid_state');
+    victim.jar.set(COOKIE, crypto.randomBytes(32).toString('base64url'));
+    expect(outcome(await backFromOmnisend(service, state, { b: victim, code: 'victim-code' }))).toBe('invalid_state');
 
-    const betaDraft = await handle(service, 'POST', '/api/integrations/omnisend/campaign-drafts', {
-      authorization: 'Bearer beta',
-      body: { name: 'Other account', subject: 'Subject', body: 'Body' },
-    });
-    expect(betaDraft.statusCode).toBe(409);
-    expect(betaDraft.body.code).toBe('NOT_CONNECTED');
-    expect(calls).toHaveLength(3);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(storage.calls.filter((c) => c.op === 'put')).toHaveLength(puts);
+    expect(storage.documents.has(userKey('account-beta'))).toBe(false);
+    expect((await call(service, 'GET', `${API}/status`, { authorization: 'Bearer beta' })).body.connected).toBe(false);
+    // a refused callback leaves the browser's own cookie alone
+    expect(victim.jar.has(COOKIE)).toBe(true);
+    // the state is still beta's own, in beta's own browser
+    expect(outcome(await backFromOmnisend(service, state, { b: betas, code: 'beta-code' }))).toBe('connected');
   });
 
-  it('consumes state once, disconnects only one customer, and never exposes sending', async () => {
-    const fetch = vi.fn(async () => jsonResponse({
-      access_token: 'private-alpha-access-token',
-      refresh_token: 'private-alpha-refresh-token',
-      token_type: 'Bearer',
-      scope: OMNISEND_SCOPES.join(' '),
-    }));
+  it('uses a started connection once, disconnects only one account, and never exposes sending', async () => {
+    const fetch = omnisendFetch();
     const { service } = makeService({ fetch });
-    const started = await handle(service, 'POST', '/api/integrations/omnisend/connect', { body: {}, origin: OMNISEND_PUBLIC_BASE_URL });
-    const state = new URL(started.body.authorizationUrl).searchParams.get('state');
-    const callbackUrl = new URL(`${OMNISEND_REDIRECT_URI}?code=oauth-code&state=${encodeURIComponent(state)}`);
-    const first = makeResponse();
-    await service.handle(request('GET', undefined, undefined, ''), first, callbackUrl);
+    const { state, browser: b } = await startConnect(service);
+    const cookie = b.cookie();
+    const first = await backFromOmnisend(service, state, { b });
+    // the same callback again, cookie and all
     const replay = makeResponse();
-    await service.handle(request('GET', undefined, undefined, ''), replay, callbackUrl);
-    expect(first.headers.location).toContain('omnisend=connected');
-    expect(replay.headers.location).toContain('omnisend=invalid_state');
+    await service.handle({ method: 'GET', headers: { cookie }, socket: {} }, replay, new URL(`${OMNISEND_REDIRECT_URI}?code=oauth-code&state=${encodeURIComponent(state)}`));
+    expect(outcome(first)).toBe('connected');
+    expect(outcome(replay)).toBe('invalid_state');
     expect(fetch).toHaveBeenCalledTimes(1);
 
-    const disconnected = await handle(service, 'DELETE', '/api/integrations/omnisend/connection');
+    await connected(service, 'Bearer beta', 'beta-code');
+    const disconnected = await call(service, 'DELETE', `${API}/connection`);
     expect(disconnected.body.connected).toBe(false);
-    expect((await handle(service, 'GET', '/api/integrations/omnisend/status')).body.connected).toBe(false);
-    expect((await handle(service, 'GET', '/api/integrations/omnisend/status', { authorization: 'Bearer beta' })).body.connected).toBe(false);
-    const sending = await handle(service, 'POST', '/api/integrations/omnisend/send', { body: {} });
+    expect((await call(service, 'GET', `${API}/status`)).body.connected).toBe(false);
+    expect((await call(service, 'GET', `${API}/status`, { authorization: 'Bearer beta' })).body.connected).toBe(true);
+    const sending = await call(service, 'POST', `${API}/send`, { body: {} });
     expect(sending.statusCode).toBe(404);
     expect(sending.body.code).toBe('SEND_NOT_AVAILABLE');
   });
 
-  it('rejects cross-site browser requests before changing OAuth state', async () => {
-    const { service, storage } = makeService();
-    const result = await handle(service, 'POST', '/api/integrations/omnisend/connect', { body: {}, origin: 'https://attacker.test' });
-    expect(result.statusCode).toBe(403);
-    expect(storage.documents.size).toBe(0);
+  it('keeps a connection started in another tab of the same browser', async () => {
+    const { service } = makeService({ fetch: omnisendFetch() });
+    const b = browser();
+    const first = await startConnect(service, b);
+    const value = b.jar.get(COOKIE);
+    const second = await startConnect(service, b);
+    // the second Connect keeps this browser's value (and starts its ten minutes again)
+    expect(b.jar.get(COOKIE)).toBe(value);
+    expect(second.state).not.toBe(first.state);
+    expect(outcome(await backFromOmnisend(service, first.state, { b }))).toBe('connected');
   });
 
-  it('requires OAuth to start on the published app origin', async () => {
+  it('turns every other return into a fixed outcome, never reflecting what came back', async () => {
+    const tokenAnswers = [jsonResponse({ error: 'invalid_grant' }, 400), jsonResponse({ access_token: 'private-at-x', token_type: 'mac' })];
+    const fetch = omnisendFetch({ token: () => tokenAnswers.shift() ?? jsonResponse({ access_token: 'private-at-y', token_type: 'Bearer', scope: 'campaigns.write' }) });
+    const { service, clock, storage } = makeService({ fetch });
+    const run = async (params, { code = 'oauth-code', later = 0 } = {}) => {
+      const { state, browser: b } = await startConnect(service);
+      clock.now += later;
+      const res = await backFromOmnisend(service, state, { b, code, params });
+      clock.now = NOW;
+      return res;
+    };
+    const denied = await run({ error: 'access_denied', error_description: '<script>alert(1)</script>', redirect_uri: 'https://evil.example' }, { code: '' });
+    expect(outcome(denied)).toBe('cancelled');
+    expect(denied.headers.location).not.toMatch(/script|evil/);
+    expect(outcome(await run({ error: 'server_error' }, { code: '' }))).toBe('error');
+    expect(outcome(await run({}, { later: 10 * 60 * 1000 + 1 }))).toBe('invalid_state');
+    expect(outcome(await run({}, { code: '' }))).toBe('error');
+    expect(outcome(await run({}, { code: 'c'.repeat(3000) }))).toBe('error');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(outcome(await run({}))).toBe('error'); // the exchange was refused
+    expect(outcome(await run({}))).toBe('error'); // not a Bearer token
+    // a grant without both permissions isn't kept: the account is asked to connect again
+    expect(outcome(await run({}))).toBe('scopes');
+    expect(storage.documents.get(userKey('account-alpha')).value).toEqual({ needsReconnect: 'scopes', markedAt: new Date(NOW).toISOString() });
+    expect((await call(service, 'GET', `${API}/status`)).body).toMatchObject({ connected: false, reconnect: 'scopes' });
+    expect(outcome(await backFromOmnisend(service, '"><script>', { code: 'x' }))).toBe('invalid_state');
+  });
+});
+
+// ───────────── started connections: per account, read one at a time, limited ─────────────
+
+describe('connections waiting for Omnisend', () => {
+  it('can’t be pushed out by another account starting many connections', async () => {
+    const { service, storage } = makeService({ fetch: omnisendFetch() });
+    const { state, browser: b } = await startConnect(service);
+    for (let i = 0; i < 501; i += 1) {
+      const res = await call(service, 'POST', `${API}/connect`, { authorization: 'Bearer beta', origin: OMNISEND_PUBLIC_BASE_URL, body: {} });
+      expect(res.statusCode).toBe(200);
+    }
+    expect(outcome(await backFromOmnisend(service, state, { b }))).toBe('connected');
+    // beta's own document holds only its newest three
+    const betas = [...storage.documents.entries()].filter(([key]) => key.startsWith('omnisend:oauth:pending:')).map(([, row]) => Object.keys(row.value.states).length);
+    expect(betas.sort()).toEqual([0, 3]);
+  });
+
+  it('keeps an account’s newest three', async () => {
+    const { service } = makeService({ fetch: omnisendFetch() });
+    const b = browser();
+    const states = [];
+    for (let i = 0; i < 4; i += 1) states.push((await startConnect(service, b)).state);
+    expect(outcome(await backFromOmnisend(service, states[0], { b }))).toBe('invalid_state');
+    expect(outcome(await backFromOmnisend(service, states[3], { b }))).toBe('connected');
+  });
+
+  it('are read one small document at a time, and a malformed state reads nothing', async () => {
+    const { service, storage } = makeService({ fetch: omnisendFetch() });
+    await startConnect(service, browser(), 'Bearer beta');
+    storage.calls.length = 0;
+    const b = browser();
+    b.jar.set(COOKIE, crypto.randomBytes(32).toString('base64url'));
+    for (const bad of ['', 'x', 'a'.repeat(300), `${'a'.repeat(43)}.${'b'.repeat(21)}`, `${'a'.repeat(43)}.${'b'.repeat(22)}x`]) {
+      expect(outcome(await backFromOmnisend(service, bad, { b }))).toBe('invalid_state');
+    }
+    expect(storage.calls).toHaveLength(0);
+    const tag = crypto.randomBytes(16).toString('base64url').slice(0, 22);
+    expect(outcome(await backFromOmnisend(service, `${crypto.randomBytes(32).toString('base64url')}.${tag}`, { b }))).toBe('invalid_state');
+    expect(storage.calls).toEqual([{ op: 'get', key: `omnisend:oauth:pending:${tag}` }]);
+    // without the browser's cookie, nothing is read at all
+    storage.calls.length = 0;
+    expect(outcome(await backFromOmnisend(service, `${crypto.randomBytes(32).toString('base64url')}.${tag}`))).toBe('invalid_state');
+    expect(storage.calls).toHaveLength(0);
+    expect([...storage.documents.keys()].some((key) => key === 'omnisend:oauth:states')).toBe(false);
+  });
+
+  it('don’t conflict when different accounts connect at the same time', async () => {
+    const { service } = makeService({ fetch: omnisendFetch(), storage: makeStorage({ latencyMs: 1 }) });
+    const results = await Promise.all(
+      Array.from({ length: 12 }, (_, i) => call(service, 'POST', `${API}/connect`, { authorization: `Bearer user-${i}`, origin: OMNISEND_PUBLIC_BASE_URL, body: {} })),
+    );
+    expect(results.map((r) => r.statusCode)).toEqual(Array(12).fill(200));
+  });
+
+  it('are rate limited: connecting and drafts per account, the callback per caller', async () => {
+    const limitedKeys = new Set();
+    const rateLimited = vi.fn((key) => limitedKeys.has(key));
+    const fetch = omnisendFetch();
+    const { service, storage } = makeService({ fetch, rateLimited });
+    await connected(service);
+    expect(rateLimited).toHaveBeenCalledWith('omnisend-connect:user:account-alpha', 1);
+    expect(rateLimited).toHaveBeenCalledWith('omnisend-callback:198.51.100.4');
+
+    limitedKeys.add('omnisend-connect:user:account-alpha');
+    limitedKeys.add('omnisend-drafts:user:account-alpha');
+    limitedKeys.add('omnisend-callback:198.51.100.4');
+    storage.calls.length = 0;
+    const connect = await call(service, 'POST', `${API}/connect`, { origin: OMNISEND_PUBLIC_BASE_URL, body: {} });
+    expect([connect.statusCode, connect.body.code]).toEqual([429, 'RATE_LIMIT']);
+    const draft = await call(service, 'POST', `${API}/campaign-drafts`, { body: DRAFT });
+    expect([draft.statusCode, draft.body.code]).toEqual([429, 'RATE_LIMIT']);
+    const b = browser();
+    b.jar.set(COOKIE, crypto.randomBytes(32).toString('base64url'));
+    expect(outcome(await backFromOmnisend(service, `${crypto.randomBytes(32).toString('base64url')}.${'a'.repeat(22)}`, { b }))).toBe('busy');
+    expect(storage.calls).toHaveLength(0);
+    expect(fetch.log.filter((c) => c.kind !== 'token')).toHaveLength(0);
+    // another account isn't held back
+    expect((await call(service, 'POST', `${API}/connect`, { authorization: 'Bearer beta', origin: OMNISEND_PUBLIC_BASE_URL, body: {} })).statusCode).toBe(200);
+  });
+
+  it('refuses cross-site requests before changing anything, and starts only on the published app', async () => {
     const { service, storage } = makeService();
-    const result = await handle(service, 'POST', '/api/integrations/omnisend/connect', { body: {} });
-    expect(result.statusCode).toBe(400);
-    expect(result.body.code).toBe('USE_PUBLISHED_APP');
+    const crossSite = await call(service, 'POST', `${API}/connect`, { body: {}, origin: 'https://attacker.test' });
+    expect(crossSite.statusCode).toBe(403);
+    const elsewhere = await call(service, 'POST', `${API}/connect`, { body: {} });
+    expect(elsewhere.statusCode).toBe(400);
+    expect(elsewhere.body.code).toBe('USE_PUBLISHED_APP');
     expect(storage.documents.size).toBe(0);
   });
+});
+
+// ───────────── campaign drafts ─────────────
+
+describe('campaign drafts', () => {
+  it('creates an email template and campaign draft only with the requesting account’s token', async () => {
+    const fetch = omnisendFetch();
+    const { service } = makeService({ fetch });
+    await connected(service);
+    const draft = await call(service, 'POST', `${API}/campaign-drafts`, {
+      body: { ...DRAFT, subject: '<script>alert(1)</script>', body: 'Hello <script>bad()</script>\n\nThanks\nThe team' },
+    });
+    expect(draft.statusCode).toBe(201);
+    expect(draft.body.campaign).toEqual({ id: 'b'.repeat(24), name: DRAFT.name, status: 'draft', url: `https://app.omnisend.com/campaigns/${'b'.repeat(24)}/settings` });
+    expect(draft.headers['access-control-allow-origin']).toBe('https://app.test');
+    expect(JSON.stringify(draft.body)).not.toContain('private-');
+    const [, template, campaign] = fetch.log;
+    expect(fetch.log.map((c) => c.kind)).toEqual(['token', 'template', 'campaign']);
+    for (const c of [template, campaign]) {
+      expect(c.headers.authorization).toBe('Bearer private-at-oauth-code');
+      expect(c.headers['omnisend-version']).toBe('2026-03-15');
+    }
+    const html = template.body.html;
+    expect(html).toContain('<p style="margin:0 0 14px">Hello &lt;script&gt;bad()&lt;/script&gt;</p>');
+    expect(html).toContain('Thanks<br>The team');
+    expect(html).not.toContain('<script');
+    // the subject is the subject: the preview doesn't repeat it in the body
+    expect(html).not.toMatch(/<h1/);
+    expect(html).toContain('<a href="https://copperandcomb.com/free" style="display:inline-block;');
+    expect(html).toContain('>Download your free guide</a>');
+    expect(campaign.body).toEqual({ channel: 'email', type: 'regular', name: DRAFT.name, language: 'en_US', content: { email: { templateID: 'a'.repeat(24), subject: '<script>alert(1)</script>', preheader: DRAFT.preheader } } });
+
+    const betaDraft = await call(service, 'POST', `${API}/campaign-drafts`, { authorization: 'Bearer beta', body: DRAFT });
+    expect(betaDraft.statusCode).toBe(409);
+    expect(betaDraft.body.code).toBe('NOT_CONNECTED');
+    expect(fetch.log).toHaveLength(3);
+  });
+
+  it('puts the unsubscribe link Omnisend requires in every imported template', async () => {
+    const fetch = omnisendFetch();
+    const { service } = makeService({ fetch });
+    await connected(service);
+    await call(service, 'POST', `${API}/campaign-drafts`, { body: { subject: 'Hello', body: 'Just text, no button.' } });
+    const html = fetch.log.find((c) => c.kind === 'template').body.html;
+    expect(html).toMatch(/<p style="[^"]*">You’re receiving this because you signed up\. <a href="\[\[unsubscribe_link\]\]"[^>]*>Unsubscribe<\/a> anytime\.<\/p><\/main>/);
+    expect(html).not.toContain('<a href="http');
+  });
+
+  it('reads the body with a small limit and answers 413 or 400', async () => {
+    const fetch = omnisendFetch();
+    const { service, readJson } = makeService({ fetch });
+    await connected(service);
+    const big = await call(service, 'POST', `${API}/campaign-drafts`, { rawBody: JSON.stringify({ ...DRAFT, pad: 'x'.repeat(BODY_LIMIT) }) });
+    expect([big.statusCode, big.body.code]).toEqual([413, 'TOO_LARGE']);
+    expect(readJson).toHaveBeenCalledWith(expect.anything(), BODY_LIMIT);
+    // a body declared too large isn't read at all, and the connection closes after the answer
+    readJson.mockClear();
+    const declared = await call(service, 'POST', `${API}/campaign-drafts`, { body: DRAFT, headers: { 'content-length': String(40 * 1024 * 1024) } });
+    expect([declared.statusCode, declared.body.code, declared.headers.connection]).toEqual([413, 'TOO_LARGE', 'close']);
+    expect(readJson).not.toHaveBeenCalled();
+    for (const rawBody of ['null', 'false', '0', '""', '[]', 'not json']) {
+      const res = await call(service, 'POST', `${API}/campaign-drafts`, { rawBody });
+      expect(res.statusCode).toBe(400);
+      expect(['INVALID_DRAFT', 'BAD_REQUEST']).toContain(res.body.code);
+    }
+    expect(fetch.log.filter((c) => c.kind !== 'token')).toHaveLength(0);
+  });
+
+  it('refuses a button without a web address instead of leaving it out', async () => {
+    const fetch = omnisendFetch();
+    const { service } = makeService({ fetch });
+    await connected(service);
+    for (const ctaUrl of ['{{product_link}}', '[link to your offer]', 'javascript:alert(1)', 'https://user:pass@example.com/', '']) {
+      const res = await call(service, 'POST', `${API}/campaign-drafts`, { body: { ...DRAFT, ctaUrl } });
+      expect([res.statusCode, res.body.code]).toEqual([400, 'INVALID_CTA']);
+    }
+    expect(fetch.log.filter((c) => c.kind !== 'token')).toHaveLength(0);
+    // a link without a label: the preview shows no button, and neither does the draft
+    const noLabel = await call(service, 'POST', `${API}/campaign-drafts`, { body: { ...DRAFT, ctaLabel: '' } });
+    expect(noLabel.statusCode).toBe(201);
+    expect(fetch.log.find((c) => c.kind === 'template').body.html).not.toContain('copperandcomb.com');
+  });
+
+  it('refuses fields over their limits instead of cutting them, and shortens only the campaign name', async () => {
+    const fetch = omnisendFetch();
+    const { service } = makeService({ fetch });
+    await connected(service);
+    const tooLong = { subject: 'S'.repeat(251), preheader: 'P'.repeat(251), body: 'B'.repeat(24_001), ctaLabel: 'L'.repeat(101), ctaUrl: `https://example.com/${'u'.repeat(2048)}` };
+    for (const [field, value] of Object.entries(tooLong)) {
+      const res = await call(service, 'POST', `${API}/campaign-drafts`, { body: { ...DRAFT, [field]: value } });
+      expect([res.statusCode, res.body.code]).toEqual([400, 'INVALID_DRAFT']);
+    }
+    // exactly at the limit is fine, counted as Omnisend does (an emoji is one character)
+    const atLimit = await call(service, 'POST', `${API}/campaign-drafts`, { body: { ...DRAFT, subject: `${'S'.repeat(249)}😀`, name: `${'N'.repeat(300)}` } });
+    expect(atLimit.statusCode).toBe(201);
+    const campaign = fetch.log.find((c) => c.kind === 'campaign').body;
+    expect(campaign.content.email.subject).toBe(`${'S'.repeat(249)}😀`);
+    expect(campaign.name).toBe('N'.repeat(250));
+    expect([...fetch.log.find((c) => c.kind === 'template').body.name].length).toBeLessThanOrEqual(255);
+  });
+});
+
+// ───────────── when Omnisend refuses, or doesn't say ─────────────
+
+describe('when Omnisend refuses or doesn’t answer', () => {
+  const draftWith = async (fetch) => {
+    const made = makeService({ fetch });
+    await connected(made.service);
+    const res = await call(made.service, 'POST', `${API}/campaign-drafts`, { body: DRAFT });
+    return { ...made, res };
+  };
+  const steps = (fetch) => fetch.log.filter((c) => c.kind !== 'token').map((c) => c.kind);
+
+  it('a connection Omnisend no longer accepts (401) asks for a new one', async () => {
+    const fetch = omnisendFetch({ template: () => jsonResponse({ type: 'https://problems.omnisend.com/unauthorized', detail: 'private detail' }, 401) });
+    const { service, storage, res } = await draftWith(fetch);
+    expect([res.statusCode, res.body.code]).toEqual([409, 'RECONNECT_REQUIRED']);
+    expect(res.body.error).toBe('Omnisend no longer accepts this connection, so nothing was created. Connect Omnisend again.');
+    expect(storage.documents.get(userKey('account-alpha')).value).toEqual({ needsReconnect: 'revoked', markedAt: new Date(NOW).toISOString() });
+    expect((await call(service, 'GET', `${API}/status`)).body).toMatchObject({ connected: false, reconnect: 'revoked', scopes: [] });
+    const again = await call(service, 'POST', `${API}/campaign-drafts`, { body: DRAFT });
+    expect([again.statusCode, again.body.code]).toEqual([409, 'RECONNECT_REQUIRED']);
+    expect(steps(fetch)).toEqual(['template']);
+    // connecting again clears it
+    await connected(service);
+    expect((await call(service, 'GET', `${API}/status`)).body).toMatchObject({ connected: true, reconnect: null });
+  });
+
+  it('a connection without both permissions asks for a new one', async () => {
+    const fetch = omnisendFetch();
+    const { service, storage } = makeService({ fetch });
+    storage.documents.set(userKey('account-alpha'), { value: { accessToken: 'private-at-old', scopes: ['campaigns.write'] }, updatedAt: 'v0' });
+    expect((await call(service, 'GET', `${API}/status`)).body).toMatchObject({ connected: false, reconnect: 'scopes' });
+    const res = await call(service, 'POST', `${API}/campaign-drafts`, { body: DRAFT });
+    expect([res.statusCode, res.body.code]).toEqual([409, 'SCOPE_REQUIRED']);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(storage.documents.get(userKey('account-alpha')).value.accessToken).toBeUndefined();
+    // and Omnisend saying so (403) does the same
+    const refused = omnisendFetch({ template: () => jsonResponse({}, 403) });
+    const second = await draftWith(refused);
+    expect([second.res.statusCode, second.res.body.code]).toEqual([409, 'SCOPE_REQUIRED']);
+    expect((await call(second.service, 'GET', `${API}/status`)).body.reconnect).toBe('scopes');
+  });
+
+  it('a template import that may have happened says so, and is never retried', async () => {
+    const fetch = omnisendFetch({ template: () => Promise.reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError')) });
+    const { res } = await draftWith(fetch);
+    expect([res.statusCode, res.body.code]).toEqual([502, 'OUTCOME_UNKNOWN']);
+    expect(res.body.error).toBe('The email template may have been created: Omnisend didn’t confirm it. Check Omnisend before trying again.');
+    expect(steps(fetch)).toEqual(['template']);
+
+    const serverError = omnisendFetch({ template: () => jsonResponse({}, 503) });
+    expect((await draftWith(serverError)).res.body.code).toBe('OUTCOME_UNKNOWN');
+    const noId = omnisendFetch({ template: () => jsonResponse({ id: 'not-a-template-id' }, 201) });
+    const unconfirmed = (await draftWith(noId)).res;
+    expect([unconfirmed.statusCode, unconfirmed.body.code]).toEqual([502, 'TEMPLATE_UNCONFIRMED']);
+    expect(unconfirmed.body.error).toMatch(/may have been created: check Omnisend before trying again\.$/);
+    expect(steps(noId)).toEqual(['template']);
+  });
+
+  it('an import that never reached Omnisend says nothing was created', async () => {
+    const fetch = omnisendFetch({ template: () => Promise.reject(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } })) });
+    const { res } = await draftWith(fetch);
+    expect([res.statusCode, res.body.code, res.body.error]).toEqual([502, 'OMNISEND_UNAVAILABLE', 'Couldn’t reach Omnisend, so nothing was created. Try again shortly.']);
+    const refused = omnisendFetch({ template: () => jsonResponse({ detail: 'private detail' }, 400) });
+    const answer = (await draftWith(refused)).res;
+    expect([answer.body.code, answer.body.error]).toEqual(['TEMPLATE_CREATE_FAILED', 'Omnisend refused the email template (HTTP 400), so nothing was created.']);
+  });
+
+  it('a campaign step that fails says the template exists, and whether the draft may', async () => {
+    const cases = [
+      [() => Promise.reject(new DOMException('aborted', 'TimeoutError')), 502, 'OUTCOME_UNKNOWN', 'The email template was imported, and the campaign draft may have been created: Omnisend didn’t confirm it. Check Omnisend before trying again.'],
+      [() => jsonResponse({}, 500), 502, 'OUTCOME_UNKNOWN', 'The email template was imported, and the campaign draft may have been created: Omnisend didn’t confirm it. Check Omnisend before trying again.'],
+      [() => jsonResponse({ detail: 'private detail' }, 400), 502, 'DRAFT_CREATE_FAILED', 'The email template was imported, but Omnisend refused the campaign draft (HTTP 400), so none was created. Check Omnisend before trying again.'],
+      [() => jsonResponse({ type: 'https://problems.omnisend.com/sender-email-not-available', detail: 'private detail' }, 422), 422, 'SENDER_REQUIRED', 'The email template was imported, but Omnisend can’t create a campaign until this brand has a verified sender email. Add one in Omnisend’s sender settings; the template is already there to use.'],
+      [() => jsonResponse({ type: 'https://problems.omnisend.com/rate-limit-exceeded', retryAfter: 60 }, 429), 429, 'OMNISEND_RATE_LIMIT', 'The email template was imported, but Omnisend is limiting requests right now, so no campaign draft was created. Wait a minute and check Omnisend before trying again.'],
+      [() => Promise.reject(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } })), 502, 'OMNISEND_UNAVAILABLE', 'The email template was imported, but Omnisend couldn’t be reached to create the campaign draft. Check Omnisend before trying again.'],
+    ];
+    for (const [campaign, status, code, error] of cases) {
+      const fetch = omnisendFetch({ campaign });
+      const { res } = await draftWith(fetch);
+      expect([res.statusCode, res.body.code, res.body.error]).toEqual([status, code, error]);
+      expect(steps(fetch)).toEqual(['template', 'campaign']);
+      expect(JSON.stringify(res.body)).not.toContain('private');
+    }
+  });
+});
+
+// ───────────── status ─────────────
+
+describe('the status', () => {
+  it('says whether the caller is the app’s owner', async () => {
+    const { service } = makeService();
+    expect((await call(service, 'GET', `${API}/status`, { authorization: 'Bearer owner' })).body.owner).toBe(true);
+    expect((await call(service, 'GET', `${API}/status`)).body.owner).toBe(false);
+  });
+
+  it('copes with storage that isn’t set up, can’t be read or is down', async () => {
+    const { service, storage } = makeService();
+    storage.fail.get = 'NO_TABLE';
+    const noTable = await call(service, 'GET', `${API}/status`);
+    expect([noTable.statusCode, noTable.body.storageReady, noTable.body.connected]).toEqual([200, false, false]);
+    storage.fail.get = 'UNREACHABLE';
+    const down = await call(service, 'GET', `${API}/status`);
+    expect([down.statusCode, down.body.code]).toEqual([503, 'STORAGE_UNAVAILABLE']);
+    storage.fail.get = null;
+
+    // a connection saved under an encryption secret that has since changed: connect again (or disconnect)
+    storage.documents.set(userKey('account-alpha'), { value: { accessToken: 'private-at-old', scopes: OMNISEND_SCOPES }, updatedAt: 'v0' });
+    storage.unreadable.add(userKey('account-alpha'));
+    expect((await call(service, 'GET', `${API}/status`)).body).toMatchObject({ connected: false, reconnect: 'unreadable', storageReady: true });
+    const draft = await call(service, 'POST', `${API}/campaign-drafts`, { body: DRAFT });
+    expect([draft.statusCode, draft.body.code]).toEqual([409, 'RECONNECT_REQUIRED']);
+    const disconnect = await call(service, 'DELETE', `${API}/connection`);
+    expect(disconnect.statusCode).toBe(200);
+    expect((await call(service, 'GET', `${API}/status`)).body).toMatchObject({ connected: false, reconnect: null });
+  });
+
+  it('needs accounts and a sign-in that can be checked', async () => {
+    const off = makeService({ auth: { enabled: false } }).service;
+    expect((await call(off, 'GET', `${API}/status`)).body.code).toBe('ACCOUNTS_NOT_CONFIGURED');
+    const broken = makeService({ auth: { enabled: true, identify: async () => Promise.reject(new Error('down')) } }).service;
+    const unavailable = await call(broken, 'GET', `${API}/status`);
+    expect([unavailable.statusCode, unavailable.body.code]).toEqual([503, 'AUTH_UNAVAILABLE']);
+    const signedOut = await call(makeService().service, 'GET', `${API}/status`, { authorization: '' });
+    expect([signedOut.statusCode, signedOut.body.code]).toEqual([401, 'AUTH_REQUIRED']);
+    expect(signedOut.headers['access-control-allow-origin']).toBe('https://app.test');
+  });
+});
+
+// ───────────── deleting an account ─────────────
+
+describe('forgetting an account (account deletion)', () => {
+  it('has nothing to delete without the app_state table, or without storage', async () => {
+    const { service, storage } = makeService();
+    storage.fail.get = 'NO_TABLE';
+    storage.fail.put = 'NO_TABLE';
+    await expect(service.forgetUser('account-alpha')).resolves.toBeUndefined();
+    const local = makeService({ storage: { enabled: false } }).service;
+    await expect(local.forgetUser('account-alpha')).resolves.toBeUndefined();
+  });
+
+  it('overwrites a connection without reading it, so one it can’t decrypt goes too', async () => {
+    const { service, storage } = makeService();
+    storage.documents.set(userKey('account-alpha'), { value: { accessToken: 'private-at-old', refreshToken: 'private-rt-old' }, updatedAt: 'v0' });
+    storage.unreadable.add(userKey('account-alpha'));
+    storage.fail.get = 'UNREACHABLE';
+    await service.forgetUser('account-alpha');
+    expect(storage.calls.filter((c) => c.op === 'get')).toHaveLength(0);
+    expect(storage.calls.filter((c) => c.op === 'put').every((c) => !c.conditional)).toBe(true);
+    expect(storage.documents.get(userKey('account-alpha')).value).toEqual({ forgottenAt: new Date(NOW).toISOString() });
+  });
+
+  it('stops the deletion with its own message when storage is down', async () => {
+    const { service, storage } = makeService();
+    storage.fail.put = 'UNREACHABLE';
+    await expect(service.forgetUser('account-alpha')).rejects.toMatchObject({
+      status: 503,
+      code: 'OMNISEND_FORGET_FAILED',
+      message: 'Couldn’t remove your Omnisend connection just now, so your account wasn’t deleted. Try again shortly.',
+    });
+  });
+
+  it('drops the connections the account started, so a sign-in finished afterwards stores nothing', async () => {
+    const fetch = omnisendFetch();
+    const { service, storage } = makeService({ fetch });
+    const { state, browser: b } = await startConnect(service);
+    await service.forgetUser('account-alpha');
+    expect(outcome(await backFromOmnisend(service, state, { b, code: 'leaver-code' }))).toBe('invalid_state');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(storage.documents.get(userKey('account-alpha')).value.accessToken).toBeUndefined();
+    // and the deleted account can't start another
+    const again = await call(service, 'POST', `${API}/connect`, { origin: OMNISEND_PUBLIC_BASE_URL, body: {} });
+    expect([again.statusCode, again.body.code]).toEqual([403, 'ACCOUNT_GONE']);
+  });
+
+  it('never stores a token for an account deleted while its sign-in was being exchanged', async () => {
+    let service;
+    const fetch = omnisendFetch({
+      token: async (form) => {
+        await service.forgetUser('account-alpha');
+        return jsonResponse({ access_token: `private-at-${form.get('code')}`, token_type: 'Bearer', scope: OMNISEND_SCOPES.join(' ') });
+      },
+    });
+    const made = makeService({ fetch });
+    service = made.service;
+    const { state, browser: b } = await startConnect(service);
+    expect(outcome(await backFromOmnisend(service, state, { b, code: 'leaver-code' }))).toBe('invalid_state');
+    expect(made.storage.documents.get(userKey('account-alpha')).value).toEqual({ forgottenAt: new Date(NOW).toISOString() });
+  });
+
+  it('lets an account that wasn’t deleted after all connect again a week later', async () => {
+    const { service, clock } = makeService({ fetch: omnisendFetch() });
+    await service.forgetUser('account-alpha');
+    clock.now = NOW + 8 * 24 * 60 * 60 * 1000;
+    await connected(service);
+  });
+});
+
+// ───────────── the real server ─────────────
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const APP = 'https://yourlocalbusiness.replit.app';
+
+/** ai-server.mjs, with Omnisend answered by test/mock-omnisend.mjs (nothing leaves the machine). */
+async function startServer(supa, extraEnv = {}) {
+  const port = await new Promise((resolve) => {
+    const probe = http.createServer();
+    probe.listen(0, '127.0.0.1', () => {
+      const { port: free } = probe.address();
+      probe.close(() => resolve(free));
+    });
+  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ylb-omnisend-'));
+  const log = path.join(dir, 'omnisend-calls.jsonl');
+  const child = spawn(process.execPath, ['--import', pathToFileURL(path.join(here, 'test', 'mock-omnisend.mjs')).href, path.join(here, 'ai-server.mjs')], {
+    env: {
+      PATH: process.env.PATH,
+      PORT: String(port),
+      HOST: '127.0.0.1',
+      DATA_DIR: dir,
+      SUPABASE_URL: supa.url,
+      SUPABASE_PUBLISHABLE_KEY: supa.PUBLISHABLE,
+      SUPABASE_SECRET_KEY: supa.SECRET,
+      ADMIN_EMAILS: 'owner@example.com',
+      OMNISEND_CLIENT_ID: 'fake-client-id',
+      OMNISEND_CLIENT_SECRET: 'fake-client-secret',
+      OMNISEND_MOCK_LOG: log,
+      ...extraEnv,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  child.stdout.on('data', (d) => (out += d));
+  child.stderr.on('data', (d) => (out += d));
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`server didn’t start: ${out}`)), 15_000);
+    child.on('exit', (code) => reject(new Error(`server exited ${code}: ${out}`)));
+    const check = () => (out.includes('Yourlocalbusiness server on') ? (clearTimeout(timer), resolve()) : setTimeout(check, 25));
+    check();
+  });
+  return {
+    port,
+    calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)) : []),
+    output: () => out,
+    // the server saves its usage log as it stops: its folder goes once it has exited
+    stop: async () => {
+      child.kill();
+      await exited;
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+function request(port, method, pathname, { token, origin, body, rawBody, cookie, timeoutMs = 10_000 } = {}) {
+  return new Promise((resolve) => {
+    const headers = { host: 'yourlocalbusiness.replit.app' };
+    if (origin) headers.origin = origin;
+    if (token) headers.authorization = `Bearer ${token}`;
+    if (cookie) headers.cookie = cookie;
+    const payload = rawBody ?? (body !== undefined ? JSON.stringify(body) : undefined);
+    if (payload !== undefined) {
+      headers['content-type'] = 'application/json';
+      headers['content-length'] = Buffer.byteLength(payload);
+    }
+    const req = http.request({ host: '127.0.0.1', port, method, path: pathname, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString();
+        let json = null;
+        try {
+          json = JSON.parse(text);
+        } catch {}
+        resolve({ status: res.statusCode, headers: res.headers, json });
+      });
+    });
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      resolve({ status: 'NO_ANSWER' });
+    });
+    req.on('error', (e) => resolve({ status: 'ERROR', error: e.code }));
+    if (payload !== undefined) req.write(payload);
+    req.end();
+  });
+}
+
+const returned = (res) => new URL(res.headers.location).searchParams.get('omnisend');
+
+describe('the real server', () => {
+  let supa;
+  beforeAll(async () => {
+    supa = await (await createMockSupabase()).start();
+  });
+  afterAll(async () => {
+    await supa?.close();
+  });
+
+  it('ties the callback to the browser, limits the draft body, rate-limits callers and forgets deleted accounts', async () => {
+    const server = await startServer(supa, { RATE_LIMIT_PER_MIN: '8' });
+    try {
+      const { port } = server;
+      const alice = await supa.tokenFor('omnisend-alice@example.com');
+      const bob = await supa.tokenFor('omnisend-bob@example.com');
+      const drafts = `${API}/campaign-drafts`;
+
+      const start = await request(port, 'POST', `${API}/connect`, { token: alice.token, origin: APP, body: {} });
+      expect(start.status).toBe(200);
+      expect(start.headers['set-cookie']).toHaveLength(1);
+      expect(start.headers['set-cookie'][0]).toMatch(new RegExp(`^${COOKIE}=[A-Za-z0-9_-]{43}; Path=/; Max-Age=600; Secure; HttpOnly; SameSite=Lax$`));
+      const cookie = start.headers['set-cookie'][0].split(';')[0];
+      const state = encodeURIComponent(new URL(start.json.authorizationUrl).searchParams.get('state'));
+
+      // another browser (no cookie) comes back with the state: nothing is exchanged or stored
+      const stranger = await request(port, 'GET', `${API}/callback?code=bob-code&state=${state}`);
+      expect([stranger.status, returned(stranger)]).toEqual([303, 'invalid_state']);
+      expect(server.calls().filter((c) => c.kind === 'token')).toHaveLength(0);
+      const back = await request(port, 'GET', `${API}/callback?code=alice-code&state=${state}`, { cookie });
+      expect(returned(back)).toBe('connected');
+      expect(back.headers['set-cookie'][0]).toMatch(/Max-Age=0;/);
+      expect((await request(port, 'GET', `${API}/status`, { token: alice.token, origin: APP })).json).toMatchObject({ connected: true, owner: false });
+
+      // the real sameOrigin and readJson
+      const crossSite = await request(port, 'POST', drafts, { token: alice.token, origin: 'https://evil.example', body: DRAFT });
+      expect(crossSite.status).toBe(403);
+      const big = await request(port, 'POST', drafts, { token: alice.token, origin: APP, rawBody: JSON.stringify({ ...DRAFT, body: 'x'.repeat(200 * 1024) }) });
+      expect([big.status, big.json?.code]).toEqual([413, 'TOO_LARGE']);
+      const nothing = await request(port, 'POST', drafts, { token: alice.token, origin: APP, rawBody: 'null', timeoutMs: 5000 });
+      expect([nothing.status, nothing.json?.code]).toEqual([400, 'INVALID_DRAFT']);
+      const draft = await request(port, 'POST', drafts, { token: alice.token, origin: APP, body: DRAFT });
+      expect(draft.status).toBe(201);
+      const imported = server.calls().find((c) => c.path === '/api/email-templates/import');
+      expect(imported.bearer).toBe('Bearer fake-at-alice-code');
+      expect(imported.payload.html).toContain('<a href="[[unsubscribe_link]]"');
+
+      // bob starts connecting, deletes his account, then his Omnisend tab comes back: no token for the deleted account
+      const bobStart = await request(port, 'POST', `${API}/connect`, { token: bob.token, origin: APP, body: {} });
+      const bobCookie = bobStart.headers['set-cookie'][0].split(';')[0];
+      const bobState = encodeURIComponent(new URL(bobStart.json.authorizationUrl).searchParams.get('state'));
+      const deleted = await request(port, 'DELETE', '/api/account', { token: bob.token, origin: APP });
+      expect(deleted.status).toBe(200);
+      expect(supa.users.has(bob.user.id)).toBe(false);
+      const late = await request(port, 'GET', `${API}/callback?code=bob-code&state=${bobState}`, { cookie: bobCookie });
+      expect(returned(late)).toBe('invalid_state');
+      const key = userKey(bob.user.id);
+      const row = (supa.tables.get('app_state') ?? []).find((r) => r.key === key);
+      expect(JSON.parse(createSecretBox(supa.SECRET, 'ylb-app-state').open(row.ciphertext, `app_state:${key}`))).toEqual({ forgottenAt: expect.any(String) });
+      expect(server.calls().filter((c) => c.kind === 'token').map((c) => c.code)).toEqual(['alice-code']);
+
+      // callbacks from one caller: over RATE_LIMIT_PER_MIN, they're turned away before any storage read
+      const reads = () => supa.calls.filter((c) => c.method === 'GET' && c.path === '/rest/v1/app_state').length;
+      const outcomes = [];
+      for (let i = 0; i < 8; i += 1) {
+        const randomState = `${crypto.randomBytes(32).toString('base64url')}.${crypto.randomBytes(16).toString('base64url').slice(0, 22)}`;
+        const before = reads();
+        const res = await request(port, 'GET', `${API}/callback?code=x&state=${randomState}`, { cookie });
+        outcomes.push([returned(res), reads() - before]);
+      }
+      expect(outcomes.at(-1)).toEqual(['busy', 0]);
+      expect(server.calls().filter((c) => c.kind === 'blocked')).toEqual([]);
+      expect(server.output()).not.toMatch(/fake-at-|fake-rt-|fake-client-secret/);
+    } finally {
+      await server.stop();
+    }
+  }, 30_000);
+
+  it('deletes accounts and reports status without the app_state table', async () => {
+    const bare = await (await createMockSupabase({ missingTables: ['app_state'] })).start();
+    const server = await startServer(bare);
+    try {
+      const someone = await bare.tokenFor('omnisend-someone@example.com');
+      const status = await request(server.port, 'GET', `${API}/status`, { token: someone.token, origin: APP });
+      expect([status.status, status.json.storageReady]).toEqual([200, false]);
+      const deleted = await request(server.port, 'DELETE', '/api/account', { token: someone.token, origin: APP });
+      expect(deleted.status).toBe(200);
+      expect(bare.users.has(someone.user.id)).toBe(false);
+    } finally {
+      await server.stop();
+      await bare.close();
+    }
+  }, 30_000);
 });
