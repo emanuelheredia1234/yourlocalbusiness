@@ -116,10 +116,10 @@ export function readJson(req, limit = 1e6) {
 }
 
 /** Call a module's handle(req, res, url) and get { status, body }. */
-export async function call(module, method, path, { token, body, host = 'yourlocalbusiness.replit.app' } = {}) {
+export async function call(module, method, path, { token, body, host = 'yourlocalbusiness.replit.app', headers = {} } = {}) {
   const req = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]);
   req.method = method;
-  req.headers = { host, ...(token ? { authorization: `Bearer ${token}` } : {}) };
+  req.headers = { host, ...headers, ...(token ? { authorization: `Bearer ${token}` } : {}) };
   const res = {
     statusCode: 0,
     headers: {},
