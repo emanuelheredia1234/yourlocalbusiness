@@ -214,7 +214,7 @@ export function StrategyPage({ project }: { project: Project }) {
       />
       <Tabs<Tab>
         sticky
-        className="mb-6"
+        className="mb-5"
         value={tab}
         onChange={setTab}
         tabs={[

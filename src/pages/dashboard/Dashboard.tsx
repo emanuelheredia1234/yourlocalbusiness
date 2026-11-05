@@ -444,10 +444,18 @@ function NextPost({ project, post, now, className }: { project: Project; post?: 
             <DueBadge post={post} now={now} />
           </span>
         }
-        caption={post.caption || undefined}
         className="w-full max-w-[300px]"
       >
         <PostVisual style={post.style} headline={post.headline} brand={b} watermark={post.watermark} media={post.media} storyboard={post.storyboard} aspect="1/1" className="!rounded-none" />
+        {/* the caption as PostFrame lays it out, with the padding outside the clamp (a 4th line must not peek through it) */}
+        {post.caption && (
+          <div className="px-3 py-2.5">
+            <p className="clamp-3 text-small text-ink-2">
+              <span className="mr-1 font-semibold text-ink">{handleFor(project, post)}</span>
+              {post.caption}
+            </p>
+          </div>
+        )}
       </PostFrame>
       <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
         {held ? (
