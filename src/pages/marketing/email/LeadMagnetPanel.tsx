@@ -15,6 +15,7 @@ import { Icon } from '@/components/ui/Icon';
 import { BrandLogo } from '@/components/brand/Logo';
 import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
+import { PanelHead } from './shared';
 
 export function LeadMagnetPanel({ project }: { project: Project }) {
   const updateMarketing = useStore((s) => s.updateMarketing);
@@ -72,24 +73,25 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
   return (
     <div className="grid grid-cols-1 items-start gap-8 lg:grid-cols-12">
       <div className="flex min-w-0 flex-col lg:col-span-7">
-        <Section
-          title="Lead magnet"
-          description={`A quick win people trade their email for, leading to ${project.studio.listing.title || project.brand.name}.`}
-          actions={
-            <>
-              <Select<LeadMagnetType> size="sm" aria-label="Lead magnet type" value={type} onChange={setType} options={LEAD_MAGNET_TYPES.map((t) => ({ value: t.id, label: t.label }))} className="w-[150px]" />
-              <GenerateButton size="sm" running={ai.running} runningLabel="Writing…" onClick={generate}>
-                Write a new one
-              </GenerateButton>
-              <MoreMenu
-                items={[
-                  { label: 'Copy as Markdown', icon: <Copy />, onSelect: () => void copyMarkdown() },
-                  { label: 'Export .md', icon: <Download />, onSelect: () => void download(`${slugify(lm.title)}.md`, leadMagnetMarkdown(lm, project.brand.name)) },
-                ]}
-              />
-            </>
-          }
-        >
+        <Section>
+          <PanelHead
+            title="Lead magnet"
+            description={`A quick win people trade their email for, leading to ${project.studio.listing.title || project.brand.name}.`}
+            actions={
+              <>
+                <Select<LeadMagnetType> size="sm" aria-label="Lead magnet type" value={type} onChange={setType} options={LEAD_MAGNET_TYPES.map((t) => ({ value: t.id, label: t.label }))} className="w-[150px]" />
+                <GenerateButton size="sm" running={ai.running} runningLabel="Writing…" onClick={generate}>
+                  Write a new one
+                </GenerateButton>
+                <MoreMenu
+                  items={[
+                    { label: 'Copy as Markdown', icon: <Copy />, onSelect: () => void copyMarkdown() },
+                    { label: 'Export .md', icon: <Download />, onSelect: () => void download(`${slugify(lm.title)}.md`, leadMagnetMarkdown(lm, project.brand.name)) },
+                  ]}
+                />
+              </>
+            }
+          />
           <div className="flex flex-col gap-4">
             {thinking}
             {resultBar}

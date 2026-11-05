@@ -87,7 +87,7 @@ export default function MarketingHub() {
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-h3 text-ink">{c.label}</span>
-                  <span className="mt-0.5 block truncate text-small text-muted" title={c.desc}>
+                  <span className="mt-0.5 block text-small text-muted sm:truncate" title={c.desc}>
                     {c.desc}
                   </span>
                 </span>

@@ -1,9 +1,23 @@
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { EmailStep, Project, Subscriber } from '@/lib/types';
 import { ensureUrl, readableOn } from '@/lib/utils';
 import { renderTokens } from '@/ai/local/email';
 import { useStore } from '@/store/useStore';
 import { BrandLogo } from '@/components/brand/Logo';
+
+/** A panel's title row: the title and its line on the left, the actions on the right. Unlike Section's own row it
+ *  wraps, so on a phone the actions go under the title instead of squeezing it into a column one word wide. */
+export function PanelHead({ title, description, actions }: { title: ReactNode; description?: ReactNode; actions?: ReactNode }) {
+  return (
+    <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+      <div className="min-w-0 flex-1 basis-72">
+        <h2 className="text-h2 text-ink">{title}</h2>
+        {description && <p className="mt-1 text-small text-muted">{description}</p>}
+      </div>
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
 
 /** Merge values for previews: a real subscriber's, or clear placeholders (never invented people or sites). */
 export function emailTokens(p: Project, sub?: Pick<Subscriber, 'name' | 'email'> | null): Record<string, string> {

@@ -336,7 +336,8 @@ export default function SeoSalesPage() {
                   {publishLabel}
                 </button>
               )}
-              <MoreMenu label="More page actions" items={menu} />
+              {/* on a phone it sits in the bottom bar, beside Publish */}
+              {!phone && <MoreMenu label="More page actions" items={menu} />}
             </>
           ) : undefined
         }
@@ -568,6 +569,7 @@ export default function SeoSalesPage() {
       {hasPage && phone && (
         <div className="sm:hidden">
           <StickyActionBar>
+            <MoreMenu label="More page actions" items={menu} />
             <button type="button" className="btn btn-primary" onClick={openPublish}>
               {publishLabel}
             </button>
@@ -872,7 +874,8 @@ function EditPanel({
   };
 
   return (
-    <section className="sticky bottom-0 z-10 -mx-3 -mb-3 mt-4 w-[calc(100%+24px)] bg-gradient-to-t from-surface-2 from-70% to-transparent px-3 pb-3 pt-6 sm:-mx-6 sm:-mb-6 sm:w-[calc(100%+48px)] sm:px-6 sm:pb-6" aria-label="Edit with AI">
+    // docked at the bottom of the canvas while you scroll the page; on a phone (where the Publish bar is) it sits at the end
+    <section className="sticky bottom-0 z-10 -mx-3 -mb-3 mt-4 w-[calc(100%+24px)] bg-gradient-to-t from-surface-2 from-70% to-transparent px-3 pb-3 pt-6 max-sm:static sm:-mx-6 sm:-mb-6 sm:w-[calc(100%+48px)] sm:px-6 sm:pb-6" aria-label="Edit with AI">
       <div className="mx-auto flex w-full max-w-[760px] flex-col gap-2">
         <AIThinking running={ai.running} stage={ai.stage} onStop={ai.stop} compact />
         {outcome && !ai.running && (

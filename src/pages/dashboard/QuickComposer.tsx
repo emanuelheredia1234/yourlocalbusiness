@@ -252,16 +252,16 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
         </div>
         {/* before generating, so the AI writes for the first network's choice; the others get the link moved for them */}
         {link ? (
-          <Field label="Where the link goes" right={<span className="font-mono [overflow-wrap:anywhere]">{linkText(link.url)}</span>}>
+          <Field label="Where the link goes" right={<span className="font-mono [overflow-wrap:anywhere] max-sm:hidden">{linkText(link.url)}</span>}>
             <ul className="flex flex-col divide-y divide-line rounded-lg border border-line">
               {platforms.map((p) => (
-                <li key={p} className="flex min-h-12 flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5">
-                  <span className="flex min-w-[110px] flex-1 items-center gap-2 text-ui text-ink">
-                    <PlatformGlyph platform={p} size={16} /> {networkLabel(p)}
+                <li key={p} className="grid min-h-12 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 px-3 py-1.5">
+                  <span className="flex min-w-0 items-center gap-2 text-ui text-ink">
+                    <PlatformGlyph platform={p} size={16} /> <span className="truncate">{networkLabel(p)}</span>
                   </span>
                   <Select<LinkPlacement>
                     size="sm"
-                    className="w-[176px]"
+                    className="w-[176px] max-sm:w-[148px]"
                     aria-label={`Where the link goes on ${networkLabel(p)}`}
                     value={linkFor(p)!.placement}
                     onChange={(v) => setLinkWhere((x) => ({ ...x, [p]: v }))}
@@ -271,6 +271,8 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
                 </li>
               ))}
             </ul>
+            {/* on a phone the address goes under the list, so the label keeps its one line */}
+            <p className="mt-1.5 font-mono text-caption text-muted [overflow-wrap:anywhere] sm:hidden">{linkText(link.url)}</p>
           </Field>
         ) : (
           <p className="text-small text-muted">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings → Brand.' : 'No link in your posts yet. Publish your page (Marketing → SEO page), or add your website in Settings → Brand.'}</p>

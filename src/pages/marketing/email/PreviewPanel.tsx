@@ -6,7 +6,7 @@ import { delayLabel, sequenceCsv } from '@/lib/emailFunnel';
 import { CopyButton, Empty, InfoTip, Section } from '@/components/ui/primitives';
 import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
-import { EmailView, emailTokens } from './shared';
+import { EmailView, PanelHead, emailTokens } from './shared';
 
 const PROVIDERS = [
   { name: 'Kit (ConvertKit)', url: 'https://kit.com' },
@@ -36,29 +36,30 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
     );
   }
   return (
-    <Section
-      title={
-        <span className="inline-flex items-center gap-1">
-          Preview & export
-          <InfoTip title="Email tools that send it">
-            <span className="block">This app doesn’t send email. Set the sequence up as an automation in your email tool, which sends it to everyone who signs up.</span>
-            <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-              {PROVIDERS.map((p) => (
-                <a key={p.name} href={p.url} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1">
-                  {p.name} <ExternalLink size={12} aria-hidden="true" />
-                </a>
-              ))}
-            </span>
-          </InfoTip>
-        </span>
-      }
-      description="Set it up as an automation in your email tool. Values in [brackets] are filled in by it."
-      actions={
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => download(`${slugify(project.brand.name)}-email-sequence.csv`, sequenceCsv(project))}>
-          <Download /> Export CSV
-        </button>
-      }
-    >
+    <Section>
+      <PanelHead
+        title={
+          <span className="inline-flex items-center gap-1">
+            Preview & export
+            <InfoTip title="Email tools that send it">
+              <span className="block">This app doesn’t send email. Set the sequence up as an automation in your email tool, which sends it to everyone who signs up.</span>
+              <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+                {PROVIDERS.map((p) => (
+                  <a key={p.name} href={p.url} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-1">
+                    {p.name} <ExternalLink size={12} aria-hidden="true" />
+                  </a>
+                ))}
+              </span>
+            </InfoTip>
+          </span>
+        }
+        description="Set it up as an automation in your email tool. Values in [brackets] are filled in by it."
+        actions={
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => download(`${slugify(project.brand.name)}-email-sequence.csv`, sequenceCsv(project))}>
+            <Download /> Export CSV
+          </button>
+        }
+      />
       <ol className="flex flex-col gap-6">
         {emails.map((e, i) => (
           <li key={e.id} className="grid grid-cols-1 gap-3 lg:grid-cols-[180px_minmax(0,1fr)] lg:gap-6">

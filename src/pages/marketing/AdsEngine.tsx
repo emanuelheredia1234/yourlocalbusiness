@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Check, Download, ExternalLink, PenLine, Plus, Trash2 } from 'lucide-react';
+import { Check, Download, ExternalLink, PenLine, Plus, Target, Trash2 } from 'lucide-react';
 import type { AdCampaign, AdCreative, AdObjective, AdPlatform, Project, SearchAd, StyleId } from '@/lib/types';
 import { cn, ensureUrl, fmtMoney, fmtRelative, parseDateStr, slugify, stripProtocol } from '@/lib/utils';
 import { AD_CTAS as CTAS, adFinalUrl, adsCsv, adsText, applyAds } from '@/lib/ads';
@@ -43,21 +43,25 @@ export default function AdsEngine() {
         title="Ads"
         description="Plan a campaign here, then run it in each platform’s ads manager."
         actions={
-          <button type="button" className="btn btn-secondary btn-sm" onClick={create}>
-            <Plus /> New campaign
-          </button>
+          // with no campaign yet, the empty state's Create campaign is the one way in
+          campaigns.length > 0 ? (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={create}>
+              <Plus /> New campaign
+            </button>
+          ) : undefined
         }
       />
       {campaigns.length > 1 && active && <Tabs className="mb-5" size="sm" value={active.id} onChange={setActiveId} tabs={campaigns.map((c) => ({ id: c.id, label: c.name || 'Untitled campaign' }))} />}
       {!active ? (
         <Empty
-          variant="ai"
+          variant="page"
+          icon={<Target />}
           title="Plan a local ad campaign"
-          body="A budget, an audience and three ad versions to test."
+          body="A budget, an audience and three ad versions to test. The AI writes the versions once you’ve set the basics."
           action={
-            <GenerateButton variant="ai" size="lg" onClick={create}>
-              Plan my campaign
-            </GenerateButton>
+            <button type="button" className="btn btn-primary" onClick={create}>
+              <Plus /> Create campaign
+            </button>
           }
         />
       ) : (
@@ -99,7 +103,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
       <div className="min-w-0 lg:col-span-8">
         <section aria-label="Campaign settings">
           <div className="mb-5 flex items-center gap-2">
-            <input className="input input-inline h-10 min-w-0 flex-1 text-h2" value={c.name} onChange={(e) => set({ name: e.target.value })} aria-label="Campaign name" />
+            <input className="input input-inline -ml-3 h-10 min-w-0 flex-1 text-h2" value={c.name} onChange={(e) => set({ name: e.target.value })} aria-label="Campaign name" />
             <MoreMenu label="More campaign actions" items={[{ label: 'Delete campaign', icon: <Trash2 />, onSelect: () => void remove(), danger: true }]} />
           </div>
           <div className="flex flex-col gap-6">

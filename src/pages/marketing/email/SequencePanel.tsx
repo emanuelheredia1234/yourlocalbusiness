@@ -13,7 +13,7 @@ import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, Empty, Field, MoreMenu, Section, Segmented, confirmAction } from '@/components/ui/primitives';
 import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
-import { EmailView, emailTokens } from './shared';
+import { EmailView, PanelHead, emailTokens } from './shared';
 
 /** "Day 3" (or "Day 0 · 2h"): when an email goes out, counted from sign-up. */
 function dayMarker(emails: EmailStep[], i: number): string {
@@ -75,26 +75,27 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
   }
 
   return (
-    <Section
-      title="Welcome sequence"
-      description={`${magnet ? `For everyone who claims “${magnet.title}” · ` : ''}Runs over ${span}`}
-      actions={
-        <>
-          <GenerateButton size="sm" running={ai.running} runningLabel="Writing…" onClick={generate}>
-            Rewrite sequence
-          </GenerateButton>
-          <button type="button" className="btn btn-primary btn-sm" onClick={onPreview}>
-            <Eye /> Preview & export
-          </button>
-          <MoreMenu
-            items={[
-              { label: 'Copy all', icon: <Copy />, onSelect: () => void copyAll() },
-              { label: 'Export .txt', icon: <Download />, onSelect: () => void download(`${slugify(project.brand.name)}-email-sequence.txt`, sequenceText(project)) },
-            ]}
-          />
-        </>
-      }
-    >
+    <Section>
+      <PanelHead
+        title="Welcome sequence"
+        description={`${magnet ? `For everyone who claims “${magnet.title}” · ` : ''}Runs over ${span}`}
+        actions={
+          <>
+            <GenerateButton size="sm" running={ai.running} runningLabel="Writing…" onClick={generate}>
+              Rewrite sequence
+            </GenerateButton>
+            <button type="button" className="btn btn-primary btn-sm" onClick={onPreview}>
+              <Eye /> Preview & export
+            </button>
+            <MoreMenu
+              items={[
+                { label: 'Copy all', icon: <Copy />, onSelect: () => void copyAll() },
+                { label: 'Export .txt', icon: <Download />, onSelect: () => void download(`${slugify(project.brand.name)}-email-sequence.txt`, sequenceText(project)) },
+              ]}
+            />
+          </>
+        }
+      />
       <div className="flex flex-col gap-4">
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
         {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
