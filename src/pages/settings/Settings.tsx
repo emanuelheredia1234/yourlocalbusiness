@@ -532,7 +532,7 @@ function Preferences() {
         <SettingsRow label="Where your work is kept" description={signedIn ? 'Yourlocalbusiness saves your workspace to your account.' : 'Yourlocalbusiness keeps your data in this browser.'}>
           <span className="text-small text-muted">{signedIn ? 'Your account' : 'This browser'}</span>
         </SettingsRow>
-        <SettingsRow label="Where the AI runs" description="On your server’s keys when they’re set up, otherwise on the built-in engine.">
+        <SettingsRow label="Where the AI runs" description={__ARTIFACT_BUILD__ ? 'Through your claude.ai account.' : 'On your server’s keys when they’re set up, otherwise on the built-in engine.'}>
           <span className="text-small text-muted">{__ARTIFACT_BUILD__ ? 'claude.ai' : 'Your server'}</span>
         </SettingsRow>
       </SettingsSection>

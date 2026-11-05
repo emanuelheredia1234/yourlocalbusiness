@@ -1506,6 +1506,7 @@ function OwnerManaged() {
                             <span className="text-ink-2">{f.label}</span>
                             <span className={cn('min-w-0 truncate text-right', p ? 'text-ink' : 'text-muted')} title={p && model ? `${p.label} · ${model}` : undefined}>
                               {p ? p.label : 'Built-in engine'}
+                              {p && model && <span className="text-muted"> · {model}</span>}
                             </span>
                           </li>
                         );
