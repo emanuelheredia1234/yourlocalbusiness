@@ -662,7 +662,19 @@ export function CodeTab({ project }: { project: Project }) {
         ) : (
           // < 1280: a picker instead of the list
           <div className="flex flex-wrap items-center gap-2 xl:hidden">
-            <Select<string> value={active.id} onChange={(id) => setActiveId(id)} options={list.map((a) => ({ value: a.id, label: a.name, description: a.published ? 'Live' : 'Draft' }))} aria-label="Asset" className="w-auto min-w-[220px] max-w-full" />
+            {/* one line, the height of the buttons beside it: Live or Draft as the dot before each name */}
+            <Select<string>
+              size="sm"
+              value={active.id}
+              onChange={(id) => setActiveId(id)}
+              options={list.map((a) => ({
+                value: a.id,
+                label: a.name,
+                icon: <span className={cn('h-[7px] w-[7px] rounded-full', a.published ? (hasUnpublishedChanges(a) ? 'bg-warn-solid' : 'bg-good-solid') : 'bg-faint')} role="img" aria-label={a.published ? (hasUnpublishedChanges(a) ? 'Changes not live' : 'Live') : 'Draft'} />,
+              }))}
+              aria-label="Asset"
+              className="w-auto min-w-[220px] max-w-full"
+            />
             {newAssetButton('ai-outline')}
             <AgentButtons target="asset" />
           </div>
