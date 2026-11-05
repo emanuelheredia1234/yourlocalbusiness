@@ -28,6 +28,13 @@ export const BILLING_PREFIX = '/api/billing/';
 const TAG = /^cust_[0-9a-f]{24}$/;
 const SETTLE_EVERY_MS = 5 * 60_000;
 
+const safeDecode = (s) => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return '';
+  }
+};
 const daysFrom = (url) => Math.min(366, Math.max(1, Math.trunc(Number(url.searchParams.get('days')) || 30)));
 
 export function createBillingRoutes({
@@ -287,7 +294,7 @@ export function createBillingRoutes({
       else if (sub === 'invoice.csv' && m === 'GET') {
         const { month, csv } = await invoice(url);
         reply(req, res, 200, csv, { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="usage-${month}.csv"` });
-      } else if (/^customers\/[^/]+\/cap$/.test(sub) && m === 'PUT') reply(req, res, 200, await putCap(req, decodeURIComponent(sub.split('/')[1])));
+      } else if (/^customers\/[^/]+\/cap$/.test(sub) && m === 'PUT') reply(req, res, 200, await putCap(req, safeDecode(sub.split('/')[1])));
       else return false;
       return true;
     } catch (e) {
