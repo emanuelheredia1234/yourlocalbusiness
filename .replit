@@ -1,4 +1,4 @@
-modules = ["web", "nodejs-22"]
+modules = ["web", "nodejs-22", "python-base-3.13"]
 run = "npm install && npm run dev -- --host 0.0.0.0 --port 5000"
 
 [[ports]]
