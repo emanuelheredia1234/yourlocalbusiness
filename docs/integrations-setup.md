@@ -856,6 +856,29 @@ them on again later doesn't restart the free days (they start at the first `enfo
   every account's plan (Stripe ids as …last4), Grant free plan, Re-check with Stripe.
 - None of this exists in the claude.ai artifact build.
 
+### Weekly AI videos (P1b)
+
+- **Limits** (`shared/plans.json` `videosPerWeek`): Launch 3, Grow 5, Scale unlimited, per business; the owner is
+  unlimited. A business's week runs Monday 00:00 to Sunday 23:59 in its time zone (Settings › Brand › Business
+  details; else the browser's zone sent with the request; else UTC).
+- **Counting** (`server/videoWeek.mjs`, table `video_starts` from `supabase/migrations/20261111000000_video_week.sql`):
+  a video counts when the server asks a provider for it (`POST /api/ai/video`, which the video panel, the composer and
+  the assistant's `make_video` all use). It's claimed before the provider is asked, under a per-user, per-week
+  advisory lock, so two parallel starts can't both pass at the limit. It is refunded only when the provider certainly
+  never started it (it refused before any paid work, or no key could make it); when in doubt it counts, and it is
+  never retried. The account's total is also held to the limit times its businesses, so made-up business ids can't get
+  around it.
+- **Own keys**: videos made with the customer's own AI key are recorded but never counted or refused, the same rule as
+  AI credits (own keys never use credits).
+- **Plans not turned on**: videos are counted, never refused. Once on: `402 VIDEO_WEEK_LIMIT { used, limit, resetsAt }`
+  ("You’ve made 3 of 3 videos this week. Resets Monday."), shown in the upgrade prompt with Upgrade and Use my own AI
+  keys. `GET /api/ai/video/week?projectId=` answers the count the video panel and the campaign setup show ("2 of 3
+  videos used this week").
+- **Video days**: the campaign setup chooses how many videos go out on each posting day (`CampaignConfig.videoDays`,
+  Monday first; older setups' "videos per day" become that count on each posting day when the workspace opens). More
+  videos a week than the plan makes stops the 30-day plan while plans are on, and is a warning before.
+- Before the migration is run, the counts live in the server's memory (they reset when it restarts).
+
 ### Cron jobs
 
 `billing-hourly` (pending removals and downgrades at period end, due locks, free trials ending, unknown operations

@@ -4,11 +4,11 @@
 
 import { useEffect } from 'react';
 import { create } from 'zustand';
-import type { VideoWeek } from '@/lib/videoWeek';
+import { videoAllowance, type VideoAllowance, type VideoWeek } from '@/lib/videoWeek';
 import { browserTimeZone, projectTimeZone } from '@/lib/timeZone';
 import { useAuth } from '@/lib/cloud/auth';
 import { serverFetch } from '@/ai/claude';
-import { billingOn } from './billing';
+import { billingOn, useBilling, useBillingOn } from './billing';
 import { useStore } from './useStore';
 
 const FRESH_MS = 60_000;
@@ -57,4 +57,20 @@ export function useProjectVideoWeek(projectId: string | null | undefined): Video
     if (projectId) void useVideoWeek.getState().refresh(projectId);
   }, [projectId]);
   return w;
+}
+
+/** What the plan allows a business a week (the campaign setup and the assistant warn from it); null with plans hidden. */
+export function currentVideoAllowance(): VideoAllowance | null {
+  if (__ARTIFACT_BUILD__ || !billingOn()) return null;
+  const b = useBilling.getState();
+  return videoAllowance(b.plan, b.account);
+}
+
+/** React: currentVideoAllowance. */
+export function useVideoAllowance(): VideoAllowance | null {
+  const on = useBillingOn();
+  const plan = useBilling((s) => s.plan);
+  const account = useBilling((s) => s.account);
+  if (__ARTIFACT_BUILD__ || !on) return null;
+  return videoAllowance(plan, account);
 }

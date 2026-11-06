@@ -134,16 +134,24 @@ describe('the SEO page’s guidance', () => {
 });
 
 describe('campaign settings', () => {
-  const cur: CampaignConfig = { ...p.marketing.campaign, postsPerDay: 2, videosPerDay: 0, videoStyles: [], platforms: ['instagram'], goal: 'sales' };
+  const cur: CampaignConfig = { ...p.marketing.campaign, postsPerDay: 2, videoDays: [0, 0, 0, 0, 0, 0, 0], videoStyles: [], platforms: ['instagram'], goal: 'sales' };
 
   it('takes only known values, keeps days, times, watermark, start date and posts per day', () => {
     const r = campaignPatch(cur, { ...s.content!.campaign, platforms: ['instagram', 'facebook', 'myspace' as never], postMix: { educational: 9, tip: -1, question: 1.6, sales: 0, bts: 2 } as never, videoShare: 'most' });
     if (!r.ok) throw new Error(r.problem);
-    expect(r.next).toMatchObject({ goal: 'leads', platforms: ['instagram', 'facebook'], postTypes: { educational: 3, tip: 0, question: 2, sales: 0, bts: 2 }, videosPerDay: 2, videoStyles: ['ugc'] });
+    expect(r.next).toMatchObject({ goal: 'leads', platforms: ['instagram', 'facebook'], postTypes: { educational: 3, tip: 0, question: 2, sales: 0, bts: 2 }, videoDays: cur.days.map((on) => (on ? 2 : 0)), videoStyles: ['ugc'] });
     for (const k of ['days', 'times', 'watermark', 'startDate', 'postsPerDay', 'imageStyles'] as const) expect(r.next[k]).toEqual(cur[k]);
     expect(r.lines[0]).toBe('Goal: Get leads (was: Make sales)');
     expect(r.lines[1]).toBe('Networks: Instagram, Facebook (was: Instagram)');
-    expect(campaignPatch({ ...cur, videosPerDay: 1 }, { ...s.content!.campaign, videoShare: 'some' }).ok && campaignPatch({ ...cur, videosPerDay: 1 }, { ...s.content!.campaign, videoShare: 'some' })).toMatchObject({ next: { videosPerDay: 1 } });
+    // "some": the chosen video days stay; none chosen yet → one on each posting day
+    const mine = [1, 0, 0, 1, 0, 0, 0].map((n, i) => (cur.days[i] ? n : 0));
+    expect(campaignPatch({ ...cur, videoDays: mine }, { ...s.content!.campaign, videoShare: 'some' })).toMatchObject({ next: { videoDays: mine } });
+    expect(campaignPatch(cur, { ...s.content!.campaign, videoShare: 'some' })).toMatchObject({ next: { videoDays: cur.days.map((on) => (on ? 1 : 0)) } });
+    expect(campaignPatch({ ...cur, videoDays: mine }, { ...s.content!.campaign, videoShare: 'none' })).toMatchObject({ next: { videoDays: [0, 0, 0, 0, 0, 0, 0] } });
+    // an older setup (one count a day) is read on each posting day, and the old field goes
+    const old = campaignPatch({ ...cur, videoDays: undefined as never, videosPerDay: 1 }, { ...s.content!.campaign, videoShare: 'some' });
+    expect(old.ok && 'videosPerDay' in old.next).toBe(false);
+    expect(old).toMatchObject({ next: { videoDays: cur.days.map((on) => (on ? 1 : 0)) } });
   });
 
   it('refuses settings that can’t make a plan', () => {

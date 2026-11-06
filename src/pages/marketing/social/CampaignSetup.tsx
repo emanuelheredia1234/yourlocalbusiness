@@ -1,12 +1,15 @@
 import { useMemo, type ReactNode } from 'react';
-import { Check, TriangleAlert } from 'lucide-react';
+import { Check, Minus, Plus, TriangleAlert } from 'lucide-react';
 import type { CampaignConfig, ImageStyleId, PostPlatform, PostType, Project, StyleId, VideoStyleId } from '@/lib/types';
 import { cn, parseDateStr, WEEKDAYS } from '@/lib/utils';
 import { brandMark } from '@/lib/brandMark';
 import { IMAGE_STYLES, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES } from '@/ai/knowledge';
 import { suggestTopics } from '@/ai/local/social';
 import { useStore } from '@/store/useStore';
-import { cadence, patchCampaign } from '@/ai/socialPlan';
+import { cadence, patchCampaign, setVideoDay } from '@/ai/socialPlan';
+import { videoDaysOverLimit } from '@/lib/videoWeek';
+import { useVideoAllowance } from '@/store/videoWeek';
+import { VideoWeekLine } from '@/components/billing/VideoWeekLine';
 import { DateTimeButton, Segmented, SettingsRow, Toggle } from '@/components/ui/primitives';
 import { StackedBar } from '@/components/charts/Charts';
 import { PostVisual, orderStyles } from '@/components/visuals/PostVisual';
@@ -21,6 +24,8 @@ const WEIGHTS = [
   { id: '3', label: 'Most' },
 ] as const;
 
+
+const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 const pad = (n: number) => String(n).padStart(2, '0');
 /** "14:30" today, as a time the time picker shows */
@@ -69,7 +74,10 @@ export function CampaignSetup({ project }: { project: Project }) {
   const needVideoStyle = c.videos > 0 && cfg.videoStyles.length === 0;
 
   const toggleIn = <T extends string>(list: T[], id: T): T[] => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
-  const videos = Math.min(cfg.videosPerDay, cfg.postsPerDay);
+  // plans: AI videos a week for a business; over it stops the plan while plans are on, else a warning
+  const allowance = useVideoAllowance();
+  const overLimit = videoDaysOverLimit(c.videos, allowance);
+  const videoDaysText = c.videos === 0 ? 'No videos. Add one to a posting day to mix videos in.' : `${c.videos} video${c.videos === 1 ? '' : 's'} a week, on ${c.videoDayCount} day${c.videoDayCount === 1 ? '' : 's'}. The rest are image posts.`;
 
   return (
     <div className="flex flex-col gap-5">
@@ -88,15 +96,16 @@ export function CampaignSetup({ project }: { project: Project }) {
           <Segmented
             size="sm"
             value={String(cfg.postsPerDay)}
-            onChange={(v) => {
-              const n = Number(v);
-              set({ postsPerDay: n, videosPerDay: Math.min(cfg.videosPerDay, n) });
-            }}
+            onChange={(v) => set({ postsPerDay: Number(v) })}
             options={[1, 2, 3, 4, 5].map((n) => ({ id: String(n), label: String(n) }))}
           />
         </SettingsRow>
-        <SettingsRow label="Videos per day" description={`${cfg.postsPerDay - videos} image post${cfg.postsPerDay - videos === 1 ? '' : 's'} and ${videos} video${videos === 1 ? '' : 's'} each posting day`}>
-          <Segmented size="sm" value={String(videos)} onChange={(v) => set({ videosPerDay: Number(v) })} options={Array.from({ length: cfg.postsPerDay + 1 }, (_, n) => ({ id: String(n), label: String(n) }))} />
+        <SettingsRow label="Video days" description={videoDaysText}>
+          <div className="flex flex-wrap gap-1.5 md:justify-end" role="group" aria-label="Videos on each posting day">
+            {WEEKDAYS.map((d, i) => (
+              <VideoDayStepper key={d} day={d} dayName={DAY_NAMES[i]} on={cfg.days[i]} count={c.videoDays[i]} max={cfg.postsPerDay} onChange={(n) => setVideoDay(i, n, project.id)} />
+            ))}
+          </div>
         </SettingsRow>
         <SettingsRow label="Posting times" description="One for each post of the day.">
           <div className="flex flex-wrap gap-2 md:justify-end">
@@ -125,6 +134,8 @@ export function CampaignSetup({ project }: { project: Project }) {
             {c.perWeek} posts a week · {c.videos} videos · {c.images} images · ≈ {c.month} over 30 days
           </p>
           {c.days === 0 && <Warn>Pick at least one posting day.</Warn>}
+          {overLimit && <Warn>{overLimit}</Warn>}
+          <VideoWeekLine projectId={project.id} className="w-full" />
         </div>
       </SetupSection>
 
@@ -150,7 +161,7 @@ export function CampaignSetup({ project }: { project: Project }) {
               </StyleCard>
             ))}
           </StyleGroup>
-          {needVideoStyle && <Warn>Choose at least one video style, or set videos per day to 0.</Warn>}
+          {needVideoStyle && <Warn>Choose at least one video style, or turn the video days off.</Warn>}
         </div>
       </SetupSection>
 
@@ -189,6 +200,24 @@ export function CampaignSetup({ project }: { project: Project }) {
           <StackedBar parts={POST_TYPES.map((t) => ({ key: t.id, label: t.short, value: Math.round((cfg.postTypes[t.id] / typeTotal) * 100), color: `rgb(var(--${t.slot}))` }))} />
         </div>
       </SetupSection>
+    </div>
+  );
+}
+
+/** One weekday's videos: − n + within the day's posts; a day without posts shows a dash. */
+function VideoDayStepper({ day, dayName, on, count, max, onChange }: { day: string; dayName: string; on: boolean; count: number; max: number; onChange: (n: number) => void }) {
+  return (
+    <div className={cn('flex items-center gap-0.5 rounded-full border px-0.5 py-0.5', on && count > 0 ? 'border-primary bg-primary-soft/50' : 'border-line', !on && 'opacity-60')}>
+      <button type="button" className="btn btn-ghost btn-icon btn-xs" aria-label={`One fewer video on ${dayName}`} disabled={!on || count <= 0} onClick={() => onChange(count - 1)}>
+        <Minus />
+      </button>
+      <span className="num min-w-[48px] text-center text-small text-ink-2" aria-live="polite">
+        <span className="font-medium text-ink">{day}</span> {on ? count : '–'}
+        <span className="sr-only">{on ? ` ${count} video${count === 1 ? '' : 's'}` : ' no posts'}</span>
+      </span>
+      <button type="button" className="btn btn-ghost btn-icon btn-xs" aria-label={`One more video on ${dayName}`} disabled={!on || count >= max} onClick={() => onChange(count + 1)}>
+        <Plus />
+      </button>
     </div>
   );
 }

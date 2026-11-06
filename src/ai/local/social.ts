@@ -17,6 +17,7 @@ import type {
 import { addDays, capitalize, combineDateTime, createRng, hashStr, lowerFirst, truncate, uid, weekdayIndex } from '@/lib/utils';
 import { IMAGE_STYLES, PLATFORMS, POST_TYPE_MAP, VIDEO_STYLES, isVideoStyle } from '../knowledge';
 import { buildFacts, singular, verbOutcome, Voice, type Facts } from '../text';
+import { videoDaysOf } from '@/lib/campaign';
 import { fitForX, firstCommentFor, knownLinks, linkText, placeLink, postLinkFor, type PostLink } from '@/lib/pageLink';
 
 const PHASES: { until: number; name: string; weights: Record<PostType, number> }[] = [
@@ -52,7 +53,8 @@ export function defaultCampaign(): CampaignConfig {
   return {
     days: [true, true, true, true, true, false, false],
     postsPerDay: 2,
-    videosPerDay: 1,
+    // one video on each posting day (Monday to Friday)
+    videoDays: [1, 1, 1, 1, 1, 0, 0],
     watermark: true,
     imageStyles: ['minimal', 'handcrafted', 'editorial'],
     videoStyles: ['ugc', 'kinetic'],
@@ -128,7 +130,9 @@ export function generateCampaignPlan(project: Project, config: CampaignConfig, d
   const imageStyles: ImageStyleId[] = config.imageStyles.length ? config.imageStyles : ['minimal'];
   const videoStyles: VideoStyleId[] = config.videoStyles.length ? config.videoStyles : ['kinetic'];
   const perDay = Math.max(1, Math.min(5, config.postsPerDay));
-  const videos = Math.max(0, Math.min(perDay, config.videosPerDay));
+  // the videos on each weekday (Monday first): they land on the days the setup chose
+  const videoDays = videoDaysOf(config);
+  const videosWeek = videoDays.reduce((a, b) => a + b, 0);
   const times = config.times.slice(0, perDay).sort();
   const bank = topicBank(f, v);
   const topicCursor: Record<PostType, number> = { educational: 0, tip: 0, question: 0, sales: 0, bts: 0 };
@@ -153,7 +157,7 @@ export function generateCampaignPlan(project: Project, config: CampaignConfig, d
     }
     const slots: PlanSlot[] = [];
     if (posting) {
-      const videoIdx = new Set(rng.shuffle(Array.from({ length: perDay }, (_, k) => k)).slice(0, videos));
+      const videoIdx = new Set(rng.shuffle(Array.from({ length: perDay }, (_, k) => k)).slice(0, Math.min(perDay, videoDays[wd])));
       for (let s = 0; s < perDay; s++) {
         const format: PostFormat = videoIdx.has(s) ? 'video' : 'image';
         // post type with largest deficit vs. its weighted target share
@@ -206,7 +210,7 @@ export function generateCampaignPlan(project: Project, config: CampaignConfig, d
     { week: 4, theme: 'Conversion: open the offer', goal: `Drive ${f.track === 'business' ? 'bookings' : 'sales'} of ${f.productShort}.`, kpi: 'Link clicks, conversions, revenue', keyMessage: offerKeyMessage(f.productShort) },
     { week: 5, theme: 'Final push & recap', goal: recapGoal(f.track), kpi: 'Conversions, retargeting audience size', keyMessage: RECAP_MESSAGE },
   ];
-  const strategy = `A 30-day ${config.goal === 'sales' ? 'launch' : config.goal === 'leads' ? 'list-building' : 'awareness'} campaign for ${f.brand} on ${platforms.map((p) => PLATFORMS[p].label).join(', ')}. ${all.length} posts across ${days.filter((x) => x.posting).length} posting days move ${f.audience} from awareness (week 1) to authority (week 2), trust (week 3) and conversion (week 4). ${videos ? `${videos} of ${perDay} daily posts are short videos to maximize reach;` : 'Static posts carry the plan;'} sales posts ramp up in the final ten days${f.leadMagnet ? `, and educational posts point to the free “${f.leadMagnet}”` : ''}.`;
+  const strategy = `A 30-day ${config.goal === 'sales' ? 'launch' : config.goal === 'leads' ? 'list-building' : 'awareness'} campaign for ${f.brand} on ${platforms.map((p) => PLATFORMS[p].label).join(', ')}. ${all.length} posts across ${days.filter((x) => x.posting).length} posting days move ${f.audience} from awareness (week 1) to authority (week 2), trust (week 3) and conversion (week 4). ${videosWeek ? `${videosWeek} short ${videosWeek === 1 ? 'video goes' : 'videos go'} out each week on the chosen video days to maximize reach;` : 'Static posts carry the plan;'} sales posts ramp up in the final ten days${f.leadMagnet ? `, and educational posts point to the free “${f.leadMagnet}”` : ''}.`;
   return {
     id: uid('plan'),
     createdAt: Date.now(),
@@ -403,12 +407,37 @@ export function linkRule(link: PostLink | null, platform: PostPlatform): string 
   return 'Write no web address: the call to action says “link in bio”.';
 }
 
+/**
+ * A plan day's slots with as many videos as the setup now chooses for that weekday (a plan made before the video days
+ * changed): extra videos become image posts and missing ones turn image posts into videos, from the last slot back,
+ * each taking the first style of its kind.
+ */
+export function fitSlotsToVideoDays(day: Pick<PlanDay, 'date' | 'slots'>, config: CampaignConfig): PlanSlot[] {
+  const want = videoDaysOf(config)[weekdayIndex(day.date)] ?? 0;
+  const slots = day.slots.map((s) => ({ ...s }));
+  let have = slots.filter((s) => s.format === 'video').length;
+  const imageStyle: StyleId = config.imageStyles[0] ?? 'minimal';
+  const videoStyle: StyleId = config.videoStyles[0] ?? 'kinetic';
+  for (let i = slots.length - 1; i >= 0 && have !== want; i--) {
+    const s = slots[i];
+    if (have > want && s.format === 'video') {
+      slots[i] = { ...s, format: 'image', style: isVideoStyle(s.style) ? imageStyle : s.style };
+      have--;
+    } else if (have < want && s.format === 'image') {
+      slots[i] = { ...s, format: 'video', style: isVideoStyle(s.style) ? s.style : videoStyle };
+      have++;
+    }
+  }
+  return slots;
+}
+
 export function generateContentBatch(project: Project, plan: CampaignPlan, config: CampaignConfig, d: Directives = {}, variation = 0, days = 7): Post[] {
   const batchId = uid('batch');
   const now = Date.now();
   const posts: Post[] = [];
   for (const day of plan.days.slice(0, days)) {
-    for (const slot of day.slots) {
+    // videos land on the days the setup chooses now
+    for (const slot of fitSlotsToVideoDays(day, config)) {
       // the link where this network's setting puts it (the post keeps that choice, and the comment's text when it goes there)
       const link = postLinkFor(project, slot.platform);
       const c = composePost(project, { topic: slot.topic, postType: slot.postType, platform: slot.platform, format: slot.format, style: slot.style, goal: config.goal, watermark: config.watermark, link }, d, `${slot.id}|${variation}`);

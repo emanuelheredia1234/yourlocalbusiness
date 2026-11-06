@@ -400,7 +400,7 @@ with a note), plan banners and one upgrade prompt for refused paid actions (`src
 
 Owner steps (all in [docs/integrations-setup.md](docs/integrations-setup.md) §10; Stripe Sandbox first, live only
 with your OK): run
-`supabase/migrations/20261110000000_billing.sql`; set `STRIPE_SECRET_KEY` (restricted live key in production),
+`supabase/migrations/20261110000000_billing.sql` and `supabase/migrations/20261111000000_video_week.sql` (weekly AI videos per business: Launch 3, Grow 5, Scale unlimited; own-key videos never count); set `STRIPE_SECRET_KEY` (restricted live key in production),
 `STRIPE_WEBHOOK_SECRET` and `APP_URL`; add the webhook `https://yourlocalbusiness.replit.app/api/webhooks/stripe`; run
 `npm run stripe:setup` (a dry run; then `--apply`; `--live` only with your OK); set up the Customer Portal (quantity
 editing off) and Smart Retries; optionally Stripe Tax (`STRIPE_AUTOMATIC_TAX=1`); then Owner → Billing → Plans → Turn on plans. Turning plans off again is the rollback.

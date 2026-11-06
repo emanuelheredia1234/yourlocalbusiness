@@ -10,6 +10,7 @@ import { useStore } from '@/store/useStore';
 import { newSkill, parseDirectives } from '@/ai/brain';
 import { PLATFORMS } from '@/ai/knowledge';
 import { campaignProblem } from '@/ai/socialPlan';
+import { videoDaysOf } from '@/lib/campaign';
 import { LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, placementFor } from './pageLink';
 import { claimFree, noLinks, POST_NETWORKS, POST_TYPE_IDS } from './strategyNormalize';
 import { CTA_LABEL, GOAL_LABEL, LEAD_MAGNET_LABEL, MIX_WORD, POST_TYPE_WORD, capStrategy, ownerFacts, readStrategy } from './strategy';
@@ -160,7 +161,8 @@ export function withSeoBlock(guide: string, block: string, prev?: string): { mod
 
 // ───────────── campaign settings ─────────────
 
-export type CampaignBefore = Pick<CampaignConfig, 'goal' | 'platforms' | 'postTypes' | 'videosPerDay' | 'videoStyles'>;
+/** The settings before Strategy changed them (videoDays; older records have videosPerDay instead). */
+export type CampaignBefore = Pick<CampaignConfig, 'goal' | 'platforms' | 'postTypes' | 'videoStyles'> & { videoDays?: number[]; videosPerDay?: number };
 
 const mixLine = (mix: Record<PostType, number>) =>
   POST_TYPE_IDS.filter((t) => mix[t] > 0)
@@ -179,18 +181,23 @@ export function campaignPatch(cur: CampaignConfig, rec: StrategyContent['campaig
   const platforms = rec.platforms.filter((x, i, a) => POST_NETWORKS.includes(x) && a.indexOf(x) === i);
   const mix = Object.fromEntries(POST_TYPE_IDS.map((t) => [t, Math.min(3, Math.max(0, Math.round(Number(rec.postMix?.[t]) || 0)))])) as Record<PostType, number>;
   const postTypes = POST_TYPE_IDS.some((t) => mix[t] > 0) ? mix : cur.postTypes;
-  let videosPerDay = rec.videoShare === 'none' ? 0 : rec.videoShare === 'most' ? cur.postsPerDay : cur.videosPerDay > 0 ? cur.videosPerDay : 1;
-  videosPerDay = Math.max(0, Math.min(cur.postsPerDay, videosPerDay));
-  const next: CampaignConfig = { ...cur, goal: rec.goal, platforms: platforms.length ? platforms : cur.platforms, postTypes, videosPerDay, videoStyles: videosPerDay > 0 && !cur.videoStyles.length ? ['ugc'] : cur.videoStyles };
+  // how much video: none, every post on each posting day ("most"), or the chosen video days (one on each posting day
+  // when none were chosen yet)
+  const curDays = videoDaysOf(cur);
+  const wantDays = rec.videoShare === 'none' ? curDays.map(() => 0) : rec.videoShare === 'most' ? cur.days.map((on) => (on ? cur.postsPerDay : 0)) : curDays.some((n) => n > 0) ? curDays : cur.days.map((on) => (on ? 1 : 0));
+  const { videosPerDay: _old, ...base } = cur;
+  const videoDays = videoDaysOf({ ...base, videoDays: wantDays });
+  const weekly = (d: number[]) => d.reduce((a, b) => a + b, 0);
+  const next: CampaignConfig = { ...base, goal: rec.goal, platforms: platforms.length ? platforms : cur.platforms, postTypes, videoDays, videoStyles: weekly(videoDays) > 0 && !cur.videoStyles.length ? ['ugc'] : cur.videoStyles };
   const problem = campaignProblem(next);
   if (problem) return { ok: false, problem };
   const lines = [
     `Goal: ${GOAL_LABEL[next.goal]}${next.goal !== cur.goal ? ` (was: ${GOAL_LABEL[cur.goal]})` : ''}`,
     `Networks: ${nets(next.platforms)}${!same(next.platforms, cur.platforms) ? ` (was: ${nets(cur.platforms)})` : ''}`,
     `Post mix: ${mixLine(next.postTypes)}${!same(next.postTypes, cur.postTypes) ? ` (was: ${mixLine(cur.postTypes)})` : ''}`,
-    `Videos: ${rec.videoShare} (${next.videosPerDay} a day${next.videosPerDay !== cur.videosPerDay ? `, was ${cur.videosPerDay}` : ''})`,
+    `Videos: ${rec.videoShare} (${weekly(videoDays)} a week${!same(videoDays, curDays) ? `, was ${weekly(curDays)}` : ''})`,
   ];
-  return { ok: true, next, before: { goal: cur.goal, platforms: cur.platforms, postTypes: cur.postTypes, videosPerDay: cur.videosPerDay, videoStyles: cur.videoStyles }, lines };
+  return { ok: true, next, before: { goal: cur.goal, platforms: cur.platforms, postTypes: cur.postTypes, videoDays: curDays, videoStyles: cur.videoStyles }, lines };
 }
 
 // ───────────── where links go ─────────────
@@ -282,7 +289,13 @@ export function undoCampaign(pid: string): boolean {
     const before = s.applied.campaign?.before as Partial<CampaignBefore> | undefined;
     if (!before) return null;
     const { campaign: _gone, ...applied } = s.applied;
-    const cur = p.marketing.campaign;
+    const { videosPerDay: _old, ...cur } = p.marketing.campaign;
+    // the video days as they were (an older record kept one count a day: on each posting day)
+    const videoDays = Array.isArray(before.videoDays)
+      ? videoDaysOf({ ...cur, videoDays: before.videoDays })
+      : typeof before.videosPerDay === 'number'
+        ? videoDaysOf({ days: cur.days, postsPerDay: cur.postsPerDay, videosPerDay: before.videosPerDay })
+        : videoDaysOf(p.marketing.campaign);
     return {
       marketing: {
         campaign: {
@@ -290,7 +303,7 @@ export function undoCampaign(pid: string): boolean {
           goal: before.goal ?? cur.goal,
           platforms: before.platforms?.length ? before.platforms : cur.platforms,
           postTypes: (before.postTypes as CampaignConfig['postTypes']) ?? cur.postTypes,
-          videosPerDay: Math.min(cur.postsPerDay, typeof before.videosPerDay === 'number' ? before.videosPerDay : cur.videosPerDay),
+          videoDays,
           videoStyles: (before.videoStyles as CampaignConfig['videoStyles']) ?? cur.videoStyles,
         },
       },
