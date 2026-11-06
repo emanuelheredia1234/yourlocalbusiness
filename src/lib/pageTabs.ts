@@ -9,7 +9,7 @@ export const PAGE_TABS = {
   'workspace-settings': { brand: 'Brand', ai: 'AI keys', accounts: 'Social accounts', projects: 'Projects & data', prefs: 'Preferences', account: 'Account', domains: 'Domains' },
   'marketing-social': { setup: 'Campaign setup', plan: '30-day plan', batch: '7-day batch', create: 'Create post', analytics: 'Analytics' },
   'marketing-email': { magnet: 'Lead magnet', sequence: 'Sequence', preview: 'Preview & export', subscribers: 'Subscribers', leads: 'Leads', analytics: 'Analytics' },
-  'marketing-ads': { plan: 'Campaigns', analytics: 'Analytics' },
+  'marketing-ads': { plan: 'Plans', campaigns: 'Campaigns', analytics: 'Analytics' },
   'marketing-seo': { builder: 'Page', analytics: 'Analytics' },
   calendar: { scheduled: 'Planned', published: 'Posted', drafts: 'Drafts' },
   brain: { skills: 'Skills', library: 'Library', docs: 'Knowledge', playground: 'Playground', log: 'Activity' },
