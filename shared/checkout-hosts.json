@@ -1,0 +1,27 @@
+{
+  "about": "Checkout sites a buy link (/b/<id>) sends buyers to directly. Any other site still works: buyers see a 'You're leaving' page first on the app's address (a redirect only on the owner's own verified domain). A listed parent domain covers its subdomains (myshopify.com covers shop.myshopify.com). Read by server/offers/checkoutHosts.mjs and the app.",
+  "hosts": [
+    "buy.stripe.com",
+    "checkout.stripe.com",
+    "gumroad.com",
+    "gum.co",
+    "lemonsqueezy.com",
+    "paypal.com",
+    "paypal.me",
+    "square.link",
+    "checkout.square.site",
+    "squareup.com",
+    "myshopify.com",
+    "etsy.com",
+    "payhip.com",
+    "ko-fi.com",
+    "buymeacoffee.com",
+    "whop.com",
+    "podia.com",
+    "kajabi.com",
+    "thinkific.com",
+    "teachable.com",
+    "calendly.com",
+    "cal.com"
+  ]
+}

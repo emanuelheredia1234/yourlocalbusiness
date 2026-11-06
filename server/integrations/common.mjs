@@ -222,6 +222,11 @@ export const BUCKET_LIMITS = Object.freeze({
   'ads-refresh': [{ limit: 1, windowMs: 300_000 }],
   'billing-write': [{ limit: 20, windowMs: 3_600_000 }],
   'stripe-webhook': [{ limit: 600, windowMs: 60_000 }],
+  'offers-read': [{ limit: 120, windowMs: 60_000 }],
+  'offers-write': [{ limit: 60, windowMs: 3_600_000 }],
+  'whop-connect': [{ limit: 10, windowMs: 3_600_000 }],
+  'whop-catalog': [{ limit: 30, windowMs: 60_000 }],
+  'whop-webhook': [{ limit: 600, windowMs: 60_000 }],
 });
 
 /**

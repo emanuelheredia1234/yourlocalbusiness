@@ -3,7 +3,7 @@
 // two instances share nothing, as Whop's two environments don't.
 //
 //   node server/test/mock-whop.mjs [port] [sandbox|production]   → prints its API base (…/api/v1)
-//   const mock = await createMockWhop({ environment: 'sandbox' }).start();   mock.apiBase
+//   const mock = await createMockWhop({ environment: 'sandbox', webhookTarget }).start();   mock.apiBase
 //
 // Auth: "Authorization: Bearer <key>" for a key registered with POST /__keys {key, accountId, permissions[]}
 // (mock.addKey(...)); anything else 401 {error:{type:'unauthorized'}}. A call without the permission it needs answers
@@ -51,7 +51,11 @@ import { signWhopPayload } from '../payments/whopWebhook.mjs';
 const rid = (prefix, n = 14) => `${prefix}_${crypto.randomBytes(n).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, n)}`;
 const API_VERSION_DATE = '2026-08-14';
 
-export function createMockWhop({ environment = 'sandbox', now = () => Date.now() } = {}) {
+/**
+ * environment: 'sandbox' | 'production'. webhookTarget: tests' local server origin: deliveries go to that origin with
+ * the webhook URL's own path (Whop would call the public https address). now: the clock (signatures' timestamps).
+ */
+export function createMockWhop({ environment = 'sandbox', webhookTarget = null, now = () => Date.now() } = {}) {
   const keys = new Map(); // key → { accountId, permissions:Set }
   const products = []; // { id, account_id, title, visibility, created_at }
   const variants = []; // { id, product_id, account_id, ... }
@@ -74,6 +78,10 @@ export function createMockWhop({ environment = 'sandbox', now = () => Date.now()
   // ── state helpers (also used by the HTTP hooks) ──
   function addKey(key, accountId, permissions = []) {
     keys.set(key, { accountId, permissions: new Set(permissions) });
+  }
+  /** The seller deleted the key in Whop's dashboard: it answers 401 from now on. */
+  function removeKey(key) {
+    keys.delete(key);
   }
   function seed(accountId, list = []) {
     const out = [];
@@ -122,7 +130,8 @@ export function createMockWhop({ environment = 'sandbox', now = () => Date.now()
       const signature = sig === 'bad' ? signWhopPayload(raw, eventId, ts, `${h.secret}x`) : signWhopPayload(raw, eventId, ts, h.secret);
       let status = 0;
       try {
-        const res = await fetch(h.url, { method: 'POST', headers: { 'content-type': 'application/json', 'webhook-id': eventId, 'webhook-timestamp': ts, 'webhook-signature': signature }, body: raw, redirect: 'manual', signal: AbortSignal.timeout(10_000) });
+        const target = api.webhookTarget ? `${api.webhookTarget}${new URL(h.url).pathname}` : h.url;
+        const res = await fetch(target, { method: 'POST', headers: { 'content-type': 'application/json', 'webhook-id': eventId, 'webhook-timestamp': ts, 'webhook-signature': signature }, body: raw, redirect: 'manual', signal: AbortSignal.timeout(10_000) });
         status = res.status;
         await res.text().catch(() => '');
       } catch {
@@ -388,6 +397,7 @@ export function createMockWhop({ environment = 'sandbox', now = () => Date.now()
   const api = {
     environment,
     allowHttp: false,
+    webhookTarget,
     get base() {
       return base;
     },
@@ -403,6 +413,7 @@ export function createMockWhop({ environment = 'sandbox', now = () => Date.now()
     payments,
     events,
     addKey,
+    removeKey,
     seed,
     pay,
     refund,

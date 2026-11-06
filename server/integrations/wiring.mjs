@@ -29,6 +29,9 @@
 //                                                          Checkout, the portal, businesses, the Stripe webhook)
 //   /api/ads/…                                             server/ads/routes.mjs (launching and changing campaigns;
 //                                                          ad events arrive on /api/webhooks/zernio)
+//   /api/offers…  /api/payments/whop…  /api/webhooks/whop/<id>   server/offers/index.mjs (offers and buy links, the
+//                                                          users' own Whop accounts; /b/<id> through pages.mjs with
+//                                                          integrations.offers.buy)
 //
 // Each module's factory gets the same deps: { auth, storage (appState), db (server/integrations/db.mjs),
 // connections, treg, omnisend, send, readJson, readRaw, rateLimited, limit, corsHeaders, sameOrigin,
@@ -55,6 +58,7 @@ import { createSeoGoogleRoutes } from '../seo/google.mjs';
 import { createSitemapRoutes } from '../seo/sitemap.mjs';
 import { createBillingRoutes } from '../billing/routes.mjs';
 import { createAdsRoutes } from '../ads/routes.mjs';
+import { createOffers } from '../offers/index.mjs';
 import { createTreg } from '../treg.mjs';
 import { dbFromEnv, INTEGRATIONS_MIGRATION } from './db.mjs';
 import { createBucketLimiter, readRaw, redactPath, safeLog } from './common.mjs';
@@ -95,6 +99,7 @@ export const DEFAULT_FACTORIES = Object.freeze({
   sitemap: createSitemapRoutes,
   billing: createBillingRoutes,
   ads: createAdsRoutes,
+  offers: createOffers,
   treg: createTreg,
 });
 
@@ -127,6 +132,7 @@ export function moduleFor(pathname) {
   if (under(ROUTE_PREFIXES.seoGoogle)) return 'seoGoogle';
   if (under(ROUTE_PREFIXES.billing) || under(ROUTE_PREFIXES.stripeWebhook)) return 'billing';
   if (under(ROUTE_PREFIXES.ads)) return 'ads';
+  if (under(ROUTE_PREFIXES.offers) || under(ROUTE_PREFIXES.whop) || under(ROUTE_PREFIXES.whopWebhook)) return 'offers';
   return null;
 }
 
@@ -177,6 +183,7 @@ export function createIntegrations({
     seoGoogle: make.seoGoogle(deps),
     billing: make.billing(deps),
     ads: make.ads(deps),
+    offers: make.offers(deps),
   };
   adsModule = modules.ads;
   billingModule = modules.billing;
@@ -187,7 +194,8 @@ export function createIntegrations({
   // ad events from Zernio's webhook (only those about one of the customer's own connections) update launched campaigns
   connections.impl?.ads?.setAdsListener?.((userId, zid, evt) => modules.ads.fromWebhook?.(userId, zid, evt));
   // account deletion: the vendor's connections go first (while their ids are still known), then the rest
-  const FORGET_ORDER = ['ads', 'posting', 'analytics', 'seoGoogle', 'billing', 'publicMedia', 'nango', 'connections'];
+  // (offers before billing: each Whop webhook gets its one removal attempt while the keys are still there)
+  const FORGET_ORDER = ['ads', 'posting', 'analytics', 'seoGoogle', 'offers', 'billing', 'publicMedia', 'nango', 'connections'];
 
   const crashed = (req, res, path, e) => {
     safeLog('integration_error', { path: redactPath(path), error: e?.name || 'Error', code: e?.code }, log);
@@ -201,6 +209,9 @@ export function createIntegrations({
     treg,
     db: database,
     billing,
+    /** offers and buy links: .buy for pages.mjs (/b/<id>), .config() for /api/config */
+    offers: modules.offers,
+    offersConfig: () => modules.offers.config?.() ?? { enabled: false, whop: { sandbox: false, production: false } },
     /** for tests and the startup notes */
     connectionsProvider: selected.provider,
     connectionsSelected: selected,
@@ -320,6 +331,7 @@ export function createIntegrations({
       if (!t.billingSetUp) lines.push('Per-customer caps and the treg check: add TREG_ADMIN_TOKEN and TREG_ORG_ID in Replit Secrets.');
       if (!has(env, 'CUSTOMER_TAG_SECRET')) lines.push('Usage tracking per customer needs the CUSTOMER_TAG_SECRET Secret (32+ random bytes; never change it).');
       lines.push(...billing.notes());
+      lines.push(...(modules.offers.notes?.() ?? []));
       if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql, supabase/migrations/20261108000000_ads_launch.sql, supabase/migrations/20261110000000_billing.sql and supabase/migrations/20261111000000_video_week.sql in Supabase.`);
       return lines;
     },
