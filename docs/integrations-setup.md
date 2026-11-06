@@ -314,6 +314,14 @@ methods, deleting campaigns, special ad categories (housing, jobs, credit, polit
 4. Owner → Billing → Ad limits: set the defaults (or one customer's) and turn **ads on** there. Ads stay off until
    **both** `ADS_LAUNCH_ENABLED=1` and the customer's (or the default) `ads on` are set.
 
+**In Zernio, for ads** (once): the API key in `ZERNIO_API_KEY` (§3a step 2); the **ads add-on** on the plan;
+the webhook from §3a step 4 subscribed to the five ad events (`ad.review.approved`, `ad.review.rejected`,
+`ad.status_changed`, `ad.delivery_issue`, `ad_account.status_changed`) on the same URL and secret (without them the
+Campaigns tab still updates on Refresh, just later); a payment method on your Zernio team before you pass 500 live
+ads. Zernio's plan, billing, add-on or key problems are never shown to customers: they see "Launching and changing
+ads from the app isn't available right now. The app owner has been told." and you get the alert in Owner → Billing
+(and the server log, `zernio_owner_alert`).
+
 **What customers need** (the launch window's checklist): Meta ads or Google Ads connected in Settings → Connected
 accounts and chosen for the business; an ad account picked (active, not a Google manager or test account); on Meta
 a payment method on the ad account, a Facebook Page (an Instagram professional account is optional), Meta's
@@ -560,6 +568,35 @@ by older versions show **Sent with Manus earlier**, read-only. There is no bulk 
   to 3 competitors through treg), SEO page (treg and Search Console) and Email (Omnisend). Each shows the last
   fetched numbers with their "as of" time and a 7/30-day range.
 
+### Ads: Launch… and the Campaigns tab
+
+Marketing → Ads has three tabs: **Plans** (the planner), **Campaigns** (what was launched) and **Analytics**. With
+launching on for the customer, a plan for Meta and/or Google with its page and ads shows **Launch…** (the full app
+only; the artifact build keeps copy and CSV export). The launch window has one tab per platform and five steps:
+**Ad account** (the business's connection, "Change in Connected accounts", then the ad accounts inside it with the
+setup checklist), **Who sees it** (each place in the plan becomes a lookup and the customer picks every match; Meta:
+radius and interests; Google: language; the "housing, jobs, credit…" question with no default), **The ads** (Meta:
+1 to 3 versions, each with its image: "Make the image" or "Use my photo"), **Budget and dates** (a daily amount per
+platform in that account's own currency, never converted; two platforms start empty under the plan's total; start,
+days and the computed last day with the time zone; the customer's limit and what's in use; **Paused / Active** with
+no default) and **Review** (the server's own review of exactly what will be sent, with blockers, claim ticks,
+warnings and what's left out). **Continue to confirm** opens the spend confirm: account and id tail, daily, dates
+with the time zone, planned total, Meta's spending limit (or Google's "pause or end it to stop"), Paused or Active,
+the ads and the link, the limit after this, and for an Active launch the "I understand this will spend real money"
+tick. The button repeats the choice and the amount ("Launch on Meta and spend $25.00 a day").
+
+The **Campaigns** tab: the limits strip (daily limit, committed, live campaigns), Refresh (reads Meta and Google at
+most every 5 minutes; also when the tab opens), the setup summary per platform, one row per campaign (state in plain
+words, daily, dates, spent so far, results as of their read time, Manage, Open in Ads Manager) and the full **Ad
+activity** (newest first, CSV). A row whose outcome is unknown shows the "may have happened" note and **Check
+status**, never "Try again". **Manage** shows the numbers, each ad's review, the campaign's activity, and Pause /
+Resume / Change daily budget / Change end date (Meta) / Swap ad / End, each with a preview and a confirm (the spend
+confirm for anything that can raise spend), and off with the reason while a change is still going or unconfirmed.
+The planner shows "Launched on Meta · Paused" on a launched plan and says edits don't change the live campaign.
+
+The assistant can list launched campaigns and **open** the launch or change window; it never launches, resumes or
+changes a budget, never picks Paused or Active and never ticks a box.
+
 ### Customer usage (owner only)
 
 Settings → AI keys → **Billing (owner)** opens **Customer usage**: per customer, analytics cost (treg) today and
@@ -570,7 +607,8 @@ profiles** used of the plan's limit (its tip gives each customer's limit of busi
 Upload-Post's last alert in plain words ("profiles are running low", "the API key was refused", "a customer reached
 their limit of businesses" with which customer, …). Estimates
 never count toward a cap. "Check against treg" and the monthly CSV are unchanged. It tracks usage only; it
-charges nothing.
+charges nothing. Below it, **Ad limits** (§3c): the defaults, each customer's own limits (empty = the default),
+committed daily and campaigns on, and **Pause all** for a customer (a preview of what's on, then one pause each).
 
 The artifact build shows "Connected accounts and live analytics need the full app" instead of any of this.
 
