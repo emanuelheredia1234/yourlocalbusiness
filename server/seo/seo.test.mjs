@@ -248,139 +248,101 @@ describe('Submit to Google: app-host pages', () => {
   });
 });
 
-describe('Submit to Google: custom domains', () => {
+describe('Submit to Google: custom domains (the owner’s Search Console through treg)', () => {
   function domainPage() {
     project(A.id, 'p1');
     rows('published_domains').push({ domain: 'joesbakery.com', user_id: A.id, token: 't', verified_at: '2026-10-01T00:00:00Z' });
     page(A.id, 'p1', 'joe', { domain: 'joesbakery.com' });
   }
-  const connected = { google_search_console: { state: 'connected', targetLabel: 'sc-domain:joesbakery.com', targetKind: 'gsc_site' } };
+  /** treg's Search Console answers; `sites` is the owner's property list (mutable per test). */
+  function gscTreg(state) {
+    return fakeTreg(async (endpointId, request) => {
+      if (state.fail?.[endpointId]) throw state.fail[endpointId];
+      if (endpointId === 'google-search-console.sites') return { siteEntry: state.sites };
+      if (endpointId === 'google-search-console.sitemaps') return { sitemap: state.sitemaps ?? [] };
+      if (endpointId === 'google-search-console.url_inspection') return { inspectionResult: { indexStatusResult: { verdict: 'PASS', coverageState: 'Submitted and indexed' } } };
+      void request;
+      return {};
+    });
+  }
+  const SITE = 'sc-domain:joesbakery.com';
+  const ids = (treg) => treg.calls.map((c) => c.endpointId.replace('google-search-console.', ''));
 
-  it('needs Search Console connected', async () => {
+  it('adds the domain to the owner’s Search Console once and waits for the owner to verify it; nothing else is sent', async () => {
     domainPage();
-    const { routes } = makeRoutes();
-    const r = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
-    expect(r.status).toBe(409);
-    expect(r.body.code).toBe('NOT_CONNECTED');
+    const state = { sites: [] };
+    const { routes, treg } = makeRoutes({ treg: gscTreg(state) });
+    const first = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
+    expect(first.body.result).toEqual({ host: 'custom', steps: [{ step: 'site_add', outcome: 'ok' }, { step: 'verify', outcome: 'failed', detail: 'OWNER_VERIFICATION_PENDING' }], ownerVerification: { domain: 'joesbakery.com' } });
+    const add = treg.calls.find((c) => c.endpointId === 'google-search-console.x.webmasters-sites-add');
+    expect(add.request).toMatchObject({ method: 'PUT', query: { siteUrl: SITE } });
+    expect(add.opts.oneShot).toBe(true);
+    // listed but unverified: still waiting, and the add is not sent again
+    state.sites = [{ siteUrl: SITE, permissionLevel: 'siteUnverifiedUser' }];
+    const second = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
+    expect(second.body.result.steps).toEqual([{ step: 'verify', outcome: 'failed', detail: 'OWNER_VERIFICATION_PENDING' }]);
+    expect(ids(treg).filter((x) => x === 'x.webmasters-sites-add')).toHaveLength(1);
+    expect(ids(treg)).not.toContain('x.webmasters-sitemaps-submit');
+    const st = await call(routes, 'GET', '/api/seo/google/status?projectId=p1', { token: 'a' });
+    expect(st.body.status).toMatchObject({ host: 'custom', verified: false, connected: false });
   });
 
-  it('shows the DNS record, then verifies, adds the site, submits the sitemap and inspects; later presses skip what is done', async () => {
+  it('once the owner verified it: submits the domain’s sitemap once and inspects; later presses skip what is done', async () => {
     domainPage();
-    let fail = null;
-    const connections = fakeConnections({
-      statuses: connected,
-      request: async (_u, _p, req) => {
-        if (fail && req.path.includes(fail.path)) return fail.res;
-        if (req.path === '/siteVerification/v1/token') return { status: 200, body: { method: 'DNS_TXT', token: 'google-site-verification=abc' } };
-        if (req.path === '/v1/urlInspection/index:inspect') return { status: 200, body: { inspectionResult: { indexStatusResult: { verdict: 'PASS', coverageState: 'Submitted and indexed' } } } };
-        if (req.method === 'GET' && req.path === '/v3/sites') return { status: 200, body: { siteEntry: [] } };
-        if (req.method === 'GET' && req.path.endsWith('/sitemaps')) return { status: 200, body: { sitemap: [{ path: 'https://joesbakery.com/sitemap.xml' }] } };
-        return { status: 200, body: {} };
-      },
-    });
-    const { routes } = makeRoutes({ connections });
-    const first = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
-    expect(first.body.result).toEqual({ host: 'custom', steps: [{ step: 'verify_token', outcome: 'ok' }], dnsRecord: { type: 'TXT', name: 'joesbakery.com', value: 'google-site-verification=abc' } });
-
-    // Google can't see the record yet: Verify fails, the record is shown again
-    fail = { path: 'webResource', res: { status: 400, body: { error: { message: 'secret text' } } } };
-    const second = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
-    expect(second.body.result.steps).toEqual([{ step: 'verify_token', outcome: 'skipped' }, { step: 'verify', outcome: 'failed', detail: 'DNS_RECORD_NOT_FOUND' }]);
-    expect(second.raw).not.toContain('secret text');
-
-    // the site add's answer is lost (5xx): unknown, and the press stops there
-    fail = { path: '/v3/sites/sc-domain', res: { status: 503, body: null } };
-    const third = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
-    expect(third.body.result.steps.at(-1)).toEqual({ step: 'site_add', outcome: 'unknown' });
-
-    // next press: a read first; not there, so it needs the user's confirmation before sending again
-    fail = null;
-    const before = connections.calls.filter((c) => c.method === 'PUT' && c.path === '/v3/sites/sc-domain%3Ajoesbakery.com').length;
-    const fourth = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
-    expect(fourth.body.result.steps.at(-1)).toEqual({ step: 'site_add', outcome: 'unknown', detail: 'CONFIRM_RESEND' });
-    expect(connections.calls.filter((c) => c.method === 'PUT' && c.path === '/v3/sites/sc-domain%3Ajoesbakery.com')).toHaveLength(before);
-    expect(connections.calls.some((c) => c.method === 'GET' && c.path === '/v3/sites')).toBe(true);
-
-    const fifth = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true, resend: true } });
-    expect(fifth.body.result.steps).toEqual([
-      { step: 'verify_token', outcome: 'skipped' },
-      { step: 'verify', outcome: 'skipped' },
-      { step: 'site_add', outcome: 'ok' },
+    const state = { sites: [{ siteUrl: SITE, permissionLevel: 'siteOwner' }] };
+    const { routes, treg } = makeRoutes({ treg: gscTreg(state) });
+    const r = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
+    expect(r.body.result.steps).toEqual([
+      { step: 'verify', outcome: 'ok' },
       { step: 'sitemap', outcome: 'ok' },
       { step: 'inspect', outcome: 'ok', verdict: 'PASS', coverageState: 'Submitted and indexed' },
     ]);
-    const sitemapPut = connections.calls.find((c) => c.method === 'PUT' && c.path.includes('/sitemaps/'));
-    expect(sitemapPut.path).toBe(`/v3/sites/sc-domain%3Ajoesbakery.com/sitemaps/${encodeURIComponent('https://joesbakery.com/sitemap.xml')}`);
-    expect(sitemapPut.oneShot).toBe(true);
-    // every write is one attempt
-    for (const c of connections.calls.filter((x) => x.method !== 'GET' && !x.path.includes('urlInspection'))) expect(c.oneShot).toBe(true);
-
-    // an unknown sitemap step that the read shows as there is ok without sending
-    supa.tables.get('seo_google_steps').find((s) => s.step === 'sitemap').outcome = 'unknown';
-    connections.calls.length = 0;
-    const sixth = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
-    expect(sixth.body.result.steps.find((s) => s.step === 'sitemap').outcome).toBe('ok');
-    expect(connections.calls.some((c) => c.method === 'PUT')).toBe(false);
+    const submit = treg.calls.find((c) => c.endpointId === 'google-search-console.x.webmasters-sitemaps-submit');
+    expect(submit.request.query).toEqual({ siteUrl: SITE, feedpath: 'https://joesbakery.com/sitemap.xml' });
+    expect(submit.opts.oneShot).toBe(true);
+    const again = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
+    expect(again.body.result.steps.find((s) => s.step === 'sitemap')).toEqual({ step: 'sitemap', outcome: 'skipped' });
+    expect(ids(treg).filter((x) => x === 'x.webmasters-sitemaps-submit')).toHaveLength(1);
+    const st = await call(routes, 'GET', '/api/seo/google/status?projectId=p1', { token: 'a' });
+    expect(st.body.status).toMatchObject({ verified: true, connected: true, submittedAt: expect.any(String) });
   });
-});
 
-describe('Submit to Google: custom domains, one send per step', () => {
-  function domainPage() {
-    project(A.id, 'p1');
-    rows('published_domains').push({ domain: 'joesbakery.com', user_id: A.id, token: 't', verified_at: '2026-10-01T00:00:00Z' });
-    page(A.id, 'p1', 'joe', { domain: 'joesbakery.com' });
-    const at = new Date().toISOString();
-    for (const step of ['verify_token', 'verify']) rows('seo_google_steps').push({ user_id: A.id, page_id: 'seo:p1', step, outcome: 'ok', detail: {}, at });
-  }
-  const connected = { google_search_console: { state: 'connected', targetLabel: 'sc-domain:joesbakery.com', targetKind: 'gsc_site' } };
-  const isSiteAdd = (c) => c.method === 'PUT' && c.path === '/v3/sites/sc-domain%3Ajoesbakery.com';
-
-  it('two presses at once add the site once; the other is told it is already being sent', async () => {
+  it('an unknown sitemap submit is read first; resent only when the user confirms', async () => {
     domainPage();
-    const connections = fakeConnections({
-      statuses: connected,
-      request: async (_u, _p, req) => {
-        if (req.method === 'PUT') await new Promise((r) => setTimeout(r, 30));
-        if (req.path === '/v1/urlInspection/index:inspect') return { status: 200, body: { inspectionResult: { indexStatusResult: { verdict: 'PASS' } } } };
-        return { status: 200, body: {} };
-      },
-    });
-    const { routes } = makeRoutes({ connections });
+    const state = { sites: [{ siteUrl: SITE, permissionLevel: 'siteFullUser' }], fail: { 'google-search-console.x.webmasters-sitemaps-submit': Object.assign(new Error('upstream'), { kind: 'upstream' }) } };
+    let t = Date.now();
+    const { routes, treg } = makeRoutes({ treg: gscTreg(state), now: () => t });
+    const first = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
+    expect(first.body.result.steps.at(-1)).toEqual({ step: 'sitemap', outcome: 'unknown' });
+    state.fail = {};
+    t += 5 * 60_000;
+    const second = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
+    expect(second.body.result.steps.at(-1)).toEqual({ step: 'sitemap', outcome: 'unknown', detail: 'CONFIRM_RESEND' });
+    expect(ids(treg).filter((x) => x === 'x.webmasters-sitemaps-submit')).toHaveLength(1);
+    expect(ids(treg)).toContain('sitemaps');
+    const third = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true, resend: true } });
+    expect(third.body.result.steps.find((s) => s.step === 'sitemap').outcome).toBe('ok');
+    expect(ids(treg).filter((x) => x === 'x.webmasters-sitemaps-submit')).toHaveLength(2);
+    // and a stored unknown that the read shows as there is ok without sending
+    supa.tables.get('seo_google_steps').find((s) => s.step === 'sitemap').outcome = 'unknown';
+    supa.tables.get('seo_google_steps').find((s) => s.step === 'sitemap').detail = {};
+    state.sitemaps = [{ path: 'https://joesbakery.com/sitemap.xml' }];
+    const fourth = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
+    expect(fourth.body.result.steps.find((s) => s.step === 'sitemap').outcome).toBe('ok');
+    expect(ids(treg).filter((x) => x === 'x.webmasters-sitemaps-submit')).toHaveLength(2);
+  });
+
+  it('two presses at once submit the sitemap once; the other is told it is already being sent', async () => {
+    domainPage();
+    const treg = fakeTreg(async (endpointId) => (endpointId === 'google-search-console.sites' ? { siteEntry: [{ siteUrl: SITE, permissionLevel: 'siteOwner' }] } : {}), { delayMs: 20 });
+    const { routes } = makeRoutes({ treg });
     const [x, y] = await Promise.all([
       call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } }),
       call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } }),
     ]);
-    expect(connections.calls.filter(isSiteAdd)).toHaveLength(1);
+    expect(treg.calls.filter((c) => c.endpointId === 'google-search-console.x.webmasters-sitemaps-submit')).toHaveLength(1);
     expect([x.status, y.status].sort()).toEqual([200, 409]);
     expect([x, y].find((r) => r.status === 409).body.code).toBe('ALREADY_PUBLISHING');
-    expect(rows('seo_google_steps').find((s) => s.step === 'site_add').outcome).toBe('ok');
-  });
-
-  it('marks a step unknown before the call, so an answer lost to a crash is read and confirmed, never re-sent silently', async () => {
-    domainPage();
-    let t = Date.now();
-    const connections = fakeConnections({
-      statuses: connected,
-      request: async (_u, _p, req) => {
-        // the step is already stored as being sent while Google is asked
-        if (isSiteAdd(req)) expect(rows('seo_google_steps').find((s) => s.step === 'site_add')).toMatchObject({ outcome: 'unknown', detail: { sending: true } });
-        if (req.method === 'GET' && req.path === '/v3/sites') return { status: 200, body: { siteEntry: [] } };
-        return { status: 200, body: {} };
-      },
-    });
-    const { routes } = makeRoutes({ connections, now: () => t });
-    // the server stopped after claiming site_add: the row says unknown (sending) and nothing more
-    rows('seo_google_steps').push({ user_id: A.id, page_id: 'seo:p1', step: 'site_add', outcome: 'unknown', detail: { sending: true }, at: new Date(t).toISOString() });
-    const soon = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true, resend: true } });
-    expect(soon.status).toBe(409);
-    expect(connections.calls.filter(isSiteAdd)).toHaveLength(0);
-    t += 5 * 60_000;
-    const later = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true } });
-    expect(later.body.result.steps.at(-1)).toEqual({ step: 'site_add', outcome: 'unknown', detail: 'CONFIRM_RESEND' });
-    expect(connections.calls.filter(isSiteAdd)).toHaveLength(0);
-    const confirmed = await call(routes, 'POST', '/api/seo/google/publish', { token: 'a', body: { projectId: 'p1', confirm: true, resend: true } });
-    expect(confirmed.body.result.steps.find((s) => s.step === 'site_add')).toEqual({ step: 'site_add', outcome: 'ok' });
-    expect(connections.calls.filter(isSiteAdd)).toHaveLength(1);
   });
 });
 

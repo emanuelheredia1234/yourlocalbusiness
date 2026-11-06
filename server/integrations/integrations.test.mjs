@@ -26,9 +26,9 @@ import {
   unlogged,
 } from './common.mjs';
 import { createDb, DbError, filterQuery } from './db.mjs';
-import { ANALYTICS_SOURCES, API_ERROR_CODES, PHASE1_PLATFORMS, PHASE2_PLATFORMS, PLATFORMS } from './contracts.mjs';
+import { AD_PLATFORMS, ANALYTICS_SOURCES, API_ERROR_CODES, PHASE1_PLATFORMS, PHASE2_PLATFORMS, PLATFORMS, SOCIAL_PLATFORMS } from './contracts.mjs';
 import { CONNECTION_METHODS, createConnections, nullConnections } from '../connections/index.mjs';
-import { ANALYTICS_SOURCES as CLIENT_SOURCES, CONNECT_PLATFORMS, PHASE2_PLATFORMS as CLIENT_PHASE2 } from '../../src/lib/integrations/types.ts';
+import { AD_PLATFORMS as CLIENT_ADS, ANALYTICS_SOURCES as CLIENT_SOURCES, CONNECT_PLATFORMS, PHASE2_PLATFORMS as CLIENT_PHASE2, SOCIAL_PLATFORMS as CLIENT_SOCIAL } from '../../src/lib/integrations/types.ts';
 import { seoPageId } from '../../src/lib/seoPage.ts';
 import { TREG_ENDPOINTS } from '../treg-endpoints.mjs';
 import { createTreg, TregError } from '../treg.mjs';
@@ -308,7 +308,9 @@ describe('connections', () => {
     expect(list.map((s) => s.platform)).toEqual([...PLATFORMS]);
     for (const s of list) expect(s.state).toBe(PHASE2_PLATFORMS.includes(s.platform) ? 'coming_soon' : 'not_connected');
     await expect(c.connectLink(uid, 'facebook')).rejects.toMatchObject({ status: 503, code: 'CONNECTIONS_NOT_ENABLED' });
-    await expect(c.request(uid, 'x', { method: 'POST', path: '/2/tweets', oneShot: true })).rejects.toMatchObject({ code: 'CONNECTIONS_NOT_ENABLED' });
+    await expect(c.publish(uid, 'x', { jobId: uid })).rejects.toMatchObject({ code: 'CONNECTIONS_NOT_ENABLED' });
+    expect(await c.insights(uid, 'facebook', {})).toBeNull();
+    expect(await c.adResults(uid, 'meta_ads', {})).toBeNull();
     expect(await c.check(uid, 'linkedin')).toEqual({ platform: 'linkedin', state: 'not_connected' });
   });
 
@@ -317,8 +319,10 @@ describe('connections', () => {
     const c = createConnections(impl);
     await expect(c.connectLink('someone', 'facebook')).rejects.toMatchObject({ code: 'AUTH_REQUIRED' });
     await expect(c.connectLink(uid, 'myspace')).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    await expect(c.credentials(uid, 'facebook')).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(await c.credentials(uid, 'tiktok_ads')).toBe('ok');
+    await expect(c.connectLink(uid, 'google_search_console')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    // a business id that isn't a plain id never reaches the implementation
+    await c.status(uid, { projectId: '../../etc' });
+    expect(impl.status).toHaveBeenLastCalledWith(uid, { projectId: undefined });
     expect(impl.connectLink).not.toHaveBeenCalled();
     expect(await c.connectLink(uid, 'facebook')).toBe('ok');
     expect(() => createConnections({ status() {} })).toThrow(/connectLink/);
@@ -332,7 +336,9 @@ describe('the contracts on both sides', () => {
     expect([...CONNECT_PLATFORMS]).toEqual([...PLATFORMS]);
     expect([...CLIENT_PHASE2]).toEqual([...PHASE2_PLATFORMS]);
     expect([...CLIENT_SOURCES]).toEqual([...ANALYTICS_SOURCES]);
-    expect(PHASE1_PLATFORMS).toEqual(['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'google_ads', 'meta_ads', 'google_search_console']);
+    expect(PHASE1_PLATFORMS).toEqual(['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'google_ads', 'meta_ads', 'linkedin_ads', 'tiktok_ads', 'pinterest_ads', 'x_ads', 'reddit_ads', 'microsoft_ads']);
+    expect([...CLIENT_SOCIAL]).toEqual([...SOCIAL_PLATFORMS]);
+    expect([...CLIENT_ADS]).toEqual([...AD_PLATFORMS]);
     const ts = fs.readFileSync(path.join(here, '..', '..', 'src', 'lib', 'integrations', 'types.ts'), 'utf8');
     const union = /export type ApiErrorCode =([\s\S]*?);/.exec(ts)[1];
     expect([...union.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1])).toEqual([...API_ERROR_CODES]);

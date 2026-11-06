@@ -276,34 +276,36 @@ describe('POST /api/analytics/refresh', () => {
     expect(JSON.stringify(after)).not.toMatch(/topup|balance/i);
   });
 
-  it('uses the connected account for a connected network (Page token kept in memory, Graph called directly) and treg for the rest', async () => {
+  it('uses the business’s connected account (Zernio’s own stats) for a connected network and treg for the rest', async () => {
     project(A.id, 'p1', { brand: { name: 'Joe', socials: { instagram: 'joesbakery', facebook: 'joesbakery' } } });
     const connections = fakeConnections({
       statuses: { facebook: { state: 'connected', targetLabel: 'Joe’s Bakery', targetKind: 'fb_page' } },
-      request: async (_u, platform, req) => {
-        if (platform === 'facebook' && req.path === '/v26.0/{target}') return { status: 200, body: { id: '1234567', access_token: 'test-page-token' } };
-        return { status: 404, body: null };
-      },
+      insights: async (_u, platform) => (platform === 'facebook' ? { followers: 310, engagement: 7, reach: 90, views: 120, series: [{ date: '2026-11-02', followers: 310, reach: 90, engagement: 7 }], topPosts: [{ id: 'p1', text: 'Hello', likes: 5, comments: 2 }] } : null),
     });
-    const graphCalls = [];
-    const fetch = async (url, init) => {
-      graphCalls.push({ url: String(url), auth: init.headers.authorization });
-      return new Response(JSON.stringify({ data: [{ name: 'page_follows', values: [{ value: 300, end_time: '2026-11-01T07:00:00+0000' }, { value: 310, end_time: '2026-11-02T07:00:00+0000' }] }, { name: 'page_post_engagements', values: [{ value: 7, end_time: '2026-11-02T07:00:00+0000' }] }, { name: 'page_total_media_view_unique', values: [{ value: 90, end_time: '2026-11-02T07:00:00+0000' }] }] }), { status: 200 });
-    };
-    const { routes, treg } = makeRoutes({ connections, fetch });
+    const { routes, treg } = makeRoutes({ connections });
     await call(routes, 'POST', '/api/analytics/refresh', { token: 'a', body: { projectId: 'p1' } });
     await routes.refresher.idle();
     const nets = rows('analytics_snapshots').find((s) => s.source === 'social').data.networks;
     expect(nets.find((n) => n.network === 'facebook')).toMatchObject({ origin: 'own', followers: 310, engagement: 7, reach: 90 });
     expect(nets.find((n) => n.network === 'instagram').origin).toBe('public');
     expect(treg.calls.some((c) => c.endpointId.includes('facebook'))).toBe(false);
-    expect(graphCalls).toHaveLength(1);
-    expect(graphCalls[0].url).toMatch(/^https:\/\/graph\.facebook\.com\/v26\.0\/1234567\/insights\?/);
-    expect(graphCalls[0].url).not.toMatch(/token/);
-    expect(graphCalls[0].auth).toBe('Bearer test-page-token');
-    // the proxy calls never carry a token in the query, and the Page token is stored nowhere
-    for (const c of connections.calls) expect(JSON.stringify(c.query ?? {})).not.toMatch(/token=|access_token=/);
-    expect(JSON.stringify([...supa.tables.values()])).not.toContain('test-page-token');
+    // the read names this business, so its own chosen account is used
+    expect(connections.calls).toEqual([expect.objectContaining({ kind: 'insights', userId: A.id, platform: 'facebook', projectId: 'p1' })]);
+  });
+
+  it('reads every connected ad account’s results through Zernio (no ad changes) next to competitors', async () => {
+    project(A.id, 'p1');
+    const own = (platform, spend) => ({ platform, currency: 'USD', spend, impressions: 100, clicks: 10, conversions: 1, series: [], campaigns: [] });
+    const connections = fakeConnections({
+      statuses: { meta_ads: { state: 'connected', targetLabel: 'Joe ads', targetKind: 'ads_account' }, reddit_ads: { state: 'connected', targetLabel: 'Joe reddit', targetKind: 'ads_account' }, google_ads: { state: 'needs_reconnect' } },
+      adResults: async (_u, platform) => own(platform, platform === 'meta_ads' ? 20 : 5),
+    });
+    const { routes } = makeRoutes({ connections });
+    await call(routes, 'POST', '/api/analytics/refresh', { token: 'a', body: { projectId: 'p1', sources: ['ads'] } });
+    await routes.refresher.idle();
+    const ads = rows('analytics_snapshots').find((s) => s.source === 'ads');
+    expect(ads.data.own.map((o) => o.platform)).toEqual(['meta_ads', 'reddit_ads']);
+    expect(connections.calls.map((c) => c.platform)).toEqual(['meta_ads', 'reddit_ads']);
   });
 
   it('notes "reconnect" and uses public data when the connection needs a reconnect', async () => {

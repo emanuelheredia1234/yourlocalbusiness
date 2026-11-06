@@ -1,5 +1,5 @@
 // What ai-server.mjs delivers to the integration modules (WP0), one acceptance test each: the route table,
-// the Nango webhook's raw body, unlogged media and webhook paths, the account-deletion order, the startup
+// the Zernio and Nango webhooks' raw bodies, unlogged media and webhook paths, the account-deletion order, the startup
 // sweeps and notes, the connections switch, and the app-host hook in pages.mjs; then the real server.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
@@ -58,15 +58,17 @@ function recorder() {
       },
       ...extra,
     }));
-  const nangoImpl = Object.fromEntries(CONNECTION_METHODS.map((m) => [m, vi.fn(async () => (m === 'status' ? [] : undefined))]));
-  nangoImpl.forgetUser = vi.fn(async (id) => calls.push(['forget', 'vendor', id]));
-  nangoImpl.unforgetUser = vi.fn(async (id) => calls.push(['unforget', 'vendor', id]));
+  const zernioImpl = Object.fromEntries(CONNECTION_METHODS.map((m) => [m, vi.fn(async () => (m === 'status' ? [] : undefined))]));
+  zernioImpl.forgetUser = vi.fn(async (id) => calls.push(['forget', 'vendor', id]));
+  zernioImpl.unforgetUser = vi.fn(async (id) => calls.push(['unforget', 'vendor', id]));
   return {
     calls,
-    nangoImpl,
+    zernioImpl,
     factories: {
-      nango: vi.fn(() => nangoImpl),
+      zernio: vi.fn(() => zernioImpl),
+      nango: vi.fn(() => ({ enabled: true, integrations: {} })),
       connectionRoutes: mod('connections'),
+      nangoRoutes: mod('nango'),
       posting: mod('posting'),
       publicMedia: mod('publicMedia'),
       analytics: mod('analytics'),
@@ -82,7 +84,10 @@ describe('the route table', () => {
   it('sends each prefix to its module', () => {
     expect(moduleFor('/api/integrations/connections')).toBe('connections');
     expect(moduleFor('/api/integrations/connections/facebook/connect')).toBe('connections');
-    expect(moduleFor('/api/webhooks/nango')).toBe('connections');
+    expect(moduleFor('/api/webhooks/zernio')).toBe('connections');
+    expect(moduleFor('/api/webhooks/nango')).toBe('nango');
+    expect(moduleFor('/api/integrations/nango')).toBe('nango');
+    expect(moduleFor('/api/integrations/nango/calendly/connect')).toBe('nango');
     expect(moduleFor('/api/posting/publish')).toBe('posting');
     expect(moduleFor('/api/media/public/abc.def')).toBe('publicMedia');
     expect(moduleFor('/api/analytics/refresh')).toBe('analytics');
@@ -135,7 +140,7 @@ describe('the route table', () => {
   });
 });
 
-describe('the Nango webhook', () => {
+describe('the Zernio webhook', () => {
   it('reaches its module with the body unread, so the HMAC covers the exact bytes (readJson never runs)', async () => {
     const r = recorder();
     const readJson = vi.fn(async () => ({}));
@@ -151,8 +156,8 @@ describe('the Nango webhook', () => {
     const integrations = createIntegrations({ env: {}, send: sendLike, readJson, factories: r.factories, db: { enabled: false } });
     const s = await serve(integrations);
     try {
-      const raw = '{"type":"auth","operation":"creation",  "success":true,"x":"é"}';
-      const res = await fetch(`${s.base}/api/webhooks/nango`, { method: 'POST', body: raw, headers: { 'x-nango-hmac-sha256': 'abc' } });
+      const raw = '{"event":"account.connected",  "id":"evt_1","x":"é"}';
+      const res = await fetch(`${s.base}/api/webhooks/zernio`, { method: 'POST', body: raw, headers: { 'x-zernio-signature': 'abc' } });
       expect(res.status).toBe(200);
       expect(got).toBe(raw);
       expect(readJson).not.toHaveBeenCalled();
@@ -165,7 +170,7 @@ describe('the Nango webhook', () => {
 describe('account deletion', () => {
   it('forgets the vendor connections first, then posting, analytics, SEO and billing; lifts them newest first', async () => {
     const r = recorder();
-    const integrations = createIntegrations({ env: { NANGO_SECRET_KEY: 'test-nango-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
+    const integrations = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
     await integrations.forgetUser(UID);
     const forgets = r.calls.filter((c) => c[0] === 'forget').map((c) => c[1]);
     expect(forgets[0]).toBe('vendor');
@@ -213,37 +218,43 @@ describe('startup', () => {
   });
 
   it('names what is missing and never prints a value', () => {
-    const secrets = { NANGO_SECRET_KEY: 'test-nango-key', TREG_TOKEN: 'test-treg-token-xyz', TREG_ADMIN_TOKEN: 'test-treg-admin-token', CUSTOMER_TAG_SECRET: 'test-customer-tag-secret-0123456789' };
+    const secrets = { ZERNIO_API_KEY: 'sk_test_zernio_key_xyz', TREG_TOKEN: 'test-treg-token-xyz', TREG_ADMIN_TOKEN: 'test-treg-admin-token', CUSTOMER_TAG_SECRET: 'test-customer-tag-secret-0123456789' };
     const integrations = createIntegrations({ env: secrets, send: sendLike, db: { enabled: false } });
     const text = integrations.notes().join('\n');
-    expect(text).toContain('Connected accounts: on (Nango).');
-    expect(text).toContain('NANGO_WEBHOOK_SIGNING_KEY');
+    expect(text).toContain('Connected accounts (social and ads): on (Zernio).');
+    expect(text).toContain('ZERNIO_WEBHOOK_SECRET');
+    expect(text).toContain('Other integrations (Nango): off');
     expect(text).toContain('TREG_ORG_ID');
     for (const v of Object.values(secrets)) expect(text).not.toContain(v);
     const off = createIntegrations({ env: {}, send: sendLike, db: { enabled: false } }).notes().join('\n');
-    expect(off).toMatch(/Connected accounts: off.*NANGO_SECRET_KEY/);
+    expect(off).toMatch(/Connected accounts: off.*ZERNIO_API_KEY/);
     expect(off).toContain('TREG_TOKEN');
   });
 });
 
 describe('the connections switch', () => {
-  it('is Nango once NANGO_SECRET_KEY is set, unless CONNECTIONS_PROVIDER=off', () => {
+  it('is Zernio once ZERNIO_API_KEY is set, unless CONNECTIONS_PROVIDER=off; Nango never carries social accounts', () => {
     expect(selectConnections({})).toEqual({ provider: null, reason: 'no_key' });
-    expect(selectConnections({ CONNECTIONS_PROVIDER: 'nango' })).toEqual({ provider: null, reason: 'no_key' });
-    expect(selectConnections({ NANGO_SECRET_KEY: 'test-nango-key' })).toEqual({ provider: 'nango', reason: 'key' });
-    expect(selectConnections({ NANGO_SECRET_KEY: 'test-nango-key', CONNECTIONS_PROVIDER: 'nango' })).toEqual({ provider: 'nango', reason: 'key' });
-    expect(selectConnections({ NANGO_SECRET_KEY: 'test-nango-key', CONNECTIONS_PROVIDER: 'off' })).toEqual({ provider: null, reason: 'off' });
-    expect(selectConnections({ NANGO_SECRET_KEY: 'test-nango-key', CONNECTIONS_PROVIDER: 'treg' })).toEqual({ provider: null, reason: 'unknown_provider' });
+    expect(selectConnections({ CONNECTIONS_PROVIDER: 'zernio' })).toEqual({ provider: null, reason: 'no_key' });
+    expect(selectConnections({ ZERNIO_API_KEY: 'k' })).toEqual({ provider: 'zernio', reason: 'key' });
+    expect(selectConnections({ ZERNIO_API_KEY: 'k', CONNECTIONS_PROVIDER: 'zernio' })).toEqual({ provider: 'zernio', reason: 'key' });
+    expect(selectConnections({ ZERNIO_API_KEY: 'k', CONNECTIONS_PROVIDER: 'off' })).toEqual({ provider: null, reason: 'off' });
+    expect(selectConnections({ ZERNIO_API_KEY: 'k', CONNECTIONS_PROVIDER: 'nango' })).toEqual({ provider: null, reason: 'unknown_provider' });
+    expect(selectConnections({ NANGO_SECRET_KEY: 'test-nango-key' })).toEqual({ provider: null, reason: 'no_key' });
   });
 
-  it('builds the Nango implementation only when selected', () => {
+  it('builds Zernio only when selected, and Nango only with NANGO_SECRET_KEY (for other integrations)', () => {
     const off = recorder();
-    createIntegrations({ env: {}, send: sendLike, factories: off.factories, db: { enabled: false } });
+    const none = createIntegrations({ env: {}, send: sendLike, factories: off.factories, db: { enabled: false } });
+    expect(off.factories.zernio).not.toHaveBeenCalled();
     expect(off.factories.nango).not.toHaveBeenCalled();
+    expect(none.nango.enabled).toBe(false);
     const on = recorder();
-    const i = createIntegrations({ env: { NANGO_SECRET_KEY: 'test-nango-key' }, send: sendLike, factories: on.factories, db: { enabled: false } });
+    const i = createIntegrations({ env: { ZERNIO_API_KEY: 'k', NANGO_SECRET_KEY: 'test-nango-key' }, send: sendLike, factories: on.factories, db: { enabled: false } });
+    expect(on.factories.zernio).toHaveBeenCalledTimes(1);
     expect(on.factories.nango).toHaveBeenCalledTimes(1);
-    expect(i.connectionsProvider).toBe('nango');
+    expect(i.connectionsProvider).toBe('zernio');
+    expect(i.connections.enabled).toBe(true);
   });
 });
 
@@ -332,7 +343,7 @@ describe('ai-server.mjs with the integrations', () => {
     expect(body.connections.find((c) => c.platform === 'pinterest')).toEqual({ platform: 'pinterest', state: 'coming_soon' });
     const owner = await supa.tokenFor('owner@example.com');
     const forOwner = await (await fetch(`${base}/api/integrations/connections`, { headers: { authorization: `Bearer ${owner.token}` } })).json();
-    expect(forOwner.hint).toMatch(/NANGO_SECRET_KEY/);
+    expect(forOwner.hint).toMatch(/ZERNIO_API_KEY/);
     // connecting is refused plainly; a cross-site page is refused first
     const connect = await fetch(`${base}/api/integrations/connections/facebook/connect`, { method: 'POST', headers: { authorization: `Bearer ${user.token}` } });
     expect(connect.status).toBe(503);

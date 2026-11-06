@@ -37,8 +37,8 @@ export function fakeTreg(answer, { delayMs = 0 } = {}) {
 
 export const tregError = (kind, extra = {}) => new TregError(kind, kind, extra);
 
-/** Connections with these statuses and a request(userId, platform, req) answerer. */
-export function fakeConnections({ statuses = {}, request = async () => ({ status: 404, body: null }) } = {}) {
+/** Connections with these statuses and insights / adResults answerers (the Zernio reads' shape). */
+export function fakeConnections({ statuses = {}, insights = async () => null, adResults = async () => null } = {}) {
   const calls = [];
   const impl = {
     ...nullConnections,
@@ -47,9 +47,13 @@ export function fakeConnections({ statuses = {}, request = async () => ({ status
     async status() {
       return Object.entries(statuses).map(([platform, s]) => ({ platform, ...s }));
     },
-    async request(userId, platform, req) {
-      calls.push({ userId, platform, ...structuredClone(req) });
-      return request(userId, platform, req);
+    async insights(userId, platform, opts) {
+      calls.push({ kind: 'insights', userId, platform, ...structuredClone(opts) });
+      return insights(userId, platform, opts);
+    },
+    async adResults(userId, platform, opts) {
+      calls.push({ kind: 'adResults', userId, platform, ...structuredClone(opts) });
+      return adResults(userId, platform, opts);
     },
   };
   const c = createConnections(impl);

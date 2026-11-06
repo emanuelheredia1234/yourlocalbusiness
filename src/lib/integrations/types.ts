@@ -2,7 +2,7 @@
 // (the app's side; the server mirrors them as JSDoc in server/integrations/contracts.mjs). Everything here is
 // what the browser may see: no connection ids, no tokens, no other customer's data.
 
-/** The accounts a user can connect (phase 2 ones show "Coming soon"). */
+/** The accounts a user can connect, all through Zernio (phase 2 ones show "Coming soon"). */
 export type ConnectPlatform =
   | 'facebook'
   | 'instagram'
@@ -13,17 +13,25 @@ export type ConnectPlatform =
   | 'pinterest'
   | 'google_ads'
   | 'meta_ads'
-  | 'microsoft_ads'
+  | 'linkedin_ads'
   | 'tiktok_ads'
-  | 'google_search_console';
+  | 'pinterest_ads'
+  | 'x_ads'
+  | 'reddit_ads'
+  | 'microsoft_ads';
 
-export const CONNECT_PLATFORMS: readonly ConnectPlatform[] = ['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'pinterest', 'google_ads', 'meta_ads', 'microsoft_ads', 'tiktok_ads', 'google_search_console'];
-/** Shown as "Coming soon" for now. */
-export const PHASE2_PLATFORMS: readonly ConnectPlatform[] = ['pinterest', 'microsoft_ads', 'tiktok_ads'];
+export const CONNECT_PLATFORMS: readonly ConnectPlatform[] = ['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'pinterest', 'google_ads', 'meta_ads', 'linkedin_ads', 'tiktok_ads', 'pinterest_ads', 'x_ads', 'reddit_ads', 'microsoft_ads'];
+/** The social networks (Settings › Connected accounts › Social). */
+export const SOCIAL_PLATFORMS: readonly ConnectPlatform[] = ['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'pinterest'];
+/** The ad accounts (read only: the app changes no ad). */
+export const AD_PLATFORMS: readonly ConnectPlatform[] = ['google_ads', 'meta_ads', 'linkedin_ads', 'tiktok_ads', 'pinterest_ads', 'x_ads', 'reddit_ads', 'microsoft_ads'];
+/** Shown as "Coming soon" for now (posts in the app have no Pinterest format yet). */
+export const PHASE2_PLATFORMS: readonly ConnectPlatform[] = ['pinterest'];
+export type AdPlatformId = 'google_ads' | 'meta_ads' | 'linkedin_ads' | 'tiktok_ads' | 'pinterest_ads' | 'x_ads' | 'reddit_ads' | 'microsoft_ads';
 
 export type ConnectionState = 'not_connected' | 'pending' | 'connected' | 'limited' | 'needs_reconnect' | 'coming_soon';
 export type LimitedReason = 'missing_permissions' | 'no_page_role' | 'app_not_approved' | 'insights_unavailable' | 'private_only';
-export type TargetKind = 'fb_page' | 'ig_account' | 'li_person' | 'li_org' | 'yt_channel' | 'ads_account' | 'gsc_site' | 'tt_account' | 'x_account';
+export type TargetKind = 'fb_page' | 'ig_account' | 'li_person' | 'li_org' | 'yt_channel' | 'ads_account' | 'tt_account' | 'x_account' | 'pin_account';
 
 export interface ConnectionStatus {
   platform: ConnectPlatform;
@@ -49,13 +57,34 @@ export interface ConnectionsResponse {
   connections: ConnectionStatus[];
   available: ConnectPlatform[];
   setUp: boolean;
+  /** who holds the logins: 'zernio' when connecting is on */
+  provider?: 'zernio' | null;
   /** admins only: which Replit Secret to add (names, never values) */
   hint?: string;
 }
 
+/** A connect link to open, or (ad accounts on a network already connected) nothing to open. */
 export interface ConnectLink {
-  connectLink: string;
-  expiresAt: string;
+  connectLink?: string;
+  expiresAt?: string;
+  alreadyConnected?: boolean;
+}
+
+/** Other integrations through Nango (future booking tools and CRMs; never social or ads). */
+export interface NangoIntegration {
+  key: string;
+  label: string;
+  category: 'booking' | 'crm' | 'calendar' | 'payments' | 'other';
+  state: ConnectionState;
+  connectedAt?: string;
+  lastError?: string;
+}
+
+export interface NangoResponse {
+  enabled: boolean;
+  setUp: boolean;
+  integrations: NangoIntegration[];
+  hint?: string;
 }
 
 // ───────────── posting ─────────────
@@ -144,7 +173,7 @@ export interface SocialData {
 
 export interface AdsData {
   own: {
-    platform: 'google_ads' | 'meta_ads';
+    platform: AdPlatformId;
     currency: string;
     spend: number;
     impressions: number;
@@ -212,13 +241,16 @@ export interface SeoPublishResult {
   steps: { step: SeoStepName; outcome: StepOutcome | 'skipped'; verdict?: string; coverageState?: string; lastCrawlTime?: string; alreadySubmittedAt?: string; detail?: string }[];
   /** custom domains: the DNS TXT record to add before Verify */
   dnsRecord?: { type: 'TXT'; name: string; value: string };
+  /** custom domains: waiting for the app's owner to verify the domain in Search Console */
+  ownerVerification?: { domain: string };
 }
 
 export interface SeoGoogleStatus {
   host: 'app' | 'custom' | null;
   published: boolean;
-  /** custom domains: Search Console connected */
+  /** custom domains: verified in the app owner's Search Console (same as `verified`) */
   connected?: boolean;
+  verified?: boolean;
   submittedAt?: string;
   verdict?: string;
   coverageState?: string;
@@ -257,6 +289,8 @@ export interface CustomerUsageRow {
   status: 'active' | 'blocked';
   lastActivityAt?: string;
   syncedToTreg?: boolean;
+  /** accounts connected through Zernio right now (Zernio bills per connected account) */
+  connectedAccounts?: number;
 }
 
 export interface ReconcileReport {
