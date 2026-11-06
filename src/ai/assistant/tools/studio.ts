@@ -32,6 +32,7 @@ import { deleteConfirm, manusCard } from '../confirm';
 import { host } from '../host';
 import { activeProject } from '../lookup';
 import { arg, clip, defineTool, untrusted, type AnyTool, type ArgValue, type ChatButton, type ConfirmCardSpec } from '../registry';
+import { useOffers } from '@/store/offers';
 
 const SHOT_IDS = ['hero', 'lifestyle', 'inside', 'offer'] as const satisfies readonly ListingShotId[];
 const PACKAGE_MODELS = ['per-session', 'project', 'monthly', 'one-time', 'quote', 'free'] as const satisfies readonly ServicePriceModel[];
@@ -219,6 +220,9 @@ const getListing = defineTool({
         price: priceLabel(lead.price, lead.model),
         ...(biz ? { howCustomersBuy: d.bookingType, hours: d.hours || null } : {}),
         buyUrl: d.buyUrl || null,
+        offerId: d.offerId ?? null,
+        // the business's offers (what Attach payment made): id, title, price, who takes the payment, Test mode
+        offers: (useOffers.getState().byProject[p.id] ?? []).map((o) => ({ id: o.id, title: o.title, price: o.priceDisplay, provider: o.provider, test: o.environment === 'sandbox', status: o.status })),
         contactEmail: d.contactEmail || null,
         phone: d.phone || null,
         website: p.brand.websiteUrl || null,
@@ -246,8 +250,8 @@ const categoriesFor = (p: Project) => (isBusiness(p) ? BUSINESS_CATEGORIES : PRO
 const findCategory = (p: Project, c: string) => (c.toLowerCase() === p.studio.listing.category.toLowerCase() ? p.studio.listing.category : categoriesFor(p).find((x) => x.toLowerCase() === c.toLowerCase()));
 const isImage = (p: Project, id: string) => p.brand.images.some((m) => m.id === id && m.kind === 'image');
 
-const LISTING_FIELDS = ['title', 'tagline', 'description', 'category', 'tags', 'bookingType', 'hours', 'buyUrl', 'contactEmail', 'phone', 'coverImageId', 'galleryIds'] as const;
-const FIELD_WORDS: Record<(typeof LISTING_FIELDS)[number], string> = { title: 'title', tagline: 'tagline', description: 'description', category: 'category', tags: 'search tags', bookingType: 'how customers buy', hours: 'hours', buyUrl: 'buy or booking link', contactEmail: 'email', phone: 'phone', coverImageId: 'cover', galleryIds: 'gallery' };
+const LISTING_FIELDS = ['title', 'tagline', 'description', 'category', 'tags', 'bookingType', 'hours', 'buyUrl', 'offerId', 'contactEmail', 'phone', 'coverImageId', 'galleryIds'] as const;
+const FIELD_WORDS: Record<(typeof LISTING_FIELDS)[number], string> = { title: 'title', tagline: 'tagline', description: 'description', category: 'category', tags: 'search tags', bookingType: 'how customers buy', hours: 'hours', buyUrl: 'buy or booking link', offerId: 'buy link (an offer)', contactEmail: 'email', phone: 'phone', coverImageId: 'cover', galleryIds: 'gallery' };
 
 const updateListingDraft = defineTool({
   name: 'update_listing_draft',
@@ -262,6 +266,7 @@ const updateListingDraft = defineTool({
     bookingType: arg.enum(['book', 'inquire', 'buy'], { optional: true, desc: 'business' }),
     hours: arg.string({ optional: true, max: 160, allowEmpty: true, desc: 'business' }),
     buyUrl: arg.string({ optional: true, max: 500, allowEmpty: true, desc: 'own checkout or booking page' }),
+    offerId: arg.string({ optional: true, max: 22, allowEmpty: true, desc: 'one of the business’s offers (get_listing lists them) as the buy link; "" removes it' }),
     contactEmail: arg.string({ optional: true, max: 200, allowEmpty: true }),
     phone: arg.string({ optional: true, max: 40, allowEmpty: true }),
     coverImageId: arg.string({ optional: true, max: 80, allowEmpty: true, desc: 'brand image id; "": brand cover' }),
@@ -273,6 +278,11 @@ const updateListingDraft = defineTool({
     if (!isBusiness(p) && (a.bookingType !== undefined || a.hours !== undefined)) return 'How customers buy and hours are for a business listing.';
     if (a.category !== undefined && !findCategory(p, a.category)) return `category must be one of: ${categoriesFor(p).join(', ')}.`;
     if (a.buyUrl && !safeUrl(a.buyUrl)) return 'buyUrl must be a web address, like https://buy.stripe.com/… ("" clears it).';
+    if (a.offerId) {
+      const o = (useOffers.getState().byProject[p.id] ?? []).find((x) => x.id === a.offerId);
+      if (!o) return `There’s no offer with id "${a.offerId}" for this business. get_listing lists its offers; the owner makes new ones with Attach payment.`;
+      if (o.status === 'archived' || o.status === 'draft') return 'That offer isn’t selling: the owner can pick another in Studio › Listing & publish.';
+    }
     if (a.contactEmail && !safeEmail(a.contactEmail)) return 'contactEmail doesn’t look like an email address ("" clears it).';
     if (a.phone && !safePhone(a.phone)) return 'phone doesn’t look like a phone number ("" clears it).';
     if (a.coverImageId && !isImage(p, a.coverImageId)) return `There’s no image with id "${a.coverImageId}" in the brand images. get_listing lists them.`;
@@ -297,6 +307,7 @@ const updateListingDraft = defineTool({
         ...(a.bookingType ? { bookingType: a.bookingType } : {}),
         ...(a.hours !== undefined ? { hours: a.hours } : {}),
         ...(a.buyUrl !== undefined ? { buyUrl: a.buyUrl } : {}),
+        ...(a.offerId !== undefined ? { offerId: a.offerId || undefined } : {}),
         ...(a.contactEmail !== undefined ? { contactEmail: a.contactEmail } : {}),
         ...(a.phone !== undefined ? { phone: a.phone } : {}),
         ...(a.coverImageId !== undefined ? { coverImageId: a.coverImageId || undefined } : {}),

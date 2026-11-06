@@ -783,7 +783,7 @@ const htmlModeProblem = () => {
 /** What the owner should know about the page's buttons and form (the first that applies), as the builder says it. */
 function pageNeeds(p: Project): string | undefined {
   const type = pageTypeOf(p);
-  if (type === 'checkout' && !paymentLink(p)) return 'Buy now doesn’t open anything yet: the owner adds their own payment link under Page type (the app never takes payments).';
+  if (type === 'checkout' && !paymentLink(p)) return 'Buy now doesn’t open anything yet: the owner attaches payment (one of their offers, or their own payment link) under Page type. The app never takes payments itself.';
   if (type === 'booking' && !bookingLink(p)) return 'No booking link yet: visitors send a request with the form instead. The owner can add their booking link under Page type.';
   if (type === 'landing' && !ctaLink(p)) return 'The buttons don’t link anywhere yet: the owner adds a buy or booking link in Studio → Listing & publish, or their website in Settings.';
   if (p.marketing.salesPage?.sections.some((x) => x.type === 'leadForm' && x.visible) && !p.marketing.seoPublished) return 'Its form sends only once the page is published (publish_seo_page).';
@@ -896,7 +896,7 @@ const writeSeoPageTool = defineTool({
     const t = pageType ?? now;
     const busy = htmlModeProblem() ?? seoBusy();
     if (busy) return busy;
-    if (t === 'checkout' && !paymentLink(p) && (!p.marketing.salesPage || now !== 'checkout')) return 'A checkout page needs the owner’s own payment link first: they add it under Page type on the SEO page (set_page_type opens it). The app never takes payments.';
+    if (t === 'checkout' && !paymentLink(p) && (!p.marketing.salesPage || now !== 'checkout')) return 'A checkout page needs a payment first: the owner attaches one of their offers or their own payment link under Page type on the SEO page (set_page_type opens it). The app never takes payments itself.';
     if (p.marketing.salesPage && !replace) return `There is already an SEO page (${PAGE_TYPE_LABEL[now].toLowerCase()}). Ask the owner, then call again with replace: true. Its copy is rewritten following their guidance; kept: metadata, testimonials and facts, guarantee, prices, services, contact details and images. It can be undone.`;
     return null;
   },
