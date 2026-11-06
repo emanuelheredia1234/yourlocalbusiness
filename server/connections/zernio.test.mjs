@@ -159,6 +159,20 @@ describe('ad accounts, isolation and choices', () => {
     expect(JSON.stringify(targets)).not.toContain(account._id);
   });
 
+  it('finds a just-connected ad account when Zernio lists profileId as the profile object (Check after connect)', async () => {
+    const t = setup();
+    mock.setPopulateProfiles(true);
+    try {
+      await t.connections.connectLink(ALICE, 'meta_ads');
+      const doc = (await t.storage.get(`zernio:user:${sha256(ALICE)}`)).value;
+      mock.addAccount({ platform: 'metaads', profileId: doc.profileId, username: 'joesbakery' });
+      const meta = await t.connections.check(ALICE, 'meta_ads');
+      expect(meta).toMatchObject({ platform: 'meta_ads', state: 'connected' });
+    } finally {
+      mock.setPopulateProfiles(false);
+    }
+  });
+
   it('keeps users apart: a webhook for one customer never changes another’s accounts', async () => {
     const t = setup();
     await connectVia(t, ALICE, 'google_ads', { zPlatform: 'googleads' });

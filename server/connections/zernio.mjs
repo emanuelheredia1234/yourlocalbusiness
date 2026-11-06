@@ -64,6 +64,8 @@ const DEFAULT = '*';
 const iso = (ms) => new Date(ms).toISOString();
 const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+/** A listed account's profile id: Zernio sends it as a string or as the populated profile object ({ _id, ... }). */
+const profileIdOf = (v) => (isObj(v) ? String(v._id ?? '') : v == null ? '' : String(v));
 const clip = (s, n = 120) => {
   const t = (typeof s === 'string' || typeof s === 'number' ? String(s) : '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
@@ -327,7 +329,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     if (!doc.profileId) return doc;
     const res = await call('GET', '/accounts', { query: { profileId: doc.profileId, includeOverLimit: 'true' }, retry429: true });
     if (res.status < 200 || res.status >= 300) throw callFailure(res);
-    const all = (Array.isArray(res.body?.accounts) ? res.body.accounts : []).filter((a) => isObj(a) && ZID.test(String(a._id ?? '')) && (!a.profileId || a.profileId === doc.profileId));
+    const all = (Array.isArray(res.body?.accounts) ? res.body.accounts : []).filter((a) => isObj(a) && ZID.test(String(a._id ?? '')) && (!profileIdOf(a.profileId) || profileIdOf(a.profileId) === doc.profileId));
     const listed = all.filter((a) => FROM_ZERNIO[a.platform]);
     // the hidden posting account an ad account's connect made (enabled: false), which holds the customer's token
     const hiddenParent = (a) => {
@@ -553,7 +555,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
       const platform = FROM_ZERNIO[a.platform];
       if (!ZID.test(zid) || !platform) return 'ignored';
       // the account must sit in this customer's own profile (account.profileId), not only the event's profiles list
-      if (typeof a.profileId === 'string' && who.doc.profileId && a.profileId !== who.doc.profileId) return 'not_ours';
+      if (profileIdOf(a.profileId) && who.doc.profileId && profileIdOf(a.profileId) !== who.doc.profileId) return 'not_ours';
       // Zernio puts disconnectionType inside `account` (webhooks/accounts); the top level is read too for older senders
       const disconnection = String(a.disconnectionType ?? evt.disconnectionType ?? '');
       await updateDoc(userId, (d) => {
@@ -632,7 +634,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     // failure stops the deletion), then the profile itself, then the doc
     if (setUp && doc.profileId) {
       const listed = await call('GET', '/accounts', { query: { profileId: doc.profileId, includeOverLimit: 'true' }, retry429: true }).catch(() => null);
-      const fromZernio = listed && listed.status >= 200 && listed.status < 300 && Array.isArray(listed.body?.accounts) ? listed.body.accounts.filter((a) => isObj(a) && ZID.test(String(a._id ?? '')) && (!a.profileId || a.profileId === doc.profileId)).map((a) => String(a._id)) : [];
+      const fromZernio = listed && listed.status >= 200 && listed.status < 300 && Array.isArray(listed.body?.accounts) ? listed.body.accounts.filter((a) => isObj(a) && ZID.test(String(a._id ?? '')) && (!profileIdOf(a.profileId) || profileIdOf(a.profileId) === doc.profileId)).map((a) => String(a._id)) : [];
       const known = Object.entries(doc.accounts ?? {}).flatMap(([zid, a]) => [zid, ...(a?.parent ? [a.parent] : [])]);
       for (const zid of [...new Set([...fromZernio, ...known])]) {
         const res = await call('DELETE', `/accounts/${zid}`);

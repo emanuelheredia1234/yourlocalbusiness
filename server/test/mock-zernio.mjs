@@ -64,6 +64,7 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     }
   }
 
+  let populateProfiles = false;
   const profileRef = (profileId) => {
     const p = profiles.find((x) => x._id === profileId);
     return p ? [{ id: p._id, externalId: p.externalId ?? null }] : [];
@@ -106,7 +107,11 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       const state = oid();
       return json(res, 200, { authUrl: `${base}/__connect?platform=${m[1]}&profileId=${profileId}${m[2] ? '&ads=1' : ''}&state=${state}`, state });
     }
-    if (req.method === 'GET' && p === '/accounts') return json(res, 200, { accounts: accounts.filter((a) => !q.get('profileId') || a.profileId === q.get('profileId')), hasAnalyticsAccess: true });
+    if (req.method === 'GET' && p === '/accounts') {
+      // Zernio may send profileId as the populated profile object ({ _id, name, ... }) instead of a string
+      const listed = accounts.filter((a) => !q.get('profileId') || a.profileId === q.get('profileId'));
+      return json(res, 200, { accounts: populateProfiles ? listed.map((a) => ({ ...a, profileId: { _id: a.profileId, name: 'Main' } })) : listed, hasAnalyticsAccess: true });
+    }
     m = /^\/profiles\/([0-9a-f]{24})$/.exec(p);
     if (m && req.method === 'DELETE') {
       const i = profiles.findIndex((x) => x._id === m[1]);
@@ -191,6 +196,10 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       return { raw, payload, headers: { 'x-zernio-event': payload.event, 'x-zernio-event-id': payload.id, 'x-zernio-signature': signWebhook(raw, secret) } };
     },
     profileRef,
+    /** List accounts with profileId as the populated profile object, as Zernio may. */
+    setPopulateProfiles(on) {
+      populateProfiles = !!on;
+    },
     async start(port = 0) {
       server = http.createServer((req, res) => void handler(req, res).catch(() => err(res, 500, 'internal_error', 'api_error')));
       await new Promise((r) => server.listen(port, '127.0.0.1', r));
