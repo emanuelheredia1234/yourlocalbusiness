@@ -33,7 +33,8 @@ export interface StoreState {
   settings: AppSettings;
 
   // projects
-  createProject: (track?: Track, origin?: Origin) => string;
+  /** id: a pre-made id (projectActions claims its business slot first, then creates it with the same id) */
+  createProject: (track?: Track, origin?: Origin, id?: string) => string;
   updateProject: (id: string, fn: (p: Project) => Project) => void;
   patchActive: (fn: (p: Project) => Project) => void;
   updateBrand: (patch: Partial<Brand>) => void;
@@ -112,8 +113,8 @@ export const useStore = create<StoreState>()(
     (set, get) => ({
       ...initial(),
 
-      createProject: (track = 'product', origin = 'new') => {
-        const p = newProject(track, origin);
+      createProject: (track = 'product', origin = 'new', id) => {
+        const p = newProject(track, origin, id);
         set((s) => ({ projects: [...s.projects, p], activeProjectId: p.id }));
         return p.id;
       },

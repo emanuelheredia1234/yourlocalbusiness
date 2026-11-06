@@ -13,6 +13,7 @@ import { cleanWorkspace } from '@/store/cleanup';
 import { stopTurn } from '@/store/assistant';
 import { createSync, supabaseBackend, useSyncStatus, type Sync } from './sync';
 import { createMediaSync, type MediaSync } from './media';
+import { setBillingConfig } from '@/lib/billing/config';
 
 export interface AccountsConfig {
   enabled: boolean;
@@ -163,7 +164,9 @@ async function loadConfig(): Promise<AccountsConfig | null> {
   try {
     const res = await fetch(`${base}/api/config`, { signal: AbortSignal.timeout(8000) });
     if (res.ok) {
-      const c = ((await res.json().catch(() => null)) as { accounts?: AccountsConfig } | null)?.accounts;
+      const body = (await res.json().catch(() => null)) as { accounts?: AccountsConfig; billing?: unknown } | null;
+      setBillingConfig(body?.billing);
+      const c = body?.accounts;
       if (c && typeof c === 'object') {
         safeStorage.setItem(CONFIG_KEY, JSON.stringify(c));
         return c.enabled && c.url && c.publishableKey ? c : null;
@@ -171,6 +174,7 @@ async function loadConfig(): Promise<AccountsConfig | null> {
     }
     if (res.status === 404) {
       safeStorage.removeItem(CONFIG_KEY);
+      setBillingConfig(null);
       return null;
     }
   } catch {
@@ -590,6 +594,16 @@ export async function saveNow(timeoutMs = 10_000): Promise<boolean> {
   const data = await Promise.race([sync.flush(), new Promise<boolean>((r) => setTimeout(() => r(false), timeoutMs))]);
   const files = media ? await media.settle(timeoutMs) : true;
   return data && files;
+}
+
+/** Save projects the account refused earlier (their business slot was just claimed, or the plan has room now). */
+export function releaseHeld(ids: string[]): void {
+  sync?.release(ids);
+}
+
+/** "Remove from this device" for a project the account refused: it goes from this device only. */
+export function dropHeld(id: string): void {
+  sync?.drop(id);
 }
 
 /** Forget this account on this device: its copy of the workspace, its files and its pending jobs. */

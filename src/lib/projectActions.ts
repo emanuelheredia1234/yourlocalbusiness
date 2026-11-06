@@ -1,28 +1,120 @@
 // Starting and deleting projects outside the pages that do it (the project menu, the command palette,
 // Settings › Projects & data, and the assistant), with the same steps each time.
 
-import type { Track } from './types';
+import type { Origin, Track } from './types';
 import { navigate } from './router';
 import { pushMyListings } from './community';
 import { useStore } from '@/store/useStore';
+import { newProjectId } from '@/store/defaults';
 import { useAnalytics } from '@/store/analytics';
-import { useAuth } from '@/lib/cloud/auth';
+import { useBilling } from '@/store/billing';
+import { toast } from '@/store/ui';
+import { releaseHeld, useAuth } from '@/lib/cloud/auth';
+import { claimSlot, slotMessage, type SlotResult } from '@/lib/cloud/slots';
 import { confirmLeave } from '@/components/ui/leave';
+
+// ───────────── business slots ─────────────
+
+/**
+ * What the app does when the plan has no slot for a new business: the plan's limit opens Add a business (then
+ * `retry` runs), no plan opens #plans, anything else is a toast in our words. Free and owner plans never buy here.
+ */
+export function slotRefused(r: SlotResult, retry?: () => void | Promise<void>): void {
+  const b = useBilling.getState();
+  if (r.reason === 'limit') {
+    if (b.account?.source === 'stripe' && b.plan?.active) b.openAddBusiness(retry);
+    else toast({ kind: 'error', title: slotMessage(r) });
+    return;
+  }
+  if (r.reason === 'plan_required') {
+    toast({ kind: 'info', title: 'Choose a plan to add a business.' });
+    void navigate('plans', { force: true });
+    return;
+  }
+  toast({ kind: 'error', title: slotMessage(r) });
+}
+
+/**
+ * Create a project only once the plan has a slot for it: the id is made first, its slot claimed, then the project
+ * is created with that id. Resolves to the id, or null when the plan refused (the dialogs say why; `then` runs if the
+ * owner adds a business and the project is created after all). Nothing is created without the database's answer.
+ */
+export async function createProjectWithSlot(track?: Track, origin: Origin = 'new', then?: (id: string) => void): Promise<string | null> {
+  const id = newProjectId();
+  const make = () => {
+    const made = useStore.getState().createProject(track, origin, id);
+    then?.(made);
+    return made;
+  };
+  const r = await claimSlot(id);
+  if (r.ok) return make();
+  slotRefused(r, async () => {
+    // a business was just added: the slot is claimed again (the same id), then the project is made
+    const again = await claimSlot(id);
+    if (again.ok) make();
+    else slotRefused(again);
+  });
+  return null;
+}
+
+export type StartResult = { id: string } | { stayed: true } | { refused: string };
 
 /**
  * Start a new project and open its setup, as the project menu's "New project" does: first the leave guard
- * asks when leaving would stop something that's generating. `track`: the setup's first answer when it's
- * already known (the setup then starts at its next step). Resolves to the new project's id, or null when
- * the owner chose to stay.
+ * asks when leaving would stop something that's generating, then the plan's business slot is claimed.
+ * `track`: the setup's first answer when it's already known (the setup then starts at its next step).
+ * `interactive: false` (the assistant): a refused slot only says so; nothing paid opens.
  */
+export async function startProject(track?: Track, { interactive = true }: { interactive?: boolean } = {}): Promise<StartResult> {
+  if (!(await confirmLeave())) return { stayed: true };
+  const open = (id: string) => {
+    // what choosing the track on the setup's first step does
+    if (track) useStore.getState().updateProject(id, (p) => ({ ...p, track, wizardStep: 'start' }));
+    void navigate('onboarding', { force: true });
+  };
+  if (!interactive) {
+    const id = newProjectId();
+    const r = await claimSlot(id);
+    if (!r.ok) return { refused: r.reason === 'limit' || r.reason === 'plan_required' ? 'Your plan has no free business slot. Add one in Settings › Plan.' : slotMessage(r) };
+    useStore.getState().createProject(track ?? 'product', 'new', id);
+    open(id);
+    return { id };
+  }
+  const id = await createProjectWithSlot(track ?? undefined, 'new', open);
+  return id ? { id } : { refused: 'no slot' };
+}
+
+/** startProject for the project menu and the palette: the new id, or null when the owner stayed or the plan refused. */
 export async function startNewProject(track?: Track): Promise<string | null> {
-  if (!(await confirmLeave())) return null;
-  const s = useStore.getState();
-  const id = track ? s.createProject(track, 'new') : s.createProject();
-  // what choosing the track on the setup's first step does
-  if (track) s.updateProject(id, (p) => ({ ...p, track, wizardStep: 'start' }));
-  void navigate('onboarding', { force: true });
-  return id;
+  const r = await startProject(track);
+  return 'id' in r ? r.id : null;
+}
+
+/**
+ * Claim slots for projects that have none yet (a backup's), in order, up to the plan's limit. Returns the ids that
+ * got one and the ids that didn't (those are set aside by sync until a slot frees up). Ids with a slot already reuse it.
+ */
+export async function claimSlotsFor(ids: string[]): Promise<{ claimed: string[]; refused: string[]; offline: boolean }> {
+  const claimed: string[] = [];
+  const refused: string[] = [];
+  let offline = false;
+  let full = false;
+  for (const id of ids) {
+    // the plan is full (or the account can't be reached): the rest wait too
+    if (full || offline) {
+      refused.push(id);
+      continue;
+    }
+    const r = await claimSlot(id);
+    if (r.ok) claimed.push(id);
+    else {
+      refused.push(id);
+      if (r.reason === 'offline') offline = true;
+      if (r.reason === 'limit' || r.reason === 'plan_required') full = true;
+    }
+  }
+  if (claimed.length) releaseHeld(claimed);
+  return { claimed, refused, offline };
 }
 
 /**

@@ -43,10 +43,13 @@ export function defaultStudio(): Studio {
 /** Bump to run a new one-time cleanup (store/cleanup.ts) on projects saved by older versions. */
 export const LEGACY_CLEANUP = 1;
 
-export function newProject(track: Track = 'product', origin: Origin = 'new'): Project {
+/** A new project's id (made before the project, so its business slot can be claimed first). */
+export const newProjectId = (): string => uid('proj');
+
+export function newProject(track: Track = 'product', origin: Origin = 'new', id: string = newProjectId()): Project {
   const now = Date.now();
   return {
-    id: uid('proj'),
+    id,
     createdAt: now,
     updatedAt: now,
     // nothing to clean up in a project made by this version

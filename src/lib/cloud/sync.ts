@@ -82,6 +82,8 @@ export interface SyncStatus {
   problem: null | 'offline' | 'error';
   message: string | null;
   lastSavedAt: number | null;
+  /** projects the account refused to save (the plan has no free business slot): kept on this device */
+  held: string[];
 }
 export const useSyncStatus = create<SyncStatus & { set: (p: Partial<SyncStatus>) => void }>((set) => ({
   pending: 0,
@@ -90,6 +92,7 @@ export const useSyncStatus = create<SyncStatus & { set: (p: Partial<SyncStatus>)
   problem: null,
   message: null,
   lastSavedAt: null,
+  held: [],
   set: (p) => set(p),
 }));
 
@@ -134,6 +137,17 @@ interface Meta {
   v: Record<string, string>;
   /** rows changed here and not yet saved: 'up' (save) or 'del' (delete) */
   d: Record<string, 'up' | 'del'>;
+  /**
+   * project rows the account refused (the plan has no free business slot: Postgres 42501, row-level security). Kept
+   * on this device, never retried on their own and never removed by a pull; release() saves them again.
+   */
+  h?: Record<string, 'slot'>;
+}
+
+/** A refusal by row-level security (Postgres 42501), as PostgREST reports it. */
+export function isSlotRefusal(e: unknown): boolean {
+  const err = e as { code?: unknown; status?: unknown } | null;
+  return !!err && String(err.code ?? '') === '42501';
 }
 
 type Store = typeof useStore;
@@ -154,13 +168,13 @@ export type Sync = ReturnType<typeof createSync>;
 
 export function createSync({ backend, userId, store = useStore, delay = 1500, refreshAfter = 30_000, fresh = false }: SyncOptions) {
   const metaKey = `ylb-sync:${userId}`;
-  const meta: Meta = (() => {
-    if (fresh) return { v: {}, d: {} };
+  const meta: Meta & { h: Record<string, 'slot'> } = (() => {
+    if (fresh) return { v: {}, d: {}, h: {} };
     try {
       const m = JSON.parse(safeStorage.getItem(metaKey) || 'null') as Meta | null;
-      return m && typeof m.v === 'object' && typeof m.d === 'object' ? m : { v: {}, d: {} };
+      return m && typeof m.v === 'object' && typeof m.d === 'object' ? { ...m, h: m.h && typeof m.h === 'object' ? m.h : {} } : { v: {}, d: {}, h: {} };
     } catch {
-      return { v: {}, d: {} };
+      return { v: {}, d: {}, h: {} };
     }
   })();
   const seq = new Map<string, number>();
@@ -183,12 +197,18 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
     return p;
   };
 
+  const heldIds = () => Object.keys(meta.h).map((k) => splitKey(k)[1]);
   const saveMeta = () => {
     if (disposed) return;
     safeStorage.setItem(metaKey, JSON.stringify(meta));
-    useSyncStatus.getState().set({ pending: Object.keys(meta.d).length });
+    useSyncStatus.getState().set({ pending: Object.keys(meta.d).length, held: heldIds() });
   };
   const mark = (key: string, op: 'up' | 'del') => {
+    // a held project stays held while it changes here (saving it would be refused again); deleting it lets it go
+    if (meta.h[key]) {
+      if (op === 'up') return;
+      delete meta.h[key];
+    }
     meta.d[key] = op;
     seq.set(key, ++counter);
   };
@@ -300,6 +320,7 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
       const need = new Map<DocKind, string[]>();
       for (const [key, version] of remote) {
         if (meta.d[key]) continue; // changed here too: this device's version is saved next
+        if (meta.h[key]) continue; // held here (locked on the plan): this device's version stays
         if (meta.v[key] !== version || !local.has(key)) {
           const [kind, id] = splitKey(key);
           need.set(kind, [...(need.get(kind) ?? []), id]);
@@ -308,6 +329,8 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
       const removed: string[] = [];
       for (const key of local) {
         if (remote.has(key) || meta.d[key] === 'del') continue;
+        // held (the plan has no slot for it): the account not having it is expected
+        if (meta.h[key]) continue;
         if (key !== SETTINGS_KEY && meta.v[key]) {
           // deleted on another device: that wins, even over a change here (say an auto-published post)
           removed.push(key);
@@ -315,7 +338,7 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
           seq.delete(key);
         } else if (!meta.d[key]) mark(key, 'up'); // never saved yet
       }
-      for (const key of Object.keys(meta.v)) if (!remote.has(key)) delete meta.v[key];
+      for (const key of Object.keys(meta.v)) if (!remote.has(key) && !meta.h[key]) delete meta.v[key];
       const rows: DocRow[] = [];
       for (const [kind, ids] of need) for (const part of chunks(ids, 100)) rows.push(...(await backend.fetch(kind, part)));
       apply(rows, removed);
@@ -339,7 +362,7 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
         timer = null;
       }
       if (disposed) return false;
-      if (!Object.keys(meta.d).length) return true;
+      if (!Object.keys(meta.d).length) return !Object.keys(meta.h).length;
       const status = useSyncStatus.getState();
       status.set({ saving: true });
       // catch up first, so this device doesn't save over newer changes from another one
@@ -358,7 +381,7 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
       const entries = Object.entries(meta.d);
       if (!entries.length) {
         status.set({ saving: false, problem: null, message: null, lastSavedAt: Date.now() });
-        return true;
+        return !Object.keys(meta.h).length;
       }
       const at = new Map(entries.map(([key]) => [key, seq.get(key) ?? 0]));
       const done = (key: string) => {
@@ -379,7 +402,29 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
           if (data === undefined) done(key);
           else ups.push({ kind, id, data, size: JSON.stringify(data).length });
         }
-        for (const part of chunkBySize(ups, (r) => r.size)) {
+        // projects go one per request: one the plan refuses (no free business slot) never blocks the others
+        const projectUps = ups.filter((r) => r.kind === 'project');
+        const otherUps = ups.filter((r) => r.kind !== 'project');
+        for (const r of projectUps) {
+          let saved: DocRow[];
+          try {
+            saved = await backend.upsert([{ kind: r.kind, id: r.id, data: r.data }]);
+          } catch (e) {
+            if (!isSlotRefusal(e)) throw e;
+            // set aside: kept on this device, not counted as a failure, not retried on its own
+            const key = keyOf(r.kind, r.id);
+            if ((seq.get(key) ?? 0) === at.get(key)) {
+              delete meta.d[key];
+              meta.h[key] = 'slot';
+            }
+            saveMeta();
+            continue;
+          }
+          for (const x of saved) meta.v[keyOf(x.kind, x.id)] = x.updated_at;
+          done(keyOf(r.kind, r.id));
+          saveMeta();
+        }
+        for (const part of chunkBySize(otherUps, (r) => r.size)) {
           const saved = await backend.upsert(part.map(({ kind, id, data }) => ({ kind, id, data })));
           for (const r of saved) meta.v[keyOf(r.kind, r.id)] = r.updated_at;
           for (const r of part) done(keyOf(r.kind, r.id));
@@ -399,7 +444,8 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
         status.set({ saving: false, problem: null, message: null, lastSavedAt: Date.now() });
         const left = Object.keys(meta.d).length;
         if (left && running) schedule();
-        return left === 0;
+        // a held project isn't in the account yet: nothing is "all saved" while one waits
+        return left === 0 && !Object.keys(meta.h).length;
       } catch (e) {
         saveMeta();
         status.set({ saving: false, ...describe(e) });
@@ -492,9 +538,37 @@ export function createSync({ backend, userId, store = useStore, delay = 1500, re
     saveMeta();
   }
 
+  /** Save held projects again (a slot was claimed for them, or the plan has room now). */
+  function release(ids: string[]) {
+    let any = false;
+    for (const id of ids) {
+      const key = keyOf('project', id);
+      if (!meta.h[key]) continue;
+      delete meta.h[key];
+      mark(key, 'up');
+      any = true;
+    }
+    if (!any) return;
+    saveMeta();
+    if (running) schedule(0);
+  }
+
+  /** "Remove from this device" for a held project: gone here, never deleted from the account. */
+  function drop(id: string) {
+    const key = keyOf('project', id);
+    if (!meta.h[key]) return;
+    delete meta.h[key];
+    apply([], [key]);
+    delete meta.v[key];
+    saveMeta();
+  }
+
   return {
     pull,
     flush,
+    release,
+    drop,
+    held: heldIds,
     start,
     stop,
     dispose,
