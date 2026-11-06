@@ -534,8 +534,12 @@ describe('the invoice CSV', () => {
       { customer_tag: tag, vendor: 'treg', cost_micro: -1, outcome: 'settled' },
       { customer_tag: tag, vendor: 'nango', estimated: true, cost_micro: 290_000, outcome: 'ok' },
       { customer_tag: tag, vendor: 'x', estimated: true, cost_micro: 200_000, outcome: 'ok' },
+      // Upload-Post's estimated profile row and Zernio's ad accounts count as connections; its real calls cost nothing
+      { customer_tag: tag, vendor: 'uploadpost', estimated: true, cost_micro: 1_960_000, outcome: 'ok' },
+      { customer_tag: tag, vendor: 'zernio', estimated: true, cost_micro: 6_000_000, outcome: 'ok' },
+      { customer_tag: tag, vendor: 'uploadpost', estimated: false, cost_micro: 0, feature: 'posting', outcome: 'ok' },
     ];
     const csv = invoiceCsv({ month: '2026-11', rows, emails: new Map([[tag, '=HYPERLINK("http://x")']]), statuses: new Map([[tag, 'blocked']]) });
-    expect(csv.split('\r\n')[1]).toBe(`${tag},"'=HYPERLINK(""http://x"")",2026-11,0.300002,3,0.290000,0.200000,0.790002,blocked`);
+    expect(csv.split('\r\n')[1]).toBe(`${tag},"'=HYPERLINK(""http://x"")",2026-11,0.300002,3,8.250000,0.200000,8.750002,blocked`);
   });
 });

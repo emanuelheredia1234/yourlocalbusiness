@@ -1,6 +1,6 @@
 // The owner's monthly CSV (GET /api/billing/invoice.csv?month=YYYY-MM): one line per customer tag, from our
 // ledger (which matches treg's usage/by-tag after reconciling). Amounts are summed as integer micro-USD and
-// formatted with 6 decimals only at the end. Estimated rows (connected accounts, X posts) get their own
+// formatted with 6 decimals only at the end. Estimated rows (Upload-Post profiles, Zernio ad accounts, X posts) get their own
 // columns, labelled estimated. Every cell is CSV-escaped and formula-guarded.
 
 import { isCall } from './ledger.mjs';
@@ -48,7 +48,7 @@ export function invoiceCsv({ month, rows, emails = new Map(), statuses = new Map
     if (r.vendor === 'treg' && r.estimated !== true) {
       p.treg += c;
       if (isCall(r)) p.calls += 1;
-    } else if ((r.vendor === 'zernio' || r.vendor === 'nango') && r.estimated === true) p.conn += c;
+    } else if ((r.vendor === 'uploadpost' || r.vendor === 'zernio' || r.vendor === 'nango') && r.estimated === true) p.conn += c;
     else if (r.vendor === 'x' && r.estimated === true) p.x += c;
   }
   const lines = [INVOICE_HEADER.join(',')];

@@ -1,5 +1,5 @@
 // How an Update calls treg and the connected accounts: through treg.call (server/treg.mjs, which tags the customer,
-// writes the ledger and maps errors) and the connections' reads (Zernio: connections.insights / adResults), with at
+// writes the ledger and maps errors) and the connections' reads (social stats from Upload-Post: connections.insights; ad results from Zernio: adResults), with at
 // most 4 treg calls in flight per customer and 3 connection reads per user, and an Idempotency-Key per treg call
 // so a timeout repeat (treg's own) is free.
 
@@ -102,7 +102,7 @@ export function createRunner({ treg, connections, ctx }) {
     },
 
     /**
-     * The business's own stats from its connected account (Zernio analytics, reads only): the normalized numbers,
+     * The business's own stats from its connected account (Upload-Post analytics, reads only): the normalized numbers,
      * or null when no account is chosen. Throws { kind: 'reconnect'|'busy'|'upstream'|... } when a read failed.
      */
     async insights(platform, { since, until } = {}) {

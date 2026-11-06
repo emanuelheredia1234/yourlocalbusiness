@@ -299,7 +299,7 @@ function CustomerRow({ row, defaults, onEdit, onChanged }: { row: CustomerUsageR
         {row.estimatedMicro > 0 && <span className="block text-caption text-muted">+{usd(row.estimatedMicro)} est.</span>}
       </td>
       <td className="num px-2 py-2 text-right font-mono text-ink-2">{row.calls}</td>
-      <td className="num px-2 py-2 text-right font-mono text-ink-2" title="Social and ad accounts connected through Zernio (billed per connected account)">
+      <td className="num px-2 py-2 text-right font-mono text-ink-2" title="Social accounts (Upload-Post) plus ad accounts (Zernio, billed per connected account) connected now">
         {row.connectedAccounts ?? '–'}
       </td>
       <td className="num px-2 py-2 font-mono text-caption text-ink-2">

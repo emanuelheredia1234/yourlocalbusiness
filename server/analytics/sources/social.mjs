@@ -1,5 +1,5 @@
 // Source `social`: one entry per network with a stored handle or a connected account. Connected (with a chosen
-// account): own insights from Zernio. Not connected: treg public data. Connected but needing a reconnect or limited: public data with
+// account): own insights from Upload-Post. Not connected: treg public data. Connected but needing a reconnect or limited: public data with
 // the note 'reconnect' (never a silent fallback).
 
 import { handlesOf } from '../handles.mjs';

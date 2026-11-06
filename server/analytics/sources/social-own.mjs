@@ -1,6 +1,6 @@
 // The business's own stats from its connected account, normalized to SocialNetworkStats with origin 'own'. Reads
-// only, through Zernio (server/connections/zernio.mjs insights(): daily metrics, follower stats and the top
-// posts of the account this business uses), via the run's runner (one slot set per user).
+// only, through Upload-Post (server/connections/uploadpost.mjs insights(): the account's followers, reach, views,
+// engagement, the reach series and its cached top posts), via the run's runner (one slot set per user).
 //
 // Numbers and post text from the network are data: kept as numbers and plain text (normalize/util.mjs).
 

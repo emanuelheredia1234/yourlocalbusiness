@@ -52,7 +52,13 @@ export function endpointLabel(endpoint, vendor = 'treg') {
   const NAMES = { facebook: 'Facebook', instagram: 'Instagram', linkedin: 'LinkedIn', tiktok: 'TikTok', x: 'X', youtube: 'YouTube', pinterest: 'Pinterest', google_ads: 'Google Ads', meta_ads: 'Meta Ads', linkedin_ads: 'LinkedIn Ads', tiktok_ads: 'TikTok Ads', pinterest_ads: 'Pinterest Ads', x_ads: 'X Ads', reddit_ads: 'Reddit Ads', microsoft_ads: 'Microsoft Ads' };
   const platform = /^([a-z_]+):/.exec(String(endpoint ?? ''))?.[1];
   if (vendor === 'x') return 'X post';
-  if (vendor === 'zernio' && /^zernio_accounts/.test(String(endpoint))) return 'Connected accounts';
+  if (vendor === 'zernio' && /^zernio_accounts/.test(String(endpoint))) return 'Ad accounts';
+  if (vendor === 'uploadpost' && /^upload_post_profile/.test(String(endpoint))) return 'Connected accounts';
+  if (vendor === 'uploadpost' && platform && NAMES[platform]) {
+    const ep = String(endpoint);
+    if (/:POST \/upload/.test(ep)) return `${NAMES[platform]} post`;
+    if (/:GET \/(analytics|post-analytics)/.test(ep)) return `${NAMES[platform]} stats`;
+  }
   if (vendor === 'nango' && /^nango_connection/.test(String(endpoint))) return 'Connected integration';
   if (platform && NAMES[platform]) return `${NAMES[platform]} (your account)`;
   if (vendor === 'omnisend') return 'Email stats';
