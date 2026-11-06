@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useBilling, useBillingOn } from '@/store/billing';
+import { planFor } from '@/lib/plans';
+import { navigate } from '@/lib/router';
 import { Check, Download, ExternalLink, PenLine, Plus, Rocket, Trash2 } from 'lucide-react';
 import type { AdCampaign, AdCreative, AdObjective, AdPlatform, Project, SearchAd, StyleId } from '@/lib/types';
 import { cn, ensureUrl, fmtMoney, fmtRelative, parseDateStr, slugify, stripProtocol } from '@/lib/utils';
@@ -312,7 +315,10 @@ function ExportPanel({ c, finalUrl, onFinalUrl, onExported, onLaunch }: { c: AdC
   const launchOff = !__ARTIFACT_BUILD__ && !!limits && !launchShown;
   const platforms = launchablePlatforms(c);
   const launchReady = platforms.length > 0 && !!finalUrl && ((platforms.includes('meta') && hasCreatives) || (platforms.includes('google') && !!c.search));
-  const launchWhy = !platforms.length ? 'Add Meta or Google to the platforms to launch from here.' : !finalUrl ? 'Add the page your ads link to first.' : !launchReady ? 'Generate the ads first.' : null;
+  // plans: launching is part of Grow and Scale (the server decides; this only says so up front)
+  const billing = useBillingOn();
+  const planNoAds = useBilling((s) => billing && !!s.plan && s.plan.plan !== 'legacy' && s.plan.plan !== 'owner' && !s.plan.features.adsLaunch);
+  const launchWhy = planNoAds ? `Part of ${planFor('grow').name} and ${planFor('scale').name}.` : !platforms.length ? 'Add Meta or Google to the platforms to launch from here.' : !finalUrl ? 'Add the page your ads link to first.' : !launchReady ? 'Generate the ads first.' : null;
   return (
     <>
       <section className="card p-5" aria-label="Budget">
@@ -338,10 +344,22 @@ function ExportPanel({ c, finalUrl, onFinalUrl, onExported, onLaunch }: { c: AdC
         </h2>
         {launchShown && (
           <div className="flex flex-col gap-1.5">
-            <button type="button" className="btn btn-primary btn-sm self-start" disabled={!launchReady} onClick={onLaunch}>
+            <button type="button" className="btn btn-primary btn-sm self-start" disabled={!launchReady || planNoAds} onClick={onLaunch}>
               <Rocket /> Launch…
             </button>
-            {launchWhy && <p className="text-caption text-muted">{launchWhy}</p>}
+            {launchWhy && (
+              <p className="text-caption text-muted">
+                {launchWhy}
+                {planNoAds && (
+                  <>
+                    {' '}
+                    <button type="button" className="link" onClick={() => void navigate('plans', { force: true })}>
+                      See plans
+                    </button>
+                  </>
+                )}
+              </p>
+            )}
           </div>
         )}
         <Field label="Final URL" htmlFor="ad-final" hint="The page people land on when they click your ad.">

@@ -705,6 +705,24 @@ plan allows), `server/billing/plans.mjs` + `shared/plans.json` (every price and 
 (the tables), `scripts/stripe-setup.mjs` (products and prices). Database: `supabase/migrations/20261110000000_billing.sql`.
 Nothing is enforced until the owner turns plans on; until then the app behaves as before.
 
+### Owner steps, in order
+
+1. **Stripe Sandbox first.** In the Stripe Dashboard, open a Sandbox (Developers → Sandboxes) and copy its secret key
+   (`sk_test_…`) into the workspace Secrets as `STRIPE_SECRET_KEY`. Everything below is done in the Sandbox, end to
+   end, before anything live.
+2. Run the migration `supabase/migrations/20261110000000_billing.sql` (and check the rule on a branch, below).
+3. Set `APP_URL` (the app's https address).
+4. **Products and prices** with the setup script (below): a dry run, then `--apply`.
+5. **Webhook** (below): the endpoint URL and the 10 events; its signing secret into `STRIPE_WEBHOOK_SECRET`.
+6. **Customer Portal** settings (below).
+7. Optional: **Stripe Tax** (below).
+8. Try it in the Sandbox: create an account, choose a plan on `#plans`, pay with `4242 4242 4242 4242`, come back to
+   the app, add a business, try `4000 0000 0000 0341` (a card that declines later) for the failed-payment path.
+9. Owner → Billing → Plans → **Turn on plans**.
+10. Live (only with the owner's explicit OK): create a **restricted live key** (`rk_live_…`, permissions below), run
+    the setup script with it and `--live`, add the live webhook endpoint and its secret, set up the live Portal, and
+    swap the Secrets.
+
 ### Secrets
 
 | Secret | What it is |
@@ -748,6 +766,12 @@ Stripe → Settings → Billing → Customer portal (or `--apply --portal`): pay
 cancel **at period end** on, **subscription updates (plan and quantity changes) off** (the app does those so each one is
 sent once and confirmed). Business information and links to the terms and privacy pages.
 
+### Stripe Tax (optional)
+
+Off by default. Decide on tax registration first (Stripe → Tax → Registrations), then set `STRIPE_AUTOMATIC_TAX=1`:
+Checkout then collects the address it needs and adds tax where it applies (prices are `tax_behavior=exclusive`, so
+tax goes on top). Leaving it off charges the plan price only.
+
 ### Failed payments (dunning)
 
 Stripe → Settings → Billing → Subscriptions and emails: Smart Retries for 2 weeks, then **cancel** the subscription;
@@ -783,6 +807,34 @@ them on again later doesn't restart the free days (they start at the first `enfo
   `BILLING_PENDING`). The Stripe Customer is kept (receipts, tax records).
 - After a plan ends, published pages keep serving 30 days; data is kept 90 days and is never deleted automatically
   (the owner list shows `dataExpiresAt`).
+
+### What customers see (the app)
+
+- **`#plans`** (public, signed out too): a Monthly / Annual switch (annual shows "2 months free" and the saving),
+  the Launch, Grow ("Most popular") and Scale cards, the comparison table and the FAQ, all from `shared/plans.json`.
+  **Start with …** signed out remembers the choice, opens Create your account ("Then you'll finish starting Grow
+  ($197/month) with Stripe."), and after sign-in goes straight to Stripe Checkout; back in the app
+  (`?billing=success&session_id=…`) the plan is read again: "You're on Grow.", or "Payment is still processing" with
+  a refresh. Signed in with a plan, the buttons read Current plan / Switch to … (upgrades and monthly → yearly are
+  charged now, downgrades start at renewal; yearly → monthly says to contact support).
+- **New sign-ups** with plans on and no plan see the plan picker before their first business.
+- **Every new business claims a slot first** (project menu, palette, Settings › Projects & data, the setup, the
+  assistant, a backup import). A full paid plan opens **Add a business** ($97/month, charged today for the rest of
+  the period; a declined card changes nothing; "Confirming your payment…" is read back, never re-sent); no plan opens
+  `#plans`; the assistant only says the plan is full (it never buys).
+- **A business the account refused** (no free slot: the database's rule) stays on that device with a note: Add a
+  business, or Remove from this device. Other changes keep saving.
+- **Settings › Plan**: the plan, price, status (Active, Trial ends, Payment problem until, Cancels, Ended), next
+  renewal, the AI credits meter, Change plan, Manage billing (the Portal: card, invoices, cancelling); the businesses
+  (N of M, Active / Locked / Ends), Add a business, Remove one at renewal (choose which; no refund), Undo, and
+  Choose which businesses stay active when over the limit. The owner sees "Owner plan — unlimited".
+- **Banners** for a failed payment (grace, then paused), a trial ending, a plan that cancels or ended; **one upgrade
+  prompt** for any refused paid action (`PLAN_REQUIRED`, `PAYMENT_REQUIRED`, `CREDITS_USED`, `BUSINESS_LIMIT`,
+  `CARD_DECLINED`) with the server's own sentence and See plans / Upgrade to … / Update card / Add a business / Use my
+  own AI keys. Ads' Launch shows "Part of Grow and Scale" on Launch; longer videos show the tier that has them.
+- Owner → Billing → **Plans**: the switch (with what's missing), card-trial days, free days for existing accounts,
+  every account's plan (Stripe ids as …last4), Grant free plan, Re-check with Stripe.
+- None of this exists in the claude.ai artifact build.
 
 ### Cron jobs
 

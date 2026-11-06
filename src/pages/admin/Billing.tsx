@@ -14,6 +14,7 @@ import { fmtRelative } from '@/lib/utils';
 import { toast } from '@/store/ui';
 import { download } from '@/components/ui/download';
 import { AdsLimitsSection } from './AdsLimitsSection';
+import { PlansAdminSection } from './PlansAdminSection';
 import { Badge, Callout, Empty, Field, InfoTip, Modal, MoreMenu, PageHeader, Select, SettingsSection, Skeleton, Spinner, StatStrip, confirmAction, type MenuEntry } from '@/components/ui/primitives';
 
 /** USD from integer micros, 2 decimals (4 under a cent). */
@@ -282,6 +283,7 @@ export function BillingView({ data, report, onEdit, onChanged }: { data: Data; r
           </div>
         </dl>
       </SettingsSection>
+      <PlansAdminSection />
       <AdsLimitsSection />
     </div>
   );

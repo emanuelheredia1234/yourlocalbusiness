@@ -30,6 +30,9 @@ import { useAssistant } from '@/store/assistant';
 import { StoreOverlays } from '@/pages/store/StoreOverlays';
 import { Onboarding } from '@/pages/onboarding/Onboarding';
 import { Dashboard } from '@/pages/dashboard/Dashboard';
+import { PlanBanner, useBillingWatcher } from '@/components/billing/PlanBanner';
+import { UpgradePrompt } from '@/components/billing/UpgradePrompt';
+import { AddBusinessDialog } from '@/components/billing/AddBusinessDialog';
 
 const Studio = lazy(() => import('@/pages/studio/Studio'));
 const MarketingHub = lazy(() => import('@/pages/marketing/MarketingHub'));
@@ -44,6 +47,17 @@ const BrainPage = lazy(() => import('@/pages/brain/Brain'));
 const AdminBillingPage = lazy(() => import('@/pages/admin/Billing'));
 const SettingsPage = lazy(() => import('@/pages/settings/Settings'));
 const StrategyPage = lazy(() => import('@/pages/strategy/Strategy'));
+const PlansPage = lazy(() => import('@/pages/plans/Plans'));
+
+/** The plan's dialogs (Add a business, the upgrade prompt): on every screen, including setup and #plans. */
+function BillingHosts() {
+  return (
+    <>
+      <UpgradePrompt />
+      <AddBusinessDialog />
+    </>
+  );
+}
 
 /**
  * Keeps <html data-theme> in step with Settings › Theme. The boot script in index.html sets it before
@@ -97,6 +111,7 @@ export default function App() {
   useVoiceReadWatcher();
   useStrategyManusWatcher();
   useAgentBuildWatcher();
+  useBillingWatcher();
 
   useEffect(() => {
     initRuntime();
@@ -117,6 +132,8 @@ export default function App() {
 
   const needsOnboarding = !project || !project.onboarded;
   useEffect(() => {
+    // #plans opens whatever state the workspace is in (it has its own way back)
+    if (route === 'plans') return;
     if (needsOnboarding && route !== 'onboarding') void navigate('onboarding', { force: true });
     else if (!needsOnboarding && (route === 'onboarding' || route === null)) void navigate('dashboard', { force: true });
   }, [needsOnboarding, route]);
@@ -130,10 +147,24 @@ export default function App() {
     void navigate('workspace-settings', { force: true });
   }, []);
 
+  if (route === 'plans') {
+    return (
+      <>
+        <Suspense fallback={<PageSkeleton />}>
+          <PlansPage />
+        </Suspense>
+        <BillingHosts />
+        <Toaster />
+        <ConfirmHost />
+      </>
+    );
+  }
+
   if (needsOnboarding) {
     return (
       <>
         <Onboarding />
+        <BillingHosts />
         <Toaster />
         <ConfirmHost />
       </>
@@ -197,6 +228,7 @@ export default function App() {
         {/* relative: absolutely positioned bits inside (sr-only labels) stay in this scroll area instead of stretching the page behind the shell; overscroll-contain: scrolling never moves the page itself */}
         <main id="main-scroll" className="scroll-thin relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <div className={cn('mx-auto w-full gutter pb-24 pt-6 md:pb-12', route && WIDE.includes(route) ? 'max-w-[1600px]' : 'max-w-[1200px]')}>
+            <PlanBanner />
             <PageErrorBoundary key={route ?? 'dashboard'} onHome={() => void navigate('dashboard', { force: true })}>
               <Suspense fallback={<PageSkeleton />}>{page}</Suspense>
             </PageErrorBoundary>
@@ -215,6 +247,7 @@ export default function App() {
       <MarkPostedHost />
       <ListingWindowHost />
       <StoreOverlays />
+      <BillingHosts />
       <Assistant />
       <ConfirmHost />
       <Toaster placement={assistantOpen ? 'beside-panel' : 'above-launcher'} />

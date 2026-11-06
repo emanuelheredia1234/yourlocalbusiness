@@ -40,6 +40,7 @@ import { Empty, Kbd, Menu, MenuItem, Popover, Tooltip, type MenuEntry } from '..
 import { Sheet, SheetContent, SheetTitle } from '../ui/shadcn/sheet';
 import { confirmLeave } from '@/components/ui/leave';
 import { startNewProject } from '@/lib/projectActions';
+import { PlanLockBadge } from '@/components/billing/HeldProjects';
 import { LogoMark } from '../brand/Logo';
 import { Spark } from '../ai/Spark';
 import { AccountButton } from '../auth/Account';
@@ -214,6 +215,7 @@ function ProjectSwitcher({ onNavigate }: { onNavigate?: () => void }) {
             <span className="flex min-w-0 items-center gap-2">
               <span className="truncate">{p.brand.name || 'Untitled project'}</span>
               {!p.onboarded && <span className="badge shrink-0">Setup</span>}
+              <PlanLockBadge projectId={p.id} />
             </span>
           </MenuItem>
         ))}

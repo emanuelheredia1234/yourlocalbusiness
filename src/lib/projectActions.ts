@@ -125,6 +125,8 @@ export function deleteProjectEverywhere(id: string): void {
   useStore.getState().deleteProject(id);
   void pushMyListings();
   void releaseSocialFor([id]);
+  // plans: the database frees its business slot once the delete is saved; read the businesses again then
+  if (useBilling.getState().enforce && useAuth.getState().phase === 'ready') setTimeout(() => void useBilling.getState().refresh(), 5000);
 }
 
 /** Whether a business has social accounts (holds one of the user's business slots), as the server last said. */

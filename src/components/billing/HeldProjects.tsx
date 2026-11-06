@@ -64,3 +64,12 @@ export function HeldProjectsNotice({ className }: { className?: string }) {
     </div>
   );
 }
+
+/** "Locked" (the plan locked this business: read-only until a slot frees up) or "Not saved" (held on this device). */
+export function PlanLockBadge({ projectId }: { projectId: string }) {
+  const on = useBillingOn();
+  const locked = useBilling((s) => s.isLocked(projectId));
+  const held = useSyncStatus((s) => s.held.includes(projectId));
+  if (!on || (!locked && !held)) return null;
+  return <span className="badge shrink-0">{locked ? 'Locked' : 'Not saved'}</span>;
+}

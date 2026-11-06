@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { Check, ChevronRight, CircleUserRound, Database, Download, FolderOpen, Globe, KeyRound, Link2, Monitor, Moon, Palette, Pencil, Plus, SlidersHorizontal, Sun, Trash2, Upload } from 'lucide-react';
+import { Check, ChevronRight, CircleUserRound, CreditCard, Database, Download, FolderOpen, Globe, KeyRound, Link2, Monitor, Moon, Palette, Pencil, Plus, SlidersHorizontal, Sun, Trash2, Upload } from 'lucide-react';
 import type { AppSettings, Brand, Project } from '@/lib/types';
 import { cn, ensureUrl, fmtRelative, readFileAsText, slugify } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
 import { pushMyListings } from '@/lib/community';
 import { saveBrand, brandCopyFrom } from '@/lib/brandSave';
 import { EXPORT_KEYS, backupFileName, backupJson } from '@/lib/backup';
-import { deleteProjectEverywhere, freshSocialDeleteNote, holdsSocialSlot, refreshSocialSlots, releaseSocialFor } from '@/lib/projectActions';
+import { claimSlotsFor, createProjectWithSlot, deleteProjectEverywhere, freshSocialDeleteNote, holdsSocialSlot, refreshSocialSlots, releaseSocialFor } from '@/lib/projectActions';
+import { slotsNeeded } from '@/lib/cloud/slots';
+import { useBilling } from '@/store/billing';
+import { HeldProjectsNotice, PlanLockBadge } from '@/components/billing/HeldProjects';
 import { usePublishAccess } from '@/lib/publish';
 import { FORMATS } from '@/ai/knowledge';
 import { brandKitTask } from '@/ai/tasks';
@@ -28,8 +31,10 @@ import { ConnectedAccounts } from './ConnectedAccounts';
 import { TimeZoneSelect } from './TimeZoneSelect';
 import { isValidTimeZone, projectTimeZone } from '@/lib/timeZone';
 import { UsageSection } from './UsageSection';
+import { PlanSection } from './PlanSection';
+import { useBillingOn } from '@/store/billing';
 
-type Tab = 'brand' | 'domains' | 'ai' | 'accounts' | 'projects' | 'prefs' | 'account';
+type Tab = 'brand' | 'domains' | 'ai' | 'accounts' | 'projects' | 'prefs' | 'plan' | 'account';
 
 /** The sections, in the order of the sub-navigation (ids never change: the palette and the assistant open them). */
 const SECTIONS: { id: Tab; label: string; hint: string; icon: ReactNode }[] = [
@@ -39,6 +44,7 @@ const SECTIONS: { id: Tab; label: string; hint: string; icon: ReactNode }[] = [
   { id: 'accounts', label: 'Connected accounts', hint: 'Connect your accounts to post and see your own stats', icon: <Link2 /> },
   { id: 'projects', label: 'Projects & data', hint: 'Projects, backups and reset', icon: <Database /> },
   { id: 'prefs', label: 'Preferences', hint: 'Your name, theme and Marketplace', icon: <SlidersHorizontal /> },
+  { id: 'plan', label: 'Plan', hint: 'Your plan, businesses and billing', icon: <CreditCard /> },
   { id: 'account', label: 'Account', hint: 'Sign-in, password and deletion', icon: <CircleUserRound /> },
 ];
 const TAB_IDS = SECTIONS.map((s) => s.id) as string[];
@@ -46,9 +52,12 @@ const TAB_IDS = SECTIONS.map((s) => s.id) as string[];
 export default function Settings() {
   const project = useActiveProject()!;
   const signedIn = useAuth((s) => s.phase === 'ready');
+  const billing = useBillingOn();
+  // Plan only when signed in with plans shown (never in the artifact build)
+  const allowed = (id: string) => (id !== 'account' || signedIn) && (id !== 'plan' || (signedIn && billing));
   const { access } = usePublishAccess();
   const wanted = useUI((s) => s.settingsTab);
-  const [tab, setTab] = useState<Tab>(() => (wanted && TAB_IDS.includes(wanted) && (wanted !== 'account' || signedIn) ? (wanted as Tab) : 'brand'));
+  const [tab, setTab] = useState<Tab>(() => (wanted && TAB_IDS.includes(wanted) && allowed(wanted) ? (wanted as Tab) : 'brand'));
   // phones: the list of sections, or one open section (a request from elsewhere opens it directly)
   const [open, setOpen] = useState(() => !!wanted && TAB_IDS.includes(wanted));
   // "domains" from a page's Publish panel: the Domains section, with its Add domain button in view
@@ -56,17 +65,18 @@ export default function Settings() {
   // the account menu, the palette and the assistant ask for a section
   useEffect(() => {
     if (!wanted) return;
-    if (TAB_IDS.includes(wanted) && (wanted !== 'account' || signedIn)) {
+    if (TAB_IDS.includes(wanted) && allowed(wanted)) {
       setTab(wanted as Tab);
       setOpen(true);
       if (wanted === 'domains') setFocusDomains(true);
     }
     useUI.getState().setSettingsTab(null);
-  }, [wanted, signedIn]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wanted, signedIn, billing]);
 
   // Domains only where publishing is on; Account only when signed in
   const domainsOn = access === 'ready' || access === 'signed-out';
-  const items = SECTIONS.filter((s) => (s.id !== 'domains' || domainsOn || (tab === 'domains' && access === 'checking')) && (s.id !== 'account' || signedIn));
+  const items = SECTIONS.filter((s) => (s.id !== 'domains' || domainsOn || (tab === 'domains' && access === 'checking')) && allowed(s.id));
   const shown: Tab = items.some((s) => s.id === tab) ? tab : 'brand';
   const current = SECTIONS.find((s) => s.id === shown)!;
 
@@ -161,6 +171,7 @@ export default function Settings() {
           {shown === 'accounts' && <Accounts key={project.id} />}
           {shown === 'projects' && <ProjectsData />}
           {shown === 'prefs' && <Preferences />}
+          {shown === 'plan' && <PlanSection />}
           {shown === 'account' && signedIn && (
             <div className="max-w-[880px]">
               <AccountSettings />
@@ -353,12 +364,32 @@ function Accounts() {
 
 // ───────────────────────── Projects & data ─────────────────────────
 
+/**
+ * Plans: which of a backup's businesses need a slot claimed, and the confirm's sentence when the plan has room for
+ * fewer than that ("X of the backup's Y businesses won't be saved to your account until you add slots").
+ */
+async function backupSlotNote(ids: string[]): Promise<{ need: string[]; short: boolean; text: string }> {
+  if (!slotsNeeded()) return { need: [], short: false, text: '' };
+  const b = useBilling.getState();
+  await b.refresh();
+  const st = useBilling.getState();
+  const slotted = new Set((st.businesses?.slots ?? []).map((x) => x.projectId));
+  const need = ids.filter((id) => !slotted.has(id));
+  const free = st.slotsLeft();
+  if (need.length <= free) return { need, short: false, text: '' };
+  const left = need.length - free;
+  return {
+    need,
+    short: true,
+    text: ` Your plan has room for ${free} more ${free === 1 ? 'business' : 'businesses'}; ${left} of the backup’s ${ids.length} ${ids.length === 1 ? 'business' : 'businesses'} won’t be saved to your account until you add slots (Settings › Plan).`,
+  };
+}
+
 function ProjectsData() {
   const signedIn = useAuth((s) => s.phase === 'ready');
   const projects = useStore((s) => s.projects);
   const activeId = useStore((s) => s.activeProjectId);
   const setActive = useStore((s) => s.setActiveProject);
-  const createProject = useStore((s) => s.createProject);
   const replaceState = useStore((s) => s.replaceState);
   const resetAll = useStore((s) => s.resetAll);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -377,7 +408,10 @@ function ProjectsData() {
       if (goneProjects.length) await refreshSocialSlots();
       const losing = goneProjects.filter((p) => holdsSocialSlot(p.id)).map((p) => `“${p.brand.name || 'Untitled'}”`);
       const socialNote = losing.length ? ` ${losing.join(', ')} ${losing.length === 1 ? 'isn’t' : 'aren’t'} in the backup, so ${losing.length === 1 ? 'its' : 'their'} connected social accounts are disconnected too.` : '';
-      if (!(await confirmAction({ title: 'Replace your workspace with this backup?', body: `${data.projects.length} project${data.projects.length === 1 ? '' : 's'} will be loaded. Your current data on this device is replaced.${socialNote} Images and videos aren’t part of backups.`, confirmLabel: 'Import backup', danger: true }))) return;
+      // plans: each of the backup's businesses needs a slot; ids that already have one reuse it
+      const slotNote = await backupSlotNote(data.projects.map((p) => p.id));
+      if (!(await confirmAction({ title: 'Replace your workspace with this backup?', body: `${data.projects.length} project${data.projects.length === 1 ? '' : 's'} will be loaded. Your current data on this device is replaced.${socialNote}${slotNote.text} Images and videos aren’t part of backups.`, confirmLabel: slotNote.short ? 'Import anyway' : 'Import backup', danger: true }))) return;
+      const claims = slotNote.need.length ? await claimSlotsFor(slotNote.need) : null;
       const d = defaultSettings();
       const patch: Partial<StoreState> = {};
       for (const k of EXPORT_KEYS) if (k in data) (patch as Record<string, unknown>)[k] = (data as Record<string, unknown>)[k];
@@ -390,7 +424,9 @@ function ProjectsData() {
       void releaseSocialFor(gone);
       // an older backup may hold things that version made up
       cleanWorkspace();
-      toast({ kind: 'success', title: 'Backup imported' });
+      if (claims?.refused.length) {
+        toast({ kind: 'info', title: 'Backup imported', body: `${claims.refused.length} of its businesses ${claims.refused.length === 1 ? 'isn’t' : 'aren’t'} saved to your account until you add ${claims.refused.length === 1 ? 'a slot' : 'slots'}.`, action: { label: 'Add a business', run: () => useBilling.getState().openAddBusiness(() => void claimSlotsFor(claims.refused)) } });
+      } else toast({ kind: 'success', title: 'Backup imported' });
     } catch {
       toast({ kind: 'error', title: 'That file isn’t a Yourlocalbusiness backup' });
     }
@@ -408,10 +444,10 @@ function ProjectsData() {
 
   const newProjectButtons = (
     <>
-      <button type="button" className="btn btn-secondary btn-sm" onClick={() => createProject('business', 'new')}>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => void createProjectWithSlot('business', 'new')}>
         <Plus /> New business
       </button>
-      <button type="button" className="btn btn-secondary btn-sm" onClick={() => createProject('product', 'new')}>
+      <button type="button" className="btn btn-secondary btn-sm" onClick={() => void createProjectWithSlot('product', 'new')}>
         <Plus /> New product
       </button>
     </>
@@ -419,6 +455,7 @@ function ProjectsData() {
 
   return (
     <div className="flex max-w-[880px] flex-col gap-6">
+      <HeldProjectsNotice />
       <SettingsSection
         title="Projects"
         description="Each project has its own brand, studio, marketing and analytics."
@@ -440,6 +477,7 @@ function ProjectsData() {
                     </span>
                     {active && <Badge tone="primary">Open now</Badge>}
                     {!p.onboarded && <Badge>Setup</Badge>}
+                    <PlanLockBadge projectId={p.id} />
                   </span>
                   <span className="block truncate text-small text-muted" title={meta}>
                     {meta}

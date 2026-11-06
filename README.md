@@ -391,11 +391,19 @@ accounts, and paid actions while a payment is overdue. Nothing is enforced until
 accounts then get 30 days of Grow free. The owner's account is the unlimited owner plan. Billing is off in the
 claude.ai artifact build.
 
-Owner steps (all in [docs/integrations-setup.md](docs/integrations-setup.md) §10): run
+In the app: the public `#plans` page (monthly / annual with the saving, the three cards, a comparison table, the FAQ;
+Start → create an account → Stripe Checkout → back to the app), Settings › Plan (plan, credits, businesses used of
+allowed, Add a business with the price confirmed, Remove one at renewal, Manage billing in the Portal), a slot claimed
+before every new business (a full plan offers Add a business; a business the account refused stays on the device
+with a note), plan banners and one upgrade prompt for refused paid actions (`src/lib/plans.ts`, `src/store/billing.ts`,
+`src/lib/cloud/slots.ts`, `src/pages/plans/`, `src/components/billing/`).
+
+Owner steps (all in [docs/integrations-setup.md](docs/integrations-setup.md) §10; Stripe Sandbox first, live only
+with your OK): run
 `supabase/migrations/20261110000000_billing.sql`; set `STRIPE_SECRET_KEY` (restricted live key in production),
 `STRIPE_WEBHOOK_SECRET` and `APP_URL`; add the webhook `https://yourlocalbusiness.replit.app/api/webhooks/stripe`; run
 `npm run stripe:setup` (a dry run; then `--apply`; `--live` only with your OK); set up the Customer Portal (quantity
-editing off) and Smart Retries; then Owner → Billing → Plans → Turn on plans. Turning plans off again is the rollback.
+editing off) and Smart Retries; optionally Stripe Tax (`STRIPE_AUTOMATIC_TAX=1`); then Owner → Billing → Plans → Turn on plans. Turning plans off again is the rollback.
 Tests use `server/test/mock-stripe.mjs` and `server/test/mock-supabase.mjs` only.
 
 ## Scheduled jobs
