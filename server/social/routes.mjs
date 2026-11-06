@@ -2,8 +2,8 @@
 //   POST /api/posting/publish            PublishRequest → {job}    (the job is `sending`; the app polls it)
 //   GET  /api/posting/jobs/:jobId        → {job}                   a database read only, never a network call
 //   POST /api/posting/jobs/:jobId/check  {} → {job}                "Check again" on an `unknown` job: one read of
-//                                                                  the post's status at Zernio, at most once per
-//                                                                  30 s per job; never resends
+//                                                                  the post's status at Upload-Post (by the job
+//                                                                  id), at most once per 30 s per job; never resends
 //   GET  /api/posting/jobs?projectId=    → {jobs}                  the business's last 200
 // Checks in order: the app's own page (sameOrigin), a signed-in user, the route's rate limit. Every query names
 // the signed-in user; someone else's project, post or job answers 404.
@@ -69,8 +69,8 @@ export function createPostingRoutes(deps = {}) {
   async function route(req, res, url, who) {
     const p = url.pathname;
     if (!db?.enabled) throw fail(503, 'NOT_SET_UP', 'Posting from the app isn’t set up yet. Post it yourself for now.', {}, 'Supabase isn’t set up on this server (SUPABASE_URL and SUPABASE_SECRET_KEY).');
-    // no connected accounts (ZERNIO_API_KEY unset): nothing can be posted from the app, and no job exists
-    if (!connections?.enabled) throw fail(503, 'NOT_SET_UP', 'Posting from the app isn’t switched on yet. Post it yourself, then mark it as posted.', {}, connections?.hint || 'Connecting accounts is off: add ZERNIO_API_KEY in Replit Secrets.');
+    // no social accounts (UPLOAD_POST_API_KEY unset): nothing can be posted from the app, and no job exists
+    if (!connections?.socialEnabled) throw fail(503, 'NOT_SET_UP', 'Posting from the app isn’t switched on yet. Post it yourself, then mark it as posted.', {}, 'Posting is off: add UPLOAD_POST_API_KEY (and UPLOAD_POST_WEBHOOK_SECRET, MEDIA_URL_SECRET) in Replit Secrets.');
     if (p === `${PREFIX}publish` && req.method === 'POST') {
       limited('posting-publish', who.id);
       const out = await posting.publish(who, await body(req));
@@ -103,7 +103,7 @@ export function createPostingRoutes(deps = {}) {
       }
       return true;
     },
-    /** Startup: jobs a restart left `sending` (older than 180 s) become `unknown`, never re-sent. */
+    /** Startup: jobs a restart left `sending` (older than 11 minutes) become `unknown`, never re-sent. */
     async onStart() {
       if (db?.enabled) await posting.sweepAll();
     },

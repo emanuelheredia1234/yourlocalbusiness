@@ -1,8 +1,11 @@
-// Posting from the app through Zernio (spec §1.7, owner decision): one POST /v1/posts per post with an
-// Idempotency-Key, the file uploaded to Zernio first, unknown outcomes checked only by a read ("Check again"),
-// post.* webhooks finishing a job, the stuck-job sweep, caps, ownership, and nothing ever sent twice.
+// Posting from the app through Upload-Post (spec §1.7, owner decision): one upload per post with our job id as
+// request_id, Idempotency-Key and external_id, the media as our short-lived public link, the platform's own result
+// deciding (never the top-level success), background answers read from /uploadposts/status, unknown outcomes checked
+// only by a read ("Check again"), upload_completed webhooks finishing a job, the stuck-job sweep, caps, ownership,
+// and nothing ever sent twice. Nothing here reaches Upload-Post (server/test/mock-uploadpost.mjs).
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { mediaToken } from './media.mjs';
+import { STUCK_AFTER_MS } from './jobs.mjs';
 import { JPEG, MP4, PNG, startPosting } from './test-helpers.mjs';
 
 let t;
@@ -21,9 +24,10 @@ afterAll(async () => {
   await t.close();
 });
 afterEach(() => {
-  // the rules every test keeps: no post without its key, none sent twice, no key on an upload or in a query
-  expect(t.zernio.violations).toEqual([]);
-  expect(t.logs.join('\n')).not.toContain(t.env.ZERNIO_API_KEY);
+  // the rules every test keeps: no upload without its key, none sent twice, no key in a query, Pages asked per profile
+  expect(t.up.violations).toEqual([]);
+  expect(t.logs.join('\n')).not.toContain(t.env.UPLOAD_POST_API_KEY);
+  expect(t.logs.join('\n')).not.toContain('/api/media/public/');
 });
 
 async function publishAndWait(u, post, extra) {
@@ -35,7 +39,7 @@ async function publishAndWait(u, post, extra) {
 const jobOf = async (u, id) => (await t.call(u, 'GET', `/api/posting/jobs/${id}`)).body.job;
 
 describe('posting a saved post', () => {
-  it('posts once on the chosen account with the job id as Idempotency-Key and in the metadata; the job is sent with its address', async () => {
+  it('posts once with the job id as request_id, Idempotency-Key and external_id, on the business’s Page; the job is sent with its address', async () => {
     const post = await t.post(alice, { platform: 'facebook', caption: 'Fresh sourdough today', linkPlacement: 'comment', firstComment: 'Order: https://joes.example/order' });
     const before = t.postCalls().length;
     const r = await publishAndWait(alice, post, { content: { text: post.caption, hashtags: post.hashtags, firstComment: post.firstComment } });
@@ -44,76 +48,105 @@ describe('posting a saved post', () => {
     expect(job).toMatchObject({ state: 'sent', url: expect.stringMatching(/^https:\/\/social\.example\/facebook\/p\//) });
     const calls = t.postCalls().slice(before);
     expect(calls).toHaveLength(1);
-    expect(calls[0].idempotencyKey).toBe(job.id);
-    expect(calls[0].body).toMatchObject({ content: 'Fresh sourdough today\n\n#bakery', publishNow: true, metadata: { ylbJob: job.id }, platforms: [{ platform: 'facebook', platformSpecificData: { firstComment: 'Order: https://joes.example/order' } }] });
-    // the account id came from the stored doc, never from the request
-    expect(calls[0].body.platforms[0].accountId).toMatch(/^[0-9a-f]{24}$/);
-    expect(JSON.stringify(job)).not.toContain(calls[0].body.platforms[0].accountId);
-    // the ledger has the customer's Zernio row
+    expect(calls[0]).toMatchObject({ path: '/api/upload_text', idempotencyKey: job.id });
+    const profile = await t.profileOf(alice);
+    expect(calls[0].form).toMatchObject({ user: profile, 'platform[]': ['facebook'], request_id: job.id, external_id: job.id, title: expect.stringMatching(/^Fresh sourdough today\r?\n\r?\n#bakery$/), first_comment: 'Order: https://joes.example/order', facebook_page_id: expect.stringMatching(/^page_/) });
+    // the profile and the Page came from the stored doc, never from the request, and the browser sees neither
+    expect(JSON.stringify(job)).not.toContain(profile);
+    expect(JSON.stringify(job)).not.toContain(calls[0].form.facebook_page_id);
     const ledger = await t.db.select('usage_ledger', { call_id: job.id });
-    expect(ledger.map((x) => [x.vendor, x.feature, x.endpoint, x.outcome])).toEqual([['zernio', 'posting', 'facebook:POST /v1/posts', 'ok']]);
+    expect(ledger.map((x) => [x.vendor, x.feature, x.endpoint, x.outcome])).toEqual([['uploadpost', 'posting', 'facebook:POST /upload_text', 'ok']]);
   });
 
-  it('uploads a photo to Zernio’s storage first (no key on it), then posts it as a media item', async () => {
+  it('sends a photo as our short-lived public link (Upload-Post fetches it), and that link serves the file', async () => {
     const media = t.file(alice, 'img-ig-1.jpg', JPEG, 'image/jpeg');
     const post = await t.post(alice, { platform: 'instagram', media });
     const r = await publishAndWait(alice, post);
     expect((await jobOf(alice, r.body.job.id)).state).toBe('sent');
-    const presign = t.zernio.calls.filter((c) => c.path === '/api/v1/media/presign').pop();
-    expect(presign.body).toMatchObject({ contentType: 'image/jpeg' });
-    const put = t.zernio.calls.filter((c) => c.method === 'PUT').pop();
-    expect(put).toMatchObject({ auth: null, bytes: JPEG.length });
-    expect(t.postCalls().pop().body.mediaItems).toEqual([{ type: 'image', url: expect.stringContaining('/__media/') }]);
+    const call = t.postCalls().pop();
+    expect(call.path).toBe('/api/upload_photos');
+    const [link] = call.form['photos[]'];
+    expect(link).toMatch(/^https:\/\/app\.test\/api\/media\/public\//);
+    const fetched = await t.call(null, 'GET', new URL(link).pathname);
+    expect(fetched.status).toBe(200);
   });
 
   it('refuses an Instagram photo that isn’t a JPEG before anything is sent', async () => {
     const media = t.file(alice, 'img-ig-png', PNG, 'image/png');
     const post = await t.post(alice, { platform: 'instagram', media });
-    const before = t.zernio.calls.length;
+    const before = t.up.calls.length;
     const r = await t.publish(alice, post);
     expect(r.status).toBe(400);
     expect(r.body.code).toBe('MEDIA_UNSUPPORTED');
-    expect(t.zernio.calls.length).toBe(before);
+    expect(t.up.calls.length).toBe(before);
   });
 
-  it('posts a YouTube video with its title, and a TikTok video with TikTok’s settings', async () => {
+  it('posts a YouTube video with its title in the background (status reads by the job id), and a TikTok video with an audience the account allows', async () => {
     const video = t.file(alice, 'vid-yt-1', MP4, 'video/mp4');
     const yt = await t.post(alice, { platform: 'youtube', format: 'video', media: video, headline: 'Our sourdough, start to finish' });
-    expect((await jobOf(alice, (await publishAndWait(alice, yt, { platform: 'youtube' })).body.job.id)).state).toBe('sent');
-    expect(t.postCalls().pop().body.platforms[0]).toMatchObject({ platform: 'youtube', platformSpecificData: { title: 'Our sourdough, start to finish', visibility: 'public' } });
+    const r = await publishAndWait(alice, yt, { platform: 'youtube' });
+    expect(await jobOf(alice, r.body.job.id)).toMatchObject({ state: 'sent', url: expect.stringMatching(/^https:\/\//) });
+    expect(t.postCalls().pop()).toMatchObject({ path: '/api/upload', form: { async_upload: 'true', youtube_title: 'Our sourdough, start to finish', privacyStatus: 'public' } });
+    expect(t.up.calls.some((c) => c.path === '/api/uploadposts/status' && c.query.request_id === r.body.job.id)).toBe(true);
     const tv = t.file(alice, 'vid-tt-1', MP4, 'video/mp4');
     const tt = await t.post(alice, { platform: 'tiktok', format: 'video', media: tv });
     expect((await jobOf(alice, (await publishAndWait(alice, tt)).body.job.id)).state).toBe('sent');
-    expect(t.postCalls().pop().body.tiktokSettings).toMatchObject({ privacy_level: 'PUBLIC_TO_EVERYONE', content_preview_confirmed: true });
+    expect(t.postCalls().pop().form.privacy_level).toBe('PUBLIC_TO_EVERYONE');
   });
 
-  it('a network refusal ends failed with a plain message', async () => {
+  it('a TikTok that went to the account’s drafts is sent with a note and no address', async () => {
+    const tv = t.file(alice, 'vid-tt-2', MP4, 'video/mp4');
+    const tt = await t.post(alice, { platform: 'tiktok', format: 'video', media: tv, caption: 'Drafts one' });
+    t.up.setUploadOutcome('inbox');
+    const job = await jobOf(alice, (await publishAndWait(alice, tt)).body.job.id);
+    expect(job).toMatchObject({ state: 'sent', note: 'SENT_TO_DRAFTS', noteMessage: 'Sent to your TikTok drafts. Open TikTok to publish it.' });
+    expect(job.url).toBeUndefined();
+  });
+
+  it('this platform failing ends failed with our words (top-level success is not trusted); not connected there reads plainly', async () => {
     const post = await t.post(alice, { platform: 'linkedin', caption: 'Refused one' });
-    t.zernio.setPostOutcome('failed');
+    t.up.setUploadOutcome('platform_failed');
     const job = await jobOf(alice, (await publishAndWait(alice, post)).body.job.id);
     expect(job).toMatchObject({ state: 'failed', errorCode: 'REFUSED', errorMessage: expect.any(String) });
+    expect(JSON.stringify(job)).not.toContain('raw text');
+    const post2 = await t.post(alice, { platform: 'linkedin', caption: 'Skipped one' });
+    t.up.setUploadOutcome('skipped');
+    expect(await jobOf(alice, (await publishAndWait(alice, post2)).body.job.id)).toMatchObject({ state: 'failed', errorCode: 'NOT_CONNECTED' });
+  });
+
+  it('a daily cap is the network’s limit; our key or plan trouble reads as a safe message (the owner is told)', async () => {
+    const p1 = await t.post(alice, { platform: 'x', caption: 'Capped' });
+    t.up.setUploadOutcome('hard_cap');
+    expect(await jobOf(alice, (await publishAndWait(alice, p1)).body.job.id)).toMatchObject({ state: 'failed', errorCode: 'PLATFORM_LIMIT' });
+    const p2 = await t.post(alice, { platform: 'x', caption: 'Plan cap' });
+    t.up.setUploadOutcome('scheduled_limit');
+    const job = await jobOf(alice, (await publishAndWait(alice, p2)).body.job.id);
+    expect(job).toMatchObject({ state: 'failed', errorCode: 'SERVICE_UNAVAILABLE' });
+    expect(JSON.stringify(job)).not.toMatch(/upload-post|plan|upgrade|40000/i);
   });
 });
 
 describe('unknown outcomes and Check again', () => {
-  it('a 5xx after Zernio took the post is unknown (one create only); Check again finds it by the job id, with reads only', async () => {
+  it('a 5xx after Upload-Post took the post is unknown (one upload only); Check again finds it by the job id, with reads only', async () => {
     const post = await t.post(alice, { platform: 'x', caption: 'Created then 502' });
-    t.zernio.setPostOutcome('accepted_then_500');
+    t.up.setUploadOutcome('accepted_then_500');
     const before = t.postCalls().length;
     const r = await publishAndWait(alice, post);
     const job = await jobOf(alice, r.body.job.id);
-    expect(job).toMatchObject({ state: 'unknown', errorCode: 'UNCONFIRMED' });
+    expect(job).toMatchObject({ state: 'unknown', errorCode: 'UNCONFIRMED', errorMessage: expect.stringContaining('may have been posted - check before trying again') });
     expect(t.postCalls().length - before).toBe(1);
-    const reads = t.zernio.calls.length;
+    const reads = t.up.calls.length;
     const c = await t.call(alice, 'POST', `/api/posting/jobs/${job.id}/check`, {});
     expect(c.body.job.state).toBe('sent');
-    expect(t.zernio.calls.slice(reads).every((x) => x.method === 'GET')).toBe(true);
+    expect(t.up.calls.slice(reads).every((x) => x.method === 'GET')).toBe(true);
+    expect(t.up.calls.slice(reads).some((x) => x.path === '/api/uploadposts/status' && x.query.request_id === job.id)).toBe(true);
     expect(t.postCalls().length - before).toBe(1);
+    expect((await t.db.select('usage_ledger', { call_id: job.id })).map((x) => x.endpoint)).toContain('x:GET /uploadposts/status');
   });
 
   it('a 500 with nothing created stays unknown after Check again (never “send again”), and a second press within 30 s answers 429', async () => {
     const post = await t.post(alice, { platform: 'facebook', caption: 'Not there' });
-    t.zernio.setPostOutcome('error500');
+    t.up.setUploadOutcome('error500');
     const r = await publishAndWait(alice, post);
     expect((await jobOf(alice, r.body.job.id)).state).toBe('unknown');
     const c1 = await t.call(alice, 'POST', `/api/posting/jobs/${r.body.job.id}/check`, {});
@@ -125,28 +158,26 @@ describe('unknown outcomes and Check again', () => {
     expect((await t.call(alice, 'POST', `/api/posting/jobs/${r.body.job.id}/check`, {})).status).toBe(200);
   });
 
-  it('a post.published webhook finishes an unknown job (routed by the customer and the job id)', async () => {
+  it('an upload_completed webhook finishes an unknown job (routed by the customer’s profile and the job id)', async () => {
     const post = await t.post(alice, { platform: 'facebook', caption: 'Finished by webhook' });
-    t.zernio.setPostOutcome('error500');
+    t.up.setUploadOutcome('error500');
     const r = await publishAndWait(alice, post);
     expect((await jobOf(alice, r.body.job.id)).state).toBe('unknown');
-    const doc = (await t.storage.get([...t.storage.documents.keys()].find((k) => k.startsWith('zernio:user:')))).value;
-    const evt = t.zernio.signed({ event: 'post.published', profiles: t.zernio.profileRef(doc.profileId), post: { id: 'dddddddddddddddddddddddd', status: 'published', metadata: { ylbJob: r.body.job.id }, platforms: [{ platform: 'facebook', status: 'published', publishedUrl: 'https://facebook.com/joe/posts/9' }] } });
+    const evt = t.up.signed({ event: 'upload_completed', request_id: r.body.job.id, profile_username: await t.profileOf(alice), platform: 'facebook', result: { success: true, url: 'https://facebook.com/joe/posts/9', post_id: '9' } }, { ts: Math.floor(t.clock.t / 1000) });
     expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
     expect(await jobOf(alice, r.body.job.id)).toMatchObject({ state: 'sent', url: 'https://facebook.com/joe/posts/9' });
-    // Bob's job can't be finished by an event for Alice's profile
+    // Bob's job can't be finished by an event for Alice's profile, nor a job on another platform
     expect(await t.routes.posting.fromWebhook(bob.id, r.body.job.id, { state: 'failed' })).toBeNull();
+    expect(await t.routes.posting.fromWebhook(alice.id, r.body.job.id, { state: 'failed', platform: 'x' })).toBeNull();
   });
 
-  it('a post.published webhook that arrives while the post is still being sent finishes the job when the answer is unclear', async () => {
+  it('an upload_completed that arrives while the post is still being sent finishes the job when the answer is unclear', async () => {
     const post = await t.post(alice, { platform: 'facebook', caption: 'Webhook before the answer' });
     let release;
-    t.zernio.setPostOutcome({ waitFor: new Promise((r) => (release = r)), then: 'error500' });
+    t.up.setUploadOutcome({ waitFor: new Promise((r) => (release = r)), then: 'error500' });
     const r = await t.publish(alice, post);
-    // wait until the POST is at Zernio (the job is `sending` and this process is working on it)
-    for (let i = 0; i < 200 && !t.postCalls().some((c) => c.headers?.['idempotency-key'] === r.body.job.id || c.idempotencyKey === r.body.job.id); i += 1) await new Promise((res) => setTimeout(res, 5));
-    const doc = (await t.storage.get([...t.storage.documents.keys()].find((k) => k.startsWith('zernio:user:')))).value;
-    const evt = t.zernio.signed({ event: 'post.published', profiles: t.zernio.profileRef(doc.profileId), post: { id: 'eeeeeeeeeeeeeeeeeeeeeeee', status: 'published', metadata: { ylbJob: r.body.job.id }, platforms: [{ platform: 'facebook', status: 'published', publishedUrl: 'https://facebook.com/joe/posts/10' }] } });
+    for (let i = 0; i < 200 && !t.postCalls().some((c) => c.idempotencyKey === r.body.job.id); i += 1) await new Promise((res) => setTimeout(res, 5));
+    const evt = t.up.signed({ event: 'upload_completed', request_id: r.body.job.id, profile_username: await t.profileOf(alice), platform: 'facebook', result: { success: true, url: 'https://facebook.com/joe/posts/10' } }, { ts: Math.floor(t.clock.t / 1000) });
     expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
     expect((await jobOf(alice, r.body.job.id)).state).toBe('sending');
     release();
@@ -154,19 +185,19 @@ describe('unknown outcomes and Check again', () => {
     expect(await jobOf(alice, r.body.job.id)).toMatchObject({ state: 'sent', url: 'https://facebook.com/joe/posts/10' });
   });
 
-  it('a `sending` job older than 180 s becomes unknown on read and on startup, with no network call', async () => {
+  it('a `sending` job older than the polling window becomes unknown on read and on startup, with no network call', async () => {
     const base = { user_id: alice.id, project_id: 'proj-1', platform: 'facebook', state: 'sending', provider_ref: {} };
-    const old = new Date(t.clock.t - 200_000).toISOString();
+    const old = new Date(t.clock.t - STUCK_AFTER_MS - 20_000).toISOString();
     const a = { ...base, id: crypto.randomUUID(), post_id: 'stuck-a', client_request_id: crypto.randomUUID(), requested_at: old };
     const b = { ...base, id: crypto.randomUUID(), post_id: 'stuck-b', client_request_id: crypto.randomUUID(), requested_at: old };
-    const fresh = { ...base, id: crypto.randomUUID(), post_id: 'fresh-c', client_request_id: crypto.randomUUID(), requested_at: new Date(t.clock.t - 10_000).toISOString() };
+    const fresh = { ...base, id: crypto.randomUUID(), post_id: 'fresh-c', client_request_id: crypto.randomUUID(), requested_at: new Date(t.clock.t - 200_000).toISOString() };
     await t.db.insert('post_publish_jobs', [a, b, fresh]);
-    const calls = t.zernio.calls.length;
+    const calls = t.up.calls.length;
     expect(await jobOf(alice, a.id)).toMatchObject({ state: 'unknown', errorCode: 'INTERRUPTED' });
     await t.routes.onStart();
     expect((await t.jobRow(b.id)).state).toBe('unknown');
     expect((await t.jobRow(fresh.id)).state).toBe('sending');
-    expect(t.zernio.calls.length).toBe(calls);
+    expect(t.up.calls.length).toBe(calls);
   });
 });
 
@@ -187,11 +218,11 @@ describe('the job', () => {
 
   it('refuses a post whose text changed since it was saved (POST_CHANGED), and an unconfirmed request', async () => {
     const post = await t.post(alice, { platform: 'facebook', caption: 'Saved text' });
-    const before = t.zernio.calls.length;
+    const before = t.up.calls.length;
     const r = await t.publish(alice, post, { content: { text: 'Different text the screen still shows' } });
     expect(r.body.code).toBe('POST_CHANGED');
     expect((await t.publish(alice, post, { confirm: false })).status).toBe(400);
-    expect(t.zernio.calls.length).toBe(before);
+    expect(t.up.calls.length).toBe(before);
   });
 
   it('the 21st X post of the day answers 429 CUSTOMER_CAP', async () => {
@@ -214,7 +245,7 @@ describe('the job', () => {
     expect(r.body.jobs.length).toBeGreaterThan(3);
     const times = r.body.jobs.map((j) => j.requestedAt);
     expect([...times].sort().reverse()).toEqual(times);
-    expect(JSON.stringify(r.body)).not.toMatch(/user_id|provider_ref|accountRef|idempotencyKey|ylbJob/);
+    expect(JSON.stringify(r.body)).not.toMatch(/user_id|provider_ref|accountRef|idempotencyKey|requestId|ylb_/);
   });
 });
 
@@ -236,11 +267,11 @@ describe('ownership and access', () => {
   it('needs a sign-in, and an account connected for that network', async () => {
     expect((await t.call(null, 'GET', '/api/posting/jobs?projectId=proj-1')).status).toBe(401);
     const post = await t.post(bob, { platform: 'tiktok', media: t.file(bob, 'img-bob.jpg', JPEG, 'image/jpeg') });
-    const before = t.zernio.calls.length;
+    const before = t.up.calls.length;
     const r = await t.publish(bob, post);
     expect(r.status).toBe(409);
     expect(r.body.code).toBe('NOT_CONNECTED');
-    expect(t.zernio.calls.length).toBe(before);
+    expect(t.up.calls.length).toBe(before);
   });
 });
 
@@ -258,7 +289,7 @@ describe('connections switched off', () => {
       expect((await off.call(u, 'GET', '/api/posting/jobs?projectId=proj-1')).status).toBe(503);
       const token = mediaToken(off.env, { userId: u.id, mediaId: 'any', kind: 'image' }, off.clock.t);
       expect((await off.call(null, 'GET', `/api/media/public/${token}`)).status).toBe(503);
-      expect(off.zernio.calls).toHaveLength(0);
+      expect(off.up.calls).toHaveLength(0);
     } finally {
       await off.close();
     }

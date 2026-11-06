@@ -1,7 +1,7 @@
-// GET /api/media/public/<token>: a short-lived, MAC'd link to one of a user's media files, for networks that
-// fetch the photo or video themselves (Instagram, Facebook photos, TikTok PULL_FROM_URL). Spec §1.7 "Media".
+// GET /api/media/public/<token>: a short-lived, MAC'd link to one of a user's media files, for Upload-Post (and the
+// networks behind it) to fetch a post's photo or video. Spec §1.7 "Media".
 //
-// While connecting accounts is off (no ZERNIO_API_KEY) no link is ever made, so every request answers 503.
+// While social posting is off (no UPLOAD_POST_API_KEY) no link is ever made, so every request answers 503.
 // No sign-in and no same-origin check: the token is the permission (server/social/media.mjs makes it, 30 minutes
 // for a photo, 2 hours for a video). A bad MAC answers 403, an expired token 410, a file that isn't there 404.
 // The bytes stream from Supabase Storage with the service key; Range requests answer 206 (TikTok and video).
@@ -39,8 +39,8 @@ export function createPublicMediaRoutes(deps = {}) {
   const plain = (req, res, status, error, code, extra = {}) => send(res, status, { error, code }, { ...corsHeaders(req), 'cache-control': 'no-store', 'x-robots-tag': 'noindex', ...extra });
 
   async function serve(req, res, token) {
-    // links are only made for posts sent through a connected account: with connecting off there are none
-    if (deps.connections && !deps.connections.enabled) return plain(req, res, 503, 'This link isn’t available.', 'NOT_SET_UP');
+    // links are only made for posts sent through a connected social account: with posting off there are none
+    if (deps.connections && !deps.connections.socialEnabled) return plain(req, res, 503, 'This link isn’t available.', 'NOT_SET_UP');
     let v;
     try {
       v = verifyMediaToken(env, token, now());

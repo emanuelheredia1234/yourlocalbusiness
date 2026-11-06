@@ -4,14 +4,16 @@
 // - One live job per post and network: the post_publish_jobs_one_live index (queued, sending, sent, unknown)
 //   makes a second publish answer 409 ALREADY_PUBLISHING with the job that's there.
 // - The same clientRequestId (a double click) gives back the same job.
-// - A `sending` job older than 180 s (the 120 s write limit + 60 s) that this process isn't working on was left
-//   by a restart: it becomes `unknown`, on startup and on every read. `unknown` never means "send again".
+// - A `sending` job older than 11 minutes (the 120 s write limit + Upload-Post's longest status-polling window,
+//   10 minutes for a video) that this process isn't working on was left by a restart: it becomes `unknown`, on
+//   startup and on every read. `unknown` never means "send again": it reads "may have been posted - check before
+//   trying again", and "Check again" reads the status by the job id.
 // Every query names the server-resolved user.
 
 import crypto from 'node:crypto';
 import { fail } from '../integrations/common.mjs';
 
-export const STUCK_AFTER_MS = 180_000;
+export const STUCK_AFTER_MS = 11 * 60_000;
 export const CHECK_EVERY_MS = 30_000;
 const LIVE = ['queued', 'sending', 'sent', 'unknown'];
 
@@ -26,8 +28,22 @@ export const JOB_MESSAGES = Object.freeze({
   MEDIA_PROCESSING: 'The network couldn’t finish processing the video, so nothing was posted.',
   MEDIA_MISSING: 'The photo or video isn’t saved to your account, so nothing was posted.',
   NO_TARGET: 'Choose which account to post to in Settings → Connected accounts.',
-  INTERRUPTED: 'The app restarted while posting. Check your account before trying anything else.',
-  UNCONFIRMED: 'We couldn’t confirm the post went out. Check your account before trying anything else.',
+  INTERRUPTED: 'The app restarted while posting. It may have been posted - check before trying again.',
+  UNCONFIRMED: 'We couldn’t confirm the post went out. It may have been posted - check before trying again.',
+  NOT_CONNECTED: 'This account isn’t connected any more, so nothing was posted. Connect it in Settings → Connected accounts.',
+  DUPLICATE: 'This looks the same as a recent post on this network. Change the text or the photo, then try again.',
+  ACCOUNT_CHECK: 'The network wants you to confirm your account. Open its app, then try again.',
+  TEMP_RESTRICTED: 'The network has limited this account for now, so nothing was posted. Try again later.',
+  TIKTOK_PRIVACY: 'This TikTok account doesn’t allow that audience setting, so nothing was posted. Check the account’s privacy settings in TikTok.',
+  TIKTOK_DRAFTS_FULL: 'TikTok paused uploads because there are too many unpublished drafts. Publish or delete drafts in TikTok, then try again.',
+  BUSY: 'Posting is busy right now, so nothing was posted. Try again in a minute.',
+  NOT_SENT: 'We couldn’t reach the posting service, so nothing was posted. Try again shortly.',
+  SERVICE_UNAVAILABLE: 'Posting from the app isn’t available right now, so nothing was posted. We’ve been notified. You can post it yourself.',
+});
+
+/** Plain words for a job that was sent but isn't public yet (TikTok put it in the account's drafts). */
+export const JOB_NOTES = Object.freeze({
+  SENT_TO_DRAFTS: 'Sent to your TikTok drafts. Open TikTok to publish it.',
 });
 
 const iso = (ms) => new Date(ms).toISOString();
@@ -41,13 +57,14 @@ export function jobOut(row) {
     postId: row.post_id,
     platform: row.platform,
     state: row.state,
-    ...(row.url ? { url: row.url } : {}),
+    ...(typeof row.url === 'string' && /^https:\/\//.test(row.url) ? { url: row.url } : {}),
     ...(row.error_code ? { errorCode: row.error_code, errorMessage: JOB_MESSAGES[row.error_code] ?? JOB_MESSAGES.REFUSED } : {}),
     requestedAt: row.requested_at,
     ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
     ...(row.checked_at ? { checkedAt: row.checked_at } : {}),
     ...(typeof ref.comment === 'string' ? { comment: ref.comment } : {}),
     ...(ref.checkable === false ? { checkable: false } : {}),
+    ...(row.state === 'sent' && ref.outcome === 'drafts' ? { note: 'SENT_TO_DRAFTS', noteMessage: JOB_NOTES.SENT_TO_DRAFTS } : {}),
   };
 }
 

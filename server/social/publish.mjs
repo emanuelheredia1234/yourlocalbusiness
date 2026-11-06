@@ -1,13 +1,15 @@
-// Posting a saved post on a connected account through Zernio (spec §1.7, owner decision): checks, the job, the one
-// POST /v1/posts (server/connections/zernio.mjs publish()), the ledger.
+// Posting a saved post on a connected account through Upload-Post (spec §1.7, owner decision): checks, the job,
+// the one upload (server/connections/uploadpost.mjs publish(): the media as our short-lived public link, our job id
+// as request_id and Idempotency-Key, then status reads while Upload-Post works in the background), the ledger.
+// Facebook groups are not here: they stay with Manus.
 //
 //   const posting = createPosting({ db, connections, env, fetch, now, log });
 //   await posting.publish(who, body)  → { status: 200, job }    (the job is `sending`; it finishes in the background)
-//   await posting.check(who, jobId)   → { job }                 ("Check again" on an `unknown` job: one read of the
-//                                                               post's status at Zernio)
+//   await posting.check(who, jobId)   → { job }                 ("Check again" on an `unknown` job: one read of
+//                                                               /uploadposts/status by the job id; never resends)
 //   await posting.job(who, jobId)     → { job }                 (a database read only)
 //   await posting.list(who, projectId)→ { jobs }
-//   await posting.fromWebhook(userId, jobId, outcome)            a post.* webhook's definite answer for a job
+//   await posting.fromWebhook(userId, jobId, outcome)            an upload_completed webhook's answer for a job
 //
 // What it never does: send a post twice by itself, use text from the request as the post (the post is re-read
 // from the user's account and must match), or put a token or a media link in a log.
@@ -82,7 +84,7 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
   const store = mediaStore ?? createMediaStore({ env, fetch });
   /** background runs, for tests (settled()) */
   const running = new Set();
-  /** a post.* webhook that arrived while this process was still posting that job: applied if the answer was unclear */
+  /** an upload_completed webhook that arrived while this process was still posting that job: applied if the answer was unclear */
   const early = new Map();
 
   async function statusFor(userId, platform, projectId) {
@@ -112,7 +114,7 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
     return { postsPerDay: pick('posts_per_day', DEFAULT_POST_CAPS.postsPerDay), xPostsPerDay: pick('x_posts_per_day', DEFAULT_POST_CAPS.xPostsPerDay), blocked: own.status === 'blocked' };
   }
 
-  /** Post a job that is `sending` (one attempt at Zernio), and record how it ended. Never throws, never resends. */
+  /** Post a job that is `sending` (one attempt at Upload-Post), and record how it ended. Never throws, never resends. */
   async function run({ userId, platform, composed, media, privacy }, row) {
     jobs.active.add(row.id);
     let outcome;
@@ -138,10 +140,10 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
     let finished = null;
     try {
       finished = await jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.ref ?? {} });
-      // our own answer was unclear (a timeout, a 5xx), but Zernio's webhook already said how it ended
+      // our own answer was unclear (a timeout, a 5xx), but Upload-Post's webhook already said how it ended
       const told = early.get(row.id);
       if (outcome.state === 'unknown' && told) {
-        finished = await jobs.finish(userId, row.id, { state: told.state, url: told.url, errorCode: told.errorCode, ref: told.postId ? { postId: told.postId } : undefined });
+        finished = await jobs.finish(userId, row.id, { state: told.state, url: told.url, errorCode: told.errorCode, ref: told.drafts ? { outcome: 'drafts' } : undefined });
         outcome = told;
       }
     } catch (e) {
@@ -186,7 +188,7 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       if (post.platform !== platform && !videoForYouTube) throw fail(409, 'POST_CHANGED', `This post is for ${NETWORK[post.platform] ?? 'another network'}. Save the post first.`);
       if (!contentMatches(post, body.content, platform)) throw fail(409, 'POST_CHANGED', 'The post changed since you opened it. Save the post first.');
 
-      if (!connections.enabled) throw fail(503, 'CONNECTIONS_NOT_ENABLED', 'Connecting accounts is coming soon. You can still post yourself and mark posts as posted.');
+      if (!connections.socialEnabled) throw fail(503, 'CONNECTIONS_NOT_ENABLED', 'Connecting accounts is coming soon. You can still post yourself and mark posts as posted.');
       const status = await statusFor(userId, platform, projectId);
       const problem = connectionProblem(platform, status);
       if (problem) throw problem;
@@ -247,7 +249,7 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       return { jobs: (await jobs.list(who.id, id)).map(jobOut) };
     },
 
-    /** "Check again" on an `unknown` job: one read of the post at Zernio, at most once per 30 s. Never resends. */
+    /** "Check again" on an `unknown` job: one status read at Upload-Post, at most once per 30 s. Never resends. */
     async check(who, jobId) {
       const userId = who.id;
       if (!isUuid(jobId)) throw fail(404, 'NOT_FOUND', 'No such post job.');
@@ -255,7 +257,7 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       const row = await jobs.byId(userId, jobId);
       if (!row) throw fail(404, 'NOT_FOUND', 'No such post job.');
       if (row.state !== 'unknown') return { job: jobOut(row) };
-      if (!connections.enabled) return { job: jobOut(row) };
+      if (!connections.socialEnabled) return { job: jobOut(row) };
       const claimed = await jobs.claimCheck(userId, row);
       let found = null;
       try {
@@ -269,28 +271,29 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       } catch {
         /* no tag: the check still answers */
       }
-      if (tag) await ledger({ customer_tag: tag, user_id: userId, project_id: row.project_id, call_id: row.id, vendor: 'zernio', endpoint: `${row.platform}:GET /v1/posts`, outcome: found?.found ? 'sent' : found?.failed ? 'failed' : 'unknown' });
+      if (tag) await ledger({ customer_tag: tag, user_id: userId, project_id: row.project_id, call_id: row.id, vendor: 'uploadpost', endpoint: `${row.platform}:GET /uploadposts/status`, outcome: found?.found ? 'sent' : found?.failed ? 'failed' : 'unknown' });
       if (!found) return { job: jobOut(claimed) };
-      if (found.found) return { job: jobOut(await jobs.finish(userId, row.id, { state: 'sent', url: found.url, ref: found.ref })) };
+      if (found.found) return { job: jobOut(await jobs.finish(userId, row.id, { state: 'sent', url: found.url, ref: found.drafts ? { ...(found.ref ?? {}), outcome: 'drafts' } : found.ref })) };
       if (found.failed) return { job: jobOut(await jobs.finish(userId, row.id, { state: 'failed', errorCode: found.errorCode ?? 'REFUSED', ref: found.ref })) };
       // still publishing, or not found yet: stays unknown (never "send again")
       return { job: jobOut((await jobs.byId(userId, row.id)) ?? claimed) };
     },
 
     /**
-     * A post.* webhook's definite answer for one of this user's jobs (routed by the customer's externalId, then
-     * the job id we put in the post's metadata). Only a job still `sending` or `unknown` changes.
+     * An upload_completed webhook's definite answer for one of this user's jobs (routed by the customer's profile
+     * name, then the request id, which is our job id). Only a job still `sending` or `unknown` on that platform changes.
      */
     async fromWebhook(userId, jobId, outcome) {
       if (!isUuid(userId) || !isUuid(jobId) || !outcome || !['sent', 'failed'].includes(outcome.state)) return null;
       const row = await jobs.byId(userId, jobId);
       if (!row || !['sending', 'unknown'].includes(row.state)) return null;
+      if (outcome.platform && outcome.platform !== row.platform) return null;
       // a job this process is still posting finishes from its own answer; this one is kept in case that is unclear
       if (row.state === 'sending' && jobs.active.has(row.id)) {
         early.set(row.id, outcome);
         return null;
       }
-      return jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.postId ? { postId: outcome.postId } : undefined });
+      return jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.drafts ? { outcome: 'drafts' } : undefined });
     },
 
     /** Startup: jobs a restart left `sending` become `unknown`. */

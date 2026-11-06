@@ -1,14 +1,15 @@
 // For the posting tests: the posting routes on a bare HTTP server with mock Supabase (database, storage, sign-in) and
-// the real Zernio connections against the mock Zernio server (server/test/mock-zernio.mjs). Fake values only.
+// the real Upload-Post connections against the mock Upload-Post server (server/test/mock-uploadpost.mjs). Fake values
+// only; nothing reaches Upload-Post.
 
 import http from 'node:http';
 import { createAuth } from '../auth.mjs';
-import { createConnections, nullConnections } from '../connections/index.mjs';
-import { createZernioConnections } from '../connections/zernio.mjs';
+import { combineConnections, createConnections, nullConnections } from '../connections/index.mjs';
+import { createUploadPostConnections } from '../connections/uploadpost.mjs';
 import { createDb } from '../integrations/db.mjs';
 import { createBucketLimiter, sha256 } from '../integrations/common.mjs';
 import { createMockSupabase } from '../test/mock-supabase.mjs';
-import { createMockZernio, TEST_ZERNIO_KEY, TEST_ZERNIO_WEBHOOK_SECRET } from '../test/mock-zernio.mjs';
+import { createMockUploadPost, TEST_UPLOAD_POST_KEY, TEST_UPLOAD_POST_WEBHOOK_SECRET } from '../test/mock-uploadpost.mjs';
 import { makeStorage } from '../test/fakes.mjs';
 import { createPostingRoutes } from './routes.mjs';
 import { createPublicMediaRoutes } from '../media/publicMedia.mjs';
@@ -50,23 +51,23 @@ function readJson(req, limit = 1 << 20) {
   });
 }
 
-/** Every network a test user has connected (zernio platform names). */
-export const NETWORKS = { facebook: 'facebook', instagram: 'instagram', linkedin: 'linkedin', tiktok: 'tiktok', x: 'twitter', youtube: 'youtube' };
+/** Every network a test user can connect. */
+export const NETWORKS = ['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube'];
 
 /** Everything a posting test needs, started. Call .close() after. */
 export async function startPosting({ env: envExtra = {}, enabled = true } = {}) {
   const supa = await (await createMockSupabase()).start();
-  const zernio = await createMockZernio().start();
+  const up = await createMockUploadPost().start();
   const clock = { t: Date.now() };
   const now = () => clock.t;
   const env = {
     SUPABASE_URL: supa.url,
     SUPABASE_SECRET_KEY: supa.SECRET,
     MEDIA_PUBLIC_BASE_URL: 'https://app.test',
-    ZERNIO_API_KEY: TEST_ZERNIO_KEY,
-    ZERNIO_WEBHOOK_SECRET: TEST_ZERNIO_WEBHOOK_SECRET,
-    ZERNIO_BASE_URL: zernio.apiBase,
-    ZERNIO_RPM: '10000',
+    UPLOAD_POST_API_KEY: TEST_UPLOAD_POST_KEY,
+    UPLOAD_POST_WEBHOOK_SECRET: TEST_UPLOAD_POST_WEBHOOK_SECRET,
+    UPLOAD_POST_BASE_URL: up.base,
+    UPLOAD_POST_RPM: '900',
     ...TEST_SECRETS,
     ...envExtra,
   };
@@ -75,8 +76,9 @@ export async function startPosting({ env: envExtra = {}, enabled = true } = {}) 
   const storage = makeStorage();
   const logs = [];
   const log = { log: (line) => logs.push(String(line)) };
-  const impl = enabled ? createZernioConnections({ env, storage, db, now, log }) : nullConnections;
-  const connections = createConnections(impl);
+  // status polling waits through `sleep`: the test clock moves instead of real time passing
+  const impl = enabled ? createUploadPostConnections({ env, storage, db, now, log, sleep: async (ms) => void (clock.t += ms) }) : nullConnections;
+  const connections = createConnections(enabled ? combineConnections({ social: impl }) : nullConnections);
   const limit = createBucketLimiter({ now });
   const deps = { auth, db, connections, send: sendLike, readJson, limit, env, now, log };
   const routes = createPostingRoutes(deps);
@@ -96,7 +98,7 @@ export async function startPosting({ env: envExtra = {}, enabled = true } = {}) 
 
   const ctx = {
     supa,
-    zernio,
+    up,
     db,
     env,
     impl,
@@ -111,19 +113,27 @@ export async function startPosting({ env: envExtra = {}, enabled = true } = {}) 
       const { token, user } = await supa.tokenFor(email);
       return { token, id: user.id, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' } };
     },
-    /** Connect networks for a user the way a customer does: a connect link, then Zernio's signed webhook. */
-    async connect(u, platforms = Object.keys(NETWORKS), { username = 'joesbakery' } = {}) {
+    /**
+     * Connect networks for a user the way a customer does: a connect link, the hosted page (mock), then Upload-Post's
+     * signed social_account_connected webhook. Facebook gets one Page.
+     */
+    async connect(u, platforms = NETWORKS, { username = 'joesbakery' } = {}) {
       const made = {};
       for (const platform of platforms) {
         await connections.connectLink(u.id, platform);
-        const doc = (await storage.get(`zernio:user:${sha256(u.id)}`)).value;
-        const account = zernio.addAccount({ platform: NETWORKS[platform], profileId: doc.profileId, username });
-        const evt = zernio.signed({ event: 'account.connected', profiles: zernio.profileRef(doc.profileId), account: { accountId: account._id, platform: NETWORKS[platform], username, displayName: `${username} on ${platform}` } });
+        const doc = (await storage.get(`uploadpost:user:${sha256(u.id)}`)).value;
+        if (platform === 'facebook') up.pages.facebook.set(doc.username, [{ id: `page_${doc.username.slice(4, 12)}`, name: `${username} page` }]);
+        const account = up.connect(doc.username, platform, { handle: username, display_name: `${username} on ${platform}` });
+        const evt = up.signed({ event: 'social_account_connected', profile_username: doc.username, platform }, { ts: Math.floor(clock.t / 1000) });
         const res = await impl.webhook(evt.raw, evt.headers);
         if (res.status !== 200) throw new Error(`connect webhook ${res.status}`);
         made[platform] = account;
       }
       return made;
+    },
+    /** The user's Upload-Post profile name. */
+    async profileOf(u) {
+      return (await storage.get(`uploadpost:user:${sha256(u.id)}`)).value.username;
     },
     async project(u, id = 'proj-1') {
       await db.upsert('user_docs', { user_id: u.id, kind: 'project', id, data: { id, name: 'Joe’s Bakery', location: { city: 'Austin' } } }, { onConflict: 'user_id,kind,id' });
@@ -167,13 +177,13 @@ export async function startPosting({ env: envExtra = {}, enabled = true } = {}) 
     async jobRow(id) {
       return (await db.select('post_publish_jobs', { id }))[0];
     },
-    /** POST /api/posting/publish calls Zernio received */
+    /** the uploads Upload-Post received */
     postCalls() {
-      return zernio.calls.filter((c) => c.method === 'POST' && c.path === '/api/v1/posts');
+      return up.uploadCalls();
     },
     async close() {
       await new Promise((r) => server.close(r));
-      await zernio.close();
+      await up.close();
       await supa.close();
     },
   };

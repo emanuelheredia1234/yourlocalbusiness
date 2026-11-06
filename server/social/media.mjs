@@ -1,10 +1,11 @@
 // A post's photo or video, as the posting code and the public media route reach it (spec §1.7 "Media").
 //
 // Files live in the private Supabase Storage bucket `media` at <userId>/<mediaId> (src/lib/cloud/media.ts). The
-// server reads them with the service key: a HEAD to check one exists (and its type and size), a GET for the
-// bytes it uploads to Zernio's storage before a post (server/connections/zernio.mjs, POST /media/presign).
+// server reads them with the service key: a HEAD to check one exists (and its type and size), and a GET for the
+// bytes (a file-upload fallback, unused for now).
 //
-// A short-lived public link is also available for anything that must fetch a file itself:
+// Upload-Post fetches a post's photo or video itself from a short-lived public link
+// (server/connections/uploadpost.mjs puts it in the upload's form, so MEDIA_URL_SECRET is needed to post media):
 // <base>/api/media/public/<token>, token = base64url(JSON{u,m,e,k}) + '.' + base64url(HMAC-SHA256(
 // MEDIA_URL_SECRET, payload)). 30 minutes for a photo, 2 hours for a video. The link only ever goes in a POST
 // body (never a query string, so it isn't in anyone's URL logs) and is never logged.
