@@ -95,31 +95,44 @@ network, so Instagram, TikTok, X and YouTube are one account per customer, share
 Facebook and LinkedIn each business picks its Page. Facebook groups stay with Manus.
 
 **Set it up once**
-1. Subscribe to Upload-Post's **Advanced** plan ($147/month, 75 profiles, white label). More profiles: the +25
-   ($65/month) or +50 ($115/month) add-on; they don't stack. There is **no sandbox**: every test post is real, so
-   make your own test profile with test social accounts for the first live check.
-2. app.upload-post.com → **API keys** → create a key. Paste it **only** into Replit Secrets as `UPLOAD_POST_API_KEY`.
-   A wrong key locks the server's address out for 5 minutes after 10 tries; the app stops for 60 s after one 401
-   and tells you.
-3. Notifications → webhook: URL `https://yourlocalbusiness.replit.app/api/webhooks/upload-post`, events
-   `upload_completed`, `social_account_connected`, `social_account_disconnected`, `social_account_reauth_required`.
+1. Subscribe to Upload-Post's **Advanced** plan, billed **yearly** ($1,411 a year, about $118 a month; $147 month
+   to month). It includes 75 profiles, white label and unlimited uploads. More profiles: the +25 ($650 a year or
+   $65 a month) or +50 ($1,150 a year or $115 a month) add-on; they don't stack, so past 125 profiles you need a
+   bigger plan or a second account. There is **no sandbox**: every test post is real, so make your own test
+   profile with test social accounts for the first live check.
+2. app.upload-post.com → **API keys** → create a key. Paste it **only** into Replit Secrets as
+   `UPLOAD_POST_API_KEY`; the app shows at most its last 4 characters. Upload-Post locks the server's address out
+   for 5 minutes after 10 tries with a wrong key, so after one refused key the app stops calling for 60 seconds
+   and tells you (Customer usage → "Social posting needs attention").
+3. Webhook (Upload-Post dashboard → Notifications → Webhook): register
+   `https://yourlocalbusiness.replit.app/api/webhooks/upload-post` and turn on the events `upload_completed`,
+   `social_account_connected`, `social_account_disconnected` and `social_account_reauth_required`.
 4. Copy the `whsec_…` webhook secret Upload-Post shows into Replit Secrets as `UPLOAD_POST_WEBHOOK_SECRET`. Each
    delivery is signed (`X-Upload-Post-Signature`, HMAC-SHA256 of `<timestamp>.<body>`); the app refuses unsigned
-   deliveries and ones more than 5 minutes old, and applies each event once. Upload-Post never sends a webhook
-   twice, so the app also reads post status and checks every profile once a day.
-5. Branding for the hosted connect page: `UPLOAD_POST_BRAND_LOGO_URL`, `UPLOAD_POST_CONNECT_TITLE`,
-   `UPLOAD_POST_CONNECT_DESCRIPTION`, `UPLOAD_POST_BACK_BUTTON_TEXT` (all sent on every link).
-6. Set `MEDIA_URL_SECRET` (Upload-Post fetches each photo and video from a short-lived link on this app).
-7. X: links in X posts are removed unless you buy Upload-Post's **X Links** add-on (50 link posts a month, shared
-   by all customers). X post stats are also a shared daily budget.
+   deliveries and ones more than 5 minutes old, and applies each event once. Upload-Post sends each webhook only
+   once and never retries, so the app also reads post status itself and checks every profile once a day.
+   Rotating: Upload-Post's new secret works at once, so put the old one in `UPLOAD_POST_WEBHOOK_SECRET_PREVIOUS`
+   for the switchover, then remove it.
+5. White label. The app sends the whole branding with every connect link (Upload-Post clears any field left
+   out): `UPLOAD_POST_BRAND_LOGO_URL` (an https link to your logo), `UPLOAD_POST_CONNECT_TITLE`,
+   `UPLOAD_POST_CONNECT_DESCRIPTION`, `UPLOAD_POST_BACK_BUTTON_TEXT`, the one network being connected, a light
+   theme and no calendar (the app has its own). Nothing to set in Upload-Post's dashboard for this.
+6. Set `MEDIA_URL_SECRET` (32+ random bytes): Upload-Post fetches each photo and video from a short-lived link on
+   this app, so no photo or video can be posted without it.
+7. X: links in X posts are removed unless you buy Upload-Post's **X Links** add-on ($19 a month or $152 a year,
+   50 link posts a month **shared by all customers**). X post stats are a shared daily budget too (5,000 posts a
+   day for the whole account).
 8. Your privacy notice must name Upload-Post's company, **TONVI TECH SL** (Spain), as a processor.
 9. Run the migrations in §2, redeploy, and check the startup notes say "Social accounts and posting: on
-   (Upload-Post)".
+   (Upload-Post)". Settings → Connected accounts then shows Connect on every social network.
 
 **What the app does with Upload-Post**
-- **Connect**: Settings → Connected accounts → Connect opens Upload-Post's hosted page (on app.upload-post.com)
-  for that one network, with your logo and text. Customers come back with its back button; the app sees the new
-  account from the webhook and reads the profile again when they return.
+- **Connect**: Settings → Connected accounts → Social accounts → Connect opens Upload-Post's hosted page (always
+  on app.upload-post.com; no custom domain) for that one network, with your logo and text. A fresh link is made
+  for every press (Upload-Post's links last 48 hours; the app never stores them). Customers come back with its
+  back button; the app sees the new account from the webhook and reads the profile again when they return.
+  **Reconnect** shows when a network asks the customer to sign in again; **Disconnect** removes that network
+  from their profile.
 - **Post**: one upload per post, with the job id as `request_id`, `Idempotency-Key` and `external_id`. Photos and
   videos go as the app's short-lived link. The network's own result decides; videos finish in the background and
   the app reads their status by the job id. A timeout or a 5xx reads "It may have been posted - check before
@@ -133,6 +146,21 @@ Facebook and LinkedIn each business picks its Page. Facebook groups stay with Ma
 - **Team-level problems never reach customers**: our key, the profile cap, a blocked profile, the scheduled-post
   cap and the shared X and analytics budgets show customers a plain "temporarily unavailable, we've been notified"
   and leave an owner alert (`uploadpost:alert`) and hint.
+
+**Limits to know**
+- **Profiles**: 75 on Advanced, one per customer who has pressed Connect (customers who never connect a social
+  account use none). With 5 or fewer left (`UPLOAD_POST_ALERT_REMAINING`) you get an alert; at 0 new customers
+  read "Social connections are temporarily full. We've been notified" until you add profiles. Deleting an account deletes its profile, and a daily check deletes `ylb_` profiles whose customer is gone (at
+  most 10 a day; profiles with other names are never touched).
+- **API rate**: 200 calls a minute and 1,000 per 10 minutes for the account, plus 2 a minute and 10 per 10 minutes
+  for each profile. The app keeps itself under `UPLOAD_POST_RPM` (150) plus the per-profile allowance, and waits
+  once on a 429 for reads; posts are never repeated.
+- **Per social account, per 24 hours**: Instagram 50, TikTok 15 (and 6 a minute), LinkedIn 150, YouTube 30,
+  Facebook 25 per Page, X 30, Threads 50, Pinterest 20. Over one, the post fails plainly ("This account has
+  reached the network's posting limit for now") and nothing is retried.
+- **Shared across all customers**: the X Links allowance (50 link posts a month) and X post stats (5,000 posts a
+  day); the analytics reads the app allows itself (80 per 5 minutes); 40,000 pending scheduled posts.
+- **Not supported by Upload-Post**: Facebook groups and personal profiles (groups stay with Manus), Reddit.
 
 ## 3a. Ad accounts (Zernio)
 
@@ -192,9 +220,11 @@ Upload-Post, Zernio and treg).
 
 ## 4. Platform approvals
 
-None are needed to start: Upload-Post's and Zernio's own apps are already approved on every network. Networks still apply their
-own rules to each account (for example, Instagram needs a professional account, Facebook posts go to a Page the
-customer manages, Meta Ads needs a Facebook Page, TikTok videos are public only on TikTok Business connections).
+None are needed to start: Upload-Post's apps (social) and Zernio's apps (ads) are already approved on every
+network. Networks still apply their own rules to each account (for example, Instagram needs a professional
+account, Facebook posts go to a Page the customer manages, Meta Ads needs a Facebook Page). TikTok only offers
+the audience settings the account allows; when TikTok limits the app, a post may land in the account's drafts,
+and the post then reads "Sent to your TikTok drafts. Open TikTok to publish it."
 
 **How posting works once an account is connected**
 - The customer presses **Post on Facebook** (or another network) and confirms. The app sends the post **once**.
@@ -302,45 +332,77 @@ forced to reconnect (drafts keep working), and only the Email Analytics tab asks
 
 ## 7. What customers see
 
-_Filled in by the app work (WP5, WP6): Settings → Connected accounts, the Update button, the Analytics tabs,
-posting buttons, and the owner's Customer usage page._
+### Settings → Connected accounts
 
-### Posting buttons (WP6)
+One screen with two sections:
+
+- **Social accounts** (Upload-Post): Facebook Page, Instagram, LinkedIn, TikTok, X, YouTube, and Pinterest as
+  "Coming soon". Each row shows its state and one action: **Connect** (opens the hosted sign-in page in a new
+  tab; the row reads "Waiting for Instagram…" with **Check** until the network answers, and "That didn't finish.
+  Try again." after 30 minutes), **Reconnect** when the network asks to sign in again, and a ⋯ menu on connected
+  rows (choose the Page for this business, check the connection, **Disconnect**). The "How connecting works" tip
+  says plainly that the sign-in page is run by Upload-Post, so its name shows there and on the network's
+  permission screen; one account per network serves all of a customer's businesses, and for Facebook and
+  LinkedIn each business picks its Page. A Page picked on the hosted page applies to every business; changing it
+  means reconnecting.
+- **Ad accounts** (Zernio): Google Ads, Meta Ads, LinkedIn Ads, TikTok Ads, Pinterest Ads, Reddit Ads, Microsoft
+  Ads, and X Ads as "Coming soon". Read only: "The app only reads them and never changes your ads or spends
+  money."
+- A side whose key isn't set says "Connecting social accounts isn't available yet" (or ad accounts) and shows no
+  Connect buttons; with both off, one note: "Connecting accounts is coming soon. You can still post yourself and
+  mark posts as posted."
+- **The owner** also sees an "Owner setup" box with the missing Secrets (names only), the steps for each side
+  that's off and the webhook address to register. Customers never see it.
+- Team-level problems (our key, the profile cap, plan limits) show customers only "temporarily unavailable,
+  we've been notified"; the owner sees the reason on Customer usage.
+- **Other integrations** appears only once Nango is set up and lists at least one integration (§3b).
+
+### Posting buttons and post status
 
 Every post shows one posting button, by its state:
 
 - **Post on Facebook** (or the post's network) when that account is connected. It opens a confirm window with the
   account, exactly what goes out, the image or video, where the link goes and the first comment. Nothing is sent
   until the customer confirms, and each confirm is one attempt.
-- **Posting…** while the server sends it, then **Posted** with **View post**.
-- **Try again** only when the network refused the post (nothing went out). It opens a new confirm.
-- **Check again** when the app couldn't confirm the post went out. It is a read-only check, and the post is never
-  sent again by itself. The customer can also **Mark as posted** or **Post it yourself**.
+- **Posting…** while the server sends it (a video can take up to 10 minutes), then **Posted** with **View post**.
+- **In TikTok drafts** when TikTok put the post in the account's drafts: "Sent to your TikTok drafts. Open TikTok
+  to publish it." It is never sent again.
+- **Try again** only when the network refused the post (nothing went out), with the reason in plain words (for
+  example "This looks the same as a recent post on this network", "This account has reached the network's posting
+  limit for now", "The connection to this account needs to be renewed"). It opens a new confirm.
+- **Check again** when the app couldn't confirm the post went out: "It may have been posted - check before
+  trying again." It is a read-only check (at most every 30 seconds) and the post is never sent again by itself.
+  The customer can also **Mark as posted** or **Post it yourself**.
 - **Post it yourself** when the account isn't connected: copy the text, download the image or video, open the
   network, then **Mark as posted**.
+- On X, a post with a link warns "The link may not show on X" (the X Links allowance is shared).
 
-Manus only posts in Facebook groups (**Post to groups** on a Facebook post). Posts sent with Manus by older
-versions show **Sent with Manus earlier**, read-only. There is no bulk send: each post is confirmed on its own.
-Nothing to set up for this beyond Upload-Post (§3) and Zernio (§3a).
+Scheduled posts stay on the app's own calendar; the app sends each one only when the customer presses **Post**
+and confirms. Manus only posts in Facebook groups (**Post to groups** on a Facebook post). Posts sent with Manus
+by older versions show **Sent with Manus earlier**, read-only. There is no bulk send.
 
-### Analytics, Settings and Customer usage (WP5)
+### Analytics and the Update button
 
 - **Marketing → Overview → Update** (top right, the only filled button there) fetches every source for the
   active business, once per 15 minutes. A row under the header shows Social, Ads, SEO and Email as they finish;
   after 5 minutes the button comes back and the row says "Still updating in the background". Nothing is retried
   by the app: a refusal (today's limit, nothing to update yet, too soon) shows as a Callout or a toast.
-- **Analytics tabs** on Social, Ads (Campaigns | Analytics), SEO page (Page | Analytics) and Email show the last
-  fetched numbers with their "as of" time and a 7/30-day range (remembered in the browser under
-  `ylb-analytics-range`). Competitors (up to 3) and keywords (up to 10) are edited in a drawer on the Ads and SEO
-  tabs. **Submit to Google** on the SEO tab is one confirmed press; Google decides when to index.
-- **Settings → Connected accounts** lists Social and Ads with each account's state (connected through Zernio).
-  Until `ZERNIO_API_KEY` is set it says "Connecting accounts is coming soon" and shows no Connect buttons; the
-  owner also sees which Replit Secret is missing (the name only). **Other integrations** appears only once Nango
-  is set up and lists at least one integration (§3b).
-- **Settings → AI keys → Analytics data costs**: each signed-in person's own usage against their caps, estimated
-  costs labelled. The owner also sees **Billing (owner)**, which opens **Customer usage**: per-customer totals,
-  caps (edit, block, reset), "Check against treg", and the monthly CSV. It tracks usage only; it charges nothing.
-- The artifact build shows "Connected accounts and live analytics need the full app" instead of any of this.
+- **Analytics tabs**: Social (a connected account's own stats from Upload-Post, otherwise public stats through
+  treg; "Reconnect to see your own stats" when a network asks), Ads (connected ad accounts from Zernio, plus up
+  to 3 competitors through treg), SEO page (treg and Search Console) and Email (Omnisend). Each shows the last
+  fetched numbers with their "as of" time and a 7/30-day range.
+
+### Customer usage (owner only)
+
+Settings → AI keys → **Billing (owner)** opens **Customer usage**: per customer, analytics cost (treg) today and
+over 30 days, analytics calls, **Social (Upload-Post)** (social accounts connected now, Upload-Post calls and the
+estimated profile cost) and **Ads (Zernio)** (ad accounts connected now and their estimate), caps (edit, block,
+reset) and status. Above the table: **Upload-Post profiles** used of the plan's limit and, when there is one,
+Upload-Post's last alert in plain words ("profiles are running low", "the API key was refused", …). Estimates
+never count toward a cap. "Check against treg" and the monthly CSV are unchanged. It tracks usage only; it
+charges nothing.
+
+The artifact build shows "Connected accounts and live analytics need the full app" instead of any of this.
 
 ## 8. What works on day one (no Upload-Post or Zernio key yet, no approvals)
 
@@ -356,4 +418,5 @@ Nothing to set up for this beyond Upload-Post (§3) and Zernio (§3a).
 **As soon as `UPLOAD_POST_API_KEY`, `UPLOAD_POST_WEBHOOK_SECRET` and `MEDIA_URL_SECRET` are set** (and the §2
 migrations run): customers connect their social accounts, post from the app after a confirm, and see their own
 stats. **With `ZERNIO_API_KEY` and `ZERNIO_WEBHOOK_SECRET`**: they connect ad accounts and see their ad results.
-Each side works without the other. No network approvals are needed: Upload-Post's and Zernio's apps are approved.
+Each side works without the other. No network approvals are needed: Upload-Post's apps (social) and Zernio's
+apps (ads) are already approved.
