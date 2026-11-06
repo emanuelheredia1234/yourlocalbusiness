@@ -802,6 +802,33 @@ key, the webhook secret, `APP_URL` and all 8 prices are in place, and says which
 **Rollback**: turn plans off (the same switch). Everything is ungated again at once; nothing is deleted, and turning
 them on again later doesn't restart the free days (they start at the first `enforced_at`).
 
+### In the app: attaching payment and where buy links go
+
+- **Settings → Payments** (signed in, self-hosted only): a card for **Live** and one for **Test mode** (Whop's
+  sandbox). Connected, it shows the account, the key's last 4 characters, whether sales updates arrive ("Receiving
+  sales", "Not confirmed yet", "Whop turned off sales updates" with **Turn back on**), the last sale update, **Check
+  again**, **Replace key** and **Disconnect** (a second confirm pauses the buy links that use it). The key and the
+  webhook secret are password fields, emptied after every try, success or not.
+- **Attach payment** (one dialog everywhere): pick one of the business's offers, or make one: **Whop** (product, then
+  plan; the price comes from Whop; one request id per dialog, so a double press makes one link; "Whop didn't
+  confirm the link yet" offers **Check again**) or **your own link** (address, price text, title; the hint says
+  whether buyers go straight there or see the "you're leaving" page first). Signed out, with offers off on the
+  server, or in the claude.ai build, the old plain link field shows instead.
+- **Where it's used:** an asset's **Payment** row (Code & assets: the AI then writes its Buy buttons as plain
+  `<a href="{{buy:<id>}}">` links, with no checkout of its own and no price but the offer's), the SEO page's
+  payment under **Page type** (the checkout page shows the offer's price), the listing's **Buy link** (the published
+  listing carries `https://<app>/b/<id>` and "Secure checkout on whop.com"), and an email's button (**Use a buy
+  link**). Pages hold the token `{{buy:<id>}}`; publishing asks the server which offers are the business's and
+  writes `/b/<id>` (relative, so a page on the customer's own domain stays there); any other id becomes `#`. The
+  in-app preview shows `#buy-preview`; a copy or export gets the full address. Published pages stay sandboxed: a Buy
+  button is a plain link.
+- **Studio → Listing & publish → Offers:** each offer with who takes the payment, Test mode, its state, clicks, live
+  sales and where it's used; **Copy link**, **Refresh from Whop** (re-reads the plan's price), **Pause**/**Resume**
+  and **Archive** (its link then says it's no longer available).
+- **Analytics → Sales:** live sales, revenue per currency (gross, refunds under it) and buy link clicks for the
+  range; Test mode sales only as a note; the sales list (Live/Test, CSV). Refunded, Partly refunded and "Disputed:
+  see Whop" come from Whop's events; refunds and disputes are handled in Whop.
+
 ### Money rules (what the code guarantees)
 
 - One money operation in flight per user (`billing_ops`); each Stripe write is sent once with a fixed Idempotency-Key

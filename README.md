@@ -34,7 +34,7 @@ Real:
 Not done by the app (it says so where it matters):
 - Sending email: you export the sequence to your email provider (Kit, Mailchimp, MailerLite…), which collects sign-ups and sends it. With Omnisend connected, the app can create campaign drafts there, which you review and send yourself (see "Omnisend: campaign drafts from the email sequence").
 - Paying for ads: ad spend is billed by Meta or Google to the customer's own payment method. The app can launch Meta and Google Search campaigns (once the owner turns it on, after a spend confirm with the amounts) and change them; TikTok and LinkedIn stay copy-and-export. The app never estimates reach or results.
-- Taking payments: buyers pay on each seller's own checkout link.
+- Taking payments: buyers pay on each seller's own Whop account or own checkout link, through the offer's buy link (see "Offers and buy links"). The app holds no money, charges no fee on Whop sales, and never refunds: refunds and disputes stay in Whop.
 
 ## AI: one AI, powered by your API keys
 
@@ -410,6 +410,27 @@ with your OK): run
 editing off) and Smart Retries; optionally Stripe Tax (`STRIPE_AUTOMATIC_TAX=1`); then Owner → Billing → Plans → Turn on plans. Turning plans off again is the rollback.
 Tests use `server/test/mock-stripe.mjs` and `server/test/mock-supabase.mjs` only.
 
+## Offers and buy links (Whop)
+
+One **offer** is one thing a business sells, with one permanent buy link, `https://<app>/b/<id>`. Self-hosted, signed
+in (never in the claude.ai build, which keeps the plain payment link fields):
+
+- **Settings › Payments:** connect your own Whop account in **Live** and/or **Test mode** (Whop's sandbox): an account
+  API key with the listed permissions and your `biz_…` id. The key is sent once and kept sealed on the server; you
+  only ever see its last 4 characters. The card says whether sales updates arrive, and offers Check again, Replace
+  key and Disconnect.
+- **Attach payment** on an asset (Code & assets › Payment), the SEO page (Page type, for checkout and showcase pages),
+  the listing's buy link and an email's button (Use a buy link): pick an offer, or make one from a Whop product and
+  plan (the price comes from Whop) or your own checkout link. Pages hold `{{buy:<id>}}`; publishing writes `/b/<id>`,
+  and Buy buttons are plain links (published pages run sandboxed).
+- **Studio › Listing & publish › Offers:** clicks, live sales and where each offer is used; Refresh from Whop, Pause,
+  Archive. **Analytics › Sales:** live sales, revenue per currency with refunds, buy link clicks, and the sales list
+  with CSV. Test mode is labelled everywhere and never counts as revenue.
+
+Owner setup (migration `supabase/migrations/20261113000000_offers.sql`, `PAYMENT_KEYS_SECRET`, `APP_PUBLIC_URL`, the
+webhook address `APP_PUBLIC_URL/api/webhooks/whop/<connection id>` and its seven events, and the sandbox check before
+going live): docs/integrations-setup.md, "Payments: offers and Whop".
+
 ## Scheduled jobs
 
 Replit Autoscale stops the app when it's idle, so nothing runs on a timer inside it. Supabase's pg_cron calls
@@ -474,7 +495,7 @@ npm run build:artifact      # dist-artifact/yourlocalbusiness.html (single file)
 
 Where to plug in real integrations:
 - Posting through the networks' own APIs instead of Manus: `startManusPost` in `src/ai/manusPost.ts` is the one place a post leaves the app.
-- Payments: sellers use their own checkout link (a listing's `buyUrl`). To take payments in the app, add Stripe Checkout on your server and record paid orders from its webhook.
+- Payments: each business sells through offers with permanent buy links (`/b/<id>`): the customer's own Whop account (Settings › Payments; sales come back through Whop's webhook) or their own checkout link. Stripe Connect is reserved for later (`PROVIDERS.stripe` in `server/offers/providers.mjs`). See docs/integrations-setup.md, "Payments: offers and Whop".
 - Email delivery: connect an email provider's API where the sequence is exported (`src/pages/marketing/email/PreviewPanel.tsx`).
 - Ads: push campaigns through the platforms' marketing APIs from `ExportPanel` in `src/pages/marketing/AdsEngine.tsx`.
 - Shared marketplace outside claude.ai: replace the Artifact database calls in `src/lib/community.ts` with your API.
