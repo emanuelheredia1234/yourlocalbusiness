@@ -107,6 +107,8 @@ export function createPostingRoutes(deps = {}) {
     async onStart() {
       if (db?.enabled) await posting.sweepAll();
     },
+    /** server/cron: the same sweep once an hour, each hourly tick (a warm server never restarts; nothing is re-sent). */
+    cronJobs: () => (db?.enabled ? [{ name: 'posting-sweep', everyMs: 60 * 60_000, run: () => posting.sweepAll() }] : []),
     // jobs go with the account (on delete cascade); nothing is held anywhere else
     async forgetUser() {},
     async unforgetUser() {},

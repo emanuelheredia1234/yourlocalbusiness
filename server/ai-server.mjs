@@ -37,7 +37,8 @@
 //   ZERNIO_BRAND_LOGO_URL, ZERNIO_BRAND_COLOR, ADS_LAUNCH_ENABLED ("1" lets customers launch ads and raise budgets;
 //   unset = off, pausing still works), ADS_HARD_MAX_DAILY (500), ADS_HARD_MAX_CHANGE (200), NANGO_INTEGRATIONS (JSON, booking tools and CRMs only), GSC_APP_PROPERTY
 //   (the app's own address; also where the back button on Upload-Post's connect page goes),
-//   GSC_APP_VERIFICATION_FILE; for tests UPLOAD_POST_BASE_URL, ZERNIO_BASE_URL, NANGO_BASE_URL, TREG_BASE_URL. Keys are never printed: the startup notes name what's missing.
+//   GSC_APP_VERIFICATION_FILE; CRON_SECRET (the bearer for POST /api/cron/tick, the same value as the Supabase Vault
+//   secret cron_secret; CRON_BUDGET_MS, 40000 by default, is one tick's time budget); for tests UPLOAD_POST_BASE_URL, ZERNIO_BASE_URL, NANGO_BASE_URL, TREG_BASE_URL. Keys are never printed: the startup notes name what's missing.
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -52,6 +53,7 @@ import { limitsFromEnv } from './limits.mjs';
 import { MIGRATION, appStateFromEnv } from './appState.mjs';
 import { pagesFromEnv } from './pages.mjs';
 import { createIntegrations } from './integrations/wiring.mjs';
+import { createCron } from './cron/index.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.resolve(here, '..', 'dist');
@@ -204,6 +206,11 @@ const integrations = createIntegrations({
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
   clientKey: (req) => pages.visitor(req),
 });
+// periodic jobs (server/cron): Supabase pg_cron calls POST /api/cron/tick hourly with "Authorization: Bearer
+// <CRON_SECRET>"; each job runs once per period behind an app_state claim. Local dev (no CRON_SECRET, not a Replit
+// deployment) ticks in-process instead.
+const cron = createCron({ storage: appState });
+for (const job of integrations.cronJobs()) cron.register(job);
 // keys and settings saved in Supabase (when its secret key is set) before the first request
 // (never more than a few seconds: a slow Supabase must not keep the app from starting)
 const settingsFrom = await Promise.race([ai.init(), new Promise((r) => setTimeout(() => r('slow'), 5000))]);
@@ -278,6 +285,7 @@ function route(req, res, url) {
       .then(async (ident) => ident && send(res, 200, { ok: true, ai: await ai.health(ident.who, req) }, corsHeaders(req)))
       .catch((e) => crashed(req, res, e));
   }
+  if (cron.match(url)) return void cron.handle(req, res, url, send).catch((e) => crashed(req, res, e));
   if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url).catch((e) => crashed(req, res, e));
   // connected accounts, the Upload-Post, Zernio and Nango webhooks (raw body), posting, public media links, analytics, SEO on Google, billing
   if (integrations.match(url)) return void integrations.handle(req, res, url).catch((e) => crashed(req, res, e));
@@ -348,8 +356,11 @@ server.listen(PORT, HOST, async () => {
   if (auth.enabled && pages.enabled) console.log('Lead forms: on (they need supabase/migrations/20261103050000_page_leads.sql in Supabase too; limits: LEADS_PER_IP_PER_HOUR, LEADS_PER_PAGE_PER_HOUR).');
   if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
   for (const line of integrations.notes()) console.log(line);
+  for (const line of cron.notes()) console.log(line);
   // the startup sweeps: stuck posting jobs and analytics runs, unsettled treg calls (never a resend)
   void integrations.start();
+  // local dev only: the periodic jobs tick in this process (on a deployment POST /api/cron/tick is the only driver)
+  cron.startLocal();
   if (!fs.existsSync(DIST)) console.log('No ./dist yet: run `npm run build` to serve the app from here, or use `npm run dev` (it proxies /api to this server).');
 });
 

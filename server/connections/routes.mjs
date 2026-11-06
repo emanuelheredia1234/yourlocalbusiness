@@ -214,14 +214,16 @@ export function createConnectionRoutes(deps = {}) {
     async userDeleted(userId) {
       await socialImpl?.userDeleted?.(userId);
     },
-    /** The monthly estimated rows per customer and Upload-Post's daily reconcile, on start and once a day. */
-    async onStart() {
-      const jobs = [socialImpl?.meterIfDue, socialImpl?.reconcileIfDue, adsImpl?.meterIfDue].filter((f) => typeof f === 'function');
-      if (!jobs.length) return;
-      const run = () => Promise.all(jobs.map((f) => f().catch(() => {})));
-      void run();
-      const t = setInterval(run, 24 * 3_600_000);
-      t.unref?.();
+    /**
+     * server/cron: the monthly estimated rows per customer (Upload-Post and Zernio) and Upload-Post's daily
+     * reconcile, once a day from the cron tick. Each also keeps its own app_state claim (per month / per UTC day).
+     */
+    cronJobs() {
+      const jobs = [];
+      if (typeof socialImpl?.meterIfDue === 'function') jobs.push({ name: 'uploadpost-meter', dailyAtUtc: '02:10', run: () => socialImpl.meterIfDue() });
+      if (typeof socialImpl?.reconcileIfDue === 'function') jobs.push({ name: 'uploadpost-reconcile', dailyAtUtc: '03:10', run: () => socialImpl.reconcileIfDue() });
+      if (typeof adsImpl?.meterIfDue === 'function') jobs.push({ name: 'zernio-meter', dailyAtUtc: '02:20', run: () => adsImpl.meterIfDue() });
+      return jobs;
     },
   };
 }

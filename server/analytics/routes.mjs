@@ -77,6 +77,8 @@ export function createAnalyticsRoutes(deps = {}) {
     async onStart() {
       if (db?.enabled) await sweepStuckRuns(db, now());
     },
+    /** server/cron: the same sweep once an hour, each hourly tick (never re-run). */
+    cronJobs: () => (db?.enabled ? [{ name: 'analytics-sweep', everyMs: 60 * 60_000, run: async () => ({ ended: await sweepStuckRuns(db, now()) }) }] : []),
     // analytics rows go with the account (on delete cascade); nothing is held anywhere else
     async forgetUser() {},
     async unforgetUser() {},

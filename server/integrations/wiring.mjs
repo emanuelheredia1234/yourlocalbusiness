@@ -10,6 +10,7 @@
 //                                                        (409 ADS_LIVE while a launched campaign is on, unless acked)
 //   integrations.userDeleted(id)                         after it was deleted (e.g. the ledger keeps its rows)
 //   integrations.start()                                 the startup sweeps (stuck jobs, stuck runs, pending rows)
+//   integrations.cronJobs()                              the periodic jobs for server/cron (POST /api/cron/tick)
 //   integrations.notes()                                 startup lines: what's on, which Secrets are missing (names)
 //
 // Routes (server/integrations/contracts.mjs ROUTE_PREFIXES):
@@ -28,7 +29,7 @@
 // Each module's factory gets the same deps: { auth, storage (appState), db (server/integrations/db.mjs),
 // connections, treg, omnisend, send, readJson, readRaw, rateLimited, limit, corsHeaders, sameOrigin,
 // clientKey, env, fetch, now, log } and returns { handle(req, res, url) → boolean, forgetUser?, unforgetUser?,
-// userDeleted?, onStart? }. The webhook and media paths are never logged as they are (redactPath), and nothing
+// userDeleted?, onStart?, cronJobs? }. The webhook and media paths are never logged as they are (redactPath), and nothing
 // here reads a request body: the module does (readRaw for the webhook, whose HMAC covers the exact bytes).
 //
 // Connected accounts are two sides (the owner's choice): social networks, posting and social stats through
@@ -238,6 +239,22 @@ export function createIntegrations({
           safeLog('integration_start_failed', { module: name, error: e?.name || 'Error', code: e?.code }, log);
         }
       }
+    },
+
+    /**
+     * The periodic jobs each module asks for (server/cron registers them; POST /api/cron/tick runs them): the treg
+     * settle, Upload-Post's and Zernio's daily metering and reconcile, and the stuck-job sweeps.
+     */
+    cronJobs() {
+      const out = [];
+      for (const [name, m] of Object.entries(modules)) {
+        try {
+          out.push(...(m.cronJobs?.() ?? []));
+        } catch (e) {
+          safeLog('integration_cron_jobs_failed', { module: name, error: e?.name || 'Error' }, log);
+        }
+      }
+      return out;
     },
 
     /** What to print at startup: what's on and which Secrets are missing, by name only. */

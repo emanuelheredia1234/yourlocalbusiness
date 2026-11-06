@@ -6,7 +6,7 @@
 // shifted back a day, or reaching into today). Pending rows not settled yet are listed apart, never as
 // mismatches. For a mismatched customer, up to 20 of our call ids are looked up at treg to find the gap.
 //
-// settlePending(): every 5 minutes, for 'pending' rows older than 2 minutes, GET /calls/<id> (a read). When treg
+// settlePending(): every hour (cron tick), for 'pending' rows older than 2 minutes, GET /calls/<id> (a read). When treg
 // has settled it, a correcting row (outcome 'settled', cost = charged − reserved, same call_id) is written.
 // The shape of /calls/<id> is UNVERIFIED (treg-digest §7): charged_micro is read from `ledger.charged_micro`,
 // then `charged_micro`; a call still pending (or with no charge yet) is left for the next round.
@@ -145,7 +145,7 @@ export async function settlePending({ ledger, admin, now = () => Date.now(), log
     } catch (e) {
       safeLog('billing_settle_failed', { kind: e?.kind }, log);
       // a refusal about this one call (a bad id, treg refusing that lookup) mustn't stall every other row;
-      // treg busy, down or the token refused: stop this round and try again in 5 minutes
+      // treg busy, down or the token refused: stop this round and try again at the next tick
       if (e?.kind === 'bad_request' || e?.kind === 'not_found') continue;
       break;
     }

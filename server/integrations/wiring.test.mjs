@@ -275,6 +275,34 @@ describe('startup', () => {
     expect(log.log.mock.calls.map((c) => c[0]).join('\n')).toContain('integration_start_failed');
   });
 
+  it('collects every module’s cron jobs; a module that throws doesn’t stop the others', () => {
+    const r = recorder();
+    r.factories.billing = vi.fn(() => ({ handle: async () => false, cronJobs: () => [{ name: 'treg-settle', everyMs: 3_600_000, run() {} }] }));
+    r.factories.posting = vi.fn(() => ({
+      handle: async () => false,
+      cronJobs() {
+        throw new Error('nope');
+      },
+    }));
+    r.factories.ads = vi.fn(() => ({ handle: async () => false, cronJobs: () => [{ name: 'ads-sweep', everyMs: 3_600_000, run() {} }] }));
+    const log = { log: vi.fn() };
+    const integrations = createIntegrations({ env: {}, send: sendLike, factories: r.factories, log, db: { enabled: false } });
+    expect(integrations.cronJobs().map((j) => j.name)).toEqual(['treg-settle', 'ads-sweep']);
+    expect(log.log.mock.calls.map((c) => c[0]).join('\n')).toContain('integration_cron_jobs_failed');
+  });
+
+  it('the real modules ask for the treg settle, the daily metering and reconcile, and the sweeps (no timers of their own)', () => {
+    const env = { UPLOAD_POST_API_KEY: 'up_test_key_xyz_000', ZERNIO_API_KEY: 'sk_test_zernio_key_xyz', TREG_TOKEN: 'test-treg-token-xyz', TREG_ADMIN_TOKEN: 'test-treg-admin-token', TREG_ORG_ID: 'org_test', CUSTOMER_TAG_SECRET: 'test-customer-tag-secret-0123456789' };
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    const integrations = createIntegrations({ env, send: sendLike, db: { enabled: true, select: async () => [], insert: async () => [], update: async () => [], upsert: async () => [], remove: async () => [] }, appState: { enabled: false } });
+    const names = integrations.cronJobs().map((j) => j.name);
+    expect(names).toEqual(expect.arrayContaining(['treg-settle', 'uploadpost-meter', 'uploadpost-reconcile', 'zernio-meter', 'posting-sweep', 'analytics-sweep', 'ads-sweep']));
+    // pg_cron ticks hourly on the deployment: a shorter period would promise a cadence that never happens
+    for (const j of integrations.cronJobs()) if (j.everyMs !== undefined) expect(j.everyMs, j.name).toBeGreaterThanOrEqual(3_600_000);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
   it('names what is missing and never prints a value', () => {
     const secrets = { ZERNIO_API_KEY: 'sk_test_zernio_key_xyz', UPLOAD_POST_API_KEY: 'up_test_key_xyz_000', TREG_TOKEN: 'test-treg-token-xyz', TREG_ADMIN_TOKEN: 'test-treg-admin-token', CUSTOMER_TAG_SECRET: 'test-customer-tag-secret-0123456789' };
     const integrations = createIntegrations({ env: secrets, send: sendLike, db: { enabled: false } });
@@ -371,7 +399,7 @@ describe('ai-server.mjs with the integrations', () => {
   let child;
   let base;
   let output = '';
-  const FAKE = { TREG_TOKEN: 'test-treg-token-0001', TREG_ADMIN_TOKEN: 'test-treg-admin-0002', CUSTOMER_TAG_SECRET: 'test-customer-tag-secret-0003', MEDIA_URL_SECRET: 'test-media-url-secret-0004' };
+  const FAKE = { CRON_SECRET: 'test-cron-secret-0005-abcdef', TREG_TOKEN: 'test-treg-token-0001', TREG_ADMIN_TOKEN: 'test-treg-admin-0002', CUSTOMER_TAG_SECRET: 'test-customer-tag-secret-0003', MEDIA_URL_SECRET: 'test-media-url-secret-0004' };
 
   beforeAll(async () => {
     supa = await (await createMockSupabase()).start();
@@ -478,6 +506,21 @@ describe('ai-server.mjs with the integrations', () => {
     for (const v of Object.values(FAKE)) expect(output).not.toContain(v);
     expect(output).toContain('Social accounts and posting: off.');
     expect(output).toContain('20261105000000_integrations.sql');
+  });
+
+  it('POST /api/cron/tick: 401 without the bearer, then runs the due jobs once per period', async () => {
+    expect((await fetch(`${base}/api/cron/tick`, { method: 'POST' })).status).toBe(401);
+    expect((await fetch(`${base}/api/cron/tick`, { method: 'POST', headers: { authorization: 'Bearer wrong' } })).status).toBe(401);
+    expect((await fetch(`${base}/api/cron/tick`, { headers: { authorization: `Bearer ${FAKE.CRON_SECRET}` } })).status).toBe(405);
+    const first = await (await fetch(`${base}/api/cron/tick`, { method: 'POST', headers: { authorization: `Bearer ${FAKE.CRON_SECRET}`, 'content-type': 'application/json' }, body: '{}' })).json();
+    expect(first.ok).toBe(true);
+    const names = first.jobs.map((j) => j.name);
+    expect(names).toEqual(expect.arrayContaining(['treg-settle', 'posting-sweep', 'analytics-sweep', 'ads-sweep']));
+    expect(first.jobs.find((j) => j.name === 'posting-sweep').status).toBe('ran');
+    const second = await (await fetch(`${base}/api/cron/tick`, { method: 'POST', headers: { authorization: `Bearer ${FAKE.CRON_SECRET}` } })).json();
+    expect(second.jobs.find((j) => j.name === 'posting-sweep')).toMatchObject({ status: 'skipped', reason: 'done' });
+    expect(output).toContain('Scheduled jobs (');
+    expect(output).not.toContain(FAKE.CRON_SECRET);
   });
 
   it('leaves /sitemap.xml and /robots.txt to the app until the sitemap module answers them', async () => {

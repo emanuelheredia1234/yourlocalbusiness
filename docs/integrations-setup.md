@@ -46,6 +46,7 @@ name only.
 | `ADS_REVIEW_SECRET` | Signs each ad launch or change review, so what is sent is exactly what the customer confirmed (§3c) | 32+ random bytes. Unset, the app derives one from `CUSTOMER_TAG_SECRET`. Changing it only makes open reviews stale. |
 | `TREG_TOKEN` | Analytics data, competitor ads, Google rank, Search Console | A **member-role agent token** (`treg org agent-new ylb-app`). Not your own dashboard key. |
 | `TREG_ADMIN_TOKEN` | Customer caps and the usage check against treg (billing only) | Admin-role agent token; only a team owner can make one. |
+| `CRON_SECRET` | The bearer for `POST /api/cron/tick`, which runs the scheduled jobs (§2a) | 32+ random bytes (`openssl rand -hex 32`). The **same value** goes into the Supabase Vault secret `cron_secret`. Unset on the published app, no scheduled job runs (the tick answers 503 NOT_SET_UP). |
 | `NANGO_SECRET_KEY` | Optional, later: other integrations (booking tools, CRMs) | Leave unset until you add one (§3b). |
 | `NANGO_WEBHOOK_SIGNING_KEY` | Optional, with Nango only | |
 | `NANGO_WEBHOOK_SIGNING_KEY_PREVIOUS` | Only while rotating Nango's signing key | Remove it once Nango signs with the new one. |
@@ -78,6 +79,7 @@ Plain settings (not secret; Replit Secrets or env):
 | `ZERNIO_BRAND_LOGO_URL` | — | An https link to a square logo for that screen. |
 | `ZERNIO_BRAND_COLOR` | — | Its button colour, `#RRGGBB`. |
 | `NANGO_INTEGRATIONS` | — | Only with Nango (§3b): JSON of the integrations customers may connect. |
+| `CRON_BUDGET_MS` | `40000` | How long one cron tick may run jobs before it answers (§2a); a job still running then finishes in the background. |
 | `GSC_APP_PROPERTY` | — | `https://yourlocalbusiness.replit.app/` once that Search Console property is verified. Its host is also the app's own address for the back button on Upload-Post's connect page (unset: `https://yourlocalbusiness.replit.app`), so set it to the app's real address if that ever changes. |
 | `GSC_APP_VERIFICATION_FILE` | — | Google's HTML verification file name, e.g. `google1a2b3c4d5e6f7a8b.html`. |
 
@@ -94,12 +96,52 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    (vendor `uploadpost`).
 4. `supabase/migrations/20261108000000_ads_launch.sql`: launched ad campaigns, their jobs and audit log, each
    business's chosen ad account, and the owner's ad limits (`ad_limits`; ads start **off** for everyone).
+5. `supabase/migrations/20261109000000_cron_tick.sql`: turns on pg_cron and pg_net and schedules the hourly call to
+   `POST /api/cron/tick` (§2a). Create the Vault secret first (§2a, step 2).
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices. Their ad accounts are disconnected at Zernio first (every account in their Zernio profile, then the
 profile). Their Upload-Post profiles (one per business, with every social connection in them) are deleted once the
 account itself is gone, so a deletion that stops half way loses no connection; if a delete fails, the daily check
 finishes it. Deleting one business in the app deletes that business's profile right away.
+
+## 2a. Scheduled jobs (the cron tick)
+
+Replit Autoscale stops the app when nobody uses it, so the app can't wake itself for periodic work. Supabase does it
+instead: **pg_cron** calls `POST https://yourlocalbusiness.replit.app/api/cron/tick` at minute 7 of every hour
+through **pg_net**, with `Authorization: Bearer <CRON_SECRET>`. Each tick runs the jobs that are due (`server/cron/`):
+
+| Job | How often | What it does |
+|---|---|---|
+| `treg-settle` | hourly (each tick) | Asks treg what slow ("pending") calls finally cost and adds the correcting ledger rows (§5) |
+| `uploadpost-meter` | daily from 02:10 UTC | Last month's estimated Upload-Post profile rows per customer (once per month) |
+| `zernio-meter` | daily from 02:20 UTC | Last month's estimated Zernio rows per customer (once per month) |
+| `uploadpost-reconcile` | daily from 03:10 UTC | The Upload-Post daily check (§3): accounts against our records, the profile cap, cleanup |
+| `posting-sweep`, `analytics-sweep`, `ads-sweep` | hourly (each tick) | Posts, analytics runs and ad changes left "sending"/"running" by a restart become "unknown"/ended; nothing is re-sent |
+
+Each job runs **at most once per period**: the run is claimed first in `app_state` (one row per job), so a repeated
+call, a slow pg_net retry or two copies of the app never run it twice. A job that fails is recorded and waits for
+its next period; it is never retried in the same one. A tick stops starting jobs after `CRON_BUDGET_MS` (40 s) and
+answers with a JSON summary (`ran`, `failed`, each job's `status`: `ran`, `skipped` with a reason, `failed` with an
+error code, or `running`). The secret is compared in constant time and never logged or shown.
+
+**Owner steps (once):**
+1. Make a secret: `openssl rand -hex 32`. Put it in Replit Secrets as `CRON_SECRET` (workspace and deployment) and
+   republish.
+2. In Supabase → SQL Editor, store **the same value** in Vault (never in a file or a chat):
+   `select vault.create_secret('<the CRON_SECRET value>', 'cron_secret', 'Bearer for POST /api/cron/tick');`
+3. Run `supabase/migrations/20261109000000_cron_tick.sql` (safe to run again; it replaces the `ylb-cron-tick` job).
+4. Check it after the next hour: `select * from cron.job_run_details order by start_time desc limit 5;` and
+   `select status_code, left(content, 200) from net._http_response order by created desc limit 5;` (200 with
+   `"ok":true`). 401 means the two values differ; 503 means `CRON_SECRET` isn't on the published app.
+
+To rotate: `select vault.update_secret((select id from vault.secrets where name = 'cron_secret'), '<new>');`, then
+the new value in `CRON_SECRET`, then republish (ticks in between answer 401 and simply run next hour).
+
+**Running it yourself:** `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://yourlocalbusiness.replit.app/api/cron/tick`
+(harmless: what already ran this period is skipped). **Local dev:** without `CRON_SECRET` and outside a Replit
+deployment (`REPLIT_DEPLOYMENT` unset), the server ticks itself every minute, so nothing needs setting up. On the
+published app the tick is the only driver.
 
 ## 3. Social accounts and posting (Upload-Post)
 
@@ -442,7 +484,8 @@ estimated costs of connected accounts and X posts are shown, labelled estimated,
 Several calls at once can go over a cap by about one call each, so each customer runs at most 4 at a time.
 
 **Slow answers.** A treg answer that is still running after a minute comes back as "pending": it is never sent
-again. Every 5 minutes the server asks treg what it finally charged and adds a correcting ledger row. The same
+again. The `treg-settle` job (once an hour, run by the hourly cron tick, §2a; and once when the server starts)
+asks treg what it finally charged and adds a correcting ledger row. The same
 goes for a call our server gave up waiting on whose one repeat found it still running at treg (whether treg
 names the call in that answer is to be confirmed on the first live check). Calls still unsettled after 7 days
 are no longer asked about; they stay listed as pending in the check against treg.
@@ -631,3 +674,26 @@ migrations run): customers connect each business's social accounts, post from th
 each business's own stats. **With `ZERNIO_API_KEY` and `ZERNIO_WEBHOOK_SECRET`**: they connect ad accounts and see their ad results.
 Each side works without the other. No network approvals are needed: Upload-Post's apps (social) and Zernio's
 apps (ads) are already approved.
+
+## 9. Owner checklist: before paid plans (P0)
+
+These start the things later phases wait on. None of them charges anyone.
+
+1. **Cron tick** (§2a): `CRON_SECRET` in Replit Secrets, the same value as the Vault secret `cron_secret`, then
+   run `supabase/migrations/20261109000000_cron_tick.sql` and check the first tick.
+2. **Stripe Sandbox**: in the Stripe Dashboard, create a Sandbox for "Your Local Business". Put its **secret key**
+   (`sk_test_…`) in the Replit **workspace** Secrets only (Tools → Secrets in the workspace, not the deployment) as
+   `STRIPE_SECRET_KEY`. The live key comes later (P1), as a restricted key in the deployment Secrets. Never paste a
+   key anywhere else; the app only ever shows its last 4 characters. Tests use `server/test/mock-stripe.mjs` and
+   never call Stripe.
+3. **Google OAuth verification for `gmail.send`** (needed for outreach from the customer's own Gmail, P10): in
+   Google Cloud Console → APIs & Services → OAuth consent screen, add the `https://www.googleapis.com/auth/gmail.send`
+   scope, the privacy policy and terms links and the app's domain, then submit for verification. It is a
+   sensitive scope (not restricted): Google reviews the app and a demo video; it can take a few weeks, so start now.
+4. **Microsoft publisher verification** (for `Mail.Send` from Outlook, P10): in Microsoft Entra → App registrations,
+   link the app to a verified Microsoft Partner Network ID (Publisher verification), so customers see a verified
+   publisher instead of "unverified" on the consent screen.
+5. **Stripe Connect platform profile** (sellers take payments, P6): in the Stripe Dashboard → Connect → Get started,
+   fill in the platform profile (what the platform does, who the sellers are, that sellers own their Stripe
+   accounts and see the full Stripe Dashboard, that Stripe collects its fees from the seller and sellers carry
+   negative balances). Don't enable live charges yet.
