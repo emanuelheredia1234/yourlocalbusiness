@@ -886,7 +886,7 @@ const noDns = async () => {
 };
 
 /** pages.mjs behind a bare server, routed like ai-server.mjs (with room for very long headers). */
-async function startPages({ mock, secretKey, distDir = '', resolveTxt = noDns, lookupLimits, tuning, fetch: fetchImpl }) {
+async function startPages({ mock, secretKey, distDir = '', resolveTxt = noDns, lookupLimits, tuning, fetch: fetchImpl, billing }) {
   const auth = createAuth({ supabaseUrl: mock.url, publishableKey: mock.PUBLISHABLE });
   const send = (res, status, body, headers = {}) => {
     res.writeHead(status, { 'content-type': 'application/json', ...headers });
@@ -902,7 +902,7 @@ async function startPages({ mock, secretKey, distDir = '', resolveTxt = noDns, l
       req.on('end', () => resolve(JSON.parse(raw || '{}')));
     });
   const whoIs = async (req) => (req.headers.authorization ? { who: await auth.identify(req) } : { who: null });
-  const pages = createPages({ supabaseUrl: mock.url, secretKey, auth, whoIs, send, readJson, distDir, resolveTxt, ...(lookupLimits ? { lookupLimits } : {}), ...(tuning ? { tuning } : {}), ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+  const pages = createPages({ supabaseUrl: mock.url, secretKey, auth, whoIs, send, readJson, distDir, resolveTxt, ...(lookupLimits ? { lookupLimits } : {}), ...(tuning ? { tuning } : {}), ...(fetchImpl ? { fetch: fetchImpl } : {}), ...(billing ? { billing } : {}) });
   const server = http.createServer({ maxHeaderSize: 1024 * 1024 }, async (req, res) => {
     const url = new URL(`http://local${req.url}`);
     if (!pages.isAppHost(req)) return pages.serveDomain(req, res, url);
@@ -1631,5 +1631,41 @@ describe('helpers', () => {
     expect(imageTypeOf(WEBP)).toBe('image/webp');
     expect(imageTypeOf(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>'))).toBeNull();
     expect(imageTypeOf(Buffer.alloc(4))).toBeNull();
+  });
+});
+
+describe('plans (spec §A6.6): pages after a plan ends, and publishing needs an active plan', () => {
+  it('serves until 30 days after the plan ended, then 410; publishing on a paused plan is 402; billing errors fail open', async () => {
+    const plan = { until: null, paused: false, broken: false };
+    const billing = {
+      pagesServeUntil: async () => {
+        if (plan.broken) throw new Error('db down');
+        return plan.until;
+      },
+      requireActive: async () => {
+        if (plan.paused) throw Object.assign(new Error('This needs a plan. Choose one to keep going.'), { status: 402, code: 'PLAN_REQUIRED', extra: { need: { feature: 'publish' } } });
+        return null;
+      },
+    };
+    const s = await startPages({ mock: supa, secretKey: supa.SECRET, billing });
+    try {
+      const put = (fields) => s.api(`/api/pages/${encodeURIComponent('seo:plan1')}`, { who: alice, method: 'PUT', body: { kind: 'seo', title: 'Plan', html: '<p>plan page</p>', images: [], slug: 'alice-plan-page', ...fields } });
+      expect((await put()).status).toBe(200);
+      expect((await request(s.base, '/alice-plan-page')).status).toBe(200);
+      plan.until = new Date(Date.now() + 86_400_000).toISOString();
+      expect((await request(s.base, '/alice-plan-page')).status).toBe(200);
+      plan.until = new Date(Date.now() - 1000).toISOString();
+      const gone = await request(s.base, '/alice-plan-page');
+      expect(gone.status).toBe(410);
+      expect(gone.text).toContain('This page is no longer available.');
+      plan.broken = true;
+      expect((await request(s.base, '/alice-plan-page')).status).toBe(200);
+      plan.paused = true;
+      const refused = await put({ title: 'Again' });
+      expect(refused.status).toBe(402);
+      expect(await refused.json()).toMatchObject({ code: 'PLAN_REQUIRED', upgrade: '#plans' });
+    } finally {
+      await s.close();
+    }
   });
 });

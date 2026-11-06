@@ -23,9 +23,13 @@ export function createAnalyticsRoutes(deps = {}) {
   async function route(req, res, url, who) {
     const p = url.pathname;
     if (p === `${PREFIX}refresh` && req.method === 'POST') {
+      // a paused plan refuses before any vendor call (402 PLAN_REQUIRED / PAYMENT_REQUIRED; a no-op without plans)
+      await deps.billing?.requireActive?.(who, 'analytics');
       if (kit.limited(req, res, { bucket: 'analytics-refresh' }, who.id)) return;
       const body = await kit.body(req);
       const projectId = projectIdFrom(body.projectId);
+      // a business that's locked on the plan (over its limit) refreshes nothing
+      await deps.billing?.requireSlot?.(who, projectId);
       const sources = body.sources === undefined ? undefined : Array.isArray(body.sources) ? body.sources.map(String) : [];
       const run = await refresher.start(who, projectId, sources);
       return kit.reply(req, res, 202, { run });

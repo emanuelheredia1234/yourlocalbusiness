@@ -128,6 +128,15 @@ export const API_ERROR_CODES = Object.freeze([
   'UNAVAILABLE',
   'RATE_LIMITED',
   'BAD_REQUEST',
+  // plans and billing (server/billing/stripe.mjs)
+  'PLAN_REQUIRED',
+  'PAYMENT_REQUIRED',
+  'CREDITS_USED',
+  'ALREADY_SUBSCRIBED',
+  'CARD_DECLINED',
+  'BILLING_PENDING',
+  'OWNER_PLAN',
+  'NOT_ALLOWED_ON_PLAN',
 ]);
 
 /** The route prefixes the server hands to the integration modules (server/integrations/wiring.mjs). */
@@ -143,6 +152,7 @@ export const ROUTE_PREFIXES = Object.freeze({
   seoGoogle: '/api/seo/google/',
   billing: '/api/billing/',
   ads: '/api/ads/',
+  stripeWebhook: '/api/webhooks/stripe',
 });
 
 /** Rate-limit buckets (per user unless noted), as `${bucket}:user:<id>` keys for rateLimited(key, factor). */
@@ -163,4 +173,6 @@ export const RATE_BUCKETS = Object.freeze({
   adsStop: 'ads-stop', // 120 per hour (pause and end only: stopping is never throttled by ads-write)
   adsCheck: 'ads-check', // 1 per job per 30 s + 60 per hour
   adsRefresh: 'ads-refresh', // 1 per business per 5 minutes
+  billingWrite: 'billing-write', // 20 per hour (checkout, portal, businesses, plan changes)
+  stripeWebhook: 'stripe-webhook', // 600 per minute per IP
 });

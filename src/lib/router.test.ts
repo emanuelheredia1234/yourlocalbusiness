@@ -1,7 +1,7 @@
 // The link back from Upload-Post's connect page: /?settings=accounts#workspace-settings opens Settings → Connected
 // accounts once, and the address loses the parameter.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { takeSettingsSection } from './router';
+import { ROUTES, takeSettingsSection } from './router';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -26,5 +26,12 @@ describe('takeSettingsSection', () => {
     expect(takeSettingsSection()).toBeNull();
     at('?settings=%3Cscript%3E');
     expect(takeSettingsSection()).toBeNull();
+  });
+});
+
+describe('routes', () => {
+  it('has #plans, and never a word claude.ai reserves (upgrade, settings, …)', () => {
+    expect(ROUTES).toContain('plans');
+    for (const reserved of ['upgrade', 'settings', 'sidebar', 'customize', 'downloads']) expect(ROUTES as readonly string[]).not.toContain(reserved);
   });
 });

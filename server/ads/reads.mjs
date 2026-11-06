@@ -163,7 +163,7 @@ async function canLaunchFor(ctx, who, tag) {
   if (!tag) return false;
   const lim = await ctx.limits.effective(tag);
   if (switchesProblem(lim, ctx.env)) return false;
-  return (await ctx.canLaunchAds(who.id, ctx)) === true;
+  return (await ctx.canLaunchAds(who.id, who)) === true;
 }
 
 /** PUT /api/ads/accounts/choice {projectId, platform, adAccountRef} */

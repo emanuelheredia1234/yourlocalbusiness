@@ -228,7 +228,7 @@ export function accountsDiffer(prof, social) {
  * CUSTOMER_TAG_SECRET, MEDIA_URL_SECRET (posts with a photo or video), GSC_APP_PROPERTY (the app's address, for the
  * connect page's back button). storage: appState. db: server/integrations/db.mjs. client, sleep: for tests.
  */
-export function createUploadPostConnections({ env = process.env, fetch = globalThis.fetch, now = () => Date.now(), storage = null, db = null, log = console, client = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+export function createUploadPostConnections({ env = process.env, fetch = globalThis.fetch, now = () => Date.now(), storage = null, db = null, log = console, client = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), billing = null } = {}) {
   const storageReady = storage?.enabled === true;
   const dbReady = db?.enabled === true;
   const log_ = (event, fields) => safeLog(event, fields, log);
@@ -241,8 +241,21 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   };
   /** Businesses with a profile per user (one user making businesses can't use up the plan's 75). */
   const maxPerUser = intEnv('UPLOAD_POST_MAX_PROFILES_PER_USER', 3, 1, 1000);
-  /** New profiles one user can start in a day (their limit, at least 3): connect, delete, connect again can't drain the day's budget. */
-  const userNewPerDay = Math.max(3, maxPerUser);
+  /**
+   * A user's limit of businesses with a profile: with plans enforced (server/billing/stripe.mjs), their plan's business
+   * limit (the owner 1000; a paused plan 0 new ones, the existing ones kept); otherwise, or when the plan can't be
+   * read, UPLOAD_POST_MAX_PROFILES_PER_USER as before plans. → { cap, plan } (plan: the limit comes from a plan).
+   */
+  async function capFor(userId) {
+    if (!billing?.businessLimit) return { cap: maxPerUser, plan: false };
+    try {
+      const n = await billing.businessLimit(userId);
+      if (n === null || n === undefined) return { cap: maxPerUser, plan: false };
+      return { cap: Math.max(0, Math.trunc(Number(n) || 0)), plan: true };
+    } catch {
+      return { cap: maxPerUser, plan: false };
+    }
+  }
   /** New profiles a day at most (a burst of throwaway sign-ups must not fill the plan's 75 in an afternoon). */
   const newProfilesPerDay = intEnv('UPLOAD_POST_NEW_PROFILES_PER_DAY', 20, 1, 1000);
   /** A profile with nothing connected this long goes back to the plan. */
@@ -333,15 +346,25 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
 
   /** The customer-safe refusal for the profile cap (the owner is told which add-on to buy). */
   const capFull = () => fail(503, 'CONNECTIONS_UNAVAILABLE', 'Social connections are temporarily full. We’ve been notified and will let you know.', {}, 'Upload-Post’s profile limit is reached: add the +25 or +50 profile add-on, or move to a bigger plan, in the Upload-Post dashboard.');
-  /** The user's own limit of businesses with social accounts (UPLOAD_POST_MAX_PROFILES_PER_USER). */
-  const userCapFull = (used) =>
-    fail(
-      409,
-      'BUSINESS_LIMIT',
-      `You can connect social accounts for up to ${maxPerUser} ${maxPerUser === 1 ? 'business' : 'businesses'}, and ${used >= maxPerUser ? 'all of them are in use' : `${used} are in use`}. Delete a business you no longer use to free its slot, or ask us for more.`,
-      { used, cap: maxPerUser },
-      `This customer reached UPLOAD_POST_MAX_PROFILES_PER_USER (${maxPerUser} businesses with social accounts). Raise it in Replit Secrets if they need more.`,
-    );
+  /** The user's own limit of businesses with social accounts (their plan's, or UPLOAD_POST_MAX_PROFILES_PER_USER). */
+  const userCapFull = (used, { cap = maxPerUser, plan = false } = {}) =>
+    plan && cap === 0
+      ? fail(402, 'PLAN_REQUIRED', 'This needs a plan. Choose one to keep going.', { upgrade: '#plans' })
+      : plan
+      ? fail(
+          409,
+          'BUSINESS_LIMIT',
+          `Your plan includes ${cap} ${cap === 1 ? 'business' : 'businesses'} with social accounts. Add a business in Settings › Plan.`,
+          { used, cap },
+          `This customer's plan allows ${cap} businesses with social accounts (Owner → Billing → Plans can grant more).`,
+        )
+      : fail(
+          409,
+          'BUSINESS_LIMIT',
+          `You can connect social accounts for up to ${cap} ${cap === 1 ? 'business' : 'businesses'}, and ${used >= cap ? 'all of them are in use' : `${used} are in use`}. Delete a business you no longer use to free its slot, or ask us for more.`,
+          { used, cap },
+          `This customer reached UPLOAD_POST_MAX_PROFILES_PER_USER (${cap} businesses with social accounts). Raise it in Replit Secrets if they need more.`,
+        );
   /** A refusal that sent nothing (or got a definite no): a reservation made for it can go. */
   const definite = (e) => Object.assign(e, { definite: true });
 
@@ -561,9 +584,10 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
    * "delete this business" and "free a deleted business's slot").
    */
   async function slots(userId) {
-    if (!storageReady) return { used: 0, cap: maxPerUser, projects: [], orphans: [] };
+    const { cap } = await capFor(userId);
+    if (!storageReady) return { used: 0, cap, projects: [], orphans: [] };
     const { value } = await readDoc(userId);
-    if (forgotten(value)) return { used: 0, cap: maxPerUser, projects: [], orphans: [] };
+    if (forgotten(value)) return { used: 0, cap, projects: [], orphans: [] };
     const holding = value.profiles.filter(holdsPlanSlot);
     // a slot whose business is gone from the account (the server's own check, never one device's project list), or
     // whose delete hasn't gone through yet: the app offers to free those
@@ -572,7 +596,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       if (p.state === 'deleting') orphans.push(p.projectId);
       else if (dbReady && (await businessThere(userId, p.projectId)) === false) orphans.push(p.projectId);
     }
-    return { used: holding.length, cap: maxPerUser, projects: holding.map((p) => p.projectId), orphans };
+    return { used: holding.length, cap, projects: holding.map((p) => p.projectId), orphans };
   }
 
   // ───────────── a business's profile (one per business, of the plan's 75) ─────────────
@@ -627,6 +651,9 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       if (e instanceof IntegrationError) throw e;
       throw fail(503, 'UNAVAILABLE', 'Couldn’t start connecting just now. Try again shortly.');
     });
+    const limit = await capFor(userId);
+    // new profiles a day per user: their limit, at least 3
+    const userNewPerDay = Math.max(3, limit.cap);
     const held = await updateDoc(userId, (d) => {
       if (forgotten(d)) throw fail(409, 'FORBIDDEN', 'This account is being deleted.');
       const p = profileOf(d, projectId);
@@ -634,7 +661,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       if (p?.state === 'reserved') return { write: false, result: { username: p.username } };
       // a profile whose delete hasn't gone through yet still holds one of the plan's: it counts until it's gone
       const used = d.profiles.filter((x) => holdsPlanSlot(x) && x.projectId !== projectId).length;
-      if (used >= maxPerUser) return { write: false, result: { full: true, used } };
+      if (used >= limit.cap) return { write: false, result: { full: true, used } };
       // new profiles a day per user (their limit, at least 3): connect, delete, connect again can't use up the
       // plan's daily budget for everyone
       const today = iso(now()).slice(0, 10);
@@ -649,8 +676,8 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     });
     if (held.ready) return { username: held.username, made: false };
     if (held.full) {
-      ownerAlert('profile_user_cap', { tag, n: maxPerUser });
-      throw userCapFull(held.used);
+      if (!limit.plan) ownerAlert('profile_user_cap', { tag, n: limit.cap });
+      throw userCapFull(held.used, limit);
     }
     if (held.daily) {
       log_('uploadpost_profile_user_daily', {});

@@ -1,4 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { billingOn, useBilling } from '@/store/billing';
+import { featureTier, planFor } from '@/lib/plans';
 import { Download, Trash2 } from 'lucide-react';
 import type { MediaRef } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -74,6 +76,11 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
   const job = useImageJob();
   const [aspect, setAspect] = useState<VideoAspect>(defaultAspect);
   const [duration, setDuration] = useState<number>(8);
+  // plans: the longest video the plan makes (null: no limit here, e.g. plans off or the artifact build)
+  const maxSeconds = useBilling((s) => (billingOn() && server && s.plan && s.plan.plan !== 'legacy' && s.plan.plan !== 'owner' ? s.plan.features.video.maxSeconds : null));
+  useEffect(() => {
+    if (maxSeconds != null && duration > maxSeconds) setDuration(VIDEO_DURATIONS.filter((d) => d <= maxSeconds).pop() ?? duration);
+  }, [maxSeconds, duration]);
   const [resolution, setResolution] = useState<VideoResolution>('768p');
   const [fromImage, setFromImage] = useState(!!startImage);
   // editable here; a new suggestion from outside (e.g. a regenerated post) replaces it
@@ -188,11 +195,15 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
         <label className="flex items-center gap-2 text-small font-medium text-ink-2" htmlFor={`${fid}-d`}>
           Length
           <select id={`${fid}-d`} className="select input-sm w-auto" value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
-            {VIDEO_DURATIONS.map((d) => (
-              <option key={d} value={d}>
-                {d} seconds
-              </option>
-            ))}
+            {VIDEO_DURATIONS.map((d) => {
+              // plans: lengths above the plan's limit show locked with the tier that has them (the server decides)
+              const locked = maxSeconds != null && d > maxSeconds;
+              return (
+                <option key={d} value={d} disabled={locked}>
+                  {d} seconds{locked ? ` (${planFor(featureTier('video_length')).name} and up)` : ''}
+                </option>
+              );
+            })}
           </select>
         </label>
         {!server && <Segmented<VideoResolution> size="sm" value={resolution} onChange={setResolution} options={VIDEO_RESOLUTIONS.map((r) => ({ id: r.id, label: r.label }))} />}

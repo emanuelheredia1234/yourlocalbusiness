@@ -10,6 +10,10 @@ import type {
   AnalyticsSettings,
   AnalyticsSettingsInput,
   AnalyticsSnapshot,
+  BillingOp,
+  BillingOpResponse,
+  BillingSettingsResponse,
+  BusinessesResponse,
   AnalyticsSource,
   ApiError,
   ApiErrorCode,
@@ -21,6 +25,10 @@ import type {
   CustomerUsage,
   CustomersResponse,
   NangoResponse,
+  OwnerBillingAccount,
+  PlanInterval,
+  PlanResponse,
+  PlanTier,
   PublishJob,
   PublishRequest,
   ReconcileReport,
@@ -37,6 +45,11 @@ export class IntegrationApiError extends Error {
   readonly period?: 'day' | 'month';
   /** the owner only: which Secret or setting is missing (names, never values) */
   readonly hint?: string;
+  /** plans: what a refused action needs, when credits renew, whether to offer undo, the money operation */
+  readonly need?: { feature?: string; tier?: string };
+  readonly resetsAt?: string;
+  readonly useUndo?: boolean;
+  readonly op?: BillingOp | null;
   constructor(status: number, body: Partial<ApiError> | null, fallback = 'Something went wrong. Try again shortly.') {
     super(typeof body?.error === 'string' && body.error ? body.error : fallback);
     this.name = 'IntegrationApiError';
@@ -45,6 +58,10 @@ export class IntegrationApiError extends Error {
     if (typeof body?.nextAt === 'string') this.nextAt = body.nextAt;
     if (body?.period === 'day' || body?.period === 'month') this.period = body.period;
     if (typeof body?.hint === 'string') this.hint = body.hint;
+    if (body?.need && typeof body.need === 'object') this.need = { ...(typeof body.need.feature === 'string' ? { feature: body.need.feature } : {}), ...(typeof body.need.tier === 'string' ? { tier: body.need.tier } : {}) };
+    if (typeof body?.resetsAt === 'string') this.resetsAt = body.resetsAt;
+    if (body?.useUndo === true) this.useUndo = true;
+    if (body?.op && typeof body.op === 'object') this.op = body.op;
   }
 }
 
@@ -134,3 +151,35 @@ export const putDefaults = (defaults: CapSettings) => call<{ defaults: CapSettin
 export const getReconcile = (days = 30) => call<ReconcileReport>('GET', `/api/billing/reconcile${q({ days })}`);
 /** The invoice CSV's address (fetched with the bearer by the caller, as a download). month: YYYY-MM. */
 export const invoiceCsvUrl = (month: string) => `${base()}/api/billing/invoice.csv${q({ month })}`;
+
+// ───────────── plans (Launch, Grow, Scale) ─────────────
+// clientRequestId: a UUID made per user action (a double click sends the same one, so Stripe sees one request). Writes
+// are never retried here: a 202 means "being confirmed", read back with getBusinesses / getPlan.
+
+/** The plan, businesses and credits; sessionId: the Checkout Session the user just came back from. */
+export const getPlan = (sessionId?: string) => call<PlanResponse>('GET', `/api/billing/plan${q({ session_id: sessionId })}`);
+export const startCheckout = (req: { tier: PlanTier; interval: PlanInterval; extraBusinesses?: number; clientRequestId: string }) => call<{ url: string }>('POST', '/api/billing/checkout', req);
+export const openPortal = (clientRequestId: string) => call<{ url: string }>('POST', '/api/billing/portal', { clientRequestId });
+export const getBusinesses = () => call<BusinessesResponse>('GET', '/api/billing/businesses');
+export const changeBusinesses = (req: { action: 'add' | 'remove' | 'undo_remove'; clientRequestId: string; confirm: true; projectId?: string }) => call<BillingOpResponse>('POST', '/api/billing/businesses', req);
+export const setActiveBusinesses = (projectIds: string[]) => call<BusinessesResponse>('PUT', '/api/billing/businesses/active', { projectIds });
+export const changePlan = (req: { tier: PlanTier; interval: PlanInterval; clientRequestId: string; confirm: true }) => call<BillingOpResponse>('POST', '/api/billing/plan', req);
+/** The owner only. */
+export const getBillingAccounts = (status?: string) => call<{ accounts: OwnerBillingAccount[] }>('GET', `/api/billing/accounts${q({ status })}`);
+export const putCompPlan = (customerTag: string, body: { tier: PlanTier | 'none'; extraBusinesses?: number; until?: string | null; note?: string }) => call<{ ok: true }>('PUT', `/api/billing/accounts/${seg(customerTag)}/comp`, body);
+export const syncBillingAccount = (customerTag: string) => call<{ ok: true }>('POST', `/api/billing/accounts/${seg(customerTag)}/sync`, {});
+export const getBillingSettings = () => call<BillingSettingsResponse>('GET', '/api/billing/settings');
+export const putBillingSettings = (body: { enforce?: boolean; cardTrialDays?: number; existingTrialDays?: number }) => call<BillingSettingsResponse>('PUT', '/api/billing/settings', body);
+
+/** A fresh id for one user action (Stripe's Idempotency-Key is made from it on the server). */
+export function newRequestId(): string {
+  const c = typeof globalThis !== 'undefined' ? (globalThis.crypto as Crypto | undefined) : undefined;
+  if (c?.randomUUID) return c.randomUUID();
+  const b = new Uint8Array(16);
+  if (c?.getRandomValues) c.getRandomValues(b);
+  else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}

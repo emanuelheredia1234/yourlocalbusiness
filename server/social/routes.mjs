@@ -72,8 +72,13 @@ export function createPostingRoutes(deps = {}) {
     // no social accounts (UPLOAD_POST_API_KEY unset): nothing can be posted from the app, and no job exists
     if (!connections?.socialEnabled) throw fail(503, 'NOT_SET_UP', 'Posting from the app isn’t switched on yet. Post it yourself, then mark it as posted.', {}, 'Posting is off: add UPLOAD_POST_API_KEY (and UPLOAD_POST_WEBHOOK_SECRET, MEDIA_URL_SECRET) in Replit Secrets.');
     if (p === `${PREFIX}publish` && req.method === 'POST') {
+      // a paused plan refuses before anything is sent (402; a no-op without plans)
+      await deps.billing?.requireActive?.(who, 'posting');
       limited('posting-publish', who.id);
-      const out = await posting.publish(who, await body(req));
+      const b = await body(req);
+      // a business that's locked on the plan (over its limit) can't post
+      await deps.billing?.requireSlot?.(who, typeof b?.projectId === 'string' ? b.projectId : null);
+      const out = await posting.publish(who, b);
       return reply(req, res, 200, out);
     }
     if (p === `${PREFIX}jobs` && req.method === 'GET') {

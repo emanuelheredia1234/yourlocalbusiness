@@ -12,6 +12,9 @@
 //   integrations.start()                                 the startup sweeps (stuck jobs, stuck runs, pending rows)
 //   integrations.cronJobs()                              the periodic jobs for server/cron (POST /api/cron/tick)
 //   integrations.notes()                                 startup lines: what's on, which Secrets are missing (names)
+//   integrations.billing                                 the plans (server/billing/stripe.mjs): entitlement(userId, who),
+//                                                        requireActive(who, feature), businessLimit(userId),
+//                                                        pagesServeUntil(userId), config() — for ai-server.mjs and pages
 //
 // Routes (server/integrations/contracts.mjs ROUTE_PREFIXES):
 //   /api/integrations/connections…  /api/webhooks/upload-post  /api/webhooks/zernio
@@ -22,7 +25,8 @@
 //   /api/media/public/<token>                              server/media/publicMedia.mjs
 //   /api/analytics/…                                       server/analytics/routes.mjs
 //   /api/seo/google/…                                      server/seo/google.mjs
-//   /api/billing/…                                         server/billing/routes.mjs
+//   /api/billing/…  /api/webhooks/stripe                   server/billing/routes.mjs (+ billing/stripe.mjs: plans,
+//                                                          Checkout, the portal, businesses, the Stripe webhook)
 //   /api/ads/…                                             server/ads/routes.mjs (launching and changing campaigns;
 //                                                          ad events arrive on /api/webhooks/zernio)
 //
@@ -55,6 +59,28 @@ import { createTreg } from '../treg.mjs';
 import { dbFromEnv, INTEGRATIONS_MIGRATION } from './db.mjs';
 import { createBucketLimiter, readRaw, redactPath, safeLog } from './common.mjs';
 import { ROUTE_PREFIXES } from './contracts.mjs';
+import { entitlementOf } from '../billing/entitlement.mjs';
+
+/** Plans not wired (tests with a stub billing module): everything as before plans. */
+const LEGACY = Object.freeze(entitlementOf(null, { enforce: false }));
+
+/**
+ * The plans, late-bound: modules made before the billing module (Upload-Post's connections) and after it (ads) ask
+ * this; it answers "not enforced" until the billing module exists or when it has no plans.
+ */
+export function billingFacade(get) {
+  const impl = () => get()?.plans ?? null;
+  return {
+    entitlement: async (userId, who = null) => (impl() ? impl().entitlement(userId, who) : LEGACY),
+    requireActive: async (who, feature = null) => (impl() ? impl().requireActive(who, feature) : null),
+    requireSlot: async (who, projectId) => (impl()?.requireSlot ? impl().requireSlot(who, projectId) : null),
+    businessLimit: async (userId, who = null) => (impl() ? impl().businessLimit(userId, who) : null),
+    pagesServeUntil: async (userId) => (impl() ? impl().pagesServeUntil(userId) : null),
+    tregCapsFor: async (tag) => (impl() ? impl().tregCapsFor(tag) : null),
+    config: () => (impl() ? impl().config() : { enabled: false, enforce: false }),
+    notes: () => impl()?.notes?.() ?? [],
+  };
+}
 
 export const DEFAULT_FACTORIES = Object.freeze({
   uploadPost: createUploadPostConnections,
@@ -99,7 +125,7 @@ export function moduleFor(pathname) {
   if (under(ROUTE_PREFIXES.publicMedia)) return 'publicMedia';
   if (under(ROUTE_PREFIXES.analytics)) return 'analytics';
   if (under(ROUTE_PREFIXES.seoGoogle)) return 'seoGoogle';
-  if (under(ROUTE_PREFIXES.billing)) return 'billing';
+  if (under(ROUTE_PREFIXES.billing) || under(ROUTE_PREFIXES.stripeWebhook)) return 'billing';
   if (under(ROUTE_PREFIXES.ads)) return 'ads';
   return null;
 }
@@ -128,12 +154,16 @@ export function createIntegrations({
   const make = { ...DEFAULT_FACTORIES, ...factories };
   const database = db ?? dbFromEnv(env, fetch);
   const limit = createBucketLimiter({ now });
-  const base = { auth, storage: appState, db: database, omnisend, send, readJson, readRaw, rateLimited, limit, corsHeaders, sameOrigin, clientKey, env, fetch, now, log };
+  // the billing module is made below; everything made before it asks through this facade
+  let billingModule = null;
+  const billing = billingFacade(() => billingModule);
+  const base = { auth, storage: appState, db: database, omnisend, send, readJson, readRaw, rateLimited, limit, corsHeaders, sameOrigin, clientKey, env, fetch, now, log, billing };
 
   const selected = selectConnections(env);
   const connections = createConnections(combineConnections({ social: selected.social ? make.uploadPost(base) : null, ads: selected.ads ? make.zernio(base) : null }));
   const nango = has(env, 'NANGO_SECRET_KEY') ? make.nango(base) : nullNango;
-  const treg = make.treg({ env, fetch, now, db: database, log });
+  // the tier layer of each customer's treg caps comes from the plans (late-bound: the billing module is made below)
+  const treg = make.treg({ env, fetch, now, db: database, log, tierFor: (tag) => billing.tregCapsFor(tag) });
   // the disconnect route asks the ads module which launched campaigns are still on (R12); the module is made below
   let adsModule = null;
   const deps = { ...base, connections, nango, treg, liveAdsGuard: (userId, platform) => adsModule?.liveOn?.(userId, platform) ?? [] };
@@ -149,6 +179,7 @@ export function createIntegrations({
     ads: make.ads(deps),
   };
   adsModule = modules.ads;
+  billingModule = modules.billing;
   const sitemap = make.sitemap(deps);
   // an upload_completed webhook from Upload-Post finishes its job (sent / failed) the same way "Check again" does
   // (only a job of the business whose profile the event came through)
@@ -169,6 +200,7 @@ export function createIntegrations({
     nango,
     treg,
     db: database,
+    billing,
     /** for tests and the startup notes */
     connectionsProvider: selected.provider,
     connectionsSelected: selected,
@@ -199,6 +231,9 @@ export function createIntegrations({
       // launched campaigns first: once the Zernio connections are gone nothing could pause them (409 ADS_LIVE
       // while one is on, unless the customer acknowledged it with ackLiveAds)
       await modules.ads.beforeForget?.(userId, opts);
+      // then a live plan subscription is cancelled (409 BILLING_PENDING when that can't be confirmed): before any
+      // vendor connection goes, so a stopped deletion leaves everything as it was
+      await modules.billing.beforeForget?.(userId, opts);
       await connections.forgetUser(userId);
       for (const name of FORGET_ORDER) await modules[name].forgetUser?.(userId);
     },
@@ -284,7 +319,8 @@ export function createIntegrations({
       lines.push(t.setUp ? 'Analytics data (treg): on.' : 'Analytics data (treg): off (add the TREG_TOKEN Secret).');
       if (!t.billingSetUp) lines.push('Per-customer caps and the treg check: add TREG_ADMIN_TOKEN and TREG_ORG_ID in Replit Secrets.');
       if (!has(env, 'CUSTOMER_TAG_SECRET')) lines.push('Usage tracking per customer needs the CUSTOMER_TAG_SECRET Secret (32+ random bytes; never change it).');
-      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql and supabase/migrations/20261108000000_ads_launch.sql in Supabase.`);
+      lines.push(...billing.notes());
+      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql, supabase/migrations/20261108000000_ads_launch.sql and supabase/migrations/20261110000000_billing.sql in Supabase.`);
       return lines;
     },
   };

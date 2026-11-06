@@ -56,7 +56,7 @@ export class AssistantError extends Error {
 }
 
 /** Codes that mean the AI never answered (anything else that still carries text answered in prose). */
-const NO_ANSWER = new Set(['cancelled', 'not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed', 'rate_limited', 'session_expired', 'unavailable', 'network', 'daily_limit', 'no_provider', 'credits', 'auth', 'refused']);
+const NO_ANSWER = new Set(['cancelled', 'not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed', 'rate_limited', 'session_expired', 'unavailable', 'network', 'daily_limit', 'no_provider', 'credits', 'auth', 'refused', 'plan_required']);
 
 function explain(e: unknown): AssistantError {
   const err = e as AIError;
@@ -76,6 +76,8 @@ function explain(e: unknown): AssistantError {
     case 'credits':
     case 'auth':
       return new AssistantError(msg || 'The key that powers the Assistant couldn’t be used.', code, true);
+    case 'plan_required':
+      return new AssistantError(msg || 'This needs a plan. Choose one in Settings › Plan.', code);
     case 'not_granted':
       return new AssistantError('Claude access was declined for this page.', code);
     case 'session_expired':

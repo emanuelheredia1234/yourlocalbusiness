@@ -12,7 +12,8 @@
     "server": "node server/ai-server.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/design-lint.mjs --strict && vitest run",
-    "lint:design": "node scripts/design-lint.mjs --strict"
+    "lint:design": "node scripts/design-lint.mjs --strict",
+    "stripe:setup": "node scripts/stripe-setup.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.3.0",

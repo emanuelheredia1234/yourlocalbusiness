@@ -95,6 +95,10 @@ const SERVER_CODES: Record<string, string> = {
   REFUSAL: 'refused',
   CUT_OFF: 'cut_off',
   DAILY_LIMIT: 'daily_limit',
+  // plans (the upgrade prompt explains; the server's sentence is the message)
+  PLAN_REQUIRED: 'plan_required',
+  PAYMENT_REQUIRED: 'plan_required',
+  CREDITS_USED: 'plan_required',
 };
 
 /** When your server last failed to answer (a request or a health check); 0 once it answers. */
@@ -151,7 +155,24 @@ export async function serverFetch(serverUrl: string, path: string, init: Request
   // without accounts, the owner's routes (Viktor in Slack) need the ADMIN_TOKEN entered in Settings › AI keys
   const admin = safeStorage.getItem(ADMIN_TOKEN_KEY);
   if (admin && !headers.has('x-admin-token')) headers.set('x-admin-token', admin);
-  return fetch(target, { ...init, headers });
+  const res = await fetch(target, { ...init, headers });
+  // plans: a paid action the plan refused opens the upgrade prompt (the caller still gets the answer as before)
+  if (planRefusalListener && (res.status === 402 || res.status === 403 || res.status === 409)) {
+    const listener = planRefusalListener;
+    void res
+      .clone()
+      .json()
+      .then((body: unknown) => listener(path, res.status, body))
+      .catch(() => undefined);
+  }
+  return res;
+}
+
+type PlanRefusalListener = (path: string, status: number, body: unknown) => void;
+let planRefusalListener: PlanRefusalListener | null = null;
+/** Plans: told about every 402 (and the ads gate's 403, a full plan's 409) from the app's server. */
+export function setPlanRefusalListener(fn: PlanRefusalListener | null): void {
+  planRefusalListener = fn;
 }
 
 /** /api/health's `agents`, when it has the expected shape (an older server sends none). */

@@ -19,6 +19,8 @@ export const ROUTES = [
   'workspace-settings',
   // the owner's per-customer usage (Settings › Billing (owner)); the page checks isAdmin itself
   'admin-billing',
+  // the plans (Launch, Grow, Scale): public, signed out too; "upgrade" is reserved by claude.ai, so this is "plans"
+  'plans',
 ] as const;
 
 export type Route = (typeof ROUTES)[number];
