@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import type { EmailStep, Project, Subscriber } from '@/lib/types';
-import { ensureUrl, readableOn } from '@/lib/utils';
+import { readableOn } from '@/lib/utils';
+import { pageLink } from '@/lib/pageLink';
 import { renderTokens } from '@/ai/local/email';
 import { useStore } from '@/store/useStore';
 import { BrandLogo } from '@/components/brand/Logo';
@@ -19,15 +20,19 @@ export function PanelHead({ title, description, actions }: { title: ReactNode; d
   );
 }
 
-/** Merge values for previews: a real subscriber's, or clear placeholders (never invented people or sites). */
+/**
+ * Merge values for previews and drafts: a real subscriber's, or clear placeholders (never invented people or sites).
+ * The lead magnet's link is its published download (/m/<id>, on the SEO page's domain when it has one); the offer's
+ * is the page posts link to (pageLink: the published SEO page, else the website).
+ */
 export function emailTokens(p: Project, sub?: Pick<Subscriber, 'name' | 'email'> | null): Record<string, string> {
-  const site = p.brand.websiteUrl ? ensureUrl(p.brand.websiteUrl).replace(/\/$/, '') : '';
   const profile = useStore.getState().settings.profile;
+  const d = p.marketing.leadMagnet?.delivery;
   return {
     first_name: sub?.name ? sub.name.split(' ')[0] : '[First name]',
     email: sub?.email || '[subscriber’s email]',
-    lead_magnet_link: site ? `${site}/free` : '[link to your free download]',
-    product_link: site ? `${site}/${p.marketing.seo?.slug || 'offer'}` : '[link to your offer]',
+    lead_magnet_link: d ? d.domainLink ?? d.link : '[link to your free download]',
+    product_link: pageLink(p)?.url ?? '[link to your offer]',
     sender_name: profile.name || p.brand.name,
     sender_email: profile.email || 'your sending address',
     brand: p.brand.name,
@@ -46,6 +51,10 @@ const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
 export function EmailView({ project, email, tokens, compact }: { project: Project; email: EmailStep; tokens: Record<string, string>; compact?: boolean }) {
   const c = project.brand.colors;
   const body = renderTokens(email.body, tokens);
+  const label = renderTokens(email.ctaLabel, tokens);
+  const href = webHref(renderTokens(email.ctaUrl, tokens));
+  const button: CSSProperties = { display: 'inline-block', marginTop: 20, borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700, background: c.primary, color: readableOn(c.primary), textDecoration: 'none' };
+  const where = signedUpAt(project);
   const row: CSSProperties = { fontSize: 13, lineHeight: '20px', color: META };
   return (
     <div className="overflow-hidden" style={{ background: '#ffffff', color: INK, fontFamily: FONT }}>
@@ -69,13 +78,45 @@ export function EmailView({ project, email, tokens, compact }: { project: Projec
         <div className="whitespace-pre-line" style={{ fontSize: 14, lineHeight: 1.65 }}>
           {body}
         </div>
-        {email.ctaLabel && (
-          <span style={{ display: 'inline-block', marginTop: 20, borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700, background: c.primary, color: readableOn(c.primary) }}>{renderTokens(email.ctaLabel, tokens)}</span>
-        )}
+        {email.ctaLabel &&
+          (href ? (
+            <a href={href} target="_blank" rel="noopener noreferrer" aria-label={`${label} (opens in a new tab)`} className="focus-visible:shadow-focus outline-none" style={button}>
+              {label}
+            </a>
+          ) : (
+            <span aria-disabled="true" title="Add a link in Sequence › Button link" style={{ ...button, cursor: 'not-allowed' }}>
+              {label}
+            </span>
+          ))}
         <p style={{ marginTop: 24, borderTop: `1px solid ${RULE}`, paddingTop: 12, fontSize: 11, lineHeight: '16px', color: FINE }}>
-          You’re receiving this because you signed up at {tokens.lead_magnet_link.replace(/^https?:\/\//, '')}. Unsubscribe anytime.
+          You’re receiving this because you signed up at {where}. Unsubscribe anytime.
         </p>
       </div>
     </div>
   );
+}
+
+/** A button's address when it's a real web address (http or https with a host), else '' (a placeholder, a bad link). */
+export function webHref(raw: string): string {
+  const t = raw.trim();
+  if (!/^https?:\/\//i.test(t)) return '';
+  try {
+    const u = new URL(t);
+    return (u.protocol === 'https:' || u.protocol === 'http:') && u.hostname.includes('.') && !u.username ? u.toString() : '';
+  } catch {
+    return '';
+  }
+}
+
+/** Where subscribers signed up, for the footer: the host of the page posts link to, else the brand's name. */
+export function signedUpAt(project: Project): string {
+  const link = pageLink(project);
+  if (link) {
+    try {
+      return new URL(link.url).host;
+    } catch {
+      /* fall through */
+    }
+  }
+  return project.brand.name || 'our website';
 }

@@ -57,6 +57,8 @@ function project({ emails = false, website = '' }: { emails?: boolean; website?:
   p.brand.name = 'Copper & Comb';
   p.brand.websiteUrl = website;
   if (emails) p.marketing.emails = generateEmailSequence(p, null);
+  // with a website, the lead magnet's download is published too: every link in the emails is a real address
+  if (website) p.marketing.leadMagnet = { id: 'lm', type: 'guide', title: 'Free guide', subtitle: '', intro: '', sections: [], cta: '', optInHeadline: '', optInBullets: [], buttonLabel: '', createdAt: 0, delivery: { source: 'pdf', fileId: 'AbCdEfGhIjKlMnOpQrStUv', link: 'https://app.example/m/AbCdEfGhIjKlMnOpQrStUv', gate: true, publishedAt: 1 } };
   return p;
 }
 
@@ -245,7 +247,8 @@ describe('Omnisend drafts', () => {
       });
       expect(draft).toEqual(omnisendDraft(p, email, i, tokens));
       expect(JSON.stringify(draft)).not.toContain('{{');
-      expect(draft.ctaUrl).toMatch(/^https:\/\/copperandcomb\.com\/(free|offer)$/);
+      // the published download's link, or the offer's (the website: no page is published here)
+      expect(draft.ctaUrl).toMatch(/^https:\/\/(app\.example\/m\/AbCdEfGhIjKlMnOpQrStUv|copperandcomb\.com)$/);
       // the body the preview shows is the body sent
       expect(host.querySelectorAll('ol > li')[i].textContent).toContain(draft.body.split('\n')[0]);
     });
