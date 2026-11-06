@@ -80,6 +80,18 @@ function recorder() {
       analytics: mod('analytics'),
       seoGoogle: mod('seoGoogle'),
       billing: mod('billing'),
+      ads: mod('ads', {
+        async beforeForget(id, opts) {
+          calls.push(['beforeForget', 'ads', id, opts]);
+        },
+        async liveOn(id, platform) {
+          calls.push(['liveOn', 'ads', id, platform]);
+          return [{ id: 'c1' }];
+        },
+        async fromWebhook(id, zid, evt) {
+          calls.push(['fromWebhook', 'ads', id, zid, evt.event]);
+        },
+      }),
       sitemap: vi.fn(() => ({ handle: vi.fn(async () => false) })),
       treg: vi.fn(() => ({ health: () => ({ setUp: false, billingSetUp: false }) })),
     },
@@ -100,6 +112,9 @@ describe('the route table', () => {
     expect(moduleFor('/api/analytics/refresh')).toBe('analytics');
     expect(moduleFor('/api/seo/google/publish')).toBe('seoGoogle');
     expect(moduleFor('/api/billing/me')).toBe('billing');
+    expect(moduleFor('/api/ads/launch')).toBe('ads');
+    expect(moduleFor('/api/ads/campaigns/x/change')).toBe('ads');
+    expect(moduleFor('/api/adsx')).toBeNull();
     expect(moduleFor('/api/integrations/omnisend/status')).toBeNull();
     expect(moduleFor('/api/integrations/connectionsx')).toBeNull();
     expect(moduleFor('/api/postingx')).toBeNull();
@@ -196,6 +211,36 @@ describe('account deletion', () => {
     r.calls.length = 0;
     await integrations.userDeleted(UID);
     expect(r.calls.filter((c) => c[0] === 'deleted').map((c) => c[1])).toContain('billing');
+  });
+
+  it('asks the ads module first (live campaigns), before any Zernio connection goes, and passes the acknowledgement', async () => {
+    const r = recorder();
+    const integrations = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
+    await integrations.forgetUser(UID, { ackLiveAds: true });
+    expect(r.calls[0]).toEqual(['beforeForget', 'ads', UID, { ackLiveAds: true }]);
+    expect(r.calls.findIndex((c) => c[1] === 'vendor')).toBeGreaterThan(0);
+    r.calls.length = 0;
+    r.factories.ads = vi.fn(() => ({
+      handle: async () => false,
+      async beforeForget() {
+        throw Object.assign(new Error('live ads'), { status: 409, code: 'ADS_LIVE' });
+      },
+    }));
+    const blocked = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
+    await expect(blocked.forgetUser(UID)).rejects.toMatchObject({ code: 'ADS_LIVE' });
+    expect(r.calls.some((c) => c[0] === 'forget')).toBe(false);
+  });
+
+  it('wires the ad events listener and the disconnect guard to the ads module', async () => {
+    const r = recorder();
+    r.zernioImpl.setAdsListener = vi.fn();
+    const integrations = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
+    expect(r.zernioImpl.setAdsListener).toHaveBeenCalledTimes(1);
+    await r.zernioImpl.setAdsListener.mock.calls[0][0](UID, 'z1', { event: 'ad.review.rejected' });
+    expect(r.calls).toContainEqual(['fromWebhook', 'ads', UID, 'z1', 'ad.review.rejected']);
+    const deps = r.factories.connectionRoutes.mock.calls[0][0];
+    expect(await deps.liveAdsGuard(UID, 'meta_ads')).toEqual([{ id: 'c1' }]);
+    void integrations;
   });
 
   it('stops when a module can’t forget (so the account isn’t deleted half-way)', async () => {

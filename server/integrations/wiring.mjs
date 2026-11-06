@@ -6,7 +6,8 @@
 //   integrations.match(url) / handle(req, res, url)      the routes below
 //   integrations.appHostExtras(req, res, url)            for pagesFromEnv(..., { appHostExtras }): app-host
 //                                                        /sitemap.xml, /robots.txt, the GSC verification file
-//   integrations.forgetUser(id) / unforgetUser(id)       before an account is deleted / when that failed
+//   integrations.forgetUser(id, {ackLiveAds}) / unforgetUser(id)   before an account is deleted / when that failed
+//                                                        (409 ADS_LIVE while a launched campaign is on, unless acked)
 //   integrations.userDeleted(id)                         after it was deleted (e.g. the ledger keeps its rows)
 //   integrations.start()                                 the startup sweeps (stuck jobs, stuck runs, pending rows)
 //   integrations.notes()                                 startup lines: what's on, which Secrets are missing (names)
@@ -21,6 +22,8 @@
 //   /api/analytics/…                                       server/analytics/routes.mjs
 //   /api/seo/google/…                                      server/seo/google.mjs
 //   /api/billing/…                                         server/billing/routes.mjs
+//   /api/ads/…                                             server/ads/routes.mjs (launching and changing campaigns;
+//                                                          ad events arrive on /api/webhooks/zernio)
 //
 // Each module's factory gets the same deps: { auth, storage (appState), db (server/integrations/db.mjs),
 // connections, treg, omnisend, send, readJson, readRaw, rateLimited, limit, corsHeaders, sameOrigin,
@@ -46,6 +49,7 @@ import { createAnalyticsRoutes } from '../analytics/routes.mjs';
 import { createSeoGoogleRoutes } from '../seo/google.mjs';
 import { createSitemapRoutes } from '../seo/sitemap.mjs';
 import { createBillingRoutes } from '../billing/routes.mjs';
+import { createAdsRoutes } from '../ads/routes.mjs';
 import { createTreg } from '../treg.mjs';
 import { dbFromEnv, INTEGRATIONS_MIGRATION } from './db.mjs';
 import { createBucketLimiter, readRaw, redactPath, safeLog } from './common.mjs';
@@ -63,6 +67,7 @@ export const DEFAULT_FACTORIES = Object.freeze({
   seoGoogle: createSeoGoogleRoutes,
   sitemap: createSitemapRoutes,
   billing: createBillingRoutes,
+  ads: createAdsRoutes,
   treg: createTreg,
 });
 
@@ -94,6 +99,7 @@ export function moduleFor(pathname) {
   if (under(ROUTE_PREFIXES.analytics)) return 'analytics';
   if (under(ROUTE_PREFIXES.seoGoogle)) return 'seoGoogle';
   if (under(ROUTE_PREFIXES.billing)) return 'billing';
+  if (under(ROUTE_PREFIXES.ads)) return 'ads';
   return null;
 }
 
@@ -127,7 +133,9 @@ export function createIntegrations({
   const connections = createConnections(combineConnections({ social: selected.social ? make.uploadPost(base) : null, ads: selected.ads ? make.zernio(base) : null }));
   const nango = has(env, 'NANGO_SECRET_KEY') ? make.nango(base) : nullNango;
   const treg = make.treg({ env, fetch, now, db: database, log });
-  const deps = { ...base, connections, nango, treg };
+  // the disconnect route asks the ads module which launched campaigns are still on (R12); the module is made below
+  let adsModule = null;
+  const deps = { ...base, connections, nango, treg, liveAdsGuard: (userId, platform) => adsModule?.liveOn?.(userId, platform) ?? [] };
 
   const modules = {
     connections: make.connectionRoutes(deps),
@@ -137,13 +145,17 @@ export function createIntegrations({
     analytics: make.analytics(deps),
     seoGoogle: make.seoGoogle(deps),
     billing: make.billing(deps),
+    ads: make.ads(deps),
   };
+  adsModule = modules.ads;
   const sitemap = make.sitemap(deps);
   // an upload_completed webhook from Upload-Post finishes its job (sent / failed) the same way "Check again" does
   // (only a job of the business whose profile the event came through)
   connections.impl?.social?.setPostListener?.((userId, jobId, outcome, where) => modules.posting.posting?.fromWebhook?.(userId, jobId, outcome, where));
+  // ad events from Zernio's webhook (only those about one of the customer's own connections) update launched campaigns
+  connections.impl?.ads?.setAdsListener?.((userId, zid, evt) => modules.ads.fromWebhook?.(userId, zid, evt));
   // account deletion: the vendor's connections go first (while their ids are still known), then the rest
-  const FORGET_ORDER = ['posting', 'analytics', 'seoGoogle', 'billing', 'publicMedia', 'nango', 'connections'];
+  const FORGET_ORDER = ['ads', 'posting', 'analytics', 'seoGoogle', 'billing', 'publicMedia', 'nango', 'connections'];
 
   const crashed = (req, res, path, e) => {
     safeLog('integration_error', { path: redactPath(path), error: e?.name || 'Error', code: e?.code }, log);
@@ -182,7 +194,10 @@ export function createIntegrations({
      * the stored connection doc, then posting, analytics, SEO and billing. A module that throws stops the
      * deletion (the caller lifts the others with unforgetUser).
      */
-    async forgetUser(userId) {
+    async forgetUser(userId, opts = {}) {
+      // launched campaigns first: once the Zernio connections are gone nothing could pause them (409 ADS_LIVE
+      // while one is on, unless the customer acknowledged it with ackLiveAds)
+      await modules.ads.beforeForget?.(userId, opts);
       await connections.forgetUser(userId);
       for (const name of FORGET_ORDER) await modules[name].forgetUser?.(userId);
     },
@@ -242,6 +257,9 @@ export function createIntegrations({
           lines.push('Ad accounts: on (Zernio).');
           const missing = ['ZERNIO_WEBHOOK_SECRET', 'CUSTOMER_TAG_SECRET'].filter((n) => !has(env, n));
           if (missing.length) lines.push(`Ad accounts also need these Replit Secrets: ${missing.join(', ')}.`);
+          lines.push(String(env.ADS_LAUNCH_ENABLED ?? '').trim() === '1' ? 'Launching ads: on (ADS_LAUNCH_ENABLED=1); each customer still needs ads turned on in Owner → Billing → Ad limits.' : 'Launching ads: off (ADS_LAUNCH_ENABLED isn’t 1). Pausing and ending launched campaigns still work.');
+          if (!has(env, 'ADS_REVIEW_SECRET')) lines.push('Launching ads: ADS_REVIEW_SECRET isn’t set, so review tokens fall back to CUSTOMER_TAG_SECRET.');
+          if (!has(env, 'MEDIA_URL_SECRET')) lines.push('Launching ads on Meta needs MEDIA_URL_SECRET (Meta fetches the ad images from the app).');
         } else lines.push('Ad accounts: off (add ZERNIO_API_KEY and ZERNIO_WEBHOOK_SECRET in Replit Secrets to turn them on).');
       }
       lines.push(nango.enabled ? `Other integrations (Nango): on, ${Object.keys(nango.integrations ?? {}).length} listed.` : 'Other integrations (Nango): off (kept for future booking tools and CRMs; add NANGO_SECRET_KEY to turn on).');
@@ -249,7 +267,7 @@ export function createIntegrations({
       lines.push(t.setUp ? 'Analytics data (treg): on.' : 'Analytics data (treg): off (add the TREG_TOKEN Secret).');
       if (!t.billingSetUp) lines.push('Per-customer caps and the treg check: add TREG_ADMIN_TOKEN and TREG_ORG_ID in Replit Secrets.');
       if (!has(env, 'CUSTOMER_TAG_SECRET')) lines.push('Usage tracking per customer needs the CUSTOMER_TAG_SECRET Secret (32+ random bytes; never change it).');
-      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql and supabase/migrations/20261107000000_upload_post.sql in Supabase.`);
+      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql and supabase/migrations/20261108000000_ads_launch.sql in Supabase.`);
       return lines;
     },
   };
