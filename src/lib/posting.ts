@@ -89,7 +89,8 @@ export function captionPreview(post: Post, project: Project | undefined): Captio
       for (const t of tags) if (xLength(postText({ caption, hashtags: [...kept, t] })) <= 280) kept.push(t);
       droppedTags = tags.length - kept.length;
       text = postText({ caption, hashtags: kept });
-      firstComment = comment;
+      // the reply isn't added for you on X: add it yourself once the post is live
+      if (comment) commentYourself = 'Add your reply on X once it’s live.';
       break;
     }
     default:

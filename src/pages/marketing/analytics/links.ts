@@ -24,7 +24,22 @@ export const PLATFORM_NAMES: Record<ConnectPlatform, string> = {
   pinterest: 'Pinterest',
   google_ads: 'Google Ads',
   meta_ads: 'Meta Ads',
-  microsoft_ads: 'Microsoft Ads',
+  linkedin_ads: 'LinkedIn Ads',
   tiktok_ads: 'TikTok Ads',
-  google_search_console: 'Search Console',
+  pinterest_ads: 'Pinterest Ads',
+  x_ads: 'X Ads',
+  reddit_ads: 'Reddit Ads',
+  microsoft_ads: 'Microsoft Ads',
+};
+
+/** Short ad-network labels for badges and chart subtitles. */
+export const AD_SHORT: Partial<Record<ConnectPlatform, string>> = {
+  google_ads: 'Google',
+  meta_ads: 'Meta',
+  linkedin_ads: 'LinkedIn',
+  tiktok_ads: 'TikTok',
+  pinterest_ads: 'Pinterest',
+  x_ads: 'X',
+  reddit_ads: 'Reddit',
+  microsoft_ads: 'Microsoft',
 };

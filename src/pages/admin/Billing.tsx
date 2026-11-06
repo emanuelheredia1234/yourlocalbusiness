@@ -200,6 +200,7 @@ export function BillingView({ data, report, onEdit, onChanged }: { data: Data; r
                 <th className="px-2 py-2 text-right font-medium">Today</th>
                 <th className="px-2 py-2 text-right font-medium">30 days</th>
                 <th className="px-2 py-2 text-right font-medium">Calls</th>
+                <th className="px-2 py-2 text-right font-medium">Accounts</th>
                 <th className="px-2 py-2 font-medium">Cap (day / month)</th>
                 <th className="px-2 py-2 font-medium">Status</th>
                 <th className="w-12 px-2 py-2" aria-label="Actions" />
@@ -298,6 +299,9 @@ function CustomerRow({ row, defaults, onEdit, onChanged }: { row: CustomerUsageR
         {row.estimatedMicro > 0 && <span className="block text-caption text-muted">+{usd(row.estimatedMicro)} est.</span>}
       </td>
       <td className="num px-2 py-2 text-right font-mono text-ink-2">{row.calls}</td>
+      <td className="num px-2 py-2 text-right font-mono text-ink-2" title="Social and ad accounts connected through Zernio (billed per connected account)">
+        {row.connectedAccounts ?? '–'}
+      </td>
       <td className="num px-2 py-2 font-mono text-caption text-ink-2">
         {usd(daily ?? 0)} / {usd(monthly ?? 0)}
         {custom && <Badge className="ml-1.5">Own</Badge>}

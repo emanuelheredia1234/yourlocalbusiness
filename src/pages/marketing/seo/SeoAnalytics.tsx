@@ -13,7 +13,6 @@ import { AreaChart, ChartCard } from '@/components/charts/Charts';
 import { Callout, ChipInput, CopyButton, Drawer, Empty, Field, InfoTip, Segmented, Spinner, StatStrip, StatusDot, confirmAction } from '@/components/ui/primitives';
 import { AnalyticsShell, DataTable } from '../analytics/AnalyticsShell';
 import { inRange, pct, rankLabel } from '../analytics/compute';
-import { openConnectedAccounts } from '../analytics/links';
 
 const n = (v: number | undefined) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v).toLocaleString('en-US') : '–');
 
@@ -168,7 +167,8 @@ function GoogleCard({ project }: { project: Project }) {
       : status.submittedAt
         ? { tone: 'primary' as const, text: `Submitted ${fmtDate(status.submittedAt)}` }
         : { tone: 'faint' as const, text: 'Not submitted' };
-  const needsConnect = status?.host === 'custom' && status.connected === false;
+  // a custom domain is sent through the app owner's Search Console once the owner has verified it there (a DNS record)
+  const waitingForOwner = status?.host === 'custom' && status.verified !== true && (!!result?.ownerVerification || !!status.steps?.some((x) => x.step === 'verify' && x.outcome === 'failed'));
 
   return (
     <section className="card p-4 sm:p-5" aria-label="Google">
@@ -186,7 +186,7 @@ function GoogleCard({ project }: { project: Project }) {
             {status?.lastCrawlTime && <span>Last crawled {fmtDate(status.lastCrawlTime)}</span>}
           </div>
         </div>
-        {status?.published && !needsConnect && (
+        {status?.published && (
           <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void submit()}>
             {busy ? <Spinner size={14} /> : <Globe />}
             {dns ? 'Verify and submit' : 'Submit to Google'}
@@ -199,17 +199,9 @@ function GoogleCard({ project }: { project: Project }) {
         </p>
       )}
       {status && !status.published && <p className="mt-3 text-small text-muted">Publish the page first (on the Page tab), then submit it here.</p>}
-      {needsConnect && (
-        <Callout
-          tone="info"
-          className="mt-3"
-          action={
-            <button type="button" className="btn btn-secondary btn-xs" onClick={openConnectedAccounts}>
-              Connect
-            </button>
-          }
-        >
-          Your page is on your own domain. Connect Google Search Console to submit it.
+      {waitingForOwner && (
+        <Callout tone="info" className="mt-3">
+          Your page is on your own domain. The app’s owner verifies it with Google first, usually within a day; you may be asked to add a DNS record. Press Submit again once that’s done.
         </Callout>
       )}
       {dns && (

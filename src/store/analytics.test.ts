@@ -163,10 +163,10 @@ describe('connected accounts', () => {
   });
 
   it('switched off (no available platforms) or unreachable: nothing is enabled', async () => {
-    api.getConnections.mockResolvedValue({ connections: [], available: [], setUp: false, hint: 'add NANGO_SECRET_KEY in Replit Secrets' });
+    api.getConnections.mockResolvedValue({ connections: [], available: [], setUp: false, hint: 'add ZERNIO_API_KEY in Replit Secrets' });
     await useAnalytics.getState().refreshConnections();
     expect(useAnalytics.getState().connectionsEnabled).toBe(false);
-    expect(useAnalytics.getState().connectionsHint).toContain('NANGO_SECRET_KEY');
+    expect(useAnalytics.getState().connectionsHint).toContain('ZERNIO_API_KEY');
     api.getConnections.mockRejectedValue(new IntegrationApiError(0, null));
     await useAnalytics.getState().refreshConnections();
     expect(useAnalytics.getState().connectionsEnabled).toBe(false);

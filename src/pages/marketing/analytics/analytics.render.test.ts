@@ -105,7 +105,7 @@ describe('ok', () => {
     expect(html).toContain('Reconnect to see your own stats.');
     // no Update button on the tab, and no vendor names in the copy
     expect(html).not.toMatch(/btn-primary[^>]*>[^<]*Update/);
-    expect(html).not.toMatch(/treg|nango/i);
+    expect(html).not.toMatch(/treg|nango|zernio/i);
   });
 
   it('Ads: own results, campaigns and competitor ads (ad text as text, Ad Library link)', () => {
@@ -153,10 +153,10 @@ describe('empty (never updated)', () => {
 });
 
 describe('not connected', () => {
-  it('Ads without an ad account: “Connect Google Ads or Meta Ads”, competitors still shown', () => {
+  it('Ads without an ad account: “Connect an ad account”, competitors still shown', () => {
     setSnaps([snap('ads', { own: [], competitors: ADS.competitors } satisfies AdsData)]);
     const html = panels.ads();
-    expect(html).toContain('Connect Google Ads or Meta Ads to see your results.');
+    expect(html).toContain('Connect an ad account (Google, Meta, LinkedIn, TikTok and more) to see your results.');
     expect(html).toContain('Rival Bakes');
   });
   it('Email not connected: connect your email account; missing reporting scope: reconnect', () => {

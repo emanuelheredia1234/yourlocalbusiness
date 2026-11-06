@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { ExternalLink, Target, Users } from 'lucide-react';
 import type { Project } from '@/lib/types';
 import type { AdsData, AnalyticsCompetitor } from '@/lib/integrations/types';
+import { AD_PLATFORMS } from '@/lib/integrations/types';
 import { fmtDate } from '@/lib/utils';
 import { useAnalytics, useConnections } from '@/store/analytics';
 import { toast } from '@/store/ui';
@@ -11,7 +12,7 @@ import { AreaChart, ChartCard } from '@/components/charts/Charts';
 import { Badge, Callout, Drawer, Empty, Field, Spinner, StatStrip } from '@/components/ui/primitives';
 import { AnalyticsShell, DataTable } from '../analytics/AnalyticsShell';
 import { adsTotals, money, pct, safeLink } from '../analytics/compute';
-import { openConnectedAccounts } from '../analytics/links';
+import { AD_SHORT, openConnectedAccounts } from '../analytics/links';
 
 const n = (v: number | undefined) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v).toLocaleString('en-US') : '–');
 
@@ -44,7 +45,7 @@ function AdsEmpty({ onCompetitors }: { onCompetitors: () => void }) {
     <Empty
       icon={<Target />}
       title="No ad numbers yet"
-      body="Connect Google Ads or Meta Ads for your own results, or track up to 3 competitors’ ads. Then press Update on the Marketing page."
+      body="Connect an ad account (Google, Meta, LinkedIn, TikTok and more) for your own results, or track up to 3 competitors’ ads. Then press Update on the Marketing page."
       action={
         <>
           <button type="button" className="btn btn-secondary btn-sm" onClick={openConnectedAccounts}>
@@ -64,7 +65,7 @@ export function AdsBody({ data, range, onCompetitors, now }: { data: AdsData; ra
   const own = Array.isArray(data?.own) ? data.own : [];
   const competitors = Array.isArray(data?.competitors) ? data.competitors : [];
   const t = adsTotals(data, range, now);
-  const connected = own.length > 0 || byPlatform.google_ads?.state === 'connected' || byPlatform.meta_ads?.state === 'connected';
+  const connected = own.length > 0 || AD_PLATFORMS.some((p) => byPlatform[p]?.state === 'connected');
   return (
     <div className="flex flex-col gap-6">
       <section aria-label="Your ads" className="flex flex-col gap-4">
@@ -80,7 +81,7 @@ export function AdsBody({ data, range, onCompetitors, now }: { data: AdsData; ra
               )
             }
           >
-            {connected ? 'No results from your ad accounts yet. Press Update on the Marketing page.' : 'Connect Google Ads or Meta Ads to see your results.'}
+            {connected ? 'No results from your ad accounts yet. Press Update on the Marketing page.' : 'Connect an ad account (Google, Meta, LinkedIn, TikTok and more) to see your results.'}
           </Callout>
         ) : (
           <>
@@ -93,7 +94,7 @@ export function AdsBody({ data, range, onCompetitors, now }: { data: AdsData; ra
                 { label: 'Conversions', value: n(t.conversions) },
               ]}
             />
-            <ChartCard title="Spend per day" subtitle={`Google and Meta, last ${range} days`} table={{ columns: ['Date', 'Spend', 'Clicks'], rows: t.series.map((s) => [fmtDate(s.date), money(s.spend, t.currency), s.clicks]) }}>
+            <ChartCard title="Spend per day" subtitle={`${own.map((a) => AD_SHORT[a.platform] ?? a.platform).join(', ')}, last ${range} days`} table={{ columns: ['Date', 'Spend', 'Clicks'], rows: t.series.map((s) => [fmtDate(s.date), money(s.spend, t.currency), s.clicks]) }}>
               {t.series.length ? <AreaChart data={t.series.map((s) => ({ x: s.date, y: s.spend }))} label="Spend" format={(v) => money(v, t.currency)} /> : <p className="py-6 text-center text-small text-muted">No spend in this range.</p>}
             </ChartCard>
             <DataTable
@@ -103,7 +104,7 @@ export function AdsBody({ data, range, onCompetitors, now }: { data: AdsData; ra
               rows={own.flatMap((a) =>
                 (a.campaigns ?? []).map((c) => [
                   <span key="c" className="flex min-w-0 items-center gap-2">
-                    <Badge>{a.platform === 'google_ads' ? 'Google' : 'Meta'}</Badge>
+                    <Badge>{AD_SHORT[a.platform] ?? a.platform}</Badge>
                     <span className="truncate">{c.name}</span>
                   </span>,
                   money(c.spend, a.currency),

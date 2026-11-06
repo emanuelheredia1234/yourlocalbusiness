@@ -217,7 +217,7 @@ describe('the windows', () => {
     expect(w).toContain('Fresh bread daily. #bread');
     expect(w).toContain(`First comment Order here: ${PAGE}`);
     expect(out.match(/btn-primary/g)).toHaveLength(1);
-    expect(w).not.toMatch(/Nango|treg/);
+    expect(w).not.toMatch(/Nango|Zernio|treg/);
   });
 
   it('the confirm, opened on an older Manus post (say by the assistant): explains, and its Post button is disabled', () => {

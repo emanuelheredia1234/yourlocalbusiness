@@ -16,6 +16,16 @@ import { IntegrationApiError, checkConnection, connect as connectApi, disconnect
 import { serverFetch } from '@/ai/claude';
 import { serverBaseNow } from '@/lib/cloud/auth';
 import { safeStorage } from '@/lib/storage';
+import { useStore } from '@/store/useStore';
+
+/** The business on screen: it picks which of the user's connected accounts are shown and used. */
+const activeProject = (): string | undefined => {
+  try {
+    return useStore.getState().activeProjectId ?? undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const artifact = () => typeof __ARTIFACT_BUILD__ !== 'undefined' && __ARTIFACT_BUILD__;
 
@@ -192,7 +202,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
   /** One read of the connections (refreshConnections() shares it while it runs). */
   const readConnections = async () => {
     try {
-      const r = await getConnections();
+      const r = await getConnections(activeProject());
       const connections = Array.isArray(r.connections) ? r.connections : [];
       // a network that's no longer waiting (connected, or anything but not connected) leaves `pending`;
       // one still not connected after 30 minutes becomes "That didn't finish"
@@ -312,9 +322,14 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     connectPlatform: async (platform, mode = 'connect') => {
       if (artifact()) return { ok: false, message: 'Connected accounts need the full app.' };
       try {
-        const { connectLink } = await (mode === 'reconnect' ? reconnectApi(platform) : connectApi(platform));
+        const link = await (mode === 'reconnect' ? reconnectApi(platform, activeProject()) : connectApi(platform, activeProject()));
+        // an ad account on a network already connected needs no sign-in: read the accounts again
+        if (link.alreadyConnected || !link.connectLink) {
+          await get().refreshConnections();
+          return { ok: true };
+        }
         // a new tab with no way back to this page; the link is never put in the address bar or kept
-        if (typeof window !== 'undefined') window.open(connectLink, '_blank', 'noopener');
+        if (typeof window !== 'undefined') window.open(link.connectLink, '_blank', 'noopener');
         // only when the window was opened is kept
         const expired = { ...get().expired };
         delete expired[platform];
@@ -339,7 +354,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
         return { ok: true };
       }
       try {
-        const { connection } = await checkConnection(platform);
+        const { connection } = await checkConnection(platform, activeProject());
         set({ connections: [...get().connections.filter((c) => c.platform !== platform), connection] });
         return { ok: true };
       } catch (e) {
@@ -350,7 +365,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     disconnectPlatform: async (platform) => {
       if (artifact()) return { ok: false };
       try {
-        await disconnectApi(platform);
+        await disconnectApi(platform, activeProject());
         const pending = { ...get().pending };
         delete pending[platform];
         set({ connections: get().connections.map((c) => (c.platform === platform ? { platform, state: 'not_connected' } : c)), pending });

@@ -1,32 +1,39 @@
-// Settings › Connected accounts: each network, ad account and Search Console, with its state and the one
-// action that fits it. Connect asks the server for a link and opens it in a new tab (the link is never kept);
-// the row then waits for the network. Nothing here posts or changes anything at the network.
+// Settings › Connected accounts: each social network and ad account, with its state and the one action that fits
+// it. Accounts connect through Zernio's secure, branded sign-in (the server asks for the link; it opens in a new
+// tab and is never kept); the row then waits for the network. Each business picks which account it uses.
+// Other integrations (Nango: future booking tools and CRMs) show only when the owner has set them up.
+// Nothing here posts or changes anything at the network.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeftRight, BarChart3, Pin, RefreshCw, Search, Target, Unplug } from 'lucide-react';
-import type { ConnectPlatform, ConnectionStatus, LimitedReason, Target as ConnectTarget } from '@/lib/integrations/types';
-import { PHASE2_PLATFORMS } from '@/lib/integrations/types';
-import { getTargets, setTarget } from '@/lib/integrations/api';
+import { ArrowLeftRight, BarChart3, CalendarClock, Pin, Plug, RefreshCw, Target, Unplug } from 'lucide-react';
+import type { ConnectPlatform, ConnectionStatus, LimitedReason, NangoIntegration, NangoResponse, Target as ConnectTarget } from '@/lib/integrations/types';
+import { AD_PLATFORMS, PHASE2_PLATFORMS, SOCIAL_PLATFORMS } from '@/lib/integrations/types';
+import { connectNango, disconnectNango, getNangoIntegrations, getTargets, setTarget } from '@/lib/integrations/api';
 import { useAnalytics, PENDING_EXPIRES_MS } from '@/store/analytics';
+import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { PlatformMark } from '@/components/posts/PlatformIcon';
 import { Badge, Callout, InfoTip, Modal, MoreMenu, OptionCards, SettingsRow, SettingsSection, Spinner, StatusDot, confirmAction, type MenuEntry } from '@/components/ui/primitives';
 import { PLATFORM_NAMES } from '@/pages/marketing/analytics/links';
 
-const SOCIAL: ConnectPlatform[] = ['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'pinterest'];
-const ADS: ConnectPlatform[] = ['google_ads', 'meta_ads', 'microsoft_ads', 'tiktok_ads'];
-const SEARCH: ConnectPlatform[] = ['google_search_console'];
+const SOCIAL: readonly ConnectPlatform[] = SOCIAL_PLATFORMS;
+const ADS: readonly ConnectPlatform[] = AD_PLATFORMS;
 
 /** Where each network's own app settings are (Disconnect doesn't remove access there). */
 const APP_SETTINGS: Partial<Record<ConnectPlatform, string>> = {
   facebook: 'Facebook',
-  instagram: 'Facebook',
+  instagram: 'Instagram',
   meta_ads: 'Facebook',
   linkedin: 'LinkedIn',
+  linkedin_ads: 'LinkedIn',
   tiktok: 'TikTok',
+  tiktok_ads: 'TikTok',
   x: 'X',
+  x_ads: 'X',
   youtube: 'your Google account',
   google_ads: 'your Google account',
-  google_search_console: 'your Google account',
+  pinterest_ads: 'Pinterest',
+  reddit_ads: 'Reddit',
+  microsoft_ads: 'your Microsoft account',
 };
 
 const LIMITED_COPY: Record<LimitedReason, (name: string) => string> = {
@@ -44,7 +51,8 @@ const TARGET_KIND: Partial<Record<NonNullable<ConnectionStatus['targetKind']>, s
   li_org: 'Company page',
   yt_channel: 'Channel',
   ads_account: 'Ad account',
-  gsc_site: 'Site',
+  tt_account: 'Account',
+  x_account: 'Account',
 };
 
 export type RowAction = 'connect' | 'reconnect' | 'check' | 'menu' | 'none';
@@ -55,15 +63,13 @@ export interface RowView {
   note?: string;
   action: RowAction;
   comingSoon?: boolean;
-  /** Instagram connects through Facebook */
-  connectAs?: ConnectPlatform;
 }
 
 /** What a row shows, from the server's status and what this browser knows (a connect window opened here). */
 export function rowView(
   platform: ConnectPlatform,
   st: ConnectionStatus | undefined,
-  o: { enabled: boolean; pendingAt?: number; expired?: boolean; facebook?: ConnectionStatus; now?: number },
+  o: { enabled: boolean; pendingAt?: number; expired?: boolean; now?: number },
 ): RowView {
   const name = PLATFORM_NAMES[platform];
   if (PHASE2_PLATFORMS.includes(platform) || st?.state === 'coming_soon') return { tone: 'faint', status: 'Coming soon', action: 'none', comingSoon: true };
@@ -71,7 +77,7 @@ export function rowView(
   const off = !o.enabled;
   const now = o.now ?? Date.now();
   const waiting = state === 'pending' || (state === 'not_connected' && o.pendingAt !== undefined && now - o.pendingAt <= PENDING_EXPIRES_MS);
-  if (waiting && !off) return { tone: 'faint', status: `Waiting for ${platform === 'instagram' ? 'Facebook' : name}…`, note: 'Finish in the tab that opened, then come back.', action: 'check' };
+  if (waiting && !off) return { tone: 'faint', status: `Waiting for ${name}…`, note: 'Finish in the tab that opened, then come back.', action: 'check' };
   if (state === 'connected') {
     if (st?.expiresSoon) return { tone: 'warn', status: 'Expires soon', note: `Reconnect to keep posting to ${name}.`, action: off ? 'none' : 'reconnect' };
     return { tone: 'good', status: 'Connected', action: off ? 'none' : 'menu' };
@@ -88,23 +94,14 @@ export function rowView(
   }
   // not connected
   const expiredNote = o.expired || (o.pendingAt !== undefined && now - o.pendingAt > PENDING_EXPIRES_MS) ? 'That didn’t finish. Try again.' : undefined;
-  if (platform === 'instagram') {
-    const fbOn = o.facebook?.state === 'connected' || o.facebook?.state === 'limited';
-    return {
-      tone: 'faint',
-      status: 'Not connected',
-      note: expiredNote ?? (fbOn ? 'The chosen Facebook Page has no Instagram professional account.' : 'Connect a Facebook Page that has an Instagram professional account.'),
-      action: off || fbOn ? 'none' : 'connect',
-      connectAs: 'facebook',
-    };
-  }
+  if (platform === 'x_ads' && !expiredNote) return { tone: 'faint', status: 'Not connected', note: 'Connect X first, then X Ads.', action: off ? 'none' : 'connect' };
   return { tone: 'faint', status: 'Not connected', ...(expiredNote ? { note: expiredNote } : {}), action: off ? 'none' : 'connect' };
 }
 
 function PlatformIcon({ platform }: { platform: ConnectPlatform }) {
   if (platform === 'facebook' || platform === 'instagram' || platform === 'linkedin' || platform === 'tiktok' || platform === 'x' || platform === 'youtube')
     return <PlatformMark platform={platform} size={20} />;
-  const icon = platform === 'pinterest' ? <Pin /> : platform === 'google_search_console' ? <Search /> : platform === 'google_ads' || platform === 'microsoft_ads' ? <Target /> : <BarChart3 />;
+  const icon = platform === 'pinterest' || platform === 'pinterest_ads' ? <Pin /> : platform === 'google_ads' || platform === 'microsoft_ads' || platform === 'reddit_ads' ? <Target /> : <BarChart3 />;
   return (
     <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm bg-surface-3 text-ink-2 [&>svg]:size-3.5" aria-hidden="true">
       {icon}
@@ -165,7 +162,7 @@ export function ConnectedAccounts() {
     );
   }
 
-  const row = (p: ConnectPlatform) => <AccountRow key={p} platform={p} status={byPlatform[p]} view={rowView(p, byPlatform[p], { enabled, pendingAt: pending[p], expired: expired[p], facebook: byPlatform.facebook })} onChoose={() => setChoose(p)} />;
+  const row = (p: ConnectPlatform) => <AccountRow key={p} platform={p} status={byPlatform[p]} view={rowView(p, byPlatform[p], { enabled, pendingAt: pending[p], expired: expired[p] })} onChoose={() => setChoose(p)} />;
 
   return (
     <div className="flex flex-col gap-6">
@@ -185,7 +182,7 @@ export function ConnectedAccounts() {
         description="Post from the app and see your own stats."
         actions={
           <InfoTip label="How connecting works" title="How connecting works">
-            Connect opens the network’s own sign-in in a new tab. You choose what to allow there; the app never sees your password. Disconnecting here stops the app using the account; to remove access completely, also remove the app in the network’s own settings.
+            Connect opens a secure sign-in in a new tab, then the network’s own sign-in. You choose what to allow there; the app never sees your password. Each business uses the account you choose for it. Disconnecting here stops the app using the account; to remove access completely, also remove the app in the network’s own settings.
           </InfoTip>
         }
       >
@@ -194,9 +191,7 @@ export function ConnectedAccounts() {
       <SettingsSection title="Ads" description="See your own ad results. The app reads them only and never changes your ads.">
         {ADS.map(row)}
       </SettingsSection>
-      <SettingsSection title="Google Search Console" description="For pages on your own domain. Pages on the app’s address need no connection.">
-        {SEARCH.map(row)}
-      </SettingsSection>
+      <OtherIntegrations />
       {choose && <ChooseTarget platform={choose} onClose={() => setChoose(null)} />}
     </div>
   );
@@ -217,7 +212,7 @@ function AccountRow({ platform, status, view, onChoose }: { platform: ConnectPla
     }
   };
   const s = useAnalytics.getState;
-  const connect = () => void act(() => s().connectPlatform(view.connectAs ?? platform), `Couldn’t start connecting ${name}`);
+  const connect = () => void act(() => s().connectPlatform(platform), `Couldn’t start connecting ${name}`);
   const reconnect = () => void act(() => s().connectPlatform(platform, 'reconnect'), `Couldn’t start reconnecting ${name}`);
   const check = () => void act(() => s().checkPlatform(platform), `Couldn’t check ${name}`);
   const disconnect = async () => {
@@ -232,7 +227,7 @@ function AccountRow({ platform, status, view, onChoose }: { platform: ConnectPla
   };
 
   const menu: MenuEntry[] = [
-    ...((status?.targetsAvailable ?? 0) > 1 ? [{ label: platform === 'facebook' ? 'Choose page' : 'Choose account', icon: <ArrowLeftRight />, onSelect: onChoose }] : []),
+    ...((status?.targetsAvailable ?? 0) > 1 ? [{ label: platform === 'facebook' ? 'Choose Page for this business' : 'Choose account for this business', icon: <ArrowLeftRight />, onSelect: onChoose }] : []),
     { label: 'Check connection', icon: <RefreshCw />, onSelect: check },
     'separator',
     { label: 'Disconnect', icon: <Unplug />, danger: true, onSelect: () => void disconnect() },
@@ -300,7 +295,7 @@ function ChooseTarget({ platform, onClose }: { platform: ConnectPlatform; onClos
     if (!picked || saving) return;
     setSaving(true);
     try {
-      const { connection } = await setTarget(platform, picked);
+      const { connection } = await setTarget(platform, picked, useStore.getState().activeProjectId ?? undefined);
       useAnalytics.setState((s) => ({ connections: [...s.connections.filter((c) => c.platform !== platform), connection] }));
       toast({ title: `${name}: ${connection.targetLabel ?? 'chosen'}`, kind: 'success' });
       onClose();
@@ -315,7 +310,7 @@ function ChooseTarget({ platform, onClose }: { platform: ConnectPlatform; onClos
       open
       onClose={onClose}
       title={platform === 'facebook' ? 'Choose which Page to use' : `Choose which ${name} account to use`}
-      subtitle="Posts and stats use this one. You can change it later."
+      subtitle="This business’s posts and stats use this one. You can change it later."
       footer={
         <>
           <button type="button" className="btn btn-secondary btn-sm" onClick={onClose}>
@@ -349,5 +344,91 @@ function ChooseTarget({ platform, onClose }: { platform: ConnectPlatform; onClos
         />
       )}
     </Modal>
+  );
+}
+
+/**
+ * Other integrations through Nango (future booking tools and CRMs). Nothing shows until the owner turns Nango on
+ * and lists an integration; the owner alone sees the setup hint.
+ */
+function OtherIntegrations() {
+  const [data, setData] = useState<NangoResponse | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const load = () =>
+    getNangoIntegrations()
+      .then(setData)
+      .catch(() => setData(null));
+  useEffect(() => {
+    if (__ARTIFACT_BUILD__) return;
+    void load();
+  }, []);
+  if (!data?.enabled) return null;
+  const list = Array.isArray(data.integrations) ? data.integrations : [];
+  if (!list.length && !data.hint) return null;
+  const run = async (key: string, fn: () => Promise<unknown>, failTitle: string) => {
+    if (busy) return;
+    setBusy(key);
+    try {
+      await fn();
+      await load();
+    } catch (e) {
+      toast({ title: failTitle, body: e instanceof Error ? e.message : 'Try again shortly.', kind: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <SettingsSection title="Other integrations" description="Booking tools and CRMs the app can work with.">
+      {data.hint && (
+        <Callout tone="warn" title="Owner setup">
+          {data.hint}
+        </Callout>
+      )}
+      {list.map((i: NangoIntegration) => {
+        const connected = i.state === 'connected';
+        return (
+          <SettingsRow
+            key={i.key}
+            label={
+              <span className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm bg-surface-3 text-ink-2 [&>svg]:size-3.5" aria-hidden="true">
+                  {i.category === 'booking' || i.category === 'calendar' ? <CalendarClock /> : <Plug />}
+                </span>
+                <span className="truncate">{i.label}</span>
+              </span>
+            }
+          >
+            <span className="flex min-w-0 flex-wrap items-center justify-end gap-3" data-integration={i.key} data-state={i.state}>
+              <StatusDot tone={connected ? 'good' : i.state === 'needs_reconnect' ? 'warn' : 'faint'}>{connected ? 'Connected' : i.state === 'pending' ? 'Waiting…' : i.state === 'needs_reconnect' ? 'Reconnect needed' : 'Not connected'}</StatusDot>
+              {connected ? (
+                <button type="button" className="btn btn-ghost btn-sm" disabled={busy === i.key} onClick={() => void run(i.key, () => disconnectNango(i.key), `Couldn’t disconnect ${i.label}`)}>
+                  {busy === i.key && <Spinner size={14} />}
+                  Disconnect
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={busy === i.key}
+                  onClick={() =>
+                    void run(
+                      i.key,
+                      async () => {
+                        const { connectLink } = await connectNango(i.key);
+                        if (typeof window !== 'undefined') window.open(connectLink, '_blank', 'noopener');
+                      },
+                      `Couldn’t start connecting ${i.label}`,
+                    )
+                  }
+                >
+                  {busy === i.key && <Spinner size={14} />}
+                  Connect
+                </button>
+              )}
+            </span>
+          </SettingsRow>
+        );
+      })}
+    </SettingsSection>
   );
 }

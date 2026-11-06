@@ -32,12 +32,17 @@ function rowOf(html: string, platform: string): string {
 beforeEach(() => set([]));
 afterEach(() => vi.unstubAllGlobals());
 
-describe('the three sections', () => {
-  it('Social, Ads and Search Console, with phase-2 networks as Coming soon', () => {
+describe('the sections', () => {
+  it('Social and Ads (every ad network Zernio reads), Pinterest as Coming soon, no Search Console row', () => {
     const html = render();
-    for (const t of ['Social', 'Ads', 'Google Search Console', 'Facebook Page', 'Instagram', 'LinkedIn', 'TikTok', 'YouTube', 'Google Ads', 'Meta Ads', 'Search Console', 'Pages on the app’s address need no connection']) expect(html).toContain(t);
-    for (const p of ['pinterest', 'microsoft_ads', 'tiktok_ads']) expect(rowOf(html, p)).toContain('Coming soon');
-    expect(html).not.toMatch(/nango|treg/i);
+    for (const t of ['Social', 'Ads', 'Facebook Page', 'Instagram', 'LinkedIn', 'TikTok', 'YouTube', 'Google Ads', 'Meta Ads', 'LinkedIn Ads', 'TikTok Ads', 'Pinterest Ads', 'X Ads', 'Reddit Ads', 'Microsoft Ads']) expect(html).toContain(t);
+    expect(rowOf(html, 'pinterest')).toContain('Coming soon');
+    for (const p of ['microsoft_ads', 'tiktok_ads', 'reddit_ads']) expect(rowOf(html, p)).toContain('Connect');
+    expect(html).not.toContain('Search Console');
+    expect(html).not.toMatch(/nango|treg|zernio/i);
+  });
+  it('no Other integrations section until the owner sets Nango up', () => {
+    expect(render()).not.toContain('Other integrations');
   });
 });
 
@@ -97,13 +102,15 @@ describe('every row state', () => {
       expect(row.includes('>Reconnect<')).toBe(reason === 'missing_permissions' || reason === 'no_page_role');
     }
   });
-  it('Instagram follows Facebook: connect a Facebook Page that has an Instagram professional account', () => {
-    expect(rowOf(render(), 'instagram')).toContain('Connect a Facebook Page that has an Instagram professional account.');
-    set([
-      { platform: 'facebook', state: 'connected' },
-      { platform: 'instagram', state: 'connected', targetLabel: 'joesbakery', targetKind: 'ig_account' },
-    ]);
-    expect(rowOf(render(), 'instagram')).toContain('Connected');
+  it('Instagram connects on its own (no Facebook Page needed)', () => {
+    const row = rowOf(render(), 'instagram');
+    expect(row).toContain('Not connected');
+    expect(row).toContain('>Connect<');
+    set([{ platform: 'instagram', state: 'connected', targetLabel: 'joesbakery', targetKind: 'ig_account' }]);
+    expect(rowOf(render(), 'instagram')).toContain('joesbakery (Instagram)');
+  });
+  it('X Ads says to connect X first', () => {
+    expect(rowOf(render(), 'x_ads')).toContain('Connect X first, then X Ads.');
   });
 });
 
@@ -118,11 +125,11 @@ describe('connecting switched off', () => {
 
 describe('the owner’s hint', () => {
   it('names the Replit Secret, never a value', () => {
-    set([], { connectionsEnabled: false, connectionsHint: 'Connecting accounts is off: add NANGO_SECRET_KEY (and NANGO_WEBHOOK_SIGNING_KEY) in Replit Secrets.' });
+    set([], { connectionsEnabled: false, connectionsHint: 'Connecting social and ad accounts is off: add ZERNIO_API_KEY (and ZERNIO_WEBHOOK_SECRET) in Replit Secrets.' });
     const html = render();
-    expect(html).toContain('NANGO_SECRET_KEY');
+    expect(html).toContain('ZERNIO_API_KEY');
     expect(html).toContain('Replit Secrets');
-    expect(html).not.toMatch(/sk_|test-nango-key/);
+    expect(html).not.toMatch(/sk_test|test-zernio-key/);
   });
   it('people who aren’t the owner get no hint (the server sends none)', () => {
     set([], { connectionsEnabled: false });
@@ -143,6 +150,6 @@ describe('rowView', () => {
   it('a server-side pending state reads as waiting; connected with connecting off shows no action', () => {
     expect(rowView('facebook', { platform: 'facebook', state: 'pending' }, { enabled: true }).status).toBe('Waiting for Facebook…');
     expect(rowView('facebook', { platform: 'facebook', state: 'connected' }, { enabled: false }).action).toBe('none');
-    expect(rowView('instagram', undefined, { enabled: true }).connectAs).toBe('facebook');
+    expect(rowView('instagram', undefined, { enabled: true }).action).toBe('connect');
   });
 });
