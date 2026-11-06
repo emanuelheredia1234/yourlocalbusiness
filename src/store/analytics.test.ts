@@ -223,9 +223,17 @@ describe('connections without opening Settings (useConnections → ensureConnect
       api.getConnections.mockReturnValueOnce(new Promise((r) => (resolve = r)));
       const p = useAnalytics.getState().refreshConnections();
       useStore.setState({ activeProjectId: 'biz-c' });
-      resolve({ connections: [], available: ['facebook'], setUp: true });
+      let resolveC!: (v: unknown) => void;
+      api.getConnections.mockReturnValueOnce(new Promise((r) => (resolveC = r)));
+      resolve({ connections: [{ platform: 'facebook', state: 'connected', targetLabel: 'B page' }], available: ['facebook'], setUp: true });
+      await vi.waitFor(() => expect(api.getConnections).toHaveBeenLastCalledWith('biz-c'));
+      // while the new business's read is out, the old business's answer was dropped
+      expect(useAnalytics.getState().connections[0]?.targetLabel).not.toBe('B page');
+      resolveC({ connections: [{ platform: 'facebook', state: 'connected', targetLabel: 'C page' }], available: ['facebook'], setUp: true });
       await p;
       expect(api.getConnections).toHaveBeenLastCalledWith('biz-c');
+      // the old business's answer never shows on the new one
+      expect(useAnalytics.getState().connections[0]?.targetLabel).toBe('C page');
     } finally {
       useStore.setState({ activeProjectId: before });
     }

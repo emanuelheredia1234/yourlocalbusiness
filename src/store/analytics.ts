@@ -208,6 +208,8 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     const projectId = activeProject();
     try {
       const r = await getConnections(projectId);
+      // another business came on screen while this was out: drop it (its accounts must never show on the new one)
+      if (projectId !== activeProject()) return;
       const connections = Array.isArray(r.connections) ? r.connections : [];
       // a network that's no longer waiting (connected, or anything but not connected) leaves `pending`;
       // one still not connected after 30 minutes becomes "That didn't finish"
@@ -238,6 +240,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     } catch (e) {
       // off, signed out or unreachable: everything reads "Not connected" and posting stays manual
       // (signed out: the next mount or focus asks again, so signing in shows the accounts)
+      if (projectId !== activeProject()) return;
       connectionsAt = e instanceof IntegrationApiError && e.code === 'AUTH_REQUIRED' ? 0 : Date.now();
       connectionsFor = projectId;
       set({ connections: [], connectionsEnabled: false, connectionsLoaded: true, connectionsError: e instanceof IntegrationApiError && e.code !== 'AUTH_REQUIRED' ? e.message : undefined });
