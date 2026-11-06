@@ -49,3 +49,4 @@ waitForPort = 8787
 
 [userenv.shared]
 ADMIN_EMAILS = "hectorheredia242@gmail.com"
+APP_URL = "https://yourlocalbusiness.replit.app"
