@@ -3,7 +3,8 @@
 //
 //   GET    /api/pages                       → { pages, domains, appOrigin }                       (signed in)
 //   GET    /api/pages/check?slug=&pageId=   → { ok } | { ok: false, reason: 'taken'|'reserved'|'format' }
-//   PUT    /api/pages/<pageId>              { kind, slug, title, html, images, domain?, home? } → { page, url, domainUrl? }
+//   PUT    /api/pages/<pageId>              { kind, slug, title, html, images, domain?, home?, projectId? } → { page, url, domainUrl? }
+//                                           (projectId: the page's business, kept so its leads know it; an SEO page's is its id's)
 //   DELETE /api/pages/<pageId>
 //   POST   /api/domains                     { domain } → { domain, token, verified, verifiedAt, record }
 //                                           (409 DOMAIN_TAKEN when another account has it, with this account's record)
@@ -55,7 +56,9 @@ import path from 'node:path';
 import { serviceHeaders } from './secretBox.mjs';
 import { sameOrigin } from './providers/routes.mjs';
 // lead forms on published pages: POST /<slug>/lead and /api/leads (server/leads.mjs)
-import { createLeads, leadLimitsFromEnv } from './leads.mjs';
+import { LEADS_P2_MIGRATION, createLeads, leadCounters, leadLimitsFromEnv } from './leads.mjs';
+// lead magnets: /m/<id>, /api/lead-files and /api/public-images (server/leadFiles.mjs)
+import { createLeadFiles, leadLinkSecret, magnetLimitsFromEnv } from './leadFiles.mjs';
 
 export const PAGES_MIGRATION = 'supabase/migrations/20261103040000_published_pages.sql';
 
@@ -173,9 +176,14 @@ const NAMES_WAIT = 2000;
 
 // Never allow-same-origin: the app's sign-in tokens live in localStorage on the app's origin.
 const ARTIFACT_CSP = 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads';
-const SEO_CSP = 'sandbox allow-forms allow-popups allow-popups-to-escape-sandbox';
+// SEO pages run no scripts; allow-downloads only lets a link (a lead magnet's /m/<id>) start a download
+const SEO_CSP = 'sandbox allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads';
+/** The sandbox published pages get on the app's host (exported for tests). */
+export const PAGE_CSP = Object.freeze({ seo: SEO_CSP, artifact: ARTIFACT_CSP });
 const IMAGE_CSP = "default-src 'none'; sandbox";
 const NOTICE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+/** A page's business (user_docs project id), as page_leads and lead_files keep it. */
+const PROJECT_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const COMMON = { 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin' };
 
 // A plain page with no app name: custom domains must not show whose app serves them.
@@ -672,6 +680,8 @@ export function pagesFromEnv(env = process.env, deps = {}) {
     supabaseUrl: env.SUPABASE_URL || '',
     secretKey: env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '',
     leadLimits: leadLimitsFromEnv(env),
+    magnetLimits: magnetLimitsFromEnv(env),
+    linkSecret: leadLinkSecret(env),
     appHosts: env.APP_HOSTS || '',
     resolveTxt: txtResolver(env.PAGES_DNS_SERVERS || ''),
     trustedHops: hopsFrom(env.TRUSTED_PROXY_HOPS),
@@ -703,6 +713,9 @@ export function createPages({
   distDir = '',
   // lead forms: { perIp, perPage, windowMs } (server/leads.mjs)
   leadLimits,
+  // lead magnets: { perIp, perFile, windowMs } and the download tickets' secret (server/leadFiles.mjs)
+  magnetLimits,
+  linkSecret = null,
   appHosts = '',
   resolveTxt = txtResolver(),
   trustedHops = TRUSTED_PROXY_HOPS,
@@ -762,12 +775,24 @@ export function createPages({
     console.warn(`Published pages: Supabase refused a request (${what}).`);
   };
   const accountGone = () => fail(401, 'ACCOUNT_GONE', 'This account doesn’t exist anymore. Sign in again.');
+  // project_id is looked for again a while after it was found missing (the migration may have been run since)
+  let projectColumnOffAt = 0;
+  const projectColumnOff = () => projectColumnOffAt > 0 && Date.now() - projectColumnOffAt < 10 * 60_000;
+  const withoutProject = (q) => q.replace(/,project_id(?=[,&]|$)/g, '');
 
   /**
    * Supabase's REST API with the secret key: the parsed answer, or an error with status and code.
    * meter: what the answer brought is added to meter.bytes (the visitors' byte limits).
    */
   async function rest(query, { method = 'GET', body, prefer, timeout = 10_000, meter } = {}) {
+    // before 20261112000000_leads_p2.sql, published_pages has no project_id: it's left out of reads and writes
+    if (projectColumnOff()) {
+      query = withoutProject(query);
+      if (body && typeof body === 'object' && !Array.isArray(body) && 'project_id' in body) {
+        body = { ...body };
+        delete body.project_id;
+      }
+    }
     let res;
     let raw;
     try {
@@ -790,6 +815,11 @@ export function createPages({
     const message = String(data?.message ?? '');
     const about = `${message} ${data?.details ?? ''}`;
     if (res.status === 404 && (code === 'PGRST205' || code === '42P01' || /published_(pages|domains)/.test(message))) throw tablesMissing();
+    if ((code === '42703' || code === 'PGRST204') && message.includes('project_id') && !projectColumnOff()) {
+      projectColumnOffAt = Date.now();
+      console.warn(`Published pages: published_pages has no project_id column yet, so artifacts’ leads don’t know their business. Run ${LEADS_P2_MIGRATION} in Supabase → SQL Editor.`);
+      return rest(query, { method, body, prefer, timeout, meter });
+    }
     // a unique key: the address was just taken, or the domain's home page (published_pages_domain_home)
     if (code === '23505') throw fail(409, 'CONFLICT', 'That changed just now. Try again.', { constraint: /published_pages_domain_home/.test(about) ? 'home' : '' });
     // a row this one points at is gone, or isn't the same account's: the account (deleted), or the domain
@@ -901,7 +931,7 @@ export function createPages({
   // ── lookups for visitors: cached, one request at a time per key, within the limits ──
   const DOMAIN_COLUMNS = 'domain,user_id,token,verified_at';
   /** A page's row without its HTML: what's kept per page (its HTML is kept apart, by version). */
-  const PAGE_HEAD = 'slug,user_id,page_id,kind,title,images,domain,home,updated_at';
+  const PAGE_HEAD = 'slug,user_id,page_id,kind,title,images,domain,home,project_id,updated_at';
   const PAGE_ROW = `${PAGE_HEAD},html`;
   const domainCache = rowCache('domain', { ttl: tune.domainTtl, maxBytes: 4 * MB, maxEntries: 5000, sizeOf: () => 300 }); // host → domain row | null
   // slug → the page's row without its HTML, with htmlBytes (the HTML's size) | null
@@ -1302,6 +1332,8 @@ export function createPages({
     recheckSoon(site);
     // a visitor sending one of the domain's pages' forms (server/leads.mjs)
     if (req.method === 'POST' && leads.matchLead(url)) return leads.receiveOnDomain(req, res, url, site);
+    // the app's short public routes (/m/<id>: the owner's lead magnets only)
+    if (isPublicRoute(url.pathname)) return servePublicRoute(req, res, url, site);
     if (req.method !== 'GET' && req.method !== 'HEAD') return write(req, res, 405, { ...COMMON, 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', allow: 'GET, HEAD' }, 'Method not allowed');
     const p = url.pathname;
     const text = (type, body, cacheControl) => write(req, res, 200, { ...COMMON, 'content-type': type, 'cache-control': cacheControl }, body);
@@ -1368,6 +1400,17 @@ export function createPages({
     }
   }
 
+  /** /b/…, /m/… and /o/… (any method): the app's own short public routes, never the app itself (call servePublicRoute). */
+  const matchPublicRoute = (url) => isPublicRoute(url.pathname);
+  /**
+   * A short public route, on the app's host or (site: serveDomain's row) on a domain. Until its feature answers it
+   * (/b/ with offers, /o/ with opt-outs), it's the published pages' "not found" page.
+   */
+  async function servePublicRoute(req, res, url, site = null) {
+    if (magnets.matchMagnet(url)) return magnets.serveMagnet(req, res, url, site);
+    return notFound(req, res);
+  }
+
   /** GET|HEAD /<slug>, /<slug>/ and /<slug>/img/<name> on the app's host (call servePage for them). */
   const matchPage = (url) => enabled && !isPublicRoute(url.pathname) && PAGE_PATH.test(url.pathname);
 
@@ -1407,7 +1450,31 @@ export function createPages({
     const got = await pageWithHtml(page, client);
     return got ? { ...got.page, html: got.html.toString('utf8') } : null;
   }
-  const leads = createLeads({ enabled, supabaseUrl: url, secretKey, fetch, limits: leadLimits, findPage: leadPage, reserved, notFound, whoIs, send, corsHeaders, rateLimited, allowedOrigin });
+  // one pair of per-visitor and per-page counters for every form: the pages' and the lead magnets' email gate
+  const counters = leadCounters(leadLimits);
+  const magnets = createLeadFiles({
+    enabled,
+    supabaseUrl: url,
+    secretKey,
+    fetch,
+    whoIs,
+    send,
+    readJson,
+    rateLimited,
+    corsHeaders,
+    allowedOrigin,
+    billing,
+    mustExist,
+    originOf,
+    notFound,
+    gone,
+    visitor,
+    keepLead: (row) => leads.keepLead(row),
+    counters,
+    limits: magnetLimits,
+    linkSecret,
+  });
+  const leads = createLeads({ enabled, supabaseUrl: url, secretKey, fetch, counters, findPage: leadPage, findMagnet: magnets.findMagnet, ticket: magnets.ticket, reserved, notFound, whoIs, send, corsHeaders, rateLimited, allowedOrigin });
 
   // ── the signed-in API ──
   const describePage = (r, origin) => ({
@@ -1417,6 +1484,7 @@ export function createPages({
     title: r.title ?? '',
     domain: r.domain ?? null,
     home: !!r.home,
+    projectId: typeof r.project_id === 'string' ? r.project_id : null,
     updatedAt: r.updated_at ?? null,
     url: `${origin}/${r.slug}`,
     ...(r.domain ? { domainUrl: r.home ? `https://${r.domain}/` : `https://${r.domain}/${r.slug}` } : {}),
@@ -1429,7 +1497,7 @@ export function createPages({
   };
   /** A domain another account has, as this account would prove it's theirs. */
   const describeClaim = (domain, userId) => describeDomain({ domain, user_id: userId, token: tokenFor(domain, userId), verified_at: null });
-  const PAGE_COLUMNS = 'page_id,kind,slug,title,domain,home,updated_at';
+  const PAGE_COLUMNS = 'page_id,kind,slug,title,domain,home,project_id,updated_at';
 
   /** The images a page is published with, checked: [{ name, mime, bytes, size, sha256 }]. */
   function readImages(list) {
@@ -1500,6 +1568,9 @@ export function createPages({
     if (b.domain && !domain) throw fail(400, 'BAD_DOMAIN', 'That isn’t a domain name.');
     const home = b.home === true;
     if (home && !domain) throw fail(400, 'BAD_REQUEST', 'Choose one of your domains to make this its home page.');
+    // the page's business, so its leads know it: given, or (an SEO page) the id after seo:
+    if (b.projectId != null && (typeof b.projectId !== 'string' || b.projectId.length > 80 || !PROJECT_ID_RE.test(b.projectId))) throw fail(400, 'BAD_REQUEST', 'Unknown business.');
+    const projectId = b.projectId ?? (kind === 'seo' ? pageId.slice(4) : null);
     const uid = who.id;
     const pid = encodeURIComponent(pageId);
     const d = domain ? encodeURIComponent(domain) : '';
@@ -1543,7 +1614,7 @@ export function createPages({
       // one row per page: a new name moves the page (its old name stops working)
       const rows = await rest(`published_pages?on_conflict=user_id,page_id&select=${PAGE_COLUMNS}`, {
         method: 'POST',
-        body: { slug, user_id: uid, page_id: pageId, kind, title, html, images: images.map(({ name, mime, size, sha256: hash }) => ({ name, mime, size, sha256: hash, v: version })), domain, home },
+        body: { slug, user_id: uid, page_id: pageId, kind, title, html, images: images.map(({ name, mime, size, sha256: hash }) => ({ name, mime, size, sha256: hash, v: version })), domain, home, project_id: projectId },
         prefer: 'resolution=merge-duplicates,return=representation',
       });
       saved = rows?.[0];
@@ -1571,7 +1642,7 @@ export function createPages({
     // the images it had before go (and leftovers of publishes that stopped halfway)
     const previous = Array.isArray(current?.images) ? String(current.images.find((i) => typeof i?.v === 'string' && i.v)?.v ?? '') : '';
     await removeImages(base, { keep: version, spare: UPLOAD_GRACE, previous });
-    const page = describePage(saved ?? { page_id: pageId, kind, slug, title, domain, home }, origin);
+    const page = describePage(saved ?? { page_id: pageId, kind, slug, title, domain, home, project_id: projectId }, origin);
     return { page, url: page.url, ...(page.domainUrl ? { domainUrl: page.domainUrl } : {}) };
   }
 
@@ -1685,10 +1756,11 @@ export function createPages({
     return { ok: true };
   }
 
-  const matchApi = (url) => /^\/api\/(pages|domains)(\/|$)/.test(url.pathname) || leads.matchApi(url);
+  const matchApi = (url) => /^\/api\/(pages|domains)(\/|$)/.test(url.pathname) || leads.matchApi(url) || magnets.matchApi(url);
 
   async function handleApi(req, res, url) {
     if (leads.matchApi(url)) return leads.handleApi(req, res, url);
+    if (magnets.matchApi(url)) return magnets.handleApi(req, res, url);
     const reply = (status, body) => send(res, status, body, corsHeaders(req));
     if (!sameOrigin(req, allowedOrigin)) return reply(403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
     if (!enabled) return reply(503, { error: 'Publishing isn’t set up on this server yet: it needs accounts and the SUPABASE_SECRET_KEY Secret. Ask the app’s owner.', code: 'PAGES_OFF' });
@@ -1781,6 +1853,7 @@ export function createPages({
     htmlCache.deleteWhere(theirHtml);
     bigHtmlCache.deleteWhere(theirHtml);
     imageCache.dropPrefix(`${userId}/`);
+    magnets.forgetUser(userId);
   }
 
   return {
@@ -1790,6 +1863,9 @@ export function createPages({
     // POST /<slug>/lead on the app's address (server/leads.mjs)
     matchLead: leads.matchLead,
     receiveLead: leads.receiveLead,
+    // /b/, /m/ and /o/ on the app's address (/m/<id>: a lead magnet, server/leadFiles.mjs)
+    matchPublicRoute,
+    servePublicRoute,
     forgetUser,
     /** Who a request comes from, as the per-address limits count it (clientOf, with TRUSTED_PROXY_HOPS). */
     visitor,

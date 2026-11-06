@@ -172,6 +172,35 @@ describe('publishing', () => {
   });
 });
 
+describe('forms that send to Email → Leads', () => {
+  const form = asset({ html: '<form method="post" action="{{lead-action}}"><input name="email"></form>', css: '', js: 'var FORM_ACTION = "{{lead-action}}";', images: [] });
+
+  it('keep the token to publish, which turns it into /<slug>/lead', async () => {
+    const b = m.publishBuild(form);
+    expect(b.html).toContain('action="{{lead-action}}"');
+    const ready = await preparePublish(b, 'free-guide');
+    expect(ready.html).toContain('action="/free-guide/lead"');
+    expect(ready.html).toContain('var FORM_ACTION = "/free-guide/lead";');
+  });
+
+  it('a copy of a published asset sends to its full address, from anywhere', () => {
+    const { html } = m.documentWithImages({ ...form, published: { slug: 'free-guide', url: 'https://app.example/free-guide', publishedAt: 1, hash: '' } }, {});
+    expect(html).toContain('action="https://app.example/free-guide/lead"');
+    expect(html).toContain('var FORM_ACTION = "https://app.example/free-guide/lead";');
+    expect(html).not.toContain('TODO');
+  });
+
+  it('a copy of an unpublished asset sends nothing yet, and says so', () => {
+    const { html } = m.documentWithImages(form, {});
+    expect(html).toContain('action="#"');
+    // the script still sees the token, so it shows it's a preview
+    expect(html).toContain('var FORM_ACTION = "{{lead-action}}";');
+    expect(html).toContain('TODO: publish this asset in the app');
+    // an asset without such a form gets no note
+    expect(m.documentWithImages(asset(), {}).html).not.toContain('TODO: publish');
+  });
+});
+
 describe('the creation box', () => {
   const projectOf = (track: 'business' | 'product'): Project => {
     const p = newProject(track, 'new');

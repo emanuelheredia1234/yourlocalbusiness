@@ -11,6 +11,14 @@ import type { PublishAccess } from '@/lib/publish';
 import type { Lead } from '@/lib/leads';
 
 const state: { access: PublishAccess } = { access: 'ready' };
+const asked = vi.hoisted(() => ({ calls: [] as { title?: unknown; body?: unknown }[], answer: false }));
+vi.mock('@/components/ui/primitives', async (original) => ({
+  ...(await original<typeof import('@/components/ui/primitives')>()),
+  confirmAction: async (o: { title?: unknown; body?: unknown }) => {
+    asked.calls.push(o);
+    return asked.answer;
+  },
+}));
 vi.mock('@/lib/publish', async (original) => ({ ...(await original<typeof import('@/lib/publish')>()), usePublishAccess: () => ({ access: state.access, retry: () => {} }) }));
 
 // Rendered on the server, a zustand hook shows the store's first state: read the current one instead.
@@ -28,7 +36,7 @@ const { useStore } = await import('@/store/useStore');
 const { newProject, defaultSettings } = await import('@/store/defaults');
 const { useLeads } = await import('@/store/leads');
 const { seoPageIdOf } = await import('@/lib/leads');
-const { Leads } = await import('./Leads');
+const { Leads, consentedOrAsked } = await import('./Leads');
 const { default: EmailFunnel } = await import('../EmailFunnel');
 const { Sidebar } = await import('@/components/layout/Shell');
 
@@ -41,6 +49,11 @@ function project(): Project {
 const lead = (over: Partial<Lead> = {}): Lead => ({
   id: '0b7c1a2e-1111-4222-8333-444455556666',
   pageId: seoPageIdOf('proj_leads1'),
+  projectId: null,
+  source: 'page',
+  kind: 'form',
+  consent: false,
+  payload: {},
   slug: 'maya-bakes',
   name: 'Ann Lee',
   email: 'ann@example.com',
@@ -87,7 +100,7 @@ describe('the list', () => {
   it('says where leads come from when there are none, with a way to build a lead form page', () => {
     const html = render(project(), []);
     expect(html).toContain('No leads yet');
-    expect(html).toContain('When someone sends the form on your published page, it shows here. Lead form pages have a form, and so do booking pages without a booking link.');
+    expect(html).toContain('When someone sends a form you published, it shows here: your page’s form, a published asset’s form or result, or your lead magnet’s sign-up.');
     expect(html).toContain('Build a lead form page');
     expect(html).toContain('Reply from your own email or phone: the app doesn’t send email.');
     // nothing to export
@@ -104,7 +117,9 @@ describe('the list', () => {
     expect(html).toContain('href="tel:+15125550100"');
     expect(html).toContain('Preferred time: <bdi>Tuesday morning</bdi>');
     expect(html).toContain('Can you do a cake for Friday?');
-    expect(html).toContain('From /maya-bakes · Maya Bakes');
+    expect(html).toContain('From your page /maya-bakes · Maya Bakes');
+    // a page form with no box ticked: no badges
+    expect(html).not.toContain('Agreed to emails');
     expect(html).toContain('Add only people who asked to hear from you.');
     expect(html).toMatch(/<button type="button" class="btn btn-secondary btn-xs">.*Add to subscribers<\/button>/);
     expect(html).toContain('aria-label="Delete the lead from Ann Lee"');
@@ -143,6 +158,50 @@ describe('the list', () => {
   });
 });
 
+describe('where each lead came from', () => {
+  it('has the business and source filters', () => {
+    const html = render(project(), []);
+    expect(html).toContain('aria-label="Which businesses"');
+    expect(html).toContain('This business');
+    expect(html).toContain('All businesses');
+    expect(html).toContain('aria-label="Where they came from"');
+    for (const label of ['>All<', '>Pages<', '>Assets<', '>Lead magnet<']) expect(html).toContain(label);
+  });
+
+  it('a quiz result from an asset: its name, the kind, the result as text rows, and the consent badge', () => {
+    const p = project();
+    p.studio.codeAssets = [{ id: 'code_q1', name: 'Cake quiz', kind: 'quiz', prompt: '', html: '', css: '', js: '', outdated: false, createdAt: 0, updatedAt: 0 }];
+    const html = render(p, [lead({ pageId: 'artifact:code_q1', projectId: p.id, source: 'asset', kind: 'quiz', consent: true, slug: 'cake-quiz', message: '', time: '', payload: { result: 'Nearly there', score: '80', answers: 'Q1: <b>x</b>' } })]);
+    expect(html).toContain('From quiz “Cake quiz” · Maya Bakes');
+    expect(html).toContain('Quiz result');
+    expect(html).toContain('Agreed to emails');
+    expect(html).toMatch(/<dt class="text-muted">Result<\/dt><dd dir="auto"[^>]*>Nearly there<\/dd>/);
+    expect(html).toMatch(/<dt class="text-muted">Score<\/dt><dd dir="auto"[^>]*>80<\/dd>/);
+    // what a visitor typed is text, never markup
+    expect(html).toContain('Q1: &lt;b&gt;x&lt;/b&gt;');
+  });
+
+  it('a lead magnet sign-up says what was downloaded', () => {
+    const p = project();
+    p.marketing.leadMagnet = { id: 'lm', type: 'checklist', title: 'Cake checklist', subtitle: '', intro: '', sections: [], cta: '', optInHeadline: '', optInBullets: [], buttonLabel: '', createdAt: 0, delivery: { source: 'pdf', fileId: 'AbCdEfGhIjKlMnOpQrStUv', link: 'https://app.example/m/AbCdEfGhIjKlMnOpQrStUv', gate: true, publishedAt: 1 } };
+    const html = render(p, [lead({ pageId: 'magnet:AbCdEfGhIjKlMnOpQrStUv', projectId: p.id, source: 'magnet', kind: 'magnet', slug: '', message: '', time: '', payload: { magnet: 'AbCdEfGhIjKlMnOpQrStUv', request: 'Old title' } })]);
+    expect(html).toContain('Downloaded “Cake checklist” · Maya Bakes');
+    expect(html).toContain('>Download<');
+  });
+
+  it('adding someone who didn’t tick the box asks first; one who did is added at once', async () => {
+    asked.calls = [];
+    asked.answer = false;
+    expect(await consentedOrAsked({ consent: false })).toBe(false);
+    expect(asked.calls).toHaveLength(1);
+    expect(asked.calls[0].body).toBe('They didn’t tick the box to get emails. Add them only if they agreed another way.');
+    asked.answer = true;
+    expect(await consentedOrAsked({ consent: false })).toBe(true);
+    expect(await consentedOrAsked({ consent: true })).toBe(true);
+    expect(asked.calls).toHaveLength(2);
+  });
+});
+
 describe('Email', () => {
   it('has a Leads tab with the count of new leads, opens on it, and the Email channel shows a badge', () => {
     const p = project();
@@ -151,7 +210,7 @@ describe('Email', () => {
     expect(html).toMatch(/<button role="tab" aria-selected="true"[^>]*>.*Leads<span class="num font-mono text-caption text-muted">2<\/span><\/button>/);
     // the Email channel's badge sits in the sidebar's Marketing group now (it replaced the channel switcher)
     expect(renderToStaticMarkup(createElement(Sidebar))).toMatch(/>Email<\/span><span class="nav-count">2<span class="sr-only">, 2 new leads<\/span><\/span><\/button>/);
-    expect(html).toContain('Messages from your published page’s form show under Leads.');
+    expect(html).toContain('What people send with your published forms shows under Leads: your page, your assets and your lead magnet.');
     expect(html).toContain('aria-label="Delete the lead from Cy"');
     // seen: no count, and the funnel opens where it always did
     p.marketing.leadsSeenAt = Date.now();

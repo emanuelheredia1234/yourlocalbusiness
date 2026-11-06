@@ -1,21 +1,29 @@
-// Lead forms: what visitors send with a published page's form (a lead form page, a booking request, a
-// question), kept for the page's owner, who sees it in the app (Marketing Hub → Email → Leads).
+// Lead forms: what visitors send with a published page's form (a lead form, a booking request, a question, a
+// quiz's or calculator's "email me my result"), kept for the page's owner, who sees it in the app (Marketing Hub →
+// Email → Leads), tagged with its business (project_id), where it came from (source) and its kind.
 //
-//   POST   /<slug>/lead                      (visitors) a published page's form → a small thank-you page,
-//                                            on the app's address or on the page's own domain
-//   GET    /api/leads?before=&limit=&pageId= → { leads: [{ id, pageId, slug, name, email, phone, message, time, createdAt }] }
+//   POST   /<slug>/lead                      (visitors) a published page's form → a small thank-you page, on the
+//                                            app's address or on the page's own domain. With Accept: application/json
+//                                            (a widget's fetch; no preflight) → { ok, title, text, download? }, CORS *.
+//   GET    /api/leads?before=&limit=&pageId=&projectId=&source=&kind=
+//                                            → { leads: [{ id, pageId, slug, projectId, source, kind, consent, payload,
+//                                              name, email, phone, message, time, createdAt }] }
 //                                            newest first                                     (signed in, same site)
 //   DELETE /api/leads/<id>                   → { ok: true } (already gone counts as done)
 //
-// Leads are rows in page_leads (supabase/migrations/20261103050000_page_leads.sql): row-level security on with
-// no policies, so only this server, with the secret key, reads or writes them. Deleting an account deletes its
-// leads (on delete cascade).
+// Leads are rows in page_leads (supabase/migrations/20261103050000_page_leads.sql and 20261112000000_leads_p2.sql):
+// row-level security on with no policies, so only this server, with the secret key, reads or writes them. Deleting
+// an account deletes its leads (on delete cascade).
 //
 // What a visitor sends is a stranger's text. Every input is bounded before any pattern looks at it; a field over
 // its limit is refused, never cut; and nothing a visitor typed (nor their email or address) is logged or shown
-// back. Only a published SEO page whose HTML has a form posting here takes leads, and on a domain only that
-// domain's own page. A hidden field (`website`) catches most bots: filled in, it looks like success and nothing
-// is kept. Visitors and pages each have a limit per hour, counted in this server's memory.
+// back. Only a published page (an SEO page or an artifact) whose HTML has a form posting here takes leads, and on
+// a domain only that domain's own page. source comes from the page's row ('page' for SEO, 'asset' for artifacts),
+// never from the form; kind, consent (only "yes" counts) and a few result fields (LEAD_PAYLOAD_MAX) come from a
+// whitelist. A lead magnet's id sent with a form counts only when it's the page owner's; then the answer links to
+// the download with a ticket valid 15 minutes (server/leadFiles.mjs), so the visitor skips the gate they just filled.
+// A hidden field (`website`) catches most bots: filled in, it looks like success and nothing is kept. Visitors and
+// pages each have a limit per hour, counted in this server's memory (shared with the lead-magnet gate).
 //
 // server/pages.mjs builds this (createLeads) with what it already has: its page lookup (cached and budgeted),
 // the app's reserved names and its "not found" page. Env: LEADS_PER_IP_PER_HOUR (default 10),
@@ -27,6 +35,8 @@ import { serviceHeaders } from './secretBox.mjs';
 import { sameOrigin } from './providers/routes.mjs';
 
 export const LEADS_MIGRATION = 'supabase/migrations/20261103050000_page_leads.sql';
+/** The columns P2 added (project_id, source, kind, consent, payload): before it's run, forms still work without them. */
+export const LEADS_P2_MIGRATION = 'supabase/migrations/20261112000000_leads_p2.sql';
 
 /** Forms per visitor and per page in windowMs, when nothing says otherwise. */
 export const LEAD_LIMITS = Object.freeze({ perIp: 10, perPage: 30, windowMs: 3_600_000 });
@@ -54,28 +64,57 @@ const RAW_FACTOR = 4;
 const MAX_LEAD_BYTES = 16 * 1024;
 /** How much of a body that's refused is read (and dropped) so the answer can go out; past it, the connection ends. */
 const MAX_DRAIN = 1024 * 1024;
-const LEAD_COLUMNS = 'id,page_id,slug,name,email,phone,message,time,created_at';
+const LEAD_COLUMNS = 'id,page_id,slug,project_id,source,kind,consent,payload,name,email,phone,message,time,created_at';
+const LEGACY_LEAD_COLUMNS = 'id,page_id,slug,name,email,phone,message,time,created_at';
+/**
+ * The extra fields a form may send for a quiz, calculator, booking or lead magnet, with their limits in characters
+ * (src/ai/agents/importHtml.ts mirrors this). Each is bounded before any pattern; over its limit it's refused.
+ */
+export const LEAD_PAYLOAD_MAX = Object.freeze({ request: 200, service: 200, result: 200, score: 16, answers: 1500, inputs: 1500, outputs: 1500 });
+/**
+ * The whole payload's size in UTF-8 bytes, as JSON. The table caps it at 8192 bytes (page_leads_payload_check:
+ * pg_column_size); the limits above are in characters, and text in other scripts takes up to 4 bytes each, so a
+ * payload within them can still be too big. Over this it's "too long" (the visitor can shorten it), never a 503.
+ */
+export const LEAD_PAYLOAD_BYTES = 7500;
+/** Payload fields kept with their line breaks. */
+const MULTI_LINE = new Set(['answers', 'inputs', 'outputs']);
+const SCORE = /^-?\d{1,6}(\.\d{1,2})?$/;
+/** What a lead can be (page_leads_kind_check). 'magnet' is only ever the gate's own (server/leadFiles.mjs). */
+export const LEAD_KINDS = Object.freeze(['form', 'lead', 'booking', 'quiz', 'calculator', 'roi', 'checklist', 'magnet']);
+const FORM_KINDS = new Set(LEAD_KINDS.filter((k) => k !== 'magnet'));
+export const LEAD_SOURCES = Object.freeze(['page', 'asset', 'magnet']);
+/** A lead magnet's id (server/leadFiles.mjs): 16 random bytes in base64url. */
+export const MAGNET_ID = /^[A-Za-z0-9_-]{22}$/;
+/** A business's id (user_docs project id, as published pages carry it). */
+export const PROJECT_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const LEAD_EMAIL = /^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+\.[a-z]{2,}$/i;
 /** An ISO time exactly as Postgres sends it back (paging passes it on unchanged, microseconds and all): at most 32 characters. */
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
 const MAX_ISO = 32;
-/** A page's id (the same rule as published_pages and page_leads): at most 89 characters. */
-const PAGE_ID_RE = /^(seo|artifact):[A-Za-z0-9_-]{1,80}$/;
+/** A lead's page id (page_leads: a published page's, or magnet:<lead file id>): at most 89 characters. */
+const PAGE_ID_RE = /^(seo|artifact|magnet):[A-Za-z0-9_-]{1,80}$/;
 const MAX_PAGE_ID = 89;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Of X-Forwarded-For, only the end is read: that's where each proxy adds the address it got the request from. */
 const MAX_FORWARDED = 1024;
 const TIMEOUT = 5000;
 
-const NOTICE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+export const NOTICE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+/** The notice with a download link (a lead magnet's): a link may start a download from it. Still no scripts. */
+export const DOWNLOAD_NOTICE_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox allow-downloads";
 const COMMON = { 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin' };
+
+/** Text for HTML: & < > " ' escaped. */
+export const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 /**
  * The answer a visitor gets: the same plain page as pages.mjs's notices (no app name: a domain mustn't show
- * whose app serves it), plus a link back to the page. Every string in it is one of this file's own, and back is
- * / or /<slug> (letters, digits and hyphens), so nothing needs escaping.
+ * whose app serves it), plus a link back to the page (none when back is ''). title and text are this file's own
+ * strings, and back is / or /<slug> (letters, digits and hyphens), so they need no escaping. download: { href,
+ * label }, a lead magnet's link (/m/<id>?k=<ticket>: URL-safe characters) and its owner's title, escaped here.
  */
-const leadNotice = (title, text, back) => `<!doctype html>
+export const leadNotice = (title, text, back, download = null) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -97,20 +136,22 @@ const leadNotice = (title, text, back) => `<!doctype html>
 <main>
 <h1>${title}</h1>
 <p>${text}</p>
-<p class="back"><a href="${back}">Back to the page</a></p>
-</main>
+${download ? `<p class="back"><a href="${escapeHtml(download.href)}" download>Download ${escapeHtml(download.label)}</a></p>\n` : ''}${back ? `<p class="back"><a href="${back}">Back to the page</a></p>\n` : ''}</main>
 </body>
 </html>
 `;
 
 /** What a visitor is told: status, title, text. "Thank you" only once the lead is kept (or a bot filled the hidden field). */
-const ANSWERS = {
+export const ANSWERS = {
   sent: [200, 'Thank you', 'Your message was sent.'],
   requested: [200, 'Thank you', 'Your request was sent. This is a request, not a booked time.'],
   noContact: [400, 'Add your email or phone', 'Go back and add your email or phone number, then send it again.'],
+  noEmail: [400, 'Add your email', 'Go back and add your email, then send it again.'],
   badEmail: [400, 'Check your email', 'That email address doesn’t look right. Go back and check it.'],
   badPhone: [400, 'Check your phone number', 'That phone number doesn’t look right. Go back and check it.'],
   tooLong: [400, 'That’s too long', 'Something you typed is too long. Go back and shorten it.'],
+  badField: [400, 'Check the form', 'Something in this form doesn’t look right. Go back and try again.'],
+  notFound: [404, 'Page not found', 'This page doesn’t exist, or it’s no longer published.'],
   unreadable: [400, 'This form couldn’t be read', 'Go back and try again.'],
   notForm: [415, 'This form couldn’t be read', 'Go back and try again.'],
   tooBig: [413, 'That’s too long to send', 'Go back and shorten your message.'],
@@ -171,7 +212,7 @@ export function visitorOf(req) {
 }
 
 /** How often each key did something in the last windowMs. Memory only: never logged, never saved. */
-function windowCounter(limit, windowMs, maxKeys = 10_000) {
+export function windowCounter(limit, windowMs, maxKeys = 10_000) {
   const m = new Map(); // key → its times, oldest first; the key used least recently first
   const recent = (key, now) => {
     const list = m.get(key);
@@ -225,7 +266,7 @@ const phoneOk = (s) => /^[0-9+().\- ]+$/.test(s) && /^\d{6,15}$/.test(s.replace(
  * A form's fields, tidied: { fields } or { problem } (a key of ANSWERS). Each is bounded before any pattern
  * looks at it, and over its limit it's refused, never cut. It needs an email or a phone.
  */
-export function readLeadFields(form) {
+export function readLeadFields(form, { emailRequired = false } = {}) {
   const fields = {};
   for (const [key, max] of Object.entries(LEAD_MAX)) {
     const raw = form.get(key) ?? '';
@@ -236,9 +277,54 @@ export function readLeadFields(form) {
   }
   if (fields.email && !LEAD_EMAIL.test(fields.email)) return { problem: 'badEmail' };
   if (fields.phone && !phoneOk(fields.phone)) return { problem: 'badPhone' };
+  if (emailRequired && !fields.email) return { problem: 'noEmail' };
   if (!fields.email && !fields.phone) return { problem: 'noContact' };
   return { fields };
 }
+
+/**
+ * The whitelisted extras besides the contact fields: { extras: { kind, consent, magnet, payload } } or { problem }.
+ * kind: one of FORM_KINDS, else null (the page's default). consent: only "yes". magnet: a lead file's id as sent
+ * (whose it is gets checked later), else null. payload: only the LEAD_PAYLOAD_MAX keys that aren't empty, tidied.
+ */
+export function readLeadExtras(form) {
+  const rawKind = String(form.get('kind') ?? '').slice(0, 20);
+  const kind = FORM_KINDS.has(rawKind) ? rawKind : null;
+  const consent = String(form.get('consent') ?? '').slice(0, 10) === 'yes';
+  const rawMagnet = String(form.get('magnet') ?? '');
+  const magnet = rawMagnet.length === 22 && MAGNET_ID.test(rawMagnet) ? rawMagnet : null;
+  const payload = {};
+  for (const [key, max] of Object.entries(LEAD_PAYLOAD_MAX)) {
+    const raw = form.get(key) ?? '';
+    if (raw.length > max * RAW_FACTOR) return { problem: 'tooLong' };
+    const v = MULTI_LINE.has(key) ? multiLine(raw) : oneLine(raw);
+    if (v.length > max && Array.from(v).length > max) return { problem: 'tooLong' };
+    if (!v) continue;
+    if (key === 'score' && !SCORE.test(v)) return { problem: 'badField' };
+    payload[key] = v;
+  }
+  // room for the magnet's id the server may add (22 characters and its key)
+  if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > LEAD_PAYLOAD_BYTES - 40) return { problem: 'tooLong' };
+  return { extras: { kind, consent, magnet, payload } };
+}
+
+/** A stored payload as the owner sees it: only the whitelisted keys (and the magnet's id), strings only. */
+export function cleanPayload(p) {
+  const out = {};
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return out;
+  for (const [key, max] of Object.entries(LEAD_PAYLOAD_MAX)) if (typeof p[key] === 'string' && p[key] && p[key].length <= max * 2) out[key] = p[key];
+  if (typeof p.magnet === 'string' && MAGNET_ID.test(p.magnet)) out.magnet = p.magnet;
+  return out;
+}
+
+/** The per-visitor and per-page counters, one pair for every form this server takes (the lead-magnet gate's too). */
+export function leadCounters(limits = LEAD_LIMITS) {
+  const lim = { ...LEAD_LIMITS, ...(limits || {}) };
+  return { perVisitor: windowCounter(lim.perIp, lim.windowMs), perPage: windowCounter(lim.perPage, lim.windowMs) };
+}
+
+/** Whether a request asks for a JSON answer (a widget's fetch): Accept says application/json. */
+export const wantsJson = (req) => /application\/json/i.test(String(req.headers.accept || '').slice(0, 300));
 
 /** HTML's whitespace: space, tab, line feed, form feed, carriage return. */
 const isSpace = (c) => c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
@@ -270,7 +356,7 @@ export function hasLeadForm(html, slug) {
 }
 
 /** Read and drop what's still coming (so the answer can be read); past MAX_DRAIN, end the connection. */
-function drain(req) {
+export function drain(req) {
   let size = 0;
   req.on('data', (c) => {
     size += c.length;
@@ -281,7 +367,7 @@ function drain(req) {
 }
 
 /** A form's fields (application/x-www-form-urlencoded, at most MAX_LEAD_BYTES). Rejects with { status: 400 | 413 | 415 }. */
-function readForm(req) {
+export function readForm(req) {
   return new Promise((resolve, reject) => {
     const refuse = (status) => reject(Object.assign(new Error('That form couldn’t be read.'), { status }));
     const type = String(req.headers['content-type'] || '')
@@ -311,10 +397,12 @@ function readForm(req) {
 
 /**
  * enabled: publishing is on (accounts and the secret key). supabaseUrl, secretKey, fetch: Supabase's REST API.
- * limits: { perIp, perPage, windowMs }. findPage(slug, req): the published page's row ({ slug, user_id, page_id,
- * kind, html, domain, home }) or null, cached and budgeted (it throws when that can't be told right now).
- * reserved(slug): one of the app's own names. notFound(req, res): the "Page not found" page. whoIs, send,
- * corsHeaders, rateLimited, allowedOrigin: the server's own, as pages.mjs has them.
+ * limits: { perIp, perPage, windowMs }; counters: leadCounters(limits), when another module (the lead-magnet gate)
+ * shares them. findPage(slug, req): the published page's row ({ slug, user_id, page_id, project_id, kind, html,
+ * domain, home }) or null, cached and budgeted (it throws when that can't be told right now).
+ * findMagnet(id): a lead file's { id, user_id, project_id, title } or null (cached; it may throw). ticket(id): the
+ * 15-minute download link's ticket. reserved(slug): one of the app's own names. notFound(req, res): the "Page not
+ * found" page. whoIs, send, corsHeaders, rateLimited, allowedOrigin: the server's own, as pages.mjs has them.
  */
 export function createLeads({
   enabled = false,
@@ -322,7 +410,10 @@ export function createLeads({
   secretKey = '',
   fetch = globalThis.fetch,
   limits = LEAD_LIMITS,
+  counters = null,
   findPage = async () => null,
+  findMagnet = async () => null,
+  ticket = null,
   reserved = () => false,
   notFound = (req, res) => {
     res.writeHead(404, { ...COMMON, 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
@@ -334,12 +425,10 @@ export function createLeads({
   rateLimited = () => false,
   allowedOrigin = '',
 } = {}) {
-  const lim = { ...LEAD_LIMITS, ...(limits || {}) };
   let base = String(supabaseUrl);
   while (base.endsWith('/')) base = base.slice(0, -1);
   const headers = secretKey ? serviceHeaders(secretKey) : {};
-  const perVisitor = windowCounter(lim.perIp, lim.windowMs);
-  const perPage = windowCounter(lim.perPage, lim.windowMs);
+  const { perVisitor, perPage } = counters ?? leadCounters(limits);
 
   const fail = (status, code, message, extra = {}) => Object.assign(new Error(message), { status, code, ...extra });
   let warnedTable = false;
@@ -349,6 +438,15 @@ export function createLeads({
       console.warn(`Lead forms: the page_leads table isn’t in Supabase yet. Run ${LEADS_MIGRATION} in Supabase → SQL Editor.`);
     }
     return fail(503, 'LEADS_TABLE', `Run ${LEADS_MIGRATION} in Supabase → SQL Editor.`);
+  };
+  let warnedColumns = false;
+  /** The P2 columns aren't there yet: said once; forms keep working without them. */
+  const columnsMissing = () => {
+    if (!warnedColumns) {
+      warnedColumns = true;
+      console.warn(`Lead forms: page_leads has no source or payload columns yet. Run ${LEADS_P2_MIGRATION} in Supabase → SQL Editor.`);
+    }
+    return fail(503, 'LEADS_MIGRATION', `Run ${LEADS_P2_MIGRATION} in Supabase → SQL Editor.`);
   };
   let warnedAt = 0;
   /** At most one line a minute, and only codes: never what a visitor wrote, their email or their address. */
@@ -378,15 +476,51 @@ export function createLeads({
     // the message may quote the row (a visitor's words): it's only looked at, never logged or passed on
     const message = String(data?.message ?? '').slice(0, 300);
     if (res.status === 404 && (code === 'PGRST205' || code === '42P01' || message.includes('page_leads'))) throw tableMissing();
-    throw fail(502, 'UPSTREAM', `Supabase refused that (error ${res.status}). Try again.`, { detail: `${res.status}${code ? ` ${code}` : ''}` });
+    // a column P2 added isn't there yet (PostgREST: PGRST204 on a write, 42703 on a read or filter)
+    const noColumn = code === 'PGRST204' || code === '42703';
+    throw fail(502, 'UPSTREAM', `Supabase refused that (error ${res.status}). Try again.`, { detail: `${res.status}${code ? ` ${code}` : ''}`, noColumn });
   }
 
-  const sendNotice = (res, [status, title, text], back, extra = {}) => {
-    const body = Buffer.from(leadNotice(title, text, back), 'utf8');
-    res.writeHead(status, { ...COMMON, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': NOTICE_CSP, 'content-length': body.length, ...extra });
+  /**
+   * Keep one lead (once: the server never sends a visitor's message twice). Before the P2 migration, a page's lead
+   * is kept without the new columns; a magnet sign-up (no page name) can't be, and that's an error.
+   */
+  async function keepLead(row) {
+    const full = { id: crypto.randomUUID(), created_at: new Date().toISOString(), ...row };
+    try {
+      await rest('page_leads', { method: 'POST', body: full, prefer: 'return=minimal', timeout: TIMEOUT });
+    } catch (e) {
+      if (!e?.noColumn || full.source === 'magnet' || !full.slug) throw e.noColumn ? columnsMissing() : e;
+      columnsMissing();
+      const { project_id: _p, source: _s, kind: _k, consent: _c, payload: _d, ...legacy } = full;
+      await rest('page_leads', { method: 'POST', body: legacy, prefer: 'return=minimal', timeout: TIMEOUT });
+    }
+    return full.id;
+  }
+
+  /** The answer, as HTML (plain posts, SEO pages) or JSON (a widget that asked for it): never anyone else's data. */
+  const sendNotice = (req, res, [status, title, text], back, { extra = {}, download = null } = {}) => {
+    if (wantsJson(req)) {
+      const body = Buffer.from(JSON.stringify({ ok: status < 300, title, text, ...(download ? { download: download.href } : {}) }), 'utf8');
+      res.writeHead(status, { ...COMMON, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'access-control-allow-origin': '*', 'content-length': body.length, ...extra });
+      return res.end(body);
+    }
+    const body = Buffer.from(leadNotice(title, text, back, download), 'utf8');
+    res.writeHead(status, { ...COMMON, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': download ? DOWNLOAD_NOTICE_CSP : NOTICE_CSP, 'content-length': body.length, ...extra });
     res.end(body);
   };
   const retryAfter = (ms) => ({ 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) });
+
+  /** A lead magnet sent with a form, only when it's the page owner's (anything else is ignored, without a word). */
+  async function ownMagnet(id, userId, client) {
+    if (!id) return null;
+    try {
+      const m = await findMagnet(id, client);
+      return m && m.user_id === userId && m.id === id ? m : null;
+    } catch {
+      return null;
+    }
+  }
 
   /** POST /<slug>/lead (call receiveLead for it). */
   const matchLead = (url) => enabled && url.pathname.length <= MAX_LEAD_PATH && LEAD_PATH.test(url.pathname);
@@ -403,8 +537,8 @@ export function createLeads({
     if (!m || reserved(m[1])) return false;
     const slug = m[1];
     let back = `/${slug}`;
-    const answer = (name, extra) => {
-      sendNotice(res, ANSWERS[name], back, extra);
+    const answer = (name, extra, download) => {
+      sendNotice(req, res, ANSWERS[name], back, { extra, download });
       return true;
     };
     try {
@@ -429,25 +563,53 @@ export function createLeads({
       } catch {
         return answer('notSent', retryAfter(60_000));
       }
-      // only an SEO page published with this form, and on a domain only that domain's own page
-      if (!page || page.kind !== 'seo' || !hasLeadForm(page.html, slug) || (site && (page.domain !== site.domain || page.user_id !== site.user_id))) {
+      // only a page published with this form (an SEO page or an artifact), and on a domain only that domain's own page
+      if (!page || (page.kind !== 'seo' && page.kind !== 'artifact') || !hasLeadForm(page.html, slug) || (site && (page.domain !== site.domain || page.user_id !== site.user_id))) {
+        if (wantsJson(req)) return answer('notFound');
         notFound(req, res);
         return true;
       }
       if (site && page.home) back = '/';
       const { fields, problem } = readLeadFields(form);
       if (problem) return answer(problem);
+      const more = readLeadExtras(form);
+      if (more.problem) return answer(more.problem);
+      const { kind, consent, magnet, payload } = more.extras;
       const pageKey = `${page.user_id}:${page.page_id}`;
       if (perPage.full(pageKey)) return answer('pageLimit', retryAfter(perPage.wait(pageKey)));
       perPage.hit(pageKey);
+      const seo = page.kind === 'seo';
+      // looked up on the visitor's own budget, so made-up ids from a few addresses can't use up everyone's
+      const mine = await ownMagnet(magnet, page.user_id, visitor);
+      // a form that hands out the owner's download asks for an email, as its gate does (a phone alone gets no file)
+      if (mine && !fields.email) return answer('noEmail');
+      const projectId = typeof page.project_id === 'string' && PROJECT_ID_RE.test(page.project_id) ? page.project_id : seo ? page.page_id.slice(4) : null;
       try {
-        // once: the server never sends a visitor's message twice
-        await rest('page_leads', { method: 'POST', body: { id: crypto.randomUUID(), user_id: page.user_id, slug, page_id: page.page_id, ...fields, created_at: new Date().toISOString() }, prefer: 'return=minimal', timeout: TIMEOUT });
+        await keepLead({
+          user_id: page.user_id,
+          slug,
+          page_id: page.page_id,
+          project_id: projectId && PROJECT_ID_RE.test(projectId) ? projectId : null,
+          source: seo ? 'page' : 'asset',
+          kind: kind ?? (seo ? 'form' : 'lead'),
+          consent,
+          payload: mine ? { ...payload, magnet: mine.id } : payload,
+          ...fields,
+        });
       } catch (e) {
-        warn(`Lead forms: couldn’t keep a lead (${e?.code === 'LEADS_TABLE' ? 'LEADS_TABLE' : e?.detail || e?.code || 'error'}).`);
+        warn(`Lead forms: couldn’t keep a lead (${e?.code === 'LEADS_TABLE' || e?.code === 'LEADS_MIGRATION' ? e.code : e?.detail || e?.code || 'error'}).`);
         return answer('notSent', retryAfter(60_000));
       }
-      return answer(fields.time ? 'requested' : 'sent');
+      // stored: a lead magnet's download, without its gate (the visitor just filled one in)
+      let download = null;
+      if (mine && typeof ticket === 'function') {
+        try {
+          download = { href: `/m/${mine.id}?k=${ticket(mine.id)}`, label: mine.title || 'your file' };
+        } catch {
+          download = null;
+        }
+      }
+      return answer(fields.time ? 'requested' : 'sent', undefined, download);
     } catch {
       if (!res.headersSent) answer('notSent', retryAfter(60_000));
       return true;
@@ -462,7 +624,22 @@ export function createLeads({
 
   // ── the signed-in API ──
   const matchApi = (url) => url.pathname === API_ROOT || url.pathname.startsWith(`${API_ROOT}/`);
-  const describeLead = (r) => ({ id: r.id, pageId: r.page_id, slug: r.slug, name: r.name ?? '', email: r.email ?? '', phone: r.phone ?? '', message: r.message ?? '', time: r.time ?? '', createdAt: r.created_at ?? null });
+  const describeLead = (r) => ({
+    id: r.id,
+    pageId: r.page_id,
+    slug: r.slug ?? '',
+    projectId: typeof r.project_id === 'string' ? r.project_id : null,
+    source: LEAD_SOURCES.includes(r.source) ? r.source : 'page',
+    kind: LEAD_KINDS.includes(r.kind) ? r.kind : 'form',
+    consent: r.consent === true,
+    payload: cleanPayload(r.payload),
+    name: r.name ?? '',
+    email: r.email ?? '',
+    phone: r.phone ?? '',
+    message: r.message ?? '',
+    time: r.time ?? '',
+    createdAt: r.created_at ?? null,
+  });
 
   async function handleApi(req, res, url) {
     const reply = (status, body) => send(res, status, body, corsHeaders(req));
@@ -494,15 +671,33 @@ export function createLeads({
     try {
       if (target === null) {
         if (method !== 'GET') return notAllowed();
-        const asked = (url.searchParams.get('limit') ?? '').slice(0, 8);
+        const q = url.searchParams;
+        const asked = (q.get('limit') ?? '').slice(0, 8);
         const limit = Math.min(100, Math.max(1, Number.parseInt(asked, 10) || 50));
         // passed on exactly as the server sent it: read back and written again, a time loses its microseconds and paging could skip a lead
-        const before = url.searchParams.get('before') ?? '';
+        const before = q.get('before') ?? '';
         if (before && (before.length > MAX_ISO || !ISO_TIME.test(before) || Number.isNaN(Date.parse(before)))) return reply(400, { error: 'That time isn’t one the server can read.', code: 'BAD_REQUEST' });
-        const pageId = url.searchParams.get('pageId') ?? '';
+        const pageId = q.get('pageId') ?? '';
         if (pageId && (pageId.length > MAX_PAGE_ID || !PAGE_ID_RE.test(pageId))) return reply(400, { error: 'Unknown page.', code: 'BAD_REQUEST' });
+        const projectId = q.get('projectId') ?? '';
+        if (projectId && (projectId.length > 80 || !PROJECT_ID_RE.test(projectId))) return reply(400, { error: 'Unknown business.', code: 'BAD_REQUEST' });
+        const source = q.get('source') ?? '';
+        if (source && !LEAD_SOURCES.includes(source)) return reply(400, { error: 'Unknown source.', code: 'BAD_REQUEST' });
+        const kind = q.get('kind') ?? '';
+        if (kind && !LEAD_KINDS.includes(kind)) return reply(400, { error: 'Unknown kind.', code: 'BAD_REQUEST' });
+        const filters = `${pageId ? `&page_id=eq.${encodeURIComponent(pageId)}` : ''}${projectId ? `&project_id=eq.${projectId}` : ''}${source ? `&source=eq.${source}` : ''}${kind ? `&kind=eq.${kind}` : ''}`;
         // encoded: a + in the time would otherwise read as a space
-        const rows = await rest(`page_leads?user_id=eq.${uid}${pageId ? `&page_id=eq.${encodeURIComponent(pageId)}` : ''}${before ? `&created_at=lt.${encodeURIComponent(before)}` : ''}&select=${LEAD_COLUMNS}&order=created_at.desc,id.desc&limit=${limit}`);
+        const query = (columns, f) => `page_leads?user_id=eq.${uid}${f}${before ? `&created_at=lt.${encodeURIComponent(before)}` : ''}&select=${columns}&order=created_at.desc,id.desc&limit=${limit}`;
+        let rows;
+        try {
+          rows = await rest(query(LEAD_COLUMNS, filters));
+        } catch (e) {
+          if (!e?.noColumn) throw e;
+          // before the P2 migration: the leads as they were (filters on the new columns can't be answered yet)
+          if (projectId || source || kind) throw columnsMissing();
+          columnsMissing();
+          rows = await rest(query(LEGACY_LEAD_COLUMNS, filters));
+        }
         return reply(200, { leads: (Array.isArray(rows) ? rows : []).map(describeLead) });
       }
       if (target.length !== 36 || !UUID.test(target)) return reply(404, { error: 'That lead isn’t in your list.', code: 'NOT_FOUND' });
@@ -517,5 +712,5 @@ export function createLeads({
     }
   }
 
-  return { matchLead, receiveLead, receiveOnDomain, matchApi, handleApi };
+  return { matchLead, receiveLead, receiveOnDomain, matchApi, handleApi, keepLead, sendNotice, counters: { perVisitor, perPage } };
 }

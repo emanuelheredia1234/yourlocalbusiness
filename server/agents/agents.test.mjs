@@ -134,7 +134,13 @@ describe('Manus’s messages', () => {
     expect(prompt).toContain('<<<REQUEST\nA booking widget for my yoga classes\nREQUEST>>>');
     expect(prompt).toContain('- img-1: the shop front');
     expect(prompt).toContain('Plain JavaScript in one <script> at the end of the body');
-    expect(prompt).toContain('a form may only open an email to the email in the facts');
+    // an asset's form posts to Leads once published (never a mailto: link)
+    expect(prompt).toContain('If this section needs a form: <form method="post" action="{{lead-action}}">');
+    expect(prompt).toContain('name="consent" value="yes"');
+    expect(prompt).toContain('adding the header Accept: application/json');
+    expect(prompt).toContain('No mailto: links for forms. Send nothing anywhere else.');
+    expect(prompt).toContain('it must not send anything anywhere except the form’s own action.');
+    expect(prompt).not.toContain('a form may only open an email');
     expect(prompt).toMatch(/RESULT: BUILT \| page\.html\nRESULT: FAILED \| <short reason>$/);
     expect(title).toBe('Build · Booking widget · Bean & Leaf · ylb-ABC123');
     expect(fnFromTitle(title)).toBe('build');
@@ -145,6 +151,7 @@ describe('Manus’s messages', () => {
     expect(prompt).toContain("It's my SEO page: real text a search engine can read, one H1 and clear H2 section headings.");
     expect(prompt).toContain('Use no JavaScript at all: the page must work with scripts turned off.');
     expect(prompt).toContain('<form method="post" action="{{lead-action}}">');
+    expect(prompt).toContain('an optional unticked checkbox name="consent" value="yes"');
     expect(prompt).toContain("There's no website to look at: choose a simple, clean look.");
     expect(prompt).toContain('There are no images. Use no images: no <img> tags and no image addresses.');
   });

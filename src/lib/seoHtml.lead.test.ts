@@ -45,3 +45,19 @@ describe('a published HTML-mode page’s form', () => {
     expect(hasLeadForm(seoPublishBuild(p, publishTarget('https://app.example', 'calm-yoga')).html, 'calm-yoga')).toBe(false);
   });
 });
+
+describe('the published lead magnet on the SEO page', () => {
+  const delivery = { source: 'pdf' as const, fileId: 'AbCdEfGhIjKlMnOpQrStUv', link: 'https://app.example/m/AbCdEfGhIjKlMnOpQrStUv', gate: true, publishedAt: 1 };
+  const withMagnet = (p: Project) => {
+    p.marketing.leadMagnet = { id: 'lm', type: 'guide', title: 'Free guide', subtitle: '', intro: '', sections: [], cta: '', optInHeadline: '', optInBullets: [], buttonLabel: '', createdAt: 0, delivery };
+    return p;
+  };
+
+  it('an HTML-mode page’s form sends its id, so the server gives the download after the sign-up', () => {
+    const html = seoPublishBuild(withMagnet(project()), publishTarget('https://app.example', 'calm-yoga')).html;
+    expect(html).toContain('<form method="post" action="/calm-yoga/lead"><input type="hidden" name="kind" value="lead"><input type="hidden" name="magnet" value="AbCdEfGhIjKlMnOpQrStUv">');
+    expect(hasLeadForm(html, 'calm-yoga')).toBe(true);
+    // without one, nothing is added
+    expect(seoPublishBuild(project(), publishTarget('https://app.example', 'calm-yoga')).html).not.toContain('name="magnet"');
+  });
+});

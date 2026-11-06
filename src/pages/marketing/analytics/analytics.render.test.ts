@@ -133,7 +133,18 @@ describe('ok', () => {
   it('Email: rates, sends per day, campaigns and leads', () => {
     setSnaps([snap('email', EMAIL)]);
     const html = panels.email();
-    for (const t of ['Sent', '1,500', 'Open rate', '42%', 'Click rate', 'Unsubscribe rate', 'Attributed revenue', '$310', 'November news', 'Leads']) expect(html).toContain(t);
+    for (const t of ['Sent', '1,500', 'Open rate', '42%', 'Click rate', 'Unsubscribe rate', 'Attributed revenue', '$310', 'November news', 'Leads', 'From pages, assets and your lead magnet']) expect(html).toContain(t);
+    // an older snapshot has no split or downloads: none shown
+    expect(html).not.toContain('Lead magnet ');
+    expect(html).not.toContain('Downloads');
+  });
+
+  it('Email: leads by where they came from, and the lead magnet’s downloads', () => {
+    setSnaps([snap('email', { ...EMAIL, leadsBySource: { page: 3, asset: 2, magnet: 2 }, downloads: 12 })]);
+    const html = panels.email();
+    expect(html).toContain('Pages 3 · Assets 2 · Lead magnet 2');
+    // an all-time total beside a count for the chosen range: it says so
+    expect(html).toMatch(/Downloads \(all time\) <span class="num font-mono text-ink">12<\/span>/);
   });
 });
 

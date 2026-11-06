@@ -13,3 +13,13 @@ declare module '*/server/agents/templates.mjs' {
   export const MANUS_LIMIT: number;
   export const SLACK_LIMIT: number;
 }
+declare module '*/server/leads.mjs' {
+  /** The result fields a form may send, with their limits in characters. */
+  export const LEAD_PAYLOAD_MAX: Readonly<Record<string, number>>;
+  /** What a lead can be. */
+  export const LEAD_KINDS: readonly string[];
+  /** Where a lead came from. */
+  export const LEAD_SOURCES: readonly string[];
+  /** Whether a published page's HTML has a form that posts to /<slug>/lead (the server takes nothing else). */
+  export function hasLeadForm(html: string, slug: string): boolean;
+}

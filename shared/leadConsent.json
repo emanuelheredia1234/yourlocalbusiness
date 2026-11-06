@@ -1,0 +1,6 @@
+{
+  "checkbox": "Email me tips and offers from {Brand}. I can unsubscribe at any time.",
+  "receives": "{Brand} receives what you send here.",
+  "magnetReceives": "{Brand} receives your name and email and sends you the download.",
+  "fallbackBrand": "this business"
+}

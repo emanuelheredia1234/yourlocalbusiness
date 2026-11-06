@@ -287,3 +287,28 @@ describe('the publishing API', () => {
     expect(pub.publishedFromServer({ ...page, domain: 'a.com', home: true, domainUrl: 'https://a.com/' }, 'h', 9)).toEqual({ slug: 'menu', domain: 'a.com', home: true, url: 'https://app.example/menu', domainUrl: 'https://a.com/', publishedAt: 9, hash: 'h' });
   });
 });
+
+describe('where forms send', () => {
+  it('publishing turns every {{lead-action}} into /<slug>/lead, the form’s and the script’s', async () => {
+    const html = '<form method="post" action="{{lead-action}}"><input name="email"></form><script>var FORM_ACTION = "{{lead-action}}";</script>';
+    const ready = await preparePublish({ html, images: [] }, 'free-guide');
+    expect(ready.html).toBe('<form method="post" action="/free-guide/lead"><input name="email"></form><script>var FORM_ACTION = "/free-guide/lead";</script>');
+    // the fingerprint is of the build, so a rename doesn't count as a change to publish
+    expect(ready.hash).toBe(buildHash(html, []));
+  });
+
+  it('publishing writes the business’s current download id into {{lead-magnet}}, or nothing', async () => {
+    const html = '<form method="post" action="{{lead-action}}"><input type="hidden" name="magnet" value="{{lead-magnet}}"></form>';
+    expect((await preparePublish({ html, images: [] }, 'free-guide', 'AbCdEfGhIjKlMnOpQrStUv')).html).toBe('<form method="post" action="/free-guide/lead"><input type="hidden" name="magnet" value="AbCdEfGhIjKlMnOpQrStUv"></form>');
+    expect((await preparePublish({ html, images: [] }, 'free-guide')).html).toContain('name="magnet" value=""');
+  });
+
+  it('sends the page’s project with it, only when it’s a valid id', async () => {
+    calls.length = 0;
+    answer = () => json(200, { page: { pageId: 'artifact:code_1', kind: 'artifact', slug: 'calc', title: 'Calc', home: false, updatedAt: 1, url: 'https://app.example/calc' } });
+    await pub.publishPage({ pageId: 'artifact:code_1', kind: 'artifact', slug: 'calc', title: 'Calc', html: '<p>x</p>', images: [], projectId: 'proj_1' });
+    await pub.publishPage({ pageId: 'artifact:code_1', kind: 'artifact', slug: 'calc', title: 'Calc', html: '<p>x</p>', images: [], projectId: 'bad id!' });
+    expect((calls[0].body as { projectId?: string }).projectId).toBe('proj_1');
+    expect(calls[1].body).not.toHaveProperty('projectId');
+  });
+});

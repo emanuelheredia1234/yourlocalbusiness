@@ -3,10 +3,10 @@
 // the page id matches the one the page is published with, and the server's refusals read in plain words.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from './types';
-import { LeadsError, csvCell, deleteLead, leadEmail, leadTime, leadToSubscriber, leadsCsv, listLeads, seoPageIdOf, toLead, type Lead } from './leads';
+import { LeadsError, csvCell, deleteLead, leadDetails, leadEmail, leadOfProject, leadSourceLine, leadTime, leadToSubscriber, leadsCsv, leadsSince, listLeads, seoPageIdOf, toLead, type Lead } from './leads';
 import { seoPageId } from './seoPage';
 
-const lead = (over: Partial<Lead> = {}): Lead => ({ id: 'l1', pageId: 'seo:p1', slug: 'maya-bakes', name: 'Ann Lee', email: 'Ann.Lee@Example.com', phone: '', message: 'Hi', time: '', createdAt: '2026-11-03T10:00:00.123456+00:00', ...over });
+const lead = (over: Partial<Lead> = {}): Lead => ({ id: 'l1', pageId: 'seo:p1', projectId: null, source: 'page', kind: 'form', consent: false, payload: {}, slug: 'maya-bakes', name: 'Ann Lee', email: 'Ann.Lee@Example.com', phone: '', message: 'Hi', time: '', createdAt: '2026-11-03T10:00:00.123456+00:00', ...over });
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -15,7 +15,7 @@ afterEach(() => {
 describe('reading the server’s answer', () => {
   it('takes only objects with an id, and only text in each field', () => {
     for (const bad of [null, undefined, 'x', 3, [], [{ id: 'a' }], {}, { id: '' }, { id: 7 }]) expect(toLead(bad), JSON.stringify(bad)).toBeNull();
-    expect(toLead({ id: 'a', pageId: 'seo:p', slug: 's', name: { evil: true }, email: 5, phone: null, message: ['x'], time: undefined, createdAt: '2026-11-03T10:00:00Z', extra: '<b>x</b>' })).toEqual({ id: 'a', pageId: 'seo:p', slug: 's', name: '', email: '', phone: '', message: '', time: '', createdAt: '2026-11-03T10:00:00Z' });
+    expect(toLead({ id: 'a', pageId: 'seo:p', slug: 's', name: { evil: true }, email: 5, phone: null, message: ['x'], time: undefined, createdAt: '2026-11-03T10:00:00Z', extra: '<b>x</b>' })).toEqual({ id: 'a', pageId: 'seo:p', projectId: null, source: 'page', kind: 'form', consent: false, payload: {}, slug: 's', name: '', email: '', phone: '', message: '', time: '', createdAt: '2026-11-03T10:00:00Z' });
   });
 
   it('reads the time, microseconds and all, and 0 when it can’t', () => {
@@ -37,17 +37,96 @@ describe('the CSV', () => {
     expect(csvCell('')).toBe('""');
   });
 
-  it('has a header row, then one row per lead with its page and when it came in', () => {
-    const csv = leadsCsv([lead({ message: '=SUM(A1)\nline 2', phone: '+1 512 555 0100', time: 'Tuesday morning' }), lead({ id: 'l2', name: '', email: '', phone: '555 0100', createdAt: 'bad' })], (l) => `/${l.slug} · Maya Bakes`);
+  it('has a header row, then one row per lead with where it came from, what it sent and when', () => {
+    const label = { project: () => 'Maya Bakes', page: (l: Lead) => `/${l.slug}` };
+    const csv = leadsCsv(
+      [
+        lead({ message: '=SUM(A1)\nline 2', phone: '+1 512 555 0100', time: 'Tuesday morning' }),
+        lead({ id: 'l2', name: '', email: '', phone: '555 0100', createdAt: 'bad', source: 'asset', kind: 'quiz', consent: true, payload: { result: 'Nearly there', score: '80', answers: 'Q1: =A\nQ2: b' } }),
+      ],
+      label,
+    );
     const rows = csv.split('\n');
-    expect(rows[0]).toBe('name,email,phone,preferred_time,message,page,received');
+    expect(rows[0]).toBe('created,source,kind,project,page,name,email,phone,time,message,consent,result,score,answers,inputs,outputs,service,request');
     expect(csv).toBe(
       [
-        'name,email,phone,preferred_time,message,page,received',
-        `"Ann Lee","Ann.Lee@Example.com","'+1 512 555 0100","Tuesday morning","'=SUM(A1)\nline 2","/maya-bakes · Maya Bakes","2026-11-03T10:00:00.123Z"`,
-        `"","","555 0100","","Hi","/maya-bakes · Maya Bakes","bad"`,
+        rows[0],
+        `"2026-11-03T10:00:00.123Z","page","form","Maya Bakes","/maya-bakes","Ann Lee","Ann.Lee@Example.com","'+1 512 555 0100","Tuesday morning","'=SUM(A1)\nline 2","no","","","","","","",""`,
+        `"bad","asset","quiz","Maya Bakes","/maya-bakes","","","555 0100","","Hi","yes","Nearly there","80","Q1: =A\nQ2: b","","","",""`,
       ].join('\n'),
     );
+  });
+});
+
+describe('P2 fields', () => {
+  it('reads the business, source, kind, consent and payload, and falls back on anything unknown', () => {
+    expect(toLead({ id: 'a', pageId: 'artifact:code_1', projectId: 'proj_1', source: 'asset', kind: 'quiz', consent: true, payload: { result: 'Top', score: '90', answers: 'Q1: x', evil: 'no', inputs: 5, magnet: 'AbCdEfGhIjKlMnOpQrStUv' } })).toMatchObject({
+      projectId: 'proj_1',
+      source: 'asset',
+      kind: 'quiz',
+      consent: true,
+      payload: { result: 'Top', score: '90', answers: 'Q1: x', magnet: 'AbCdEfGhIjKlMnOpQrStUv' },
+    });
+    expect(toLead({ id: 'a', projectId: 'bad id!', source: 'mail', kind: 'virus', consent: 'yes', payload: ['x'] })).toMatchObject({ projectId: null, source: 'page', kind: 'form', consent: false, payload: {} });
+    expect(toLead({ id: 'a', payload: { magnet: 'short' } })!.payload).toEqual({});
+  });
+
+  it('a business’s leads: by its tag, else (older leads) by its SEO page', () => {
+    expect(leadOfProject(lead({ projectId: 'p1', pageId: 'artifact:x' }), 'p1')).toBe(true);
+    expect(leadOfProject(lead({ projectId: 'p2', pageId: 'seo:p1' }), 'p1')).toBe(false);
+    expect(leadOfProject(lead({ projectId: null, pageId: 'seo:p1' }), 'p1')).toBe(true);
+    expect(leadOfProject(lead({ projectId: null, pageId: 'artifact:x' }), 'p1')).toBe(false);
+  });
+
+  it('says where each lead came from, and its extra fields as labelled text', () => {
+    expect(leadSourceLine(lead({ source: 'asset', kind: 'quiz' }), { asset: 'Tax score' })).toBe('From quiz “Tax score”');
+    expect(leadSourceLine(lead({ source: 'asset', kind: 'booking', slug: 'book' }))).toBe('From booking widget /book');
+    expect(leadSourceLine(lead({ source: 'page' }))).toBe('From your page /maya-bakes');
+    expect(leadSourceLine(lead({ source: 'magnet', slug: '', payload: { request: 'Free guide' } }))).toBe('Downloaded “Free guide”');
+    expect(leadSourceLine(lead({ source: 'magnet', slug: '' }), { magnet: 'Tax checklist' })).toBe('Downloaded “Tax checklist”');
+    expect(leadDetails(lead({ payload: { request: 'Guide', outputs: 'Total: $5', score: '4' } }))).toEqual([
+      { label: 'Score', value: '4' },
+      { label: 'Estimate', value: 'Total: $5' },
+      { label: 'Requested', value: 'Guide' },
+    ]);
+  });
+
+  it('asks for a business’s leads by its id, or (before the server’s update) by its page', async () => {
+    const urls: string[] = [];
+    let first = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(String(url));
+        if (first) {
+          first = false;
+          return new Response(JSON.stringify({ error: 'Run the migration.', code: 'LEADS_MIGRATION' }), { status: 503 });
+        }
+        return new Response(JSON.stringify({ leads: [{ id: 'a', pageId: 'seo:p1' }] }), { status: 200 });
+      }),
+    );
+    const list = await listLeads({ projectId: 'p1', limit: 10 });
+    expect(urls[0]).toBe('/api/leads?limit=10&projectId=p1');
+    expect(urls[1]).toBe('/api/leads?limit=10&pageId=seo%3Ap1');
+    expect(list.map((l) => l.id)).toEqual(['a']);
+    // a source or kind can't be answered that way: the error stands
+    first = true;
+    await expect(listLeads({ projectId: 'p1', source: 'asset' })).rejects.toMatchObject({ code: 'LEADS_MIGRATION' });
+  });
+});
+
+describe('the Analytics page’s count', () => {
+  it('counts every source of this business’s leads in the range, not only the SEO page’s', () => {
+    const since = Date.parse('2026-11-01T00:00:00Z');
+    const leads = [
+      lead({ id: 'a' }),
+      lead({ id: 'b', pageId: 'artifact:quiz1', projectId: 'p1', source: 'asset', kind: 'quiz' }),
+      lead({ id: 'c', pageId: 'magnet:AbCdEfGhIjKlMnOpQrStUv', projectId: 'p1', source: 'magnet', kind: 'magnet', slug: '' }),
+      lead({ id: 'd', pageId: 'artifact:x', projectId: 'p2', source: 'asset' }),
+      lead({ id: 'e', pageId: 'artifact:quiz1', projectId: 'p1', source: 'asset', createdAt: '2026-10-01T00:00:00Z' }),
+    ];
+    expect(leadsSince(leads, 'p1', since)).toBe(3);
+    expect(leadsSince(leads, 'p2', since)).toBe(1);
   });
 });
 
@@ -81,7 +160,7 @@ describe('the server', () => {
     const [url, init] = fetch.mock.calls[0];
     expect(url).toBe('/api/leads?before=2026-11-03T10%3A00%3A00.123456%2B00%3A00&limit=50&pageId=seo%3Ap1');
     expect(init?.method).toBe('GET');
-    expect(leads).toEqual([{ id: 'a', pageId: 'seo:p1', slug: 's', name: '', email: '', phone: '', message: '', time: '', createdAt: '2026-11-03T10:00:00.5+00:00' }]);
+    expect(leads).toEqual([{ id: 'a', pageId: 'seo:p1', projectId: null, source: 'page', kind: 'form', consent: false, payload: {}, slug: 's', name: '', email: '', phone: '', message: '', time: '', createdAt: '2026-11-03T10:00:00.5+00:00' }]);
     await listLeads({ limit: 500 });
     expect(fetch.mock.calls[1][0]).toBe('/api/leads?limit=100');
     await listLeads();

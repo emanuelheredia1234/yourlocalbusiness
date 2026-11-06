@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createAuth } from './auth.mjs';
 import { createPages } from './pages.mjs';
-import { hasLeadForm, leadLimitsFromEnv, readLeadFields, visitorKey, visitorOf } from './leads.mjs';
+import { LEAD_PAYLOAD_BYTES, LEAD_PAYLOAD_MAX, hasLeadForm, leadLimitsFromEnv, readLeadExtras, readLeadFields, visitorKey, visitorOf } from './leads.mjs';
 import { createMockSupabase } from './test/mock-supabase.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -206,9 +206,9 @@ describe('a published page’s form', () => {
     expect(leadsOf(alice).at(-1)).toMatchObject({ name: 'Bo', email: '', phone: '+1 512 555 0100', time: 'Tuesday morning' });
   });
 
-  it('only for a published SEO page with a form that posts there', async () => {
+  it('only for a published page with a form that posts there', async () => {
     expect((await publish(alice, 'seo:noform1', { slug: 'alice-no-form' })).status).toBe(200);
-    expect((await publish(alice, 'artifact:form1', { slug: 'alice-artifact-form', html: withForm('alice-artifact-form') })).status).toBe(200);
+    expect((await publish(alice, 'artifact:noform1', { slug: 'alice-artifact-form' })).status).toBe(200);
     // a form that posts to another page's address, and an action that isn't the form's, don't count
     expect((await publish(alice, 'seo:otherform1', { slug: 'alice-other-form', html: withForm('alice-leads') })).status).toBe(200);
     expect((await publish(alice, 'seo:tricky1', { slug: 'alice-tricky', html: '<form method="post" data-action="/alice-tricky/lead"><input name="email"></form><p>action="/alice-tricky/lead"</p>' })).status).toBe(200);
@@ -262,6 +262,83 @@ describe('a published page’s form', () => {
   });
 });
 
+describe('every kind of form reaches Leads', () => {
+  const json = { accept: 'application/json' };
+
+  it('an artifact with a real form takes leads, tagged as an asset; one without a form doesn’t', async () => {
+    expect((await publish(alice, 'artifact:quiz1', { slug: 'alice-quiz', projectId: 'biz1', html: withForm('alice-quiz', '<script>/* a quiz */</script>') })).status).toBe(200);
+    const r = await postLead('/alice-quiz/lead', { email: 'quiz@example.com', kind: 'quiz', result: 'You’re a sourdough person', score: '8', answers: 'Q1: Crust\nQ2: Tang' });
+    expect(r.status).toBe(200);
+    expect(r.text).toContain('Thank you');
+    expect(leadsOf(alice).at(-1)).toMatchObject({ page_id: 'artifact:quiz1', slug: 'alice-quiz', project_id: 'biz1', source: 'asset', kind: 'quiz', consent: false, payload: { result: 'You’re a sourdough person', score: '8', answers: 'Q1: Crust\nQ2: Tang' } });
+    // an artifact's default kind is 'lead'; an SEO page's is 'form', with its business from its id
+    expect((await postLead('/alice-quiz/lead', { email: 'plain@example.com' })).status).toBe(200);
+    expect(leadsOf(alice).at(-1)).toMatchObject({ source: 'asset', kind: 'lead', payload: {} });
+    expect((await postLead('/alice-leads/lead', { email: 'seo@example.com' })).status).toBe(200);
+    expect(leadsOf(alice).at(-1)).toMatchObject({ source: 'page', kind: 'form', project_id: 'lead1' });
+  });
+
+  it('source comes from the page, never from the form; kind only from the list', async () => {
+    const cases = [
+      [{ source: 'magnet', kind: 'booking' }, 'asset', 'booking'],
+      [{ source: 'page', kind: 'magnet' }, 'asset', 'lead'],
+      [{ kind: 'evil' }, 'asset', 'lead'],
+      [{ kind: `quiz${'x'.repeat(5000)}` }, 'asset', 'lead'],
+    ];
+    for (const [extra, source, kind] of cases) {
+      expect((await postLead('/alice-quiz/lead', { email: 'k@example.com', ...extra })).status, JSON.stringify(extra).slice(0, 40)).toBe(200);
+      expect(leadsOf(alice).at(-1), JSON.stringify(extra).slice(0, 40)).toMatchObject({ source, kind });
+    }
+  });
+
+  it('consent is only a ticked box (consent=yes)', async () => {
+    for (const [value, want] of [['yes', true], ['on', false], ['true', false], ['YES', false], ['', false]]) {
+      expect((await postLead('/alice-quiz/lead', { email: 'c@example.com', consent: value })).status, value).toBe(200);
+      expect(leadsOf(alice).at(-1).consent, value).toBe(want);
+    }
+  });
+
+  it('result fields: one character over is refused, never cut; unknown keys are ignored', async () => {
+    const before = rowsOf('page_leads').length;
+    for (const [key, max] of Object.entries(LEAD_PAYLOAD_MAX)) {
+      if (key === 'score') continue;
+      const r = await postLead('/alice-quiz/lead', { email: 'p@example.com', [key]: 'x'.repeat(max + 1) });
+      expect(r.status, key).toBe(400);
+      expect(r.text, key).toContain('That’s too long');
+    }
+    for (const score of ['12345678', 'ten', '1.234', '1e5']) {
+      const r = await postLead('/alice-quiz/lead', { email: 'p@example.com', score });
+      expect(r.status, score).toBe(400);
+    }
+    expect(rowsOf('page_leads').length).toBe(before);
+    expect((await postLead('/alice-quiz/lead', { email: 'p@example.com', result: 'x'.repeat(200), score: '-12.5', admin: 'yes', user_id: bob.user.id, payload: '{"a":1}' })).status).toBe(200);
+    const last = leadsOf(alice).at(-1);
+    expect(last.payload).toEqual({ result: 'x'.repeat(200), score: '-12.5' });
+    expect(last.user_id).toBe(alice.user.id);
+  });
+
+  it('a widget may ask for JSON: CORS *, no cookies, and nothing but its own answer', async () => {
+    let r = await postLead('/alice-quiz/lead', { email: 'w@example.com', kind: 'calculator', inputs: 'Rooms: 3', outputs: 'About $450' }, { headers: { ...json, origin: 'null' } });
+    expect(r.status).toBe(200);
+    expect(r.headers['content-type']).toBe('application/json; charset=utf-8');
+    expect(r.headers['access-control-allow-origin']).toBe('*');
+    expect(r.headers['access-control-allow-credentials']).toBeUndefined();
+    expect(r.headers['set-cookie']).toBeUndefined();
+    expect(JSON.parse(r.text)).toEqual({ ok: true, title: 'Thank you', text: 'Your message was sent.' });
+    expect(leadsOf(alice).at(-1)).toMatchObject({ kind: 'calculator', payload: { inputs: 'Rooms: 3', outputs: 'About $450' } });
+    r = await postLead('/alice-quiz/lead', { name: 'No contact' }, { headers: json });
+    expect(r.status).toBe(400);
+    expect(JSON.parse(r.text)).toMatchObject({ ok: false, title: 'Add your email or phone' });
+    r = await postLead('/nobody-published-this/lead', { email: 'w@example.com' }, { headers: json });
+    expect(r.status).toBe(404);
+    expect(JSON.parse(r.text)).toMatchObject({ ok: false, title: 'Page not found' });
+    // without the header: the HTML notice, as plain form posts and SEO pages get
+    r = await postLead('/alice-quiz/lead', { email: 'w@example.com' });
+    expect(r.headers['content-type']).toBe('text/html; charset=utf-8');
+    expect(r.headers['access-control-allow-origin']).toBeUndefined();
+  });
+});
+
 describe('the leads API', () => {
   it('lists each owner’s own leads, newest first, a page at a time', async () => {
     let r = await api('/api/leads', { who: alice });
@@ -269,7 +346,7 @@ describe('the leads API', () => {
     const { leads } = await r.json();
     const mine = leadsOf(alice).sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : a.id < b.id ? 1 : -1));
     expect(leads.map((l) => l.id)).toEqual(mine.map((x) => x.id));
-    expect(leads[0]).toEqual({ id: mine[0].id, pageId: mine[0].page_id, slug: mine[0].slug, name: mine[0].name, email: mine[0].email, phone: mine[0].phone, message: mine[0].message, time: mine[0].time, createdAt: mine[0].created_at });
+    expect(leads[0]).toEqual({ id: mine[0].id, pageId: mine[0].page_id, slug: mine[0].slug, projectId: mine[0].project_id ?? null, source: mine[0].source ?? 'page', kind: mine[0].kind ?? 'form', consent: mine[0].consent === true, payload: mine[0].payload ?? {}, name: mine[0].name, email: mine[0].email, phone: mine[0].phone, message: mine[0].message, time: mine[0].time, createdAt: mine[0].created_at });
     expect(leads.some((l) => l.slug === 'bob-form-page')).toBe(false);
 
     // times as Postgres sends them back (microseconds, +00:00): passed on exactly
@@ -305,6 +382,27 @@ describe('the leads API', () => {
     expect((await api('/api/leads', { who: alice, headers: { origin: 'https://evil.example' } })).status).toBe(403);
     for (const p of ['/api/leads/', '/api/leads/check', `/api/leads/${mine[0].id}/x`, `/api/leads/${'a'.repeat(3000)}`]) expect((await api(p, { who: alice })).status, p.slice(0, 60)).toBe(404);
     expect((await api('/api/leads', { who: alice, method: 'POST', body: {} })).status).toBe(405);
+  });
+
+  it('filters by business, source and kind: own rows only, and bad values are refused', async () => {
+    const list = async (q, who = alice) => (await (await api(`/api/leads?limit=100&${q}`, { who })).json()).leads;
+    const quiz = await list('kind=quiz');
+    expect(quiz.length).toBeGreaterThan(0);
+    expect(quiz.every((l) => l.kind === 'quiz' && l.source === 'asset')).toBe(true);
+    expect(quiz[0].payload).toMatchObject({ result: 'You’re a sourdough person' });
+    expect((await list('source=asset')).every((l) => l.source === 'asset')).toBe(true);
+    expect((await list('source=page')).every((l) => l.source === 'page')).toBe(true);
+    const business = await list('projectId=lead1');
+    expect(business.length).toBeGreaterThan(0);
+    expect(business.every((l) => l.projectId === 'lead1')).toBe(true);
+    // bob asking for alice's business gets nothing of hers
+    expect(await list('projectId=lead1', bob)).toEqual([]);
+    expect(await list('kind=quiz', bob)).toEqual([]);
+    for (const q of ['source=email', 'kind=survey', 'projectId=a%20b', `projectId=${'a'.repeat(81)}`, 'pageId=magnet%3Ax%2Fy']) {
+      const r = await api(`/api/leads?${q}`, { who: alice });
+      expect(r.status, q).toBe(400);
+    }
+    expect((await api('/api/leads?pageId=magnet%3AAAAAAAAAAAAAAAAAAAAAAA', { who: alice })).status).toBe(200);
   });
 
   it('deletes a lead for its owner only', async () => {
@@ -448,6 +546,62 @@ describe('without the setup', () => {
     }
   });
 
+  it('before the P2 migration, a page’s form is still kept, without the new columns', async () => {
+    const s = await startPages({ mock: supa, secretKey: supa.SECRET });
+    let refused = 0;
+    supa.behavior.fail = (method, pathname) => {
+      if (method !== 'POST' || pathname !== '/rest/v1/page_leads' || refused) return null;
+      refused++;
+      return { status: 400, body: { code: 'PGRST204', message: "Could not find the 'source' column of 'page_leads' in the schema cache" } };
+    };
+    try {
+      const before = rowsOf('page_leads').length;
+      const r = await postLead('/alice-leads/lead', { email: 'old-db@example.com', kind: 'lead' }, { base: s.base });
+      expect(r.status).toBe(200);
+      expect(refused).toBe(1);
+      expect(rowsOf('page_leads').length).toBe(before + 1);
+      const row = rowsOf('page_leads').at(-1);
+      expect(row.email).toBe('old-db@example.com');
+      expect(row).not.toHaveProperty('source');
+      // filtering on the new columns names the file to run
+      supa.behavior.fail = (method, pathname, q) => (pathname === '/rest/v1/page_leads' && String(q.get('select')).includes('source') ? { status: 400, body: { code: '42703', message: 'column page_leads.source does not exist' } } : null);
+      let res = await fetch(`${s.base}/api/leads?source=page`, { headers: { authorization: `Bearer ${alice.token}` } });
+      expect(res.status).toBe(503);
+      expect((await res.json()).code).toBe('LEADS_MIGRATION');
+      res = await fetch(`${s.base}/api/leads`, { headers: { authorization: `Bearer ${alice.token}` } });
+      expect(res.status).toBe(200);
+      expect((await res.json()).leads.length).toBeGreaterThan(0);
+    } finally {
+      supa.behavior.fail = null;
+      await s.close();
+    }
+  });
+
+  it('before the P2 migration, publishing still works without project_id', async () => {
+    const s = await startPages({ mock: supa, secretKey: supa.SECRET });
+    supa.behavior.fail = (method, pathname, q) =>
+      pathname === '/rest/v1/published_pages' && ((method === 'POST' && q.get('on_conflict')) || String(q.get('select') ?? '').includes('project_id')) && !q.has('__never')
+        ? { status: 400, body: { code: method === 'POST' ? 'PGRST204' : '42703', message: method === 'POST' ? "Could not find the 'project_id' column of 'published_pages' in the schema cache" : 'column published_pages.project_id does not exist' } }
+        : null;
+    try {
+      // the POST is refused while it carries project_id; once it's left out, the stand-in takes it
+      let posts = 0;
+      const inner = supa.behavior.fail;
+      supa.behavior.fail = (method, pathname, q) => {
+        if (pathname === '/rest/v1/published_pages' && method === 'POST') return posts++ === 0 ? inner(method, pathname, q) : null;
+        return inner(method, pathname, q);
+      };
+      const r = await fetch(`${s.base}/api/pages/${encodeURIComponent('artifact:old1')}`, { method: 'PUT', headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'artifact', slug: 'alice-old-db', title: 'Old', html: withForm('alice-old-db'), images: [], projectId: 'biz1' }) });
+      expect(r.status).toBe(200);
+      expect(posts).toBe(2);
+      const list = await fetch(`${s.base}/api/pages`, { headers: { authorization: `Bearer ${alice.token}` } });
+      expect(list.status).toBe(200);
+    } finally {
+      supa.behavior.fail = null;
+      await s.close();
+    }
+  });
+
   it('a form never says it was sent while Supabase is down', async () => {
     const s = await startPages({ mock: supa, secretKey: supa.SECRET });
     try {
@@ -536,6 +690,29 @@ describe('the parts on their own', () => {
     expect(read({ email: `${'a.'.repeat(60)}@${'b.'.repeat(60)}` }).problem).toBe('badEmail');
     expect(read({ email: 'ann@example.com', phone: `${'1('.repeat(19)}` }).problem).toBe('badPhone');
     expect(performance.now() - t).toBeLessThan(200);
+  });
+
+  it('reads only the whitelisted extras', () => {
+    const read = (fields) => readLeadExtras(new URLSearchParams(fields));
+    expect(read({})).toEqual({ extras: { kind: null, consent: false, magnet: null, payload: {} } });
+    expect(read({ kind: 'roi', consent: 'yes', magnet: 'A'.repeat(22), service: ' Deep  clean ', other: 'x' })).toEqual({ extras: { kind: 'roi', consent: true, magnet: 'A'.repeat(22), payload: { service: 'Deep clean' } } });
+    expect(read({ magnet: 'A'.repeat(23) }).extras.magnet).toBeNull();
+    expect(read({ magnet: '../'.repeat(8) }).extras.magnet).toBeNull();
+    expect(read({ answers: 'a\r\nb' }).extras.payload.answers).toBe('a\nb');
+    expect(read({ outputs: ' \t'.repeat(4000) }).problem).toBe('tooLong');
+  });
+
+  it('a payload within each field’s characters but over the table’s bytes is “too long”, not a failed insert', () => {
+    const read = (fields) => readLeadExtras(new URLSearchParams(fields));
+    // 3 bytes a character: each field within its 1500 characters, the whole over 8192 bytes (page_leads_payload_check)
+    const wide = '日'.repeat(1400);
+    expect(read({ answers: wide }).extras.payload.answers).toBe(wide);
+    expect(read({ answers: wide, inputs: wide }).problem).toBe('tooLong');
+    expect(read({ answers: wide, inputs: '✓ done\n'.repeat(180), outputs: '💡'.repeat(600) }).problem).toBe('tooLong');
+    // what passes always fits, with room for the magnet's id
+    const ok = read({ answers: '日'.repeat(1200), inputs: 'a'.repeat(1500), outputs: 'b'.repeat(1500), magnet: 'A'.repeat(22) });
+    expect(ok.extras).toBeTruthy();
+    expect(Buffer.byteLength(JSON.stringify({ ...ok.extras.payload, magnet: 'A'.repeat(22) }))).toBeLessThanOrEqual(LEAD_PAYLOAD_BYTES);
   });
 
   it('tells visitors apart by the address the host’s proxy saw', () => {

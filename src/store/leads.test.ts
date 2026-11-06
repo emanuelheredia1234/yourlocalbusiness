@@ -23,6 +23,11 @@ let n = 0;
 const lead = (p: Project | string, min: number, over: Partial<Lead> = {}): Lead => ({
   id: `lead-${++n}`,
   pageId: seoPageIdOf(typeof p === 'string' ? p : p.id),
+  projectId: null,
+  source: 'page',
+  kind: 'form',
+  consent: false,
+  payload: {},
   slug: typeof p === 'string' ? `${p}-page` : p.marketing.seoPublished?.slug ?? 'old-name',
   name: 'Ann',
   email: 'ann@example.com',

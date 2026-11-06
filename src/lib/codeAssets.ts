@@ -10,6 +10,7 @@ import type { CodeAsset, CodeKind, Project, PromptImage, Published } from '@/lib
 import { buildDocument, type CodeResult } from '@/ai/local/code';
 import { imageDataUrls, imageKeyNumber, imageTokens } from '@/lib/promptImages';
 import { buildHash, type PublishBuild } from '@/lib/publish';
+import { hasLeadAction, LEAD_ACTION } from '@/lib/leadAction';
 import { listJoin, uid } from '@/lib/utils';
 import { useStore } from '@/store/useStore';
 
@@ -104,7 +105,7 @@ export const artifactPageId = (assetId: string) => `artifact:${assetId}`;
 
 /** What an asset publishes: the full page, images as {{img-N}} (publishing gives them addresses), with the storage stand-in, since published pages run sandboxed. */
 export function publishBuild(a: CodeAsset): PublishBuild {
-  return { html: buildDocument(codeOf(a), a.name, { storageShim: true }), images: a.images ?? [] };
+  return { html: buildDocument(codeOf(a), a.name, { storageShim: true, leadAction: LEAD_ACTION }), images: a.images ?? [] };
 }
 
 const staleCache = new WeakMap<CodeAsset, boolean>();
@@ -122,11 +123,21 @@ export function hasUnpublishedChanges(a: CodeAsset): boolean {
   return stale;
 }
 
-/** The page to copy or download, with its images embedded as data URLs, and the keys of any used image that couldn't be loaded. */
+/** A copy's TODO where its forms would send, when the asset isn't published yet. */
+const LEAD_TODO = `${String.fromCharCode(60)}!-- TODO: publish this asset in the app so its forms send to Email → Leads. Until then they send nothing. -->\n`;
+
+/**
+ * The page to copy or download, with its images embedded as data URLs, and the keys of any used image that couldn't be loaded.
+ * Its forms send to the published asset's full address (https://<app>/<slug>/lead), so they work from anywhere; not published,
+ * they send nothing yet, and a comment at the top says so.
+ */
 export function documentWithImages(a: CodeAsset, urls: Record<string, string>): { html: string; missing: string[] } {
   const code = codeOf(a);
   const missing = imageTokens(allCode(code)).filter((k) => !urls[k] && (a.images ?? []).some((i) => i.key === k));
-  return { html: buildDocument(code, a.name, { images: urls }), missing };
+  const published = a.published?.url && /^https?:\/\//.test(a.published.url) ? `${a.published.url.replace(/\/+$/, '')}/lead` : '';
+  const forms = hasLeadAction(allCode(code));
+  const html = buildDocument(forms && !published ? { ...code, html: `${LEAD_TODO}${code.html}` } : code, a.name, { images: urls, ...(published ? { leadAction: published } : {}) });
+  return { html, missing };
 }
 
 /** The images the code shows (of those the asset has). */

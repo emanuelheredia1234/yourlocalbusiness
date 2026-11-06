@@ -1,3 +1,5 @@
+import { consentLabel, receivesNote } from '@/lib/consent';
+import { LEAD_FILE_ID } from '@/lib/leadFields';
 import type {
   AboutData,
   Brand,
@@ -1284,6 +1286,8 @@ const TYPE_CSS = `.lead-form { background: var(--soft); } .lead-form form, .lead
 button.btn { border: 0; font: inherit; font-weight: 700; cursor: pointer; justify-self: start; }
 fieldset[disabled] { opacity: .6; } fieldset[disabled] button.btn { cursor: not-allowed; } .note { color: var(--muted); font-size: 15px; margin: 12px 0 0; }
 .hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.consent { display: flex; gap: 10px; align-items: flex-start; font-size: 15px; color: var(--muted); cursor: pointer; } .consent input { width: 18px; height: 18px; margin-top: 3px; flex: none; accent-color: var(--brand); }
+.fine { color: var(--muted); font-size: 14px; margin: 0; }
 .items { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-top: 28px; }
 .item { background: var(--soft); border-radius: var(--radius); padding: 22px; display: flex; flex-direction: column; gap: 8px; }
 .item h3, .item p { margin: 0; } .item .meta { color: var(--muted); font-size: 14px; margin: 0; } .price-line b { font-size: 26px; } .price-line span { color: var(--muted); font-size: 15px; } .item .btn { margin-top: auto; align-self: flex-start; }
@@ -1565,6 +1569,8 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
           // The app's own fields; it sends only once the page is published (SEO pages run no scripts).
           const d = s.data;
           const action = (opts.leadAction ?? '').trim();
+          const fileId = project.marketing.leadMagnet?.delivery?.fileId ?? '';
+          const magnet = LEAD_FILE_ID.test(fileId) ? fileId : '';
           typeSections = true;
           anchors.add('lead-form');
           return block(
@@ -1580,7 +1586,11 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
             d.askTime && `          <div class="field"><label for="lf-time">Preferred day and time</label><input id="lf-time" name="time" maxlength="120" required placeholder="For example: Tuesday morning"></div>`,
             `          <div class="field"><label for="lf-message">Message (optional)</label><textarea id="lf-message" name="message" rows="4" maxlength="2000"></textarea></div>`,
             `          <div class="hp" aria-hidden="true"><label for="lf-website">Leave this empty</label><input id="lf-website" name="website" tabindex="-1" autocomplete="off"></div>`,
+            // the published lead magnet: the server shows its download after the sign-up
+            magnet && `          <input type="hidden" name="kind" value="lead"><input type="hidden" name="magnet" value="${e(magnet)}">`,
+            `          <label class="consent"><input type="checkbox" name="consent" value="yes"> <span>${e(consentLabel(project.brand.name))}</span></label>`,
             `          <button class="btn" type="submit">${e(d.buttonLabel.trim() || 'Send')}</button>`,
+            `          <p class="fine">${e(receivesNote(project.brand.name))}</p>`,
             `        </fieldset>`,
             !action && `        <p class="note">${e(formNote())}</p>`,
             `      </form>`,

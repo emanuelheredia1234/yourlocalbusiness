@@ -28,6 +28,7 @@ import {
 } from '@/lib/publish';
 import { CopyButton, Field, Spinner, StatusDot, confirmAction } from '@/components/ui/primitives';
 import { toast, useUI } from '@/store/ui';
+import { useStore } from '@/store/useStore';
 
 /** Open Settings at the Domains card. */
 export function openDomainSettings() {
@@ -77,6 +78,7 @@ export function PublishPanel({
   onChange,
   version,
   className,
+  projectId,
 }: {
   /** 'seo:<projectId>' or 'artifact:<assetId>' */
   pageId: string;
@@ -89,6 +91,8 @@ export function PublishPanel({
   /** changes when the page does (e.g. its updatedAt), so the panel looks again for changes not published yet */
   version?: string | number;
   className?: string;
+  /** the project the page belongs to (its leads show under that business) */
+  projectId?: string;
 }) {
   const { access, retry } = usePublishAccess();
   const ids = useId();
@@ -227,8 +231,10 @@ export function PublishPanel({
     setNotice(null);
     try {
       const target = publishTarget(appOrigin, to.slug, to.domain || null, to.home);
-      const ready = await preparePublish(await latest.current.build(target), to.slug);
-      const next = await publishPage({ pageId, kind, slug: to.slug, title, html: ready.html, images: ready.images, domain: to.domain || null, home: to.home, hash: ready.hash });
+      // the business's current lead-magnet download, for a widget's {{lead-magnet}} (as it is now, not when the widget was made)
+      const magnet = projectId ? useStore.getState().projects.find((x) => x.id === projectId)?.marketing.leadMagnet?.delivery?.fileId : undefined;
+      const ready = await preparePublish(await latest.current.build(target), to.slug, magnet);
+      const next = await publishPage({ pageId, kind, slug: to.slug, title, html: ready.html, images: ready.images, domain: to.domain || null, home: to.home, hash: ready.hash, ...(projectId ? { projectId } : {}) });
       latest.current.onChange(next);
       remember(next);
       setStale(false);

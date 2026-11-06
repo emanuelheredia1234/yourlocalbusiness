@@ -8,6 +8,7 @@ import type { PromptImage, Published } from './types';
 import { serverFetch } from '@/ai/claude';
 import { serverBaseNow, useAuth } from './cloud/auth';
 import { imageTokens, imagesForPublish, resolveImageTokens, type PublishImage } from './promptImages';
+import { leadActionFor, resolveLeadAction, resolveLeadMagnet } from './leadAction';
 
 export type PageKind = 'seo' | 'artifact';
 
@@ -97,6 +98,8 @@ export const MAX_HTML_BYTES = 1_500_000;
 const MAX_REQUEST_BYTES = 13.5 * 1024 * 1024;
 const MAX_IMAGES = 12;
 const PAGE_ID = /^(seo|artifact):[A-Za-z0-9_-]{1,80}$/;
+/** A project's id as the server takes it (published_pages.project_id). */
+const PROJECT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 
 /** A page name: 3–60 lower-case letters, digits and single hyphens, starting and ending with a letter or digit. */
 export function isValidSlug(slug: string): boolean {
@@ -213,13 +216,15 @@ export function publishedImagePaths(slug: string, images: Pick<PublishImage, 'na
 }
 
 /**
- * A page's build, ready to send: the images it uses (redrawn for the web), its HTML with each token
- * turned into that image's address, and its fingerprint.
+ * A page's build, ready to send: the images it uses (redrawn for the web), its HTML with each image token
+ * turned into that image's address, each {{lead-action}} into /<slug>/lead (so its forms send to Email →
+ * Leads) and each {{lead-magnet}} into magnet (the business's current download id, or nothing), and its fingerprint.
  */
-export async function preparePublish(build: PublishBuild, slug: string): Promise<{ html: string; images: PublishImage[]; hash: string }> {
+export async function preparePublish(build: PublishBuild, slug: string, magnet?: string): Promise<{ html: string; images: PublishImage[]; hash: string }> {
   const keys = imageTokens(build.html);
   const images = keys.length ? await imagesForPublish(build.images, keys) : [];
-  return { html: resolveImageTokens(build.html, publishedImagePaths(slug, images)), images, hash: buildHash(build.html, build.images) };
+  const html = resolveLeadMagnet(resolveLeadAction(resolveImageTokens(build.html, publishedImagePaths(slug, images)), leadActionFor(slug)), magnet);
+  return { html, images, hash: buildHash(build.html, build.images) };
 }
 
 // ───────────── is publishing on? ─────────────
@@ -389,6 +394,8 @@ export interface PublishInput {
   home?: boolean;
   /** the build's fingerprint (buildHash); without it, one of what's sent */
   hash?: string;
+  /** the project the page belongs to, so its leads show under that business (an SEO page's is its own id) */
+  projectId?: string;
 }
 
 /**
@@ -401,7 +408,8 @@ export async function publishPage(p: PublishInput): Promise<Published> {
   if (p.images.length > MAX_IMAGES) throw new PublishError(`A published page can have up to ${MAX_IMAGES} images.`, 'TOO_MANY_IMAGES');
   const domain = p.domain || null;
   const home = !!(domain && p.home);
-  const body = JSON.stringify({ kind: p.kind, slug: p.slug, title: p.title.trim().slice(0, 300), html: p.html, images: p.images.map(({ name, mime, data }) => ({ name, mime, data })), domain, home });
+  const projectId = p.projectId && PROJECT_ID.test(p.projectId) ? p.projectId : undefined;
+  const body = JSON.stringify({ kind: p.kind, slug: p.slug, title: p.title.trim().slice(0, 300), html: p.html, images: p.images.map(({ name, mime, data }) => ({ name, mime, data })), domain, home, ...(projectId ? { projectId } : {}) });
   if (bytes(body) > MAX_REQUEST_BYTES) throw new PublishError('This page and its images are too big to send at once. Try fewer or smaller images.', 'TOO_LARGE');
   const j = await api<{ page?: unknown; url?: unknown; domainUrl?: unknown }>('PUT', `/api/pages/${pagePath(p.pageId)}`, body);
   const page = toServerPage(j.page);

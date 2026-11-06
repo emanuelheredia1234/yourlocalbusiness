@@ -21,8 +21,12 @@ export function updateMarketingOf(projectId: string, patch: Partial<Marketing> |
 }
 
 /** A new lead magnet (and its opt-in copy) replaces the current one. */
+/** A new lead magnet replaces the old one's words; its published download (and its permanent link) stays, to update. */
 export function applyLeadMagnet(lm: LeadMagnet, projectId = activeId()): void {
-  updateMarketingOf(projectId, { leadMagnet: lm });
+  updateMarketingOf(projectId, (m) => {
+    const delivery = lm.delivery ?? m.leadMagnet?.delivery;
+    return { leadMagnet: delivery ? { ...lm, delivery } : lm };
+  });
 }
 
 /** A new sequence replaces all five emails. */

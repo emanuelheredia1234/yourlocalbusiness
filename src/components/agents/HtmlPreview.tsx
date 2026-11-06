@@ -183,7 +183,7 @@ export function HtmlPreviewHost() {
           {req.target === 'seo' && <Callout tone="warn">{name} wrote this page. Check every claim, price and testimonial before you publish: the app can’t check free HTML.</Callout>}
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <DeviceSwitch value={device} onChange={setDevice} />
-            <span className="text-caption text-muted">{req.target === 'seo' ? 'Scripts are off and its form doesn’t send from here.' : 'Its script runs here in a sandbox, as on a published page.'}</span>
+            <span className="text-caption text-muted">{req.target === 'seo' ? 'Scripts are off and its form doesn’t send from here.' : `Its script runs here in a sandbox, as on a published page.${result.page.hasLeadForm ? ' Forms send to Email → Leads once published.' : ''}`}</span>
           </div>
           {doc ? (
             <HtmlPreviewFrame doc={doc} sandbox={req.target === 'seo' ? SEO_SANDBOX : ASSET_SANDBOX} device={device} title={`Preview of ${req.title}`} />

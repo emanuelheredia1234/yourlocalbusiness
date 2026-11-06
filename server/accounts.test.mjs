@@ -251,3 +251,33 @@ describe('ai-server.mjs with accounts', () => {
     }
   }, 20_000);
 });
+
+describe('deleting an account clears every bucket of theirs', () => {
+  it('media, lead-files and public-files, and nobody else’s', async () => {
+    const auth = createAuth({ supabaseUrl: supa.url, publishableKey: supa.PUBLISHABLE, secretKey: supa.SECRET });
+    const leaving = await supa.tokenFor('leaving-buckets@example.com');
+    const staying = await supa.tokenFor('staying-buckets@example.com');
+    const put = (key) => supa.objects.set(key, { bytes: Buffer.from('x'), type: 'application/pdf', created: Date.now() });
+    const theirs = [`media/${leaving.user.id}/m1`, `lead-files/${leaving.user.id}/AAAAAAAAAAAAAAAAAAAAAA/v1-abc/guide.pdf`, `public-files/${leaving.user.id}/BBBBBBBBBBBBBBBBBBBBBB.png`];
+    const others = [`lead-files/${staying.user.id}/CCCCCCCCCCCCCCCCCCCCCC/v1-abc/guide.pdf`, `public-files/${staying.user.id}/DDDDDDDDDDDDDDDDDDDDDD.png`];
+    for (const k of [...theirs, ...others]) put(k);
+    await auth.deleteUser(leaving.user.id);
+    for (const k of theirs) expect(supa.objects.has(k), k).toBe(false);
+    for (const k of others) expect(supa.objects.has(k), k).toBe(true);
+    expect(supa.users.has(leaving.user.id)).toBe(false);
+  });
+
+  it('still works before the new buckets exist (their migration wasn’t run)', async () => {
+    const bare = await (await createMockSupabase({ missingBuckets: ['lead-files', 'public-files'] })).start();
+    try {
+      const auth = createAuth({ supabaseUrl: bare.url, publishableKey: bare.PUBLISHABLE, secretKey: bare.SECRET });
+      const leaving = await bare.tokenFor('leaving-early@example.com');
+      bare.objects.set(`media/${leaving.user.id}/m1`, { bytes: Buffer.from('x'), type: 'image/png', created: Date.now() });
+      await auth.deleteUser(leaving.user.id);
+      expect(bare.objects.has(`media/${leaving.user.id}/m1`)).toBe(false);
+      expect(bare.users.has(leaving.user.id)).toBe(false);
+    } finally {
+      await bare.close();
+    }
+  });
+});

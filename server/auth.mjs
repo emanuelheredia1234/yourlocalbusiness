@@ -11,6 +11,7 @@
 
 import crypto from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { USER_BUCKETS, bucketMissing } from './buckets.mjs';
 
 /** jose errors that mean the token itself is bad (anything else: it couldn't be checked here). */
 const INVALID = new Set(['ERR_JWT_EXPIRED', 'ERR_JWT_CLAIM_VALIDATION_FAILED', 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED', 'ERR_JWS_INVALID', 'ERR_JWT_INVALID']);
@@ -132,29 +133,40 @@ export function createAuth({ supabaseUrl = '', publishableKey = '', secretKey = 
     const headers = { apikey: secretKey, ...(secretKey.startsWith('sb_secret_') ? {} : { authorization: `Bearer ${secretKey}` }) };
     const failed = (what, status) => Object.assign(new Error(`Couldn’t delete your files (${what}, ${status}). Nothing was deleted yet; try again.`), { status: 502, code: 'UPSTREAM' });
     // The files in a folder and its sub-folders (published pages keep their images in
-    // <user id>/published/<page>/). Storage lists a sub-folder as an entry without an id.
-    async function filesIn(prefix, depth = 0) {
-      const list = await fetch(`${url}/storage/v1/object/list/media`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefix, limit: 1000, offset: 0 }) });
-      if (!list.ok) throw failed('listing', list.status);
+    // <user id>/published/<page>/, lead files theirs in <user id>/<file id>/<version>/). Storage lists a
+    // sub-folder as an entry without an id. A bucket that isn't there yet (its migration wasn't run) holds nothing.
+    async function filesIn(bucket, prefix, depth = 0) {
+      const list = await fetch(`${url}/storage/v1/object/list/${bucket}`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefix, limit: 1000, offset: 0 }) });
+      if (!list.ok) {
+        const text = await list.text().catch(() => '');
+        if (bucketMissing(list.status, text)) return null;
+        throw failed('listing', list.status);
+      }
       const items = await list.json();
       const out = [];
       for (const i of Array.isArray(items) ? items : []) {
         if (i?.id != null) out.push(`${prefix}${i.name}`);
-        else if (i?.name && depth < 4) out.push(...(await filesIn(`${prefix}${i.name}/`, depth + 1)));
+        else if (i?.name && depth < 4) out.push(...((await filesIn(bucket, `${prefix}${i.name}/`, depth + 1)) ?? []));
       }
       return out;
     }
-    // their files first: list and remove media/<user id>/… until the folder is empty
+    // their files first: list and remove <bucket>/<user id>/… in every bucket of theirs until each folder is empty
     async function clearFolder() {
-      for (let round = 0; round < 50; round++) {
-        const files = await filesIn(`${userId}/`);
-        if (!files.length) return;
-        for (let i = 0; i < files.length; i += 1000) {
-          const del = await fetch(`${url}/storage/v1/object/media`, { method: 'DELETE', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: files.slice(i, i + 1000) }) });
-          if (!del.ok) throw failed('deleting', del.status);
+      for (const bucket of USER_BUCKETS) {
+        let emptied = false;
+        for (let round = 0; round < 50 && !emptied; round++) {
+          const files = await filesIn(bucket, `${userId}/`);
+          if (!files?.length) {
+            emptied = true;
+            break;
+          }
+          for (let i = 0; i < files.length; i += 1000) {
+            const del = await fetch(`${url}/storage/v1/object/${bucket}`, { method: 'DELETE', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: files.slice(i, i + 1000) }) });
+            if (!del.ok) throw failed('deleting', del.status);
+          }
         }
+        if (!emptied) throw failed('too many files', 0);
       }
-      throw failed('too many files', 0);
     }
     await clearFolder();
     const res = await fetch(`${url}/auth/v1/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE', headers });

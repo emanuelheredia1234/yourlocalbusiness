@@ -57,6 +57,8 @@ function project({ emails = false, website = '' }: { emails?: boolean; website?:
   p.brand.name = 'Copper & Comb';
   p.brand.websiteUrl = website;
   if (emails) p.marketing.emails = generateEmailSequence(p, null);
+  // with a website, the lead magnet's download is published too: every link in the emails is a real address
+  if (website) p.marketing.leadMagnet = { id: 'lm', type: 'guide', title: 'Free guide', subtitle: '', intro: '', sections: [], cta: '', optInHeadline: '', optInBullets: [], buttonLabel: '', createdAt: 0, delivery: { source: 'pdf', fileId: 'AbCdEfGhIjKlMnOpQrStUv', link: 'https://app.example/m/AbCdEfGhIjKlMnOpQrStUv', gate: true, publishedAt: 1 } };
   return p;
 }
 
@@ -245,7 +247,8 @@ describe('Omnisend drafts', () => {
       });
       expect(draft).toEqual(omnisendDraft(p, email, i, tokens));
       expect(JSON.stringify(draft)).not.toContain('{{');
-      expect(draft.ctaUrl).toMatch(/^https:\/\/copperandcomb\.com\/(free|offer)$/);
+      // the published download's link, or the offer's (the website: no page is published here)
+      expect(draft.ctaUrl).toMatch(/^https:\/\/(app\.example\/m\/AbCdEfGhIjKlMnOpQrStUv|copperandcomb\.com)$/);
       // the body the preview shows is the body sent
       expect(host.querySelectorAll('ol > li')[i].textContent).toContain(draft.body.split('\n')[0]);
     });
@@ -258,6 +261,17 @@ describe('Omnisend drafts', () => {
 
   it('doesn’t create a draft whose button has no web address', async () => {
     const f = await renderConnected(project({ emails: true }));
+    await act(async () => buttons('Create Omnisend draft')[0].click());
+    await settle();
+    expect(calls(f, DRAFTS_PATH)).toHaveLength(0);
+    // its button links to the lead magnet: what fixes it is publishing the download, not a website
+    expect(host.querySelector('ol > li [role="alert"]')?.textContent).toBe('This email’s button has no web address yet. Publish your download in Email › Lead magnet › Delivery first: this button links to it.');
+  });
+
+  it('says to add a website when the button links to the offer and there’s none', async () => {
+    const p = project({ emails: true });
+    p.marketing.emails = p.marketing.emails.map((e, i) => (i === 0 ? { ...e, ctaUrl: '{{product_link}}' } : e));
+    const f = await renderConnected(p);
     await act(async () => buttons('Create Omnisend draft')[0].click());
     await settle();
     expect(calls(f, DRAFTS_PATH)).toHaveLength(0);

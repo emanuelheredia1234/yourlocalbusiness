@@ -4,23 +4,30 @@ import type { Project } from '@/lib/types';
 import { cn, fmtDateTime, fmtRelative, slugify } from '@/lib/utils';
 import { showSignIn } from '@/lib/cloud/auth';
 import { usePublishAccess } from '@/lib/publish';
-import { LEADS_EXPORT_MAX, LEADS_PAGE_SIZE, MAX_EMAIL, allLeads, deleteLead, leadEmail, leadTime, leadsCsv, listLeads, seoPageIdOf, type Lead } from '@/lib/leads';
-import { addLeadToSubscribers, leadProject, markLeadsSeen, useLeads } from '@/store/leads';
+import { LEADS_EXPORT_MAX, LEADS_PAGE_SIZE, LEAD_KIND_LABELS, MAX_EMAIL, allLeads, deleteLead, leadDetails, leadEmail, leadOfProject, leadSourceLine, leadTime, leadsCsv, listLeads, type Lead } from '@/lib/leads';
+import type { LeadSource } from '@/lib/leadFields';
+import { artifactPageId } from '@/lib/codeAssets';
+import { addLeadToSubscribers, leadOwner, leadProject, markLeadsSeen, useLeads } from '@/store/leads';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
-import { Callout, Empty, InfoTip, Segmented, Spinner, Tooltip, confirmAction } from '@/components/ui/primitives';
+import { Badge, Callout, Empty, InfoTip, Segmented, Spinner, Tooltip, confirmAction } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
 import { safeEmail, safePhone } from '@/lib/listingActions';
 
-type Scope = 'page' | 'all';
+type Scope = 'project' | 'all';
+type SourceFilter = 'all' | LeadSource;
+
+/** The source filter, while the app is open (memory only: never saved, as leads are people's details). */
+let rememberedSource: SourceFilter = 'all';
 
 /** a message longer than this shows its first lines, with Show all */
 const LONG_LINES = 6;
 const LONG_CHARS = 360;
 
 /**
- * Email → Leads: what people sent with the form on the owner's published pages (a lead form page, a
- * booking request, a question). The server keeps them; the app shows them, newest first, and can add one
+ * Email → Leads: what people sent with the owner's published forms (an SEO page's form, an asset's widget: a
+ * lead form, a booking request, a quiz or calculator result; or the lead magnet's sign-up). The server keeps them;
+ * the app shows them, newest first, for this business or all of them and by where they came from, and can add one
  * to the subscriber list, delete it, or export a CSV. Visitors wrote every word of a lead: it's shown as text.
  */
 export function Leads({ project }: { project: Project }) {
@@ -73,9 +80,9 @@ function AccessNote({ children, action }: { children: string; action?: JSX.Eleme
 }
 
 /** What the watcher already has for this view: shown at once, until the list arrives. */
-function seed(recent: Lead[] | null, pageId: string | undefined): Lead[] | null {
+function seed(recent: Lead[] | null, projectId: string | undefined, source: SourceFilter): Lead[] | null {
   if (!recent) return null;
-  return pageId ? recent.filter((l) => l.pageId === pageId) : recent;
+  return recent.filter((l) => (!projectId || leadOfProject(l, projectId)) && (source === 'all' || l.source === source));
 }
 
 const mailHref = (email: string) => `mailto:${email.replace(/[%?#&=]/g, (c) => encodeURIComponent(c))}`;
@@ -84,9 +91,11 @@ function LeadList({ project }: { project: Project }) {
   const ids = useId();
   const projects = useStore((s) => s.projects);
   const recent = useLeads((s) => s.recent);
-  const [scope, setScope] = useState<Scope>('page');
-  const pageId = scope === 'page' ? seoPageIdOf(project.id) : undefined;
-  const [leads, setLeads] = useState<Lead[] | null>(() => seed(recent, pageId));
+  const [scope, setScope] = useState<Scope>('project');
+  const [source, setSourceState] = useState<SourceFilter>(rememberedSource);
+  const projectId = scope === 'project' ? project.id : undefined;
+  const filter = { projectId, ...(source === 'all' ? {} : { source }) };
+  const [leads, setLeads] = useState<Lead[] | null>(() => seed(recent, projectId, source));
   // the last page was full: there may be more
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -105,7 +114,7 @@ function LeadList({ project }: { project: Project }) {
     const ctrl = new AbortController();
     setLoading(true);
     setError('');
-    listLeads({ pageId, limit: LEADS_PAGE_SIZE, signal: ctrl.signal }).then(
+    listLeads({ ...filter, limit: LEADS_PAGE_SIZE, signal: ctrl.signal }).then(
       (list) => {
         if (v !== view.current) return;
         setLeads(list);
@@ -120,13 +129,13 @@ function LeadList({ project }: { project: Project }) {
     );
     void useLeads.getState().refresh();
     return () => ctrl.abort();
-  }, [pageId, loads]);
+  }, [projectId, source, loads]);
 
-  // seen: what this page's list shows counts as seen (the bell's count and the badge go)
+  // seen: what this business's whole list shows counts as seen (the bell's count and the badge go)
   useEffect(() => {
-    if (scope !== 'page' || !leads?.length) return;
+    if (scope !== 'project' || source !== 'all' || !leads?.length) return;
     markLeadsSeen(project.id, Math.max(...leads.map(leadTime)));
-  }, [leads, scope, project.id]);
+  }, [leads, scope, source, project.id]);
 
   // after a delete: the next lead's Delete button, or the list
   useEffect(() => {
@@ -140,7 +149,14 @@ function LeadList({ project }: { project: Project }) {
   const changeScope = (s: Scope) => {
     if (s === scope) return;
     setScope(s);
-    setLeads(seed(useLeads.getState().recent, s === 'page' ? seoPageIdOf(project.id) : undefined));
+    setLeads(seed(useLeads.getState().recent, s === 'project' ? project.id : undefined, source));
+    setMore(false);
+  };
+  const changeSource = (s: SourceFilter) => {
+    if (s === source) return;
+    rememberedSource = s;
+    setSourceState(s);
+    setLeads(seed(useLeads.getState().recent, projectId, s));
     setMore(false);
   };
 
@@ -151,7 +167,7 @@ function LeadList({ project }: { project: Project }) {
     setLoading(true);
     setError('');
     try {
-      const next = await listLeads({ pageId, before: last.createdAt, limit: LEADS_PAGE_SIZE });
+      const next = await listLeads({ ...filter, before: last.createdAt, limit: LEADS_PAGE_SIZE });
       if (v !== view.current) return;
       setLeads((cur) => {
         const have = new Set((cur ?? []).map((l) => l.id));
@@ -165,11 +181,8 @@ function LeadList({ project }: { project: Project }) {
     }
   };
 
-  const ownerOf = (lead: Lead) => projects.find((p) => seoPageIdOf(p.id) === lead.pageId) ?? null;
-  const pageLabel = (lead: Lead) => {
-    const owner = ownerOf(lead);
-    return `/${lead.slug}${owner ? ` · ${owner.brand.name}` : ''}`;
-  };
+  const ownerOf = (lead: Lead) => leadOwner(lead, projects);
+  const csvLabel = { project: (lead: Lead) => ownerOf(lead)?.brand.name ?? '', page: (lead: Lead) => (lead.slug ? `/${lead.slug}` : lead.pageId) };
   const who = (lead: Lead) => lead.name || lead.email || lead.phone || 'someone';
 
   const remove = async (lead: Lead) => {
@@ -196,7 +209,8 @@ function LeadList({ project }: { project: Project }) {
     }
   };
 
-  const subscribe = (lead: Lead) => {
+  const subscribe = async (lead: Lead) => {
+    if (!(await consentedOrAsked(lead))) return;
     const r = addLeadToSubscribers(lead);
     if (r.status === 'added') toast({ kind: 'success', title: 'Added to your subscribers', body: r.projectId === project.id ? 'Find them under Subscribers.' : `In ${r.brand}’s Email → Subscribers.` });
     else if (r.status === 'exists') toast({ kind: 'info', title: 'Already on your subscriber list' });
@@ -205,10 +219,10 @@ function LeadList({ project }: { project: Project }) {
   const exportCsv = async () => {
     setExporting(true);
     try {
-      const { leads: list, capped } = await allLeads({ pageId, max: LEADS_EXPORT_MAX });
-      const name = scope === 'page' ? `${slugify(project.brand.name) || 'your'}-leads.csv` : 'leads-all-pages.csv';
+      const { leads: list, capped } = await allLeads({ ...filter, max: LEADS_EXPORT_MAX });
+      const name = `${scope === 'project' ? slugify(project.brand.name) || 'your' : 'all'}-leads${source === 'all' ? '' : `-${SOURCE_FILE[source]}`}.csv`;
       // a byte-order mark, so spreadsheets read names with accents right
-      await download(name, String.fromCharCode(0xfeff) + leadsCsv(list, pageLabel));
+      await download(name, String.fromCharCode(0xfeff) + leadsCsv(list, csvLabel));
       if (capped) toast({ kind: 'info', title: 'Exported the newest 5,000 leads.' });
     } catch (e) {
       toast({ kind: 'error', title: 'Couldn’t export your leads', body: (e as Error)?.message });
@@ -225,18 +239,31 @@ function LeadList({ project }: { project: Project }) {
           <h2 id={`${ids}-title`} className="text-h3 text-ink">
             {leads ? `${count}${more ? '+' : ''} lead${count === 1 && !more ? '' : 's'}` : 'Leads'}
           </h2>
-          <InfoTip label="About replying">Messages people send with the form on your published page. Reply from your own email or phone: the app doesn’t send email.</InfoTip>
+          <InfoTip label="About replying">What people send with your published forms: your page’s form, your assets (forms, bookings, quiz and calculator results) and your lead magnet’s sign-up. Reply from your own email or phone: the app doesn’t send email.</InfoTip>
         </div>
         {/* what the ⓘ says, read out with the list for everyone using a screen reader */}
         <p className="sr-only">Reply from your own email or phone: the app doesn’t send email.</p>
-        <div role="group" aria-label="Which pages">
+        <div role="group" aria-label="Which businesses">
           <Segmented<Scope>
             size="sm"
             value={scope}
             onChange={changeScope}
             options={[
-              { id: 'page', label: 'This page' },
-              { id: 'all', label: 'All pages' },
+              { id: 'project', label: 'This business' },
+              { id: 'all', label: 'All businesses' },
+            ]}
+          />
+        </div>
+        <div role="group" aria-label="Where they came from">
+          <Segmented<SourceFilter>
+            size="sm"
+            value={source}
+            onChange={changeSource}
+            options={[
+              { id: 'all', label: 'All' },
+              { id: 'page', label: 'Pages' },
+              { id: 'asset', label: 'Assets' },
+              { id: 'magnet', label: 'Lead magnet' },
             ]}
           />
         </div>
@@ -273,9 +300,15 @@ function LeadList({ project }: { project: Project }) {
           <Empty
             icon={<Inbox />}
             title="No leads yet"
-            body="When someone sends the form on your published page, it shows here. Lead form pages have a form, and so do booking pages without a booking link."
+            body={
+              source === 'asset'
+                ? 'When someone sends a published asset’s form (a lead form, a booking request, or a quiz or calculator result), it shows here.'
+                : source === 'magnet'
+                  ? 'When someone signs up for your published lead magnet’s download, it shows here. Publish it under Email › Lead magnet.'
+                  : 'When someone sends a form you published, it shows here: your page’s form, a published asset’s form or result, or your lead magnet’s sign-up.'
+            }
             action={
-              scope === 'page' ? (
+              scope === 'project' && source !== 'asset' && source !== 'magnet' ? (
                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => void useUI.getState().openSeoBuilder({ pageType: 'lead' })}>
                   Build a lead form page
                 </button>
@@ -289,13 +322,13 @@ function LeadList({ project }: { project: Project }) {
             <span>Name</span>
             <span>Contact</span>
             <span>Message</span>
-            <span>From page</span>
+            <span>From</span>
             <span>Received</span>
             <span />
           </div>
           <ul ref={listRef} tabIndex={-1} aria-label="Leads" className="divide-y divide-line outline-none">
             {leads.map((lead) => (
-              <LeadItem key={lead.id} lead={lead} project={project} projects={projects} from={ownerOf(lead)} who={who(lead)} busy={busy.has(lead.id)} onSubscribe={() => subscribe(lead)} onDelete={() => void remove(lead)} />
+              <LeadItem key={lead.id} lead={lead} project={project} projects={projects} from={ownerOf(lead)} who={who(lead)} busy={busy.has(lead.id)} onSubscribe={() => void subscribe(lead)} onDelete={() => void remove(lead)} />
             ))}
           </ul>
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-2.5">
@@ -310,6 +343,23 @@ function LeadList({ project }: { project: Project }) {
       )}
     </section>
   );
+}
+
+/** Whether to add a lead to the subscribers: yes when they ticked the box to get emails, else only when the owner says so. */
+export async function consentedOrAsked(lead: Pick<Lead, 'consent'>): Promise<boolean> {
+  if (lead.consent) return true;
+  return confirmAction({ title: 'Add them to your subscribers?', body: 'They didn’t tick the box to get emails. Add them only if they agreed another way.', confirmLabel: 'Add anyway' });
+}
+
+/** A CSV's name for each source. */
+const SOURCE_FILE: Record<LeadSource, string> = { page: 'pages', asset: 'assets', magnet: 'lead-magnet' };
+
+/** Where a lead came from, named the way the owner knows it: an asset by its name, the lead magnet by its title. */
+function sourceLine(lead: Lead, from: Project | null): string {
+  const asset = lead.source === 'asset' ? from?.studio.codeAssets.find((a) => artifactPageId(a.id) === lead.pageId)?.name : undefined;
+  const lm = from?.marketing.leadMagnet;
+  const magnet = lead.source === 'magnet' && lm && (lead.payload.magnet === lm.delivery?.fileId || lead.pageId === `magnet:${lm.delivery?.fileId}`) ? lm.title : undefined;
+  return leadSourceLine(lead, { asset, magnet });
 }
 
 /** The list's columns on wide screens (it reads as a table; each lead is still one list item). */
@@ -327,6 +377,7 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
   const target = leadProject(lead, projects) ?? project;
   const subscribed = canSubscribe && target.marketing.subscribers.some((s) => s.email.trim().toLowerCase() === leadEmail(lead));
   const long = lead.message.split('\n').length > LONG_LINES || lead.message.length > LONG_CHARS;
+  const details = leadDetails(lead);
   const when = lead.createdAt ? (
     <time dateTime={lead.createdAt} title={t ? fmtDateTime(t) : undefined} className="num font-mono text-caption text-muted">
       {t ? fmtRelative(t) : lead.createdAt}
@@ -377,6 +428,28 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
         )}
       </div>
       <div className="min-w-0">
+        {(lead.kind !== 'form' || lead.consent) && (
+          <p className="mb-1 flex flex-wrap gap-1">
+            {lead.kind !== 'form' && <Badge>{LEAD_KIND_LABELS[lead.kind]}</Badge>}
+            {lead.consent && (
+              <Badge tone="good" dot>
+                Agreed to emails
+              </Badge>
+            )}
+          </p>
+        )}
+        {details.length > 0 && (
+          <dl className="mb-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-small">
+            {details.map((d) => (
+              <div key={d.label} className="contents">
+                <dt className="text-muted">{d.label}</dt>
+                <dd dir="auto" className="min-w-0 whitespace-pre-line break-words text-ink-2">
+                  {d.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
         {lead.message && (
           <>
             <p id={`${ids}-msg`} dir="auto" className={cn('whitespace-pre-line break-words text-small text-ink-2', long && !open && 'line-clamp-6')}>
@@ -391,7 +464,7 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
         )}
       </div>
       <p className="min-w-0 break-words text-small text-muted">
-        From /{lead.slug} · {from ? from.brand.name : 'a page that isn’t in your projects'}
+        {sourceLine(lead, from)} · {from ? from.brand.name : 'not in your projects'}
       </p>
       <div className="hidden xl:block">{when}</div>
       <div className="flex shrink-0 items-center gap-1 xl:justify-end">

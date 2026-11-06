@@ -9,6 +9,7 @@
 import type { Project } from './types';
 import { imageTokens } from './promptImages';
 import { escapeHtml } from './utils';
+import { LEAD_FILE_ID } from './leadFields';
 import { contactEmail, contactTel } from '@/ai/local/seo';
 import { SCRIPT_CLOSE } from '@/ai/local/code';
 
@@ -31,6 +32,17 @@ export interface SeoHtmlOptions {
   leadAction: string;
   /** an image's address by its key: a {{img-N}} token (publishing), a data URL (Copy, Export, the preview), or undefined */
   imageUrl: (key: string) => string | undefined;
+}
+
+/**
+ * The page's form with the published lead magnet's id (and kind "lead") as hidden fields, so the server shows its
+ * download after the sign-up. Only the form the importer made (action {{lead-action}}), and only once.
+ */
+function withMagnet(html: string, project: Project): string {
+  const id = project.marketing.leadMagnet?.delivery?.fileId ?? '';
+  if (!LEAD_FILE_ID.test(id) || /\bname=["']?magnet\b/.test(html)) return html;
+  const kind = /\bname=["']?kind\b/.test(html) ? '' : '<input type="hidden" name="kind" value="lead">';
+  return html.replace(/<form\b[^>]*\saction=(["'])\{\{lead-action\}\}\1[^>]*>/, (open) => `${open}${kind}<input type="hidden" name="magnet" value="${id}">`);
 }
 
 /** The images the HTML-mode page shows (its tokens, in the order they first appear), of those it has. */
@@ -86,7 +98,7 @@ export function seoHtmlDocument(project: Project, o: SeoHtmlOptions): string {
     .replace(/\{\{/g, '{\\u007b')
     .replace(`"${SHARE_IMAGE}"`, () => JSON.stringify(shareImage).replace(/</g, '\\u003c'));
 
-  const body = fill(h.html).split(LEAD_ACTION).join(attr(o.leadAction));
+  const body = withMagnet(fill(h.html), project).split(LEAD_ACTION).join(attr(o.leadAction));
   return `<!doctype html>
 <html lang="en">
 <head>

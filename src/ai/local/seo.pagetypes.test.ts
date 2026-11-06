@@ -464,6 +464,12 @@ describe('buttons', () => {
 describe('the exported page', () => {
   const p = salon();
 
+  it('with a published lead magnet, the form sends its id so the server gives the download after the sign-up', () => {
+    const withMagnet: Project = { ...as(p, 'lead'), marketing: { ...p.marketing, pageType: 'lead', leadMagnet: { id: 'lm', type: 'guide', title: 'Free guide', subtitle: '', intro: '', sections: [], cta: '', optInHeadline: '', optInBullets: [], buttonLabel: '', createdAt: 0, delivery: { source: 'pdf', fileId: 'AbCdEfGhIjKlMnOpQrStUv', link: 'https://app.example/m/AbCdEfGhIjKlMnOpQrStUv', gate: true, publishedAt: 1 } } } };
+    const out = html(withMagnet, generateSalesPage(withMagnet, {}, 0, 'lead'), { leadAction: '/x/lead' });
+    expect(out).toContain('<input type="hidden" name="kind" value="lead"><input type="hidden" name="magnet" value="AbCdEfGhIjKlMnOpQrStUv">');
+  });
+
   it('a form that posts to the published page’s /lead, with the app’s own fields and a hidden trap for bots', () => {
     const page = generateSalesPage(p, {}, 0, 'lead');
     const out = html(as(p, 'lead'), page, { leadAction: '/x/lead' });
@@ -477,6 +483,10 @@ describe('the exported page', () => {
     expect(out).toContain('<label for="lf-message">Message (optional)</label><textarea id="lf-message" name="message" rows="4" maxlength="2000"></textarea>');
     expect(out).toContain('<div class="hp" aria-hidden="true"><label for="lf-website">Leave this empty</label><input id="lf-website" name="website" tabindex="-1" autocomplete="off"></div>');
     expect(out).toContain('<button class="btn" type="submit">Send</button>');
+    // the unticked box for emails, and who gets what's sent
+    expect(out).toContain(`<label class="consent"><input type="checkbox" name="consent" value="yes"> <span>Email me tips and offers from ${p.brand.name}. I can unsubscribe at any time.</span></label>`);
+    expect(out).toContain(`<p class="fine">${p.brand.name} receives what you send here.</p>`);
+    expect(out).not.toContain('name="magnet"');
     expect(out).not.toContain('name="time"');
     expect(out).not.toContain('Publish this page to collect leads.');
     // SEO pages run no scripts

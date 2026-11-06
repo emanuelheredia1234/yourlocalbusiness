@@ -39,7 +39,7 @@ export default function EmailFunnel() {
       <PageHeader
         className="mb-4"
         title="Email"
-        description={__ARTIFACT_BUILD__ ? 'This app doesn’t send email: set these up in your email tool, which sends them.' : 'This app doesn’t send email. Messages from your published page’s form show under Leads.'}
+        description={__ARTIFACT_BUILD__ ? 'This app doesn’t send email: set these up in your email tool, which sends them.' : 'This app doesn’t send email. What people send with your published forms shows under Leads: your page, your assets and your lead magnet.'}
       />
       <Tabs<Tab>
         className="mb-5"

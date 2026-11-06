@@ -42,7 +42,9 @@ describe('as a Code & assets asset', () => {
     expect(a.html).toContain('<img src="{{img-1}}" alt="Studio">');
     expect(a.html).not.toContain('img-9');
     expect(a.js).toBe('console.log(1)');
-    expect(a.css).toBe('h1{color:#123}');
+    // its form sends to Email → Leads once published, with the app's hidden field (and its style)
+    expect(a.css).toBe('h1{color:#123}\n.hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}');
+    expect(a.html).toMatch(/<form action="\{\{lead-action\}\}" method="post"><div class="hp" aria-hidden="true">/);
     expect(a.images?.map((i) => i.key)).toEqual(['img-1', 'img-2']);
     // the project keeps no thumbnails for these
     expect(a.images?.every((i) => i.media.thumb === undefined)).toBe(true);
