@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "currency": "usd",
+  "tiers": ["launch", "grow", "scale"],
+  "plans": {
+    "launch": {
+      "name": "Launch",
+      "price": { "month": 9700, "year": 97000 },
+      "lookupKeys": { "month": "ylb_launch_monthly", "year": "ylb_launch_yearly" },
+      "businessesIncluded": 1,
+      "aiCreditsPerMonth": 1500,
+      "video": { "maxHeight": 768, "maxSeconds": 10, "label": "768p, up to 10 s" },
+      "adsLaunch": false,
+      "treg": { "monthlyMicro": 3000000, "dailyMicro": 300000 },
+      "leadEmailsPerMonth": 25,
+      "publicListings": 3,
+      "customDomains": 1,
+      "platformFeePct": 3,
+      "promptControl": "style_notes",
+      "support": "email"
+    },
+    "grow": {
+      "name": "Grow",
+      "price": { "month": 19700, "year": 197000 },
+      "lookupKeys": { "month": "ylb_grow_monthly", "year": "ylb_grow_yearly" },
+      "businessesIncluded": 1,
+      "aiCreditsPerMonth": 3500,
+      "video": { "maxHeight": 1440, "maxSeconds": 15, "label": "2K, up to 15 s" },
+      "adsLaunch": true,
+      "treg": { "monthlyMicro": 8000000, "dailyMicro": 800000 },
+      "leadEmailsPerMonth": 150,
+      "publicListings": 15,
+      "customDomains": 3,
+      "platformFeePct": 1,
+      "promptControl": "style_notes",
+      "support": "email"
+    },
+    "scale": {
+      "name": "Scale",
+      "price": { "month": 39700, "year": 397000 },
+      "lookupKeys": { "month": "ylb_scale_monthly", "year": "ylb_scale_yearly" },
+      "businessesIncluded": 1,
+      "aiCreditsPerMonth": 7500,
+      "video": { "maxHeight": 1440, "maxSeconds": 15, "label": "2K, up to 15 s" },
+      "adsLaunch": true,
+      "treg": { "monthlyMicro": 20000000, "dailyMicro": 2000000 },
+      "leadEmailsPerMonth": 500,
+      "publicListings": 50,
+      "customDomains": 10,
+      "platformFeePct": 0,
+      "promptControl": "per_prompt",
+      "support": "priority"
+    }
+  },
+  "additionalBusiness": {
+    "name": "Additional business",
+    "price": { "month": 9700, "year": 97000 },
+    "lookupKeys": { "month": "ylb_business_monthly", "year": "ylb_business_yearly" },
+    "aiCreditsPerMonth": 1000
+  },
+  "creditUsd": 0.01,
+  "graceDays": 7,
+  "pagesAfterCancelDays": 30,
+  "dataAfterCancelDays": 90,
+  "existingAccountTrial": { "tier": "grow", "days": 30 },
+  "owner": { "name": "Owner", "unlimited": true }
+}
