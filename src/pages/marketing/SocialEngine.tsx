@@ -110,7 +110,7 @@ export default function SocialEngine() {
                 <Layers /> Go to the 7-day batch
               </button>
             </div>
-            <PlanView plan={plan} covered={covered} />
+            <PlanView plan={plan} covered={covered} config={cfg} />
           </>
         ) : (
           !planAI.running && <Empty variant="ai" title="No plan yet" body="Finish the setup, then plan 30 days that move people from hearing about you to booking." action={planButton()} />

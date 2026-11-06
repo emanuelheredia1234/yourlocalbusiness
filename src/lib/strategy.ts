@@ -215,7 +215,7 @@ function normApplied(raw: unknown): StrategyState['applied'] {
     } else {
       const b = obj(a.before);
       if (typeof b.goal !== 'string' || !Array.isArray(b.platforms)) continue;
-      rec.before = { goal: b.goal, platforms: b.platforms.filter((x) => POST_NETWORKS.includes(x as PostPlatform)), postTypes: obj(b.postTypes), videosPerDay: typeof b.videosPerDay === 'number' ? b.videosPerDay : 0, videoStyles: Array.isArray(b.videoStyles) ? b.videoStyles.filter((x) => typeof x === 'string') : [] };
+      rec.before = { goal: b.goal, platforms: b.platforms.filter((x) => POST_NETWORKS.includes(x as PostPlatform)), postTypes: obj(b.postTypes), ...(Array.isArray(b.videoDays) && b.videoDays.length === 7 && b.videoDays.every((n) => typeof n === 'number') ? { videoDays: b.videoDays as number[] } : { videosPerDay: typeof b.videosPerDay === 'number' ? b.videosPerDay : 0 }), videoStyles: Array.isArray(b.videoStyles) ? b.videoStyles.filter((x) => typeof x === 'string') : [] };
     }
     out[area] = rec;
   }

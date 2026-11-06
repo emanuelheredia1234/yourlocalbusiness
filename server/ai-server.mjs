@@ -50,6 +50,7 @@ import { createRateLimiter } from './rateLimit.mjs';
 import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
 import { limitsFromEnv } from './limits.mjs';
+import { videoWeekFromEnv } from './videoWeek.mjs';
 import { MIGRATION, appStateFromEnv } from './appState.mjs';
 import { pagesFromEnv } from './pages.mjs';
 import { createIntegrations } from './integrations/wiring.mjs';
@@ -182,7 +183,7 @@ function requestUrl(req) {
 
 const auth = authFromEnv();
 const appState = appStateFromEnv();
-const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv(), appState, limits: limitsFromEnv() });
+const ai = createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir: DATA_DIR, adminToken: ADMIN_TOKEN, allowedOrigin: ALLOWED_ORIGIN, baseUrls: BASE_URLS, auth, userKeys: userKeysFromEnv(), appState, limits: limitsFromEnv(), videoWeek: videoWeekFromEnv() });
 // Omnisend campaign drafts (server/omnisend.mjs): the callback's per-caller limit counts callers as published pages do
 const omnisend = createOmnisendRoutes({
   auth,

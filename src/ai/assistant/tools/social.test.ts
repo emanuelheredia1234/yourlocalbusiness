@@ -265,7 +265,7 @@ describe('the campaign: setup, plan, batch and link settings', () => {
   it('update_campaign changes the setup as its tab does, and says when no plan can be made from it', async () => {
     const r = await runTool('update_campaign', { days: ['Monday', 'wed', 'fri'], postsPerDay: 1, platforms: ['Instagram', 'linkedin'], styles: ['editorial', 'kinetic'], postTypes: { sales: 3, bts: 0 }, times: ['08:00'], goal: 'leads' });
     const cfg = activeProject().marketing.campaign;
-    expect(cfg).toMatchObject({ days: [true, false, true, false, true, false, false], postsPerDay: 1, videosPerDay: 1, platforms: ['instagram', 'linkedin'], imageStyles: ['editorial'], videoStyles: ['kinetic'], goal: 'leads' });
+    expect(cfg).toMatchObject({ days: [true, false, true, false, true, false, false], postsPerDay: 1, videoDays: [1, 0, 1, 0, 1, 0, 0], platforms: ['instagram', 'linkedin'], imageStyles: ['editorial'], videoStyles: ['kinetic'], goal: 'leads' });
     expect(cfg.postTypes).toMatchObject({ sales: 3, bts: 0, tip: 2 });
     expect(cfg.times).toHaveLength(5);
     expect(cfg.times[0]).toBe('08:00');
@@ -273,6 +273,19 @@ describe('the campaign: setup, plan, batch and link settings', () => {
     const none = await runTool('update_campaign', { platforms: [] });
     expect(none.result).toMatchObject({ problem: 'A plan can’t be made from this setup yet: Pick at least one platform.' });
     expect((await runTool('update_campaign', { videosPerDay: 4 })).error).toBe('Videos per day can’t be more than posts per day (1).');
+    // which posting days get videos (days not named get none)
+    const vd = await runTool('update_campaign', { videoDays: { wed: 1 } });
+    expect(activeProject().marketing.campaign.videoDays).toEqual([0, 0, 1, 0, 0, 0, 0]);
+    expect(vd.result).toMatchObject({ setup: { videoDays: { wed: 1 }, videosPerWeek: 1 } });
+    expect('videosPerDay' in activeProject().marketing.campaign).toBe(false);
+    expect((await runTool('update_campaign', { videoDays: { tue: 1 } })).error).toBe('tue isn’t a posting day: add it to days first, or leave it out of videoDays.');
+    expect((await runTool('update_campaign', { videoDays: { mon: 2 } })).error).toBe('mon: a day can’t have more videos than posts (1).');
+    expect((await runTool('update_campaign', { videoDays: { mon: 1 }, videosPerDay: 1 })).error).toBe('Give videoDays or videosPerDay, not both.');
+    // days and video days together; videosPerDay puts the same count on every posting day
+    await runTool('update_campaign', { days: ['tue', 'thu'], videoDays: { thu: 1 } });
+    expect(activeProject().marketing.campaign.videoDays).toEqual([0, 0, 0, 1, 0, 0, 0]);
+    await runTool('update_campaign', { videosPerDay: 1 });
+    expect(activeProject().marketing.campaign.videoDays).toEqual([0, 1, 0, 1, 0, 0, 0]);
     expect((await runTool('update_campaign', { styles: ['glitter'] })).error).toMatch(/"glitter" isn’t a style/);
     expect((await runTool('update_campaign', { days: ['someday'] })).error).toMatch(/isn’t a weekday/);
     expect((await runTool('update_campaign', { postTypes: {} })).error).toBe('Say what to change.');

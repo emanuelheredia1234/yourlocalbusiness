@@ -2,6 +2,7 @@
 // the composer, projects) plus a few preferences. The groups (social, studio, marketing, brand) add
 // the rest in their own files.
 
+import { videoDaysOf } from '@/lib/campaign';
 import type { AppSettings } from '@/lib/types';
 import { fmtRelative, toDateStr } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
@@ -79,7 +80,7 @@ const getProject = defineTool({
       case 'social': {
         const c = m.campaign;
         data = {
-          setup: { days: c.days, postsPerDay: c.postsPerDay, videosPerDay: c.videosPerDay, platforms: c.platforms, imageStyles: c.imageStyles, videoStyles: c.videoStyles, postTypes: c.postTypes, startDate: c.startDate, times: c.times, goal: c.goal, watermark: c.watermark },
+          setup: { days: c.days, postsPerDay: c.postsPerDay, videoDays: videoDaysOf(c), platforms: c.platforms, imageStyles: c.imageStyles, videoStyles: c.videoStyles, postTypes: c.postTypes, startDate: c.startDate, times: c.times, goal: c.goal, watermark: c.watermark },
           plan: m.plan ? { startDate: m.plan.startDate, total: m.plan.summary.total, strategy: clip(m.plan.strategy, 300), weeks: m.plan.weeks.map((w) => ({ week: w.week, theme: w.theme })) } : null,
           facebookGroups: m.facebookGroups ?? [],
         };

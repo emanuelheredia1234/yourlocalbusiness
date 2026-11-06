@@ -7,6 +7,8 @@
 
 import type { CampaignConfig, CampaignPlan, LinkPlacement, Post, PostPlatform, Project } from '@/lib/types';
 import { useStore } from '@/store/useStore';
+import { videoDaysOf, videoDaysPatch } from '@/lib/campaign';
+import { videoDaysOverLimit, type VideoAllowance } from '@/lib/videoWeek';
 
 const activeId = () => useStore.getState().activeProjectId ?? '';
 
@@ -20,29 +22,53 @@ export function updateMarketingOf(projectId: string, patch: Partial<Project['mar
 
 // ───────────── the campaign setup ─────────────
 
-/** Posts per week and over 30 days, from the posting days and posts per day. */
+/** Posts per week and over 30 days, from the posting days, posts per day and the videos chosen on each day. */
 export function cadence(cfg: CampaignConfig) {
   const days = cfg.days.filter(Boolean).length;
   const perWeek = days * cfg.postsPerDay;
-  const videos = days * Math.min(cfg.videosPerDay, cfg.postsPerDay);
+  const videoDays = videoDaysOf(cfg);
+  const videos = videoDays.reduce((a, b) => a + b, 0);
   // approx. posts over 30 days
   const month = Math.round((perWeek * 30) / 7);
-  return { days, perWeek, videos, images: perWeek - videos, month };
+  return { days, perWeek, videos, images: perWeek - videos, month, videoDays, videoDayCount: videoDays.filter((n) => n > 0).length };
 }
 
-/** What stops a plan from being made from this setup (the setup tab highlights it), or null. */
+/**
+ * What stops a plan from being made from this setup (the setup tab highlights it), or null. More chosen videos a week
+ * than the plan makes never stop it (videoDaysWarning says so): the server refuses each video past the week's limit,
+ * and older setups (one video on each posting day) would otherwise be stuck the day plans start.
+ */
 export function campaignProblem(cfg: CampaignConfig): string | null {
   const c = cadence(cfg);
   if (c.days === 0) return 'Pick at least one posting day.';
   if (!cfg.platforms.length) return 'Pick at least one platform.';
   if (c.images > 0 && !cfg.imageStyles.length) return 'Choose at least one image style for the image posts.';
-  if (c.videos > 0 && !cfg.videoStyles.length) return 'Choose at least one video style, or set videos per day to 0.';
+  if (c.videos > 0 && !cfg.videoStyles.length) return 'Choose at least one video style, or turn the video days off.';
   return null;
+}
+
+/** More chosen videos a week than the plan makes for a business: said, never stopping the plan. */
+export function videoDaysWarning(cfg: CampaignConfig, allowance?: VideoAllowance | null): string | null {
+  return videoDaysOverLimit(cadence(cfg).videos, allowance);
+}
+
+/** Change how many videos go out on one weekday (0 = none), within that day's posts. */
+export function setVideoDay(weekday: number, n: number, projectId = activeId()): void {
+  updateMarketingOf(projectId, (m) => {
+    const cur = videoDaysOf(m.campaign);
+    const next = cur.map((v, i) => (i === weekday ? Math.max(0, Math.trunc(n)) : v));
+    return { campaign: { ...m.campaign, ...videoDaysPatch(m.campaign, { videoDays: next }) } };
+  });
 }
 
 /** Change the campaign setup (the latest saved one, so two quick changes never undo each other). */
 export function patchCampaign(patch: Partial<CampaignConfig>, projectId = activeId()): void {
-  updateMarketingOf(projectId, (m) => ({ campaign: { ...m.campaign, ...patch } }));
+  updateMarketingOf(projectId, (m) => {
+    const next = { ...m.campaign, ...patch };
+    // video days stay on posting days and within each day's posts; the older "videos per day" goes
+    const { videosPerDay: _old, ...rest } = next;
+    return { campaign: { ...rest, ...videoDaysPatch(m.campaign, patch) } };
+  });
 }
 
 /** Where a network's link goes on this project's new posts (posts already made keep theirs). */

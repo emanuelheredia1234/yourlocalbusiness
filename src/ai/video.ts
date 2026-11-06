@@ -11,6 +11,8 @@ import { saveMediaFile, safeStorage } from '@/lib/storage';
 import { readFileAsDataURL } from '@/lib/utils';
 import { ZapierError, zapierCall } from '@/lib/zapier';
 import { useStore } from '@/store/useStore';
+import { useVideoWeek } from '@/store/videoWeek';
+import { browserTimeZone, projectTimeZone } from '@/lib/timeZone';
 import { dailyLimitText, serverFetch } from './claude';
 import { fmtElapsed } from './manus';
 import { isAIMeta, type AIMeta } from './meta';
@@ -42,6 +44,8 @@ export class VideoError extends Error {
   constructor(
     message: string,
     readonly code: string,
+    /** the server's answer, when it refused (e.g. VIDEO_WEEK_LIMIT's videoWeek) */
+    readonly body: Record<string, unknown> | null = null,
   ) {
     super(message);
   }
@@ -62,6 +66,8 @@ export interface VideoRequest {
   resolution: VideoResolution;
   /** a photo to start from (e.g. the listing cover) */
   firstFrame?: Blob | null;
+  /** the business it's for (the open one by default): its week counts the video (plans: AI videos a week) */
+  projectId?: string;
 }
 
 export function videoCost(duration: number, resolution: VideoResolution): number {
@@ -126,8 +132,8 @@ async function serverVideo(path: string, init: RequestInit = {}): Promise<Respon
   }
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string; code?: string } | null;
-    const code = body?.code === 'DAILY_LIMIT' ? 'VIDEO_DAILY_LIMIT' : body?.code === 'NO_PROVIDER' ? 'VIDEO_SETUP' : body?.code === 'CREDITS' ? 'VIDEO_CREDITS' : body?.code === 'NOT_FOUND' ? 'VIDEO_LOST' : res.status >= 500 && init.method !== 'POST' ? 'VIDEO_NETWORK' : 'VIDEO_ERROR';
-    throw new VideoError(body?.error || `Video request failed (${res.status}).`, code);
+    const code = body?.code === 'VIDEO_WEEK_LIMIT' ? 'VIDEO_WEEK_LIMIT' : body?.code === 'DAILY_LIMIT' ? 'VIDEO_DAILY_LIMIT' : body?.code === 'NO_PROVIDER' ? 'VIDEO_SETUP' : body?.code === 'CREDITS' ? 'VIDEO_CREDITS' : body?.code === 'NOT_FOUND' ? 'VIDEO_LOST' : res.status >= 500 && init.method !== 'POST' ? 'VIDEO_NETWORK' : 'VIDEO_ERROR';
+    throw new VideoError(body?.error || `Video request failed (${res.status}).`, code, body && typeof body === 'object' ? (body as Record<string, unknown>) : null);
   }
   return res;
 }
@@ -171,10 +177,21 @@ const sleep = (ms: number, signal?: AbortSignal) =>
 /** Start a video job (a paid write: never retried automatically). */
 export async function startVideo(r: VideoRequest): Promise<VideoJob> {
   if (videoTransport.server) {
-    const body: Record<string, unknown> = { prompt: r.prompt, aspect: r.aspect, duration: r.duration };
+    // the business's week counts it: its id and time zone (else the browser's) go along
+    const st = useStore.getState();
+    const projectId = r.projectId ?? st.activeProjectId ?? '';
+    const project = st.projects.find((p) => p.id === projectId);
+    const body: Record<string, unknown> = { prompt: r.prompt, aspect: r.aspect, duration: r.duration, projectId, timeZone: projectTimeZone(project), browserTimeZone: browserTimeZone() };
     if (r.firstFrame) body.firstFrame = await readFileAsDataURL(r.firstFrame);
-    const res = await serverVideo('', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    const { job } = (await res.json()) as { job: ServerJob };
+    let res: Response;
+    try {
+      res = await serverVideo('', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    } catch (e) {
+      if (e instanceof VideoError && e.body?.videoWeek) useVideoWeek.getState().set(projectId, e.body.videoWeek as never);
+      throw e;
+    }
+    const { job, videoWeek } = (await res.json()) as { job: ServerJob; videoWeek?: unknown };
+    if (videoWeek) useVideoWeek.getState().set(projectId, videoWeek as never);
     return { jobId: job.id, pollingUrl: '', server: true };
   }
   const params: Record<string, unknown> = { model: VIDEO_MODEL, prompt: r.prompt, duration: String(r.duration), resolution: r.resolution, aspect_ratio: r.aspect };
@@ -323,6 +340,8 @@ export function videoErrorMessage(code: string, message = ''): { title: string; 
       return { title: 'No key makes videos yet', body: message || 'In Settings › AI keys, tick Videos for an OpenRouter, Google or xAI key.' };
     case 'VIDEO_NETWORK':
       return { title: 'Couldn’t reach your AI server', body: 'Check that the server is running, then try again.' };
+    case 'VIDEO_WEEK_LIMIT':
+      return { title: 'This week’s AI videos are used', body: message || 'You’ve made all of this week’s videos. Resets Monday.' };
     case 'VIDEO_DAILY_LIMIT':
       return { title: 'Today’s AI limit is reached', body: dailyLimitText(message) };
     case 'VIDEO_LOST':

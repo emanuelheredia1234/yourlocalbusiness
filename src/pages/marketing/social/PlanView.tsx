@@ -1,24 +1,32 @@
 import { useMemo } from 'react';
 import { Check, Clapperboard, Image as ImageIcon } from 'lucide-react';
-import type { CampaignPlan, PlanDay, PlanSlot, PostPlatform } from '@/lib/types';
+import type { CampaignConfig, CampaignPlan, PlanDay, PlanSlot, PostPlatform } from '@/lib/types';
 import { fmtDate, fmtTime } from '@/lib/utils';
 import { PLATFORMS, POST_TYPE_MAP, POST_TYPES, STYLE_LABEL } from '@/ai/knowledge';
 import { setSlotTopic } from '@/ai/socialPlan';
+import { fitSlotsToVideoDays } from '@/ai/local/social';
 import { StackedBar } from '@/components/charts/Charts';
 import { Badge, StatStrip, Tooltip } from '@/components/ui/primitives';
 import { PlatformGlyph } from '@/components/posts/PlatformIcon';
 
-/** The 30-day plan as an agenda: the strategy and its numbers, then each week's theme and its posts (topics editable). */
-export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<string> }) {
+/**
+ * The 30-day plan as an agenda: the strategy and its numbers, then each week's theme and its posts (topics editable).
+ * Each day shows the formats the batch will make: as many videos as the setup's video days choose now (a plan made
+ * before they changed is fitted the same way the batch fits it).
+ */
+export function PlanView({ plan, covered, config }: { plan: CampaignPlan; covered: Set<string>; config: CampaignConfig }) {
   const s = plan.summary;
   const platforms = Object.entries(s.byPlatform) as [PostPlatform, number][];
+  const days = useMemo(() => plan.days.map((d) => ({ ...d, slots: fitSlotsToVideoDays(d, config) })), [plan, config]);
+  const videos = days.reduce((n, d) => n + d.slots.filter((sl) => sl.format === 'video').length, 0);
+  const refitted = videos !== s.videos || days.some((d, i) => d.slots.some((sl, j) => sl.format !== plan.days[i].slots[j]?.format));
   const weeks = useMemo(
     () =>
       plan.weeks.map((w) => ({
         ...w,
-        days: plan.days.filter((d) => d.week === w.week),
+        days: days.filter((d) => d.week === w.week),
       })),
-    [plan],
+    [plan, days],
   );
   const first = plan.days[0]?.date ?? plan.startDate;
   const last = plan.days[plan.days.length - 1]?.date ?? plan.startDate;
@@ -28,8 +36,8 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
       <StatStrip
         items={[
           { label: 'Posts', value: s.total, sub: `${fmtDate(first)} – ${fmtDate(last)}` },
-          { label: 'Videos', value: s.videos },
-          { label: 'Images', value: s.images },
+          { label: 'Videos', value: videos },
+          { label: 'Images', value: s.total - videos },
           { label: 'Networks', value: platforms.length, sub: platforms.map(([p, n]) => `${PLATFORMS[p].label.replace(' (Twitter)', '')} ${n}`).join(' · ') },
         ]}
       />
@@ -37,7 +45,10 @@ export function PlanView({ plan, covered }: { plan: CampaignPlan; covered: Set<s
       <section className="mt-10" aria-label="Campaign strategy">
         <h2 className="mb-4 text-h2 text-ink">Strategy</h2>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-          <p className="max-w-[72ch] text-body text-ink-2 lg:col-span-7">{plan.strategy}</p>
+          <div className="max-w-[72ch] lg:col-span-7">
+            <p className="text-body text-ink-2">{plan.strategy}</p>
+            {refitted && <p className="mt-2 text-small text-muted">Your video days changed after this plan was made: the posts below follow the new days. Regenerate the plan to update its strategy too.</p>}
+          </div>
           <div className="lg:col-span-5">
             <p className="mb-2 text-small font-medium text-ink-2">Post mix</p>
             <StackedBar parts={POST_TYPES.map((t) => ({ key: t.id, label: t.short, value: s.byType[t.id], color: `rgb(var(--${t.slot}))` }))} />

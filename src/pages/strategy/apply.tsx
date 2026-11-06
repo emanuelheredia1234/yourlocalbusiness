@@ -22,6 +22,7 @@ import {
 } from '@/lib/strategyApply';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
+import { currentVideoAllowance } from '@/store/videoWeek';
 import { openPage } from '@/ai/assistant/nav';
 import { confirmAction, Modal } from '@/components/ui/primitives';
 import { cn } from '@/lib/utils';
@@ -205,7 +206,7 @@ export async function campaignFlow(pid: string): Promise<void> {
   const p = projectOf(pid);
   const s = p ? readStrategy(p) : null;
   if (!p || !s?.content) return;
-  const r = campaignPatch(p.marketing.campaign, s.content.campaign);
+  const r = campaignPatch(p.marketing.campaign, s.content.campaign, currentVideoAllowance());
   if (!r.ok) {
     toast({ kind: 'error', title: 'These settings can’t make a plan', body: r.problem });
     return;

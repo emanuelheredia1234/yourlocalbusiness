@@ -22,8 +22,10 @@ import { VIDEO_DURATIONS, fmtUsd, pendingVideos } from '@/ai/video';
 import { networkLabel, postBlocker, postText, textWarning } from '@/ai/postShared';
 import { groupsAlreadyOut } from '@/ai/manusGroups';
 import { applyPostMedia, buildComposerPosts, composerTaskInput, makePostImage, makePostVideo, postImageKey, postVideoKey, postVideoText, rewriteInput, rewritePatch } from '@/ai/socialPosts';
-import { applyCampaignPlan, applyWeekBatch, batchStart, cadence, campaignProblem, coveredSlots, patchCampaign, setLinkPlacement, setSlotTopic, weekBatchInput } from '@/ai/socialPlan';
+import { applyCampaignPlan, applyWeekBatch, batchStart, cadence, campaignProblem, coveredSlots, patchCampaign, setLinkPlacement, setSlotTopic, videoDaysWarning, weekBatchInput } from '@/ai/socialPlan';
 import { useStore } from '@/store/useStore';
+import { currentVideoAllowance, useVideoWeek } from '@/store/videoWeek';
+import { videoWeekLine } from '@/lib/videoWeek';
 import { addToCalendarFlow, downloadPostMedia, postHeld } from '@/components/posts/PostActions';
 import { manusSetupHint } from '@/components/posts/manusShared';
 import { apiHolds, legacyManus } from '@/lib/posting';
@@ -41,6 +43,9 @@ const STYLE_IDS: StyleId[] = [...IMAGE_STYLES.map((x) => x.id), ...VIDEO_STYLES.
 const POST_TYPE_IDS = POST_TYPES.map((t) => t.id);
 const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 const WEIGHT = arg.number({ optional: true, int: true, min: 0, max: 3 });
+const VIDEOS = arg.number({ optional: true, int: true, min: 0, max: 5 });
+/** The setup's video days as { mon: 1, thu: 2 } (days without videos left out). */
+const videoDaysOut = (days: number[]) => Object.fromEntries(WEEKDAYS.map((d, i) => [d, days[i]]).filter(([, n]) => (n as number) > 0));
 
 /** A network named in text ("Instagram", "twitter"), as the app's id. */
 const toNetwork = (x: string): PostPlatform | undefined => {
@@ -390,11 +395,12 @@ const unmarkPosted = defineTool({
 const updateCampaign = defineTool({
   name: 'update_campaign',
   class: 'L',
-  summary: 'Change the campaign setup (postTypes: 0 off to 3 most).',
+  summary: 'Change the campaign setup (postTypes: 0 off to 3 most; videoDays: which posting days get videos, and how many).',
   args: {
     days: arg.array(arg.string({ max: 9 }), { optional: true, max: 7, desc: 'mon…sun' }),
     postsPerDay: arg.number({ optional: true, int: true, min: 1, max: 5 }),
-    videosPerDay: arg.number({ optional: true, int: true, min: 0, max: 5 }),
+    videoDays: arg.object({ mon: VIDEOS, tue: VIDEOS, wed: VIDEOS, thu: VIDEOS, fri: VIDEOS, sat: VIDEOS, sun: VIDEOS }, { optional: true, desc: 'videos on each posting day, e.g. {mon: 1, thu: 1}; days not named get none' }),
+    videosPerDay: arg.number({ optional: true, int: true, min: 0, max: 5, desc: 'the same number of videos on every posting day' }),
     times: arg.array(arg.string({ pattern: TIME }), { optional: true, max: 5 }),
     startDate: arg.string({ optional: true, pattern: DATE }),
     goal: arg.enum(['awareness', 'leads', 'sales'], { optional: true }),
@@ -404,10 +410,20 @@ const updateCampaign = defineTool({
     watermark: arg.boolean({ optional: true }),
   },
   validate: (a) => {
-    const keys = ['days', 'postsPerDay', 'videosPerDay', 'times', 'startDate', 'goal', 'platforms', 'styles', 'postTypes', 'watermark'] as const;
+    const keys = ['days', 'postsPerDay', 'videoDays', 'videosPerDay', 'times', 'startDate', 'goal', 'platforms', 'styles', 'postTypes', 'watermark'] as const;
     if (!keys.some((k) => a[k] !== undefined && !(k === 'postTypes' && !Object.keys(a.postTypes ?? {}).length))) return 'Say what to change.';
     const cfg = activeProject().marketing.campaign;
-    if (a.videosPerDay !== undefined && a.videosPerDay > (a.postsPerDay ?? cfg.postsPerDay)) return `Videos per day can’t be more than posts per day (${a.postsPerDay ?? cfg.postsPerDay}).`;
+    const perDay = a.postsPerDay ?? cfg.postsPerDay;
+    if (a.videoDays && a.videosPerDay !== undefined) return 'Give videoDays or videosPerDay, not both.';
+    if (a.videosPerDay !== undefined && a.videosPerDay > perDay) return `Videos per day can’t be more than posts per day (${perDay}).`;
+    if (a.videoDays) {
+      const posting = a.days ? WEEKDAYS.map((d) => a.days!.some((x) => toWeekday(x) === d)) : cfg.days;
+      for (const [i, d] of WEEKDAYS.entries()) {
+        const n = a.videoDays[d] ?? 0;
+        if (n > perDay) return `${d}: a day can’t have more videos than posts (${perDay}).`;
+        if (n > 0 && !posting[i]) return `${d} isn’t a posting day: add it to days first, or leave it out of videoDays.`;
+      }
+    }
     if (a.startDate && !realDate(a.startDate)) return 'Pick a real start date (YYYY-MM-DD).';
     const day = a.days?.find((d) => !toWeekday(d));
     if (day) return `"${day}" isn’t a weekday: use ${WEEKDAYS.join(', ')}.`;
@@ -424,11 +440,13 @@ const updateCampaign = defineTool({
       const on = a.days.map(toWeekday);
       patch.days = WEEKDAYS.map((d) => on.includes(d));
     }
-    if (a.postsPerDay !== undefined) {
-      patch.postsPerDay = a.postsPerDay;
-      // as the setup does: never more videos than posts
-      patch.videosPerDay = Math.min(a.videosPerDay ?? cfg.videosPerDay, a.postsPerDay);
-    } else if (a.videosPerDay !== undefined) patch.videosPerDay = a.videosPerDay;
+    // as the setup does: videos only on posting days, never more than the day's posts (patchCampaign keeps that)
+    if (a.postsPerDay !== undefined) patch.postsPerDay = a.postsPerDay;
+    if (a.videoDays) patch.videoDays = WEEKDAYS.map((d) => a.videoDays![d] ?? 0);
+    else if (a.videosPerDay !== undefined) {
+      const posting = patch.days ?? cfg.days;
+      patch.videoDays = posting.map((on) => (on ? a.videosPerDay! : 0));
+    }
     if (a.times) patch.times = [...a.times, ...cfg.times.slice(a.times.length)];
     if (a.startDate) patch.startDate = a.startDate;
     if (a.goal) patch.goal = a.goal;
@@ -445,12 +463,16 @@ const updateCampaign = defineTool({
     const p = useStore.getState().projects.find((x) => x.id === ctx.projectId)!;
     const now = p.marketing.campaign;
     const c = cadence(now);
+    const allowance = currentVideoAllowance();
     const problem = campaignProblem(now);
+    const warning = videoDaysWarning(now, allowance);
     return {
       data: {
         changed: Object.keys(patch),
-        setup: { days: WEEKDAYS.filter((_d, i) => now.days[i]), postsPerDay: now.postsPerDay, videosPerDay: now.videosPerDay, times: now.times.slice(0, now.postsPerDay), platforms: now.platforms, goal: now.goal, perWeek: c.perWeek, over30Days: c.month },
+        setup: { days: WEEKDAYS.filter((_d, i) => now.days[i]), postsPerDay: now.postsPerDay, videoDays: videoDaysOut(c.videoDays), videosPerWeek: c.videos, times: now.times.slice(0, now.postsPerDay), platforms: now.platforms, goal: now.goal, perWeek: c.perWeek, over30Days: c.month },
+        ...(allowance ? { planVideosPerWeek: allowance.perWeek ?? 'unlimited' } : {}),
         ...(problem ? { problem: `A plan can’t be made from this setup yet: ${problem}` } : {}),
+        ...(warning ? { warning } : {}),
         ...(p.marketing.plan ? { plan: 'The 30-day plan was made from the old setup: generate_campaign_plan with replace: true makes a new one (ask the owner).' } : {}),
       },
       note: `Updated your campaign setup${problem ? `: ${problem.replace(/\.$/, '').toLowerCase()}` : `: about ${c.perWeek} posts a week`}`,
@@ -695,7 +717,7 @@ const makeVideo = defineTool({
   card: ({ postId, seconds }) => {
     const p = findPost(postId);
     const turns = p?.format === 'image' ? `. It becomes a video post: the video takes the place of its ${isOwnPhoto(p.media) ? 'photo (your photo stays in your files)' : p.media ? 'image' : 'planned image'}` : '';
-    return videoCard({ what: `A ${videoSeconds(seconds)}-second video for ${name(p)} on ${p ? net(p) : 'its network'}${turns}.`, seconds: videoSeconds(seconds) });
+    return videoCard({ what: `A ${videoSeconds(seconds)}-second video for ${name(p)} on ${p ? net(p) : 'its network'}${turns}.`, seconds: videoSeconds(seconds), week: videoWeekLine(useVideoWeek.getState().byProject[activeProject().id]) });
   },
   run: async ({ postId, seconds, prompt }, ctx) => {
     const p = activeProject();

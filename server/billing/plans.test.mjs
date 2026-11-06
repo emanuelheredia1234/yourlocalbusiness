@@ -1,9 +1,9 @@
 // shared/plans.json (spec §A2, C1.1): every tier has every key, lookup keys are unique, amounts match the Tiers table,
 // and the credits math.
 import { describe, expect, it } from 'vitest';
-import { OWNER_PLAN, PLANS, PRICE_TABLE, TIERS, creditsFor, creditsToUsd, intervalFromLookupKey, lookupKeyFor, lookupKeysAll, planFor, tierFromLookupKey, tierRank, usdToCredits } from './plans.mjs';
+import { OWNER_PLAN, PLANS, PRICE_TABLE, TIERS, creditsFor, creditsToUsd, intervalFromLookupKey, lookupKeyFor, lookupKeysAll, planFor, tierFromLookupKey, tierRank, usdToCredits, videosPerWeekFor } from './plans.mjs';
 
-const KEYS = ['name', 'price', 'lookupKeys', 'businessesIncluded', 'aiCreditsPerMonth', 'video', 'adsLaunch', 'treg', 'leadEmailsPerMonth', 'publicListings', 'customDomains', 'platformFeePct', 'promptControl', 'support'];
+const KEYS = ['name', 'price', 'lookupKeys', 'businessesIncluded', 'aiCreditsPerMonth', 'video', 'videosPerWeek', 'adsLaunch', 'treg', 'leadEmailsPerMonth', 'publicListings', 'customDomains', 'platformFeePct', 'promptControl', 'support'];
 
 describe('plans.json', () => {
   it('has the three tiers in order, each with every key', () => {
@@ -54,5 +54,14 @@ describe('plans.json', () => {
     expect(planFor('owner')).toBe(OWNER_PLAN);
     expect(planFor('nope')).toBe(null);
     expect(tierRank('scale')).toBeGreaterThan(tierRank('grow'));
+  });
+
+  it('has the weekly AI videos per business: Launch 3, Grow 5, Scale and the owner unlimited', () => {
+    expect(TIERS.map((t) => PLANS.plans[t].videosPerWeek)).toEqual([3, 5, null]);
+    expect(videosPerWeekFor('launch')).toBe(3);
+    expect(videosPerWeekFor('grow')).toBe(5);
+    expect(videosPerWeekFor('scale')).toBe(null);
+    expect(videosPerWeekFor('owner')).toBe(null);
+    expect(videosPerWeekFor('none')).toBe(0);
   });
 });

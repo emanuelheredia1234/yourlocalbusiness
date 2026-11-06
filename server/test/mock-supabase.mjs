@@ -47,6 +47,8 @@ const PRIMARY_KEYS = {
   billing_accounts: ['user_id'],
   billing_ops: ['id'],
   project_slots: ['user_id', 'project_id'],
+  // supabase/migrations/20261111000000_video_week.sql
+  video_starts: ['id'],
 };
 /** the integration tables (all server-only) */
 const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops'];
@@ -88,10 +90,10 @@ const RUN_SLOT_MS = 15 * 60_000;
 /** tables every signed-in person may read (writes stay owner-only), like the market_listings policies */
 const PUBLIC_READ = new Set(['market_listings']);
 /** tables with row-level security and no policies: only the secret key reaches them */
-const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'published_pages', 'published_domains', 'page_leads', ...INTEGRATION_TABLES]);
+const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'video_starts', 'published_pages', 'published_domains', 'page_leads', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts']);
 /** the user_secrets.provider check constraint (supabase/migrations/20261103030000_ai_usage_daily.sql) */
 const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openrouter', 'meta', 'manus']);
 
@@ -235,7 +237,14 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
   function project(row, select) {
     if (!select || select === '*') return { ...row };
     const out = {};
-    for (const c of select.split(',').map((s) => s.trim()).filter(Boolean)) out[c] = row[c];
+    for (const c of select.split(',').map((s) => s.trim()).filter(Boolean)) {
+      // alias:column->>key (a JSON field as text), as PostgREST reads it
+      const j = /^(?:(\w+):)?(\w+)->>(\w+)$/.exec(c);
+      if (j) {
+        const v = row[j[2]]?.[j[3]];
+        out[j[1] ?? j[3]] = v == null ? null : typeof v === 'object' ? JSON.stringify(v) : String(v);
+      } else out[c] = row[c];
+    }
     return out;
   }
 
@@ -392,6 +401,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (fn === 'claim_analytics_run') return claimAnalyticsRun(req, res, raw);
     if (fn === 'ads_begin_launch' || fn === 'ads_begin_change') return adsBegin(req, res, fn, raw);
     if (BILLING_FNS.has(fn)) return billingRpc(req, res, fn, raw);
+    if (fn === 'ylb_claim_video_start') return claimVideoStart(req, res, raw);
     if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -419,6 +429,39 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (b.p_email) row.email = b.p_email;
     row.updated_at = new Date().toISOString();
     return send(res, 200, { ...row });
+  }
+
+  /**
+   * public.ylb_claim_video_start (supabase/migrations/20261111000000_video_week.sql): counts the user's video starts
+   * for the week that aren't refunded or own-key, refuses at the business's or the account's limit, else inserts a
+   * pending row. One request at a time here, as the advisory lock makes it in Postgres. Server-only.
+   */
+  async function claimVideoStart(req, res, raw) {
+    const fn = 'ylb_claim_video_start';
+    if (missingTables.includes('video_starts')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    let b;
+    try {
+      b = JSON.parse(raw || '{}');
+    } catch {
+      return send(res, 400, { message: 'invalid json' });
+    }
+    if (!users.has(b.p_user)) return send(res, 409, { code: '23503', message: 'insert or update on table "video_starts" violates foreign key constraint "video_starts_user_id_fkey"' });
+    const rows = tables.get('video_starts') ?? [];
+    tables.set('video_starts', rows);
+    const proj = b.p_project ?? '';
+    const own = b.p_own === true;
+    const mine = rows.filter((r) => r.user_id === b.p_user && r.week_start === b.p_week && r.state !== 'refunded' && !r.own_key);
+    const usedProject = mine.filter((r) => r.project_id === proj).length;
+    const limit = b.p_limit ?? null;
+    if (!own && limit != null && usedProject >= limit) return send(res, 200, { ok: false, used: usedProject, limit, reason: 'business' });
+    if (!own && b.p_user_limit != null && mine.length >= b.p_user_limit) return send(res, 200, { ok: false, used: mine.length, limit: b.p_user_limit, reason: 'account' });
+    const id = b.p_id ?? crypto.randomUUID();
+    if (rows.some((r) => r.id === id)) return send(res, 200, { ok: true, id, used: usedProject, limit });
+    const now = new Date().toISOString();
+    rows.push({ id, user_id: b.p_user, project_id: proj, week_start: b.p_week, state: 'pending', own_key: own, job_id: null, created_at: now, updated_at: now });
+    return send(res, 200, { ok: true, id, used: usedProject + (own ? 0 : 1), limit });
   }
 
   /**

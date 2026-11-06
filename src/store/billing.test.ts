@@ -233,11 +233,23 @@ describe('the upgrade prompt', () => {
     showUpgrade({ code: 'PLAN_REQUIRED', error: 'x' });
     expect(useBilling.getState().upgrade?.code).toBe('CREDITS_USED');
     useBilling.getState().closeUpgrade();
-    for (const code of ['PLAN_REQUIRED', 'PAYMENT_REQUIRED', 'BUSINESS_LIMIT', 'CARD_DECLINED']) {
+    for (const code of ['PLAN_REQUIRED', 'PAYMENT_REQUIRED', 'BUSINESS_LIMIT', 'CARD_DECLINED', 'VIDEO_WEEK_LIMIT']) {
       expect(showUpgrade({ code, error: 'words', need: { feature: 'ads', tier: 'grow' } })).toBe(true);
       expect(useBilling.getState().upgrade).toMatchObject({ code, message: 'words' });
       useBilling.getState().closeUpgrade();
     }
+  });
+
+  it('a weekly video refusal keeps the business’s time zone, so the reset date is that business’s Monday', () => {
+    // a Sydney business seen from Los Angeles: Monday 00:00 in Sydney is Sunday afternoon in Los Angeles
+    const body = { code: 'VIDEO_WEEK_LIMIT', error: 'You’ve made 3 of 3 videos this week. Resets Monday.', resetsAt: '2026-11-08T13:00:00.000Z', videoWeek: { timeZone: 'Australia/Sydney' } };
+    expect(showUpgrade(body)).toBe(true);
+    expect(useBilling.getState().upgrade).toMatchObject({ code: 'VIDEO_WEEK_LIMIT', resetsAt: '2026-11-08T13:00:00.000Z', timeZone: 'Australia/Sydney' });
+    useBilling.getState().closeUpgrade();
+    // a zone this browser doesn't know is left out (the browser's own is used)
+    showUpgrade({ ...body, videoWeek: { timeZone: 'Mars/Olympus' } });
+    expect(useBilling.getState().upgrade?.timeZone).toBeUndefined();
+    useBilling.getState().closeUpgrade();
   });
 
   it('ignores other errors, and everything when plans aren’t shown', () => {

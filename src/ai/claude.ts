@@ -99,6 +99,7 @@ const SERVER_CODES: Record<string, string> = {
   PLAN_REQUIRED: 'plan_required',
   PAYMENT_REQUIRED: 'plan_required',
   CREDITS_USED: 'plan_required',
+  VIDEO_WEEK_LIMIT: 'plan_required',
 };
 
 /** When your server last failed to answer (a request or a health check); 0 once it answers. */
