@@ -178,6 +178,62 @@ describe('mock-stripe', () => {
     expect(calls.some((c) => c.violation)).toBe(false);
   });
 
+  it('P1 additions: product custom ids, a card trial, error_if_incomplete with a declining card, invoices, renewal failure, portal configurations, item periods', async () => {
+    const product = await stripe('POST', '/v1/products', { id: 'ylb_test_custom', name: 'Custom' });
+    expect(product.body.id).toBe('ylb_test_custom');
+    expect((await stripe('POST', '/v1/products', { id: 'ylb_test_custom', name: 'Again' })).status).toBe(400);
+    expect((await stripe('GET', '/v1/products/ylb_test_custom')).body.name).toBe('Custom');
+    const price = (await stripe('POST', '/v1/prices', { product: 'ylb_test_custom', currency: 'usd', unit_amount: 9700, lookup_key: 'p1_tier_m', recurring: { interval: 'month' } })).body;
+    const extra = (await stripe('POST', '/v1/prices', { product: 'ylb_test_custom', currency: 'usd', unit_amount: 9700, lookup_key: 'p1_biz_m', recurring: { interval: 'month' } })).body;
+    const yearly = (await stripe('POST', '/v1/prices', { product: 'ylb_test_custom', currency: 'usd', unit_amount: 97000, lookup_key: 'p1_tier_y', recurring: { interval: 'year' } })).body;
+    const customer = (await stripe('POST', '/v1/customers', { email: 'p1@example.com' })).body;
+
+    // a 7-day card trial: the subscription starts trialing, the first invoice is $0
+    const trial = await stripe('POST', '/v1/checkout/sessions', { mode: 'subscription', customer: customer.id, success_url: 'https://x/ok', line_items: [{ price: price.id, quantity: 1 }], subscription_data: { trial_period_days: 7 } });
+    const { subscription: sub } = await (await fetch(`${mock.base}/__checkout/complete`, { method: 'POST', body: JSON.stringify({ id: trial.body.id }) })).json();
+    expect(sub.status).toBe('trialing');
+    expect(sub.trial_end - sub.current_period_start).toBe(7 * 86400);
+    expect(sub.items.data[0]).toMatchObject({ current_period_start: sub.current_period_start, current_period_end: sub.current_period_end });
+    const first = (await stripe('GET', `/v1/invoices/${sub.latest_invoice}`)).body;
+    expect(first).toMatchObject({ object: 'invoice', subscription: sub.id, amount_paid: 0, status: 'paid' });
+    expect((await stripe('GET', '/v1/invoices/in_nope00000000')).status).toBe(404);
+
+    // the card declines: an immediate charge with error_if_incomplete is refused and nothing changes
+    await fetch(`${mock.base}/__customers/decline`, { method: 'POST', body: JSON.stringify({ id: customer.id }) });
+    const add = { items: [{ price: extra.id, quantity: 1 }], proration_behavior: 'always_invoice', payment_behavior: 'error_if_incomplete' };
+    const declined = await stripe('POST', `/v1/subscriptions/${sub.id}`, add, { idem: 'p1-declined' });
+    expect(declined.status).toBe(402);
+    expect(declined.body.error).toMatchObject({ type: 'card_error', code: 'card_declined' });
+    expect((await stripe('GET', `/v1/subscriptions/${sub.id}`)).body.items.data).toHaveLength(1);
+    // a change that charges nothing now still goes through
+    expect((await stripe('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: sub.items.data[0].id, price: price.id }], proration_behavior: 'none' })).status).toBe(200);
+    mock.decline(customer.id, false);
+    const added = await stripe('POST', `/v1/subscriptions/${sub.id}`, add, { idem: 'p1-added' });
+    expect(added.status).toBe(200);
+    expect((await stripe('GET', `/v1/invoices/${added.body.latest_invoice}`)).body).toMatchObject({ billing_reason: 'subscription_update', status: 'paid' });
+    // month → year on both items
+    const items = added.body.items.data;
+    expect((await stripe('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: items[0].id, price: yearly.id }] })).body.items.data[0].price.recurring.interval).toBe('year');
+
+    // a renewal payment fails: past_due with invoice.payment_failed; a renewal recovers it
+    received.length = 0;
+    const failed = await (await fetch(`${mock.base}/__invoices/fail`, { method: 'POST', body: JSON.stringify({ subscription: sub.id }) })).json();
+    expect(failed.subscription.status).toBe('past_due');
+    expect(failed.invoice).toMatchObject({ status: 'open', subscription: sub.id });
+    expect(received.map((d) => d.event.type)).toEqual(['invoice.payment_failed', 'customer.subscription.updated']);
+    const renewed = await (await fetch(`${mock.base}/__subscriptions/renew`, { method: 'POST', body: JSON.stringify({ id: sub.id }) })).json();
+    expect(renewed.status).toBe('active');
+    expect(renewed.current_period_start).toBe(failed.subscription.current_period_end);
+
+    // a portal configuration with quantity editing off, used by a portal session
+    const config = await stripe('POST', '/v1/billing_portal/configurations', { features: { payment_method_update: { enabled: true }, subscription_update: { enabled: false }, subscription_cancel: { enabled: true, mode: 'at_period_end' } } }, { idem: 'p1-portal' });
+    expect(config.body).toMatchObject({ object: 'billing_portal.configuration', features: { subscription_update: { enabled: 'false' } } });
+    expect((await stripe('GET', `/v1/billing_portal/configurations/${config.body.id}`)).body.id).toBe(config.body.id);
+    expect((await stripe('POST', '/v1/billing_portal/sessions', { customer: customer.id, configuration: config.body.id })).body.configuration).toBe(config.body.id);
+    expect((await stripe('POST', '/v1/billing_portal/sessions', { customer: customer.id, configuration: 'bpc_nope00000000' })).status).toBe(404);
+    expect(mock.writes('POST /v1/billing_portal/configurations')).toHaveLength(1);
+  });
+
   it('Connect: an account, its onboarding link, and a direct charge with an application fee on that account only', async () => {
     const acct = (await stripe('POST', '/v1/accounts', { type: 'standard', country: 'US', email: 'seller@example.com' })).body;
     expect(acct).toMatchObject({ object: 'account', charges_enabled: false });
