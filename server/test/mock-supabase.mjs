@@ -49,6 +49,8 @@ const PRIMARY_KEYS = {
   project_slots: ['user_id', 'project_id'],
   // supabase/migrations/20261111000000_video_week.sql
   video_starts: ['id'],
+  // supabase/migrations/20261112000000_leads_p2.sql
+  lead_files: ['id'],
 };
 /** the integration tables (all server-only) */
 const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops'];
@@ -90,10 +92,60 @@ const RUN_SLOT_MS = 15 * 60_000;
 /** tables every signed-in person may read (writes stay owner-only), like the market_listings policies */
 const PUBLIC_READ = new Set(['market_listings']);
 /** tables with row-level security and no policies: only the secret key reaches them */
-const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'video_starts', 'published_pages', 'published_domains', 'page_leads', ...INTEGRATION_TABLES]);
+const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'video_starts', 'published_pages', 'published_domains', 'page_leads', 'lead_files', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files']);
+const PROJECT_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const SLUG = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
+/**
+ * Check constraints Postgres enforces on a whole row (supabase/migrations/20261103050000_page_leads.sql,
+ * 20261112000000_leads_p2.sql, 20261103040000_published_pages.sql): the name of the first one a row breaks, or null.
+ * Columns the row doesn't have take their defaults, as an insert would.
+ */
+const CHECKS = {
+  page_leads: (r) => {
+    const v = { source: 'page', kind: 'form', consent: false, payload: {}, name: '', email: '', phone: '', message: '', time: '', ...r };
+    if (!/^(seo|artifact|magnet):[A-Za-z0-9_-]{1,80}$/.test(String(v.page_id))) return 'page_leads_page_id_format';
+    if (!(v.slug === '' || SLUG.test(String(v.slug)))) return 'page_leads_slug_format';
+    if (v.project_id != null && !PROJECT_ID.test(String(v.project_id))) return 'page_leads_project_id_format';
+    if (!['page', 'asset', 'magnet'].includes(v.source)) return 'page_leads_source_check';
+    if (!['form', 'lead', 'booking', 'quiz', 'calculator', 'roi', 'checklist', 'magnet'].includes(v.kind)) return 'page_leads_kind_check';
+    if (!v.payload || typeof v.payload !== 'object' || Array.isArray(v.payload) || Buffer.byteLength(JSON.stringify(v.payload)) > 8192) return 'page_leads_payload_check';
+    if (v.name.length > 120 || v.email.length > 254 || v.phone.length > 40 || v.message.length > 2000 || v.time.length > 120) return 'page_leads_sizes';
+    if (!v.email && !v.phone) return 'page_leads_contact';
+    return null;
+  },
+  published_pages: (r) => (r.project_id != null && !PROJECT_ID.test(String(r.project_id)) ? 'published_pages_project_id_format' : null),
+  lead_files: (r) => {
+    const v = { title: '', file_name: '', bytes: 0, url: '', ...r };
+    if (!/^[A-Za-z0-9_-]{22}$/.test(String(v.id))) return 'lead_files_id_format';
+    if (!PROJECT_ID.test(String(v.project_id))) return 'lead_files_project_id_format';
+    if (v.title.length > 200) return 'lead_files_title_size';
+    if (!['file', 'url'].includes(v.kind)) return 'lead_files_kind_check';
+    if (v.file_name.length > 120) return 'lead_files_file_name_size';
+    if (!(Number(v.bytes) >= 0 && Number(v.bytes) <= 26214400)) return 'lead_files_bytes_range';
+    if (v.url.length > 2000 || !(v.url === '' || /^https?:\/\//.test(v.url))) return 'lead_files_url_format';
+    if (!((v.kind === 'url' && v.url !== '') || v.kind === 'file')) return 'lead_files_url_needed';
+    return null;
+  },
+};
+const checkRefusal = (table, row) => {
+  const name = CHECKS[table]?.(row);
+  return name ? { code: '23514', details: null, hint: null, message: `new row for relation "${table}" violates check constraint "${name}"` } : null;
+};
+/**
+ * Storage buckets with rules (supabase/migrations/20261112000000_leads_p2.sql): size and the types allowed (no SVG).
+ * Any other bucket (media) takes anything, as before.
+ */
+const BUCKETS = {
+  'lead-files': {
+    public: false,
+    maxBytes: 26214400,
+    types: ['application/pdf', 'application/epub+zip', 'application/zip', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', 'image/png', 'image/jpeg', 'image/webp', 'audio/mpeg', 'video/mp4'],
+  },
+  'public-files': { public: true, maxBytes: 5242880, types: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'] },
+};
 /** the user_secrets.provider check constraint (supabase/migrations/20261103030000_ai_usage_daily.sql) */
 const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openrouter', 'meta', 'manus']);
 
@@ -105,7 +157,7 @@ const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openr
  * project gets a slot while plans aren't enforced; deleting a project frees its slot). The real policy is checked on a
  * Supabase branch, never claimed from this mock.
  */
-export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600, missingTables = [], secretProviders = SECRET_PROVIDERS, domainOwnerCheck = true, projectSlots = false } = {}) {
+export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600, missingTables = [], missingBuckets = [], secretProviders = SECRET_PROVIDERS, domainOwnerCheck = true, projectSlots = false } = {}) {
   const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true });
   const kid = 'mock-key-1';
   const jwk = { ...(await exportJWK(publicKey)), kid, alg: 'ES256', use: 'sig' };
@@ -337,8 +389,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
         const next = i >= 0 ? { ...rows[i], ...row } : row;
         // the primary key stays unique when an upsert matched on another unique key (a renamed slug)
         if (rows.some((r, j) => j !== i && primary.every((c) => r[c] === next[c]))) return send(res, 409, DUPLICATE);
-        const refused = (table === 'published_pages' ? pageRefusal(next, rows.filter((_, j) => j !== i), null) : null) ?? uniqueRefusal(table, next, rows.filter((_, j) => j !== i));
-        if (refused) return send(res, 409, refused);
+        const refused = checkRefusal(table, next) ?? (table === 'published_pages' ? pageRefusal(next, rows.filter((_, j) => j !== i), null) : null) ?? uniqueRefusal(table, next, rows.filter((_, j) => j !== i));
+        if (refused) return send(res, refused.code === '23514' ? 400 : 409, refused);
         if (i >= 0) rows[i] = next;
         else rows.push(next);
         written.push(next);
@@ -355,6 +407,10 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       if (primary.some((c) => c in patch)) {
         const keyOf = (r) => JSON.stringify(primary.map((c) => (hit.includes(r) && c in patch ? patch[c] : r[c])));
         if (hit.some((h) => rows.some((r) => r !== h && keyOf(r) === keyOf(h)))) return send(res, 409, DUPLICATE);
+      }
+      for (const r of hit) {
+        const refused = checkRefusal(table, { ...r, ...patch });
+        if (refused) return send(res, 400, refused);
       }
       if (table === 'published_pages') {
         const after = rows.map((r) => (hit.includes(r) ? { ...r, ...patch } : r));
@@ -402,6 +458,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (fn === 'ads_begin_launch' || fn === 'ads_begin_change') return adsBegin(req, res, fn, raw);
     if (BILLING_FNS.has(fn)) return billingRpc(req, res, fn, raw);
     if (fn === 'ylb_claim_video_start') return claimVideoStart(req, res, raw);
+    if (fn === 'lead_file_downloaded') return leadFileDownloaded(req, res, raw);
     if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -429,6 +486,26 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (b.p_email) row.email = b.p_email;
     row.updated_at = new Date().toISOString();
     return send(res, 200, { ...row });
+  }
+
+  /** public.lead_file_downloaded (supabase/migrations/20261112000000_leads_p2.sql): one more download, in one statement. Server-only. */
+  async function leadFileDownloaded(req, res, raw) {
+    const fn = 'lead_file_downloaded';
+    if (missingTables.includes('lead_files')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    let b;
+    try {
+      b = JSON.parse(raw || '{}');
+    } catch {
+      return send(res, 400, { message: 'invalid json' });
+    }
+    for (const r of tables.get('lead_files') ?? []) {
+      if (r.id !== b.p_id) continue;
+      r.downloads = (Number(r.downloads) || 0) + 1;
+      r.last_download_at = new Date().toISOString();
+    }
+    return send(res, 204, undefined);
   }
 
   /**
@@ -702,6 +779,16 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
 
   async function storage(req, res, url, rawBuf) {
     const p0 = url.pathname.replace(/^\/storage\/v1/, '');
+    // a bucket the migration hasn't made yet: Storage answers 400 with "Bucket not found"
+    const bucketOf = /^\/object\/(?:list\/|sign\/|authenticated\/|public\/)?([^/]+)/.exec(p0)?.[1];
+    if (bucketOf && missingBuckets.includes(bucketOf)) return send(res, 400, { statusCode: '404', error: 'Bucket not found', message: 'Bucket not found' });
+    // a public bucket's file: no key needed
+    const pub = /^\/object\/public\/([^/]+)\/(.+)$/.exec(p0);
+    if (pub && (req.method === 'GET' || req.method === 'HEAD')) {
+      const o = BUCKETS[pub[1]]?.public ? objects.get(`${pub[1]}/${decodeURIComponent(pub[2])}`) : null;
+      if (!o) return send(res, 400, { statusCode: '404', error: 'not_found', message: 'Object not found' });
+      return send(res, 200, req.method === 'HEAD' ? undefined : o.bytes, { 'content-type': o.type, 'content-length': o.bytes.length });
+    }
     // a signed link: no key needed, the token is the permission (like Supabase Storage)
     const sg = /^\/object\/sign\/([^/]+)\/(.+)$/.exec(p0);
     if (sg && req.method === 'GET') {
@@ -769,6 +856,9 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
           bytes = Buffer.from(await file.arrayBuffer());
           type = file.type || 'application/octet-stream';
         }
+        const rules = BUCKETS[bucket];
+        if (rules && bytes.length > rules.maxBytes) return send(res, 400, { statusCode: '413', error: 'Payload too large', message: 'The object exceeded the maximum allowed size' });
+        if (rules && !rules.types.includes(type.split(';')[0].trim().toLowerCase())) return send(res, 400, { statusCode: '415', error: 'invalid_mime_type', message: `mime type ${type} is not supported` });
         objects.set(key, { bytes, type, created: Date.now() });
         return send(res, 200, { Key: key, Id: crypto.randomUUID() });
       }
