@@ -213,6 +213,13 @@ export const BUCKET_LIMITS = Object.freeze({
   'zernio-webhook': [{ limit: 600, windowMs: 60_000 }],
   'upload-post-webhook': [{ limit: 600, windowMs: 60_000 }],
   'posting-check': [{ limit: 60, windowMs: 3_600_000 }],
+  'ads-read': [{ limit: 60, windowMs: 60_000 }],
+  'ads-preview': [{ limit: 30, windowMs: 3_600_000 }],
+  'ads-write': [{ limit: 20, windowMs: 3_600_000 }],
+  'ads-stop': [{ limit: 120, windowMs: 3_600_000 }],
+  'ads-check': [{ limit: 60, windowMs: 3_600_000 }],
+  // keyed `${userId}:${projectId}`: one refresh per business every 5 minutes
+  'ads-refresh': [{ limit: 1, windowMs: 300_000 }],
 });
 
 /**
