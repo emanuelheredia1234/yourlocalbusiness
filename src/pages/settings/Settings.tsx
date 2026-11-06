@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { Check, ChevronRight, CircleUserRound, CreditCard, Database, Download, FolderOpen, Globe, KeyRound, Link2, Monitor, Moon, Palette, Pencil, Plus, SlidersHorizontal, Sun, Trash2, Upload } from 'lucide-react';
+import { Check, ChevronRight, CircleUserRound, CreditCard, Wallet, Database, Download, FolderOpen, Globe, KeyRound, Link2, Monitor, Moon, Palette, Pencil, Plus, SlidersHorizontal, Sun, Trash2, Upload } from 'lucide-react';
 import type { AppSettings, Brand, Project } from '@/lib/types';
 import { cn, ensureUrl, fmtRelative, readFileAsText, slugify } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
@@ -32,9 +32,10 @@ import { TimeZoneSelect } from './TimeZoneSelect';
 import { isValidTimeZone, projectTimeZone } from '@/lib/timeZone';
 import { UsageSection } from './UsageSection';
 import { PlanSection } from './PlanSection';
+import { PaymentsSection } from './PaymentsSection';
 import { useBillingOn } from '@/store/billing';
 
-type Tab = 'brand' | 'domains' | 'ai' | 'accounts' | 'projects' | 'prefs' | 'plan' | 'account';
+type Tab = 'brand' | 'domains' | 'ai' | 'accounts' | 'payments' | 'projects' | 'prefs' | 'plan' | 'account';
 
 /** The sections, in the order of the sub-navigation (ids never change: the palette and the assistant open them). */
 const SECTIONS: { id: Tab; label: string; hint: string; icon: ReactNode }[] = [
@@ -42,6 +43,7 @@ const SECTIONS: { id: Tab; label: string; hint: string; icon: ReactNode }[] = [
   { id: 'domains', label: 'Domains', hint: 'Your own web addresses', icon: <Globe /> },
   { id: 'ai', label: 'AI keys', hint: 'What powers the AI', icon: <KeyRound /> },
   { id: 'accounts', label: 'Connected accounts', hint: 'Connect your accounts to post and see your own stats', icon: <Link2 /> },
+  { id: 'payments', label: 'Payments', hint: 'Sell through your own Whop account', icon: <Wallet /> },
   { id: 'projects', label: 'Projects & data', hint: 'Projects, backups and reset', icon: <Database /> },
   { id: 'prefs', label: 'Preferences', hint: 'Your name, theme and Marketplace', icon: <SlidersHorizontal /> },
   { id: 'plan', label: 'Plan', hint: 'Your plan, businesses and billing', icon: <CreditCard /> },
@@ -54,7 +56,8 @@ export default function Settings() {
   const signedIn = useAuth((s) => s.phase === 'ready');
   const billing = useBillingOn();
   // Plan only when signed in with plans shown (never in the artifact build)
-  const allowed = (id: string) => (id !== 'account' || signedIn) && (id !== 'plan' || (signedIn && billing));
+  // Payments only where the app's server is (never in the artifact build)
+  const allowed = (id: string) => (id !== 'account' || signedIn) && (id !== 'plan' || (signedIn && billing)) && (id !== 'payments' || !__ARTIFACT_BUILD__);
   const { access } = usePublishAccess();
   const wanted = useUI((s) => s.settingsTab);
   const [tab, setTab] = useState<Tab>(() => (wanted && TAB_IDS.includes(wanted) && allowed(wanted) ? (wanted as Tab) : 'brand'));
@@ -169,6 +172,7 @@ export default function Settings() {
           )}
           {shown === 'ai' && <AISettings />}
           {shown === 'accounts' && <Accounts key={project.id} />}
+          {shown === 'payments' && <PaymentsSection />}
           {shown === 'projects' && <ProjectsData />}
           {shown === 'prefs' && <Preferences />}
           {shown === 'plan' && <PlanSection />}

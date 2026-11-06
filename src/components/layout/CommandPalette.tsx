@@ -51,6 +51,7 @@ const SETTINGS: { id: string; label: string }[] = [
   { id: 'domains', label: 'Domains' },
   { id: 'ai', label: 'AI keys' },
   { id: 'accounts', label: 'Social accounts' },
+  ...(__ARTIFACT_BUILD__ ? [] : [{ id: 'payments', label: 'Payments (Whop)' }]),
   { id: 'projects', label: 'Projects & data' },
   { id: 'prefs', label: 'Preferences' },
 ];

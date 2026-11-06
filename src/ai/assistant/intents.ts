@@ -14,6 +14,7 @@ export interface PageIntent {
 const RULES: { re: RegExp; route: Route; tab?: string }[] = [
   { re: /\b(api keys?|ai keys?|ai settings?|my keys?|keys?\b.*\bai|daily limit)/i, route: 'workspace-settings', tab: 'ai' },
   { re: /\b(social accounts?|handles?)\b/i, route: 'workspace-settings', tab: 'accounts' },
+  { re: /\b(whop|payments? settings?|connect payments?)\b/i, route: 'workspace-settings', tab: 'payments' },
   { re: /\b(password|log ?out|sign ?out|delete (my )?account)\b/i, route: 'workspace-settings', tab: 'account' },
   { re: /\b(backup|restore|reset|projects? (&|and) data)\b/i, route: 'workspace-settings', tab: 'projects' },
   { re: /\b(domains?)\b/i, route: 'workspace-settings', tab: 'domains' },
