@@ -49,6 +49,7 @@ import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
 import { createOmnisendRoutes } from './omnisend.mjs';
 import { createGmailRoutes } from './gmail.mjs';
+import { serveLegal } from './legal.mjs';
 import { createRateLimiter } from './rateLimit.mjs';
 import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
@@ -335,6 +336,8 @@ function route(req, res, url) {
   // a visitor sending a published page's form (/<name>/lead; server/leads.mjs)
   if (req.method === 'POST' && pages.matchLead(url)) return void pages.receiveLead(req, res, url).then((handled) => handled || send(res, 405, 'Method not allowed'), (e) => crashed(req, res, e));
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
+  // Privacy and Terms are real HTML documents (server/legal.mjs), not the SPA shell. No sign-in.
+  if (serveLegal(req, res, url)) return;
   // the app host's /sitemap.xml, /robots.txt and Search Console file (server/seo/sitemap.mjs), then pages and the app
   return void pages.serveAppHostExtras(req, res, url).then((handled) => handled || servePageOrApp(req, res, url), (e) => crashed(req, res, e));
 }

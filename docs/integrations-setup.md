@@ -485,8 +485,15 @@ same host (the same rule as Omnisend).
 Access tokens expire (about an hour). The app refreshes them with the stored refresh token. If Google revokes
 the grant, the customer is asked to connect again.
 
-Verification of `gmail.send` (a privacy policy, terms and a demo video) is still later, before anyone who isn't
-a test user can connect. See §9 item 3. This app does not add those pages or invent their URLs.
+Verification of `gmail.send` is still required before anyone who isn't a test user can connect (§9 item 3).
+Paste these public pages into the OAuth consent screen. Both are real documents (not the app shell), readable
+without signing in:
+
+- Privacy policy: `https://yourlocalbusiness.replit.app/privacy`
+- Terms of service: `https://yourlocalbusiness.replit.app/terms`
+
+`/privacy-policy` redirects to `/privacy`. `/terms-of-service` redirects to `/terms`. The privacy policy names
+Upload-Post’s company, TONVI TECH SL (Spain), as a processor.
 
 ## 4. Platform approvals
 
@@ -749,10 +756,12 @@ These start the things later phases wait on. None of them charges anyone.
    connect flow, the OAuth client and the redirect URI are §3d. The redirect URI is
    `https://yourlocalbusiness.replit.app/api/integrations/gmail/callback`. Secrets: `GOOGLE_CLIENT_ID` and
    `GOOGLE_CLIENT_SECRET`. In Google Cloud Console → APIs & Services → OAuth consent screen, add the
-   `https://www.googleapis.com/auth/gmail.send` scope, the privacy policy and terms links and the app's domain,
-   then submit for verification. It is a sensitive scope (not restricted): Google reviews the app and a demo
-   video; it can take a few weeks. This app does not publish privacy policy or terms pages; add the real links
-   when you have them, then submit. Until then, keep the consent screen in Testing and use test users (§3d).
+   `https://www.googleapis.com/auth/gmail.send` scope, the app's domain, and these pages, then submit for
+   verification:
+   - Privacy policy: `https://yourlocalbusiness.replit.app/privacy`
+   - Terms of service: `https://yourlocalbusiness.replit.app/terms`
+   It is a sensitive scope (not restricted): Google reviews the app and a demo video; it can take a few weeks.
+   Until Google verifies the app, keep the consent screen in Testing and use test users (§3d).
 4. **Microsoft publisher verification** (for `Mail.Send` from Outlook, P10): in Microsoft Entra → App registrations,
    link the app to a verified Microsoft Partner Network ID (Publisher verification), so customers see a verified
    publisher instead of "unverified" on the consent screen.
@@ -834,7 +843,8 @@ Prices are found by lookup key, never by id: `ylb_{launch,grow,scale,business}_{
 
 Stripe → Settings → Billing → Customer portal (or `--apply --portal`): payment methods on, invoice history on,
 cancel **at period end** on, **subscription updates (plan and quantity changes) off** (the app does those so each one is
-sent once and confirmed). Business information and links to the terms and privacy pages.
+sent once and confirmed). Business information and links to the terms and privacy pages
+(`https://yourlocalbusiness.replit.app/terms` and `https://yourlocalbusiness.replit.app/privacy`).
 
 ### Stripe Tax (optional)
 
