@@ -745,6 +745,8 @@ export function createAdsRoutes(deps = {}) {
     async onStart() {
       if (db?.enabled) await jobs.sweep();
     },
+    /** server/cron: the same sweep every 15 minutes (`sending` → `unknown`; never re-sent). */
+    cronJobs: () => (db?.enabled ? [{ name: 'ads-sweep', everyMs: 15 * 60_000, run: async () => ({ interrupted: await jobs.sweep() }) }] : []),
     // rows go with the account (on delete cascade); nothing is held anywhere else
     async forgetUser() {},
     async unforgetUser() {},

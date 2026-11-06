@@ -211,7 +211,8 @@ export function createCron({ env = process.env, storage = null, now = () => Date
       jobs: results,
     };
     lastTick = { at: summary.at, source, ran: summary.ran, failed: summary.failed };
-    note('cron_tick', { source, ran: summary.ran, failed: summary.failed, skipped: results.filter((r) => r.status === 'skipped').length, running: results.filter((r) => r.status === 'running').length, ms: summary.elapsedMs });
+    // (the local loop's quiet minutes aren't logged)
+    if (source !== 'local' || results.some((r) => r.status !== 'skipped')) note('cron_tick', { source, ran: summary.ran, failed: summary.failed, skipped: results.filter((r) => r.status === 'skipped').length, running: results.filter((r) => r.status === 'running').length, ms: summary.elapsedMs });
     return summary;
   }
 

@@ -481,7 +481,18 @@ describe('the settle job’s rules', () => {
       expect([a, b]).toEqual([1, 1]); // the same run, shared
       expect(await db.select('usage_ledger', { call_id: callId, outcome: 'settled' })).toHaveLength(1);
     } finally {
-      s.routes.stop();
+      await s.close();
+    }
+  });
+
+  it('settles every 5 minutes from the cron tick, not from a timer of its own', async () => {
+    const s = await serve();
+    try {
+      expect(s.routes.stop).toBeUndefined();
+      const jobs = s.routes.cronJobs();
+      expect(jobs).toEqual([expect.objectContaining({ name: 'treg-settle', everyMs: 5 * 60_000 })]);
+      expect(await jobs[0].run({})).toEqual({ settled: expect.any(Number) });
+    } finally {
       await s.close();
     }
   });

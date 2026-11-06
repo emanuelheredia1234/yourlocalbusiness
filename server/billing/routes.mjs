@@ -8,7 +8,7 @@
 //                                                  with treg's budget dimension)
 //   GET /api/billing/reconcile?days=30             owner: our ledger against treg's usage by tag
 //   GET /api/billing/invoice.csv?month=YYYY-MM     owner: the month's CSV to bill from
-// onStart: settle treg's `pending` answers now and every 5 minutes. userDeleted(userId): the ledger rows keep
+// onStart: settle treg's `pending` answers now; cronJobs(): again every 5 minutes, from the cron tick (server/cron). userDeleted(userId): the ledger rows keep
 // the customer tag (for invoices) and lose the user id.
 //
 // Checks in order: same origin, a signed-in user, the billing-read bucket, set up (else 503 NOT_SET_UP, with
@@ -61,7 +61,6 @@ export function createBillingRoutes({
   const admin = adminOverride ?? createTregAdmin({ env, fetch, log });
   const caps = createCaps({ db, ledger, admin, storage, now, log });
   const reply = (req, res, status, body, headers = {}) => send(res, status, body, { ...corsHeaders(req), ...headers });
-  let timer = null;
   // one settle run at a time in this server: an overlapping run would write a second 'settled' row for a call
   let settling = null;
   const settleOnce = () => (settling ??= settlePending({ ledger, admin, now, log }).finally(() => (settling = null)));
@@ -367,22 +366,14 @@ export function createBillingRoutes({
     ledger,
     caps,
     admin,
-    /** Settle pending treg rows now (also every 5 minutes after onStart). */
+    /** Settle pending treg rows now (also every 5 minutes from the cron tick). */
     settle: () => (missing().length ? Promise.resolve(0) : settleOnce()),
     async onStart() {
       if (missing().length) return;
       await settleOnce();
-      if (!timer) {
-        timer = setInterval(() => {
-          settleOnce().catch(() => {});
-        }, SETTLE_EVERY_MS);
-        timer.unref?.();
-      }
     },
-    stop() {
-      if (timer) clearInterval(timer);
-      timer = null;
-    },
+    /** server/cron: the periodic settle (Autoscale sleeps, so no in-process timer). Idempotent: settles what's pending. */
+    cronJobs: () => [{ name: 'treg-settle', everyMs: SETTLE_EVERY_MS, run: async () => ({ settled: missing().length ? 0 : await settleOnce() }) }],
     async forgetUser() {},
     async unforgetUser() {},
     /** After the account is gone: its ledger rows stay (by customer tag, for invoices) without the user id. */
