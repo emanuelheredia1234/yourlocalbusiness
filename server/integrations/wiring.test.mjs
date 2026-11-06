@@ -117,6 +117,8 @@ describe('the route table', () => {
     expect(moduleFor('/api/ads/campaigns/x/change')).toBe('ads');
     expect(moduleFor('/api/adsx')).toBeNull();
     expect(moduleFor('/api/integrations/omnisend/status')).toBeNull();
+    expect(moduleFor('/api/integrations/gmail/callback')).toBeNull();
+    expect(moduleFor('/api/integrations/gmail/connect')).toBeNull();
     expect(moduleFor('/api/integrations/connectionsx')).toBeNull();
     expect(moduleFor('/api/postingx')).toBeNull();
   });
