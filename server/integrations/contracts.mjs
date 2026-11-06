@@ -82,8 +82,8 @@
  */
 
 /**
- * Every account a customer can connect: the social networks through Upload-Post (server/connections/uploadpost.mjs)
- * and the ad accounts through Zernio (server/connections/zernio.mjs). Search Console is not here: it runs on treg's
+ * Every account a customer can connect: the social networks through Upload-Post (server/connections/uploadpost.mjs;
+ * each business connects its own) and the ad accounts through Zernio (server/connections/zernio.mjs). Search Console is not here: it runs on treg's
  * team connection (server/seo/google.mjs).
  * @type {readonly Platform[]}
  */
@@ -113,6 +113,7 @@ export const API_ERROR_CODES = Object.freeze([
   'NOT_SET_UP',
   'CONNECTIONS_NOT_ENABLED',
   'CONNECTIONS_UNAVAILABLE',
+  'BUSINESS_LIMIT',
   'NOT_CONNECTED',
   'NEEDS_RECONNECT',
   'ALREADY_PUBLISHING',

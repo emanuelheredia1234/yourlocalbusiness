@@ -2,7 +2,7 @@
 // (the app's side; the server mirrors them as JSDoc in server/integrations/contracts.mjs). Everything here is
 // what the browser may see: no connection ids, no tokens, no other customer's data.
 
-/** The accounts a user can connect: social networks through Upload-Post, ad accounts through Zernio (phase 2 ones show "Coming soon"). */
+/** The accounts a user can connect: social networks through Upload-Post (each business its own), ad accounts through Zernio (phase 2 ones show "Coming soon"). */
 export type ConnectPlatform =
   | 'facebook'
   | 'instagram'
@@ -64,8 +64,18 @@ export interface ConnectionsResponse {
   setUpAds?: boolean;
   /** links stay in X posts (the owner bought Upload-Post's X Links add-on); otherwise they're taken out */
   xLinks?: boolean;
+  /** the user's businesses with social accounts (each connects its own), of their limit; `projects`: which */
+  slots?: SocialSlots;
   /** admins only: which Replit Secret to add (names, never values) */
   hint?: string;
+}
+
+/** How many of the user's businesses have social accounts (one Upload-Post profile each), of their limit. */
+export interface SocialSlots {
+  used: number;
+  cap: number;
+  /** the user's own project ids that hold a slot */
+  projects: string[];
 }
 
 /** A connect link to open, or (ad accounts on a network already connected) nothing to open. */
@@ -302,8 +312,10 @@ export interface CustomerUsageRow {
   syncedToTreg?: boolean;
   /** social accounts (Upload-Post) plus ad accounts (Zernio) connected right now */
   connectedAccounts?: number;
-  /** social accounts connected through Upload-Post right now (one profile per customer) */
+  /** social accounts connected through Upload-Post right now, all their businesses together */
   socialAccounts?: number;
+  /** Upload-Post profiles their businesses use (one per business with social accounts) */
+  socialProfiles?: number;
   /** ad accounts connected through Zernio right now (Zernio bills per connected ad account) */
   adAccounts?: number;
   /** each vendor's share of the period: real costs, estimates (never toward a cap) and calls */
@@ -323,11 +335,13 @@ export interface CustomersResponse {
   defaults: CapSettings & { syncedToTreg?: boolean };
   /** treg's last team-level alert (kind only, never amounts) */
   alert?: { kind: string; at: string };
-  /** Upload-Post profiles in use out of the plan's limit (one per customer who connected a social account) */
-  upProfiles?: { used: number; limit?: number };
-  /** Upload-Post's last team-level alert (kind only) */
-  /** the most serious of Upload-Post's current team-level alerts (n: how many, for the kinds that count) */
-  uploadPostAlert?: { kind: string; at: string; n?: number };
+  /**
+   * Upload-Post profiles in use out of the plan's limit (one per business that connected social accounts), and
+   * how many businesses each customer may connect (UPLOAD_POST_MAX_PROFILES_PER_USER)
+   */
+  upProfiles?: { used: number; limit?: number; perCustomer?: number };
+  /** the most serious of Upload-Post's current team-level alerts (n: how many, for the kinds that count; the customer it's about) */
+  uploadPostAlert?: { kind: string; at: string; n?: number; customerTag?: string };
 }
 
 export interface ReconcileReport {
@@ -349,6 +363,7 @@ export type ApiErrorCode =
   | 'NOT_SET_UP'
   | 'CONNECTIONS_NOT_ENABLED'
   | 'CONNECTIONS_UNAVAILABLE'
+  | 'BUSINESS_LIMIT'
   | 'NOT_CONNECTED'
   | 'NEEDS_RECONNECT'
   | 'ALREADY_PUBLISHING'

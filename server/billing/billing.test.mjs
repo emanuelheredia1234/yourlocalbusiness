@@ -63,7 +63,7 @@ function readJson(req, limit = 1e6) {
 }
 
 /** The billing routes behind a bare server; sign-in is "Bearer <user id>" (users map → isAdmin). */
-async function serve({ env = envFor(), storage = memoryStorage(), alert = null, limit = () => false, admin = null } = {}) {
+async function serve({ env = envFor(), storage = memoryStorage(), alert = null, limit = () => false, admin = null, connections = null } = {}) {
   const auth = {
     enabled: true,
     async identify(req) {
@@ -72,7 +72,7 @@ async function serve({ env = envFor(), storage = memoryStorage(), alert = null, 
       return u ? { id: u.id, email: u.email, isAdmin: u.isAdmin } : null;
     },
   };
-  const routes = createBillingRoutes({ auth, storage, db, treg: { alert: async () => alert }, send, readJson, limit, sameOrigin: (req) => req.headers.origin !== 'https://evil.example', env, ...(admin ? { admin } : {}) });
+  const routes = createBillingRoutes({ auth, storage, db, treg: { alert: async () => alert }, connections, send, readJson, limit, sameOrigin: (req) => req.headers.origin !== 'https://evil.example', env, ...(admin ? { admin } : {}) });
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://local');
     if (!(await routes.handle(req, res, url))) send(res, 404, { error: 'Not found', code: 'NOT_FOUND' });
@@ -235,6 +235,33 @@ describe('the routes', () => {
     } finally {
       await s.close();
     }
+  });
+
+  it('GET /customers: Upload-Post profiles per customer (one per business), their social accounts across businesses, profiles used of the plan and each customer’s limit; the estimated rows per business add up per customer', async () => {
+    const est = (who, projectId, month = '2026-10') => row(who, { vendor: 'uploadpost', estimated: true, cost_micro: 1_960_000, feature: 'connections', endpoint: `upload_post_profile ${month}`, project_id: projectId });
+    await db.insert('usage_ledger', [est('ana', 'proj_a1'), est('ana', 'proj_a2'), est('ben', 'proj_b1'), row('ana', { vendor: 'uploadpost', cost_micro: 0, feature: 'posting', endpoint: 'x:POST /upload_text', project_id: 'proj_a2' })]);
+    const ana = users.get('ana').id;
+    const ben = users.get('ben').id;
+    const social = {
+      accountCount: async (id) => (id === ana ? 5 : id === ben ? 1 : 0),
+      profileCount: async (id) => (id === ana ? 2 : id === ben ? 1 : 0),
+      ownerView: async () => ({ profilesUsed: 12, profilesLimit: 75, perUserLimit: 3, alert: { kind: 'profile_user_cap', at: 'x', n: 3, customerTag: tagOf('ana') } }),
+    };
+    const s = await serve({ connections: { impl: { social, ads: null } } });
+    try {
+      const { json } = await s.as('owner')('GET', '/api/billing/customers?days=30');
+      const a = json.customers.find((c) => c.customerTag === tagOf('ana'));
+      const b = json.customers.find((c) => c.customerTag === tagOf('ben'));
+      expect(a).toMatchObject({ socialAccounts: 5, socialProfiles: 2, estimatedMicro: 3_920_000, vendors: { uploadpost: { costMicro: 0, estimatedMicro: 3_920_000, calls: 1 } } });
+      expect(b).toMatchObject({ socialAccounts: 1, socialProfiles: 1, estimatedMicro: 1_960_000 });
+      expect(json.upProfiles).toEqual({ used: 12, limit: 75, perCustomer: 3 });
+      expect(json.uploadPostAlert).toEqual({ kind: 'profile_user_cap', at: 'x', n: 3, customerTag: tagOf('ana') });
+    } finally {
+      await s.close();
+    }
+    // the month's CSV puts both of ana's businesses on her one line
+    const csv = invoiceCsv({ month: '2026-10', rows: [est('ana', 'proj_a1'), est('ana', 'proj_a2')] });
+    expect(csv.split('\r\n')[1]).toContain(`${tagOf('ana')},,2026-10,0.000000,0,3.920000,0.000000,3.920000,active`);
   });
 
   it('PUT a customer’s cap stores it and sends treg the merged caps; bad values 400; unknown customers 404', async () => {

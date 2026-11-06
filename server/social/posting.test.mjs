@@ -190,6 +190,31 @@ describe('unknown outcomes and Check again', () => {
     expect(await t.routes.posting.fromWebhook(alice.id, r.body.job.id, { state: 'failed' })).toBeNull();
   });
 
+  it('each business posts through its own profile, and an upload_completed through one business’s profile never finishes another business’s job', async () => {
+    await t.project(alice, 'proj-2');
+    await t.connect(alice, ['facebook'], { projectId: 'proj-2' });
+    const p1 = await t.profileOf(alice, 'proj-1');
+    const p2 = await t.profileOf(alice, 'proj-2');
+    expect(p2).not.toBe(p1);
+    const post2 = await t.post(alice, { projectId: 'proj-2', platform: 'facebook', caption: 'From the second business' });
+    const r2 = await publishAndWait(alice, post2);
+    expect((await jobOf(alice, r2.body.job.id)).state).toBe('sent');
+    expect(t.postCalls().pop().form).toMatchObject({ user: p2, facebook_page_id: `page_${p2.slice(-8)}` });
+    // a post of the first business whose answer was unclear
+    const post1 = await t.post(alice, { platform: 'facebook', caption: 'From the first business' });
+    t.up.setUploadOutcome('error500');
+    const r1 = await publishAndWait(alice, post1);
+    expect((await jobOf(alice, r1.body.job.id)).state).toBe('unknown');
+    const wrong = t.up.signed({ event: 'upload_completed', request_id: r1.body.job.id, profile_username: p2, platform: 'facebook', result: { success: true, url: 'https://facebook.com/joe/posts/31' } }, { ts: Math.floor(t.clock.t / 1000) });
+    await t.impl.webhook(wrong.raw, wrong.headers);
+    await t.impl.settled();
+    expect((await jobOf(alice, r1.body.job.id)).state).toBe('unknown');
+    const right = t.up.signed({ event: 'upload_completed', request_id: r1.body.job.id, profile_username: p1, platform: 'facebook', result: { success: true, url: 'https://facebook.com/joe/posts/32' } }, { ts: Math.floor(t.clock.t / 1000) });
+    await t.impl.webhook(right.raw, right.headers);
+    await t.impl.settled();
+    expect(await jobOf(alice, r1.body.job.id)).toMatchObject({ state: 'sent', url: 'https://facebook.com/joe/posts/32' });
+  });
+
   it('an upload_completed that arrives while the post is still being sent finishes the job when the answer is unclear', async () => {
     const post = await t.post(alice, { platform: 'facebook', caption: 'Webhook before the answer' });
     let release;

@@ -82,7 +82,7 @@ export async function startPosting({ env: envExtra = {}, enabled = true } = {}) 
   const limit = createBucketLimiter({ now });
   const deps = { auth, db, connections, send: sendLike, readJson, limit, env, now, log };
   const routes = createPostingRoutes(deps);
-  impl.setPostListener?.((userId, jobId, outcome) => routes.posting.fromWebhook(userId, jobId, outcome));
+  impl.setPostListener?.((userId, jobId, outcome, where) => routes.posting.fromWebhook(userId, jobId, outcome, where));
   const media = createPublicMediaRoutes({ ...deps, clientKey: () => 'test' });
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://local');
@@ -114,17 +114,18 @@ export async function startPosting({ env: envExtra = {}, enabled = true } = {}) 
       return { token, id: user.id, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' } };
     },
     /**
-     * Connect networks for a user the way a customer does: a connect link, the hosted page (mock), then Upload-Post's
-     * signed social_account_connected webhook. Facebook gets one Page.
+     * Connect networks for one of a user's businesses the way a customer does: a connect link, the hosted page
+     * (mock), then Upload-Post's signed social_account_connected webhook. Facebook gets one Page. The business must
+     * be saved first (project()).
      */
-    async connect(u, platforms = NETWORKS, { username = 'joesbakery' } = {}) {
+    async connect(u, platforms = NETWORKS, { username = 'joesbakery', projectId = 'proj-1' } = {}) {
       const made = {};
       for (const platform of platforms) {
-        await connections.connectLink(u.id, platform);
-        const doc = (await storage.get(`uploadpost:user:${sha256(u.id)}`)).value;
-        if (platform === 'facebook') up.pages.facebook.set(doc.username, [{ id: `page_${doc.username.slice(4, 12)}`, name: `${username} page` }]);
-        const account = up.connect(doc.username, platform, { handle: username, display_name: `${username} on ${platform}` });
-        const evt = up.signed({ event: 'social_account_connected', profile_username: doc.username, platform }, { ts: Math.floor(clock.t / 1000) });
+        await connections.connectLink(u.id, platform, { projectId });
+        const name = await ctx.profileOf(u, projectId);
+        if (platform === 'facebook') up.pages.facebook.set(name, [{ id: `page_${name.slice(-8)}`, name: `${username} page` }]);
+        const account = up.connect(name, platform, { handle: username, display_name: `${username} on ${platform}` });
+        const evt = up.signed({ event: 'social_account_connected', profile_username: name, platform }, { ts: Math.floor(clock.t / 1000) });
         const res = await impl.webhook(evt.raw, evt.headers);
         if (res.status !== 200) throw new Error(`connect webhook ${res.status}`);
         await impl.settled();
@@ -132,9 +133,9 @@ export async function startPosting({ env: envExtra = {}, enabled = true } = {}) 
       }
       return made;
     },
-    /** The user's Upload-Post profile name. */
-    async profileOf(u) {
-      return (await storage.get(`uploadpost:user:${sha256(u.id)}`)).value.username;
+    /** A business's Upload-Post profile name (each business has its own). */
+    async profileOf(u, projectId = 'proj-1') {
+      return (await storage.get(`uploadpost:user:${sha256(u.id)}`))?.value?.profiles?.find((p) => p.projectId === projectId)?.username;
     },
     async project(u, id = 'proj-1') {
       await db.upsert('user_docs', { user_id: u.id, kind: 'project', id, data: { id, name: 'Joe’s Bakery', location: { city: 'Austin' } } }, { onConflict: 'user_id,kind,id' });

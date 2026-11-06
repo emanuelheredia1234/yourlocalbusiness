@@ -2,7 +2,8 @@
 // X and YouTube accounts and their ad accounts (Meta, Google, LinkedIn, TikTok, Pinterest, Reddit, Microsoft).
 // Two implementations behind one facade (the owner's choice):
 // - social networks: Upload-Post (server/connections/uploadpost.mjs), on with UPLOAD_POST_API_KEY: connecting,
-//   posting, post status and social stats, one Upload-Post profile per customer;
+//   posting, post status and social stats, one Upload-Post profile per business (each project), at most
+//   UPLOAD_POST_MAX_PROFILES_PER_USER businesses per user;
 // - ad accounts: Zernio (server/connections/zernio.mjs), on with ZERNIO_API_KEY: connecting ad accounts and ad results.
 // combineConnections({ social, ads }) routes each platform to its side; either side can be off (nullConnections),
 // where every network shows "Not connected" and posting stays manual ("Post it yourself", then "Mark as posted").
@@ -11,14 +12,16 @@
 //
 // Every method takes the server-resolved user id (never a value from the browser). Account ids stay on the
 // server: the browser gets ConnectionStatus (server/integrations/contracts.mjs) and opaque target handles only.
-// `opts.projectId` (a business of that user) picks the account or Page that business uses; without it, the default.
+// `opts.projectId` (a business of that user) picks whose accounts: for social networks each business has its own
+// Upload-Post profile (without a business nothing social is connected); for ad accounts it picks the business's
+// ad account (else the default). A project id is only ever looked up among the signed-in user's own businesses.
 //
 //   status(userId, {projectId}) → ConnectionStatus[]            every platform, phase 2 ones 'coming_soon'
 //   connectLink(userId, platform, {projectId}) → {connectLink, expiresAt} | {alreadyConnected: true}
 //   reconnectLink(userId, platform, {projectId}) → same
 //   check(userId, platform, {projectId}) → ConnectionStatus       reads the accounts again from the vendor
 //   disconnect(userId, platform, {projectId}) → void
-//   targets(userId, platform) → Target[]
+//   targets(userId, platform, {projectId}) → Target[]
 //   setTarget(userId, platform, targetId, {projectId}) → ConnectionStatus
 //   insights(userId, platform, {projectId, since, until}) → own stats (reads), or null when nothing is chosen
 //   adResults(userId, platform, {projectId, since, until}) → one AdsData.own entry (reads), or null
@@ -26,6 +29,9 @@
 //     one attempt; 'unknown' when it may have gone out
 //   postStatus(userId, ref) → {found, url} | {failed} | {pending} | null   a read for "Check again"
 //   forgetUser(userId) / unforgetUser(userId)
+// and, outside the per-side contract (social only): slots(userId) → {used, cap, projects} (the user's businesses
+// with a profile, of their limit) and forgetProject(userId, projectId) → {freed} (a business was deleted: its
+// profile goes, with every social account in it).
 
 import { AD_PLATFORMS, PHASE2_PLATFORMS, PLATFORMS, SOCIAL_PLATFORMS } from '../integrations/contracts.mjs';
 import { fail, isUuid } from '../integrations/common.mjs';
@@ -97,8 +103,8 @@ export const nullConnections = Object.freeze({
   },
 });
 
-/** A project id from a request ('' when absent); the implementation checks it's the user's own when it matters. */
-const projectOf = (opts) => (typeof opts?.projectId === 'string' && /^[A-Za-z0-9._:-]{1,120}$/.test(opts.projectId) ? opts.projectId : undefined);
+/** A project id from a request (undefined when absent or malformed); the implementation looks it up among the user's own. */
+export const projectOf = (opts) => (typeof opts?.projectId === 'string' && /^[A-Za-z0-9._:-]{1,120}$/.test(opts.projectId) && !['__proto__', 'constructor', 'prototype'].includes(opts.projectId) ? opts.projectId : undefined);
 
 const sideOff = (hint) => Object.freeze({ ...nullConnections, hint });
 
@@ -144,6 +150,10 @@ export function combineConnections({ social = null, ads = null } = {}) {
     adResults: (userId, platform, opts) => (AD_PLATFORMS.includes(platform) ? a.adResults(userId, platform, opts) : null),
     publish: (userId, platform, opts) => s.publish(userId, platform, opts),
     postStatus: (userId, ref) => s.postStatus(userId, ref),
+    /** The user's businesses with a social profile, of their limit (null when social is off). */
+    slots: async (userId) => (typeof s.slots === 'function' ? s.slots(userId) : null),
+    /** A business was deleted: its social profile goes (ad accounts aren't per business: nothing changes there). */
+    forgetProject: async (userId, projectId) => (typeof s.forgetProject === 'function' ? s.forgetProject(userId, projectId) : { freed: false }),
     /**
      * Social first: it only marks the profile (Upload-Post deletes it in userDeleted, once the account is gone, so a
      * deletion that stops here or later loses no social connection); then the ad accounts at Zernio.
@@ -165,13 +175,6 @@ export function combineConnections({ social = null, ads = null } = {}) {
  */
 export function createConnections(impl = nullConnections) {
   for (const m of CONNECTION_METHODS) if (typeof impl?.[m] !== 'function') throw new Error(`connections: the implementation has no ${m}()`);
-  const perPlatform =
-    (name) =>
-    async (userId, platform, ...rest) => {
-      checkUser(userId);
-      checkPlatform(platform);
-      return impl[name](userId, platform, ...rest);
-    };
   const withOpts =
     (name) =>
     async (userId, platform, opts = {}) => {
@@ -201,7 +204,7 @@ export function createConnections(impl = nullConnections) {
     reconnectLink: withOpts('reconnectLink'),
     check: withOpts('check'),
     disconnect: withOpts('disconnect'),
-    targets: perPlatform('targets'),
+    targets: withOpts('targets'),
     async setTarget(userId, platform, targetId, opts = {}) {
       checkUser(userId);
       checkPlatform(platform);
@@ -213,6 +216,17 @@ export function createConnections(impl = nullConnections) {
     async postStatus(userId, ref) {
       checkUser(userId);
       return impl.postStatus(userId, ref);
+    },
+    async slots(userId) {
+      checkUser(userId);
+      return typeof impl.slots === 'function' ? impl.slots(userId) : null;
+    },
+    /** A business was deleted (or its slot given back): only that user's own business is ever touched. */
+    async forgetProject(userId, projectId) {
+      checkUser(userId);
+      const id = projectOf({ projectId });
+      if (!id) throw fail(400, 'BAD_REQUEST', 'Which business?');
+      return typeof impl.forgetProject === 'function' ? impl.forgetProject(userId, id) : { freed: false };
     },
     async forgetUser(userId) {
       if (!isUuid(userId)) return;

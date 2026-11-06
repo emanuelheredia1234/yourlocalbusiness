@@ -68,7 +68,7 @@ function matches(row, filters) {
   });
 }
 
-const KEYS = { billing_customers: ['customer_tag'], webhook_deliveries: ['body_hash'] };
+const KEYS = { billing_customers: ['customer_tag'], webhook_deliveries: ['body_hash'], user_docs: ['user_id', 'kind', 'id'] };
 
 export function makeDb() {
   const tables = new Map();

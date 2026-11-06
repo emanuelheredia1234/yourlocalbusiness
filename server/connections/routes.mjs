@@ -1,21 +1,25 @@
 // The connected-accounts routes (social networks through Upload-Post, ad accounts through Zernio):
 //   GET    /api/integrations/connections[?projectId=]               {connections, available, setUp, setUpSocial,
 //                                                                    setUpAds, provider: {social, ads}, xLinks,
+//                                                                    slots? ({used, cap, projects}: the user's
+//                                                                    businesses with social accounts, of their limit),
 //                                                                    hint? (admins: a Secret still missing)}
+//   DELETE /api/integrations/connections?projectId=                {ok, freed}  a business was deleted: its social
+//                                                                    profile goes, with every account in it
 //   POST   /api/integrations/connections/:platform/connect          {connectLink, expiresAt} | {alreadyConnected: true}
 //                                                                    body {projectId?}: the business that connects it
 //   POST   /api/integrations/connections/:platform/reconnect        same
 //   POST   /api/integrations/connections/:platform/check            {connection}   body {projectId?}
 //   DELETE /api/integrations/connections/:platform[?projectId=]     {ok: true}
-//   GET    /api/integrations/connections/:platform/targets          {targets}
+//   GET    /api/integrations/connections/:platform/targets[?projectId=]  {targets}
 //   PUT    /api/integrations/connections/:platform/target           {connection}   body {targetId, projectId?}
 //   POST   /api/webhooks/upload-post   no sameOrigin, no bearer: the raw body (readRaw, 256 KB), its HMAC over
 //                                       "<timestamp>.<body>" and a 300 s window (social accounts, upload_completed)
 //   POST   /api/webhooks/zernio        same, Zernio's HMAC (ad accounts)
 //
 // Every route but the webhook: sameOrigin, then a signed-in user (auth.identify), then a rate-limit bucket. The
-// user is always the server's (a user id in a body is never read); a projectId only picks which of that user's
-// own accounts a business uses. Answers are {error, code}, never Upload-Post's, Zernio's or a network's text. A side
+// user is always the server's (a user id in a body is never read); a projectId only picks which of that user's own
+// businesses (each has its own social accounts), never anyone else's. Answers are {error, code}, never Upload-Post's, Zernio's or a network's text. A side
 // that is off (no UPLOAD_POST_API_KEY for social, no ZERNIO_API_KEY for ads) lists "Not connected" for its
 // platforms, refuses the rest with 503 CONNECTIONS_NOT_ENABLED, and its webhook answers 503 without reading the body.
 
@@ -28,6 +32,7 @@ export const UPLOAD_POST_WEBHOOK_PATH = '/api/webhooks/upload-post';
 const WEBHOOK_LIMIT = 262_144;
 const NO_STORE = { 'cache-control': 'no-store' };
 const PROJECT_ID = /^[A-Za-z0-9._:-]{1,120}$/;
+const RESERVED_KEYS = ['__proto__', 'constructor', 'prototype'];
 
 /** deps: the integration deps (server/integrations/wiring.mjs). connections.impl's sides answer the webhooks. */
 export function createConnectionRoutes(deps = {}) {
@@ -82,7 +87,7 @@ export function createConnectionRoutes(deps = {}) {
     }
   }
 
-  const projectFrom = (v) => (typeof v === 'string' && PROJECT_ID.test(v) ? v : undefined);
+  const projectFrom = (v) => (typeof v === 'string' && PROJECT_ID.test(v) && !RESERVED_KEYS.includes(v) ? v : undefined);
 
   async function handle(req, res, url) {
     const path = url.pathname;
@@ -118,10 +123,20 @@ export function createConnectionRoutes(deps = {}) {
       return true;
     }
     try {
+      if (path === CONNECTIONS_PREFIX && req.method === 'DELETE') {
+        // a business was deleted in the app: its social profile (and every account in it) goes, its slot comes back
+        const projectId = projectFrom(url.searchParams.get('projectId'));
+        if (!projectId) throw fail(400, 'BAD_REQUEST', 'Which business?');
+        const out = connections.socialEnabled ? await connections.forgetProject(who.id, projectId) : { freed: false };
+        reply(req, res, 200, { ok: true, freed: out?.freed === true });
+        return true;
+      }
       if (path === CONNECTIONS_PREFIX) {
         if (req.method !== 'GET') throw fail(405, 'BAD_REQUEST', 'Method not allowed.');
         const list = await connections.status(who.id, { projectId: projectFrom(url.searchParams.get('projectId')) });
         const on = (p) => (AD_PLATFORMS.includes(p) ? connections.adsEnabled : connections.socialEnabled);
+        // how many of the user's businesses have social accounts, of their limit (each business has its own)
+        const slots = connections.socialEnabled && connections.setUpSocial ? await connections.slots(who.id).catch(() => null) : null;
         reply(req, res, 200, {
           connections: list,
           available: connections.enabled ? PLATFORMS.filter((p) => !PHASE2_PLATFORMS.includes(p) && on(p)) : [],
@@ -131,6 +146,7 @@ export function createConnectionRoutes(deps = {}) {
           provider: { social: connections.socialEnabled ? 'upload_post' : null, ads: connections.adsEnabled ? 'zernio' : null },
           // whether links stay in X posts (the X Links add-on); without it Upload-Post takes them out
           xLinks: connections.xLinks === true,
+          ...(slots && Number.isFinite(slots.used) && Number.isFinite(slots.cap) ? { slots: { used: slots.used, cap: slots.cap, projects: Array.isArray(slots.projects) ? slots.projects : [] } } : {}),
           // the owner reads which Secret a side still needs (names only), whichever side it is, set up or not
           ...(who.isAdmin === true && connections.hint ? { hint: connections.hint } : {}),
         });
@@ -160,7 +176,7 @@ export function createConnectionRoutes(deps = {}) {
         return true;
       }
       if (route === 'GET targets') {
-        reply(req, res, 200, { targets: await connections.targets(who.id, platform) });
+        reply(req, res, 200, { targets: await connections.targets(who.id, platform, { projectId: projectFrom(url.searchParams.get('projectId')) }) });
         return true;
       }
       if (route === 'PUT target') {

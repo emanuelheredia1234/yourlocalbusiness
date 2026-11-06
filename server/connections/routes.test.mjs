@@ -8,8 +8,8 @@ import http from 'node:http';
 import { createConnectionRoutes } from './routes.mjs';
 import { combineConnections, createConnections, nullConnections } from './index.mjs';
 import { createZernioConnections } from './zernio.mjs';
-import { createUploadPostConnections } from './uploadpost.mjs';
-import { createBucketLimiter, readRaw, sha256 } from '../integrations/common.mjs';
+import { createUploadPostConnections, profileUsername } from './uploadpost.mjs';
+import { createBucketLimiter, customerTag, readRaw, sha256 } from '../integrations/common.mjs';
 import { createMockZernio, signWebhook, TEST_ZERNIO_KEY, TEST_ZERNIO_WEBHOOK_SECRET } from '../test/mock-zernio.mjs';
 import { createMockUploadPost, signUploadPost, TEST_UPLOAD_POST_KEY, TEST_UPLOAD_POST_WEBHOOK_SECRET } from '../test/mock-uploadpost.mjs';
 import { makeDb, makeLog, makeStorage } from '../test/fakes.mjs';
@@ -19,6 +19,10 @@ const BOB = { id: '7d1e2b3c-4a5f-4b6c-8d7e-9f0a1b2c3d4e', isAdmin: false };
 const OWNER = { id: '5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d', isAdmin: true };
 const USERS = { alice: ALICE, bob: BOB, owner: OWNER };
 const TAG_SECRET = 'test-customer-tag-secret-0123456789';
+/** Each user's businesses (the app's project ids). */
+const P1 = 'proj_bakery00001';
+const P2 = 'proj_catering002';
+const P3 = 'proj_foodtruck03';
 
 function sendLike(res, status, body, headers = {}) {
   const data = typeof body === 'string' ? body : JSON.stringify(body);
@@ -96,7 +100,10 @@ afterEach(() => {
   expect(up.violations).toEqual([]);
 });
 
-const profileOf = async (user) => (await storage.get(`uploadpost:user:${sha256(user.id)}`)).value.username;
+/** A business's profile name, as stored for that user. */
+const profileOf = async (user, projectId = P1) => (await storage.get(`uploadpost:user:${sha256(user.id)}`))?.value?.profiles?.find((p) => p.projectId === projectId)?.username;
+/** A business saved to the user's account (the app's cloud save writes user_docs). */
+const business = (user, projectId = P1, database = db) => database.insert('user_docs', { user_id: user.id, kind: 'project', id: projectId, data: { id: projectId } }, { ignoreDuplicates: true });
 
 /** POST a signed Upload-Post event to the app's webhook route, as Upload-Post does. */
 async function upHook(base, event, opts) {
@@ -104,13 +111,14 @@ async function upHook(base, event, opts) {
   return fetch(`${base}/api/webhooks/upload-post`, { method: 'POST', body: raw, headers: { 'content-type': 'application/json', ...signUploadPost(raw, { event: event.event, ...opts }) } });
 }
 
-/** Connect a social network through the routes: the hosted page (mock), then Upload-Post's webhook over HTTP. */
-async function connectOverHttp(who, platform, account = {}) {
-  const r = await app.call(who, 'POST', `/api/integrations/connections/${platform}/connect`, {});
+/** Connect a social network for a business through the routes: the hosted page (mock), then Upload-Post's webhook over HTTP. */
+async function connectOverHttp(who, platform, account = {}, projectId = P1) {
+  await business(USERS[who], projectId);
+  const r = await app.call(who, 'POST', `/api/integrations/connections/${platform}/connect`, { projectId });
   expect(r.status).toBe(200);
   const { connectLink } = await r.json();
   expect((await fetch(connectLink)).status).toBe(200);
-  const username = await profileOf(USERS[who]);
+  const username = await profileOf(USERS[who], projectId);
   const acct = up.connect(username, platform, account);
   expect((await upHook(app.base, { event: 'social_account_connected', profile_username: username, platform })).status).toBe(200);
   // answered at once; the account is read back right after
@@ -206,13 +214,19 @@ describe('the list', () => {
 });
 
 describe('connecting end to end', () => {
-  it('connects Instagram through the hosted page and Upload-Post’s webhook; the browser sees status only', async () => {
+  it('connects Instagram for a business through the hosted page and Upload-Post’s webhook; the browser sees status and its slots only', async () => {
     const { accountId, connectLink, username } = await connectOverHttp('alice', 'instagram', { id: 'ig_acct_9000' });
-    const list = await (await app.call('alice', 'GET', '/api/integrations/connections')).json();
+    const list = await (await app.call('alice', 'GET', `/api/integrations/connections?projectId=${P1}`)).json();
     expect(list.connections.find((c) => c.platform === 'instagram')).toMatchObject({ state: 'connected', targetKind: 'ig_account' });
+    expect(list.slots).toMatchObject({ used: 1, cap: 3, projects: [P1] });
     expect(JSON.stringify(list)).not.toContain(accountId);
     expect(JSON.stringify(list)).not.toContain(username);
-    const checked = await app.call('alice', 'POST', '/api/integrations/connections/instagram/check', {});
+    // another business of hers (and no business at all) has nothing connected
+    const other = await (await app.call('alice', 'GET', `/api/integrations/connections?projectId=${P2}`)).json();
+    expect(other.connections.find((c) => c.platform === 'instagram').state).toBe('not_connected');
+    const none = await (await app.call('alice', 'GET', '/api/integrations/connections')).json();
+    expect(none.connections.find((c) => c.platform === 'instagram').state).toBe('not_connected');
+    const checked = await app.call('alice', 'POST', '/api/integrations/connections/instagram/check', { projectId: P1 });
     expect((await checked.json()).connection.state).toBe('connected');
     const logs = app.log.text() + implLog.text();
     expect(logs).not.toContain(TEST_UPLOAD_POST_KEY);
@@ -227,44 +241,70 @@ describe('connecting end to end', () => {
     expect(JSON.stringify(list)).not.toContain(accountId);
   });
 
-  it('uses the signed-in user only: a user id in the body is ignored; the profile is theirs', async () => {
-    const r = await app.call('bob', 'POST', '/api/integrations/connections/youtube/connect', { userId: ALICE.id, profile_username: 'ylb_000000000000000000000000' });
+  it('uses the signed-in user only: a user id or a profile name in the body is ignored; the profile is theirs, for their business', async () => {
+    await business(BOB, P1);
+    const r = await app.call('bob', 'POST', '/api/integrations/connections/youtube/connect', { userId: ALICE.id, projectId: P1, profile_username: 'ylb_000000000000000000000000_00000000' });
     expect(r.status).toBe(200);
     const bobTag = db.rows('billing_customers').find((c) => c.user_id === BOB.id).customer_tag;
-    expect(await profileOf(BOB)).toBe(`ylb_${bobTag.slice(5)}`);
-    expect(up.jwtBodies.pop().username).toBe(`ylb_${bobTag.slice(5)}`);
+    const name = profileUsername(bobTag, BOB.id, P1, TAG_SECRET);
+    expect(await profileOf(BOB)).toBe(name);
+    expect(up.jwtBodies.pop().username).toBe(name);
+    // without a business, or with one that isn't saved in his account, nothing is made
+    expect((await app.call('bob', 'POST', '/api/integrations/connections/youtube/connect', {})).status).toBe(400);
+    expect((await app.call('bob', 'POST', '/api/integrations/connections/youtube/connect', { projectId: 'proj_notbobs00001' })).status).toBe(404);
   });
 
-  it('keeps users apart: another user’s account handle is refused, their status is their own', async () => {
+  it('keeps users apart: another user’s account handle and business are refused, their status is their own', async () => {
     await connectOverHttp('alice', 'x');
-    const aliceTargets = (await (await app.call('alice', 'GET', '/api/integrations/connections/x/targets')).json()).targets;
-    const bobList = await (await app.call('bob', 'GET', '/api/integrations/connections')).json();
+    const aliceTargets = (await (await app.call('alice', 'GET', `/api/integrations/connections/x/targets?projectId=${P1}`)).json()).targets;
+    expect(aliceTargets).toHaveLength(1);
+    // Bob naming Alice's business id finds only his own (nothing)
+    const bobList = await (await app.call('bob', 'GET', `/api/integrations/connections?projectId=${P1}`)).json();
     expect(bobList.connections.find((c) => c.platform === 'x').state).toBe('not_connected');
-    await connectOverHttp('bob', 'x', { id: 'x_bob' });
-    expect((await app.call('bob', 'PUT', '/api/integrations/connections/x/target', { targetId: aliceTargets[0].id })).status).toBe(400);
-    expect((await app.call('bob', 'DELETE', '/api/integrations/connections/x')).status).toBe(200);
-    const aliceList = await (await app.call('alice', 'GET', '/api/integrations/connections')).json();
+    expect((await (await app.call('bob', 'GET', `/api/integrations/connections/x/targets?projectId=${P1}`)).json()).targets).toEqual([]);
+    await connectOverHttp('bob', 'x', { id: 'x_bob' }, P2);
+    expect((await app.call('bob', 'PUT', '/api/integrations/connections/x/target', { targetId: aliceTargets[0].id, projectId: P1 })).status).toBe(400);
+    expect((await app.call('bob', 'PUT', '/api/integrations/connections/x/target', { targetId: aliceTargets[0].id, projectId: P2 })).status).toBe(400);
+    expect((await app.call('bob', 'DELETE', `/api/integrations/connections/x?projectId=${P1}`)).status).toBe(200);
+    // Bob has a business with the same id (his own): deleting it frees his profile, never Alice's
+    const bobs = await profileOf(BOB, P1);
+    expect((await (await app.call('bob', 'DELETE', `/api/integrations/connections?projectId=${P1}`)).json())).toEqual({ ok: true, freed: true });
+    expect(up.profiles.has(bobs)).toBe(false);
+    const aliceList = await (await app.call('alice', 'GET', `/api/integrations/connections?projectId=${P1}`)).json();
     expect(aliceList.connections.find((c) => c.platform === 'x').state).toBe('connected');
+    expect(up.profiles.has(await profileOf(ALICE))).toBe(true);
   });
 
-  it('a business id picks which LinkedIn page that business posts as', async () => {
-    const username = (await (async () => {
-      await app.call('alice', 'POST', '/api/integrations/connections/linkedin/connect', {});
-      return profileOf(ALICE);
-    })());
-    up.pages.linkedin.set(username, [{ id: 'urn:li:organization:42', name: 'Joe’s Bakery Co' }]);
-    await connectOverHttp('alice', 'linkedin', { display_name: 'Joe Baker' });
-    const targets = (await (await app.call('alice', 'GET', '/api/integrations/connections/linkedin/targets')).json()).targets;
+  it('each business has its own LinkedIn: the business id picks whose accounts and which page it posts as', async () => {
+    await business(ALICE, P2);
+    const name = profileUsername(customerTag(ALICE.id, { CUSTOMER_TAG_SECRET: TAG_SECRET }), ALICE.id, P2, TAG_SECRET);
+    up.addProfile(name);
+    up.pages.linkedin.set(name, [{ id: 'urn:li:organization:42', name: 'Joe’s Bakery Co' }]);
+    await connectOverHttp('alice', 'linkedin', { display_name: 'Joe Baker' }, P2);
+    const targets = (await (await app.call('alice', 'GET', `/api/integrations/connections/linkedin/targets?projectId=${P2}`)).json()).targets;
     expect(targets.map((x) => x.kind)).toEqual(['li_person', 'li_org']);
     expect(JSON.stringify(targets)).not.toContain('urn:li');
     const org = targets.find((x) => x.kind === 'li_org');
-    const r = await app.call('alice', 'PUT', '/api/integrations/connections/linkedin/target', { targetId: org.id, projectId: 'proj-2' });
+    const r = await app.call('alice', 'PUT', '/api/integrations/connections/linkedin/target', { targetId: org.id, projectId: P2 });
     expect((await r.json()).connection.targetLabel).toBe('Joe’s Bakery Co');
-    const forP2 = (await (await app.call('alice', 'GET', '/api/integrations/connections?projectId=proj-2')).json()).connections.find((c) => c.platform === 'linkedin');
+    const forP2 = (await (await app.call('alice', 'GET', `/api/integrations/connections?projectId=${P2}`)).json()).connections.find((c) => c.platform === 'linkedin');
     expect(forP2).toMatchObject({ targetLabel: 'Joe’s Bakery Co', targetKind: 'li_org' });
-    // another business never inherits proj-2's company page: it posts as the person until it chooses
-    const forOther = (await (await app.call('alice', 'GET', '/api/integrations/connections?projectId=proj-3')).json()).connections.find((c) => c.platform === 'linkedin');
-    expect(forOther).toMatchObject({ targetLabel: 'Joe Baker', targetKind: 'li_person' });
+    // another business has its own accounts: this LinkedIn isn't its
+    const forOther = (await (await app.call('alice', 'GET', `/api/integrations/connections?projectId=${P3}`)).json()).connections.find((c) => c.platform === 'linkedin');
+    expect(forOther.state).toBe('not_connected');
+  });
+
+  it('deleting a business frees its slot: DELETE ?projectId= deletes that business’s profile only (the user’s own); none named is refused', async () => {
+    const { username } = await connectOverHttp('owner', 'tiktok', {}, P3);
+    const before = (await (await app.call('owner', 'GET', '/api/integrations/connections')).json()).slots;
+    expect(before.projects).toContain(P3);
+    expect((await app.call('owner', 'DELETE', '/api/integrations/connections')).status).toBe(400);
+    const r = await app.call('owner', 'DELETE', `/api/integrations/connections?projectId=${P3}`);
+    expect(await r.json()).toEqual({ ok: true, freed: true });
+    expect(up.profiles.has(username)).toBe(false);
+    const after = (await (await app.call('owner', 'GET', '/api/integrations/connections')).json()).slots;
+    expect(after).toMatchObject({ used: before.used - 1 });
+    expect(after.projects).not.toContain(P3);
   });
 
   it('refuses a malformed target id', async () => {
@@ -275,7 +315,8 @@ describe('connecting end to end', () => {
 
   it('limits connect attempts to 10 an hour per user', async () => {
     let last;
-    for (let i = 0; i < 11; i += 1) last = await app.call('owner', 'POST', '/api/integrations/connections/tiktok/connect', {});
+    await business(OWNER, P2);
+    for (let i = 0; i < 11; i += 1) last = await app.call('owner', 'POST', '/api/integrations/connections/tiktok/connect', { projectId: P2 });
     expect(last.status).toBe(429);
     expect((await last.json()).code).toBe('RATE_LIMITED');
   });
@@ -283,7 +324,7 @@ describe('connecting end to end', () => {
 
 describe('the webhook routes', () => {
   it('Upload-Post: no bearer or same origin, but a valid signature within 300 s; unsigned, stale or bad is 401; over 256 KB is 413', async () => {
-    const ok = await upHook(app.base, { event: 'social_account_connected', profile_username: 'ylb_000000000000000000000000', platform: 'x' });
+    const ok = await upHook(app.base, { event: 'social_account_connected', profile_username: 'ylb_000000000000000000000000_00000000', platform: 'x' });
     expect(ok.status).toBe(200);
     const raw = JSON.stringify({ event: 'upload_completed' });
     expect((await fetch(`${app.base}/api/webhooks/upload-post`, { method: 'POST', body: raw })).status).toBe(401);
@@ -353,13 +394,14 @@ describe('through the server wiring (server/integrations/wiring.mjs)', () => {
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${server.address().port}`;
     try {
-      const r = await fetch(`${base}/api/integrations/connections/tiktok/connect`, { method: 'POST', headers: { 'x-test-user': 'alice', 'content-type': 'application/json' }, body: '{}' });
+      await business(ALICE, P3, wdb);
+      const r = await fetch(`${base}/api/integrations/connections/tiktok/connect`, { method: 'POST', headers: { 'x-test-user': 'alice', 'content-type': 'application/json' }, body: JSON.stringify({ projectId: P3 }) });
       expect(r.status).toBe(200);
-      const username = (await appState.get(`uploadpost:user:${sha256(ALICE.id)}`)).value.username;
+      const username = (await appState.get(`uploadpost:user:${sha256(ALICE.id)}`)).value.profiles.find((p) => p.projectId === P3).username;
       up.connect(username, 'tiktok');
       expect((await upHook(base, { event: 'social_account_connected', profile_username: username, platform: 'tiktok' })).status).toBe(200);
       await integrations.connections.impl.social.settled();
-      const list = await (await fetch(`${base}/api/integrations/connections`, { headers: { 'x-test-user': 'alice' } })).json();
+      const list = await (await fetch(`${base}/api/integrations/connections?projectId=${P3}`, { headers: { 'x-test-user': 'alice' } })).json();
       expect(list.connections.find((c) => c.platform === 'tiktok')).toMatchObject({ state: 'connected', targetKind: 'tt_account' });
       const nangoList = await (await fetch(`${base}/api/integrations/nango`, { headers: { 'x-test-user': 'alice' } })).json();
       expect(nangoList).toEqual({ enabled: false, setUp: false, integrations: [] });

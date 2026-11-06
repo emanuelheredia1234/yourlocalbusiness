@@ -308,6 +308,48 @@ describe('POST /api/analytics/refresh', () => {
     expect(connections.calls).toEqual([expect.objectContaining({ kind: 'insights', userId: A.id, platform: 'facebook', projectId: 'p1' })]);
   });
 
+  it('each business reads its own connected account’s stats through its own Upload-Post profile; the customer’s usage adds up their businesses', async () => {
+    const { createUploadPostConnections } = await import('../connections/uploadpost.mjs');
+    const { combineConnections, createConnections } = await import('../connections/index.mjs');
+    const { createMockUploadPost, TEST_UPLOAD_POST_KEY, TEST_UPLOAD_POST_WEBHOOK_SECRET } = await import('../test/mock-uploadpost.mjs');
+    const up = await createMockUploadPost().start();
+    try {
+      project(A.id, 'p1', { brand: { name: 'Joe’s Bakery', socials: {} } });
+      project(A.id, 'p2', { brand: { name: 'Joe’s Catering', socials: {} } });
+      const env = { ...ENV, UPLOAD_POST_API_KEY: TEST_UPLOAD_POST_KEY, UPLOAD_POST_WEBHOOK_SECRET: TEST_UPLOAD_POST_WEBHOOK_SECRET, UPLOAD_POST_BASE_URL: up.base, UPLOAD_POST_RPM: '900' };
+      const storage = makeStorage();
+      const impl = createUploadPostConnections({ env, storage, db, log: { log() {} } });
+      const connections = createConnections(combineConnections({ social: impl }));
+      const names = {};
+      for (const [p, followers] of [['p1', 1310], ['p2', 42]]) {
+        await connections.connectLink(A.id, 'instagram', { projectId: p });
+        const doc = Object.values(Object.fromEntries(storage.documents)).map((d) => d.value).find((v) => Array.isArray(v?.profiles));
+        names[p] = doc.profiles.find((x) => x.projectId === p).username;
+        up.connect(names[p], 'instagram', { display_name: `IG ${p}` });
+        up.analytics.set(names[p], { followers });
+        const evt = up.signed({ event: 'social_account_connected', profile_username: names[p], platform: 'instagram' });
+        expect((await impl.webhook(evt.raw, evt.headers)).status).toBe(200);
+        await impl.settled();
+      }
+      expect(names.p1).not.toBe(names.p2);
+      const { routes } = makeRoutes({ connections });
+      for (const p of ['p1', 'p2']) {
+        expect((await call(routes, 'POST', '/api/analytics/refresh', { token: 'a', body: { projectId: p, sources: ['social'] } })).status).toBe(202);
+        await routes.refresher.idle();
+      }
+      const snap = (p) => rows('analytics_snapshots').find((s) => s.project_id === p && s.source === 'social').data.networks.find((n) => n.network === 'instagram');
+      expect(snap('p1')).toMatchObject({ origin: 'own', followers: 1310 });
+      expect(snap('p2')).toMatchObject({ origin: 'own', followers: 42 });
+      expect(up.calls.filter((c) => c.path.startsWith('/api/analytics/')).map((c) => c.path)).toEqual([`/api/analytics/${names.p1}`, `/api/analytics/${names.p2}`]);
+      // each read is on the customer's ledger, tagged with its business: their usage is the sum of their businesses
+      const reads = rows('usage_ledger').filter((r) => r.feature === 'social' && r.vendor === 'uploadpost');
+      expect(reads.map((r) => r.project_id).sort()).toEqual(['p1', 'p2']);
+      expect(new Set(reads.map((r) => r.customer_tag)).size).toBe(1);
+    } finally {
+      await up.close();
+    }
+  });
+
   it('reads every connected ad account’s results through Zernio (no ad changes) next to competitors', async () => {
     project(A.id, 'p1');
     const own = (platform, spend) => ({ platform, currency: 'USD', spend, impressions: 100, clicks: 10, conversions: 1, series: [], campaigns: [] });

@@ -206,18 +206,22 @@ export function createBillingRoutes({
       if (!p.lastActivityAt || String(r.created_at) > p.lastActivityAt) p.lastActivityAt = String(r.created_at);
     }
     const emails = await emailsFor(list);
-    // how many social accounts (Upload-Post) and ad accounts (Zernio) each customer has connected right now
+    // how many social accounts (Upload-Post, all their businesses together) and ad accounts (Zernio) each customer
+    // has connected right now, and how many of the plan's Upload-Post profiles their businesses use (one each)
     const counts = new Map();
     const socialCount = connections?.impl?.social?.accountCount;
+    const profileCount = connections?.impl?.social?.profileCount;
     const adsCount = connections?.impl?.ads?.accountCount ?? (connections?.impl && !('social' in connections.impl) ? connections.impl.accountCount : undefined);
     if (typeof socialCount === 'function' || typeof adsCount === 'function') {
       for (const c of list) {
         const social = typeof socialCount === 'function' ? await socialCount(c.user_id).catch(() => null) : null;
+        const profiles = typeof profileCount === 'function' ? await profileCount(c.user_id).catch(() => null) : null;
         const ads = typeof adsCount === 'function' ? await adsCount(c.user_id).catch(() => null) : null;
-        if (Number.isFinite(social) || Number.isFinite(ads)) counts.set(c.customer_tag, { social: Number.isFinite(social) ? social : 0, ads: Number.isFinite(ads) ? ads : 0, socialKnown: Number.isFinite(social), adsKnown: Number.isFinite(ads) });
+        if (Number.isFinite(social) || Number.isFinite(ads)) counts.set(c.customer_tag, { social: Number.isFinite(social) ? social : 0, ads: Number.isFinite(ads) ? ads : 0, socialKnown: Number.isFinite(social), adsKnown: Number.isFinite(ads), profiles: Number.isFinite(profiles) ? profiles : null });
       }
     }
-    // the owner's view of Upload-Post: profiles used out of the plan's limit, and its last team-level alert
+    // the owner's view of Upload-Post: profiles used out of the plan's limit, each user's limit of businesses, and
+    // its most serious team-level alert
     const uploadPost = (await connections?.impl?.social?.ownerView?.().catch(() => null)) ?? null;
     const out = [...per.entries()].map(([tag, p]) => {
       const o = capRows.byTag.get(tag);
@@ -231,6 +235,7 @@ export function createBillingRoutes({
           ? {
               connectedAccounts: counts.get(tag).social + counts.get(tag).ads,
               ...(counts.get(tag).socialKnown ? { socialAccounts: counts.get(tag).social } : {}),
+              ...(Number.isFinite(counts.get(tag).profiles) ? { socialProfiles: counts.get(tag).profiles } : {}),
               ...(counts.get(tag).adsKnown ? { adAccounts: counts.get(tag).ads } : {}),
             }
           : {}),
@@ -246,7 +251,7 @@ export function createBillingRoutes({
       customers: out,
       defaults: { ...capToApi(d), syncedToTreg: capRows.defaults?.synced_to_treg_at != null },
       ...(alert ? { alert } : {}),
-      ...(uploadPost && Number.isFinite(uploadPost.profilesUsed) ? { upProfiles: { used: uploadPost.profilesUsed, ...(uploadPost.profilesLimit ? { limit: uploadPost.profilesLimit } : {}) } } : {}),
+      ...(uploadPost && Number.isFinite(uploadPost.profilesUsed) ? { upProfiles: { used: uploadPost.profilesUsed, ...(uploadPost.profilesLimit ? { limit: uploadPost.profilesLimit } : {}), ...(Number.isFinite(uploadPost.perUserLimit) ? { perCustomer: uploadPost.perUserLimit } : {}) } } : {}),
       ...(uploadPost?.alert ? { uploadPostAlert: uploadPost.alert } : {}),
     };
   }

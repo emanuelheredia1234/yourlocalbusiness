@@ -9,7 +9,7 @@
 //   POST   /uploadposts/users                    201 {profile} | 409 exists | 403 PROFILE_LIMIT_REACHED (cap)
 //   GET    /uploadposts/users                    {limit, plan, profiles}
 //   GET    /uploadposts/users/:username          {profile} | 404
-//   DELETE /uploadposts/users                    JSON {username}
+//   DELETE /uploadposts/users                    JSON {username} (mock.failDeletes: usernames that answer 500)
 //   POST   /uploadposts/users/generate-jwt       {access_url, duration} | 403 PROFILE_BLOCKED | 404 PROFILE_NOT_FOUND
 //   DELETE /uploadposts/users/social             JSON {profile_username, social_platform}
 //   GET    /uploadposts/facebook/pages?profile=  GET /uploadposts/linkedin/pages?profile= (404: no LinkedIn pages)
@@ -24,11 +24,13 @@
 //          entries {platform, success: true, message: "Queued"} and no status of their own; when done, top-level
 //          completed / failed (mock.entryStatus adds each entry's own status); mock.setStatus(id, body) overrides
 //   GET    /uploadposts/history?request_id=
-//   GET    /analytics/:username?platforms=       GET /uploadposts/post-analytics/cached?user= (empty unless seeded)
+//   GET    /analytics/:username?platforms=       (mock.analytics: username → numbers to answer instead)
+//   GET    /uploadposts/post-analytics/cached?user= (empty unless seeded)
 // Test hooks: mock.connect(username, platform, extra), mock.setStatus(requestId, body), mock.signed(event, …).
 //
 // Violations a test fails on: an upload without Idempotency-Key, a second upload with a key it has seen (a
-// resend), the API key in a query string, a Pages/boards list without profile=, an external_id over 200 chars.
+// resend), the API key in a query string, a Pages/boards list without profile=, an external_id over 200 chars, a
+// new profile's username outside Upload-Post's characters or over 40 characters.
 
 import crypto from 'node:crypto';
 import http from 'node:http';
@@ -64,7 +66,9 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
   const tiktokSettings = new Map(); // username → { status, body } answered instead of the options
   const statusOverride = new Map(); // request_id → a /status body to answer as it is
   const cachedPosts = new Map(); // username → cached post rows (empty unless a test seeds them)
+  const analytics = new Map(); // username → numbers that replace the standard ones on /analytics (e.g. { followers })
   const blocked = new Set(); // usernames that answer PROFILE_BLOCKED on generate-jwt
+  const failDeletes = new Set(); // usernames whose DELETE /uploadposts/users answers 500 (nothing deleted)
   let profileCap = cap;
   let entryStatus = false;
   let server = null;
@@ -171,6 +175,8 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     if (p === '/uploadposts/users' && m === 'POST') {
       const username = String(body?.username ?? '');
       if (!/^[A-Za-z0-9_@-]{1,64}$/.test(username)) return err(res, 400, 'Username required');
+      // Upload-Post's documented characters; we keep within 40 (the longest the docs' own example scheme used)
+      if (!/^[A-Za-z0-9_@-]{1,40}$/.test(username)) violations.push({ kind: 'username_invalid', length: username.length });
       if (profiles.has(username)) return err(res, 409, 'User already exists');
       if (profiles.size >= profileCap) return err(res, 403, 'You have reached the PROFILE_LIMIT_REACHED for your plan (Advanced, owner@example.com)', { error_code: 'PROFILE_LIMIT_REACHED' });
       const prof = { username, display_name: body?.display_name ?? null, created_at: new Date().toUTCString(), social_accounts: {} };
@@ -180,6 +186,7 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     if (p === '/uploadposts/users' && m === 'GET') return json(res, 200, { success: true, limit: profileCap, plan: 'advanced', profiles: [...profiles.values()].map(profileOut) });
     if (p === '/uploadposts/users' && m === 'DELETE') {
       const username = String(body?.username ?? '');
+      if (failDeletes.has(username)) return err(res, 500, 'Internal error');
       if (!profiles.delete(username)) return err(res, 404, 'Profile not found');
       return json(res, 200, { success: true, message: 'Perfil eliminado correctamente' });
     }
@@ -264,7 +271,7 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
         }
         // metric_type as documented: what reach_timeseries counts on each network
         const metricType = ['youtube', 'tiktok', 'threads'].includes(pl) ? 'views' : ['x', 'pinterest'].includes(pl) ? 'impressions' : 'reach';
-        out[pl] = { followers: 1310, reach: 1000, views: 700, impressions: 700, likes: 52, comments: 8, shares: 3, saves: 1, reach_timeseries: [{ date: '2026-11-01', value: 700 }, { date: '2026-11-02', value: 300 }], metric_type: metricType };
+        out[pl] = { followers: 1310, reach: 1000, views: 700, impressions: 700, likes: 52, comments: 8, shares: 3, saves: 1, reach_timeseries: [{ date: '2026-11-01', value: 700 }, { date: '2026-11-02', value: 300 }], metric_type: metricType, ...(analytics.get(prof.username) ?? {}) };
       }
       return json(res, 200, out);
     }
@@ -321,12 +328,17 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     tiktokPrivacy,
     tiktokSettings,
     cachedPosts,
+    analytics,
     blocked,
+    failDeletes,
     get base() {
       return `${base}/api`;
     },
     set cap(n) {
       profileCap = n;
+    },
+    get cap() {
+      return profileCap;
     },
     /** each /status entry also carries its own status (completed / failed) */
     set entryStatus(on) {

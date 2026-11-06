@@ -1,33 +1,45 @@
 // Customers' social accounts through Upload-Post (the owner's choice for social; ads stay on Zernio): one
-// Upload-Post profile per customer, made on their first Connect click, named `ylb_` + the 24 hex of their customer
-// tag (never an email or our user id; Upload-Post usernames can't be changed, so it is stored once and never
-// recomputed). Customers connect on Upload-Post's hosted white-label page. The methods are those of
+// Upload-Post profile per business (each project in the app), so every business connects its own Facebook Page,
+// Instagram, TikTok, X, YouTube and LinkedIn (Upload-Post holds one account per network per profile). A profile is
+// made on the first Connect click for that business (never just because a business was made) and named
+// `ylb_` + the 24 hex of the customer tag + `_` + 8 hex of a keyed hash of the business (never an email, our user
+// id or the raw project id; Upload-Post usernames can't be changed, so it is stored once and never recomputed).
+// Customers connect on Upload-Post's hosted white-label page. The methods are those of
 // server/connections/index.mjs for the social platforms, plus webhook(rawBody, headers) for
-// POST /api/webhooks/upload-post (settled() waits for its background work), setPostListener(fn), userDeleted(userId),
-// meterIfDue(), reconcileIfDue(), accountCount(userId), ownerView() and alert(kind).
+// POST /api/webhooks/upload-post (settled() waits for its background work), setPostListener(fn), slots(userId),
+// forgetProject(userId, projectId), userDeleted(userId), meterIfDue(), reconcileIfDue(), accountCount(userId),
+// profileCount(userId), ownerView() and alert(kind).
 //
 //   const impl = createUploadPostConnections({ env, fetch, now, storage, db, log });
 //
 // What this file keeps (docs/integrations-setup.md §3):
 // - Every Upload-Post call goes through server/uploadpost.mjs (the one client; the key never leaves it).
-// - Isolation: a request only ever names the signed-in user's own profile username (from their stored doc), and
-//   every Pages list is asked with profile= (without it Upload-Post lists every customer's Pages).
-// - The browser sees ConnectionStatus and opaque target handles only: no profile names, account or Page ids.
-// - A post is one attempt (request_id = Idempotency-Key = external_id = the job id). A timeout, a 5xx or a status
-//   that never settles is 'unknown' ("may have been posted - check before trying again") and is only ever
-//   checked with a read of /uploadposts/status by the job id; nothing here sends it again.
+// - Isolation: a request only ever names a profile from the signed-in user's own stored doc, picked by the business
+//   it names (a project id of the right shape, which must be one of that user's saved businesses before a profile is
+//   made). Another user's project id only ever finds that user's own businesses. Every Pages list is asked with
+//   profile= (without it Upload-Post lists every customer's Pages).
+// - Slots: each user has at most UPLOAD_POST_MAX_PROFILES_PER_USER businesses with a profile (default 3), so one
+//   user can't use up the plan's 75 by making businesses. The slot is reserved in the user's doc (a version-checked
+//   write) before Upload-Post is asked, so two Connect clicks at once never make two profiles or pass the cap.
+// - The browser sees ConnectionStatus, opaque target handles and its own slot count only: no profile names, account
+//   or Page ids.
+// - A post is one attempt (request_id = Idempotency-Key = external_id = the job id), through its business's profile.
+//   A timeout, a 5xx or a status that never settles is 'unknown' ("may have been posted - check before trying
+//   again") and is only ever checked with a read of /uploadposts/status by the job id; nothing here sends it again.
 // - Team-level problems (our key, the 75-profile cap, a blocked profile, the scheduled-post cap, the shared X and
 //   analytics budgets) never reach a customer: they see a safe message and the owner gets an alert (one per kind in
 //   `uploadpost:alerts`; a key or rate alert ends at the next call that works).
 // - Webhooks: signed (HMAC over "<timestamp>.<raw body>", 300 s window; unsigned ones refused), de-duplicated by
 //   request id + platform + event, answered 200 at once and worked on afterwards (Upload-Post waits 10 s and pauses
-//   deliveries for 30 minutes after 5 failures), routed by profile_username → customer tag → user, applied only to
-//   that customer's own doc and jobs. Upload-Post never retries a webhook, so status polling, a read of the profile
-//   while a connect is waiting (and on Check and Connect) and the daily reconcile of every profile back it up.
-// - A profile is deleted only after its customer's account is gone (userDeleted), or by the daily check for a
-//   profile our own account deletion marked: never because a customer looks absent (another copy of the app on the
-//   same key, or a doc that can't be read, must not delete anyone's connections). A profile nobody connected
-//   anything to for a week goes back to the plan (it's made again on the next Connect).
+//   deliveries for 30 minutes after 5 failures), routed by profile_username → customer tag → user → the one business
+//   whose stored profile has that name, applied only to that business's profile and that user's jobs. Upload-Post
+//   never retries a webhook, so status polling, a read of the profile while a connect is waiting (and on Check and
+//   Connect) and the daily reconcile of every profile back it up.
+// - Profiles go back to the plan when their business is deleted (forgetProject), when the account is deleted
+//   (userDeleted, every profile), when nothing was connected for UPLOAD_POST_RECLAIM_DAYS, or (the daily check) when
+//   the business has been gone from the account for 2 days. The daily check only ever touches `ylb_` profiles it
+//   can map to one customer and one of their businesses (or that account deletion marked): never one because its
+//   customer looks absent (another copy of the app on the same key, or a doc that can't be read).
 // - Third-party text (account names, Page names, post text) is data: clipped and kept as plain text.
 
 import crypto from 'node:crypto';
@@ -56,11 +68,17 @@ const FULL_READ_EVERY_MS = 10 * 60_000;
 /** Webhook work running at once (each answer went out already). */
 const WEBHOOK_WORKERS = 4;
 const DAY_MS = 86_400_000;
+/** A business gone from the account this long (seen by two daily checks) gives its profile back. */
+const PROJECT_GONE_MS = 2 * DAY_MS;
+/** Ended profile lives kept for the monthly estimate (last month and this one). */
+const PAST_KEEP_MS = 70 * DAY_MS;
+/** The daily check deletes at most this many profiles (marked, gone businesses, reclaimed, the old per-customer one). */
+const DELETES_PER_DAY = 10;
 /** X Links: 50 link posts a month for the whole Upload-Post account; the owner hears at 40. */
 const X_LINKS_POOL = 50;
 const X_LINKS_POOL_ALERT = 40;
 /** The owner's alerts, most serious first (the Billing page shows the first one live), and how long one shows. */
-const ALERT_RANK = ['auth', 'rate_lockout', 'profile_cap', 'profile_blocked', 'plan', 'scheduled_limit', 'media_secret', 'profile_budget', 'x_links', 'profile_cap_low', 'x_links_low', 'profile_orphans', 'analytics_limit'];
+const ALERT_RANK = ['auth', 'rate_lockout', 'profile_cap', 'profile_blocked', 'plan', 'scheduled_limit', 'media_secret', 'profile_budget', 'profile_user_cap', 'x_links', 'profile_cap_low', 'x_links_low', 'profile_orphans', 'analytics_limit'];
 const ALERT_TTL_MS = 7 * DAY_MS;
 const ALERTS_KEY = 'uploadpost:alerts';
 const GONE_KEY = 'uploadpost:gone';
@@ -82,9 +100,15 @@ export const hasXLink = (text) => X_LINKISH.test(String(text ?? ''));
 export const PROFILE_MONTH_MICRO = 1_960_000;
 /** Analytics reads: 100 per 5 minutes at Upload-Post; we keep to 80 so on-demand views have room. */
 const ANALYTICS_PER_5_MIN = 80;
-const USERNAME = /^ylb_[0-9a-f]{24}$/;
+/** A business's profile: ylb_ + the customer tag's 24 hex + _ + 8 hex of the business key (37 characters). */
+export const PROFILE_USERNAME = /^ylb_[0-9a-f]{24}_[0-9a-f]{8}$/;
+/** The one-profile-per-customer name an earlier build of this branch used (dev data only): deleted, never used. */
+const LEGACY_USERNAME = /^ylb_[0-9a-f]{24}$/;
+/** A project id as the app makes them (proj_…), within user_docs' 80 characters. */
+const PROJECT_ID = /^[A-Za-z0-9._:-]{1,80}$/;
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const PAGE_ID = /^[A-Za-z0-9:_.-]{1,120}$/;
 const TARGET_ID = /^tgt_[0-9a-f]{32}$/;
-const DEFAULT = '*';
 const PERSONAL = 'personal';
 
 const iso = (ms) => new Date(ms).toISOString();
@@ -95,9 +119,31 @@ const clip = (s, n = 120) => {
 };
 const httpsUrl = (u) => (typeof u === 'string' && /^https:\/\/[^\s<>"']{4,500}$/.test(u) ? u : undefined);
 const docKey = (userId) => `uploadpost:user:${sha256(String(userId))}`;
-const blankDoc = () => ({ v: 1, accounts: {}, pages: {}, pins: {}, choice: {}, pending: {}, lastError: {} });
-const usernameFor = (tag) => `ylb_${String(tag).slice(5)}`;
-const tagForUsername = (username) => (USERNAME.test(String(username)) ? `cust_${String(username).slice(4)}` : null);
+const blankDoc = () => ({ v: 2, profiles: [] });
+const MAPS = ['accounts', 'pages', 'pins', 'choice', 'pending', 'lastError'];
+/** A project id the profiles can be keyed by (the app's shape; never an object's own property names). */
+export const validProject = (id) => typeof id === 'string' && PROJECT_ID.test(id) && !RESERVED_KEYS.has(id);
+const pageIdOk = (id) => PAGE_ID.test(id) && !RESERVED_KEYS.has(id);
+/** The customer tag a profile name belongs to (either shape), or null. */
+const tagForUsername = (username) => {
+  const u = String(username ?? '');
+  return PROFILE_USERNAME.test(u) || LEGACY_USERNAME.test(u) ? `cust_${u.slice(4, 28)}` : null;
+};
+/** A business holds one of its user's slots while its profile is being made or is there. */
+const holdsSlot = (p) => p?.state === 'reserved' || p?.state === 'ready';
+/** It (may) still use one of the plan's profiles. */
+const holdsPlanSlot = (p) => holdsSlot(p) || p?.state === 'deleting';
+
+/**
+ * A business's profile name, from the customer's tag and a keyed hash (CUSTOMER_TAG_SECRET) of the user and the
+ * business: `ylb_<24 hex>_<8 hex>`, 37 characters of [a-z0-9_] (Upload-Post allows letters, digits, _, @ and -).
+ * `salt` picks another name when one is taken by another of the user's businesses (never in practice). Computed
+ * once, when the profile is reserved, and stored: never computed again for a business that has one.
+ */
+export function profileUsername(tag, userId, projectId, secret, salt = 0) {
+  const key = crypto.createHmac('sha256', String(secret)).update(`uploadpost-profile:${userId}:${projectId}${salt ? `:${salt}` : ''}`).digest('hex').slice(0, 8);
+  return `ylb_${String(tag).slice(5, 29)}_${key}`;
+}
 
 /** A per-platform error_code → the code a job ends with (our words live in server/social/jobs.mjs). */
 export function jobErrorForCode(code) {
@@ -146,13 +192,13 @@ export function outcomeOfEntry(entry, { platform = '', top = '', final = false }
   return { state: 'pending' };
 }
 
-/** The profile's connected accounts (Upload-Post's social_accounts) differ from what our doc has. */
-export function accountsDiffer(doc, social) {
+/** A business profile's connected accounts (Upload-Post's social_accounts) differ from what our doc has for it. */
+export function accountsDiffer(prof, social) {
   if (!isObj(social)) return false;
   for (const platform of Object.keys(UP_PLATFORM)) {
     if (PHASE2_PLATFORMS.includes(platform)) continue;
     const there = social[UP_PLATFORM[platform]];
-    const mine = doc?.accounts?.[platform];
+    const mine = prof?.accounts?.[platform];
     if (isObj(there) !== !!mine) return true;
     if (!mine) continue;
     if (clip(there.username ?? '', 120) !== (mine.key ?? '')) return true;
@@ -163,11 +209,11 @@ export function accountsDiffer(doc, social) {
 
 /**
  * env: UPLOAD_POST_API_KEY, UPLOAD_POST_WEBHOOK_SECRET (+ _PREVIOUS), UPLOAD_POST_BASE_URL (tests), UPLOAD_POST_RPM,
- * UPLOAD_POST_ALERT_REMAINING, UPLOAD_POST_NEW_PROFILES_PER_DAY, UPLOAD_POST_RECLAIM_DAYS, UPLOAD_POST_X_LINKS
- * (the X Links add-on is bought), UPLOAD_POST_X_LINK_POSTS_PER_CUSTOMER, UPLOAD_POST_BRAND_LOGO_URL,
- * UPLOAD_POST_CONNECT_TITLE, UPLOAD_POST_CONNECT_DESCRIPTION, UPLOAD_POST_BACK_BUTTON_TEXT, CUSTOMER_TAG_SECRET,
- * MEDIA_URL_SECRET (posts with a photo or video), GSC_APP_PROPERTY (the app's address for the back button).
- * storage: appState. db: server/integrations/db.mjs. client, sleep: for tests.
+ * UPLOAD_POST_ALERT_REMAINING, UPLOAD_POST_MAX_PROFILES_PER_USER, UPLOAD_POST_NEW_PROFILES_PER_DAY,
+ * UPLOAD_POST_RECLAIM_DAYS, UPLOAD_POST_X_LINKS (the X Links add-on is bought), UPLOAD_POST_X_LINK_POSTS_PER_CUSTOMER,
+ * UPLOAD_POST_BRAND_LOGO_URL, UPLOAD_POST_CONNECT_TITLE, UPLOAD_POST_CONNECT_DESCRIPTION, UPLOAD_POST_BACK_BUTTON_TEXT,
+ * CUSTOMER_TAG_SECRET, MEDIA_URL_SECRET (posts with a photo or video), GSC_APP_PROPERTY (the app's address, for the
+ * connect page's back button). storage: appState. db: server/integrations/db.mjs. client, sleep: for tests.
  */
 export function createUploadPostConnections({ env = process.env, fetch = globalThis.fetch, now = () => Date.now(), storage = null, db = null, log = console, client = null, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   const storageReady = storage?.enabled === true;
@@ -180,6 +226,8 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     const n = Number.parseInt(env[name], 10);
     return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : dflt;
   };
+  /** Businesses with a profile per user (one user making businesses can't use up the plan's 75). */
+  const maxPerUser = intEnv('UPLOAD_POST_MAX_PROFILES_PER_USER', 3, 1, 1000);
   /** New profiles a day at most (a burst of throwaway sign-ups must not fill the plan's 75 in an afternoon). */
   const newProfilesPerDay = intEnv('UPLOAD_POST_NEW_PROFILES_PER_DAY', 20, 1, 1000);
   /** A profile with nothing connected this long goes back to the plan. */
@@ -188,9 +236,9 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   const xLinks = /^(on|true|1|yes)$/i.test(String(env.UPLOAD_POST_X_LINKS || '').trim());
   const xLinkPostsPerCustomer = intEnv('UPLOAD_POST_X_LINK_POSTS_PER_CUSTOMER', 5, 0, X_LINKS_POOL);
   let postListener = null;
-  let capCache = null; // { at, used, limit }
+  let capCache = null; // { at, used, limit, profiles }
   const analyticsTimes = [];
-  /** when each user's profile was last read back (status() reads it while a connect waits) */
+  /** when each business's profile was last read back (status() reads it while a connect waits) */
   const lastSync = new Map();
   let lastFullRead = 0;
   /** when each alert kind was last saved (so a burst of the same one isn't a burst of writes) */
@@ -221,7 +269,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
 
   // ───────────── the owner's alerts (one entry per kind; the Billing page shows the most serious) ─────────────
 
-  /** Change the stored alerts (`uploadpost:alerts`, { kind: { at, n? } }): change(map) → true when it changed. */
+  /** Change the stored alerts (`uploadpost:alerts`, { kind: { at, n?, tag? } }): change(map) → true when it changed. */
   async function changeAlerts(change) {
     if (!storageReady) return;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -269,6 +317,17 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
 
   /** The customer-safe refusal for the profile cap (the owner is told which add-on to buy). */
   const capFull = () => fail(503, 'CONNECTIONS_UNAVAILABLE', 'Social connections are temporarily full. We’ve been notified and will let you know.', {}, 'Upload-Post’s profile limit is reached: add the +25 or +50 profile add-on, or move to a bigger plan, in the Upload-Post dashboard.');
+  /** The user's own limit of businesses with social accounts (UPLOAD_POST_MAX_PROFILES_PER_USER). */
+  const userCapFull = (used) =>
+    fail(
+      409,
+      'BUSINESS_LIMIT',
+      `You can connect social accounts for up to ${maxPerUser} ${maxPerUser === 1 ? 'business' : 'businesses'}, and ${used >= maxPerUser ? 'all of them are in use' : `${used} are in use`}. Delete a business you no longer use to free its slot, or ask us for more.`,
+      { used, cap: maxPerUser },
+      `This customer reached UPLOAD_POST_MAX_PROFILES_PER_USER (${maxPerUser} businesses with social accounts). Raise it in Replit Secrets if they need more.`,
+    );
+  /** A refusal that sent nothing (or got a definite no): a reservation made for it can go. */
+  const definite = (e) => Object.assign(e, { definite: true });
 
   /** An Upload-Post call in our words when it got no answer at all. */
   async function call(method, path, opts) {
@@ -307,7 +366,45 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return Object.assign(new Error('upload-post read failed'), { kind, status: e.status, code: e.code });
   }
 
-  // ───────────── the stored doc (encrypted, per user) ─────────────
+  // ───────────── the stored doc (encrypted, per user; one entry per business with a profile) ─────────────
+
+  /** A business's profile entry, its maps always objects. */
+  function cleanProfile(p) {
+    if (!isObj(p) || !validProject(p.projectId) || !PROFILE_USERNAME.test(String(p.username ?? ''))) return null;
+    const out = { ...p };
+    if (!['reserved', 'ready', 'deleting', 'reclaimed'].includes(out.state)) out.state = 'reserved';
+    for (const k of MAPS) if (!isObj(out[k])) out[k] = {};
+    return out;
+  }
+
+  /**
+   * The stored doc as this build reads it (v2: { v, customer?, profiles: [{ projectId, username, state, … }],
+   * past?: [{ projectId, from, to }], legacy?: { username }, forgottenAt?, deletedAt? }). A doc from the earlier
+   * one-profile-per-customer build (dev data only) keeps nothing but its profile's name, as `legacy`: that profile
+   * is never used again, and the daily check (or account deletion) deletes it.
+   */
+  function upgrade(raw) {
+    if (!isObj(raw)) return blankDoc();
+    if (raw.v === 2) {
+      const profiles = (Array.isArray(raw.profiles) ? raw.profiles : []).map(cleanProfile).filter(Boolean);
+      // one entry per business (the first wins), never two businesses on one name
+      const projects = new Set();
+      const names = new Set();
+      const unique = profiles.filter((p) => {
+        if (projects.has(p.projectId) || names.has(p.username)) return false;
+        projects.add(p.projectId);
+        names.add(p.username);
+        return true;
+      });
+      return { ...raw, profiles: unique, past: (Array.isArray(raw.past) ? raw.past : []).filter((l) => isObj(l) && validProject(l.projectId)) };
+    }
+    const doc = blankDoc();
+    if (typeof raw.customer === 'string' && /^cust_[0-9a-f]{24}$/.test(raw.customer)) doc.customer = raw.customer;
+    if (LEGACY_USERNAME.test(String(raw.username ?? ''))) doc.legacy = { username: raw.username };
+    if (raw.forgottenAt) doc.forgottenAt = raw.forgottenAt;
+    if (raw.deletedAt) doc.deletedAt = raw.deletedAt;
+    return doc;
+  }
 
   async function readDoc(userId) {
     if (!storageReady) throw notSetUp(hint, 'Connecting accounts isn’t available yet.');
@@ -317,13 +414,11 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     } catch {
       throw fail(503, 'UNAVAILABLE', 'Couldn’t read your connected accounts just now. Try again shortly.');
     }
-    // a doc this server can't decrypt (the secret changed) reads as blank so the customer can start over (the
-    // profile name comes back from the customer tag, the accounts from Upload-Post), and says so: nothing may be
-    // concluded from it (the daily check never deletes anything on a doc's say-so)
+    // a doc this server can't decrypt (the secret changed) reads as blank so the customer can start over (a
+    // business's profile name comes back from the customer tag and the business, its accounts from Upload-Post),
+    // and says so: nothing may be concluded from it (the daily check never deletes anything on a doc's say-so)
     if (got?.unreadable) return { value: blankDoc(), version: got.updatedAt ?? null, unreadable: true };
-    const value = isObj(got?.value) ? got.value : blankDoc();
-    for (const k of ['accounts', 'pages', 'pins', 'choice', 'pending', 'lastError']) if (!isObj(value[k])) value[k] = {};
-    return { value, version: got?.updatedAt ?? null, unreadable: false };
+    return { value: upgrade(got?.value), version: got?.updatedAt ?? null, unreadable: false };
   }
 
   /** change(doc) → { value, result } or { write: false, result }. Re-reads and retries on a version conflict. */
@@ -348,80 +443,118 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return Number.isFinite(at) && now() - at < FORGOTTEN_FOR_MS;
   };
 
+  /** The business's profile entry (any state), or null. */
+  const profileOf = (doc, projectId) => (validProject(projectId) ? (doc?.profiles ?? []).find((p) => p.projectId === projectId) ?? null : null);
+  /** The business's profile when it's there at Upload-Post (posting, stats, status), or null. */
+  const liveProfile = (doc, projectId) => {
+    const p = profileOf(doc, projectId);
+    return p?.state === 'ready' ? p : null;
+  };
+  /** Replace (or add) a business's entry in a doc being changed. */
+  const putProfile = (d, entry) => {
+    d.profiles = [...d.profiles.filter((p) => p.projectId !== entry.projectId), entry];
+  };
+  const dropProfile = (d, projectId) => {
+    d.profiles = d.profiles.filter((p) => p.projectId !== projectId);
+  };
+  /** A profile's life ends now (deleted, reclaimed or given back): kept for the monthly estimate. */
+  function endLife(d, p) {
+    if (p.createdAt) d.past = [...(d.past ?? []), { projectId: p.projectId, from: p.createdAt, to: iso(now()) }];
+    d.past = (d.past ?? []).filter((l) => now() - Date.parse(l.to) < PAST_KEEP_MS);
+    delete p.createdAt;
+  }
+  const blankProfile = (projectId, username) => ({ projectId, username, state: 'reserved', reservedAt: iso(now()), accounts: {}, pages: {}, pins: {}, choice: {}, pending: {}, lastError: {} });
+
   /** The opaque handle the browser sees for an account or a Page (never the id). */
   const handleOf = (platform, id) => `tgt_${crypto.createHmac('sha256', tagSecret || 'ylb').update(`uploadpost:${platform}:${id}`).digest('hex').slice(0, 32)}`;
 
   /**
-   * The Page (Facebook) or page URN / 'personal' (LinkedIn) a business posts to, or null when none is clear. Each
-   * business has its own choice; one that has none uses the customer's default ('*': set without a business, or
-   * the Page that was pinned before a business chose another), never another business's choice.
+   * The Page (Facebook) or page URN / 'personal' (LinkedIn) the business posts to, or null when none is clear: the
+   * Page pinned on the hosted connect page (it wins over anything sent with a post), else the business's choice,
+   * else its only Page. Each business has its own profile, so its choice is its own.
    */
-  function pageFor(doc, platform, projectId) {
+  function pageFor(prof, platform) {
     if (platform !== 'facebook' && platform !== 'linkedin') return null;
-    // a Page pinned on the hosted connect page wins over anything sent with a post, so it wins here too
-    const pin = doc.pins?.[platform];
+    const pin = prof?.pins?.[platform];
     if (pin) return pin;
-    const pick = (projectId && doc.choice?.[projectId]?.[platform]) || doc.choice?.[DEFAULT]?.[platform];
-    const known = doc.pages?.[platform] ?? {};
+    const pick = prof?.choice?.[platform];
+    const known = prof?.pages?.[platform] ?? {};
     if (platform === 'linkedin') return pick && (pick === PERSONAL || known[pick]) ? pick : PERSONAL;
     if (pick && known[pick]) return pick;
     const ids = Object.keys(known);
     return ids.length === 1 ? ids[0] : null;
   }
 
-  function statusOf(doc, platform, projectId) {
+  function statusOf(prof, platform) {
     if (PHASE2_PLATFORMS.includes(platform)) return { platform, state: 'coming_soon' };
-    const acct = doc.accounts?.[platform];
+    const acct = prof?.accounts?.[platform];
     if (acct) {
       const state = acct.state === 'needs_reconnect' ? 'needs_reconnect' : 'connected';
       const out = { platform, state };
       if (platform === 'facebook') {
-        const page = pageFor(doc, platform, projectId);
-        const label = page ? doc.pages?.facebook?.[page] : '';
+        const page = pageFor(prof, platform);
+        const label = page ? prof.pages?.facebook?.[page] : '';
         if (label) Object.assign(out, { targetLabel: label, targetKind: 'fb_page' });
         // with a Page pinned on the connect page too: choosing another one here clears that pin
-        const n = Object.keys(doc.pages?.facebook ?? {}).length;
+        const n = Object.keys(prof.pages?.facebook ?? {}).length;
         if (n > 1) out.targetsAvailable = n;
       } else if (platform === 'linkedin') {
-        const page = pageFor(doc, platform, projectId);
-        if (page && page !== PERSONAL && doc.pages?.linkedin?.[page]) Object.assign(out, { targetLabel: doc.pages.linkedin[page], targetKind: 'li_org' });
+        const page = pageFor(prof, platform);
+        if (page && page !== PERSONAL && prof.pages?.linkedin?.[page]) Object.assign(out, { targetLabel: prof.pages.linkedin[page], targetKind: 'li_org' });
         else if (acct.label) Object.assign(out, { targetLabel: acct.label, targetKind: 'li_person' });
-        const n = Object.keys(doc.pages?.linkedin ?? {}).length;
+        const n = Object.keys(prof.pages?.linkedin ?? {}).length;
         if (n > 0) out.targetsAvailable = n + 1;
       } else if (acct.label) Object.assign(out, { targetLabel: acct.label, targetKind: TARGET_KIND[platform] });
       if (acct.connectedAt) out.connectedAt = acct.connectedAt;
       if (state === 'needs_reconnect') out.lastError = 'reconnect';
       return out;
     }
-    const pending = Date.parse(doc.pending?.[platform]?.at);
+    const pending = Date.parse(prof?.pending?.[platform]?.at);
     if (Number.isFinite(pending)) {
       if (now() - pending < PENDING_MS) return { platform, state: 'pending' };
       return { platform, state: 'not_connected', lastError: 'not_finished' };
     }
-    if (doc.lastError?.[platform]) return { platform, state: 'not_connected', lastError: clip(doc.lastError[platform], 40) };
+    if (prof?.lastError?.[platform]) return { platform, state: 'not_connected', lastError: clip(prof.lastError[platform], 40) };
     return { platform, state: 'not_connected' };
   }
 
-  const waiting = (doc) => Object.values(doc.pending ?? {}).some((x) => now() - Date.parse(x?.at) < PENDING_MS);
+  const waiting = (prof) => Object.values(prof?.pending ?? {}).some((x) => now() - Date.parse(x?.at) < PENDING_MS);
+  const syncKey = (userId, projectId) => `${userId}:${projectId}`;
 
   /**
-   * ConnectionStatus for every platform; ad platforms read "Not connected" here (Zernio answers those). While a
-   * connect is waiting, the profile is read back from Upload-Post (at most every 30 s): Upload-Post sends its
+   * ConnectionStatus for every platform, for one business (each has its own accounts); ad platforms read "Not
+   * connected" here (Zernio answers those), and without a business every social network does. While a connect is
+   * waiting, the business's profile is read back from Upload-Post (at most every 30 s): Upload-Post sends its
    * social_account_connected webhook once and never again, so a lost one must not leave the customer waiting.
    */
   async function status(userId, { projectId } = {}) {
-    if (!storageReady) return notConnectedStatuses();
+    if (!storageReady || !validProject(projectId)) return notConnectedStatuses();
     let { value } = await readDoc(userId);
     if (forgotten(value)) return notConnectedStatuses();
-    if (setUp && USERNAME.test(String(value.username ?? '')) && waiting(value) && now() - (lastSync.get(userId) ?? 0) >= PENDING_SYNC_MS) {
-      value = (await sync(userId).catch(() => null)) ?? value;
+    let prof = liveProfile(value, projectId);
+    if (setUp && prof && waiting(prof) && now() - (lastSync.get(syncKey(userId, projectId)) ?? 0) >= PENDING_SYNC_MS) {
+      value = (await sync(userId, projectId).catch(() => null)) ?? value;
+      prof = liveProfile(value, projectId);
     }
-    return PLATFORMS.map((p) => (SOCIAL_PLATFORMS.includes(p) ? statusOf(value, p, projectId) : { platform: p, state: PHASE2_PLATFORMS.includes(p) ? 'coming_soon' : 'not_connected' }));
+    return PLATFORMS.map((p) => (SOCIAL_PLATFORMS.includes(p) ? statusOf(prof, p) : { platform: p, state: PHASE2_PLATFORMS.includes(p) ? 'coming_soon' : 'not_connected' }));
   }
 
-  // ───────────── the customer's profile (one per customer, of the plan's 75) ─────────────
+  /**
+   * The user's business slots: { used, cap, projects } — how many of their businesses have a profile (being made or
+   * there) out of UPLOAD_POST_MAX_PROFILES_PER_USER, and which (the user's own project ids, for the app's
+   * "delete this business" and "free a deleted business's slot").
+   */
+  async function slots(userId) {
+    if (!storageReady) return { used: 0, cap: maxPerUser, projects: [] };
+    const { value } = await readDoc(userId);
+    if (forgotten(value)) return { used: 0, cap: maxPerUser, projects: [] };
+    const holding = value.profiles.filter(holdsSlot);
+    return { used: holding.length, cap: maxPerUser, projects: holding.map((p) => p.projectId) };
+  }
 
-  /** GET /uploadposts/users (cached 1 minute): { used, limit } or null. Also tells the client the budget. */
+  // ───────────── a business's profile (one per business, of the plan's 75) ─────────────
+
+  /** GET /uploadposts/users (cached 1 minute): { used, limit, profiles } or null. Also tells the client the budget. */
   async function capInfo({ fresh = false } = {}) {
     if (!fresh && capCache && now() - capCache.at < CAP_CACHE_MS) return capCache;
     const res = await call('GET', '/uploadposts/users', { retry429: true });
@@ -433,29 +566,95 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return capCache;
   }
 
+  /** The business is one of the user's own saved businesses (user_docs), or a refusal in plain words. */
+  async function ownProject(userId, projectId) {
+    let rows;
+    try {
+      rows = await db.select('user_docs', { user_id: userId, kind: 'project', id: projectId }, { select: 'id', limit: 1 });
+    } catch {
+      throw fail(503, 'UNAVAILABLE', 'Couldn’t start connecting just now. Try again shortly.');
+    }
+    if (!rows.length) throw fail(404, 'NOT_FOUND', 'This business isn’t saved to your account yet. Wait a moment, then try again.');
+  }
+
+  /** A name for a new business profile no other of the user's businesses (or their old profile) has. */
+  function freshUsername(d, tag, userId, projectId) {
+    const taken = new Set([...d.profiles.map((p) => p.username), ...(d.legacy?.username ? [d.legacy.username] : [])]);
+    for (let salt = 0; salt < 20; salt += 1) {
+      const u = profileUsername(tag, userId, projectId, tagSecret, salt);
+      if (!taken.has(u)) return u;
+    }
+    throw fail(503, 'UNAVAILABLE', 'Couldn’t start connecting just now. Try again shortly.');
+  }
+
   /**
-   * The user's profile username: stored, or made now (a 409 means it exists already, which is fine). → { username,
-   * made } (made: Upload-Post created it just now, so it has no accounts yet).
+   * The business's profile name: stored, or made now. The slot is reserved in the user's doc first (a
+   * version-checked write, so two clicks at once can't both pass the user's cap or make two profiles: they get the
+   * same stored name, and Upload-Post answers 409 to the second create), then Upload-Post is asked once. A definite
+   * refusal gives the slot back; no answer keeps it (the next Connect asks again; a 409 then means it was made).
+   * → { username, made } (made: Upload-Post created it just now, so it has no accounts yet).
    */
-  async function ensureProfile(userId) {
+  async function ensureProfile(userId, projectId) {
     const { value: doc } = await readDoc(userId);
     if (forgotten(doc)) throw fail(409, 'FORBIDDEN', 'This account is being deleted.');
-    if (USERNAME.test(String(doc.username ?? ''))) return { username: doc.username, made: false };
+    const have = profileOf(doc, projectId);
+    if (have?.state === 'ready') return { username: have.username, made: false };
+    await ownProject(userId, projectId);
     const tag = await ensureCustomer(db, userId, env).catch((e) => {
       if (e instanceof IntegrationError) throw e;
       throw fail(503, 'UNAVAILABLE', 'Couldn’t start connecting just now. Try again shortly.');
     });
-    const username = usernameFor(tag);
-    const made = await createProfile(username, tag);
-    await updateDoc(userId, (d) => {
-      d.customer = tag;
-      d.username = username;
-      d.createdAt = d.createdAt ?? iso(now());
-      delete d.reclaimedAt;
-      return { value: d };
+    const held = await updateDoc(userId, (d) => {
+      if (forgotten(d)) throw fail(409, 'FORBIDDEN', 'This account is being deleted.');
+      const p = profileOf(d, projectId);
+      if (p?.state === 'ready') return { write: false, result: { username: p.username, ready: true } };
+      if (p?.state === 'reserved') return { write: false, result: { username: p.username } };
+      const used = d.profiles.filter((x) => holdsSlot(x) && x.projectId !== projectId).length;
+      if (used >= maxPerUser) return { write: false, result: { full: true, used } };
+      // a business that had a profile before (given back, or being deleted) gets the same name again
+      const username = p?.username ?? freshUsername(d, tag, userId, projectId);
+      putProfile(d, p ? { ...p, state: 'reserved', reservedAt: iso(now()), was: p.state, accounts: {}, pending: {}, lastError: {}, pages: {}, pins: {}, choice: {} } : blankProfile(projectId, username));
+      d.customer = d.customer ?? tag;
+      return { value: d, result: { username } };
     });
+    if (held.ready) return { username: held.username, made: false };
+    if (held.full) {
+      ownerAlert('profile_user_cap', { tag, n: maxPerUser });
+      throw userCapFull(held.used);
+    }
+    let made;
+    try {
+      made = await createProfile(held.username, tag);
+    } catch (e) {
+      if (e?.definite) {
+        await updateDoc(userId, (d) => {
+          const p = profileOf(d, projectId);
+          if (!p || p.username !== held.username || p.state !== 'reserved') return { write: false };
+          // a business that never had a profile leaves nothing; one that had keeps its name (and a delete still due)
+          if (p.was === 'reclaimed' || p.was === 'deleting') putProfile(d, { ...p, state: p.was });
+          else dropProfile(d, projectId);
+          return { value: d };
+        }).catch(() => null);
+      }
+      throw e;
+    }
+    const ready = await updateDoc(userId, (d) => {
+      const p = profileOf(d, projectId);
+      // the business was deleted while its profile was being made: the profile goes again (below)
+      if (!p || p.username !== held.username || p.state === 'deleting') return { write: false, result: false };
+      p.state = 'ready';
+      p.createdAt = p.createdAt ?? iso(now());
+      delete p.was;
+      delete p.reclaimedAt;
+      delete p.missingSince;
+      return { value: d, result: true };
+    });
+    if (!ready) {
+      if (made) await deleteProfile(held.username);
+      throw fail(404, 'NOT_FOUND', 'This business was deleted.');
+    }
     log_('uploadpost_profile_ready', {});
-    return { username, made };
+    return { username: held.username, made };
   }
 
   /** One of today's new-profile slots (UPLOAD_POST_NEW_PROFILES_PER_DAY), or false when they're used up. */
@@ -480,7 +679,10 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return true;
   }
 
-  /** → true when Upload-Post made it now, false when it was there already (409, or in the plan's list). */
+  /**
+   * Make the profile at Upload-Post (one attempt). → true when Upload-Post made it now, false when it was there
+   * already (409, or in the plan's list). Throws our refusal; `definite` when nothing was made for sure.
+   */
   async function createProfile(username, tag) {
     const cap = await capInfo().catch(() => null);
     const listed = !!cap?.profiles.some((p) => p.username === username);
@@ -488,20 +690,22 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       const remaining = cap.limit - cap.used;
       if (remaining <= 0) {
         ownerAlert('profile_cap');
-        throw capFull();
+        throw definite(capFull());
       }
       if (remaining <= alertRemaining) ownerAlert('profile_cap_low');
     }
     if (!listed && !(await takeNewProfileSlot())) {
       ownerAlert('profile_budget');
-      throw fail(503, 'CONNECTIONS_UNAVAILABLE', 'Social connections are temporarily full. We’ve been notified and will let you know.', {}, `More than ${newProfilesPerDay} new customers started connecting social accounts today (UPLOAD_POST_NEW_PROFILES_PER_DAY): check they're real, then raise it if they are.`);
+      throw definite(fail(503, 'CONNECTIONS_UNAVAILABLE', 'Social connections are temporarily full. We’ve been notified and will let you know.', {}, `More than ${newProfilesPerDay} new business profiles were started today (UPLOAD_POST_NEW_PROFILES_PER_DAY): check the customers are real, then raise it if they are.`));
     }
-    const made = await call('POST', '/uploadposts/users', { body: { username, display_name: `Customer ${String(tag).slice(5, 13)}` }, headers: { 'Idempotency-Key': `profile-${username}` } });
+    // the display name is opaque too (a business name could be personal): the customer's and the business's short ids
+    const made = await call('POST', '/uploadposts/users', { body: { username, display_name: `Customer ${String(tag).slice(5, 13)} business ${username.slice(-8)}` }, headers: { 'Idempotency-Key': `profile-${username}` } });
     if ((made.status >= 200 && made.status < 300) || made.status === 409) {
       if (capCache && made.status !== 409) capCache = { ...capCache, used: capCache.used + 1, profiles: [...capCache.profiles, { username }] };
       return made.status !== 409;
     }
-    throw callFailure(made);
+    const err = callFailure(made);
+    throw made.status >= 500 ? err : definite(err);
   }
 
   // ───────────── connect and reconnect (the hosted white-label page) ─────────────
@@ -509,14 +713,15 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   function branding(username, platform) {
     const logo = httpsUrl(String(env.UPLOAD_POST_BRAND_LOGO_URL || '').trim());
     // every field, every time: Upload-Post clears the ones left out. The back button opens Settings → Connected
-    // accounts (the app routes by #hash; ?settings=accounts picks the section), where the profile is read back.
+    // accounts on the app's own address (GSC_APP_PROPERTY's host; the app routes by #hash, ?settings=accounts picks
+    // the section), where the profile is read back. No business id goes to Upload-Post.
     return {
       username,
       redirect_url: `${appOrigin(env)}/?settings=accounts#workspace-settings`,
       ...(logo ? { logo_image: logo } : {}),
       redirect_button_text: clip(env.UPLOAD_POST_BACK_BUTTON_TEXT || 'Back to Yourlocalbusiness', 60),
       connect_title: clip(env.UPLOAD_POST_CONNECT_TITLE || 'Connect your social accounts', 100),
-      connect_description: clip(env.UPLOAD_POST_CONNECT_DESCRIPTION || 'Sign in to the account your business posts from. You can disconnect it at any time in the app.', 300),
+      connect_description: clip(env.UPLOAD_POST_CONNECT_DESCRIPTION || 'Sign in to the account this business posts from. You can disconnect it at any time in the app.', 300),
       platforms: [UP_PLATFORM[platform]],
       show_calendar: false,
       readonly_calendar: false,
@@ -524,16 +729,19 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     };
   }
 
+  const needBusiness = () => fail(400, 'BAD_REQUEST', 'Open the business these accounts are for, then try again.');
+
   async function startConnect(userId, platform, { projectId, reconnect = false } = {}) {
     requireSetUp();
     if (!SOCIAL_PLATFORMS.includes(platform)) throw fail(404, 'NOT_FOUND', 'Unknown account type.');
     if (PHASE2_PLATFORMS.includes(platform)) throw fail(400, 'BAD_REQUEST', `${NAMES[platform]} is coming soon.`);
-    const { username, made } = await ensureProfile(userId);
+    if (!validProject(projectId)) throw needBusiness();
+    const { username, made } = await ensureProfile(userId, projectId);
     let { value: doc } = await readDoc(userId);
     if (!reconnect) {
       // the profile as Upload-Post has it now: an account whose webhook never came is connected already
-      if (!made || doc.accounts?.[platform]?.state === 'connected') doc = (await sync(userId).catch(() => null)) ?? doc;
-      if (doc.accounts?.[platform]?.state === 'connected') {
+      if (!made || liveProfile(doc, projectId)?.accounts?.[platform]?.state === 'connected') doc = (await sync(userId, projectId).catch(() => null)) ?? doc;
+      if (liveProfile(doc, projectId)?.accounts?.[platform]?.state === 'connected') {
         log_('uploadpost_connect_already', { platform });
         return { alreadyConnected: true };
       }
@@ -541,8 +749,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     let res = await call('POST', '/uploadposts/users/generate-jwt', { body: branding(username, platform) });
     if (res.status === 404) {
       // the profile went missing at Upload-Post (deleted by hand?): made again once, then asked once more
-      const tag = doc.customer ?? tagForUsername(username);
-      await createProfile(username, tag);
+      await createProfile(username, doc.customer ?? tagForUsername(username));
       res = await call('POST', '/uploadposts/users/generate-jwt', { body: branding(username, platform) });
     }
     if (res.status < 200 || res.status >= 300) {
@@ -562,8 +769,10 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       throw fail(502, 'UNAVAILABLE', 'Couldn’t start connecting just now. Try again shortly.');
     }
     await updateDoc(userId, (d) => {
-      d.pending[platform] = { at: iso(now()), ...(projectId ? { projectId } : {}) };
-      delete d.lastError[platform];
+      const p = liveProfile(d, projectId);
+      if (!p || p.username !== username) return { write: false };
+      p.pending[platform] = { at: iso(now()) };
+      delete p.lastError[platform];
       return { value: d };
     });
     log_('uploadpost_connect_started', { platform, reconnect });
@@ -582,7 +791,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     const out = {};
     for (const p of (Array.isArray(res.body?.pages) ? res.body.pages : []).filter(isObj).slice(0, 100)) {
       const id = String(p.id ?? p.urn ?? p.page_id ?? '');
-      if (!/^[A-Za-z0-9:_.-]{1,120}$/.test(id)) continue;
+      if (!pageIdOk(id)) continue;
       out[id] = clip(p.name ?? p.page_name ?? p.title ?? NAMES[platform], 80);
     }
     return out;
@@ -590,7 +799,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
 
   /**
    * The Page pinned on the profile (the hosted connect page lets the customer pick one, and a pin wins over the
-   * Page sent with each post): { id, name } | '' (none) | { reauth: true } (this customer's Facebook sign-in ran
+   * Page sent with each post): { id, name } | '' (none) | { reauth: true } (this business's Facebook sign-in ran
    * out: Upload-Post answers 401 facebook_reauth_required here) | null (the read failed). The answer is
    * { pages[], selected_page_id, selected_page_name }, selected_page_id null without a pin.
    */
@@ -603,7 +812,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     const raw = b.selected_page_id ?? b[`${platform}_page_id`] ?? null;
     if (raw === null || raw === undefined || raw === '') return '';
     const id = String(raw);
-    return /^[A-Za-z0-9:_.-]{1,120}$/.test(id) ? { id, name: clip(b.selected_page_name ?? b[`${platform}_page_name`] ?? '', 80) } : null;
+    return pageIdOk(id) ? { id, name: clip(b.selected_page_name ?? b[`${platform}_page_name`] ?? '', 80) } : null;
   }
 
   /** A pinned Page's id as the Pages list has it (LinkedIn takes a URN or its number). */
@@ -617,12 +826,13 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return id;
   }
 
-  /** GET /uploadposts/users/{username} → the doc's accounts (labels, state), Pages and pins. */
-  async function sync(userId) {
+  /** GET /uploadposts/users/{username} for one business → its accounts (labels, state), Pages and pins. → the doc. */
+  async function sync(userId, projectId) {
     const { value: doc } = await readDoc(userId);
-    if (!USERNAME.test(String(doc.username ?? ''))) return doc;
-    const username = doc.username;
-    lastSync.set(userId, now());
+    const prof = liveProfile(doc, projectId);
+    if (!prof) return doc;
+    const username = prof.username;
+    lastSync.set(syncKey(userId, projectId), now());
     if (lastSync.size > 5000) for (const [k, at] of lastSync) if (now() - at > 3_600_000) lastSync.delete(k);
     const res = await call('GET', `/uploadposts/users/${username}`, { retry429: true });
     let social = {};
@@ -637,6 +847,8 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       extra[platform] = { pages, pin };
     }
     return updateDoc(userId, (d) => {
+      const p = liveProfile(d, projectId);
+      if (!p || p.username !== username) return { write: false, result: d };
       const next = {};
       for (const [upKey, a] of Object.entries(social)) {
         const platform = FROM_UP[upKey];
@@ -644,11 +856,11 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
         // "" or null: not connected. A non-empty string: a credential channel (not one of ours)
         if (!isObj(a)) continue;
         const key = clip(a.username ?? '', 120);
-        const old = d.accounts[platform];
-        // a different account came in: this platform's choices start over
+        const old = p.accounts[platform];
+        // a different account came in: this platform's choice starts over
         if (old && old.key && key && old.key !== key) {
-          for (const map of Object.values(d.choice)) delete map?.[platform];
-          delete d.pages[platform];
+          delete p.choice[platform];
+          delete p.pages[platform];
         }
         next[platform] = {
           key,
@@ -657,74 +869,73 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
           ...(Array.isArray(a.capabilities) ? { capabilities: a.capabilities.filter((c) => typeof c === 'string').slice(0, 30).map((c) => clip(c, 40)) } : {}),
           connectedAt: old?.key === key && old?.connectedAt ? old.connectedAt : iso(now()),
         };
-        if (d.pending[platform]) delete d.pending[platform];
+        if (p.pending[platform]) delete p.pending[platform];
       }
-      d.accounts = next;
+      p.accounts = next;
       for (const platform of ['facebook', 'linkedin']) {
         if (!next[platform]) {
-          delete d.pages[platform];
-          delete d.pins[platform];
+          delete p.pages[platform];
+          delete p.pins[platform];
           continue;
         }
         const got = extra[platform];
-        if (got?.pages) d.pages[platform] = got.pages;
-        if (got?.pin === '') delete d.pins[platform];
+        if (got?.pages) p.pages[platform] = got.pages;
+        if (got?.pin === '') delete p.pins[platform];
         else if (got?.pin?.reauth) next[platform].state = 'needs_reconnect';
         else if (got?.pin?.id) {
-          const id = pinnedId(got.pin.id, d.pages[platform]);
-          d.pins[platform] = id;
+          const id = pinnedId(got.pin.id, p.pages[platform]);
+          p.pins[platform] = id;
           // a pinned Page the list didn't show still gets its name (posts go there whatever the list says)
-          if (!d.pages[platform]?.[id] && got.pin.name) d.pages[platform] = { ...(d.pages[platform] ?? {}), [id]: got.pin.name };
+          if (!p.pages[platform]?.[id] && got.pin.name) p.pages[platform] = { ...(p.pages[platform] ?? {}), [id]: got.pin.name };
         }
       }
-      for (const [key, map] of Object.entries(d.choice)) {
-        for (const p of Object.keys(map ?? {})) if (!next[p]) delete map[p];
-        if (!Object.keys(map ?? {}).length) delete d.choice[key];
-      }
+      for (const k of Object.keys(p.choice)) if (!next[k]) delete p.choice[k];
       return { value: d, result: d };
     });
   }
 
   async function check(userId, platform, { projectId } = {}) {
     requireSetUp();
-    const doc = await sync(userId);
-    return statusOf(doc, platform, projectId);
+    if (!validProject(projectId)) return statusOf(null, platform);
+    const doc = await sync(userId, projectId);
+    return statusOf(liveProfile(doc, projectId), platform);
   }
 
-  async function disconnect(userId, platform) {
+  /** Disconnect one network from one business (the user's other businesses keep theirs). */
+  async function disconnect(userId, platform, { projectId } = {}) {
     requireSetUp();
+    if (!validProject(projectId)) throw needBusiness();
     const { value: doc } = await readDoc(userId);
-    if (USERNAME.test(String(doc.username ?? '')) && doc.accounts?.[platform]) {
-      // one attempt; a 404 means it's already gone. Every business of this customer stops using it.
-      const res = await call('DELETE', '/uploadposts/users/social', { body: { profile_username: doc.username, social_platform: UP_PLATFORM[platform] } });
+    const prof = liveProfile(doc, projectId);
+    if (prof?.accounts?.[platform]) {
+      // one attempt; a 404 means it's already gone
+      const res = await call('DELETE', '/uploadposts/users/social', { body: { profile_username: prof.username, social_platform: UP_PLATFORM[platform] } });
       if ((res.status < 200 || res.status >= 300) && res.status !== 404) throw callFailure(res, platform);
     }
     await updateDoc(userId, (d) => {
-      delete d.accounts[platform];
-      delete d.pending[platform];
-      delete d.pages[platform];
-      delete d.pins[platform];
-      for (const [key, map] of Object.entries(d.choice)) {
-        delete map?.[platform];
-        if (!Object.keys(map ?? {}).length) delete d.choice[key];
-      }
+      const p = liveProfile(d, projectId);
+      if (!p) return { write: false };
+      for (const k of MAPS) delete p[k][platform];
       return { value: d };
     });
     log_('uploadpost_disconnected', { platform });
   }
 
-  async function targets(userId, platform) {
+  async function targets(userId, platform, { projectId } = {}) {
     requireSetUp();
     const { value: doc } = await readDoc(userId);
-    const acct = doc.accounts?.[platform];
-    if (!acct || !USERNAME.test(String(doc.username ?? ''))) return [];
+    const prof = liveProfile(doc, projectId);
+    const acct = prof?.accounts?.[platform];
+    if (!acct) return [];
     if (platform !== 'facebook' && platform !== 'linkedin') return [{ id: handleOf(platform, acct.key || platform), label: acct.label, kind: TARGET_KIND[platform] }];
-    const pages = (await readPages(doc.username, platform)) ?? doc.pages?.[platform] ?? {};
+    const pages = (await readPages(prof.username, platform)) ?? prof.pages?.[platform] ?? {};
     await updateDoc(userId, (d) => {
-      d.pages[platform] = pages;
+      const p = liveProfile(d, projectId);
+      if (!p || p.username !== prof.username) return { write: false };
+      p.pages[platform] = pages;
       return { value: d };
     }).catch(() => null);
-    // every Page, a pinned one too: choosing another for a business clears the pin (setTarget)
+    // every Page, a pinned one too: choosing another clears the pin (setTarget)
     const list = [];
     if (platform === 'linkedin') list.push({ id: handleOf(platform, PERSONAL), label: acct.label, kind: 'li_person' });
     for (const [id, label] of Object.entries(pages)) list.push({ id: handleOf(platform, id), label, kind: platform === 'facebook' ? 'fb_page' : 'li_org' });
@@ -735,41 +946,37 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     requireSetUp();
     if (!TARGET_ID.test(String(targetId))) throw fail(400, 'BAD_REQUEST', 'Choose one of the listed accounts.');
     const { value: doc } = await readDoc(userId);
-    const acct = doc.accounts?.[platform];
+    const prof = liveProfile(doc, projectId);
+    const acct = prof?.accounts?.[platform];
     if (!acct) throw fail(400, 'BAD_REQUEST', 'Choose one of the listed accounts.');
     if (platform !== 'facebook' && platform !== 'linkedin') {
       if (handleOf(platform, acct.key || platform) !== targetId) throw fail(400, 'BAD_REQUEST', 'Choose one of the listed accounts.');
-      return statusOf(doc, platform, projectId);
+      return statusOf(prof, platform);
     }
-    const ids = [...(platform === 'linkedin' ? [PERSONAL] : []), ...Object.keys(doc.pages?.[platform] ?? {})];
+    const ids = [...(platform === 'linkedin' ? [PERSONAL] : []), ...Object.keys(prof.pages?.[platform] ?? {})];
     const id = ids.find((x) => handleOf(platform, x) === targetId);
     if (!id) throw fail(400, 'BAD_REQUEST', 'Choose one of the listed accounts.');
-    const pin = doc.pins?.[platform];
-    if (pin && pin !== id && USERNAME.test(String(doc.username ?? ''))) {
+    const pin = prof.pins?.[platform];
+    if (pin && pin !== id) {
       // a Page pinned on the connect page wins over the Page each post names, so this business's choice would be
-      // ignored: the pin goes (one attempt; 404 means it's gone already), and businesses that never chose keep
-      // the pinned Page as their default below
-      const res = await call('DELETE', `/uploadposts/users/${platform}-page`, { body: { profile_username: doc.username } });
+      // ignored: the pin goes (one attempt; 404 means it's gone already)
+      const res = await call('DELETE', `/uploadposts/users/${platform}-page`, { body: { profile_username: prof.username } });
       if ((res.status < 200 || res.status >= 300) && res.status !== 404) {
-        if (isSocialReauth(res)) await markReconnect(userId, platform);
+        if (isSocialReauth(res)) await markReconnect(userId, projectId, platform);
         throw callFailure(res, platform);
       }
       log_('uploadpost_pin_cleared', { platform });
     }
     return updateDoc(userId, (d) => {
-      const key = projectId ?? DEFAULT;
-      const was = d.pins[platform];
-      if (was && was !== id) {
-        if (key !== DEFAULT && !d.choice[DEFAULT]?.[platform]) d.choice[DEFAULT] = { ...(d.choice[DEFAULT] ?? {}), [platform]: was };
-        delete d.pins[platform];
-      }
-      // this business only: another business never inherits it
-      d.choice[key] = { ...(d.choice[key] ?? {}), [platform]: id };
-      return { value: d, result: statusOf(d, platform, projectId) };
+      const p = liveProfile(d, projectId);
+      if (!p || p.username !== prof.username) throw fail(409, 'UNAVAILABLE', 'Your connected accounts changed in another request. Try again.');
+      if (p.pins[platform] && p.pins[platform] !== id) delete p.pins[platform];
+      p.choice[platform] = id;
+      return { value: d, result: statusOf(p, platform) };
     });
   }
 
-  // ───────────── ledger (Upload-Post calls per customer, next to treg's and Zernio's) ─────────────
+  // ───────────── ledger (Upload-Post calls per customer and business, next to treg's and Zernio's) ─────────────
 
   async function ledger(row) {
     if (!dbReady || !row.customer_tag) return;
@@ -789,17 +996,17 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     }
   };
 
-  /** The account a read or a post uses, or a refusal in plain words. */
+  /** The business's account a read or a post uses, or a refusal in plain words. */
   async function usable(userId, platform, projectId) {
     requireSetUp();
     const { value: doc } = await readDoc(userId);
-    if (forgotten(doc) || !USERNAME.test(String(doc.username ?? ''))) throw fail(409, 'NOT_CONNECTED', `${NAMES[platform]} isn’t connected.`);
-    const acct = doc.accounts?.[platform];
-    if (!acct) throw fail(409, 'NOT_CONNECTED', `${NAMES[platform]} isn’t connected.`);
+    const prof = forgotten(doc) ? null : liveProfile(doc, projectId);
+    const acct = prof?.accounts?.[platform];
+    if (!acct) throw fail(409, 'NOT_CONNECTED', `${NAMES[platform]} isn’t connected for this business.`);
     if (acct.state === 'needs_reconnect') throw fail(409, 'NEEDS_RECONNECT', `Reconnect ${NAMES[platform]} in Settings → Connected accounts.`);
-    const page = pageFor(doc, platform, projectId);
+    const page = pageFor(prof, platform);
     if (platform === 'facebook' && !page) throw fail(409, 'NOT_CONNECTED', 'Choose which Facebook Page to use in Settings → Connected accounts.');
-    return { doc, username: doc.username, account: acct, page, tag: tagOf(doc, userId) };
+    return { doc, prof, username: prof.username, account: acct, page, tag: tagOf(doc, userId) };
   }
 
   // ───────────── own stats (reads) ─────────────
@@ -812,6 +1019,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return true;
   }
 
+  /** One business's own numbers on one network, from its own profile (each business's stats are its own). */
   async function insights(userId, platform, { projectId } = {}) {
     if (!SOCIAL_PLATFORMS.includes(platform)) return null;
     let got;
@@ -824,12 +1032,12 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     }
     const { username, tag, page } = got;
     // LinkedIn has no stats for a personal profile: without page_urn Upload-Post would answer with the first company
-    // page the member administers (maybe another business's), so a personal profile reads public data instead
+    // page the member administers, so a personal profile reads public data instead
     if (platform === 'linkedin' && (!page || page === PERSONAL)) return null;
     const read = async (path, query, endpoint) => {
       if (!analyticsSlot()) throw Object.assign(new Error('busy'), { kind: 'busy' });
       const res = await call('GET', path, { query, retry429: true });
-      await ledger({ customer_tag: tag, user_id: userId, project_id: projectId ?? null, feature: 'social', endpoint: `${platform}:${endpoint}`, http_status: res.status, outcome: res.status < 400 ? 'ok' : res.status >= 500 ? 'unknown' : 'failed' });
+      await ledger({ customer_tag: tag, user_id: userId, project_id: projectId, feature: 'social', endpoint: `${platform}:${endpoint}`, http_status: res.status, outcome: res.status < 400 ? 'ok' : res.status >= 500 ? 'unknown' : 'failed' });
       return res;
     };
     const q = { platforms: UP_PLATFORM[platform] };
@@ -898,10 +1106,11 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   }
 
   /**
-   * TikTok's audience setting → { privacy? } | { error }. One asked for goes as it is (Upload-Post refuses one the
-   * account doesn't have before anything reaches TikTok: TIKTOK_PRIVACY). A video without one sends none: TikTok
-   * then uses the account's own default, the only choice that works on every account. A photo needs one (Upload-
-   * Post's default, public, fails on a private account): public when the account has it, else its followers.
+   * TikTok's audience setting → { privacy? } | { error }, read from the business's own TikTok account (its profile).
+   * One asked for goes as it is (Upload-Post refuses one the account doesn't have before anything reaches TikTok:
+   * TIKTOK_PRIVACY). A video without one sends none: TikTok then uses the account's own default, the only choice
+   * that works on every account. A photo needs one (Upload-Post's default, public, fails on a private account):
+   * public when the account has it, else its followers.
    */
   async function tiktokPrivacy(username, wanted, kind) {
     if (wanted !== undefined && wanted !== null && wanted !== '') return TIKTOK_PRIVACY.includes(wanted) ? { privacy: wanted } : { error: 'TIKTOK_PRIVACY' };
@@ -958,7 +1167,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     let out = entry ? outcomeOfEntry(entry, { platform, top }) : { state: 'pending' };
     if (!entry && top === 'failed') out = { state: 'failed', errorCode: 'REFUSED' };
     if (out.state === 'sent' && !out.url && !out.drafts) {
-      // the final address comes from the history when the status has none
+      // the final address comes from the history when the status has none (asked for this business's profile only)
       const h = await call('GET', '/uploadposts/history', { query: { request_id: requestId, profile_username: username, limit: 10 } }).catch(() => null);
       const row = (Array.isArray(h?.body?.history) ? h.body.history : []).find((r) => isObj(r) && r.platform === UP_PLATFORM[platform]);
       if (row?.fallback_to_inbox === true) out = { state: 'sent', drafts: true };
@@ -980,11 +1189,12 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return { state: 'unknown', errorCode: 'UNCONFIRMED' };
   }
 
-  async function markReconnect(userId, platform) {
+  async function markReconnect(userId, projectId, platform) {
     try {
       await updateDoc(userId, (d) => {
-        if (!d.accounts[platform]) return { write: false };
-        d.accounts[platform].state = 'needs_reconnect';
+        const p = liveProfile(d, projectId);
+        if (!p?.accounts[platform]) return { write: false };
+        p.accounts[platform].state = 'needs_reconnect';
         return { value: d };
       });
     } catch {
@@ -1000,7 +1210,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return iso(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 1));
   };
 
-  /** X posts with a link this month (`x:link_post` rows), one customer's or everyone's; null when unreadable. */
+  /** X posts with a link this month (`x:link_post` rows), one customer's (all their businesses) or everyone's. */
   async function xLinkPosts(tag) {
     if (!dbReady) return null;
     try {
@@ -1020,9 +1230,10 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   }
 
   /**
-   * Post one saved post on the business's account: one upload (media as our short-lived public link), then, for
-   * an answer that comes in the background, status reads by the job id. → { state: 'sent'|'failed'|'unknown',
-   * url?, errorCode?, ref }. Never throws after the upload was sent; never sends again.
+   * Post one saved post on its business's account (the profile of the post's business): one upload (media as our
+   * short-lived public link), then, for an answer that comes in the background, status reads by the job id.
+   * → { state: 'sent'|'failed'|'unknown', url?, errorCode?, ref }. Never throws after the upload was sent; never
+   * sends again.
    */
   async function publish(userId, platform, { projectId, jobId, composed, media, privacy } = {}) {
     const ref = { via: 'upload_post', requestId: jobId, platform };
@@ -1053,7 +1264,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     if (platform === 'tiktok') {
       tiktok = await tiktokPrivacy(username, privacy, media?.kind).catch(() => ({}));
       if (tiktok.error) {
-        if (tiktok.error === 'NEEDS_RECONNECT') await markReconnect(userId, platform);
+        if (tiktok.error === 'NEEDS_RECONNECT') await markReconnect(userId, projectId, platform);
         return { state: 'failed', errorCode: tiktok.error, ref };
       }
     }
@@ -1069,8 +1280,8 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     if (sent.outcome === 'failed') {
       const refused = refusalOutcome(res);
       // the account isn't connected at Upload-Post any more: the doc learns it now (one read), not on every post
-      if (refused.resync) await sync(userId).catch(() => null);
-      if (refused.reauth) await markReconnect(userId, platform);
+      if (refused.resync) await sync(userId, projectId).catch(() => null);
+      if (refused.reauth) await markReconnect(userId, projectId, platform);
       return withRef(refused, ref);
     }
     const body = isObj(res?.body) ? res.body : {};
@@ -1087,7 +1298,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       if (later?.state === 'sent') out = later;
     }
     if (out.state === 'pending') out = { state: 'unknown', errorCode: 'UNCONFIRMED' };
-    if (out.reauth || out.errorCode === 'NEEDS_RECONNECT') await markReconnect(userId, platform);
+    if (out.reauth || out.errorCode === 'NEEDS_RECONNECT') await markReconnect(userId, projectId, platform);
     if (xLink && out.state !== 'failed') {
       const warned = (Array.isArray(entry?.warnings) ? entry.warnings : []).some((w) => /link|url/i.test(typeof w === 'string' ? w : JSON.stringify(w ?? '')));
       await noteXLink({ tag, userId, projectId, jobId, out, warned });
@@ -1097,19 +1308,21 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
 
   /**
    * "Check again" for a job whose outcome is unknown: one /status read by the job id (plus the history for the
-   * address). → { found: true, url?, drafts? } | { failed: true, errorCode } | { pending: true } | null.
+   * address, asked for the job's business's profile). ref: the job's provider ref with its projectId.
+   * → { found: true, url?, drafts? } | { failed: true, errorCode } | { pending: true } | null.
    */
   async function postStatus(userId, ref = {}) {
     if (!setUp || !SOCIAL_PLATFORMS.includes(ref.platform)) return null;
     const { value: doc } = await readDoc(userId);
-    if (!USERNAME.test(String(doc.username ?? ''))) return null;
+    const prof = liveProfile(doc, ref.projectId);
+    if (!prof) return null;
     const requestId = String(ref.requestId ?? ref.jobId ?? '');
     if (!REQUEST_ID.test(requestId)) return null;
-    const got = await readStatus(doc.username, requestId, ref.platform);
+    const got = await readStatus(prof.username, requestId, ref.platform);
     if (!got) return null;
     if (got.state === 'sent') return { found: true, ...(got.url ? { url: got.url } : {}), ...(got.drafts ? { drafts: true, ref: { outcome: 'drafts' } } : {}) };
     if (got.state === 'failed') {
-      if (got.errorCode === 'NEEDS_RECONNECT') await markReconnect(userId, ref.platform);
+      if (got.errorCode === 'NEEDS_RECONNECT') await markReconnect(userId, ref.projectId, ref.platform);
       return { failed: true, errorCode: got.errorCode };
     }
     return { pending: true, ...(got.missing ? { missing: true } : {}) };
@@ -1118,27 +1331,23 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   // ───────────── webhooks ─────────────
 
   /**
-   * The customer a profile_username belongs to: ylb_<hex> → cust_<hex> → billing_customers → user, or null. The
-   * stored doc must name that profile; a doc that lost the name (it couldn't be read after a secret change) takes it
-   * back, since the name comes from the customer's own tag.
+   * Who a profile name belongs to: ylb_<hex>_<key> → cust_<hex> → billing_customers → the user → the one business
+   * whose stored profile has exactly that name. → { userId, doc, projectId?, prof?, legacy?, unreadable? } (no
+   * projectId when no business of theirs has it), or null when no customer here has that tag.
    */
-  async function userOfProfile(profileUsername) {
-    const tag = tagForUsername(profileUsername);
+  async function profileOwner(username) {
+    const tag = tagForUsername(username);
     if (!tag) return null;
     const rows = await db.select('billing_customers', { customer_tag: tag }, { select: 'customer_tag,user_id', limit: 1 });
     const userId = rows[0]?.user_id;
     if (!userId) return null;
-    const { value: doc } = await readDoc(userId);
-    if (doc.username === profileUsername) return { userId, doc };
-    if (USERNAME.test(String(doc.username ?? '')) || usernameFor(tag) !== profileUsername || forgotten(doc)) return null;
-    const adopted = await updateDoc(userId, (d) => {
-      if (d.username) return { write: false, result: null };
-      d.customer = tag;
-      d.username = profileUsername;
-      d.createdAt = d.createdAt ?? iso(now());
-      return { value: d, result: d };
-    }).catch(() => null);
-    return adopted ? { userId, doc: adopted } : null;
+    const got = await readDoc(userId);
+    if (got.unreadable) return { userId, doc: got.value, unreadable: true };
+    const doc = got.value;
+    if (LEGACY_USERNAME.test(username)) return { userId, doc, ...(doc.legacy?.username === username ? { legacy: true } : {}) };
+    const hits = doc.profiles.filter((p) => p.username === username);
+    if (hits.length !== 1) return { userId, doc };
+    return { userId, doc, projectId: hits[0].projectId, prof: hits[0] };
   }
 
   async function applyEvent(evt) {
@@ -1151,13 +1360,14 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       await reconcileAccounts();
       return 'reconciled';
     }
-    const who = await userOfProfile(String(evt.profile_username ?? ''));
-    if (!who) return 'not_ours';
-    const { userId } = who;
+    const who = await profileOwner(String(evt.profile_username ?? ''));
+    if (who?.legacy) return 'legacy';
+    if (!who?.prof || who.prof.state !== 'ready' || forgotten(who.doc)) return 'not_ours';
+    const { userId, projectId } = who;
     if (/^social_account_(connected|disconnected|reauth_required)$/.test(type)) {
-      await sync(userId);
+      await sync(userId, projectId);
       const platform = FROM_UP[String(evt.platform ?? '')];
-      if (type === 'social_account_reauth_required' && platform) await markReconnect(userId, platform);
+      if (type === 'social_account_reauth_required' && platform) await markReconnect(userId, projectId, platform);
       return 'applied';
     }
     if (type === 'upload_completed') {
@@ -1170,12 +1380,13 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       if (platform === 'tiktok' && out.state === 'sent' && !out.url && !out.drafts) {
         // the event has no fallback_to_inbox flag: a TikTok with no web address may be in the account's drafts
         // (video drafts carry "Video sent to Inbox (No Public URL)" as their post_url), so the status says which
-        const read = USERNAME.test(String(who.doc.username ?? '')) ? await readStatus(who.doc.username, jobId, platform).catch(() => null) : null;
+        const read = await readStatus(who.prof.username, jobId, platform).catch(() => null);
         if (read?.state === 'sent') out = read;
         else if (typeof result.post_url === 'string' && result.post_url.trim() && !httpsUrl(result.post_url)) out = { state: 'sent', drafts: true };
       }
-      if (out.reauth) await markReconnect(userId, platform);
-      await postListener(userId, jobId, { state: out.state, platform, ...(out.url ? { url: out.url } : {}), ...(out.errorCode ? { errorCode: out.errorCode } : {}), ...(out.drafts ? { drafts: true } : {}) });
+      if (out.reauth) await markReconnect(userId, projectId, platform);
+      // the job must be this user's and this business's (it went out through this business's profile)
+      await postListener(userId, jobId, { state: out.state, platform, ...(out.url ? { url: out.url } : {}), ...(out.errorCode ? { errorCode: out.errorCode } : {}), ...(out.drafts ? { drafts: true } : {}) }, { projectId });
       return 'applied';
     }
     return 'ignored';
@@ -1219,9 +1430,10 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     if (type === 'upload_completed') {
       const id = safe(evt.result?.post_id) || safe(evt.result?.publish_id);
       const req = safe(evt.request_id);
-      // a success after a failure (Upload-Post retried it) is a new answer, never a repeat of the failure
+      // a success after a failure (Upload-Post retried it) is a new answer, never a repeat of the failure; the
+      // profile is part of it (each business has its own, and only the one that posted it may finish the job)
       const outcome = evt.result?.success === true ? `ok:${id}` : 'failed';
-      if (req && safe(evt.platform)) return `uploadpost:${req}:${safe(evt.platform)}:${type}:${outcome}`;
+      if (req && safe(evt.platform)) return `uploadpost:${safe(evt.profile_username)}:${req}:${safe(evt.platform)}:${type}:${outcome}`;
       if (id) return `uploadpost:post:${id}`;
     }
     if (type && safe(evt.profile_username) && safe(evt.platform) && safe(evt.created_at)) return `uploadpost:${type}:${evt.profile_username}:${evt.platform}:${evt.created_at}`;
@@ -1261,7 +1473,58 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return { status: 200, body: { ok: true } };
   }
 
-  // ───────────── account deletion ─────────────
+  // ───────────── a business deleted, an account deleted ─────────────
+
+  /** Delete a profile at Upload-Post (one attempt): true when it's gone (or was already). */
+  async function deleteProfile(username) {
+    const res = await call('DELETE', '/uploadposts/users', { body: { username } }).catch(() => null);
+    const gone = !!res && ((res.status >= 200 && res.status < 300) || res.status === 404);
+    if (gone) capCache = null;
+    else log_('uploadpost_profile_delete_failed', { status: res?.status ?? null });
+    return gone;
+  }
+
+  /**
+   * A business was deleted in the app (or its user gave its slot back): its profile at Upload-Post goes, with every
+   * social account in it, and the slot is the user's again at once. One attempt; a failed delete is finished by the
+   * daily check (the entry is marked `deleting`, hidden and out of the user's count). Only the signed-in user's own
+   * business is ever touched. → { freed: boolean, later?: true }.
+   */
+  async function forgetProject(userId, projectId) {
+    if (!storageReady) return { freed: false };
+    if (!validProject(projectId)) throw needBusiness();
+    const { value: doc } = await readDoc(userId);
+    const prof = profileOf(doc, projectId);
+    if (!prof) return { freed: false };
+    if (prof.state === 'reclaimed') {
+      // nothing at Upload-Post any more: the business just leaves the doc
+      await updateDoc(userId, (d) => {
+        if (profileOf(d, projectId)?.state !== 'reclaimed') return { write: false };
+        dropProfile(d, projectId);
+        return { value: d };
+      });
+      return { freed: false };
+    }
+    await updateDoc(userId, (d) => {
+      const p = profileOf(d, projectId);
+      if (!p || p.username !== prof.username) return { write: false };
+      endLife(d, p);
+      putProfile(d, { projectId, username: p.username, state: 'deleting', deletingAt: iso(now()), accounts: {}, pages: {}, pins: {}, choice: {}, pending: {}, lastError: {} });
+      return { value: d };
+    });
+    if (!setUp || !(await deleteProfile(prof.username))) return { freed: true, later: true };
+    await updateDoc(userId, (d) => {
+      const p = profileOf(d, projectId);
+      if (!p || p.username !== prof.username || p.state !== 'deleting') return { write: false };
+      dropProfile(d, projectId);
+      return { value: d };
+    }).catch(() => null);
+    log_('uploadpost_profile_deleted', { why: 'business' });
+    return { freed: true };
+  }
+
+  /** Every profile name the user has at Upload-Post (or may have): their businesses' and an old per-customer one. */
+  const namesOf = (doc) => [...doc.profiles.filter((p) => p.state !== 'reclaimed').map((p) => p.username), ...(doc.legacy?.username ? [doc.legacy.username] : [])];
 
   /** The profiles our own account deletion marked for deleting ({ username: { at } }), as stored. */
   async function readGone() {
@@ -1269,14 +1532,18 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return { map: isObj(got?.value) ? got.value : {}, version: got?.updatedAt ?? null };
   }
 
-  /** Mark (or unmark) a profile for deleting: the daily check deletes a marked one whose customer is gone. */
-  async function markGone(username, on) {
+  /** Mark (or unmark) profiles for deleting: the daily check deletes a marked one whose customer is gone. */
+  async function markGone(usernames, on) {
+    const names = [].concat(usernames).filter(Boolean);
+    if (!names.length) return;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const { map, version } = await readGone();
-      if (on ? map[username] : !map[username]) return;
       const next = { ...map };
-      if (on) next[username] = { at: iso(now()) };
-      else delete next[username];
+      for (const u of names) {
+        if (on) next[u] = next[u] ?? { at: iso(now()) };
+        else delete next[u];
+      }
+      if (JSON.stringify(next) === JSON.stringify(map)) return;
       try {
         await storage.put(GONE_KEY, next, { ifVersion: version });
         return;
@@ -1287,19 +1554,17 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   }
 
   /**
-   * Before the account is deleted: social stops (status reads "Not connected", nothing posts) and the profile is
-   * marked for deleting, but nothing at Upload-Post goes yet: a deletion that stops half way (unforgetUser) leaves
-   * every connection as it was. The profile goes in userDeleted, once the account is gone.
+   * Before the account is deleted: social stops (status reads "Not connected", nothing posts) and every profile of
+   * theirs is marked for deleting, but nothing at Upload-Post goes yet: a deletion that stops half way
+   * (unforgetUser) leaves every connection as it was. The profiles go in userDeleted, once the account is gone.
    */
   async function forgetUser(userId) {
     if (!storageReady) return;
     const { value: doc } = await readDoc(userId);
-    if (USERNAME.test(String(doc.username ?? ''))) {
-      try {
-        await markGone(doc.username, true);
-      } catch {
-        throw fail(503, 'UNAVAILABLE', 'Couldn’t disconnect your accounts just now. Try again shortly.');
-      }
+    try {
+      await markGone(namesOf(doc), true);
+    } catch {
+      throw fail(503, 'UNAVAILABLE', 'Couldn’t disconnect your accounts just now. Try again shortly.');
     }
     await updateDoc(userId, (d) => {
       d.forgottenAt = iso(now());
@@ -1315,40 +1580,48 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       delete d.forgottenAt;
       return { value: d };
     });
-    if (USERNAME.test(String(doc.username ?? ''))) await markGone(doc.username, false).catch(() => log_('uploadpost_unmark_failed', {}));
+    await markGone(namesOf(doc), false).catch(() => log_('uploadpost_unmark_failed', {}));
   }
 
   /**
-   * After the account is gone (best effort): its profile's estimated cost so far (the monthly run won't see a
-   * customer who's gone), then the profile at Upload-Post with every account in it (one attempt; 404 means gone
-   * already; a failure stays marked for the daily check), then the doc.
+   * After the account is gone (best effort): each business profile's estimated cost so far (the monthly run won't
+   * see a customer who's gone), then every profile at Upload-Post with every account in it (one attempt each; 404
+   * means gone already; a failure stays marked for the daily check), then the doc.
    */
   async function userDeleted(userId) {
     if (!storageReady) return;
     const { value: doc } = await readDoc(userId);
-    if (!USERNAME.test(String(doc.username ?? ''))) return;
-    const tag = doc.customer ?? tagForUsername(doc.username);
+    const names = namesOf(doc);
+    if (!names.length && !doc.profiles.length && !(doc.past ?? []).length) return;
+    const tag = doc.customer ?? tagForUsername(doc.profiles[0]?.username ?? names[0]);
     if (tag) await meterGoneCustomer(tag, doc).catch(() => log_('uploadpost_meter_failed', {}));
     if (setUp) {
-      const res = await call('DELETE', '/uploadposts/users', { body: { username: doc.username } }).catch(() => null);
-      if (res && ((res.status >= 200 && res.status < 300) || res.status === 404)) {
-        capCache = null;
-        await markGone(doc.username, false).catch(() => null);
-      } else log_('uploadpost_profile_delete_failed', { status: res?.status ?? null });
+      for (const username of names) if (await deleteProfile(username)) await markGone(username, false).catch(() => null);
     }
-    await updateDoc(userId, (d) => ({ value: { ...blankDoc(), customer: d.customer, forgottenAt: d.forgottenAt ?? iso(now()), deletedAt: iso(now()) } })).catch(() => null);
+    await updateDoc(userId, (d) => ({ value: { ...blankDoc(), ...(d.customer ? { customer: d.customer } : {}), forgottenAt: d.forgottenAt ?? iso(now()), deletedAt: iso(now()) } })).catch(() => null);
   }
 
   // ───────────── the owner's view, the monthly estimate and the daily reconcile ─────────────
 
-  /** How many social accounts a customer has connected now (the owner's per-customer view). */
+  /** How many social accounts a customer has connected now, all their businesses together (the owner's view). */
   async function accountCount(userId) {
     if (!storageReady) return 0;
     const { value } = await readDoc(userId);
-    return forgotten(value) ? 0 : Object.keys(value.accounts ?? {}).length;
+    if (forgotten(value)) return 0;
+    return value.profiles.filter((p) => p.state === 'ready').reduce((n, p) => n + Object.keys(p.accounts ?? {}).length, 0);
   }
 
-  /** For the owner's billing view: profiles used out of the plan's limit, and the most serious current alert. */
+  /** How many of the plan's profiles a customer's businesses use now (the owner's per-customer view). */
+  async function profileCount(userId) {
+    if (!storageReady) return 0;
+    const { value } = await readDoc(userId);
+    return value.profiles.filter(holdsPlanSlot).length + (value.legacy?.username ? 1 : 0);
+  }
+
+  /**
+   * For the owner's billing view: profiles used out of the plan's limit, each user's limit of businesses, and the
+   * most serious current alert.
+   */
   async function ownerView() {
     if (!setUp) return null;
     const cap = await capInfo().catch(() => null);
@@ -1359,8 +1632,10 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       return Number.isFinite(at) && now() - at < (k === 'analytics_limit' ? DAY_MS : ALERT_TTL_MS);
     });
     const top = live[0];
-    const alert = top ? { kind: top, at: clip(map[top].at, 40), ...(Number.isFinite(map[top].n) ? { n: map[top].n } : {}) } : null;
-    return { ...(cap ? { profilesUsed: cap.used, ...(cap.limit ? { profilesLimit: cap.limit } : {}) } : {}), ...(alert ? { alert } : {}) };
+    const alert = top
+      ? { kind: top, at: clip(map[top].at, 40), ...(Number.isFinite(map[top].n) ? { n: map[top].n } : {}), ...(typeof map[top].tag === 'string' && /^cust_[0-9a-f]{24}$/.test(map[top].tag) ? { customerTag: map[top].tag } : {}) }
+      : null;
+    return { ...(cap ? { profilesUsed: cap.used, ...(cap.limit ? { profilesLimit: cap.limit } : {}) } : {}), perUserLimit: maxPerUser, ...(alert ? { alert } : {}) };
   }
 
   /** A month as [start, end) in ms and its 'YYYY-MM' name; offset -1 is last month. */
@@ -1371,14 +1646,19 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return { start, end, name: iso(start).slice(0, 7), days: (end - start) / DAY_MS };
   }
 
+  /** The businesses whose profiles lived in the doc's window: the ones there now and the ones that ended lately. */
+  const meteredProjects = (doc) => [...new Set([...doc.profiles.map((p) => p.projectId), ...(doc.past ?? []).map((l) => l.projectId)])];
+
   /**
-   * One profile's estimated cost inside [start, until) of a month (the plan price over its profiles, prorated by
-   * days): the profile's current life (createdAt → deletion or now) and, when it was reclaimed once, its last one.
+   * One business profile's estimated cost inside [start, until) of a month (the plan price over its profiles,
+   * prorated by days): its current life (createdAt → account deletion or now) and the lives that ended (deleted,
+   * reclaimed, given back).
    */
-  function profileMicro(doc, month, until = month.end) {
+  function profileMicro(doc, projectId, month, until = month.end) {
     const lives = [];
-    if (USERNAME.test(String(doc.username ?? ''))) lives.push([Date.parse(doc.createdAt), Date.parse(doc.forgottenAt)]);
-    if (isObj(doc.lastLife)) lives.push([Date.parse(doc.lastLife.from), Date.parse(doc.lastLife.to)]);
+    const p = profileOf(doc, projectId);
+    if (p?.state === 'ready' && p.createdAt) lives.push([Date.parse(p.createdAt), Date.parse(doc.forgottenAt)]);
+    for (const l of doc.past ?? []) if (l.projectId === projectId) lives.push([Date.parse(l.from), Date.parse(l.to)]);
     let ms = 0;
     for (const [from, to] of lives) {
       const a = Math.max(month.start, Number.isFinite(from) ? from : month.start);
@@ -1388,33 +1668,39 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return Math.round((PROFILE_MONTH_MICRO * ms) / DAY_MS / month.days);
   }
 
-  /** One customer's estimated profile row for a month, unless it's there already. → 'written' | 'there' | 'failed'. */
-  async function meterRow(tag, userId, month, micro) {
+  /**
+   * One business profile's estimated row for a month (customer tag, user and the business's project id), unless
+   * it's there already. → 'written' | 'there' | 'failed'.
+   */
+  async function meterRow(tag, userId, projectId, month, micro) {
     const endpoint = `upload_post_profile ${month.name}`;
     try {
-      const have = await db.select('usage_ledger', { vendor: 'uploadpost', customer_tag: tag, endpoint }, { select: 'id', limit: 1 });
+      const have = await db.select('usage_ledger', { vendor: 'uploadpost', customer_tag: tag, endpoint, project_id: projectId }, { select: 'id', limit: 1 });
       if (have.length) return 'there';
-      await db.insert('usage_ledger', { vendor: 'uploadpost', customer_tag: tag, user_id: userId ?? null, feature: 'connections', endpoint, cost_micro: micro, estimated: true, outcome: 'ok' });
+      await db.insert('usage_ledger', { vendor: 'uploadpost', customer_tag: tag, user_id: userId ?? null, project_id: projectId, feature: 'connections', endpoint, cost_micro: micro, estimated: true, outcome: 'ok' });
       return 'written';
     } catch {
       return 'failed';
     }
   }
 
-  /** A deleted customer's profile cost: last month (if its row isn't there yet) and this month up to now. */
+  /** A deleted customer's profile costs, per business: last month (if its row isn't there yet) and this month up to now. */
   async function meterGoneCustomer(tag, doc) {
     if (!dbReady) return;
-    for (const [month, until] of [[monthOf(-1), monthOf(-1).end], [monthOf(0), now()]]) {
-      const micro = profileMicro(doc, month, until);
-      if (micro > 0) await meterRow(tag, null, month, micro);
+    for (const projectId of meteredProjects(doc)) {
+      for (const [month, until] of [[monthOf(-1), monthOf(-1).end], [monthOf(0), now()]]) {
+        const micro = profileMicro(doc, projectId, month, until);
+        if (micro > 0) await meterRow(tag, null, projectId, month, micro);
+      }
     }
   }
 
   /**
-   * Once per month: for last month, one estimated `upload_post_profile` row per customer with a profile. Each row
-   * is written only when it isn't there yet, and the month counts as done only after a pass where every customer
-   * was read and every row written, so a failed read or insert (or a restart half way) is finished by the next
-   * daily run. A run claims the month for 2 hours (ifVersion), so two servers don't both write it.
+   * Once per month: for last month, one estimated `upload_post_profile` row per business profile, on its customer
+   * (tagged with the business). Each row is written only when it isn't there yet, and the month counts as done only
+   * after a pass where every customer was read and every row written, so a failed read or insert (or a restart half
+   * way) is finished by the next daily run. A run claims the month for 2 hours (ifVersion), so two servers don't
+   * both write it.
    */
   async function meterIfDue() {
     if (!setUp) return { skipped: true };
@@ -1449,11 +1735,13 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
           continue;
         }
         if (got.unreadable) continue;
-        const micro = profileMicro(got.value, month);
-        if (micro <= 0) continue;
-        const r = await meterRow(c.customer_tag, c.user_id, month, micro);
-        if (r === 'written') rows += 1;
-        if (r === 'failed') complete = false;
+        for (const projectId of meteredProjects(got.value)) {
+          const micro = profileMicro(got.value, projectId, month);
+          if (micro <= 0) continue;
+          const r = await meterRow(c.customer_tag, c.user_id, projectId, month, micro);
+          if (r === 'written') rows += 1;
+          if (r === 'failed') complete = false;
+        }
       }
       if (customers.length < 1000) break;
     }
@@ -1463,18 +1751,19 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   }
 
   /**
-   * Every one of our profiles at Upload-Post against our docs: a profile whose accounts differ from its customer's
-   * doc (a connect, disconnect or reconnect flag whose webhook was missed) is read again. → { checked, listed }.
+   * Every one of our business profiles at Upload-Post against our docs: a profile whose accounts differ from its
+   * business's entry (a connect, disconnect or reconnect flag whose webhook was missed) is read again.
+   * → { checked, listed }.
    */
   async function reconcileAccounts() {
     const cap = await capInfo({ fresh: true });
     if (!cap) return { checked: 0, listed: null };
     let checked = 0;
     for (const p of cap.profiles) {
-      if (!USERNAME.test(String(p.username ?? ''))) continue;
-      const who = await userOfProfile(p.username).catch(() => null);
-      if (!who || !accountsDiffer(who.doc, p.social_accounts)) continue;
-      await sync(who.userId).catch(() => null);
+      if (!PROFILE_USERNAME.test(String(p.username ?? ''))) continue;
+      const who = await profileOwner(p.username).catch(() => null);
+      if (!who?.prof || who.prof.state !== 'ready' || !accountsDiffer(who.prof, p.social_accounts)) continue;
+      await sync(who.userId, who.projectId).catch(() => null);
       checked += 1;
     }
     return { checked, listed: cap.profiles };
@@ -1483,15 +1772,33 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   /** Nothing is connected in this listed profile (and the listing says so). */
   const emptyProfile = (p) => isObj(p.social_accounts) && Object.values(p.social_accounts).every((a) => a === '' || a === null || a === undefined);
 
+  /** Whether the business is still in the user's account: true, false (gone, and the account has others), or null (can't tell). */
+  async function businessThere(userId, projectId) {
+    try {
+      const own = await db.select('user_docs', { user_id: userId, kind: 'project', id: projectId }, { select: 'id', limit: 1 });
+      if (own.length) return true;
+      // the account's businesses aren't in this database at all (an empty or other database): nothing to conclude
+      const any = await db.select('user_docs', { user_id: userId, kind: 'project' }, { select: 'id', limit: 1 });
+      return any.length ? false : null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Once a day: every profile's accounts against our docs (above), the cap (an owner alert when few profiles are
-   * left), then our own `ylb_` profiles (never one named otherwise, at most 10 deletions a day):
+   * left), then our own `ylb_` profiles (never one named otherwise, at most 10 deletions a day), each mapped through
+   * its customer tag to one customer and through their doc to one business:
    * - a profile our account deletion marked, whose customer is gone, is deleted (a failed delete after the
    *   account went, or a restart in between); a mark whose customer is still here (a deletion that stopped) goes;
-   * - a profile with no customer here and no mark is left alone and reported to the owner: it isn't ours to
-   *   judge (another copy of the app on the same key, or a database that's empty or not this one);
-   * - a customer's profile with nothing connected for UPLOAD_POST_RECLAIM_DAYS (no connect waiting) goes back
-   *   to the plan; it's made again on their next Connect.
+   * - a profile no business of a customer here has, or with no customer here and no mark, is left alone and
+   *   reported to the owner: it isn't ours to judge (another copy of the app on the same key, or a database that's
+   *   empty or not this one);
+   * - a business's profile whose delete failed (the business was deleted) is deleted; one whose business has been
+   *   gone from the account for 2 days (deleted where the app couldn't reach us) is deleted;
+   * - a business's profile with nothing connected for UPLOAD_POST_RECLAIM_DAYS (no connect waiting) goes back to the
+   *   plan; it's made again, with the same name, on that business's next Connect;
+   * - the one-per-customer profile of an earlier build (dev data) is deleted.
    */
   async function reconcileIfDue() {
     if (!setUp) return { skipped: true };
@@ -1517,13 +1824,11 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     let deleted = 0;
     let reclaimed = 0;
     let unknown = 0;
-    const remove = async (username) => {
-      const res = await call('DELETE', '/uploadposts/users', { body: { username } }).catch(() => null);
-      return !!res && ((res.status >= 200 && res.status < 300) || res.status === 404);
-    };
+    const budgetLeft = () => deleted + reclaimed < DELETES_PER_DAY;
     for (const p of listed) {
-      if (deleted + reclaimed >= 10) break;
-      const tag = tagForUsername(p.username);
+      if (!budgetLeft()) break;
+      const username = String(p.username ?? '');
+      const tag = tagForUsername(username);
       if (!tag) continue;
       let rows;
       try {
@@ -1532,42 +1837,125 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
         break;
       }
       const userId = rows[0]?.user_id;
-      const mark = gone[p.username];
+      const mark = gone[username];
       if (!userId) {
         if (!mark) {
           unknown += 1;
           continue;
         }
-        if (await remove(p.username)) {
+        if (await deleteProfile(username)) {
           deleted += 1;
-          await markGone(p.username, false).catch(() => null);
+          await markGone(username, false).catch(() => null);
         }
         continue;
       }
       if (mark) {
-        if (now() - Date.parse(mark.at) > FORGOTTEN_FOR_MS) await markGone(p.username, false).catch(() => null);
+        if (now() - Date.parse(mark.at) > FORGOTTEN_FOR_MS) await markGone(username, false).catch(() => null);
         continue;
       }
       const got = await readDoc(userId).catch(() => null);
       if (!got || got.unreadable) continue;
       const doc = got.value;
-      if (doc.username !== p.username || forgotten(doc) || !emptyProfile(p) || Object.keys(doc.accounts ?? {}).length) continue;
-      const created = Date.parse(doc.createdAt);
-      const lastConnect = Math.max(0, ...Object.values(doc.pending ?? {}).map((x) => Date.parse(x?.at)).filter(Number.isFinite));
+      if (forgotten(doc)) continue;
+      // the earlier build's one-per-customer profile: never used now, so it goes back to the plan
+      if (LEGACY_USERNAME.test(username)) {
+        if (doc.legacy?.username !== username) {
+          unknown += 1;
+          continue;
+        }
+        if (await deleteProfile(username)) {
+          deleted += 1;
+          await updateDoc(userId, (d) => {
+            if (d.legacy?.username !== username) return { write: false };
+            delete d.legacy;
+            return { value: d };
+          }).catch(() => null);
+        }
+        continue;
+      }
+      const hits = doc.profiles.filter((x) => x.username === username);
+      if (hits.length !== 1) {
+        unknown += 1;
+        continue;
+      }
+      const prof = hits[0];
+      const { projectId } = prof;
+      if (prof.state === 'reserved') {
+        // made, though our answer was lost: it's there
+        await updateDoc(userId, (d) => {
+          const x = profileOf(d, projectId);
+          if (!x || x.username !== username || x.state !== 'reserved') return { write: false };
+          x.state = 'ready';
+          const made = Date.parse(p.created_at);
+          x.createdAt = iso(Number.isFinite(made) && made <= now() ? made : now());
+          return { value: d };
+        }).catch(() => null);
+        continue;
+      }
+      if (prof.state === 'deleting') {
+        if (await deleteProfile(username)) {
+          deleted += 1;
+          await updateDoc(userId, (d) => {
+            const x = profileOf(d, projectId);
+            if (!x || x.username !== username || x.state !== 'deleting') return { write: false };
+            dropProfile(d, projectId);
+            return { value: d };
+          }).catch(() => null);
+        }
+        continue;
+      }
+      if (prof.state !== 'ready') {
+        unknown += 1;
+        continue;
+      }
+      const there = await businessThere(userId, projectId);
+      if (there === false) {
+        const since = Date.parse(prof.missingSince);
+        if (!Number.isFinite(since)) {
+          await updateDoc(userId, (d) => {
+            const x = liveProfile(d, projectId);
+            if (!x || x.username !== username) return { write: false };
+            x.missingSince = iso(now());
+            return { value: d };
+          }).catch(() => null);
+          continue;
+        }
+        if (now() - since < PROJECT_GONE_MS) continue;
+        if (await deleteProfile(username)) {
+          deleted += 1;
+          await updateDoc(userId, (d) => {
+            const x = profileOf(d, projectId);
+            if (!x || x.username !== username) return { write: false };
+            endLife(d, x);
+            dropProfile(d, projectId);
+            return { value: d };
+          }).catch(() => null);
+          log_('uploadpost_profile_deleted', { why: 'business_gone' });
+        }
+        continue;
+      }
+      if (there === true && prof.missingSince) {
+        await updateDoc(userId, (d) => {
+          const x = liveProfile(d, projectId);
+          if (!x || !x.missingSince) return { write: false };
+          delete x.missingSince;
+          return { value: d };
+        }).catch(() => null);
+      }
+      if (!emptyProfile(p) || Object.keys(prof.accounts ?? {}).length) continue;
+      const created = Date.parse(prof.createdAt);
+      const lastConnect = Math.max(0, ...Object.values(prof.pending ?? {}).map((x) => Date.parse(x?.at)).filter(Number.isFinite));
       if (!Number.isFinite(created) || now() - created < reclaimAfterMs || now() - lastConnect < LINK_LIFETIME_MS) continue;
-      if (!(await remove(p.username))) continue;
+      if (!(await deleteProfile(username))) continue;
       reclaimed += 1;
       await updateDoc(userId, (d) => {
-        if (d.username !== p.username) return { write: false };
-        d.lastLife = { from: d.createdAt, to: iso(now()) };
-        delete d.username;
-        delete d.createdAt;
-        d.reclaimedAt = iso(now());
-        d.pending = {};
+        const x = profileOf(d, projectId);
+        if (!x || x.username !== username || x.state !== 'ready') return { write: false };
+        endLife(d, x);
+        putProfile(d, { projectId, username, state: 'reclaimed', reclaimedAt: iso(now()), accounts: {}, pages: {}, pins: {}, choice: {}, pending: {}, lastError: {} });
         return { value: d };
       }).catch(() => null);
     }
-    if (deleted || reclaimed) capCache = null;
     if (unknown) ownerAlert('profile_orphans', { n: unknown });
     else clearAlerts(['profile_orphans']);
     log_('uploadpost_reconciled', { checked, deleted, reclaimed, unknown });
@@ -1582,7 +1970,10 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     warning,
     /** the X Links add-on is bought (UPLOAD_POST_X_LINKS): links stay in X posts, from a shared allowance */
     xLinks,
+    /** each user's limit of businesses with a profile (UPLOAD_POST_MAX_PROFILES_PER_USER) */
+    maxPerUser,
     status,
+    slots,
     connectLink: (userId, platform, opts = {}) => startConnect(userId, platform, { ...opts, reconnect: false }),
     reconnectLink: (userId, platform, opts = {}) => startConnect(userId, platform, { ...opts, reconnect: true }),
     check,
@@ -1593,6 +1984,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     adResults,
     publish,
     postStatus,
+    forgetProject,
     forgetUser,
     unforgetUser,
     userDeleted,
@@ -1604,10 +1996,11 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     meterIfDue,
     reconcileIfDue,
     accountCount,
+    profileCount,
     ownerView,
     /** a team-level problem another module found (posting: 'media_secret'), for the owner's Billing page */
     alert: (kind) => ownerAlert(kind),
-    /** posting registers how an upload_completed webhook finishes its job: fn(userId, jobId, outcome) */
+    /** posting registers how an upload_completed webhook finishes its job: fn(userId, jobId, outcome, { projectId }) */
     setPostListener(fn) {
       postListener = typeof fn === 'function' ? fn : null;
     },

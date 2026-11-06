@@ -140,7 +140,8 @@ export function createIntegrations({
   };
   const sitemap = make.sitemap(deps);
   // an upload_completed webhook from Upload-Post finishes its job (sent / failed) the same way "Check again" does
-  connections.impl?.social?.setPostListener?.((userId, jobId, outcome) => modules.posting.posting?.fromWebhook?.(userId, jobId, outcome));
+  // (only a job of the business whose profile the event came through)
+  connections.impl?.social?.setPostListener?.((userId, jobId, outcome, where) => modules.posting.posting?.fromWebhook?.(userId, jobId, outcome, where));
   // account deletion: the vendor's connections go first (while their ids are still known), then the rest
   const FORGET_ORDER = ['posting', 'analytics', 'seoGoogle', 'billing', 'publicMedia', 'nango', 'connections'];
 

@@ -9,7 +9,8 @@
 //                                                               /uploadposts/status by the job id; never resends)
 //   await posting.job(who, jobId)     → { job }                 (a database read only)
 //   await posting.list(who, projectId)→ { jobs }
-//   await posting.fromWebhook(userId, jobId, outcome)            an upload_completed webhook's answer for a job
+//   await posting.fromWebhook(userId, jobId, outcome, {projectId})  an upload_completed webhook's answer for a job of
+//                                                               that business (it came through that business's profile)
 //
 // What it never does: send a post twice by itself, use text from the request as the post (the post is re-read
 // from the user's account and must match), or put a token or a media link in a log.
@@ -267,7 +268,8 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       const claimed = await jobs.claimCheck(userId, row);
       let found = null;
       try {
-        found = await connections.postStatus(userId, { ...(claimed.provider_ref ?? {}), jobId: claimed.id, requestedAt: claimed.requested_at, platform: claimed.platform });
+        // read through the job's own business's profile (each business has its own)
+        found = await connections.postStatus(userId, { ...(claimed.provider_ref ?? {}), jobId: claimed.id, requestedAt: claimed.requested_at, platform: claimed.platform, projectId: claimed.project_id });
       } catch (e) {
         safeLog('posting_check_error', { platform: row.platform, error: e?.name || 'Error' }, log);
       }
@@ -286,16 +288,17 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
     },
 
     /**
-     * An upload_completed webhook's definite answer for one of this user's jobs (routed by the customer's profile
-     * name, then the request id, which is our job id). Only a job still `sending` or `unknown` on that platform
-     * changes, or a `failed` one that Upload-Post then posted after all (its own retry): that one reads "Posted", so
-     * it isn't posted twice.
+     * An upload_completed webhook's definite answer for one of this user's jobs (routed by the business's profile
+     * name, then the request id, which is our job id). Only a job of that business (it went out through that
+     * business's profile) on that platform changes: one still `sending` or `unknown`, or a `failed` one that
+     * Upload-Post then posted after all (its own retry). That one reads "Posted", so it isn't posted twice.
      */
-    async fromWebhook(userId, jobId, outcome) {
+    async fromWebhook(userId, jobId, outcome, { projectId } = {}) {
       if (!isUuid(userId) || !isUuid(jobId) || !outcome || !['sent', 'failed'].includes(outcome.state)) return null;
       const row = await jobs.byId(userId, jobId);
       if (!row || !['sending', 'unknown', ...(outcome.state === 'sent' ? ['failed'] : [])].includes(row.state)) return null;
       if (outcome.platform && outcome.platform !== row.platform) return null;
+      if (projectId !== undefined && row.project_id !== projectId) return null;
       // a job this process is still posting finishes from its own answer; this one is kept in case that is unclear
       if (row.state === 'sending' && jobs.active.has(row.id)) {
         early.set(row.id, outcome);

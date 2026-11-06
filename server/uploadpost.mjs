@@ -1,5 +1,5 @@
 // The one module that talks to Upload-Post (https://docs.upload-post.com): customers' social accounts (one
-// Upload-Post profile per customer), posting, post status and social stats. Everything else reaches Upload-Post
+// Upload-Post profile per business), posting, post status and social stats. Everything else reaches Upload-Post
 // through createUploadPostClient(...) here; nothing else in the server holds UPLOAD_POST_API_KEY or builds an
 // Upload-Post URL. Ads stay on Zernio (server/zernio.mjs).
 //
@@ -247,7 +247,7 @@ export function createUploadPostClient({ env = process.env, fetch = globalThis.f
           res = await once(m, p, { query, body, form, headers, timeoutMs: t, maxWaitMs });
         }
       }
-      if (res.status >= 400) safeLog('uploadpost_call_refused', { method: m, path: p.replace(/ylb_[0-9a-f]{24}/g, ':profile'), status: res.status, code: upError(res).code, local: res.local === true }, log);
+      if (res.status >= 400) safeLog('uploadpost_call_refused', { method: m, path: p.replace(/ylb_[0-9a-f]{24}(?:_[0-9a-f]{8})?/g, ':profile'), status: res.status, code: upError(res).code, local: res.local === true }, log);
       return res;
     },
 
