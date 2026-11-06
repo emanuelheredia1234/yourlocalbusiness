@@ -18,7 +18,7 @@ import { busyJobs } from '@/lib/busy';
 import { showSignIn, useAuth } from '@/lib/cloud/auth';
 import { AD_CTAS, adById, adFinalUrl, adsCsv, adsText, applyAds, patchAd } from '@/lib/ads';
 import { applyEmailSequence, applyLeadMagnet, delayLabel, importSubscribers, parseSubscriberCsv, sequenceCsv, subscriberEmailOk, subscribersCsv, updateMarketingOf } from '@/lib/emailFunnel';
-import { allLeads, deleteLead, leadEmail, leadTime, leadsCsv, listLeads, seoPageIdOf, type Lead } from '@/lib/leads';
+import { allLeads, deleteLead, leadDetails, leadEmail, leadOfProject, leadSourceLine, leadTime, leadsCsv, listLeads, seoPageIdOf, type Lead } from '@/lib/leads';
 import { PAGE_TYPES, PAGE_TYPE_LABEL, bookingLink, missingLink, pageTypeNoun, pageTypeOf, paymentLink, webLink } from '@/lib/pageTypes';
 import { listPublished, publishConfig, type ServerPage } from '@/lib/publish';
 import { seoFileHtml, seoHtmlActive } from '@/lib/seoPage';
@@ -354,7 +354,7 @@ const leadName = (l: Lead | undefined) => clip(l?.name || l?.email || l?.phone, 
 
 /** Everything the visitor typed, in one line: shown to the model as data only. */
 function visitorText(l: Lead): string {
-  return [l.name && `Name: ${l.name}`, l.email && `Email: ${l.email}`, l.phone && `Phone: ${l.phone}`, l.time && `Preferred time: ${l.time}`, l.message && `Message: ${l.message}`].filter(Boolean).join('. ');
+  return [l.name && `Name: ${l.name}`, l.email && `Email: ${l.email}`, l.phone && `Phone: ${l.phone}`, l.time && `Preferred time: ${l.time}`, l.message && `Message: ${l.message}`, ...leadDetails(l).map((d) => `${d.label}: ${d.value}`)].filter(Boolean).join('. ');
 }
 
 const listLeadsTool = defineTool({
@@ -370,7 +370,7 @@ const listLeadsTool = defineTool({
     if (cannot) return cannot;
     let list: Lead[];
     try {
-      list = await listLeads({ pageId: all ? undefined : seoPageIdOf(p.id), limit, signal: ctx.signal });
+      list = await listLeads({ projectId: all ? undefined : p.id, limit, signal: ctx.signal });
     } catch (e) {
       if (ctx.signal.aborted) throw stopped();
       throw new Error((e as Error)?.message || 'Couldn’t load your leads. Try again.');
@@ -378,12 +378,14 @@ const listLeadsTool = defineTool({
     rememberLeads(list);
     const projects = s().projects;
     const leads = list.map((l) => {
-      const owner = projects.find((x) => seoPageIdOf(x.id) === l.pageId);
+      const owner = projects.find((x) => leadOfProject(l, x.id));
       const email = leadEmail(l);
       const target = owner ?? p;
       return {
         ...(SAFE_ID.test(l.id) ? { id: l.id } : {}),
-        page: `/${clip(l.slug, 60)}`,
+        page: l.slug ? `/${clip(l.slug, 60)}` : null,
+        source: leadSourceLine(l),
+        ...(l.consent ? { agreedToEmails: true } : {}),
         project: owner ? (owner.id === p.id ? 'this project' : clip(owner.brand.name, 60)) : 'a page that isn’t in your projects',
         received: leadTime(l) ? fmtRelative(leadTime(l)) : null,
         ...(owner && leadTime(l) > (owner.marketing.leadsSeenAt ?? 0) ? { new: true } : {}),
@@ -415,20 +417,24 @@ const addLeadToSubscribersTool = defineTool({
     let added = 0;
     let already = 0;
     let noEmail = 0;
+    let noConsent = 0;
     const elsewhere = new Set<string>();
     const here = activeProject().id;
     for (const id of uniq(ids)) {
       const lead = knownLead(id);
       if (!lead) continue;
       const r = addLeadToSubscribers(lead);
-      if (r.status === 'added') added++;
+      if (r.status === 'added') {
+        added++;
+        if (!lead.consent) noConsent++;
+      }
       else if (r.status === 'exists') already++;
       else noEmail++;
       if (r.status !== 'no-email' && r.projectId !== here) elsewhere.add(r.brand);
     }
     if (!added && !already) return { ok: false, error: noEmail === 1 ? 'That lead gave no email address, so it can’t be a subscriber.' : 'None of these leads gave an email address.' };
     return {
-      data: { added, alreadySubscribed: already, ...(noEmail ? { noEmail } : {}), ...(elsewhere.size ? { inOtherProjects: [...elsewhere] } : {}) },
+      data: { added, alreadySubscribed: already, ...(noEmail ? { noEmail } : {}), ...(elsewhere.size ? { inOtherProjects: [...elsewhere] } : {}), ...(noConsent ? { didntTickTheEmailBox: noConsent, about: 'They didn’t tick the box to get emails: keep them only if they agreed another way.' } : {}) },
       note: added ? `Added ${plural(added, 'lead')} to your subscribers${already ? ` (${already} already there)` : ''}` : 'They’re already on your subscriber list',
     };
   },
@@ -1203,17 +1209,14 @@ const exportFile = defineTool({
         if (cannot) return cannot;
         let got: Awaited<ReturnType<typeof allLeads>>;
         try {
-          got = await allLeads({ pageId: allPages ? undefined : seoPageIdOf(pid), signal: ctx.signal });
+          got = await allLeads({ projectId: allPages ? undefined : pid, signal: ctx.signal });
         } catch (e) {
           if (ctx.signal.aborted) throw stopped();
           throw new Error((e as Error)?.message || 'Couldn’t load your leads. Try again.');
         }
         if (!got.leads.length) return { ok: false, error: 'There are no leads to export yet.' };
         const projects = s().projects;
-        const label = (l: Lead) => {
-          const owner = projects.find((x) => seoPageIdOf(x.id) === l.pageId);
-          return `/${l.slug}${owner ? ` · ${owner.brand.name}` : ''}`;
-        };
+        const label = { project: (l: Lead) => projects.find((x) => leadOfProject(l, x.id))?.brand.name ?? '', page: (l: Lead) => (l.slug ? `/${l.slug}` : l.pageId) };
         // a byte-order mark, so spreadsheets read names with accents right (memory only, like the Leads tab)
         const csv = String.fromCharCode(0xfeff) + leadsCsv(got.leads, label);
         const name = allPages ? 'leads-all-pages.csv' : `${fileBase(p)}-leads.csv`;

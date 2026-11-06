@@ -7,7 +7,7 @@ import { useEffect, useRef } from 'react';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { Project } from '@/lib/types';
 import { uid } from '@/lib/utils';
-import { leadTime, leadToSubscriber, listLeads, seoPageIdOf, type Lead } from '@/lib/leads';
+import { leadOfProject, leadTime, leadToSubscriber, listLeads, type Lead } from '@/lib/leads';
 import { useAuth } from '@/lib/cloud/auth';
 import { getActiveProject, useStore } from './useStore';
 
@@ -60,12 +60,16 @@ export function forgetLeads(): void {
   useLeads.setState({ recent: null, checkedAt: 0, error: '' });
 }
 
-/** New leads for this project's page: newer than marketing.leadsSeenAt. */
+/** New leads for this business (its page, its assets and its lead magnet): newer than marketing.leadsSeenAt. */
 export function newLeadCount(project: Project | null | undefined, recent: Lead[] | null): number {
   if (!project || !recent?.length) return 0;
-  const pageId = seoPageIdOf(project.id);
   const seen = project.marketing.leadsSeenAt ?? 0;
-  return recent.filter((l) => l.pageId === pageId && leadTime(l) > seen).length;
+  return recent.filter((l) => leadOfProject(l, project.id) && leadTime(l) > seen).length;
+}
+
+/** Whether a business has anything published that takes leads: its SEO page, an asset, or its lead magnet. */
+export function takesLeads(p: Project): boolean {
+  return !!p.marketing.seoPublished || p.studio.codeAssets.some((a) => !!a.published) || !!p.marketing.leadMagnet?.delivery;
 }
 
 export function useNewLeadCount(project: Project | null | undefined): number {
@@ -77,14 +81,12 @@ export function useNewLeadCount(project: Project | null | undefined): number {
 export function leadsToAnnounce(projects: Project[], recent: Lead[]): { projectId: string; count: number; newest: number; slug: string; brand: string }[] {
   const out: { projectId: string; count: number; newest: number; slug: string; brand: string }[] = [];
   for (const p of projects) {
-    const published = p.marketing.seoPublished;
-    if (!published) continue;
+    if (!takesLeads(p)) continue;
     const marker = Math.max(p.marketing.leadsNotifiedAt ?? 0, p.marketing.leadsSeenAt ?? 0);
-    const pageId = seoPageIdOf(p.id);
-    const fresh = recent.filter((l) => l.pageId === pageId && leadTime(l) > marker);
+    const fresh = recent.filter((l) => leadOfProject(l, p.id) && leadTime(l) > marker);
     if (!fresh.length) continue;
     const latest = fresh.reduce((a, b) => (leadTime(b) > leadTime(a) ? b : a));
-    out.push({ projectId: p.id, count: fresh.length, newest: leadTime(latest), slug: latest.slug || published.slug, brand: p.brand.name });
+    out.push({ projectId: p.id, count: fresh.length, newest: leadTime(latest), slug: latest.slug || (latest.source === 'magnet' ? '' : p.marketing.seoPublished?.slug ?? ''), brand: p.brand.name });
   }
   return out;
 }
@@ -93,7 +95,7 @@ export function leadsToAnnounce(projects: Project[], recent: Lead[]): { projectI
 export function announceLeads(recent: Lead[]): void {
   const st = useStore.getState();
   for (const a of leadsToAnnounce(st.projects, recent)) {
-    st.notify({ kind: 'lead', title: a.count === 1 ? 'New lead from your page' : `${a.count}${a.count >= RECENT ? '+' : ''} new leads from your page`, body: `/${a.slug} · ${a.brand}`, route: 'marketing-email' });
+    st.notify({ kind: 'lead', title: a.count === 1 ? 'New lead from your page' : `${a.count}${a.count >= RECENT ? '+' : ''} new leads from your page`, body: a.slug ? `/${a.slug} · ${a.brand}` : a.brand, route: 'marketing-email' });
     st.updateProject(a.projectId, (p) => ({ ...p, marketing: { ...p.marketing, leadsNotifiedAt: Math.max(p.marketing.leadsNotifiedAt ?? 0, a.newest) } }));
   }
 }
@@ -102,7 +104,7 @@ export function announceLeads(recent: Lead[]): void {
 export function useLeadsWatcher(): void {
   const signedIn = useAuth((s) => s.phase === 'ready');
   const account = useAuth((s) => (s.phase === 'ready' ? s.user?.id ?? '' : ''));
-  const published = useStore((s) => s.projects.some((p) => !!p.marketing.seoPublished));
+  const published = useStore((s) => s.projects.some(takesLeads));
   // signed out, or another account: the last one's leads go
   const last = useRef(account);
   useEffect(() => {
@@ -143,12 +145,20 @@ export function markLeadsSeen(projectId: string, newest: number): void {
   st.updateProject(projectId, (x) => ({ ...x, marketing: { ...x.marketing, leadsSeenAt: Math.max(x.marketing.leadsSeenAt ?? 0, newest) } }));
 }
 
-/** The project a lead's page belongs to (else the active one). */
-export function leadProject(lead: Pick<Lead, 'pageId'>, projects: Project[] = useStore.getState().projects): Project | null {
-  return projects.find((p) => seoPageIdOf(p.id) === lead.pageId) ?? getActiveProject();
+/** The business a lead belongs to (by the business it's tagged with, else its SEO page), or null. */
+export function leadOwner(lead: Pick<Lead, 'pageId' | 'projectId'>, projects: Project[] = useStore.getState().projects): Project | null {
+  return projects.find((p) => leadOfProject(lead, p.id)) ?? null;
 }
 
-/** Add a lead to the subscribers of the project its page belongs to (else the active one). */
+/** The project a lead belongs to (else the active one). */
+export function leadProject(lead: Pick<Lead, 'pageId' | 'projectId'>, projects: Project[] = useStore.getState().projects): Project | null {
+  return leadOwner(lead, projects) ?? getActiveProject();
+}
+
+/**
+ * Add a lead to the subscribers of the project it belongs to (else the active one). The subscriber's source stays
+ * 'lead'. Callers ask the owner first when the lead didn't tick the box to get emails (lead.consent).
+ */
 export function addLeadToSubscribers(lead: Lead): { status: 'added' | 'exists' | 'no-email'; projectId: string; brand: string } {
   const project = leadProject(lead);
   if (!project) return { status: 'no-email', projectId: '', brand: '' };

@@ -63,6 +63,8 @@ export function EmailBody({ data, range, now }: { data: EmailData; range: number
   const series = emailSeries(data, range, now);
   const campaigns = Array.isArray(data?.campaigns) ? data.campaigns : [];
   const currency = data?.currency || 'USD';
+  const by = data?.leadsBySource;
+  const bySource = by && [by.page, by.asset, by.magnet].every((x) => typeof x === 'number') ? by : null;
   return (
     <div className="flex flex-col gap-4">
       <StatStrip
@@ -80,8 +82,18 @@ export function EmailBody({ data, range, now }: { data: EmailData; range: number
         </ChartCard>
         <section className="card p-4 sm:p-5" aria-label="Leads">
           <h3 className="text-h3 text-ink">Leads</h3>
-          <p className="text-small text-muted">From your published page’s form</p>
+          <p className="text-small text-muted">From pages, assets and your lead magnet</p>
           <p className="num mt-3 font-mono text-h1 text-ink">{n(data?.leads ?? 0)}</p>
+          {bySource && (
+            <p className="num mt-1 text-caption text-muted">
+              Pages {n(bySource.page)} · Assets {n(bySource.asset)} · Lead magnet {n(bySource.magnet)}
+            </p>
+          )}
+          {typeof data?.downloads === 'number' && (
+            <p className="mt-3 text-small text-ink-2">
+              Downloads <span className="num font-mono text-ink">{n(data.downloads)}</span>
+            </p>
+          )}
         </section>
       </div>
       {campaigns.length > 0 ? (

@@ -238,6 +238,10 @@ export interface EmailData {
   series: { date: string; sent: number; opened: number; clicked: number }[];
   campaigns: { id: string; name: string; sent: number; openRate: number; clickRate: number; revenue: number }[];
   leads: number;
+  /** the same leads by where they came from (absent from older snapshots) */
+  leadsBySource?: { page: number; asset: number; magnet: number };
+  /** the lead magnet's downloads, all time (absent from older snapshots) */
+  downloads?: number;
 }
 
 export interface AnalyticsCompetitor {
