@@ -29,6 +29,8 @@
 //   rotating), ZERNIO_API_KEY (turns ad accounts on, through Zernio), ZERNIO_WEBHOOK_SECRET (+ _PREVIOUS only while
 //   rotating), ADS_REVIEW_SECRET (32+ random bytes; signs the ad launch reviews, else derived from CUSTOMER_TAG_SECRET),
 //   NANGO_SECRET_KEY (future non-social integrations only; off by default), NANGO_WEBHOOK_SIGNING_KEY.
+//   Gmail (customer outreach, server/gmail.mjs, not Nango): GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.
+//   Redirect URI: https://yourlocalbusiness.replit.app/api/integrations/gmail/callback (no localhost callback).
 //   Plain env: TREG_ORG_ID, CONNECTIONS_PROVIDER (unset; "off" keeps connected accounts off), UPLOAD_POST_RPM (150),
 //   UPLOAD_POST_ALERT_REMAINING (5), UPLOAD_POST_MAX_PROFILES_PER_USER (3: businesses with social accounts per user,
 //   one Upload-Post profile each), UPLOAD_POST_NEW_PROFILES_PER_DAY (20), UPLOAD_POST_RECLAIM_DAYS (7),
@@ -46,6 +48,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
 import { createOmnisendRoutes } from './omnisend.mjs';
+import { createGmailRoutes } from './gmail.mjs';
 import { createRateLimiter } from './rateLimit.mjs';
 import { authFromEnv } from './auth.mjs';
 import { userKeysFromEnv } from './userKeys.mjs';
@@ -195,6 +198,17 @@ const omnisend = createOmnisendRoutes({
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
   clientKey: (req) => pages.visitor(req),
 });
+// Customer Gmail (server/gmail.mjs): the customer's own mailbox for later outreach. Not Nango.
+const gmail = createGmailRoutes({
+  auth,
+  storage: appState,
+  send,
+  readJson,
+  rateLimited,
+  corsHeaders,
+  sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
+  clientKey: (req) => pages.visitor(req),
+});
 // connected accounts, posting, analytics, usage and SEO on Google (server/integrations/wiring.mjs)
 const integrations = createIntegrations({
   auth,
@@ -231,7 +245,7 @@ async function deleteAccount(req, res) {
   const ackLiveAds = new URL(req.url, 'http://local').searchParams.get('ackLiveAds') === '1';
   try {
     // launched ads first (409 ADS_LIVE unless acknowledged), then connected accounts (their vendor connections are
-    // deleted while the ids are still known), then posting, analytics, SEO and billing, then Omnisend
+    // deleted while the ids are still known), then posting, analytics, SEO and billing, then Omnisend, then Gmail
     try {
       await integrations.forgetUser(ident.who.id, { ackLiveAds });
     } catch (e) {
@@ -245,9 +259,17 @@ async function deleteAccount(req, res) {
       throw e;
     }
     try {
+      await gmail.forgetUser(ident.who.id);
+    } catch (e) {
+      await omnisend.unforgetUser(ident.who.id);
+      await integrations.unforgetUser(ident.who.id);
+      throw e;
+    }
+    try {
       await auth.deleteUser(ident.who.id);
     } catch (e) {
-      // the account stays: don't keep it from connecting Omnisend for a week
+      // the account stays: don't keep it from connecting Omnisend or Gmail for a week
+      await gmail.unforgetUser(ident.who.id);
       await omnisend.unforgetUser(ident.who.id);
       await integrations.unforgetUser(ident.who.id);
       throw e;
@@ -297,6 +319,7 @@ function route(req, res, url) {
   }
   if (cron.match(url)) return void cron.handle(req, res, url, send).catch((e) => crashed(req, res, e));
   if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url).catch((e) => crashed(req, res, e));
+  if (url.pathname.startsWith('/api/integrations/gmail/')) return void gmail.handle(req, res, url).catch((e) => crashed(req, res, e));
   // connected accounts, the Upload-Post, Zernio and Nango webhooks (raw body), posting, public media links, analytics, SEO on Google, billing
   if (integrations.match(url)) return void integrations.handle(req, res, url).catch((e) => crashed(req, res, e));
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res).catch((e) => crashed(req, res, e));
@@ -366,6 +389,7 @@ server.listen(PORT, HOST, async () => {
   if (auth.enabled && pages.enabled) console.log('Lead forms: on (they need supabase/migrations/20261103050000_page_leads.sql in Supabase too; limits: LEADS_PER_IP_PER_HOUR, LEADS_PER_PAGE_PER_HOUR).');
   if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
   for (const line of integrations.notes()) console.log(line);
+  for (const line of gmail.notes()) console.log(line);
   for (const line of cron.notes()) console.log(line);
   // the startup sweeps: stuck posting jobs and analytics runs, unsettled treg calls (never a resend)
   void integrations.start();

@@ -9,6 +9,7 @@
 // Each side is switched on by its own key; a side that's off says so, and the owner alone sees which Replit
 // Secrets to add and the webhook address to register (names and addresses, never values).
 // Other integrations (Nango: future booking tools and CRMs) show only when the owner has set them up.
+// Gmail is separate from Nango: one mailbox per signed-in customer, for outreach later.
 // Nothing here posts or changes anything at the network.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeftRight, BarChart3, CalendarClock, Pin, Plug, RefreshCw, Target, Unplug } from 'lucide-react';
@@ -24,6 +25,7 @@ import { PlatformMark } from '@/components/posts/PlatformIcon';
 import { Badge, Callout, InfoTip, Modal, MoreMenu, OptionCards, SettingsRow, SettingsSection, Spinner, StatusDot, confirmAction, type MenuEntry } from '@/components/ui/primitives';
 import { disconnectWarning, liveAdsFor } from '@/components/ads/liveAds';
 import { PLATFORM_NAMES } from '@/pages/marketing/analytics/links';
+import { GmailAccount } from './GmailAccount';
 
 const SOCIAL: readonly ConnectPlatform[] = SOCIAL_PLATFORMS;
 const ADS: readonly ConnectPlatform[] = AD_PLATFORMS;
@@ -237,6 +239,7 @@ export function ConnectedAccounts() {
         {sideOff(adsOn, 'Connecting ad accounts')}
         {ADS.map(row)}
       </SettingsSection>
+      <GmailAccount />
       <OtherIntegrations />
       {choose && <ChooseTarget platform={choose} onClose={() => setChoose(null)} />}
     </div>
