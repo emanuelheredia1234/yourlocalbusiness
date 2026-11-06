@@ -220,3 +220,18 @@ describe('who drives the jobs', () => {
     expect(bearerMatches(`Basic ${SECRET}`, SECRET)).toBe(false);
   });
 });
+
+describe('the pg_cron migration', () => {
+  it('posts hourly to the tick with the Vault secret, and is safe to run again', async () => {
+    const fs = await import('node:fs');
+    const sql = fs.readFileSync(new URL('../../supabase/migrations/20261109000000_cron_tick.sql', import.meta.url), 'utf8');
+    expect(sql).toMatch(/create extension if not exists pg_cron/);
+    expect(sql).toMatch(/create extension if not exists pg_net/);
+    expect(sql).toContain(`https://yourlocalbusiness.replit.app${TICK_PATH}`);
+    expect(sql).toMatch(/cron\.unschedule\('ylb-cron-tick'\)/);
+    expect(sql).toMatch(/where s\.name = 'cron_secret'/);
+    expect(sql).toMatch(/'7 \* \* \* \*'/);
+    // no secret value in the file: only the Vault lookup
+    expect(sql).not.toMatch(/Bearer [A-Za-z0-9]{16,}/);
+  });
+});
