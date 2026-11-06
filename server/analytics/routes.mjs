@@ -23,6 +23,8 @@ export function createAnalyticsRoutes(deps = {}) {
   async function route(req, res, url, who) {
     const p = url.pathname;
     if (p === `${PREFIX}refresh` && req.method === 'POST') {
+      // a paused plan refuses before any vendor call (402 PLAN_REQUIRED / PAYMENT_REQUIRED; a no-op without plans)
+      await deps.billing?.requireActive?.(who, 'analytics');
       if (kit.limited(req, res, { bucket: 'analytics-refresh' }, who.id)) return;
       const body = await kit.body(req);
       const projectId = projectIdFrom(body.projectId);

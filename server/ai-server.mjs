@@ -209,6 +209,8 @@ const integrations = createIntegrations({
 // periodic jobs (server/cron): Supabase pg_cron calls POST /api/cron/tick hourly with "Authorization: Bearer
 // <CRON_SECRET>"; each job runs once per period behind an app_state claim. Local dev (no CRON_SECRET, not a Replit
 // deployment) ticks in-process instead.
+// plans (server/billing/stripe.mjs): the AI routes gate on them once they're enforced
+ai.setBilling(integrations.billing);
 const cron = createCron({ storage: appState });
 for (const job of integrations.cronJobs()) cron.register(job);
 // keys and settings saved in Supabase (when its secret key is set) before the first request
@@ -261,7 +263,7 @@ async function deleteAccount(req, res) {
 
 // published pages: the signed-in API, the pages themselves, and people's own domains
 // (appHostExtras: the app host's /sitemap.xml, /robots.txt and Search Console file, server/seo/sitemap.mjs)
-const pages = pagesFromEnv(process.env, { auth, whoIs: ai.whoIs, send, readJson, rateLimited, corsHeaders, allowedOrigin: ALLOWED_ORIGIN, distDir: DIST, appHostExtras: integrations.appHostExtras });
+const pages = pagesFromEnv(process.env, { auth, whoIs: ai.whoIs, send, readJson, rateLimited, corsHeaders, allowedOrigin: ALLOWED_ORIGIN, distDir: DIST, appHostExtras: integrations.appHostExtras, billing: integrations.billing });
 
 const crashed = (req, res, e) => {
   console.error(e);
@@ -276,7 +278,8 @@ function route(req, res, url) {
   }
   if (url.pathname === '/api/config' && req.method === 'GET') {
     // what the browser needs to sign in (the publishable key is meant to be public), and whether it can publish pages
-    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config() }, corsHeaders(req));
+    // billing: whether plans are set up and enforced (no key, no ids)
+    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config(), billing: integrations.billing.config() }, corsHeaders(req));
   }
   if (url.pathname === '/api/health' && req.method === 'GET') {
     // `ok`: the server is up; `ai` says which keys are ready and what powers each function (signed-in users only, with accounts on)

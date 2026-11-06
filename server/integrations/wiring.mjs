@@ -75,6 +75,7 @@ export function billingFacade(get) {
     requireActive: async (who, feature = null) => (impl() ? impl().requireActive(who, feature) : null),
     businessLimit: async (userId, who = null) => (impl() ? impl().businessLimit(userId, who) : null),
     pagesServeUntil: async (userId) => (impl() ? impl().pagesServeUntil(userId) : null),
+    tregCapsFor: async (tag) => (impl() ? impl().tregCapsFor(tag) : null),
     config: () => (impl() ? impl().config() : { enabled: false, enforce: false }),
     notes: () => impl()?.notes?.() ?? [],
   };
@@ -160,7 +161,8 @@ export function createIntegrations({
   const selected = selectConnections(env);
   const connections = createConnections(combineConnections({ social: selected.social ? make.uploadPost(base) : null, ads: selected.ads ? make.zernio(base) : null }));
   const nango = has(env, 'NANGO_SECRET_KEY') ? make.nango(base) : nullNango;
-  const treg = make.treg({ env, fetch, now, db: database, log });
+  // the tier layer of each customer's treg caps comes from the plans (late-bound: the billing module is made below)
+  const treg = make.treg({ env, fetch, now, db: database, log, tierFor: (tag) => billing.tregCapsFor(tag) });
   // the disconnect route asks the ads module which launched campaigns are still on (R12); the module is made below
   let adsModule = null;
   const deps = { ...base, connections, nango, treg, liveAdsGuard: (userId, platform) => adsModule?.liveOn?.(userId, platform) ?? [] };

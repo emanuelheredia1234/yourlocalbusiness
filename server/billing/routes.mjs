@@ -68,7 +68,8 @@ export function createBillingRoutes({
 } = {}) {
   const ledger = createLedger({ db, now, log });
   const admin = adminOverride ?? createTregAdmin({ env, fetch, log });
-  const caps = createCaps({ db, ledger, admin, storage, now, log });
+  // the tier layer comes from the plans (made just below; asked only when a cap is read)
+  const caps = createCaps({ db, ledger, admin, storage, now, log, tierFor: (tag) => plans.tregCapsFor(tag) });
   const reply = (req, res, status, body, headers = {}) => send(res, status, body, { ...corsHeaders(req), ...headers });
   // one settle run at a time in this server: an overlapping run would write a second 'settled' row for a call
   let settling = null;

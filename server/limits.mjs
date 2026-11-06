@@ -227,6 +227,59 @@ export function createLimits({ supabaseUrl = '', secretKey = '', fetch = globalT
     },
 
     /**
+     * A user's dollars on the app's keys since `sinceDay` (YYYY-MM-DD, inclusive; at most ~31 rows): { usd, known }.
+     * Their own keys never count (own_usd). Same fail-closed rule as the daily counters: Supabase unreadable and
+     * nothing seen here for them → known: false.
+     */
+    async monthUsage(userId, sinceDay) {
+      const mem = () => round6(memoryRows((r) => r.user_id === userId && r.day >= sinceDay).reduce((n, r) => n + num(r.usd), 0));
+      if (enabled && UUID.test(userId)) {
+        try {
+          const got = await rows(`user_id=eq.${encodeURIComponent(userId)}&day=gte.${sinceDay}&select=day,usd&limit=40`);
+          problem = null;
+          return { usd: round6(got.reduce((n, r) => n + num(r.usd), 0)), known: true };
+        } catch (e) {
+          note(e);
+          if (e?.code === 'NOT_SET_UP') return { usd: mem(), known: true };
+          const seen = memoryRows((r) => r.user_id === userId && r.day >= sinceDay).length > 0;
+          return { usd: mem(), known: seen };
+        }
+      }
+      return { usd: mem(), known: true };
+    },
+
+    /**
+     * Where a user stands against their plan's monthly AI credits (plans: budgetUsd = credits × $0.01), counting this
+     * process's requests in flight like status() so parallel requests can't all slip under it. strict: refuse when
+     * this request's own estimate would take the month over (videos, web research).
+     */
+    async monthStatus(userId, { budgetUsd, sinceDay, resetsAt = null }, { reservation = null, strict = false } = {}) {
+      const { usd, known } = await this.monthUsage(userId, sinceDay);
+      const mine = inflight.get(userId) ?? new Map();
+      const upTo = reservation?.seq ?? Infinity;
+      let pendingUsd = 0;
+      let ownUsd = 0;
+      for (const [id, est] of mine) {
+        if (id > upTo) continue;
+        if (id === upTo) ownUsd = est;
+        else pendingUsd += est;
+      }
+      const budget = Math.max(0, num(budgetUsd));
+      const spent = usd + pendingUsd;
+      const over = spent >= budget || (strict && reservation && round6(spent + ownUsd) > budget);
+      return {
+        budgetUsd: round6(budget),
+        usedUsd: round6(usd),
+        pendingUsd: round6(pendingUsd),
+        estimateUsd: round6(ownUsd),
+        resetsAt,
+        unavailable: !known,
+        tooCostly: spent < budget && over,
+        reached: over || !known,
+      };
+    },
+
+    /**
      * Where a user stands against the owner's daily limits.
      * reservation: this request's own reserve() (only the requests ahead of it, and it, count).
      * strict: refuse when this request's own estimate would take the dollars over the limit (videos);

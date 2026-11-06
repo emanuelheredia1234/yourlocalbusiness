@@ -89,7 +89,7 @@ export function createAdsRoutes(deps = {}) {
     limits,
     /** ad accounts with a write in flight here (one at a time per ad account; pause and end never wait) */
     busy: new Set(),
-    canLaunchAds: (userId) => gate(userId, { db, env }),
+    canLaunchAds: (userId) => gate(userId, { db, env, billing: deps.billing ?? null }),
     mediaStore: deps.mediaStore ?? createMediaStore({ env, fetch }),
     tagOf: (userId) => customerTag(userId, env),
   };

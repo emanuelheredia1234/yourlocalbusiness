@@ -167,6 +167,8 @@ export function createConnectionRoutes(deps = {}) {
       if (route === 'POST connect' || route === 'POST reconnect') {
         // only the business id is read from the body: who connects is the signed-in user, nothing else
         const projectId = projectFrom((await body(req)).projectId);
+        // a paused plan can't connect new accounts (disconnecting always works; 402, a no-op without plans)
+        await deps.billing?.requireActive?.(who, 'connect');
         if (limit('integrations-connect', who.id)) throw fail(429, 'RATE_LIMITED', 'Too many connect attempts. Try again later.');
         const link = action === 'connect' ? await connections.connectLink(who.id, platform, { projectId }) : await connections.reconnectLink(who.id, platform, { projectId });
         reply(req, res, 200, link.alreadyConnected ? { alreadyConnected: true } : { connectLink: link.connectLink, expiresAt: link.expiresAt });

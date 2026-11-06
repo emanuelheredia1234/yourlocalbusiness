@@ -1,5 +1,6 @@
 // Per-customer caps (table billing_caps): the '*' row holds the defaults, a row per customer tag overrides
-// them (a null field inherits the default), and status 'blocked' cuts a customer off.
+// them (a null field inherits the default), and status 'blocked' cuts a customer off. With plans enforced, the
+// customer's tier adds a layer between the two (its treg budget from shared/plans.json): defaults < tier < override.
 //
 //   const caps = createCaps({ db, ledger, admin, storage, now, log });   // admin: server/billing/tregAdmin.mjs
 //   await caps.check(tag, { estimateMicro })   throws TregError customer_blocked | customer_cap (same as treg's)
@@ -63,9 +64,12 @@ export function parseCapFields(body) {
   return out;
 }
 
-/** Defaults merged with an override: the override's null fields inherit. */
-export function mergeCaps(defaults, override) {
-  const d = { ...BUILTIN_DEFAULTS, ...dropNulls(defaults) };
+/**
+ * Defaults merged with an override: the override's null fields inherit. tierLayer (plans): the tier's money caps
+ * ({ monthly_cap_micro, daily_cap_micro }) on top of the defaults and under the override.
+ */
+export function mergeCaps(defaults, override, tierLayer = null) {
+  const d = { ...BUILTIN_DEFAULTS, ...dropNulls(defaults), ...dropNulls(tierLayer ? { daily_cap_micro: tierLayer.daily_cap_micro, monthly_cap_micro: tierLayer.monthly_cap_micro } : null) };
   if (!override) return { ...d, status: d.status === 'blocked' ? 'blocked' : 'active' };
   const out = { ...d };
   for (const [, col] of NUMERIC) if (override[col] != null) out[col] = Number(override[col]);
@@ -86,7 +90,11 @@ export function tregBudgetBody(caps) {
   return body;
 }
 
-export function createCaps({ db, ledger, admin = null, storage = null, now = () => Date.now(), log = console } = {}) {
+/**
+ * tierFor(tag) → { monthly_cap_micro, daily_cap_micro } | null: the customer's plan layer (server/billing/stripe.mjs
+ * tregCapsFor); null or absent → no layer (plans off, the owner, no plan).
+ */
+export function createCaps({ db, ledger, admin = null, storage = null, now = () => Date.now(), log = console, tierFor = null } = {}) {
   const stamp = () => new Date(now()).toISOString();
 
   async function rowFor(tag) {
@@ -98,9 +106,19 @@ export function createCaps({ db, ledger, admin = null, storage = null, now = () 
     return { ...BUILTIN_DEFAULTS, ...dropNulls(await rowFor('*')) };
   }
 
+  async function tierLayer(tag) {
+    if (tag === '*' || typeof tierFor !== 'function') return null;
+    try {
+      return (await tierFor(tag)) ?? null;
+    } catch {
+      // the plan can't be read now: the defaults and the override still apply
+      return null;
+    }
+  }
+
   async function effective(tag) {
-    const [d, o] = await Promise.all([rowFor('*'), tag === '*' ? null : rowFor(tag)]);
-    return mergeCaps(d, o);
+    const [d, o, t] = await Promise.all([rowFor('*'), tag === '*' ? null : rowFor(tag), tierLayer(tag)]);
+    return mergeCaps(d, o, t);
   }
 
   /** Mark a row synced (or not) with treg. */
@@ -117,12 +135,13 @@ export function createCaps({ db, ledger, admin = null, storage = null, now = () 
     if (!admin || admin.stub) return false;
     try {
       const row = await rowFor(tag);
-      if (!row) {
+      // a tier layer is sent even without an override row (the plan's budget is the customer's ceiling at treg)
+      if (!row && !(await tierLayer(tag))) {
         await admin.budgets.delete(tag);
         return true;
       }
       await admin.budgets.put(tag, tregBudgetBody(await effective(tag)));
-      await markSynced(tag, true);
+      if (row) await markSynced(tag, true);
       return true;
     } catch (e) {
       safeLog('billing_cap_sync_failed', { kind: e?.kind, code: e?.code }, log);

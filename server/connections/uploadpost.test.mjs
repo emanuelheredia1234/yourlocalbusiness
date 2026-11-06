@@ -31,7 +31,7 @@ afterAll(async () => {
   await mock.close();
 });
 
-function setup({ env = {}, start = Date.now(), storage = makeStorage(), db = makeDb() } = {}) {
+function setup({ env = {}, start = Date.now(), storage = makeStorage(), db = makeDb(), billing = null } = {}) {
   const log = makeLog();
   const clock = { t: start };
   const fullEnv = {
@@ -46,7 +46,7 @@ function setup({ env = {}, start = Date.now(), storage = makeStorage(), db = mak
     GSC_APP_PROPERTY: 'https://yourlocalbusiness.replit.app/',
     ...env,
   };
-  const impl = createUploadPostConnections({ env: fullEnv, storage, db, log, now: () => clock.t, sleep: async (ms) => void (clock.t += ms) });
+  const impl = createUploadPostConnections({ env: fullEnv, storage, db, log, now: () => clock.t, sleep: async (ms) => void (clock.t += ms), billing });
   return { impl, connections: createConnections(combineConnections({ social: impl })), storage, db, log, env: fullEnv, clock };
 }
 
@@ -418,6 +418,32 @@ describe('each user’s limit of businesses (UPLOAD_POST_MAX_PROFILES_PER_USER)'
     expect(out.find((o) => o.status === 'rejected').reason).toMatchObject({ code: 'BUSINESS_LIMIT' });
     expect(await t.connections.slots(FAY)).toMatchObject({ used: 2 });
     expect([...mock.profiles.keys()].filter((u) => u.startsWith(name.slice(0, 29)))).toHaveLength(2);
+  });
+});
+
+describe('the limit with plans (spec §A6.4): business_limit replaces the env cap once plans are enforced', () => {
+  it('follows the plan’s business limit, says so in our words, and goes back to the env value when plans are off', async () => {
+    let limit = 2;
+    const billing = { businessLimit: async () => limit };
+    const t = setup({ billing });
+    const GUS = 'a9111111-2222-4333-8444-555555555555';
+    for (const p of [P1, P2, P3, P4]) await business(t, GUS, p);
+    for (const p of [P1, P2]) await t.connections.connectLink(GUS, 'x', { projectId: p });
+    expect(await t.connections.slots(GUS)).toMatchObject({ used: 2, cap: 2 });
+    const err = await t.connections.connectLink(GUS, 'x', { projectId: P3 }).catch((e) => e);
+    expect(err).toMatchObject({ status: 409, code: 'BUSINESS_LIMIT', extra: { used: 2, cap: 2 } });
+    expect(errorBody(err, null).body.error).toBe('Your plan includes 2 businesses with social accounts. Add a business in Settings › Plan.');
+    // a business added on the plan: the third connects
+    limit = 3;
+    expect((await t.connections.connectLink(GUS, 'x', { projectId: P3 })).connectLink).toBeDefined();
+    // a paused plan: nothing new (the existing ones are kept)
+    limit = 0;
+    const paused = await t.connections.connectLink(GUS, 'x', { projectId: P4 }).catch((e) => e);
+    expect(paused).toMatchObject({ status: 402, code: 'PLAN_REQUIRED' });
+    expect((await t.connections.connectLink(GUS, 'tiktok', { projectId: P1 })).connectLink).toBeDefined();
+    // plans not enforced (null): the env value as before plans
+    limit = null;
+    expect(await t.connections.slots(GUS)).toMatchObject({ cap: 3 });
   });
 });
 

@@ -177,6 +177,22 @@ export function createStripeBilling({
     return ent.businessLimit ?? 1000;
   }
 
+  /**
+   * The treg caps of a customer's plan ({ monthly_cap_micro, daily_cap_micro }) for server/billing/caps.mjs, or null
+   * (plans not enforced, the owner, no plan). A paused plan keeps its layer: the analytics route refuses it.
+   */
+  async function tregCapsFor(tag) {
+    if (!TAG.test(String(tag ?? '')) || !db?.enabled) return null;
+    const s = await settings();
+    if (s.enforce !== true) return null;
+    const [acct] = await db.select('billing_accounts', { customer_tag: tag }, { limit: 1 });
+    if (!acct) return null;
+    const ent = entitlementOf(acct, s, now());
+    const t = ent.features?.treg;
+    if (ent.plan === 'owner' || ent.plan === 'none' || !t) return null;
+    return { monthly_cap_micro: t.monthlyMicro, daily_cap_micro: t.dailyMicro };
+  }
+
   /** Until when a user's published pages keep serving (null: no end). Fail-open: errors and not enforced → null. */
   const pagesCache = new Map();
   async function pagesServeUntil(userId) {
@@ -1255,6 +1271,7 @@ export function createStripeBilling({
     requireActive,
     businessLimit,
     pagesServeUntil,
+    tregCapsFor,
     forgetUser,
     cronJobs,
     configured,
