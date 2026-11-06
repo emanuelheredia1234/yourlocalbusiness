@@ -1,42 +1,27 @@
-// Posting a saved post on a connected account (spec §1.7): checks, the job, the adapter run, the ledger.
+// Posting a saved post on a connected account through Zernio (spec §1.7, owner decision): checks, the job, the one
+// POST /v1/posts (server/connections/zernio.mjs publish()), the ledger.
 //
 //   const posting = createPosting({ db, connections, env, fetch, now, log });
 //   await posting.publish(who, body)  → { status: 200, job }    (the job is `sending`; it finishes in the background)
-//   await posting.check(who, jobId)   → { job }                 ("Check again" on an `unknown` job: one read)
+//   await posting.check(who, jobId)   → { job }                 ("Check again" on an `unknown` job: one read of the
+//                                                               post's status at Zernio)
 //   await posting.job(who, jobId)     → { job }                 (a database read only)
 //   await posting.list(who, projectId)→ { jobs }
+//   await posting.fromWebhook(userId, jobId, outcome)            a post.* webhook's definite answer for a job
 //
 // What it never does: send a post twice by itself, use text from the request as the post (the post is re-read
 // from the user's account and must match), or put a token or a media link in a log.
 
-import { ensureCustomer, fail, isUuid, notSetUp, safeLog, utcDay } from '../integrations/common.mjs';
+import { ensureCustomer, fail, isUuid, safeLog, utcDay } from '../integrations/common.mjs';
 import { PUBLISH_PLATFORMS } from '../integrations/contracts.mjs';
-import { ADAPTERS } from './adapters/index.mjs';
-import { proxyRead, proxyWrite } from './adapters/common.mjs';
-import { cleanHashtags, composeFor, placementOf, xPostCost } from './caption.mjs';
-import { createDirect } from './direct.mjs';
+import { cleanHashtags, composeFor, placementOf } from './caption.mjs';
 import { createJobs, jobOut } from './jobs.mjs';
-import { canMakePublicLinks, createMediaStore, formatProblem, MEDIA_ID_RE, mediaKind, publicMediaUrl } from './media.mjs';
+import { createMediaStore, formatProblem, MEDIA_ID_RE, mediaKind } from './media.mjs';
 
-export const DEFAULT_TIMING = Object.freeze({
-  writeMs: 120_000,
-  readMs: 30_000,
-  igPollMs: 60_000,
-  igVideoMaxMs: 5 * 60_000,
-  tiktokPollMs: 10_000,
-  tiktokMaxMs: 2 * 60_000,
-  xVideoMaxMs: 2 * 60_000,
-});
 /** The posting caps when billing_caps has no row at all (the migration's '*' row says the same). */
 export const DEFAULT_POST_CAPS = Object.freeze({ postsPerDay: 50, xPostsPerDay: 20 });
-/** X's list price for a "Check again" (one user read + up to 5 post reads), an estimate in micro-USD. */
-const X_CHECK_COST_MICRO = 35_000;
 
 const NETWORK = { facebook: 'Facebook', instagram: 'Instagram', linkedin: 'LinkedIn', tiktok: 'TikTok', x: 'X', youtube: 'YouTube' };
-/** networks whose posts go to a chosen Page, account or organization */
-const NEEDS_TARGET = new Set(['facebook', 'instagram', 'linkedin']);
-/** networks that fetch the file from our short-lived link */
-const pullsMedia = (platform, env, kind) => platform === 'instagram' || (platform === 'facebook' && kind === 'image') || (platform === 'tiktok' && (kind === 'image' || String(env.TIKTOK_UPLOAD_MODE || '').toUpperCase() === 'PULL_FROM_URL'));
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const idOf = (v, max = 120) => (typeof v === 'string' && v.length > 0 && v.length <= max && /^[A-Za-z0-9._:-]+$/.test(v) ? v : null);
@@ -84,7 +69,7 @@ function connectionProblem(platform, status) {
   const name = NETWORK[platform];
   const state = status?.state;
   if (state === 'connected' || (state === 'limited' && ['private_only', 'insights_unavailable'].includes(status.limitedReason))) {
-    if (NEEDS_TARGET.has(platform) && !status.targetLabel) return fail(409, 'NOT_CONNECTED', `Choose which ${platform === 'linkedin' ? 'profile or page' : 'Page'} to post to in Settings → Connected accounts.`);
+    if (!status.targetLabel) return fail(409, 'NOT_CONNECTED', `Choose which ${name} account to post to in Settings → Connected accounts.`);
     return null;
   }
   if (state === 'needs_reconnect' || (state === 'limited' && status.limitedReason === 'missing_permissions')) return fail(409, 'NEEDS_RECONNECT', `Reconnect ${name} in Settings → Connected accounts, or post it yourself.`);
@@ -92,17 +77,14 @@ function connectionProblem(platform, status) {
   return fail(409, 'NOT_CONNECTED', `Connect ${name} to post from here, or post it yourself.`);
 }
 
-export function createPosting({ db, connections, env = process.env, fetch = globalThis.fetch, now = () => Date.now(), log = console, sleep, timing = {}, mediaStore, direct } = {}) {
-  const T = { ...DEFAULT_TIMING, ...timing };
-  const wait = sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+export function createPosting({ db, connections, env = process.env, fetch = globalThis.fetch, now = () => Date.now(), log = console, mediaStore } = {}) {
   const jobs = createJobs({ db, now });
   const store = mediaStore ?? createMediaStore({ env, fetch });
-  const directCalls = direct ?? createDirect({ env, fetch, timeouts: { readMs: T.readMs, writeMs: T.writeMs } });
   /** background runs, for tests (settled()) */
   const running = new Set();
 
-  async function statusFor(userId, platform) {
-    const all = await connections.status(userId);
+  async function statusFor(userId, platform, projectId) {
+    const all = await connections.status(userId, { projectId });
     return (Array.isArray(all) ? all : []).find((s) => s?.platform === platform) ?? { platform, state: 'not_connected' };
   }
 
@@ -128,59 +110,36 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
     return { postsPerDay: pick('posts_per_day', DEFAULT_POST_CAPS.postsPerDay), xPostsPerDay: pick('x_posts_per_day', DEFAULT_POST_CAPS.xPostsPerDay), blocked: own.status === 'blocked' };
   }
 
-  /** The context an adapter works with (adapters/common.mjs). */
-  function contextFor({ userId, platform, status, composed, media, privacy, job, extra = {} }) {
-    return {
-      userId,
-      platform,
-      status,
-      composed,
-      media,
-      privacy,
-      job,
-      env,
-      timing: T,
-      connections,
-      direct: directCalls,
-      mediaStore: store,
-      sleep: wait,
-      now,
-      requestedAt: job?.requested_at,
-      read: (req) => proxyRead(connections, userId, platform, req, T.readMs),
-      write: (req) => proxyWrite(connections, userId, platform, req, T.writeMs),
-      publicUrl: () => publicMediaUrl(env, { userId, mediaId: media.id, kind: media.kind }, now()),
-      note: (ref) => (job ? jobs.note(userId, job.id, ref).catch(() => null) : null),
-      ...extra,
-    };
-  }
-
-  /** Run the adapter for a job that is `sending`, and record how it ended. Never throws, never resends. */
-  async function run(ctx, row, tag) {
-    const { userId, platform } = ctx;
+  /** Post a job that is `sending` (one attempt at Zernio), and record how it ended. Never throws, never resends. */
+  async function run({ userId, platform, composed, media, privacy }, row) {
     jobs.active.add(row.id);
     let outcome;
     try {
-      outcome = await ADAPTERS[platform].publish(ctx);
+      outcome = await connections.publish(userId, platform, {
+        projectId: row.project_id,
+        jobId: row.id,
+        composed,
+        media,
+        privacy,
+        loadMedia: async () => {
+          const got = await store.bytes(userId, media.id);
+          if (!got) throw Object.assign(new Error('missing'), { code: 'MEDIA_MISSING' });
+          return got.bytes;
+        },
+      });
     } catch (e) {
       // anything unexpected after the job started: it may have gone out
-      safeLog('posting_adapter_error', { platform, error: e?.name || 'Error', code: e?.code }, log);
+      safeLog('posting_publish_error', { platform, error: e?.name || 'Error', code: e?.code }, log);
       outcome = { state: 'unknown' };
     }
     if (!outcome || !['sent', 'failed', 'unknown'].includes(outcome.state)) outcome = { state: 'unknown' };
-    const ref = { ...(outcome.ref ?? {}), ...(outcome.comment ? { comment: outcome.comment } : {}) };
     let finished = null;
     try {
-      finished = await jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref });
+      finished = await jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.ref ?? {} });
     } catch (e) {
       safeLog('posting_finish_failed', { platform, code: e?.code }, log);
     } finally {
       jobs.active.delete(row.id);
-    }
-    const base = { customer_tag: tag, user_id: userId, project_id: row.project_id, call_id: row.id, outcome: outcome.state };
-    await ledger({ ...base, vendor: 'nango', endpoint: `${platform}:publish` });
-    if (platform === 'x' && outcome.state !== 'failed') {
-      await ledger({ ...base, vendor: 'x', endpoint: 'x:POST /2/tweets', cost_micro: xPostCost(ctx.composed), estimated: true });
-      if (outcome.comment === 'added') await ledger({ ...base, vendor: 'x', endpoint: 'x:POST /2/tweets (reply)', cost_micro: xPostCost({ hasUrl: /https?:\/\//i.test(ctx.composed.comment ?? '') }), estimated: true });
     }
     safeLog('posting_job_done', { platform, state: outcome.state, error: outcome.errorCode ?? null }, log);
     return finished;
@@ -219,7 +178,7 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       if (!contentMatches(post, body.content, platform)) throw fail(409, 'POST_CHANGED', 'The post changed since you opened it. Save the post first.');
 
       if (!connections.enabled) throw fail(503, 'CONNECTIONS_NOT_ENABLED', 'Connecting accounts is coming soon. You can still post yourself and mark posts as posted.');
-      const status = await statusFor(userId, platform);
+      const status = await statusFor(userId, platform, projectId);
       const problem = connectionProblem(platform, status);
       if (problem) throw problem;
 
@@ -238,9 +197,6 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       }
       const why = formatProblem(platform, media);
       if (why) throw fail(400, 'MEDIA_UNSUPPORTED', why);
-      if (media && pullsMedia(platform, env, media.kind) && !canMakePublicLinks(env)) {
-        throw notSetUp('Add MEDIA_URL_SECRET (32+ random bytes) in Replit Secrets.', 'Posting photos and videos from the app isn’t set up yet. Post it yourself for now.');
-      }
 
       // the customer's daily posting cap (X bills each post)
       const tag = await ensureCustomer(db, userId, env);
@@ -256,15 +212,12 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       if (live) throw fail(409, 'ALREADY_PUBLISHING', `This post is already ${live.state === 'sent' ? 'posted' : 'being posted'} on ${NETWORK[platform]}.`, { job: jobOut(live) });
 
       const privacy = typeof body.privacy === 'string' ? body.privacy.slice(0, 40) : undefined;
-      const ctx = contextFor({ userId, platform, status, composed, media, privacy, job: null });
-      const pre = (await ADAPTERS[platform].preflight?.(ctx)) ?? {};
 
       const made = await jobs.create({ userId, projectId, postId, platform, clientRequestId });
       if (made.existing && made.why === 'same_request') return { job: jobOut(made.row) };
       if (made.existing) throw fail(409, 'ALREADY_PUBLISHING', `This post is already being posted on ${NETWORK[platform]}.`, { job: jobOut(made.row) });
       const row = (await jobs.start(userId, made.row.id)) ?? made.row;
-      const runCtx = { ...contextFor({ userId, platform, status, composed, media, privacy, job: row }), ...pre };
-      const p = run(runCtx, row, tag).finally(() => running.delete(p));
+      const p = run({ userId, platform, composed, media, privacy }, row).finally(() => running.delete(p));
       running.add(p);
       return { job: jobOut(row) };
     },
@@ -285,7 +238,7 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       return { jobs: (await jobs.list(who.id, id)).map(jobOut) };
     },
 
-    /** "Check again" on an `unknown` job: one read-only check, at most once per 30 s. Never resends. */
+    /** "Check again" on an `unknown` job: one read of the post at Zernio, at most once per 30 s. Never resends. */
     async check(who, jobId) {
       const userId = who.id;
       if (!isUuid(jobId)) throw fail(404, 'NOT_FOUND', 'No such post job.');
@@ -293,41 +246,39 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       const row = await jobs.byId(userId, jobId);
       if (!row) throw fail(404, 'NOT_FOUND', 'No such post job.');
       if (row.state !== 'unknown') return { job: jobOut(row) };
-      // a LinkedIn member's own posts can't be read back: nothing to call
-      if (row.provider_ref?.checkable === false) return { job: jobOut(row) };
+      if (!connections.enabled) return { job: jobOut(row) };
       const claimed = await jobs.claimCheck(userId, row);
-      let post;
-      try {
-        post = await loadPost(db, userId, row.post_id, row.project_id);
-      } catch {
-        return { job: jobOut(claimed) };
-      }
-      const platform = row.platform;
-      const adapter = ADAPTERS[platform];
-      if (!adapter || !connections.enabled) return { job: jobOut(claimed) };
-      const status = await statusFor(userId, platform);
-      const ctx = contextFor({ userId, platform, status, composed: composeFor(platform, post), media: null, job: claimed });
       let found = null;
       try {
-        found = await adapter.check(ctx, claimed);
+        found = await connections.postStatus(userId, { ...(claimed.provider_ref ?? {}), jobId: claimed.id, requestedAt: claimed.requested_at, platform: claimed.platform });
       } catch (e) {
-        safeLog('posting_check_error', { platform, error: e?.name || 'Error' }, log);
+        safeLog('posting_check_error', { platform: row.platform, error: e?.name || 'Error' }, log);
       }
-      if (found === null) return { job: jobOut(claimed) };
       let tag = null;
       try {
         tag = await ensureCustomer(db, userId, env);
       } catch {
         /* no tag: the check still answers */
       }
-      if (tag) {
-        const base = { customer_tag: tag, user_id: userId, project_id: row.project_id, call_id: row.id, outcome: found.found ? 'sent' : 'unknown' };
-        await ledger({ ...base, vendor: 'nango', endpoint: `${platform}:check` });
-        if (platform === 'x') await ledger({ ...base, vendor: 'x', endpoint: 'x:GET /2/users/{id}/tweets', cost_micro: X_CHECK_COST_MICRO, estimated: true });
-      }
+      if (tag) await ledger({ customer_tag: tag, user_id: userId, project_id: row.project_id, call_id: row.id, vendor: 'zernio', endpoint: `${row.platform}:GET /v1/posts`, outcome: found?.found ? 'sent' : found?.failed ? 'failed' : 'unknown' });
+      if (!found) return { job: jobOut(claimed) };
       if (found.found) return { job: jobOut(await jobs.finish(userId, row.id, { state: 'sent', url: found.url, ref: found.ref })) };
-      if (found.failed) return { job: jobOut(await jobs.finish(userId, row.id, { state: 'failed', errorCode: 'REFUSED', ref: found.ref })) };
+      if (found.failed) return { job: jobOut(await jobs.finish(userId, row.id, { state: 'failed', errorCode: found.errorCode ?? 'REFUSED', ref: found.ref })) };
+      // still publishing, or not found yet: stays unknown (never "send again")
       return { job: jobOut((await jobs.byId(userId, row.id)) ?? claimed) };
+    },
+
+    /**
+     * A post.* webhook's definite answer for one of this user's jobs (routed by the customer's externalId, then
+     * the job id we put in the post's metadata). Only a job still `sending` or `unknown` changes.
+     */
+    async fromWebhook(userId, jobId, outcome) {
+      if (!isUuid(userId) || !isUuid(jobId) || !outcome || !['sent', 'failed'].includes(outcome.state)) return null;
+      const row = await jobs.byId(userId, jobId);
+      if (!row || !['sending', 'unknown'].includes(row.state)) return null;
+      // a job this process is still posting finishes from its own answer
+      if (row.state === 'sending' && jobs.active.has(row.id)) return null;
+      return jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.postId ? { postId: outcome.postId } : undefined });
     },
 
     /** Startup: jobs a restart left `sending` become `unknown`. */

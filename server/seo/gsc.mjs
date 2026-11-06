@@ -1,6 +1,7 @@
 // Search Console reads for one page, built only from the requester's own published page (never a URL from the
-// browser). App-host pages are in the owner's property (GSC_APP_PROPERTY) through treg's team connection;
-// custom-domain pages in the user's own property through their connected Search Console.
+// browser). Every read goes through treg's team connection to the owner's Search Console: app-host pages are in the
+// owner's URL-prefix property (GSC_APP_PROPERTY); a customer's own domain is a Domain property (sc-domain:<domain>)
+// in the owner's account, verified by a DNS TXT record (server/seo/google.mjs).
 //
 // The owner's property holds every customer's pages, so each performance call carries exactly ONE filter,
 // {dimension:'page', operator:'equals', expression:<exact URL>}: `contains` on /joe would also count /joes-bakery.
@@ -63,25 +64,20 @@ export function sumPerformance(answers) {
   };
 }
 
-/** Site id for the user's own custom-domain property. */
+/** Site id of a customer's custom domain in the owner's Search Console (a Domain property). */
 export const domainProperty = (domain) => `sc-domain:${domain}`;
 
 /**
- * The page's last 28 days. page: ownSeoPage(...). runner: analytics runner (treg / own). property: the owner's
- * GSC_APP_PROPERTY (app host). → SeoData.gsc
+ * The page's last 28 days. page: ownSeoPage(...). runner: analytics runner (treg). property: the owner's
+ * GSC_APP_PROPERTY (app host); a custom domain reads its sc-domain property. → SeoData.gsc
  */
 export async function pagePerformance({ runner, page, property, now }) {
   const answers = [];
   for (const variant of pageVariants(page.url)) {
     const body = performanceBody(variant, now);
-    if (page.host === 'app') {
-      const got = await runner.treg('gsc.performance', body, 'gsc', { query: { siteUrl: property } });
-      answers.push(got.data);
-    } else {
-      const res = await runner.own('google_search_console', { method: 'POST', path: `/v3/sites/${encodeURIComponent(domainProperty(page.domain))}/searchAnalytics/query`, body });
-      if (res?.status >= 200 && res.status < 300) answers.push(res.body);
-      else throw Object.assign(new Error('gsc read failed'), { kind: res?.status === 401 || res?.status === 403 ? 'reconnect' : 'upstream' });
-    }
+    const siteUrl = page.host === 'app' ? property : domainProperty(page.domain);
+    const got = await runner.treg('gsc.performance', body, 'gsc', { query: { siteUrl } });
+    answers.push(got.data);
   }
   return sumPerformance(answers);
 }

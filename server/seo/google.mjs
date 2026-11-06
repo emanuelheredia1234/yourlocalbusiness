@@ -9,10 +9,13 @@
 // users (claimed in appState before the call); URL inspection draws on the property's 2,000 a day (refused above
 // 1,500, and above 20 per customer), at most once a week per page until it is indexed.
 //
-// Custom-domain page: the user's own connected Search Console. Steps, each one-shot and stored per page
-// (seo_google_steps): the DNS TXT token, Verify, add the site, submit the domain's sitemap, inspect the page. A later
-// press skips steps already 'ok'. A step whose outcome is 'unknown' is first checked with a read (sites, sitemaps);
-// it is sent again only when the read doesn't show it AND the user confirmed (resend: true).
+// Custom-domain page: also the owner's Search Console through treg's team connection, as a Domain property
+// (sc-domain:<domain>) the owner verifies with a DNS TXT record (docs/integrations-setup.md §3). Steps, stored per
+// page (seo_google_steps): 'verify' (a read: is the domain verified in the owner's account?), 'site_add' (one-shot,
+// once: adds the unverified property so the owner sees it waiting), then submit the domain's sitemap and inspect
+// the page. Until the owner has verified the domain the customer reads "waiting for verification" and nothing else
+// is sent. A later press skips steps already 'ok'. A step whose outcome is 'unknown' is first checked with a read
+// (sites, sitemaps); it is sent again only when the read doesn't show it AND the user confirmed (resend: true).
 //
 // Nothing here is retried by itself. There is no API to "request indexing": Google decides when to index.
 
@@ -27,6 +30,8 @@ import { claimInspection, claimStep, claimSubmit, inspectionDue, readSteps, reco
 
 const PREFIX = '/api/seo/google/';
 const STEP_ORDER = ['verify_token', 'verify', 'site_add', 'sitemap', 'inspect'];
+/** The owner's access to a property that means it is verified (siteUnverifiedUser means listed only). */
+const VERIFIED_LEVELS = new Set(['siteOwner', 'siteFullUser', 'siteRestrictedUser']);
 /** treg error kinds that mean Google was never asked (or refused outright): the step failed, nothing was done. */
 const DEFINITE = new Set(['bad_request', 'config', 'not_found', 'customer_cap', 'customer_blocked', 'too_expensive', 'team_unavailable']);
 /** Of those, the ones where treg itself refused, so Google was never asked at all. */
@@ -56,11 +61,6 @@ export function createSeoGoogleRoutes(deps = {}) {
     return { page, pageId: seoPageIdFor(projectId) };
   }
 
-  async function gscConnected(userId) {
-    const all = await connections.status(userId).catch(() => []);
-    return all.find((s) => s.platform === 'google_search_console')?.state === 'connected';
-  }
-
   // ───────────── status ─────────────
 
   async function status(who, projectId) {
@@ -68,7 +68,8 @@ export function createSeoGoogleRoutes(deps = {}) {
     if (!page) return { host: null, published: false };
     const steps = await readSteps(db, who.id, pageId);
     const out = { host: page.host, published: true };
-    if (page.host === 'custom') out.connected = await gscConnected(who.id);
+    // custom domain: verified in the owner's Search Console (the last check said so)
+    if (page.host === 'custom') out.connected = out.verified = steps.verify?.outcome === 'ok';
     if (steps.sitemap?.outcome === 'ok') out.submittedAt = steps.sitemap.at;
     Object.assign(out, inspectionFields({ inspectionResult: { indexStatusResult: steps.inspect?.detail ?? {} } }));
     const list = STEP_ORDER.filter((s) => steps[s]).map((s) => ({ step: s, outcome: steps[s].outcome, at: steps[s].at }));
@@ -121,91 +122,79 @@ export function createSeoGoogleRoutes(deps = {}) {
 
   // ───────────── custom-domain page ─────────────
 
-  async function publishCustom(who, page, pageId, runner, resend) {
-    if (!(await gscConnected(who.id))) throw fail(409, 'NOT_CONNECTED', 'Connect Google Search Console to send pages on your own domain to Google.');
+  async function publishCustom(who, page, pageId, runner, customerTag, resend) {
     const site = domainProperty(page.domain);
     const feed = `https://${page.domain}/sitemap.xml`;
     const steps = [];
     const stored = await readSteps(db, who.id, pageId);
-    const google = (request) => runner.own('google_search_console', { oneShot: true, timeoutMs: 120_000, ...request });
-    const read = (request) => runner.own('google_search_console', { oneShot: false, timeoutMs: 30_000, ...request });
-    const dnsRecord = (token) => ({ type: 'TXT', name: page.domain, value: String(token).slice(0, 300) });
 
-    /** A stored 'unknown' step: did it happen after all? (a read) → true / false / null (no read for it). */
-    async function happened(step) {
-      if (step === 'site_add') {
-        const res = await read({ method: 'GET', path: '/v3/sites' });
-        return Array.isArray(res?.body?.siteEntry) ? res.body.siteEntry.some((s) => s?.siteUrl === site) : false;
+    // 1. is the domain verified in the owner's Search Console? (a read, every press until it is)
+    let entry = null;
+    try {
+      const got = await runner.treg('gsc.sites', {}, 'gsc');
+      entry = (Array.isArray(got.data?.siteEntry) ? got.data.siteEntry : []).find((e) => e?.siteUrl === site) ?? null;
+    } catch (e) {
+      steps.push({ step: 'verify', outcome: 'failed', detail: publicCode(e) });
+      return { host: 'custom', steps };
+    }
+    if (!entry || !VERIFIED_LEVELS.has(entry.permissionLevel)) {
+      // 2. not there yet: add it once (unverified), so the owner sees it waiting in Search Console
+      // (an earlier add whose outcome was unknown is not sent again: the owner can add the domain by hand)
+      if (!entry && (!stored.site_add || stored.site_add.outcome === 'failed')) {
+        if (await claimStep(db, who.id, pageId, 'site_add', stored.site_add ?? null, now())) {
+          const added = await attempt(() => runner.treg('gsc.sites_add', { siteUrl: site }, 'gsc'));
+          await writeStep(db, who.id, pageId, 'site_add', added.outcome, {}, now());
+          steps.push({ step: 'site_add', outcome: added.outcome });
+        }
       }
-      if (step === 'sitemap') {
-        const res = await read({ method: 'GET', path: `/v3/sites/${encodeURIComponent(site)}/sitemaps` });
-        return Array.isArray(res?.body?.sitemap) ? res.body.sitemap.some((s) => s?.path === feed) : false;
+      await writeStep(db, who.id, pageId, 'verify', 'failed', { detail: 'OWNER_VERIFICATION_PENDING' }, now());
+      steps.push({ step: 'verify', outcome: 'failed', detail: 'OWNER_VERIFICATION_PENDING' });
+      return { host: 'custom', steps, ownerVerification: { domain: page.domain } };
+    }
+    if (stored.verify?.outcome !== 'ok') await writeStep(db, who.id, pageId, 'verify', 'ok', {}, now());
+    steps.push({ step: 'verify', outcome: 'ok' });
+
+    // 3. the domain's sitemap (one-shot; an unknown one is read first and resent only when confirmed)
+    const before = stored.sitemap;
+    let sitemapOk = before?.outcome === 'ok';
+    if (sitemapOk) steps.push({ step: 'sitemap', outcome: 'skipped' });
+    else {
+      if (before?.outcome === 'unknown') {
+        if (stillSending(before, now())) throw fail(409, 'ALREADY_PUBLISHING', 'This page is already being sent to Google. Check again in a few minutes.');
+        const done = await runner
+          .treg('gsc.sitemaps', { siteUrl: site }, 'gsc')
+          .then((got) => (Array.isArray(got.data?.sitemap) ? got.data.sitemap.some((x) => x?.path === feed) : false))
+          .catch(() => null);
+        if (done === true) {
+          await writeStep(db, who.id, pageId, 'sitemap', 'ok', {}, now());
+          steps.push({ step: 'sitemap', outcome: 'ok' });
+          sitemapOk = true;
+        } else if (!resend) {
+          steps.push({ step: 'sitemap', outcome: 'unknown', detail: 'CONFIRM_RESEND' });
+          return { host: 'custom', steps };
+        }
       }
-      return null;
+      if (!sitemapOk) {
+        if (!(await claimStep(db, who.id, pageId, 'sitemap', before ?? null, now()))) throw fail(409, 'ALREADY_PUBLISHING', 'This page is already being sent to Google. Check again in a few minutes.');
+        const got = await attempt(() => runner.treg('gsc.submit', { siteUrl: site, feedpath: feed }, 'gsc'));
+        await writeStep(db, who.id, pageId, 'sitemap', got.outcome, {}, now());
+        steps.push({ step: 'sitemap', outcome: got.outcome });
+        if (got.outcome !== 'ok') return { host: 'custom', steps };
+      }
     }
 
-    const WRITES = {
-      verify_token: () => google({ method: 'POST', path: '/siteVerification/v1/token', baseUrlOverride: 'https://www.googleapis.com', body: { site: { type: 'INET_DOMAIN', identifier: page.domain }, verificationMethod: 'DNS_TXT' } }),
-      verify: () => google({ method: 'POST', path: '/siteVerification/v1/webResource', baseUrlOverride: 'https://www.googleapis.com', query: { verificationMethod: 'DNS_TXT' }, body: { site: { type: 'INET_DOMAIN', identifier: page.domain } } }),
-      site_add: () => google({ method: 'PUT', path: `/v3/sites/${encodeURIComponent(site)}` }),
-      sitemap: () => google({ method: 'PUT', path: `/v3/sites/${encodeURIComponent(site)}/sitemaps/${encodeURIComponent(feed)}` }),
-    };
-
-    for (const step of STEP_ORDER) {
-      const before = stored[step];
-      if (step === 'inspect') {
-        if (!inspectionDue(before, now())) {
-          steps.push({ step, outcome: 'skipped', ...(before?.detail ?? {}) });
-          break;
-        }
-        const res = await read({ method: 'POST', path: '/v1/urlInspection/index:inspect', baseUrlOverride: 'https://searchconsole.googleapis.com', body: { inspectionUrl: page.url, siteUrl: site, languageCode: 'en-US' } }).catch(() => null);
-        if (res?.status >= 200 && res.status < 300) {
-          const fields = inspectionFields(res.body);
-          await writeStep(db, who.id, pageId, step, 'ok', fields, now());
-          steps.push({ step, outcome: 'ok', ...fields });
-        } else steps.push({ step, outcome: 'failed' });
-        break;
-      }
-      if (before?.outcome === 'ok') {
-        steps.push({ step, outcome: 'skipped' });
-        continue;
-      }
-      if (before?.outcome === 'unknown') {
-        // another press is sending this step right now: never a second send
-        if (stillSending(before, now())) throw fail(409, 'ALREADY_PUBLISHING', 'This page is already being sent to Google. Check again in a few minutes.');
-        const done = await happened(step).catch(() => null);
-        if (done === true) {
-          const { sending: _sending, ...kept } = before.detail ?? {};
-          await writeStep(db, who.id, pageId, step, 'ok', kept, now());
-          steps.push({ step, outcome: 'ok' });
-          continue;
-        }
-        if (!resend) {
-          steps.push({ step, outcome: 'unknown', detail: 'CONFIRM_RESEND' });
-          return { host: 'custom', steps };
-        }
-      }
-      // claimed before the call (stored 'unknown'): two presses at once send once, and a crash mid-call leaves
-      // 'unknown' for the next press to read and confirm, never a silent second send
-      if (!(await claimStep(db, who.id, pageId, step, before ?? null, now()))) throw fail(409, 'ALREADY_PUBLISHING', 'This page is already being sent to Google. Check again in a few minutes.');
-      const got = await attempt(WRITES[step]);
-      let detail = {};
-      if (step === 'verify_token' && got.outcome === 'ok') {
-        const token = typeof got.value?.body?.token === 'string' ? got.value.body.token : '';
-        if (!token) {
-          await writeStep(db, who.id, pageId, step, 'failed', {}, now());
-          steps.push({ step, outcome: 'failed' });
-          return { host: 'custom', steps };
-        }
-        detail = { token: token.slice(0, 300) };
-      }
-      await writeStep(db, who.id, pageId, step, got.outcome, detail, now());
-      steps.push({ step, outcome: got.outcome, ...(step === 'verify' && got.outcome === 'failed' ? { detail: 'DNS_RECORD_NOT_FOUND' } : {}) });
-      // the TXT record has to be added at the DNS host before Verify: stop here and show it
-      if (step === 'verify_token' && got.outcome === 'ok') return { host: 'custom', steps, dnsRecord: dnsRecord(detail.token) };
-      if (got.outcome !== 'ok') {
-        const token = stored.verify_token?.detail?.token;
-        return { host: 'custom', steps, ...(step === 'verify' && token ? { dnsRecord: dnsRecord(token) } : {}) };
+    // 4. inspect the page (a read), within the property's and the customer's daily budget
+    const last = stored.inspect;
+    if (!inspectionDue(last, now())) steps.push({ step: 'inspect', outcome: 'skipped', ...(last?.detail ?? {}) });
+    else if (!(await claimInspection(storage, customerTag, now()))) steps.push({ step: 'inspect', outcome: 'skipped', detail: 'INSPECTION_QUOTA' });
+    else {
+      try {
+        const got = await runner.treg('gsc.inspect', { inspectionUrl: page.url, siteUrl: site, languageCode: 'en-US' }, 'gsc');
+        const fields = inspectionFields(got.data);
+        await writeStep(db, who.id, pageId, 'inspect', 'ok', fields, now());
+        steps.push({ step: 'inspect', outcome: 'ok', ...fields });
+      } catch (e) {
+        steps.push({ step: 'inspect', outcome: 'failed', detail: publicCode(e) });
       }
     }
     return { host: 'custom', steps };
@@ -218,7 +207,7 @@ export function createSeoGoogleRoutes(deps = {}) {
     if (!page) throw fail(409, 'BAD_REQUEST', 'Publish your page first.');
     const customerTag = await ensureCustomer(db, who.id, env);
     const runner = createRunner({ treg, connections, ctx: { userId: who.id, projectId, runId: crypto.randomUUID(), customerTag } });
-    return page.host === 'app' ? publishApp(who, page, pageId, runner, customerTag) : publishCustom(who, page, pageId, runner, body.resend === true);
+    return page.host === 'app' ? publishApp(who, page, pageId, runner, customerTag) : publishCustom(who, page, pageId, runner, customerTag, body.resend === true);
   }
 
   return {

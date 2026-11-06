@@ -42,6 +42,7 @@ export function createBillingRoutes({
   storage = null,
   db,
   treg = null,
+  connections = null,
   send,
   readJson,
   limit = () => false,
@@ -193,6 +194,15 @@ export function createBillingRoutes({
       if (!p.lastActivityAt || String(r.created_at) > p.lastActivityAt) p.lastActivityAt = String(r.created_at);
     }
     const emails = await emailsFor(list);
+    // how many accounts each customer has connected through Zernio right now (billing visibility next to treg)
+    const counts = new Map();
+    const countOf = connections?.impl?.accountCount;
+    if (typeof countOf === 'function') {
+      for (const c of list) {
+        const n = await countOf(c.user_id).catch(() => null);
+        if (Number.isFinite(n)) counts.set(c.customer_tag, n);
+      }
+    }
     const out = [...per.entries()].map(([tag, p]) => {
       const o = capRows.byTag.get(tag);
       const merged = mergeCaps(capRows.defaults, o);
@@ -201,6 +211,7 @@ export function createBillingRoutes({
         ...(emails.get(tag) ? { email: emails.get(tag) } : {}),
         ...p,
         lastActivityAt: p.lastActivityAt ?? undefined,
+        ...(counts.has(tag) ? { connectedAccounts: counts.get(tag) } : {}),
         caps: o ? capToApi(o) : {},
         status: merged.status,
         ...(o ? { syncedToTreg: o.synced_to_treg_at != null } : {}),

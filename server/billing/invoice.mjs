@@ -48,7 +48,7 @@ export function invoiceCsv({ month, rows, emails = new Map(), statuses = new Map
     if (r.vendor === 'treg' && r.estimated !== true) {
       p.treg += c;
       if (isCall(r)) p.calls += 1;
-    } else if (r.vendor === 'nango' && r.estimated === true) p.conn += c;
+    } else if ((r.vendor === 'zernio' || r.vendor === 'nango') && r.estimated === true) p.conn += c;
     else if (r.vendor === 'x' && r.estimated === true) p.x += c;
   }
   const lines = [INVOICE_HEADER.join(',')];

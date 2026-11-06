@@ -2,10 +2,10 @@
 //
 // Files live in the private Supabase Storage bucket `media` at <userId>/<mediaId> (src/lib/cloud/media.ts). The
 // server reads them with the service key: a HEAD to check one exists (and its type and size), a GET for the
-// bytes it uploads itself (X, LinkedIn, YouTube, TikTok FILE_UPLOAD).
+// bytes it uploads to Zernio's storage before a post (server/connections/zernio.mjs, POST /media/presign).
 //
-// Networks that fetch the file themselves (Instagram, Facebook photos, TikTok PULL_FROM_URL) get a short-lived
-// link: <base>/api/media/public/<token>, token = base64url(JSON{u,m,e,k}) + '.' + base64url(HMAC-SHA256(
+// A short-lived public link is also available for anything that must fetch a file itself:
+// <base>/api/media/public/<token>, token = base64url(JSON{u,m,e,k}) + '.' + base64url(HMAC-SHA256(
 // MEDIA_URL_SECRET, payload)). 30 minutes for a photo, 2 hours for a video. The link only ever goes in a POST
 // body (never a query string, so it isn't in anyone's URL logs) and is never logged.
 
@@ -155,12 +155,12 @@ export function formatProblem(platform, media) {
       return null;
     case 'facebook':
       if (!media) return null;
-      if (kind === 'video') return 'Posting videos to a Facebook Page from the app is coming soon. Post it yourself for now.';
+      if (kind === 'video') return t === 'video/mp4' ? null : 'Facebook Pages need an MP4 video.';
       if (!['image/jpeg', 'image/png'].includes(t)) return 'Facebook Pages take JPEG or PNG photos.';
       return null;
     case 'linkedin':
       if (!media) return null;
-      if (kind === 'video') return 'Posting videos to LinkedIn from the app is coming soon. Post it yourself for now.';
+      if (kind === 'video') return t === 'video/mp4' ? null : 'LinkedIn needs an MP4 video.';
       if (!['image/jpeg', 'image/png', 'image/gif'].includes(t)) return 'LinkedIn takes JPEG, PNG or GIF photos.';
       return null;
     case 'tiktok':

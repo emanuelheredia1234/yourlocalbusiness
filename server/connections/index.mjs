@@ -1,36 +1,33 @@
-// Connected accounts, vendor-neutral: each app user connects their own Facebook Page, Instagram, LinkedIn,
-// TikTok, X, YouTube, Google Ads, Meta Ads and Search Console. The implementation that holds their logins is
-// Nango (server/nango.mjs); until NANGO_SECRET_KEY is set the app uses nullConnections, where every network
-// shows "Not connected" and posting stays manual ("Post it yourself", then "Mark as posted").
+// Connected accounts, vendor-neutral: each app user connects their own Facebook Page, Instagram, LinkedIn, TikTok,
+// X and YouTube accounts and their ad accounts (Meta, Google, LinkedIn, TikTok, Pinterest, X, Reddit, Microsoft).
+// The implementation is Zernio (server/connections/zernio.mjs, the owner's choice): one Zernio profile per customer
+// on Zernio's own approved platform apps. Until ZERNIO_API_KEY is set the app uses nullConnections, where every
+// network shows "Not connected" and posting stays manual ("Post it yourself", then "Mark as posted").
 //
-// Every method takes the server-resolved user id (never a value from the browser). Connection ids, target ids
-// and tokens stay on the server: the browser gets ConnectionStatus (server/integrations/contracts.mjs) only.
+// Nango is not here: it stays for future non-social integrations (booking tools, CRMs) in server/nango.mjs.
 //
-//   status(userId) → ConnectionStatus[]                     every platform, phase 2 ones 'coming_soon'
-//   connectLink(userId, platform) → {connectLink, expiresAt}
-//   reconnectLink(userId, platform) → {connectLink, expiresAt}
-//   check(userId, platform) → ConnectionStatus
-//   disconnect(userId, platform) → void
+// Every method takes the server-resolved user id (never a value from the browser). Account ids stay on the
+// server: the browser gets ConnectionStatus (server/integrations/contracts.mjs) and opaque target handles only.
+// `opts.projectId` (a business of that user) picks the account that business uses; without it, the default.
+//
+//   status(userId, {projectId}) → ConnectionStatus[]            every platform, phase 2 ones 'coming_soon'
+//   connectLink(userId, platform, {projectId}) → {connectLink, expiresAt} | {alreadyConnected: true}
+//   reconnectLink(userId, platform, {projectId}) → same
+//   check(userId, platform, {projectId}) → ConnectionStatus       reads the accounts again from the vendor
+//   disconnect(userId, platform, {projectId}) → void
 //   targets(userId, platform) → Target[]
-//   setTarget(userId, platform, targetId) → ConnectionStatus
-//   request(userId, platform, {method, path, query, body, headers, baseUrlOverride, oneShot, timeoutMs}) → {status, headers, body}
-//     oneShot=true: exactly one attempt (no Retries / Retry-On). Reads may pass oneShot=false: one retry after
-//     Retry-After on a 429 only.
-//   credentials(userId, platform) → {accessToken}           only microsoft_ads and tiktok_ads (phase 2), for direct
-//                                                           server calls; never returned to a route
-//   forgetUser(userId)                                      deletes every connection at the vendor (one attempt
-//                                                           each), then the stored doc
-//   unforgetUser(userId)
-//
-// Instagram's status is derived: connected when Facebook is connected and the chosen Page has an Instagram
-// professional account (the implementation decides; see docs/integrations-setup.md).
+//   setTarget(userId, platform, targetId, {projectId}) → ConnectionStatus
+//   insights(userId, platform, {projectId, since, until}) → own stats (reads), or null when nothing is chosen
+//   adResults(userId, platform, {projectId, since, until}) → one AdsData.own entry (reads), or null
+//   publish(userId, platform, {projectId, jobId, composed, media, loadMedia, privacy}) → {state, url?, errorCode?, ref}
+//     one attempt; 'unknown' when it may have gone out
+//   postStatus(userId, ref) → {found, url} | {failed} | {pending} | null   a read for "Check again"
+//   forgetUser(userId) / unforgetUser(userId)
 
 import { PHASE2_PLATFORMS, PLATFORMS } from '../integrations/contracts.mjs';
 import { fail, isUuid } from '../integrations/common.mjs';
 
-export const CONNECTION_METHODS = Object.freeze(['status', 'connectLink', 'reconnectLink', 'check', 'disconnect', 'targets', 'setTarget', 'request', 'credentials', 'forgetUser', 'unforgetUser']);
-/** The only platforms credentials() answers for (their APIs aren't reachable through the proxy). */
-export const CREDENTIAL_PLATFORMS = Object.freeze(['microsoft_ads', 'tiktok_ads']);
+export const CONNECTION_METHODS = Object.freeze(['status', 'connectLink', 'reconnectLink', 'check', 'disconnect', 'targets', 'setTarget', 'insights', 'adResults', 'publish', 'postStatus', 'forgetUser', 'unforgetUser']);
 
 const notEnabled = () => fail(503, 'CONNECTIONS_NOT_ENABLED', 'Connecting accounts is coming soon. You can still post yourself and mark posts as posted.');
 
@@ -47,12 +44,12 @@ export function notConnectedStatuses() {
   return PLATFORMS.map((platform) => ({ platform, state: PHASE2_PLATFORMS.includes(platform) ? 'coming_soon' : 'not_connected' }));
 }
 
-/** The app until NANGO_SECRET_KEY is set: nothing is connected and nothing can be. */
+/** The app until ZERNIO_API_KEY is set: nothing is connected and nothing can be. */
 export const nullConnections = Object.freeze({
   enabled: false,
   /** for GET /api/integrations/connections: setUp false, and the owner's hint names the Secret */
   setUp: false,
-  hint: 'Connecting accounts is off: add NANGO_SECRET_KEY (and NANGO_WEBHOOK_SIGNING_KEY) in Replit Secrets.',
+  hint: 'Connecting social and ad accounts is off: add ZERNIO_API_KEY (and ZERNIO_WEBHOOK_SECRET) in Replit Secrets.',
   async status() {
     return notConnectedStatuses();
   },
@@ -74,11 +71,17 @@ export const nullConnections = Object.freeze({
   async setTarget() {
     throw notEnabled();
   },
-  async request() {
+  async insights() {
+    return null;
+  },
+  async adResults() {
+    return null;
+  },
+  async publish() {
     throw notEnabled();
   },
-  async credentials() {
-    throw notEnabled();
+  async postStatus() {
+    return null;
   },
   async forgetUser() {
     /* nothing stored */
@@ -88,37 +91,56 @@ export const nullConnections = Object.freeze({
   },
 });
 
+/** A project id from a request ('' when absent); the implementation checks it's the user's own when it matters. */
+const projectOf = (opts) => (typeof opts?.projectId === 'string' && /^[A-Za-z0-9._:-]{1,120}$/.test(opts.projectId) ? opts.projectId : undefined);
+
 /**
- * The connections every route uses, around an implementation (createNango(...) or nullConnections): checks the
- * user id and the platform before the implementation sees them, and keeps credentials() to its two platforms.
+ * The connections every route uses, around an implementation (createZernioConnections(...) or nullConnections):
+ * checks the user id and the platform before the implementation sees them.
  */
 export function createConnections(impl = nullConnections) {
   for (const m of CONNECTION_METHODS) if (typeof impl?.[m] !== 'function') throw new Error(`connections: the implementation has no ${m}()`);
-  const perPlatform = (name) => async (userId, platform, ...rest) => {
-    checkUser(userId);
-    checkPlatform(platform);
-    return impl[name](userId, platform, ...rest);
-  };
+  const perPlatform =
+    (name) =>
+    async (userId, platform, ...rest) => {
+      checkUser(userId);
+      checkPlatform(platform);
+      return impl[name](userId, platform, ...rest);
+    };
+  const withOpts =
+    (name) =>
+    async (userId, platform, opts = {}) => {
+      checkUser(userId);
+      checkPlatform(platform);
+      return impl[name](userId, platform, { ...opts, projectId: projectOf(opts) });
+    };
   return Object.freeze({
     enabled: impl.enabled !== false,
     setUp: impl.setUp !== false,
     /** what the owner is told when it isn't set up (Secret names only) */
     hint: typeof impl.hint === 'string' ? impl.hint : '',
-    async status(userId) {
+    /** the implementation (for the webhook route and the startup jobs) */
+    impl,
+    async status(userId, opts = {}) {
       checkUser(userId);
-      return impl.status(userId);
+      return impl.status(userId, { projectId: projectOf(opts) });
     },
-    connectLink: perPlatform('connectLink'),
-    reconnectLink: perPlatform('reconnectLink'),
-    check: perPlatform('check'),
-    disconnect: perPlatform('disconnect'),
+    connectLink: withOpts('connectLink'),
+    reconnectLink: withOpts('reconnectLink'),
+    check: withOpts('check'),
+    disconnect: withOpts('disconnect'),
     targets: perPlatform('targets'),
-    setTarget: perPlatform('setTarget'),
-    request: perPlatform('request'),
-    async credentials(userId, platform) {
+    async setTarget(userId, platform, targetId, opts = {}) {
       checkUser(userId);
-      if (!CREDENTIAL_PLATFORMS.includes(platform)) throw fail(403, 'FORBIDDEN', 'Not available for this account type.');
-      return impl.credentials(userId, platform);
+      checkPlatform(platform);
+      return impl.setTarget(userId, platform, targetId, { projectId: projectOf(opts) });
+    },
+    insights: withOpts('insights'),
+    adResults: withOpts('adResults'),
+    publish: withOpts('publish'),
+    async postStatus(userId, ref) {
+      checkUser(userId);
+      return impl.postStatus(userId, ref);
     },
     async forgetUser(userId) {
       if (!isUuid(userId)) return;

@@ -1,5 +1,5 @@
-// Source `social`: one entry per network with a stored handle or a connected account. Connected (with a target):
-// own insights. Not connected: treg public data. Connected but needing a reconnect or limited: public data with
+// Source `social`: one entry per network with a stored handle or a connected account. Connected (with a chosen
+// account): own insights from Zernio. Not connected: treg public data. Connected but needing a reconnect or limited: public data with
 // the note 'reconnect' (never a silent fallback).
 
 import { handlesOf } from '../handles.mjs';
@@ -23,7 +23,7 @@ export function socialPlan(project, statuses) {
  * → { status, errorCode?, data: SocialData, summary, resolved } (resolved: ids to keep). Throws only a stopping
  * treg error (cap, block, team balance) when no network could be read at all.
  */
-export async function socialSource({ project, statuses, runner, resolved, env, fetch, now, recordEstimate }) {
+export async function socialSource({ project, statuses, runner, resolved, now }) {
   const { handles, byPlatform, networks } = socialPlan(project, statuses);
   if (!networks.length) return { status: 'not_connected', errorCode: 'NO_HANDLES', data: { networks: [] } };
   const results = [];
@@ -37,7 +37,7 @@ export async function socialSource({ project, statuses, runner, resolved, env, f
       try {
         if (isOwnUsable(status)) {
           try {
-            const own = await ownStats(network, { runner, env, fetch, now, status, handle, recordEstimate });
+            const own = await ownStats(network, { runner, now, handle });
             if (own) return void results.push(own);
           } catch (e) {
             if (!handle) {

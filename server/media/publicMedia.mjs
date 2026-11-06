@@ -1,7 +1,7 @@
 // GET /api/media/public/<token>: a short-lived, MAC'd link to one of a user's media files, for networks that
 // fetch the photo or video themselves (Instagram, Facebook photos, TikTok PULL_FROM_URL). Spec §1.7 "Media".
 //
-// While connecting accounts is off (no NANGO_SECRET_KEY) no link is ever made, so every request answers 503.
+// While connecting accounts is off (no ZERNIO_API_KEY) no link is ever made, so every request answers 503.
 // No sign-in and no same-origin check: the token is the permission (server/social/media.mjs makes it, 30 minutes
 // for a photo, 2 hours for a video). A bad MAC answers 403, an expired token 410, a file that isn't there 404.
 // The bytes stream from Supabase Storage with the service key; Range requests answer 206 (TikTok and video).

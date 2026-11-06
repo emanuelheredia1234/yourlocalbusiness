@@ -6,7 +6,7 @@
 //   await caps.effective(tag)                   the merged caps
 //   await caps.putCap(tag, fields) / putDefaults(fields) / resetCap(tag)   then synced to treg (admin token)
 //
-// The app-side check counts real treg spend only (vendor 'treg'): estimated Nango and X rows never block anyone.
+// The app-side check counts real treg spend only (vendor 'treg'): estimated Zernio, Nango and X rows never block anyone.
 // treg's own budgets are the authoritative ceiling; ours stops a call before it is made. Neither is a hard
 // limit when calls run at the same time (about one call each), which is why each customer runs at most 4.
 //

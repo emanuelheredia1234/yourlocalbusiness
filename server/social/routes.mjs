@@ -1,8 +1,9 @@
 // Posting from the app (spec §1.1, §1.7):
 //   POST /api/posting/publish            PublishRequest → {job}    (the job is `sending`; the app polls it)
 //   GET  /api/posting/jobs/:jobId        → {job}                   a database read only, never a network call
-//   POST /api/posting/jobs/:jobId/check  {} → {job}                "Check again" on an `unknown` job: one read,
-//                                                                  at most once per 30 s per job; never resends
+//   POST /api/posting/jobs/:jobId/check  {} → {job}                "Check again" on an `unknown` job: one read of
+//                                                                  the post's status at Zernio, at most once per
+//                                                                  30 s per job; never resends
 //   GET  /api/posting/jobs?projectId=    → {jobs}                  the business's last 200
 // Checks in order: the app's own page (sameOrigin), a signed-in user, the route's rate limit. Every query names
 // the signed-in user; someone else's project, post or job answers 404.
@@ -10,7 +11,7 @@
 // presses "Check again". onStart: jobs a restart left `sending` become `unknown`.
 //
 // Deps (server/integrations/wiring.mjs): {auth, db, connections, send, readJson, rateLimited, limit, corsHeaders,
-// sameOrigin, env, fetch, now, log}; tests may add sleep, timing, mediaStore, direct.
+// sameOrigin, env, fetch, now, log}; tests may add mediaStore.
 
 import { errorBody, fail } from '../integrations/common.mjs';
 import { createPosting } from './publish.mjs';
@@ -26,7 +27,7 @@ function fromDbError(e) {
 
 export function createPostingRoutes(deps = {}) {
   const { auth, db, connections, send, readJson, sameOrigin = () => true, corsHeaders = () => ({}), limit = () => false, env = process.env, fetch = globalThis.fetch, now = () => Date.now(), log = console } = deps;
-  const posting = createPosting({ db, connections, env, fetch, now, log, sleep: deps.sleep, timing: deps.timing, mediaStore: deps.mediaStore, direct: deps.direct });
+  const posting = createPosting({ db, connections, env, fetch, now, log, mediaStore: deps.mediaStore });
   const reply = (req, res, status, body) => send(res, status, body, corsHeaders(req));
 
   async function user(req, res) {
@@ -68,8 +69,8 @@ export function createPostingRoutes(deps = {}) {
   async function route(req, res, url, who) {
     const p = url.pathname;
     if (!db?.enabled) throw fail(503, 'NOT_SET_UP', 'Posting from the app isn’t set up yet. Post it yourself for now.', {}, 'Supabase isn’t set up on this server (SUPABASE_URL and SUPABASE_SECRET_KEY).');
-    // no connected accounts (NANGO_SECRET_KEY unset): nothing can be posted from the app, and no job exists
-    if (!connections?.enabled) throw fail(503, 'NOT_SET_UP', 'Posting from the app isn’t switched on yet. Post it yourself, then mark it as posted.', {}, connections?.hint || 'Connecting accounts is off: add NANGO_SECRET_KEY in Replit Secrets.');
+    // no connected accounts (ZERNIO_API_KEY unset): nothing can be posted from the app, and no job exists
+    if (!connections?.enabled) throw fail(503, 'NOT_SET_UP', 'Posting from the app isn’t switched on yet. Post it yourself, then mark it as posted.', {}, connections?.hint || 'Connecting accounts is off: add ZERNIO_API_KEY in Replit Secrets.');
     if (p === `${PREFIX}publish` && req.method === 'POST') {
       limited('posting-publish', who.id);
       const out = await posting.publish(who, await body(req));

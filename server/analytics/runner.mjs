@@ -1,6 +1,7 @@
 // How an Update calls treg and the connected accounts: through treg.call (server/treg.mjs, which tags the customer,
-// writes the ledger and maps errors) and connections.request, with at most 4 treg calls in flight per customer and
-// 3 connection calls per user, and an Idempotency-Key per call so a timeout repeat (treg's own) is free.
+// writes the ledger and maps errors) and the connections' reads (Zernio: connections.insights / adResults), with at
+// most 4 treg calls in flight per customer and 3 connection reads per user, and an Idempotency-Key per treg call
+// so a timeout repeat (treg's own) is free.
 
 import { sha256 } from '../integrations/common.mjs';
 import { TREG_ENDPOINTS } from '../treg-endpoints.mjs';
@@ -100,9 +101,17 @@ export function createRunner({ treg, connections, ctx }) {
       });
     },
 
-    /** A read from the user's own connected account (connections.request), oneShot false (one 429 repeat at most). */
-    async own(platform, request) {
-      return connectionSlots.run(ctx.userId, () => connections.request(ctx.userId, platform, { oneShot: false, timeoutMs: 30_000, ...request }));
+    /**
+     * The business's own stats from its connected account (Zernio analytics, reads only): the normalized numbers,
+     * or null when no account is chosen. Throws { kind: 'reconnect'|'busy'|'upstream'|... } when a read failed.
+     */
+    async insights(platform, { since, until } = {}) {
+      return connectionSlots.run(ctx.userId, () => connections.insights(ctx.userId, platform, { projectId: ctx.projectId, since, until }));
+    },
+
+    /** The business's own ad results on one ad platform (Zernio ads, reads only): one AdsData.own entry, or null. */
+    async adResults(platform, { since, until } = {}) {
+      return connectionSlots.run(ctx.userId, () => connections.adResults(ctx.userId, platform, { projectId: ctx.projectId, since, until }));
     },
 
     costMicro: () => cost,

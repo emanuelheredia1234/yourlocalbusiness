@@ -32,6 +32,7 @@ export const TREG_ENDPOINTS = Object.freeze({
   'gsc.sites': { label: 'Search Console check', endpointId: 'google-search-console.sites', method: 'GET', maxCostUsd: null, refresh: 'health' },
   'gsc.sitemaps': { label: 'Sitemap status', endpointId: 'google-search-console.sitemaps', method: 'GET', maxCostUsd: null, refresh: 'update' },
   'gsc.submit': { label: 'Sitemap submitted to Google', endpointId: 'google-search-console.x.webmasters-sitemaps-submit', method: 'PUT', maxCostUsd: null, refresh: 'publish', oneShot: true },
+  'gsc.sites_add': { label: 'Domain added to Search Console', endpointId: 'google-search-console.x.webmasters-sites-add', method: 'PUT', maxCostUsd: null, refresh: 'publish', oneShot: true },
   'gsc.inspect': { label: 'Google index check', endpointId: 'google-search-console.url_inspection', method: 'POST', maxCostUsd: null, refresh: 'inspect' },
   'gsc.performance': { label: 'Google search results', endpointId: 'google-search-console.performance', method: 'POST', maxCostUsd: null, refresh: 'update' },
 });
@@ -48,10 +49,11 @@ export function tregEndpoint(keyOrId) {
 export function endpointLabel(endpoint, vendor = 'treg') {
   const e = tregEndpoint(endpoint);
   if (e) return e.label;
-  const NAMES = { facebook: 'Facebook', instagram: 'Instagram', linkedin: 'LinkedIn', tiktok: 'TikTok', x: 'X', youtube: 'YouTube', pinterest: 'Pinterest', google_ads: 'Google Ads', meta_ads: 'Meta Ads', microsoft_ads: 'Microsoft Ads', tiktok_ads: 'TikTok Ads', google_search_console: 'Search Console' };
+  const NAMES = { facebook: 'Facebook', instagram: 'Instagram', linkedin: 'LinkedIn', tiktok: 'TikTok', x: 'X', youtube: 'YouTube', pinterest: 'Pinterest', google_ads: 'Google Ads', meta_ads: 'Meta Ads', linkedin_ads: 'LinkedIn Ads', tiktok_ads: 'TikTok Ads', pinterest_ads: 'Pinterest Ads', x_ads: 'X Ads', reddit_ads: 'Reddit Ads', microsoft_ads: 'Microsoft Ads' };
   const platform = /^([a-z_]+):/.exec(String(endpoint ?? ''))?.[1];
   if (vendor === 'x') return 'X post';
-  if (vendor === 'nango' && /^nango_connection/.test(String(endpoint))) return 'Connected account';
+  if (vendor === 'zernio' && /^zernio_accounts/.test(String(endpoint))) return 'Connected accounts';
+  if (vendor === 'nango' && /^nango_connection/.test(String(endpoint))) return 'Connected integration';
   if (platform && NAMES[platform]) return `${NAMES[platform]} (your account)`;
   if (vendor === 'omnisend') return 'Email stats';
   return 'Analytics data';

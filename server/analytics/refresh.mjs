@@ -7,7 +7,8 @@
 //   refresher.idle() → a promise that settles when no run is in progress (tests)
 
 import crypto from 'node:crypto';
-import { ensureCustomer, fail, safeLog } from '../integrations/common.mjs';
+import { ensureCustomer, fail, safeLog, seoPageIdFor } from '../integrations/common.mjs';
+import { readSteps } from '../seo/steps.mjs';
 import { ANALYTICS_SOURCES } from '../integrations/contracts.mjs';
 import { appOrigin } from '../seo/sitemap.mjs';
 import { createRunner, publicCode } from './runner.mjs';
@@ -70,10 +71,12 @@ export function createRefresher({ db, storage = null, treg, connections, omnisen
   async function gather(userId, projectId) {
     const project = await loadProject(db, userId, projectId);
     const { settings, resolved } = await readSettings(db, userId, projectId);
-    const statuses = await connections.status(userId).catch(() => []);
+    const statuses = await connections.status(userId, { projectId }).catch(() => []);
     const page = await ownSeoPage(db, userId, projectId, appOrigin(env));
+    // a custom domain is read from the owner's Search Console property once the owner has verified it there
+    const customVerified = page?.host === 'custom' ? (await readSteps(db, userId, seoPageIdFor(projectId)).catch(() => ({}))).verify?.outcome === 'ok' : false;
     const emailOn = typeof omnisend?.connected === 'function' ? await omnisend.connected(userId).catch(() => false) : false;
-    return { project, settings, resolved, statuses, page, emailOn };
+    return { project, settings, resolved, statuses, page, emailOn, customVerified };
   }
 
   /** What there is to fetch; empty means 422 NOTHING_TO_UPDATE (and nothing is spent). */
@@ -81,21 +84,11 @@ export function createRefresher({ db, storage = null, treg, connections, omnisen
     const social = socialPlan(g.project, g.statuses).networks.length > 0;
     const ads = (() => {
       const p = adsPlan(g.settings, g.statuses);
-      return p.google || p.meta || p.competitors.length > 0;
+      return p.own.length > 0 || p.competitors.length > 0;
     })();
     const seo = (g.settings.keywords || []).length > 0 || !!g.page;
     const email = g.emailOn;
     return { social, ads, seo, email };
-  }
-
-  /** Record what the estimated (never capped) X reads cost, as WP3's ledger does for every vendor row. */
-  function estimator(ctx) {
-    return async (vendor, endpoint, costMicro) => {
-      if (!costMicro) return;
-      await db
-        .insert('usage_ledger', { customer_tag: ctx.customerTag, user_id: ctx.userId, project_id: ctx.projectId, feature: 'social', vendor, endpoint, cost_micro: costMicro, estimated: true, outcome: 'ok', run_id: ctx.runId })
-        .catch(() => safeLog('analytics_estimate_not_recorded', { vendor }, log));
-    };
   }
 
   async function runSources(ctx, g, which) {
@@ -108,12 +101,11 @@ export function createRefresher({ db, storage = null, treg, connections, omnisen
       return chain;
     };
     let resolvedPatch = {};
-    const statusFor = (platform) => g.statuses.find((s) => s.platform === platform);
 
     const SOURCES = {
-      social: () => socialSource({ project: g.project, statuses: g.statuses, runner, resolved: g.resolved, env, fetch, now: now(), recordEstimate: estimator(ctx) }),
-      ads: () => adsSource({ settings: g.settings, statuses: g.statuses, runner, resolved: g.resolved }),
-      seo: () => seoSource({ db, userId: ctx.userId, projectId: ctx.projectId, project: g.project, settings: g.settings, resolved: g.resolved, page: g.page, property: String(env.GSC_APP_PROPERTY || '').trim(), origin: appOrigin(env), gscStatus: statusFor('google_search_console'), runner, now: now(), storage, customerTag: ctx.customerTag }),
+      social: () => socialSource({ project: g.project, statuses: g.statuses, runner, resolved: g.resolved, now: now() }),
+      ads: () => adsSource({ settings: g.settings, statuses: g.statuses, runner, resolved: g.resolved, now: now() }),
+      seo: () => seoSource({ db, userId: ctx.userId, projectId: ctx.projectId, project: g.project, settings: g.settings, resolved: g.resolved, page: g.page, property: String(env.GSC_APP_PROPERTY || '').trim(), origin: appOrigin(env), gscStatus: g.customVerified ? { state: 'connected' } : undefined, runner, now: now(), storage, customerTag: ctx.customerTag }),
       email: async () => emailSource({ db, userId: ctx.userId, projectId: ctx.projectId, omnisend, previous: await readSnapshot(db, ctx.userId, ctx.projectId, 'email').catch(() => null), now: now() }),
     };
 
