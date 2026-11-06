@@ -36,12 +36,13 @@ async function readJson(req) {
 }
 
 /** A server that routes like wiring.mjs: the connections routes, 404 otherwise. */
-async function serve({ connections, extraEnv = {} } = {}) {
+async function serve({ connections, extraEnv = {}, liveAdsGuard } = {}) {
   const log = makeLog();
   const auth = { enabled: true, identify: async (req) => USERS[req.headers['x-test-user']] ?? null };
   const routes = createConnectionRoutes({
     auth,
     connections,
+    ...(liveAdsGuard ? { liveAdsGuard } : {}),
     send: sendLike,
     readJson,
     readRaw,
@@ -420,6 +421,27 @@ describe('through the server wiring (server/integrations/wiring.mjs)', () => {
       expect(nangoList).toEqual({ enabled: false, setUp: false, integrations: [] });
     } finally {
       await new Promise((r) => server.close(r));
+    }
+  });
+});
+
+describe('disconnecting an ad account with launched campaigns still on (R12)', () => {
+  it('answers 409 ADS_LIVE with the list unless acknowledged; social networks and empty lists aren’t asked', async () => {
+    const asked = [];
+    const live = [{ id: 'c1', name: 'Winter pipes', platform: 'meta', daily: 25, currency: 'USD', idTail: '1234' }];
+    const guarded = await serve({ connections: both().connections, liveAdsGuard: async (userId, platform) => (asked.push([userId, platform]), platform === 'meta_ads' ? live : []) });
+    try {
+      const before = mock.calls.length;
+      const r = await guarded.call('alice', 'DELETE', `/api/integrations/connections/meta_ads?projectId=${P1}`);
+      expect(r.status).toBe(409);
+      expect(await r.json()).toMatchObject({ code: 'ADS_LIVE', live });
+      expect(mock.calls.slice(before).some((c) => c.method === 'DELETE')).toBe(false);
+      expect((await guarded.call('alice', 'DELETE', `/api/integrations/connections/meta_ads?projectId=${P1}&ackLiveAds=1`)).status).not.toBe(409);
+      expect((await guarded.call('alice', 'DELETE', `/api/integrations/connections/google_ads?projectId=${P1}`)).status).not.toBe(409);
+      await guarded.call('alice', 'DELETE', `/api/integrations/connections/instagram?projectId=${P1}`);
+      expect(asked).toEqual([[ALICE.id, 'meta_ads'], [ALICE.id, 'google_ads']]);
+    } finally {
+      await guarded.close();
     }
   });
 });

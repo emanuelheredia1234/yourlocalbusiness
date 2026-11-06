@@ -342,3 +342,58 @@ describe('deleting an account and the monthly counts', () => {
     expect(text).not.toContain(account._id);
   });
 });
+
+describe('ad events go to the ads side (server/ads/webhook.mjs)', () => {
+  const adEvent = (profileId, accountId, extra = {}) => mock.signed({ event: 'ad.review.rejected', profiles: mock.profileRef(profileId), account: { accountId, profileId, platform: 'metaads' }, adObject: { level: 'AD', platformId: '120200000000001', platformAdAccountId: 'act_1', adId: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'x' }, review: { status: 'rejected', raw: 'DISAPPROVED', reasons: [] }, ...extra });
+
+  it('hands an event about one of the customer’s own connections to the listener, once per event id', async () => {
+    const t = setup();
+    const got = [];
+    t.impl.setAdsListener(async (userId, zid, evt) => void got.push({ userId, zid, event: evt.event }));
+    const { account, profileId } = await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
+    const evt = adEvent(profileId, account._id);
+    expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
+    expect((await t.impl.webhook(evt.raw, evt.headers)).body).toMatchObject({ duplicate: true });
+    expect(got).toEqual([{ userId: ALICE, zid: account._id, event: 'ad.review.rejected' }]);
+  });
+
+  it('drops an event whose connection isn’t that customer’s (not_ours): the listener never sees it', async () => {
+    const t = setup();
+    const got = [];
+    t.impl.setAdsListener(async (userId, zid) => void got.push({ userId, zid }));
+    const alice = await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
+    const bob = await connectVia(t, BOB, 'meta_ads', { zPlatform: 'metaads', username: 'bobsbikes' });
+    const evt = adEvent(alice.profileId, bob.account._id);
+    expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
+    expect(got).toEqual([]);
+    expect(t.log.lines.at(-1)).toContain('"outcome":"not_ours"');
+  });
+
+  it('answers 500 when the listener throws, so Zernio delivers it again (and it is applied then)', async () => {
+    const t = setup();
+    let fail = true;
+    const got = [];
+    t.impl.setAdsListener(async () => {
+      if (fail) throw new Error('db down');
+      got.push(1);
+    });
+    const { account, profileId } = await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
+    const evt = adEvent(profileId, account._id);
+    expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(500);
+    fail = false;
+    expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
+    expect(got).toHaveLength(1);
+  });
+
+  it('exposes the business’s connection, the one client and nothing else for ads', async () => {
+    const t = setup();
+    await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
+    const doc = (await t.storage.get(`zernio:user:${sha256(ALICE)}`)).value;
+    const got = await t.impl.adsAccountFor(ALICE, 'meta_ads', 'proj-1');
+    expect(got.tag).toBe(customerTag(ALICE, t.env));
+    expect(doc.accounts[got.zid]?.platform).toBe('meta_ads');
+    await expect(t.impl.adsAccountFor(ALICE, 'google_ads', 'proj-1')).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+    await expect(t.impl.adsAccountFor(ALICE, 'tiktok_ads', 'proj-1')).rejects.toMatchObject({ status: 404 });
+    expect(t.impl.client.enabled).toBe(true);
+  });
+});

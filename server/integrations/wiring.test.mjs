@@ -12,6 +12,7 @@ import { createIntegrations, moduleFor, selectConnections } from './wiring.mjs';
 import { CONNECTION_METHODS } from '../connections/index.mjs';
 import { createPages } from '../pages.mjs';
 import { createMockSupabase } from '../test/mock-supabase.mjs';
+import { createDb } from './db.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UID = '0b6f3a52-5d0e-4c58-9a0c-0e7c5b1d2a11';
@@ -80,6 +81,18 @@ function recorder() {
       analytics: mod('analytics'),
       seoGoogle: mod('seoGoogle'),
       billing: mod('billing'),
+      ads: mod('ads', {
+        async beforeForget(id, opts) {
+          calls.push(['beforeForget', 'ads', id, opts]);
+        },
+        async liveOn(id, platform) {
+          calls.push(['liveOn', 'ads', id, platform]);
+          return [{ id: 'c1' }];
+        },
+        async fromWebhook(id, zid, evt) {
+          calls.push(['fromWebhook', 'ads', id, zid, evt.event]);
+        },
+      }),
       sitemap: vi.fn(() => ({ handle: vi.fn(async () => false) })),
       treg: vi.fn(() => ({ health: () => ({ setUp: false, billingSetUp: false }) })),
     },
@@ -100,6 +113,9 @@ describe('the route table', () => {
     expect(moduleFor('/api/analytics/refresh')).toBe('analytics');
     expect(moduleFor('/api/seo/google/publish')).toBe('seoGoogle');
     expect(moduleFor('/api/billing/me')).toBe('billing');
+    expect(moduleFor('/api/ads/launch')).toBe('ads');
+    expect(moduleFor('/api/ads/campaigns/x/change')).toBe('ads');
+    expect(moduleFor('/api/adsx')).toBeNull();
     expect(moduleFor('/api/integrations/omnisend/status')).toBeNull();
     expect(moduleFor('/api/integrations/connectionsx')).toBeNull();
     expect(moduleFor('/api/postingx')).toBeNull();
@@ -196,6 +212,36 @@ describe('account deletion', () => {
     r.calls.length = 0;
     await integrations.userDeleted(UID);
     expect(r.calls.filter((c) => c[0] === 'deleted').map((c) => c[1])).toContain('billing');
+  });
+
+  it('asks the ads module first (live campaigns), before any Zernio connection goes, and passes the acknowledgement', async () => {
+    const r = recorder();
+    const integrations = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
+    await integrations.forgetUser(UID, { ackLiveAds: true });
+    expect(r.calls[0]).toEqual(['beforeForget', 'ads', UID, { ackLiveAds: true }]);
+    expect(r.calls.findIndex((c) => c[1] === 'vendor')).toBeGreaterThan(0);
+    r.calls.length = 0;
+    r.factories.ads = vi.fn(() => ({
+      handle: async () => false,
+      async beforeForget() {
+        throw Object.assign(new Error('live ads'), { status: 409, code: 'ADS_LIVE' });
+      },
+    }));
+    const blocked = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
+    await expect(blocked.forgetUser(UID)).rejects.toMatchObject({ code: 'ADS_LIVE' });
+    expect(r.calls.some((c) => c[0] === 'forget')).toBe(false);
+  });
+
+  it('wires the ad events listener and the disconnect guard to the ads module', async () => {
+    const r = recorder();
+    r.zernioImpl.setAdsListener = vi.fn();
+    const integrations = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
+    expect(r.zernioImpl.setAdsListener).toHaveBeenCalledTimes(1);
+    await r.zernioImpl.setAdsListener.mock.calls[0][0](UID, 'z1', { event: 'ad.review.rejected' });
+    expect(r.calls).toContainEqual(['fromWebhook', 'ads', UID, 'z1', 'ad.review.rejected']);
+    const deps = r.factories.connectionRoutes.mock.calls[0][0];
+    expect(await deps.liveAdsGuard(UID, 'meta_ads')).toEqual([{ id: 'c1' }]);
+    void integrations;
   });
 
   it('stops when a module can’t forget (so the account isn’t deleted half-way)', async () => {
@@ -374,6 +420,22 @@ describe('ai-server.mjs with the integrations', () => {
     expect(connect.status).toBe(503);
     expect((await connect.json()).code).toBe('CONNECTIONS_NOT_ENABLED');
     expect((await fetch(`${base}/api/integrations/connections`, { headers: { authorization: `Bearer ${user.token}`, origin: 'https://evil.example' } })).status).toBe(403);
+  });
+
+  it('DELETE /api/account names the launched campaigns still on (409 ADS_LIVE) until acknowledged; ads routes are off without Zernio', async () => {
+    const user = await supa.tokenFor('ads-live@example.com');
+    const auth = { authorization: `Bearer ${user.token}` };
+    expect((await fetch(`${base}/api/ads/accounts?projectId=p1&platform=meta`, { headers: auth })).status).toBe(503);
+    const db = createDb({ supabaseUrl: supa.url, secretKey: supa.SECRET });
+    const id = crypto.randomUUID();
+    await db.insert('ad_campaigns', { id, user_id: user.user.id, customer_tag: 'cust_000000000000000000000000', project_id: 'p1', plan_id: 'plan-1', platform: 'meta', zernio_account_id: 'aaaaaaaaaaaaaaaaaaaaaaa1', ad_account_id: 'act_123456789', ad_account_name: 'Acme', currency: 'USD', timezone: 'America/Chicago', name: 'Winter pipes · Meta · YLB 1a2b3c4d5e6f', launch_key: crypto.randomUUID(), goal: 'traffic', daily_budget: 25, start_at: new Date().toISOString(), launched_as: 'ACTIVE', state: 'active', configured_status: 'ACTIVE', review: {}, remote: {}, sent_body: {} });
+    const live = await (await fetch(`${base}/api/ads/live`, { headers: auth })).json();
+    expect(live.live).toEqual([{ id, name: 'Winter pipes', platform: 'meta', daily: 25, currency: 'USD', idTail: '6789' }]);
+    const refused = await fetch(`${base}/api/account`, { method: 'DELETE', headers: auth });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ code: 'ADS_LIVE', live: [expect.objectContaining({ id })] });
+    const ok = await fetch(`${base}/api/account?ackLiveAds=1`, { method: 'DELETE', headers: auth });
+    expect(ok.status).toBe(200);
   });
 
   it('answers 503 NOT_SET_UP where a route still needs a missing Secret, and the built routes answer for themselves', async () => {

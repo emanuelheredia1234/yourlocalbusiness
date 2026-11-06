@@ -11,3 +11,7 @@ declare module '*/server/test/mock-providers.mjs' {
   /** The stand-in AI's scripted step for an assistant prompt (JSON text). */
   export function mockAssistantReply(prompt: string): string;
 }
+declare module '*/server/ads/build.mjs' {
+  /** the planner's buttons → Meta's callToAction values (src/lib/ads.ts META_CTA keeps the same map) */
+  export const CTA_MAP: Readonly<Record<string, string>>;
+}

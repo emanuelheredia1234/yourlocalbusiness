@@ -9,7 +9,9 @@ import { deleteAccount, setNewPassword, showSignIn, signOut, useAuth } from '@/l
 import { useSyncStatus } from '@/lib/cloud/sync';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
-import { Callout, SettingsRow, SettingsSection, Spinner, confirmAction } from '@/components/ui/primitives';
+import { Callout, Checkbox, SettingsRow, SettingsSection, Spinner, confirmAction } from '@/components/ui/primitives';
+import type { LiveAdRow } from '@/lib/ads/launchTypes';
+import { liveAdLine, liveAdsFor } from '@/components/ads/liveAds';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -208,22 +210,52 @@ function ChangePassword({ email }: { email: string }) {
 function DeleteAccount({ email }: { email: string }) {
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
+  // ad campaigns still switched on keep spending after the account is gone (R12): named, and a tick to go on
+  const [live, setLive] = useState<LiveAdRow[] | null>(null);
+  const [ack, setAck] = useState(false);
   const match = typed.trim().toLowerCase() === email.toLowerCase();
+  const blockedByAds = !!live?.length && !ack;
   return (
     <SettingsSection tone="danger" title="Delete account" description="Deletes your account, every project, post and listing in it, and all your files. This can’t be undone.">
       <SettingsRow label="Type your email to confirm" description="Export a backup first (Projects & data) if you might need anything." htmlFor="del-confirm">
         <input id="del-confirm" className="input" autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={email} />
       </SettingsRow>
+      {!!live?.length && (
+        <div className="flex flex-col gap-3 border-t border-line py-4">
+          <Callout tone="warn" title="Ad campaigns are still on">
+            These campaigns are still on and will keep spending on your own Meta or Google account after you delete this app account. Pause or end them first on Marketing › Ads › Campaigns, or tick below.
+            <ul className="mt-1.5 list-disc pl-4">
+              {live.map((r) => (
+                <li key={r.id}>{liveAdLine(r)}</li>
+              ))}
+            </ul>
+          </Callout>
+          <Checkbox id="del-ack-ads" checked={ack} onChange={setAck} label="I’ll manage them in Ads Manager." />
+        </div>
+      )}
       <div className="flex justify-end border-t border-line py-4">
         <button
           type="button"
           className="btn btn-danger-ghost btn-sm"
-          disabled={!match || busy}
+          disabled={!match || busy || blockedByAds}
           onClick={async () => {
-            if (!(await confirmAction({ title: 'Delete your account for good?', body: 'Your workspace and files are deleted from your account and this device.', confirmLabel: 'Delete my account', danger: true }))) return;
+            // the live list first: deleting stops the account's sync before the request, so ask before that
             setBusy(true);
-            const r = await deleteAccount();
+            const rows = live ?? (await liveAdsFor());
             setBusy(false);
+            if (rows.length && !ack) {
+              setLive(rows);
+              return;
+            }
+            if (!(await confirmAction({ title: 'Delete your account for good?', body: rows.length ? `Your workspace and files are deleted from your account and this device. ${rows.length === 1 ? 'Your ad campaign keeps' : `Your ${rows.length} ad campaigns keep`} running in Ads Manager.` : 'Your workspace and files are deleted from your account and this device.', confirmLabel: 'Delete my account', danger: true }))) return;
+            setBusy(true);
+            const r = await deleteAccount({ ackLiveAds: rows.length > 0 && ack });
+            setBusy(false);
+            if (r.code === 'ADS_LIVE' && r.live) {
+              setLive(r.live);
+              setAck(false);
+              return;
+            }
             if (r.error) toast({ kind: 'error', title: 'Couldn’t delete your account', body: r.error });
           }}
         >

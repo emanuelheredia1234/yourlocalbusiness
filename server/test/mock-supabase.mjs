@@ -36,11 +36,17 @@ const PRIMARY_KEYS = {
   analytics_history: ['id'],
   webhook_deliveries: ['body_hash'],
   seo_google_steps: ['user_id', 'page_id', 'step'],
+  // supabase/migrations/20261108000000_ads_launch.sql
+  ad_account_choices: ['user_id', 'project_id', 'platform'],
+  ad_campaigns: ['id'],
+  ad_jobs: ['id'],
+  ad_audit: ['id'],
+  ad_limits: ['customer_tag'],
 };
 /** the integration tables (all server-only) */
-const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps'];
+const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits'];
 /** `generated always as identity` columns: the mock numbers them 1, 2, 3… per table */
-const IDENTITY = { usage_ledger: 'id', analytics_history: 'id' };
+const IDENTITY = { usage_ledger: 'id', analytics_history: 'id', ad_audit: 'id' };
 /**
  * Other unique keys Postgres enforces besides the primary key: [columns, only rows where…]. A write that would
  * give two rows the same values is refused with 23505, as PostgREST answers (409).
@@ -52,6 +58,12 @@ const UNIQUE = {
     { name: 'post_publish_jobs_one_live', cols: ['user_id', 'post_id', 'platform'], where: (r) => ['queued', 'sending', 'sent', 'unknown'].includes(r.state) },
   ],
   analytics_runs: [{ name: 'analytics_runs_one_running', cols: ['user_id', 'project_id'], where: (r) => r.state === 'running' }],
+  ad_campaigns: [{ name: 'ad_campaigns_one_live', cols: ['user_id', 'plan_id', 'platform'], where: (r) => !['ended', 'failed'].includes(r.state) }],
+  ad_jobs: [
+    { name: 'ad_jobs_user_client_request', cols: ['user_id', 'client_request_id'] },
+    { name: 'ad_jobs_one_live', cols: ['campaign_id'], where: (r) => ['queued', 'sending', 'unknown'].includes(r.state) },
+    { name: 'ad_jobs_review_once', cols: ['user_id', 'review_nonce'], where: (r) => r.review_nonce != null },
+  ],
 };
 /** tables with a user_id column that isn't a foreign key: deleting the user leaves their rows */
 const NO_USER_FK = new Set(['usage_ledger']);
@@ -63,7 +75,7 @@ const PUBLIC_READ = new Set(['market_listings']);
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'published_pages', 'published_domains', 'page_leads', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit']);
 /** the user_secrets.provider check constraint (supabase/migrations/20261103030000_ai_usage_daily.sql) */
 const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openrouter', 'meta', 'manus']);
 
@@ -348,6 +360,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
   /** POST /rest/v1/rpc/<fn>: the database functions the server calls (execute revoked from browsers). */
   async function rpc(req, res, fn, raw) {
     if (fn === 'claim_analytics_run') return claimAnalyticsRun(req, res, raw);
+    if (fn === 'ads_begin_launch' || fn === 'ads_begin_change') return adsBegin(req, res, fn, raw);
     if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -404,6 +417,55 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (rows.some((r) => r.id === row.id) || uniqueRefusal('analytics_runs', row, rows)) return send(res, 200, []);
     rows.push(row);
     return send(res, 200, [{ ...row }]);
+  }
+
+  /**
+   * public.ads_begin_launch / ads_begin_change (supabase/migrations/20261108000000_ads_launch.sql): one transaction
+   * each. The same (user_id, client_request_id) answers the job that is there; otherwise the campaign row (launch),
+   * the job and the audit row go in together, or none does (a unique index refuses with 23505 and its name).
+   */
+  async function adsBegin(req, res, fn, raw) {
+    if (missingTables.includes('ad_jobs')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    let b;
+    try {
+      b = JSON.parse(raw || '{}')?.p ?? {};
+    } catch {
+      return send(res, 400, { message: 'invalid json' });
+    }
+    const t = (name) => {
+      if (!tables.has(name)) tables.set(name, []);
+      return tables.get(name);
+    };
+    const j = b.job ?? {};
+    const same = t('ad_jobs').find((r) => r.user_id === j.user_id && r.client_request_id === j.client_request_id);
+    if (same) {
+      const camp = t('ad_campaigns').find((r) => r.id === same.campaign_id && r.user_id === same.user_id) ?? null;
+      return send(res, 200, { existing: true, job: { ...same }, ...(fn === 'ads_begin_launch' ? { campaign: camp && { ...camp } } : {}) });
+    }
+    if (!users.has(j.user_id)) return send(res, 409, { code: '23503', message: 'insert or update on table "ad_jobs" violates foreign key constraint "ad_jobs_user_id_fkey"' });
+    const at = new Date().toISOString();
+    let camp = null;
+    if (fn === 'ads_begin_launch') {
+      const c = b.campaign ?? {};
+      camp = { budget_level: 'adset', spend_cap: null, end_at: null, configured_status: null, review: {}, remote: {}, results: null, last_read_at: null, ended_at: null, ...c, created_at: at, updated_at: at };
+      if (t('ad_campaigns').some((r) => r.id === camp.id)) return send(res, 409, DUPLICATE);
+      const refused = uniqueRefusal('ad_campaigns', camp, t('ad_campaigns'));
+      if (refused) return send(res, 409, refused);
+    } else if (!t('ad_campaigns').some((r) => r.id === j.campaign_id && r.user_id === j.user_id)) {
+      return send(res, 409, { code: '23503', message: 'insert or update on table "ad_jobs" violates foreign key constraint "ad_jobs_campaign_id_fkey"' });
+    }
+    const job = { actor: 'customer', before: null, provider_ref: {}, error_code: null, requested_at: at, finished_at: null, checked_at: null, ...j, ...(camp ? { campaign_id: camp.id } : {}), updated_at: at };
+    const refusedJob = uniqueRefusal('ad_jobs', job, t('ad_jobs'));
+    if (refusedJob) return send(res, 409, refusedJob);
+    const n = (identities.get('ad_audit') ?? 0) + 1;
+    identities.set('ad_audit', n);
+    const a = b.audit ?? {};
+    if (camp) t('ad_campaigns').push(camp);
+    t('ad_jobs').push(job);
+    t('ad_audit').push({ before: null, after: null, project_id: null, ...a, id: n, at, campaign_id: job.campaign_id, job_id: job.id });
+    return send(res, 200, { existing: false, job: { ...job }, ...(camp ? { campaign: { ...camp } } : {}) });
   }
 
   // ───────────── Storage subset ─────────────

@@ -1,6 +1,6 @@
 // Source `ads`: the business's own ad results on every connected ad account (Meta, Google, LinkedIn, TikTok,
 // Pinterest, X, Reddit, Microsoft), read through Zernio (server/connections/zernio.mjs adResults(): daily account
-// metrics and campaigns; the app makes no ad changes), and up to 3 competitors' active ads from the ad libraries
+// metrics and campaigns; this file only reads: launches and changes go through server/ads/), and up to 3 competitors' active ads from the ad libraries
 // (treg). Ad text and campaign names are data, shown as text.
 
 import { itemsOf } from '../normalize/index.mjs';

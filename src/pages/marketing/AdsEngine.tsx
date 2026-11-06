@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Check, Download, ExternalLink, PenLine, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, Download, ExternalLink, PenLine, Plus, Rocket, Trash2 } from 'lucide-react';
 import type { AdCampaign, AdCreative, AdObjective, AdPlatform, Project, SearchAd, StyleId } from '@/lib/types';
 import { cn, ensureUrl, fmtMoney, fmtRelative, parseDateStr, slugify, stripProtocol } from '@/lib/utils';
 import { AD_CTAS as CTAS, adFinalUrl, adsCsv, adsText, applyAds } from '@/lib/ads';
@@ -10,7 +10,7 @@ import { adsTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { AutoTextarea, Checkbox, ChipInput, CopyButton, DateTimeButton, Empty, Field, InfoTip, LinesEditor, MoreMenu, OptionCards, PageHeader, Section, Tabs, confirmAction } from '@/components/ui/primitives';
+import { AutoTextarea, Callout, Checkbox, ChipInput, CopyButton, DateTimeButton, Empty, Field, InfoTip, LinesEditor, MoreMenu, OptionCards, PageHeader, Section, Tabs, confirmAction } from '@/components/ui/primitives';
 import { PostFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
 import { PostVisual, orderStyles } from '@/components/visuals/PostVisual';
@@ -18,8 +18,18 @@ import { LogoMark } from '@/components/brand/Logo';
 import { useTabRequest } from '@/store/ui';
 import { tabLabel, tabsOf } from '@/lib/pageTabs';
 import { AdsAnalytics } from './ads/AdsAnalytics';
+import { CampaignsTab } from './ads/campaigns/CampaignsTab';
+import { ManageDrawerHost } from './ads/campaigns/ManageDrawer';
+import { ChangeConfirmHost } from './ads/campaigns/ChangeConfirm';
+import { LaunchWizardHost } from './ads/launch/LaunchWizard';
+import { launchablePlatforms } from './ads/launch/draft';
+import { mayBeOn, useAdsLaunch } from '@/store/adsLaunch';
+import type { LaunchedCampaign } from '@/lib/ads/launchTypes';
+import { PLATFORM_LABEL } from '@/lib/ads/launchTypes';
+import { money } from '@/lib/ads/launchFormat';
 
-type PageTab = 'plan' | 'analytics';
+type PageTab = 'plan' | 'campaigns' | 'analytics';
+const NO_LAUNCHED: LaunchedCampaign[] = [];
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const dateStr = (ms: number) => {
@@ -34,9 +44,21 @@ export default function AdsEngine() {
   const campaigns = useMemo(() => ads.filter((a) => a.projectId === project.id).sort((a, b) => b.createdAt - a.createdAt), [ads, project.id]);
   const [activeId, setActiveId] = useState<string | null>(campaigns[0]?.id ?? null);
   const active = campaigns.find((c) => c.id === activeId) ?? campaigns[0] ?? null;
-  // Campaigns (the plans) and Analytics (results and competitors; the full app only)
+  // Plans, Campaigns (what was launched) and Analytics (results and competitors); the last two in the full app only
   const [pageTab, setPageTab] = useState<PageTab>('plan');
-  useTabRequest<PageTab>('marketing-ads', (tabsOf('marketing-ads') as PageTab[]).filter((t) => !__ARTIFACT_BUILD__ || t !== 'analytics'), setPageTab);
+  useTabRequest<PageTab>('marketing-ads', (tabsOf('marketing-ads') as PageTab[]).filter((t) => !__ARTIFACT_BUILD__ || t === 'plan'), setPageTab);
+  const launched = useAdsLaunch((s) => s.campaigns[project.id] ?? NO_LAUNCHED);
+  useEffect(() => {
+    if (!__ARTIFACT_BUILD__) void useAdsLaunch.getState().load(project.id);
+  }, [project.id]);
+  const launchAgain = (row: LaunchedCampaign) => {
+    const planId = row.planId;
+    if (!campaigns.some((c) => c.id === planId)) return;
+    setActiveId(planId);
+    setPageTab('plan');
+    // the spend confirm warns when the last try may still turn up late (Google's data lags)
+    useAdsLaunch.getState().openLaunch({ planId, again: { platform: row.platform, tag: row.tag, code: row.lastJob?.code ?? null } });
+  };
 
   const create = () => {
     const c = newAdCampaign(project);
@@ -50,7 +72,7 @@ export default function AdsEngine() {
       <PageHeader
         className={campaigns.length > 1 || !__ARTIFACT_BUILD__ ? 'mb-4' : 'max-sm:mb-4'}
         title="Ads"
-        description="Plan a campaign here, then run it in each platform’s ads manager."
+        description={__ARTIFACT_BUILD__ ? 'Plan a campaign here, then run it in each platform’s ads manager.' : 'Plan a campaign, then launch it on Meta and Google from here or run it in each platform’s ads manager.'}
         actions={
           <button type="button" className="btn btn-secondary btn-sm" onClick={create}>
             <Plus /> New campaign
@@ -64,12 +86,15 @@ export default function AdsEngine() {
           onChange={setPageTab}
           tabs={[
             { id: 'plan', label: tabLabel('marketing-ads', 'plan'), count: campaigns.length || undefined },
+            { id: 'campaigns', label: tabLabel('marketing-ads', 'campaigns'), count: launched.length || undefined },
             { id: 'analytics', label: tabLabel('marketing-ads', 'analytics') },
           ]}
         />
       )}
       {!__ARTIFACT_BUILD__ && pageTab === 'analytics' ? (
-        <AdsAnalytics project={project} />
+        <AdsAnalytics project={project} onCampaigns={() => setPageTab('campaigns')} />
+      ) : !__ARTIFACT_BUILD__ && pageTab === 'campaigns' ? (
+        <CampaignsTab project={project} onLaunchAgain={launchAgain} />
       ) : (
         <>
           {campaigns.length > 1 && active && (
@@ -90,15 +115,25 @@ export default function AdsEngine() {
               }
             />
           ) : (
-            <CampaignEditor key={active.id} project={project} c={active} onDeleted={() => setActiveId(null)} />
+            <CampaignEditor key={active.id} project={project} c={active} launched={launched.filter((l) => l.planId === active.id)} onDeleted={() => setActiveId(null)} onCampaigns={() => setPageTab('campaigns')} />
           )}
+        </>
+      )}
+      {!__ARTIFACT_BUILD__ && (
+        <>
+          <LaunchWizardHost />
+          <ChangeConfirmHost />
+          <ManageDrawerHost />
         </>
       )}
     </div>
   );
 }
 
-function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCampaign; onDeleted: () => void }) {
+/** "Launched on Meta · Paused" (one line per launched platform). */
+const launchedLine = (l: LaunchedCampaign) => `Launched on ${PLATFORM_LABEL[l.platform]} · ${l.state === 'paused' ? 'Paused' : l.state === 'active' ? 'Running' : l.state === 'in_review' ? 'In review' : l.state === 'launching' ? 'Launching' : l.state === 'unknown' ? 'Not confirmed' : l.state === 'rejected' ? 'Not approved' : l.state === 'with_issues' ? 'Running with limits' : l.state === 'completed' ? 'Finished' : l.state === 'ended' ? 'Ended' : 'Not launched'}`;
+
+function CampaignEditor({ project, c, launched, onDeleted, onCampaigns }: { project: Project; c: AdCampaign; launched: LaunchedCampaign[]; onDeleted: () => void; onCampaigns: () => void }) {
   const upsertAd = useStore((s) => s.upsertAd);
   const deleteAd = useStore((s) => s.deleteAd);
   const ai = useAI(adsTask);
@@ -119,7 +154,14 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
     if (r) applyAds(c.id, r);
   };
   const remove = async () => {
-    if (await confirmAction({ title: `Delete “${c.name}”?`, body: 'The campaign and its creatives will be removed.', confirmLabel: 'Delete', danger: true })) {
+    // deleting a plan never pauses what was launched from it: say so, and name what keeps running (R12)
+    const on = launched.filter(mayBeOn);
+    const body = on.length
+      ? `The plan and its creatives will be removed. ${on.length === 1 ? 'This launched campaign keeps' : 'These launched campaigns keep'} running and spending: ${on.map((l) => `${l.name} on ${PLATFORM_LABEL[l.platform]} (${money(l.daily, l.account.currency)} a day)`).join('; ')}. Pause or end ${on.length === 1 ? 'it' : 'them'} on the Campaigns tab.`
+      : launched.length
+        ? 'The plan and its creatives will be removed. What was launched from it stays on the Campaigns tab.'
+        : 'The campaign and its creatives will be removed.';
+    if (await confirmAction({ title: `Delete “${c.name}”?`, body, confirmLabel: 'Delete', danger: true })) {
       deleteAd(c.id);
       onDeleted();
     }
@@ -133,6 +175,20 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
             <input className="input input-inline -ml-3 h-10 min-w-0 flex-1 text-h2" value={c.name} onChange={(e) => set({ name: e.target.value })} aria-label="Campaign name" />
             <MoreMenu label="More campaign actions" items={[{ label: 'Delete campaign', icon: <Trash2 />, onSelect: () => void remove(), danger: true }]} />
           </div>
+          {launched.length > 0 && (
+            <Callout
+              tone="info"
+              className="mb-5"
+              action={
+                <button type="button" className="btn btn-secondary btn-xs" onClick={onCampaigns}>
+                  Campaigns
+                </button>
+              }
+            >
+              <span className="block font-medium text-ink">{launched.map(launchedLine).join(' · ')}</span>
+              Changes here don’t change the live campaign. Use Manage on the Campaigns tab.
+            </Callout>
+          )}
           <div className="flex flex-col gap-6">
             <div>
               <p className="label">Objective</p>
@@ -230,7 +286,7 @@ function CampaignEditor({ project, c, onDeleted }: { project: Project; c: AdCamp
       </div>
 
       <aside className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-6 lg:col-span-4">
-        <ExportPanel c={c} finalUrl={finalUrl} onFinalUrl={(v) => set({ finalUrl: v })} onExported={() => set({ exportedAt: Date.now() })} />
+        <ExportPanel c={c} finalUrl={finalUrl} onFinalUrl={(v) => set({ finalUrl: v })} onExported={() => set({ exportedAt: Date.now() })} onLaunch={() => useAdsLaunch.getState().openLaunch({ planId: c.id })} />
       </aside>
     </div>
   );
@@ -247,9 +303,16 @@ const AD_MANAGERS: Record<AdPlatform, { label: string; url: string }> = {
 const displayUrl = (url: string) => stripProtocol(url).replace(/\/+$/, '');
 
 /** Budget (your own numbers), and taking the plan to each platform's ads manager. */
-function ExportPanel({ c, finalUrl, onFinalUrl, onExported }: { c: AdCampaign; finalUrl: string; onFinalUrl: (v: string) => void; onExported: () => void }) {
+function ExportPanel({ c, finalUrl, onFinalUrl, onExported, onLaunch }: { c: AdCampaign; finalUrl: string; onFinalUrl: (v: string) => void; onExported: () => void; onLaunch: () => void }) {
   const hasCreatives = c.creatives.length > 0 && c.selectedCreativeIds.length > 0;
   const ready = hasCreatives && !!finalUrl;
+  // Launch…: the full app only, when the owner has launching on for this customer
+  const limits = useAdsLaunch((s) => s.limits[c.projectId]);
+  const launchShown = !__ARTIFACT_BUILD__ && !!limits && limits.adsEnabled && limits.launchOpen && !limits.blocked;
+  const launchOff = !__ARTIFACT_BUILD__ && !!limits && !launchShown;
+  const platforms = launchablePlatforms(c);
+  const launchReady = platforms.length > 0 && !!finalUrl && ((platforms.includes('meta') && hasCreatives) || (platforms.includes('google') && !!c.search));
+  const launchWhy = !platforms.length ? 'Add Meta or Google to the platforms to launch from here.' : !finalUrl ? 'Add the page your ads link to first.' : !launchReady ? 'Generate the ads first.' : null;
   return (
     <>
       <section className="card p-5" aria-label="Budget">
@@ -265,8 +328,22 @@ function ExportPanel({ c, finalUrl, onFinalUrl, onExported }: { c: AdCampaign; f
       <section className="card flex flex-col gap-4 p-5" aria-label="Run it">
         <h2 className="flex items-center gap-1 text-h3 text-ink">
           Run it on the platforms
-          <InfoTip label="How ads run">This app doesn’t run or pay for ads. Copy the plan into each platform’s ads manager, where you set the budget and launch it.</InfoTip>
+          {__ARTIFACT_BUILD__ ? (
+            <InfoTip label="How ads run">This app doesn’t run or pay for ads. Copy the plan into each platform’s ads manager, where you set the budget and launch it.</InfoTip>
+          ) : launchOff ? (
+            <InfoTip label="How ads run">Launching ads isn’t turned on for your account. Copy the plan into each platform’s ads manager, where you set the budget and launch it.</InfoTip>
+          ) : (
+            <InfoTip label="How ads run">You can launch on Meta and Google from here. Ad spend is billed by Meta or Google to your own payment method.</InfoTip>
+          )}
         </h2>
+        {launchShown && (
+          <div className="flex flex-col gap-1.5">
+            <button type="button" className="btn btn-primary btn-sm self-start" disabled={!launchReady} onClick={onLaunch}>
+              <Rocket /> Launch…
+            </button>
+            {launchWhy && <p className="text-caption text-muted">{launchWhy}</p>}
+          </div>
+        )}
         <Field label="Final URL" htmlFor="ad-final" hint="The page people land on when they click your ad.">
           <input id="ad-final" className="input font-mono" placeholder="https://yourbusiness.com/offer" value={c.finalUrl ?? finalUrl} onChange={(e) => onFinalUrl(e.target.value)} onBlur={(e) => onFinalUrl(ensureUrl(e.target.value))} />
         </Field>

@@ -22,6 +22,7 @@ import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { PlatformMark } from '@/components/posts/PlatformIcon';
 import { Badge, Callout, InfoTip, Modal, MoreMenu, OptionCards, SettingsRow, SettingsSection, Spinner, StatusDot, confirmAction, type MenuEntry } from '@/components/ui/primitives';
+import { disconnectWarning, liveAdsFor } from '@/components/ads/liveAds';
 import { PLATFORM_NAMES } from '@/pages/marketing/analytics/links';
 
 const SOCIAL: readonly ConnectPlatform[] = SOCIAL_PLATFORMS;
@@ -386,15 +387,17 @@ function AccountRow({ platform, status, view, onChoose }: { platform: ConnectPla
   const disconnect = async () => {
     const where = APP_SETTINGS[platform] ?? name;
     const ads = ADS.includes(platform);
+    // campaigns launched from the app on this connection whose switch is on keep running, unreachable (R12)
+    const live = ads && (platform === 'meta_ads' || platform === 'google_ads') ? await liveAdsFor(platform === 'meta_ads' ? 'meta' : 'google') : [];
     const ok = await confirmAction({
       title: `Disconnect ${name}?`,
       body: ads
-        ? `Every business that uses this account stops using it. This doesn’t remove access inside ${where}; do that in ${where}’s settings.`
+        ? `Every business that uses this account stops using it. This doesn’t remove access inside ${where}; do that in ${where}’s settings.${disconnectWarning(live)}`
         : `This business stops using it, and its posting there goes back to manual. Your other businesses keep their own accounts. This doesn’t remove access inside ${where}; do that in ${where}’s settings.`,
       confirmLabel: 'Disconnect',
       danger: true,
     });
-    if (ok) await act(() => s().disconnectPlatform(platform), `Couldn’t disconnect ${name}`);
+    if (ok) await act(() => s().disconnectPlatform(platform, { ackLiveAds: live.length > 0 }), `Couldn’t disconnect ${name}`);
   };
 
   const menu: MenuEntry[] = [

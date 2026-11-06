@@ -90,7 +90,7 @@
 export const PLATFORMS = Object.freeze(['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'pinterest', 'google_ads', 'meta_ads', 'linkedin_ads', 'tiktok_ads', 'pinterest_ads', 'x_ads', 'reddit_ads', 'microsoft_ads']);
 /** @type {readonly Platform[]} the social networks */
 export const SOCIAL_PLATFORMS = Object.freeze(['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'pinterest']);
-/** @type {readonly Platform[]} the ad accounts (results are read only; the app changes no ad) */
+/** @type {readonly Platform[]} the ad accounts (results are read here; launches and changes go through server/ads/) */
 export const AD_PLATFORMS = Object.freeze(['google_ads', 'meta_ads', 'linkedin_ads', 'tiktok_ads', 'pinterest_ads', 'x_ads', 'reddit_ads', 'microsoft_ads']);
 /**
  * @type {readonly Platform[]} shown as "Coming soon": Pinterest (posts in the app have no Pinterest format yet) and
@@ -142,6 +142,7 @@ export const ROUTE_PREFIXES = Object.freeze({
   analytics: '/api/analytics/',
   seoGoogle: '/api/seo/google/',
   billing: '/api/billing/',
+  ads: '/api/ads/',
 });
 
 /** Rate-limit buckets (per user unless noted), as `${bucket}:user:<id>` keys for rateLimited(key, factor). */
@@ -156,4 +157,10 @@ export const RATE_BUCKETS = Object.freeze({
   uploadPostWebhook: 'upload-post-webhook', // 600 per minute per IP
   nangoWebhook: 'nango-webhook', // 600 per minute per IP
   postingCheck: 'posting-check', // 1 per job per 30 s + 60 per hour
+  adsRead: 'ads-read', // 60 per minute (accounts, targeting search, campaigns, audit, jobs)
+  adsPreview: 'ads-preview', // 30 per hour
+  adsWrite: 'ads-write', // 20 per hour (launch, resume, budget, end date, creative) + the owner's per-day counts
+  adsStop: 'ads-stop', // 120 per hour (pause and end only: stopping is never throttled by ads-write)
+  adsCheck: 'ads-check', // 1 per job per 30 s + 60 per hour
+  adsRefresh: 'ads-refresh', // 1 per business per 5 minutes
 });

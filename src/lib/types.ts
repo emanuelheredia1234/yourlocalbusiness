@@ -788,6 +788,19 @@ export interface AdCreative {
   style: StyleId;
   format: PostFormat;
   visualHeadline: string;
+  /** the image Meta gets when the plan is launched (saved to the account; Meta fetches it from a signed link) */
+  media?: AdCreativeMedia;
+}
+
+/** A launched ad's image: madeBy 'ai' (the app made it from the creative) or 'owner' (your own photo). */
+export interface AdCreativeMedia {
+  mediaId: string;
+  width: number;
+  height: number;
+  type: 'image/jpeg' | 'image/png';
+  madeBy: 'ai' | 'owner';
+  /** what it was made from (style, headline), so a changed creative shows "make it again" */
+  renderedFrom?: string;
 }
 
 export interface SearchAd {

@@ -1,6 +1,8 @@
 // Paid ads plans apart from their page: where the ads send people, the plan as text and as a CSV for an
 // ads manager, and how an AI answer is applied. Shared by Marketing → Paid ads and the assistant, so both
-// do exactly the same. The app never runs or pays for ads: these are plans the owner takes to each platform.
+// do exactly the same. A plan stays a plan: the owner takes it to each platform's ads manager, or launches it on
+// Meta and Google from the planner (src/pages/marketing/ads/launch, server/ads/), where the ad spend is billed by
+// Meta or Google to the owner's own payment method; the app never pays for or charges for ad spend.
 
 import type { AdCampaign, Project } from './types';
 import { ensureUrl, fmtMoney } from './utils';
@@ -9,6 +11,9 @@ import { useStore } from '@/store/useStore';
 
 /** The buttons an ad can have (the ads managers' own choices). */
 export const AD_CTAS = ['Learn More', 'Shop Now', 'Book Now', 'Sign Up', 'Download', 'Get Quote', 'Contact Us', 'Get Offer'];
+
+/** Each button as Meta's callToAction value (the same map as server/ads/build.mjs CTA_MAP; a test keeps them equal). */
+export const META_CTA: Record<string, string> = { 'Learn More': 'LEARN_MORE', 'Shop Now': 'SHOP_NOW', 'Book Now': 'BOOK_NOW', 'Sign Up': 'SIGN_UP', Download: 'DOWNLOAD', 'Get Quote': 'GET_QUOTE', 'Contact Us': 'CONTACT_US', 'Get Offer': 'GET_OFFER' };
 
 const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 

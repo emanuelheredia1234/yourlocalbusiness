@@ -1,5 +1,7 @@
-// Ads › Analytics: the user's own Google Ads and Meta Ads results (read only: the app never changes ads), and
-// up to three competitors' active ads from the public ad libraries. Ad text is someone else's: shown as text.
+// Ads › Analytics: the user's own Google Ads and Meta Ads results (this page only reads; launching and changing
+// campaigns goes through the Campaigns tab and server/ads/), and up to three competitors' active ads from the
+// public ad libraries. Ad text is someone else's: shown as text. A campaign launched from the app links back to
+// the Campaigns tab.
 import { useEffect, useState } from 'react';
 import { ExternalLink, Target, Users } from 'lucide-react';
 import type { Project } from '@/lib/types';
@@ -7,6 +9,7 @@ import type { AdsData, AnalyticsCompetitor } from '@/lib/integrations/types';
 import { AD_PLATFORMS } from '@/lib/integrations/types';
 import { fmtDate } from '@/lib/utils';
 import { useAnalytics, useConnections } from '@/store/analytics';
+import { useAdsLaunch } from '@/store/adsLaunch';
 import { toast } from '@/store/ui';
 import { AreaChart, ChartCard } from '@/components/charts/Charts';
 import { Badge, Callout, Drawer, Empty, Field, Spinner, StatStrip } from '@/components/ui/primitives';
@@ -16,8 +19,10 @@ import { AD_SHORT, openConnectedAccounts } from '../analytics/links';
 
 const n = (v: number | undefined) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v).toLocaleString('en-US') : '–');
 
-export function AdsAnalytics({ project }: { project: Project }) {
+export function AdsAnalytics({ project, onCampaigns }: { project: Project; onCampaigns?: () => void }) {
   const [editing, setEditing] = useState(false);
+  const launched = useAdsLaunch((s) => s.campaigns[project.id]);
+  const launchedIds = new Set((launched ?? []).map((c) => c.platformCampaignId).filter((x): x is string => !!x));
   return (
     <>
       <AnalyticsShell<AdsData>
@@ -33,7 +38,7 @@ export function AdsAnalytics({ project }: { project: Project }) {
         }
         empty={<AdsEmpty onCompetitors={() => setEditing(true)} />}
       >
-        {(snap, range) => <AdsBody data={snap.data} range={range} onCompetitors={() => setEditing(true)} />}
+        {(snap, range) => <AdsBody data={snap.data} range={range} onCompetitors={() => setEditing(true)} launchedIds={launchedIds} onCampaigns={onCampaigns} />}
       </AnalyticsShell>
       {editing && <CompetitorsDrawer projectId={project.id} onClose={() => setEditing(false)} />}
     </>
@@ -60,7 +65,7 @@ function AdsEmpty({ onCompetitors }: { onCompetitors: () => void }) {
   );
 }
 
-export function AdsBody({ data, range, onCompetitors, now }: { data: AdsData; range: number; onCompetitors?: () => void; now?: number }) {
+export function AdsBody({ data, range, onCompetitors, now, launchedIds, onCampaigns }: { data: AdsData; range: number; onCompetitors?: () => void; now?: number; launchedIds?: Set<string>; onCampaigns?: () => void }) {
   const { byPlatform } = useConnections();
   const own = Array.isArray(data?.own) ? data.own : [];
   const competitors = Array.isArray(data?.competitors) ? data.competitors : [];
@@ -106,6 +111,11 @@ export function AdsBody({ data, range, onCompetitors, now }: { data: AdsData; ra
                   <span key="c" className="flex min-w-0 items-center gap-2">
                     <Badge>{AD_SHORT[a.platform] ?? a.platform}</Badge>
                     <span className="truncate">{c.name}</span>
+                    {onCampaigns && launchedIds?.has(String(c.id)) && (
+                      <button type="button" className="link shrink-0 text-caption" onClick={onCampaigns}>
+                        Launched from the app
+                      </button>
+                    )}
                   </span>,
                   money(c.spend, a.currency),
                   n(c.impressions),

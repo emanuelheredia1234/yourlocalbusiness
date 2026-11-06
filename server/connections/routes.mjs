@@ -11,7 +11,10 @@
 //                                                                    body {projectId?}: the business that connects it
 //   POST   /api/integrations/connections/:platform/reconnect        same
 //   POST   /api/integrations/connections/:platform/check            {connection}   body {projectId?}
-//   DELETE /api/integrations/connections/:platform[?projectId=]     {ok: true}
+//   DELETE /api/integrations/connections/:platform[?projectId=][&ackLiveAds=1]   {ok: true} | 409 ADS_LIVE {live}
+//                                                                    (Meta ads / Google Ads while a campaign launched
+//                                                                    from the app is on: after disconnecting the app
+//                                                                    can't pause it, so the customer acknowledges it)
 //   GET    /api/integrations/connections/:platform/targets[?projectId=]  {targets}
 //   PUT    /api/integrations/connections/:platform/target           {connection}   body {targetId, projectId?}
 //   POST   /api/webhooks/upload-post   no sameOrigin, no bearer: the raw body (readRaw, 256 KB), its HMAC over
@@ -37,7 +40,7 @@ const RESERVED_KEYS = ['__proto__', 'constructor', 'prototype'];
 
 /** deps: the integration deps (server/integrations/wiring.mjs). connections.impl's sides answer the webhooks. */
 export function createConnectionRoutes(deps = {}) {
-  const { auth, connections, send, sameOrigin = () => true, rateLimited = () => false, limit = () => false, corsHeaders = () => ({}), readRaw, readJson, clientKey = (req) => req.socket?.remoteAddress || 'unknown' } = deps;
+  const { auth, connections, liveAdsGuard = null, send, sameOrigin = () => true, rateLimited = () => false, limit = () => false, corsHeaders = () => ({}), readRaw, readJson, clientKey = (req) => req.socket?.remoteAddress || 'unknown' } = deps;
   const impl = connections?.enabled ? connections.impl : null;
   // the webhooks: Upload-Post's goes to the social side, Zernio's to the ads side (or a plain Zernio impl)
   const socialImpl = connections?.socialEnabled ? (impl?.social ?? null) : null;
@@ -175,6 +178,11 @@ export function createConnectionRoutes(deps = {}) {
         return true;
       }
       if (route === 'DELETE ') {
+        // R12: never lose the way to pause a launched campaign without saying so (server/ads/ liveOn)
+        if ((platform === 'meta_ads' || platform === 'google_ads') && typeof liveAdsGuard === 'function' && url.searchParams.get('ackLiveAds') !== '1') {
+          const live = await liveAdsGuard(who.id, platform);
+          if (Array.isArray(live) && live.length) throw fail(409, 'ADS_LIVE', 'These campaigns are still on. After disconnecting, the app can’t pause them: they keep running until you pause them in Ads Manager.', { live });
+        }
         await connections.disconnect(who.id, platform, { projectId: projectFrom(url.searchParams.get('projectId')) });
         reply(req, res, 200, { ok: true });
         return true;

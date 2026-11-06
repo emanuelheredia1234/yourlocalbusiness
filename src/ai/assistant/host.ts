@@ -13,6 +13,7 @@ import { useMarkPosted } from '@/components/posts/PostActions';
 import { openListingWindow } from '@/components/studio/ListingWindowHost';
 import { openAgentBuild } from '@/components/agents/buildWindow';
 import { useUI } from '@/store/ui';
+import { useAdsLaunch } from '@/store/adsLaunch';
 import type { DangerSpec, PubWindow } from './registry';
 import { assistantAvailability, askAssistantModel, promptBudget, type Availability } from './transport';
 import { openPage } from './nav';
@@ -64,6 +65,19 @@ export const host: AssistantHost = {
       case 'agent-build':
         // the page (Code & assets, or the SEO page), then "Build with Manus / Viktor" there: the owner fills it in and sends it
         return openAgentBuild({ target: w.target, via: w.agent });
+      case 'ad-launch': {
+        // the Plans tab, then the launch window: nothing is picked for the owner (no PAUSED/ACTIVE, no ticks)
+        if (__ARTIFACT_BUILD__) return false;
+        const ok = await openPage('marketing-ads', 'plan');
+        if (ok) useAdsLaunch.getState().openLaunch({ planId: w.planId, fromAssistant: true });
+        return ok;
+      }
+      case 'ad-change': {
+        if (__ARTIFACT_BUILD__) return false;
+        const ok = await openPage('marketing-ads', 'campaigns');
+        if (ok) useAdsLaunch.getState().openChange({ campaignId: w.campaignId, action: w.action });
+        return ok;
+      }
       case 'page':
         return openPage(w.route, w.tab);
     }

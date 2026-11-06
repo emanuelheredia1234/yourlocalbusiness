@@ -42,7 +42,8 @@ name only.
 | `ZERNIO_API_KEY` | **Turns ad accounts on** (Zernio, ads only) | Your Zernio API key (`sk_…`), from the Zernio dashboard → API keys. |
 | `ZERNIO_WEBHOOK_SECRET` | Checks that ad-account news really comes from Zernio | A random string you choose (32+ characters); you give the same value to Zernio in §3a. |
 | `ZERNIO_WEBHOOK_SECRET_PREVIOUS` | Only while rotating the webhook secret | Remove it once Zernio uses the new one. |
-| `MEDIA_URL_SECRET` | Short-lived links to a post's photo or video (Upload-Post fetches them) | 32+ random bytes. **Needed to post photos and videos.** |
+| `MEDIA_URL_SECRET` | Short-lived links to a post's photo or video (Upload-Post fetches them), and to a Meta ad's image | 32+ random bytes. **Needed to post photos and videos, and to launch on Meta.** |
+| `ADS_REVIEW_SECRET` | Signs each ad launch or change review, so what is sent is exactly what the customer confirmed (§3c) | 32+ random bytes. Unset, the app derives one from `CUSTOMER_TAG_SECRET`. Changing it only makes open reviews stale. |
 | `TREG_TOKEN` | Analytics data, competitor ads, Google rank, Search Console | A **member-role agent token** (`treg org agent-new ylb-app`). Not your own dashboard key. |
 | `TREG_ADMIN_TOKEN` | Customer caps and the usage check against treg (billing only) | Admin-role agent token; only a team owner can make one. |
 | `NANGO_SECRET_KEY` | Optional, later: other integrations (booking tools, CRMs) | Leave unset until you add one (§3b). |
@@ -70,6 +71,9 @@ Plain settings (not secret; Replit Secrets or env):
 | `ZERNIO_BASE_URL`, `NANGO_BASE_URL`, `TREG_BASE_URL` | — | Tests and mocks only; leave unset in production. |
 | `MEDIA_PUBLIC_BASE_URL` | `ALLOWED_ORIGIN`, else `https://yourlocalbusiness.replit.app` | The public address Upload-Post fetches a post's photo or video from. Set it only if the app's public address is not one of those. |
 | `ZERNIO_RPM` | `60` | The app's own limit on Zernio calls per minute. Zernio allows 60 with up to 2 connected accounts and 600 from 3; raise this to `600` then. |
+| `ADS_LAUNCH_ENABLED` | unset (off) | `1` lets customers launch ads and raise budgets, end dates and resume (§3c). Pausing and ending always work. |
+| `ADS_HARD_MAX_DAILY` | `500` | Ceiling for any customer's daily ad limit; Owner → Billing → Ad limits can't go above it. |
+| `ADS_HARD_MAX_CHANGE` | `200` | Ceiling for the most one launch or increase can add a day. |
 | `ZERNIO_BRAND_NAME` | `Yourlocalbusiness` | The name on Zernio's ads connect screen ("Yourlocalbusiness wants to connect to your Meta Ads account"). |
 | `ZERNIO_BRAND_LOGO_URL` | — | An https link to a square logo for that screen. |
 | `ZERNIO_BRAND_COLOR` | — | Its button colour, `#RRGGBB`. |
@@ -88,6 +92,8 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
 2. `supabase/migrations/20261106000000_zernio.sql`: lets the usage ledger record Zernio rows.
 3. `supabase/migrations/20261107000000_upload_post.sql`: lets the usage ledger record Upload-Post rows
    (vendor `uploadpost`).
+4. `supabase/migrations/20261108000000_ads_launch.sql`: launched ad campaigns, their jobs and audit log, each
+   business's chosen ad account, and the owner's ad limits (`ad_limits`; ads start **off** for everyone).
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices. Their ad accounts are disconnected at Zernio first (every account in their Zernio profile, then the
@@ -244,7 +250,7 @@ the plan's 75 profiles. Facebook groups stay with Manus.
 ## 3a. Ad accounts (Zernio)
 
 Zernio is kept **for ads only**: connecting Meta, Google, LinkedIn, TikTok, Pinterest, Reddit and Microsoft ad
-accounts and reading ad results (later: launching and changing campaigns). Social accounts and posting are
+accounts, reading ad results, and launching and changing Meta and Google Search campaigns (§3c). Social accounts and posting are
 Upload-Post's (§3). Each customer gets one Zernio **profile**, made the first time they connect an ad account,
 with `externalId` = their customer id (`cust_…`, never an email). Zernio account ids never reach the browser.
 
@@ -257,7 +263,9 @@ with `externalId` = their customer id (`cust_…`, never an email). Zernio accou
 4. Dashboard → **Webhooks** → add an endpoint:
    - URL: `https://yourlocalbusiness.replit.app/api/webhooks/zernio`
    - Secret: the same value as `ZERNIO_WEBHOOK_SECRET`
-   - Events: `account.connected`, `account.disconnected` (post events aren't needed any more).
+   - Events: `account.connected`, `account.disconnected`, and for launched campaigns `ad.review.approved`,
+     `ad.review.rejected`, `ad.status_changed`, `ad.delivery_issue`, `ad_account.status_changed` (same URL, same
+     secret; post events aren't needed any more). Subscribing to the ad events needs the ads add-on.
    Press **Send test**: the app answers 200. Zernio signs each delivery (`X-Zernio-Signature`, HMAC-SHA256 of the
    body); the app ignores anything unsigned or for a profile that isn't one of your customers, and applies each
    event once.
@@ -280,11 +288,93 @@ it beyond Zernio's settings.
 - **Disconnect and deletion**: Zernio's Meta Ads connect also makes a hidden Facebook account (not billed, not
   postable) that holds the customer's Facebook token. Disconnecting Meta Ads removes it too, and deleting a
   customer's account removes every account in their Zernio profile, then the profile.
-- **Stats**: each ad account's daily spend and campaigns (read only: the app makes no ad changes yet).
+- **Stats**: each ad account's daily spend and campaigns (read here; launches and changes are §3c).
 - **Usage**: every Zernio call is a ledger row (vendor `zernio`, no cost), and once a month an estimated "ad
   accounts" row (count × Zernio's list price).
 - Rate limits: the app stays under `ZERNIO_RPM`; a read that gets a 429 waits once (10 s at most); writes are
   never repeated.
+
+## 3c. Ads: launching and changing campaigns
+
+**What it does.** Customers launch a saved Ads plan on **Meta** (Facebook and Instagram feed: one campaign, one ad
+set, 1 to 3 ads from the plan's picked A/B/C) and **Google Search** (one campaign, one ad group, one responsive
+search ad from the plan's search ad), then pause, resume, end, change the daily budget, change the end date (Meta
+only) and swap the ad from the Campaigns tab. Ad spend is billed by Meta or Google to **the customer's own**
+payment method; the app never handles ad money. Not from the app yet: TikTok, LinkedIn, Google Display, PMax and
+Video, lead forms, pixels and conversion goals, custom audiences, sitelinks, creating ad accounts or payment
+methods, deleting campaigns, special ad categories (housing, jobs, credit, politics, gambling) and EU targeting.
+
+**Turn it on**
+1. Run `supabase/migrations/20261108000000_ads_launch.sql` (§2).
+2. Zernio: the **ads add-on** must be on your Zernio plan (`ads_addon_required` otherwise). Managed ads cost $0.01
+   per active ad a month after the first 500 free, and Zernio needs a payment method on your team past 500 live ads
+   (`ads_allowance_exceeded`). These calls show in the ledger as vendor `zernio` with no cost: check Zernio's invoice.
+3. Replit Secrets: `ADS_REVIEW_SECRET` (32+ random bytes) and `MEDIA_URL_SECRET` (Meta fetches ad images from the
+   app). Add the ad events to the Zernio webhook (§3a step 4).
+4. Owner → Billing → Ad limits: set the defaults (or one customer's) and turn **ads on** there. Ads stay off until
+   **both** `ADS_LAUNCH_ENABLED=1` and the customer's (or the default) `ads on` are set.
+
+**In Zernio, for ads** (once): the API key in `ZERNIO_API_KEY` (§3a step 2); the **ads add-on** on the plan;
+the webhook from §3a step 4 subscribed to the five ad events (`ad.review.approved`, `ad.review.rejected`,
+`ad.status_changed`, `ad.delivery_issue`, `ad_account.status_changed`) on the same URL and secret (without them the
+Campaigns tab still updates on Refresh, just later); a payment method on your Zernio team before you pass 500 live
+ads. Zernio's plan, billing, add-on or key problems are never shown to customers: they see "Launching and changing
+ads from the app isn't available right now. The app owner has been told." and you get the alert in Owner → Billing
+(and the server log, `zernio_owner_alert`).
+
+**What customers need** (the launch window's checklist): Meta ads or Google Ads connected in Settings → Connected
+accounts and chosen for the business; an ad account picked (active, not a Google manager or test account); on Meta
+a payment method on the ad account, a Facebook Page (an Instagram professional account is optional), Meta's
+non-discrimination policy accepted, no security hold; on Google an approved billing setup in Google Ads → Billing
+(advisory: the app warns, Google won't show ads without it). Google reviews every ad; Meta does too.
+
+**Limits** (`ad_limits`, `'*'` = defaults, a customer row overrides field by field):
+| Limit | Default | Checked on |
+|---|---|---|
+| ads on | off | launch, resume, increases |
+| currency | USD | limits apply only to ad accounts in this currency; another one is refused ("Ask the app owner to set your ad limit in EUR") |
+| daily limit | $50 | committed daily across the customer's campaigns whose switch is (or may be) on, after the change |
+| per change | $50 | a launch's daily, and one increase's added daily |
+| per campaign | $750 | a launch's daily × days; a resume, increase or later end date: spent so far + what's left |
+| launches a day | 3 | launch attempts that reached the send, per UTC day |
+| changes a day | 20 | resumes, budget, end date and ad swaps (pause and end never count) |
+A customer blocked in Billing can't launch, resume or increase. `ADS_HARD_MAX_DAILY` and `ADS_HARD_MAX_CHANGE` cap
+what you can set. Every change to a limit bumps its version (open reviews must be done again) and shows in the
+customer's activity ("The app owner set your daily limit … to $100.00"). **Pausing and ending always work**: with
+ads off, a blocked customer, `ADS_LAUNCH_ENABLED` unset or the daily change limit used up. **Pause all** on a
+customer's row pauses every campaign of theirs that is on, one by one (audited as "Paused by the app owner").
+Turning ads off or blocking a customer never pauses anything by itself.
+
+**Money safety.** Every launch, on Meta and Google, is created with its campaign switched off, and switched on by
+the launch's own next step only if the customer chose Active (so a create that answers late can never be running
+untracked). On Meta the app first sets a campaign spending limit equal to the confirmed planned total (at least
+Meta's smallest limit, 100 US dollars, which the confirm shows); a budget increase or a later end date raises that
+limit first, and the app never lowers it. Google has no such limit from the app: the owner limits and the end date
+are the bounds there. Each review can start one write only, and launches or increases sent at the same moment are
+checked against the limits one after another. Every launch and every change that
+can raise spend needs the customer's spend confirm with the amounts, dates and account; the server sends exactly
+what the review showed (a plan edited, a limit changed or a budget changed in Ads Manager since then is refused
+before anything is sent). Meta's text optimisations are all off; Google gets at least 3 headlines and 2
+descriptions of the customer's own, so neither writes copy for them. Claim words ("licensed", "guarantee",
+"reviews", …) need the customer's tick.
+
+**Unknown outcomes.** A write is sent **once**. A timeout, a cut connection or a 5xx makes it "unknown": "It may
+have happened - check status before trying again." **Check status** only reads (live on Meta; on Google it waits
+for a sync newer than the send, as Google's data reaches Zernio 15 to 60 minutes late). Nothing is ever re-sent by
+itself, on a page load or on a restart. To look for a launch in Ads Manager yourself, search for the tag in its
+name: `YLB` and 12 letters and digits (e.g. `Winter pipes · Meta · YLB 1a2b3c4d5e6f`). "Launch again" (only after
+the check says it wasn't created) uses a new tag.
+
+**Where live spend is named.** Deleting the app account, disconnecting Meta ads or Google Ads, and deleting a plan
+list the campaigns still on and what keeps running ("they keep running until you pause them in Ads Manager"); the
+first two need the customer's tick (`ackLiveAds=1`).
+
+**Routes** (signed in, same site): `/api/ads/accounts`, `/accounts/choice`, `/targeting/search`, `/launch/preview`,
+`/launch`, `/campaigns`, `/campaigns/refresh`, `/campaigns/:id/change/preview`, `/campaigns/:id/change`,
+`/campaigns/:id/review`, `/jobs/:id`, `/jobs/:id/check`, `/audit`, `/live`; owner only: `/admin/limits`,
+`/admin/limits/:tag` and `/defaults`, `/admin/customers/:tag/pause-all/preview` and `/pause-all`. Code:
+`server/ads/` (`zernioAds.mjs` is the only file that sends ad writes). Tests run against
+`server/test/mock-zernio-ads.mjs` only.
 
 ## 3b. Other integrations (Nango, for later)
 
@@ -481,6 +571,35 @@ by older versions show **Sent with Manus earlier**, read-only. There is no bulk 
   to 3 competitors through treg), SEO page (treg and Search Console) and Email (Omnisend). Each shows the last
   fetched numbers with their "as of" time and a 7/30-day range.
 
+### Ads: Launch… and the Campaigns tab
+
+Marketing → Ads has three tabs: **Plans** (the planner), **Campaigns** (what was launched) and **Analytics**. With
+launching on for the customer, a plan for Meta and/or Google with its page and ads shows **Launch…** (the full app
+only; the artifact build keeps copy and CSV export). The launch window has one tab per platform and five steps:
+**Ad account** (the business's connection, "Change in Connected accounts", then the ad accounts inside it with the
+setup checklist), **Who sees it** (each place in the plan becomes a lookup and the customer picks every match; Meta:
+radius and interests; Google: language; the "housing, jobs, credit…" question with no default), **The ads** (Meta:
+1 to 3 versions, each with its image: "Make the image" or "Use my photo"), **Budget and dates** (a daily amount per
+platform in that account's own currency, never converted; two platforms start empty under the plan's total; start,
+days and the computed last day with the time zone; the customer's limit and what's in use; **Paused / Active** with
+no default) and **Review** (the server's own review of exactly what will be sent, with blockers, claim ticks,
+warnings and what's left out). **Continue to confirm** opens the spend confirm: account and id tail, daily, dates
+with the time zone, planned total, Meta's spending limit (or Google's "pause or end it to stop"), Paused or Active,
+the ads and the link, the limit after this, and for an Active launch the "I understand this will spend real money"
+tick. The button repeats the choice and the amount ("Launch on Meta and spend $25.00 a day").
+
+The **Campaigns** tab: the limits strip (daily limit, committed, live campaigns), Refresh (reads Meta and Google at
+most every 5 minutes; also when the tab opens), the setup summary per platform, one row per campaign (state in plain
+words, daily, dates, spent so far, results as of their read time, Manage, Open in Ads Manager) and the full **Ad
+activity** (newest first, CSV). A row whose outcome is unknown shows the "may have happened" note and **Check
+status**, never "Try again". **Manage** shows the numbers, each ad's review, the campaign's activity, and Pause /
+Resume / Change daily budget / Change end date (Meta) / Swap ad / End, each with a preview and a confirm (the spend
+confirm for anything that can raise spend), and off with the reason while a change is still going or unconfirmed.
+The planner shows "Launched on Meta · Paused" on a launched plan and says edits don't change the live campaign.
+
+The assistant can list launched campaigns and **open** the launch or change window; it never launches, resumes or
+changes a budget, never picks Paused or Active and never ticks a box.
+
 ### Customer usage (owner only)
 
 Settings → AI keys → **Billing (owner)** opens **Customer usage**: per customer, analytics cost (treg) today and
@@ -491,7 +610,8 @@ profiles** used of the plan's limit (its tip gives each customer's limit of busi
 Upload-Post's last alert in plain words ("profiles are running low", "the API key was refused", "a customer reached
 their limit of businesses" with which customer, …). Estimates
 never count toward a cap. "Check against treg" and the monthly CSV are unchanged. It tracks usage only; it
-charges nothing.
+charges nothing. Below it, **Ad limits** (§3c): the defaults, each customer's own limits (empty = the default),
+committed daily and campaigns on, and **Pause all** for a customer (a preview of what's on, then one pause each).
 
 The artifact build shows "Connected accounts and live analytics need the full app" instead of any of this.
 
