@@ -1,6 +1,7 @@
-// Settings › Connected accounts, drawn once per state (as on the server: no effects run): every row state
-// (limited with each reason, waiting, a connect window that didn't finish), connecting switched off, the
-// owner's hint (Secret names, never values) and the artifact build.
+// Settings › Connected accounts, drawn once per state (as on the server: no effects run): the two sections
+// (social accounts through Upload-Post, ad accounts through Zernio), every row state (limited with each reason,
+// waiting, a connect window that didn't finish), one side or both switched off, the owner's setup steps (Secret
+// names and webhook addresses, never values) and the artifact build.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -14,11 +15,11 @@ vi.mock('@/store/analytics', async (original) => {
 });
 
 const { useAnalytics } = await import('@/store/analytics');
-const { ConnectedAccounts, rowView } = await import('./ConnectedAccounts');
+const { ConnectedAccounts, rowView, webhookUrls } = await import('./ConnectedAccounts');
 
 const render = () => renderToStaticMarkup(createElement(TooltipProvider, null, createElement(ConnectedAccounts)));
 const set = (connections: ConnectionStatus[], extra: Partial<ReturnType<typeof useAnalytics.getState>> = {}) =>
-  useAnalytics.setState({ connections, connectionsEnabled: true, connectionsLoaded: true, connectionsHint: undefined, connectionsError: undefined, pending: {}, expired: {}, ...extra });
+  useAnalytics.setState({ connections, connectionsEnabled: true, socialEnabled: true, adsEnabled: true, connectionsLoaded: true, connectionsHint: undefined, connectionsError: undefined, pending: {}, expired: {}, ...extra });
 
 /** The markup of one row (from its data-platform marker back to the row's start). */
 function rowOf(html: string, platform: string): string {
@@ -33,9 +34,9 @@ beforeEach(() => set([]));
 afterEach(() => vi.unstubAllGlobals());
 
 describe('the sections', () => {
-  it('Social and Ads (every ad network Zernio reads), Pinterest as Coming soon, no Search Console row', () => {
+  it('Social accounts and Ad accounts (every ad network Zernio reads), Pinterest as Coming soon, no Search Console row', () => {
     const html = render();
-    for (const t of ['Social', 'Ads', 'Facebook Page', 'Instagram', 'LinkedIn', 'TikTok', 'YouTube', 'Google Ads', 'Meta Ads', 'LinkedIn Ads', 'TikTok Ads', 'Pinterest Ads', 'X Ads', 'Reddit Ads', 'Microsoft Ads']) expect(html).toContain(t);
+    for (const t of ['Social accounts', 'Ad accounts', 'Facebook Page', 'Instagram', 'LinkedIn', 'TikTok', 'YouTube', 'Google Ads', 'Meta Ads', 'LinkedIn Ads', 'TikTok Ads', 'Pinterest Ads', 'X Ads', 'Reddit Ads', 'Microsoft Ads']) expect(html).toContain(t);
     expect(rowOf(html, 'pinterest')).toContain('Coming soon');
     for (const p of ['microsoft_ads', 'tiktok_ads', 'reddit_ads']) expect(rowOf(html, p)).toContain('Connect');
     expect(html).not.toContain('Search Console');
@@ -118,20 +119,56 @@ describe('every row state', () => {
 
 describe('connecting switched off', () => {
   it('a Callout at the top, and no Connect buttons', () => {
-    set([], { connectionsEnabled: false });
+    set([], { connectionsEnabled: false, socialEnabled: false, adsEnabled: false });
     const html = render();
     expect(html).toContain('Connecting accounts is coming soon. You can still post yourself and mark posts as posted.');
     expect(html).not.toContain('>Connect<');
+  });
+  it('social off, ads on: the social section says so and only ad rows connect', () => {
+    set([], { socialEnabled: false });
+    const html = render();
+    expect(html).toContain('Connecting social accounts isn’t available yet.');
+    expect(html).not.toContain('Connecting ad accounts isn’t available yet.');
+    expect(rowOf(html, 'instagram')).not.toContain('>Connect<');
+    expect(rowOf(html, 'google_ads')).toContain('>Connect<');
+  });
+  it('ads off, social on: the ads section says so and only social rows connect', () => {
+    set([], { adsEnabled: false });
+    const html = render();
+    expect(html).toContain('Connecting ad accounts isn’t available yet.');
+    expect(rowOf(html, 'meta_ads')).not.toContain('>Connect<');
+    expect(rowOf(html, 'facebook')).toContain('>Connect<');
+  });
+  it('a reconnect from the server shows Reconnect while that side is on', () => {
+    set([{ platform: 'instagram', state: 'needs_reconnect', lastError: 'reconnect' }]);
+    expect(rowOf(render(), 'instagram')).toContain('>Reconnect<');
+  });
+  it('a connect the server saw start but never finish: “That didn’t finish. Try again.”', () => {
+    set([{ platform: 'youtube', state: 'not_connected', lastError: 'not_finished' }]);
+    expect(rowOf(render(), 'youtube')).toContain('That didn’t finish. Try again.');
   });
 });
 
 describe('the owner’s hint', () => {
   it('names the Replit Secret, never a value', () => {
-    set([], { connectionsEnabled: false, connectionsHint: 'Connecting social and ad accounts is off: add ZERNIO_API_KEY (and ZERNIO_WEBHOOK_SECRET) in Replit Secrets.' });
+    set([], { connectionsEnabled: false, socialEnabled: false, adsEnabled: false, connectionsHint: 'Social accounts and posting are off: add UPLOAD_POST_API_KEY in Replit Secrets. Ad accounts are off: add ZERNIO_API_KEY (and ZERNIO_WEBHOOK_SECRET) in Replit Secrets.' });
     const html = render();
     expect(html).toContain('ZERNIO_API_KEY');
     expect(html).toContain('Replit Secrets');
     expect(html).not.toMatch(/sk_test|test-zernio-key/);
+  });
+  it('the owner’s setup steps: each side that’s off, with its Secrets and the webhook address to register', () => {
+    set([], { connectionsEnabled: false, socialEnabled: false, adsEnabled: false, connectionsHint: 'Social accounts and posting are off.' });
+    const html = render();
+    for (const t of ['Social accounts (Upload-Post)', 'Advanced plan (yearly)', 'UPLOAD_POST_API_KEY', 'UPLOAD_POST_WEBHOOK_SECRET', 'MEDIA_URL_SECRET', '/api/webhooks/upload-post', 'Ad accounts (Zernio)', 'ZERNIO_WEBHOOK_SECRET', '/api/webhooks/zernio', 'docs/integrations-setup.md']) expect(html).toContain(t);
+    // a side that works shows no steps
+    set([], { adsEnabled: false, connectionsHint: 'Ad accounts are off.' });
+    const ads = render();
+    expect(ads).toContain('Ad accounts (Zernio)');
+    expect(ads).not.toContain('Social accounts (Upload-Post)');
+  });
+  it('webhook addresses from the server’s address', () => {
+    expect(webhookUrls('https://app.example.com/')).toEqual({ social: 'https://app.example.com/api/webhooks/upload-post', ads: 'https://app.example.com/api/webhooks/zernio' });
   });
   it('people who aren’t the owner get no hint (the server sends none)', () => {
     set([], { connectionsEnabled: false });

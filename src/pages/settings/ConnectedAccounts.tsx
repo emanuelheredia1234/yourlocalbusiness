@@ -1,6 +1,10 @@
-// Settings › Connected accounts: each social network and ad account, with its state and the one action that fits
-// it. Social accounts connect through Upload-Post's hosted, branded page and ad accounts through Zernio's (the server asks for the link; it opens in a new
-// tab and is never kept); the row then waits for the network. Each business picks which account it uses.
+// Settings › Connected accounts: one screen, two sections.
+// - Social accounts: the networks the business posts from (posting, post status and social stats). Connect opens
+//   the posting service's hosted, branded sign-in page (Upload-Post) in a new tab; the row then waits for the
+//   network. Reconnect when a network asks to sign in again; Disconnect stops the app using the account.
+// - Ad accounts: the ad accounts the app reads results from (Zernio). Read only for now.
+// Each side is switched on by its own key; a side that's off says so, and the owner alone sees which Replit
+// Secrets to add and the webhook address to register (names and addresses, never values).
 // Other integrations (Nango: future booking tools and CRMs) show only when the owner has set them up.
 // Nothing here posts or changes anything at the network.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -8,6 +12,8 @@ import { ArrowLeftRight, BarChart3, CalendarClock, Pin, Plug, RefreshCw, Target,
 import type { ConnectPlatform, ConnectionStatus, LimitedReason, NangoIntegration, NangoResponse, Target as ConnectTarget } from '@/lib/integrations/types';
 import { AD_PLATFORMS, PHASE2_PLATFORMS, SOCIAL_PLATFORMS } from '@/lib/integrations/types';
 import { connectNango, disconnectNango, getNangoIntegrations, getTargets, setTarget } from '@/lib/integrations/api';
+import { serverBaseNow } from '@/lib/cloud/auth';
+import { cn } from '@/lib/utils';
 import { useAnalytics, PENDING_EXPIRES_MS } from '@/store/analytics';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
@@ -93,7 +99,7 @@ export function rowView(
     };
   }
   // not connected
-  const expiredNote = o.expired || (o.pendingAt !== undefined && now - o.pendingAt > PENDING_EXPIRES_MS) ? 'That didn’t finish. Try again.' : undefined;
+  const expiredNote = o.expired || st?.lastError === 'not_finished' || (o.pendingAt !== undefined && now - o.pendingAt > PENDING_EXPIRES_MS) ? 'That didn’t finish. Try again.' : undefined;
   if (platform === 'x_ads' && !expiredNote) return { tone: 'faint', status: 'Not connected', note: 'Connect X first, then X Ads.', action: off ? 'none' : 'connect' };
   return { tone: 'faint', status: 'Not connected', ...(expiredNote ? { note: expiredNote } : {}), action: off ? 'none' : 'connect' };
 }
@@ -112,6 +118,8 @@ function PlatformIcon({ platform }: { platform: ConnectPlatform }) {
 export function ConnectedAccounts() {
   const connections = useAnalytics((s) => s.connections);
   const enabled = useAnalytics((s) => s.connectionsEnabled);
+  const socialOn = useAnalytics((s) => s.socialEnabled);
+  const adsOn = useAnalytics((s) => s.adsEnabled);
   const loaded = useAnalytics((s) => s.connectionsLoaded);
   const hint = useAnalytics((s) => s.connectionsHint);
   const error = useAnalytics((s) => s.connectionsError);
@@ -162,15 +170,21 @@ export function ConnectedAccounts() {
     );
   }
 
-  const row = (p: ConnectPlatform) => <AccountRow key={p} platform={p} status={byPlatform[p]} view={rowView(p, byPlatform[p], { enabled, pendingAt: pending[p], expired: expired[p] })} onChoose={() => setChoose(p)} />;
+  const row = (p: ConnectPlatform) => {
+    const on = ADS.includes(p) ? adsOn : socialOn;
+    return <AccountRow key={p} platform={p} status={byPlatform[p]} view={rowView(p, byPlatform[p], { enabled: on, pendingAt: pending[p], expired: expired[p] })} onChoose={() => setChoose(p)} />;
+  };
+  // one side off while the other works: that section says so (both off: one note at the top)
+  const sideOff = (on: boolean, what: string) =>
+    loaded && enabled && !on ? (
+      <div className="pb-2">
+        <Callout tone="info">{what} isn’t available yet. You can still post yourself and mark posts as posted.</Callout>
+      </div>
+    ) : null;
 
   return (
     <div className="flex flex-col gap-6">
-      {hint && (
-        <Callout tone="warn" title="Owner setup">
-          {hint}
-        </Callout>
-      )}
+      {hint && <OwnerSetup hint={hint} socialOn={socialOn} adsOn={adsOn} />}
       {loaded && !enabled && <Callout tone="info">Connecting accounts is coming soon. You can still post yourself and mark posts as posted.</Callout>}
       {error && (
         <p role="alert" className="text-small text-bad">
@@ -178,22 +192,76 @@ export function ConnectedAccounts() {
         </p>
       )}
       <SettingsSection
-        title="Social"
-        description="Post from the app and see your own stats."
+        title="Social accounts"
+        description="The accounts your business posts from. The app posts only after you confirm, and shows your own stats."
         actions={
           <InfoTip label="How connecting works" title="How connecting works">
-            Connect opens a secure sign-in in a new tab, then the network’s own sign-in. You choose what to allow there; the app never sees your password. Each business uses the account you choose for it. Disconnecting here stops the app using the account; to remove access completely, also remove the app in the network’s own settings.
+            Connect opens a secure sign-in page in a new tab, run by Upload-Post, the service the app posts through, so its name also shows on the network’s permission screen. You choose what to allow; the app never sees your password. Each network connects one account for all your businesses; for Facebook and LinkedIn you can choose the Page each business posts to. Disconnecting here stops the app using the account; to remove access completely, also remove it in the network’s own settings.
           </InfoTip>
         }
       >
+        {sideOff(socialOn, 'Connecting social accounts')}
         {SOCIAL.map(row)}
       </SettingsSection>
-      <SettingsSection title="Ads" description="See your own ad results. The app reads them only and never changes your ads.">
+      <SettingsSection title="Ad accounts" description="See your own ad results. The app only reads them and never changes your ads or spends money.">
+        {sideOff(adsOn, 'Connecting ad accounts')}
         {ADS.map(row)}
       </SettingsSection>
       <OtherIntegrations />
       {choose && <ChooseTarget platform={choose} onClose={() => setChoose(null)} />}
     </div>
+  );
+}
+
+/** The webhook addresses the owner registers (this server's own address; never a secret). */
+export function webhookUrls(base: string): { social: string; ads: string } {
+  const b = base.replace(/\/+$/, '');
+  return { social: `${b}/api/webhooks/upload-post`, ads: `${b}/api/webhooks/zernio` };
+}
+
+/** The owner's setup steps for each side that's still off (the server sends `hint` to the owner only). */
+function OwnerSetup({ hint, socialOn, adsOn }: { hint: string; socialOn: boolean; adsOn: boolean }) {
+  let base = '';
+  try {
+    base = serverBaseNow();
+  } catch {
+    base = '';
+  }
+  if (!base && typeof window !== 'undefined') base = window.location.origin;
+  const urls = webhookUrls(base || 'https://your-app');
+  const code = 'font-mono text-caption';
+  return (
+    <Callout tone="warn" title="Owner setup">
+      <p>{hint}</p>
+      {!socialOn && (
+        <div className="mt-2">
+          <p className="font-medium text-ink">Social accounts (Upload-Post)</p>
+          <ol className="mt-1 list-decimal space-y-0.5 pl-5">
+            <li>Take the Upload-Post Advanced plan (yearly) and turn on white label.</li>
+            <li>
+              Add <span className={code}>UPLOAD_POST_API_KEY</span>, <span className={code}>UPLOAD_POST_WEBHOOK_SECRET</span>, <span className={code}>MEDIA_URL_SECRET</span> and <span className={code}>CUSTOMER_TAG_SECRET</span> in Replit Secrets.
+            </li>
+            <li>
+              In Upload-Post’s dashboard, send webhooks to <span className={cn(code, 'break-all')}>{urls.social}</span>.
+            </li>
+          </ol>
+        </div>
+      )}
+      {!adsOn && (
+        <div className="mt-2">
+          <p className="font-medium text-ink">Ad accounts (Zernio)</p>
+          <ol className="mt-1 list-decimal space-y-0.5 pl-5">
+            <li>
+              Add <span className={code}>ZERNIO_API_KEY</span> and <span className={code}>ZERNIO_WEBHOOK_SECRET</span> in Replit Secrets.
+            </li>
+            <li>
+              In Zernio’s dashboard, send webhooks to <span className={cn(code, 'break-all')}>{urls.ads}</span>.
+            </li>
+          </ol>
+        </div>
+      )}
+      <p className="mt-2 text-caption text-muted">Step by step: docs/integrations-setup.md.</p>
+    </Callout>
   );
 }
 

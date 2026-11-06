@@ -172,6 +172,23 @@ describe('connected accounts', () => {
     expect(useAnalytics.getState().connectionsEnabled).toBe(false);
   });
 
+  it('each side on its own: social (Upload-Post) and ads (Zernio) from setUpSocial / setUpAds and what’s available', async () => {
+    api.getConnections.mockResolvedValue({ connections: [], available: ['google_ads', 'meta_ads'], setUp: true, setUpSocial: false, setUpAds: true, provider: { social: null, ads: 'zernio' }, hint: 'add UPLOAD_POST_API_KEY in Replit Secrets' });
+    await useAnalytics.getState().refreshConnections();
+    expect(useAnalytics.getState()).toMatchObject({ connectionsEnabled: true, socialEnabled: false, adsEnabled: true });
+    expect(useAnalytics.getState().connectionsHint).toContain('UPLOAD_POST_API_KEY');
+    api.getConnections.mockResolvedValue({ connections: [], available: ['facebook', 'instagram'], setUp: true, setUpSocial: true, setUpAds: false, provider: { social: 'upload_post', ads: null } });
+    await useAnalytics.getState().refreshConnections();
+    expect(useAnalytics.getState()).toMatchObject({ connectionsEnabled: true, socialEnabled: true, adsEnabled: false });
+    // an older server without the per-side flags: each side follows what's available
+    api.getConnections.mockResolvedValue({ connections: [], available: ['facebook', 'google_ads'], setUp: true });
+    await useAnalytics.getState().refreshConnections();
+    expect(useAnalytics.getState()).toMatchObject({ socialEnabled: true, adsEnabled: true });
+    api.getConnections.mockRejectedValue(new IntegrationApiError(0, null));
+    await useAnalytics.getState().refreshConnections();
+    expect(useAnalytics.getState()).toMatchObject({ connectionsEnabled: false, socialEnabled: false, adsEnabled: false });
+  });
+
   it('Check on a pending row re-reads; on a connected row asks the server once', async () => {
     api.getConnections.mockResolvedValue({ connections: [], available: ['x'], setUp: true });
     useAnalytics.setState({ pending: { x: Date.now() } });

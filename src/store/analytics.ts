@@ -11,7 +11,7 @@
 import { useEffect } from 'react';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { AnalyticsSettings, AnalyticsSettingsInput, AnalyticsSnapshot, AnalyticsSource, ConnectPlatform, ConnectionStatus, RefreshRun } from '@/lib/integrations/types';
-import { ANALYTICS_SOURCES } from '@/lib/integrations/types';
+import { ANALYTICS_SOURCES, AD_PLATFORMS, SOCIAL_PLATFORMS } from '@/lib/integrations/types';
 import { IntegrationApiError, checkConnection, connect as connectApi, disconnect as disconnectApi, getConnections, getRun, getSnapshots, reconnect as reconnectApi, refreshAnalytics, saveAnalyticsSettings } from '@/lib/integrations/api';
 import { serverFetch } from '@/ai/claude';
 import { serverBaseNow } from '@/lib/cloud/auth';
@@ -89,6 +89,10 @@ export interface AnalyticsState {
   connections: ConnectionStatus[];
   /** whether connecting accounts is switched on (false: every network is posted by hand) */
   connectionsEnabled: boolean;
+  /** social accounts (connect, post, social stats) are switched on */
+  socialEnabled: boolean;
+  /** ad accounts (connect, ad results) are switched on */
+  adsEnabled: boolean;
   /** the first answer has come in */
   connectionsLoaded: boolean;
   /** the owner only: which Replit Secret is missing (names, never values) */
@@ -228,9 +232,15 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       }
       connectionsAt = Date.now();
       connectionsFor = projectId;
+      const available = Array.isArray(r.available) ? r.available : [];
+      const enabled = r.setUp === true && available.length > 0;
+      // each side by its own flag; an older server sent only setUp (then both follow it)
+      const side = (flag: boolean | undefined, list: readonly ConnectPlatform[]) => enabled && (flag ?? true) && available.some((p) => list.includes(p));
       set({
         connections,
-        connectionsEnabled: r.setUp === true && Array.isArray(r.available) && r.available.length > 0,
+        connectionsEnabled: enabled,
+        socialEnabled: side(r.setUpSocial, SOCIAL_PLATFORMS),
+        adsEnabled: side(r.setUpAds, AD_PLATFORMS),
         connectionsLoaded: true,
         connectionsHint: typeof r.hint === 'string' && r.hint ? r.hint : undefined,
         connectionsError: undefined,
@@ -243,7 +253,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       if (projectId !== activeProject()) return;
       connectionsAt = e instanceof IntegrationApiError && e.code === 'AUTH_REQUIRED' ? 0 : Date.now();
       connectionsFor = projectId;
-      set({ connections: [], connectionsEnabled: false, connectionsLoaded: true, connectionsError: e instanceof IntegrationApiError && e.code !== 'AUTH_REQUIRED' ? e.message : undefined });
+      set({ connections: [], connectionsEnabled: false, socialEnabled: false, adsEnabled: false, connectionsLoaded: true, connectionsError: e instanceof IntegrationApiError && e.code !== 'AUTH_REQUIRED' ? e.message : undefined });
     }
   };
 
@@ -258,6 +268,8 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     range: readRange(),
     connections: [],
     connectionsEnabled: false,
+    socialEnabled: false,
+    adsEnabled: false,
     connectionsLoaded: false,
     pending: {},
     expired: {},
