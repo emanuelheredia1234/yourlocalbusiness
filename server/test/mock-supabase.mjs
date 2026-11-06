@@ -42,9 +42,16 @@ const PRIMARY_KEYS = {
   ad_jobs: ['id'],
   ad_audit: ['id'],
   ad_limits: ['customer_tag'],
+  // supabase/migrations/20261110000000_billing.sql
+  billing_settings: ['id'],
+  billing_accounts: ['user_id'],
+  billing_ops: ['id'],
+  project_slots: ['user_id', 'project_id'],
 };
 /** the integration tables (all server-only) */
-const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits'];
+const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops'];
+/** tables users may read their own rows of but never write (only the server and the database functions do) */
+const USER_READ_ONLY = new Set(['project_slots']);
 /** `generated always as identity` columns: the mock numbers them 1, 2, 3… per table */
 const IDENTITY = { usage_ledger: 'id', analytics_history: 'id', ad_audit: 'id' };
 /**
@@ -64,6 +71,15 @@ const UNIQUE = {
     { name: 'ad_jobs_one_live', cols: ['campaign_id'], where: (r) => ['queued', 'sending', 'unknown'].includes(r.state) },
     { name: 'ad_jobs_review_once', cols: ['user_id', 'review_nonce'], where: (r) => r.review_nonce != null },
   ],
+  billing_accounts: [
+    { name: 'billing_accounts_customer_tag_key', cols: ['customer_tag'] },
+    { name: 'billing_accounts_stripe_customer_id_key', cols: ['stripe_customer_id'] },
+    { name: 'billing_accounts_stripe_subscription_id_key', cols: ['stripe_subscription_id'] },
+  ],
+  billing_ops: [
+    { name: 'billing_ops_user_id_client_request_id_key', cols: ['user_id', 'client_request_id'] },
+    { name: 'billing_ops_one_live', cols: ['user_id'], where: (r) => ['sending', 'unknown'].includes(r.state) },
+  ],
 };
 /** tables with a user_id column that isn't a foreign key: deleting the user leaves their rows */
 const NO_USER_FK = new Set(['usage_ledger']);
@@ -75,15 +91,19 @@ const PUBLIC_READ = new Set(['market_listings']);
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'published_pages', 'published_domains', 'page_leads', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots']);
 /** the user_secrets.provider check constraint (supabase/migrations/20261103030000_ai_usage_daily.sql) */
 const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openrouter', 'meta', 'manus']);
 
 /**
  * domainOwnerCheck: the published_pages_domain_owner foreign key (a page only on a domain its owner has);
  * false is a database where the migration was last run before it was added.
+ * projectSlots: emulate the billing migration's rule on user_docs (a project row is written by a signed-in user only
+ * while it holds an active project_slots row, once billing_settings.enforce is true) and its two triggers (a new
+ * project gets a slot while plans aren't enforced; deleting a project frees its slot). The real policy is checked on a
+ * Supabase branch, never claimed from this mock.
  */
-export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600, missingTables = [], secretProviders = SECRET_PROVIDERS, domainOwnerCheck = true } = {}) {
+export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600, missingTables = [], secretProviders = SECRET_PROVIDERS, domainOwnerCheck = true, projectSlots = false } = {}) {
   const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true });
   const kid = 'mock-key-1';
   const jwk = { ...(await exportJWK(publicKey)), kid, alg: 'ES256', use: 'sig' };
@@ -96,7 +116,9 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
   const calls = [];
   // down: every request fails; restDelayMs: the database answers this slowly (auth stays quick);
   // fail(method, pathname, searchParams): { status, body } to answer one request with instead (or nothing)
-  const behavior = { down: false, restDelayMs: 0, fail: null };
+  // now: the database's clock (now()) for the billing functions, e.g. () => fixed + offset in tests
+  const behavior = { down: false, restDelayMs: 0, fail: null, now: null };
+  const dbNow = () => (typeof behavior.now === 'function' ? behavior.now() : Date.now());
   let server;
   let base = '';
 
@@ -234,6 +256,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     const who = await caller(req);
     if (!who) return send(res, 401, { code: 'PGRST301', message: 'JWT expired or invalid' });
     if (who.anon || (SERVICE_ONLY.has(table) && !who.service)) return send(res, 401, { code: '42501', message: 'permission denied for table ' + table });
+    if (USER_READ_ONLY.has(table) && !who.service && req.method !== 'GET' && req.method !== 'HEAD') return send(res, 401, { code: '42501', message: 'permission denied for table ' + table });
     const rows = tables.get(table) ?? [];
     tables.set(table, rows);
     const owned = (r) => who.service || r.user_id === who.userId;
@@ -286,6 +309,11 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
         if (table === 'user_secrets' && !secretProviders.has(item.provider)) return send(res, 400, { code: '23514', message: 'new row for relation "user_secrets" violates check constraint "user_secrets_provider_check"' });
         if (!who.service && item.user_id !== who.userId) return send(res, 403, { code: '42501', message: 'new row violates row-level security policy for table "' + table + '"' });
         if (USER_FK.has(table) && !users.has(item.user_id)) return send(res, 409, { code: '23503', details: `Key (user_id)=(${item.user_id}) is not present in table "users".`, hint: null, message: `insert or update on table "${table}" violates foreign key constraint "${table}_user_id_fkey"` });
+        if (projectSlots && table === 'user_docs' && item.kind === 'project') {
+          // the before-insert trigger, then the policy's check on the proposed row (an upsert's too)
+          slots.onProjectInsert(item.user_id, item.id);
+          if (!who.service && !slots.writeOk(item.user_id, item.id)) return send(res, 403, { code: '42501', message: 'new row violates row-level security policy for table "user_docs"' });
+        }
         const row = { ...item, updated_at: new Date().toISOString() };
         // `generated always as identity`: Postgres numbers the row itself and refuses a value from the caller
         if (IDENTITY[table]) {
@@ -312,6 +340,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (req.method === 'PATCH') {
       const patch = JSON.parse(raw || '{}');
       const hit = rows.filter((r) => owned(r) && matches(r, filters));
+      if (projectSlots && table === 'user_docs' && !who.service && hit.some((r) => (patch.kind ?? r.kind) === 'project' && !slots.writeOk(r.user_id, patch.id ?? r.id))) return send(res, 403, { code: '42501', message: 'new row violates row-level security policy for table "user_docs"' });
       // an update that would give a row another row's primary key changes nothing
       const primary = PRIMARY_KEYS[table] ?? ['id'];
       if (primary.some((c) => c in patch)) {
@@ -350,6 +379,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       const gone = [];
       for (const r of rows) (owned(r) && matches(r, filters) ? gone : keep).push(r);
       tables.set(table, keep);
+      if (projectSlots && table === 'user_docs') for (const d of gone) if (d.kind === 'project') slots.onProjectDelete(d.user_id, d.id);
       // a removed domain's pages lose it (published_pages.domain: on delete set null)
       if (table === 'published_domains') for (const p of tables.get('published_pages') ?? []) if (gone.some((d) => d.domain === p.domain)) p.domain = null;
       return /return=representation/.test(prefer) ? send(res, 200, gone) : send(res, 204, undefined);
@@ -361,6 +391,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
   async function rpc(req, res, fn, raw) {
     if (fn === 'claim_analytics_run') return claimAnalyticsRun(req, res, raw);
     if (fn === 'ads_begin_launch' || fn === 'ads_begin_change') return adsBegin(req, res, fn, raw);
+    if (BILLING_FNS.has(fn)) return billingRpc(req, res, fn, raw);
     if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -466,6 +497,160 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     t('ad_jobs').push(job);
     t('ad_audit').push({ before: null, after: null, project_id: null, ...a, id: n, at, campaign_id: job.campaign_id, job_id: job.id });
     return send(res, 200, { existing: false, job: { ...job }, ...(camp ? { campaign: { ...camp } } : {}) });
+  }
+
+  // ───────────── plans: project slots and the billing functions (supabase/migrations/20261110000000_billing.sql) ─────────────
+  // Each function body below runs without an await, so two calls never interleave: like the advisory lock per user.
+
+  const slots = (() => {
+    const t = (name) => {
+      if (!tables.has(name)) tables.set(name, []);
+      return tables.get(name);
+    };
+    const iso = (ms) => new Date(ms).toISOString();
+    const enforced = () => t('billing_settings').find((r) => Number(r.id) === 1)?.enforce === true;
+    const account = (u) => t('billing_accounts').find((r) => r.user_id === u) ?? null;
+    const mine = (u) => t('project_slots').filter((r) => r.user_id === u);
+    const active = (u) => mine(u).filter((r) => r.state === 'active');
+    const byClaim = (a, b) => (a.claimed_at < b.claimed_at ? -1 : a.claimed_at > b.claimed_at ? 1 : a.project_id < b.project_id ? -1 : a.project_id > b.project_id ? 1 : 0);
+    const eligible = (a) => !!a && (a.source === 'owner' || (['active', 'trialing', 'past_due'].includes(a.status) && (a.source !== 'comp' || a.comp_until == null || Date.parse(a.comp_until) > dbNow())));
+    const counts = (u) => ({ active: active(u).length, locked: mine(u).filter((r) => r.state === 'locked').length });
+    const insert = (u, id) => {
+      const row = { user_id: u, project_id: id, state: 'active', claimed_at: iso(dbNow()), lock_at: null, locked_at: null, locked_reason: null };
+      t('project_slots').push(row);
+      return row;
+    };
+    const lock = (r, reason) => Object.assign(r, { state: 'locked', locked_at: iso(dbNow()), locked_reason: reason });
+
+    function applySlots(u) {
+      for (const r of mine(u)) if (r.lock_at && Date.parse(r.lock_at) <= dbNow()) Object.assign(lock(r, 'removed'), { lock_at: null });
+      if (!enforced()) return counts(u);
+      const a = account(u);
+      if (!a) return counts(u);
+      const ok = eligible(a) && a.status !== 'unpaid';
+      const lim = a.source === 'owner' ? null : ok ? a.business_limit ?? null : 1;
+      const reason = ok ? 'limit' : a.status === 'unpaid' ? 'payment' : 'plan_ended';
+      if (lim != null) {
+        const on = active(u).sort(byClaim);
+        if (!ok) on.slice(1).forEach((r) => lock(r, reason));
+        else if (on.length > lim) on.slice(lim).forEach((r) => lock(r, reason));
+      }
+      if (ok) {
+        const room = lim == null ? Infinity : Math.max(0, lim - active(u).length);
+        mine(u)
+          .filter((r) => r.state === 'locked' && r.locked_reason !== 'removed')
+          .sort(byClaim)
+          .slice(0, room)
+          .forEach((r) => Object.assign(r, { state: 'active', locked_at: null, locked_reason: null }));
+      }
+      return counts(u);
+    }
+
+    return {
+      enforced,
+      writeOk: (u, id) => !enforced() || mine(u).some((r) => r.project_id === id && r.state === 'active'),
+      onProjectInsert(u, id) {
+        if (!enforced() && !mine(u).some((r) => r.project_id === id)) insert(u, id);
+      },
+      onProjectDelete(u, id) {
+        tables.set('project_slots', t('project_slots').filter((r) => !(r.user_id === u && r.project_id === id)));
+      },
+      claim(u, id, { admin = false } = {}) {
+        if (typeof id !== 'string' || id.length < 1 || id.length > 80) return { ok: false, reason: 'bad_request' };
+        const there = mine(u).find((r) => r.project_id === id);
+        if (there) return there.state === 'active' ? { ok: true, state: 'active' } : { ok: false, reason: 'locked', state: 'locked' };
+        if (!enforced()) {
+          insert(u, id);
+          return { ok: true, state: 'active' };
+        }
+        const a = account(u);
+        if (admin || a?.source === 'owner') {
+          insert(u, id);
+          return { ok: true, state: 'active' };
+        }
+        if (!eligible(a)) return { ok: false, reason: 'plan_required' };
+        const used = active(u).length;
+        if (a.business_limit != null && used >= a.business_limit) return { ok: false, reason: 'limit', used, limit: a.business_limit };
+        insert(u, id);
+        return { ok: true, state: 'active', used: used + 1, limit: a.business_limit ?? null };
+      },
+      applySlots,
+      choose(u, ids) {
+        const a = account(u);
+        const lim = a?.source === 'owner' ? null : !a || !eligible(a) ? 1 : a.business_limit ?? null;
+        const list = [...new Set(Array.isArray(ids) ? ids.map(String) : [])];
+        if (!list.length || (lim != null && list.length > lim)) return { ok: false, reason: 'limit', limit: lim };
+        if (list.some((id) => !mine(u).some((r) => r.project_id === id))) return { ok: false, reason: 'not_found' };
+        for (const r of mine(u)) {
+          if (list.includes(r.project_id)) Object.assign(r, { state: 'active', locked_at: null, locked_reason: null, lock_at: null });
+          else if (r.state === 'active') lock(r, 'limit');
+        }
+        return { ok: true, active: list.length };
+      },
+      apply(u, row, fetchedAt) {
+        const list = t('billing_accounts');
+        const i = list.findIndex((r) => r.user_id === u);
+        let wrote = false;
+        if (i < 0) {
+          const next = { ...row, user_id: u, stripe_fetched_at: fetchedAt ?? null, created_at: iso(dbNow()), updated_at: iso(dbNow()) };
+          const clash = uniqueRefusal('billing_accounts', next, list);
+          if (clash) return { error: clash };
+          list.push(next);
+          wrote = true;
+        } else {
+          const stored = list[i].stripe_fetched_at;
+          if (stored == null || fetchedAt == null || Date.parse(stored) < Date.parse(fetchedAt)) {
+            const next = { ...list[i], ...row, user_id: u, stripe_fetched_at: fetchedAt ?? list[i].stripe_fetched_at, updated_at: iso(dbNow()) };
+            const clash = uniqueRefusal('billing_accounts', next, list.filter((_, j) => j !== i));
+            if (clash) return { error: clash };
+            list[i] = next;
+            wrote = true;
+          }
+        }
+        applySlots(u);
+        return { wrote };
+      },
+      startExisting(days, tags) {
+        const docs = t('user_docs').filter((d) => d.kind === 'project');
+        const n = new Map();
+        for (const d of docs) n.set(d.user_id, (n.get(d.user_id) ?? 0) + 1);
+        let added = 0;
+        for (const [u, count] of n) {
+          if (account(u) || !tags?.[u]) continue;
+          const until = iso(dbNow() + days * 86_400_000);
+          t('billing_accounts').push({ user_id: u, customer_tag: tags[u], source: 'comp', tier: 'grow', interval: null, status: 'trialing', stripe_customer_id: null, stripe_subscription_id: null, tier_item_id: null, business_item_id: null, extra_businesses: 0, comp_extra: Math.max(0, count - 1), business_limit: Math.max(1, count), extra_keep: 0, extra_keep_until: null, tier_keep: null, tier_keep_until: null, current_period_start: null, current_period_end: null, billing_anchor: null, cancel_at_period_end: false, canceled_at: null, ended_at: null, trial_ends_at: until, grace_until: null, comp_until: until, comp_note: 'existing account', checkout_session_id: null, checkout_expires_at: null, stripe_fetched_at: null, created_at: iso(dbNow()), updated_at: iso(dbNow()) });
+          added += 1;
+        }
+        return added;
+      },
+    };
+  })();
+
+  const BILLING_FNS = new Set(['claim_project_slot', 'ylb_apply_slots', 'ylb_choose_active_slots', 'ylb_billing_apply', 'ylb_billing_start_existing']);
+
+  /** The billing migration's functions: claim_project_slot for signed-in users; the rest for the server only. */
+  async function billingRpc(req, res, fn, raw) {
+    if (missingTables.includes('project_slots') || missingTables.includes('billing_accounts')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    let b;
+    try {
+      b = JSON.parse(raw || '{}');
+    } catch {
+      return send(res, 400, { message: 'invalid json' });
+    }
+    if (fn === 'claim_project_slot') {
+      if (!who?.userId) return send(res, 401, { code: '42501', message: who?.service || who?.anon ? `permission denied for function ${fn}` : 'not signed in' });
+      const admin = users.get(who.userId)?.app_metadata?.ylb_role === 'admin';
+      return send(res, 200, slots.claim(who.userId, b.p_project_id, { admin }));
+    }
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    if (fn === 'ylb_apply_slots') return send(res, 200, slots.applySlots(b.p_user));
+    if (fn === 'ylb_choose_active_slots') return send(res, 200, slots.choose(b.p_user, b.p_ids));
+    if (fn === 'ylb_billing_start_existing') return send(res, 200, slots.startExisting(Number(b.p_days) || 0, b.p_tags ?? {}));
+    if (!users.has(b.p_user)) return send(res, 409, { code: '23503', message: 'insert or update on table "billing_accounts" violates foreign key constraint "billing_accounts_user_id_fkey"' });
+    const out = slots.apply(b.p_user, b.p_row ?? {}, b.p_fetched_at ?? null);
+    if (out.error) return send(res, 409, out.error);
+    return send(res, 200, out.wrote);
   }
 
   // ───────────── Storage subset ─────────────
@@ -717,6 +902,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     users,
     tables,
     objects,
+    /** the plans emulation (projectSlots): enforced(), claim(userId, projectId), applySlots(userId), … */
+    slots,
     emails,
     calls,
     behavior,

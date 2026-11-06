@@ -385,7 +385,15 @@ export type ApiErrorCode =
   | 'INSPECTION_QUOTA'
   | 'UNAVAILABLE'
   | 'RATE_LIMITED'
-  | 'BAD_REQUEST';
+  | 'BAD_REQUEST'
+  | 'PLAN_REQUIRED'
+  | 'PAYMENT_REQUIRED'
+  | 'CREDITS_USED'
+  | 'ALREADY_SUBSCRIBED'
+  | 'CARD_DECLINED'
+  | 'BILLING_PENDING'
+  | 'OWNER_PLAN'
+  | 'NOT_ALLOWED_ON_PLAN';
 
 export interface ApiError {
   error: string;

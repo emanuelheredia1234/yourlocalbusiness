@@ -220,6 +220,8 @@ export const BUCKET_LIMITS = Object.freeze({
   'ads-check': [{ limit: 60, windowMs: 3_600_000 }],
   // keyed `${userId}:${projectId}`: one refresh per business every 5 minutes
   'ads-refresh': [{ limit: 1, windowMs: 300_000 }],
+  'billing-write': [{ limit: 20, windowMs: 3_600_000 }],
+  'stripe-webhook': [{ limit: 600, windowMs: 60_000 }],
 });
 
 /**
