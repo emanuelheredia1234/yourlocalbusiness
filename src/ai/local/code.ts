@@ -2,6 +2,8 @@ import type { BrandColors, CodeKind, Directives, Project, PromptImage, ServicePa
 import { escapeHtml, hashStr, readableOn, todayStr, toDateStr, lighten, darken, listJoin, truncate } from '@/lib/utils';
 import { imageKeyNumber, imageTokens, resolveImageTokens } from '@/lib/promptImages';
 import { LEAD_ACTION, previewLeadAction, resolveLeadAction } from '@/lib/leadAction';
+import { HONEYPOT, LEAD_FIELDS, LEAD_FILE_ID, LEAD_PAYLOAD_MAX, fitField } from '@/lib/leadFields';
+import { consentLabel, receivesNote } from '@/lib/consent';
 import type { CalcKind } from '../knowledge';
 import { buildFacts, verbOutcome, Voice, type Facts } from '../text';
 
@@ -125,10 +127,10 @@ const linkTodo = (f: Facts, indent = '') => (f.url ? '' : `${indent}<!-- TODO: n
 
 /** What a widget needs from the owner. Nothing here is ever made up: empty means "not set yet". */
 export interface WidgetSettings {
-  /** where forms send: the owner's form endpoint URL or a mailto: address; '' = not connected */
+  /** where forms send: {{lead-action}} (Email → Leads once published), the owner's form endpoint URL or a mailto: address; '' = not connected */
   action: string;
   /** where `action` came from, for the note shown after generating */
-  actionFrom: 'prompt' | 'listing' | '';
+  actionFrom: 'prompt' | 'listing' | 'leads' | '';
   /** when the owner's offer ends, local time "YYYY-MM-DDTHH:MM"; '' = not set */
   endDate: string;
   /** the owner's opening hours as typed in the listing */
@@ -171,7 +173,8 @@ const ACTION_CUE = String.raw`(?:\b(?:form\s+)?action|\bendpoint|\bwebhook(?:\s+
 /**
  * Where forms should send. A URL is only used when the request says it is the target ("post to https://…",
  * "form action https://…", "endpoint https://…"); a URL merely mentioned is not. Same for an email address
- * ("mailto:…", "send signups to me@…"). Otherwise the listing's contact email, or not connected.
+ * ("mailto:…", "send signups to me@…"). Otherwise Email → Leads ({{lead-action}}, which publishing fills in).
+ * The claude.ai build has no publishing: there it's the listing's contact email, or not connected.
  */
 function formAction(project: Project, prompt: string): Pick<WidgetSettings, 'action' | 'actionFrom'> {
   const url = new RegExp(`${ACTION_CUE}(https://[^\\s"'<>]+)`, 'i').exec(prompt)?.[1]?.replace(/[.,;)]+$/, '');
@@ -180,6 +183,7 @@ function formAction(project: Project, prompt: string): Pick<WidgetSettings, 'act
     /\bmailto:([^\s@"'<>?]+@[^\s@"'<>?]+\.[a-z]{2,})\b/i.exec(prompt)?.[1] ??
     new RegExp(`${ACTION_CUE}([^\\s@"'<>]+@[^\\s@"'<>]+\\.[a-z]{2,})\\b`, 'i').exec(prompt)?.[1];
   if (email) return { action: `mailto:${email}`, actionFrom: 'prompt' };
+  if (!__ARTIFACT_BUILD__) return { action: LEAD_ACTION, actionFrom: 'leads' };
   const listed = project.studio.listing?.contactEmail?.trim();
   if (listed && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(listed)) return { action: `mailto:${listed}`, actionFrom: 'listing' };
   return { action: '', actionFrom: '' };
@@ -257,34 +261,64 @@ export function parseHours(text: string): Record<number, string[]> | null {
 }
 
 /**
- * Shared form sending. FORM_ACTION sits at the top of the script so the owner can see and change it.
- * With no action set, nothing is sent and the widget says so ("Not connected: submissions are not sent").
+ * Shared form sending. FORM_ACTION sits at the top of the script so the owner can see and change it. Every
+ * form widget is a real <form method="post"> with named fields, so it also works with scripts off; the script
+ * sends it with fetch and shows the answer in place.
+ * - {{lead-action}} (the default): publishing makes it /<slug>/lead, which keeps what's sent in Email → Leads.
+ *   Until then (the preview, an unpublished copy) nothing is sent and the widget says it's a preview.
+ * - mailto: opens the visitor's email app; another address gets a POST.
+ * - Empty: nothing is sent, and the widget says so ("Not connected: submissions are not sent").
  */
 function formJs(action: string): string {
-  return `// Where submissions go. Set FORM_ACTION to your own form endpoint (for example a Formspree, Basin or
-// Google Apps Script web app URL) or to "mailto:you@yourbusiness.com".
-// TODO: until it is set, this form sends nothing and shows "Not connected: submissions are not sent".
+  return `// Where submissions go. The app's lead-action placeholder sends them to your Email → Leads once this is
+// published (until then the form is a preview and sends nothing). You can set FORM_ACTION to your own form endpoint (a Formspree, Basin or Google Apps Script web app URL)
+// or to "mailto:you@yourbusiness.com" instead.${action ? '' : '\n// TODO: until it is set, this form sends nothing and shows "Not connected: submissions are not sent".'}
 var FORM_ACTION = ${JSON.stringify(action)};
 var notice = document.getElementById('ylb-notice');
 if (notice) notice.hidden = !!FORM_ACTION;
-function ylbSend(fields, subject) {
-  if (!FORM_ACTION) return Promise.resolve('none');
+function ylbFields(form) {
+  var out = {};
+  new FormData(form).forEach(function (v, k) { if (typeof v === 'string') out[k] = v; });
+  return out;
+}
+function ylbSend(form, subject) {
+  var fields = ylbFields(form);
+  if (!FORM_ACTION) return Promise.resolve({ status: 'none' });
+  // still the app's placeholder: a preview, or a copy that isn't published
+  if (/^\\{\\{\\s*lead-action\\s*\\}\\}$/.test(FORM_ACTION)) return Promise.resolve({ status: 'preview' });
   if (/^mailto:/i.test(FORM_ACTION)) {
-    var body = Object.keys(fields).map(function (k) { return k + ': ' + fields[k]; }).join('\\n');
+    delete fields.website;
+    var body = Object.keys(fields).filter(function (k) { return fields[k]; }).map(function (k) { return k + ': ' + fields[k]; }).join('\\n');
     window.location.href = FORM_ACTION + (FORM_ACTION.indexOf('?') < 0 ? '?' : '&') + 'subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-    return Promise.resolve('mail');
+    return Promise.resolve({ status: 'mail' });
   }
-  var data = new FormData();
-  Object.keys(fields).forEach(function (k) { data.append(k, fields[k]); });
-  return fetch(FORM_ACTION, { method: 'POST', body: data, headers: { Accept: 'application/json' } })
-    .then(function (r) { return r.ok ? 'sent' : 'error'; }, function () { return 'error'; });
+  var leads = /\\/lead$/.test(FORM_ACTION.split(/[?#]/)[0]);
+  var data;
+  if (leads) data = new URLSearchParams(fields);
+  else { data = new FormData(); Object.keys(fields).forEach(function (k) { data.append(k, fields[k]); }); }
+  return fetch(FORM_ACTION, { method: 'POST', body: data, headers: { Accept: 'application/json' } }).then(function (r) {
+    return r.json().catch(function () { return null; }).then(function (j) {
+      var text = j && typeof j.text === 'string' ? j.text : '';
+      if (!r.ok) return { status: 'error', text: text };
+      var dl = j && typeof j.download === 'string' && /^\\/m\\/[A-Za-z0-9_-]{22}\\?k=/.test(j.download) ? new URL(j.download, new URL(FORM_ACTION, location.href)).href : '';
+      return { status: 'sent', download: dl };
+    });
+  }, function () {
+    // couldn't reach it from here: send the form itself, and the visitor gets the answer as a page
+    if (leads) { try { form.setAttribute('action', FORM_ACTION); HTMLFormElement.prototype.submit.call(form); return { status: 'away' }; } catch (e) {} }
+    return { status: 'error' };
+  });
 }
 var YLB_MESSAGES = {
   sent: 'Thanks, your details were sent.',
   mail: 'Your email app should open with your details. Send that email to finish.',
   none: 'This form is not connected yet, so nothing was sent.',
+  preview: 'This is a preview. Published, this form sends to your Leads.',
+  away: 'Sending…',
   error: 'Something went wrong and nothing was sent. Please try again.'
-};`;
+};
+function ylbProblem(r) { return r.status === 'none' || r.status === 'error' || r.status === 'preview'; }
+function ylbMessage(r) { return (r.status === 'error' && r.text) || YLB_MESSAGES[r.status]; }`;
 }
 
 const NOTICE_HTML = `<p class="ylb-notice" id="ylb-notice" hidden>Not connected: submissions are not sent</p>`;
@@ -293,10 +327,34 @@ const NOTICE_CSS = `.ylb-notice { margin: 0 0 14px; padding: 8px 12px; border-ra
 
 /** The note shown in the Code tab after generating a form widget. */
 function formNote(s: WidgetSettings): string {
+  if (s.actionFrom === 'leads') return 'Once published, submissions go to Email → Leads.';
   if (!s.action) return 'Not connected yet: set FORM_ACTION at the top of the JS to your form endpoint or a mailto: address. Until then nothing is sent.';
   if (s.actionFrom === 'listing') return `Submissions open an email to ${s.action.slice(7)} (your listing's contact email). Change FORM_ACTION in the JS to use a form endpoint.`;
   return `Submissions go to ${s.action.replace(/^mailto:/, '')}. Change FORM_ACTION in the JS to send them elsewhere.`;
 }
+
+// ───────────── the parts every form has ─────────────
+
+/** <form …> that posts where the widget sends (the token, an endpoint, a mailto: address; "#" when not connected). */
+const formOpen = (s: WidgetSettings, id: string, cls = '') => `<form id="${id}"${cls ? ` class="${cls}"` : ''} method="post" action="${escapeHtml(s.action || '#')}" novalidate>`;
+/** Hidden fields: the form's kind, and any result or request it carries (cut to the server's limits). */
+const hiddenFields = (fields: Record<string, string>) =>
+  Object.entries(fields)
+    .map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(fitField(k, v))}"${LEAD_PAYLOAD_MAX[k] ? ` maxlength="${LEAD_PAYLOAD_MAX[k]}"` : ''} />`)
+    .join('');
+/** The field people never see: a bot fills it in, and the server drops what it sends. */
+const HONEYPOT_HTML = `<div class="hp" aria-hidden="true"><label>Website <input type="text" name="${HONEYPOT}" tabindex="-1" autocomplete="off" /></label></div>`;
+/** The marketing-email box (unticked; never needed to send). */
+const consentHtml = (brand: string) => `<label class="consent"><input type="checkbox" name="consent" value="yes" /> <span>${escapeHtml(consentLabel(brand))}</span></label>`;
+const receivesHtml = (brand: string) => `<p class="fine">${escapeHtml(receivesNote(brand))}</p>`;
+/** A contact field with its server limit. */
+const leadInput = (name: keyof typeof LEAD_FIELDS & string, attrs: string) => `<input name="${name}" maxlength="${LEAD_FIELDS[name]}" ${attrs} />`;
+const FORM_CSS = `.hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.consent { display: flex; gap: 8px; align-items: flex-start; font-size: .85em; color: var(--muted); font-weight: 500; cursor: pointer; }
+.consent input { width: 16px; height: 16px; margin-top: 3px; flex: none; accent-color: var(--brand); }
+.fine { margin: 2px 0 0; font-size: .75em; color: var(--muted); }
+.dl { display: inline-block; margin-top: 10px; }
+`;
 
 // ───────────── calculators ─────────────
 
@@ -598,8 +656,9 @@ set('o1',fmt$(monthly));set('o2',fmtN(roi)+'%');set('o3',fmtN(Math.max(1,days))+
   }
 }
 
-function calculatorCode(kind: CalcKind | 'roi', f: Facts, c: BrandColors, titleOverride?: string, packages: ServicePackage[] = []): CodeResult {
+function calculatorCode(kind: CalcKind | 'roi', f: Facts, c: BrandColors, w: WidgetSettings, emailStep: boolean, titleOverride?: string, packages: ServicePackage[] = []): CodeResult {
   const s = calcSpec(kind, f, packages);
+  const leadKind = kind === 'roi' ? 'roi' : 'calculator';
   const title = titleOverride || s.title;
   const field = (fl: CalcField) => {
     const input =
@@ -622,10 +681,12 @@ ${s.outputs.map((o, i) => `      <div class="result${i === 0 ? ' main' : ''}"><s
     </div>
     <p class="note muted">${escapeHtml(s.note)}</p>
 ${linkTodo(f, '    ')}    <a class="btn" href="${linkTo(f)}" target="_blank" rel="noopener">Get the full ${escapeHtml(f.track === 'business' ? 'quote' : f.formatNoun.toLowerCase())} →</a>
-  </div>
+${emailStep ? `${emailStepHtml(w, f.brand, { kind: leadKind, title: 'Want this estimate by email?', button: 'Email me this estimate', fields: ['inputs', 'outputs'] })}
+` : ''}  </div>
 </div>`;
   const css =
     baseCss(c) +
+    (emailStep ? NOTICE_CSS + FORM_CSS + EMAIL_STEP_CSS : '') +
     `.affix { display: flex; align-items: center; border: 1px solid var(--line); border-radius: calc(var(--radius) * .6); background: #fff; }
 .affix:focus-within { outline: 2px solid var(--brand); outline-offset: 1px; }
 .affix span { padding: 0 10px; color: var(--muted); font-weight: 600; font-size: .9em; }
@@ -643,19 +704,34 @@ function v(id){var el=document.getElementById(id);return parseFloat(el&&el.value
 function set(id,val){var el=document.getElementById(id);if(el)el.textContent=val;}
 function calc(){${s.compute}}
 document.getElementById('calc-form').addEventListener('input',calc);
-calc();`;
-  return { name: title, kind: kind === 'roi' ? 'roi' : 'calculator', html, css, js, ...(s.ownerNote ? { note: s.ownerNote } : {}) };
+calc();${
+    emailStep
+      ? `
+var IN=${JSON.stringify(s.fields.map((fl) => [fl.id, fl.label]))},OUT=${JSON.stringify(s.outputs.map((o) => [o.id, o.label]))};
+function lines(list,read){return list.map(function(x){return x[1]+': '+read(document.getElementById(x[0]));}).join('\\n');}
+${emailStepJs(w, f.brand, title, "put('inputs',lines(IN,function(el){return !el?'':el.tagName==='SELECT'?el.options[el.selectedIndex].text:el.value;}));put('outputs',lines(OUT,function(el){return el?el.textContent:'';}));")}`
+      : ''
+  }`;
+  const notes = [s.ownerNote, emailStep ? `Visitors can send you the estimate with their email. ${formNote(w)}` : ''].filter(Boolean);
+  return { name: title, kind: leadKind, html, css, js, ...(notes.length ? { note: notes.join(' ') } : {}) };
 }
 
 // ───────────── other widgets ─────────────
 
-function leadFormCode(f: Facts, c: BrandColors, v: Voice, s: WidgetSettings): CodeResult {
+/** The project's published lead-magnet download's id, for a form that should hand it out after the sign-up. */
+const magnetId = (project: Project): string => {
+  const id = project.marketing.leadMagnet?.delivery?.fileId ?? '';
+  return LEAD_FILE_ID.test(id) ? id : '';
+};
+
+function leadFormCode(f: Facts, c: BrandColors, v: Voice, s: WidgetSettings, project: Project): CodeResult {
   const lm = f.leadMagnet || `The ${f.topic} Starter Checklist`;
   const bullets = [
     `${v.pick(['Skip', 'Avoid', 'Stop'])} ${f.mistakes[0]}`,
     `${f.quickWins[0].charAt(0).toUpperCase() + f.quickWins[0].slice(1)}`,
     `A simple plan to ${verbOutcome(f.outcomes[0])}`,
   ];
+  const magnet = magnetId(project);
   const html = `<div class="ylb">
   <div class="ylb-card optin">
     <div class="cover" aria-hidden="true"><span>FREE</span><b>${escapeHtml(lm)}</b><em>${escapeHtml(f.brand)}</em></div>
@@ -667,15 +743,19 @@ function leadFormCode(f: Facts, c: BrandColors, v: Voice, s: WidgetSettings): Co
       <ul class="ticks">
 ${bullets.map((b) => `        <li>${escapeHtml(b)}</li>`).join('\n')}
       </ul>
-      <form id="optin" novalidate>
-        <input id="fname" name="fname" placeholder="First name" autocomplete="given-name" />
-        <input id="email" name="email" type="email" placeholder="you@email.com" autocomplete="email" required />
+      ${formOpen(s, 'optin')}
+        ${hiddenFields({ kind: 'lead', request: lm, ...(magnet ? { magnet } : {}) })}${HONEYPOT_HTML}
+        ${leadInput('name', 'id="fname" placeholder="First name" autocomplete="given-name" aria-label="First name"')}
+        ${leadInput('email', 'id="email" type="email" placeholder="you@email.com" autocomplete="email" aria-label="Email" required')}
+        ${consentHtml(f.brand)}
         <button class="btn" type="submit">Get the free guide</button>
         <p class="error" id="err" role="alert"></p>
+        ${receivesHtml(f.brand)}
       </form>
       <div class="success" id="ok" hidden>
         <h3>Thanks</h3>
         <p class="muted" id="ok-text"></p>
+        <a class="btn dl" id="dl" href="#" download hidden>Download now</a>
       </div>
     </div>
   </div>
@@ -683,6 +763,7 @@ ${bullets.map((b) => `        <li>${escapeHtml(b)}</li>`).join('\n')}
   const css =
     baseCss(c) +
     NOTICE_CSS +
+    FORM_CSS +
     `.optin { display: grid; gap: 24px; grid-template-columns: 200px 1fr; align-items: center; }
 @media (max-width: 560px) { .optin { grid-template-columns: 1fr; } }
 .cover { aspect-ratio: 3/4; border-radius: calc(var(--radius) * .8); background: linear-gradient(150deg, var(--brand), var(--brand-dark)); color: var(--brand-ink); padding: 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 20px 40px -20px var(--brand); transform: rotate(-3deg); }
@@ -702,9 +783,11 @@ form.addEventListener('submit',function(e){e.preventDefault();
   var err=document.getElementById('err');
   if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email)){err.textContent='Please enter a valid email address.';return;}
   err.textContent='';
-  ylbSend({name:document.getElementById('fname').value.trim(),email:email,request:${JSON.stringify(lm)}},${JSON.stringify(`Request: ${lm}`)}).then(function(status){
-    if(status==='none'||status==='error'){err.textContent=YLB_MESSAGES[status];return;}
-    form.hidden=true;document.getElementById('ok').hidden=false;document.getElementById('ok-text').textContent=YLB_MESSAGES[status];
+  ylbSend(form,${JSON.stringify(`Request: ${lm}`)}).then(function(r){
+    if(ylbProblem(r)){err.textContent=ylbMessage(r);return;}
+    if(r.status==='away')return;
+    form.hidden=true;document.getElementById('ok').hidden=false;document.getElementById('ok-text').textContent=ylbMessage(r);
+    if(r.download){var dl=document.getElementById('dl');dl.href=r.download;dl.hidden=false;}
   });
 });`;
   return { name: `${lm} opt-in form`, kind: 'leadform', html, css, js, note: formNote(s) };
@@ -860,7 +943,54 @@ else{tick();timer=setInterval(tick,1000);}`;
   return { name: 'Offer countdown', kind: 'countdown', html, css, js, note };
 }
 
-function quizCode(f: Facts, c: BrandColors): CodeResult {
+/**
+ * The "Email me my result" step of a quiz, calculator or checklist: a real form, hidden until there's something to
+ * send (`show`), whose hidden result fields the widget's script fills in. Its kind tells the owner what it is.
+ */
+function emailStepHtml(s: WidgetSettings, brand: string, o: { kind: string; title: string; button: string; fields: string[] }): string {
+  return `    <div class="ylb-mail" id="ylb-mail"${o.kind === 'quiz' ? ' hidden' : ''}>
+      ${NOTICE_HTML}
+      <h3>${escapeHtml(o.title)}</h3>
+      ${formOpen(s, 'mail-form')}
+        ${hiddenFields({ kind: o.kind })}${o.fields.map((k) => `<input type="hidden" name="${k}" maxlength="${LEAD_PAYLOAD_MAX[k]}" />`).join('')}${HONEYPOT_HTML}
+        <div class="grid">${leadInput('email', 'type="email" placeholder="you@email.com" autocomplete="email" aria-label="Email" required')}${leadInput('name', 'placeholder="First name (optional)" autocomplete="given-name" aria-label="First name (optional)"')}</div>
+        ${consentHtml(brand)}
+        <button class="btn" type="submit">${escapeHtml(o.button)}</button>
+        <p class="error" id="mail-err" role="alert"></p>
+        ${receivesHtml(brand)}
+      </form>
+      <p class="muted" id="mail-ok" hidden></p>
+    </div>`;
+}
+const EMAIL_STEP_CSS = `.ylb-mail { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.ylb-mail h3 { margin: 0 0 10px; font-size: 1.05em; }
+#mail-form { display: grid; gap: 10px; }
+#mail-err { color: #c0392b; font-size: .85em; min-height: 1em; margin: 0; }
+`;
+/**
+ * The step's script: `fill(form)` sets the hidden result fields just before it's sent. The owner gets what's sent;
+ * nothing says an email went to the visitor (the app sends none).
+ */
+function emailStepJs(s: WidgetSettings, brand: string, subject: string, fill: string): string {
+  return `${formJs(s.action)}
+(function(){var form=document.getElementById('mail-form');if(!form)return;
+ function cut(t,n){t=String(t);return t.length>n?t.slice(0,n-1)+'…':t;}
+ function put(k,v){var el=form.querySelector('input[name="'+k+'"]');if(el)el.value=cut(v,Number(el.getAttribute('maxlength'))||200);}
+ form.addEventListener('submit',function(e){e.preventDefault();var err=document.getElementById('mail-err');
+  var email=form.querySelector('input[name=email]').value.trim();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)){err.textContent='Please enter a valid email address.';return;}
+  err.textContent='';(function(form,put){${fill}})(form,put);
+  ylbSend(form,${JSON.stringify(subject)}).then(function(r){
+   if(ylbProblem(r)){err.textContent=ylbMessage(r);return;}
+   if(r.status==='away')return;
+   form.hidden=true;var ok=document.getElementById('mail-ok');ok.hidden=false;
+   ok.textContent=r.status==='sent'?${JSON.stringify(`Thanks. ${brand} has your result and your email.`)}:ylbMessage(r);
+  });
+ });
+})();`;
+}
+
+function quizCode(f: Facts, c: BrandColors, s: WidgetSettings, emailStep: boolean): CodeResult {
   const qs = [
     { q: `How often do you ${f.quickWins[0].replace(/^(open|set|add|try|start|use|pick|write|plan|swap|rewrite|post|give|practice|check|change|book|get|reply)\b/i, (m) => m.toLowerCase())}?`, a: ['Never', 'Sometimes', 'Every week'] },
     { q: `Do you find yourself ${f.mistakes[0]}?`, a: ['All the time', 'Occasionally', 'Rarely'] },
@@ -876,10 +1006,12 @@ function quizCode(f: Facts, c: BrandColors): CodeResult {
     <div id="q"></div>
     <div class="progress"><i id="bar"></i></div>
     <div id="result" hidden></div>
-  </div>
+${emailStep ? `${emailStepHtml(s, f.brand, { kind: 'quiz', title: 'Want your result by email?', button: 'Email me my result', fields: ['result', 'score', 'answers'] })}
+` : ''}  </div>
 </div>`;
   const css =
     baseCss(c) +
+    (emailStep ? NOTICE_CSS + FORM_CSS + EMAIL_STEP_CSS : '') +
     `.question { font-weight: 700; font-size: 1.1em; margin: 6px 0 14px; }
 .answers { display: grid; gap: 8px; }
 .answers button { text-align: left; padding: 12px 14px; border: 1px solid var(--line); border-radius: calc(var(--radius) * .6); background: #fff; font: inherit; cursor: pointer; transition: border-color .15s, background .15s; }
@@ -894,17 +1026,23 @@ var RESULTS=[
  {min:5,title:'Building momentum',text:${JSON.stringify(`You have some of the basics in place. Have a question about ${f.topicLower}? Ask ${f.brand}.`)}},
  {min:8,title:'Nearly there',text:${JSON.stringify(`You have most of the basics in place. See what ${f.brand} offers below.`)}}
 ];
-var i=0,score=0;
+var i=0,score=0,picked=[],RESULT=null;
 function render(){var box=document.getElementById('q');document.getElementById('bar').style.width=(i/QS.length*100)+'%';
  if(i>=QS.length){box.hidden=true;var r=RESULTS.filter(function(x){return score>=x.min;}).pop();var out=document.getElementById('result');out.hidden=false;
+  RESULT={title:r.title,score:Math.round(score/10*100)};var step=document.getElementById('ylb-mail');if(step)step.hidden=false;
   out.innerHTML='<p class="score">'+Math.round(score/10*100)+'</p><h3>'+r.title+'</h3><p class="muted">'+r.text+'</p><a class="btn" target="_blank" rel="noopener" href=${JSON.stringify(f.url || '#')}>Get your plan →</a>';return;}${f.url ? '' : ' // TODO: no website set yet. Replace "#" above with your link.'}
  var q=QS[i];box.innerHTML='<p class="muted">Question '+(i+1)+' of '+QS.length+'</p><p class="question">'+q.q+'</p><div class="answers">'+q.a.map(function(a,k){return '<button type="button" data-k="'+k+'">'+a+'</button>';}).join('')+'</div>';
- box.querySelectorAll('button').forEach(function(b){b.addEventListener('click',function(){score+=Number(b.dataset.k);i++;render();});});}
-render();`;
-  return { name: `${f.topic} quiz`, kind: 'quiz', html, css, js };
+ box.querySelectorAll('button').forEach(function(b){b.addEventListener('click',function(){score+=Number(b.dataset.k);picked.push('Q'+(i+1)+': '+q.q+' '+q.a[Number(b.dataset.k)]);i++;render();});});}
+render();${
+    emailStep
+      ? `
+${emailStepJs(s, f.brand, `My ${f.topic} quiz result`, "if(RESULT){put('result',RESULT.title);put('score',String(RESULT.score));}put('answers',picked.join('\\n'));")}`
+      : ''
+  }`;
+  return { name: `${f.topic} quiz`, kind: 'quiz', html, css, js, ...(emailStep ? { note: `Visitors can send you their result with their email. ${formNote(s)}` } : {}) };
 }
 
-function checklistCode(f: Facts, c: BrandColors): CodeResult {
+function checklistCode(f: Facts, c: BrandColors, s: WidgetSettings, emailStep: boolean): CodeResult {
   const items = [...f.quickWins, ...f.mistakes.map((m) => `Stop ${m}`)].slice(0, 8);
   const html = `<div class="ylb">
   <div class="ylb-card">
@@ -916,10 +1054,12 @@ function checklistCode(f: Facts, c: BrandColors): CodeResult {
 ${items.map((it, i) => `      <li><label><input type="checkbox" data-i="${i}" /> <span>${escapeHtml(it.charAt(0).toUpperCase() + it.slice(1))}</span></label></li>`).join('\n')}
     </ul>
     <button class="btn ghost" id="reset" type="button">Reset</button>
-  </div>
+${emailStep ? `${emailStepHtml(s, f.brand, { kind: 'checklist', title: 'Send me this checklist', button: 'Send me this checklist', fields: ['outputs'] })}
+` : ''}  </div>
 </div>`;
   const css =
     baseCss(c) +
+    (emailStep ? NOTICE_CSS + FORM_CSS + EMAIL_STEP_CSS : '') +
     `.progress { height: 8px; background: var(--brand-soft); border-radius: 999px; overflow: hidden; margin-bottom: 14px; }
 .progress i { display: block; height: 100%; width: 0; background: var(--brand); transition: width .3s ease; }
 .list { list-style: none; padding: 0; margin: 0 0 16px; display: grid; gap: 6px; }
@@ -934,8 +1074,13 @@ function save(v){try{localStorage.setItem(KEY,JSON.stringify(v));}catch(e){}}
 function update(){var done=boxes.filter(function(b){return b.checked;}).length;document.getElementById('done').textContent=done;document.getElementById('bar').style.width=(done/boxes.length*100)+'%';save(boxes.map(function(b){return b.checked;}));}
 var saved=load();boxes.forEach(function(b,i){b.checked=!!saved[i];b.addEventListener('change',update);});
 document.getElementById('reset').addEventListener('click',function(){boxes.forEach(function(b){b.checked=false;});update();});
-update();`;
-  return { name: `${f.topic} checklist`, kind: 'checklist', html, css, js };
+update();${
+    emailStep
+      ? `
+${emailStepJs(s, f.brand, `${f.topic} checklist`, "var done=boxes.filter(function(b){return b.checked;});put('outputs',done.length+'/'+boxes.length+' done'+done.map(function(b){return '\\n✓ '+b.parentNode.textContent.trim();}).join(''));")}`
+      : ''
+  }`;
+  return { name: `${f.topic} checklist`, kind: 'checklist', html, css, js, ...(emailStep ? { note: `Visitors can ask for this checklist with their email. ${formNote(s)} Ticks stay on their device.` } : {}) };
 }
 
 /** Testimonials the owner entered on their sales page (never ones an older version wrote that still await review). */
@@ -996,11 +1141,11 @@ function bookingCode(f: Facts, c: BrandColors, project: Project, s: WidgetSettin
   const serviceField = services.length
     ? `      <fieldset><legend>1. Service</legend>
         <div class="opts">
-${services.map((sv, i) => `          <label class="opt"><input type="radio" name="svc" value="${escapeHtml(sv.name)}"${i === 0 ? ' checked' : ''} /><span><b>${escapeHtml(sv.name)}</b>${sv.price > 0 ? `<em>$${sv.price}</em>` : ''}</span></label>`).join('\n')}
+${services.map((sv, i) => `          <label class="opt"><input type="radio" name="service" value="${escapeHtml(fitField('service', sv.name))}"${i === 0 ? ' checked' : ''} /><span><b>${escapeHtml(sv.name)}</b>${sv.price > 0 ? `<em>$${sv.price}</em>` : ''}</span></label>`).join('\n')}
         </div>
       </fieldset>`
     : `      <fieldset><legend>1. What do you need?</legend>
-        <input id="svc-text" placeholder="Tell us what you’d like booked" />
+        <input id="svc-text" name="service" maxlength="${LEAD_PAYLOAD_MAX.service}" placeholder="Tell us what you’d like booked" aria-label="What you’d like booked" />
       </fieldset>`;
   const whenField = hours
     ? `      <fieldset><legend>2. Day</legend><div class="days" id="days"></div></fieldset>
@@ -1014,14 +1159,17 @@ ${services.map((sv, i) => `          <label class="opt"><input type="radio" name
     <span class="pill">${escapeHtml(f.city ? `${f.city} · ` : '')}Booking request</span>
     <h2>Book with ${escapeHtml(f.brand)}</h2>
     <p class="sub">Send a request${hours ? ' for a time within our opening hours' : ''}. It isn’t booked until ${escapeHtml(f.brand)} confirms it.</p>
-    <form id="book" novalidate>
+    ${formOpen(s, 'book')}
+      ${hiddenFields({ kind: 'booking' })}<input type="hidden" name="time" id="when" maxlength="${LEAD_FIELDS.time}" />${HONEYPOT_HTML}
 ${serviceField}
 ${whenField}
       <fieldset><legend>${hours ? '4' : '3'}. Your details</legend>
-        <div class="grid"><input id="name" placeholder="Full name" autocomplete="name" /><input id="email" type="email" placeholder="Email" autocomplete="email" /></div>
+        <div class="grid">${leadInput('name', 'id="name" placeholder="Full name" autocomplete="name" aria-label="Full name"')}${leadInput('email', 'id="email" type="email" placeholder="Email" autocomplete="email" aria-label="Email"')}${leadInput('phone', 'id="phone" type="tel" placeholder="Phone (optional)" autocomplete="tel" aria-label="Phone (optional)"')}</div>
       </fieldset>
+      ${consentHtml(f.brand)}
       <p class="error" id="err" role="alert"></p>
       <button class="btn" type="submit">Send booking request</button>
+      ${receivesHtml(f.brand)}
     </form>
     <div id="done" hidden></div>
   </div>
@@ -1029,6 +1177,7 @@ ${whenField}
   const css =
     baseCss(c) +
     NOTICE_CSS +
+    FORM_CSS +
     `fieldset { border: 0; padding: 0; margin: 0 0 16px; }
 legend { font-weight: 700; margin-bottom: 8px; }
 .opts { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
@@ -1056,16 +1205,17 @@ renderDays();renderTimes();`
   const js = `${formJs(s.action)}
 ${pick}
 document.getElementById('book').addEventListener('submit',function(e){e.preventDefault();var form=this;var err=document.getElementById('err');
- var svcEl=document.querySelector('input[name=svc]:checked');var svcText=document.getElementById('svc-text');var svc=svcEl?svcEl.value:(svcText?svcText.value.trim():'');
+ var svcEl=document.querySelector('input[name=service]:checked');var svcText=document.getElementById('svc-text');var svc=svcEl?svcEl.value:(svcText?svcText.value.trim():'');
  var name=document.getElementById('name').value.trim();var email=document.getElementById('email').value.trim();
  if(!when()){err.textContent=${JSON.stringify(hours ? 'Pick a day and time.' : 'Tell us when suits you.')};return;}
  if(!name||!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(email)){err.textContent='Add your name and a valid email.';return;}
- err.textContent='';
- ylbSend({service:svc,when:when(),name:name,email:email},'Booking request: '+(svc||'appointment')).then(function(status){
-  if(status==='none'||status==='error'){err.textContent=YLB_MESSAGES[status];return;}
+ err.textContent='';document.getElementById('when').value=when().slice(0,${LEAD_FIELDS.time});
+ ylbSend(form,'Booking request: '+(svc||'appointment')).then(function(r){
+  if(ylbProblem(r)){err.textContent=ylbMessage(r);return;}
+  if(r.status==='away')return;
   form.hidden=true;var done=document.getElementById('done');done.hidden=false;
   done.innerHTML='<div class="confirm"><h3>Request ready</h3><p class="muted"></p><p class="muted"></p></div>';
-  var ps=done.querySelectorAll('p');ps[0].textContent=[svc,when()].filter(Boolean).join(' · ');ps[1].textContent=YLB_MESSAGES[status]+' This is a request, not a confirmed booking.';
+  var ps=done.querySelectorAll('p');ps[0].textContent=[svc,when()].filter(Boolean).join(' · ');ps[1].textContent=ylbMessage(r)+' This is a request, not a confirmed booking.';
  });
 });`;
   const notes = [formNote(s), hours ? 'Times come from your listing hours.' : 'No opening hours I could read in your listing, so visitors suggest a day and time.'];
@@ -1330,11 +1480,15 @@ const imageNames = (keys: string[]) => `${keys.length === 1 ? 'image' : 'images'
 
 // ───────────── entry points ─────────────
 
+/** A request that asks for no email step ("no email capture", "without the email form"). */
+const NO_EMAIL_STEP = /\b(?:no|without|skip|don[’']?t (?:add|include|ask for))\s+(?:an?\s+|the\s+)?email(?:\s+(?:step|form|capture|field|sign-?up))?\b/i;
+
 export function generateCode(project: Project, kind: CodeKind, prompt: string, d: Directives = {}, variation = 0, images: PromptImage[] = []): CodeResult {
   const f = buildFacts(project);
   const v = Voice.create(f, d, hashStr(`${project.id}|code|${kind}|${variation}|${prompt}`));
   const colors = project.brand.colors;
   const settings = widgetSettings(project, prompt);
+  const emailStep = !d.noEmailStep && !NO_EMAIL_STEP.test(prompt);
   const titleFromPrompt = (() => {
     const m = /(?:called|named|titled)\s+["“]?([^"”\n.]+)["”]?/i.exec(prompt);
     return m ? m[1].trim() : undefined;
@@ -1342,13 +1496,13 @@ export function generateCode(project: Project, kind: CodeKind, prompt: string, d
   let res: CodeResult;
   switch (kind) {
     case 'calculator':
-      res = calculatorCode(f.niche.calc, f, colors, titleFromPrompt, project.studio.packages);
+      res = calculatorCode(f.niche.calc, f, colors, settings, emailStep, titleFromPrompt, project.studio.packages);
       break;
     case 'roi':
-      res = calculatorCode('roi', f, colors, titleFromPrompt);
+      res = calculatorCode('roi', f, colors, settings, emailStep, titleFromPrompt);
       break;
     case 'leadform':
-      res = leadFormCode(f, colors, v, settings);
+      res = leadFormCode(f, colors, v, settings, project);
       break;
     case 'pricing':
       res = pricingCode(f, colors, project);
@@ -1360,10 +1514,10 @@ export function generateCode(project: Project, kind: CodeKind, prompt: string, d
       res = countdownCode(f, colors, project, settings);
       break;
     case 'quiz':
-      res = quizCode(f, colors);
+      res = quizCode(f, colors, settings, emailStep);
       break;
     case 'checklist':
-      res = checklistCode(f, colors);
+      res = checklistCode(f, colors, settings, emailStep);
       break;
     case 'testimonials':
       res = testimonialsCode(colors, project);
@@ -1531,6 +1685,11 @@ export function modifyCode(code: Code, instruction: string, images: PromptImage[
   } else if (/\bsans\b/.test(ins)) {
     vars.delete('--font');
     applied.push('Sans-serif font');
+  }
+  // the email step of a quiz, calculator or checklist: hidden, so the form stays for a later "bring it back"
+  if (/ylb-mail/.test(code.html) && NO_EMAIL_STEP.test(instruction.replace(/\b(?:remove|delete|take out|hide|drop|get rid of)\b/i, 'no'))) {
+    extra += '.ylb-mail { display: none !important; }\n';
+    applied.push('Email step hidden');
   }
   if (/center|centre/.test(ins)) {
     extra += '.ylb, .ylb-card { text-align: center; }\n';

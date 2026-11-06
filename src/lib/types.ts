@@ -417,6 +417,27 @@ export interface LeadMagnet {
   optInBullets: string[];
   buttonLabel: string;
   createdAt: number;
+  /** the published download (/m/<id>): a PDF made from this guide, an uploaded file, or a link. No secrets: the link is public by design. */
+  delivery?: LeadMagnetDelivery;
+}
+
+/** A lead magnet's published download, served at /m/<fileId> (server/leadFiles.mjs). */
+export interface LeadMagnetDelivery {
+  source: 'pdf' | 'upload' | 'url';
+  /** the server's lead_files id (22 characters) */
+  fileId: string;
+  /** https://<app>/m/<fileId> */
+  link: string;
+  /** https://<the SEO page's verified domain>/m/<fileId>, when it has one */
+  domainLink?: string;
+  /** visitors give their email before the download */
+  gate: boolean;
+  fileName?: string;
+  bytes?: number;
+  url?: string;
+  /** what was published (fingerprint of the guide or the upload's sha), to tell when it's out of date */
+  hash?: string;
+  publishedAt: number;
 }
 
 export interface EmailStep {
@@ -954,6 +975,8 @@ export interface Directives {
   person?: 'i' | 'we' | 'you';
   facts?: string[];
   hookStyle?: HookStyle;
+  /** widgets: no "Email me my result" step on quizzes, calculators and checklists */
+  noEmailStep?: boolean;
 }
 
 export interface Skill {

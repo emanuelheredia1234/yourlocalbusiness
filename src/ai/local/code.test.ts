@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { newProject } from '@/store/defaults';
 import type { Project } from '@/lib/types';
 import { generateCode, parseEndDate, parseHours, widgetSettings } from './code';
 import { codeEditTask, codeTask } from '../tasks';
+import { resolveLeadAction } from '@/lib/leadAction';
+import { hasLeadForm } from '../../../server/leads.mjs';
 
 function business(): Project {
   const p = newProject('business', 'new');
@@ -24,8 +26,13 @@ function product(): Project {
 
 const all = (c: { html: string; css: string; js: string }) => `${c.html}\n${c.css}\n${c.js}`;
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe('widget code makes no claims for the owner', () => {
-  it('lead form: not connected until the owner sets an action, and no delivery claim', () => {
+  it('lead form in the claude.ai build: not connected until the owner sets an action, and no delivery claim', () => {
+    vi.stubGlobal('__ARTIFACT_BUILD__', true);
     const code = generateCode(product(), 'leadform', '');
     expect(code.js).toContain('var FORM_ACTION = "";');
     expect(code.js).toContain('Not connected');
@@ -39,9 +46,13 @@ describe('widget code makes no claims for the owner', () => {
     expect(generateCode(product(), 'leadform', 'send signups to me@ledger.co').js).toContain('var FORM_ACTION = "mailto:me@ledger.co";');
     const p = product();
     p.studio.listing.contactEmail = 'hello@ledger.co';
+    // with publishing, Email → Leads; the listing's email only in the claude.ai build
+    expect(generateCode(p, 'leadform', '').js).toContain('var FORM_ACTION = "{{lead-action}}";');
+    vi.stubGlobal('__ARTIFACT_BUILD__', true);
     const code = generateCode(p, 'leadform', '');
     expect(code.js).toContain('var FORM_ACTION = "mailto:hello@ledger.co";');
     expect(code.note).toMatch(/listing/);
+    expect(code.html).toContain('action="mailto:hello@ledger.co"');
   });
 
   it('booking: no randomly taken slots, no "you are booked", times only from the owner hours', () => {
@@ -160,9 +171,10 @@ describe('owner settings parsing', () => {
 
   it('uses a URL as the form target only when the request says so', () => {
     const p = business();
-    expect(widgetSettings(p, 'like the one on https://competitor.com/contact').action).toBe('');
-    expect(widgetSettings(p, 'see https://example.org for inspiration and add a lead form').action).toBe('');
-    expect(widgetSettings(p, 'my email is me@x.co, add it to the footer').action).toBe('');
+    // otherwise Email → Leads
+    expect(widgetSettings(p, 'like the one on https://competitor.com/contact').action).toBe('{{lead-action}}');
+    expect(widgetSettings(p, 'see https://example.org for inspiration and add a lead form').action).toBe('{{lead-action}}');
+    expect(widgetSettings(p, 'my email is me@x.co, add it to the footer')).toMatchObject({ action: '{{lead-action}}', actionFrom: 'leads' });
     expect(widgetSettings(p, 'form action https://hooks.example.org/a').action).toBe('https://hooks.example.org/a');
     expect(widgetSettings(p, 'endpoint: https://api.example.org/f').action).toBe('https://api.example.org/f');
     expect(widgetSettings(p, 'submit signups to https://x.example.org/s').action).toBe('https://x.example.org/s');
@@ -267,6 +279,16 @@ describe('generated script', () => {
     for (const kind of ['calculator', 'leadform', 'pricing', 'hero', 'countdown', 'quiz', 'checklist', 'testimonials', 'booking', 'spreadsheet', 'faq', 'roi'] as const) {
       const code = generateCode(p, kind, '');
       expect(() => new Function(code.js), kind).not.toThrow();
+    }
+  });
+});
+
+describe('form widgets, published', () => {
+  it('pass the server’s own check for a lead form', () => {
+    for (const kind of ['leadform', 'booking', 'quiz', 'calculator', 'roi', 'checklist'] as const) {
+      const code = generateCode(kind === 'booking' ? business() : product(), kind, '');
+      expect(hasLeadForm(resolveLeadAction(code.html, '/my-widget/lead'), 'my-widget')).toBe(true);
+      expect(hasLeadForm(code.html, 'my-widget')).toBe(false);
     }
   });
 });
