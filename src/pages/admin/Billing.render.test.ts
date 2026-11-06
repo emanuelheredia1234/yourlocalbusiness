@@ -43,6 +43,18 @@ describe('the page', () => {
     // nothing on this page is a filled button besides the header’s Download CSV
     expect(html).not.toContain('btn-primary');
   });
+  it('Upload-Post and Zernio next to the others: accounts, calls and estimates per customer, profiles used of the plan, its alert in plain words', () => {
+    const rows: CustomerUsageRow[] = [
+      { ...ROWS[0], socialAccounts: 3, adAccounts: 1, connectedAccounts: 4, vendors: { treg: { costMicro: 1_250_000, estimatedMicro: 0, calls: 120 }, uploadpost: { costMicro: 0, estimatedMicro: 1_960_000, calls: 14 }, zernio: { costMicro: 0, estimatedMicro: 290_000, calls: 0 } } },
+      ROWS[1],
+    ];
+    const html = wrap(createElement(BillingView, { data: { ...DATA, customers: rows, upProfiles: { used: 12, limit: 75 }, uploadPostAlert: { kind: 'profile_cap_low', at: new Date().toISOString() } }, report: null, onEdit: () => {}, onChanged: () => {} }));
+    for (const t of ['Social (Upload-Post)', 'Ads (Zernio)', '3 accts', '14 calls · +$1.96 est.', '1 acct', '+$0.29 est.', 'Upload-Post profiles', '12 / 75', 'Social posting needs attention', 'Upload-Post profiles are running low']) expect(html).toContain(t);
+    // an alert kind this page doesn't know still reads in plain words, never the raw kind
+    const other = wrap(createElement(BillingView, { data: { ...DATA, uploadPostAlert: { kind: 'something_new', at: '' } }, report: null, onEdit: () => {}, onChanged: () => {} }));
+    expect(other).toContain('Check the Upload-Post dashboard.');
+    expect(other).not.toContain('something_new');
+  });
   it('the treg alert shows no amounts', () => {
     const html = wrap(createElement(BillingView, { data: { ...DATA, alert: { kind: 'insufficient_balance', at: '' } }, report: null, onEdit: () => {}, onChanged: () => {} }));
     expect(html).toContain('Analytics provider needs attention (billing).');

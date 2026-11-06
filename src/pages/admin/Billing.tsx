@@ -1,9 +1,11 @@
 // The owner's per-customer usage (route admin-billing, linked from Settings for the owner only): what each
-// customer's analytics cost, their caps (edit, block, reset), the check of our ledger against the provider's
-// own totals, and a CSV to bill from. The server answers all of it to admins only; this page charges nothing.
+// customer's analytics cost (treg), their social posting (Upload-Post: connected accounts, calls and the profile
+// estimate) and ad accounts (Zernio) side by side, their caps (edit, block, reset), the check of our ledger
+// against treg's own totals, and a CSV to bill from. The server answers all of it to admins only; this page
+// charges nothing. Team-level provider alerts show as plain words, never amounts or links.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ban, CircleCheck, Download, Pencil, Receipt, RefreshCw, RotateCcw } from 'lucide-react';
-import type { CapSettings, CustomerUsageRow, ReconcileReport } from '@/lib/integrations/types';
+import type { CapSettings, CustomerUsageRow, CustomersResponse, ReconcileReport } from '@/lib/integrations/types';
 import { IntegrationApiError, getCustomers, getReconcile, putCustomerCap, putDefaults } from '@/lib/integrations/api';
 import { serverFetch } from '@/ai/claude';
 import { serverBaseNow } from '@/lib/cloud/auth';
@@ -36,7 +38,19 @@ export function recentMonths(now = new Date(), n = 12): string[] {
 }
 const monthLabel = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 
-type Data = { customers: CustomerUsageRow[]; defaults: CapSettings & { syncedToTreg?: boolean }; alert?: { kind: string; at: string } };
+type Data = CustomersResponse;
+
+/** Upload-Post's team-level alerts, in plain words for the owner (customers only ever saw "temporarily unavailable"). */
+export const UPLOAD_POST_ALERTS: Record<string, string> = {
+  profile_cap: 'Upload-Post’s profile limit is reached: new customers can’t connect social accounts. Add the +25 or +50 profile add-on in the Upload-Post dashboard.',
+  profile_cap_low: 'Upload-Post profiles are running low. Add the +25 or +50 profile add-on before new customers are turned away.',
+  profile_blocked: 'Upload-Post blocked a customer profile over the plan’s limits. Check the plan and profile count in the Upload-Post dashboard.',
+  scheduled_limit: 'Upload-Post’s limit on pending scheduled posts was reached. Check the scheduled posts in the Upload-Post dashboard.',
+  analytics_limit: 'Upload-Post’s analytics limit was reached, so some social stats are waiting. They catch up on the next Update.',
+  auth: 'Upload-Post refused the API key, so social posting is paused. Check UPLOAD_POST_API_KEY in Replit Secrets.',
+  rate_lockout: 'Upload-Post is turning requests away for a few minutes (too many at once, or a wrong key). Check UPLOAD_POST_API_KEY in Replit Secrets if it keeps happening.',
+  plan: 'Upload-Post refused a post over the plan’s limits. Check the plan in the Upload-Post dashboard.',
+};
 
 export default function Billing() {
   const [data, setData] = useState<Data | null>(null);
@@ -179,28 +193,38 @@ export function BillingView({ data, report, onEdit, onChanged }: { data: Data; r
   return (
     <div className="flex flex-col gap-6">
       {data.alert && <Callout tone="warn">Analytics provider needs attention (billing). Check the provider’s balance and plan.</Callout>}
+      {data.uploadPostAlert && (
+        <Callout tone="warn" title="Social posting needs attention">
+          {UPLOAD_POST_ALERTS[data.uploadPostAlert.kind] ?? 'Upload-Post reported a problem with the plan or key. Check the Upload-Post dashboard.'}
+          {data.uploadPostAlert.at && !Number.isNaN(Date.parse(data.uploadPostAlert.at)) ? ` (${fmtRelative(data.uploadPostAlert.at)})` : ''}
+        </Callout>
+      )}
       {report && <ReconcileCallout report={report} />}
       <StatStrip
         items={[
           { label: 'Total', value: usd(totals.cost), sub: 'Last 30 days' },
           { label: 'Customers active', value: totals.active },
           { label: 'Blocked', value: totals.blocked },
-          { label: 'Estimated connection costs', value: usd(totals.estimated), info: 'List-price estimates for connected accounts and posts to X. They never count toward a cap.' },
+          { label: 'Estimated connection costs', value: usd(totals.estimated), info: 'Estimates for social profiles (Upload-Post’s plan price per profile) and connected ad accounts (Zernio). They never count toward a cap.' },
+          ...(data.upProfiles
+            ? [{ label: 'Upload-Post profiles', value: data.upProfiles.limit ? `${data.upProfiles.used} / ${data.upProfiles.limit}` : String(data.upProfiles.used), info: 'One profile per customer who connected a social account. The Advanced plan has 75; add-ons give +25 or +50.' }]
+            : []),
         ]}
       />
       <section className="card overflow-x-auto" aria-label="Customers">
         {rows.length === 0 ? (
           <Empty icon={<Receipt />} title="No customers yet" body="Customers appear here after their first analytics Update." />
         ) : (
-          <table className="w-full min-w-[720px] text-left text-small">
+          <table className="w-full min-w-[880px] text-left text-small">
             <caption className="sr-only">Customers</caption>
             <thead className="border-b border-line text-caption text-muted">
               <tr>
                 <th className="px-4 py-2 font-medium">Customer</th>
                 <th className="px-2 py-2 text-right font-medium">Today</th>
                 <th className="px-2 py-2 text-right font-medium">30 days</th>
-                <th className="px-2 py-2 text-right font-medium">Calls</th>
-                <th className="px-2 py-2 text-right font-medium">Accounts</th>
+                <th className="px-2 py-2 text-right font-medium">Analytics calls</th>
+                <th className="px-2 py-2 text-right font-medium">Social (Upload-Post)</th>
+                <th className="px-2 py-2 text-right font-medium">Ads (Zernio)</th>
                 <th className="px-2 py-2 font-medium">Cap (day / month)</th>
                 <th className="px-2 py-2 font-medium">Status</th>
                 <th className="w-12 px-2 py-2" aria-label="Actions" />
@@ -299,9 +323,8 @@ function CustomerRow({ row, defaults, onEdit, onChanged }: { row: CustomerUsageR
         {row.estimatedMicro > 0 && <span className="block text-caption text-muted">+{usd(row.estimatedMicro)} est.</span>}
       </td>
       <td className="num px-2 py-2 text-right font-mono text-ink-2">{row.calls}</td>
-      <td className="num px-2 py-2 text-right font-mono text-ink-2" title="Social accounts (Upload-Post) plus ad accounts (Zernio, billed per connected account) connected now">
-        {row.connectedAccounts ?? '–'}
-      </td>
+      <VendorCell accounts={row.socialAccounts} usage={row.vendors?.uploadpost} calls title="Social accounts connected now, Upload-Post calls in the period and the estimated profile cost" />
+      <VendorCell accounts={row.adAccounts} usage={row.vendors?.zernio} title="Ad accounts connected now and the estimated cost (Zernio bills per connected ad account)" />
       <td className="num px-2 py-2 font-mono text-caption text-ink-2">
         {usd(daily ?? 0)} / {usd(monthly ?? 0)}
         {custom && <Badge className="ml-1.5">Own</Badge>}
@@ -316,6 +339,17 @@ function CustomerRow({ row, defaults, onEdit, onChanged }: { row: CustomerUsageR
         <MoreMenu label={`Actions for ${who}`} items={items} size="xs" />
       </td>
     </tr>
+  );
+}
+
+/** One vendor's cell: accounts connected now, then calls and the estimate (an older server: the combined count only). */
+export function VendorCell({ accounts, usage, calls, title }: { accounts?: number; usage?: { costMicro: number; estimatedMicro: number; calls: number }; calls?: boolean; title: string }) {
+  const extra = [calls && usage && usage.calls > 0 ? `${usage.calls} call${usage.calls === 1 ? '' : 's'}` : '', usage && usage.estimatedMicro > 0 ? `+${usd(usage.estimatedMicro)} est.` : ''].filter(Boolean).join(' · ');
+  return (
+    <td className="num px-2 py-2 text-right font-mono text-ink-2" title={title}>
+      {typeof accounts === 'number' ? `${accounts} acct${accounts === 1 ? '' : 's'}` : '–'}
+      {extra && <span className="block text-caption text-muted">{extra}</span>}
+    </td>
   );
 }
 

@@ -37,6 +37,9 @@ const safeDecode = (s) => {
 };
 const daysFrom = (url) => Math.min(366, Math.max(1, Math.trunc(Number(url.searchParams.get('days')) || 30)));
 
+/** The vendors the owner's customer table shows side by side (GET /api/billing/customers → vendors). */
+export const VENDOR_COLUMNS = Object.freeze(['treg', 'uploadpost', 'zernio']);
+
 export function createBillingRoutes({
   auth,
   storage = null,
@@ -179,7 +182,7 @@ export function createBillingRoutes({
     const per = new Map();
     const ensure = (tag) => {
       let p = per.get(tag);
-      if (!p) per.set(tag, (p = { costMicro: 0, estimatedMicro: 0, calls: 0, todayMicro: 0, lastActivityAt: null }));
+      if (!p) per.set(tag, (p = { costMicro: 0, estimatedMicro: 0, calls: 0, todayMicro: 0, lastActivityAt: null, vendors: {} }));
       return p;
     };
     for (const c of list) ensure(c.customer_tag);
@@ -191,6 +194,15 @@ export function createBillingRoutes({
         if (String(r.created_at) >= today) p.todayMicro += c;
       } else if (r.estimated === true) p.estimatedMicro += c;
       if (r.vendor === 'treg' && isCall(r)) p.calls += 1;
+      // each vendor's share, side by side (treg real costs; Upload-Post and Zernio calls and their monthly estimates)
+      if (VENDOR_COLUMNS.includes(r.vendor)) {
+        const v = (p.vendors[r.vendor] ??= { costMicro: 0, estimatedMicro: 0, calls: 0 });
+        if (r.estimated === true) v.estimatedMicro += c;
+        else {
+          v.costMicro += c;
+          if (isCall(r)) v.calls += 1;
+        }
+      }
       if (!p.lastActivityAt || String(r.created_at) > p.lastActivityAt) p.lastActivityAt = String(r.created_at);
     }
     const emails = await emailsFor(list);

@@ -217,7 +217,7 @@ describe('the routes', () => {
   });
 
   it('GET /customers lists every customer with email, real and estimated costs, calls, today, caps and status', async () => {
-    await db.insert('usage_ledger', [row('ana', { cost_micro: 4000 }), row('ana', { vendor: 'nango', estimated: true, cost_micro: 290_000, feature: 'connections', endpoint: 'nango_connection' }), row('ben', { cost_micro: 1000, created_at: iso(Date.now() - 3 * DAY) })]);
+    await db.insert('usage_ledger', [row('ana', { cost_micro: 4000 }), row('ana', { vendor: 'nango', estimated: true, cost_micro: 290_000, feature: 'connections', endpoint: 'nango_connection' }), row('ben', { cost_micro: 1000, created_at: iso(Date.now() - 3 * DAY) }), row('ben', { vendor: 'uploadpost', cost_micro: 0, endpoint: 'upload_post upload' }), row('ben', { vendor: 'uploadpost', estimated: true, cost_micro: 1_960_000, feature: 'connections', endpoint: 'upload_post_profile 2026-11' })]);
     await db.insert('billing_caps', { customer_tag: tagOf('ben'), daily_cap_micro: 10, status: 'blocked', synced_to_treg_at: iso(Date.now()) });
     const s = await serve({ alert: { kind: 'platform_daily_cap_reached', at: 'y' } });
     try {
@@ -228,6 +228,10 @@ describe('the routes', () => {
       expect(ben).toMatchObject({ email: 'ben@example.com', costMicro: 1000, todayMicro: 0, status: 'blocked', syncedToTreg: true, caps: { dailyCapMicro: 10, monthlyCapMicro: null, status: 'blocked' } });
       expect(json.defaults).toMatchObject({ dailyCapMicro: 250_000, monthlyCapMicro: 3_000_000, callsPerDay: 400, postsPerDay: 50, xPostsPerDay: 20, status: 'active' });
       expect(json.alert).toEqual({ kind: 'platform_daily_cap_reached', at: 'y' });
+      // each vendor side by side (nango is not one of the columns)
+      expect(ana.vendors).toEqual({ treg: { costMicro: 4000, estimatedMicro: 0, calls: 1 } });
+      expect(ben.vendors).toEqual({ treg: { costMicro: 1000, estimatedMicro: 0, calls: 1 }, uploadpost: { costMicro: 0, estimatedMicro: 1_960_000, calls: 1 } });
+      expect(ben.costMicro).toBe(1000);
     } finally {
       await s.close();
     }
