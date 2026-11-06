@@ -2,10 +2,11 @@
 // pages (one shared submit per 24 h, the inspection budgets, claims before calls) and custom domains (stored
 // steps, reads before any resend); exact page filters so customers never see each other's numbers.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
 import { createMockSupabase } from '../test/mock-supabase.mjs';
 import { createDb } from '../integrations/db.mjs';
 import { seoPageIdFor, utcDay } from '../integrations/common.mjs';
-import { createSitemapRoutes, robotsTxt, sitemapXml, VERIFICATION_FILE_RE } from './sitemap.mjs';
+import { createSitemapRoutes, HOMEPAGE_VERIFICATION_FILE, robotsTxt, sitemapXml, verificationBody, VERIFICATION_FILE_RE } from './sitemap.mjs';
 import { createSeoGoogleRoutes } from './google.mjs';
 import { pagePerformance } from './gsc.mjs';
 import { createRunner } from '../analytics/runner.mjs';
@@ -65,6 +66,7 @@ describe('app-host sitemap, robots.txt and verification file', () => {
     expect(robotsTxt('https://x.example')).toContain('Sitemap: https://x.example/sitemap.xml');
     const file = await call(sitemap, 'GET', '/google1a2b3c4d5e6f7a8b.html');
     expect(file.raw).toBe('google-site-verification: google1a2b3c4d5e6f7a8b.html');
+    expect(file.raw).not.toMatch(/<html|id="root"/);
     expect((await call(sitemap, 'GET', '/google0000000000000000.html')).handled).toBe(false);
     expect((await call(sitemap, 'GET', '/joes-bakery')).handled).toBe(false);
     expect((await call(sitemap, 'POST', '/robots.txt')).handled).toBe(false);
@@ -73,6 +75,22 @@ describe('app-host sitemap, robots.txt and verification file', () => {
     expect(VERIFICATION_FILE_RE.test('../google1a2b3c4d5e6f7a8b.html')).toBe(false);
     const bad = createSitemapRoutes({ db, env: { ...ENV, GSC_APP_VERIFICATION_FILE: '../../etc/passwd' } });
     expect((await call(bad, 'GET', '/../../etc/passwd')).handled).toBe(false);
+  });
+
+  it('serves the homepage verification file with no env var, as the exact one-line body', async () => {
+    const sitemap = createSitemapRoutes({ db, env: ENV });
+    const file = await call(sitemap, 'GET', `/${HOMEPAGE_VERIFICATION_FILE}`);
+    expect(file.handled).toBe(true);
+    expect(file.status).toBe(200);
+    expect(file.headers['content-type']).toMatch(/text\/html/);
+    expect(file.raw).toBe(verificationBody(HOMEPAGE_VERIFICATION_FILE));
+    expect(file.raw).toBe('google-site-verification: google2598e017b2dc1e02.html');
+    expect(file.raw.endsWith('\n')).toBe(false);
+    expect(fs.readFileSync(new URL('../../public/google2598e017b2dc1e02.html', import.meta.url), 'utf8')).toBe(file.raw);
+    expect(file.raw).not.toMatch(/<|id="root"/);
+    const head = await call(sitemap, 'HEAD', `/${HOMEPAGE_VERIFICATION_FILE}`);
+    expect(head.status).toBe(200);
+    expect(head.raw).toBe('');
   });
 });
 

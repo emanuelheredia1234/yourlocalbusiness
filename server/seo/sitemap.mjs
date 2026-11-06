@@ -8,11 +8,18 @@
 // /sitemap.xml lists every user's published sales page (kind 'seo') that lives on the app's address only: a page
 // whose address is a custom domain is listed in that domain's sitemap instead (no duplicate content). Built from
 // the database at most every 10 minutes. /robots.txt allows everything but /api/ and points at the sitemap.
-// /<GSC_APP_VERIFICATION_FILE> (google<16 hex>.html) answers Google's HTML-file check for the owner's property.
+// /google2598e017b2dc1e02.html answers Google's HTML-file check for the homepage (always, no sign-in).
+// /<GSC_APP_VERIFICATION_FILE> answers the same way when that setting names another google<16 hex>.html file.
 // Page names can't contain a dot, so none of these collide with a page.
 
 /** Google's HTML verification file name. */
 export const VERIFICATION_FILE_RE = /^google[0-9a-f]{16}\.html$/;
+/**
+ * The homepage property's HTML-file check. Served even when GSC_APP_VERIFICATION_FILE is unset, so
+ * https://yourlocalbusiness.replit.app/google2598e017b2dc1e02.html is not the app shell.
+ * Body is exactly `google-site-verification: <filename>` with no HTML wrapper.
+ */
+export const HOMEPAGE_VERIFICATION_FILE = 'google2598e017b2dc1e02.html';
 /** How long a built sitemap is served before it's built again. */
 export const SITEMAP_TTL_MS = 10 * 60_000;
 /** A sitemap file holds at most 50,000 addresses (sitemaps.org). */
@@ -49,6 +56,19 @@ export function appOrigin(env = process.env, req = null) {
 export function verificationFile(env = process.env) {
   const name = String(env.GSC_APP_VERIFICATION_FILE || '').trim();
   return VERIFICATION_FILE_RE.test(name) ? name : '';
+}
+
+/** File names this host answers for Google's HTML-file check: the homepage file, plus GSC_APP_VERIFICATION_FILE when set. */
+export function verificationFiles(env = process.env) {
+  const names = new Set([HOMEPAGE_VERIFICATION_FILE]);
+  const configured = verificationFile(env);
+  if (configured) names.add(configured);
+  return names;
+}
+
+/** The one line Google fetches. No HTML wrapper and no extra newline. */
+export function verificationBody(name) {
+  return `google-site-verification: ${name}`;
 }
 
 /** The sitemap XML for these rows ({slug, updated_at}) on this origin. */
@@ -119,8 +139,8 @@ export function createSitemapRoutes({ db = null, env = process.env, now = () => 
         }
         return write(req, res, 'application/xml; charset=utf-8', xml, 'public, max-age=600');
       }
-      const file = verificationFile(env);
-      if (file && p === `/${file}`) return write(req, res, 'text/html; charset=utf-8', `google-site-verification: ${file}`, 'public, max-age=3600');
+      const asked = p.startsWith('/') ? p.slice(1) : '';
+      if (verificationFiles(env).has(asked)) return write(req, res, 'text/html; charset=utf-8', verificationBody(asked), 'public, max-age=3600');
       return false;
     },
     /** for tests */
