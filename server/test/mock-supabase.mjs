@@ -781,7 +781,14 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
           insert(u, id);
           return { ok: true, state: 'active' };
         }
-        if (!eligible(a)) return { ok: false, reason: 'plan_required' };
+        if (!eligible(a)) {
+          // 20261114000000_trial_paywall.sql: the first business needs no plan (setup makes it before the paywall)
+          if (!mine(u).length) {
+            insert(u, id);
+            return { ok: true, state: 'active', used: 1, limit: 1, starter: true };
+          }
+          return { ok: false, reason: 'plan_required' };
+        }
         const used = active(u).length;
         if (a.business_limit != null && used >= a.business_limit) return { ok: false, reason: 'limit', used, limit: a.business_limit };
         insert(u, id);

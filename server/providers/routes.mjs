@@ -290,6 +290,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       return false;
     }
     if (ent.plan === 'legacy' || ent.plan === 'owner') return null;
+    // before any plan: setup's one-off AI allowance (the brand board, strategy and first posts), metered below
+    if (!ent.active && ent.starter === true && ent.creditsPerMonth > 0) return ent;
     if (!ent.active) {
       const payment = ent.paused === 'payment';
       reply(req, res, 402, payment ? { error: 'Your last payment didn’t go through. Update your card in Billing to keep going.', code: 'PAYMENT_REQUIRED', upgrade: '#plans' } : { error: 'This needs a plan. Choose one to keep going.', code: 'PLAN_REQUIRED', need: { feature: 'ai', tier: 'launch' }, upgrade: '#plans' });
@@ -299,6 +301,9 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
   }
 
   const creditsError = (ent, st) => {
+    if (ent.starter === true) {
+      return { error: 'You’ve used the AI included for setting up. Start your free trial to keep going, or use your own AI keys.', code: 'PLAN_REQUIRED', need: { feature: 'ai', tier: 'launch' }, credits: { monthly: ent.creditsPerMonth }, upgrade: '#plans' };
+    }
     const resets = st.resetsAt ? new Date(st.resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' }) : 'next month';
     return {
       error: `You’ve used this month’s AI credits. They renew on ${resets}. Add a business or upgrade for more, or use your own AI keys.`,
@@ -856,6 +861,10 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           ent = await billing.entitlement(who.id, who);
         } catch {
           ent = null;
+        }
+        // AI video is a paid action: not part of setup's allowance before a plan
+        if (ent && ent.plan !== 'legacy' && ent.plan !== 'owner' && !ent.active) {
+          return reply(req, res, 402, ent.paused === 'payment' ? { error: 'Your last payment didn’t go through. Update your card in Billing to keep going.', code: 'PAYMENT_REQUIRED', upgrade: '#plans' } : { error: 'AI video is part of every plan. Start your free trial to make one.', code: 'PLAN_REQUIRED', need: { feature: 'video', tier: 'launch' }, upgrade: '#plans' });
         }
         const v = ent && ent.plan !== 'legacy' && ent.plan !== 'owner' ? ent.features?.video : null;
         if (v) {

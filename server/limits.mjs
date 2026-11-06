@@ -235,7 +235,7 @@ export function createLimits({ supabaseUrl = '', secretKey = '', fetch = globalT
       const mem = () => round6(memoryRows((r) => r.user_id === userId && r.day >= sinceDay).reduce((n, r) => n + num(r.usd), 0));
       if (enabled && UUID.test(userId)) {
         try {
-          const got = await rows(`user_id=eq.${encodeURIComponent(userId)}&day=gte.${sinceDay}&select=day,usd&limit=40`);
+          const got = await rows(`user_id=eq.${encodeURIComponent(userId)}&day=gte.${sinceDay}&select=day,usd&order=day.desc&limit=400`);
           problem = null;
           return { usd: round6(got.reduce((n, r) => n + num(r.usd), 0)), known: true };
         } catch (e) {

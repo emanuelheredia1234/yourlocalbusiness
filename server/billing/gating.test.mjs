@@ -94,10 +94,29 @@ describe('the AI gate with plans', () => {
     const r = await gen(u);
     expect(r.status).toBe(402);
     expect(await r.json()).toMatchObject({ code: 'PAYMENT_REQUIRED' });
-    const none = await supa.tokenFor('noplan@gate.test');
-    const n = await gen(none);
+    // a plan that ended: no AI on the app's keys
+    const ended = await supa.tokenFor('ended@gate.test');
+    billing.accounts.set(ended.user.id, row({ tier: 'none', status: 'canceled', ended_at: new Date(Date.now() - DAY).toISOString() }));
+    const n = await gen(ended);
     expect(n.status).toBe(402);
     expect(await n.json()).toMatchObject({ code: 'PLAN_REQUIRED', upgrade: '#plans' });
+    expect(providers.calls.length).toBe(calls);
+  });
+
+  it('before any plan: setup’s one-off AI allowance (200 credits), then “Start your free trial”; never a video', async () => {
+    const fresh = await supa.tokenFor('setup@gate.test');
+    expect((await gen(fresh)).status).toBe(200);
+    // $2 used on the app's keys: the allowance is spent, and it never renews
+    usedUsd(fresh.user.id, 2);
+    const r = await gen(fresh);
+    expect(r.status).toBe(402);
+    const j = await r.json();
+    expect(j).toMatchObject({ code: 'PLAN_REQUIRED', need: { feature: 'ai' }, upgrade: '#plans' });
+    expect(j.error).toContain('Start your free trial');
+    const calls = providers.calls.length;
+    const v = await fetch(`${app.base}/api/ai/video`, { method: 'POST', headers: headersFor(fresh), body: JSON.stringify({ prompt: 'a cafe', duration: 5 }) });
+    expect(v.status).toBe(402);
+    expect(await v.json()).toMatchObject({ code: 'PLAN_REQUIRED', need: { feature: 'video' } });
     expect(providers.calls.length).toBe(calls);
   });
 

@@ -52,14 +52,25 @@ describe('claim_project_slot', () => {
     expect(supa.tables.get('project_slots').map((r) => r.project_id).sort()).toEqual(['p1', 'p2']);
   });
 
-  it('refuses without a plan once enforced, and is idempotent for a business it already holds', async () => {
+  it('once enforced, the first business needs no plan (setup), a second does; idempotent for one it already holds', async () => {
     const { token, user } = await supa.tokenFor('noplan@example.com');
     setEnforce(true);
-    expect((await claim(token, 'p1')).body).toEqual({ ok: false, reason: 'plan_required' });
+    expect((await claim(token, 'p1')).body).toEqual({ ok: true, state: 'active', used: 1, limit: 1, starter: true });
+    expect((await claim(token, 'p1')).body).toEqual({ ok: true, state: 'active' });
+    expect((await claim(token, 'p2')).body).toEqual({ ok: false, reason: 'plan_required' });
     await db.rpc('ylb_billing_apply', { p_user: user.id, p_row: account(user.id), p_fetched_at: new Date().toISOString() });
-    expect((await claim(token, 'p1')).body).toMatchObject({ ok: true, used: 1, limit: 1 });
     expect((await claim(token, 'p1')).body).toEqual({ ok: true, state: 'active' });
     expect((await claim(token, 'p2')).body).toEqual({ ok: false, reason: 'limit', used: 1, limit: 1 });
+  });
+
+  it('a plan that ended (its oldest business kept) never gets another free first business', async () => {
+    const { token, user } = await supa.tokenFor('ended@example.com');
+    setEnforce(true);
+    await db.rpc('ylb_billing_apply', { p_user: user.id, p_row: account(user.id, { business_limit: 2 }), p_fetched_at: new Date().toISOString() });
+    expect((await claim(token, 'a')).body.ok).toBe(true);
+    expect((await claim(token, 'b')).body.ok).toBe(true);
+    await db.rpc('ylb_billing_apply', { p_user: user.id, p_row: { ...account(user.id), status: 'canceled', ended_at: new Date().toISOString() }, p_fetched_at: new Date().toISOString() });
+    expect((await claim(token, 'c')).body).toEqual({ ok: false, reason: 'plan_required' });
   });
 
   it('lets exactly one of two concurrent claims at limit − 1 through (serialised like the advisory lock)', async () => {

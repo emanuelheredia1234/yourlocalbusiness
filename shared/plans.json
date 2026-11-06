@@ -66,5 +66,7 @@
   "pagesAfterCancelDays": 30,
   "dataAfterCancelDays": 90,
   "existingAccountTrial": { "tier": "grow", "days": 30 },
+  "cardTrial": { "days": 7, "aiCredits": 300, "endingSoonDays": 3 },
+  "starter": { "aiCredits": 200 },
   "owner": { "name": "Owner", "unlimited": true }
 }

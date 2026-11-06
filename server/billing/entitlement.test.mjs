@@ -18,9 +18,25 @@ describe('entitlementOf', () => {
     expect(entitlementOf(acct({ source: 'owner', tier: 'owner' }), ON, NOW)).toMatchObject({ plan: 'owner', active: true });
   });
 
-  it('a new sign-up has no plan (paused, no banner); an ended one says so', () => {
-    expect(entitlementOf(null, ON, NOW)).toMatchObject({ plan: 'none', active: false, paused: 'plan', banner: null, creditsPerMonth: 0, features: { adsLaunch: false } });
-    expect(entitlementOf(acct({ tier: 'none', status: 'canceled', ended_at: at(-1) }), ON, NOW)).toMatchObject({ plan: 'none', banner: 'plan_ended' });
+  it('a new sign-up has no plan (paused, no banner) but setup’s one-off AI allowance; an ended one says so and gets none', () => {
+    expect(entitlementOf(null, ON, NOW)).toMatchObject({ plan: 'none', active: false, paused: 'plan', banner: null, starter: true, creditsPerMonth: 200, creditWindow: { start: '2020-01-01T00:00:00.000Z', resetsAt: null }, features: { adsLaunch: false } });
+    // a row made at sign-up (no plan yet): the allowance counts from that day, once
+    const fresh = entitlementOf(acct({ tier: 'none', status: 'none', created_at: '2026-11-10T15:00:00Z' }), ON, NOW);
+    expect(fresh).toMatchObject({ starter: true, creditsPerMonth: 200, creditWindow: { start: '2026-11-10T00:00:00.000Z', resetsAt: null } });
+    expect(entitlementOf(acct({ tier: 'none', status: 'canceled', ended_at: at(-1) }), ON, NOW)).toMatchObject({ plan: 'none', banner: 'plan_ended', starter: false, creditsPerMonth: 0 });
+    // a free plan that ended, or a subscription that never finished: no allowance either
+    expect(entitlementOf(acct({ source: 'comp', tier: 'none', status: 'expired' }), ON, NOW)).toMatchObject({ starter: false, creditsPerMonth: 0 });
+    expect(entitlementOf(acct({ tier: 'none', status: 'none', stripe_subscription_id: 'sub_123456' }), ON, NOW)).toMatchObject({ starter: false, creditsPerMonth: 0 });
+  });
+
+  it('a 7-day card trial: the chosen tier’s features, the trial’s 300 credits for the whole trial, days left, ending soon in the last 3 days', () => {
+    const t = entitlementOf(acct({ tier: 'scale', status: 'trialing', current_period_start: at(-2), current_period_end: at(5), trial_ends_at: at(5) }), ON, NOW);
+    expect(t).toMatchObject({ plan: 'scale', active: true, trial: true, trialDaysLeft: 5, banner: 'trial', creditsPerMonth: 300, creditWindow: { start: at(-2), resetsAt: at(5) }, features: { adsLaunch: true, videosPerWeek: null } });
+    expect(entitlementOf(acct({ status: 'trialing', trial_ends_at: at(2.5) }), ON, NOW)).toMatchObject({ banner: 'trial_ending', trialDaysLeft: 3 });
+    // cancelled during the trial: it says so (no charge on day 8)
+    expect(entitlementOf(acct({ status: 'trialing', trial_ends_at: at(4), cancel_at_period_end: true }), ON, NOW)).toMatchObject({ banner: 'cancel_at_period_end', trial: true });
+    // after the trial (active): the tier's own credits again
+    expect(entitlementOf(acct({ tier: 'scale', status: 'active', trial_ends_at: at(-1) }), ON, NOW)).toMatchObject({ trial: false, creditsPerMonth: 7500, banner: null });
   });
 
   it.each([
