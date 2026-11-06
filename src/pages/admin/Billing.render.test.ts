@@ -59,6 +59,11 @@ describe('the page', () => {
     expect(other).toContain('Check the Upload-Post dashboard.');
     expect(other).not.toContain('something_new');
   });
+  it('carries the section ids Settings › Owner links to (overview, Plans, Ad limits)', () => {
+    const html = wrap(createElement(BillingView, { data: DATA, report: null, onEdit: () => {}, onChanged: () => {} }));
+    for (const id of ['owner-billing-overview', 'owner-plans', 'owner-ad-limits']) expect(html).toContain(`id="${id}"`);
+  });
+
   it('the treg alert shows no amounts', () => {
     const html = wrap(createElement(BillingView, { data: { ...DATA, alert: { kind: 'insufficient_balance', at: '' } }, report: null, onEdit: () => {}, onChanged: () => {} }));
     expect(html).toContain('Analytics provider needs attention (billing).');

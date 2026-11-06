@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { Check, ChevronRight, CircleUserRound, CreditCard, Wallet, Database, Download, FolderOpen, Globe, KeyRound, Link2, Monitor, Moon, Palette, Pencil, Plus, SlidersHorizontal, Sun, Trash2, Upload } from 'lucide-react';
+import { Check, ChevronRight, CircleUserRound, CreditCard, ShieldCheck, Wallet, Database, Download, FolderOpen, Globe, KeyRound, Link2, Monitor, Moon, Palette, Pencil, Plus, SlidersHorizontal, Sun, Trash2, Upload } from 'lucide-react';
 import type { AppSettings, Brand, Project } from '@/lib/types';
 import { cn, ensureUrl, fmtRelative, readFileAsText, slugify } from '@/lib/utils';
 import { useRuntime } from '@/lib/platform';
@@ -33,9 +33,11 @@ import { isValidTimeZone, projectTimeZone } from '@/lib/timeZone';
 import { UsageSection } from './UsageSection';
 import { PlanSection } from './PlanSection';
 import { PaymentsSection } from './PaymentsSection';
+import { OwnerSection } from './OwnerSection';
+import { useAnalytics } from '@/store/analytics';
 import { useBillingOn } from '@/store/billing';
 
-type Tab = 'brand' | 'domains' | 'ai' | 'accounts' | 'payments' | 'projects' | 'prefs' | 'plan' | 'account';
+type Tab = 'brand' | 'domains' | 'ai' | 'accounts' | 'payments' | 'projects' | 'prefs' | 'plan' | 'account' | 'owner';
 
 /** The sections, in the order of the sub-navigation (ids never change: the palette and the assistant open them). */
 const SECTIONS: { id: Tab; label: string; hint: string; icon: ReactNode }[] = [
@@ -48,6 +50,8 @@ const SECTIONS: { id: Tab; label: string; hint: string; icon: ReactNode }[] = [
   { id: 'prefs', label: 'Preferences', hint: 'Your name, theme and Marketplace', icon: <SlidersHorizontal /> },
   { id: 'plan', label: 'Plan', hint: 'Your plan, businesses and billing', icon: <CreditCard /> },
   { id: 'account', label: 'Account', hint: 'Sign-in, password and deletion', icon: <CircleUserRound /> },
+  // the app's owner only: Customer usage's sections (billing overview, Plans, Ad limits)
+  { id: 'owner', label: 'Owner', hint: 'Customer usage, plans and ad limits', icon: <ShieldCheck /> },
 ];
 const TAB_IDS = SECTIONS.map((s) => s.id) as string[];
 
@@ -55,9 +59,14 @@ export default function Settings() {
   const project = useActiveProject()!;
   const signedIn = useAuth((s) => s.phase === 'ready');
   const billing = useBillingOn();
+  // the owner's row (the server says who the owner is; every owner page checks again)
+  const owner = useAnalytics((s) => s.owner === true);
+  useEffect(() => {
+    if (!__ARTIFACT_BUILD__ && signedIn) void useAnalytics.getState().loadOwner();
+  }, [signedIn]);
   // Plan only when signed in with plans shown (never in the artifact build)
   // Payments only where the app's server is (never in the artifact build)
-  const allowed = (id: string) => (id !== 'account' || signedIn) && (id !== 'plan' || (signedIn && billing)) && (id !== 'payments' || !__ARTIFACT_BUILD__);
+  const allowed = (id: string) => (id !== 'account' || signedIn) && (id !== 'plan' || (signedIn && billing)) && (id !== 'payments' || !__ARTIFACT_BUILD__) && (id !== 'owner' || (owner && !__ARTIFACT_BUILD__));
   const { access } = usePublishAccess();
   const wanted = useUI((s) => s.settingsTab);
   const [tab, setTab] = useState<Tab>(() => (wanted && TAB_IDS.includes(wanted) && allowed(wanted) ? (wanted as Tab) : 'brand'));
@@ -75,7 +84,7 @@ export default function Settings() {
     }
     useUI.getState().setSettingsTab(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wanted, signedIn, billing]);
+  }, [wanted, signedIn, billing, owner]);
 
   // Domains only where publishing is on; Account only when signed in
   const domainsOn = access === 'ready' || access === 'signed-out';
@@ -176,6 +185,7 @@ export default function Settings() {
           {shown === 'projects' && <ProjectsData />}
           {shown === 'prefs' && <Preferences />}
           {shown === 'plan' && <PlanSection />}
+          {shown === 'owner' && <OwnerSection />}
           {shown === 'account' && signedIn && (
             <div className="max-w-[880px]">
               <AccountSettings />
