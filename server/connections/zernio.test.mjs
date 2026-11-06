@@ -4,7 +4,7 @@
 // monthly ad-account counts. Social accounts, posting and social stats are Upload-Post's (uploadpost.test.mjs): this
 // side refuses them.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createZernioConnections } from './zernio.mjs';
+import { createZernioConnections, profileIdOf } from './zernio.mjs';
 import { createConnections } from './index.mjs';
 import { createZernioClient, zernioBase, ZERNIO_BASE_URL } from '../zernio.mjs';
 import { customerTag, sha256 } from '../integrations/common.mjs';
@@ -111,7 +111,7 @@ describe('profiles and connect links', () => {
     const before = mock.calls.length;
     await t.connections.connectLink(ALICE, 'linkedin_ads');
     const call = mock.calls.slice(before).find((c) => c.path === '/api/v1/connect/linkedin/ads');
-    expect(call.query).toMatchObject({ welcome: 'true', brandName: 'Joe’s Toolkit', logoUrl: 'https://cdn.example/logo.png', primaryColor: '#1D4ED8', redirect_url: 'https://yourlocalbusiness.replit.app/?connected=linkedin_ads' });
+    expect(call.query).toMatchObject({ welcome: 'true', brandName: 'Joe’s Toolkit', logoUrl: 'https://cdn.example/logo.png', primaryColor: '#1D4ED8', redirect_url: 'https://yourlocalbusiness.replit.app/?ylb_connect=linkedin_ads' });
     expect(call.query.profileId).toMatch(/^[0-9a-f]{24}$/);
   });
 
@@ -395,5 +395,144 @@ describe('ad events go to the ads side (server/ads/webhook.mjs)', () => {
     await expect(t.impl.adsAccountFor(ALICE, 'google_ads', 'proj-1')).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
     await expect(t.impl.adsAccountFor(ALICE, 'tiktok_ads', 'proj-1')).rejects.toMatchObject({ status: 404 });
     expect(t.impl.client.enabled).toBe(true);
+  });
+});
+
+describe('reading accounts back: profileId shapes, one row per ads login, and the redirect back', () => {
+  const CAROL = '3c2b1a00-1111-4222-8333-444455556666';
+  const DAVE = '4d3c2b11-2222-4333-8444-555566667777';
+  const ERIN = '5e4d3c22-3333-4444-8555-666677778888';
+  const FRANK = '6f5e4d33-4444-4555-8666-777788889999';
+  const profileOf = async (t, userId) => (await t.storage.get(`zernio:user:${sha256(userId)}`)).value.profileId;
+
+  it('keeps a just-connected account whether Zernio gives profileId as the id or as the Profile object', async () => {
+    const t = setup();
+    await t.connections.connectLink(CAROL, 'meta_ads', { projectId: 'p1' });
+    const pid = await profileOf(t, CAROL);
+    mock.addAccount({ platform: 'metaads', profileId: pid, username: 'carolads' });
+    mock.shape.profileId = 'object';
+    try {
+      const listedNow = await fetch(`${mock.apiBase}/accounts?profileId=${pid}`, { headers: { authorization: `Bearer ${TEST_ZERNIO_KEY}` } }).then((r) => r.json());
+      expect(typeof listedNow.accounts[0].profileId).toBe('object');
+      const c = await t.connections.check(CAROL, 'meta_ads', { projectId: 'p1' });
+      expect(c.state).toBe('connected');
+    } finally {
+      mock.shape.profileId = 'string';
+    }
+    // and with the plain id too
+    const c2 = await t.connections.check(CAROL, 'meta_ads', { projectId: 'p1' });
+    expect(c2.state).toBe('connected');
+  });
+
+  it('profileIdOf reads both shapes; a row naming another profile is never kept', async () => {
+    expect(profileIdOf({ profileId: 'aaaaaaaaaaaaaaaaaaaaaaaa' })).toBe('aaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(profileIdOf({ profileId: { _id: 'bbbbbbbbbbbbbbbbbbbbbbbb', name: 'x' } })).toBe('bbbbbbbbbbbbbbbbbbbbbbbb');
+    expect(profileIdOf({ profileId: null })).toBe('');
+    expect(profileIdOf({})).toBe('');
+    // Zernio answering a row from another profile (as an object): dropped
+    const t = setup();
+    await t.connections.connectLink(DAVE, 'google_ads');
+    const pid = await profileOf(t, DAVE);
+    const other = mock.profiles.find((p) => p._id !== pid)._id;
+    const stranger = mock.addAccount({ platform: 'googleads', profileId: other, username: 'notdave' });
+    const realFetch = globalThis.fetch;
+    const t2 = (() => {
+      const env = { ...t.env };
+      const leaky = async (url, init) => {
+        const res = await realFetch(String(url).replace(`profileId=${pid}`, 'profileId='), init);
+        return res;
+      };
+      return { impl: createZernioConnections({ env, storage: t.storage, db: t.db, log: t.log, fetch: leaky }) };
+    })();
+    mock.shape.profileId = 'object';
+    try {
+      const c = await t2.impl.check(DAVE, 'google_ads', {});
+      expect(c.state).not.toBe('connected');
+      expect(JSON.stringify((await t.storage.get(`zernio:user:${sha256(DAVE)}`)).value.accounts)).not.toContain(stranger._id);
+    } finally {
+      mock.shape.profileId = 'string';
+    }
+  });
+
+  it('asks for one row per ad account: a second Meta ad account on the same login is listed and kept', async () => {
+    const t = setup();
+    await t.connections.connectLink(ERIN, 'meta_ads', { projectId: 'shop' });
+    const pid = await profileOf(t, ERIN);
+    const first = mock.addAccount({ platform: 'metaads', profileId: pid, username: 'erin', displayName: 'Erin ads 1', login: 'login-erin' });
+    await t.connections.check(ERIN, 'meta_ads', { projectId: 'shop' });
+    // the second business connects another ad account through the same Meta login
+    await t.connections.connectLink(ERIN, 'meta_ads', { projectId: 'cafe' }).catch(() => null);
+    await t.connections.reconnectLink(ERIN, 'meta_ads', { projectId: 'cafe' });
+    const second = mock.addAccount({ platform: 'metaads', profileId: pid, username: 'erin', displayName: 'Erin ads 2', login: 'login-erin' });
+    // Zernio's default listing would show the login once (its oldest row): the read asks for every row
+    const before = mock.calls.length;
+    const c = await t.connections.check(ERIN, 'meta_ads', { projectId: 'cafe', accountId: second._id });
+    const call = mock.calls.slice(before).find((x) => x.path === '/api/v1/accounts');
+    expect(call.query).toMatchObject({ adAccountRows: 'true', profileId: pid });
+    expect(c).toMatchObject({ state: 'connected', targetLabel: 'Erin ads 2' });
+    const doc = (await t.storage.get(`zernio:user:${sha256(ERIN)}`)).value;
+    expect(Object.keys(doc.accounts).sort()).toEqual([first._id, second._id].sort());
+    // each business keeps its own: the first stays on the first
+    expect(doc.choice.shop.meta_ads).toBe(first._id);
+    expect(doc.choice.cafe.meta_ads).toBe(second._id);
+    expect(doc.pending.meta_ads).toBeUndefined();
+  });
+
+  it('an account.connected webhook’s row isn’t dropped by the next read (it would be with one row per login)', async () => {
+    const t = setup();
+    const { profileId } = await connectVia(t, FRANK, 'meta_ads', { zPlatform: 'metaads' });
+    // a second ad account on the login of an earlier one
+    mock.accounts.find((a) => a.profileId === profileId && a.platform === 'metaads')._login = 'login-frank';
+    const extra = mock.addAccount({ platform: 'metaads', profileId, username: 'frank2', login: 'login-frank' });
+    const evt = mock.signed({ event: 'account.connected', profiles: mock.profileRef(profileId), account: { accountId: extra._id, profileId: { _id: profileId }, platform: 'metaads', username: 'frank2' } });
+    expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
+    await t.connections.check(FRANK, 'meta_ads');
+    expect(Object.keys((await t.storage.get(`zernio:user:${sha256(FRANK)}`)).value.accounts)).toContain(extra._id);
+  });
+
+  it('an older Zernio that refuses adAccountRows is read again without it (a read, so safe to repeat)', async () => {
+    const t = setup();
+    const U = '7a6b5c44-5555-4666-8777-88889999aaaa';
+    await t.connections.connectLink(U, 'google_ads');
+    const pid = await profileOf(t, U);
+    mock.addAccount({ platform: 'googleads', profileId: pid, username: 'u' });
+    mock.shape.rejectAdAccountRows = true;
+    try {
+      const before = mock.calls.length;
+      const c = await t.connections.check(U, 'google_ads');
+      expect(c.state).toBe('connected');
+      const reads = mock.calls.slice(before).filter((x) => x.path === '/api/v1/accounts');
+      expect(reads).toHaveLength(2);
+      expect(reads[1].query.adAccountRows).toBeUndefined();
+    } finally {
+      mock.shape.rejectAdAccountRows = false;
+    }
+  });
+
+  it('a connect that came back with an error stops waiting and keeps our reason code (never Zernio’s text)', async () => {
+    const t = setup();
+    const U = '8b7c6d55-6666-4777-8888-9999aaaabbbb';
+    await t.connections.connectLink(U, 'meta_ads', { projectId: 'p' });
+    expect((await t.connections.status(U, { projectId: 'p' })).find((c) => c.platform === 'meta_ads').state).toBe('pending');
+    const c = await t.connections.abandon(U, 'meta_ads', { projectId: 'p', reason: 'ad_accounts_not_granted' });
+    expect(c).toMatchObject({ platform: 'meta_ads', state: 'not_connected', lastError: 'ad_accounts_not_granted' });
+    expect((await t.storage.get(`zernio:user:${sha256(U)}`)).value.pending.meta_ads).toBeUndefined();
+    // anything we don't know becomes connection_failed
+    expect((await t.connections.abandon(U, 'meta_ads', { reason: '<script>Meta said no</script>' })).lastError).toBe('connection_failed');
+    // the team-level reasons alert the owner
+    await t.connections.abandon(U, 'meta_ads', { reason: 'ads_addon_required' });
+    expect(t.log.text()).toContain('zernio_owner_alert');
+    // a new connect clears the reason
+    await t.connections.connectLink(U, 'meta_ads', { projectId: 'p' });
+    expect((await t.connections.status(U, { projectId: 'p' })).find((c) => c.platform === 'meta_ads').lastError).toBeUndefined();
+  });
+
+  it('the redirect back names our platform in its own parameter (Zernio adds connected= / error= itself)', async () => {
+    const t = setup();
+    const U = '9c8d7e66-7777-4888-8999-aaaabbbbcccc';
+    const before = mock.calls.length;
+    await t.connections.connectLink(U, 'google_ads');
+    const call = mock.calls.slice(before).find((c) => c.path === '/api/v1/connect/googleads/ads');
+    expect(call.query.redirect_url).toBe('https://yourlocalbusiness.replit.app/?ylb_connect=google_ads');
   });
 });

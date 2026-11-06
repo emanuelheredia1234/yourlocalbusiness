@@ -143,6 +143,11 @@ export function combineConnections({ social = null, ads = null } = {}) {
     connectLink: via('connectLink'),
     reconnectLink: via('reconnectLink'),
     check: via('check'),
+    /** a connect that came back with an error stops waiting (ad accounts: Zernio's redirect); elsewhere a re-read */
+    abandon: (userId, platform, opts) => {
+      const side = sideOf(platform);
+      return typeof side.abandon === 'function' ? side.abandon(userId, platform, opts) : side.check(userId, platform, opts);
+    },
     disconnect: via('disconnect'),
     targets: via('targets'),
     setTarget: via('setTarget'),
@@ -203,6 +208,13 @@ export function createConnections(impl = nullConnections) {
     connectLink: withOpts('connectLink'),
     reconnectLink: withOpts('reconnectLink'),
     check: withOpts('check'),
+    /** A connect that came back with an error: that platform stops waiting (impls without it: a re-read). */
+    async abandon(userId, platform, opts = {}) {
+      checkUser(userId);
+      checkPlatform(platform);
+      const fn = typeof impl.abandon === 'function' ? impl.abandon : impl.check;
+      return fn(userId, platform, { ...opts, projectId: projectOf(opts) });
+    },
     disconnect: withOpts('disconnect'),
     targets: withOpts('targets'),
     async setTarget(userId, platform, targetId, opts = {}) {

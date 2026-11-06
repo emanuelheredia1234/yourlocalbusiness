@@ -64,8 +64,9 @@ export function zernioError(res) {
   const b = res?.body && typeof res.body === 'object' ? res.body : {};
   const code = typeof b.code === 'string' ? b.code.slice(0, 60) : '';
   const type = typeof b.type === 'string' ? b.type.slice(0, 40) : '';
+  const param = typeof b.param === 'string' ? b.param.slice(0, 60) : '';
   const retryAfter = Number.parseInt(res?.headers?.['retry-after'] ?? '', 10);
-  return { status: Number(res?.status) || 0, code, type, ...(Number.isFinite(retryAfter) ? { retryAfter } : {}) };
+  return { status: Number(res?.status) || 0, code, type, ...(param ? { param } : {}), ...(Number.isFinite(retryAfter) ? { retryAfter } : {}) };
 }
 
 function sameHex(a, b) {
