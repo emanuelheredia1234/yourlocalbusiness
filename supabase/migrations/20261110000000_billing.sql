@@ -302,7 +302,7 @@ begin
 end;
 $$;
 
--- the server writes what it read from Stripe (or a free plan): only when this read is newer than the stored one
+-- the server writes what it read from Stripe (or a free plan): only when this read is not older than the stored one
 create or replace function public.ylb_billing_apply(p_user uuid, p_row jsonb, p_fetched_at timestamptz) returns boolean
   language plpgsql volatile security definer set search_path = '' as $$
 declare
@@ -315,7 +315,7 @@ begin
     insert into public.billing_accounts select * from jsonb_populate_record(null::public.billing_accounts,
       p_row || jsonb_build_object('user_id', p_user, 'stripe_fetched_at', p_fetched_at, 'created_at', now(), 'updated_at', now()));
     wrote := true;
-  elsif stored is null or p_fetched_at is null or stored < p_fetched_at then
+  elsif stored is null or p_fetched_at is null or stored <= p_fetched_at then
     update public.billing_accounts a set
       (customer_tag, source, tier, interval, status, stripe_customer_id, stripe_subscription_id, tier_item_id,
        business_item_id, extra_businesses, comp_extra, business_limit, extra_keep, extra_keep_until, tier_keep,

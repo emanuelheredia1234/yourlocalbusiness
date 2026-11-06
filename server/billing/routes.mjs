@@ -8,6 +8,8 @@
 //                                                  with treg's budget dimension)
 //   GET /api/billing/reconcile?days=30             owner: our ledger against treg's usage by tag
 //   GET /api/billing/invoice.csv?month=YYYY-MM     owner: the month's CSV to bill from
+//   /api/billing/plan|checkout|portal|businesses…|accounts…|settings, POST /api/webhooks/stripe
+//                                                  plans and billing with Stripe (server/billing/stripe.mjs)
 // onStart: settle treg's `pending` answers now; cronJobs(): again every hour, from the hourly cron tick (server/cron). userDeleted(userId): the ledger rows keep
 // the customer tag (for invoices) and lose the user id.
 //
@@ -23,8 +25,10 @@ import { invoiceCsv, isMonth, monthWindow } from './invoice.mjs';
 import { endpointLabel } from '../treg-endpoints.mjs';
 import { customerTag, errorBody, fail, notSetUp, safeLog } from '../integrations/common.mjs';
 import { serviceHeaders } from '../secretBox.mjs';
+import { createStripeBilling, STRIPE_ROUTES } from './stripe.mjs';
 
 export const BILLING_PREFIX = '/api/billing/';
+export const STRIPE_WEBHOOK_PATH = '/api/webhooks/stripe';
 const TAG = /^cust_[0-9a-f]{24}$/;
 // once per hourly cron tick: pg_cron calls the tick hourly (Autoscale must be able to sleep), so a shorter period
 // would only promise a cadence the deployment never meets
@@ -50,14 +54,17 @@ export function createBillingRoutes({
   connections = null,
   send,
   readJson,
+  readRaw = null,
   limit = () => false,
   corsHeaders = () => ({}),
   sameOrigin = () => true,
+  clientKey = (req) => req.socket?.remoteAddress || 'unknown',
   env = process.env,
   fetch = globalThis.fetch,
   now = () => Date.now(),
   log = console,
   admin: adminOverride = null,
+  stripeClient = null,
 } = {}) {
   const ledger = createLedger({ db, now, log });
   const admin = adminOverride ?? createTregAdmin({ env, fetch, log });
@@ -66,6 +73,9 @@ export function createBillingRoutes({
   // one settle run at a time in this server: an overlapping run would write a second 'settled' row for a call
   let settling = null;
   const settleOnce = () => (settling ??= settlePending({ ledger, admin, now, log }).finally(() => (settling = null)));
+
+  // plans and billing with Stripe; caps are told the tier layer of each customer (server/billing/caps.mjs)
+  const plans = createStripeBilling({ db, env, fetch, now, log, readJson, readRaw, limit, clientKey, emailFor: (id) => emailFor(id), caps, stripe: stripeClient });
 
   /**
    * What's missing, by Secret name (empty when ready). A user's own usage needs only the ledger and the tag
@@ -304,6 +314,12 @@ export function createBillingRoutes({
 
   async function handle(req, res, url) {
     const path = url.pathname;
+    if (path === STRIPE_WEBHOOK_PATH) {
+      if (req.method !== 'POST') return false;
+      const out = await plans.webhook(req);
+      send(res, out.status, out.body);
+      return true;
+    }
     if (!path.startsWith(BILLING_PREFIX)) return false;
     if (!sameOrigin(req)) {
       reply(req, res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
@@ -324,8 +340,19 @@ export function createBillingRoutes({
       reply(req, res, 429, { error: 'Too many requests. Try again in a minute.', code: 'RATE_LIMITED' });
       return true;
     }
+    const sub = path.slice(BILLING_PREFIX.length);
+    if (STRIPE_ROUTES.test(sub)) {
+      try {
+        const out = await plans.route(req, sub, who, url);
+        if (!out) return false;
+        reply(req, res, out.status, out.body);
+      } catch (e) {
+        const { status, body: b } = plans.errorReply(e, who);
+        reply(req, res, status, b);
+      }
+      return true;
+    }
     try {
-      const sub = path.slice(BILLING_PREFIX.length);
       const gaps = missing({ ownUsageOnly: sub === 'me' });
       if (gaps.length) throw notSetUp(`Usage tracking needs these in Replit Secrets: ${gaps.join(', ')}.`, 'Usage isn’t available yet.');
       const m = req.method;
@@ -368,6 +395,8 @@ export function createBillingRoutes({
     ledger,
     caps,
     admin,
+    /** plans and billing (server/billing/stripe.mjs): entitlement, gates, webhook */
+    plans,
     /** Settle pending treg rows now (also once an hour from the cron tick). */
     settle: () => (missing().length ? Promise.resolve(0) : settleOnce()),
     async onStart() {
@@ -375,7 +404,11 @@ export function createBillingRoutes({
       await settleOnce();
     },
     /** server/cron: the periodic settle (Autoscale sleeps, so no in-process timer). Idempotent: settles what's pending. */
-    cronJobs: () => [{ name: 'treg-settle', everyMs: SETTLE_EVERY_MS, run: async () => ({ settled: missing().length ? 0 : await settleOnce() }) }],
+    cronJobs: () => [{ name: 'treg-settle', everyMs: SETTLE_EVERY_MS, run: async () => ({ settled: missing().length ? 0 : await settleOnce() }) }, ...plans.cronJobs()],
+    /** Before an account is deleted (before any vendor connection goes): a live subscription is cancelled (409 BILLING_PENDING when unconfirmed). */
+    async beforeForget(userId) {
+      await plans.forgetUser(userId);
+    },
     async forgetUser() {},
     async unforgetUser() {},
     /** After the account is gone: its ledger rows stay (by customer tag, for invoices) without the user id. */

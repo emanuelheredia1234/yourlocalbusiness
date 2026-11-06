@@ -599,7 +599,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
           wrote = true;
         } else {
           const stored = list[i].stripe_fetched_at;
-          if (stored == null || fetchedAt == null || Date.parse(stored) < Date.parse(fetchedAt)) {
+          if (stored == null || fetchedAt == null || Date.parse(stored) <= Date.parse(fetchedAt)) {
             const next = { ...list[i], ...row, user_id: u, stripe_fetched_at: fetchedAt ?? list[i].stripe_fetched_at, updated_at: iso(dbNow()) };
             const clash = uniqueRefusal('billing_accounts', next, list.filter((_, j) => j !== i));
             if (clash) return { error: clash };

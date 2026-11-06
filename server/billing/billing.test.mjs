@@ -490,7 +490,9 @@ describe('the settle job’s rules', () => {
     try {
       expect(s.routes.stop).toBeUndefined();
       const jobs = s.routes.cronJobs();
-      expect(jobs).toEqual([expect.objectContaining({ name: 'treg-settle', everyMs: 60 * 60_000 })]);
+      // the treg settle, then the plan jobs (server/billing/stripe.mjs)
+      expect(jobs.map((j) => j.name)).toEqual(['treg-settle', 'billing-hourly', 'stripe-reconcile', 'billing-retention']);
+      expect(jobs[0]).toEqual(expect.objectContaining({ name: 'treg-settle', everyMs: 60 * 60_000 }));
       expect(await jobs[0].run({})).toEqual({ settled: expect.any(Number) });
     } finally {
       await s.close();

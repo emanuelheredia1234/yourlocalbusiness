@@ -232,6 +232,40 @@ describe('account deletion', () => {
     expect(r.calls.some((c) => c[0] === 'forget')).toBe(false);
   });
 
+  it('cancels a live plan subscription before any vendor connection goes, and a refusal stops the deletion', async () => {
+    const r = recorder();
+    r.factories.billing = vi.fn(() => ({
+      handle: async () => false,
+      async beforeForget(id) {
+        r.calls.push(['beforeForget', 'billing', id]);
+      },
+    }));
+    const integrations = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
+    await integrations.forgetUser(UID);
+    const order = r.calls.map((c) => `${c[0]}:${c[1]}`);
+    expect(order.indexOf('beforeForget:billing')).toBeGreaterThan(order.indexOf('beforeForget:ads'));
+    expect(order.indexOf('beforeForget:billing')).toBeLessThan(order.indexOf('forget:vendor'));
+    r.calls.length = 0;
+    r.factories.billing = vi.fn(() => ({
+      handle: async () => false,
+      async beforeForget() {
+        throw Object.assign(new Error('pending'), { status: 409, code: 'BILLING_PENDING' });
+      },
+    }));
+    const blocked = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
+    await expect(blocked.forgetUser(UID)).rejects.toMatchObject({ code: 'BILLING_PENDING' });
+    expect(r.calls.some((c) => c[0] === 'forget')).toBe(false);
+  });
+
+  it('routes the Stripe webhook to the billing module, and exposes the plans facade (not enforced without billing)', async () => {
+    expect(moduleFor('/api/webhooks/stripe')).toBe('billing');
+    const r = recorder();
+    const integrations = createIntegrations({ env: {}, send: sendLike, factories: r.factories, db: { enabled: false } });
+    expect(await integrations.billing.entitlement(UID)).toMatchObject({ plan: 'legacy', active: true });
+    expect(await integrations.billing.businessLimit(UID)).toBe(null);
+    expect(integrations.billing.config()).toEqual({ enabled: false, enforce: false });
+  });
+
   it('wires the ad events listener and the disconnect guard to the ads module', async () => {
     const r = recorder();
     r.zernioImpl.setAdsListener = vi.fn();

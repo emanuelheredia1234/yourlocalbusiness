@@ -81,7 +81,7 @@ export function createStripeClient({ env = process.env, fetch = globalThis.fetch
   const mode = stripeMode(key);
   const override = String(env.STRIPE_API_BASE ?? '').trim().replace(/\/+$/, '');
   // a custom base only with a test key: a live key only ever goes to Stripe
-  const baseRefused = !!override && !/^sk_test_/.test(key);
+  const baseRefused = !!override && !!key && !/^sk_test_/.test(key);
   const base = override && !baseRefused ? override : LIVE_BASE;
   const enabled = !!mode && !baseRefused;
 
