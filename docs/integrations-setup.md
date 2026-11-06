@@ -84,7 +84,7 @@ Plain settings (not secret; Replit Secrets or env):
 | `NANGO_INTEGRATIONS` | — | Only with Nango (§3b): JSON of the integrations customers may connect. |
 | `CRON_BUDGET_MS` | `40000` | How long one cron tick may run jobs before it answers (§2a); a job still running then finishes in the background. |
 | `GSC_APP_PROPERTY` | — | `https://yourlocalbusiness.replit.app/` once that Search Console property is verified. Its host is also the app's own address for the back button on Upload-Post's connect page (unset: `https://yourlocalbusiness.replit.app`), so set it to the app's real address if that ever changes. |
-| `GSC_APP_VERIFICATION_FILE` | — | Google's HTML verification file name, e.g. `google1a2b3c4d5e6f7a8b.html`. |
+| `GSC_APP_VERIFICATION_FILE` | — | Optional extra HTML verification file name, e.g. `google1a2b3c4d5e6f7a8b.html`. The homepage file `google2598e017b2dc1e02.html` is already served (§6). |
 
 The Supabase and Omnisend Secrets you already have are unchanged (`SUPABASE_SERVICE_ROLE_KEY` is still read as an older name for `SUPABASE_SECRET_KEY`).
 
@@ -573,9 +573,10 @@ never count). Until the treg wrapper (section 5) is in the app, these routes ans
 
 **Search Console for pages on the app's own address** (one property for every customer's page):
 1. In Google Search Console, add the URL-prefix property `https://yourlocalbusiness.replit.app/`.
-2. Choose **HTML file** verification. Put the file name Google gives you (for example
-   `google1a2b3c4d5e6f7a8b.html`) in the plain setting `GSC_APP_VERIFICATION_FILE`, redeploy, then press
-   **Verify** in Google. The app answers `https://yourlocalbusiness.replit.app/<that file>` itself.
+2. Choose **HTML file** verification. The homepage file is already served, with no sign-in and not the app shell:
+   `https://yourlocalbusiness.replit.app/google2598e017b2dc1e02.html`
+   (the body is exactly `google-site-verification: google2598e017b2dc1e02.html`). Press **Verify** in Google.
+   A different file name can still be set as `GSC_APP_VERIFICATION_FILE`; the app answers that URL too.
 3. Set `GSC_APP_PROPERTY` to `https://yourlocalbusiness.replit.app/`. Its host is also where the back button on
    Upload-Post's connect page takes customers (§3); unset, that is `https://yourlocalbusiness.replit.app`.
 4. Connect Search Console to your treg team with the **write** capability (`treg connections connect --provider
