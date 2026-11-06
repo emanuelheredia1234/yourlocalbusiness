@@ -769,6 +769,8 @@ export interface ExternalPublish {
   checkedAt: number;
   /** via 'api': sent to the account's TikTok drafts, not public yet (the owner publishes it in TikTok) */
   drafts?: boolean;
+  /** via 'api': an earlier try that failed was posted after all, so the post may be on the network twice */
+  twice?: boolean;
 }
 
 // ───────────── Paid ads ─────────────

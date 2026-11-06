@@ -160,6 +160,7 @@ function stateUi(post: Post): { label: string; tone: Tone; icon: typeof Loader2 
     case 'working':
       return { label: `Posting on ${n}…`, tone: 'primary', icon: Loader2 };
     case 'posted':
+      if (ext.via === 'api' && ext.twice) return { label: `May be on ${n} twice`, tone: 'warn', icon: CircleAlert };
       if (ext.via === 'api' && ext.drafts) return { label: 'Sent to your TikTok drafts', tone: 'warn', icon: CircleCheck };
       return { label: `Posted on ${n}`, tone: 'good', icon: CircleCheck };
     case 'failed':
@@ -177,6 +178,15 @@ export function PublishStatus({ post, compact }: { post: Post; compact?: boolean
   const ext = post.external;
   const ui = stateUi(post);
   if (!ext || !ui) return null;
+  // an earlier try that failed was posted after all: the post may be there twice, so say what to check
+  if (ext.via === 'api' && ext.state === 'posted' && ext.twice && !compact) {
+    const net = networkLabel(post.platform);
+    return (
+      <Callout tone="warn" title={ui.label}>
+        <p>An earlier try that didn’t go out was posted after all. Check {net} and delete one if it’s there twice. The app won’t send it again.</p>
+      </Callout>
+    );
+  }
   // sent to TikTok drafts: not public yet, so say what's left to do
   if (ext.via === 'api' && ext.state === 'posted' && ext.drafts && !compact)
     return (

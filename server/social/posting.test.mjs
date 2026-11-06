@@ -190,6 +190,73 @@ describe('unknown outcomes and Check again', () => {
     expect(await t.routes.posting.fromWebhook(alice.id, r.body.job.id, { state: 'failed' })).toBeNull();
   });
 
+  it('a success webhook for an old failed try after the customer posted it again: the old try reads “posted after all”, the live one says the post may now appear twice; one live job stays, and nothing is sent again', async () => {
+    const post = await t.post(alice, { platform: 'facebook', caption: 'Failed, then posted again' });
+    t.up.setUploadOutcome('platform_failed');
+    const first = await publishAndWait(alice, post);
+    expect((await jobOf(alice, first.body.job.id)).state).toBe('failed');
+    // the customer presses Try again: a new try goes out
+    const second = await publishAndWait(alice, post);
+    expect((await jobOf(alice, second.body.job.id)).state).toBe('sent');
+    const before = t.postCalls().length;
+    // Upload-Post's own retry posted the first try after all
+    const late = t.up.signed({ event: 'upload_completed', request_id: first.body.job.id, profile_username: await t.profileOf(alice), platform: 'facebook', result: { success: true, url: 'https://facebook.com/joe/posts/21', post_id: '21' } }, { ts: Math.floor(t.clock.t / 1000) });
+    expect((await t.impl.webhook(late.raw, late.headers)).status).toBe(200);
+    await t.impl.settled();
+    expect(await jobOf(alice, first.body.job.id)).toMatchObject({ state: 'sent', url: 'https://facebook.com/joe/posts/21', note: 'POSTED_AFTER_ALL', noteMessage: expect.stringMatching(/may now appear twice/) });
+    expect(await jobOf(alice, second.body.job.id)).toMatchObject({ state: 'sent', note: 'MAY_APPEAR_TWICE', noteMessage: expect.stringMatching(/may now appear twice/) });
+    // still one live job for the post on Facebook: the old row stays out of the live set, and says what happened
+    const rows = await t.db.select('post_publish_jobs', { user_id: alice.id, post_id: post.id, platform: 'facebook' });
+    expect(rows.filter((r) => ['queued', 'sending', 'sent', 'unknown'].includes(r.state)).map((r) => r.id)).toEqual([second.body.job.id]);
+    expect(rows.find((r) => r.id === first.body.job.id)).toMatchObject({ state: 'failed', error_code: 'POSTED_AFTER_ALL', url: 'https://facebook.com/joe/posts/21' });
+    // the same news again (another delivery) changes nothing; nothing was sent; a third publish is refused
+    const again = t.up.signed({ event: 'upload_completed', request_id: first.body.job.id, profile_username: await t.profileOf(alice), platform: 'facebook', result: { success: true, url: 'https://facebook.com/joe/posts/22', post_id: '22' } }, { ts: Math.floor(t.clock.t / 1000) });
+    await t.impl.webhook(again.raw, again.headers);
+    await t.impl.settled();
+    expect((await jobOf(alice, first.body.job.id)).url).toBe('https://facebook.com/joe/posts/21');
+    expect(t.postCalls().length).toBe(before);
+    expect((await t.publish(alice, post)).status).toBe(409);
+    // the app reads both in the business's job list
+    const list = await t.call(alice, 'GET', '/api/posting/jobs?projectId=proj-1');
+    expect(list.body.jobs.filter((j) => j.postId === post.id).map((j) => j.note).sort()).toEqual(['MAY_APPEAR_TWICE', 'POSTED_AFTER_ALL']);
+    // even once the new try is no longer live (say it's found to have failed), the post went out: never a third copy
+    await t.db.update('post_publish_jobs', { id: second.body.job.id }, { state: 'failed', error_code: 'REFUSED' });
+    const fourth = await t.publish(alice, post);
+    expect(fourth.status).toBe(409);
+    expect(fourth.body).toMatchObject({ code: 'ALREADY_PUBLISHING', job: { id: first.body.job.id, state: 'sent', note: 'POSTED_AFTER_ALL' } });
+    expect(t.postCalls().length).toBe(before);
+  });
+
+  it('the old try’s late success while the new try is still being sent: the new one still ends saying it may appear twice', async () => {
+    const post = await t.post(alice, { platform: 'linkedin', caption: 'Racing tries' });
+    t.up.setUploadOutcome('platform_failed');
+    const first = await publishAndWait(alice, post);
+    expect((await jobOf(alice, first.body.job.id)).state).toBe('failed');
+    let release;
+    t.up.setUploadOutcome({ waitFor: new Promise((r) => (release = r)), then: 'ok' });
+    const second = await t.publish(alice, post);
+    for (let i = 0; i < 200 && !t.postCalls().some((c) => c.idempotencyKey === second.body.job.id); i += 1) await new Promise((res) => setTimeout(res, 5));
+    const late = t.up.signed({ event: 'upload_completed', request_id: first.body.job.id, profile_username: await t.profileOf(alice), platform: 'linkedin', result: { success: true, url: 'https://linkedin.com/feed/update/1', post_id: 'li1' } }, { ts: Math.floor(t.clock.t / 1000) });
+    expect((await t.impl.webhook(late.raw, late.headers)).status).toBe(200);
+    await t.impl.settled();
+    release();
+    await t.settled();
+    expect(await jobOf(alice, first.body.job.id)).toMatchObject({ state: 'sent', note: 'POSTED_AFTER_ALL' });
+    expect(await jobOf(alice, second.body.job.id)).toMatchObject({ state: 'sent', note: 'MAY_APPEAR_TWICE' });
+  });
+
+  it('a failed try posted after all with nothing posted since simply reads “Posted” (it’s the live one now)', async () => {
+    const post = await t.post(alice, { platform: 'x', caption: 'Posted after all, alone' });
+    t.up.setUploadOutcome('platform_failed');
+    const first = await publishAndWait(alice, post);
+    const late = t.up.signed({ event: 'upload_completed', request_id: first.body.job.id, profile_username: await t.profileOf(alice), platform: 'x', result: { success: true, url: 'https://x.com/joe/status/5', post_id: '5' } }, { ts: Math.floor(t.clock.t / 1000) });
+    await t.impl.webhook(late.raw, late.headers);
+    await t.impl.settled();
+    const job = await jobOf(alice, first.body.job.id);
+    expect(job).toMatchObject({ state: 'sent', url: 'https://x.com/joe/status/5' });
+    expect(job.note).toBeUndefined();
+  });
+
   it('each business posts through its own profile, and an upload_completed through one business’s profile never finishes another business’s job', async () => {
     await t.project(alice, 'proj-2');
     await t.connect(alice, ['facebook'], { projectId: 'proj-2' });

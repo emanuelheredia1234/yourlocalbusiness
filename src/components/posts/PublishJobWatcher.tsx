@@ -1,10 +1,13 @@
 // Following the posts the app is sending through your connected accounts. While a job is sending, its post is
 // read every 3 seconds for up to 2 minutes with GET /api/posting/jobs/:id: a pure read that never contacts
 // the network and never sends again. On load, only jobs still sending are picked up again; an "unknown" job is
-// never checked by itself (only your "Check again" press does that).
+// never checked by itself (only your "Check again" press does that). On load and when another business comes on
+// screen, the business's job list (a database read) says whether an earlier try that failed was posted after all,
+// so a post may be on the network twice: that post says so, once.
 import { useEffect } from 'react';
 import type { PublishJob } from '@/lib/integrations/types';
 import { followJob } from '@/lib/posting';
+import { listJobs } from '@/lib/integrations/api';
 import { networkLabel } from '@/ai/postShared';
 import { useStore } from '@/store/useStore';
 import { useAnalytics } from '@/store/analytics';
@@ -19,7 +22,10 @@ export function announceJob(postId: string, job: PublishJob) {
   const post = useStore.getState().posts.find((p) => p.id === postId);
   if (!post) return;
   const name = networkLabel(post.platform);
-  if (job.state === 'sent' && job.note === 'SENT_TO_DRAFTS') {
+  if (job.note === 'POSTED_AFTER_ALL' || job.note === 'MAY_APPEAR_TWICE') {
+    toast({ kind: 'info', title: `This post may be on ${name} twice`, body: job.noteMessage || `An earlier try was posted after all. Check ${name} and delete one if it’s there twice.` });
+    useStore.getState().notify({ kind: 'post', title: `May be on ${name} twice`, body: post.headline, route: 'calendar' });
+  } else if (job.state === 'sent' && job.note === 'SENT_TO_DRAFTS') {
     toast({ kind: 'info', title: 'Sent to your TikTok drafts', body: job.noteMessage || 'Open TikTok to publish it.' });
     useStore.getState().notify({ kind: 'post', title: 'Sent to your TikTok drafts', body: post.headline, route: 'calendar' });
   } else if (job.state === 'sent') {
@@ -56,6 +62,29 @@ export function trackJob(postId: string, jobId: string, o: { intervalMs?: number
     .finally(() => following.delete(jobId));
 }
 
+/**
+ * One read of a business's jobs: a post whose earlier failed try was posted after all (or whose live try may
+ * therefore be there twice) takes that news and says so once. A database read only; nothing is sent.
+ */
+export async function syncPostedTwice(projectId: string): Promise<void> {
+  let jobs: PublishJob[] = [];
+  try {
+    jobs = (await listJobs(projectId)).jobs ?? [];
+  } catch {
+    return;
+  }
+  // newest first: a post's live try is applied before its older ones
+  for (const job of jobs) {
+    if (job.note !== 'POSTED_AFTER_ALL' && job.note !== 'MAY_APPEAR_TWICE') continue;
+    const before = useStore.getState().posts.find((p) => p.id === job.postId);
+    if (!before) continue;
+    const had = before.external?.via === 'api' && before.external.twice === true;
+    useStore.getState().applyPublishJob(job.postId, job);
+    const after = useStore.getState().posts.find((p) => p.id === job.postId);
+    if (!had && after?.external?.via === 'api' && after.external.twice) announceJob(job.postId, job);
+  }
+}
+
 /** Jobs the post list says are still sending (the ones to pick up again on load). */
 export const sendingJobs = (posts: ReturnType<typeof useStore.getState>['posts']) =>
   posts.filter((p) => p.external?.via === 'api' && p.external.state === 'working' && p.external.jobId).map((p) => ({ postId: p.id, jobId: p.external!.jobId! }));
@@ -66,6 +95,7 @@ export const sendingJobs = (posts: ReturnType<typeof useStore.getState>['posts']
  */
 export function PublishJobWatcher() {
   const userId = useAuth((s) => (s.phase === 'ready' ? s.user?.id : undefined));
+  const projectId = useStore((s) => s.activeProjectId);
   useEffect(() => {
     if (__ARTIFACT_BUILD__ || !userId) return;
     void useAnalytics.getState().refreshConnections();
@@ -74,5 +104,11 @@ export function PublishJobWatcher() {
     }, 2000);
     return () => clearTimeout(t);
   }, [userId]);
+  // the business on screen: news of a try posted after all (its post may be there twice)
+  useEffect(() => {
+    if (__ARTIFACT_BUILD__ || !userId || !projectId) return;
+    const t = setTimeout(() => void syncPostedTwice(projectId), 2500);
+    return () => clearTimeout(t);
+  }, [userId, projectId]);
   return null;
 }

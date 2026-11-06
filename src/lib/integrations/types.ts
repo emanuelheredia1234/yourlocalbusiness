@@ -139,9 +139,15 @@ export interface PublishJob {
   requestedAt: string;
   finishedAt?: string;
   checkedAt?: string;
-  /** sent, but not public yet: TikTok put it in the account's drafts (noteMessage says so in plain words) */
-  note?: 'SENT_TO_DRAFTS';
+  /**
+   * SENT_TO_DRAFTS: sent, but not public yet (TikTok put it in the account's drafts). POSTED_AFTER_ALL: this try had
+   * failed, then the network posted it after all. MAY_APPEAR_TWICE: an earlier try that failed was posted after
+   * all, so the post may be there twice. noteMessage says it in plain words.
+   */
+  note?: 'SENT_TO_DRAFTS' | 'POSTED_AFTER_ALL' | 'MAY_APPEAR_TWICE';
   noteMessage?: string;
+  /** a try posted after all that went to the account's TikTok drafts */
+  drafts?: boolean;
   /** false: the network can't be read back, so "Check again" can't help (mark it posted yourself) */
   checkable?: boolean;
 }

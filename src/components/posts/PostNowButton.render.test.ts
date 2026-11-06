@@ -151,6 +151,18 @@ describe('the posting button', () => {
     expect(s).toContain('It isn’t public yet.');
   });
 
+  it('posted, and an earlier failed try was posted after all: it may be there twice, with what to check, and no way to send it again', () => {
+    const p = post({ status: 'published', publishedBy: 'api', postUrl: 'https://facebook.com/p/2', external: api('posted', { url: 'https://facebook.com/p/2', twice: true }) });
+    const b = words(button(p, [connected('facebook')]));
+    expect(b).toContain('Posted');
+    expect(b).not.toMatch(/Post on Facebook|Try again/);
+    const s = words(status(p));
+    expect(s).toContain('May be on Facebook twice');
+    expect(s).toContain('Check Facebook and delete one if it’s there twice. The app won’t send it again.');
+    use([p], []);
+    expect(words(html(createElement(PublishStatus, { post: p, compact: true })))).toContain('May be on Facebook twice');
+  });
+
   it('failed (nothing went out): “Try again” opens a new confirm when connected, else Post it yourself', () => {
     expect(words(button(post({ external: api('failed') }), [connected('facebook')]))).toContain('Try again');
     expect(words(button(post({ external: api('failed') }), []))).toContain('Post it yourself');

@@ -147,6 +147,8 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
         finished = await jobs.finish(userId, row.id, { state: told.state, url: told.url, errorCode: told.errorCode, ref: told.drafts ? { outcome: 'drafts' } : undefined });
         outcome = told;
       }
+      // an earlier try of this post that had failed was posted after all while this one went: it may be there twice
+      finished = await jobs.markIfTwice(userId, finished);
     } catch (e) {
       safeLog('posting_finish_failed', { platform, code: e?.code }, log);
     } finally {
@@ -228,6 +230,9 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
 
       const live = await jobs.liveFor(userId, postId, platform);
       if (live) throw fail(409, 'ALREADY_PUBLISHING', `This post is already ${live.state === 'sent' ? 'posted' : 'being posted'} on ${NETWORK[platform]}.`, { job: jobOut(live) });
+      // an earlier try the network posted after all is out there, though its row isn't live: never a third copy
+      const late = await jobs.postedAfterAllFor(userId, postId, platform);
+      if (late) throw fail(409, 'ALREADY_PUBLISHING', `This post is already posted on ${NETWORK[platform]}.`, { job: jobOut(late) });
 
       const privacy = typeof body.privacy === 'string' ? body.privacy.slice(0, 40) : undefined;
 
@@ -291,7 +296,9 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
      * An upload_completed webhook's definite answer for one of this user's jobs (routed by the business's profile
      * name, then the request id, which is our job id). Only a job of that business (it went out through that
      * business's profile) on that platform changes: one still `sending` or `unknown`, or a `failed` one that
-     * Upload-Post then posted after all (its own retry). That one reads "Posted", so it isn't posted twice.
+     * Upload-Post then posted after all (its own retry). That one reads "Posted", so it isn't posted twice; when the
+     * customer has already posted it again, the old try records "posted after all" and the post says it may now
+     * appear twice (the one-live-post rule holds, and nothing is sent).
      */
     async fromWebhook(userId, jobId, outcome, { projectId } = {}) {
       if (!isUuid(userId) || !isUuid(jobId) || !outcome || !['sent', 'failed'].includes(outcome.state)) return null;
@@ -304,7 +311,8 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
         early.set(row.id, outcome);
         return null;
       }
-      return jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.drafts ? { outcome: 'drafts' } : undefined }, { fromFailed: true });
+      if (row.state === 'failed') return jobs.postedAfterAll(userId, row, { url: outcome.url, drafts: outcome.drafts });
+      return jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.drafts ? { outcome: 'drafts' } : undefined });
     },
 
     /** Startup: jobs a restart left `sending` become `unknown`. */

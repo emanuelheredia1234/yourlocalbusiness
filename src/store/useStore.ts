@@ -179,8 +179,11 @@ export const useStore = create<StoreState>()(
             if (p.id !== postId || job.postId !== postId) return p;
             const prev = p.external?.via === 'api' ? p.external : undefined;
             const requestedAt = Date.parse(job.requestedAt) || Date.now();
-            // an older job never overwrites a newer one
-            if (prev && prev.jobId !== job.id && prev.requestedAt > requestedAt) return p;
+            // an older job never overwrites a newer one, except an older try the network posted after all over a
+            // newer one that failed or can't be confirmed (the post is out, maybe twice)
+            const postedAfterAll = job.state === 'sent' && job.note === 'POSTED_AFTER_ALL' && (prev?.state === 'failed' || prev?.state === 'unknown');
+            if (prev && prev.jobId !== job.id && prev.requestedAt > requestedAt && !postedAfterAll) return p;
+            const twice = job.note === 'POSTED_AFTER_ALL' || job.note === 'MAY_APPEAR_TWICE' || (prev?.jobId === job.id && prev.twice === true);
             const state: NonNullable<Post['external']>['state'] = job.state === 'sent' ? 'posted' : job.state === 'failed' ? 'failed' : job.state === 'unknown' ? 'unknown' : 'working';
             const at = Date.parse(job.checkedAt ?? job.finishedAt ?? '') || Date.now();
             const external = {
@@ -197,7 +200,8 @@ export const useStore = create<StoreState>()(
               requestedAt,
               checkedAt: at,
               ...(job.url ? { url: job.url } : {}),
-              ...(job.state === 'sent' && job.note === 'SENT_TO_DRAFTS' ? { drafts: true } : {}),
+              ...(job.state === 'sent' && (job.note === 'SENT_TO_DRAFTS' || job.drafts === true) ? { drafts: true } : {}),
+              ...(twice ? { twice: true } : {}),
             };
             if (job.state === 'sent' && p.status !== 'published')
               return { ...p, status: 'published' as const, publishedBy: 'api' as const, publishedAt: job.finishedAt ?? new Date().toISOString(), postUrl: job.url ?? p.postUrl, statusBeforePosted: p.status, external, updatedAt: Date.now() };
