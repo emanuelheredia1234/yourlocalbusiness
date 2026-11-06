@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { MOCK_REPORTS } from '../test/mock-omnisend.mjs';
 import { createOmnisendRoutes, emailDataFrom, OMNISEND_SCOPES, REPORTS_QUERY } from '../omnisend.mjs';
 import { emailSource } from './sources/email.mjs';
+import { leadCounts } from './snapshots.mjs';
 import { call, fakeAuth, makeStorage, readJson, send } from './test-helpers.mjs';
 
 const USER = { id: '0b6f3a52-5d0e-4c58-9a0c-0e7c5b1d2a11', email: 'a@example.com' };
@@ -135,5 +136,49 @@ describe('email source', () => {
     expect(skipped).toMatchObject({ status: 'skipped', errorCode: 'RATE_LIMITED' });
     const cached = await emailSource({ db, userId: USER.id, projectId: 'p1', omnisend: { reports: async () => ({ status: 'ok', cached: true }) }, previous: { data: { sent: 9, openRate: 0 }, fetched_at: '2026-11-05T11:30:00Z' }, now: Date.now() });
     expect(cached).toMatchObject({ status: 'ok', data: { sent: 9, leads: 2 }, fetchedAt: '2026-11-05T11:30:00Z' });
+  });
+});
+
+describe('leads by business and source', () => {
+  const NOW = Date.parse('2026-11-06T12:00:00Z');
+  const day = 86_400_000;
+  const other = '00000000-0000-4000-8000-0000000000ff';
+  const rows = {
+    page_leads: [
+      { user_id: USER.id, project_id: 'p1', page_id: 'seo:p1', source: 'page', created_at: new Date(NOW - day).toISOString() },
+      { user_id: USER.id, project_id: 'p1', page_id: 'artifact:a1', source: 'asset', created_at: new Date(NOW - 2 * day).toISOString() },
+      { user_id: USER.id, project_id: 'p1', page_id: 'artifact:a2', source: 'asset', created_at: new Date(NOW - 3 * day).toISOString() },
+      { user_id: USER.id, project_id: 'p1', page_id: 'magnet:AAAAAAAAAAAAAAAAAAAAAA', source: 'magnet', created_at: new Date(NOW - 4 * day).toISOString() },
+      // too old, another business, another account
+      { user_id: USER.id, project_id: 'p1', page_id: 'seo:p1', source: 'page', created_at: new Date(NOW - 40 * day).toISOString() },
+      { user_id: USER.id, project_id: 'p2', page_id: 'seo:p2', source: 'page', created_at: new Date(NOW - day).toISOString() },
+      { user_id: other, project_id: 'p1', page_id: 'seo:p1', source: 'page', created_at: new Date(NOW - day).toISOString() },
+    ],
+    lead_files: [
+      { user_id: USER.id, project_id: 'p1', downloads: 7 },
+      { user_id: USER.id, project_id: 'p1', downloads: 3 },
+      { user_id: USER.id, project_id: 'p2', downloads: 100 },
+      { user_id: other, project_id: 'p1', downloads: 50 },
+    ],
+  };
+  /** db.select over the rows above, with eq and ['gte', v] filters, as server/integrations/db.mjs sends them. */
+  const db = (missingColumn = false) => ({
+    select: async (table, filters) => {
+      if (missingColumn && table === 'page_leads' && 'project_id' in filters) throw Object.assign(new Error('column'), { status: 400 });
+      if (missingColumn && table === 'lead_files') throw Object.assign(new Error('table'), { status: 503 });
+      return (rows[table] ?? []).filter((r) => Object.entries(filters).every(([k, v]) => (Array.isArray(v) ? String(r[k]) >= v[1] : String(r[k]) === String(v))));
+    },
+  });
+
+  it('counts the business’s pages, assets and lead magnet, and its downloads; never another business’s or account’s', async () => {
+    expect(await leadCounts(db(), USER.id, 'p1', NOW)).toEqual({ page: 1, asset: 2, magnet: 1 });
+    const got = await emailSource({ db: db(), userId: USER.id, projectId: 'p1', omnisend: null, now: NOW });
+    expect(got.data).toMatchObject({ leads: 4, leadsBySource: { page: 1, asset: 2, magnet: 1 }, downloads: 10 });
+  });
+
+  it('before the migration: the sales page’s leads, as before, and no downloads', async () => {
+    const got = await emailSource({ db: db(true), userId: USER.id, projectId: 'p1', omnisend: null, now: NOW });
+    // page_id seo:p1 in the last 30 days (another account's never)
+    expect(got.data).toMatchObject({ leads: 1, leadsBySource: { page: 1, asset: 0, magnet: 0 }, downloads: 0 });
   });
 });

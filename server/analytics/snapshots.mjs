@@ -46,10 +46,38 @@ export async function ownSeoPage(db, userId, projectId, origin) {
   return { slug: row.slug, domain: null, home: false, updatedAt: row.updated_at, url: `${origin}/${row.slug}`, host: 'app' };
 }
 
-/** How many leads the project's sales page has had in the last `days` days (first-party data). */
+const LEAD_SOURCES = ['page', 'asset', 'magnet'];
+/** At most this many leads are counted for a business's 30 days (more shows as this many). */
+const MAX_COUNTED = 5000;
+
+/**
+ * The business's leads in the last `days` days by where they came from (first-party data): { page, asset, magnet }.
+ * Its sales page, its published assets and its lead magnet's sign-ups, by page_leads.project_id (never another
+ * business's or another account's). Before 20261112000000_leads_p2.sql there's no project_id: the sales page's, as before.
+ */
+export async function leadCounts(db, userId, projectId, now, days = 30) {
+  const since = iso(now - days * 86_400_000);
+  let rows;
+  try {
+    rows = await db.select('page_leads', { user_id: userId, project_id: projectId, created_at: ['gte', since] }, { select: 'source', limit: MAX_COUNTED });
+  } catch {
+    rows = (await db.select('page_leads', { user_id: userId, page_id: seoPageIdFor(projectId), created_at: ['gte', since] }, { select: 'id', limit: MAX_COUNTED })).map(() => ({ source: 'page' }));
+  }
+  const by = { page: 0, asset: 0, magnet: 0 };
+  for (const r of Array.isArray(rows) ? rows : []) by[LEAD_SOURCES.includes(r?.source) ? r.source : 'page']++;
+  return by;
+}
+
+/** How many leads the business had in the last `days` days, from every source (leadCounts). */
 export async function leadCount(db, userId, projectId, now, days = 30) {
-  const rows = await db.select('page_leads', { user_id: userId, page_id: seoPageIdFor(projectId), created_at: ['gte', iso(now - days * 86_400_000)] }, { select: 'id', limit: 1000 });
-  return rows.length;
+  const by = await leadCounts(db, userId, projectId, now, days);
+  return by.page + by.asset + by.magnet;
+}
+
+/** How many times the business's lead magnets were downloaded, in all (lead_files.downloads). 0 before the migration. */
+export async function downloadCount(db, userId, projectId) {
+  const rows = await db.select('lead_files', { user_id: userId, project_id: projectId }, { select: 'downloads', limit: 100 });
+  return (Array.isArray(rows) ? rows : []).reduce((n, r) => n + (Number.isFinite(Number(r?.downloads)) ? Number(r.downloads) : 0), 0);
 }
 
 // ───────────── settings ─────────────
