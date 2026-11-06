@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { CalendarClock, Check, CheckCheck, Pencil, Send, Trash2, TriangleAlert, Undo2, Users } from 'lucide-react';
+import { CalendarClock, Check, CheckCheck, Hand, Pencil, Send, Trash2, TriangleAlert, Undo2, Users } from 'lucide-react';
 import type { Brand, Post, PostPlatform, PostType, StyleId } from '@/lib/types';
 import { cn, fmtDateTime, fmtRelative } from '@/lib/utils';
 import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, POST_TYPE_MAP, STYLE_LABEL, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
@@ -17,15 +17,20 @@ import { LogoMark } from '../brand/Logo';
 import { ManusLink, PostImagePanel } from '../images/PostImagePanel';
 import { VideoPanel } from '../images/VideoPanel';
 import { useImageJob } from '../images/useImageJob';
-import { ExternalBadge, ManusPostButton, useCanOfferManus, useManusPost } from './ManusPost';
+import { useCanOfferManus } from './manusShared';
+import { PostNowButton, PublishStatus } from './PostNowButton';
 import { GroupShareBadge, useManusGroups } from './ManusGroups';
-import { DueBadge, PostedBy, addToCalendarFlow, isDue, manusHolds, postMenuEntries, useMarkPosted } from './PostActions';
+import { DueBadge, PostedBy, addToCalendarFlow, isDue, postHeld, postMenuEntries, useMarkPosted } from './PostActions';
 import { postVideoPrompt } from '@/ai/image';
 import { makePostImage, rewriteInput, rewritePatch } from '@/ai/socialPosts';
 import { brandHandle } from '@/lib/brandMark';
 import { isOwnPhoto } from '@/lib/media';
 import { firstCommentOf, networkMovePatch, xLength } from '@/lib/pageLink';
-import { networkLabel, postText } from '@/ai/manusPost';
+import { networkLabel, postText } from '@/ai/postShared';
+import { canPostFrom, legacyManus } from '@/lib/posting';
+import { useConnections } from '@/store/analytics';
+import { usePublishConfirm } from './PublishConfirm';
+import { usePostItYourself } from './PostItYourselfModal';
 import { LinkFields, PostLinkNote } from './PostLinkNote';
 
 export function PostTypeTag({ type, className }: { type: PostType; className?: string }) {
@@ -94,10 +99,10 @@ export function PostFields({ post, onChange }: EditableProps) {
           <AutoTextarea id={`v-${post.id}`} value={post.visualPrompt} onChange={(v) => onChange({ visualPrompt: v })} minRows={2} />
         </Field>
       )}
-      {manusHolds(post) && (
+      {postHeld(post) && (
         <p className="flex items-start gap-1.5 text-small text-warn">
           <TriangleAlert size={14} className="mt-[3px] shrink-0" aria-hidden="true" />
-          Manus already has this post: changing the date or time here doesn’t change it on {PLATFORMS[post.platform].label}.
+          {post.external?.via === 'manus' ? 'This post was sent with Manus earlier' : 'The app is posting this, or may already have'}: changing the date or time here doesn’t change it on {PLATFORMS[post.platform].label}.
         </p>
       )}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -156,7 +161,7 @@ export function PostFields({ post, onChange }: EditableProps) {
   );
 }
 
-/** Whether "Post to groups" applies (a Facebook post, Manus reachable, no group share running). */
+/** Whether "Post to groups" applies (a Facebook post, Manus reachable, no group share running). Groups are all Manus does now. */
 function groupsOpen(post: Post, offer: boolean): boolean {
   return offer && post.platform === 'facebook' && !(post.groupShare && (post.groupShare.state === 'working' || post.groupShare.state === 'needs_input'));
 }
@@ -166,7 +171,9 @@ function PostState({ post, now }: { post: Post; now: number }) {
   if (isDue(post, now) && (!post.external || post.external.state === 'failed' || post.external.state === 'scheduled')) return <DueBadge post={post} now={now} />;
   if (post.status === 'published') return <StatusDot tone="good">Posted</StatusDot>;
   if (post.status === 'draft') return <StatusDot tone="faint">Draft</StatusDot>;
-  return <StatusDot tone="primary">{manusHolds(post) ? 'With Manus' : 'Planned'}</StatusDot>;
+  if (post.external?.via === 'api' && post.external.state === 'working') return <StatusDot tone="primary" pulse>Posting…</StatusDot>;
+  if (post.external?.via === 'api' && post.external.state === 'unknown') return <StatusDot tone="warn">Check it</StatusDot>;
+  return <StatusDot tone="primary">{post.external?.via === 'manus' && post.external.state !== 'failed' ? 'Sent earlier' : 'Planned'}</StatusDot>;
 }
 
 /**
@@ -178,6 +185,8 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
   const [editing, setEditing] = useState(false);
   const update = useStore((s) => s.updatePost);
   const offer = useCanOfferManus();
+  const { byPlatform } = useConnections();
+  const canPost = !__ARTIFACT_BUILD__ && canPostFrom(byPlatform[post.platform]);
   const now = useNow(60_000);
   const ai = useAI(postTask);
   const points = useMemo(() => pointsFromCaption(post.caption), [post.caption]);
@@ -200,8 +209,6 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
     const r = await ai.run(input);
     if (r) update(post.id, rewritePatch(project, post, r, input.link ?? null));
   };
-  const held = manusHolds(post);
-  const canSend = offer && post.status !== 'published' && !held;
   const handle = previewHandle(brand, post.platform);
   const when = post.status === 'published' && post.publishedAt ? post.publishedAt : post.scheduledAt;
   const writing: MenuEntry[] =
@@ -214,7 +221,9 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
         ];
   const menu: MenuEntry[] = [
     ...writing,
-    ...(post.status === 'draft' && canSend ? [{ label: `Post on ${networkLabel(post.platform)} now`, icon: <Send />, onSelect: () => useManusPost.getState().open(post.id) }] : []),
+    ...(post.status === 'draft' && !postHeld(post)
+      ? [canPost && !legacyManus(post) ? { label: `Post on ${networkLabel(post.platform)} now`, icon: <Send />, onSelect: () => usePublishConfirm.getState().open(post.id) } : { label: 'Post it yourself…', icon: <Hand />, onSelect: () => usePostItYourself.getState().open(post.id) }]
+      : []),
     ...(groupsOpen(post, offer) ? [{ label: 'Post to groups', icon: <Users />, onSelect: () => useManusGroups.getState().open(post.id) }] : []),
     ...postMenuEntries(post),
   ];
@@ -223,12 +232,8 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
     <button type="button" className="btn btn-secondary btn-sm" onClick={() => addToCalendarFlow([post.id])}>
       <CalendarClock /> Add to calendar
     </button>
-  ) : post.status === 'scheduled' && canSend ? (
-    <ManusPostButton post={post} />
-  ) : post.status === 'scheduled' && !held ? (
-    <button type="button" className="btn btn-secondary btn-sm" onClick={() => useMarkPosted.getState().open(post.id)}>
-      <CheckCheck /> Mark as posted
-    </button>
+  ) : post.status === 'scheduled' ? (
+    <PostNowButton post={post} />
   ) : null;
   return (
     <PostFrame
@@ -308,7 +313,7 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
           </Callout>
         )}
         <PostedBy post={post} />
-        <ExternalBadge post={post} />
+        <PublishStatus post={post} />
         <GroupShareBadge post={post} />
       </div>
     </PostFrame>
@@ -415,8 +420,8 @@ export function PostEditorHost() {
   const offer = useCanOfferManus();
   const phone = useMediaQuery('(max-width: 639px)');
   if (!id || !post || !project) return null;
-  const held = manusHolds(post);
-  const canSend = offer && post.status !== 'published' && !held;
+  // an older post sent with Manus: its posting button is already "Mark as posted"
+  const legacy = post.external?.via === 'manus' && post.external.state !== 'failed';
   const remove = async () => {
     const extra = post.status === 'published' ? ' It stays on the network: this only removes it from the app.' : '';
     if (await confirmAction({ title: 'Delete this post?', body: `This can’t be undone.${extra}`, confirmLabel: 'Delete', danger: true })) {
@@ -440,17 +445,14 @@ export function PostEditorHost() {
       toast({ kind: 'info', title: 'Back on your calendar', body: 'It’s marked as not posted.' });
     },
   };
-  // the state's actions, as today: Manus posts it (the one filled button), or you do
-  let main: FooterAction | null = null;
+  // the state's actions: the posting button (the one filled button when the app can post it), and yours
   let second: FooterAction | null = null;
   const extra: MenuEntry[] = [];
   if (post.status === 'draft') {
-    if (canSend) second = addToCalendar;
-    else main = addToCalendar;
+    second = addToCalendar;
     extra.push({ label: 'Mark as posted…', icon: <CheckCheck />, onSelect: markPosted.run });
   } else if (post.status === 'scheduled') {
-    if (canSend) second = markPosted;
-    else main = markPosted;
+    if (!legacy) second = markPosted;
     extra.push({ label: 'Move to drafts', icon: <Undo2 />, onSelect: () => update(post.id, { status: 'draft' }) });
   } else if (post.publishedBy === 'manual') second = unmark;
   if (groupsOpen(post, offer)) extra.push({ label: 'Post to groups', icon: <Users />, onSelect: () => useManusGroups.getState().open(post.id) });
@@ -460,7 +462,7 @@ export function PostEditorHost() {
       {a.icon} {a.label}
     </button>
   );
-  const filled = canSend ? <ManusPostButton post={post} primary /> : main ? button(main, true) : null;
+  const filled = post.status === 'published' && post.publishedBy !== 'api' ? null : <PostNowButton post={post} primary />;
   const footer = phone ? (
     <div className="flex w-full items-center gap-2">
       <MoreMenu items={[...(filled && second ? [asEntry(second)] : []), ...extra, 'separator', { label: 'Delete', icon: <Trash2 />, danger: true, onSelect: () => void remove() }]} />
@@ -488,8 +490,8 @@ export function PostEditorHost() {
           )}
           {post.status === 'published' && <p className="mb-4 text-small text-muted">It’s already out: editing it here doesn’t change the post on {PLATFORMS[post.platform].label.replace(' (Twitter)', '')}.</p>}
           {post.external && (
-            <div className="mb-4">
-              <ExternalBadge post={post} />
+            <div className="mb-4 empty:hidden">
+              <PublishStatus post={post} />
             </div>
           )}
           {post.groupShare && (

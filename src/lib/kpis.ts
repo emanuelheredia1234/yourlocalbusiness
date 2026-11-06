@@ -10,10 +10,10 @@ export interface Kpis {
   prev: DayPoint[];
   /** start of the first day counted (local midnight): every count uses this same boundary */
   since: number;
-  /** went out in the period (Manus reported it, or you marked it) */
+  /** went out in the period (the app posted it, or you marked it) */
   posted: number;
-  /** of those, posted by Manus */
-  byManus: number;
+  /** of those, posted from the app (older posts: by Manus) */
+  byApp: number;
   /** on your calendar from now on */
   upcoming: number;
   /** on your calendar, time passed, not posted */
@@ -39,7 +39,7 @@ export function computeKpis(input: { projectId: string | undefined; posts: Post[
     prev,
     since,
     posted,
-    byManus: sumSeries(series, 'byManus'),
+    byApp: sumSeries(series, 'byApp'),
     upcoming: mine.filter((p) => p.status === 'scheduled' && new Date(p.scheduledAt).getTime() > now).length,
     due: mine.filter((p) => p.status === 'scheduled' && new Date(p.scheduledAt).getTime() <= now && (!p.external || p.external.state === 'failed')).length,
     made,

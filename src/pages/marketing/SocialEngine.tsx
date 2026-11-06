@@ -12,6 +12,7 @@ import { QuickComposer } from '@/pages/dashboard/QuickComposer';
 import { CampaignSetup } from './social/CampaignSetup';
 import { PlanView } from './social/PlanView';
 import { BatchView } from './social/BatchView';
+import { SocialAnalytics } from './social/SocialAnalytics';
 
 type Tab = SocialTab;
 
@@ -26,7 +27,7 @@ export default function SocialEngine() {
   const [tab, setTab] = useState<Tab>(() => requested ?? (!plan ? 'setup' : 'batch'));
   useEffect(() => {
     if (!requested) return;
-    setTab(requested);
+    setTab(__ARTIFACT_BUILD__ && requested === 'analytics' ? 'batch' : requested);
     useUI.getState().setSocialTab(null);
   }, [requested]);
   // Once opened, the 7-day batch and the composer stay mounted while you switch tabs, so what they're
@@ -73,6 +74,7 @@ export default function SocialEngine() {
           { id: 'plan', label: label('plan'), count: plan?.summary.total },
           { id: 'batch', label: label('batch'), count: batchPosts.filter((p) => p.status !== 'published').length || undefined },
           { id: 'create', label: label('create') },
+          ...(__ARTIFACT_BUILD__ ? [] : [{ id: 'analytics' as const, label: label('analytics') }]),
         ]}
       />
       {/* the plan's progress and Stop show on every tab while it runs: it can be started from the setup, the plan or the 7-day batch */}
@@ -118,6 +120,7 @@ export default function SocialEngine() {
           <BatchView project={project} posts={batchPosts} covered={covered} planAction={plan ? undefined : planButton()} />
         </div>
       )}
+      {!__ARTIFACT_BUILD__ && tab === 'analytics' && <SocialAnalytics project={project} />}
       {shown.has('create') && (
         <section hidden={tab !== 'create'} aria-label="Create individual post">
           <QuickComposer key={`${project.id}:${preset?.n ?? 0}`} initialTopic={preset?.topic} />

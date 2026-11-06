@@ -292,7 +292,7 @@ export function ArtifactAI() {
     <div className="flex max-w-[880px] flex-col gap-6">
       <Callout tone="info" title="AI in claude.ai">
         <span className="inline-flex flex-wrap items-center gap-x-1">
-          Claude writes everything through your claude.ai account; photos and videos come through your Zapier connector, and Manus posts for you.
+          Claude writes everything through your claude.ai account; photos and videos come through your Zapier connector, and Manus posts in Facebook groups for you.
           <InfoTip title="Your own keys" label="About AI keys">
             Photos come from Meta Muse Image and videos from HeyGen, both through OpenRouter in your Zapier connector. To use your own API keys (OpenRouter, Google, xAI, Anthropic, Meta, Manus and OpenAI), with what each key powers and its effort, run the self-hosted app and open Settings › AI keys there.
           </InfoTip>

@@ -15,6 +15,11 @@ import { PostFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
 import { PostVisual, orderStyles } from '@/components/visuals/PostVisual';
 import { LogoMark } from '@/components/brand/Logo';
+import { useTabRequest } from '@/store/ui';
+import { tabLabel, tabsOf } from '@/lib/pageTabs';
+import { AdsAnalytics } from './ads/AdsAnalytics';
+
+type PageTab = 'plan' | 'analytics';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const dateStr = (ms: number) => {
@@ -29,17 +34,21 @@ export default function AdsEngine() {
   const campaigns = useMemo(() => ads.filter((a) => a.projectId === project.id).sort((a, b) => b.createdAt - a.createdAt), [ads, project.id]);
   const [activeId, setActiveId] = useState<string | null>(campaigns[0]?.id ?? null);
   const active = campaigns.find((c) => c.id === activeId) ?? campaigns[0] ?? null;
+  // Campaigns (the plans) and Analytics (results and competitors; the full app only)
+  const [pageTab, setPageTab] = useState<PageTab>('plan');
+  useTabRequest<PageTab>('marketing-ads', (tabsOf('marketing-ads') as PageTab[]).filter((t) => !__ARTIFACT_BUILD__ || t !== 'analytics'), setPageTab);
 
   const create = () => {
     const c = newAdCampaign(project);
     upsertAd(c);
     setActiveId(c.id);
+    setPageTab('plan');
   };
 
   return (
     <div>
       <PageHeader
-        className={campaigns.length > 1 ? 'mb-4' : 'max-sm:mb-4'}
+        className={campaigns.length > 1 || !__ARTIFACT_BUILD__ ? 'mb-4' : 'max-sm:mb-4'}
         title="Ads"
         description="Plan a campaign here, then run it in each platform’s ads manager."
         actions={
@@ -48,25 +57,42 @@ export default function AdsEngine() {
           </button>
         }
       />
-      {campaigns.length > 1 && active && (
-        // the tab row keeps its name for screen readers ("Campaigns")
-        <div role="group" aria-label="Campaigns" className="mb-5">
-          <Tabs size="sm" value={active.id} onChange={setActiveId} tabs={campaigns.map((c) => ({ id: c.id, label: c.name || 'Untitled campaign' }))} />
-        </div>
-      )}
-      {!active ? (
-        <Empty
-          variant="ai"
-          title="Plan a local ad campaign"
-          body="A budget, an audience and three ad versions to test."
-          action={
-            <GenerateButton variant="ai" size="lg" onClick={create}>
-              Plan my campaign
-            </GenerateButton>
-          }
+      {!__ARTIFACT_BUILD__ && (
+        <Tabs<PageTab>
+          className="mb-5"
+          value={pageTab}
+          onChange={setPageTab}
+          tabs={[
+            { id: 'plan', label: tabLabel('marketing-ads', 'plan'), count: campaigns.length || undefined },
+            { id: 'analytics', label: tabLabel('marketing-ads', 'analytics') },
+          ]}
         />
+      )}
+      {!__ARTIFACT_BUILD__ && pageTab === 'analytics' ? (
+        <AdsAnalytics project={project} />
       ) : (
-        <CampaignEditor key={active.id} project={project} c={active} onDeleted={() => setActiveId(null)} />
+        <>
+          {campaigns.length > 1 && active && (
+            // the tab row keeps its name for screen readers ("Campaigns")
+            <div role="group" aria-label="Campaigns" className="mb-5">
+              <Tabs size="sm" value={active.id} onChange={setActiveId} tabs={campaigns.map((c) => ({ id: c.id, label: c.name || 'Untitled campaign' }))} />
+            </div>
+          )}
+          {!active ? (
+            <Empty
+              variant="ai"
+              title="Plan a local ad campaign"
+              body="A budget, an audience and three ad versions to test."
+              action={
+                <GenerateButton variant="ai" size="lg" onClick={create}>
+                  Plan my campaign
+                </GenerateButton>
+              }
+            />
+          ) : (
+            <CampaignEditor key={active.id} project={project} c={active} onDeleted={() => setActiveId(null)} />
+          )}
+        </>
       )}
     </div>
   );

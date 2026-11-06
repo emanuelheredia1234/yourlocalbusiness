@@ -7,7 +7,7 @@ import type { GroupResult, GroupShare, Post } from '@/lib/types';
 import { cn, fmtRelative } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { manusViaServer } from '@/ai/manus';
-import { postBlocker, suggestedAccount } from '@/ai/manusPost';
+import { postBlocker, suggestedAccount } from '@/ai/postShared';
 import { MAX_GROUPS, carriedResults, groupKey, groupLinkError, groupPostText, groupRecord, groupSummary, groupsAlreadyOut, groupsToRetry, parseGroups, rememberedGroups, startGroupShare } from '@/ai/manusGroups';
 import { knownLinks, linkText, pageLink, postPlacement } from '@/lib/pageLink';
 import { beginBusy, endBusy } from '@/lib/busy';
@@ -16,7 +16,7 @@ import { toast, useUI } from '@/store/ui';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, AutoTextarea, Callout, Field, Modal, Spinner } from '../ui/primitives';
 import { MediaThumb } from '../media/MediaUpload';
 import { PlatformChip } from './PlatformIcon';
-import { TONE_BADGE, TONE_BLOCK, errorCopy, manusSetupHint, useCanOfferManus, useManusReady, type Tone } from './ManusPost';
+import { TONE_BADGE, TONE_BLOCK, errorCopy, manusSetupHint, useCanOfferManus, useManusReady, type Tone } from './manusShared';
 import { refreshGroupsFromManus } from '@/ai/manusStatus';
 
 export const useManusGroups = create<{ id: string | null; open: (id: string) => void; close: () => void }>((set) => ({

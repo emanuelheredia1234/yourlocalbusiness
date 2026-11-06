@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, Compass, LogOut, Megaphone, Package, PencilRuler
 import type { Origin, Project, Track } from '@/lib/types';
 import { cn, fmtMoney, stripProtocol } from '@/lib/utils';
 import { navigate } from '@/lib/router';
+import { deleteProjectEverywhere } from '@/lib/projectActions';
 import { FORMATS, matchBusinessType } from '@/ai/knowledge';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { AppMark } from '@/components/layout/Shell';
@@ -97,7 +98,6 @@ export function Onboarding() {
   const create = useStore((s) => s.createProject);
   const update = useStore((s) => s.updateProject);
   const setActive = useStore((s) => s.setActiveProject);
-  const del = useStore((s) => s.deleteProject);
   const signedIn = useAuth((s) => s.phase === 'ready');
 
   useEffect(() => {
@@ -191,7 +191,8 @@ export function Onboarding() {
               type="button"
               className="btn btn-ghost btn-sm"
               onClick={() => {
-                del(project.id);
+                // a business set up halfway may already have connected social accounts: they go with it
+                deleteProjectEverywhere(project.id);
                 setActive(others[0].id);
                 navigate('dashboard');
               }}

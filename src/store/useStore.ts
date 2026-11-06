@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import type { PublishJob } from '@/lib/integrations/types';
 import type {
   AdCampaign,
   AppSettings,
@@ -45,12 +46,18 @@ export interface StoreState {
   addPosts: (posts: Post[]) => void;
   updatePost: (id: string, patch: Partial<Post>) => void;
   deletePosts: (ids: string[]) => void;
-  /** put drafts on your calendar (nothing posts by itself: Manus posts them, or you do) */
+  /** put drafts on your calendar (nothing posts by itself: you post them from the app, or yourself) */
   schedulePosts: (ids: string[]) => void;
   /** you posted it yourself: mark it published, with its link if you have one */
   markPosted: (id: string, o?: { url?: string; at?: string }) => void;
   /** undo a mark you made by hand */
   unmarkPosted: (id: string) => void;
+  /**
+   * What the server says about a post the app sent through your connected account (PostNowButton and the
+   * job watcher call only this): sending, posted (published by the app, with its link), failed, or unknown
+   * (it may have gone out: check before doing anything else). It never sends anything.
+   */
+  applyPublishJob: (postId: string, job: PublishJob) => void;
 
   // ads
   upsertAd: (c: AdCampaign) => void;
@@ -165,6 +172,44 @@ export const useStore = create<StoreState>()(
           posts: s.posts.map((p) =>
             p.id === id && p.publishedBy === 'manual' ? { ...p, status: p.statusBeforePosted ?? 'scheduled', statusBeforePosted: undefined, publishedBy: undefined, publishedAt: undefined, postUrl: undefined, updatedAt: Date.now() } : p,
           ),
+        })),
+      applyPublishJob: (postId, job) =>
+        set((s) => ({
+          posts: s.posts.map((p) => {
+            if (p.id !== postId || job.postId !== postId) return p;
+            const prev = p.external?.via === 'api' ? p.external : undefined;
+            const requestedAt = Date.parse(job.requestedAt) || Date.now();
+            // an older job never overwrites a newer one, except an older try the network posted after all over a
+            // newer one that failed or can't be confirmed (the post is out, maybe twice)
+            // (or a plain `sent` over a newer try that failed: the post went out once)
+            const postedAfterAll = job.state === 'sent' && ((job.note === 'POSTED_AFTER_ALL' && (prev?.state === 'failed' || prev?.state === 'unknown')) || prev?.state === 'failed');
+            if (prev && prev.jobId !== job.id && prev.requestedAt > requestedAt && !postedAfterAll) return p;
+            // a try that failed is never there twice
+            const twice = job.state !== 'failed' && (job.note === 'POSTED_AFTER_ALL' || job.note === 'MAY_APPEAR_TWICE' || (prev?.jobId === job.id && prev.twice === true));
+            const state: NonNullable<Post['external']>['state'] = job.state === 'sent' ? 'posted' : job.state === 'failed' ? 'failed' : job.state === 'unknown' ? 'unknown' : 'working';
+            const at = Date.parse(job.checkedAt ?? job.finishedAt ?? '') || Date.now();
+            const external = {
+              via: 'api' as const,
+              jobId: job.id,
+              network: p.platform,
+              taskId: job.id,
+              taskUrl: '',
+              mode: 'now' as const,
+              state,
+              message: job.state === 'failed' || job.state === 'unknown' ? (job.errorMessage ?? '').slice(0, 300) : '',
+              page: prev?.jobId === job.id ? prev.page : '',
+              scheduledFor: job.requestedAt,
+              requestedAt,
+              checkedAt: at,
+              ...(job.url ? { url: job.url } : {}),
+              ...(job.state === 'sent' && (job.note === 'SENT_TO_DRAFTS' || job.drafts === true) ? { drafts: true } : {}),
+              ...(twice ? { twice: true } : {}),
+            };
+            if (job.state === 'sent' && p.status !== 'published')
+              return { ...p, status: 'published' as const, publishedBy: 'api' as const, publishedAt: job.finishedAt ?? new Date().toISOString(), postUrl: job.url ?? p.postUrl, statusBeforePosted: p.status, external, updatedAt: Date.now() };
+            if (job.state === 'sent') return { ...p, postUrl: p.postUrl ?? job.url, external, updatedAt: Date.now() };
+            return { ...p, external, updatedAt: Date.now() };
+          }),
         })),
 
       upsertAd: (c) => set((s) => ({ ads: s.ads.some((a) => a.id === c.id) ? s.ads.map((a) => (a.id === c.id ? c : a)) : [...s.ads, c] })),

@@ -574,7 +574,7 @@ describe('analytics', () => {
       result: {
         days: 30,
         posted: 2,
-        byManus: 1,
+        byApp: 1,
         markedByOwner: 1,
         plannedAhead: 1,
         due: 1,
@@ -695,6 +695,20 @@ describe('projects', () => {
     expect(st.myListings).toEqual([]);
     expect(pushMyListings).toHaveBeenCalled();
     expect(lastActivity()?.text).toBe('Deleted the project “Tax Tracker”');
+  });
+
+  it('delete_project on a business with social accounts says they’re disconnected too (its business slot is freed)', async () => {
+    const { useAnalytics } = await import('@/store/analytics');
+    const other: Project = { ...newProject('business', 'new'), id: 'p3', onboarded: true };
+    other.brand.name = 'Joe’s Catering';
+    useStore.setState({ projects: [...useStore.getState().projects, other] });
+    useAnalytics.setState({ slots: { used: 1, cap: 3, projects: ['p3'] } });
+    try {
+      expect(await runTool('delete_project', { id: 'p3' })).toMatchObject({ ok: false, status: 'declined' });
+      expect(host.calls.dangers[0].body).toBe('“Joe’s Catering” will be deleted. Its posts, campaigns and Marketplace listing are removed too. Its connected social accounts are disconnected too, which frees one of your business slots. This can’t be undone.');
+    } finally {
+      useAnalytics.setState({ slots: undefined });
+    }
   });
 
   it('export_backup gives a download button; the file is the workspace backup, saved on the owner’s click', async () => {

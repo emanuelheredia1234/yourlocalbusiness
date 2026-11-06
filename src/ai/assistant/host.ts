@@ -3,7 +3,11 @@
 
 import type { Route } from '@/lib/router';
 import { confirmAction } from '@/components/ui/primitives';
-import { useManusPost } from '@/components/posts/ManusPost';
+import { usePublishConfirm } from '@/components/posts/PublishConfirm';
+import { usePostItYourself } from '@/components/posts/PostItYourselfModal';
+import { canPostFrom, legacyManus } from '@/lib/posting';
+import { useAnalytics } from '@/store/analytics';
+import { useStore } from '@/store/useStore';
 import { useManusGroups } from '@/components/posts/ManusGroups';
 import { useMarkPosted } from '@/components/posts/PostActions';
 import { openListingWindow } from '@/components/studio/ListingWindowHost';
@@ -34,9 +38,15 @@ export const host: AssistantHost = {
   confirmDanger: (spec) => confirmAction({ title: spec.title, body: spec.body, confirmLabel: spec.confirmLabel ?? 'Delete', cancelLabel: 'Keep it', danger: true }),
   openWindow: async (w) => {
     switch (w.kind) {
-      case 'manus-post':
-        useManusPost.getState().open(w.postIds);
+      case 'post-now': {
+        // the confirm window when the app can post on that account, else "Post it yourself": the owner confirms either way
+        const post = useStore.getState().posts.find((p) => p.id === w.postId);
+        if (!post) return false;
+        const status = useAnalytics.getState().connections.find((c) => c.platform === post.platform);
+        if (!__ARTIFACT_BUILD__ && canPostFrom(status) && !legacyManus(post)) usePublishConfirm.getState().open(post.id);
+        else usePostItYourself.getState().open(post.id);
         return true;
+      }
       case 'manus-groups':
         useManusGroups.getState().open(w.postId);
         return true;

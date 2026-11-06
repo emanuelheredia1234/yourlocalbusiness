@@ -54,9 +54,9 @@ vi.mock('./tools', async (importOriginal) => {
     defineTool({
       name: 'post_it',
       class: 'Pub',
-      summary: 'Post a post with Manus.',
+      summary: 'Open a post’s posting window.',
       args: { id: arg.string() },
-      window: ({ id }) => ({ kind: 'manus-post', postIds: [id] }),
+      window: ({ id }) => ({ kind: 'post-now', postId: id }),
     }),
     defineTool({
       name: 'build_with',
@@ -306,9 +306,9 @@ describe('the policy, whatever the model says', () => {
   it('Pub: only opens the app’s window; nothing is posted until the owner confirms there', async () => {
     script({ actions: [{ tool: 'post_it', args: { id: 'post_due' } }] }, { reply: 'The window is open: confirm there.' });
     await sendToAssistant('post it now');
-    expect(openWindow).toHaveBeenCalledWith({ kind: 'manus-post', postIds: ['post_due'] });
-    expect(activities()[0]).toMatchObject({ status: 'opened', text: expect.stringMatching(/^Opened “Post with Manus” for the post: .*confirm there$/) });
-    expect(prompts[1]).toContain('"status":"opened","result":{"opened":"manus-post","waiting":"for the owner to confirm in that window: nothing is posted or published until they do"}');
+    expect(openWindow).toHaveBeenCalledWith({ kind: 'post-now', postId: 'post_due' });
+    expect(activities()[0]).toMatchObject({ status: 'opened', text: expect.stringMatching(/^Opened the post’s posting window: .*confirm there/) });
+    expect(prompts[1]).toContain('"status":"opened","result":{"opened":"post-now","waiting":"for the owner to confirm in that window: nothing is posted or published until they do"}');
     expect(useStore.getState().posts.find((p) => p.id === 'post_due')?.external).toBeUndefined();
   });
 

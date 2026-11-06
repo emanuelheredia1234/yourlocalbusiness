@@ -16,14 +16,54 @@ const SECRET = 'sb_secret_mock_456';
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 /** Primary keys per table: rows with the same values are one row (upserts replace them). */
-const PRIMARY_KEYS = { user_docs: ['user_id', 'kind', 'id'], user_secrets: ['user_id', 'provider'], app_state: ['key'], market_listings: ['user_id', 'id'], ai_usage_daily: ['user_id', 'day'], published_pages: ['slug'], published_domains: ['domain'], page_leads: ['id'] };
+const PRIMARY_KEYS = {
+  user_docs: ['user_id', 'kind', 'id'],
+  user_secrets: ['user_id', 'provider'],
+  app_state: ['key'],
+  market_listings: ['user_id', 'id'],
+  ai_usage_daily: ['user_id', 'day'],
+  published_pages: ['slug'],
+  published_domains: ['domain'],
+  page_leads: ['id'],
+  // supabase/migrations/20261105000000_integrations.sql
+  billing_customers: ['customer_tag'],
+  billing_caps: ['customer_tag'],
+  usage_ledger: ['id'],
+  analytics_settings: ['user_id', 'project_id'],
+  analytics_snapshots: ['user_id', 'project_id', 'source'],
+  analytics_runs: ['id'],
+  post_publish_jobs: ['id'],
+  analytics_history: ['id'],
+  webhook_deliveries: ['body_hash'],
+  seo_google_steps: ['user_id', 'page_id', 'step'],
+};
+/** the integration tables (all server-only) */
+const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps'];
+/** `generated always as identity` columns: the mock numbers them 1, 2, 3… per table */
+const IDENTITY = { usage_ledger: 'id', analytics_history: 'id' };
+/**
+ * Other unique keys Postgres enforces besides the primary key: [columns, only rows where…]. A write that would
+ * give two rows the same values is refused with 23505, as PostgREST answers (409).
+ */
+const UNIQUE = {
+  billing_customers: [{ name: 'billing_customers_user_id_key', cols: ['user_id'] }],
+  post_publish_jobs: [
+    { name: 'post_publish_jobs_user_id_client_request_id_key', cols: ['user_id', 'client_request_id'] },
+    { name: 'post_publish_jobs_one_live', cols: ['user_id', 'post_id', 'platform'], where: (r) => ['queued', 'sending', 'sent', 'unknown'].includes(r.state) },
+  ],
+  analytics_runs: [{ name: 'analytics_runs_one_running', cols: ['user_id', 'project_id'], where: (r) => r.state === 'running' }],
+};
+/** tables with a user_id column that isn't a foreign key: deleting the user leaves their rows */
+const NO_USER_FK = new Set(['usage_ledger']);
+/** the claim_analytics_run slot: no second run for a business within this long of the last one's start */
+const RUN_SLOT_MS = 15 * 60_000;
 /** tables every signed-in person may read (writes stay owner-only), like the market_listings policies */
 const PUBLIC_READ = new Set(['market_listings']);
 /** tables with row-level security and no policies: only the secret key reaches them */
-const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'published_pages', 'published_domains', 'page_leads']);
+const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'published_pages', 'published_domains', 'page_leads', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps']);
 /** the user_secrets.provider check constraint (supabase/migrations/20261103030000_ai_usage_daily.sql) */
 const SECRET_PROVIDERS = new Set(['openai', 'anthropic', 'google', 'xai', 'openrouter', 'meta', 'manus']);
 
@@ -165,6 +205,17 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     return out;
   }
 
+  /** A unique key besides the primary key (UNIQUE) that `row` would share with one of `others`, as Postgres refuses it. */
+  function uniqueRefusal(table, row, others) {
+    for (const u of UNIQUE[table] ?? []) {
+      if (u.where && !u.where(row)) continue;
+      const clash = others.find((r) => (!u.where || u.where(r)) && u.cols.every((c) => r[c] != null && String(r[c]) === String(row[c])));
+      if (clash) return { code: '23505', details: `Key (${u.cols.join(', ')})=(${u.cols.map((c) => row[c]).join(', ')}) already exists.`, hint: null, message: `duplicate key value violates unique constraint "${u.name}"` };
+    }
+    return null;
+  }
+  const identities = new Map(); // table → the last number given
+
   async function rest(req, res, url, table, raw) {
     // like PostgREST before a migration has created the table
     if (missingTables.includes(table)) return send(res, 404, { code: 'PGRST205', details: null, hint: null, message: `Could not find the table 'public.${table}' in the schema cache` });
@@ -224,13 +275,20 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
         if (!who.service && item.user_id !== who.userId) return send(res, 403, { code: '42501', message: 'new row violates row-level security policy for table "' + table + '"' });
         if (USER_FK.has(table) && !users.has(item.user_id)) return send(res, 409, { code: '23503', details: `Key (user_id)=(${item.user_id}) is not present in table "users".`, hint: null, message: `insert or update on table "${table}" violates foreign key constraint "${table}_user_id_fkey"` });
         const row = { ...item, updated_at: new Date().toISOString() };
+        // `generated always as identity`: Postgres numbers the row itself and refuses a value from the caller
+        if (IDENTITY[table]) {
+          if (row[IDENTITY[table]] != null) return send(res, 400, { code: '428C9', details: `Column "${IDENTITY[table]}" is an identity column defined as GENERATED ALWAYS.`, hint: 'Use OVERRIDING SYSTEM VALUE to override.', message: `cannot insert a non-DEFAULT value into column "${IDENTITY[table]}"` });
+          const n = (identities.get(table) ?? 0) + 1;
+          identities.set(table, n);
+          row[IDENTITY[table]] = n;
+        }
         const i = rows.findIndex((r) => keyCols.every((c) => r[c] === row[c]));
         if (i >= 0 && skipExisting) continue;
         if (i >= 0 && !upsert) return send(res, 409, DUPLICATE);
         const next = i >= 0 ? { ...rows[i], ...row } : row;
         // the primary key stays unique when an upsert matched on another unique key (a renamed slug)
         if (rows.some((r, j) => j !== i && primary.every((c) => r[c] === next[c]))) return send(res, 409, DUPLICATE);
-        const refused = table === 'published_pages' ? pageRefusal(next, rows.filter((_, j) => j !== i), null) : null;
+        const refused = (table === 'published_pages' ? pageRefusal(next, rows.filter((_, j) => j !== i), null) : null) ?? uniqueRefusal(table, next, rows.filter((_, j) => j !== i));
         if (refused) return send(res, 409, refused);
         if (i >= 0) rows[i] = next;
         else rows.push(next);
@@ -253,6 +311,14 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
         for (let j = 0; j < rows.length; j++) {
           if (!hit.includes(rows[j])) continue;
           const refused = pageRefusal(after[j], after.filter((_, k) => k !== j), Object.keys(patch));
+          if (refused) return send(res, 409, refused);
+        }
+      }
+      if (UNIQUE[table]) {
+        const after = rows.map((r) => (hit.includes(r) ? { ...r, ...patch } : r));
+        for (let j = 0; j < rows.length; j++) {
+          if (!hit.includes(rows[j])) continue;
+          const refused = uniqueRefusal(table, after[j], after.filter((_, k) => k !== j));
           if (refused) return send(res, 409, refused);
         }
       }
@@ -281,6 +347,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
 
   /** POST /rest/v1/rpc/<fn>: the database functions the server calls (execute revoked from browsers). */
   async function rpc(req, res, fn, raw) {
+    if (fn === 'claim_analytics_run') return claimAnalyticsRun(req, res, raw);
     if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -308,6 +375,35 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (b.p_email) row.email = b.p_email;
     row.updated_at = new Date().toISOString();
     return send(res, 200, { ...row });
+  }
+
+  /**
+   * public.claim_analytics_run (supabase/migrations/20261105000000_integrations.sql): inserts the run only when no
+   * run for the business started in the last 15 minutes and none is running (the partial unique index), and
+   * returns it as a one-row set, or an empty one. Server-only, like the SQL (execute revoked from browsers).
+   */
+  async function claimAnalyticsRun(req, res, raw) {
+    const fn = 'claim_analytics_run';
+    if (missingTables.includes('analytics_runs')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    let b;
+    try {
+      b = JSON.parse(raw || '{}');
+    } catch {
+      return send(res, 400, { message: 'invalid json' });
+    }
+    if (!users.has(b.p_user)) return send(res, 409, { code: '23503', message: 'insert or update on table "analytics_runs" violates foreign key constraint "analytics_runs_user_id_fkey"' });
+    const rows = tables.get('analytics_runs') ?? [];
+    tables.set('analytics_runs', rows);
+    const now = Date.now();
+    const same = rows.filter((r) => r.user_id === b.p_user && r.project_id === b.p_project);
+    if (same.some((r) => Date.parse(r.started_at) > now - RUN_SLOT_MS)) return send(res, 200, []);
+    const row = { id: b.p_id, user_id: b.p_user, project_id: b.p_project, state: 'running', sources: b.p_sources ?? {}, started_at: new Date(now).toISOString(), finished_at: null, cost_micro: 0 };
+    // on conflict do nothing: the primary key, or a run still marked running (analytics_runs_one_running)
+    if (rows.some((r) => r.id === row.id) || uniqueRefusal('analytics_runs', row, rows)) return send(res, 200, []);
+    rows.push(row);
+    return send(res, 200, [{ ...row }]);
   }
 
   // ───────────── Storage subset ─────────────
@@ -390,6 +486,12 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
         const o = objects.get(key);
         if (!o) return send(res, 400, { statusCode: '404', error: 'not_found', message: 'Object not found' });
         return send(res, 200, o.bytes, { 'content-type': o.type, 'content-length': o.bytes.length });
+      }
+      // does it exist (the server checks media before handing out a link to it): headers only
+      if (req.method === 'HEAD') {
+        const o = objects.get(key);
+        if (!o) return send(res, 404, undefined);
+        return send(res, 200, undefined, { 'content-type': o.type, 'content-length': o.bytes.length });
       }
     }
     return send(res, 404, { message: 'mock storage: no route ' + p });
@@ -510,7 +612,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       if (!who?.service) return authError(res, 403, 'not_admin', 'User not allowed');
       users.delete(adminUser[1]);
       const theirDomains = new Set((tables.get('published_domains') ?? []).filter((d) => d.user_id === adminUser[1]).map((d) => d.domain));
-      for (const [t, rows] of tables) tables.set(t, rows.filter((r) => r.user_id !== adminUser[1])); // on delete cascade
+      // on delete cascade (usage_ledger.user_id has no foreign key on purpose: its rows stay for invoices)
+      for (const [t, rows] of tables) if (!NO_USER_FK.has(t)) tables.set(t, rows.filter((r) => r.user_id !== adminUser[1]));
       // other accounts' pages on a domain that went with it lose it (on delete set null)
       for (const p of tables.get('published_pages') ?? []) if (theirDomains.has(p.domain)) p.domain = null;
       return send(res, 200, {});

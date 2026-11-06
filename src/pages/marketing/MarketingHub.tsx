@@ -8,6 +8,7 @@ import { CHANNEL_ROUTES, navigate } from '@/lib/router';
 import { useNewLeadCount } from '@/store/leads';
 import { useActiveProject, useStore } from '@/store/useStore';
 import { InfoTip, PageHeader, ProgressBar, StatStrip } from '@/components/ui/primitives';
+import { OwnerAlert, UpdateButton, UpdateProgress } from './analytics/UpdateButton';
 
 /** The four channels, with the sidebar's names and icons. */
 const CHANNELS: { id: Channel; label: string; icon: ReactNode; desc: string }[] = [
@@ -73,7 +74,13 @@ export default function MarketingHub() {
 
   return (
     <div>
-      <PageHeader title="Marketing" description="Four channels, one brand." />
+      <PageHeader title="Marketing" description="Four channels, one brand." actions={__ARTIFACT_BUILD__ ? undefined : <UpdateButton projectId={project?.id ?? null} />} />
+      {!__ARTIFACT_BUILD__ && (
+        <>
+          <OwnerAlert />
+          <UpdateProgress projectId={project?.id ?? null} />
+        </>
+      )}
 
       <section className="grid grid-cols-1 items-start gap-4 md:grid-cols-2" aria-label="Channels">
         {CHANNELS.map((c) => {
@@ -120,7 +127,7 @@ export default function MarketingHub() {
         <StatStrip
           items={[
             { label: 'Posted', value: k.posted },
-            { label: 'Posted by Manus', value: k.byManus },
+            { label: 'Posted from the app', value: k.byApp },
             { label: 'Planned', value: k.upcoming },
             { label: 'Made with AI', value: k.made },
           ]}

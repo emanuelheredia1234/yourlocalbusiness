@@ -4,6 +4,7 @@ import type { PostPlatform, PostType } from '@/lib/types';
 import { fmtDate, fmtDateTime } from '@/lib/utils';
 import { PLATFORMS, POST_TYPE_MAP } from '@/ai/knowledge';
 import { countBy, postedSince, useKpis } from '@/lib/kpis';
+import { postedFromApp } from '@/lib/metrics';
 import { leadTime, seoPageIdOf } from '@/lib/leads';
 import { navigate } from '@/lib/router';
 import { useMediaQuery } from '@/lib/hooks';
@@ -78,7 +79,7 @@ export default function Analytics() {
           {!wide && rangeControl && <span className="mr-2">{rangeControl}</span>}
           <span>Real counts only</span>
           <InfoTip title="What’s counted" label="What’s counted">
-            Posts that went out (Manus reported them posted, or you marked them posted), posts on your calendar, new leads from your page’s form, and what you made with AI. Likes, views, clicks and followers live on each network, and sales on your own checkout: this app doesn’t read them, so it doesn’t show or guess them.
+            Posts that went out (posted from the app, or you marked them posted), posts on your calendar, new leads from your page’s form, and what you made with AI. Likes, views, clicks and followers live on each network, and sales on your own checkout: this app doesn’t read them, so it doesn’t show or guess them.
           </InfoTip>
         </>
       }
@@ -111,7 +112,7 @@ export default function Analytics() {
       <StatStrip
         items={[
           { label: 'Posted', value: k.posted, sub: `Last ${span}`, delta: prevPosted > 0 ? k.posted - prevPosted : null },
-          { label: 'Posted by Manus', value: k.byManus, sub: `${k.posted - k.byManus} marked by you` },
+          { label: 'Posted from the app', value: k.byApp, sub: `${k.posted - k.byApp} marked by you` },
           { label: 'Planned', value: k.upcoming, sub: k.due ? `${k.due} due, not posted` : 'Coming up on your calendar', onClick: () => navigate('calendar') },
           { label: 'New leads', value: leads ?? '–', sub: !project.marketing.seoPublished ? 'Publish your page to collect them' : leads === null ? 'Not checked yet' : 'From your page’s form' },
         ]}
@@ -233,7 +234,7 @@ function PostedTable({ posts, span }: { posts: ReturnType<typeof postedSince>; s
                   <PostTypeTag type={post.postType} />
                 </td>
                 <td className="num hidden truncate px-2 py-2 font-mono text-caption text-muted sm:table-cell">{post.publishedAt ? fmtDateTime(post.publishedAt) : ''}</td>
-                <td className="hidden px-2 py-2 text-muted md:table-cell">{post.publishedBy === 'manus' ? 'Manus' : 'You'}</td>
+                <td className="hidden px-2 py-2 text-muted md:table-cell">{postedFromApp(post) ? 'App' : 'You'}</td>
                 <td className="hidden truncate py-2 pl-2 pr-4 sm:table-cell sm:pr-5">{post.postUrl ? <PostLink post={post} /> : <span className="text-faint">–</span>}</td>
               </tr>
             ))}

@@ -17,6 +17,8 @@ export const ROUTES = [
   'store',
   'brain',
   'workspace-settings',
+  // the owner's per-customer usage (Settings › Billing (owner)); the page checks isAdmin itself
+  'admin-billing',
 ] as const;
 
 export type Route = (typeof ROUTES)[number];
@@ -78,6 +80,30 @@ export function navigate(route: Route, opts: { force?: boolean } = {}): Promise<
     /* ignore */
   }
   return Promise.resolve(true);
+}
+
+/**
+ * A link from outside the app that opens a Settings section (Upload-Post's back button comes to
+ * /?settings=accounts#workspace-settings): the section, once, and the address loses the parameter. Null if none.
+ */
+export function takeSettingsSection(): string | null {
+  if (typeof location === 'undefined') return null;
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(location.search);
+  } catch {
+    return null;
+  }
+  const section = params.get('settings');
+  if (!section || !/^[a-z]{2,20}$/.test(section)) return null;
+  params.delete('settings');
+  const rest = params.toString();
+  try {
+    history.replaceState(null, '', `${location.pathname}${rest ? `?${rest}` : ''}#workspace-settings`);
+  } catch {
+    /* the section still opens */
+  }
+  return section;
 }
 
 /** The page showing now, outside React (the assistant reads it; components use useRoute). */

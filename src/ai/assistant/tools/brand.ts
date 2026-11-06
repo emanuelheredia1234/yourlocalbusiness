@@ -15,7 +15,7 @@ import { priceLabel } from '@/lib/listing';
 import { listingChanged, liveListing } from '@/lib/listingPublish';
 import { allListings, filterListings, listingCities } from '@/lib/marketplace';
 import { useRuntime } from '@/lib/platform';
-import { deleteProjectEverywhere, startNewProject } from '@/lib/projectActions';
+import { deleteProjectEverywhere, socialDeleteNote, startNewProject } from '@/lib/projectActions';
 import { CATEGORY_META, FEEDBACK_REASONS, SCOPE_META, SKILL_LIBRARY, describeDirectives, effectiveDirectives, newSkill, skillFromLibrary, templatePlaceholders, unfilledPlaceholders } from '@/ai/brain';
 import { MAX_DOC, MIN_DOC_CHARS, docText, knowledgeDocSkill, playgroundSets } from '@/ai/brainSkills';
 import { runTask, type RunResult } from '@/ai/engine';
@@ -25,7 +25,7 @@ import { VOICE_POSTS, profileTarget, sameProfile, voiceNetworkName, voiceSkillNa
 import { brandKitTask, productIdeasTask, skillTestTask } from '@/ai/tasks';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { isStartingVoiceRead, profileLabel, readVoice, setVoiceLearn, voiceOf, voiceReadRunning, voiceSkill, voiceSkillEdited } from '@/store/voice';
-import { manusSetupHint } from '@/components/posts/ManusPost';
+import { manusSetupHint } from '@/components/posts/manusShared';
 import { voiceErrorCopy } from '@/components/brand/SocialVoice';
 import { runAITask } from '../aiTask';
 import { downloadButton, fileButton, noteInChat } from '../buttons';
@@ -704,7 +704,7 @@ const tally = <K extends string>(keys: K[]) => Object.fromEntries(countBy(keys).
 const getAnalytics = defineTool({
   name: 'get_analytics',
   class: 'R',
-  summary: 'Real counts for the last N days (default 30), as Analytics shows them: posted (by Manus or marked), planned, due, made with AI, change vs the days before, by network, type and format.',
+  summary: 'Real counts for the last N days (default 30), as Analytics shows them: posted (from the app or marked), planned, due, made with AI, change vs the days before, by network, type and format.',
   args: { days: arg.number({ optional: true, int: true, min: 1, max: 365, desc: 'default 30' }) },
   run: ({ days = 30 }) => {
     const p = activeProject();
@@ -718,8 +718,8 @@ const getAnalytics = defineTool({
         from: k.series[0].date,
         to: k.series[k.series.length - 1].date,
         posted: k.posted,
-        byManus: k.byManus,
-        markedByOwner: k.posted - k.byManus,
+        byApp: k.byApp,
+        markedByOwner: k.posted - k.byApp,
         plannedAhead: k.upcoming,
         due: k.due,
         madeWithAI: k.made,
@@ -888,7 +888,7 @@ const deleteProject = defineTool({
   },
   danger: ({ id }) => {
     const own = s().skills.filter((k) => k.projectId === id).length;
-    return deleteConfirm({ thing: 'project', names: [projectName(id)], extra: `Its posts, campaigns${own ? `, ${own === 1 ? 'the Brain skill' : `the ${own} Brain skills`} made only for it` : ''} and Marketplace listing are removed too.` });
+    return deleteConfirm({ thing: 'project', names: [projectName(id)], extra: `Its posts, campaigns${own ? `, ${own === 1 ? 'the Brain skill' : `the ${own} Brain skills`} made only for it` : ''} and Marketplace listing are removed too.${socialDeleteNote(id)}` });
   },
   run: ({ id }) => {
     const name = projectName(id);

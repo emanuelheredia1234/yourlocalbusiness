@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { useMediaQuery } from '@/lib/hooks';
-import { navigate, useRoute } from '@/lib/router';
+import { navigate, takeSettingsSection, useRoute } from '@/lib/router';
+import { useUI } from '@/store/ui';
 import { initRuntime } from '@/lib/platform';
 import { pingServer } from '@/ai/claude';
 import { startCommunitySync } from '@/lib/community';
@@ -13,7 +14,9 @@ import { PageErrorBoundary } from '@/components/layout/ErrorBoundary';
 import { ConfirmHost, Toaster } from '@/components/ui/primitives';
 import { installLeaveGuard } from '@/components/ui/leave';
 import { PostEditorHost } from '@/components/posts/PostCard';
-import { ManusPostHost, useManusPostWatcher } from '@/components/posts/ManusPost';
+import { PublishConfirmHost } from '@/components/posts/PublishConfirm';
+import { PostItYourselfHost } from '@/components/posts/PostItYourselfModal';
+import { PublishJobWatcher } from '@/components/posts/PublishJobWatcher';
 import { MarkPostedHost } from '@/components/posts/PostActions';
 import { ManusGroupsHost, useGroupShareWatcher } from '@/components/posts/ManusGroups';
 import { ListingWindowHost } from '@/components/studio/ListingWindowHost';
@@ -38,6 +41,7 @@ const CalendarPage = lazy(() => import('@/pages/calendar/ContentCalendar'));
 const AnalyticsPage = lazy(() => import('@/pages/analytics/Analytics'));
 const StorePage = lazy(() => import('@/pages/store/Marketplace'));
 const BrainPage = lazy(() => import('@/pages/brain/Brain'));
+const AdminBillingPage = lazy(() => import('@/pages/admin/Billing'));
 const SettingsPage = lazy(() => import('@/pages/settings/Settings'));
 const StrategyPage = lazy(() => import('@/pages/strategy/Strategy'));
 
@@ -88,7 +92,6 @@ export default function App() {
   // the assistant docks beside the stage at 1440px and wider
   const docked = assistantOpen && wide;
   useThemeSync();
-  useManusPostWatcher();
   useLeadsWatcher();
   useGroupShareWatcher();
   useVoiceReadWatcher();
@@ -119,6 +122,13 @@ export default function App() {
   }, [needsOnboarding, route]);
   // "Leave this page?" while something is generating
   useEffect(() => installLeaveGuard(), []);
+  // back from Upload-Post's connect page: Settings → Connected accounts (it reads the accounts again there)
+  useEffect(() => {
+    const section = takeSettingsSection();
+    if (!section || needsOnboarding) return;
+    useUI.getState().setSettingsTab(section);
+    void navigate('workspace-settings', { force: true });
+  }, []);
 
   if (needsOnboarding) {
     return (
@@ -168,6 +178,9 @@ export default function App() {
     case 'workspace-settings':
       page = <SettingsPage />;
       break;
+    case 'admin-billing':
+      page = <AdminBillingPage />;
+      break;
     default:
       page = <Dashboard />;
   }
@@ -193,7 +206,9 @@ export default function App() {
       <MobileNav />
       <CommandPalette />
       <PostEditorHost />
-      <ManusPostHost />
+      <PublishConfirmHost />
+      <PostItYourselfHost />
+      <PublishJobWatcher />
       <AgentBuildHost />
       <HtmlPreviewHost />
       <ManusGroupsHost />

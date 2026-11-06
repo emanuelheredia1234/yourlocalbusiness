@@ -328,8 +328,8 @@ const SOCIAL_PLACEHOLDER: Record<SocialPlatform, string> = {
 };
 
 /**
- * Your profile links or handles, one row per network: its colour tile joined to the field. Nothing is
- * connected: they show in post previews and tell Manus which account to post as. With `projectId`, each
+ * Your profile links or handles, one row per network: its colour tile joined to the field. Your handles are
+ * used for public stats, and to post when the account is connected (Settings › Connected accounts). With `projectId`, each
  * profile also gets the "Learn my brand voice" switch (Manus reads its posts); `voiceSetup` says how to
  * point at a missing Manus setup (see VoiceNote). Rows sit inside a SettingsSection (or anything padded alike).
  */

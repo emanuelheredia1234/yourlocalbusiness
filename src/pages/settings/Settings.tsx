@@ -6,9 +6,9 @@ import { useRuntime } from '@/lib/platform';
 import { pushMyListings } from '@/lib/community';
 import { saveBrand, brandCopyFrom } from '@/lib/brandSave';
 import { EXPORT_KEYS, backupFileName, backupJson } from '@/lib/backup';
-import { deleteProjectEverywhere } from '@/lib/projectActions';
+import { deleteProjectEverywhere, freshSocialDeleteNote, holdsSocialSlot, refreshSocialSlots, releaseSocialFor } from '@/lib/projectActions';
 import { usePublishAccess } from '@/lib/publish';
-import { PLATFORMS, POST_PLATFORMS, FORMATS } from '@/ai/knowledge';
+import { FORMATS } from '@/ai/knowledge';
 import { brandKitTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { useActiveProject, useStore, type StoreState } from '@/store/useStore';
@@ -18,13 +18,14 @@ import { toast, useUI } from '@/store/ui';
 import { useAuth } from '@/lib/cloud/auth';
 import { AccountSettings } from '@/components/auth/Account';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
-import { AutoTextarea, Badge, Callout, ChipInput, InfoTip, MoreMenu, PageHeader, Segmented, SettingsRow, SettingsSection, Toggle, confirmAction } from '@/components/ui/primitives';
+import { AutoTextarea, Badge, ChipInput, MoreMenu, PageHeader, Segmented, SettingsRow, SettingsSection, Toggle, confirmAction } from '@/components/ui/primitives';
 import { BrandImagesEditor, LogoDesigner, SocialLinksEditor } from '@/components/brand/BrandEditors';
 import { LogoMark } from '@/components/brand/Logo';
-import { manusSetupHint, useManusReady } from '@/components/posts/ManusPost';
 import { download } from '@/components/ui/download';
 import { AIProviders, ArtifactAI } from './AIProviders';
 import { DomainsCard } from './Domains';
+import { ConnectedAccounts } from './ConnectedAccounts';
+import { UsageSection } from './UsageSection';
 
 type Tab = 'brand' | 'domains' | 'ai' | 'accounts' | 'projects' | 'prefs' | 'account';
 
@@ -33,7 +34,7 @@ const SECTIONS: { id: Tab; label: string; hint: string; icon: ReactNode }[] = [
   { id: 'brand', label: 'Brand', hint: 'Name, logo, colours and photos', icon: <Palette /> },
   { id: 'domains', label: 'Domains', hint: 'Your own web addresses', icon: <Globe /> },
   { id: 'ai', label: 'AI keys', hint: 'What powers the AI', icon: <KeyRound /> },
-  { id: 'accounts', label: 'Social accounts', hint: 'Profiles and posting with Manus', icon: <Link2 /> },
+  { id: 'accounts', label: 'Connected accounts', hint: 'Connect your accounts to post and see your own stats', icon: <Link2 /> },
   { id: 'projects', label: 'Projects & data', hint: 'Projects, backups and reset', icon: <Database /> },
   { id: 'prefs', label: 'Preferences', hint: 'Your name, theme and Marketplace', icon: <SlidersHorizontal /> },
   { id: 'account', label: 'Account', hint: 'Sign-in, password and deletion', icon: <CircleUserRound /> },
@@ -301,49 +302,38 @@ function BrandSettings({ project }: { project: Project }) {
 // ───────────────────────── AI ─────────────────────────
 
 function AISettings() {
-  return __ARTIFACT_BUILD__ ? <ArtifactAI /> : <AIProviders />;
+  if (__ARTIFACT_BUILD__) return <ArtifactAI />;
+  return <AIWithUsage />;
 }
 
-// ───────────────────────── Social accounts ─────────────────────────
+/** The AI keys, then (signed in) what analytics data has cost, beside the AI limits. */
+function AIWithUsage() {
+  const signedIn = useAuth((s) => s.phase === 'ready');
+  return (
+    <>
+      <AIProviders />
+      {signedIn && (
+        <div className="mt-6 flex max-w-[880px] flex-col gap-6">
+          <UsageSection />
+        </div>
+      )}
+    </>
+  );
+}
+
+// ───────────────────────── Connected accounts ─────────────────────────
 
 function Accounts() {
   const project = useActiveProject()!;
   const updateBrand = useStore((s) => s.updateBrand);
-  const ready = useManusReady();
   const saved = useSaved(project.brand.socials);
-  const networks = POST_PLATFORMS.map((p) => PLATFORMS[p].label.replace(' (Twitter)', '')).join(', ');
   return (
     <div className="flex max-w-[880px] flex-col gap-6">
-      {ready ? (
-        <Callout tone="good" title="Manus is ready to post for you.">
-          It posts on {networks}, right away or scheduled, using your Manus credits.
-        </Callout>
-      ) : (
-        <Callout
-          tone="warn"
-          title="Manus isn’t set up yet."
-          action={
-            !__ARTIFACT_BUILD__ && (
-              <button type="button" className="btn btn-secondary btn-xs" onClick={() => useUI.getState().setSettingsTab('ai')}>
-                Open AI keys
-              </button>
-            )
-          }
-        >
-          {manusSetupHint()}
-        </Callout>
-      )}
+      <ConnectedAccounts />
       <SettingsSection
         title="Your profiles"
-        description={`For ${project.brand.name || 'this project'}. Shown in post previews; they tell Manus which account to post as.`}
-        actions={
-          <span className="flex items-center gap-1">
-            <Saved shown={saved} />
-            <InfoTip title="How posting works" label="How posting works">
-              This app doesn’t log in to your social accounts and never posts on its own. Manus, an AI agent, opens each network in its own browser, where you sign in once, and posts exactly the text and image or video you confirm. Without Manus, copy a post’s text and download its image from the post’s ⋯ menu, post it yourself, then choose Mark as posted.
-            </InfoTip>
-          </span>
-        }
+        description={`For ${project.brand.name || 'this project'}. Shown in post previews, and used for public stats when an account isn’t connected.`}
+        actions={<Saved shown={saved} />}
       >
         <SocialLinksEditor socials={project.brand.socials} onChange={(socials) => updateBrand({ socials })} projectId={project.id} voiceSetup="none" />
       </SettingsSection>
@@ -370,7 +360,14 @@ function ProjectsData() {
       const parsed = JSON.parse(await readFileAsText(file)) as { app?: string; data?: Partial<StoreState> };
       const data = parsed?.data;
       if (parsed?.app !== 'yourlocalbusiness' || !data || !Array.isArray(data.projects)) throw new Error('bad');
-      if (!(await confirmAction({ title: 'Replace your workspace with this backup?', body: `${data.projects.length} project${data.projects.length === 1 ? '' : 's'} will be loaded. Your current data on this device is replaced. Images and videos aren’t part of backups.`, confirmLabel: 'Import backup', danger: true }))) return;
+      // businesses the backup doesn't have are gone: their social accounts are disconnected (their slots freed),
+      // and the confirm names the ones that have some
+      const kept = new Set(data.projects.map((p) => p.id));
+      const goneProjects = useStore.getState().projects.filter((p) => !kept.has(p.id));
+      if (goneProjects.length) await refreshSocialSlots();
+      const losing = goneProjects.filter((p) => holdsSocialSlot(p.id)).map((p) => `“${p.brand.name || 'Untitled'}”`);
+      const socialNote = losing.length ? ` ${losing.join(', ')} ${losing.length === 1 ? 'isn’t' : 'aren’t'} in the backup, so ${losing.length === 1 ? 'its' : 'their'} connected social accounts are disconnected too.` : '';
+      if (!(await confirmAction({ title: 'Replace your workspace with this backup?', body: `${data.projects.length} project${data.projects.length === 1 ? '' : 's'} will be loaded. Your current data on this device is replaced.${socialNote} Images and videos aren’t part of backups.`, confirmLabel: 'Import backup', danger: true }))) return;
       const d = defaultSettings();
       const patch: Partial<StoreState> = {};
       for (const k of EXPORT_KEYS) if (k in data) (patch as Record<string, unknown>)[k] = (data as Record<string, unknown>)[k];
@@ -378,7 +375,9 @@ function ProjectsData() {
       const serverUrl = useStore.getState().settings.ai.serverUrl;
       patch.settings = { ...d, ...(data.settings ?? {}), ai: { ...d.ai, ...(data.settings?.ai ?? {}), serverUrl }, profile: { ...d.profile, ...(data.settings?.profile ?? {}) } };
       if (!patch.activeProjectId || !data.projects.some((p) => p.id === patch.activeProjectId)) patch.activeProjectId = data.projects[0]?.id ?? null;
+      const gone = useStore.getState().projects.map((p) => p.id).filter((id) => !kept.has(id));
       replaceState(patch);
+      void releaseSocialFor(gone);
       // an older backup may hold things that version made up
       cleanWorkspace();
       toast({ kind: 'success', title: 'Backup imported' });
@@ -388,7 +387,8 @@ function ProjectsData() {
   };
 
   const remove = async (p: Project) => {
-    if (await confirmAction({ title: `Delete ${p.brand.name || 'this project'}?`, body: 'Its posts, campaigns and Marketplace listing are removed too. This can’t be undone.', confirmLabel: 'Delete project', danger: true })) deleteProjectEverywhere(p.id);
+    const note = await freshSocialDeleteNote(p.id);
+    if (await confirmAction({ title: `Delete ${p.brand.name || 'this project'}?`, body: `Its posts, campaigns and Marketplace listing are removed too.${note} This can’t be undone.`, confirmLabel: 'Delete project', danger: true })) deleteProjectEverywhere(p.id);
   };
   // the name lives in Brand: open it there, ready to type
   const rename = () => {
@@ -487,12 +487,14 @@ function ProjectsData() {
               if (
                 await confirmAction(
                   signedIn
-                    ? { title: 'Erase your whole workspace?', body: 'All projects, posts, skills, listings, orders and files are deleted from your account and every device. Export a backup first if you might need them.', confirmLabel: 'Erase everything', danger: true }
+                    ? { title: 'Erase your whole workspace?', body: 'All projects, posts, skills, listings, orders and files are deleted from your account and every device, and every business’s connected social accounts are disconnected. Export a backup first if you might need them.', confirmLabel: 'Erase everything', danger: true }
                     : { title: 'Erase everything on this device?', body: 'All projects, posts, skills, listings and orders are deleted. Export a backup first if you might need them.', confirmLabel: 'Erase everything', danger: true },
                 )
               ) {
+                const ids = useStore.getState().projects.map((p) => p.id);
                 resetAll();
                 pushMyListings();
+                void releaseSocialFor(ids);
               }
             }}
           >

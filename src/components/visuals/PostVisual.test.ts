@@ -68,6 +68,7 @@ describe('PostVisual with your own photo', () => {
   });
 });
 
+// these import the post card and the media library on first use, which can take longer than 5 s on a busy machine
 describe('your own photo in lists', () => {
   it('is told apart from AI images and videos', async () => {
     const { isOwnPhoto } = await import('@/lib/media');
@@ -75,12 +76,12 @@ describe('your own photo in lists', () => {
     expect(isOwnPhoto(photo({ generated: { kind: 'photo', provider: 'x', prompt: 'p', purpose: 'post', aspect: '4:5', final: true, createdAt: 0 } }))).toBe(false);
     expect(isOwnPhoto(photo({ kind: 'video' }))).toBe(false);
     expect(isOwnPhoto(undefined)).toBe(false);
-  });
+  }, 20_000);
   it('shows "Your photo" instead of a visual style it never gets', async () => {
     const { styleLabel } = await import('@/components/posts/PostCard');
     const post = { format: 'image', style: 'minimal', media: photo() } as unknown as Parameters<typeof styleLabel>[0];
     expect(styleLabel(post)).toBe('Your photo');
     expect(styleLabel({ ...post, media: undefined })).not.toBe('Your photo');
     expect(styleLabel({ ...post, format: 'video', style: 'ugc' })).not.toBe('Your photo');
-  });
+  }, 20_000);
 });
