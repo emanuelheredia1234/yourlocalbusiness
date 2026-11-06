@@ -27,13 +27,15 @@
 //   rotated), MEDIA_URL_SECRET (32+ random bytes; needed to post photos and videos), UPLOAD_POST_API_KEY (turns social
 //   accounts, posting and social stats on, through Upload-Post), UPLOAD_POST_WEBHOOK_SECRET (+ _PREVIOUS only while
 //   rotating), ZERNIO_API_KEY (turns ad accounts on, through Zernio), ZERNIO_WEBHOOK_SECRET (+ _PREVIOUS only while
-//   rotating), NANGO_SECRET_KEY (future non-social integrations only; off by default), NANGO_WEBHOOK_SIGNING_KEY.
+//   rotating), ADS_REVIEW_SECRET (32+ random bytes; signs the ad launch reviews, else derived from CUSTOMER_TAG_SECRET),
+//   NANGO_SECRET_KEY (future non-social integrations only; off by default), NANGO_WEBHOOK_SIGNING_KEY.
 //   Plain env: TREG_ORG_ID, CONNECTIONS_PROVIDER (unset; "off" keeps connected accounts off), UPLOAD_POST_RPM (150),
 //   UPLOAD_POST_ALERT_REMAINING (5), UPLOAD_POST_MAX_PROFILES_PER_USER (3: businesses with social accounts per user,
 //   one Upload-Post profile each), UPLOAD_POST_NEW_PROFILES_PER_DAY (20), UPLOAD_POST_RECLAIM_DAYS (7),
 //   UPLOAD_POST_X_LINKS, UPLOAD_POST_X_LINK_POSTS_PER_CUSTOMER (5), UPLOAD_POST_BRAND_LOGO_URL, UPLOAD_POST_CONNECT_TITLE,
 //   UPLOAD_POST_CONNECT_DESCRIPTION, UPLOAD_POST_BACK_BUTTON_TEXT, ZERNIO_RPM (60), ZERNIO_BRAND_NAME,
-//   ZERNIO_BRAND_LOGO_URL, ZERNIO_BRAND_COLOR, NANGO_INTEGRATIONS (JSON, booking tools and CRMs only), GSC_APP_PROPERTY
+//   ZERNIO_BRAND_LOGO_URL, ZERNIO_BRAND_COLOR, ADS_LAUNCH_ENABLED ("1" lets customers launch ads and raise budgets;
+//   unset = off, pausing still works), ADS_HARD_MAX_DAILY (500), ADS_HARD_MAX_CHANGE (200), NANGO_INTEGRATIONS (JSON, booking tools and CRMs only), GSC_APP_PROPERTY
 //   (the app's own address; also where the back button on Upload-Post's connect page goes),
 //   GSC_APP_VERIFICATION_FILE; for tests UPLOAD_POST_BASE_URL, ZERNIO_BASE_URL, NANGO_BASE_URL, TREG_BASE_URL. Keys are never printed: the startup notes name what's missing.
 
@@ -206,17 +208,22 @@ const integrations = createIntegrations({
 // (never more than a few seconds: a slow Supabase must not keep the app from starting)
 const settingsFrom = await Promise.race([ai.init(), new Promise((r) => setTimeout(() => r('slow'), 5000))]);
 
-/** DELETE /api/account: the signed-in user's account and files go for good (their saved data is removed with the account). */
+/**
+ * DELETE /api/account[?ackLiveAds=1]: the signed-in user's account and files go for good (their saved data is removed
+ * with the account). While an ad campaign launched from the app is still on, it answers 409 ADS_LIVE with the list
+ * ({live}) unless ackLiveAds=1: after deletion the app can't pause it.
+ */
 async function deleteAccount(req, res) {
   if (!sameOrigin(req, ALLOWED_ORIGIN)) return send(res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' }, corsHeaders(req));
   const ident = await ai.whoIs(req, res);
   if (!ident) return;
   if (!ident.who) return send(res, 401, { error: 'Sign in first.', code: 'AUTH_REQUIRED' }, corsHeaders(req));
+  const ackLiveAds = new URL(req.url, 'http://local').searchParams.get('ackLiveAds') === '1';
   try {
-    // connected accounts first (their vendor connections are deleted while the ids are still known), then
-    // posting, analytics, SEO and billing, then Omnisend
+    // launched ads first (409 ADS_LIVE unless acknowledged), then connected accounts (their vendor connections are
+    // deleted while the ids are still known), then posting, analytics, SEO and billing, then Omnisend
     try {
-      await integrations.forgetUser(ident.who.id);
+      await integrations.forgetUser(ident.who.id, { ackLiveAds });
     } catch (e) {
       await integrations.unforgetUser(ident.who.id);
       throw e;
@@ -239,7 +246,9 @@ async function deleteAccount(req, res) {
     await integrations.userDeleted(ident.who.id);
     return send(res, 200, { ok: true }, corsHeaders(req));
   } catch (e) {
-    return send(res, e.status || 500, { error: e.message, code: e.code || 'UPSTREAM' }, corsHeaders(req));
+    // our own refusals carry their extra fields (ADS_LIVE: the campaigns still on); nothing else's text goes out
+    const live = e?.code === 'ADS_LIVE' && Array.isArray(e.extra?.live) ? { live: e.extra.live } : {};
+    return send(res, e.status || 500, { error: e.message, code: e.code || 'UPSTREAM', ...live }, corsHeaders(req));
   }
 }
 

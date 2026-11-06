@@ -12,6 +12,7 @@ import { createIntegrations, moduleFor, selectConnections } from './wiring.mjs';
 import { CONNECTION_METHODS } from '../connections/index.mjs';
 import { createPages } from '../pages.mjs';
 import { createMockSupabase } from '../test/mock-supabase.mjs';
+import { createDb } from './db.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const UID = '0b6f3a52-5d0e-4c58-9a0c-0e7c5b1d2a11';
@@ -419,6 +420,22 @@ describe('ai-server.mjs with the integrations', () => {
     expect(connect.status).toBe(503);
     expect((await connect.json()).code).toBe('CONNECTIONS_NOT_ENABLED');
     expect((await fetch(`${base}/api/integrations/connections`, { headers: { authorization: `Bearer ${user.token}`, origin: 'https://evil.example' } })).status).toBe(403);
+  });
+
+  it('DELETE /api/account names the launched campaigns still on (409 ADS_LIVE) until acknowledged; ads routes are off without Zernio', async () => {
+    const user = await supa.tokenFor('ads-live@example.com');
+    const auth = { authorization: `Bearer ${user.token}` };
+    expect((await fetch(`${base}/api/ads/accounts?projectId=p1&platform=meta`, { headers: auth })).status).toBe(503);
+    const db = createDb({ supabaseUrl: supa.url, secretKey: supa.SECRET });
+    const id = crypto.randomUUID();
+    await db.insert('ad_campaigns', { id, user_id: user.user.id, customer_tag: 'cust_000000000000000000000000', project_id: 'p1', plan_id: 'plan-1', platform: 'meta', zernio_account_id: 'aaaaaaaaaaaaaaaaaaaaaaa1', ad_account_id: 'act_123456789', ad_account_name: 'Acme', currency: 'USD', timezone: 'America/Chicago', name: 'Winter pipes · Meta · YLB 1a2b3c4d5e6f', launch_key: crypto.randomUUID(), goal: 'traffic', daily_budget: 25, start_at: new Date().toISOString(), launched_as: 'ACTIVE', state: 'active', configured_status: 'ACTIVE', review: {}, remote: {}, sent_body: {} });
+    const live = await (await fetch(`${base}/api/ads/live`, { headers: auth })).json();
+    expect(live.live).toEqual([{ id, name: 'Winter pipes', platform: 'meta', daily: 25, currency: 'USD', idTail: '6789' }]);
+    const refused = await fetch(`${base}/api/account`, { method: 'DELETE', headers: auth });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ code: 'ADS_LIVE', live: [expect.objectContaining({ id })] });
+    const ok = await fetch(`${base}/api/account?ackLiveAds=1`, { method: 'DELETE', headers: auth });
+    expect(ok.status).toBe(200);
   });
 
   it('answers 503 NOT_SET_UP where a route still needs a missing Secret, and the built routes answer for themselves', async () => {

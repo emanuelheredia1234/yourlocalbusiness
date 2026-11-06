@@ -89,3 +89,40 @@ describe('the public media link', () => {
     expect(parseRange('items=0-1', 100)).toBe('bad');
   });
 });
+
+describe('which sides make links', () => {
+  // Meta fetches launched ads' images from these links (server/ads/), so they work with social posting off
+  async function serveWith(connections) {
+    const http = await import('node:http');
+    const { createPublicMediaRoutes } = await import('./publicMedia.mjs');
+    const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
+    const routes = createPublicMediaRoutes({
+      env: TEST_SECRETS,
+      connections,
+      send: (res, status, body, headers = {}) => {
+        res.writeHead(status, { 'content-type': 'application/json', ...headers });
+        res.end(JSON.stringify(body));
+      },
+      mediaStore: { enabled: true, head: async () => ({ type: 'image/jpeg', size: JPEG.length }), get: async () => new Response(JPEG, { status: 200, headers: { 'content-length': String(JPEG.length) } }) },
+    });
+    const server = http.createServer((req, res) => void routes.handle(req, res, new URL(req.url, 'http://local')));
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    return { base: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((r) => server.close(r)) };
+  }
+  const uid = '0b6f3a52-5d0e-4c58-9a0c-0e7c5b1d2a11';
+
+  it('serves an ad image with social off and ads on; refuses only when both are off', async () => {
+    const url = (base) => publicMediaUrl({ ...TEST_SECRETS, MEDIA_PUBLIC_BASE_URL: base }, { userId: uid, mediaId: 'ad-a.jpg', kind: 'image', type: 'image/jpeg' });
+    const adsOnly = await serveWith({ socialEnabled: false, adsEnabled: true });
+    const off = await serveWith({ socialEnabled: false, adsEnabled: false });
+    try {
+      const r = await fetch(url(adsOnly.base));
+      expect(r.status).toBe(200);
+      expect(r.headers.get('content-type')).toBe('image/jpeg');
+      expect((await fetch(url(off.base))).status).toBe(503);
+    } finally {
+      await adsOnly.close();
+      await off.close();
+    }
+  });
+});
