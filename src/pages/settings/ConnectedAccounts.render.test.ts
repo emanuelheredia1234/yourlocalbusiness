@@ -54,7 +54,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('the sections', () => {
   it('Social accounts and Ad accounts (every ad network Zernio reads), Pinterest as Coming soon, no Search Console row', () => {
     const html = render();
-    for (const t of ['Social accounts', 'Ad accounts', 'Facebook Page', 'Instagram', 'LinkedIn', 'TikTok', 'YouTube', 'Google Ads', 'Meta Ads', 'LinkedIn Ads', 'TikTok Ads', 'Pinterest Ads', 'X Ads', 'Reddit Ads', 'Microsoft Ads']) expect(html).toContain(t);
+    for (const t of ['Social accounts', 'Ad accounts', 'Gmail', 'Facebook Page', 'Instagram', 'LinkedIn', 'TikTok', 'YouTube', 'Google Ads', 'Meta Ads', 'LinkedIn Ads', 'TikTok Ads', 'Pinterest Ads', 'X Ads', 'Reddit Ads', 'Microsoft Ads']) expect(html).toContain(t);
     expect(rowOf(html, 'pinterest')).toContain('Coming soon');
     for (const p of ['microsoft_ads', 'tiktok_ads', 'reddit_ads']) expect(rowOf(html, p)).toContain('Connect');
     expect(html).not.toContain('Search Console');

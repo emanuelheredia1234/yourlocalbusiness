@@ -14,8 +14,9 @@ Who does what:
 | **Zernio** (formerly Late) | Ads only: customers' ad accounts and their ad results (read only; campaign changes later) |
 | **treg** | Public social data, competitor ads, Google rank and Maps position, Search Console (on your own team connection), per-customer usage, caps and billing |
 | **Omnisend** | Email stats |
+| **Gmail** | Each customer’s own mailbox for later outreach (`gmail.send`). OAuth in the app, not Nango |
 | **Manus** | Only "Post to Facebook groups" |
-| **Nango** | Kept for future booking tools and CRMs only. Off until you set it up; never used for social or ads |
+| **Nango** | Kept for future booking tools and CRMs only. Off until you set it up; never used for social, ads or Gmail |
 
 Until a part's Secrets are set the app says so plainly and nothing breaks: every network shows "Not connected",
 customers post themselves and press **Mark as posted**, and Manus still posts to Facebook groups.
@@ -47,9 +48,11 @@ name only.
 | `TREG_TOKEN` | Analytics data, competitor ads, Google rank, Search Console | A **member-role agent token** (`treg org agent-new ylb-app`). Not your own dashboard key. |
 | `TREG_ADMIN_TOKEN` | Customer caps and the usage check against treg (billing only) | Admin-role agent token; only a team owner can make one. |
 | `CRON_SECRET` | The bearer for `POST /api/cron/tick`, which runs the scheduled jobs (§2a) | 32+ random bytes (`openssl rand -hex 32`). The **same value** goes into the Supabase Vault secret `cron_secret`. Unset on the published app, no scheduled job runs (the tick answers 503 NOT_SET_UP). |
-| `NANGO_SECRET_KEY` | Optional, later: other integrations (booking tools, CRMs) | Leave unset until you add one (§3b). |
+| `NANGO_SECRET_KEY` | Optional, later: other integrations (booking tools, CRMs) | Leave unset until you add one (§3b). Not used for Gmail. |
 | `NANGO_WEBHOOK_SIGNING_KEY` | Optional, with Nango only | |
 | `NANGO_WEBHOOK_SIGNING_KEY_PREVIOUS` | Only while rotating Nango's signing key | Remove it once Nango signs with the new one. |
+| `GOOGLE_CLIENT_ID` | **Turns customer Gmail connect on** | The OAuth web client's id, from Google Cloud → Credentials (§3d). |
+| `GOOGLE_CLIENT_SECRET` | With `GOOGLE_CLIENT_ID` | The OAuth web client's secret. Replit Secrets only. Never in the repo. |
 
 Plain settings (not secret; Replit Secrets or env):
 
@@ -81,7 +84,7 @@ Plain settings (not secret; Replit Secrets or env):
 | `NANGO_INTEGRATIONS` | — | Only with Nango (§3b): JSON of the integrations customers may connect. |
 | `CRON_BUDGET_MS` | `40000` | How long one cron tick may run jobs before it answers (§2a); a job still running then finishes in the background. |
 | `GSC_APP_PROPERTY` | — | `https://yourlocalbusiness.replit.app/` once that Search Console property is verified. Its host is also the app's own address for the back button on Upload-Post's connect page (unset: `https://yourlocalbusiness.replit.app`), so set it to the app's real address if that ever changes. |
-| `GSC_APP_VERIFICATION_FILE` | — | Google's HTML verification file name, e.g. `google1a2b3c4d5e6f7a8b.html`. |
+| `GSC_APP_VERIFICATION_FILE` | — | Optional extra HTML verification file name, e.g. `google1a2b3c4d5e6f7a8b.html`. The homepage file `google2598e017b2dc1e02.html` is already served (§6). |
 
 The Supabase and Omnisend Secrets you already have are unchanged (`SUPABASE_SERVICE_ROLE_KEY` is still read as an older name for `SUPABASE_SECRET_KEY`).
 
@@ -434,7 +437,63 @@ It is off until `NANGO_SECRET_KEY` is set, and nothing shows in the app until yo
 
 Customers then see **Settings → Connected accounts → Other integrations** with Connect and Disconnect. A key or
 integration id that names a social network, an ad platform or Search Console is refused (those go through
-Upload-Post, Zernio and treg).
+Upload-Post, Zernio and treg). Gmail is not one of these: customers connect it in the app (§3d).
+
+## 3d. Gmail (the customer's own mailbox, for later outreach)
+
+Each signed-in customer connects **one** Gmail account from Settings → Connected accounts → Gmail. The app asks
+only to send mail and to see which mailbox it is. It does not read the inbox. Tokens stay on the server,
+encrypted in `app_state`, one connection per customer (the same way Omnisend stores a connection). Nango is not
+used. A customer with several businesses sends later outreach from that one mailbox.
+
+Nothing is sent from the app yet. A later outreach step calls the server helper. There is no send button and no
+`/api/integrations/gmail/send` route (that path answers 404).
+
+**Authorized redirect URI** (the only one; register it exactly on the Google OAuth web client):
+
+`https://yourlocalbusiness.replit.app/api/integrations/gmail/callback`
+
+There is no localhost or other dev redirect. Connect only starts on the published app, so Google returns to that
+same host (the same rule as Omnisend).
+
+**Secrets** (Replit Secrets only; never in the repo, a chat, or the app):
+
+| Secret | What it is |
+|---|---|
+| `GOOGLE_CLIENT_ID` | The OAuth web client's id |
+| `GOOGLE_CLIENT_SECRET` | The OAuth web client's secret |
+
+**Set it up once**
+
+1. Google Cloud Console → the project **yourlocalbusiness** (Gmail API is already enabled; the OAuth consent
+   screen is External and saved in Testing). There is no OAuth client until you create one.
+2. APIs & Services → Credentials → Create credentials → **OAuth client ID** → **Web application**.
+3. Authorized redirect URI: the URL above, and no other.
+4. Put the client id and secret in Replit Secrets as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+5. The app requests these scopes and no others. The consent screen needs `gmail.send`; the other two name the mailbox. Do not add `gmail.readonly`, `gmail.modify`, `gmail.compose`, or `profile`.
+   - `https://www.googleapis.com/auth/gmail.send`
+   - `openid`
+   - `https://www.googleapis.com/auth/userinfo.email`
+6. While the consent screen is in **Testing**, add each person who should connect (including you) as a test user.
+   Otherwise Google shows that the app isn't verified.
+7. Republish. The startup notes say "Gmail outreach: on", or they name `GOOGLE_CLIENT_ID` and
+   `GOOGLE_CLIENT_SECRET` if one is missing. They never print the values. The redirect URI is in that note too.
+8. As a signed-in customer, open Settings → Connected accounts → Gmail → **Connect**. Google sends the browser
+   to the redirect URI above. The app then opens Settings → Connected accounts and shows the mailbox address.
+   **Disconnect** forgets the tokens and asks Google to revoke the grant. Deleting the account does the same.
+
+Access tokens expire (about an hour). The app refreshes them with the stored refresh token. If Google revokes
+the grant, the customer is asked to connect again.
+
+Verification of `gmail.send` is still required before anyone who isn't a test user can connect (§9 item 3).
+Paste these public pages into the OAuth consent screen. Both are real documents (not the app shell), readable
+without signing in:
+
+- Privacy policy: `https://yourlocalbusiness.replit.app/privacy`
+- Terms of service: `https://yourlocalbusiness.replit.app/terms`
+
+`/privacy-policy` redirects to `/privacy`. `/terms-of-service` redirects to `/terms`. The privacy policy names
+Upload-Post’s company, TONVI TECH SL (Spain), as a processor.
 
 ## 4. Platform approvals
 
@@ -514,9 +573,10 @@ never count). Until the treg wrapper (section 5) is in the app, these routes ans
 
 **Search Console for pages on the app's own address** (one property for every customer's page):
 1. In Google Search Console, add the URL-prefix property `https://yourlocalbusiness.replit.app/`.
-2. Choose **HTML file** verification. Put the file name Google gives you (for example
-   `google1a2b3c4d5e6f7a8b.html`) in the plain setting `GSC_APP_VERIFICATION_FILE`, redeploy, then press
-   **Verify** in Google. The app answers `https://yourlocalbusiness.replit.app/<that file>` itself.
+2. Choose **HTML file** verification. The homepage file is already served, with no sign-in and not the app shell:
+   `https://yourlocalbusiness.replit.app/google2598e017b2dc1e02.html`
+   (the body is exactly `google-site-verification: google2598e017b2dc1e02.html`). Press **Verify** in Google.
+   A different file name can still be set as `GSC_APP_VERIFICATION_FILE`; the app answers that URL too.
 3. Set `GSC_APP_PROPERTY` to `https://yourlocalbusiness.replit.app/`. Its host is also where the back button on
    Upload-Post's connect page takes customers (§3); unset, that is `https://yourlocalbusiness.replit.app`.
 4. Connect Search Console to your treg team with the **write** capability (`treg connections connect --provider
@@ -569,6 +629,9 @@ One screen with two sections:
 - **Ad accounts** (Zernio): Google Ads, Meta Ads, LinkedIn Ads, TikTok Ads, Pinterest Ads, Reddit Ads, Microsoft
   Ads, and X Ads as "Coming soon". Read only: "The app only reads them and never changes your ads or spends
   money."
+- **Gmail** (§3d): one mailbox for this account, for outreach later. **Connect** and **Disconnect**. Until
+  `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set, customers see that Gmail isn’t set up yet and the owner
+  sees those secret names and the redirect URI. Nothing is sent from this screen.
 - A side whose key isn't set says "Connecting social accounts isn't available yet" (or ad accounts) and shows no
   Connect buttons; with both off, one note: "Connecting accounts is coming soon. You can still post yourself and
   mark posts as posted."
@@ -670,6 +733,7 @@ The artifact build shows "Connected accounts and live analytics need the full ap
 - Search Console for pages on the app's own address (after §6), and on customers' own domains once you verify
   each one (§6).
 - Email analytics (Omnisend, once the reporting scope is confirmed).
+- Gmail connect (§3d), once `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set. Sending waits for outreach.
 - Per-customer usage, caps and the CSV.
 
 **As soon as `UPLOAD_POST_API_KEY`, `UPLOAD_POST_WEBHOOK_SECRET` and `MEDIA_URL_SECRET` are set** (and the §2
@@ -689,10 +753,16 @@ These start the things later phases wait on. None of them charges anyone.
    `STRIPE_SECRET_KEY`. The live key comes later (P1), as a restricted key in the deployment Secrets. Never paste a
    key anywhere else; the app only ever shows its last 4 characters. Tests use `server/test/mock-stripe.mjs` and
    never call Stripe.
-3. **Google OAuth verification for `gmail.send`** (needed for outreach from the customer's own Gmail, P10): in
-   Google Cloud Console → APIs & Services → OAuth consent screen, add the `https://www.googleapis.com/auth/gmail.send`
-   scope, the privacy policy and terms links and the app's domain, then submit for verification. It is a
-   sensitive scope (not restricted): Google reviews the app and a demo video; it can take a few weeks, so start now.
+3. **Google OAuth verification for `gmail.send`** (needed before outreach goes beyond test users, P10): the
+   connect flow, the OAuth client and the redirect URI are §3d. The redirect URI is
+   `https://yourlocalbusiness.replit.app/api/integrations/gmail/callback`. Secrets: `GOOGLE_CLIENT_ID` and
+   `GOOGLE_CLIENT_SECRET`. In Google Cloud Console → APIs & Services → OAuth consent screen, add the
+   `https://www.googleapis.com/auth/gmail.send` scope, the app's domain, and these pages, then submit for
+   verification:
+   - Privacy policy: `https://yourlocalbusiness.replit.app/privacy`
+   - Terms of service: `https://yourlocalbusiness.replit.app/terms`
+   It is a sensitive scope (not restricted): Google reviews the app and a demo video; it can take a few weeks.
+   Until Google verifies the app, keep the consent screen in Testing and use test users (§3d).
 4. **Microsoft publisher verification** (for `Mail.Send` from Outlook, P10): in Microsoft Entra → App registrations,
    link the app to a verified Microsoft Partner Network ID (Publisher verification), so customers see a verified
    publisher instead of "unverified" on the consent screen.
@@ -774,7 +844,8 @@ Prices are found by lookup key, never by id: `ylb_{launch,grow,scale,business}_{
 
 Stripe → Settings → Billing → Customer portal (or `--apply --portal`): payment methods on, invoice history on,
 cancel **at period end** on, **subscription updates (plan and quantity changes) off** (the app does those so each one is
-sent once and confirmed). Business information and links to the terms and privacy pages.
+sent once and confirmed). Business information and links to the terms and privacy pages
+(`https://yourlocalbusiness.replit.app/terms` and `https://yourlocalbusiness.replit.app/privacy`).
 
 ### Stripe Tax (optional)
 

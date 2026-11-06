@@ -348,6 +348,13 @@ function SignInScreen() {
           )}
         </p>
       )}
+      {!__ARTIFACT_BUILD__ && (
+        <p className="mt-6 text-center text-caption text-muted">
+          <a className="link" href="/privacy">Privacy</a>
+          <span aria-hidden="true"> · </span>
+          <a className="link" href="/terms">Terms</a>
+        </p>
+      )}
       {billing && mode === 'signup' && (
         <p className="mt-3 text-center text-small text-muted">
           Start → your account → Stripe Checkout → back to the app.{' '}
