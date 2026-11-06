@@ -3,16 +3,18 @@
 //
 //   useConnections() → { byPlatform, enabled, refresh() }   for PostNowButton and Settings › Connected accounts
 //   useAnalytics      the store: snapshots per project, the hub's Update (start, follow, the per-source row),
-//                     connected accounts (connect, waiting for the network, check, disconnect, choose a Page)
+//                     connected accounts of the business on screen (each business connects its own social accounts:
+//                     connect, waiting for the network, check, disconnect, choose a Page), the user's business slots,
+//                     and freeing a deleted business's slot
 //
 // The only thing kept in the browser is the Analytics range (7 or 30 days) under ylb-analytics-range.
 // Nothing here retries a write: Update and Connect are one request each, started by the person.
 
 import { useEffect } from 'react';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import type { AnalyticsSettings, AnalyticsSettingsInput, AnalyticsSnapshot, AnalyticsSource, ConnectPlatform, ConnectionStatus, RefreshRun } from '@/lib/integrations/types';
+import type { AnalyticsSettings, AnalyticsSettingsInput, AnalyticsSnapshot, AnalyticsSource, ConnectPlatform, ConnectionStatus, RefreshRun, SocialSlots } from '@/lib/integrations/types';
 import { ANALYTICS_SOURCES, AD_PLATFORMS, SOCIAL_PLATFORMS } from '@/lib/integrations/types';
-import { IntegrationApiError, checkConnection, connect as connectApi, disconnect as disconnectApi, getConnections, getRun, getSnapshots, reconnect as reconnectApi, refreshAnalytics, saveAnalyticsSettings } from '@/lib/integrations/api';
+import { IntegrationApiError, checkConnection, connect as connectApi, disconnect as disconnectApi, getConnections, getRun, getSnapshots, reconnect as reconnectApi, refreshAnalytics, releaseProjectSocial, saveAnalyticsSettings } from '@/lib/integrations/api';
 import { serverFetch } from '@/ai/claude';
 import { serverBaseNow } from '@/lib/cloud/auth';
 import { safeStorage } from '@/lib/storage';
@@ -85,8 +87,10 @@ export interface AnalyticsState {
   /** the Analytics range (7 or 30 days), remembered in this browser */
   range: AnalyticsRange;
 
-  /** connected accounts, as the server last said */
+  /** the business on screen's connected accounts, as the server last said (each business has its own) */
   connections: ConnectionStatus[];
+  /** the user's businesses with social accounts, of their limit (undefined until the server says, or social is off) */
+  slots?: SocialSlots;
   /** whether connecting accounts is switched on (false: every network is posted by hand) */
   connectionsEnabled: boolean;
   /** social accounts (connect, post, social stats) are switched on */
@@ -121,6 +125,8 @@ export interface AnalyticsState {
   /** "Check": asks the server to read the account back from the network's service, then re-reads every row. */
   checkPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
   disconnectPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
+  /** A business was deleted (or its slot is held by one that was): its social accounts are disconnected and its slot freed. One request each. */
+  releaseBusiness: (projectId: string) => Promise<{ ok: boolean; message?: string }>;
   loadOwner: () => Promise<void>;
   /** Read the project's analytics settings (a PUT with no fields changes nothing and answers them). */
   loadSettings: (projectId: string) => Promise<void>;
@@ -218,9 +224,11 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       if (projectId !== activeProject()) return;
       const connections = Array.isArray(r.connections) ? r.connections : [];
       // a network that's no longer waiting (connected, or anything but not connected) leaves `pending`;
-      // one still not connected after 30 minutes becomes "That didn't finish"
-      const pending = { ...get().pending };
-      const expired = { ...get().expired };
+      // one still not connected after 30 minutes becomes "That didn't finish". Another business on screen starts
+      // with nothing waiting here (its own connects waiting show from the server's answer)
+      const sameBusiness = connectionsFor === null || connectionsFor === projectId;
+      const pending = sameBusiness ? { ...get().pending } : {};
+      const expired = sameBusiness ? { ...get().expired } : {};
       const now = Date.now();
       for (const [p, at] of Object.entries(pending) as [ConnectPlatform, number][]) {
         const c = connections.find((x) => x.platform === p);
@@ -238,8 +246,10 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       const enabled = r.setUp === true && available.length > 0;
       // each side by its own flag; an older server sent only setUp (then both follow it)
       const side = (flag: boolean | undefined, list: readonly ConnectPlatform[]) => enabled && (flag ?? true) && available.some((p) => list.includes(p));
+      const slots = r.slots && Number.isFinite(r.slots.used) && Number.isFinite(r.slots.cap) ? { used: r.slots.used, cap: r.slots.cap, projects: Array.isArray(r.slots.projects) ? r.slots.projects.filter((x) => typeof x === 'string') : [] } : undefined;
       set({
         connections,
+        slots,
         connectionsEnabled: enabled,
         socialEnabled: side(r.setUpSocial, SOCIAL_PLATFORMS),
         adsEnabled: side(r.setUpAds, AD_PLATFORMS),
@@ -256,7 +266,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       if (projectId !== activeProject()) return;
       connectionsAt = e instanceof IntegrationApiError && e.code === 'AUTH_REQUIRED' ? 0 : Date.now();
       connectionsFor = projectId;
-      set({ connections: [], connectionsEnabled: false, socialEnabled: false, adsEnabled: false, connectionsLoaded: true, connectionsError: e instanceof IntegrationApiError && e.code !== 'AUTH_REQUIRED' ? e.message : undefined });
+      set({ connections: [], slots: undefined, connectionsEnabled: false, socialEnabled: false, adsEnabled: false, connectionsLoaded: true, connectionsError: e instanceof IntegrationApiError && e.code !== 'AUTH_REQUIRED' ? e.message : undefined });
     }
   };
 
@@ -270,6 +280,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     loading: false,
     range: readRange(),
     connections: [],
+    slots: undefined,
     connectionsEnabled: false,
     socialEnabled: false,
     adsEnabled: false,
@@ -410,6 +421,18 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
         return { ok: true };
       } catch (e) {
         return { ok: false, message: messageOf(e) };
+      }
+    },
+
+    releaseBusiness: async (projectId) => {
+      if (artifact() || !projectId) return { ok: false };
+      try {
+        await releaseProjectSocial(projectId);
+        const slots = get().slots;
+        if (slots?.projects.includes(projectId)) set({ slots: { ...slots, used: Math.max(0, slots.used - 1), projects: slots.projects.filter((x) => x !== projectId) } });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, message: messageOf(e, 'Couldn’t free that business’s slot just now. Try again shortly.') };
       }
     },
 

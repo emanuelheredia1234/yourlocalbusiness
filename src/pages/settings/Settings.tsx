@@ -6,7 +6,7 @@ import { useRuntime } from '@/lib/platform';
 import { pushMyListings } from '@/lib/community';
 import { saveBrand, brandCopyFrom } from '@/lib/brandSave';
 import { EXPORT_KEYS, backupFileName, backupJson } from '@/lib/backup';
-import { deleteProjectEverywhere } from '@/lib/projectActions';
+import { deleteProjectEverywhere, releaseSocialFor, socialDeleteNote } from '@/lib/projectActions';
 import { usePublishAccess } from '@/lib/publish';
 import { FORMATS } from '@/ai/knowledge';
 import { brandKitTask } from '@/ai/tasks';
@@ -368,7 +368,11 @@ function ProjectsData() {
       const serverUrl = useStore.getState().settings.ai.serverUrl;
       patch.settings = { ...d, ...(data.settings ?? {}), ai: { ...d.ai, ...(data.settings?.ai ?? {}), serverUrl }, profile: { ...d.profile, ...(data.settings?.profile ?? {}) } };
       if (!patch.activeProjectId || !data.projects.some((p) => p.id === patch.activeProjectId)) patch.activeProjectId = data.projects[0]?.id ?? null;
+      // businesses the backup doesn't have are gone: their social accounts are disconnected (their slots freed)
+      const kept = new Set(data.projects.map((p) => p.id));
+      const gone = useStore.getState().projects.map((p) => p.id).filter((id) => !kept.has(id));
       replaceState(patch);
+      void releaseSocialFor(gone);
       // an older backup may hold things that version made up
       cleanWorkspace();
       toast({ kind: 'success', title: 'Backup imported' });
@@ -378,7 +382,7 @@ function ProjectsData() {
   };
 
   const remove = async (p: Project) => {
-    if (await confirmAction({ title: `Delete ${p.brand.name || 'this project'}?`, body: 'Its posts, campaigns and Marketplace listing are removed too. This can’t be undone.', confirmLabel: 'Delete project', danger: true })) deleteProjectEverywhere(p.id);
+    if (await confirmAction({ title: `Delete ${p.brand.name || 'this project'}?`, body: `Its posts, campaigns and Marketplace listing are removed too.${socialDeleteNote(p.id)} This can’t be undone.`, confirmLabel: 'Delete project', danger: true })) deleteProjectEverywhere(p.id);
   };
   // the name lives in Brand: open it there, ready to type
   const rename = () => {
@@ -477,12 +481,14 @@ function ProjectsData() {
               if (
                 await confirmAction(
                   signedIn
-                    ? { title: 'Erase your whole workspace?', body: 'All projects, posts, skills, listings, orders and files are deleted from your account and every device. Export a backup first if you might need them.', confirmLabel: 'Erase everything', danger: true }
+                    ? { title: 'Erase your whole workspace?', body: 'All projects, posts, skills, listings, orders and files are deleted from your account and every device, and every business’s connected social accounts are disconnected. Export a backup first if you might need them.', confirmLabel: 'Erase everything', danger: true }
                     : { title: 'Erase everything on this device?', body: 'All projects, posts, skills, listings and orders are deleted. Export a backup first if you might need them.', confirmLabel: 'Erase everything', danger: true },
                 )
               ) {
+                const ids = useStore.getState().projects.map((p) => p.id);
                 resetAll();
                 pushMyListings();
+                void releaseSocialFor(ids);
               }
             }}
           >

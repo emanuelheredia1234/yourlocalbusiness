@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   reconnect: vi.fn(),
   checkConnection: vi.fn(),
   disconnect: vi.fn(),
+  releaseProjectSocial: vi.fn(),
   saveAnalyticsSettings: vi.fn(),
 }));
 vi.mock('@/lib/integrations/api', async (original) => ({ ...(await original<typeof import('@/lib/integrations/api')>()), ...api }));
@@ -202,6 +203,48 @@ describe('connected accounts', () => {
     await useAnalytics.getState().checkPlatform('youtube');
     expect(api.checkConnection).toHaveBeenCalledTimes(1);
     expect(useAnalytics.getState().connections.find((c) => c.platform === 'youtube')?.state).toBe('needs_reconnect');
+  });
+});
+
+describe('each business’s own social accounts', () => {
+  it('keeps the user’s business slots from the server’s answer (and none when social is off)', async () => {
+    api.getConnections.mockResolvedValue({ connections: [], available: ['facebook'], setUp: true, slots: { used: 2, cap: 3, projects: ['biz-a', 'biz-b'] } });
+    await useAnalytics.getState().refreshConnections();
+    expect(useAnalytics.getState().slots).toEqual({ used: 2, cap: 3, projects: ['biz-a', 'biz-b'] });
+    api.getConnections.mockResolvedValue({ connections: [], available: ['google_ads'], setUp: true, setUpSocial: false });
+    await useAnalytics.getState().refreshConnections();
+    expect(useAnalytics.getState().slots).toBeUndefined();
+  });
+
+  it('another business on screen doesn’t show the last one’s waiting connects', async () => {
+    const { useStore } = await import('@/store/useStore');
+    const before = useStore.getState().activeProjectId;
+    try {
+      useStore.setState({ activeProjectId: 'biz-a' });
+      api.getConnections.mockResolvedValue({ connections: [{ platform: 'instagram', state: 'not_connected' }], available: ['instagram'], setUp: true });
+      await useAnalytics.getState().refreshConnections();
+      useAnalytics.setState({ pending: { instagram: Date.now() } });
+      await useAnalytics.getState().refreshConnections();
+      expect(useAnalytics.getState().pending.instagram).toBeTypeOf('number');
+      useStore.setState({ activeProjectId: 'biz-b' });
+      await useAnalytics.getState().refreshConnections();
+      expect(api.getConnections).toHaveBeenLastCalledWith('biz-b');
+      expect(useAnalytics.getState().pending.instagram).toBeUndefined();
+    } finally {
+      useStore.setState({ activeProjectId: before });
+    }
+  });
+
+  it('freeing a deleted business’s slot is one request, and the slot count follows', async () => {
+    useAnalytics.setState({ slots: { used: 3, cap: 3, projects: ['biz-a', 'biz-b', 'biz-gone'] } });
+    api.releaseProjectSocial.mockResolvedValue({ ok: true, freed: true });
+    expect(await useAnalytics.getState().releaseBusiness('biz-gone')).toEqual({ ok: true });
+    expect(api.releaseProjectSocial).toHaveBeenCalledTimes(1);
+    expect(api.releaseProjectSocial).toHaveBeenCalledWith('biz-gone');
+    expect(useAnalytics.getState().slots).toEqual({ used: 2, cap: 3, projects: ['biz-a', 'biz-b'] });
+    api.releaseProjectSocial.mockRejectedValue(new IntegrationApiError(503, { error: 'Try again shortly.', code: 'UNAVAILABLE' }));
+    expect(await useAnalytics.getState().releaseBusiness('biz-a')).toEqual({ ok: false, message: 'Try again shortly.' });
+    expect(api.releaseProjectSocial).toHaveBeenCalledTimes(2);
   });
 });
 

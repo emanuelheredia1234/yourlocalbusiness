@@ -1,7 +1,7 @@
 // Settings › Connected accounts, drawn once per state (as on the server: no effects run): the two sections
-// (social accounts through Upload-Post, ad accounts through Zernio), every row state (limited with each reason,
-// waiting, a connect window that didn't finish), one side or both switched off, the owner's setup steps (Secret
-// names and webhook addresses, never values) and the artifact build.
+// (social accounts through Upload-Post, each business its own; ad accounts through Zernio), the business slots,
+// every row state (limited with each reason, waiting, a connect window that didn't finish), one side or both
+// switched off, the owner's setup steps (Secret names and webhook addresses, never values) and the artifact build.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -13,13 +13,28 @@ vi.mock('@/store/analytics', async (original) => {
   const real = await original<typeof import('@/store/analytics')>();
   return { ...real, useAnalytics: live(real.useAnalytics) };
 });
+// the business on screen, read live too (a server render would otherwise read the store's first state)
+vi.mock('@/store/useStore', async (original) => {
+  const real = await original<typeof import('@/store/useStore')>();
+  return { ...real, useStore: live(real.useStore) };
+});
 
 const { useAnalytics } = await import('@/store/analytics');
+const { useStore } = await import('@/store/useStore');
+const { newProject } = await import('@/store/defaults');
 const { ConnectedAccounts, rowView, webhookUrls } = await import('./ConnectedAccounts');
 
 const render = () => renderToStaticMarkup(createElement(TooltipProvider, null, createElement(ConnectedAccounts)));
 const set = (connections: ConnectionStatus[], extra: Partial<ReturnType<typeof useAnalytics.getState>> = {}) =>
-  useAnalytics.setState({ connections, connectionsEnabled: true, socialEnabled: true, adsEnabled: true, connectionsLoaded: true, connectionsHint: undefined, connectionsError: undefined, pending: {}, expired: {}, ...extra });
+  useAnalytics.setState({ connections, slots: undefined, connectionsEnabled: true, socialEnabled: true, adsEnabled: true, connectionsLoaded: true, connectionsHint: undefined, connectionsError: undefined, pending: {}, expired: {}, ...extra });
+/** The user's businesses, the first one on screen (each business connects its own social accounts). */
+function businesses(...names: string[]) {
+  const projects = names.map((name, i) => {
+    const p = newProject('business', 'existing');
+    return { ...p, id: `proj_${i + 1}`, brand: { ...p.brand, name } };
+  });
+  useStore.setState({ projects, activeProjectId: projects[0]?.id ?? null });
+}
 
 /** The markup of one row (from its data-platform marker back to the row's start). */
 function rowOf(html: string, platform: string): string {
@@ -30,7 +45,10 @@ function rowOf(html: string, platform: string): string {
   return html.slice(start, end === -1 ? undefined : end);
 }
 
-beforeEach(() => set([]));
+beforeEach(() => {
+  set([]);
+  businesses('Joe’s Bakery', 'Joe’s Catering');
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe('the sections', () => {
@@ -44,6 +62,43 @@ describe('the sections', () => {
   });
   it('no Other integrations section until the owner sets Nango up', () => {
     expect(render()).not.toContain('Other integrations');
+  });
+});
+
+describe('each business’s own accounts', () => {
+  it('says each business connects its own, and whose these are', () => {
+    const html = render();
+    expect(html).toContain('Each business connects its own accounts. These are Joe’s Bakery’s');
+    businesses('Joe’s Catering', 'Joe’s Bakery');
+    expect(render()).toContain('These are Joe’s Catering’s');
+  });
+  it('how many business slots are used, of the user’s limit', () => {
+    set([], { slots: { used: 2, cap: 3, projects: ['proj_1', 'proj_2'] } });
+    const html = render();
+    expect(html).toContain('Business slots');
+    expect(html).toContain('2 of 3 used');
+    expect(html).not.toContain('you deleted');
+    expect(html).not.toContain('can’t connect social accounts yet');
+  });
+  it('all slots in use and this business has none: it says so plainly', () => {
+    businesses('Joe’s Food Truck', 'Joe’s Bakery');
+    set([], { slots: { used: 3, cap: 3, projects: ['proj_2', 'proj_x', 'proj_y'] } });
+    const html = render();
+    expect(html).toContain('3 of 3 used');
+    expect(html).toContain('All 3 business slots are in use, so Joe’s Food Truck can’t connect social accounts yet.');
+  });
+  it('a slot held by a business that was deleted can be freed', () => {
+    set([], { slots: { used: 2, cap: 3, projects: ['proj_1', 'proj_gone'] } });
+    const html = render();
+    expect(html).toContain('1 slot is held by a business you deleted.');
+    expect(html).toContain('>Free it<');
+  });
+  it('no business on screen: nothing social to connect (ads still do)', () => {
+    useStore.setState({ projects: [], activeProjectId: null });
+    const html = render();
+    expect(html).toContain('Open a business to connect its social accounts.');
+    expect(rowOf(html, 'instagram')).not.toContain('>Connect<');
+    expect(rowOf(html, 'google_ads')).toContain('>Connect<');
   });
 });
 

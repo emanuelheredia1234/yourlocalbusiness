@@ -81,15 +81,17 @@ const q = (params: Record<string, string | number | undefined>) => {
 const seg = encodeURIComponent;
 
 // ───────────── connected accounts (social networks through Upload-Post, ad accounts through Zernio) ─────────────
-// projectId: the business on screen; it picks which of the user's accounts that business uses.
+// projectId: the business on screen. Each business connects its own social accounts (and picks its ad account).
 
 export const getConnections = (projectId?: string) => call<ConnectionsResponse>('GET', `/api/integrations/connections${q({ projectId })}`);
 export const connect = (platform: ConnectPlatform, projectId?: string) => call<ConnectLink>('POST', `/api/integrations/connections/${seg(platform)}/connect`, projectId ? { projectId } : {});
 export const reconnect = (platform: ConnectPlatform, projectId?: string) => call<ConnectLink>('POST', `/api/integrations/connections/${seg(platform)}/reconnect`, projectId ? { projectId } : {});
 export const checkConnection = (platform: ConnectPlatform, projectId?: string) => call<{ connection: ConnectionStatus }>('POST', `/api/integrations/connections/${seg(platform)}/check`, projectId ? { projectId } : {});
 export const disconnect = (platform: ConnectPlatform, projectId?: string) => call<{ ok: true }>('DELETE', `/api/integrations/connections/${seg(platform)}${q({ projectId })}`);
-export const getTargets = (platform: ConnectPlatform) => call<{ targets: Target[] }>('GET', `/api/integrations/connections/${seg(platform)}/targets`);
+export const getTargets = (platform: ConnectPlatform, projectId?: string) => call<{ targets: Target[] }>('GET', `/api/integrations/connections/${seg(platform)}/targets${q({ projectId })}`);
 export const setTarget = (platform: ConnectPlatform, targetId: string, projectId?: string) => call<{ connection: ConnectionStatus }>('PUT', `/api/integrations/connections/${seg(platform)}/target`, { targetId, ...(projectId ? { projectId } : {}) });
+/** A business was deleted: its social accounts are disconnected and its slot freed (one request; never retried). */
+export const releaseProjectSocial = (projectId: string) => call<{ ok: true; freed: boolean }>('DELETE', `/api/integrations/connections${q({ projectId })}`);
 
 // ───────────── other integrations (Nango; future booking tools and CRMs, shown only when the owner set it up) ─────────────
 

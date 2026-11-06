@@ -1,6 +1,7 @@
 // The owner's per-customer usage (route admin-billing, linked from Settings for the owner only): what each
-// customer's analytics cost (treg), their social posting (Upload-Post: connected accounts, calls and the profile
-// estimate) and ad accounts (Zernio) side by side, their caps (edit, block, reset), the check of our ledger
+// customer's analytics cost (treg), their social posting (Upload-Post: one profile per business, their connected
+// accounts, calls and the profile estimates) and ad accounts (Zernio) side by side, Upload-Post profiles used of the
+// plan's 75 overall and per customer, their caps (edit, block, reset), the check of our ledger
 // against treg's own totals, and a CSV to bill from. The server answers all of it to admins only; this page
 // charges nothing. Team-level provider alerts show as plain words, never amounts or links.
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -54,7 +55,8 @@ export const UPLOAD_POST_ALERTS: Record<string, string> = {
   profile_budget: 'More new customers started connecting social accounts today than UPLOAD_POST_NEW_PROFILES_PER_DAY allows. Check they’re real, then raise it if they are.',
   x_links: 'Upload-Post took links out of X posts: the X Links allowance (50 a month for everyone) is used up, or the add-on is off.',
   x_links_low: 'The X Links allowance (50 link posts a month for every customer together) is nearly used up.',
-  profile_orphans: 'Upload-Post has profiles named ylb_ that no customer here owns (another copy of the app on the same key, or another database). They were left alone; delete them in the Upload-Post dashboard if they’re yours to remove.',
+  profile_orphans: 'Upload-Post has profiles named ylb_ that no customer’s business here owns (another copy of the app on the same key, or another database). They were left alone; delete them in the Upload-Post dashboard if they’re yours to remove.',
+  profile_user_cap: 'A customer reached their limit of businesses with social accounts (UPLOAD_POST_MAX_PROFILES_PER_USER). Raise it in Replit Secrets if they need more.',
 };
 
 export default function Billing() {
@@ -201,6 +203,7 @@ export function BillingView({ data, report, onEdit, onChanged }: { data: Data; r
       {data.uploadPostAlert && (
         <Callout tone="warn" title="Social posting needs attention">
           {UPLOAD_POST_ALERTS[data.uploadPostAlert.kind] ?? 'Upload-Post reported a problem with the plan or key. Check the Upload-Post dashboard.'}
+          {data.uploadPostAlert.customerTag ? ` Customer ${data.uploadPostAlert.customerTag}.` : ''}
           {data.uploadPostAlert.at && !Number.isNaN(Date.parse(data.uploadPostAlert.at)) ? ` (${fmtRelative(data.uploadPostAlert.at)})` : ''}
         </Callout>
       )}
@@ -212,7 +215,13 @@ export function BillingView({ data, report, onEdit, onChanged }: { data: Data; r
           { label: 'Blocked', value: totals.blocked },
           { label: 'Estimated connection costs', value: usd(totals.estimated), info: 'Estimates for social profiles (Upload-Post’s plan price per profile) and connected ad accounts (Zernio). They never count toward a cap.' },
           ...(data.upProfiles
-            ? [{ label: 'Upload-Post profiles', value: data.upProfiles.limit ? `${data.upProfiles.used} / ${data.upProfiles.limit}` : String(data.upProfiles.used), info: 'One profile per customer who connected a social account. The Advanced plan has 75; add-ons give +25 or +50.' }]
+            ? [
+                {
+                  label: 'Upload-Post profiles',
+                  value: data.upProfiles.limit ? `${data.upProfiles.used} / ${data.upProfiles.limit}` : String(data.upProfiles.used),
+                  info: `One profile per business that connected social accounts${data.upProfiles.perCustomer ? ` (each customer up to ${data.upProfiles.perCustomer} businesses, UPLOAD_POST_MAX_PROFILES_PER_USER)` : ''}. The Advanced plan has 75; add-ons give +25 ($65 a month) or +50 ($115 a month), and they don’t stack.`,
+                },
+              ]
             : []),
         ]}
       />
@@ -328,7 +337,7 @@ function CustomerRow({ row, defaults, onEdit, onChanged }: { row: CustomerUsageR
         {row.estimatedMicro > 0 && <span className="block text-caption text-muted">+{usd(row.estimatedMicro)} est.</span>}
       </td>
       <td className="num px-2 py-2 text-right font-mono text-ink-2">{row.calls}</td>
-      <VendorCell accounts={row.socialAccounts} usage={row.vendors?.uploadpost} calls title="Social accounts connected now, Upload-Post calls in the period and the estimated profile cost" />
+      <VendorCell accounts={row.socialAccounts} profiles={row.socialProfiles} usage={row.vendors?.uploadpost} calls title="Social accounts connected now (all their businesses), Upload-Post profiles in use (one per business), calls in the period and the estimated profile cost" />
       <VendorCell accounts={row.adAccounts} usage={row.vendors?.zernio} title="Ad accounts connected now and the estimated cost (Zernio bills per connected ad account)" />
       <td className="num px-2 py-2 font-mono text-caption text-ink-2">
         {usd(daily ?? 0)} / {usd(monthly ?? 0)}
@@ -347,9 +356,12 @@ function CustomerRow({ row, defaults, onEdit, onChanged }: { row: CustomerUsageR
   );
 }
 
-/** One vendor's cell: accounts connected now, then calls and the estimate (an older server: the combined count only). */
-export function VendorCell({ accounts, usage, calls, title }: { accounts?: number; usage?: { costMicro: number; estimatedMicro: number; calls: number }; calls?: boolean; title: string }) {
-  const extra = [calls && usage && usage.calls > 0 ? `${usage.calls} call${usage.calls === 1 ? '' : 's'}` : '', usage && usage.estimatedMicro > 0 ? `+${usd(usage.estimatedMicro)} est.` : ''].filter(Boolean).join(' · ');
+/**
+ * One vendor's cell: accounts connected now, then the profiles in use (Upload-Post: one per business), calls and the
+ * estimate (an older server: the combined count only).
+ */
+export function VendorCell({ accounts, profiles, usage, calls, title }: { accounts?: number; profiles?: number; usage?: { costMicro: number; estimatedMicro: number; calls: number }; calls?: boolean; title: string }) {
+  const extra = [typeof profiles === 'number' && profiles > 0 ? `${profiles} profile${profiles === 1 ? '' : 's'}` : '', calls && usage && usage.calls > 0 ? `${usage.calls} call${usage.calls === 1 ? '' : 's'}` : '', usage && usage.estimatedMicro > 0 ? `+${usd(usage.estimatedMicro)} est.` : ''].filter(Boolean).join(' · ');
   return (
     <td className="num px-2 py-2 text-right font-mono text-ink-2" title={title}>
       {typeof accounts === 'number' ? `${accounts} acct${accounts === 1 ? '' : 's'}` : '–'}

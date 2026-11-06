@@ -1,7 +1,10 @@
 // Settings › Connected accounts: one screen, two sections.
-// - Social accounts: the networks the business posts from (posting, post status and social stats). Connect opens
-//   the posting service's hosted, branded sign-in page (Upload-Post) in a new tab; the row then waits for the
-//   network. Reconnect when a network asks to sign in again; Disconnect stops the app using the account.
+// - Social accounts: the networks the business on screen posts from (posting, post status and social stats). Each
+//   business connects its own accounts (its own Upload-Post profile); switching business shows that business's.
+//   The user sees how many of their business slots are in use (UPLOAD_POST_MAX_PROFILES_PER_USER), and can free the
+//   slot of a business they deleted. Connect opens the posting service's hosted, branded sign-in page (Upload-Post)
+//   in a new tab; the row then waits for the network. Reconnect when a network asks to sign in again; Disconnect
+//   stops this business using the account.
 // - Ad accounts: the ad accounts the app reads results from (Zernio). Read only for now.
 // Each side is switched on by its own key; a side that's off says so, and the owner alone sees which Replit
 // Secrets to add and the webhook address to register (names and addresses, never values).
@@ -118,7 +121,12 @@ function PlatformIcon({ platform }: { platform: ConnectPlatform }) {
 export function ConnectedAccounts() {
   const connections = useAnalytics((s) => s.connections);
   const enabled = useAnalytics((s) => s.connectionsEnabled);
-  const socialOn = useAnalytics((s) => s.socialEnabled);
+  const socialEnabled = useAnalytics((s) => s.socialEnabled);
+  const slots = useAnalytics((s) => s.slots);
+  const business = useStore((s) => s.projects.find((p) => p.id === s.activeProjectId));
+  const projectIds = useStore((s) => s.projects.map((p) => p.id).join(' '));
+  // social accounts belong to a business: with none on screen there's nothing to connect them to
+  const socialOn = socialEnabled && !!business;
   const adsOn = useAnalytics((s) => s.adsEnabled);
   const loaded = useAnalytics((s) => s.connectionsLoaded);
   const hint = useAnalytics((s) => s.connectionsHint);
@@ -150,9 +158,23 @@ export function ConnectedAccounts() {
   // a network that just connected with more than one Page or account: ask which one to use
   const [choose, setChoose] = useState<ConnectPlatform | null>(null);
   const prev = useRef(byPlatform);
+  // another business on screen: its own accounts, read now (the switch itself never opens the chooser)
+  const switched = useRef(false);
+  const shownBusiness = useRef(business?.id);
+  useEffect(() => {
+    if (shownBusiness.current === business?.id) return;
+    shownBusiness.current = business?.id;
+    switched.current = true;
+    setChoose(null);
+    if (!__ARTIFACT_BUILD__) void useAnalytics.getState().refreshConnections();
+  }, [business?.id]);
   useEffect(() => {
     const before = prev.current;
     prev.current = byPlatform;
+    if (switched.current) {
+      switched.current = false;
+      return;
+    }
     for (const c of connections) {
       const was = before[c.platform]?.state;
       if (c.state === 'connected' && was !== 'connected' && (c.targetsAvailable ?? 0) > 1 && !c.targetLabel) {
@@ -174,6 +196,7 @@ export function ConnectedAccounts() {
     const on = ADS.includes(p) ? adsOn : socialOn;
     return <AccountRow key={p} platform={p} status={byPlatform[p]} view={rowView(p, byPlatform[p], { enabled: on, pendingAt: pending[p], expired: expired[p] })} onChoose={() => setChoose(p)} />;
   };
+  const name = business?.brand.name.trim() || 'This business';
   // one side off while the other works: that section says so (both off: one note at the top)
   const sideOff = (on: boolean, what: string) =>
     loaded && enabled && !on ? (
@@ -193,14 +216,20 @@ export function ConnectedAccounts() {
       )}
       <SettingsSection
         title="Social accounts"
-        description="The accounts your business posts from. The app posts only after you confirm, and shows your own stats."
+        description={business ? `Each business connects its own accounts. These are ${name}’s: its posts and stats use them. The app posts only after you confirm.` : 'Each business connects its own accounts. The app posts only after you confirm.'}
         actions={
           <InfoTip label="How connecting works" title="How connecting works">
-            Connect opens a secure sign-in page in a new tab, run by Upload-Post, the service the app posts through, so its name also shows on the network’s permission screen. You choose what to allow; the app never sees your password. Each network connects one account for all your businesses; for Facebook and LinkedIn you can choose the Page each business posts to. Disconnecting here stops the app using the account; to remove access completely, also remove it in the network’s own settings.
+            Connect opens a secure sign-in page in a new tab, run by Upload-Post, the service the app posts through, so its name also shows on the network’s permission screen. You choose what to allow; the app never sees your password. Each business connects its own Facebook Page, Instagram, TikTok, X, YouTube and LinkedIn: switch business to see and connect that business’s. Disconnecting here stops this business using the account; to remove access completely, also remove it in the network’s own settings.
           </InfoTip>
         }
       >
-        {sideOff(socialOn, 'Connecting social accounts')}
+        {sideOff(socialEnabled, 'Connecting social accounts')}
+        {loaded && socialEnabled && !business && (
+          <div className="pb-2">
+            <Callout tone="info">Open a business to connect its social accounts.</Callout>
+          </div>
+        )}
+        {socialEnabled && slots && <BusinessSlots slots={slots} businessId={business?.id} businessName={name} projectIds={projectIds} />}
         {SOCIAL.map(row)}
       </SettingsSection>
       <SettingsSection title="Ad accounts" description="See your own ad results. The app only reads them and never changes your ads or spends money.">
@@ -210,6 +239,67 @@ export function ConnectedAccounts() {
       <OtherIntegrations />
       {choose && <ChooseTarget platform={choose} onClose={() => setChoose(null)} />}
     </div>
+  );
+}
+
+/**
+ * How many of the user's businesses have social accounts, of their limit; a note when this business can't get one;
+ * and Free for slots still held by businesses that were deleted (e.g. on a device that was offline).
+ */
+export function BusinessSlots({ slots, businessId, businessName, projectIds }: { slots: { used: number; cap: number; projects: string[] }; businessId?: string; businessName: string; projectIds: string }) {
+  const [busy, setBusy] = useState(false);
+  const mine = new Set(projectIds.split(' ').filter(Boolean));
+  const orphans = slots.projects.filter((id) => !mine.has(id));
+  const full = slots.used >= slots.cap && !!businessId && !slots.projects.includes(businessId);
+  const free = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      for (const id of orphans) {
+        const r = await useAnalytics.getState().releaseBusiness(id);
+        if (!r.ok) {
+          toast({ title: 'Couldn’t free the slot', body: r.message, kind: 'error' });
+          break;
+        }
+      }
+      await useAnalytics.getState().refreshConnections();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <SettingsRow
+        label={
+          <span className="inline-flex items-center gap-1">
+            Business slots
+            <InfoTip label="About business slots" title="Business slots">
+              Each business that connects social accounts uses one slot. Deleting a business frees its slot, and so does a business with nothing connected for a week.
+            </InfoTip>
+          </span>
+        }
+        description={orphans.length ? `${orphans.length === 1 ? '1 slot is' : `${orphans.length} slots are`} held by ${orphans.length === 1 ? 'a business' : 'businesses'} you deleted.` : undefined}
+      >
+        <span className="flex min-w-0 flex-wrap items-center justify-end gap-3" data-slots={`${slots.used}/${slots.cap}`}>
+          <span className="num text-small text-ink-2">
+            {slots.used} of {slots.cap} used
+          </span>
+          {orphans.length > 0 && (
+            <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => void free()}>
+              {busy && <Spinner size={14} />}
+              Free {orphans.length === 1 ? 'it' : 'them'}
+            </button>
+          )}
+        </span>
+      </SettingsRow>
+      {full && (
+        <div className="pb-2">
+          <Callout tone="warn">
+            All {slots.cap} business slots are in use, so {businessName} can’t connect social accounts yet. Delete a business you no longer use to free its slot.
+          </Callout>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -285,9 +375,12 @@ function AccountRow({ platform, status, view, onChoose }: { platform: ConnectPla
   const check = () => void act(() => s().checkPlatform(platform), `Couldn’t check ${name}`);
   const disconnect = async () => {
     const where = APP_SETTINGS[platform] ?? name;
+    const ads = ADS.includes(platform);
     const ok = await confirmAction({
       title: `Disconnect ${name}?`,
-      body: `Every business that uses this account stops using it, and posting there goes back to manual. This doesn’t remove access inside ${where}; do that in ${where}’s settings.`,
+      body: ads
+        ? `Every business that uses this account stops using it. This doesn’t remove access inside ${where}; do that in ${where}’s settings.`
+        : `This business stops using it, and its posting there goes back to manual. Your other businesses keep their own accounts. This doesn’t remove access inside ${where}; do that in ${where}’s settings.`,
       confirmLabel: 'Disconnect',
       danger: true,
     });
@@ -352,7 +445,7 @@ function ChooseTarget({ platform, onClose }: { platform: ConnectPlatform; onClos
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     let live = true;
-    getTargets(platform)
+    getTargets(platform, useStore.getState().activeProjectId ?? undefined)
       .then((r) => live && setTargets(Array.isArray(r.targets) ? r.targets : []))
       .catch((e: unknown) => live && setError(e instanceof Error ? e.message : 'Couldn’t load the list.'));
     return () => {

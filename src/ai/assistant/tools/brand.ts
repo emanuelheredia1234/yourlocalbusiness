@@ -15,7 +15,7 @@ import { priceLabel } from '@/lib/listing';
 import { listingChanged, liveListing } from '@/lib/listingPublish';
 import { allListings, filterListings, listingCities } from '@/lib/marketplace';
 import { useRuntime } from '@/lib/platform';
-import { deleteProjectEverywhere, startNewProject } from '@/lib/projectActions';
+import { deleteProjectEverywhere, socialDeleteNote, startNewProject } from '@/lib/projectActions';
 import { CATEGORY_META, FEEDBACK_REASONS, SCOPE_META, SKILL_LIBRARY, describeDirectives, effectiveDirectives, newSkill, skillFromLibrary, templatePlaceholders, unfilledPlaceholders } from '@/ai/brain';
 import { MAX_DOC, MIN_DOC_CHARS, docText, knowledgeDocSkill, playgroundSets } from '@/ai/brainSkills';
 import { runTask, type RunResult } from '@/ai/engine';
@@ -888,7 +888,7 @@ const deleteProject = defineTool({
   },
   danger: ({ id }) => {
     const own = s().skills.filter((k) => k.projectId === id).length;
-    return deleteConfirm({ thing: 'project', names: [projectName(id)], extra: `Its posts, campaigns${own ? `, ${own === 1 ? 'the Brain skill' : `the ${own} Brain skills`} made only for it` : ''} and Marketplace listing are removed too.` });
+    return deleteConfirm({ thing: 'project', names: [projectName(id)], extra: `Its posts, campaigns${own ? `, ${own === 1 ? 'the Brain skill' : `the ${own} Brain skills`} made only for it` : ''} and Marketplace listing are removed too.${socialDeleteNote(id)}` });
   },
   run: ({ id }) => {
     const name = projectName(id);
