@@ -84,7 +84,19 @@ export const RESERVED_SLUGS = new Set([
   'account', 'accounts', 'settings', 'dashboard', 'app', 'apps', 'billing', 'pay', 'payment', 'payments', 'checkout', 'support',
   'help', 'security', 'privacy', 'terms', 'legal', 'status', 'docs', 'www', 'mail', 'email', 'root', 'system', 'null', 'undefined',
   'index', 'favicon', 'robots', 'sitemap', 'well-known', 'home', 'new', 'edit', 'preview', 'yourlocalbusiness', 'replit', 'supabase', 'manus',
+  // upcoming public routes (paid plans, the public marketplace, offers, opt-outs, the cron tick and webhooks)
+  'market', 'pricing', 'plans', 'unsubscribe', 'offers', 'thank-you', 'thanks', 'store', 'listings', 'cron', 'webhooks',
+  // the short public prefixes below (already too short to be a name; listed so nobody relaxes SLUG_RE into them)
+  'b', 'm', 'o',
 ]);
+
+/**
+ * Short public routes the app answers itself: /b/<id> (buy link), /m/<id> (lead magnet download), /o/<token>
+ * (opt-out). A published name is at least 3 characters (SLUG_RE), so /b/…, /m/… and /o/… can never be a page or a
+ * page's image; matchPage and serveDomain still check isPublicRoute first, so they win whatever the name rules become.
+ */
+export const PUBLIC_ROUTE_PREFIXES = Object.freeze(['/b/', '/m/', '/o/']);
+export const isPublicRoute = (pathname) => PUBLIC_ROUTE_PREFIXES.some((p) => String(pathname || '').startsWith(p));
 
 /**
  * Hosts nobody can claim: the app's own addresses on Replit, this machine, and names that are never
@@ -1286,7 +1298,8 @@ export function createPages({
         const urls = (await listed()).map((r) => `  <url><loc>https://${host}/${r.home ? '' : r.slug}</loc>${r.updated_at ? `<lastmod>${String(r.updated_at).slice(0, 10)}</lastmod>` : ''}</url>\n`);
         text('application/xml; charset=utf-8', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('')}</urlset>\n`, 'public, max-age=300');
       } else {
-        const m = p === '/' ? null : PAGE_PATH.exec(p);
+        // the app's short public routes (/b/, /m/, /o/) are never a page's
+        const m = p === '/' || isPublicRoute(p) ? null : PAGE_PATH.exec(p);
         const slug = p === '/' ? (await listed()).find((r) => r.home)?.slug : m?.[1];
         // only this domain's own pages (and, at /, its home page)
         const shows = (page) => !!page && page.domain === host && page.user_id === site.user_id && (p !== '/' || !!page.home);
@@ -1340,11 +1353,11 @@ export function createPages({
   }
 
   /** GET|HEAD /<slug>, /<slug>/ and /<slug>/img/<name> on the app's host (call servePage for them). */
-  const matchPage = (url) => enabled && PAGE_PATH.test(url.pathname);
+  const matchPage = (url) => enabled && !isPublicRoute(url.pathname) && PAGE_PATH.test(url.pathname);
 
   /** A published page or its image on the app's host. false: it's one of the app's own paths (serve the app). */
   async function servePage(req, res, url) {
-    const m = PAGE_PATH.exec(url.pathname);
+    const m = isPublicRoute(url.pathname) ? null : PAGE_PATH.exec(url.pathname);
     if (!enabled || !m) return false;
     const [, slug, , image] = m;
     if (reserved(slug)) return false;
