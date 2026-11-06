@@ -49,7 +49,10 @@ export function listingActions(l: Listing): ListingAction[] {
   if (buy) {
     const biz = l.kind === 'business';
     const label = biz && l.bookingType === 'book' ? 'Book' : biz && l.bookingType === 'inquire' ? 'Get in touch' : 'Buy';
-    out.push({ kind: biz && l.bookingType === 'book' ? 'book' : 'buy', label, href: buy, hint: `On ${hostOf(buy)}` });
+    // an offer's buy link (/b/<id>) says where buyers really pay
+    const host = l.offer?.checkoutHost && /^[a-z0-9.-]{1,253}$/i.test(l.offer.checkoutHost) ? l.offer.checkoutHost : '';
+    const hint = host ? (l.offer?.test ? `Test checkout on ${host}` : `Secure checkout on ${host}`) : `On ${hostOf(buy)}`;
+    out.push({ kind: biz && l.bookingType === 'book' ? 'book' : 'buy', label, href: buy, hint });
   }
   if (site && site !== buy) out.push({ kind: 'website', label: 'Website', href: site, hint: hostOf(site) });
   if (email) out.push({ kind: 'email', label: 'Email', href: `mailto:${email}?subject=${encodeURIComponent(`About “${l.title}”`)}`, hint: email });

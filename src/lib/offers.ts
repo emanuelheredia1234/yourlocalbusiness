@@ -8,6 +8,7 @@ import { serverFetch } from '@/ai/claude';
 import { serverBaseNow } from '@/lib/cloud/auth';
 import checkoutHosts from '../../shared/checkout-hosts.json';
 import { OFFER_ID } from './buyLinks';
+import type { Project } from './types';
 
 export type OfferProvider = 'whop' | 'external' | 'stripe';
 export type OfferStatus = 'draft' | 'active' | 'paused' | 'checkout_unknown' | 'archived';
@@ -494,12 +495,15 @@ export const SALE_STATUS_LABEL: Record<SaleStatus, string> = {
   disputed: 'Disputed: see Whop',
 };
 
+const ZERO_DECIMAL = new Set(['JPY', 'KRW', 'VND', 'CLP', 'ISK', 'HUF']);
+/** Minor units as a plain decimal ("49.00"; zero-decimal currencies as they are). */
+export const minorToDecimal = (minor: number, currency: string): string => (ZERO_DECIMAL.has(currency.toUpperCase()) ? String(minor) : (minor / 100).toFixed(2));
+
 /** Money from minor units ("$49.00"; zero-decimal currencies as they are). */
 export function formatMoney(minor: number, currency: string): string {
   const cur = currency.toUpperCase();
-  const zero = new Set(['JPY', 'KRW', 'VND', 'CLP', 'ISK', 'HUF']);
   try {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: cur }).format(zero.has(cur) ? minor : minor / 100);
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: cur }).format(ZERO_DECIMAL.has(cur) ? minor : minor / 100);
   } catch {
     return `${(minor / 100).toFixed(2)} ${cur}`;
   }
@@ -519,4 +523,30 @@ export function requestId(): string {
   b[8] = (b[8] & 0x3f) | 0x80;
   const h = b.map((x) => x.toString(16).padStart(2, '0')).join('');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/** Where a business uses an offer, in plain words (its assets, the SEO page, the listing, its emails). */
+export function offerUses(project: Project, id: string): string[] {
+  const token = new RegExp(`\\{\\{\\s*buy:${id.replace(/[^A-Za-z0-9_-]/g, '')}\\s*\\}\\}`);
+  const out: string[] = [];
+  for (const a of project.studio.codeAssets) if (a.offerId === id || token.test(a.html)) out.push(`Asset “${a.name}”`);
+  if (project.marketing.pageLinks?.offerId === id || token.test(project.marketing.seoHtml?.html ?? '')) out.push('SEO page');
+  if (project.studio.listing.offerId === id) out.push('Listing');
+  const emails = project.marketing.emails.filter((e) => token.test(e.ctaUrl) || token.test(e.body)).length;
+  if (emails) out.push(emails === 1 ? '1 email' : `${emails} emails`);
+  return out;
+}
+
+const csvCell = (v: string): string => {
+  const s = String(v ?? '');
+  return `"${(/^[=+\-@\t\r]/.test(s) ? `'${s}` : s).replace(/"/g, '""')}"`;
+};
+
+/** Sales as a CSV (date, offer, amount, refunded, currency, status, buyer email, mode). */
+export function salesCsv(sales: Sale[], offerTitle: (id: string | null) => string): string {
+  const head = ['date', 'offer', 'amount', 'refunded', 'currency', 'status', 'buyer_email', 'mode'];
+  const rows = sales.map((s) =>
+    [s.paidAt ?? s.createdAt ?? '', offerTitle(s.offerId), minorToDecimal(s.amountMinor, s.currency), minorToDecimal(s.refundedMinor, s.currency), s.currency.toUpperCase(), SALE_STATUS_LABEL[s.status], s.buyerEmail ?? '', s.environment === 'sandbox' ? 'test' : 'live'].map(csvCell).join(','),
+  );
+  return [head.join(','), ...rows].join('\n');
 }

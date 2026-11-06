@@ -20,6 +20,8 @@ import { listingShots } from '@/ai/image';
 import { listingShotMedia } from '@/ai/listingPhotos';
 import { ListingImages, PhotoUploadButton } from './ListingImages';
 import { VideoPanel } from '@/components/images/VideoPanel';
+import { AttachPayment } from '@/components/offers/AttachPayment';
+import { OffersPanel } from '@/components/offers/OffersPanel';
 
 /** A starting description for the listing's demo video. */
 function demoVideoPrompt(project: Project): string {
@@ -315,16 +317,39 @@ export function PublishTab({ project }: { project: Project }) {
                 </Field>
               </div>
             )}
-            <Field
-              label={isBiz ? (d.bookingType === 'book' ? 'Your booking link' : d.bookingType === 'inquire' ? 'Your contact or quote page' : 'Your order page') : 'Your checkout link'}
-              htmlFor="ls-buy"
-              hint={isBiz ? 'For example Calendly, Square Appointments, Acuity, or your own site.' : 'For example a Stripe Payment Link, Gumroad, Etsy, Shopify or Lemon Squeezy page.'}
-              error={d.buyUrl?.trim() && !safeUrl(d.buyUrl) ? 'Use a web address, like https://buy.stripe.com/…' : undefined}
-            >
-              <IconInput icon={<Link2 />}>
-                <input id="ls-buy" className="input pl-8" inputMode="url" value={d.buyUrl ?? ''} onChange={(e) => setD({ buyUrl: e.target.value })} placeholder="https://" aria-invalid={d.buyUrl?.trim() && !safeUrl(d.buyUrl) ? true : undefined} />
-              </IconInput>
-            </Field>
+            {/* an offer (Whop or your own checkout) as the buy link, or your own link typed as before */}
+            {!isBiz || d.bookingType === 'buy' ? (
+              <AttachPayment
+                projectId={project.id}
+                value={d.offerId}
+                label="Attach payment as the buy link"
+                onAttach={(o) => setD({ offerId: o.id })}
+                onDetach={() => setD({ offerId: undefined })}
+                fallback={
+                <Field
+                  label={isBiz ? (d.bookingType === 'book' ? 'Your booking link' : d.bookingType === 'inquire' ? 'Your contact or quote page' : 'Your order page') : 'Your checkout link'}
+                  htmlFor="ls-buy"
+                  hint={isBiz ? 'For example Calendly, Square Appointments, Acuity, or your own site.' : 'For example a Stripe Payment Link, Gumroad, Etsy, Shopify or Lemon Squeezy page.'}
+                  error={d.buyUrl?.trim() && !safeUrl(d.buyUrl) ? 'Use a web address, like https://buy.stripe.com/…' : undefined}
+                >
+                  <IconInput icon={<Link2 />}>
+                    <input id="ls-buy" className="input pl-8" inputMode="url" value={d.buyUrl ?? ''} onChange={(e) => setD({ buyUrl: e.target.value })} placeholder="https://" aria-invalid={d.buyUrl?.trim() && !safeUrl(d.buyUrl) ? true : undefined} />
+                  </IconInput>
+                </Field>
+                }
+              />
+            ) : (
+              <Field
+                label={isBiz ? (d.bookingType === 'book' ? 'Your booking link' : d.bookingType === 'inquire' ? 'Your contact or quote page' : 'Your order page') : 'Your checkout link'}
+                htmlFor="ls-buy"
+                hint={isBiz ? 'For example Calendly, Square Appointments, Acuity, or your own site.' : 'For example a Stripe Payment Link, Gumroad, Etsy, Shopify or Lemon Squeezy page.'}
+                error={d.buyUrl?.trim() && !safeUrl(d.buyUrl) ? 'Use a web address, like https://buy.stripe.com/…' : undefined}
+              >
+                <IconInput icon={<Link2 />}>
+                  <input id="ls-buy" className="input pl-8" inputMode="url" value={d.buyUrl ?? ''} onChange={(e) => setD({ buyUrl: e.target.value })} placeholder="https://" aria-invalid={d.buyUrl?.trim() && !safeUrl(d.buyUrl) ? true : undefined} />
+                </IconInput>
+              </Field>
+            )}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="Email (optional)" htmlFor="ls-email" error={d.contactEmail?.trim() && !safeEmail(d.contactEmail) ? 'That doesn’t look like an email address.' : undefined}>
                 <IconInput icon={<Mail />}>
@@ -412,6 +437,8 @@ export function PublishTab({ project }: { project: Project }) {
         <Section title="Tags" divider description="Up to 8 words people search for, like your service, city or style.">
           <ChipInput values={d.tags} onChange={(v) => setD({ tags: v.map((t) => t.toLowerCase()) })} placeholder="Add a tag and press Enter" max={8} />
         </Section>
+
+        {!__ARTIFACT_BUILD__ && <OffersPanel project={project} />}
       </div>
 
       <aside className="flex min-w-0 flex-col gap-6 lg:sticky lg:top-6 lg:col-span-5" aria-label="Preview and publish">
