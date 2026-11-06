@@ -156,12 +156,33 @@ describe('forms', () => {
     expect(p.hasLeadForm).toBe(false);
   });
 
-  it('an asset’s form that sends to another site loses where it sent; the owner’s own site and mailto stay', () => {
-    const p = ok(asset(doc('', '<h1>Hi</h1><form id="a" action="https://formspree.io/f/x"><input name="email"></form><form id="b" action="https://www.mysite.com/join"><input name="email"></form><form id="c" action="mailto:me@mysite.com"><input name="email"></form>'), ['img-1'], 'mysite.com'));
-    expect(p.html).toContain('<form id="a"><input name="email"></form>');
+  it('an asset’s forms that Email → Leads can take post there, mailto ones too; the owner’s own site stays', () => {
+    const p = ok(asset(doc('', '<h1>Hi</h1><form id="a" action="https://formspree.io/f/x"><input name="email"></form><form id="b" action="https://www.mysite.com/join"><input name="email"></form><form id="c" action="mailto:me@mysite.com" enctype="text/plain"><input name="name"><input name="email"><input type="checkbox" name="consent" value="yes"><input type="hidden" name="kind" value="quiz"><input type="hidden" name="result" value="x"></form>'), ['img-1'], 'mysite.com'));
+    expect(p.html).toContain('<form id="a" action="{{lead-action}}" method="post"><div class="hp" aria-hidden="true"><label>Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div><input name="email" maxlength="254"></form>');
     expect(p.html).toContain('action="https://www.mysite.com/join"');
-    expect(p.html).toContain('action="mailto:me@mysite.com"');
+    expect(p.html).toMatch(/<form id="c" action="\{\{lead-action\}\}" method="post">/);
+    expect(p.html).not.toContain('mailto:');
+    expect(p.html).not.toContain('enctype');
+    expect(p.html).toContain('<input type="hidden" name="result" value="x" maxlength="200">');
+    expect(p.hasLeadForm).toBe(true);
+    expect(p.css).toContain('.hp{');
+    expect(p.notes).toContain('Your page’s forms send to Email → Leads once it’s published.');
+  });
+
+  it('an asset’s form the app can’t receive goes; one only its script uses stays, sending nowhere', () => {
+    const p = ok(asset(doc('', '<h1>Hi</h1><form id="pay" method="post" action="https://pay.example/x"><input name="card"><input name="email"></form><form id="calc" action="https://x.example/a"><input id="n" type="number"></form><form id="q"><input type="radio" name="q1" value="1"></form>')));
+    expect(p.html).not.toContain('id="pay"');
+    expect(p.html).toContain('<form id="calc"><input id="n" type="number"></form>');
+    expect(p.html).toContain('<form id="q"><input type="radio" name="q1" value="1"></form>');
+    expect(p.hasLeadForm).toBe(false);
+    expect(p.notes).toContain('Took out a form the app can’t receive.');
     expect(p.notes).toContain('Took out where a form sent to another site.');
+  });
+
+  it('{{lead-action}} outside a form’s action is taken out of an asset’s HTML, but its script may keep it', () => {
+    const p = ok(asset(doc('<script>var FORM_ACTION = "{{lead-action}}";</script>', '<a href="{{lead-action}}">x</a><p>{{lead-action}}</p>')));
+    expect(p.html).not.toContain(LEAD_ACTION);
+    expect(p.js).toContain('var FORM_ACTION = "{{lead-action}}";');
   });
 });
 

@@ -3,8 +3,9 @@
 // untrusted: it's parsed with DOMParser (an inert document: nothing in it runs or loads), and only what the
 // app can use safely is kept. Comments go (they'd reach the app's code-edit AI as code), so do frames,
 // plugins, outside stylesheets and fonts, <base>, <meta> and every inline event handler; javascript:,
-// vbscript: and data: addresses are taken out; images are only the owner's own ({{img-N}} tokens); an SEO
-// page keeps at most one form, and only one that Email → Leads can receive.
+// vbscript: and data: addresses are taken out; images are only the owner's own ({{img-N}} tokens). Forms that
+// Email → Leads can receive post to {{lead-action}} (an SEO page keeps at most one); an asset's other forms go,
+// unless they send to the owner's own site or only its script uses them.
 //
 // Template text here never holds a literal closing script tag, and comment openers are written '\x3C!--'
 // (the claude.ai build refuses a bundle that has them): comments are handled through the DOM only.
@@ -20,13 +21,14 @@ export type ImportResult =
 /** Above this, the page still imports, with a note: it makes every save of the project bigger. */
 export const LARGE_PAGE_BYTES = 300 * 1024;
 
-/** The fields a published SEO page's form may send (server/leads.mjs LEAD_MAX), with their limits. */
-export const LEAD_FIELDS: Readonly<Record<string, number>> = { name: 120, email: 254, phone: 40, message: 2000, time: 120 };
-/** The hidden field people never see: a bot fills it in, and the server drops what it sends. */
-const HONEYPOT = 'website';
+import { HONEYPOT, LEAD_EXTRA_NAMES, LEAD_FIELDS, LEAD_PAYLOAD_MAX } from '@/lib/leadFields';
+import { LEAD_ACTION } from '@/lib/leadAction';
+
+/** The fields a published page's form may send (server/leads.mjs LEAD_MAX), with their limits. */
+export { LEAD_FIELDS, LEAD_PAYLOAD_MAX, LEAD_ACTION };
 const HONEYPOT_CSS = '.hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}';
-/** Where an SEO page's form sends: the publish build writes /<slug>/lead in its place (src/lib/seoHtml.ts). */
-export const LEAD_ACTION = '{{lead-action}}';
+/** Every limit a form's field gets as maxlength. */
+const FIELD_MAX: Readonly<Record<string, number>> = { ...LEAD_FIELDS, ...LEAD_PAYLOAD_MAX };
 
 /** Elements that never stay: frames and plugins, the document's base address, meta tags, links, noscript. */
 const REMOVED = ['iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'portal', 'base', 'meta', 'link', 'noscript', 'noembed', 'noframes'];
@@ -125,7 +127,10 @@ function isClassicInline(s: Element): boolean {
 
 const isJsonLd = (s: Element) => (s.getAttribute('type') ?? '').trim().toLowerCase() === 'application/ld+json';
 
-/** Whether an SEO page's form can send to Email → Leads: only lead fields (and the hidden one) by name, and an email or a phone. */
+/**
+ * Whether a form can send to Email → Leads: only lead fields, a result or request (hidden inputs a script fills
+ * in), the consent box, its kind, a lead magnet's id and the hidden field by name, and an email or a phone.
+ */
 export function formFits(form: Element): boolean {
   let contact = false;
   for (const c of Array.from(form.querySelectorAll('input, select, textarea, button'))) {
@@ -134,11 +139,55 @@ export function formFits(form: Element): boolean {
     if (tag === 'button' || (tag === 'input' && ['submit', 'button', 'reset', 'image'].includes(type))) continue;
     const name = c.getAttribute('name');
     if (!name) continue;
-    if (name === HONEYPOT) continue;
-    if (!(name in LEAD_FIELDS)) return false;
+    if (name === HONEYPOT || LEAD_EXTRA_NAMES.includes(name)) continue;
+    if (!(name in LEAD_FIELDS) && !(name in LEAD_PAYLOAD_MAX)) return false;
     if (name === 'email' || name === 'phone') contact = true;
   }
   return contact;
+}
+
+/**
+ * A form that fits, made to send to Email → Leads: method post, action {{lead-action}} (publishing writes
+ * /<slug>/lead), no other target, each field's limit as maxlength, and the app's own hidden field (a "website"
+ * field the page had would make the server drop every lead).
+ */
+function toLeadForm(doc: Document, form: Element): void {
+  form.setAttribute('method', 'post');
+  form.setAttribute('action', LEAD_ACTION);
+  for (const a of ['enctype', 'target', 'accept-charset', 'novalidate']) form.removeAttribute(a);
+  for (const b of Array.from(form.querySelectorAll('[formaction], [formmethod], [formenctype], [formtarget]'))) ['formaction', 'formmethod', 'formenctype', 'formtarget'].forEach((a) => b.removeAttribute(a));
+  for (const c of Array.from(form.querySelectorAll('input, textarea'))) {
+    const name = c.getAttribute('name') ?? '';
+    if (name in FIELD_MAX) c.setAttribute('maxlength', String(FIELD_MAX[name]));
+  }
+  for (const c of Array.from(form.querySelectorAll('input, select, textarea'))) {
+    if (c.getAttribute('name') !== HONEYPOT) continue;
+    const id = c.getAttribute('id');
+    if (id) for (const l of Array.from(form.querySelectorAll('label'))) if (l.getAttribute('for') === id) l.remove();
+    const label = c.closest('label');
+    (label && form.contains(label) ? label : c).remove();
+  }
+  const hp = doc.createElement('div');
+  hp.setAttribute('class', 'hp');
+  hp.setAttribute('aria-hidden', 'true');
+  const label = doc.createElement('label');
+  label.append('Website ');
+  const input = doc.createElement('input');
+  input.setAttribute('type', 'text');
+  input.setAttribute('name', HONEYPOT);
+  input.setAttribute('tabindex', '-1');
+  input.setAttribute('autocomplete', 'off');
+  label.append(input);
+  hp.append(label);
+  form.prepend(hp);
+}
+
+/** Whether a form would send something by itself: named fields, and a POST or an address of its own (not "#"). */
+function formSends(form: Element): boolean {
+  const named = Array.from(form.querySelectorAll('input, select, textarea')).some((c) => !!c.getAttribute('name') && !['submit', 'button', 'reset', 'image'].includes((c.getAttribute('type') ?? '').toLowerCase()));
+  if (!named) return false;
+  const action = (form.getAttribute('action') ?? '').trim();
+  return (form.getAttribute('method') ?? '').trim().toLowerCase() === 'post' || (!!action && action !== '#');
 }
 
 /** The host of an address, without "www." ('' when it isn't an http(s) address). */
@@ -302,46 +351,35 @@ export function importAgentHtml(raw: string, o: { target: BuildTarget; imageKeys
       others++;
     }
     if (keep) {
-      keep.setAttribute('method', 'post');
-      keep.setAttribute('action', LEAD_ACTION);
-      for (const a of ['enctype', 'target', 'accept-charset', 'novalidate']) keep.removeAttribute(a);
-      for (const b of Array.from(keep.querySelectorAll('[formaction], [formmethod], [formenctype], [formtarget]'))) ['formaction', 'formmethod', 'formenctype', 'formtarget'].forEach((a) => b.removeAttribute(a));
-      for (const c of Array.from(keep.querySelectorAll('input, textarea'))) {
-        const name = c.getAttribute('name') ?? '';
-        if (name in LEAD_FIELDS) c.setAttribute('maxlength', String(LEAD_FIELDS[name]));
-      }
-      // the page's own "website" field (seen or not) would make the server drop every lead: the app's hidden one replaces it
-      for (const c of Array.from(keep.querySelectorAll('input, select, textarea'))) {
-        if (c.getAttribute('name') !== HONEYPOT) continue;
-        const id = c.getAttribute('id');
-        if (id) for (const l of Array.from(keep.querySelectorAll('label'))) if (l.getAttribute('for') === id) l.remove();
-        const label = c.closest('label');
-        (label && keep.contains(label) ? label : c).remove();
-      }
-      const hp = doc.createElement('div');
-      hp.setAttribute('class', 'hp');
-      hp.setAttribute('aria-hidden', 'true');
-      const label = doc.createElement('label');
-      label.append('Website ');
-      const input = doc.createElement('input');
-      input.setAttribute('type', 'text');
-      input.setAttribute('name', HONEYPOT);
-      input.setAttribute('tabindex', '-1');
-      input.setAttribute('autocomplete', 'off');
-      label.append(input);
-      hp.append(label);
-      keep.prepend(hp);
+      toLeadForm(doc, keep);
       css = css ? `${css}\n${HONEYPOT_CSS}` : HONEYPOT_CSS;
       hasLeadForm = true;
       notes.push('Your page’s form sends to Email → Leads once it’s published.');
     }
     if (others) notes.push(plural(others, 'Took out a form the app can’t receive: only name, email, phone, message and time fields work.', 'Took out # forms the app can’t receive: only name, email, phone, message and time fields work.'));
   } else {
+    // a form's action is the app's to write: {{lead-action}} anywhere else in the HTML goes (the script may keep it)
+    for (const { el } of all) {
+      for (const attr of Array.from(el.attributes)) if (attr.value.includes(LEAD_ACTION) && !(el.localName === 'form' && attr.name === 'action')) el.setAttribute(attr.name, attr.value.split(LEAD_ACTION).join(''));
+    }
+    for (const t of textNodesOf(body)) if ((t.data ?? '').includes(LEAD_ACTION)) t.data = t.data.split(LEAD_ACTION).join('');
     const own = (o.ownHost ?? '').toLowerCase().replace(/^www\./, '');
     let away = 0;
+    let leads = 0;
+    let removed = 0;
     for (const f of Array.from(body.querySelectorAll('form'))) {
-      const host = hostOf((f.getAttribute('action') ?? '').trim());
-      if (host && host !== own) {
+      const action = (f.getAttribute('action') ?? '').trim();
+      const host = hostOf(action);
+      // the owner's own site (an endpoint they set up) stays as it is
+      if (host && host === own) continue;
+      if (formFits(f)) {
+        toLeadForm(doc, f);
+        leads++;
+      } else if (formSends(f)) {
+        f.remove();
+        removed++;
+      } else if (host || /^mailto:/i.test(action)) {
+        // a form the page's script handles: it mustn't send anywhere by itself
         f.removeAttribute('action');
         away++;
       }
@@ -353,6 +391,12 @@ export function importAgentHtml(raw: string, o: { target: BuildTarget; imageKeys
         away++;
       }
     }
+    if (leads) {
+      css = css ? `${css}\n${HONEYPOT_CSS}` : HONEYPOT_CSS;
+      hasLeadForm = true;
+      notes.push(leads === 1 ? 'Your page’s form sends to Email → Leads once it’s published.' : 'Your page’s forms send to Email → Leads once it’s published.');
+    }
+    if (removed) notes.push(plural(removed, 'Took out a form the app can’t receive.', 'Took out # forms the app can’t receive.'));
     if (away) notes.push('Took out where a form sent to another site.');
   }
 
