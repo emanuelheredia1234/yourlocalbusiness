@@ -101,6 +101,8 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
 6. `supabase/migrations/20261112000000_leads_p2.sql` (P2, §11): tags every lead with its business, source and kind,
    adds the `lead_files` table and the `lead-files` (private) and `public-files` (public, images only) buckets.
    Run it after `20261103050000_page_leads.sql`.
+7. `supabase/migrations/20261113000000_offers.sql` (P3, §12): offers, payment connections, sales and their refunds,
+   buy link clicks. Run it after `20261105000000_integrations.sql`.
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices. Their ad accounts are disconnected at Zernio first (every account in their Zernio profile, then the
@@ -120,6 +122,8 @@ through **pg_net**, with `Authorization: Bearer <CRON_SECRET>`. Each tick runs t
 | `uploadpost-meter` | daily from 02:10 UTC | Last month's estimated Upload-Post profile rows per customer (once per month) |
 | `zernio-meter` | daily from 02:20 UTC | Last month's estimated Zernio rows per customer (once per month) |
 | `uploadpost-reconcile` | daily from 03:10 UTC | The Upload-Post daily check (§3): accounts against our records, the profile cap, cleanup |
+| `offers-webhooks` | daily from 04:17 UTC | Reads each Whop connection's webhook; a turned-off one shows a banner (§12) |
+| `offers-reconcile` | daily from 04:47 UTC | Reads the last 72 hours of Whop payments and records missed sales for the customer's offers (§12) |
 | `posting-sweep`, `analytics-sweep`, `ads-sweep` | hourly (each tick) | Posts, analytics runs and ad changes left "sending"/"running" by a restart become "unknown"/ended; nothing is re-sent |
 
 Each job runs **at most once per period**: the run is claimed first in `app_state` (one row per job), so a repeated
