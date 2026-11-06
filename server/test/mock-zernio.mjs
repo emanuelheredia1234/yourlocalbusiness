@@ -1,4 +1,4 @@
-// A stand-in for Zernio's API (https://docs.zernio.com), for tests and offline QA. Nothing here calls Zernio or a
+// A stand-in for Zernio's ads API (https://docs.zernio.com), for tests and offline QA. Nothing here calls Zernio or a
 // network. Same style as server/test/mock-providers.mjs:
 //
 //   node server/test/mock-zernio.mjs [port]     → prints its base URL; use `${base}/api/v1` as ZERNIO_BASE_URL
@@ -7,21 +7,16 @@
 // What it answers (under /api/v1, bearer must be the test key; anything else 401 invalid_credentials):
 //   GET    /profiles?externalId=          {profiles}
 //   POST   /profiles                      201 {profile} | 409 profile_external_id_conflict {details.existingProfileId}
-//   GET    /connect/:platform             {authUrl} (a test page on this mock)        records the query
-//   GET    /connect/:platform/ads         {authUrl} | {alreadyConnected: true}
+//   GET    /connect/:platform/ads         {authUrl} (a test page on this mock) | {alreadyConnected: true}
 //   GET    /accounts?profileId=           {accounts}
 //   DELETE /accounts/:id                  200 {gracePeriodEndsAt} (+ account.disconnected webhook) | 404
-//   POST   /media/presign                 {uploadUrl, publicUrl}   (PUT the bytes to uploadUrl, no API key)
-//   POST   /posts                         Idempotency-Key required; publishNow → 201 published | 207 failed, per
-//                                          the next queued outcome (setPostOutcome); a replay of the key → 200 original
-//   GET    /posts/:id   GET /posts?profileId=&fromDate=   the stored posts
-//   GET    /analytics/daily-metrics?accountId=   GET /accounts/follower-stats?accountIds=   GET /analytics?accountId=
 //   GET    /ads/timeline?accountId=       GET /ads/campaigns?accountId=
+//   POST   /ads/…                         501 (placeholder for campaign changes, task #157); records a violation
+// Ads only: social accounts, posting and social stats are Upload-Post's (server/test/mock-uploadpost.mjs).
 // Test hooks (no key): GET /__calls, GET /__violations, POST /__complete {platform, profileId, username, ads?}
 // (finishes a connect: makes the account and sends a signed account.connected webhook), GET /__connect (the page).
 //
-// Violations a test fails on: a POST /posts without Idempotency-Key, a second POST /posts with a key it has seen
-// (a resend), an API key on an upload URL or in a query string.
+// Violations a test fails on: an API key in a query string, any ad write (none is built yet).
 
 import crypto from 'node:crypto';
 import http from 'node:http';
@@ -44,12 +39,8 @@ const ADS = { facebook: 'metaads', googleads: 'googleads', linkedin: 'linkedinad
 export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_ZERNIO_WEBHOOK_SECRET, webhookUrl = process.env.ZERNIO_WEBHOOK_URL || '' } = {}) {
   const profiles = [];
   const accounts = [];
-  const posts = [];
-  const idem = new Map(); // Idempotency-Key → post id
-  const uploads = new Map();
   const calls = [];
   const violations = [];
-  const outcomes = []; // queued POST /posts outcomes: 'published' | 'failed' | 'publishing' | 'error500' | { delayMs } …
   const webhooks = [];
   let server = null;
   let base = '';
@@ -86,11 +77,6 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     return a;
   }
 
-  function publishResult(body, accountIds) {
-    const next = outcomes.length ? outcomes.shift() : 'published';
-    return { next, platforms: body.platforms.map((p, i) => ({ platform: p.platform, accountId: accountIds[i], status: next === 'failed' ? 'failed' : next === 'publishing' ? 'processing' : 'published', ...(next === 'published' ? { platformPostUrl: `https://social.example/${p.platform}/p/${oid().slice(0, 10)}` } : {}), ...(next === 'failed' ? { errorMessage: 'mock refused', errorCategory: 'user_content', errorSource: 'user' } : {}) })) };
-  }
-
   async function api(req, res, url, body, raw) {
     const p = url.pathname.replace(/^\/api\/v1/, '');
     const q = url.searchParams;
@@ -102,7 +88,7 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       profiles.push(prof);
       return json(res, 201, { message: 'Profile created successfully', profile: prof });
     }
-    let m = /^\/connect\/([a-z]+)(\/ads)?$/.exec(p);
+    let m = /^\/connect\/([a-z]+)(\/ads)$/.exec(p);
     if (m && req.method === 'GET') {
       const profileId = q.get('profileId');
       if (!profiles.some((x) => x._id === profileId)) return err(res, 404, 'not_found', 'not_found');
@@ -121,66 +107,7 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       void sendWebhook({ event: 'account.disconnected', profiles: profileRef(a.profileId), account: { accountId: a._id, profileId: a.profileId, platform: a.platform, username: a.username, disconnectionType: 'intentional', reason: 'Removed through the API' } });
       return json(res, 200, { message: 'Account disconnected', gracePeriodEndsAt: new Date(Date.now() + 3_600_000).toISOString() });
     }
-    if (req.method === 'POST' && p === '/media/presign') {
-      const id = oid();
-      return json(res, 200, { uploadUrl: `${base}/__upload/${id}`, publicUrl: `${base}/__media/${id}`, expiresIn: 3600 });
-    }
-    if (req.method === 'POST' && p === '/posts') {
-      const ik = req.headers['idempotency-key'];
-      if (!ik) violations.push({ kind: 'post_without_idempotency_key' });
-      if (ik && idem.has(ik)) {
-        violations.push({ kind: 'post_resent', key: ik });
-        return json(res, 200, { message: 'Post already exists (idempotent retry)', post: posts.find((x) => x._id === idem.get(ik)) });
-      }
-      // { waitFor: promise, then: outcome }: the answer waits until the test releases it (a webhook can arrive first)
-      if (outcomes[0] && typeof outcomes[0] === 'object' && outcomes[0].waitFor) {
-        const o = outcomes.shift();
-        await o.waitFor;
-        outcomes.unshift(o.then ?? 'published');
-      }
-      const ids = (Array.isArray(body?.platforms) ? body.platforms : []).map((t) => String(t?.accountId ?? ''));
-      if (!ids.length || ids.some((id) => !accounts.some((a) => a._id === id))) return err(res, 400, 'account_not_found', 'not_found');
-      for (const item of body.mediaItems ?? []) if (!uploads.has(String(item.url).split('/').pop())) violations.push({ kind: 'media_not_uploaded', url: item.url });
-      const result = publishResult(body, ids);
-      if (result.next === 'error500') return err(res, 500, 'internal_error', 'api_error');
-      if (result.next === 'hang') {
-        await new Promise((r) => setTimeout(r, 60_000));
-        return err(res, 504, 'timeout', 'api_error');
-      }
-      const status = result.platforms.every((x) => x.status === 'published') ? 'published' : result.platforms.every((x) => x.status === 'failed') ? 'failed' : 'publishing';
-      const acct = accounts.find((a) => a._id === ids[0]);
-      const post = { _id: oid(), content: body.content, status, platforms: result.platforms, metadata: body.metadata ?? {}, profileId: acct?.profileId, mediaItems: body.mediaItems ?? [], createdAt: new Date().toISOString(), body };
-      posts.push(post);
-      if (ik) idem.set(ik, post._id);
-      if (result.next === 'accepted_then_500') return err(res, 502, 'platform_api_error', 'platform_error');
-      return json(res, status === 'failed' ? 207 : 201, { message: 'Post published', post });
-    }
-    m = /^\/posts\/([0-9a-f]{24})$/.exec(p);
-    if (m && req.method === 'GET') {
-      const post = posts.find((x) => x._id === m[1]);
-      return post ? json(res, 200, { post }) : err(res, 404, 'post_not_found', 'not_found');
-    }
-    if (req.method === 'GET' && p === '/posts') {
-      const list = posts.filter((x) => (!q.get('profileId') || x.profileId === q.get('profileId')) && (!q.get('fromDate') || x.createdAt.slice(0, 10) >= q.get('fromDate').slice(0, 10)));
-      return json(res, 200, { posts: list, pagination: { page: 1, limit: 50, total: list.length } });
-    }
     const acct = accounts.find((a) => a._id === (q.get('accountId') ?? q.get('accountIds')));
-    if (req.method === 'GET' && p === '/analytics/daily-metrics') {
-      if (!acct) return err(res, 404, 'account_not_found', 'not_found');
-      const dailyData = [
-        { date: '2026-11-01', postCount: 1, platforms: { [acct.platform]: 1 }, metrics: { impressions: 900, reach: 700, likes: 40, comments: 6, shares: 3, saves: 1, clicks: 9, views: 500 } },
-        { date: '2026-11-02', postCount: 0, platforms: {}, metrics: { impressions: 400, reach: 300, likes: 12, comments: 2, shares: 0, saves: 0, clicks: 3, views: 200 } },
-      ];
-      return json(res, 200, { dailyData, platformBreakdown: [], totals: { postCount: 1, impressions: 1300, reach: 1000, likes: 52, comments: 8, shares: 3, saves: 1, clicks: 12, views: 700 } });
-    }
-    if (req.method === 'GET' && p === '/accounts/follower-stats') {
-      if (!acct) return json(res, 200, { accounts: [] });
-      return json(res, 200, { accounts: [{ _id: acct._id, platform: acct.platform, currentFollowers: 1310, history: [{ date: '2026-11-01', followers: 1300 }, { date: '2026-11-02', followers: 1310 }] }] });
-    }
-    if (req.method === 'GET' && p === '/analytics') {
-      if (!acct) return json(res, 200, { posts: [] });
-      return json(res, 200, { posts: [{ _id: oid(), platform: acct.platform, content: 'Fresh bread every morning <b>not html</b>', publishedAt: '2026-11-01T09:00:00Z', platformPostUrl: `https://social.example/${acct.platform}/p/1`, analytics: { likes: 40, comments: 6, shares: 3, views: 500 } }], pagination: { page: 1, pages: 1 } });
-    }
     if (req.method === 'GET' && p === '/ads/timeline') {
       if (!acct) return err(res, 404, 'account_not_found', 'not_found');
       return json(res, 200, { rows: [{ date: '2026-11-01', currency: 'USD', spend: 12.5, impressions: 3000, reach: 2000, clicks: 40, conversions: 2 }, { date: '2026-11-02', currency: 'USD', spend: 7.5, impressions: 1000, reach: 900, clicks: 10, conversions: 1 }] });
@@ -188,6 +115,10 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     if (req.method === 'GET' && p === '/ads/campaigns') {
       if (!acct) return json(res, 200, { campaigns: [] });
       return json(res, 200, { campaigns: [{ platformCampaignId: '120200001', platform: 'facebook', campaignName: 'Autumn bread', status: 'active', currency: 'USD', metrics: { spend: 20, impressions: 4000, clicks: 50, conversions: 3 } }] });
+    }
+    if (req.method !== 'GET' && p.startsWith('/ads')) {
+      violations.push({ kind: 'ad_write', path: p });
+      return err(res, 501, 'not_built', 'invalid_request_error');
     }
     return err(res, 404, 'not_found', 'not_found');
   }
@@ -214,15 +145,6 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end('<!doctype html><title>Connect (mock)</title><p>Mock Zernio connect screen.</p>');
     }
-    let m = /^\/__upload\/([0-9a-f]{24})$/.exec(url.pathname);
-    if (m && req.method === 'PUT') {
-      if (req.headers.authorization) violations.push({ kind: 'key_on_upload' });
-      uploads.set(m[1], { type: req.headers['content-type'], bytes: raw.length });
-      res.writeHead(200, { etag: '"mock"' });
-      return res.end();
-    }
-    m = /^\/__media\/([0-9a-f]{24})$/.exec(url.pathname);
-    if (m) return uploads.has(m[1]) ? (res.writeHead(200, { 'content-type': uploads.get(m[1]).type ?? 'application/octet-stream' }), res.end()) : err(res, 404, 'not_found');
     if (!url.pathname.startsWith('/api/v1/')) return err(res, 404, 'not_found', 'not_found');
     if (req.headers.authorization !== `Bearer ${key}`) return err(res, 401, 'invalid_credentials', 'authentication_error');
     return api(req, res, url, body, raw);
@@ -231,8 +153,6 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
   return {
     profiles,
     accounts,
-    posts,
-    uploads,
     calls,
     violations,
     webhooks,
@@ -245,13 +165,6 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     },
     set webhookUrl(u) {
       hookUrl = u;
-    },
-    /**
-     * What the next POST /posts does: 'published' | 'failed' | 'publishing' | 'error500' | 'hang' | 'accepted_then_500',
-     * or { waitFor: promise, then: one of those } to hold the answer until the promise settles.
-     */
-    setPostOutcome(...next) {
-      outcomes.push(...next);
     },
     addAccount,
     complete,

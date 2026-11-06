@@ -1,7 +1,8 @@
-// Connected accounts through Zernio (server/connections/zernio.mjs + server/zernio.mjs) against
-// server/test/mock-zernio.mjs: one profile per customer (externalId = the customer tag), white-label connect links,
-// isolation per user and per business, signed webhooks routed by externalId, own stats and ad results, one-attempt
-// posting with unknown outcomes checked by a read, the key kept out of logs, and the monthly account counts.
+// Ad accounts through Zernio (server/connections/zernio.mjs + server/zernio.mjs) against server/test/mock-zernio.mjs:
+// one profile per customer (externalId = the customer tag), white-label ads connect links, isolation per user and per
+// business, signed account webhooks routed by externalId, ad results (reads only), the key kept out of logs, and the
+// monthly ad-account counts. Social accounts, posting and social stats are Upload-Post's (uploadpost.test.mjs): this
+// side refuses them.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createZernioConnections } from './zernio.mjs';
 import { createConnections } from './index.mjs';
@@ -92,29 +93,29 @@ describe('the client (server/zernio.mjs)', () => {
 describe('profiles and connect links', () => {
   it('makes one profile per customer with externalId = the customer tag, and finds it again (never a second)', async () => {
     const t = setup();
-    const link = await t.connections.connectLink(ALICE, 'instagram');
-    expect(link.connectLink).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/__connect\?platform=instagram/);
+    const link = await t.connections.connectLink(ALICE, 'meta_ads');
+    expect(link.connectLink).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/__connect\?platform=facebook&.*ads=1/);
     const tag = customerTag(ALICE, t.env);
     const mine = mock.profiles.filter((p) => p.externalId === tag);
     expect(mine).toHaveLength(1);
     expect(mine[0].name).not.toMatch(/@/);
     // a second connect, and a fresh server with no stored profile id, both use the same profile
-    await t.connections.connectLink(ALICE, 'facebook');
+    await t.connections.connectLink(ALICE, 'google_ads');
     const t2 = setup();
-    await t2.connections.connectLink(ALICE, 'tiktok');
+    await t2.connections.connectLink(ALICE, 'tiktok_ads');
     expect(mock.profiles.filter((p) => p.externalId === tag)).toHaveLength(1);
   });
 
   it('asks for the white-label welcome screen with our brand and the app as the redirect', async () => {
     const t = setup({ env: { ZERNIO_BRAND_NAME: 'Joe’s Toolkit', ZERNIO_BRAND_LOGO_URL: 'https://cdn.example/logo.png', ZERNIO_BRAND_COLOR: '#1D4ED8' } });
     const before = mock.calls.length;
-    await t.connections.connectLink(ALICE, 'linkedin');
-    const call = mock.calls.slice(before).find((c) => c.path === '/api/v1/connect/linkedin');
-    expect(call.query).toMatchObject({ welcome: 'true', brandName: 'Joe’s Toolkit', logoUrl: 'https://cdn.example/logo.png', primaryColor: '#1D4ED8', redirect_url: 'https://yourlocalbusiness.replit.app/?connected=linkedin' });
+    await t.connections.connectLink(ALICE, 'linkedin_ads');
+    const call = mock.calls.slice(before).find((c) => c.path === '/api/v1/connect/linkedin/ads');
+    expect(call.query).toMatchObject({ welcome: 'true', brandName: 'Joe’s Toolkit', logoUrl: 'https://cdn.example/logo.png', primaryColor: '#1D4ED8', redirect_url: 'https://yourlocalbusiness.replit.app/?connected=linkedin_ads' });
     expect(call.query.profileId).toMatch(/^[0-9a-f]{24}$/);
   });
 
-  it('connects ad accounts through the ads connect, and needs the X account before X Ads', async () => {
+  it('connects ad accounts through the ads connect; X Ads and Pinterest are coming soon', async () => {
     const t = setup();
     const before = mock.calls.length;
     await t.connections.connectLink(ALICE, 'google_ads');
@@ -122,14 +123,19 @@ describe('profiles and connect links', () => {
     const paths = mock.calls.slice(before).map((c) => c.path);
     expect(paths).toContain('/api/v1/connect/googleads/ads');
     expect(paths).toContain('/api/v1/connect/facebook/ads');
-    await expect(t.connections.connectLink(ALICE, 'x_ads')).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+    const list = await t.connections.status(ALICE);
+    expect(list.find((s) => s.platform === 'x_ads').state).toBe('coming_soon');
+    expect(list.find((s) => s.platform === 'pinterest').state).toBe('coming_soon');
+    await expect(t.connections.connectLink(ALICE, 'x_ads')).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
-  it('shows Pinterest as coming soon and refuses to connect it', async () => {
+  it('refuses social networks (they are Upload-Post’s): nothing is asked of Zernio', async () => {
     const t = setup();
-    const list = await t.connections.status(ALICE);
-    expect(list.find((s) => s.platform === 'pinterest').state).toBe('coming_soon');
-    await expect(t.connections.connectLink(ALICE, 'pinterest')).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const before = mock.calls.length;
+    await expect(t.connections.connectLink(ALICE, 'instagram')).rejects.toMatchObject({ status: 404 });
+    expect(await t.connections.insights(ALICE, 'instagram', {})).toBeNull();
+    expect(await t.connections.publish(ALICE, 'facebook', { jobId: '81111111-2222-4333-8444-555555555555', composed: { text: 'x' } })).toMatchObject({ state: 'failed' });
+    expect(mock.calls.length).toBe(before);
   });
 
   it('is not set up without the webhook secret or the tag secret, and says which Secret (names only)', async () => {
@@ -137,78 +143,77 @@ describe('profiles and connect links', () => {
     expect(t.impl.setUp).toBe(false);
     expect(t.impl.hint).toContain('ZERNIO_WEBHOOK_SECRET');
     expect(t.impl.hint).not.toContain(TEST_ZERNIO_KEY);
-    await expect(t.connections.connectLink(ALICE, 'facebook')).rejects.toMatchObject({ code: 'NOT_SET_UP' });
+    await expect(t.connections.connectLink(ALICE, 'meta_ads')).rejects.toMatchObject({ code: 'NOT_SET_UP' });
   });
 });
 
-describe('accounts, isolation and choices', () => {
-  it('a connected account shows as connected with its label; the browser never sees a Zernio id', async () => {
+describe('ad accounts, isolation and choices', () => {
+  it('a connected ad account shows as connected with its label; the browser never sees a Zernio id', async () => {
     const t = setup();
-    const { account } = await connectVia(t, ALICE, 'facebook');
-    const fb = (await t.connections.status(ALICE)).find((s) => s.platform === 'facebook');
-    expect(fb).toMatchObject({ state: 'connected', targetLabel: 'joesbakery page', targetKind: 'fb_page' });
+    const { account } = await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
+    const meta = (await t.connections.status(ALICE)).find((s) => s.platform === 'meta_ads');
+    expect(meta).toMatchObject({ state: 'connected', targetLabel: 'joesbakery page', targetKind: 'ads_account' });
     expect(JSON.stringify(await t.connections.status(ALICE))).not.toContain(account._id);
-    const targets = await t.connections.targets(ALICE, 'facebook');
+    const targets = await t.connections.targets(ALICE, 'meta_ads');
     expect(targets[0].id).toMatch(/^tgt_[0-9a-f]{32}$/);
     expect(JSON.stringify(targets)).not.toContain(account._id);
   });
 
   it('keeps users apart: a webhook for one customer never changes another’s accounts', async () => {
     const t = setup();
-    await connectVia(t, ALICE, 'instagram');
-    const bob = await t.connections.status(BOB);
-    expect(bob.find((s) => s.platform === 'instagram').state).toBe('not_connected');
+    await connectVia(t, ALICE, 'google_ads', { zPlatform: 'googleads' });
+    expect((await t.connections.status(BOB)).find((s) => s.platform === 'google_ads').state).toBe('not_connected');
     // Bob's handle for Alice's account is refused
-    await t.connections.connectLink(BOB, 'instagram');
-    const aliceTarget = (await t.connections.targets(ALICE, 'instagram'))[0].id;
-    await expect(t.connections.setTarget(BOB, 'instagram', aliceTarget)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await t.connections.connectLink(BOB, 'google_ads');
+    const aliceTarget = (await t.connections.targets(ALICE, 'google_ads'))[0].id;
+    await expect(t.connections.setTarget(BOB, 'google_ads', aliceTarget)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
-  it('lets each business choose its own account; the business that connected gets the new one', async () => {
+  it('lets each business choose its own ad account; the business that connected gets the new one', async () => {
     const t = setup();
-    const a = await connectVia(t, ALICE, 'facebook', { projectId: 'bakery', username: 'bakery' });
-    const b = await connectVia(t, ALICE, 'facebook', { projectId: 'gym', username: 'gym' });
-    const forBakery = (await t.connections.status(ALICE, { projectId: 'bakery' })).find((s) => s.platform === 'facebook');
-    const forGym = (await t.connections.status(ALICE, { projectId: 'gym' })).find((s) => s.platform === 'facebook');
-    expect(forBakery).toMatchObject({ targetLabel: 'bakery page', targetsAvailable: 2 });
-    expect(forGym).toMatchObject({ targetLabel: 'gym page', targetsAvailable: 2 });
-    // the default (any other business) is the first connected
-    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'facebook').targetLabel).toBe('bakery page');
-    // the gym switches to the bakery's page: only the gym changes
-    const bakeryHandle = (await t.connections.targets(ALICE, 'facebook')).find((x) => x.label === 'bakery page').id;
-    await t.connections.setTarget(ALICE, 'facebook', bakeryHandle, { projectId: 'gym' });
-    expect((await t.connections.status(ALICE, { projectId: 'gym' })).find((s) => s.platform === 'facebook').targetLabel).toBe('bakery page');
-    void a;
-    void b;
+    await connectVia(t, '61111111-2222-4333-8444-555555555555', 'meta_ads', { projectId: 'bakery', username: 'bakery', zPlatform: 'metaads' });
+    await connectVia(t, '61111111-2222-4333-8444-555555555555', 'meta_ads', { projectId: 'gym', username: 'gym', zPlatform: 'metaads' });
+    const forBakery = (await t.connections.status('61111111-2222-4333-8444-555555555555', { projectId: 'bakery' })).find((s) => s.platform === 'meta_ads');
+    const forGym = (await t.connections.status('61111111-2222-4333-8444-555555555555', { projectId: 'gym' })).find((s) => s.platform === 'meta_ads');
+    expect(forBakery).toMatchObject({ targetLabel: expect.stringMatching(/^bakery/), targetsAvailable: 2 });
+    expect(forGym).toMatchObject({ targetLabel: expect.stringMatching(/^gym/), targetsAvailable: 2 });
+    expect((await t.connections.status('61111111-2222-4333-8444-555555555555')).find((s) => s.platform === 'meta_ads').targetLabel).toMatch(/^bakery/);
+    const bakeryHandle = (await t.connections.targets('61111111-2222-4333-8444-555555555555', 'meta_ads')).find((x) => x.label.startsWith('bakery')).id;
+    await t.connections.setTarget('61111111-2222-4333-8444-555555555555', 'meta_ads', bakeryHandle, { projectId: 'gym' });
+    expect((await t.connections.status('61111111-2222-4333-8444-555555555555', { projectId: 'gym' })).find((s) => s.platform === 'meta_ads').targetLabel).toMatch(/^bakery/);
   });
 
-  it('check reads the accounts back; an inactive one needs a reconnect, and reconnect names it', async () => {
+  it('check reads the accounts back; an inactive one or the needsReconnection flag needs a reconnect, and reconnect forces it', async () => {
     const t = setup();
-    const { account } = await connectVia(t, ALICE, 'tiktok');
+    const { account } = await connectVia(t, ALICE, 'tiktok_ads', { zPlatform: 'tiktokads' });
     account.isActive = false;
-    const st = await t.connections.check(ALICE, 'tiktok');
-    expect(st.state).toBe('needs_reconnect');
-    const before = mock.calls.length;
-    await t.connections.reconnectLink(ALICE, 'tiktok');
-    expect(mock.calls.slice(before).find((c) => c.path === '/api/v1/connect/tiktok').query.reconnectAccountId).toBe(account._id);
-  });
-
-  it('reads the listing’s needsReconnection flag as needing a reconnect', async () => {
-    const t = setup();
-    const { account } = await connectVia(t, ALICE, 'youtube');
+    expect((await t.connections.check(ALICE, 'tiktok_ads')).state).toBe('needs_reconnect');
+    account.isActive = true;
     account.needsReconnection = true;
-    expect(await t.connections.check(ALICE, 'youtube')).toMatchObject({ state: 'needs_reconnect' });
+    expect(await t.connections.check(ALICE, 'tiktok_ads')).toMatchObject({ state: 'needs_reconnect' });
     account.needsReconnection = false;
-    expect(await t.connections.check(ALICE, 'youtube')).toMatchObject({ state: 'connected' });
+    expect(await t.connections.check(ALICE, 'tiktok_ads')).toMatchObject({ state: 'connected' });
+    const before = mock.calls.length;
+    await t.connections.reconnectLink(ALICE, 'tiktok_ads');
+    expect(mock.calls.slice(before).find((c) => c.path === '/api/v1/connect/tiktok/ads').query.force).toBe('true');
   });
 
-  it('disconnect removes the chosen account at Zernio, once', async () => {
+  it('ignores social accounts in the profile (they are Upload-Post’s)', async () => {
     const t = setup();
-    const { account } = await connectVia(t, ALICE, 'youtube');
+    const { profileId } = await connectVia(t, '62111111-2222-4333-8444-555555555555', 'google_ads', { zPlatform: 'googleads' });
+    mock.addAccount({ platform: 'instagram', profileId, username: 'joe' });
+    await t.connections.check('62111111-2222-4333-8444-555555555555', 'google_ads');
+    expect(await t.impl.accountCount('62111111-2222-4333-8444-555555555555')).toBe(1);
+    expect((await t.connections.status('62111111-2222-4333-8444-555555555555')).find((s) => s.platform === 'instagram').state).toBe('not_connected');
+  });
+
+  it('disconnect removes the chosen ad account at Zernio, once', async () => {
+    const t = setup();
+    const { account } = await connectVia(t, ALICE, 'microsoft_ads', { zPlatform: 'microsoftads' });
     const before = mock.calls.length;
-    await t.connections.disconnect(ALICE, 'youtube');
+    await t.connections.disconnect(ALICE, 'microsoft_ads');
     expect(mock.calls.slice(before).filter((c) => c.method === 'DELETE')).toEqual([expect.objectContaining({ path: `/api/v1/accounts/${account._id}` })]);
-    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'youtube').state).toBe('not_connected');
+    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'microsoft_ads').state).toBe('not_connected');
   });
 });
 
@@ -223,72 +228,47 @@ describe('the webhook', () => {
 
   it('applies an event once (dedupe by event id) and ignores events for profiles that aren’t ours', async () => {
     const t = setup();
-    await t.connections.connectLink(ALICE, 'x');
+    await t.connections.connectLink(ALICE, 'reddit_ads');
     const doc = (await t.storage.get(`zernio:user:${sha256(ALICE)}`)).value;
-    const acct = mock.addAccount({ platform: 'twitter', profileId: doc.profileId, username: 'joe' });
-    const evt = mock.signed({ event: 'account.connected', profiles: mock.profileRef(doc.profileId), account: { accountId: acct._id, platform: 'twitter', username: 'joe' } });
+    const acct = mock.addAccount({ platform: 'redditads', profileId: doc.profileId, username: 'joe' });
+    const evt = mock.signed({ event: 'account.connected', profiles: mock.profileRef(doc.profileId), account: { accountId: acct._id, platform: 'redditads', username: 'joe' } });
     expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
     expect((await t.impl.webhook(evt.raw, evt.headers)).body).toMatchObject({ duplicate: true });
-    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'x').state).toBe('connected');
-    const stranger = mock.signed({ event: 'account.connected', profiles: [{ id: 'aaaaaaaaaaaaaaaaaaaaaaaa', externalId: 'cust_000000000000000000000000' }], account: { accountId: 'bbbbbbbbbbbbbbbbbbbbbbbb', platform: 'facebook' } });
+    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'reddit_ads').state).toBe('connected');
+    const stranger = mock.signed({ event: 'account.connected', profiles: [{ id: 'aaaaaaaaaaaaaaaaaaaaaaaa', externalId: 'cust_000000000000000000000000' }], account: { accountId: 'bbbbbbbbbbbbbbbbbbbbbbbb', platform: 'metaads' } });
     expect((await t.impl.webhook(stranger.raw, stranger.headers)).status).toBe(200);
-    expect((await t.connections.status(BOB)).find((s) => s.platform === 'facebook').state).toBe('not_connected');
+    expect((await t.connections.status(BOB)).find((s) => s.platform === 'meta_ads').state).toBe('not_connected');
   });
 
   it('an unintentional disconnect asks for a reconnect; an intentional one removes the account', async () => {
     const t = setup();
-    const { account, profileId } = await connectVia(t, ALICE, 'linkedin');
-    // the documented shape: disconnectionType sits inside `account`
-    const lost = mock.signed({ event: 'account.disconnected', profiles: mock.profileRef(profileId), account: { accountId: account._id, profileId, platform: 'linkedin', username: 'joesbakery', disconnectionType: 'unintentional', reason: 'token expired' } });
+    const { account, profileId } = await connectVia(t, ALICE, 'linkedin_ads', { zPlatform: 'linkedinads' });
+    const lost = mock.signed({ event: 'account.disconnected', profiles: mock.profileRef(profileId), account: { accountId: account._id, profileId, platform: 'linkedinads', username: 'joesbakery', disconnectionType: 'unintentional', reason: 'token expired' } });
     await t.impl.webhook(lost.raw, lost.headers);
-    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'linkedin').state).toBe('needs_reconnect');
-    const gone = mock.signed({ event: 'account.disconnected', profiles: mock.profileRef(profileId), account: { accountId: account._id, profileId, platform: 'linkedin', username: 'joesbakery', disconnectionType: 'intentional', reason: 'Removed' } });
+    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'linkedin_ads').state).toBe('needs_reconnect');
+    const gone = mock.signed({ event: 'account.disconnected', profiles: mock.profileRef(profileId), account: { accountId: account._id, profileId, platform: 'linkedinads', username: 'joesbakery', disconnectionType: 'intentional', reason: 'Removed' } });
     await t.impl.webhook(gone.raw, gone.headers);
-    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'linkedin').state).toBe('not_connected');
+    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'linkedin_ads').state).toBe('not_connected');
   });
 
   it('ignores an account event whose account sits in another profile, even when the event lists this customer', async () => {
     const t = setup();
-    const { account, profileId } = await connectVia(t, ALICE, 'facebook');
-    const other = mock.signed({ event: 'account.disconnected', profiles: mock.profileRef(profileId), account: { accountId: account._id, profileId: 'abcdefabcdefabcdefabcdef', platform: 'facebook', username: 'x', disconnectionType: 'intentional', reason: 'r' } });
+    const { account, profileId } = await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
+    const other = mock.signed({ event: 'account.disconnected', profiles: mock.profileRef(profileId), account: { accountId: account._id, profileId: 'abcdefabcdefabcdefabcdef', platform: 'metaads', username: 'x', disconnectionType: 'intentional', reason: 'r' } });
     expect((await t.impl.webhook(other.raw, other.headers)).status).toBe(200);
-    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'facebook').state).toBe('connected');
+    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'meta_ads').state).toBe('connected');
   });
 
-  it('routes a post event to the job named in the post’s metadata', async () => {
+  it('ignores post events (posting is Upload-Post’s)', async () => {
     const t = setup();
-    const { profileId } = await connectVia(t, ALICE, 'facebook');
-    const seen = [];
-    t.impl.setPostListener((userId, jobId, outcome) => seen.push({ userId, jobId, outcome }));
-    const jobId = '11111111-2222-4333-8444-555555555555';
-    const evt = mock.signed({ event: 'post.published', profiles: mock.profileRef(profileId), post: { id: 'cccccccccccccccccccccccc', status: 'published', metadata: { ylbJob: jobId }, platforms: [{ platform: 'facebook', status: 'published', publishedUrl: 'https://facebook.com/p/1' }] } });
-    await t.impl.webhook(evt.raw, evt.headers);
-    expect(seen).toEqual([{ userId: ALICE, jobId, outcome: expect.objectContaining({ state: 'sent', url: 'https://facebook.com/p/1' }) }]);
+    const { profileId } = await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
+    const evt = mock.signed({ event: 'post.published', profiles: mock.profileRef(profileId), post: { id: 'cccccccccccccccccccccccc', status: 'published', metadata: { ylbJob: '11111111-2222-4333-8444-555555555555' } } });
+    expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
+    expect(t.impl.setPostListener).toBeUndefined();
   });
 });
 
-describe('own stats and ad results (reads)', () => {
-  it('normalizes daily metrics, followers and top posts for the business’s account', async () => {
-    const t = setup();
-    await connectVia(t, ALICE, 'instagram');
-    const got = await t.connections.insights(ALICE, 'instagram', { since: Date.parse('2026-10-03'), until: Date.parse('2026-11-02') });
-    expect(got).toMatchObject({ followers: 1310, reach: 1000, views: 700, engagement: 52 + 8 + 3 + 1, postsCount: 1 });
-    expect(got.series.find((d) => d.date === '2026-11-02')).toMatchObject({ followers: 1310, reach: 300 });
-    expect(got.topPosts[0]).toMatchObject({ likes: 40, comments: 6, shares: 3 });
-    expect(typeof got.topPosts[0].text).toBe('string');
-    // each read is in the customer's ledger as a zernio row
-    expect(t.db.rows('usage_ledger').every((r) => r.vendor === 'zernio' && r.customer_tag === customerTag(ALICE, t.env))).toBe(true);
-  });
-
-  it('answers null when nothing is chosen, and { kind: reconnect } when the account needs one', async () => {
-    const t = setup();
-    expect(await t.connections.insights(ALICE, 'tiktok', {})).toBeNull();
-    const { account } = await connectVia(t, ALICE, 'tiktok');
-    account.isActive = false;
-    await t.connections.check(ALICE, 'tiktok');
-    await expect(t.connections.insights(ALICE, 'tiktok', {})).rejects.toMatchObject({ kind: 'reconnect' });
-  });
-
+describe('ad results (reads)', () => {
   it('reads ad results (spend, clicks, series, campaigns) for a connected ad account, and changes nothing', async () => {
     const t = setup();
     await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads', username: 'Joe ads' });
@@ -298,87 +278,33 @@ describe('own stats and ad results (reads)', () => {
     expect(got.series).toHaveLength(2);
     expect(got.campaigns[0]).toMatchObject({ id: '120200001', name: 'Autumn bread', spend: 20 });
     expect(mock.calls.slice(before).every((c) => c.method === 'GET')).toBe(true);
-  });
-});
-
-describe('posting (one attempt)', () => {
-  const composed = { text: 'Fresh bread today #bread', commentSupported: true, hasUrl: false };
-
-  it('posts once with an Idempotency-Key and our job id in the metadata, and returns the post’s address', async () => {
-    const t = setup();
-    await connectVia(t, ALICE, 'facebook');
-    const jobId = '21111111-2222-4333-8444-555555555555';
-    const out = await t.connections.publish(ALICE, 'facebook', { jobId, composed: { ...composed, comment: 'Order: https://joes.example' } });
-    expect(out.state).toBe('sent');
-    expect(out.url).toMatch(/^https:\/\/social\.example\/facebook\/p\//);
-    const call = mock.calls.filter((c) => c.path === '/api/v1/posts' && c.method === 'POST').pop();
-    expect(call.idempotencyKey).toBe(jobId);
-    expect(call.body).toMatchObject({ publishNow: true, metadata: { ylbJob: jobId }, platforms: [{ platform: 'facebook', platformSpecificData: { firstComment: 'Order: https://joes.example' } }] });
-    expect(mock.violations).toEqual([]);
+    expect(t.db.rows('usage_ledger').every((r) => r.vendor === 'zernio' && r.feature === 'ads' && r.customer_tag === customerTag(ALICE, t.env))).toBe(true);
   });
 
-  it('uploads the file to Zernio’s storage first (no key on the upload), then posts it', async () => {
+  it('answers null when nothing is chosen, and { kind: reconnect } when the account needs one', async () => {
     const t = setup();
-    await connectVia(t, ALICE, 'instagram');
-    const out = await t.connections.publish(ALICE, 'instagram', { jobId: '31111111-2222-4333-8444-555555555555', composed, media: { id: 'm1.jpg', type: 'image/jpeg', size: 4, kind: 'image' }, loadMedia: async () => Buffer.from([1, 2, 3, 4]) });
-    expect(out.state).toBe('sent');
-    const post = mock.posts.at(-1);
-    expect(post.mediaItems[0]).toMatchObject({ type: 'image' });
-    expect(mock.violations).toEqual([]);
-  });
-
-  it('a refused post is failed with our code; a 5xx is unknown and nothing is sent again', async () => {
-    const t = setup();
-    await connectVia(t, ALICE, 'x', { zPlatform: 'twitter' });
-    mock.setPostOutcome('failed');
-    const failed = await t.connections.publish(ALICE, 'x', { jobId: '41111111-2222-4333-8444-555555555555', composed });
-    expect(failed).toMatchObject({ state: 'failed', errorCode: 'REFUSED' });
-    mock.setPostOutcome('error500');
-    const posts = mock.calls.filter((c) => c.path === '/api/v1/posts' && c.method === 'POST').length;
-    const unknown = await t.connections.publish(ALICE, 'x', { jobId: '51111111-2222-4333-8444-555555555555', composed });
-    expect(unknown).toMatchObject({ state: 'unknown', errorCode: 'UNCONFIRMED' });
-    expect(mock.calls.filter((c) => c.path === '/api/v1/posts' && c.method === 'POST').length).toBe(posts + 1);
-  });
-
-  it('“Check again” finds a post by the job id when no post id came back (a read only)', async () => {
-    const t = setup();
-    await connectVia(t, ALICE, 'linkedin');
-    const jobId = '61111111-2222-4333-8444-555555555555';
-    mock.setPostOutcome('accepted_then_500');
-    const out = await t.connections.publish(ALICE, 'linkedin', { jobId, composed });
-    expect(out.state).toBe('unknown');
-    const before = mock.calls.length;
-    const found = await t.connections.postStatus(ALICE, { jobId, requestedAt: new Date().toISOString(), platform: 'linkedin' });
-    expect(found).toMatchObject({ found: true });
-    expect(mock.calls.slice(before).every((c) => c.method === 'GET')).toBe(true);
-    expect(mock.violations).toEqual([]);
-  });
-
-  it('refuses to post (failed, nothing sent) when the business has no account there', async () => {
-    const t = setup();
-    await t.connections.connectLink(ALICE, 'youtube');
-    const posts = mock.calls.filter((c) => c.path === '/api/v1/posts').length;
-    const out = await t.connections.publish(ALICE, 'youtube', { jobId: '71111111-2222-4333-8444-555555555555', composed });
-    expect(out).toMatchObject({ state: 'failed', errorCode: 'NO_TARGET' });
-    expect(mock.calls.filter((c) => c.path === '/api/v1/posts').length).toBe(posts);
+    expect(await t.connections.adResults('63111111-2222-4333-8444-555555555555', 'google_ads', {})).toBeNull();
+    const { account } = await connectVia(t, '63111111-2222-4333-8444-555555555555', 'google_ads', { zPlatform: 'googleads' });
+    account.isActive = false;
+    await t.connections.check('63111111-2222-4333-8444-555555555555', 'google_ads');
+    await expect(t.connections.adResults('63111111-2222-4333-8444-555555555555', 'google_ads', {})).rejects.toMatchObject({ kind: 'reconnect' });
   });
 });
 
 describe('deleting an account and the monthly counts', () => {
-
-  it('forgetUser disconnects every account at Zernio, then reads as not connected', async () => {
+  it('forgetUser disconnects every ad account at Zernio, then reads as not connected', async () => {
     const t = setup();
-    await connectVia(t, ALICE, 'facebook');
+    await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
     await connectVia(t, ALICE, 'google_ads', { zPlatform: 'googleads' });
     await t.connections.forgetUser(ALICE);
     expect((await t.connections.status(ALICE)).every((s) => s.state === 'not_connected' || s.state === 'coming_soon')).toBe(true);
   });
 
-  it('writes one estimated connected-accounts row per customer for last month, once', async () => {
+  it('writes one estimated ad-accounts row per customer for last month, once', async () => {
     let at = Date.parse('2026-10-10T00:00:00Z');
     const t = setup({ now: () => at });
-    await connectVia(t, ALICE, 'facebook');
-    await connectVia(t, ALICE, 'tiktok');
+    await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
+    await connectVia(t, ALICE, 'tiktok_ads', { zPlatform: 'tiktokads' });
     at = Date.parse('2026-11-02T00:00:00Z');
     expect((await t.impl.meterIfDue()).rows).toBe(1);
     expect((await t.impl.meterIfDue()).skipped).toBe(true);
@@ -390,8 +316,8 @@ describe('deleting an account and the monthly counts', () => {
 
   it('never logs the API key, a connect link or an account id', async () => {
     const t = setup();
-    const { account, link } = await connectVia(t, ALICE, 'facebook');
-    await t.connections.publish(ALICE, 'facebook', { jobId: '81111111-2222-4333-8444-555555555555', composed: { text: 'Hi', commentSupported: true, hasUrl: false } });
+    const { account, link } = await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
+    await t.connections.adResults(ALICE, 'meta_ads', {});
     const text = t.log.text();
     expect(text).not.toContain(TEST_ZERNIO_KEY);
     expect(text).not.toContain(link.connectLink);

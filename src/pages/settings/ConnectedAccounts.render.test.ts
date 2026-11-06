@@ -109,8 +109,10 @@ describe('every row state', () => {
     set([{ platform: 'instagram', state: 'connected', targetLabel: 'joesbakery', targetKind: 'ig_account' }]);
     expect(rowOf(render(), 'instagram')).toContain('joesbakery (Instagram)');
   });
-  it('X Ads says to connect X first', () => {
-    expect(rowOf(render(), 'x_ads')).toContain('Connect X first, then X Ads.');
+  it('X Ads is coming soon (Zernio’s X Ads needs an X account in Zernio; X posting is Upload-Post’s)', () => {
+    const row = rowOf(render(), 'x_ads');
+    expect(row).toContain('Coming soon');
+    expect(row).not.toContain('>Connect<');
   });
 });
 

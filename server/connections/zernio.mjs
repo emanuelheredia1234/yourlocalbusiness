@@ -1,34 +1,31 @@
-// Connected accounts through Zernio (the owner's choice): each customer's social accounts and ad accounts live in
-// one Zernio profile per customer, made on their first connect with externalId = our customer id (the opaque
-// billing tag, never an email). Zernio runs on its own approved platform apps; connect links open Zernio's
-// white-label welcome screen with our brand. The methods are those of server/connections/index.mjs, plus
-// webhook(rawBody, headers) for POST /api/webhooks/zernio, setPostListener(fn) and meterIfDue().
+// Ad accounts through Zernio (the owner's choice for ads; social accounts and posting are Upload-Post's,
+// server/connections/uploadpost.mjs): each customer's ad accounts live in one Zernio profile per customer, made on
+// their first connect with externalId = our customer id (the opaque billing tag, never an email). Zernio runs on its
+// own approved platform apps; connect links open Zernio's white-label welcome screen with our brand. The methods are
+// those of server/connections/index.mjs for the ad platforms (the social ones answer "not here"), plus
+// webhook(rawBody, headers) for POST /api/webhooks/zernio and meterIfDue(). Later: campaign changes through
+// /v1/ads (one-shot writes, "may have been posted - check before trying again").
 //
 //   const impl = createZernioConnections({ env, fetch, now, storage, db, log });
 //
-// What this file keeps (docs/integrations-setup.md §2):
+// What this file keeps (docs/integrations-setup.md §3a):
 // - Every Zernio call goes through server/zernio.mjs (the one client; the key never leaves it).
 // - Isolation: each user has their own profile (a request only ever names that user's profileId and the account
-//   ids stored for that user), and each business picks which account it uses (choice[projectId], else the
-//   default). POST /v1/posts accepts any account of our team, so the account id always comes from the stored doc
-//   of the signed-in user, never from a request.
+//   ids stored for that user), and each business picks which ad account it uses (choice[projectId], else the
+//   default). The account id always comes from the stored doc of the signed-in user, never from a request.
 // - The browser sees ConnectionStatus and opaque target handles only: no Zernio profile or account ids.
-// - A post is one attempt (Idempotency-Key = the job id, metadata.ylbJob = the job id). A timeout or a 5xx is
-//   'unknown' and is only ever checked with a read ("Check again"); nothing here sends it again.
 // - Webhooks: HMAC-checked on the exact bytes, deduplicated by event id, routed by profiles[0].externalId, and
-//   applied only to that customer's own doc and jobs.
-// - Third-party text (account names, post text, campaign names) is data: clipped and kept as plain text.
+//   applied only to that customer's own doc (account.* events for ad accounts; post events are ignored).
+// - Third-party text (account names, campaign names) is data: clipped and kept as plain text.
 
 import crypto from 'node:crypto';
 import { AD_PLATFORMS, PHASE2_PLATFORMS, PLATFORMS } from '../integrations/contracts.mjs';
-import { customerTag, ensureCustomer, fail, IntegrationError, notSetUp, oneShot, safeLog, sha256 } from '../integrations/common.mjs';
+import { customerTag, ensureCustomer, fail, IntegrationError, notSetUp, safeLog, sha256 } from '../integrations/common.mjs';
 import { notConnectedStatuses } from './index.mjs';
 import { createZernioClient, ZernioCallError, zernioError } from '../zernio.mjs';
 import { appOrigin } from '../seo/sitemap.mjs';
-import { num, post as normPost, text } from '../analytics/normalize/util.mjs';
+import { num, text } from '../analytics/normalize/util.mjs';
 
-/** Our platform → Zernio's posting platform (GET /v1/connect/{platform}). */
-export const SOCIAL_CONNECT = Object.freeze({ facebook: 'facebook', instagram: 'instagram', linkedin: 'linkedin', tiktok: 'tiktok', x: 'twitter', youtube: 'youtube', pinterest: 'pinterest' });
 /** Our ad platform → Zernio's connect path platform (GET /v1/connect/{platform}/ads) and its ads account platform. */
 export const ADS_CONNECT = Object.freeze({
   meta_ads: { connect: 'facebook', account: 'metaads' },
@@ -36,22 +33,19 @@ export const ADS_CONNECT = Object.freeze({
   linkedin_ads: { connect: 'linkedin', account: 'linkedinads' },
   tiktok_ads: { connect: 'tiktok', account: 'tiktokads' },
   pinterest_ads: { connect: 'pinterest', account: 'pinterestads' },
+  // X Ads needs an X account inside Zernio, and X posting is Upload-Post's: "Coming soon" until the owner decides
   x_ads: { connect: 'twitter', account: 'xads', parent: 'x' },
   reddit_ads: { connect: 'redditads', account: 'redditads' },
   microsoft_ads: { connect: 'microsoftads', account: 'microsoftads' },
 });
-/** Zernio's account platform → ours (anything else in the profile is ignored). */
-export const FROM_ZERNIO = Object.freeze({
-  ...Object.fromEntries(Object.entries(SOCIAL_CONNECT).map(([ours, z]) => [z, ours])),
-  ...Object.fromEntries(Object.entries(ADS_CONNECT).map(([ours, a]) => [a.account, ours])),
-});
+/** Zernio's ads account platform → ours (anything else in the profile, social accounts too, is ignored). */
+export const FROM_ZERNIO = Object.freeze(Object.fromEntries(Object.entries(ADS_CONNECT).map(([ours, a]) => [a.account, ours])));
 
-const NAMES = { facebook: 'Facebook', instagram: 'Instagram', linkedin: 'LinkedIn', tiktok: 'TikTok', x: 'X', youtube: 'YouTube', pinterest: 'Pinterest', google_ads: 'Google Ads', meta_ads: 'Meta Ads', linkedin_ads: 'LinkedIn Ads', tiktok_ads: 'TikTok Ads', pinterest_ads: 'Pinterest Ads', x_ads: 'X Ads', reddit_ads: 'Reddit Ads', microsoft_ads: 'Microsoft Ads' };
-const TARGET_KIND = { facebook: 'fb_page', instagram: 'ig_account', linkedin: 'li_person', tiktok: 'tt_account', x: 'x_account', youtube: 'yt_channel', pinterest: 'pin_account' };
+const NAMES = { google_ads: 'Google Ads', meta_ads: 'Meta Ads', linkedin_ads: 'LinkedIn Ads', tiktok_ads: 'TikTok Ads', pinterest_ads: 'Pinterest Ads', x_ads: 'X Ads', reddit_ads: 'Reddit Ads', microsoft_ads: 'Microsoft Ads' };
 
 const PENDING_MS = 30 * 60_000;
 const FORGOTTEN_FOR_MS = 24 * 3_600_000;
-const ACCOUNT_MONTH_MICRO = 6_000_000; // $6 per connected account per month (Zernio's list price for accounts 1-10)
+const ACCOUNT_MONTH_MICRO = 6_000_000; // $6 per connected ad account per month (Zernio's list price for accounts 1-10)
 const ZID = /^[0-9a-f]{24}$/i;
 const TARGET_ID = /^tgt_[0-9a-f]{32}$/;
 const DEFAULT = '*';
@@ -78,37 +72,6 @@ const okBody = (res) => {
   throw readFailure(res);
 };
 
-/** The plain error code a job ends with, from a failed platform entry's errorCategory. */
-export function jobErrorFor(category) {
-  switch (String(category || '')) {
-    case 'auth_expired':
-      return 'NEEDS_RECONNECT';
-    case 'user_content':
-    case 'platform_rejected':
-      return 'REFUSED';
-    case 'user_abuse':
-    case 'platform_rate_limit':
-    case 'quota_exhausted':
-      return 'PLATFORM_LIMIT';
-    case 'account_issue':
-      return 'PERMISSION';
-    default:
-      return 'REFUSED';
-  }
-}
-
-/** A post answer (POST /v1/posts, GET /v1/posts/{id}, a post.* webhook) → our outcome for one platform entry. */
-export function outcomeOfPost(post, zPlatform, accountId) {
-  const entries = Array.isArray(post?.platforms) ? post.platforms : [];
-  const entry = entries.find((p) => isObj(p) && (accountId ? String(p.accountId ?? '') === accountId : true) && (!zPlatform || p.platform === zPlatform)) ?? entries[0] ?? null;
-  const status = String(entry?.status ?? post?.status ?? '');
-  const url = typeof (entry?.platformPostUrl ?? entry?.publishedUrl) === 'string' ? String(entry.platformPostUrl ?? entry.publishedUrl) : '';
-  const safeUrl = /^https:\/\/[^\s<>"']{4,500}$/.test(url) ? url : undefined;
-  if (status === 'published') return { state: 'sent', ...(safeUrl ? { url: safeUrl } : {}) };
-  if (status === 'failed' || status === 'cancelled') return { state: 'failed', errorCode: jobErrorFor(entry?.errorCategory) };
-  return { state: 'pending' };
-}
-
 /**
  * env: ZERNIO_API_KEY, ZERNIO_WEBHOOK_SECRET, ZERNIO_BRAND_NAME, ZERNIO_BRAND_LOGO_URL, ZERNIO_BRAND_COLOR,
  * CUSTOMER_TAG_SECRET, GSC_APP_PROPERTY (the app's address for the connect redirect). storage: appState.
@@ -120,7 +83,6 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
   const dbReady = db?.enabled === true;
   const tagSecret = String(env.CUSTOMER_TAG_SECRET || '');
   const log_ = (event, fields) => safeLog(event, fields, log);
-  let postListener = null;
 
   const missing = [...(zernio.enabled ? [] : ['ZERNIO_API_KEY']), ...(zernio.webhookReady ? [] : ['ZERNIO_WEBHOOK_SECRET']), ...(tagSecret.length >= 16 ? [] : ['CUSTOMER_TAG_SECRET'])];
   const setUp = missing.length === 0 && storageReady && dbReady;
@@ -218,6 +180,8 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
 
   function statusOf(doc, platform, projectId) {
     if (PHASE2_PLATFORMS.includes(platform)) return { platform, state: 'coming_soon' };
+    // social networks are Upload-Post's: never shown from here
+    if (!isAds(platform)) return { platform, state: 'not_connected' };
     const list = accountsOf(doc, platform);
     if (list.length) {
       const pick = chosen(doc, platform, projectId);
@@ -226,7 +190,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
       const out = { platform, state };
       if (acct?.label) {
         out.targetLabel = acct.label;
-        out.targetKind = isAds(platform) ? 'ads_account' : TARGET_KIND[platform];
+        out.targetKind = 'ads_account';
       }
       if (list.length > 1) out.targetsAvailable = list.length;
       const connectedAt = acct?.connectedAt ?? list[0][1].connectedAt;
@@ -297,26 +261,20 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
 
   async function startConnect(userId, platform, { projectId, reconnect = false } = {}) {
     requireSetUp();
-    if (PHASE2_PLATFORMS.includes(platform)) throw fail(400, 'BAD_REQUEST', `${NAMES[platform]} is coming soon.`);
+    if (PHASE2_PLATFORMS.includes(platform)) throw fail(400, 'BAD_REQUEST', `${NAMES[platform] ?? 'This network'} is coming soon.`);
+    if (!isAds(platform)) throw fail(404, 'NOT_FOUND', 'Unknown account type.');
     const { profileId } = await ensureProfile(userId);
     const { value: doc } = await readDoc(userId);
     const redirect = `${appOrigin(env)}/?connected=${encodeURIComponent(platform)}`;
     const query = { profileId, redirect_url: redirect, ...brandQuery() };
-    let path;
-    if (isAds(platform)) {
-      const ads = ADS_CONNECT[platform];
-      path = `/connect/${ads.connect}/ads`;
-      if (ads.parent) {
-        const parent = chosen(doc, ads.parent, projectId);
-        if (!parent) throw fail(409, 'NOT_CONNECTED', `Connect ${NAMES[ads.parent]} first, then ${NAMES[platform]}.`);
-        query.accountId = parent[0];
-      }
-      if (reconnect) query.force = 'true';
-    } else {
-      path = `/connect/${SOCIAL_CONNECT[platform]}`;
-      const current = reconnect ? chosen(doc, platform, projectId) : null;
-      if (current) query.reconnectAccountId = current[0];
+    const ads = ADS_CONNECT[platform];
+    const path = `/connect/${ads.connect}/ads`;
+    if (ads.parent) {
+      const parent = chosen(doc, ads.parent, projectId);
+      if (!parent) throw fail(409, 'NOT_CONNECTED', `Connect ${NAMES[ads.parent] ?? 'the account'} first, then ${NAMES[platform]}.`);
+      query.accountId = parent[0];
     }
+    if (reconnect) query.force = 'true';
     const res = await call('GET', path, { query });
     if (res.status < 200 || res.status >= 300) {
       log_('zernio_connect_failed', { platform, status: res.status, code: zernioError(res).code });
@@ -426,7 +384,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
   async function targets(userId, platform) {
     requireSetUp();
     const { value: doc } = await readDoc(userId);
-    return accountsOf(doc, platform).map(([zid, a]) => ({ id: handleOf(zid), label: a.label, kind: isAds(platform) ? 'ads_account' : TARGET_KIND[platform] }));
+    return accountsOf(doc, platform).map(([zid, a]) => ({ id: handleOf(zid), label: a.label, kind: 'ads_account' }));
   }
 
   async function setTarget(userId, platform, targetId, { projectId } = {}) {
@@ -476,62 +434,11 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     return { doc, zid: pick[0], account: pick[1], tag: tagOf(doc, userId) };
   }
 
-  // ───────────── own stats (reads) ─────────────
+  // ───────────── ad results (reads) ─────────────
 
-  async function insights(userId, platform, { projectId, since, until } = {}) {
-    let got;
-    try {
-      got = await usable(userId, platform, projectId);
-    } catch (e) {
-      if (e?.code === 'NOT_CONNECTED') return null;
-      if (e?.code === 'NEEDS_RECONNECT') throw Object.assign(new Error('reconnect'), { kind: 'reconnect' });
-      throw e;
-    }
-    const { zid, tag } = got;
-    const from = ymd(since ?? now() - 30 * 86_400_000);
-    const to = ymd(until ?? now());
-    const read = async (path, query, endpoint) => {
-      const res = await call('GET', path, { query, retry429: true });
-      await ledger({ customer_tag: tag, user_id: userId, project_id: projectId ?? null, feature: 'social', endpoint: `${platform}:${endpoint}`, http_status: res.status, outcome: res.status < 400 ? 'ok' : res.status >= 500 ? 'unknown' : 'failed' });
-      return res;
-    };
-    const daily = okBody(await read('/analytics/daily-metrics', { accountId: zid, fromDate: from, toDate: to, attribution: 'received' }, 'daily-metrics'));
-    let followers;
-    let followerSeries = [];
-    const fres = await read('/accounts/follower-stats', { accountIds: zid, fromDate: from, toDate: to, granularity: 'daily' }, 'follower-stats');
-    if (fres.status >= 200 && fres.status < 300) {
-      const acct = (Array.isArray(fres.body?.accounts) ? fres.body.accounts : []).find((a) => isObj(a) && String(a._id ?? a.accountId ?? '') === zid) ?? (Array.isArray(fres.body?.accounts) ? fres.body.accounts[0] : null);
-      followers = num(acct?.currentFollowers ?? acct?.followersCount ?? acct?.followers);
-      const hist = Array.isArray(acct?.history) ? acct.history : Array.isArray(fres.body?.stats?.[zid]) ? fres.body.stats[zid] : [];
-      followerSeries = hist.filter(isObj).map((h) => ({ date: String(h.date ?? '').slice(0, 10), followers: num(h.followers ?? h.followersCount ?? h.count) })).filter((h) => /^\d{4}-\d{2}-\d{2}$/.test(h.date) && h.followers !== undefined);
-    }
-    const pres = await read('/analytics', { accountId: zid, fromDate: from, toDate: to, limit: 25, sortBy: 'engagement', order: 'desc' }, 'analytics');
-    const posts = pres.status >= 200 && pres.status < 300 ? (Array.isArray(pres.body?.posts) ? pres.body.posts : []) : [];
-    const topPosts = posts
-      .filter(isObj)
-      .map((p) => normPost({ id: p._id ?? p.postId, url: p.platformPostUrl, text: p.content ?? '', at: p.publishedAt, likes: p.analytics?.likes, comments: p.analytics?.comments, shares: p.analytics?.shares, views: p.analytics?.views ?? p.analytics?.impressions }))
-      .filter(Boolean);
-    const days = (Array.isArray(daily.dailyData) ? daily.dailyData : []).filter(isObj);
-    const t = isObj(daily.totals) ? daily.totals : {};
-    const sum = (k) => days.reduce((a, d) => a + (num(d.metrics?.[k]) ?? 0), 0);
-    const total = (k) => num(t[k]) ?? sum(k);
-    const byDate = new Map();
-    for (const d of days) {
-      const date = String(d.date ?? '').slice(0, 10);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-      const m = d.metrics ?? {};
-      byDate.set(date, { date, reach: num(m.reach) ?? 0, engagement: (num(m.likes) ?? 0) + (num(m.comments) ?? 0) + (num(m.shares) ?? 0) + (num(m.saves) ?? 0) });
-    }
-    for (const f of followerSeries) byDate.set(f.date, { ...(byDate.get(f.date) ?? { date: f.date }), followers: f.followers });
-    return {
-      followers,
-      reach: total('reach'),
-      views: total('views') || total('impressions'),
-      engagement: total('likes') + total('comments') + total('shares') + total('saves'),
-      postsCount: num(daily.totals?.postCount) ?? days.reduce((a, d) => a + (num(d.postCount) ?? 0), 0),
-      series: [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1)),
-      topPosts,
-    };
+  /** Social stats are Upload-Post's: nothing here. */
+  async function insights() {
+    return null;
   }
 
   async function adResults(userId, platform, { projectId, since, until } = {}) {
@@ -586,126 +493,14 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     };
   }
 
-  // ───────────── posting (one attempt) ─────────────
+  // ───────────── posting is Upload-Post's ─────────────
 
-  /**
-   * Post one saved post on the business's chosen account: upload the file (if any), then POST /v1/posts once with
-   * publishNow. → { state: 'sent'|'failed'|'unknown', url?, errorCode?, ref }. Never throws after the post was
-   * sent; never sends again.
-   */
-  async function publish(userId, platform, { projectId, jobId, composed, media, loadMedia, privacy } = {}) {
-    let picked;
-    try {
-      picked = await usable(userId, platform, projectId);
-    } catch (e) {
-      // nothing was sent: the account isn't usable (any other problem here is plainly a failure too)
-      return { state: 'failed', errorCode: e?.code === 'NEEDS_RECONNECT' ? 'NEEDS_RECONNECT' : 'NO_TARGET', ref: { via: 'zernio' } };
-    }
-    const { zid, tag } = picked;
-    const zPlatform = SOCIAL_CONNECT[platform];
-    const ref = { via: 'zernio', accountRef: handleOf(zid), idempotencyKey: jobId };
-
-    // 1. the file: uploaded to Zernio's storage first (a failure here means nothing was posted)
-    let mediaItems;
-    if (media) {
-      try {
-        const bytes = await loadMedia();
-        const presign = await call('POST', '/media/presign', { body: { filename: `${media.id}`.slice(0, 120), contentType: media.type, size: media.size } });
-        const uploadUrl = presign.body?.uploadUrl;
-        const publicUrl = presign.body?.publicUrl;
-        if (presign.status < 200 || presign.status >= 300 || typeof uploadUrl !== 'string' || typeof publicUrl !== 'string' || !/^https?:\/\//.test(publicUrl)) return { state: 'failed', errorCode: 'MEDIA_UPLOAD_FAILED', ref };
-        const put = await zernio.upload(uploadUrl, bytes, media.type);
-        if (put.status < 200 || put.status >= 300) return { state: 'failed', errorCode: 'MEDIA_UPLOAD_FAILED', ref };
-        mediaItems = [{ type: media.kind === 'video' ? 'video' : 'image', url: publicUrl }];
-      } catch (e) {
-        log_('zernio_media_failed', { platform, error: e?.name || 'Error' });
-        return { state: 'failed', errorCode: e?.code === 'MEDIA_MISSING' ? 'MEDIA_MISSING' : 'MEDIA_UPLOAD_FAILED', ref };
-      }
-    }
-
-    // 2. the post, once
-    const target = { platform: zPlatform, accountId: zid };
-    const psd = {};
-    if (composed.comment && ['facebook', 'instagram', 'linkedin'].includes(platform)) psd.firstComment = composed.comment;
-    if (platform === 'youtube') Object.assign(psd, { title: composed.title, visibility: 'public', madeForKids: false });
-    if (Object.keys(psd).length) target.platformSpecificData = psd;
-    const body = {
-      content: composed.text,
-      platforms: [target],
-      publishNow: true,
-      metadata: { ylbJob: jobId },
-      ...(mediaItems ? { mediaItems } : {}),
-      ...(platform === 'youtube' && composed.tags?.length ? { tags: composed.tags } : {}),
-      ...(platform === 'tiktok' ? { tiktokSettings: { privacy_level: typeof privacy === 'string' && /^[A-Z_]{3,40}$/.test(privacy) ? privacy : 'PUBLIC_TO_EVERYONE', allow_comment: true, allow_duet: true, allow_stitch: true, content_preview_confirmed: true, express_consent_given: true } } : {}),
-    };
-    const sent = await oneShot(async () => zernio.call('POST', '/posts', { body, headers: { 'Idempotency-Key': jobId }, timeoutMs: 120_000 }));
-    const res = sent.value;
-    await ledger({ customer_tag: tag, user_id: userId, project_id: projectId ?? null, call_id: jobId, feature: 'posting', endpoint: `${platform}:POST /v1/posts`, http_status: res?.status ?? null, outcome: sent.outcome === 'ok' ? 'ok' : sent.outcome === 'failed' ? 'failed' : 'unknown' });
-    if (sent.outcome === 'unknown') return { state: 'unknown', errorCode: 'UNCONFIRMED', ref };
-    const postId = String(res?.body?.post?._id ?? res?.body?.details?.existingPostId ?? '');
-    if (ZID.test(postId)) ref.postId = postId;
-    if (sent.outcome === 'failed') {
-      const e = zernioError(res);
-      // the same text already went to this account in the last 24 h: it's out there (not a second post)
-      if (res.status === 409 && res.body?.details?.existingPostId) return { state: 'sent', ref };
-      if (e.code === 'idempotency_conflict') return { state: 'unknown', errorCode: 'UNCONFIRMED', ref };
-      if (e.code === 'ACCOUNT_DISCONNECTED' || e.code === 'ads_connection_required' || e.status === 403) {
-        await markReconnect(userId, zid);
-        return { state: 'failed', errorCode: 'NEEDS_RECONNECT', ref };
-      }
-      if (e.status === 429) return { state: 'failed', errorCode: 'PLATFORM_LIMIT', ref };
-      return { state: 'failed', errorCode: 'REFUSED', ref };
-    }
-    // 201 all published, 207 a platform failed: branch on the post itself, never on "it didn't throw"
-    const out = outcomeOfPost(res.body?.post, zPlatform, zid);
-    if (out.state === 'pending') return { state: 'unknown', errorCode: 'UNCONFIRMED', ref };
-    if (out.errorCode === 'NEEDS_RECONNECT') await markReconnect(userId, zid);
-    return { ...out, ref };
+  async function publish() {
+    return { state: 'failed', errorCode: 'NO_TARGET', ref: { via: 'zernio' } };
   }
 
-  async function markReconnect(userId, zid) {
-    try {
-      await updateDoc(userId, (d) => {
-        if (!d.accounts[zid]) return { write: false };
-        d.accounts[zid].state = 'needs_reconnect';
-        return { value: d };
-      });
-    } catch {
-      /* the next sync shows it */
-    }
-  }
-
-  /**
-   * "Check again" for a job whose outcome is unknown: one read. ref: the job's provider_ref plus { jobId,
-   * requestedAt, platform }. → { found: true, url? } | { failed: true, errorCode } | { pending: true } | null.
-   */
-  async function postStatus(userId, ref = {}) {
-    if (!setUp) return null;
-    const { value: doc } = await readDoc(userId);
-    if (!doc.profileId) return null;
-    const zPlatform = SOCIAL_CONNECT[ref.platform];
-    let post = null;
-    if (ZID.test(String(ref.postId ?? ''))) {
-      const res = await call('GET', `/posts/${ref.postId}`);
-      if (res.status === 404) return { pending: true, missing: true };
-      if (res.status < 200 || res.status >= 300) return null;
-      post = res.body?.post ?? null;
-      // a post that isn't in this customer's profile is never theirs to see
-      if (post?.profileId && post.profileId !== doc.profileId) return null;
-    } else {
-      // no post id came back (a timeout): find it by the job id we put in its metadata
-      const day = ymd(Date.parse(ref.requestedAt) || now());
-      const res = await call('GET', '/posts', { query: { profileId: doc.profileId, fromDate: day, limit: 50, fields: 'metadata,status,platforms' } });
-      if (res.status < 200 || res.status >= 300) return null;
-      post = (Array.isArray(res.body?.posts) ? res.body.posts : []).find((p) => isObj(p) && p.metadata?.ylbJob === ref.jobId) ?? null;
-      if (!post) return { pending: true, missing: true };
-    }
-    const out = outcomeOfPost(post, zPlatform);
-    const postId = String(post?._id ?? '');
-    const found = ZID.test(postId) ? { postId } : {};
-    if (out.state === 'sent') return { found: true, ...(out.url ? { url: out.url } : {}), ref: found };
-    if (out.state === 'failed') return { failed: true, errorCode: out.errorCode, ref: found };
-    return { pending: true, ref: found };
+  async function postStatus() {
+    return null;
   }
 
   // ───────────── webhooks ─────────────
@@ -754,14 +549,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
       });
       return 'applied';
     }
-    if (/^post\.(published|partial|failed|platform\.published|platform\.failed|cancelled)$/.test(type) && isObj(evt.post)) {
-      const jobId = evt.post.metadata?.ylbJob;
-      if (typeof jobId !== 'string' || !postListener) return 'ignored';
-      const out = outcomeOfPost(evt.post);
-      if (out.state === 'pending') return 'ignored';
-      await postListener(userId, jobId, { ...out, postId: ZID.test(String(evt.post.id ?? evt.post._id ?? '')) ? String(evt.post.id ?? evt.post._id) : undefined });
-      return 'applied';
-    }
+    // post.* events: posting is Upload-Post's, nothing to do here
     return 'ignored';
   }
 
@@ -833,7 +621,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
 
   /**
    * Once per month (on start and daily): for last month, one `zernio_accounts` row per customer with how many
-   * accounts they had connected (prorated by days at $6 an account-month, Zernio's list price). Claimed with
+   * ad accounts they had connected (prorated by days at $6 an account-month, Zernio's list price). Claimed with
    * ifVersion so two servers don't both write it.
    */
   async function meterIfDue() {
@@ -885,7 +673,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     return { rows };
   }
 
-  /** How many accounts a customer has connected now (the owner's per-customer view). */
+  /** How many ad accounts a customer has connected now (the owner's per-customer view). */
   async function accountCount(userId) {
     if (!storageReady) return 0;
     const { value } = await readDoc(userId);
@@ -912,9 +700,5 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     webhook,
     meterIfDue,
     accountCount,
-    /** posting registers how a post.* webhook finishes its job: fn(userId, jobId, outcome) */
-    setPostListener(fn) {
-      postListener = typeof fn === 'function' ? fn : null;
-    },
   };
 }

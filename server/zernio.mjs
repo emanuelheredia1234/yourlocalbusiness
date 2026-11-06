@@ -1,12 +1,12 @@
-// The one module that talks to Zernio (https://docs.zernio.com): customers' social accounts, posting, social
-// analytics and ad results. Everything else reaches Zernio through createZernioClient(...) here; nothing else in the
+// The one module that talks to Zernio (https://docs.zernio.com), for ads only: customers' ad accounts, ad results,
+// and later campaign changes through /v1/ads (social accounts, posting and social stats are Upload-Post's,
+// server/uploadpost.mjs). Everything else reaches Zernio through createZernioClient(...) here; nothing else in the
 // server holds ZERNIO_API_KEY or builds a Zernio URL.
 //
 //   const zernio = createZernioClient({ env, fetch, now, log });
 //   zernio.enabled                                   ZERNIO_API_KEY is set
 //   await zernio.call('GET', '/accounts', { query })  → { status, headers, body }   (throws ZernioCallError on
 //                                                       a network error or a timeout: the request may have arrived)
-//   await zernio.upload(uploadUrl, bytes, type)      PUT to a presigned media URL (no API key on it)
 //   zernio.verifySignature(rawBody, header)          the webhook HMAC (ZERNIO_WEBHOOK_SECRET)
 //   zernioError(res)                                 a non-2xx answer as { code, type, retryAfter } (Zernio's
 //                                                     machine-readable fields only; never its text)
@@ -26,7 +26,6 @@ import { safeLog } from './integrations/common.mjs';
 export const ZERNIO_BASE_URL = 'https://zernio.com/api/v1';
 const READ_TIMEOUT_MS = 30_000;
 const WRITE_TIMEOUT_MS = 120_000;
-const UPLOAD_TIMEOUT_MS = 120_000;
 const MAX_RETRY_AFTER_S = 10;
 /** How long a request may wait for a slot under ZERNIO_RPM: reads up to a minute, writes 15 s (then a local 429). */
 const READ_SLOT_WAIT_MS = 65_000;
@@ -82,8 +81,6 @@ function sameHex(a, b) {
 export function createZernioClient({ env = process.env, fetch = globalThis.fetch, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = console } = {}) {
   const key = String(env.ZERNIO_API_KEY || '').trim();
   const base = zernioBase(env);
-  const baseHost = new URL(base).hostname;
-  const testBase = base !== ZERNIO_BASE_URL;
   const rpm = Math.max(1, Math.min(10_000, Number.parseInt(env.ZERNIO_RPM, 10) || 60));
   const secrets = [env.ZERNIO_WEBHOOK_SECRET, env.ZERNIO_WEBHOOK_SECRET_PREVIOUS].map((s) => String(s || '').trim()).filter(Boolean);
 
@@ -167,29 +164,6 @@ export function createZernioClient({ env = process.env, fetch = globalThis.fetch
       }
       if (res.status >= 400) safeLog('zernio_call_refused', { method: m, path: p.replace(/[0-9a-f]{24}/g, ':id'), status: res.status, code: zernioError(res).code }, log);
       return res;
-    },
-
-    /**
-     * PUT the file to the presigned URL Zernio gave (POST /media/presign). The URL must be https (or the local
-     * mock's host); no API key is sent to it. → { status }. Throws ZernioCallError on no answer.
-     */
-    async upload(uploadUrl, bytes, contentType) {
-      let u;
-      try {
-        u = new URL(String(uploadUrl));
-      } catch {
-        return { status: 0 };
-      }
-      const okProtocol = u.protocol === 'https:' || (testBase && u.protocol === 'http:' && (isLocal(u.hostname) || u.hostname === baseHost));
-      if (!okProtocol || u.username || u.password) return { status: 0 };
-      if (!(await acquire(WRITE_SLOT_WAIT_MS))) return { status: 429 };
-      try {
-        const res = await fetch(u.toString(), { method: 'PUT', headers: { 'content-type': String(contentType || 'application/octet-stream') }, body: bytes, signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS) });
-        await res.arrayBuffer().catch(() => null);
-        return { status: res.status };
-      } catch (e) {
-        throw new ZernioCallError(e?.name === 'TimeoutError' || e?.name === 'AbortError' ? 'timeout' : 'network');
-      }
     },
 
     /** X-Zernio-Signature: lowercase hex HMAC-SHA256 of the exact body bytes, with the current or previous secret. */

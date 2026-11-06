@@ -336,7 +336,7 @@ describe('the contracts on both sides', () => {
     expect([...CONNECT_PLATFORMS]).toEqual([...PLATFORMS]);
     expect([...CLIENT_PHASE2]).toEqual([...PHASE2_PLATFORMS]);
     expect([...CLIENT_SOURCES]).toEqual([...ANALYTICS_SOURCES]);
-    expect(PHASE1_PLATFORMS).toEqual(['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'google_ads', 'meta_ads', 'linkedin_ads', 'tiktok_ads', 'pinterest_ads', 'x_ads', 'reddit_ads', 'microsoft_ads']);
+    expect(PHASE1_PLATFORMS).toEqual(['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'google_ads', 'meta_ads', 'linkedin_ads', 'tiktok_ads', 'pinterest_ads', 'reddit_ads', 'microsoft_ads']);
     expect([...CLIENT_SOCIAL]).toEqual([...SOCIAL_PLATFORMS]);
     expect([...CLIENT_ADS]).toEqual([...AD_PLATFORMS]);
     const ts = fs.readFileSync(path.join(here, '..', '..', 'src', 'lib', 'integrations', 'types.ts'), 'utf8');
