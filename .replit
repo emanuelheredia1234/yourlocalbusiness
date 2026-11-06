@@ -49,3 +49,5 @@ waitForPort = 8787
 
 [userenv.shared]
 ADMIN_EMAILS = "hectorheredia242@gmail.com"
+APP_URL = "https://yourlocalbusiness.replit.app"
+STRIPE_PORTAL_CONFIGURATION = "bpc_1UYs2JC8QVa8cdNM5U77FteA"
