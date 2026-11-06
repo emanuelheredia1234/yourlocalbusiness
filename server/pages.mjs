@@ -724,6 +724,8 @@ export function createPages({
   fetch = globalThis.fetch,
   appHostExtras = null,
   billing = null,
+  // buy links /b/<id> (server/offers/buy.mjs through integrations.offers.buy): { matchBuy(url), serveBuy(…) }
+  offers = null,
 } = {}) {
   const tune = { ...TUNING, ...tuning };
   const hops = trustedHops;
@@ -1332,7 +1334,7 @@ export function createPages({
     recheckSoon(site);
     // a visitor sending one of the domain's pages' forms (server/leads.mjs)
     if (req.method === 'POST' && leads.matchLead(url)) return leads.receiveOnDomain(req, res, url, site);
-    // the app's short public routes (/m/<id>: the owner's lead magnets only)
+    // the app's short public routes (/m/<id> and /b/<id>: the owner's lead magnets and buy links only)
     if (isPublicRoute(url.pathname)) return servePublicRoute(req, res, url, site);
     if (req.method !== 'GET' && req.method !== 'HEAD') return write(req, res, 405, { ...COMMON, 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', allow: 'GET, HEAD' }, 'Method not allowed');
     const p = url.pathname;
@@ -1403,11 +1405,12 @@ export function createPages({
   /** /b/…, /m/… and /o/… (any method): the app's own short public routes, never the app itself (call servePublicRoute). */
   const matchPublicRoute = (url) => isPublicRoute(url.pathname);
   /**
-   * A short public route, on the app's host or (site: serveDomain's row) on a domain. Until its feature answers it
-   * (/b/ with offers, /o/ with opt-outs), it's the published pages' "not found" page.
+   * A short public route, on the app's host or (site: serveDomain's row) on a domain: /m/<id> (a lead magnet), /b/<id>
+   * (a buy link, when offers are on). Until its feature answers it (/o/ with opt-outs), it's the "not found" page.
    */
   async function servePublicRoute(req, res, url, site = null) {
     if (magnets.matchMagnet(url)) return magnets.serveMagnet(req, res, url, site);
+    if (offers?.matchBuy(url)) return offers.serveBuy(req, res, url, site, { notFound, gone, visitor });
     return notFound(req, res);
   }
 
@@ -1863,7 +1866,8 @@ export function createPages({
     // POST /<slug>/lead on the app's address (server/leads.mjs)
     matchLead: leads.matchLead,
     receiveLead: leads.receiveLead,
-    // /b/, /m/ and /o/ on the app's address (/m/<id>: a lead magnet, server/leadFiles.mjs)
+    // /b/, /m/ and /o/ on the app's address (/m/<id>: a lead magnet, server/leadFiles.mjs; /b/<id>: a buy link,
+    // server/offers/buy.mjs)
     matchPublicRoute,
     servePublicRoute,
     forgetUser,

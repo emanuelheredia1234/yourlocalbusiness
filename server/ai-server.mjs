@@ -39,6 +39,9 @@
 //   (the app's own address; also where the back button on Upload-Post's connect page goes),
 //   GSC_APP_VERIFICATION_FILE; CRON_SECRET (the bearer for POST /api/cron/tick, the same value as the Supabase Vault
 //   secret cron_secret; CRON_BUDGET_MS, 40000 by default, is one tick's time budget); for tests UPLOAD_POST_BASE_URL, ZERNIO_BASE_URL, NANGO_BASE_URL, TREG_BASE_URL. Keys are never printed: the startup notes name what's missing.
+// Offers and buy links /b/<id> with the customers' own Whop accounts (server/offers/index.mjs; they need
+//   supabase/migrations/20261113000000_offers.sql): PAYMENT_KEYS_SECRET (seals their Whop keys), APP_PUBLIC_URL,
+//   OFFERS_PROVIDER (off), WHOP_ENABLED (off), OFFER_CLICKS_PER_IP_PER_HOUR (60), OFFER_CLICKS_PER_OFFER_PER_HOUR (3000).
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -270,7 +273,8 @@ async function deleteAccount(req, res) {
 
 // published pages: the signed-in API, the pages themselves, and people's own domains
 // (appHostExtras: the app host's /sitemap.xml, /robots.txt and Search Console file, server/seo/sitemap.mjs)
-const pages = pagesFromEnv(process.env, { auth, whoIs: ai.whoIs, send, readJson, rateLimited, corsHeaders, allowedOrigin: ALLOWED_ORIGIN, distDir: DIST, appHostExtras: integrations.appHostExtras, billing: integrations.billing });
+// (offers: the buy links /b/<id>, server/offers/buy.mjs)
+const pages = pagesFromEnv(process.env, { auth, whoIs: ai.whoIs, send, readJson, rateLimited, corsHeaders, allowedOrigin: ALLOWED_ORIGIN, distDir: DIST, appHostExtras: integrations.appHostExtras, billing: integrations.billing, offers: integrations.offers?.buy ?? null });
 
 const crashed = (req, res, e) => {
   console.error(e);
@@ -286,7 +290,8 @@ function route(req, res, url) {
   if (url.pathname === '/api/config' && req.method === 'GET') {
     // what the browser needs to sign in (the publishable key is meant to be public), and whether it can publish pages
     // billing: whether plans are set up and enforced (no key, no ids)
-    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config(), billing: integrations.billing.config() }, corsHeaders(req));
+    // offers: whether buy links and Whop are on (booleans only)
+    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config(), billing: integrations.billing.config(), offers: integrations.offersConfig() }, corsHeaders(req));
   }
   if (url.pathname === '/api/health' && req.method === 'GET') {
     // `ok`: the server is up; `ai` says which keys are ready and what powers each function (signed-in users only, with accounts on)
@@ -307,7 +312,8 @@ function route(req, res, url) {
     }, (e) => crashed(req, res, e));
   }
   if (url.pathname.startsWith('/api/')) return send(res, 404, { error: 'Not found' }, corsHeaders(req));
-  // the app's short public routes: /m/<id> (a lead magnet's download, server/leadFiles.mjs), /b/ and /o/ (not yet)
+  // the app's short public routes: /m/<id> (a lead magnet's download, server/leadFiles.mjs), /b/<id> (a buy link,
+  // server/offers/buy.mjs), /o/ (not yet)
   if (pages.matchPublicRoute(url)) return void pages.servePublicRoute(req, res, url).catch((e) => crashed(req, res, e));
   // a visitor sending a published page's form (/<name>/lead; server/leads.mjs)
   if (req.method === 'POST' && pages.matchLead(url)) return void pages.receiveLead(req, res, url).then((handled) => handled || send(res, 405, 'Method not allowed'), (e) => crashed(req, res, e));
