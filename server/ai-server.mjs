@@ -307,6 +307,8 @@ function route(req, res, url) {
     }, (e) => crashed(req, res, e));
   }
   if (url.pathname.startsWith('/api/')) return send(res, 404, { error: 'Not found' }, corsHeaders(req));
+  // the app's short public routes: /m/<id> (a lead magnet's download, server/leadFiles.mjs), /b/ and /o/ (not yet)
+  if (pages.matchPublicRoute(url)) return void pages.servePublicRoute(req, res, url).catch((e) => crashed(req, res, e));
   // a visitor sending a published page's form (/<name>/lead; server/leads.mjs)
   if (req.method === 'POST' && pages.matchLead(url)) return void pages.receiveLead(req, res, url).then((handled) => handled || send(res, 405, 'Method not allowed'), (e) => crashed(req, res, e));
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');

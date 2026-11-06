@@ -266,11 +266,11 @@ describe('every kind of form reaches Leads', () => {
   const json = { accept: 'application/json' };
 
   it('an artifact with a real form takes leads, tagged as an asset; one without a form doesn’t', async () => {
-    expect((await publish(alice, 'artifact:quiz1', { slug: 'alice-quiz', html: withForm('alice-quiz', '<script>/* a quiz */</script>') })).status).toBe(200);
+    expect((await publish(alice, 'artifact:quiz1', { slug: 'alice-quiz', projectId: 'biz1', html: withForm('alice-quiz', '<script>/* a quiz */</script>') })).status).toBe(200);
     const r = await postLead('/alice-quiz/lead', { email: 'quiz@example.com', kind: 'quiz', result: 'You’re a sourdough person', score: '8', answers: 'Q1: Crust\nQ2: Tang' });
     expect(r.status).toBe(200);
     expect(r.text).toContain('Thank you');
-    expect(leadsOf(alice).at(-1)).toMatchObject({ page_id: 'artifact:quiz1', slug: 'alice-quiz', source: 'asset', kind: 'quiz', consent: false, payload: { result: 'You’re a sourdough person', score: '8', answers: 'Q1: Crust\nQ2: Tang' } });
+    expect(leadsOf(alice).at(-1)).toMatchObject({ page_id: 'artifact:quiz1', slug: 'alice-quiz', project_id: 'biz1', source: 'asset', kind: 'quiz', consent: false, payload: { result: 'You’re a sourdough person', score: '8', answers: 'Q1: Crust\nQ2: Tang' } });
     // an artifact's default kind is 'lead'; an SEO page's is 'form', with its business from its id
     expect((await postLead('/alice-quiz/lead', { email: 'plain@example.com' })).status).toBe(200);
     expect(leadsOf(alice).at(-1)).toMatchObject({ source: 'asset', kind: 'lead', payload: {} });
@@ -571,6 +571,31 @@ describe('without the setup', () => {
       res = await fetch(`${s.base}/api/leads`, { headers: { authorization: `Bearer ${alice.token}` } });
       expect(res.status).toBe(200);
       expect((await res.json()).leads.length).toBeGreaterThan(0);
+    } finally {
+      supa.behavior.fail = null;
+      await s.close();
+    }
+  });
+
+  it('before the P2 migration, publishing still works without project_id', async () => {
+    const s = await startPages({ mock: supa, secretKey: supa.SECRET });
+    supa.behavior.fail = (method, pathname, q) =>
+      pathname === '/rest/v1/published_pages' && ((method === 'POST' && q.get('on_conflict')) || String(q.get('select') ?? '').includes('project_id')) && !q.has('__never')
+        ? { status: 400, body: { code: method === 'POST' ? 'PGRST204' : '42703', message: method === 'POST' ? "Could not find the 'project_id' column of 'published_pages' in the schema cache" : 'column published_pages.project_id does not exist' } }
+        : null;
+    try {
+      // the POST is refused while it carries project_id; once it's left out, the stand-in takes it
+      let posts = 0;
+      const inner = supa.behavior.fail;
+      supa.behavior.fail = (method, pathname, q) => {
+        if (pathname === '/rest/v1/published_pages' && method === 'POST') return posts++ === 0 ? inner(method, pathname, q) : null;
+        return inner(method, pathname, q);
+      };
+      const r = await fetch(`${s.base}/api/pages/${encodeURIComponent('artifact:old1')}`, { method: 'PUT', headers: { authorization: `Bearer ${alice.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'artifact', slug: 'alice-old-db', title: 'Old', html: withForm('alice-old-db'), images: [], projectId: 'biz1' }) });
+      expect(r.status).toBe(200);
+      expect(posts).toBe(2);
+      const list = await fetch(`${s.base}/api/pages`, { headers: { authorization: `Bearer ${alice.token}` } });
+      expect(list.status).toBe(200);
     } finally {
       supa.behavior.fail = null;
       await s.close();

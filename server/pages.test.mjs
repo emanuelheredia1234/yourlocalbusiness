@@ -33,7 +33,8 @@ const WEBP = Buffer.concat([Buffer.from('RIFF', 'latin1'), Buffer.from([0x24, 0,
 const image = (name, mime, bytes) => ({ name, mime, data: bytes.toString('base64') });
 
 const ARTIFACT_CSP = 'sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads';
-const SEO_CSP = 'sandbox allow-forms allow-popups allow-popups-to-escape-sandbox';
+// allow-downloads: a link to a lead magnet (/m/<id>) may start a download; still no scripts and never the app's origin
+const SEO_CSP = 'sandbox allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads';
 const MIGRATION_HINT = 'Run supabase/migrations/20261103040000_published_pages.sql in Supabase → SQL Editor.';
 const TOKEN = /^ylb-[0-9a-f]{40}$/;
 const VERSION = /^[0-9a-z]{1,12}-[0-9a-f]{10}$/;
@@ -201,7 +202,7 @@ describe('publishing on the app’s address', () => {
     expect(r.status).toBe(200);
     const out = await r.json();
     expect(out).toEqual({
-      page: { pageId: 'artifact:widget1', kind: 'artifact', slug: 'alice-widget', title: 'Price calculator', domain: null, home: false, updatedAt: expect.any(String), url: `${app.base}/alice-widget` },
+      page: { pageId: 'artifact:widget1', kind: 'artifact', slug: 'alice-widget', title: 'Price calculator', domain: null, home: false, projectId: null, updatedAt: expect.any(String), url: `${app.base}/alice-widget` },
       url: `${app.base}/alice-widget`,
     });
     for (const p of ['/alice-widget', '/alice-widget/']) {
@@ -227,6 +228,23 @@ describe('publishing on the app’s address', () => {
     r = await publish(alice, 'seo:proj1', { slug: 'alice-candles', html: '<!doctype html><h1>Candles</h1><script>alert(1)</script>' });
     expect(r.status).toBe(200);
     expect((await get('/alice-candles')).headers['content-security-policy']).toBe(SEO_CSP);
+    expect(SEO_CSP).not.toContain('allow-scripts');
+    expect(SEO_CSP).not.toContain('allow-same-origin');
+    // the page's business is kept with it: an SEO page's from its id, an artifact's as the app sends it
+    expect(rowsOf('published_pages').find((p) => p.slug === 'alice-candles').project_id).toBe('proj1');
+    r = await publish(alice, 'artifact:widget2', { slug: 'alice-widget-two', projectId: 'proj_9-x' });
+    expect(r.status).toBe(200);
+    expect((await r.json()).page.projectId).toBe('proj_9-x');
+    expect(rowsOf('published_pages').find((p) => p.slug === 'alice-widget-two').project_id).toBe('proj_9-x');
+    for (const bad of ['a b', 'x'.repeat(81), 7, '../p']) expect((await publish(alice, 'artifact:widget3', { slug: 'alice-widget-three', projectId: bad })).status, String(bad)).toBe(400);
+    expect((await api(`/api/pages/${encodeURIComponent('artifact:widget2')}`, { who: alice, method: 'DELETE' })).status).toBe(200);
+    // /m/…, /b/… and /o/… are the app's own short routes: "not found" until they answer, never the app
+    for (const p of ['/m/x', '/m/AAAAAAAAAAAAAAAAAAAAAA', '/b/abc', '/o/abc']) {
+      const got = await get(p);
+      expect(got.status, p).toBe(404);
+      expect(got.text, p).toContain('Page not found');
+      expect(got.headers['content-security-policy'], p).toContain('sandbox');
+    }
 
     const list = await (await api('/api/pages', { who: alice })).json();
     expect(list.appOrigin).toBe(app.base);
