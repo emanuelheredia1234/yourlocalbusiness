@@ -8,7 +8,7 @@
 //                                                  with treg's budget dimension)
 //   GET /api/billing/reconcile?days=30             owner: our ledger against treg's usage by tag
 //   GET /api/billing/invoice.csv?month=YYYY-MM     owner: the month's CSV to bill from
-// onStart: settle treg's `pending` answers now; cronJobs(): again every 5 minutes, from the cron tick (server/cron). userDeleted(userId): the ledger rows keep
+// onStart: settle treg's `pending` answers now; cronJobs(): again every hour, from the hourly cron tick (server/cron). userDeleted(userId): the ledger rows keep
 // the customer tag (for invoices) and lose the user id.
 //
 // Checks in order: same origin, a signed-in user, the billing-read bucket, set up (else 503 NOT_SET_UP, with
@@ -26,7 +26,9 @@ import { serviceHeaders } from '../secretBox.mjs';
 
 export const BILLING_PREFIX = '/api/billing/';
 const TAG = /^cust_[0-9a-f]{24}$/;
-const SETTLE_EVERY_MS = 5 * 60_000;
+// once per hourly cron tick: pg_cron calls the tick hourly (Autoscale must be able to sleep), so a shorter period
+// would only promise a cadence the deployment never meets
+const SETTLE_EVERY_MS = 60 * 60_000;
 
 const safeDecode = (s) => {
   try {
@@ -366,7 +368,7 @@ export function createBillingRoutes({
     ledger,
     caps,
     admin,
-    /** Settle pending treg rows now (also every 5 minutes from the cron tick). */
+    /** Settle pending treg rows now (also once an hour from the cron tick). */
     settle: () => (missing().length ? Promise.resolve(0) : settleOnce()),
     async onStart() {
       if (missing().length) return;

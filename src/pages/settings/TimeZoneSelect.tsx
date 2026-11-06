@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Check, ChevronsUpDown, Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { browserTimeZone, isValidTimeZone, timeZoneLabel, timeZoneNames, utcOffsetLabel } from '@/lib/timeZone';
+import { browserTimeZone, isValidTimeZone, timeZoneLabel, timeZoneNames, timeZoneSearchValue, utcOffsetLabel } from '@/lib/timeZone';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/shadcn/popover';
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/shadcn/command';
 
@@ -35,7 +35,7 @@ export function TimeZoneSelect({ value, onChange, id }: { value: string; onChang
       </PopoverTrigger>
       <PopoverContent align="start" collisionPadding={8} className="w-[min(420px,calc(100vw-16px))] p-0">
         <Command>
-          <CommandInput placeholder="Search a city or region" aria-label="Search time zones" />
+          <CommandInput placeholder="Search a city, region or offset" aria-label="Search time zones" />
           <CommandList className="max-h-72">
             <CommandEmpty>No time zone matches.</CommandEmpty>
             {here !== value && (
@@ -45,7 +45,7 @@ export function TimeZoneSelect({ value, onChange, id }: { value: string; onChang
               </CommandItem>
             )}
             {options.map((o) => (
-              <CommandItem key={o.tz} value={`${o.tz} ${o.label} ${o.offset}`} onSelect={() => choose(o.tz)}>
+              <CommandItem key={o.tz} value={timeZoneSearchValue(o.tz, o.label, o.offset)} onSelect={() => choose(o.tz)}>
                 <Check className={cn('size-4 shrink-0', o.tz === value ? 'text-primary' : 'invisible')} aria-hidden="true" />
                 <span className="min-w-0 flex-1 truncate">{o.label}</span>
                 <span className="num shrink-0 text-caption text-muted">{o.offset}</span>

@@ -277,14 +277,14 @@ describe('startup', () => {
 
   it('collects every module’s cron jobs; a module that throws doesn’t stop the others', () => {
     const r = recorder();
-    r.factories.billing = vi.fn(() => ({ handle: async () => false, cronJobs: () => [{ name: 'treg-settle', everyMs: 300_000, run() {} }] }));
+    r.factories.billing = vi.fn(() => ({ handle: async () => false, cronJobs: () => [{ name: 'treg-settle', everyMs: 3_600_000, run() {} }] }));
     r.factories.posting = vi.fn(() => ({
       handle: async () => false,
       cronJobs() {
         throw new Error('nope');
       },
     }));
-    r.factories.ads = vi.fn(() => ({ handle: async () => false, cronJobs: () => [{ name: 'ads-sweep', everyMs: 900_000, run() {} }] }));
+    r.factories.ads = vi.fn(() => ({ handle: async () => false, cronJobs: () => [{ name: 'ads-sweep', everyMs: 3_600_000, run() {} }] }));
     const log = { log: vi.fn() };
     const integrations = createIntegrations({ env: {}, send: sendLike, factories: r.factories, log, db: { enabled: false } });
     expect(integrations.cronJobs().map((j) => j.name)).toEqual(['treg-settle', 'ads-sweep']);
@@ -297,6 +297,8 @@ describe('startup', () => {
     const integrations = createIntegrations({ env, send: sendLike, db: { enabled: true, select: async () => [], insert: async () => [], update: async () => [], upsert: async () => [], remove: async () => [] }, appState: { enabled: false } });
     const names = integrations.cronJobs().map((j) => j.name);
     expect(names).toEqual(expect.arrayContaining(['treg-settle', 'uploadpost-meter', 'uploadpost-reconcile', 'zernio-meter', 'posting-sweep', 'analytics-sweep', 'ads-sweep']));
+    // pg_cron ticks hourly on the deployment: a shorter period would promise a cadence that never happens
+    for (const j of integrations.cronJobs()) if (j.everyMs !== undefined) expect(j.everyMs, j.name).toBeGreaterThanOrEqual(3_600_000);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });

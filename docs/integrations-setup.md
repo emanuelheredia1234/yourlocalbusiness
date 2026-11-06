@@ -113,11 +113,11 @@ through **pg_net**, with `Authorization: Bearer <CRON_SECRET>`. Each tick runs t
 
 | Job | How often | What it does |
 |---|---|---|
-| `treg-settle` | every 5 minutes (so, each tick) | Asks treg what slow ("pending") calls finally cost and adds the correcting ledger rows (§5) |
+| `treg-settle` | hourly (each tick) | Asks treg what slow ("pending") calls finally cost and adds the correcting ledger rows (§5) |
 | `uploadpost-meter` | daily from 02:10 UTC | Last month's estimated Upload-Post profile rows per customer (once per month) |
 | `zernio-meter` | daily from 02:20 UTC | Last month's estimated Zernio rows per customer (once per month) |
 | `uploadpost-reconcile` | daily from 03:10 UTC | The Upload-Post daily check (§3): accounts against our records, the profile cap, cleanup |
-| `posting-sweep`, `analytics-sweep`, `ads-sweep` | every 15 minutes | Posts, analytics runs and ad changes left "sending"/"running" by a restart become "unknown"/ended; nothing is re-sent |
+| `posting-sweep`, `analytics-sweep`, `ads-sweep` | hourly (each tick) | Posts, analytics runs and ad changes left "sending"/"running" by a restart become "unknown"/ended; nothing is re-sent |
 
 Each job runs **at most once per period**: the run is claimed first in `app_state` (one row per job), so a repeated
 call, a slow pg_net retry or two copies of the app never run it twice. A job that fails is recorded and waits for
@@ -484,7 +484,7 @@ estimated costs of connected accounts and X posts are shown, labelled estimated,
 Several calls at once can go over a cap by about one call each, so each customer runs at most 4 at a time.
 
 **Slow answers.** A treg answer that is still running after a minute comes back as "pending": it is never sent
-again. The `treg-settle` job (every 5 minutes, run by the hourly cron tick, §2a; and once when the server starts)
+again. The `treg-settle` job (once an hour, run by the hourly cron tick, §2a; and once when the server starts)
 asks treg what it finally charged and adds a correcting ledger row. The same
 goes for a call our server gave up waiting on whose one repeat found it still running at treg (whether treg
 names the call in that answer is to be confirmed on the first live check). Calls still unsettled after 7 days

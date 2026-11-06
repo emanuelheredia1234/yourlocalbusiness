@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { browserTimeZone, fillTimeZones, isValidTimeZone, looksLikeTimeZone, projectTimeZone, timeZoneLabel, timeZoneNames, utcOffsetLabel } from './timeZone';
+import { browserTimeZone, fillTimeZones, isValidTimeZone, looksLikeTimeZone, projectTimeZone, timeZoneLabel, timeZoneNames, timeZoneSearchValue, utcOffsetLabel } from './timeZone';
 import { newProject } from '@/store/defaults';
 import { useStore } from '@/store/useStore';
 import { cleanWorkspace } from '@/store/cleanup';
@@ -23,6 +23,19 @@ describe('time zones', () => {
       throw new Error('no Intl');
     });
     expect(browserTimeZone()).toBe('UTC');
+  });
+
+  it('searches offsets as typed: an ASCII minus finds zones west of UTC', () => {
+    const jan = Date.parse('2026-01-15T12:00:00Z');
+    const ny = utcOffsetLabel('America/New_York', jan);
+    expect(ny).toBe('UTC\u221205:00'); // shown with a true minus
+    const v = timeZoneSearchValue('America/New_York', timeZoneLabel('America/New_York'), ny);
+    expect(v).toContain('UTC-05:00');
+    expect(v).toContain('-05:00');
+    expect(v).toContain(ny);
+    const kt = timeZoneSearchValue('Asia/Kathmandu', timeZoneLabel('Asia/Kathmandu'), utcOffsetLabel('Asia/Kathmandu', jan));
+    expect(kt).toContain('UTC+05:45');
+    expect(kt.match(/UTC\+05:45/g)).toHaveLength(1); // no duplicate when there's nothing to convert
   });
 
   it('lists zones (sorted, UTC and the saved one included) and labels them', () => {

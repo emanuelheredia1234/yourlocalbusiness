@@ -106,6 +106,15 @@ export function utcOffsetLabel(tz: string, at = Date.now()): string {
   }
 }
 
+/**
+ * What the time zone list searches: the IANA name, the label and the offset, with the offset also in ASCII
+ * ("UTC-05:00" next to the displayed "UTC−05:00") so typing "-5" or "UTC-05" finds zones west of UTC.
+ */
+export function timeZoneSearchValue(tz: string, label: string, offset: string): string {
+  const ascii = offset.replace(/\u2212/g, '-');
+  return ascii === offset ? `${tz} ${label} ${offset}` : `${tz} ${label} ${offset} ${ascii}`;
+}
+
 /** "America/New_York" → "New York (America)", for the list; the IANA name stays the value. */
 export function timeZoneLabel(tz: string): string {
   const parts = tz.split('/');

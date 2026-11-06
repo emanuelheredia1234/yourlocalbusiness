@@ -31,7 +31,8 @@ begin
 end
 $$;
 
--- minute 7 of every hour (off the top of the hour, when most schedules fire). The app's tick answers within its 40 s
+-- minute 7 of every hour (off the top of the hour, when most schedules fire). Hourly on purpose: a more frequent call
+-- would keep the Autoscale app awake around the clock, so no job asks for a period under an hour. The app's tick answers within its 40 s
 -- budget; the request may take up to 55 s. No secret → no row → no call.
 select cron.schedule(
   'ylb-cron-tick',

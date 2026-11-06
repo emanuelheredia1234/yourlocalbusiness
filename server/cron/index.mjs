@@ -3,7 +3,7 @@
 // (supabase/migrations/20261109000000_cron_tick.sql) and each tick runs the jobs that are due.
 //
 //   const cron = createCron({ env, storage: appState, now, log });
-//   cron.register({ name: 'treg-settle', everyMs: 5 * 60_000, run: (ctx) => … });
+//   cron.register({ name: 'treg-settle', everyMs: 60 * 60_000, run: (ctx) => … });
 //   cron.register({ name: 'uploadpost-reconcile', dailyAtUtc: '03:00', run: (ctx) => … });
 //   cron.match(url) / cron.handle(req, res, url)     POST /api/cron/tick, "Authorization: Bearer <CRON_SECRET>"
 //   cron.tick()                                       run what is due now (the route and the local loop call it)

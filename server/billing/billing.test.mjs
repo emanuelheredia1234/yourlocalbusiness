@@ -485,12 +485,12 @@ describe('the settle job’s rules', () => {
     }
   });
 
-  it('settles every 5 minutes from the cron tick, not from a timer of its own', async () => {
+  it('settles once per hourly cron tick, not from a timer of its own', async () => {
     const s = await serve();
     try {
       expect(s.routes.stop).toBeUndefined();
       const jobs = s.routes.cronJobs();
-      expect(jobs).toEqual([expect.objectContaining({ name: 'treg-settle', everyMs: 5 * 60_000 })]);
+      expect(jobs).toEqual([expect.objectContaining({ name: 'treg-settle', everyMs: 60 * 60_000 })]);
       expect(await jobs[0].run({})).toEqual({ settled: expect.any(Number) });
     } finally {
       await s.close();
