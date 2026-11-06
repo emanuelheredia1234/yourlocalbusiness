@@ -1,5 +1,6 @@
-// The connected-accounts routes (social networks and ad accounts, through Zernio):
-//   GET    /api/integrations/connections[?projectId=]               {connections, available, setUp, provider, hint? (admins)}
+// The connected-accounts routes (social networks through Upload-Post, ad accounts through Zernio):
+//   GET    /api/integrations/connections[?projectId=]               {connections, available, setUp, setUpSocial,
+//                                                                    setUpAds, provider: {social, ads}, hint? (admins)}
 //   POST   /api/integrations/connections/:platform/connect          {connectLink, expiresAt} | {alreadyConnected: true}
 //                                                                    body {projectId?}: the business that connects it
 //   POST   /api/integrations/connections/:platform/reconnect        same
@@ -7,39 +8,45 @@
 //   DELETE /api/integrations/connections/:platform[?projectId=]     {ok: true}
 //   GET    /api/integrations/connections/:platform/targets          {targets}
 //   PUT    /api/integrations/connections/:platform/target           {connection}   body {targetId, projectId?}
-//   POST   /api/webhooks/zernio   no sameOrigin, no bearer: the raw body (readRaw, 256 KB) and its HMAC
+//   POST   /api/webhooks/upload-post   no sameOrigin, no bearer: the raw body (readRaw, 256 KB), its HMAC over
+//                                       "<timestamp>.<body>" and a 300 s window (social accounts, upload_completed)
+//   POST   /api/webhooks/zernio        same, Zernio's HMAC (ad accounts)
 //
 // Every route but the webhook: sameOrigin, then a signed-in user (auth.identify), then a rate-limit bucket. The
 // user is always the server's (a user id in a body is never read); a projectId only picks which of that user's
-// own accounts a business uses. Answers are {error, code}, never Zernio's or a network's text. While connecting
-// is off (no ZERNIO_API_KEY) the list reads "Not connected" everywhere, everything else answers 503
-// CONNECTIONS_NOT_ENABLED, and the webhook 503 without reading the body.
+// own accounts a business uses. Answers are {error, code}, never Upload-Post's, Zernio's or a network's text. A side
+// that is off (no UPLOAD_POST_API_KEY for social, no ZERNIO_API_KEY for ads) lists "Not connected" for its
+// platforms, refuses the rest with 503 CONNECTIONS_NOT_ENABLED, and its webhook answers 503 without reading the body.
 
-import { PHASE2_PLATFORMS, PLATFORMS } from '../integrations/contracts.mjs';
+import { AD_PLATFORMS, PHASE2_PLATFORMS, PLATFORMS } from '../integrations/contracts.mjs';
 import { errorBody, fail } from '../integrations/common.mjs';
 
 export const CONNECTIONS_PREFIX = '/api/integrations/connections';
 export const ZERNIO_WEBHOOK_PATH = '/api/webhooks/zernio';
+export const UPLOAD_POST_WEBHOOK_PATH = '/api/webhooks/upload-post';
 const WEBHOOK_LIMIT = 262_144;
 const NO_STORE = { 'cache-control': 'no-store' };
 const PROJECT_ID = /^[A-Za-z0-9._:-]{1,120}$/;
 
-/** deps: the integration deps (server/integrations/wiring.mjs). connections.impl answers the webhook. */
+/** deps: the integration deps (server/integrations/wiring.mjs). connections.impl's sides answer the webhooks. */
 export function createConnectionRoutes(deps = {}) {
   const { auth, connections, send, sameOrigin = () => true, rateLimited = () => false, limit = () => false, corsHeaders = () => ({}), readRaw, readJson, clientKey = (req) => req.socket?.remoteAddress || 'unknown' } = deps;
   const impl = connections?.enabled ? connections.impl : null;
+  // the webhooks: Upload-Post's goes to the social side, Zernio's to the ads side (or a plain Zernio impl)
+  const socialImpl = connections?.socialEnabled ? (impl?.social ?? null) : null;
+  const adsImpl = connections?.adsEnabled ? (impl?.ads ?? (impl && !('social' in impl) ? impl : null)) : null;
   const reply = (req, res, status, body, headers = {}) => send(res, status, body, { ...corsHeaders(req), ...NO_STORE, ...headers });
 
-  async function webhook(req, res) {
+  async function webhook(req, res, target, bucket) {
     if (req.method !== 'POST') {
       reply(req, res, 405, { error: 'Method not allowed.', code: 'BAD_REQUEST' }, { allow: 'POST' });
       return true;
     }
-    if (!impl || typeof impl.webhook !== 'function') {
+    if (!target || typeof target.webhook !== 'function') {
       reply(req, res, 503, { error: 'Not set up.', code: 'NOT_SET_UP' });
       return true;
     }
-    if (limit('zernio-webhook', clientKey(req))) {
+    if (limit(bucket, clientKey(req))) {
       reply(req, res, 429, { error: 'Too many requests.', code: 'RATE_LIMITED' });
       return true;
     }
@@ -57,7 +64,7 @@ export function createConnectionRoutes(deps = {}) {
     }
     let result;
     try {
-      result = await impl.webhook(raw, req.headers);
+      result = await target.webhook(raw, req.headers);
     } catch {
       result = { status: 500, body: { error: 'Try again.', code: 'UNAVAILABLE' } };
     }
@@ -78,12 +85,16 @@ export function createConnectionRoutes(deps = {}) {
 
   async function handle(req, res, url) {
     const path = url.pathname;
-    if (path === ZERNIO_WEBHOOK_PATH || path.startsWith(`${ZERNIO_WEBHOOK_PATH}/`)) {
-      if (path !== ZERNIO_WEBHOOK_PATH) {
+    for (const [hookPath, target, bucket] of [
+      [ZERNIO_WEBHOOK_PATH, adsImpl, 'zernio-webhook'],
+      [UPLOAD_POST_WEBHOOK_PATH, socialImpl, 'upload-post-webhook'],
+    ]) {
+      if (path !== hookPath && !path.startsWith(`${hookPath}/`)) continue;
+      if (path !== hookPath) {
         reply(req, res, 404, { error: 'Not found.', code: 'NOT_FOUND' });
         return true;
       }
-      return webhook(req, res);
+      return webhook(req, res, target, bucket);
     }
     if (path !== CONNECTIONS_PREFIX && !path.startsWith(`${CONNECTIONS_PREFIX}/`)) return false;
     if (!sameOrigin(req)) {
@@ -109,19 +120,23 @@ export function createConnectionRoutes(deps = {}) {
       if (path === CONNECTIONS_PREFIX) {
         if (req.method !== 'GET') throw fail(405, 'BAD_REQUEST', 'Method not allowed.');
         const list = await connections.status(who.id, { projectId: projectFrom(url.searchParams.get('projectId')) });
+        const on = (p) => (AD_PLATFORMS.includes(p) ? connections.adsEnabled : connections.socialEnabled);
         reply(req, res, 200, {
           connections: list,
-          available: connections.enabled ? PLATFORMS.filter((p) => !PHASE2_PLATFORMS.includes(p)) : [],
+          available: connections.enabled ? PLATFORMS.filter((p) => !PHASE2_PLATFORMS.includes(p) && on(p)) : [],
           setUp: connections.setUp === true,
-          provider: connections.enabled ? 'zernio' : null,
-          ...(who.isAdmin === true && connections.setUp !== true && connections.hint ? { hint: connections.hint } : {}),
+          setUpSocial: connections.setUpSocial === true,
+          setUpAds: connections.setUpAds === true,
+          provider: { social: connections.socialEnabled ? 'upload_post' : null, ads: connections.adsEnabled ? 'zernio' : null },
+          // the owner reads which Secret a side still needs (names only), whichever side it is
+          ...(who.isAdmin === true && !(connections.setUpSocial === true && connections.setUpAds === true) && connections.hint ? { hint: connections.hint } : {}),
         });
         return true;
       }
       const m = /^\/api\/integrations\/connections\/([a-z_]+)(?:\/(connect|reconnect|check|targets|target))?$/.exec(path);
       if (!m || !PLATFORMS.includes(m[1])) throw fail(404, 'NOT_FOUND', 'Not found.');
       const [, platform, action = ''] = m;
-      if (!connections.enabled) throw fail(503, 'CONNECTIONS_NOT_ENABLED', 'Connecting accounts is coming soon. You can still post yourself and mark posts as posted.');
+      if (!connections.enabled || !(AD_PLATFORMS.includes(platform) ? connections.adsEnabled : connections.socialEnabled)) throw fail(503, 'CONNECTIONS_NOT_ENABLED', 'Connecting accounts is coming soon. You can still post yourself and mark posts as posted.');
       const route = `${req.method} ${action}`;
       if (route === 'POST connect' || route === 'POST reconnect') {
         // only the business id is read from the body: who connects is the signed-in user, nothing else
@@ -165,10 +180,11 @@ export function createConnectionRoutes(deps = {}) {
     async forgetUser() {},
     async unforgetUser() {},
     async userDeleted() {},
-    /** The monthly connected-account rows per customer, on start and once a day. */
+    /** The monthly estimated rows per customer and Upload-Post's daily reconcile, on start and once a day. */
     async onStart() {
-      if (!impl?.meterIfDue) return;
-      const run = () => impl.meterIfDue().catch(() => {});
+      const jobs = [socialImpl?.meterIfDue, socialImpl?.reconcileIfDue, adsImpl?.meterIfDue].filter((f) => typeof f === 'function');
+      if (!jobs.length) return;
+      const run = () => Promise.all(jobs.map((f) => f().catch(() => {})));
       void run();
       const t = setInterval(run, 24 * 3_600_000);
       t.unref?.();

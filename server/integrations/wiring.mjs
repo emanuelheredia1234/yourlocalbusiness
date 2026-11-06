@@ -12,7 +12,9 @@
 //   integrations.notes()                                 startup lines: what's on, which Secrets are missing (names)
 //
 // Routes (server/integrations/contracts.mjs ROUTE_PREFIXES):
-//   /api/integrations/connections…  /api/webhooks/zernio  server/connections/routes.mjs (+ connections/zernio.mjs)
+//   /api/integrations/connections…  /api/webhooks/upload-post  /api/webhooks/zernio
+//                                                          server/connections/routes.mjs (+ connections/uploadpost.mjs
+//                                                          for social, connections/zernio.mjs for ads)
 //   /api/integrations/nango…  /api/webhooks/nango         server/connections/nangoRoutes.mjs (+ server/nango.mjs)
 //   /api/posting/…                                         server/social/routes.mjs
 //   /api/media/public/<token>                              server/media/publicMedia.mjs
@@ -26,14 +28,16 @@
 // userDeleted?, onStart? }. The webhook and media paths are never logged as they are (redactPath), and nothing
 // here reads a request body: the module does (readRaw for the webhook, whose HMAC covers the exact bytes).
 //
-// Connected accounts (social networks and ad accounts) are Zernio (the owner's choice), switched on by ZERNIO_API_KEY
-// alone; CONNECTIONS_PROVIDER=off keeps them off whatever is set. Until then every network reads "Not connected"
-// and posting is manual. Nango stays for future non-social integrations (booking tools, CRMs), off unless
-// NANGO_SECRET_KEY is set, with no social or ads providers on it.
+// Connected accounts are two sides (the owner's choice): social networks, posting and social stats through
+// Upload-Post, switched on by UPLOAD_POST_API_KEY; ad accounts and ad results through Zernio, switched on by
+// ZERNIO_API_KEY. CONNECTIONS_PROVIDER=off keeps both off whatever is set. A side that is off reads "Not connected"
+// and posting is manual. Facebook groups stay with Manus. Nango stays for future non-social integrations (booking
+// tools, CRMs), off unless NANGO_SECRET_KEY is set, with no social or ads providers on it.
 
-import { createConnections, nullConnections } from '../connections/index.mjs';
+import { combineConnections, createConnections } from '../connections/index.mjs';
 import { createConnectionRoutes } from '../connections/routes.mjs';
 import { createZernioConnections } from '../connections/zernio.mjs';
+import { createUploadPostConnections } from '../connections/uploadpost.mjs';
 import { createNangoRoutes } from '../connections/nangoRoutes.mjs';
 import { createNango, nullNango } from '../nango.mjs';
 import { createPostingRoutes } from '../social/routes.mjs';
@@ -48,6 +52,7 @@ import { createBucketLimiter, readRaw, redactPath, safeLog } from './common.mjs'
 import { ROUTE_PREFIXES } from './contracts.mjs';
 
 export const DEFAULT_FACTORIES = Object.freeze({
+  uploadPost: createUploadPostConnections,
   zernio: createZernioConnections,
   nango: createNango,
   connectionRoutes: createConnectionRoutes,
@@ -63,20 +68,26 @@ export const DEFAULT_FACTORIES = Object.freeze({
 
 const has = (env, name) => String(env?.[name] ?? '').trim() !== '';
 
-/** Which connections implementation the env asks for: 'zernio' once ZERNIO_API_KEY is set, else null, and why. */
+/**
+ * Which connections the env asks for: { social: 'upload_post' | null, ads: 'zernio' | null, reason } — social on
+ * with UPLOAD_POST_API_KEY, ads on with ZERNIO_API_KEY, both off with CONNECTIONS_PROVIDER=off. `provider` names
+ * what is on ('upload_post+zernio', 'upload_post', 'zernio' or null) for the startup notes and tests.
+ */
 export function selectConnections(env = process.env) {
   const provider = String(env.CONNECTIONS_PROVIDER || '').trim().toLowerCase();
-  if (['off', 'none', 'false', '0'].includes(provider)) return { provider: null, reason: 'off' };
-  if (provider && provider !== 'zernio') return { provider: null, reason: 'unknown_provider' };
-  if (!has(env, 'ZERNIO_API_KEY')) return { provider: null, reason: 'no_key' };
-  return { provider: 'zernio', reason: 'key' };
+  if (['off', 'none', 'false', '0'].includes(provider)) return { provider: null, social: null, ads: null, reason: 'off' };
+  if (provider && !['on', 'auto', 'upload_post', 'zernio'].includes(provider)) return { provider: null, social: null, ads: null, reason: 'unknown_provider' };
+  const social = has(env, 'UPLOAD_POST_API_KEY') ? 'upload_post' : null;
+  const ads = has(env, 'ZERNIO_API_KEY') ? 'zernio' : null;
+  const name = [social, ads].filter(Boolean).join('+') || null;
+  return { provider: name, social, ads, reason: name ? 'key' : 'no_key' };
 }
 
-/** Which module answers a path ('connections' covers the Zernio webhook, 'nango' its own), or null. */
+/** Which module answers a path ('connections' covers the Upload-Post and Zernio webhooks, 'nango' its own), or null. */
 export function moduleFor(pathname) {
   const p = String(pathname || '');
   const under = (prefix) => (prefix.endsWith('/') ? p.startsWith(prefix) : p === prefix || p.startsWith(`${prefix}/`));
-  if (under(ROUTE_PREFIXES.connections) || under(ROUTE_PREFIXES.zernioWebhook)) return 'connections';
+  if (under(ROUTE_PREFIXES.connections) || under(ROUTE_PREFIXES.zernioWebhook) || under(ROUTE_PREFIXES.uploadPostWebhook)) return 'connections';
   if (under(ROUTE_PREFIXES.nango) || under(ROUTE_PREFIXES.nangoWebhook)) return 'nango';
   if (under(ROUTE_PREFIXES.posting)) return 'posting';
   if (under(ROUTE_PREFIXES.publicMedia)) return 'publicMedia';
@@ -113,7 +124,7 @@ export function createIntegrations({
   const base = { auth, storage: appState, db: database, omnisend, send, readJson, readRaw, rateLimited, limit, corsHeaders, sameOrigin, clientKey, env, fetch, now, log };
 
   const selected = selectConnections(env);
-  const connections = createConnections(selected.provider === 'zernio' ? make.zernio(base) : nullConnections);
+  const connections = createConnections(combineConnections({ social: selected.social ? make.uploadPost(base) : null, ads: selected.ads ? make.zernio(base) : null }));
   const nango = has(env, 'NANGO_SECRET_KEY') ? make.nango(base) : nullNango;
   const treg = make.treg({ env, fetch, now, db: database, log });
   const deps = { ...base, connections, nango, treg };
@@ -128,8 +139,8 @@ export function createIntegrations({
     billing: make.billing(deps),
   };
   const sitemap = make.sitemap(deps);
-  // a post.* webhook from Zernio finishes its job (sent / failed) the same way "Check again" does
-  connections.impl?.setPostListener?.((userId, jobId, outcome) => modules.posting.posting?.fromWebhook?.(userId, jobId, outcome));
+  // an upload_completed webhook from Upload-Post finishes its job (sent / failed) the same way "Check again" does
+  connections.impl?.social?.setPostListener?.((userId, jobId, outcome) => modules.posting.posting?.fromWebhook?.(userId, jobId, outcome));
   // account deletion: the vendor's connections go first (while their ids are still known), then the rest
   const FORGET_ORDER = ['posting', 'analytics', 'seoGoogle', 'billing', 'publicMedia', 'nango', 'connections'];
 
@@ -146,6 +157,7 @@ export function createIntegrations({
     db: database,
     /** for tests and the startup notes */
     connectionsProvider: selected.provider,
+    connectionsSelected: selected,
 
     match: (url) => moduleFor(url.pathname) !== null,
 
@@ -215,23 +227,28 @@ export function createIntegrations({
     /** What to print at startup: what's on and which Secrets are missing, by name only. */
     notes() {
       const lines = [];
-      if (selected.provider === 'zernio') {
-        lines.push('Connected accounts (social and ads): on (Zernio).');
-        const missing = ['ZERNIO_WEBHOOK_SECRET', 'CUSTOMER_TAG_SECRET'].filter((n) => !has(env, n));
-        if (missing.length) lines.push(`Connected accounts also need these Replit Secrets: ${missing.join(', ')}.`);
-      } else if (selected.reason === 'off') {
+      if (selected.reason === 'off') {
         lines.push('Connected accounts: off (CONNECTIONS_PROVIDER=off). Customers post themselves and mark posts as posted.');
       } else if (selected.reason === 'unknown_provider') {
-        lines.push('Connected accounts: off (CONNECTIONS_PROVIDER isn’t "zernio" or "off"). Customers post themselves and mark posts as posted.');
+        lines.push('Connected accounts: off (CONNECTIONS_PROVIDER isn’t "off" or empty). Customers post themselves and mark posts as posted.');
       } else {
-        lines.push('Connected accounts: off. Customers post themselves and mark posts as posted (add ZERNIO_API_KEY and ZERNIO_WEBHOOK_SECRET in Replit Secrets to turn them on).');
+        if (selected.social) {
+          lines.push('Social accounts and posting: on (Upload-Post).');
+          const missing = ['UPLOAD_POST_WEBHOOK_SECRET', 'CUSTOMER_TAG_SECRET', 'MEDIA_URL_SECRET'].filter((n) => !has(env, n));
+          if (missing.length) lines.push(`Social accounts and posting also need these Replit Secrets: ${missing.join(', ')}.`);
+        } else lines.push('Social accounts and posting: off. Customers post themselves and mark posts as posted (add UPLOAD_POST_API_KEY and UPLOAD_POST_WEBHOOK_SECRET in Replit Secrets to turn them on).');
+        if (selected.ads) {
+          lines.push('Ad accounts: on (Zernio).');
+          const missing = ['ZERNIO_WEBHOOK_SECRET', 'CUSTOMER_TAG_SECRET'].filter((n) => !has(env, n));
+          if (missing.length) lines.push(`Ad accounts also need these Replit Secrets: ${missing.join(', ')}.`);
+        } else lines.push('Ad accounts: off (add ZERNIO_API_KEY and ZERNIO_WEBHOOK_SECRET in Replit Secrets to turn them on).');
       }
       lines.push(nango.enabled ? `Other integrations (Nango): on, ${Object.keys(nango.integrations ?? {}).length} listed.` : 'Other integrations (Nango): off (kept for future booking tools and CRMs; add NANGO_SECRET_KEY to turn on).');
       const t = treg.health?.() ?? { setUp: false, billingSetUp: false };
       lines.push(t.setUp ? 'Analytics data (treg): on.' : 'Analytics data (treg): off (add the TREG_TOKEN Secret).');
       if (!t.billingSetUp) lines.push('Per-customer caps and the treg check: add TREG_ADMIN_TOKEN and TREG_ORG_ID in Replit Secrets.');
       if (!has(env, 'CUSTOMER_TAG_SECRET')) lines.push('Usage tracking per customer needs the CUSTOMER_TAG_SECRET Secret (32+ random bytes; never change it).');
-      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION} and supabase/migrations/20261106000000_zernio.sql in Supabase.`);
+      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql and supabase/migrations/20261107000000_upload_post.sql in Supabase.`);
       return lines;
     },
   };

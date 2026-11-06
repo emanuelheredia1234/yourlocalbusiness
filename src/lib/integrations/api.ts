@@ -80,7 +80,7 @@ const q = (params: Record<string, string | number | undefined>) => {
 };
 const seg = encodeURIComponent;
 
-// ───────────── connected accounts (social networks and ad accounts, through Zernio) ─────────────
+// ───────────── connected accounts (social networks through Upload-Post, ad accounts through Zernio) ─────────────
 // projectId: the business on screen; it picks which of the user's accounts that business uses.
 
 export const getConnections = (projectId?: string) => call<ConnectionsResponse>('GET', `/api/integrations/connections${q({ projectId })}`);

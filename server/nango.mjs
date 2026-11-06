@@ -1,7 +1,8 @@
 // Nango, kept for FUTURE non-social integrations (booking tools, CRMs, …): a customer connects their own account at
 // a service the owner has set up in Nango, and the app may later read or write there on their behalf. Social
-// networks, posting, social analytics and ad accounts are NOT here: they go through Zernio
-// (server/connections/zernio.mjs). Search Console runs on treg's team connection.
+// networks, posting, social analytics and ad accounts are NOT here: social goes through Upload-Post
+// (server/connections/uploadpost.mjs), ads through Zernio (server/connections/zernio.mjs). Search Console runs on
+// treg's team connection.
 //
 // Off unless NANGO_SECRET_KEY is set. With it set, nothing is offered until the owner lists integrations in
 // NANGO_INTEGRATIONS (JSON), e.g. {"calendly": {"id": "ylb-calendly", "label": "Calendly", "category": "booking"}}.
@@ -34,7 +35,7 @@ const FORGOTTEN_FOR_MS = 24 * 3_600_000;
 const KEY = /^[a-z][a-z0-9_]{1,30}$/;
 const INTEGRATION_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const CATEGORIES = new Set(['booking', 'crm', 'calendar', 'payments', 'other']);
-/** Never on Nango: these go through Zernio (social, ads) or treg (Search Console). */
+/** Never on Nango: these go through Upload-Post (social), Zernio (ads) or treg (Search Console). */
 const NOT_ON_NANGO = /(facebook|instagram|linkedin|tiktok|twitter|youtube|pinterest|threads|reddit|bluesky|snapchat|meta|google[-_]?ads|[-_]ads$|^ads[-_]|search[-_]?console|gsc|webmaster)/i;
 const RESERVED_HEADER = /^(authorization|retries|retry-on|connection-id|provider-config-key|base-url-override|host|cookie|content-length)$/i;
 
@@ -67,7 +68,7 @@ export function integrationsFrom(env = {}, log = console) {
     const id = typeof v === 'string' ? v : isObj(v) && typeof v.id === 'string' ? v.id : '';
     if (!KEY.test(key) || !INTEGRATION_ID.test(id)) continue;
     if (PLATFORMS.includes(key) || NOT_ON_NANGO.test(key) || NOT_ON_NANGO.test(id)) {
-      safeLog('nango_integration_refused', { key, why: 'social, ads and Search Console go through Zernio and treg' }, log);
+      safeLog('nango_integration_refused', { key, why: 'social, ads and Search Console go through Upload-Post, Zernio and treg' }, log);
       continue;
     }
     const label = clip(isObj(v) && typeof v.label === 'string' ? v.label : key.replace(/_/g, ' '), 40);

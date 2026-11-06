@@ -1,5 +1,5 @@
 // Settings › Connected accounts: each social network and ad account, with its state and the one action that fits
-// it. Accounts connect through Zernio's secure, branded sign-in (the server asks for the link; it opens in a new
+// it. Social accounts connect through Upload-Post's hosted, branded page and ad accounts through Zernio's (the server asks for the link; it opens in a new
 // tab and is never kept); the row then waits for the network. Each business picks which account it uses.
 // Other integrations (Nango: future booking tools and CRMs) show only when the owner has set them up.
 // Nothing here posts or changes anything at the network.

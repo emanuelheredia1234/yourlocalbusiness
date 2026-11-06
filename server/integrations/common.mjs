@@ -210,6 +210,7 @@ export const BUCKET_LIMITS = Object.freeze({
   'billing-read': [{ limit: 60, windowMs: 60_000 }],
   'nango-webhook': [{ limit: 600, windowMs: 60_000 }],
   'zernio-webhook': [{ limit: 600, windowMs: 60_000 }],
+  'upload-post-webhook': [{ limit: 600, windowMs: 60_000 }],
   'posting-check': [{ limit: 60, windowMs: 3_600_000 }],
 });
 

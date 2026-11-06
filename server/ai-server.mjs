@@ -24,12 +24,15 @@
 // Connected accounts, posting from the app, analytics, usage and "publish my page to Google" (server/integrations/wiring.mjs,
 //   docs/integrations-setup.md; they need supabase/migrations/20261105000000_integrations.sql). Secrets: TREG_TOKEN (treg
 //   member-role agent token), TREG_ADMIN_TOKEN (admin-role, billing only), CUSTOMER_TAG_SECRET (32+ random bytes, never
-//   rotated), MEDIA_URL_SECRET (32+ random bytes), ZERNIO_API_KEY (turns connected social and ad accounts on, through
-//   Zernio), ZERNIO_WEBHOOK_SECRET (+ _PREVIOUS only while rotating), NANGO_SECRET_KEY (future non-social integrations
-//   only; off by default), NANGO_WEBHOOK_SIGNING_KEY. Plain env: TREG_ORG_ID, CONNECTIONS_PROVIDER (unset; "off" keeps
-//   connected accounts off), ZERNIO_RPM (60), ZERNIO_BRAND_NAME, ZERNIO_BRAND_LOGO_URL, ZERNIO_BRAND_COLOR,
-//   NANGO_INTEGRATIONS (JSON, booking tools and CRMs only), GSC_APP_PROPERTY, GSC_APP_VERIFICATION_FILE; for tests
-//   ZERNIO_BASE_URL, NANGO_BASE_URL, TREG_BASE_URL. Keys are never printed: the startup notes name what's missing.
+//   rotated), MEDIA_URL_SECRET (32+ random bytes; needed to post photos and videos), UPLOAD_POST_API_KEY (turns social
+//   accounts, posting and social stats on, through Upload-Post), UPLOAD_POST_WEBHOOK_SECRET (+ _PREVIOUS only while
+//   rotating), ZERNIO_API_KEY (turns ad accounts on, through Zernio), ZERNIO_WEBHOOK_SECRET (+ _PREVIOUS only while
+//   rotating), NANGO_SECRET_KEY (future non-social integrations only; off by default), NANGO_WEBHOOK_SIGNING_KEY.
+//   Plain env: TREG_ORG_ID, CONNECTIONS_PROVIDER (unset; "off" keeps connected accounts off), UPLOAD_POST_RPM (150),
+//   UPLOAD_POST_ALERT_REMAINING (5), UPLOAD_POST_BRAND_LOGO_URL, UPLOAD_POST_CONNECT_TITLE,
+//   UPLOAD_POST_CONNECT_DESCRIPTION, UPLOAD_POST_BACK_BUTTON_TEXT, ZERNIO_RPM (60), ZERNIO_BRAND_NAME,
+//   ZERNIO_BRAND_LOGO_URL, ZERNIO_BRAND_COLOR, NANGO_INTEGRATIONS (JSON, booking tools and CRMs only), GSC_APP_PROPERTY,
+//   GSC_APP_VERIFICATION_FILE; for tests UPLOAD_POST_BASE_URL, ZERNIO_BASE_URL, NANGO_BASE_URL, TREG_BASE_URL. Keys are never printed: the startup notes name what's missing.
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -264,7 +267,7 @@ function route(req, res, url) {
       .catch((e) => crashed(req, res, e));
   }
   if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url).catch((e) => crashed(req, res, e));
-  // connected accounts, the Zernio and Nango webhooks (raw body), posting, public media links, analytics, SEO on Google, billing
+  // connected accounts, the Upload-Post, Zernio and Nango webhooks (raw body), posting, public media links, analytics, SEO on Google, billing
   if (integrations.match(url)) return void integrations.handle(req, res, url).catch((e) => crashed(req, res, e));
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res).catch((e) => crashed(req, res, e));
   if (pages.matchApi(url)) return void pages.handleApi(req, res, url).catch((e) => crashed(req, res, e));

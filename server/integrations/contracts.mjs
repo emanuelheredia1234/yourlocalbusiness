@@ -82,8 +82,9 @@
  */
 
 /**
- * Every account a customer can connect, all through Zernio (server/connections/zernio.mjs): the social networks and
- * the ad accounts. Search Console is not here: it runs on treg's team connection (server/seo/google.mjs).
+ * Every account a customer can connect: the social networks through Upload-Post (server/connections/uploadpost.mjs)
+ * and the ad accounts through Zernio (server/connections/zernio.mjs). Search Console is not here: it runs on treg's
+ * team connection (server/seo/google.mjs).
  * @type {readonly Platform[]}
  */
 export const PLATFORMS = Object.freeze(['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'pinterest', 'google_ads', 'meta_ads', 'linkedin_ads', 'tiktok_ads', 'pinterest_ads', 'x_ads', 'reddit_ads', 'microsoft_ads']);
@@ -91,8 +92,11 @@ export const PLATFORMS = Object.freeze(['facebook', 'instagram', 'linkedin', 'ti
 export const SOCIAL_PLATFORMS = Object.freeze(['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'pinterest']);
 /** @type {readonly Platform[]} the ad accounts (results are read only; the app changes no ad) */
 export const AD_PLATFORMS = Object.freeze(['google_ads', 'meta_ads', 'linkedin_ads', 'tiktok_ads', 'pinterest_ads', 'x_ads', 'reddit_ads', 'microsoft_ads']);
-/** @type {readonly Platform[]} shown as "Coming soon" (posts in the app have no Pinterest format yet) */
-export const PHASE2_PLATFORMS = Object.freeze(['pinterest']);
+/**
+ * @type {readonly Platform[]} shown as "Coming soon": Pinterest (posts in the app have no Pinterest format yet) and
+ * X Ads (Zernio's X Ads connect needs an X account inside Zernio, and X posting is Upload-Post's)
+ */
+export const PHASE2_PLATFORMS = Object.freeze(['pinterest', 'x_ads']);
 export const PHASE1_PLATFORMS = Object.freeze(PLATFORMS.filter((p) => !PHASE2_PLATFORMS.includes(p)));
 export const CONNECTION_STATES = Object.freeze(['not_connected', 'pending', 'connected', 'limited', 'needs_reconnect', 'coming_soon']);
 export const LIMITED_REASONS = Object.freeze(['missing_permissions', 'no_page_role', 'app_not_approved', 'insights_unavailable', 'private_only']);
@@ -101,7 +105,7 @@ export const PUBLISH_PLATFORMS = Object.freeze(['instagram', 'facebook', 'tiktok
 export const ANALYTICS_SOURCES = Object.freeze(['social', 'ads', 'seo', 'email']);
 export const SOURCE_STATUSES = Object.freeze(['ok', 'partial', 'error', 'not_connected', 'skipped', 'pending']);
 export const LEDGER_FEATURES = Object.freeze(['social', 'seo', 'ads', 'gsc', 'email', 'posting', 'connections']);
-export const LEDGER_VENDORS = Object.freeze(['treg', 'zernio', 'nango', 'x', 'omnisend']);
+export const LEDGER_VENDORS = Object.freeze(['treg', 'uploadpost', 'zernio', 'nango', 'x', 'omnisend']);
 export const API_ERROR_CODES = Object.freeze([
   'AUTH_REQUIRED',
   'FORBIDDEN',
@@ -129,6 +133,7 @@ export const API_ERROR_CODES = Object.freeze([
 export const ROUTE_PREFIXES = Object.freeze({
   connections: '/api/integrations/connections',
   zernioWebhook: '/api/webhooks/zernio',
+  uploadPostWebhook: '/api/webhooks/upload-post',
   nango: '/api/integrations/nango',
   nangoWebhook: '/api/webhooks/nango',
   posting: '/api/posting/',
@@ -146,6 +151,7 @@ export const RATE_BUCKETS = Object.freeze({
   publicMedia: 'media-public', // 120 per minute per IP
   billingRead: 'billing-read', // 60 per minute
   zernioWebhook: 'zernio-webhook', // 600 per minute per IP
+  uploadPostWebhook: 'upload-post-webhook', // 600 per minute per IP
   nangoWebhook: 'nango-webhook', // 600 per minute per IP
   postingCheck: 'posting-check', // 1 per job per 30 s + 60 per hour
 });

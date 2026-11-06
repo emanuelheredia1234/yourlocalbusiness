@@ -1,5 +1,5 @@
 // What ai-server.mjs delivers to the integration modules (WP0), one acceptance test each: the route table,
-// the Zernio and Nango webhooks' raw bodies, unlogged media and webhook paths, the account-deletion order, the startup
+// the Upload-Post, Zernio and Nango webhooks' raw bodies, unlogged media and webhook paths, the account-deletion order, the startup
 // sweeps and notes, the connections switch, and the app-host hook in pages.mjs; then the real server.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
@@ -61,10 +61,16 @@ function recorder() {
   const zernioImpl = Object.fromEntries(CONNECTION_METHODS.map((m) => [m, vi.fn(async () => (m === 'status' ? [] : undefined))]));
   zernioImpl.forgetUser = vi.fn(async (id) => calls.push(['forget', 'vendor', id]));
   zernioImpl.unforgetUser = vi.fn(async (id) => calls.push(['unforget', 'vendor', id]));
+  const uploadPostImpl = Object.fromEntries(CONNECTION_METHODS.map((m) => [m, vi.fn(async () => (m === 'status' ? [] : undefined))]));
+  uploadPostImpl.forgetUser = vi.fn(async (id) => calls.push(['forget', 'social', id]));
+  uploadPostImpl.unforgetUser = vi.fn(async (id) => calls.push(['unforget', 'social', id]));
+  uploadPostImpl.setPostListener = vi.fn();
   return {
     calls,
     zernioImpl,
+    uploadPostImpl,
     factories: {
+      uploadPost: vi.fn(() => uploadPostImpl),
       zernio: vi.fn(() => zernioImpl),
       nango: vi.fn(() => ({ enabled: true, integrations: {} })),
       connectionRoutes: mod('connections'),
@@ -85,6 +91,7 @@ describe('the route table', () => {
     expect(moduleFor('/api/integrations/connections')).toBe('connections');
     expect(moduleFor('/api/integrations/connections/facebook/connect')).toBe('connections');
     expect(moduleFor('/api/webhooks/zernio')).toBe('connections');
+    expect(moduleFor('/api/webhooks/upload-post')).toBe('connections');
     expect(moduleFor('/api/webhooks/nango')).toBe('nango');
     expect(moduleFor('/api/integrations/nango')).toBe('nango');
     expect(moduleFor('/api/integrations/nango/calendly/connect')).toBe('nango');
@@ -140,7 +147,7 @@ describe('the route table', () => {
   });
 });
 
-describe('the Zernio webhook', () => {
+describe('the Upload-Post and Zernio webhooks', () => {
   it('reaches its module with the body unread, so the HMAC covers the exact bytes (readJson never runs)', async () => {
     const r = recorder();
     const readJson = vi.fn(async () => ({}));
@@ -160,6 +167,10 @@ describe('the Zernio webhook', () => {
       const res = await fetch(`${s.base}/api/webhooks/zernio`, { method: 'POST', body: raw, headers: { 'x-zernio-signature': 'abc' } });
       expect(res.status).toBe(200);
       expect(got).toBe(raw);
+      const upRaw = '{"event":"upload_completed",  "request_id":"r1","x":"é"}';
+      const upRes = await fetch(`${s.base}/api/webhooks/upload-post`, { method: 'POST', body: upRaw, headers: { 'x-upload-post-signature': 'sha256=abc', 'x-upload-post-timestamp': '1' } });
+      expect(upRes.status).toBe(200);
+      expect(got).toBe(upRaw);
       expect(readJson).not.toHaveBeenCalled();
     } finally {
       await s.close();
@@ -170,16 +181,17 @@ describe('the Zernio webhook', () => {
 describe('account deletion', () => {
   it('forgets the vendor connections first, then posting, analytics, SEO and billing; lifts them newest first', async () => {
     const r = recorder();
-    const integrations = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
+    const integrations = createIntegrations({ env: { ZERNIO_API_KEY: 'test-zernio-key', UPLOAD_POST_API_KEY: 'test-upload-post-key' }, send: sendLike, factories: r.factories, db: { enabled: false } });
     await integrations.forgetUser(UID);
     const forgets = r.calls.filter((c) => c[0] === 'forget').map((c) => c[1]);
-    expect(forgets[0]).toBe('vendor');
+    // the social profile goes first, then the ad accounts, then everything else
+    expect(forgets.slice(0, 2)).toEqual(['social', 'vendor']);
     expect(forgets.indexOf('posting')).toBeLessThan(forgets.indexOf('analytics'));
     expect(forgets.indexOf('analytics')).toBeLessThan(forgets.indexOf('billing'));
     r.calls.length = 0;
     await integrations.unforgetUser(UID);
     const lifts = r.calls.filter((c) => c[0] === 'unforget').map((c) => c[1]);
-    expect(lifts[lifts.length - 1]).toBe('vendor');
+    expect(lifts.slice(-2)).toEqual(['vendor', 'social']);
     expect(lifts.indexOf('billing')).toBeLessThan(lifts.indexOf('posting'));
     r.calls.length = 0;
     await integrations.userDeleted(UID);
@@ -218,43 +230,55 @@ describe('startup', () => {
   });
 
   it('names what is missing and never prints a value', () => {
-    const secrets = { ZERNIO_API_KEY: 'sk_test_zernio_key_xyz', TREG_TOKEN: 'test-treg-token-xyz', TREG_ADMIN_TOKEN: 'test-treg-admin-token', CUSTOMER_TAG_SECRET: 'test-customer-tag-secret-0123456789' };
+    const secrets = { ZERNIO_API_KEY: 'sk_test_zernio_key_xyz', UPLOAD_POST_API_KEY: 'up_test_key_xyz_000', TREG_TOKEN: 'test-treg-token-xyz', TREG_ADMIN_TOKEN: 'test-treg-admin-token', CUSTOMER_TAG_SECRET: 'test-customer-tag-secret-0123456789' };
     const integrations = createIntegrations({ env: secrets, send: sendLike, db: { enabled: false } });
     const text = integrations.notes().join('\n');
-    expect(text).toContain('Connected accounts (social and ads): on (Zernio).');
+    expect(text).toContain('Social accounts and posting: on (Upload-Post).');
+    expect(text).toContain('Ad accounts: on (Zernio).');
+    expect(text).toContain('UPLOAD_POST_WEBHOOK_SECRET');
+    expect(text).toContain('MEDIA_URL_SECRET');
     expect(text).toContain('ZERNIO_WEBHOOK_SECRET');
     expect(text).toContain('Other integrations (Nango): off');
     expect(text).toContain('TREG_ORG_ID');
     for (const v of Object.values(secrets)) expect(text).not.toContain(v);
     const off = createIntegrations({ env: {}, send: sendLike, db: { enabled: false } }).notes().join('\n');
-    expect(off).toMatch(/Connected accounts: off.*ZERNIO_API_KEY/);
+    expect(off).toMatch(/Social accounts and posting: off.*UPLOAD_POST_API_KEY/);
+    expect(off).toMatch(/Ad accounts: off.*ZERNIO_API_KEY/);
     expect(off).toContain('TREG_TOKEN');
   });
 });
 
 describe('the connections switch', () => {
-  it('is Zernio once ZERNIO_API_KEY is set, unless CONNECTIONS_PROVIDER=off; Nango never carries social accounts', () => {
-    expect(selectConnections({})).toEqual({ provider: null, reason: 'no_key' });
-    expect(selectConnections({ CONNECTIONS_PROVIDER: 'zernio' })).toEqual({ provider: null, reason: 'no_key' });
-    expect(selectConnections({ ZERNIO_API_KEY: 'k' })).toEqual({ provider: 'zernio', reason: 'key' });
-    expect(selectConnections({ ZERNIO_API_KEY: 'k', CONNECTIONS_PROVIDER: 'zernio' })).toEqual({ provider: 'zernio', reason: 'key' });
-    expect(selectConnections({ ZERNIO_API_KEY: 'k', CONNECTIONS_PROVIDER: 'off' })).toEqual({ provider: null, reason: 'off' });
-    expect(selectConnections({ ZERNIO_API_KEY: 'k', CONNECTIONS_PROVIDER: 'nango' })).toEqual({ provider: null, reason: 'unknown_provider' });
-    expect(selectConnections({ NANGO_SECRET_KEY: 'test-nango-key' })).toEqual({ provider: null, reason: 'no_key' });
+  it('is Upload-Post for social with UPLOAD_POST_API_KEY and Zernio for ads with ZERNIO_API_KEY, unless CONNECTIONS_PROVIDER=off; Nango never carries social accounts', () => {
+    expect(selectConnections({})).toEqual({ provider: null, social: null, ads: null, reason: 'no_key' });
+    expect(selectConnections({ CONNECTIONS_PROVIDER: 'zernio' })).toEqual({ provider: null, social: null, ads: null, reason: 'no_key' });
+    expect(selectConnections({ ZERNIO_API_KEY: 'k' })).toEqual({ provider: 'zernio', social: null, ads: 'zernio', reason: 'key' });
+    expect(selectConnections({ UPLOAD_POST_API_KEY: 'k' })).toEqual({ provider: 'upload_post', social: 'upload_post', ads: null, reason: 'key' });
+    expect(selectConnections({ UPLOAD_POST_API_KEY: 'k', ZERNIO_API_KEY: 'k' })).toEqual({ provider: 'upload_post+zernio', social: 'upload_post', ads: 'zernio', reason: 'key' });
+    expect(selectConnections({ UPLOAD_POST_API_KEY: 'k', ZERNIO_API_KEY: 'k', CONNECTIONS_PROVIDER: 'off' })).toEqual({ provider: null, social: null, ads: null, reason: 'off' });
+    expect(selectConnections({ ZERNIO_API_KEY: 'k', CONNECTIONS_PROVIDER: 'nango' })).toEqual({ provider: null, social: null, ads: null, reason: 'unknown_provider' });
+    expect(selectConnections({ NANGO_SECRET_KEY: 'test-nango-key' })).toEqual({ provider: null, social: null, ads: null, reason: 'no_key' });
   });
 
-  it('builds Zernio only when selected, and Nango only with NANGO_SECRET_KEY (for other integrations)', () => {
+  it('builds each side only when its key is set, wires posting to Upload-Post’s webhooks, and Nango only with NANGO_SECRET_KEY', () => {
     const off = recorder();
     const none = createIntegrations({ env: {}, send: sendLike, factories: off.factories, db: { enabled: false } });
     expect(off.factories.zernio).not.toHaveBeenCalled();
+    expect(off.factories.uploadPost).not.toHaveBeenCalled();
     expect(off.factories.nango).not.toHaveBeenCalled();
     expect(none.nango.enabled).toBe(false);
+    expect(none.connections.enabled).toBe(false);
     const on = recorder();
-    const i = createIntegrations({ env: { ZERNIO_API_KEY: 'k', NANGO_SECRET_KEY: 'test-nango-key' }, send: sendLike, factories: on.factories, db: { enabled: false } });
+    const i = createIntegrations({ env: { ZERNIO_API_KEY: 'k', UPLOAD_POST_API_KEY: 'k', NANGO_SECRET_KEY: 'test-nango-key' }, send: sendLike, factories: on.factories, db: { enabled: false } });
     expect(on.factories.zernio).toHaveBeenCalledTimes(1);
+    expect(on.factories.uploadPost).toHaveBeenCalledTimes(1);
     expect(on.factories.nango).toHaveBeenCalledTimes(1);
-    expect(i.connectionsProvider).toBe('zernio');
-    expect(i.connections.enabled).toBe(true);
+    expect(on.uploadPostImpl.setPostListener).toHaveBeenCalledTimes(1);
+    expect(i.connectionsProvider).toBe('upload_post+zernio');
+    expect(i.connections).toMatchObject({ enabled: true, socialEnabled: true, adsEnabled: true });
+    const adsOnly = recorder();
+    const a = createIntegrations({ env: { ZERNIO_API_KEY: 'k' }, send: sendLike, factories: adsOnly.factories, db: { enabled: false } });
+    expect(a.connections).toMatchObject({ enabled: true, socialEnabled: false, adsEnabled: true });
   });
 });
 
@@ -343,6 +367,7 @@ describe('ai-server.mjs with the integrations', () => {
     expect(body.connections.find((c) => c.platform === 'pinterest')).toEqual({ platform: 'pinterest', state: 'coming_soon' });
     const owner = await supa.tokenFor('owner@example.com');
     const forOwner = await (await fetch(`${base}/api/integrations/connections`, { headers: { authorization: `Bearer ${owner.token}` } })).json();
+    expect(forOwner.hint).toMatch(/UPLOAD_POST_API_KEY/);
     expect(forOwner.hint).toMatch(/ZERNIO_API_KEY/);
     // connecting is refused plainly; a cross-site page is refused first
     const connect = await fetch(`${base}/api/integrations/connections/facebook/connect`, { method: 'POST', headers: { authorization: `Bearer ${user.token}` } });
@@ -355,7 +380,7 @@ describe('ai-server.mjs with the integrations', () => {
     const user = await supa.tokenFor('stubs@example.com');
     const auth = { authorization: `Bearer ${user.token}` };
     for (const [method, p] of [
-      // posting needs connected accounts, and connecting is off here (no NANGO_SECRET_KEY)
+      // posting needs connected social accounts, and they are off here (no UPLOAD_POST_API_KEY)
       ['POST', '/api/posting/publish'],
       ['GET', '/api/posting/jobs?projectId=p1'],
       // /api/billing/me is built (WP3) and needs only Supabase and CUSTOMER_TAG_SECRET; the owner routes still
@@ -389,7 +414,7 @@ describe('ai-server.mjs with the integrations', () => {
     expect(output).not.toContain('SECRETMEDIATOKEN');
     expect(output).not.toContain('conn-SECRET-ID');
     for (const v of Object.values(FAKE)) expect(output).not.toContain(v);
-    expect(output).toContain('Connected accounts: off.');
+    expect(output).toContain('Social accounts and posting: off.');
     expect(output).toContain('20261105000000_integrations.sql');
   });
 

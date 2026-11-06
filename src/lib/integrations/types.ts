@@ -2,7 +2,7 @@
 // (the app's side; the server mirrors them as JSDoc in server/integrations/contracts.mjs). Everything here is
 // what the browser may see: no connection ids, no tokens, no other customer's data.
 
-/** The accounts a user can connect, all through Zernio (phase 2 ones show "Coming soon"). */
+/** The accounts a user can connect: social networks through Upload-Post, ad accounts through Zernio (phase 2 ones show "Coming soon"). */
 export type ConnectPlatform =
   | 'facebook'
   | 'instagram'
@@ -25,8 +25,8 @@ export const CONNECT_PLATFORMS: readonly ConnectPlatform[] = ['facebook', 'insta
 export const SOCIAL_PLATFORMS: readonly ConnectPlatform[] = ['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube', 'pinterest'];
 /** The ad accounts (read only: the app changes no ad). */
 export const AD_PLATFORMS: readonly ConnectPlatform[] = ['google_ads', 'meta_ads', 'linkedin_ads', 'tiktok_ads', 'pinterest_ads', 'x_ads', 'reddit_ads', 'microsoft_ads'];
-/** Shown as "Coming soon" for now (posts in the app have no Pinterest format yet). */
-export const PHASE2_PLATFORMS: readonly ConnectPlatform[] = ['pinterest'];
+/** Shown as "Coming soon" for now (posts in the app have no Pinterest format yet; X Ads waits on the owner). */
+export const PHASE2_PLATFORMS: readonly ConnectPlatform[] = ['pinterest', 'x_ads'];
 export type AdPlatformId = 'google_ads' | 'meta_ads' | 'linkedin_ads' | 'tiktok_ads' | 'pinterest_ads' | 'x_ads' | 'reddit_ads' | 'microsoft_ads';
 
 export type ConnectionState = 'not_connected' | 'pending' | 'connected' | 'limited' | 'needs_reconnect' | 'coming_soon';
@@ -57,8 +57,11 @@ export interface ConnectionsResponse {
   connections: ConnectionStatus[];
   available: ConnectPlatform[];
   setUp: boolean;
-  /** who holds the logins: 'zernio' when connecting is on */
-  provider?: 'zernio' | null;
+  /** who holds the logins: Upload-Post for social networks, Zernio for ad accounts (an older server sent 'zernio') */
+  provider?: { social?: 'upload_post' | null; ads?: 'zernio' | null } | 'zernio' | null;
+  /** social networks (Upload-Post) and ad accounts (Zernio) are each set up by their own key */
+  setUpSocial?: boolean;
+  setUpAds?: boolean;
   /** admins only: which Replit Secret to add (names, never values) */
   hint?: string;
 }
@@ -289,8 +292,12 @@ export interface CustomerUsageRow {
   status: 'active' | 'blocked';
   lastActivityAt?: string;
   syncedToTreg?: boolean;
-  /** accounts connected through Zernio right now (Zernio bills per connected account) */
+  /** social accounts (Upload-Post) plus ad accounts (Zernio) connected right now */
   connectedAccounts?: number;
+  /** social accounts connected through Upload-Post right now (one profile per customer) */
+  socialAccounts?: number;
+  /** ad accounts connected through Zernio right now (Zernio bills per connected ad account) */
+  adAccounts?: number;
 }
 
 export interface ReconcileReport {
