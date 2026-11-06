@@ -31,6 +31,7 @@ import { StoreOverlays } from '@/pages/store/StoreOverlays';
 import { Onboarding } from '@/pages/onboarding/Onboarding';
 import { Dashboard } from '@/pages/dashboard/Dashboard';
 import { PlanBanner, useBillingWatcher } from '@/components/billing/PlanBanner';
+import { useConnectReturnWatcher } from '@/lib/integrations/connectReturnWatcher';
 import { UpgradePrompt } from '@/components/billing/UpgradePrompt';
 import { AddBusinessDialog } from '@/components/billing/AddBusinessDialog';
 
@@ -112,6 +113,7 @@ export default function App() {
   useStrategyManusWatcher();
   useAgentBuildWatcher();
   useBillingWatcher();
+  useConnectReturnWatcher();
 
   useEffect(() => {
     initRuntime();

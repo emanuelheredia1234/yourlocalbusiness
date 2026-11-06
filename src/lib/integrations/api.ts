@@ -103,7 +103,10 @@ const seg = encodeURIComponent;
 export const getConnections = (projectId?: string) => call<ConnectionsResponse>('GET', `/api/integrations/connections${q({ projectId })}`);
 export const connect = (platform: ConnectPlatform, projectId?: string) => call<ConnectLink>('POST', `/api/integrations/connections/${seg(platform)}/connect`, projectId ? { projectId } : {});
 export const reconnect = (platform: ConnectPlatform, projectId?: string) => call<ConnectLink>('POST', `/api/integrations/connections/${seg(platform)}/reconnect`, projectId ? { projectId } : {});
-export const checkConnection = (platform: ConnectPlatform, projectId?: string) => call<{ connection: ConnectionStatus }>('POST', `/api/integrations/connections/${seg(platform)}/check`, projectId ? { projectId } : {});
+/** accountId: the account Zernio named on its way back (?accountId=), a hint the server checks against this user's rows. */
+export const checkConnection = (platform: ConnectPlatform, projectId?: string, accountId?: string) => call<{ connection: ConnectionStatus }>('POST', `/api/integrations/connections/${seg(platform)}/check`, { ...(projectId ? { projectId } : {}), ...(accountId ? { accountId } : {}) });
+/** A connect that came back with ?error=: the platform stops waiting on the server and keeps our reason code. */
+export const abandonConnection = (platform: ConnectPlatform, reason: string, projectId?: string) => call<{ connection: ConnectionStatus }>('POST', `/api/integrations/connections/${seg(platform)}/abandon`, { reason, ...(projectId ? { projectId } : {}) });
 /** ackLiveAds: for Meta ads / Google Ads, the customer saw the campaigns that stay on (else 409 ADS_LIVE). */
 export const disconnect = (platform: ConnectPlatform, projectId?: string, ackLiveAds = false) => call<{ ok: true }>('DELETE', `/api/integrations/connections/${seg(platform)}${q({ projectId, ...(ackLiveAds ? { ackLiveAds: '1' } : {}) })}`);
 export const getTargets = (platform: ConnectPlatform, projectId?: string) => call<{ targets: Target[] }>('GET', `/api/integrations/connections/${seg(platform)}/targets${q({ projectId })}`);

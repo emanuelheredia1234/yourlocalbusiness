@@ -633,6 +633,19 @@ One screen with two sections:
 - **Ad accounts** (Zernio): Google Ads, Meta Ads, LinkedIn Ads, TikTok Ads, Pinterest Ads, Reddit Ads, Microsoft
   Ads, and X Ads as "Coming soon". The card says: "See your ad results here. When launching is turned on, you can
   also launch and change campaigns from the app, and each change waits for your confirmation."
+- **Coming back from Zernio's connect page.** The connect link sends the browser back to `APP_URL/?ylb_connect=<platform>`
+  and Zernio adds `connected=<platform>&profileId=&accountId=` on success, or `error=&platform=&error_reason=&
+  error_message=&is_user_fixable=` on failure. On success the app checks that platform at once
+  (`POST …/<platform>/check {accountId}`: the account id is a hint, only the user's own rows count) and says it is
+  connected. On failure it calls `POST …/<platform>/abandon {reason}` (the row stops waiting and keeps the reason)
+  and says why in its own words for `no_pages_granted`, `page_not_granted`, `ad_accounts_not_granted`,
+  `state_expired` / `invalid_state`, `reconnect_required`, `meta_ads_authorization_denied` and `connection_failed`.
+  `ads_addon_required` and `payment_required` are the Zernio team's problem: the owner is told what to fix and an
+  owner alert is logged; customers see "isn't available right now". Zernio's `error_message` is never shown. The
+  parameters are then taken out of the address bar.
+- **Reading accounts back** asks `GET /v1/accounts` with `adAccountRows=true` (one row per ad account; without it
+  Zernio lists each ads login once, so a second Meta ad account on the same login would be missed), and accepts a
+  `profileId` given as the id or as the Profile object.
 - **Gmail** (§3d): one mailbox for this account, for outreach later. **Connect** and **Disconnect**. Until
   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set, customers see that Gmail isn’t set up yet and the owner
   sees those secret names and the redirect URI. Nothing is sent from this screen.

@@ -25,6 +25,7 @@ import { PlatformMark } from '@/components/posts/PlatformIcon';
 import { Badge, Callout, InfoTip, Modal, MoreMenu, OptionCards, SettingsRow, SettingsSection, Spinner, StatusDot, confirmAction, type MenuEntry } from '@/components/ui/primitives';
 import { disconnectWarning, liveAdsFor } from '@/components/ads/liveAds';
 import { PLATFORM_NAMES } from '@/pages/marketing/analytics/links';
+import { connectErrorMessage, isConnectErrorReason } from '@/lib/integrations/connectReturn';
 import { GmailAccount } from './GmailAccount';
 
 const SOCIAL: readonly ConnectPlatform[] = SOCIAL_PLATFORMS;
@@ -106,8 +107,11 @@ export function rowView(
   }
   // not connected
   const expiredNote = o.expired || st?.lastError === 'not_finished' || (o.pendingAt !== undefined && now - o.pendingAt > PENDING_EXPIRES_MS) ? 'That didn’t finish. Try again.' : undefined;
-  if (platform === 'x_ads' && !expiredNote) return { tone: 'faint', status: 'Not connected', note: 'Connect X first, then X Ads.', action: off ? 'none' : 'connect' };
-  return { tone: 'faint', status: 'Not connected', ...(expiredNote ? { note: expiredNote } : {}), action: off ? 'none' : 'connect' };
+  // a connect that came back with an error (Zernio's redirect): why, in our words (team-level ones stay generic here)
+  const reasonNote = !expiredNote && isConnectErrorReason(st?.lastError) ? connectErrorMessage(st.lastError, name, false) : undefined;
+  if (platform === 'x_ads' && !expiredNote && !reasonNote) return { tone: 'faint', status: 'Not connected', note: 'Connect X first, then X Ads.', action: off ? 'none' : 'connect' };
+  const note = expiredNote ?? reasonNote;
+  return { tone: reasonNote ? 'warn' : 'faint', status: 'Not connected', ...(note ? { note } : {}), action: off ? 'none' : st?.lastError === 'reconnect_required' ? 'reconnect' : 'connect' };
 }
 
 function PlatformIcon({ platform }: { platform: ConnectPlatform }) {
