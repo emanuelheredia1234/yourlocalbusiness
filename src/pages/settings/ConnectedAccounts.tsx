@@ -219,7 +219,7 @@ function AccountRow({ platform, status, view, onChoose }: { platform: ConnectPla
     const where = APP_SETTINGS[platform] ?? name;
     const ok = await confirmAction({
       title: `Disconnect ${name}?`,
-      body: `Posting there goes back to manual. This doesn’t remove access inside ${where}; do that in ${where}’s settings.`,
+      body: `Every business that uses this account stops using it, and posting there goes back to manual. This doesn’t remove access inside ${where}; do that in ${where}’s settings.`,
       confirmLabel: 'Disconnect',
       danger: true,
     });
@@ -401,7 +401,16 @@ function OtherIntegrations() {
             <span className="flex min-w-0 flex-wrap items-center justify-end gap-3" data-integration={i.key} data-state={i.state}>
               <StatusDot tone={connected ? 'good' : i.state === 'needs_reconnect' ? 'warn' : 'faint'}>{connected ? 'Connected' : i.state === 'pending' ? 'Waiting…' : i.state === 'needs_reconnect' ? 'Reconnect needed' : 'Not connected'}</StatusDot>
               {connected ? (
-                <button type="button" className="btn btn-ghost btn-sm" disabled={busy === i.key} onClick={() => void run(i.key, () => disconnectNango(i.key), `Couldn’t disconnect ${i.label}`)}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={busy === i.key}
+                  onClick={() =>
+                    void confirmAction({ title: `Disconnect ${i.label}?`, body: 'The app stops using this account. To remove access completely, also remove the app in its own settings.', confirmLabel: 'Disconnect', danger: true }).then((ok) => {
+                      if (ok) void run(i.key, () => disconnectNango(i.key), `Couldn’t disconnect ${i.label}`);
+                    })
+                  }
+                >
                   {busy === i.key && <Spinner size={14} />}
                   Disconnect
                 </button>

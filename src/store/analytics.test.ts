@@ -203,6 +203,33 @@ describe('connections without opening Settings (useConnections → ensureConnect
     await ensureConnections(Date.now() + CONNECTIONS_FRESH_MS + 1);
     expect(api.getConnections).toHaveBeenCalledTimes(2);
   });
+  it('another business on screen reads its own accounts at once (each business picks its own)', async () => {
+    const { useStore } = await import('@/store/useStore');
+    const before = useStore.getState().activeProjectId;
+    try {
+      useStore.setState({ activeProjectId: 'biz-a' });
+      api.getConnections.mockResolvedValue({ connections: [{ platform: 'facebook', state: 'connected', targetLabel: 'A page' }], available: ['facebook'], setUp: true });
+      await ensureConnections();
+      expect(api.getConnections).toHaveBeenLastCalledWith('biz-a');
+      const calls = api.getConnections.mock.calls.length;
+      // still fresh for biz-a: no read
+      await ensureConnections();
+      expect(api.getConnections).toHaveBeenCalledTimes(calls);
+      useStore.setState({ activeProjectId: 'biz-b' });
+      await ensureConnections();
+      expect(api.getConnections).toHaveBeenLastCalledWith('biz-b');
+      // a switch while a read is out: the read for the old business is followed by one for the new
+      let resolve!: (v: unknown) => void;
+      api.getConnections.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      const p = useAnalytics.getState().refreshConnections();
+      useStore.setState({ activeProjectId: 'biz-c' });
+      resolve({ connections: [], available: ['facebook'], setUp: true });
+      await p;
+      expect(api.getConnections).toHaveBeenLastCalledWith('biz-c');
+    } finally {
+      useStore.setState({ activeProjectId: before });
+    }
+  });
   it('signed out: the next ask reads again (so signing in shows the accounts)', async () => {
     api.getConnections.mockRejectedValue(new IntegrationApiError(401, { error: 'Sign in', code: 'AUTH_REQUIRED' }));
     await ensureConnections();

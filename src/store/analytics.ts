@@ -127,7 +127,11 @@ let connectTimer: ReturnType<typeof setTimeout> | null = null;
 let connectUntil = 0;
 let connectionsInFlight: Promise<void> | null = null;
 let connectionsAt = 0;
+/** the business the stored connections were read for (each business picks its own accounts) */
+let connectionsFor: string | undefined | null = null;
 let focusRefetchInstalled = false;
+
+const connectionsLoadedOnce = () => connectionsAt > 0 || connectionsFor !== null;
 
 const messageOf = (e: unknown, fallback = 'Something went wrong. Try again shortly.') => (e instanceof IntegrationApiError ? e.message : fallback);
 
@@ -201,8 +205,9 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
 
   /** One read of the connections (refreshConnections() shares it while it runs). */
   const readConnections = async () => {
+    const projectId = activeProject();
     try {
-      const r = await getConnections(activeProject());
+      const r = await getConnections(projectId);
       const connections = Array.isArray(r.connections) ? r.connections : [];
       // a network that's no longer waiting (connected, or anything but not connected) leaves `pending`;
       // one still not connected after 30 minutes becomes "That didn't finish"
@@ -220,6 +225,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
         }
       }
       connectionsAt = Date.now();
+      connectionsFor = projectId;
       set({
         connections,
         connectionsEnabled: r.setUp === true && Array.isArray(r.available) && r.available.length > 0,
@@ -233,6 +239,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       // off, signed out or unreachable: everything reads "Not connected" and posting stays manual
       // (signed out: the next mount or focus asks again, so signing in shows the accounts)
       connectionsAt = e instanceof IntegrationApiError && e.code === 'AUTH_REQUIRED' ? 0 : Date.now();
+      connectionsFor = projectId;
       set({ connections: [], connectionsEnabled: false, connectionsLoaded: true, connectionsError: e instanceof IntegrationApiError && e.code !== 'AUTH_REQUIRED' ? e.message : undefined });
     }
   };
@@ -258,7 +265,12 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       if (artifact()) return Promise.resolve();
       // one read at a time: every posting button may ask at once
       if (connectionsInFlight) return connectionsInFlight;
-      connectionsInFlight = readConnections().finally(() => {
+      const run = async () => {
+        await readConnections();
+        // the business changed while that read was out: read again for the one on screen (once)
+        if (connectionsFor !== activeProject()) await readConnections();
+      };
+      connectionsInFlight = run().finally(() => {
         connectionsInFlight = null;
       });
       return connectionsInFlight;
@@ -420,6 +432,7 @@ export function stopAnalyticsTimers(): void {
   runFollowing = null;
   connectUntil = 0;
   connectionsAt = 0;
+  connectionsFor = null;
 }
 
 /**
@@ -429,7 +442,7 @@ export function stopAnalyticsTimers(): void {
 export function ensureConnections(now = Date.now()): Promise<void> {
   if (artifact()) return Promise.resolve();
   if (connectionsInFlight) return connectionsInFlight;
-  if (connectionsAt && now - connectionsAt < CONNECTIONS_FRESH_MS) return Promise.resolve();
+  if (connectionsAt && now - connectionsAt < CONNECTIONS_FRESH_MS && connectionsFor === activeProject()) return Promise.resolve();
   return useAnalytics.getState().refreshConnections();
 }
 
@@ -442,6 +455,14 @@ function installFocusRefetch(): void {
   };
   window.addEventListener('focus', onFocus);
   document.addEventListener('visibilitychange', onFocus);
+  // another business on screen: its own chosen accounts (the labels a posting confirm shows)
+  try {
+    useStore.subscribe((state, prev) => {
+      if (state.activeProjectId !== prev.activeProjectId && connectionsLoadedOnce()) void ensureConnections();
+    });
+  } catch {
+    /* no store (tests): the next focus or mount reads them */
+  }
 }
 
 /** Connection status by platform (missing: not connected), whether connecting is on, and a refetch. */
