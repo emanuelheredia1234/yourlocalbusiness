@@ -22,7 +22,7 @@ export const monthStart = (t) => `${new Date(t).toISOString().slice(0, 7)}-01T00
 
 /** A row counts as a call (for calls_per_day and the reports) unless it only corrects or repeats one. */
 export const isCall = (r) => r.outcome !== 'settled' && r.outcome !== 'timeout';
-/** Money that's real (treg's settled charge): estimates for Nango and X never count toward caps or treg totals. */
+/** Money that's real (treg's settled charge): estimates for Zernio, Nango and X never count toward caps or treg totals. */
 export const isReal = (r) => r.vendor === 'treg' && r.estimated !== true;
 
 export function createLedger({ db, now = () => Date.now(), log = console } = {}) {

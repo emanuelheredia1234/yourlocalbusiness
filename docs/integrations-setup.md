@@ -1,20 +1,31 @@
 # Connected accounts, posting, analytics and per-customer usage: owner setup
 
-What this covers: each customer connects their own Facebook Page, Instagram, LinkedIn, TikTok, X, YouTube,
-Google Ads, Meta Ads and Search Console (through **Nango**, which holds their logins); the app posts for them
-once they confirm; the Social, Ads, SEO page and Email Analytics tabs; the Marketing hub's **Update** button;
-"Submit to Google" for the SEO page; and each customer's usage, caps and a CSV to bill from (through **treg**).
+What this covers: each customer connects their own Facebook Page, Instagram, LinkedIn, TikTok, X and YouTube
+accounts and their ad accounts (Meta, Google, LinkedIn, TikTok, Pinterest, X, Reddit, Microsoft) through
+**Zernio**, which runs on its own approved platform apps and holds their logins; the app posts for them once they
+confirm; the Social, Ads, SEO page and Email Analytics tabs; the Marketing hub's **Update** button; "Submit to
+Google" for the SEO page; and each customer's usage, caps and a CSV to bill from (through **treg**).
 
-Each part below is filled in by the work package that builds it. Until a part is built or its Secrets are
-set, the app says so plainly and nothing breaks: every network shows "Not connected", customers post
-themselves and press **Mark as posted**, and Manus still posts to Facebook groups.
+Who does what:
+
+| Service | Used for |
+|---|---|
+| **Zernio** (formerly Late) | Customers' social accounts and ad accounts, posting, their own social stats, their ad results (read only), connected-account counts per customer |
+| **treg** | Public social data, competitor ads, Google rank and Maps position, Search Console (on your own team connection), per-customer usage, caps and billing |
+| **Omnisend** | Email stats |
+| **Manus** | Only "Post to Facebook groups" |
+| **Nango** | Kept for future booking tools and CRMs only. Off until you set it up; never used for social or ads |
+
+Until a part's Secrets are set the app says so plainly and nothing breaks: every network shows "Not connected",
+customers post themselves and press **Mark as posted**, and Manus still posts to Facebook groups.
 
 **Rules that hold everywhere**
-- Keys and tokens go only in **Replit Secrets**. Never paste one into the app, a chat, a file or a screenshot.
-  The app never shows a key: at most its last 4 characters.
+- Keys and tokens go only in **Replit Secrets**. Never paste one into the app, a chat, a file, a prompt or a
+  screenshot. The app never shows or logs a key: at most its last 4 characters.
 - The app never sends a post, a sitemap submission or an ad change twice by itself. When it can't tell whether
   something went out, it says so and offers **Check again** (a read) or **Post it yourself**.
-- Text from other sites (captions, bios, ads, error messages) is shown as text and never treated as instructions.
+- Text from other sites (captions, bios, ads, campaign names, error messages) is shown as text and never treated
+  as instructions.
 
 ## 1. Secrets and settings
 
@@ -23,156 +34,129 @@ name only.
 
 | Secret | What it's for | Notes |
 |---|---|---|
-| `CUSTOMER_TAG_SECRET` | Each customer's usage tag (`cust_…`) | 32+ random bytes. **Never change it**: each customer's history would split in two. |
-| `MEDIA_URL_SECRET` | Short-lived links to a post's photo or video for the networks that fetch it | 32+ random bytes. |
-| `TREG_TOKEN` | Analytics data, competitor ads, Google rank, Search Console for app-domain pages | A **member-role agent token** (`treg org agent-new ylb-app`). Not your own dashboard key. |
+| `CUSTOMER_TAG_SECRET` | Each customer's id (`cust_…`) for usage, and their Zernio profile's `externalId` | 32+ random bytes. **Never change it**: each customer's history and Zernio profile would split in two. |
+| `ZERNIO_API_KEY` | **Turns connected social and ad accounts on** | Your Zernio API key (`sk_…`), from the Zernio dashboard → API keys. |
+| `ZERNIO_WEBHOOK_SECRET` | Checks that account and post news really comes from Zernio | A random string you choose (32+ characters); you give the same value to Zernio in §3. |
+| `ZERNIO_WEBHOOK_SECRET_PREVIOUS` | Only while rotating the webhook secret | Remove it once Zernio uses the new one. |
+| `MEDIA_URL_SECRET` | Short-lived links to a post's photo or video | 32+ random bytes. |
+| `TREG_TOKEN` | Analytics data, competitor ads, Google rank, Search Console | A **member-role agent token** (`treg org agent-new ylb-app`). Not your own dashboard key. |
 | `TREG_ADMIN_TOKEN` | Customer caps and the usage check against treg (billing only) | Admin-role agent token; only a team owner can make one. |
-| `NANGO_SECRET_KEY` | **Turns connected accounts on** | A Nango environment API key with the scopes in §3. |
-| `NANGO_WEBHOOK_SIGNING_KEY` | Checks that connection news really comes from Nango | Separate from the API key. |
-| `NANGO_WEBHOOK_SIGNING_KEY_PREVIOUS` | Only while rotating the signing key | Remove it within an hour of rotating. |
+| `NANGO_SECRET_KEY` | Optional, later: other integrations (booking tools, CRMs) | Leave unset until you add one (§3b). |
+| `NANGO_WEBHOOK_SIGNING_KEY` | Optional, with Nango only | |
 
 Plain settings (not secret; Replit Secrets or env):
 
 | Name | Default | Meaning |
 |---|---|---|
 | `TREG_ORG_ID` | — | Your treg team id (`treg org ls`). |
-| `CONNECTIONS_PROVIDER` | unset | `off` keeps connected accounts off even with `NANGO_SECRET_KEY` set. |
-| `META_LOGIN_CONFIG_ID` | — | Facebook Login for Business configuration id. |
-| `NANGO_INTEGRATIONS` | built-in ids | JSON map of platform → Nango integration id, if yours differ. |
-| `NANGO_RPM` | `150` | The app's own limit on Nango calls per minute (`900` on Pay-as-you-go). |
+| `CONNECTIONS_PROVIDER` | unset | `off` keeps connected accounts off even with `ZERNIO_API_KEY` set. |
+| `ZERNIO_RPM` | `60` | The app's own limit on Zernio calls per minute. Zernio allows 60 with up to 2 connected accounts and 600 from 3; raise this to `600` then. |
+| `ZERNIO_BRAND_NAME` | `Yourlocalbusiness` | The name on Zernio's connect screen ("Yourlocalbusiness wants to connect to your Instagram"). |
+| `ZERNIO_BRAND_LOGO_URL` | — | An https link to a square logo for that screen. |
+| `ZERNIO_BRAND_COLOR` | — | Its button colour, `#RRGGBB`. |
+| `NANGO_INTEGRATIONS` | — | Only with Nango (§3b): JSON of the integrations customers may connect. |
 | `GSC_APP_PROPERTY` | — | `https://yourlocalbusiness.replit.app/` once that Search Console property is verified. |
 | `GSC_APP_VERIFICATION_FILE` | — | Google's HTML verification file name, e.g. `google1a2b3c4d5e6f7a8b.html`. |
-| `LINKEDIN_ORG_APPROVED`, `LINKEDIN_MEMBER_ANALYTICS_APPROVED` | unset | Set to `1` only after LinkedIn grants those products. |
-| `TIKTOK_UPLOAD_MODE` | `FILE_UPLOAD` | `PULL_FROM_URL` only after TikTok verifies the media URL prefix. |
-| `LINKEDIN_UPLOAD_BEARER` | unset | Only if LinkedIn's upload links turn out to need it. |
 
 The Supabase and Omnisend Secrets you already have are unchanged.
 
 ## 2. Database
 
-Run `supabase/migrations/20261105000000_integrations.sql` once in Supabase → SQL Editor (safe to run again).
-It adds server-only tables (no browser can read them): customers and caps, the usage ledger, analytics
-settings, snapshots, runs and history, publish jobs, Search Console steps and webhook deliveries. Deleting an
-account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for invoices.
+Run these once in Supabase → SQL Editor (each is safe to run again):
+1. `supabase/migrations/20261105000000_integrations.sql`: server-only tables (no browser can read them):
+   customers and caps, the usage ledger, analytics settings, snapshots, runs and history, publish jobs, Search
+   Console steps and webhook deliveries.
+2. `supabase/migrations/20261106000000_zernio.sql`: lets the usage ledger record Zernio rows.
 
-## 3. Connected accounts (Nango)
+Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
+invoices. Each customer's connected accounts are disconnected at Zernio first.
 
-Nango holds each customer's own logins; the app keeps, per customer, which connection is which network and
-which Page, channel, ad account or site they chose. Connection ids and account ids never reach the browser.
-Until `NANGO_SECRET_KEY` is set, every network shows "Not connected" and customers post themselves.
+## 3. Connected accounts (Zernio)
 
-1. **Account and plan.** Create a Nango account. The Free plan (10 connections, 200 API requests a minute,
-   hard caps) is for testing only. For real customers use Pay-as-you-go ($50 a month including $50 of credits,
-   $0.29 per connected account per month, $0.50 per GB through the proxy) and set `NANGO_RPM=900`. The app
-   writes these costs as **estimated** rows on each customer's usage once a month; estimated rows never count
-   toward a cap.
-2. **Environment API key** (Environment Settings → API Keys) with only these scopes, then paste it into the
-   Replit Secret `NANGO_SECRET_KEY`:
-   - `environment:connect_sessions:write`
-   - `environment:connections:read`
-   - `environment:connections:delete`
-   - `environment:proxy`
-   - `environment:connections:read_credentials` only if you turn on Microsoft Ads or TikTok Ads later.
-   - **Not** `connections:list`: without it, a leaked key can't list your customers' connections.
-3. **Webhook** (Environment Settings → Webhooks): URL `https://yourlocalbusiness.replit.app/api/webhooks/nango`,
-   with **on auth creation** and **on auth refresh error** turned on. Copy the signing key into the Replit Secret
-   `NANGO_WEBHOOK_SIGNING_KEY` (it is not the API key). When you rotate it, put the old one in
-   `NANGO_WEBHOOK_SIGNING_KEY_PREVIOUS` and remove that within an hour.
-4. **Callback URL** to register in each network's developer app: `https://api.nango.dev/oauth/callback`.
-5. **Integrations** (Integrations → Add), each with your own OAuth app's client id and secret entered **in the
-   Nango dashboard** (never in this app). Use these ids, or map yours with `NANGO_INTEGRATIONS`
-   (JSON, e.g. `{"facebook":"my-facebook"}`):
+Zernio holds each customer's logins on its own approved apps for every network, so **no Meta, LinkedIn, TikTok,
+X or Google app review is needed** to start. Each customer gets one Zernio **profile**, made the first time they
+press Connect, with `externalId` = their customer id (`cust_…`, never an email). The app keeps, per customer,
+which accounts are theirs and which account each of their businesses uses; Zernio account ids never reach the
+browser.
 
-   | Network | Nango provider | Integration id |
-   |---|---|---|
-   | Facebook Pages and Instagram (Facebook Login) | `facebook` | `ylb-facebook` |
-   | LinkedIn | `linkedin` | `ylb-linkedin` |
-   | TikTok | `tiktok-personal` | `ylb-tiktok` |
-   | X | `twitter-v2` | `ylb-x` |
-   | YouTube | `youtube` | `ylb-youtube` |
-   | Google Ads | `google-ads` | `ylb-google-ads` |
-   | Meta Ads | `meta-marketing-api` | `ylb-meta-ads` |
-   | Search Console | `google-search-console` | `ylb-gsc` |
-   | Coming later: Pinterest, Microsoft Ads, TikTok Ads | `pinterest`, `microsoft-ads`, `tiktok-ads` | `ylb-pinterest`, `ylb-microsoft-ads`, `ylb-tiktok-ads` |
+**Set it up once**
+1. Create a Zernio account at zernio.com. The first 2 connected accounts are free; after that Zernio bills per
+   connected account per month (about $6 each for the first 10, less after that). Analytics, comments, ads and
+   unlimited posts come with every connected account.
+2. Dashboard → **API keys** → create a key. Paste it **only** into Replit Secrets as `ZERNIO_API_KEY`.
+3. Pick a webhook secret (32+ random characters) and paste it into Replit Secrets as `ZERNIO_WEBHOOK_SECRET`.
+4. Dashboard → **Webhooks** → add an endpoint:
+   - URL: `https://yourlocalbusiness.replit.app/api/webhooks/zernio`
+   - Secret: the same value as `ZERNIO_WEBHOOK_SECRET`
+   - Events: `account.connected`, `account.disconnected`, `post.published`, `post.partial`, `post.failed`,
+     `post.platform.published`, `post.platform.failed`.
+   Press **Send test**: the app answers 200. Zernio signs each delivery (`X-Zernio-Signature`, HMAC-SHA256 of the
+   body); the app ignores anything unsigned or for a profile that isn't one of your customers, and applies each
+   event once.
+5. **White-label the connect screen** (optional, recommended): either set `ZERNIO_BRAND_NAME`,
+   `ZERNIO_BRAND_LOGO_URL` and `ZERNIO_BRAND_COLOR` (sent on every connect link), or save your brand once in the
+   Zernio dashboard's welcome-screen settings. Customers then see "Yourlocalbusiness wants to connect to your
+   Instagram" before the network's own sign-in. The network's own consent screen still names Zernio's app.
+6. Turn on the **ads add-on** in Zernio if customers will connect ad accounts.
+7. Run the migration in §2, redeploy, and check the startup notes say "Connected accounts (social and ads): on
+   (Zernio)".
 
-   The app asks each network for these permissions when a customer connects (set the same in your apps):
-   - Facebook: `pages_show_list, pages_manage_posts, pages_read_engagement, pages_manage_engagement,
-     read_insights, instagram_basic, instagram_content_publish, instagram_manage_insights,
-     instagram_manage_comments, business_management`. With Facebook Login for Business, put its configuration
-     id in `META_LOGIN_CONFIG_ID` and the permissions in that configuration instead.
-   - LinkedIn: `openid, profile, w_member_social`. Only after LinkedIn approves the products: set
-     `LINKEDIN_ORG_APPROVED=1` (adds company pages) and `LINKEDIN_MEMBER_ANALYTICS_APPROVED=1` (adds member post
-     stats). Asking for a permission LinkedIn hasn't granted breaks every LinkedIn connect.
-   - TikTok: `user.info.basic, user.info.stats, video.list, video.publish`.
-   - X: `tweet.read, tweet.write, users.read, media.write, offline.access`.
-   - YouTube: `youtube.upload, youtube.readonly, yt-analytics.readonly`.
-   - Google Ads: `adwords`. Don't set a developer token (Google retired them in September 2026).
-   - Meta Ads: `ads_read, business_management` (read only; the app never changes ads).
-   - Search Console: `webmasters, siteverification`.
+**Later (optional): your own platform apps.** Zernio can connect through your own Meta, LinkedIn, TikTok, X or
+Google apps instead of its own (Zernio dashboard → OAuth apps), so the consent screens show your app's name and
+the network's limits are yours. That needs each network's app review (often weeks). The app needs no change for
+it beyond Zernio's settings.
 
-**What customers see.** Settings → Connected accounts: Connect opens the network's sign-in in a new tab; the
-row shows "Waiting for …" for up to 30 minutes, then Connected (or "That didn't finish. Try again."). If a
-network gives more than one Page or account they choose one; a single one is chosen for them. Rows say
-plainly when something is limited: a permission wasn't allowed, they can't post on that Page, or the network
-hasn't approved the app yet. Disconnect removes the connection at Nango; it doesn't remove the app's access
-inside the network itself (that is done in the network's own settings).
+**What the app does with Zernio**
+- **Connect**: Settings → Connected accounts → Connect opens Zernio's branded screen in a new tab, then the
+  network's sign-in. Ad accounts use Zernio's ads connect (Meta, Google, LinkedIn, TikTok, Pinterest, X, Reddit,
+  Microsoft; X Ads needs the X account first). A customer with several Pages or accounts on one network picks
+  which one each business uses. Pinterest posting is "Coming soon" (posts in the app have no Pinterest format).
+- **Post**: one `POST /v1/posts` per post with `publishNow`, an `Idempotency-Key` (the job id) and our job id in
+  the post's metadata. Photos and videos are uploaded to Zernio's storage first. A timeout or a Zernio 5xx is
+  "We couldn't confirm the post went out": **Check again** reads the post's status at Zernio (by its id, or by
+  the job id in its metadata) and never sends it again. A `post.*` webhook finishes such a job too.
+- **Stats**: the Update button reads each connected account's daily metrics, follower counts and top posts, and
+  each ad account's daily spend and campaigns (read only: the app makes no ad changes).
+- **Usage**: every Zernio call is a row in the customer's usage ledger (vendor `zernio`, no cost), and once a
+  month each customer gets an estimated "connected accounts" row (count × Zernio's list price). The owner's
+  Customer usage page shows each customer's connected-account count.
+- Rate limits: the app stays under `ZERNIO_RPM`; a read that gets a 429 waits once (10 s at most); writes are
+  never repeated.
 
-**If something goes wrong**
-- "Not set up" for the owner: the hint names the missing Secret (names only, never values), or the integration
-  id Nango doesn't know.
-- Nango's Free-plan cap reached: customers read "isn't available right now" and nothing is retried.
-- A connection whose login expired shows **Reconnect needed**; Facebook logins last about 60 days, so after 50
-  days the row says **Expires soon**.
-- Deleting a customer's account deletes each of their connections at Nango once. A failure is logged as
-  `nango_forget_delete_failed` with the customer tag: delete that connection by hand in the Nango dashboard.
+## 3b. Other integrations (Nango, for later)
 
-**Testing without Nango.** `NANGO_WEBHOOK_URL=http://127.0.0.1:<server port>/api/webhooks/nango node
-server/test/mock-nango.mjs 9921` runs a stand-in (then set
-`NANGO_BASE_URL=http://127.0.0.1:9921`, `NANGO_SECRET_KEY=test-nango-key`,
-`NANGO_WEBHOOK_SIGNING_KEY=test-nango-signing-key`); its connect page has a **Complete** button that sends the
-signed webhook. Nothing in the tests calls Nango or a network.
+Nango stays in the app for **future** integrations that aren't social or ads, such as booking tools and CRMs.
+It is off until `NANGO_SECRET_KEY` is set, and nothing shows in the app until you also list an integration:
 
-## 4. Platform apps and approvals
+1. Create the integration in the Nango dashboard (for example `ylb-calendly`).
+2. Set `NANGO_SECRET_KEY` and `NANGO_WEBHOOK_SIGNING_KEY` in Replit Secrets.
+3. Set `NANGO_INTEGRATIONS`, for example
+   `{"calendly": {"id": "ylb-calendly", "label": "Calendly", "category": "booking"}}`.
+4. In Nango, point the webhook at `https://yourlocalbusiness.replit.app/api/webhooks/nango`.
 
-Start these early: nothing posts publicly until each network has approved your app. Create the apps and start
-Business Verification any time; register the OAuth redirect URI `https://api.nango.dev/oauth/callback` at each
-network only when you set up Nango (§3). Client ids and secrets go **in the Nango dashboard**, never in the app.
-The waits below are typical estimates, not promises.
+Customers then see **Settings → Connected accounts → Other integrations** with Connect and Disconnect. A key or
+integration id that names a social network, an ad platform or Search Console is refused (those go through Zernio
+and treg).
 
-| Network | What to create | Approval and typical wait | Before approval |
-|---|---|---|---|
-| Meta (Facebook Pages, Instagram, Meta Ads) | A Business-type Meta app, a Facebook Login for Business configuration (its id goes in `META_LOGIN_CONFIG_ID`), products Pages, Instagram and Marketing API | App Review for Advanced Access (pages_manage_posts, pages_manage_engagement, instagram_content_publish, instagram_manage_comments, read_insights, ads_read) and Business Verification: often 1–4 weeks | Only the app's admins and testers can connect |
-| LinkedIn | A developer app with "Share on LinkedIn" (self-serve); the Community Management API on a fresh app with no other products | Community Management: Development tier, then Standard tier (screencast): weeks | Members can post as themselves; company pages wait. Set `LINKEDIN_ORG_APPROVED=1` only once it's granted |
-| TikTok | A developer app with Content Posting API and Login Kit | The Direct Post audit: weeks | Posts are private (only the poster sees them) and at most 5 people a day can post |
-| X | A developer account with pay-per-use credits | None; prepaid credits (about $0.015 a post, $0.20 with a link) | Works as soon as there are credits |
-| Google (YouTube, Ads, Search Console) | One Cloud project and OAuth client; turn on YouTube Data, YouTube Analytics, Google Ads, Search Console and Site Verification APIs | OAuth verification for sensitive scopes: weeks. YouTube allows 100 uploads a day per project | Testing mode: up to 100 test users, sign-ins last 7 days |
+## 4. Platform approvals
+
+None are needed to start: Zernio's own apps are already approved on every network. Networks still apply their
+own rules to each account (for example, Instagram needs a professional account, Facebook posts go to a Page the
+customer manages, Meta Ads needs a Facebook Page, TikTok videos are public only on TikTok Business connections).
 
 **How posting works once an account is connected**
 - The customer presses **Post on Facebook** (or another network) and confirms. The app sends the post **once**.
-  If it can't tell whether the post went out (a timeout or a network error), the post shows **We couldn't confirm
-  the post went out** with **Check again** (a read, at most every 30 seconds) and **Post it yourself**. It never
-  sends the post again by itself, and there's no "Try again" for that case.
+  If it can't tell whether the post went out, the post shows **We couldn't confirm the post went out** with
+  **Check again** (a read, at most every 30 seconds) and **Post it yourself**. It never sends the post again by
+  itself, and there's no "Try again" for that case.
 - The post that goes out is the one saved in the customer's account. If the screen shows something older, the app
   asks them to save first.
-- Facebook posts use the Page's own access, fetched for that one post and never stored. Photos and videos for
-  Instagram, Facebook and TikTok are shared through a private link that lasts 30 minutes (2 hours for a video):
-  `https://yourlocalbusiness.replit.app/api/media/public/…`. LinkedIn, X and YouTube get the file uploaded by the
-  server.
-- Daily caps per customer: 20 posts on X (X bills each post), 50 on each other network. Change them in the
-  `billing_caps` table (`x_posts_per_day`, `posts_per_day`; the `*` row is the default).
-- Formats: Instagram takes JPEG photos and MP4 Reels; Facebook and LinkedIn take photos (video is coming); TikTok
-  needs a video or a photo; X takes up to one photo or video here; YouTube needs a video.
-
-**Settings for posting** (plain settings, not secret)
-
-| Name | Default | Meaning |
-|---|---|---|
-| `TIKTOK_UPLOAD_MODE` | `FILE_UPLOAD` | `FILE_UPLOAD` sends TikTok videos from the server. Set `PULL_FROM_URL` only after TikTok has verified the URL prefix `https://yourlocalbusiness.replit.app/api/media/public/` in its developer portal; TikTok photo posts need that too. |
-| `LINKEDIN_UPLOAD_BEARER` | unset | Set to `1` only if LinkedIn's upload links turn out to need the member's sign-in (the upload then goes through Nango). |
-| `MEDIA_PUBLIC_BASE_URL` | `ALLOWED_ORIGIN`, else `https://yourlocalbusiness.replit.app` | The address networks fetch shared photos and videos from. |
-
-`MEDIA_URL_SECRET` (§1) signs those links: without it, photo and video posts to Instagram, Facebook and TikTok
-say "isn't set up yet" and nothing is sent.
+- Daily caps per customer: 20 posts on X, 50 on each other network. Change them in the `billing_caps` table
+  (`x_posts_per_day`, `posts_per_day`; the `*` row is the default). Zernio adds its own limits (25 posts an hour
+  per account, and daily caps per network).
+- Formats: Instagram takes JPEG photos and MP4 Reels; Facebook and LinkedIn take photos and MP4 videos; TikTok
+  needs a video or a photo; X takes up to one photo or video; YouTube needs a video. The first comment goes out
+  with Facebook, Instagram and LinkedIn posts; on X and TikTok the customer adds it themselves.
 
 ## 5. treg, caps and billing
 
@@ -217,8 +201,9 @@ send invoices: bill customers from the CSV outside the app.
 ## 6. Analytics, Search Console and email stats
 
 **The Update button** (Marketing hub) fetches four sources in the background, at most once every 15 minutes per
-business: Social (public stats through treg for each handle in Settings; a connected account's own stats
-instead), Ads (connected Google Ads / Meta Ads results, read only, plus up to 3 competitors' active ads), SEO page
+business: Social (public stats through treg for each handle in Settings; a connected account's own stats from
+Zernio instead), Ads (every connected ad account's results from Zernio, read only, plus up to 3 competitors'
+active ads through treg), SEO page
 (Google rank and Maps position per keyword in the business's city, Search Console numbers for this page) and
 Email (Omnisend). A source that fails keeps showing its last good numbers with an "as of" time. Before anything is
 spent, an Update is refused when the customer is over their daily or monthly cap (estimated connection and X costs
@@ -241,10 +226,20 @@ the app's address; pages on a customer's own domain are in that domain's sitemap
 **Submit to Google** (SEO page → Analytics): for an app-address page the shared sitemap is submitted at most
 once a day across all customers, and the page is inspected (Google allows 2,000 inspections a day for the whole
 property: the app stops at 1,500, and at 20 per customer, and inspects a page at most once a week until it is
-indexed). For a page on the customer's own domain, the customer connects their own Search Console; the steps are
-the DNS TXT record, Verify, adding the site, submitting the domain's sitemap and inspecting the page. Nothing is
-sent twice by itself: when Google's answer was lost, the next press first checks, and sends again only after the
-customer confirms. Google decides when to index; there is no "request indexing" API.
+indexed). Google decides when to index; there is no "request indexing" API.
+
+**Search Console for pages on a customer's own domain** (also on your treg team connection, in your own Search
+Console account; customers connect nothing):
+1. The first **Submit to Google** for a domain adds it to your Search Console as a Domain property
+   (`sc-domain:<domain>`), unverified. The customer reads "The app's owner verifies it with Google first".
+2. In Google Search Console, open that property → **Verify** → **DNS record**. Google shows a TXT record
+   (`google-site-verification=…`) for the domain: send it to the customer to add at their DNS host (the same place
+   they added the app's `_ylb-domain` record), or add it yourself if you manage their DNS. Press **Verify** in
+   Google once it's there.
+3. The customer presses **Submit to Google** again: the app sees the domain verified in your account, submits
+   `https://<domain>/sitemap.xml` once and inspects the page. Its Search Console numbers appear on the next Update.
+Nothing is sent twice by itself: when Google's answer was lost, the next press first checks, and sends again only
+after the customer confirms.
 
 **Email stats** come from Omnisend's reports, at most one live call per Omnisend account per hour and 40 a day
 (Omnisend allows 55). The OAuth scope Omnisend needs for reports isn't confirmed yet: once it is, add it to
@@ -272,7 +267,7 @@ Every post shows one posting button, by its state:
 
 Manus only posts in Facebook groups (**Post to groups** on a Facebook post). Posts sent with Manus by older
 versions show **Sent with Manus earlier**, read-only. There is no bulk send: each post is confirmed on its own.
-Nothing to set up for this beyond the connected accounts (§3) and the posting backend (§4).
+Nothing to set up for this beyond Zernio (§3).
 
 ### Analytics, Settings and Customer usage (WP5)
 
@@ -284,20 +279,26 @@ Nothing to set up for this beyond the connected accounts (§3) and the posting b
   fetched numbers with their "as of" time and a 7/30-day range (remembered in the browser under
   `ylb-analytics-range`). Competitors (up to 3) and keywords (up to 10) are edited in a drawer on the Ads and SEO
   tabs. **Submit to Google** on the SEO tab is one confirmed press; Google decides when to index.
-- **Settings → Connected accounts** lists Social, Ads and Search Console with each account's state. Until
-  `NANGO_SECRET_KEY` is set it says "Connecting accounts is coming soon" and shows no Connect buttons; the owner
-  also sees which Replit Secret is missing (the name only).
+- **Settings → Connected accounts** lists Social and Ads with each account's state (connected through Zernio).
+  Until `ZERNIO_API_KEY` is set it says "Connecting accounts is coming soon" and shows no Connect buttons; the
+  owner also sees which Replit Secret is missing (the name only). **Other integrations** appears only once Nango
+  is set up and lists at least one integration (§3b).
 - **Settings → AI keys → Analytics data costs**: each signed-in person's own usage against their caps, estimated
   costs labelled. The owner also sees **Billing (owner)**, which opens **Customer usage**: per-customer totals,
   caps (edit, block, reset), "Check against treg", and the monthly CSV. It tracks usage only; it charges nothing.
 - The artifact build shows "Connected accounts and live analytics need the full app" instead of any of this.
 
-## 8. What works on day one (no Nango, no approvals)
+## 8. What works on day one (no Zernio key yet, no approvals)
 
 - Manual posting: **Post it yourself**, then **Mark as posted**.
 - Facebook groups through Manus.
 - Social analytics from public data (treg) for every handle in Settings.
 - Competitor ads, Google rank and Maps position (treg).
-- Search Console for pages on the app's own address (after §6).
+- Search Console for pages on the app's own address (after §6), and on customers' own domains once you verify
+  each one (§6).
 - Email analytics (Omnisend, once the reporting scope is confirmed).
 - Per-customer usage, caps and the CSV.
+
+**As soon as `ZERNIO_API_KEY` and `ZERNIO_WEBHOOK_SECRET` are set** (and the §2 migrations run): customers connect
+their social and ad accounts, post from the app after a confirm, and see their own stats and ad results. No
+network approvals are needed, because Zernio's apps are already approved.

@@ -363,9 +363,19 @@ How it behaves:
 
 API (signed in, same site only): `GET /api/integrations/omnisend/status`, `POST /api/integrations/omnisend/connect`, `DELETE /api/integrations/omnisend/connection`, `POST /api/integrations/omnisend/campaign-drafts`. Public: `GET /api/integrations/omnisend/callback` (Omnisend's redirect).
 
-## Connected accounts, analytics and usage (being built)
+## Connected accounts, posting, analytics and usage
 
-Customers will connect their own social, ads and Search Console accounts (through Nango, which holds their logins), post from the app after a confirm, see Social, Ads, SEO page and Email analytics (public data and competitor ads through treg), send their SEO page to Google, and the owner will see each customer's usage and caps. The server already answers these routes; each part says "not set up yet" until it's built and its Secrets are set, and until then posting stays manual (Post it yourself, then Mark as posted) and Manus keeps posting to Facebook groups. Setup, Secrets and the database migration: [docs/integrations-setup.md](docs/integrations-setup.md).
+Full owner setup, every Secret and the two database migrations: [docs/integrations-setup.md](docs/integrations-setup.md). In short:
+
+- **Zernio** (formerly Late) holds customers' social and ad accounts on its own approved platform apps: one Zernio profile per customer (`externalId` = their opaque customer id), white-label connect links, posting to Facebook, Instagram, LinkedIn, TikTok, X and YouTube, their own stats, and their ad results on Meta, Google, LinkedIn, TikTok, Pinterest, X, Reddit and Microsoft (read only; the app changes no ad). Owner steps: create a Zernio account; put the API key in Replit Secrets as `ZERNIO_API_KEY`; choose a webhook secret (`ZERNIO_WEBHOOK_SECRET`); add the webhook `https://yourlocalbusiness.replit.app/api/webhooks/zernio` in Zernio with that secret; optionally brand the connect screen (`ZERNIO_BRAND_NAME`, `ZERNIO_BRAND_LOGO_URL`, `ZERNIO_BRAND_COLOR`); later, optionally, your own platform apps in Zernio. Everything goes through `server/zernio.mjs`; posts are sent once with an Idempotency-Key, and "Check again" only reads the post's status.
+- **treg** stays for public data, competitor ads, Google rank, per-customer usage, caps and billing (`TREG_TOKEN`, `TREG_ADMIN_TOKEN`, `TREG_ORG_ID`), and **Search Console** on your own team connection: the app's address is one URL-prefix property (`GSC_APP_PROPERTY`), and each customer's own domain is added to your Search Console as a Domain property that you verify with a DNS TXT record.
+- **Omnisend** stays for email stats and drafts (above).
+- **Nango** stays in the code for future booking tools and CRMs only: off until `NANGO_SECRET_KEY` is set, nothing shown until `NANGO_INTEGRATIONS` lists one, and never used for social or ads.
+- **Manus** only posts to Facebook groups.
+
+Works immediately, before any key: manual posting (Post it yourself, then Mark as posted), Facebook groups through Manus, public social stats, competitor ads and Google rank through treg, Search Console for pages on the app's address, and per-customer usage. With `ZERNIO_API_KEY` and `ZERNIO_WEBHOOK_SECRET` set, customers connect accounts and post from the app right away: no network approvals are needed.
+
+Tests use stand-ins only (no live calls): `node server/test/mock-zernio.mjs` prints a mock Zernio base URL (use it as `ZERNIO_BASE_URL`), and `server/test/mock-nango.mjs`, `mock-treg.mjs`, `mock-omnisend.mjs` do the same for the others.
 
 ## Run it
 

@@ -30,7 +30,7 @@ function codeOf(e) {
 }
 
 /**
- * The app-side cap pre-check (spec §3.1): treg spend (vendor 'treg' rows only; estimated Nango and X rows never
+ * The app-side cap pre-check (spec §3.1): treg spend (vendor 'treg' rows only; estimated Zernio, Nango and X rows never
  * count) today and this month, and today's treg calls, against the customer's caps (their row, else '*').
  */
 export async function precheckCaps(db, customerTag, now, estimateMicro = MIN_ESTIMATE_MICRO) {
