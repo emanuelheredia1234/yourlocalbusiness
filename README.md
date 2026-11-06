@@ -380,6 +380,24 @@ Works immediately, before any key: manual posting (Post it yourself, then Mark a
 
 Tests use stand-ins only (no live calls): `node server/test/mock-uploadpost.mjs` prints a mock Upload-Post base URL (use it as `UPLOAD_POST_BASE_URL`), `node server/test/mock-zernio.mjs` a mock Zernio ads base URL (`ZERNIO_BASE_URL`), and `server/test/mock-nango.mjs`, `mock-treg.mjs`, `mock-omnisend.mjs` do the same for the others. `node server/test/mock-stripe.mjs` prints a mock Stripe API base (customers, prices by `lookup_key`, Checkout, subscriptions with quantities, the billing portal, signed webhooks with valid `Stripe-Signature` headers, and Connect accounts) for the paid plans and seller payments to come; the owner's steps before them (Stripe Sandbox key in the workspace Secrets, Google `gmail.send` and Microsoft publisher verification, the Stripe Connect platform profile) are in `docs/integrations-setup.md` §9.
 
+## Plans and billing
+
+Launch ($97/month), Grow ($197) and Scale ($397), yearly at ten months' price, each with one business and $97/month
+per extra business; every price and limit is in `shared/plans.json`. Customers pay through Stripe Checkout and
+manage their card, invoices and cancelling in the Stripe Customer Portal; adding or removing businesses and changing
+plans happen in the app, each sent to Stripe once (`server/billing/stripe.mjs`). Plans gate AI credits on the app's
+keys (own keys never count), video length, launching ads (Grow and up), the treg budget, businesses with social
+accounts, and paid actions while a payment is overdue. Nothing is enforced until the owner turns plans on; existing
+accounts then get 30 days of Grow free. The owner's account is the unlimited owner plan. Billing is off in the
+claude.ai artifact build.
+
+Owner steps (all in [docs/integrations-setup.md](docs/integrations-setup.md) §10): run
+`supabase/migrations/20261110000000_billing.sql`; set `STRIPE_SECRET_KEY` (restricted live key in production),
+`STRIPE_WEBHOOK_SECRET` and `APP_URL`; add the webhook `https://yourlocalbusiness.replit.app/api/webhooks/stripe`; run
+`npm run stripe:setup` (a dry run; then `--apply`; `--live` only with your OK); set up the Customer Portal (quantity
+editing off) and Smart Retries; then Owner → Billing → Plans → Turn on plans. Turning plans off again is the rollback.
+Tests use `server/test/mock-stripe.mjs` and `server/test/mock-supabase.mjs` only.
+
 ## Scheduled jobs
 
 Replit Autoscale stops the app when it's idle, so nothing runs on a timer inside it. Supabase's pg_cron calls
