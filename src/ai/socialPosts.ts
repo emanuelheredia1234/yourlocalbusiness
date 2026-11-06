@@ -170,6 +170,7 @@ export function makePostVideo(project: Project, post: Post, o: { seconds: number
     resolution: o.resolution ?? '768p',
     name: videoFileName(post.headline),
     purpose: 'post',
+    projectId: project.id,
     signal: o.signal,
     onStage: o.onStage,
     pendingKey: postVideoKey(post.id),

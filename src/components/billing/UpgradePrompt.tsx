@@ -15,6 +15,7 @@ const TITLES = {
   CREDITS_USED: 'This month’s AI credits are used',
   BUSINESS_LIMIT: 'Your plan is full',
   CARD_DECLINED: 'Your card was declined',
+  VIDEO_WEEK_LIMIT: 'This week’s AI videos are used',
 } as const;
 
 const fmtDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '');
@@ -28,7 +29,7 @@ export function UpgradePrompt() {
   if (!on || !req) return null;
   const paying = account?.source === 'stripe' && !!plan?.active;
   const current = plan?.tier ?? null;
-  const tier: Tier | null = req.code === 'PLAN_REQUIRED' && paying ? upgradeTier(req.need?.tier, current) : null;
+  const tier: Tier | null = (req.code === 'PLAN_REQUIRED' || req.code === 'VIDEO_WEEK_LIMIT') && paying ? upgradeTier(req.need?.tier, current) : null;
   const interval = account?.interval ?? 'month';
   const go = (fn: () => void) => () => {
     close();
@@ -64,6 +65,29 @@ export function UpgradePrompt() {
           {paying && (
             <button type="button" className="btn btn-primary btn-sm" onClick={addBusiness} data-autofocus>
               Add a business
+            </button>
+          )}
+        </>
+      );
+      break;
+    case 'VIDEO_WEEK_LIMIT':
+      actions = (
+        <>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={ownKeys}>
+            Use my own AI keys
+          </button>
+          {tier ? (
+            <>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={seePlans}>
+                See plans
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" data-autofocus onClick={go(() => void confirmPlanChange(tier, interval))}>
+                Upgrade to {planFor(tier).name}
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn btn-primary btn-sm" onClick={seePlans} data-autofocus>
+              See plans
             </button>
           )}
         </>
@@ -109,6 +133,7 @@ export function UpgradePrompt() {
           {current ? `; you’re on ${tierName(current)}` : ''}.
         </p>
       )}
+      {req.code === 'VIDEO_WEEK_LIMIT' && <p className="mt-2 text-small text-muted">{req.resetsAt ? `This business’s videos reset on Monday, ${fmtDate(req.resetsAt)}.` : 'This business’s videos reset on Monday.'} Videos made with your own AI keys don’t count.</p>}
       {req.code === 'CREDITS_USED' && req.resetsAt && <p className="mt-2 text-small text-muted">Your credits renew on {fmtDate(req.resetsAt)}. Your own AI keys never use credits.</p>}
     </Modal>
   );

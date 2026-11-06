@@ -233,7 +233,7 @@ describe('the upgrade prompt', () => {
     showUpgrade({ code: 'PLAN_REQUIRED', error: 'x' });
     expect(useBilling.getState().upgrade?.code).toBe('CREDITS_USED');
     useBilling.getState().closeUpgrade();
-    for (const code of ['PLAN_REQUIRED', 'PAYMENT_REQUIRED', 'BUSINESS_LIMIT', 'CARD_DECLINED']) {
+    for (const code of ['PLAN_REQUIRED', 'PAYMENT_REQUIRED', 'BUSINESS_LIMIT', 'CARD_DECLINED', 'VIDEO_WEEK_LIMIT']) {
       expect(showUpgrade({ code, error: 'words', need: { feature: 'ads', tier: 'grow' } })).toBe(true);
       expect(useBilling.getState().upgrade).toMatchObject({ code, message: 'words' });
       useBilling.getState().closeUpgrade();

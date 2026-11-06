@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createManusTask, fetchManusImage, manusErrorMessage, manusImageLimit, manusTransport } from './manus';
-import { downloadVideo, readVideo, startVideo, videoTransport, waitForVideo } from './video';
+import { downloadVideo, readVideo, startVideo, videoErrorMessage, videoTransport, waitForVideo } from './video';
+import { useStore } from '@/store/useStore';
+import { useVideoWeek } from '@/store/videoWeek';
 
 // The self-hosted app reaches Manus and video through your server (/api/ai/…), not Zapier.
 manusTransport.server = true;
@@ -75,7 +77,8 @@ describe('videos through your server', () => {
     fetchMock.mockResolvedValueOnce(json({ job: { id: 'vid_1', state: 'running', error: '', progress: null, meta: { ...meta, cost: null } } }));
     const job = await startVideo({ prompt: 'a candle', aspect: '9:16', duration: 6, resolution: '480p' });
     expect(job).toEqual({ jobId: 'vid_1', pollingUrl: '', server: true });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ prompt: 'a candle', aspect: '9:16', duration: 6 });
+    // the business's week counts it: the open business (none here) and the zones it falls back on
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ prompt: 'a candle', aspect: '9:16', duration: 6, projectId: '', timeZone: expect.any(String), browserTimeZone: expect.any(String) });
 
     fetchMock.mockResolvedValueOnce(json({ job: { id: 'vid_1', state: 'running', error: '', progress: 40, meta } }));
     fetchMock.mockResolvedValueOnce(json({ job: { id: 'vid_1', state: 'done', error: '', progress: null, meta } }));
@@ -90,6 +93,20 @@ describe('videos through your server', () => {
     const blob = await downloadVideo(job, state);
     expect(blob.size).toBe(8);
     expect(fetchMock.mock.calls[3][0]).toBe('/api/ai/video/vid_1/content');
+  });
+
+  it('sends the business and its time zone, and keeps the week the server answers (started or refused)', async () => {
+    useStore.setState({ projects: [{ ...useStore.getState().projects[0], id: 'proj_w', timeZone: 'America/Chicago' }] as never, activeProjectId: 'proj_w' });
+    const week = { used: 2, limit: 3, resetsAt: '2026-11-09T06:00:00.000Z', enforced: true };
+    fetchMock.mockResolvedValueOnce(json({ job: { id: 'vid_2', state: 'running', error: '', progress: null, meta: null }, videoWeek: week }));
+    await startVideo({ prompt: 'a candle', aspect: '9:16', duration: 6, resolution: '480p' });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ projectId: 'proj_w', timeZone: 'America/Chicago' });
+    expect(useVideoWeek.getState().byProject.proj_w).toMatchObject({ used: 2, limit: 3, enforced: true });
+    fetchMock.mockResolvedValueOnce(json({ error: 'You’ve made 3 of 3 videos this week. Resets Monday.', code: 'VIDEO_WEEK_LIMIT', used: 3, limit: 3, videoWeek: { ...week, used: 3 } }, 402));
+    const err = await startVideo({ prompt: 'a candle', aspect: '9:16', duration: 6, resolution: '480p', projectId: 'proj_w' }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'VIDEO_WEEK_LIMIT', message: 'You’ve made 3 of 3 videos this week. Resets Monday.' });
+    expect(videoErrorMessage('VIDEO_WEEK_LIMIT', (err as Error).message)).toEqual({ title: 'This week’s AI videos are used', body: 'You’ve made 3 of 3 videos this week. Resets Monday.' });
+    expect(useVideoWeek.getState().byProject.proj_w.used).toBe(3);
   });
 
   it('says when the server lost the job', async () => {

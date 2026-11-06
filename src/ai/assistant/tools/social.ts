@@ -24,6 +24,8 @@ import { groupsAlreadyOut } from '@/ai/manusGroups';
 import { applyPostMedia, buildComposerPosts, composerTaskInput, makePostImage, makePostVideo, postImageKey, postVideoKey, postVideoText, rewriteInput, rewritePatch } from '@/ai/socialPosts';
 import { applyCampaignPlan, applyWeekBatch, batchStart, cadence, campaignProblem, coveredSlots, patchCampaign, setLinkPlacement, setSlotTopic, weekBatchInput } from '@/ai/socialPlan';
 import { useStore } from '@/store/useStore';
+import { useVideoWeek } from '@/store/videoWeek';
+import { videoWeekLine } from '@/lib/videoWeek';
 import { addToCalendarFlow, downloadPostMedia, postHeld } from '@/components/posts/PostActions';
 import { manusSetupHint } from '@/components/posts/manusShared';
 import { apiHolds, legacyManus } from '@/lib/posting';
@@ -695,7 +697,7 @@ const makeVideo = defineTool({
   card: ({ postId, seconds }) => {
     const p = findPost(postId);
     const turns = p?.format === 'image' ? `. It becomes a video post: the video takes the place of its ${isOwnPhoto(p.media) ? 'photo (your photo stays in your files)' : p.media ? 'image' : 'planned image'}` : '';
-    return videoCard({ what: `A ${videoSeconds(seconds)}-second video for ${name(p)} on ${p ? net(p) : 'its network'}${turns}.`, seconds: videoSeconds(seconds) });
+    return videoCard({ what: `A ${videoSeconds(seconds)}-second video for ${name(p)} on ${p ? net(p) : 'its network'}${turns}.`, seconds: videoSeconds(seconds), week: videoWeekLine(useVideoWeek.getState().byProject[activeProject().id]) });
   },
   run: async ({ postId, seconds, prompt }, ctx) => {
     const p = activeProject();
