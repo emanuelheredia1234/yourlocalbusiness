@@ -29,9 +29,12 @@
 //   rotating), ZERNIO_API_KEY (turns ad accounts on, through Zernio), ZERNIO_WEBHOOK_SECRET (+ _PREVIOUS only while
 //   rotating), NANGO_SECRET_KEY (future non-social integrations only; off by default), NANGO_WEBHOOK_SIGNING_KEY.
 //   Plain env: TREG_ORG_ID, CONNECTIONS_PROVIDER (unset; "off" keeps connected accounts off), UPLOAD_POST_RPM (150),
-//   UPLOAD_POST_ALERT_REMAINING (5), UPLOAD_POST_BRAND_LOGO_URL, UPLOAD_POST_CONNECT_TITLE,
+//   UPLOAD_POST_ALERT_REMAINING (5), UPLOAD_POST_MAX_PROFILES_PER_USER (3: businesses with social accounts per user,
+//   one Upload-Post profile each), UPLOAD_POST_NEW_PROFILES_PER_DAY (20), UPLOAD_POST_RECLAIM_DAYS (7),
+//   UPLOAD_POST_X_LINKS, UPLOAD_POST_X_LINK_POSTS_PER_CUSTOMER (5), UPLOAD_POST_BRAND_LOGO_URL, UPLOAD_POST_CONNECT_TITLE,
 //   UPLOAD_POST_CONNECT_DESCRIPTION, UPLOAD_POST_BACK_BUTTON_TEXT, ZERNIO_RPM (60), ZERNIO_BRAND_NAME,
-//   ZERNIO_BRAND_LOGO_URL, ZERNIO_BRAND_COLOR, NANGO_INTEGRATIONS (JSON, booking tools and CRMs only), GSC_APP_PROPERTY,
+//   ZERNIO_BRAND_LOGO_URL, ZERNIO_BRAND_COLOR, NANGO_INTEGRATIONS (JSON, booking tools and CRMs only), GSC_APP_PROPERTY
+//   (the app's own address; also where the back button on Upload-Post's connect page goes),
 //   GSC_APP_VERIFICATION_FILE; for tests UPLOAD_POST_BASE_URL, ZERNIO_BASE_URL, NANGO_BASE_URL, TREG_BASE_URL. Keys are never printed: the startup notes name what's missing.
 
 import http from 'node:http';

@@ -1,7 +1,7 @@
 # Connected accounts, posting, analytics and per-customer usage: owner setup
 
-What this covers: each customer connects their own Facebook Page, Instagram, LinkedIn, TikTok, X and YouTube
-accounts through **Upload-Post** and their ad accounts (Meta, Google, LinkedIn, TikTok, Pinterest, Reddit,
+What this covers: each customer connects each of their businesses' own Facebook Page, Instagram, LinkedIn, TikTok, X
+and YouTube accounts through **Upload-Post** (one Upload-Post profile per business) and their ad accounts (Meta, Google, LinkedIn, TikTok, Pinterest, Reddit,
 Microsoft) through **Zernio**; both run on their own approved platform apps and hold the logins; the app posts for
 them once they confirm; the Social, Ads, SEO page and Email Analytics tabs; the Marketing hub's **Update** button; "Submit to
 Google" for the SEO page; and each customer's usage, caps and a CSV to bill from (through **treg**).
@@ -10,7 +10,7 @@ Who does what:
 
 | Service | Used for |
 |---|---|
-| **Upload-Post** (Advanced, white-label) | Customers' social accounts (one profile each, of 75), posting, post status, their own social stats |
+| **Upload-Post** (Advanced, white-label) | Customers' social accounts (one profile per business, of 75), posting, post status, their own social stats |
 | **Zernio** (formerly Late) | Ads only: customers' ad accounts and their ad results (read only; campaign changes later) |
 | **treg** | Public social data, competitor ads, Google rank and Maps position, Search Console (on your own team connection), per-customer usage, caps and billing |
 | **Omnisend** | Email stats |
@@ -35,7 +35,7 @@ name only.
 
 | Secret | What it's for | Notes |
 |---|---|---|
-| `CUSTOMER_TAG_SECRET` | Each customer's id (`cust_…`) for usage, their Upload-Post profile name (`ylb_…`) and their Zernio profile's `externalId` | 32+ random bytes. **Never change it**: each customer's history and vendor profiles would split in two. |
+| `CUSTOMER_TAG_SECRET` | Each customer's id (`cust_…`) for usage, their businesses' Upload-Post profile names (`ylb_…_…`) and their Zernio profile's `externalId` | 32+ random bytes. **Never change it**: each customer's history would split in two, and businesses connected after the change would get new profiles (names already made are stored and kept). |
 | `UPLOAD_POST_API_KEY` | **Turns social accounts, posting and social stats on** (Upload-Post) | Your Upload-Post API key, from app.upload-post.com → API keys. Shown masked to its last 4 characters. |
 | `UPLOAD_POST_WEBHOOK_SECRET` | Checks that account and post news really comes from Upload-Post | The `whsec_…` secret Upload-Post issues (§3, step 4). |
 | `UPLOAD_POST_WEBHOOK_SECRET_PREVIOUS` | Only while rotating that secret | Upload-Post's rotation is immediate: keep the old one here until deliveries use the new one. |
@@ -56,21 +56,22 @@ Plain settings (not secret; Replit Secrets or env):
 | `CONNECTIONS_PROVIDER` | unset | `off` keeps social and ad accounts off even with their keys set. |
 | `UPLOAD_POST_RPM` | `150` | The app's own limit on Upload-Post calls per minute (plus 2 per profile; the Advanced plan allows 200 plus 2 per profile, and 1,000 per 10 minutes plus 10 per profile). |
 | `UPLOAD_POST_ALERT_REMAINING` | `5` | How many free profile slots (of the plan's 75) are left when the owner is alerted. |
+| `UPLOAD_POST_MAX_PROFILES_PER_USER` | `3` | How many of one user's businesses can have social accounts (one Upload-Post profile each), so one user making businesses can't use up the plan's 75. Past it the customer reads "You can connect social accounts for up to 3 businesses…" and you get an alert naming the customer. Raise it for everyone here. |
 | `UPLOAD_POST_NEW_PROFILES_PER_DAY` | `20` | New Upload-Post profiles a day at most (a burst of throwaway sign-ups can't fill the plan); past it customers read "temporarily full" and you get an alert. |
-| `UPLOAD_POST_RECLAIM_DAYS` | `7` | A customer's profile with nothing connected for this many days goes back to the plan (it's made again on their next Connect). |
+| `UPLOAD_POST_RECLAIM_DAYS` | `7` | A business's profile with nothing connected for this many days goes back to the plan (it's made again, with the same name, on that business's next Connect). |
 | `UPLOAD_POST_X_LINKS` | unset | `on` once you've bought Upload-Post's X Links add-on: links stay in X posts. Unset, the app tells customers links are taken out on X. |
 | `UPLOAD_POST_X_LINK_POSTS_PER_CUSTOMER` | `5` | With X Links on: each customer's X posts with a link a month (the add-on's 50 are shared by everyone). |
 | `UPLOAD_POST_BRAND_LOGO_URL` | — | An https link to your logo for Upload-Post's hosted connect page. |
 | `UPLOAD_POST_CONNECT_TITLE` | `Connect your social accounts` | That page's title. |
 | `UPLOAD_POST_CONNECT_DESCRIPTION` | a short default | That page's description. |
-| `UPLOAD_POST_BACK_BUTTON_TEXT` | `Back to Yourlocalbusiness` | That page's back button (it opens Settings → Connected accounts: `/?settings=accounts#workspace-settings`). |
+| `UPLOAD_POST_BACK_BUTTON_TEXT` | `Back to Yourlocalbusiness` | That page's back button. It opens Settings → Connected accounts (`/?settings=accounts#workspace-settings`) on the host of `GSC_APP_PROPERTY` (default `https://yourlocalbusiness.replit.app`). |
 | `UPLOAD_POST_BASE_URL` | — | Tests and the mock only (`node server/test/mock-uploadpost.mjs`). |
 | `ZERNIO_RPM` | `60` | The app's own limit on Zernio calls per minute. Zernio allows 60 with up to 2 connected accounts and 600 from 3; raise this to `600` then. |
-| `ZERNIO_BRAND_NAME` | `Yourlocalbusiness` | The name on Zernio's connect screen ("Yourlocalbusiness wants to connect to your Instagram"). |
+| `ZERNIO_BRAND_NAME` | `Yourlocalbusiness` | The name on Zernio's ads connect screen ("Yourlocalbusiness wants to connect to your Meta Ads account"). |
 | `ZERNIO_BRAND_LOGO_URL` | — | An https link to a square logo for that screen. |
 | `ZERNIO_BRAND_COLOR` | — | Its button colour, `#RRGGBB`. |
 | `NANGO_INTEGRATIONS` | — | Only with Nango (§3b): JSON of the integrations customers may connect. |
-| `GSC_APP_PROPERTY` | — | `https://yourlocalbusiness.replit.app/` once that Search Console property is verified. |
+| `GSC_APP_PROPERTY` | — | `https://yourlocalbusiness.replit.app/` once that Search Console property is verified. Its host is also the app's own address for the back button on Upload-Post's connect page (unset: `https://yourlocalbusiness.replit.app`), so set it to the app's real address if that ever changes. |
 | `GSC_APP_VERIFICATION_FILE` | — | Google's HTML verification file name, e.g. `google1a2b3c4d5e6f7a8b.html`. |
 
 The Supabase and Omnisend Secrets you already have are unchanged.
@@ -87,24 +88,40 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices. Their ad accounts are disconnected at Zernio first (every account in their Zernio profile, then the
-profile). Their Upload-Post profile (with every social connection in it) is deleted once the account itself is
-gone, so a deletion that stops half way loses no connection; if that delete fails, the daily check finishes it.
+profile). Their Upload-Post profiles (one per business, with every social connection in them) are deleted once the
+account itself is gone, so a deletion that stops half way loses no connection; if a delete fails, the daily check
+finishes it. Deleting one business in the app deletes that business's profile right away.
 
 ## 3. Social accounts and posting (Upload-Post)
 
 Upload-Post (Advanced plan, white-label, 75 profiles) holds each customer's social logins on its own approved
-apps, so **no Meta, LinkedIn, TikTok, X or Google app review is needed**. Each customer gets one Upload-Post
-**profile**, made the first time they press Connect, named `ylb_` + the 24 hex characters of their customer id
-(never an email or a user id; Upload-Post profile names can't be changed). A profile holds one account per
-network, so Instagram, TikTok, X and YouTube are one account per customer, shared by their businesses; for
-Facebook and LinkedIn each business picks its Page. Facebook groups stay with Manus.
+apps, so **no Meta, LinkedIn, TikTok, X or Google app review is needed**. A profile holds one account per network,
+so **each business (each project in the app) gets its own Upload-Post profile** and connects its own Facebook Page,
+Instagram, TikTok, X, YouTube and LinkedIn. A business's profile is made the first time someone presses Connect for
+that business (never just because a business was made), so only businesses with social accounts use one of
+the plan's 75 profiles. Facebook groups stay with Manus.
+
+- **Profile names**: `ylb_` + the 24 hex characters of the customer id + `_` + 8 hex characters of a keyed hash
+  (HMAC-SHA256 with `CUSTOMER_TAG_SECRET`) of the user and the business, for example
+  `ylb_3f2a9c4e8d1b4c6f9a2e1b7d_5c0e19a2` (37 characters: letters, digits and `_`, which Upload-Post allows). It
+  never contains an email, a user id or the business's own id. Upload-Post names can't be changed, so the name is
+  stored the first time and never computed again. Webhooks find their customer from the first part and their
+  business from the stored names, so each event reaches exactly one customer and one business.
+- **Business slots**: each user can have social accounts on at most `UPLOAD_POST_MAX_PROFILES_PER_USER` businesses
+  (default 3), so one user making businesses can't use up the plan. The slot is reserved before Upload-Post is
+  asked, so two Connect clicks at once never make two profiles or pass the limit. Settings → Connected accounts
+  shows each user how many of their slots are used.
+- **Deleting a business** (Settings → Projects & data, the assistant, a cancelled setup, a workspace reset or a
+  backup import) disconnects its social accounts and deletes its profile, freeing the slot; the delete confirm says
+  so. If the app couldn't reach the server, the daily check deletes the profile once the business has been gone
+  from the account for 2 days, and the user can also free a deleted business's slot on Connected accounts.
 
 **Set it up once**
 1. Subscribe to Upload-Post's **Advanced** plan, billed **yearly** ($1,411 a year, about $118 a month; $147 month
-   to month). It includes 75 profiles, white label and unlimited uploads. More profiles: the +25 ($650 a year or
-   $65 a month) or +50 ($1,150 a year or $115 a month) add-on; they don't stack, so past 125 profiles you need a
-   bigger plan or a second account. There is **no sandbox**: every test post is real, so make your own test
-   profile with test social accounts for the first live check. On it, check once: a LinkedIn post with
+   to month). It includes 75 profiles (one per business with social accounts), white label and unlimited uploads.
+   More profiles: the +25 ($65 a month or $650 a year) or +50 ($115 a month or $1,150 a year) add-on; they don't
+   stack, so past 125 profiles you need a bigger plan or a second account. There is **no sandbox**: every test post
+   is real, so make your own test profile with test social accounts for the first live check. On it, check once: a LinkedIn post with
    `(brackets)` and a `#hashtag` shows them as written (the app sends plain text), a photo and a video post go
    out (Upload-Post fetches them from links ending in `.jpg` / `.mp4`), and an X post with blank lines stays one
    post (the app counts each line break as 2, since the upload sends it as CR LF).
@@ -122,7 +139,7 @@ Facebook and LinkedIn each business picks its Page. Facebook groups stay with Ma
    deliveries and ones more than 5 minutes old, and applies each event once. It answers each delivery at once and
    works on it afterwards (Upload-Post waits 10 seconds, and pauses deliveries for 30 minutes after 5 failures).
    Upload-Post sends each webhook only once and never retries, so the app also reads post status itself, reads a
-   customer's profile back while a connect is waiting (and on Check and Connect), and once a day compares every
+   business's profile back while a connect is waiting (and on Check and Connect), and once a day compares every
    profile's accounts with what it has.
    Rotating: Upload-Post's new secret works at once, so put the old one in `UPLOAD_POST_WEBHOOK_SECRET_PREVIOUS`
    for the switchover, then remove it.
@@ -144,35 +161,40 @@ Facebook and LinkedIn each business picks its Page. Facebook groups stay with Ma
 
 **What the app does with Upload-Post**
 - **Connect**: Settings → Connected accounts → Social accounts → Connect opens Upload-Post's hosted page (always
-  on app.upload-post.com; no custom domain) for that one network, with your logo and text. A fresh link is made
-  for every press (Upload-Post's links last 48 hours; the app never stores them). Customers come back with its
-  back button to Settings → Connected accounts. The app sees the new account from the webhook, and also reads the
-  profile back while the row waits (at most every 30 seconds), when they press Check, and before making another
-  link, so a lost webhook never leaves them stuck. **Reconnect** shows when a network asks the customer to sign in
-  again; **Disconnect** removes that network from their profile.
-- **Facebook Page and LinkedIn page**: each business picks its own (a business that hasn't picked is asked to;
-  LinkedIn posts as the person until then). The hosted page also lets the customer pin one Page for the whole
-  profile, and Upload-Post's pin wins over the Page each post names: the app reads the pin and shows it, and when a
-  business picks another Page in the app, the pin is cleared (the businesses that never picked keep the pinned
-  Page).
-- **Post**: one upload per post, with the job id as `request_id`, `Idempotency-Key` and `external_id`. Photos and
+  on app.upload-post.com; no custom domain) for that one network and the business on screen, with your logo and
+  text. A fresh link is made for every press (Upload-Post's links last 48 hours; the app never stores them).
+  Customers come back with its back button to Settings → Connected accounts. The app sees the new account from the
+  webhook, and also reads the business's profile back while the row waits (at most every 30 seconds), when they
+  press Check, and before making another link, so a lost webhook never leaves them stuck. **Reconnect** shows when
+  a network asks the customer to sign in again; **Disconnect** removes that network from that business only.
+- **Facebook Page and LinkedIn page**: each business picks its own, on its own profile (a business with several
+  Pages that hasn't picked is asked to; LinkedIn posts as the person until then). The hosted page also lets the
+  customer pin a Page on the business's profile, and Upload-Post's pin wins over the Page each post names: the app
+  reads the pin and shows it, and when the business picks another Page in the app, the pin is cleared.
+- **Post**: one upload per post, through the profile of the post's business, with the job id as `request_id`,
+  `Idempotency-Key` and `external_id`. Photos and
   videos go as the app's short-lived link. The network's own result decides; videos finish in the background and
   the app reads their status by the job id. A timeout or a 5xx reads "It may have been posted - check before
   trying again": **Check again** reads the status by the job id and never sends it again. A post Upload-Post
   lists as still queued, or as failed-but-retrying, keeps waiting; a TikTok that failed with TikTok's internal
   error (which TikTok sometimes publishes after moderation) reads "may have been posted". A TikTok video keeps the
-  account's own audience (none is sent); a photo needs one, so it goes public, or to followers on a private
-  account. A TikTok that lands in the account's drafts reads "Sent to your TikTok drafts", also when only the
-  webhook said it was done. LinkedIn gets plain text and plain `#hashtags`.
-- **Stats**: each connected account's followers, reach, views, engagement and its daily series (reach on
+  account's own audience (none is sent); a photo needs one (read from that business's TikTok), so it goes public,
+  or to followers on a private account. A TikTok that lands in the account's drafts reads "Sent to your TikTok
+  drafts", also when only the webhook said it was done. LinkedIn gets plain text and plain `#hashtags`.
+  A try that failed and that Upload-Post then posted after all (its own retry) reads "Posted"; if the customer had
+  posted it again in the meantime, the old try records "posted after all" (it stays out of the one-live-post rule)
+  and the post says it may now appear twice, so the customer can delete one. Nothing is ever sent again.
+- **Stats**: per business, from its own profile: each connected account's followers, reach, views, engagement and its daily series (reach on
   Facebook, Instagram and LinkedIn; views on TikTok and YouTube; impressions on X), at most 80 reads per
   5 minutes for the whole app. Top posts come from the business's public handle (treg), as for networks that
   aren't connected. A LinkedIn personal profile has no stats at Upload-Post, so it shows public data.
 - **Usage**: each post, "Check again" read, stats read and X link post is a row in the customer's usage ledger
-  (vendor `uploadpost`, no cost; profile and connect reads aren't), and once a month each customer with a profile
-  gets an estimated row ($147 / 75 ≈ $1.96 a profile-month, prorated; a customer deleted mid-month gets theirs
-  then). A month counts as done only when every row was written, so a failed write is finished the next day.
-  The owner's Customer usage page shows social and ad account counts and profiles used out of 75.
+  (vendor `uploadpost`, no cost, tagged with the business; profile and connect reads aren't), and once a month each
+  business profile gets an estimated row on its customer, tagged with the business (`project_id`): $147 / 75 ≈
+  $1.96 a profile-month, prorated (a business deleted mid-month is charged up to then; a customer deleted mid-month
+  gets theirs then). A customer's totals and CSV line add up all their businesses. A month counts as done only when
+  every row was written, so a failed write is finished the next day. The owner's Customer usage page shows profiles
+  used out of 75, and per customer their profiles (businesses), social and ad account counts.
 - **Team-level problems never reach customers**: our key, the profile cap, a blocked profile, the scheduled-post
   cap and the shared X and analytics budgets show customers a plain "temporarily unavailable, we've been notified"
   and leave an owner alert (one per kind in `uploadpost:alerts`; Customer usage shows the most serious, a key or
@@ -180,14 +202,20 @@ Facebook and LinkedIn each business picks its Page. Facebook groups stay with Ma
   answers some reads with 401 `facebook_reauth_required`) is that customer's Reconnect, never a key alert.
 
 **Limits to know**
-- **Profiles**: 75 on Advanced, one per customer who has pressed Connect (customers who never connect a social
-  account use none). With 5 or fewer left (`UPLOAD_POST_ALERT_REMAINING`) you get an alert; at 0 new customers
-  read "Social connections are temporarily full. We've been notified" until you add profiles. At most
-  `UPLOAD_POST_NEW_PROFILES_PER_DAY` new profiles are made a day, and a profile with nothing connected for
-  `UPLOAD_POST_RECLAIM_DAYS` goes back to the plan. Deleting an account deletes its profile. The daily check
-  deletes only a `ylb_` profile that account deletion marked and whose customer is gone (at most 10 a day); it
-  never deletes one because its customer looks absent (a doc it can't read, an empty database, another copy of the
-  app on the same key): it tells you how many such profiles it saw instead. Profiles with other names are never
+- **Profiles**: 75 on Advanced, **one per business** that has pressed Connect (businesses that never connect a
+  social account use none). More: the +25 add-on ($65 a month, or $650 a year) or the +50 add-on ($115 a month, or
+  $1,150 a year); **they don't stack**, so past 125 you need a bigger plan or a second account. Each user can use at
+  most `UPLOAD_POST_MAX_PROFILES_PER_USER` (default 3) of them. With 5 or fewer left (`UPLOAD_POST_ALERT_REMAINING`)
+  you get an alert; at 0, customers connecting a new business read "Social connections are temporarily full. We've
+  been notified" until you add profiles. At most `UPLOAD_POST_NEW_PROFILES_PER_DAY` new profiles are made a day, and
+  a business's profile with nothing connected for `UPLOAD_POST_RECLAIM_DAYS` goes back to the plan. Deleting a
+  business deletes its profile; deleting an account deletes all of them. The daily check (at most 10 deletions a
+  day) only touches `ylb_` profiles it can map to one customer and one of their businesses, or that account deletion
+  marked: it deletes a marked profile whose customer is gone, a business's profile whose delete failed, one whose
+  business has been gone from the account for 2 days (only when the account's other businesses are in this
+  database), and the one-per-customer profile of an earlier build of this branch (development data). It never
+  deletes one because its customer looks absent (a doc it can't read, an empty database, another copy of the app
+  on the same key): it tells you how many such profiles it saw instead. Profiles with other names are never
   touched.
 - **API rate**: 200 calls a minute and 1,000 per 10 minutes for the account, plus 2 a minute and 10 per 10 minutes
   for each profile. The app keeps itself under `UPLOAD_POST_RPM` (150) plus the per-profile allowance, and waits
@@ -221,8 +249,9 @@ with `externalId` = their customer id (`cust_…`, never an email). Zernio accou
    event once.
 5. **White-label the connect screen** (optional, recommended): either set `ZERNIO_BRAND_NAME`,
    `ZERNIO_BRAND_LOGO_URL` and `ZERNIO_BRAND_COLOR` (sent on every connect link), or save your brand once in the
-   Zernio dashboard's welcome-screen settings. Customers then see "Yourlocalbusiness wants to connect to your
-   Instagram" before the network's own sign-in. The network's own consent screen still names Zernio's app.
+   Zernio dashboard's welcome-screen settings. Customers then see "Yourlocalbusiness wants to connect to your Meta
+   Ads account" (or Google Ads, LinkedIn Ads, …) before the network's own sign-in. The network's own consent screen
+   still names Zernio's app.
 6. Turn on the **ads add-on** in Zernio if customers will connect ad accounts.
 7. Run the migration in §2, redeploy, and check the startup notes say "Ad accounts: on (Zernio)".
 
@@ -338,7 +367,8 @@ never count). Until the treg wrapper (section 5) is in the app, these routes ans
 2. Choose **HTML file** verification. Put the file name Google gives you (for example
    `google1a2b3c4d5e6f7a8b.html`) in the plain setting `GSC_APP_VERIFICATION_FILE`, redeploy, then press
    **Verify** in Google. The app answers `https://yourlocalbusiness.replit.app/<that file>` itself.
-3. Set `GSC_APP_PROPERTY` to `https://yourlocalbusiness.replit.app/`.
+3. Set `GSC_APP_PROPERTY` to `https://yourlocalbusiness.replit.app/`. Its host is also where the back button on
+   Upload-Post's connect page takes customers (§3); unset, that is `https://yourlocalbusiness.replit.app`.
 4. Connect Search Console to your treg team with the **write** capability (`treg connections connect --provider
    google-search-console`), pick the property, and check that `google-search-console.sites` lists it as
    `siteOwner`.
@@ -376,15 +406,16 @@ forced to reconnect (drafts keep working), and only the Email Analytics tab asks
 
 One screen with two sections:
 
-- **Social accounts** (Upload-Post): Facebook Page, Instagram, LinkedIn, TikTok, X, YouTube, and Pinterest as
-  "Coming soon". Each row shows its state and one action: **Connect** (opens the hosted sign-in page in a new
-  tab; the row reads "Waiting for Instagram…" with **Check** until the network answers, and "That didn't finish.
-  Try again." after 30 minutes), **Reconnect** when the network asks to sign in again, and a ⋯ menu on connected
-  rows (choose the Page for this business, check the connection, **Disconnect**). The "How connecting works" tip
-  says plainly that the sign-in page is run by Upload-Post, so its name shows there and on the network's
-  permission screen; one account per network serves all of a customer's businesses, and for Facebook and
-  LinkedIn each business picks its Page. A Page picked on the hosted page applies to every business; changing it
-  means reconnecting.
+- **Social accounts** (Upload-Post), for the business on screen: "Each business connects its own accounts. These
+  are <business>'s." Switching business shows that business's accounts. Facebook Page, Instagram, LinkedIn,
+  TikTok, X, YouTube, and Pinterest as "Coming soon". Each row shows its state and one action: **Connect** (opens
+  the hosted sign-in page in a new tab; the row reads "Waiting for Instagram…" with **Check** until the network
+  answers, and "That didn't finish. Try again." after 30 minutes), **Reconnect** when the network asks to sign in
+  again, and a ⋯ menu on connected rows (choose the Page for this business, check the connection, **Disconnect**,
+  which stops only this business using it). **Business slots: 2 of 3 used** says how many of the user's businesses
+  have social accounts; with all in use, a business without one is told to delete a business it no longer uses,
+  and a slot still held by a deleted business shows **Free it**. The "How connecting works" tip says plainly that
+  the sign-in page is run by Upload-Post, so its name shows there and on the network's permission screen.
 - **Ad accounts** (Zernio): Google Ads, Meta Ads, LinkedIn Ads, TikTok Ads, Pinterest Ads, Reddit Ads, Microsoft
   Ads, and X Ads as "Coming soon". Read only: "The app only reads them and never changes your ads or spends
   money."
@@ -395,6 +426,8 @@ One screen with two sections:
   that's off and the webhook address to register. Customers never see it.
 - Team-level problems (our key, the profile cap, plan limits) show customers only "temporarily unavailable,
   we've been notified"; the owner sees the reason on Customer usage.
+- Deleting a business (Settings → Projects & data) says "Its connected social accounts are disconnected too, which
+  frees one of your business slots" when it has any, then disconnects them.
 - **Other integrations** appears only once Nango is set up and lists at least one integration (§3b).
 
 ### Posting buttons and post status
@@ -407,6 +440,8 @@ Every post shows one posting button, by its state:
 - **Posting…** while the server sends it (a video can take up to 10 minutes), then **Posted** with **View post**.
 - **In TikTok drafts** when TikTok put the post in the account's drafts: "Sent to your TikTok drafts. Open TikTok
   to publish it." It is never sent again.
+- **May be on Facebook twice** when a try that didn't go out was posted by the network after all while the customer
+  had posted it again: check the network and delete one. It is never sent again.
 - **Try again** only when the network refused the post (nothing went out), with the reason in plain words (for
   example "This looks the same as a recent post on this network", "This account has reached the network's posting
   limit for now", "The connection to this account needs to be renewed"). It opens a new confirm.
@@ -435,10 +470,12 @@ by older versions show **Sent with Manus earlier**, read-only. There is no bulk 
 ### Customer usage (owner only)
 
 Settings → AI keys → **Billing (owner)** opens **Customer usage**: per customer, analytics cost (treg) today and
-over 30 days, analytics calls, **Social (Upload-Post)** (social accounts connected now, Upload-Post calls and the
-estimated profile cost) and **Ads (Zernio)** (ad accounts connected now and their estimate), caps (edit, block,
-reset) and status. Above the table: **Upload-Post profiles** used of the plan's limit and, when there is one,
-Upload-Post's last alert in plain words ("profiles are running low", "the API key was refused", …). Estimates
+over 30 days, analytics calls, **Social (Upload-Post)** (social accounts connected now across their businesses,
+their profiles (one per business), Upload-Post calls and the estimated profile cost) and **Ads (Zernio)** (ad
+accounts connected now and their estimate), caps (edit, block, reset) and status. Above the table: **Upload-Post
+profiles** used of the plan's limit (its tip gives each customer's limit of businesses) and, when there is one,
+Upload-Post's last alert in plain words ("profiles are running low", "the API key was refused", "a customer reached
+their limit of businesses" with which customer, …). Estimates
 never count toward a cap. "Check against treg" and the monthly CSV are unchanged. It tracks usage only; it
 charges nothing.
 
@@ -456,7 +493,7 @@ The artifact build shows "Connected accounts and live analytics need the full ap
 - Per-customer usage, caps and the CSV.
 
 **As soon as `UPLOAD_POST_API_KEY`, `UPLOAD_POST_WEBHOOK_SECRET` and `MEDIA_URL_SECRET` are set** (and the §2
-migrations run): customers connect their social accounts, post from the app after a confirm, and see their own
-stats. **With `ZERNIO_API_KEY` and `ZERNIO_WEBHOOK_SECRET`**: they connect ad accounts and see their ad results.
+migrations run): customers connect each business's social accounts, post from the app after a confirm, and see
+each business's own stats. **With `ZERNIO_API_KEY` and `ZERNIO_WEBHOOK_SECRET`**: they connect ad accounts and see their ad results.
 Each side works without the other. No network approvals are needed: Upload-Post's apps (social) and Zernio's
 apps (ads) are already approved.
