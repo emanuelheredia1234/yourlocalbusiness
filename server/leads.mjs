@@ -71,6 +71,12 @@ const LEGACY_LEAD_COLUMNS = 'id,page_id,slug,name,email,phone,message,time,creat
  * (src/ai/agents/importHtml.ts mirrors this). Each is bounded before any pattern; over its limit it's refused.
  */
 export const LEAD_PAYLOAD_MAX = Object.freeze({ request: 200, service: 200, result: 200, score: 16, answers: 1500, inputs: 1500, outputs: 1500 });
+/**
+ * The whole payload's size in UTF-8 bytes, as JSON. The table caps it at 8192 bytes (page_leads_payload_check:
+ * pg_column_size); the limits above are in characters, and text in other scripts takes up to 4 bytes each, so a
+ * payload within them can still be too big. Over this it's "too long" (the visitor can shorten it), never a 503.
+ */
+export const LEAD_PAYLOAD_BYTES = 7500;
 /** Payload fields kept with their line breaks. */
 const MULTI_LINE = new Set(['answers', 'inputs', 'outputs']);
 const SCORE = /^-?\d{1,6}(\.\d{1,2})?$/;
@@ -297,6 +303,8 @@ export function readLeadExtras(form) {
     if (key === 'score' && !SCORE.test(v)) return { problem: 'badField' };
     payload[key] = v;
   }
+  // room for the magnet's id the server may add (22 characters and its key)
+  if (Buffer.byteLength(JSON.stringify(payload), 'utf8') > LEAD_PAYLOAD_BYTES - 40) return { problem: 'tooLong' };
   return { extras: { kind, consent, magnet, payload } };
 }
 
@@ -504,10 +512,10 @@ export function createLeads({
   const retryAfter = (ms) => ({ 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) });
 
   /** A lead magnet sent with a form, only when it's the page owner's (anything else is ignored, without a word). */
-  async function ownMagnet(id, userId) {
+  async function ownMagnet(id, userId, client) {
     if (!id) return null;
     try {
-      const m = await findMagnet(id);
+      const m = await findMagnet(id, client);
       return m && m.user_id === userId && m.id === id ? m : null;
     } catch {
       return null;
@@ -571,7 +579,10 @@ export function createLeads({
       if (perPage.full(pageKey)) return answer('pageLimit', retryAfter(perPage.wait(pageKey)));
       perPage.hit(pageKey);
       const seo = page.kind === 'seo';
-      const mine = await ownMagnet(magnet, page.user_id);
+      // looked up on the visitor's own budget, so made-up ids from a few addresses can't use up everyone's
+      const mine = await ownMagnet(magnet, page.user_id, visitor);
+      // a form that hands out the owner's download asks for an email, as its gate does (a phone alone gets no file)
+      if (mine && !fields.email) return answer('noEmail');
       const projectId = typeof page.project_id === 'string' && PROJECT_ID_RE.test(page.project_id) ? page.project_id : seo ? page.page_id.slice(4) : null;
       try {
         await keepLead({

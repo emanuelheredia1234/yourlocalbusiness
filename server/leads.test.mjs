@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createAuth } from './auth.mjs';
 import { createPages } from './pages.mjs';
-import { LEAD_PAYLOAD_MAX, hasLeadForm, leadLimitsFromEnv, readLeadExtras, readLeadFields, visitorKey, visitorOf } from './leads.mjs';
+import { LEAD_PAYLOAD_BYTES, LEAD_PAYLOAD_MAX, hasLeadForm, leadLimitsFromEnv, readLeadExtras, readLeadFields, visitorKey, visitorOf } from './leads.mjs';
 import { createMockSupabase } from './test/mock-supabase.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -700,6 +700,19 @@ describe('the parts on their own', () => {
     expect(read({ magnet: '../'.repeat(8) }).extras.magnet).toBeNull();
     expect(read({ answers: 'a\r\nb' }).extras.payload.answers).toBe('a\nb');
     expect(read({ outputs: ' \t'.repeat(4000) }).problem).toBe('tooLong');
+  });
+
+  it('a payload within each field’s characters but over the table’s bytes is “too long”, not a failed insert', () => {
+    const read = (fields) => readLeadExtras(new URLSearchParams(fields));
+    // 3 bytes a character: each field within its 1500 characters, the whole over 8192 bytes (page_leads_payload_check)
+    const wide = '日'.repeat(1400);
+    expect(read({ answers: wide }).extras.payload.answers).toBe(wide);
+    expect(read({ answers: wide, inputs: wide }).problem).toBe('tooLong');
+    expect(read({ answers: wide, inputs: '✓ done\n'.repeat(180), outputs: '💡'.repeat(600) }).problem).toBe('tooLong');
+    // what passes always fits, with room for the magnet's id
+    const ok = read({ answers: '日'.repeat(1200), inputs: 'a'.repeat(1500), outputs: 'b'.repeat(1500), magnet: 'A'.repeat(22) });
+    expect(ok.extras).toBeTruthy();
+    expect(Buffer.byteLength(JSON.stringify({ ...ok.extras.payload, magnet: 'A'.repeat(22) }))).toBeLessThanOrEqual(LEAD_PAYLOAD_BYTES);
   });
 
   it('tells visitors apart by the address the host’s proxy saw', () => {

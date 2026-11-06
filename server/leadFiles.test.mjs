@@ -286,10 +286,25 @@ describe('/m/<id> for visitors', () => {
     expect(rowsOf('lead_files').find((x) => x.id === open.id).last_download_at).toEqual(expect.any(String));
   });
 
-  it('an outside link redirects there', async () => {
+  it('an outside link on the app’s host is a page that names where it goes, never a redirect', async () => {
+    const before = downloadsOf(link.id);
     const r = await visit(`/m/${link.id}`);
-    expect(r.status).toBe(302);
-    expect(r.headers.location).toBe('https://example.com/free');
+    expect(r.status).toBe(200);
+    expect(r.headers.location).toBeUndefined();
+    expect(r.headers['content-security-policy']).toBe("default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    expect(r.text).not.toContain('<script');
+    expect(r.text).toContain('<strong>example.com</strong>');
+    expect(r.text).toContain('<a href="https://example.com/free" rel="noopener noreferrer">Continue to example.com</a>');
+    expect(downloadsOf(link.id)).toBe(before + 1);
+    expect((await visit(`/m/${link.id}`, { method: 'HEAD' })).status).toBe(200);
+    expect(downloadsOf(link.id)).toBe(before + 1);
+    // behind its gate too: the sign-up, then the same page (no 303 to the outside site)
+    const gatedLink = (await create(alice, { kind: 'url', url: 'https://evil.example/login', title: 'Sign in' })).file;
+    const g = await postGate(gatedLink.id, { email: 'ann@example.com' });
+    expect(g.status).toBe(200);
+    expect(g.headers.location).toBeUndefined();
+    expect(g.text).toContain('Continue to evil.example');
+    expect(rowsOf('page_leads').at(-1)).toMatchObject({ page_id: `magnet:${gatedLink.id}`, email: 'ann@example.com' });
   });
 
   it('with a gate: a page with no script, then a sign-up kept as a magnet lead and the file', async () => {
@@ -380,6 +395,31 @@ describe('/m/<id> for visitors', () => {
     // a bot (the hidden field) gets no link either
     r = await visit(`/${slug}/lead`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form({ email: 'bot@example.com', magnet: gated.id, website: 'x' }) });
     expect(r.text).not.toContain('/m/');
+    // a phone alone doesn't get past the gate: "add your email", nothing kept, no ticket
+    const leads = rowsOf('page_leads').length;
+    r = await visit(`/${slug}/lead`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: form({ phone: '5555555555', magnet: gated.id }) });
+    expect(r.status).toBe(400);
+    expect(JSON.parse(r.text)).toEqual({ ok: false, title: 'Add your email', text: 'Go back and add your email, then send it again.' });
+    expect(rowsOf('page_leads').length).toBe(leads);
+    // a phone alone with another account's (or no) download is a plain lead, as before
+    r = await visit(`/${slug}/lead`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }, body: form({ phone: '5555555555', magnet: bobs.id }) });
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.text).download).toBeUndefined();
+  });
+
+  it('made-up download ids from one visitor don’t use up the lookups everyone else’s sign-ups need', async () => {
+    const slug = 'alice-budget-page';
+    const fresh = (await create(alice, { title: 'Fresh guide' })).file;
+    await upload(alice, fresh.id, PDF);
+    const html = `<!doctype html><form method="post" action="/${slug}/lead"><input name="email"><input type="hidden" name="magnet" value="${fresh.id}"><input name="website"></form>`;
+    expect((await api(`/api/pages/${encodeURIComponent('artifact:budget1')}`, { who: alice, method: 'PUT', body: { kind: 'artifact', slug, title: 'Budget', html, images: [], projectId: 'biz1' } })).status).toBe(200);
+    const post = (fields, ip) => visit(`/${slug}/lead`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', 'x-forwarded-for': ip }, body: form(fields) });
+    const made = (i) => `x${String(i).padStart(21, '0')}`;
+    for (let i = 0; i < 65; i++) expect((await post({ email: 'bot@example.com', magnet: made(i) }, '198.51.100.66')).status).toBe(200);
+    // a real visitor still gets the download they signed up for
+    const r = await post({ email: 'ann@example.com', magnet: fresh.id }, '198.51.100.67');
+    expect(JSON.parse(r.text).download).toMatch(new RegExp(`^/m/${fresh.id}\\?k=`));
+    expect(rowsOf('page_leads').at(-1).payload).toMatchObject({ magnet: fresh.id });
   });
 
   it('on a domain, only its owner’s files', async () => {
@@ -387,6 +427,10 @@ describe('/m/<id> for visitors', () => {
     const bobs = (await create(bob, { gate: false })).file;
     await upload(bob, bobs.id, PDF);
     expect((await visit(`/m/${open.id}`, { host: 'shop.example.com' })).status).toBe(302);
+    // an outside link: a redirect on the owner's own verified domain
+    const away = await visit(`/m/${link.id}`, { host: 'shop.example.com' });
+    expect(away.status).toBe(302);
+    expect(away.headers.location).toBe('https://example.com/free');
     const r = await visit(`/m/${bobs.id}`, { host: 'shop.example.com' });
     expect(r.status).toBe(404);
     expect(r.text.toLowerCase()).not.toContain('yourlocalbusiness');
@@ -421,6 +465,21 @@ describe('limits and plans', () => {
       expect((await visit(`/m/${file.id}`, { base: t.base, headers: { 'x-forwarded-for': '203.0.113.3' } })).status).toBe(429);
     } finally {
       await t.close();
+    }
+  });
+
+  it('the gate’s sign-ups have their own count per file, not a page form’s', async () => {
+    const s = await startPages(supa, { leadLimits: { perIp: 1000, perPage: 2, windowMs: 3_600_000 }, magnetLimits: { perIp: 1000, perFile: 1000, signupsPerFile: 4, windowMs: 3_600_000 } });
+    try {
+      const { file } = await create(alice, {});
+      await upload(alice, file.id, PDF);
+      // more than a page form's 2 an hour: a link in an email reaches many people at once
+      for (let i = 1; i <= 4; i++) expect((await postGate(file.id, { email: `s${i}@example.com` }, { base: s.base, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-for': `203.0.113.${40 + i}` } })).status).toBe(303);
+      const r = await postGate(file.id, { email: 's5@example.com' }, { base: s.base, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-for': '203.0.113.50' } });
+      expect(r.status).toBe(429);
+      expect(Number(r.headers['retry-after'])).toBeGreaterThan(60);
+    } finally {
+      await s.close();
     }
   });
 

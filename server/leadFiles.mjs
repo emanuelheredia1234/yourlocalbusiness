@@ -24,13 +24,16 @@
 // refused. Limits: 25 MB a file, 20 files and 200 MB per account, 5 MB and 200 public images per account.
 //
 // /m/<id>: the id (16 random bytes) is the permission. On the app's host and on the owner's verified domains (only
-// their own files there). Per visitor and per file, limits per hour (memory only); the row lookup is cached and
+// their own files there). An outside link is a 302 only on the owner's verified domain; on the app's host it's a
+// page (no script) that names where it goes and links there, so the app's address never bounces anyone elsewhere. Per visitor and per file, limits per hour (memory only); the row lookup is cached and
 // budgeted. 410 once the owner's plan ended more than 30 days ago. A gated file needs an email first, or a ticket
 // (?k=, 15 minutes, HMAC) the lead form's answer gives right after a sign-up. Each delivered GET (not HEAD, not a
 // prefetch) counts one download (lead_file_downloaded). Nothing a visitor typed, no email, no signed link is logged.
 //
 // Env: LEAD_LINK_SECRET (optional, 16+ characters: signs the tickets; else derived from SUPABASE_SECRET_KEY),
-// MAGNET_HITS_PER_IP_PER_HOUR (default 60), MAGNET_DOWNLOADS_PER_FILE_PER_HOUR (default 600).
+// MAGNET_HITS_PER_IP_PER_HOUR (default 60), MAGNET_DOWNLOADS_PER_FILE_PER_HOUR (default 600),
+// MAGNET_SIGNUPS_PER_FILE_PER_HOUR (default 300: the gate's sign-ups, its own count, so a link in an email to many
+// subscribers isn't held to a page form's LEADS_PER_PAGE_PER_HOUR). The gate shares LEADS_PER_IP_PER_HOUR.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -66,18 +69,23 @@ const MAX_MAGNET_PATH = 25;
 const API_PATH = /^\/api\/lead-files(?:\/([^/]{1,64})(\/content)?)?$/;
 const IMAGES_PATH = '/api/public-images';
 
-/** Visitors per hour on /m/ (each request), and requests per file per hour. */
-export const MAGNET_LIMITS = Object.freeze({ perIp: 60, perFile: 600, windowMs: 3_600_000 });
+/** Visitors per hour on /m/ (each request), requests per file per hour, and the gate's sign-ups per file per hour. */
+export const MAGNET_LIMITS = Object.freeze({ perIp: 60, perFile: 600, signupsPerFile: 300, windowMs: 3_600_000 });
 /** Row lookups for visitors per minute (cache misses only), in all and per client. */
 const LOOKUP_BUDGET = { perMin: 600, perClient: 60 };
 
-/** MAGNET_HITS_PER_IP_PER_HOUR and MAGNET_DOWNLOADS_PER_FILE_PER_HOUR (whole numbers from 1). */
+/** MAGNET_HITS_PER_IP_PER_HOUR, MAGNET_DOWNLOADS_PER_FILE_PER_HOUR and MAGNET_SIGNUPS_PER_FILE_PER_HOUR (whole numbers from 1). */
 export function magnetLimitsFromEnv(env = process.env) {
   const count = (v, fallback) => {
     const n = Number(v);
     return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback;
   };
-  return { perIp: count(env.MAGNET_HITS_PER_IP_PER_HOUR, MAGNET_LIMITS.perIp), perFile: count(env.MAGNET_DOWNLOADS_PER_FILE_PER_HOUR, MAGNET_LIMITS.perFile), windowMs: MAGNET_LIMITS.windowMs };
+  return {
+    perIp: count(env.MAGNET_HITS_PER_IP_PER_HOUR, MAGNET_LIMITS.perIp),
+    perFile: count(env.MAGNET_DOWNLOADS_PER_FILE_PER_HOUR, MAGNET_LIMITS.perFile),
+    signupsPerFile: count(env.MAGNET_SIGNUPS_PER_FILE_PER_HOUR, MAGNET_LIMITS.signupsPerFile),
+    windowMs: MAGNET_LIMITS.windowMs,
+  };
 }
 
 // ── the words the gate page shows (shared with the app: src/lib/consent.ts) ──
@@ -291,6 +299,7 @@ export function createLeadFiles({
   const lim = { ...MAGNET_LIMITS, ...(limits || {}) };
   const perHit = windowCounter(lim.perIp, lim.windowMs);
   const perFile = windowCounter(lim.perFile, lim.windowMs);
+  const perSignup = windowCounter(lim.signupsPerFile, lim.windowMs);
   const gateCounters = counters ?? leadCounters();
 
   const fail = (status, code, message, extra = {}) => Object.assign(new Error(message), { status, code, ...extra });
@@ -457,10 +466,10 @@ export function createLeadFiles({
     inflight.set(id, p);
     return p;
   }
-  /** For the lead forms (server/leads.mjs): a lead magnet's { id, user_id, project_id, title }, or null. */
-  async function findMagnet(id) {
+  /** For the lead forms (server/leads.mjs): a lead magnet's { id, user_id, project_id, title }, or null. client: the visitor's key, for the lookup budget. */
+  async function findMagnet(id, client = 'server') {
     if (typeof id !== 'string' || !MAGNET_ID.test(id)) return null;
-    const r = await findRow(id);
+    const r = await findRow(id, typeof client === 'string' && client ? client.slice(0, 200) : 'server');
     return r ? { id: r.id, user_id: r.user_id, project_id: r.project_id, title: r.title ?? '' } : null;
   }
   /** A ticket for a file (server/leads.mjs gives it after a sign-up that named the file). */
@@ -809,6 +818,33 @@ ${row.cover_path ? `<img src="${escapeHtml(publicUrl(row.cover_path))}" alt="">\
 `;
   }
 
+  /**
+   * An outside link on the app's host: not a redirect (the app's address would vouch for anywhere) but a page that
+   * names the site it goes to and links there. No script; the link opens with no referrer.
+   */
+  function leavePage(row, href) {
+    const host = escapeHtml(new URL(href).host);
+    const title = escapeHtml(row.title || 'Your free download');
+    return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${title}</title>
+<style>${GATE_STYLE}</style>
+</head>
+<body>
+<main>
+<h1>${title}</h1>
+<p>This link goes to another website: <strong>${host}</strong>.</p>
+<p><a href="${escapeHtml(href)}" rel="noopener noreferrer">Continue to ${host}</a></p>
+</main>
+</body>
+</html>
+`;
+  }
+
   const prefetch = (req) => /prefetch/i.test(`${String(req.headers['sec-purpose'] ?? '').slice(0, 100)} ${String(req.headers.purpose ?? '').slice(0, 100)} ${String(req.headers['x-moz'] ?? '').slice(0, 100)}`);
 
   async function counted(id) {
@@ -819,11 +855,20 @@ ${row.cover_path ? `<img src="${escapeHtml(publicUrl(row.cover_path))}" alt="">\
     }
   }
 
-  /** The file itself: a redirect to a 60-second signed link (or the outside link), counted for a real GET. */
-  async function deliver(req, res, row, status = 302) {
+  /**
+   * The file itself: a redirect to a 60-second signed link, counted for a real GET. An outside link: a redirect on
+   * the owner's verified domain (site), else the page that names where it goes.
+   */
+  async function deliver(req, res, row, status = 302, site = null) {
     let location;
-    if (row.kind === 'url') location = normalizeLink(row.url);
-    else {
+    if (row.kind === 'url') {
+      location = normalizeLink(row.url);
+      if (location && !site) {
+        if (req.method !== 'HEAD' && !prefetch(req)) await counted(row.id);
+        write(req, res, 200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': NOTICE_CSP }, leavePage(row, location));
+        return true;
+      }
+    } else {
       const r = await storage(`object/sign/${LEAD_FILES_BUCKET}/${objectPath(row.object_path)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expiresIn: SIGNED_SECONDS }) }, LOOKUP_TIMEOUT);
       const got = await r.json().catch(() => null);
       const signed = typeof got?.signedURL === 'string' ? got.signedURL : '';
@@ -894,7 +939,7 @@ ${row.cover_path ? `<img src="${escapeHtml(publicUrl(row.cover_path))}" alt="">\
       if (method === 'GET' || method === 'HEAD') {
         const k = url.searchParams.get('k');
         if (!row.gate || (k && checkTicket(secret, id, k))) {
-          if (!(await deliver(req, res, row))) return notFound(req, res);
+          if (!(await deliver(req, res, row, 302, site))) return notFound(req, res);
           return;
         }
         return write(req, res, 200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': GATE_CSP }, gatePage(row));
@@ -918,12 +963,12 @@ ${row.cover_path ? `<img src="${escapeHtml(publicUrl(row.cover_path))}" alt="">\
       }
       const { fields, problem } = readLeadFields(form, { emailRequired: true });
       if (problem) return write(req, res, 400, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': GATE_CSP }, gatePage(row, ANSWERS[problem][2]));
-      const pageKey = `${row.user_id}:magnet:${id}`;
-      const { perVisitor, perPage } = gateCounters;
+      // per visitor: the lead forms' own count; per file: the gate's (a link in an email reaches many people at once)
+      const { perVisitor } = gateCounters;
       if (perVisitor.full(who)) return notice(req, res, ANSWERS.visitorLimit, back, retryAfter(perVisitor.wait(who)));
       perVisitor.hit(who);
-      if (perPage.full(pageKey)) return notice(req, res, ANSWERS.pageLimit, back, retryAfter(perPage.wait(pageKey)));
-      perPage.hit(pageKey);
+      if (perSignup.full(id)) return notice(req, res, ANSWERS.pageLimit, back, retryAfter(perSignup.wait(id)));
+      perSignup.hit(id);
       const consent = String(form.get('consent') ?? '').slice(0, 10) === 'yes';
       try {
         await keepLead({ user_id: row.user_id, project_id: row.project_id, page_id: `magnet:${id}`, slug: '', source: 'magnet', kind: 'magnet', consent, payload: { request: String(row.title ?? '').slice(0, 200), magnet: id }, name: fields.name, email: fields.email });
@@ -932,7 +977,7 @@ ${row.cover_path ? `<img src="${escapeHtml(publicUrl(row.cover_path))}" alt="">\
         // never the file unless the sign-up was kept
         return notice(req, res, NOT_SENT, back, retryAfter(60_000));
       }
-      if (!(await deliver(req, res, row, 303))) return notFound(req, res);
+      if (!(await deliver(req, res, row, 303, site))) return notFound(req, res);
     } catch {
       if (!res.headersSent) notice(req, res, [503, 'This can’t be shown right now', 'Try again in a minute.'], '', retryAfter(60_000));
     }

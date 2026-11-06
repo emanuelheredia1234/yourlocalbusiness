@@ -370,7 +370,7 @@ server.listen(PORT, HOST, async () => {
     // the tickets' secret is never logged: only whether it's set, and its last 4 characters (masked like the others)
     const own = String(process.env.LEAD_LINK_SECRET ?? '');
     const signing = own.length >= 16 ? `LEAD_LINK_SECRET (…${own.slice(-4)})` : `a key derived from SUPABASE_SECRET_KEY${own ? ' (LEAD_LINK_SECRET is set but shorter than 16 characters, so it isn’t used)' : ''}`;
-    console.log(`Lead magnets: on at /m/<id> (they need supabase/migrations/20261112000000_leads_p2.sql; limits: MAGNET_HITS_PER_IP_PER_HOUR, MAGNET_DOWNLOADS_PER_FILE_PER_HOUR; download tickets signed with ${signing}).`);
+    console.log(`Lead magnets: on at /m/<id> (they need supabase/migrations/20261112000000_leads_p2.sql; limits: MAGNET_HITS_PER_IP_PER_HOUR, MAGNET_DOWNLOADS_PER_FILE_PER_HOUR, MAGNET_SIGNUPS_PER_FILE_PER_HOUR; download tickets signed with ${signing}).`);
   }
   if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
   for (const line of integrations.notes()) console.log(line);

@@ -56,6 +56,14 @@ alter table public.published_pages drop constraint if exists published_pages_pro
 alter table public.published_pages add constraint published_pages_project_id_format check (project_id is null or project_id ~ '^[A-Za-z0-9_-]{1,80}$');
 update public.published_pages set project_id = substr(page_id, 5) where project_id is null and page_id like 'seo:%';
 
+-- Leads an asset took before this ran (the server kept them without the new columns, so they got the defaults): an
+-- asset's, not a page's. Their business comes from the asset's page once it has one; an asset published before this
+-- ran has none until it's published again, so run this file again after that (it only fills what's still empty).
+update public.page_leads set source = 'asset', kind = 'lead' where page_id like 'artifact:%' and source = 'page' and kind = 'form';
+update public.page_leads l set project_id = p.project_id
+  from public.published_pages p
+  where l.project_id is null and l.page_id like 'artifact:%' and p.page_id = l.page_id and p.user_id = l.user_id and p.project_id is not null;
+
 -- ───────────── lead_files ─────────────
 
 create table if not exists public.lead_files (
