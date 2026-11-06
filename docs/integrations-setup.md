@@ -866,8 +866,12 @@ them on again later doesn't restart the free days (they start at the first `enfo
   the assistant's `make_video` all use). It's claimed before the provider is asked, under a per-user, per-week
   advisory lock, so two parallel starts can't both pass at the limit. It is refunded only when the provider certainly
   never started it (it refused before any paid work, or no key could make it); when in doubt it counts, and it is
-  never retried. The account's total is also held to the limit times its businesses, so made-up business ids can't get
-  around it.
+  never retried. If the claim's answer is lost (a timeout) while a limit applies, the route refunds that claim id and
+  answers 503 without asking the provider. The account's total is also held to the limit times its businesses; a
+  refusal for that reason says `scope: 'account'` with the account's numbers ("…across your businesses").
+- **Business check** (while a limit applies, provider-key videos only): the business id must be one of the account's
+  businesses (`project_slots`): unknown gives `404 UNKNOWN_BUSINESS`, a locked (paused) business `402 BUSINESS_LIMIT`,
+  a failed lookup 503. The business's saved time zone wins over the one the request sends.
 - **Own keys**: videos made with the customer's own AI key are recorded but never counted or refused, the same rule as
   AI credits (own keys never use credits).
 - **Plans not turned on**: videos are counted, never refused. Once on: `402 VIDEO_WEEK_LIMIT { used, limit, resetsAt }`
@@ -875,8 +879,10 @@ them on again later doesn't restart the free days (they start at the first `enfo
   keys. `GET /api/ai/video/week?projectId=` answers the count the video panel and the campaign setup show ("2 of 3
   videos used this week").
 - **Video days**: the campaign setup chooses how many videos go out on each posting day (`CampaignConfig.videoDays`,
-  Monday first; older setups' "videos per day" become that count on each posting day when the workspace opens). More
-  videos a week than the plan makes stops the 30-day plan while plans are on, and is a warning before.
+  Monday first; default Mon/Wed/Fri, 3 a week; older setups' "videos per day" become that count on each posting day
+  when the workspace opens). More videos a week than the plan makes is a warning (with "See plans" while plans are on:
+  "…so the rest won't be made"); it never blocks the 30-day plan. Applying a strategy caps its video days to the plan's
+  weekly videos, spread across the week, and the saved plan view fits each day's formats to the video days.
 - Before the migration is run, the counts live in the server's memory (they reset when it restarts).
 
 ### Cron jobs
