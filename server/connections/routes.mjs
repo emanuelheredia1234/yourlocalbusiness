@@ -40,7 +40,7 @@ const RESERVED_KEYS = ['__proto__', 'constructor', 'prototype'];
 
 /** deps: the integration deps (server/integrations/wiring.mjs). connections.impl's sides answer the webhooks. */
 export function createConnectionRoutes(deps = {}) {
-  const { auth, connections, liveAdsGuard = null, send, sameOrigin = () => true, rateLimited = () => false, limit = () => false, corsHeaders = () => ({}), readRaw, readJson, clientKey = (req) => req.socket?.remoteAddress || 'unknown' } = deps;
+  const { auth, connections, liveAdsGuard = null, releaseDirectSocial = null, send, sameOrigin = () => true, rateLimited = () => false, limit = () => false, corsHeaders = () => ({}), readRaw, readJson, clientKey = (req) => req.socket?.remoteAddress || 'unknown' } = deps;
   const impl = connections?.enabled ? connections.impl : null;
   // the webhooks: Upload-Post's goes to the social side, Zernio's to the ads side (or a plain Zernio impl)
   const socialImpl = connections?.socialEnabled ? (impl?.social ?? null) : null;
@@ -135,6 +135,15 @@ export function createConnectionRoutes(deps = {}) {
         // ?gone=1: "Free it" for a slot the app thinks a deleted business holds (refused while the business is saved)
         const onlyIfGone = url.searchParams.get('gone') === '1';
         const out = connections.socialEnabled ? await connections.forgetProject(who.id, projectId, { onlyIfGone }) : { freed: false };
+        // direct social tokens for this business go too, except "Free it" while the business is still saved.
+        // a failure here does not undo the Upload-Post release; account deletion still revokes these tokens.
+        if (typeof releaseDirectSocial === 'function' && (!onlyIfGone || out?.freed === true)) {
+          try {
+            await releaseDirectSocial(who.id, projectId);
+          } catch {
+            // Upload-Post already answered. The tokens remain until the next delete or account deletion.
+          }
+        }
         reply(req, res, 200, { ok: true, freed: out?.freed === true });
         return true;
       }

@@ -10,7 +10,9 @@
 // Secrets to add and the webhook address to register (names and addresses, never values).
 // Other integrations (Nango: future booking tools and CRMs) show only when the owner has set them up.
 // Gmail is separate from Nango: one mailbox per signed-in customer, for outreach later.
-// Nothing here posts or changes anything at the network.
+// Direct connections (Facebook, Instagram, TikTok, X, Pinterest, YouTube) are also separate from
+// Upload-Post: the customer connects the business's own account here, and posting still uses the
+// social section above. Nothing here posts or changes anything at the network.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeftRight, BarChart3, CalendarClock, Pin, Plug, RefreshCw, Target, Unplug } from 'lucide-react';
 import type { ConnectPlatform, ConnectionStatus, LimitedReason, NangoIntegration, NangoResponse, Target as ConnectTarget } from '@/lib/integrations/types';
@@ -26,6 +28,7 @@ import { Badge, Callout, InfoTip, Modal, MoreMenu, OptionCards, SettingsRow, Set
 import { disconnectWarning, liveAdsFor } from '@/components/ads/liveAds';
 import { PLATFORM_NAMES } from '@/pages/marketing/analytics/links';
 import { GmailAccount } from './GmailAccount';
+import { SocialOAuthAccounts } from './SocialOAuthAccounts';
 
 const SOCIAL: readonly ConnectPlatform[] = SOCIAL_PLATFORMS;
 const ADS: readonly ConnectPlatform[] = AD_PLATFORMS;
@@ -240,6 +243,7 @@ export function ConnectedAccounts() {
         {ADS.map(row)}
       </SettingsSection>
       <GmailAccount />
+      <SocialOAuthAccounts />
       <OtherIntegrations />
       {choose && <ChooseTarget platform={choose} onClose={() => setChoose(null)} />}
     </div>

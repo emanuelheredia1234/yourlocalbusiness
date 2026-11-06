@@ -136,7 +136,8 @@ function privacyBody() {
 <ul>
   <li><strong>Gmail.</strong> If you connect Gmail, Google asks you to allow sending mail (<code>gmail.send</code>) and to share the mailbox address (OpenID and the email identity scope). We store the access token, the refresh token, when the access token expires, the granted scopes, and the mailbox address. We use them only to send mail you later start from the product, and to show you which mailbox is connected. We do not ask to read your inbox.</li>
   <li><strong>Omnisend.</strong> If you connect Omnisend, we store that connection so the product can create email drafts in your Omnisend account and read email statistics. The product does not send those campaigns for you.</li>
-  <li><strong>Social accounts.</strong> Facebook, Instagram, LinkedIn, TikTok, X, and YouTube connections go through Upload-Post (TONVI TECH SL, Spain). Upload-Post holds the network login. We store which accounts are connected to which business so we can post after you confirm, and so we can show that business’s own stats.</li>
+  <li><strong>Social accounts through Upload-Post.</strong> Facebook, Instagram, LinkedIn, TikTok, X, and YouTube connections can go through Upload-Post (TONVI TECH SL, Spain). Upload-Post holds the network login. We store which accounts are connected to which business so we can post after you confirm, and so we can show that business’s own stats.</li>
+  <li><strong>Direct social connections.</strong> You can also connect Facebook, Instagram, TikTok, X, Pinterest, or YouTube for a business in Settings → Connected accounts → Direct connections. We store that business’s access token, refresh token, expiry, granted scopes, and the account name. Facebook and Instagram use one Meta app. YouTube uses its own Google client, separate from Gmail. The permission asked is the one needed to publish later as that account (a Facebook Page, Instagram content, a TikTok video, a post on X, a Pin, or a YouTube upload) and to show which account is connected. Nothing is posted from that connection until a later posting step. Disconnecting deletes the tokens we hold.</li>
   <li><strong>Ad accounts.</strong> Meta, Google, LinkedIn, TikTok, Pinterest, Reddit, and Microsoft ad connections go through Zernio. We use them to read results and, when you confirm, to launch or change campaigns on your own ad account. Ad spend is billed by the ad network to you, not by us.</li>
   <li><strong>Other tools.</strong> A booking tool or CRM is connected only if the operator turns that option on. Gmail does not go through that option.</li>
 </ul>
@@ -175,8 +176,9 @@ function privacyBody() {
   <li><strong>Supabase</strong> — sign-in and the database, including encrypted storage of connection tokens.</li>
   <li><strong>Replit</strong> — hosting the application.</li>
   <li><strong>Stripe</strong> — payments. Stripe handles the card.</li>
-  <li><strong>Google</strong> — only if you connect Gmail, or a Google ad account. Gmail access is the send scope and the mailbox address, not your inbox.</li>
-  <li><strong>Upload-Post (TONVI TECH SL, Spain)</strong> — social account connections and posting.</li>
+  <li><strong>Google</strong> — if you connect Gmail, YouTube, or a Google ad account. Gmail access is the send scope and the mailbox address, not your inbox. YouTube access is upload and read-only channel information, on a separate OAuth client from Gmail.</li>
+  <li><strong>Meta, TikTok, X, and Pinterest</strong> — only if you connect that network directly for a business.</li>
+  <li><strong>Upload-Post (TONVI TECH SL, Spain)</strong> — social account connections and posting, when that path is turned on.</li>
   <li><strong>Zernio</strong> — ad account connections and ad results.</li>
   <li><strong>Omnisend</strong> — only if you connect it.</li>
   <li><strong>The model provider turned on for an AI feature</strong> — the material you submit to that feature.</li>
@@ -185,7 +187,7 @@ function privacyBody() {
 
 <h2>Cookies and sign-in storage</h2>
 <p>Signing in does not set an advertising cookie. The sign-in session is stored in this browser (local storage used by Supabase Auth) so you stay signed in. You can clear it by signing out or by clearing site data.</p>
-<p>While you connect Gmail or Omnisend, the server sets a short-lived cookie on this host only (<code>__Host-ylb_gmail</code> or <code>__Host-ylb_omnisend</code>). It ties the provider’s return to the browser that started the connection. It lasts about ten minutes, is not readable by page scripts, and is removed when the connection finishes. It is not used to track you across other sites.</p>
+<p>While you connect Gmail, Omnisend, or a direct social account, the server sets a short-lived cookie on this host only (<code>__Host-ylb_gmail</code>, <code>__Host-ylb_omnisend</code>, <code>__Host-ylb_meta</code>, <code>__Host-ylb_instagram</code>, <code>__Host-ylb_tiktok</code>, <code>__Host-ylb_x</code>, <code>__Host-ylb_pinterest</code>, or <code>__Host-ylb_youtube</code>). It ties the provider’s return to the browser that started the connection. It lasts about ten minutes, is not readable by page scripts, and is removed when the connection finishes. It is not used to track you across other sites.</p>
 
 <h2>Your choices</h2>
 <ul>
@@ -234,6 +236,7 @@ function termsBody() {
 <p>Connecting a service authorizes Your Local Business to use that connection for the feature you turn on, within the permission you granted.</p>
 <ul>
   <li><strong>Gmail.</strong> Connecting Gmail authorizes the service to send mail from that mailbox when you use outreach, under Google’s <code>gmail.send</code> scope, and to store the mailbox address so you can see what is connected. You are responsible for every message sent from that mailbox and for complying with Google’s and Gmail’s rules. Do not use the connection to send spam. You can disconnect Gmail at any time, and you can also remove the app in your Google Account.</li>
+  <li><strong>Direct social accounts.</strong> Connecting Facebook, Instagram, TikTok, X, Pinterest, or YouTube stores that business’s connection so a later step can publish as that account, within the permission you granted. You are responsible for what is published and for that network’s rules. You can disconnect at any time, and you can also remove the app in the network’s own settings. YouTube is a separate Google connection from Gmail.</li>
   <li><strong>Social and ads.</strong> The service posts or changes an ad only after you confirm. You are responsible for the content and for the spend an ad network bills to your own ad account.</li>
   <li><strong>Omnisend and other tools.</strong> Drafts and reads follow the access you granted. You review and send in the provider when the product does not send for you.</li>
 </ul>

@@ -15,8 +15,9 @@ Who does what:
 | **treg** | Public social data, competitor ads, Google rank and Maps position, Search Console (on your own team connection), per-customer usage, caps and billing |
 | **Omnisend** | Email stats |
 | **Gmail** | Each customer’s own mailbox for later outreach (`gmail.send`). OAuth in the app, not Nango |
+| **Direct social connect** | Each business’s own Facebook, Instagram, TikTok, X, Pinterest, and YouTube login, stored in this app. Connect only. Posting still uses Upload-Post until that path is moved. Not Nango |
 | **Manus** | Only "Post to Facebook groups" |
-| **Nango** | Kept for future booking tools and CRMs only. Off until you set it up; never used for social, ads or Gmail |
+| **Nango** | Kept for future booking tools and CRMs only. Off until you set it up; never used for social, ads, Gmail, or direct social connect |
 
 Until a part's Secrets are set the app says so plainly and nothing breaks: every network shows "Not connected",
 customers post themselves and press **Mark as posted**, and Manus still posts to Facebook groups.
@@ -51,8 +52,18 @@ name only.
 | `NANGO_SECRET_KEY` | Optional, later: other integrations (booking tools, CRMs) | Leave unset until you add one (§3b). Not used for Gmail. |
 | `NANGO_WEBHOOK_SIGNING_KEY` | Optional, with Nango only | |
 | `NANGO_WEBHOOK_SIGNING_KEY_PREVIOUS` | Only while rotating Nango's signing key | Remove it once Nango signs with the new one. |
-| `GOOGLE_CLIENT_ID` | **Turns customer Gmail connect on** | The OAuth web client's id, from Google Cloud → Credentials (§3d). |
+| `GOOGLE_CLIENT_ID` | **Turns customer Gmail connect on** | The OAuth web client's id, from Google Cloud → Credentials (§3d). Not used for YouTube. |
 | `GOOGLE_CLIENT_SECRET` | With `GOOGLE_CLIENT_ID` | The OAuth web client's secret. Replit Secrets only. Never in the repo. |
+| `META_APP_ID` | **Turns Facebook and Instagram direct connect on** | One Meta app for both (§3e). Facebook Login for Business and Instagram API with Facebook Login. |
+| `META_APP_SECRET` | With `META_APP_ID` | That app’s secret. Replit Secrets only. |
+| `TIKTOK_CLIENT_KEY` | **Turns TikTok direct connect on** | The Login Kit client key (§3e). |
+| `TIKTOK_CLIENT_SECRET` | With `TIKTOK_CLIENT_KEY` | The Login Kit client secret. |
+| `X_CLIENT_ID` | **Turns X direct connect on** | The OAuth 2.0 client id (§3e). |
+| `X_CLIENT_SECRET` | With `X_CLIENT_ID` | The OAuth 2.0 client secret (confidential client). |
+| `PINTEREST_APP_ID` | **Turns Pinterest direct connect on** | The app id (§3e). |
+| `PINTEREST_APP_SECRET` | With `PINTEREST_APP_ID` | The app secret. |
+| `YOUTUBE_CLIENT_ID` | **Turns YouTube direct connect on** | A separate Google OAuth web client from Gmail (§3e). Do not reuse `GOOGLE_CLIENT_ID`. |
+| `YOUTUBE_CLIENT_SECRET` | With `YOUTUBE_CLIENT_ID` | That client’s secret. Not `GOOGLE_CLIENT_SECRET`. |
 
 Plain settings (not secret; Replit Secrets or env):
 
@@ -150,6 +161,9 @@ deployment (`REPLIT_DEPLOYMENT` unset), the server ticks itself every minute, so
 published app the tick is the only driver.
 
 ## 3. Social accounts and posting (Upload-Post)
+
+This is still the posting path. Direct connect (§3e) stores a customer’s own tokens beside it and does not
+replace these steps.
 
 Upload-Post (Advanced plan, white-label, 75 profiles) holds each customer's social logins on its own approved
 apps, so **no Meta, LinkedIn, TikTok, X or Google app review is needed**. A profile holds one account per network,
@@ -495,10 +509,78 @@ without signing in:
 `/privacy-policy` redirects to `/privacy`. `/terms-of-service` redirects to `/terms`. The privacy policy names
 Upload-Post’s company, TONVI TECH SL (Spain), as a processor.
 
+## 3e. Direct social connect (the customer’s own accounts)
+
+Each business can connect its own Facebook Page, Instagram, TikTok, X, Pinterest, and YouTube account
+**in this app**, from Settings → Connected accounts → Direct connections. Tokens stay on the server, encrypted
+in `app_state`, one connection per business per network (the same boundary as an Upload-Post profile: one set
+per business, under that signed-in customer only). Nango is not used.
+
+**Upload-Post is unchanged.** While `UPLOAD_POST_API_KEY` is set, posting, post status, and social stats still
+go through Upload-Post (§3). This section only connects, shows status, disconnects, and keeps a token a later
+posting helper can refresh. There is no publish route and no media upload here.
+
+If a network’s client id or secret is missing, Connect answers `CREDENTIALS_NOT_CONFIGURED` and the screen says
+that network isn’t set up yet. A signed-out request answers `AUTH_REQUIRED`. Nothing else breaks. The owner
+sees the secret names and the redirect URI. Customers do not.
+
+Instagram uses the **same Meta app** as Facebook (`META_APP_ID` and `META_APP_SECRET`) and its **own** callback,
+so register both Meta redirect URIs on that one app. YouTube uses `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET`.
+Do not put YouTube on the Gmail OAuth client (`GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`): Gmail verification
+stays on that client.
+
+**Authorized redirect URIs** (register each one exactly; there is no localhost callback). Connect only starts
+on the published app, the same rule as Gmail and Omnisend.
+
+| Network | Redirect URI | Secrets |
+|---|---|---|
+| Facebook | `https://yourlocalbusiness.replit.app/api/integrations/meta/callback` | `META_APP_ID`, `META_APP_SECRET` |
+| Instagram | `https://yourlocalbusiness.replit.app/api/integrations/instagram/callback` | the same Meta app |
+| TikTok | `https://yourlocalbusiness.replit.app/api/integrations/tiktok/callback` | `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` |
+| X | `https://yourlocalbusiness.replit.app/api/integrations/x/callback` | `X_CLIENT_ID`, `X_CLIENT_SECRET` |
+| Pinterest | `https://yourlocalbusiness.replit.app/api/integrations/pinterest/callback` | `PINTEREST_APP_ID`, `PINTEREST_APP_SECRET` |
+| YouTube | `https://yourlocalbusiness.replit.app/api/integrations/youtube/callback` | `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET` |
+
+**Scopes requested, and no others.** These are the minimum for a later publish step, plus what that network
+requires to name the account and to refresh the token.
+
+| Network | Scopes | Why |
+|---|---|---|
+| Facebook | `pages_show_list`, `pages_manage_posts`, `pages_read_engagement` | List the Page, publish a Page post, and read the Page Meta requires alongside posting. Facebook Login for Business. Graph API `v23.0`. |
+| Instagram | `instagram_basic`, `instagram_content_publish`, `pages_show_list`, `pages_read_engagement` | Instagram API with Facebook Login: publish to the professional account linked to a Page. Same Meta app, separate callback. |
+| TikTok | `user.info.basic`, `video.publish` | Name the account and direct-post a video. Not `video.upload` (that only sends a draft). |
+| X | `tweet.read`, `tweet.write`, `users.read`, `offline.access` | Post, which X requires `tweet.read` alongside `tweet.write`; name the account; refresh. `media.write` waits until posting uploads media. |
+| Pinterest | `boards:read`, `pins:write`, `user_accounts:read` | Read a board to pin to, create a Pin, and name the account. |
+| YouTube | `https://www.googleapis.com/auth/youtube.upload`, `https://www.googleapis.com/auth/youtube.readonly` | Upload a video, and read the channel title so the screen can show which channel is connected. Not the full `youtube` manage scope, and not Gmail’s scopes. |
+
+**How the sign-in is tied to the browser.** Each connect stores a one-time state (10 minutes, at most 3 open
+per customer) and sets a host-only cookie (`__Host-ylb_meta`, `__Host-ylb_instagram`, `__Host-ylb_tiktok`,
+`__Host-ylb_x`, `__Host-ylb_pinterest`, `__Host-ylb_youtube`). The callback needs both. X, TikTok, and YouTube
+also use PKCE (S256). TikTok’s challenge is the hex SHA-256 TikTok documents; X and YouTube use base64url.
+Meta, Instagram, and Pinterest use the state and the cookie. X is a confidential client (client secret on the
+token call) and still sends PKCE.
+
+Access tokens are refreshed and the new refresh token, when the network rotates it, is what gets stored.
+`accessTokenFor` on the server is for a later posting helper. It is not an HTTP route. Disconnect, and
+deleting the account, delete the tokens and ask the network to revoke the grant when it has a revoke call
+(Pinterest does not; the screen says to remove the app there too). Deleting a business releases that
+business’s direct tokens as well as its Upload-Post profile.
+
+**Platform review.** Each developer app must be approved by that network before anyone who isn’t a tester
+(or a user you listed on the app) can connect or, later, publish. Put these pages on the app’s consent
+screen. Both are real documents, readable without signing in:
+
+- Privacy policy: `https://yourlocalbusiness.replit.app/privacy`
+- Terms of service: `https://yourlocalbusiness.replit.app/terms`
+
+Startup notes name each network as on or off and print the redirect URI. They never print a secret.
+
 ## 4. Platform approvals
 
-None are needed to start: Upload-Post's apps (social) and Zernio's apps (ads) are already approved on every
-network. Networks still apply their own rules to each account (for example, Instagram needs a professional
+None are needed to start on the Upload-Post path: Upload-Post's apps (social) and Zernio's apps (ads) are already approved on every
+network. Direct connect (§3e) is different: Meta, TikTok, X, Pinterest, and Google still have to approve
+your own apps before anyone who isn’t a tester can connect or publish. Until then, only the users you
+listed on each app can finish Connect. Networks still apply their own rules to each account (for example, Instagram needs a professional
 account, Facebook posts go to a Page the customer manages, Meta Ads needs a Facebook Page). TikTok only offers
 the audience settings the account allows; when TikTok limits the app, a post may land in the account's drafts,
 and the post then reads "Sent to your TikTok drafts. Open TikTok to publish it."
@@ -632,6 +714,10 @@ One screen with two sections:
 - **Gmail** (§3d): one mailbox for this account, for outreach later. **Connect** and **Disconnect**. Until
   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set, customers see that Gmail isn’t set up yet and the owner
   sees those secret names and the redirect URI. Nothing is sent from this screen.
+- **Direct connections** (§3e): Facebook, Instagram, TikTok, X, Pinterest, and YouTube for the business on
+  screen. **Connect** and **Disconnect**. A network whose secrets aren’t set says it isn’t set up yet; the
+  owner sees the secret names and that network’s redirect URI. Nothing is posted from this section. The
+  social accounts section above is still Upload-Post when that key is set.
 - A side whose key isn't set says "Connecting social accounts isn't available yet" (or ad accounts) and shows no
   Connect buttons; with both off, one note: "Connecting accounts is coming soon. You can still post yourself and
   mark posts as posted."
@@ -734,6 +820,8 @@ The artifact build shows "Connected accounts and live analytics need the full ap
   each one (§6).
 - Email analytics (Omnisend, once the reporting scope is confirmed).
 - Gmail connect (§3d), once `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set. Sending waits for outreach.
+- Direct social connect (§3e), once that network’s secrets are set. Posting still waits on Upload-Post.
+  Testers can connect before the network approves the app; everyone else waits on that review.
 - Per-customer usage, caps and the CSV.
 
 **As soon as `UPLOAD_POST_API_KEY`, `UPLOAD_POST_WEBHOOK_SECRET` and `MEDIA_URL_SECRET` are set** (and the §2

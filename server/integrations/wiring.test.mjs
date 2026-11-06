@@ -119,6 +119,13 @@ describe('the route table', () => {
     expect(moduleFor('/api/integrations/omnisend/status')).toBeNull();
     expect(moduleFor('/api/integrations/gmail/callback')).toBeNull();
     expect(moduleFor('/api/integrations/gmail/connect')).toBeNull();
+    expect(moduleFor('/api/integrations/meta/callback')).toBeNull();
+    expect(moduleFor('/api/integrations/instagram/callback')).toBeNull();
+    expect(moduleFor('/api/integrations/tiktok/callback')).toBeNull();
+    expect(moduleFor('/api/integrations/x/callback')).toBeNull();
+    expect(moduleFor('/api/integrations/pinterest/callback')).toBeNull();
+    expect(moduleFor('/api/integrations/youtube/callback')).toBeNull();
+    expect(moduleFor('/api/integrations/social-oauth/status')).toBeNull();
     expect(moduleFor('/api/integrations/connectionsx')).toBeNull();
     expect(moduleFor('/api/postingx')).toBeNull();
   });

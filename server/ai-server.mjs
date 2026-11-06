@@ -31,6 +31,11 @@
 //   NANGO_SECRET_KEY (future non-social integrations only; off by default), NANGO_WEBHOOK_SIGNING_KEY.
 //   Gmail (customer outreach, server/gmail.mjs, not Nango): GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.
 //   Redirect URI: https://yourlocalbusiness.replit.app/api/integrations/gmail/callback (no localhost callback).
+//   Direct social connect (server/socialOauth.mjs, not Nango, not the Gmail client): META_APP_ID,
+//   META_APP_SECRET (Facebook and Instagram), TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, X_CLIENT_ID,
+//   X_CLIENT_SECRET, PINTEREST_APP_ID, PINTEREST_APP_SECRET, YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET.
+//   Redirect URIs: /api/integrations/{meta,instagram,tiktok,x,pinterest,youtube}/callback on
+//   https://yourlocalbusiness.replit.app. Posting still uses Upload-Post.
 //   Plain env: TREG_ORG_ID, CONNECTIONS_PROVIDER (unset; "off" keeps connected accounts off), UPLOAD_POST_RPM (150),
 //   UPLOAD_POST_ALERT_REMAINING (5), UPLOAD_POST_MAX_PROFILES_PER_USER (3: businesses with social accounts per user,
 //   one Upload-Post profile each), UPLOAD_POST_NEW_PROFILES_PER_DAY (20), UPLOAD_POST_RECLAIM_DAYS (7),
@@ -49,6 +54,7 @@ import { fileURLToPath } from 'node:url';
 import { createAIRoutes, sameOrigin } from './providers/routes.mjs';
 import { createOmnisendRoutes } from './omnisend.mjs';
 import { createGmailRoutes } from './gmail.mjs';
+import { createSocialOAuthRoutes } from './socialOauth.mjs';
 import { serveLegal } from './legal.mjs';
 import { createRateLimiter } from './rateLimit.mjs';
 import { authFromEnv } from './auth.mjs';
@@ -210,6 +216,18 @@ const gmail = createGmailRoutes({
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
   clientKey: (req) => pages.visitor(req),
 });
+// Direct social connect (server/socialOauth.mjs): the business's own accounts. Not Nango, and not
+// a replacement for Upload-Post posting. Deleting a business also drops these tokens.
+const socialOauth = createSocialOAuthRoutes({
+  auth,
+  storage: appState,
+  send,
+  readJson,
+  rateLimited,
+  corsHeaders,
+  sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
+  clientKey: (req) => pages.visitor(req),
+});
 // connected accounts, posting, analytics, usage and SEO on Google (server/integrations/wiring.mjs)
 const integrations = createIntegrations({
   auth,
@@ -221,6 +239,7 @@ const integrations = createIntegrations({
   corsHeaders,
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
   clientKey: (req) => pages.visitor(req),
+  releaseDirectSocial: (userId, projectId) => socialOauth.forgetProject(userId, projectId),
 });
 // periodic jobs (server/cron): Supabase pg_cron calls POST /api/cron/tick hourly with "Authorization: Bearer
 // <CRON_SECRET>"; each job runs once per period behind an app_state claim. Local dev (no CRON_SECRET, not a Replit
@@ -267,9 +286,18 @@ async function deleteAccount(req, res) {
       throw e;
     }
     try {
+      await socialOauth.forgetUser(ident.who.id);
+    } catch (e) {
+      await gmail.unforgetUser(ident.who.id);
+      await omnisend.unforgetUser(ident.who.id);
+      await integrations.unforgetUser(ident.who.id);
+      throw e;
+    }
+    try {
       await auth.deleteUser(ident.who.id);
     } catch (e) {
-      // the account stays: don't keep it from connecting Omnisend or Gmail for a week
+      // the account stays: don't keep it from connecting Omnisend, Gmail, or a social account for a week
+      await socialOauth.unforgetUser(ident.who.id);
       await gmail.unforgetUser(ident.who.id);
       await omnisend.unforgetUser(ident.who.id);
       await integrations.unforgetUser(ident.who.id);
@@ -321,6 +349,7 @@ function route(req, res, url) {
   if (cron.match(url)) return void cron.handle(req, res, url, send).catch((e) => crashed(req, res, e));
   if (url.pathname.startsWith('/api/integrations/omnisend/')) return void omnisend.handle(req, res, url).catch((e) => crashed(req, res, e));
   if (url.pathname.startsWith('/api/integrations/gmail/')) return void gmail.handle(req, res, url).catch((e) => crashed(req, res, e));
+  if (socialOauth.match(url)) return void socialOauth.handle(req, res, url).catch((e) => crashed(req, res, e));
   // connected accounts, the Upload-Post, Zernio and Nango webhooks (raw body), posting, public media links, analytics, SEO on Google, billing
   if (integrations.match(url)) return void integrations.handle(req, res, url).catch((e) => crashed(req, res, e));
   if (url.pathname === '/api/account' && req.method === 'DELETE') return void deleteAccount(req, res).catch((e) => crashed(req, res, e));
@@ -401,6 +430,7 @@ server.listen(PORT, HOST, async () => {
   if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
   for (const line of integrations.notes()) console.log(line);
   for (const line of gmail.notes()) console.log(line);
+  for (const line of socialOauth.notes()) console.log(line);
   for (const line of cron.notes()) console.log(line);
   // the startup sweeps: stuck posting jobs and analytics runs, unsettled treg calls (never a resend)
   void integrations.start();
