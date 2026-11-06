@@ -28,6 +28,9 @@ const READ_TIMEOUT_MS = 30_000;
 const WRITE_TIMEOUT_MS = 120_000;
 const UPLOAD_TIMEOUT_MS = 120_000;
 const MAX_RETRY_AFTER_S = 10;
+/** How long a request may wait for a slot under ZERNIO_RPM: reads up to a minute, writes 15 s (then a local 429). */
+const READ_SLOT_WAIT_MS = 65_000;
+export const WRITE_SLOT_WAIT_MS = 15_000;
 /** response headers a caller may see (nothing else of Zernio's headers is passed on) */
 const HEADER_WHITELIST = ['retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'content-type'];
 const RESERVED_HEADER = /^(authorization|host|cookie|content-length)$/i;
@@ -85,7 +88,13 @@ export function createZernioClient({ env = process.env, fetch = globalThis.fetch
   const secrets = [env.ZERNIO_WEBHOOK_SECRET, env.ZERNIO_WEBHOOK_SECRET_PREVIOUS].map((s) => String(s || '').trim()).filter(Boolean);
 
   const window_ = []; // request times in the last minute, every customer together
-  async function acquire() {
+  /**
+   * A slot under ZERNIO_RPM, waiting at most maxWaitMs. A write never waits long: one queued behind a burst of
+   * reads could otherwise go out after its caller already gave up on it (a post reported "unknown" that is then
+   * sent). No slot in time → a local 429, and nothing was sent.
+   */
+  async function acquire(maxWaitMs = READ_SLOT_WAIT_MS) {
+    const deadline = now() + Math.max(0, maxWaitMs);
     for (let i = 0; i < 100; i += 1) {
       const t = now();
       while (window_.length && t - window_[0] >= 60_000) window_.shift();
@@ -94,14 +103,14 @@ export function createZernioClient({ env = process.env, fetch = globalThis.fetch
         return true;
       }
       const wait = 60_000 - (t - window_[0]) + 5;
-      if (wait > 60_000) break;
+      if (t + wait > deadline) break;
       await sleep(wait);
     }
     return false;
   }
 
-  async function once(method, path, { query, body, headers = {}, timeoutMs }) {
-    if (!(await acquire())) return { status: 429, headers: { 'retry-after': '60' }, body: { code: 'rate_limited', type: 'rate_limit_error' }, local: true };
+  async function once(method, path, { query, body, headers = {}, timeoutMs, maxWaitMs }) {
+    if (!(await acquire(maxWaitMs))) return { status: 429, headers: { 'retry-after': '60' }, body: { code: 'rate_limited', type: 'rate_limit_error' }, local: true };
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined && v !== null && v !== '') q.append(k, String(v));
     const qs = q.toString();
@@ -147,12 +156,13 @@ export function createZernioClient({ env = process.env, fetch = globalThis.fetch
       const p = String(path || '');
       if (!/^\/[A-Za-z0-9/_.\-{}:]*$/.test(p) || p.includes('..') || p.includes('//')) throw new Error('zernio: bad path');
       const t = Number(timeoutMs) > 0 ? Math.min(Number(timeoutMs), WRITE_TIMEOUT_MS) : m === 'GET' ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS;
-      let res = await once(m, p, { query, body, headers, timeoutMs: t });
+      const maxWaitMs = m === 'GET' ? READ_SLOT_WAIT_MS : WRITE_SLOT_WAIT_MS;
+      let res = await once(m, p, { query, body, headers, timeoutMs: t, maxWaitMs });
       if (res.status === 429 && m === 'GET' && retry429 && !res.local) {
         const wait = Number.parseInt(res.headers['retry-after'] ?? '', 10);
         if (Number.isFinite(wait) && wait >= 0 && wait <= MAX_RETRY_AFTER_S) {
           await sleep(wait * 1000);
-          res = await once(m, p, { query, body, headers, timeoutMs: t });
+          res = await once(m, p, { query, body, headers, timeoutMs: t, maxWaitMs });
         }
       }
       if (res.status >= 400) safeLog('zernio_call_refused', { method: m, path: p.replace(/[0-9a-f]{24}/g, ':id'), status: res.status, code: zernioError(res).code }, log);
@@ -172,7 +182,7 @@ export function createZernioClient({ env = process.env, fetch = globalThis.fetch
       }
       const okProtocol = u.protocol === 'https:' || (testBase && u.protocol === 'http:' && (isLocal(u.hostname) || u.hostname === baseHost));
       if (!okProtocol || u.username || u.password) return { status: 0 };
-      if (!(await acquire())) return { status: 429 };
+      if (!(await acquire(WRITE_SLOT_WAIT_MS))) return { status: 429 };
       try {
         const res = await fetch(u.toString(), { method: 'PUT', headers: { 'content-type': String(contentType || 'application/octet-stream') }, body: bytes, signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS) });
         await res.arrayBuffer().catch(() => null);

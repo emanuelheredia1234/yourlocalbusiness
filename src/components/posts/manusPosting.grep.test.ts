@@ -3,11 +3,6 @@
 // gone with no importer left, and the assistant has no Manus posting tools.
 import { describe, expect, it } from 'vitest';
 const PHRASES = /post with manus|manus posts|posted by manus|manus adds the first comment|tell manus which account/i;
-/**
- * Settings › Social accounts is Connected accounts' (WP5's) to rewrite; its old line goes with that change.
- * Remove this entry once it's merged.
- */
-const PENDING_ELSEWHERE = new Set(['src/pages/settings/Settings.tsx']);
 
 // every source file's text (Vite reads them; tests are left out, since they quote the phrases)
 const RAW = import.meta.glob(['/src/**/*.{ts,tsx}', '!/src/**/*.test.{ts,tsx}'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
@@ -16,7 +11,6 @@ const sources = Object.entries(RAW).map(([path, text]) => ({ path: path.replace(
 describe('Manus posts only in Facebook groups', () => {
   it('no source says Manus posts on Pages or profiles (the groups flow and the legacy label aside)', () => {
     const hits = sources
-      .filter((f) => !PENDING_ELSEWHERE.has(f.path))
       .flatMap((f) => f.text.split('\n').map((line: string, i: number) => ({ at: `${f.path}:${i + 1}`, line })))
       .filter(({ line }) => PHRASES.test(line) && !/group/i.test(line) && !/with Manus earlier/i.test(line));
     expect(hits).toEqual([]);

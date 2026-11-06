@@ -63,6 +63,22 @@ describe('the client (server/zernio.mjs)', () => {
     expect(log.text()).not.toContain('ffffffffffffffffffffffff');
   });
 
+  it('a write never waits long for a rate-limit slot: no slot within 15 s answers a local 429 and sends nothing', async () => {
+    let clock = 1_000_000;
+    const slept = [];
+    const client = createZernioClient({ env: { ZERNIO_API_KEY: TEST_ZERNIO_KEY, ZERNIO_BASE_URL: mock.apiBase, ZERNIO_RPM: '1' }, now: () => clock, sleep: async (ms) => { slept.push(ms); clock += ms; }, log: makeLog() });
+    expect((await client.call('GET', '/accounts/ffffffffffffffffffffffff')).status).toBe(404);
+    const before = mock.calls.length;
+    const res = await client.call('POST', '/posts', { body: { content: 'x' }, headers: { 'Idempotency-Key': 'k-rate' } });
+    expect(res).toMatchObject({ status: 429, local: true });
+    expect(mock.calls.length).toBe(before);
+    expect(slept).toEqual([]);
+    // a read waits for its slot (up to a minute) and then goes
+    expect((await client.call('GET', '/accounts/ffffffffffffffffffffffff')).status).toBe(404);
+    expect(slept.length).toBe(1);
+    expect(mock.calls.length).toBe(before + 1);
+  });
+
   it('checks the webhook signature on the exact bytes, with the current or previous secret', () => {
     const client = createZernioClient({ env: { ZERNIO_API_KEY: 'k', ZERNIO_WEBHOOK_SECRET: 'new-secret', ZERNIO_WEBHOOK_SECRET_PREVIOUS: TEST_ZERNIO_WEBHOOK_SECRET } });
     const raw = Buffer.from('{"event":"webhook.test"}');
@@ -177,6 +193,15 @@ describe('accounts, isolation and choices', () => {
     expect(mock.calls.slice(before).find((c) => c.path === '/api/v1/connect/tiktok').query.reconnectAccountId).toBe(account._id);
   });
 
+  it('reads the listing’s needsReconnection flag as needing a reconnect', async () => {
+    const t = setup();
+    const { account } = await connectVia(t, ALICE, 'youtube');
+    account.needsReconnection = true;
+    expect(await t.connections.check(ALICE, 'youtube')).toMatchObject({ state: 'needs_reconnect' });
+    account.needsReconnection = false;
+    expect(await t.connections.check(ALICE, 'youtube')).toMatchObject({ state: 'connected' });
+  });
+
   it('disconnect removes the chosen account at Zernio, once', async () => {
     const t = setup();
     const { account } = await connectVia(t, ALICE, 'youtube');
@@ -213,12 +238,21 @@ describe('the webhook', () => {
   it('an unintentional disconnect asks for a reconnect; an intentional one removes the account', async () => {
     const t = setup();
     const { account, profileId } = await connectVia(t, ALICE, 'linkedin');
-    const lost = mock.signed({ event: 'account.disconnected', disconnectionType: 'token_expired', profiles: mock.profileRef(profileId), account: { accountId: account._id, platform: 'linkedin' } });
+    // the documented shape: disconnectionType sits inside `account`
+    const lost = mock.signed({ event: 'account.disconnected', profiles: mock.profileRef(profileId), account: { accountId: account._id, profileId, platform: 'linkedin', username: 'joesbakery', disconnectionType: 'unintentional', reason: 'token expired' } });
     await t.impl.webhook(lost.raw, lost.headers);
     expect((await t.connections.status(ALICE)).find((s) => s.platform === 'linkedin').state).toBe('needs_reconnect');
-    const gone = mock.signed({ event: 'account.disconnected', disconnectionType: 'intentional', profiles: mock.profileRef(profileId), account: { accountId: account._id, platform: 'linkedin' } });
+    const gone = mock.signed({ event: 'account.disconnected', profiles: mock.profileRef(profileId), account: { accountId: account._id, profileId, platform: 'linkedin', username: 'joesbakery', disconnectionType: 'intentional', reason: 'Removed' } });
     await t.impl.webhook(gone.raw, gone.headers);
     expect((await t.connections.status(ALICE)).find((s) => s.platform === 'linkedin').state).toBe('not_connected');
+  });
+
+  it('ignores an account event whose account sits in another profile, even when the event lists this customer', async () => {
+    const t = setup();
+    const { account, profileId } = await connectVia(t, ALICE, 'facebook');
+    const other = mock.signed({ event: 'account.disconnected', profiles: mock.profileRef(profileId), account: { accountId: account._id, profileId: 'abcdefabcdefabcdefabcdef', platform: 'facebook', username: 'x', disconnectionType: 'intentional', reason: 'r' } });
+    expect((await t.impl.webhook(other.raw, other.headers)).status).toBe(200);
+    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'facebook').state).toBe('connected');
   });
 
   it('routes a post event to the job named in the post’s metadata', async () => {

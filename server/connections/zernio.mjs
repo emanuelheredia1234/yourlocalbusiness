@@ -367,7 +367,8 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
         next[zid] = {
           platform,
           label: clip(a.displayName || a.username || a.name || NAMES[platform], 80),
-          state: a.isActive === false || a.needsReconnect === true || a.status === 'disconnected' ? 'needs_reconnect' : 'connected',
+          // the listing's flag is `needsReconnection` (docs: accounts and webhooks); `needsReconnect` is the health check's
+          state: a.isActive === false || a.needsReconnection === true || a.needsReconnect === true || a.status === 'disconnected' ? 'needs_reconnect' : 'connected',
           connectedAt: old?.connectedAt ?? (typeof a.createdAt === 'string' && Number.isFinite(Date.parse(a.createdAt)) ? a.createdAt : iso(now())),
         };
         if (!old) assignPending(d, platform, zid);
@@ -734,6 +735,10 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
       const zid = String(a.accountId ?? '');
       const platform = FROM_ZERNIO[a.platform];
       if (!ZID.test(zid) || !platform) return 'ignored';
+      // the account must sit in this customer's own profile (account.profileId), not only the event's profiles list
+      if (typeof a.profileId === 'string' && who.doc.profileId && a.profileId !== who.doc.profileId) return 'not_ours';
+      // Zernio puts disconnectionType inside `account` (webhooks/accounts); the top level is read too for older senders
+      const disconnection = String(a.disconnectionType ?? evt.disconnectionType ?? '');
       await updateDoc(userId, (d) => {
         if (type === 'account.connected') {
           const isNew = !d.accounts[zid];
@@ -741,7 +746,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
           if (isNew) assignPending(d, platform, zid);
           delete d.lastError[platform];
         } else if (d.accounts[zid]) {
-          if (evt.disconnectionType === 'intentional') delete d.accounts[zid];
+          if (disconnection === 'intentional') delete d.accounts[zid];
           else d.accounts[zid].state = 'needs_reconnect';
           pruneChoices(d);
         }

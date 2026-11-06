@@ -118,7 +118,7 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       const i = accounts.findIndex((a) => a._id === m[1]);
       if (i < 0) return err(res, 404, 'account_not_found', 'not_found');
       const [a] = accounts.splice(i, 1);
-      void sendWebhook({ event: 'account.disconnected', disconnectionType: 'intentional', profiles: profileRef(a.profileId), account: { accountId: a._id, profileId: a.profileId, platform: a.platform } });
+      void sendWebhook({ event: 'account.disconnected', profiles: profileRef(a.profileId), account: { accountId: a._id, profileId: a.profileId, platform: a.platform, username: a.username, disconnectionType: 'intentional', reason: 'Removed through the API' } });
       return json(res, 200, { message: 'Account disconnected', gracePeriodEndsAt: new Date(Date.now() + 3_600_000).toISOString() });
     }
     if (req.method === 'POST' && p === '/media/presign') {
@@ -131,6 +131,12 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       if (ik && idem.has(ik)) {
         violations.push({ kind: 'post_resent', key: ik });
         return json(res, 200, { message: 'Post already exists (idempotent retry)', post: posts.find((x) => x._id === idem.get(ik)) });
+      }
+      // { waitFor: promise, then: outcome }: the answer waits until the test releases it (a webhook can arrive first)
+      if (outcomes[0] && typeof outcomes[0] === 'object' && outcomes[0].waitFor) {
+        const o = outcomes.shift();
+        await o.waitFor;
+        outcomes.unshift(o.then ?? 'published');
       }
       const ids = (Array.isArray(body?.platforms) ? body.platforms : []).map((t) => String(t?.accountId ?? ''));
       if (!ids.length || ids.some((id) => !accounts.some((a) => a._id === id))) return err(res, 400, 'account_not_found', 'not_found');
@@ -240,7 +246,10 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     set webhookUrl(u) {
       hookUrl = u;
     },
-    /** What the next POST /posts does: 'published' | 'failed' | 'publishing' | 'error500' | 'hang' | 'accepted_then_500'. */
+    /**
+     * What the next POST /posts does: 'published' | 'failed' | 'publishing' | 'error500' | 'hang' | 'accepted_then_500',
+     * or { waitFor: promise, then: one of those } to hold the answer until the promise settles.
+     */
     setPostOutcome(...next) {
       outcomes.push(...next);
     },

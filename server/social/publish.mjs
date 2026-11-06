@@ -82,6 +82,8 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
   const store = mediaStore ?? createMediaStore({ env, fetch });
   /** background runs, for tests (settled()) */
   const running = new Set();
+  /** a post.* webhook that arrived while this process was still posting that job: applied if the answer was unclear */
+  const early = new Map();
 
   async function statusFor(userId, platform, projectId) {
     const all = await connections.status(userId, { projectId });
@@ -136,10 +138,17 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
     let finished = null;
     try {
       finished = await jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.ref ?? {} });
+      // our own answer was unclear (a timeout, a 5xx), but Zernio's webhook already said how it ended
+      const told = early.get(row.id);
+      if (outcome.state === 'unknown' && told) {
+        finished = await jobs.finish(userId, row.id, { state: told.state, url: told.url, errorCode: told.errorCode, ref: told.postId ? { postId: told.postId } : undefined });
+        outcome = told;
+      }
     } catch (e) {
       safeLog('posting_finish_failed', { platform, code: e?.code }, log);
     } finally {
       jobs.active.delete(row.id);
+      early.delete(row.id);
     }
     safeLog('posting_job_done', { platform, state: outcome.state, error: outcome.errorCode ?? null }, log);
     return finished;
@@ -276,8 +285,11 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       if (!isUuid(userId) || !isUuid(jobId) || !outcome || !['sent', 'failed'].includes(outcome.state)) return null;
       const row = await jobs.byId(userId, jobId);
       if (!row || !['sending', 'unknown'].includes(row.state)) return null;
-      // a job this process is still posting finishes from its own answer
-      if (row.state === 'sending' && jobs.active.has(row.id)) return null;
+      // a job this process is still posting finishes from its own answer; this one is kept in case that is unclear
+      if (row.state === 'sending' && jobs.active.has(row.id)) {
+        early.set(row.id, outcome);
+        return null;
+      }
       return jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.postId ? { postId: outcome.postId } : undefined });
     },
 

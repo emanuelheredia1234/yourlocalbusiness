@@ -138,6 +138,22 @@ describe('unknown outcomes and Check again', () => {
     expect(await t.routes.posting.fromWebhook(bob.id, r.body.job.id, { state: 'failed' })).toBeNull();
   });
 
+  it('a post.published webhook that arrives while the post is still being sent finishes the job when the answer is unclear', async () => {
+    const post = await t.post(alice, { platform: 'facebook', caption: 'Webhook before the answer' });
+    let release;
+    t.zernio.setPostOutcome({ waitFor: new Promise((r) => (release = r)), then: 'error500' });
+    const r = await t.publish(alice, post);
+    // wait until the POST is at Zernio (the job is `sending` and this process is working on it)
+    for (let i = 0; i < 200 && !t.postCalls().some((c) => c.headers?.['idempotency-key'] === r.body.job.id || c.idempotencyKey === r.body.job.id); i += 1) await new Promise((res) => setTimeout(res, 5));
+    const doc = (await t.storage.get([...t.storage.documents.keys()].find((k) => k.startsWith('zernio:user:')))).value;
+    const evt = t.zernio.signed({ event: 'post.published', profiles: t.zernio.profileRef(doc.profileId), post: { id: 'eeeeeeeeeeeeeeeeeeeeeeee', status: 'published', metadata: { ylbJob: r.body.job.id }, platforms: [{ platform: 'facebook', status: 'published', publishedUrl: 'https://facebook.com/joe/posts/10' }] } });
+    expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
+    expect((await jobOf(alice, r.body.job.id)).state).toBe('sending');
+    release();
+    await t.settled();
+    expect(await jobOf(alice, r.body.job.id)).toMatchObject({ state: 'sent', url: 'https://facebook.com/joe/posts/10' });
+  });
+
   it('a `sending` job older than 180 s becomes unknown on read and on startup, with no network call', async () => {
     const base = { user_id: alice.id, project_id: 'proj-1', platform: 'facebook', state: 'sending', provider_ref: {} };
     const old = new Date(t.clock.t - 200_000).toISOString();
