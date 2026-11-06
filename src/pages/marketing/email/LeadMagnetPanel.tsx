@@ -16,6 +16,8 @@ import { BrandLogo } from '@/components/brand/Logo';
 import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
 import { PanelHead } from './shared';
+import { LeadMagnetDeliverySection } from './LeadMagnetDelivery';
+import { consentLabel, magnetReceivesNote } from '@/lib/consent';
 
 export function LeadMagnetPanel({ project }: { project: Project }) {
   const updateMarketing = useStore((s) => s.updateMarketing);
@@ -145,6 +147,8 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
             </Field>
           </div>
         </Section>
+
+        <LeadMagnetDeliverySection project={project} lm={lm} />
       </div>
 
       <aside className="min-w-0 lg:sticky lg:top-4 lg:col-span-5">
@@ -168,11 +172,11 @@ function OptInPreview({ project, lm }: { project: Project; lm: LeadMagnet }) {
   const [touched, setTouched] = useState(false);
   const onPrimary = readableOn(c.primary);
   const typeLabel = LEAD_MAGNET_TYPES.find((t) => t.id === lm.type)?.label;
-  const site = project.brand.websiteUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const link = lm.delivery ? lm.delivery.domainLink ?? lm.delivery.link : '';
   const field = { width: '100%', borderRadius: 8, border: '1px solid rgba(0,0,0,.12)', background: '#ffffff', padding: '10px 12px', fontSize: 14, color: PAGE_INK } as const;
   return (
     <section aria-label="Opt-in page preview">
-      <BrowserFrame url={site ? `${site}/free` : 'Your opt-in page'}>
+      <BrowserFrame url={link ? link.replace(/^https?:\/\//, '') : 'Your opt-in page'}>
         <div style={{ background: `linear-gradient(160deg, ${withAlpha(c.primary, 0.1)}, ${c.paper} 60%)`, color: c.ink, padding: 24 }}>
           <div style={{ marginBottom: 20 }}>
             <BrandLogo brand={project.brand} size={26} layout="horizontal" />
@@ -197,7 +201,7 @@ function OptInPreview({ project, lm }: { project: Project; lm: LeadMagnet }) {
           {done ? (
             <div style={{ marginTop: 20, borderRadius: 8, background: 'rgba(255,255,255,.85)', padding: 16, fontSize: 14, color: PAGE_INK }}>
               <p style={{ fontWeight: 700 }}>This is only a preview.</p>
-              <p style={{ marginTop: 2, fontSize: 13, color: PAGE_MUTED }}>On your real opt-in page, this form sends the sign-up to your email provider, which delivers “{lm.title}”. Nothing was saved or sent here.</p>
+              <p style={{ marginTop: 2, fontSize: 13, color: PAGE_MUTED }}>On your published page, this form sends the sign-up to Email → Leads and gives the download. Nothing was saved or sent here.</p>
               <button type="button" className="btn btn-secondary btn-sm mt-3" onClick={() => setDone(false)}>
                 Back to the form
               </button>
@@ -225,12 +229,16 @@ function OptInPreview({ project, lm }: { project: Project; lm: LeadMagnet }) {
               <button type="submit" style={{ width: '100%', borderRadius: 8, padding: '12px 16px', fontSize: 15, fontWeight: 700, background: c.primary, color: onPrimary, boxShadow: '0 1px 2px rgba(0,0,0,.15)' }}>
                 {lm.buttonLabel}
               </button>
-              <p style={{ textAlign: 'center', fontSize: 11, opacity: 0.7 }}>No spam. Unsubscribe anytime.</p>
+              <label className="flex items-start" style={{ gap: 8, fontSize: 12, color: PAGE_MUTED }}>
+                <input type="checkbox" style={{ marginTop: 2 }} />
+                <span>{consentLabel(project.brand.name)}</span>
+              </label>
+              <p style={{ textAlign: 'center', fontSize: 11, opacity: 0.7 }}>{magnetReceivesNote(project.brand.name)}</p>
             </form>
           )}
         </div>
       </BrowserFrame>
-      <p className="mt-2 text-caption text-muted">A preview of your page’s words. To collect sign-ups, use your email provider’s form.</p>
+      <p className="mt-2 text-caption text-muted">{link ? 'A preview of your download’s sign-up. Visitors who sign up are in Email › Leads.' : 'A preview of your page’s words. Publish the download under Delivery to collect sign-ups.'}</p>
     </section>
   );
 }

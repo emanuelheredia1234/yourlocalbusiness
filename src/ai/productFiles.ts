@@ -104,7 +104,7 @@ export function coverMedia(p: Project) {
   return byId ?? listingShotMedia(p, 'hero');
 }
 
-async function coverBytes(p: Project, aspect: number): Promise<EbookDoc['cover']> {
+export async function coverBytes(p: Project, aspect: number): Promise<EbookDoc['cover']> {
   const m = coverMedia(p);
   if (!m || typeof document === 'undefined') return null;
   const blob = await getBlob(m.id);
