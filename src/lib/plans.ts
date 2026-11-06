@@ -15,6 +15,8 @@ export interface PlanDef {
   businessesIncluded: number;
   aiCreditsPerMonth: number;
   video: { maxHeight: number; maxSeconds: number; label: string };
+  /** AI videos each business may start a week (Monday to Sunday in its time zone); null = unlimited */
+  videosPerWeek: number | null;
   adsLaunch: boolean;
   treg: { monthlyMicro: number; dailyMicro: number };
   leadEmailsPerMonth: number;
@@ -124,6 +126,12 @@ export interface CompareRow {
 
 const n = (v: number) => v.toLocaleString('en-US');
 
+/** "3", or "Unlimited" (null). */
+export const videosPerWeekLabel = (v: number | null | undefined): string => (v == null ? 'Unlimited' : n(v));
+
+/** AI videos a week for each business on a tier (null = unlimited). */
+export const videosPerWeekFor = (tier: string | null | undefined): number | null => (isTier(tier) ? (planFor(tier).videosPerWeek ?? null) : null);
+
 /** The comparison table, from plans.json (every row of the Tiers table). */
 export function compareRows(): CompareRow[] {
   const per = <T,>(fn: (p: PlanDef, t: Tier) => T): Record<Tier, T> => Object.fromEntries(TIERS.map((t) => [t, fn(planFor(t), t)])) as Record<Tier, T>;
@@ -134,6 +142,7 @@ export function compareRows(): CompareRow[] {
     { label: 'AI credits a month', values: per((p) => n(p.aiCreditsPerMonth)) },
     { label: 'AI credits per extra business', values: per(() => `+${n(PLANS.additionalBusiness.aiCreditsPerMonth)}`) },
     { label: 'Video', values: per((p) => p.video.label) },
+    { label: 'AI videos a week, per business', values: per((p) => videosPerWeekLabel(p.videosPerWeek)) },
     { label: 'Launch ads from the app', values: per((p) => p.adsLaunch) },
     { label: 'Analytics updates (budget a month)', values: per((p) => microUsd(p.treg.monthlyMicro)) },
     { label: 'Lead emails a month', values: per((p) => n(p.leadEmailsPerMonth)) },

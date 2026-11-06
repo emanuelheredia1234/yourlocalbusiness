@@ -1,7 +1,7 @@
 // Plans as the app shows them (src/lib/plans.ts, shared/plans.json): prices, the annual saving, the tier that has a
 // feature, the comparison table, and billing hidden in the artifact build.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PLANS, TIERS, compareRows, creditsFor, featureTier, formatPrice, isBillingUi, monthsFree, priceLine, tierRank, yearlySavings } from './plans';
+import { PLANS, TIERS, compareRows, creditsFor, featureTier, formatPrice, isBillingUi, monthsFree, priceLine, tierRank, videosPerWeekFor, yearlySavings } from './plans';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -52,6 +52,8 @@ describe('tiers and features', () => {
     expect(ads.values).toEqual({ launch: false, grow: true, scale: true });
     expect(rows.find((r) => r.label === 'AI credits a month')!.values.grow).toBe(PLANS.plans.grow.aiCreditsPerMonth.toLocaleString('en-US'));
     expect(rows.find((r) => r.label === 'Fee on your sales')!.values).toEqual({ launch: '3%', grow: '1%', scale: 'None' });
+    expect(rows.find((r) => r.label === 'AI videos a week, per business')!.values).toEqual({ launch: '3', grow: '5', scale: 'Unlimited' });
+    expect([videosPerWeekFor('launch'), videosPerWeekFor('grow'), videosPerWeekFor('scale'), videosPerWeekFor('owner')]).toEqual([3, 5, null, null]);
   });
 });
 

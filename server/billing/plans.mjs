@@ -1,6 +1,7 @@
 // The plans (shared/plans.json, which the app imports too; the server is authoritative): Launch, Grow and Scale, the
 // "Additional business" add-on, and the synthetic owner plan (never in Stripe). Prices are in cents. 1 AI credit is
 // $0.01 of AI cost on the app's keys; each extra business adds 1,000 credits a month. "2K" video is stored as 1440p.
+// videosPerWeek: AI videos each business may start per week (Monday to Sunday in its time zone); null = unlimited.
 //
 //   planFor('grow')                → the frozen plan (or the owner's for 'owner', null for anything else)
 //   lookupKeysAll()                → the 8 Stripe price lookup keys
@@ -32,6 +33,7 @@ export const OWNER_PLAN = deepFreeze({
   businessesIncluded: null,
   aiCreditsPerMonth: null,
   video: { maxHeight: 2160, maxSeconds: 60, label: 'Unlimited' },
+  videosPerWeek: null,
   adsLaunch: true,
   treg: null,
   leadEmailsPerMonth: null,
@@ -94,3 +96,11 @@ export function creditsFor(tier, extraBusinesses = 0) {
 export const creditsToUsd = (credits) => Math.round(Number(credits || 0) * PLANS.creditUsd * 1e6) / 1e6;
 /** Dollars → credits (rounded up: a partial credit shows as used). */
 export const usdToCredits = (usd) => Math.ceil(Math.round((Number(usd || 0) / PLANS.creditUsd) * 1e6) / 1e6);
+
+/** AI videos a week for each business on a tier (null = unlimited: Scale and the owner; 0 for no plan). */
+export function videosPerWeekFor(tier) {
+  if (tier === 'owner') return null;
+  const p = planFor(tier);
+  if (!p) return 0;
+  return p.videosPerWeek ?? null;
+}
