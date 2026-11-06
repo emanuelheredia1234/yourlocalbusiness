@@ -68,7 +68,7 @@ export function DueBadge({ post, now }: { post: Post; now?: number }) {
 /** Who posted it, and the link when there is a real one. */
 export function PostedBy({ post, className }: { post: Post; className?: string }) {
   if (post.status !== 'published') return null;
-  const by = post.publishedBy === 'api' ? 'Posted from the app' : post.publishedBy === 'manus' ? 'Sent with Manus earlier' : post.publishedBy === 'manual' ? 'Marked as posted by you' : 'Posted';
+  const by = post.publishedBy === 'api' && post.external?.via === 'api' && post.external.drafts ? 'Sent to your TikTok drafts from the app' : post.publishedBy === 'api' ? 'Posted from the app' : post.publishedBy === 'manus' ? 'Sent with Manus earlier' : post.publishedBy === 'manual' ? 'Marked as posted by you' : 'Posted';
   return (
     <p className={cn('flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted', className)}>
       <span>

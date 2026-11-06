@@ -2,6 +2,7 @@
 //   connected, not posted      → "Post on Facebook" (opens the confirm window; nothing goes out before you confirm)
 //   sending                    → "Posting…"
 //   posted by the app          → "Posted" and "View post"
+//   sent to TikTok drafts      → "In TikTok drafts" (open TikTok to publish it; never sent again)
 //   failed (nothing went out)  → "Try again" (a new confirm), or "Post it yourself"
 //   unknown (may have gone out)→ "Check again" (a read-only check). Never "Try again".
 //   not connected              → "Post it yourself" (copy, download, open the network, then Mark as posted)
@@ -95,6 +96,13 @@ export function PostNowButton({ post, primary, size = 'sm' }: { post: Post; prim
   const ext = post.external;
   if (post.status === 'published') {
     if (post.publishedBy !== 'api') return null;
+    if (ext?.via === 'api' && ext.drafts)
+      return (
+        <span className="inline-flex flex-wrap items-center gap-2">
+          <Badge tone="warn">In TikTok drafts</Badge>
+          <span className="text-small text-muted">Open TikTok to publish it.</span>
+        </span>
+      );
     return (
       <span className="inline-flex flex-wrap items-center gap-2">
         <Badge tone="good">Posted</Badge>
@@ -152,6 +160,7 @@ function stateUi(post: Post): { label: string; tone: Tone; icon: typeof Loader2 
     case 'working':
       return { label: `Posting on ${n}…`, tone: 'primary', icon: Loader2 };
     case 'posted':
+      if (ext.via === 'api' && ext.drafts) return { label: 'Sent to your TikTok drafts', tone: 'warn', icon: CircleCheck };
       return { label: `Posted on ${n}`, tone: 'good', icon: CircleCheck };
     case 'failed':
       return { label: `The ${n} post didn’t go out`, tone: 'bad', icon: CircleAlert };
@@ -168,6 +177,13 @@ export function PublishStatus({ post, compact }: { post: Post; compact?: boolean
   const ext = post.external;
   const ui = stateUi(post);
   if (!ext || !ui) return null;
+  // sent to TikTok drafts: not public yet, so say what's left to do
+  if (ext.via === 'api' && ext.state === 'posted' && ext.drafts && !compact)
+    return (
+      <Callout tone="warn" title={ui.label}>
+        <p>It isn’t public yet. Open TikTok, find it in your drafts and publish it there.</p>
+      </Callout>
+    );
   // posted: the post's own "Posted from the app" line says it
   if (ext.via === 'api' && ext.state === 'posted' && !compact) return null;
   const working = ext.state === 'working' && ext.via === 'api';
@@ -204,7 +220,8 @@ export function PublishStatus({ post, compact }: { post: Post; compact?: boolean
     const manual = noAutoCheck(post, status);
     return (
       <Callout tone="warn" title={ui.label}>
-        <p>{manual ? `Check your ${n} profile, then mark it as posted.` : `Check ${post.platform === 'facebook' ? 'your Facebook Page' : n} before trying anything else.`}</p>
+        <p>{ext.message || 'It may have been posted - check before trying again.'}</p>
+        <p className="mt-0.5">{manual ? `Check your ${n} profile, then mark it as posted.` : `Check ${post.platform === 'facebook' ? 'your Facebook Page' : n} before trying anything else.`}</p>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-caption">
           {!manual && <InlineCheck post={post} />}
           <button type="button" className="link" onClick={() => useMarkPosted.getState().open(post.id)}>

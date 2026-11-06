@@ -48,7 +48,7 @@ export interface CaptionPreview {
   linkNote?: string;
   /** hashtags left out to fit the network */
   droppedTags: number;
-  /** a post with a link costs more on X */
+  /** a post with a link on X (the link may be dropped: the app's X link allowance is shared) */
   xLinkCost: boolean;
   /** problems that stop it (the server refuses these too) */
   blockers: string[];
@@ -196,6 +196,17 @@ export function failureCopy(job: Pick<PublishJob, 'errorCode' | 'errorMessage'>,
       return `You’ve reached today’s posting limit for ${name}. Post it yourself, or try again tomorrow.`;
     case 'POST_CHANGED':
       return 'The post changed since you opened it. Save it, then post it again.';
+    case 'DUPLICATE':
+      return `This looks the same as a recent post on ${name}. Change the text or the photo, then try again.`;
+    case 'TIKTOK_PRIVACY':
+      return 'This TikTok account doesn’t allow that audience setting. Check the account’s privacy settings in TikTok.';
+    case 'BUSY':
+      return 'Posting is busy right now. Try again in a minute.';
+    case 'SERVICE_UNAVAILABLE':
+      return 'Posting from the app isn’t available right now. We’ve been notified. You can post it yourself.';
+    case 'UNCONFIRMED':
+    case 'INTERRUPTED':
+      return 'It may have been posted - check before trying again.';
     default:
       return `${name} didn’t take the post.`;
   }

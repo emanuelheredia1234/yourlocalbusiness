@@ -19,19 +19,23 @@ export function announceJob(postId: string, job: PublishJob) {
   const post = useStore.getState().posts.find((p) => p.id === postId);
   if (!post) return;
   const name = networkLabel(post.platform);
-  if (job.state === 'sent') {
+  if (job.state === 'sent' && job.note === 'SENT_TO_DRAFTS') {
+    toast({ kind: 'info', title: 'Sent to your TikTok drafts', body: job.noteMessage || 'Open TikTok to publish it.' });
+    useStore.getState().notify({ kind: 'post', title: 'Sent to your TikTok drafts', body: post.headline, route: 'calendar' });
+  } else if (job.state === 'sent') {
     toast({ kind: 'success', title: `Posted on ${name}`, ...(job.url ? { action: { label: 'View post', run: () => void window.open(job.url, '_blank', 'noopener,noreferrer') } } : {}) });
     useStore.getState().notify({ kind: 'post', title: `Posted on ${name}`, body: post.headline, route: 'calendar' });
   } else if (job.state === 'failed') {
-    toast({ kind: 'error', title: `The ${name} post didn’t go out`, body: 'Open the post to see why, then try again or post it yourself.' });
+    toast({ kind: 'error', title: `The ${name} post didn’t go out`, body: job.errorMessage || 'Open the post to see why, then try again or post it yourself.' });
   } else if (job.state === 'unknown') {
-    toast({ kind: 'info', title: `We couldn’t confirm the ${name} post went out`, body: `Check ${name} before trying anything else.` });
+    toast({ kind: 'info', title: `We couldn’t confirm the ${name} post went out`, body: `It may have been posted - check ${name} before trying again.` });
   }
 }
 
-/** After the first two minutes, a job still sending is read every 30 s for up to 5 more minutes (the server marks
- *  one stuck for 3 minutes "unknown"), so its card never stays on "Posting…" for the rest of the visit. */
-const SLOW = { intervalMs: 30_000, maxMs: 300_000 };
+/** After the first two minutes, a job still sending is read every 30 s for up to 10 more minutes (a video can take
+ *  10 minutes to process, and the server marks a job stuck for 11 minutes "unknown"), so its card never stays on
+ *  "Posting…" for the rest of the visit. */
+const SLOW = { intervalMs: 30_000, maxMs: 600_000 };
 const stillSending = (job: PublishJob | null) => !!job && (job.state === 'queued' || job.state === 'sending');
 
 /** Follow one job until it's no longer sending (GET only), putting each answer on its post. */

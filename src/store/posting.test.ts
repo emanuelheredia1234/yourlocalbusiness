@@ -70,6 +70,18 @@ describe('what the server says about a post the app sent', () => {
     expect(useStore.getState().posts[0]).toMatchObject({ status: 'scheduled', external: { state: 'unknown' } });
   });
 
+  it('a TikTok post that landed in drafts: sent, marked as drafts (not public), never sent again', () => {
+    useStore.setState({ posts: [post('a', { platform: 'tiktok' })] });
+    useStore.getState().applyPublishJob('a', job('sent', { note: 'SENT_TO_DRAFTS', noteMessage: 'Sent to your TikTok drafts. Open TikTok to publish it.' }));
+    const p = useStore.getState().posts[0];
+    expect(p).toMatchObject({ status: 'published', publishedBy: 'api', external: { via: 'api', state: 'posted', drafts: true } });
+    expect(p.postUrl).toBeUndefined();
+    // a normal sent job has no drafts flag
+    useStore.setState({ posts: [post('b')] });
+    useStore.getState().applyPublishJob('b', job('sent', { url: 'https://facebook.com/p/1', postId: 'b' }));
+    expect(useStore.getState().posts[0].external).not.toHaveProperty('drafts');
+  });
+
   it('ignores another post’s job and an older job', () => {
     useStore.setState({ posts: [post('a', { external: { ...apiExt('working', 'job_new'), requestedAt: Date.parse('2026-11-05T11:00:00.000Z') } })] });
     useStore.getState().applyPublishJob('a', job('failed'));

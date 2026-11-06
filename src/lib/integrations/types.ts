@@ -127,6 +127,11 @@ export interface PublishJob {
   requestedAt: string;
   finishedAt?: string;
   checkedAt?: string;
+  /** sent, but not public yet: TikTok put it in the account's drafts (noteMessage says so in plain words) */
+  note?: 'SENT_TO_DRAFTS';
+  noteMessage?: string;
+  /** false: the network can't be read back, so "Check again" can't help (mark it posted yourself) */
+  checkable?: boolean;
 }
 
 // ───────────── analytics ─────────────
@@ -298,6 +303,27 @@ export interface CustomerUsageRow {
   socialAccounts?: number;
   /** ad accounts connected through Zernio right now (Zernio bills per connected ad account) */
   adAccounts?: number;
+  /** each vendor's share of the period: real costs, estimates (never toward a cap) and calls */
+  vendors?: Partial<Record<UsageVendor, VendorUsage>>;
+}
+
+export type UsageVendor = 'treg' | 'uploadpost' | 'zernio';
+export interface VendorUsage {
+  costMicro: number;
+  estimatedMicro: number;
+  calls: number;
+}
+
+/** GET /api/billing/customers (the owner only). */
+export interface CustomersResponse {
+  customers: CustomerUsageRow[];
+  defaults: CapSettings & { syncedToTreg?: boolean };
+  /** treg's last team-level alert (kind only, never amounts) */
+  alert?: { kind: string; at: string };
+  /** Upload-Post profiles in use out of the plan's limit (one per customer who connected a social account) */
+  upProfiles?: { used: number; limit?: number };
+  /** Upload-Post's last team-level alert (kind only) */
+  uploadPostAlert?: { kind: string; at: string };
 }
 
 export interface ReconcileReport {

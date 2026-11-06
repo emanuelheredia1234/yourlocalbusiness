@@ -197,6 +197,7 @@ export const useStore = create<StoreState>()(
               requestedAt,
               checkedAt: at,
               ...(job.url ? { url: job.url } : {}),
+              ...(job.state === 'sent' && job.note === 'SENT_TO_DRAFTS' ? { drafts: true } : {}),
             };
             if (job.state === 'sent' && p.status !== 'published')
               return { ...p, status: 'published' as const, publishedBy: 'api' as const, publishedAt: job.finishedAt ?? new Date().toISOString(), postUrl: job.url ?? p.postUrl, statusBeforePosted: p.status, external, updatedAt: Date.now() };

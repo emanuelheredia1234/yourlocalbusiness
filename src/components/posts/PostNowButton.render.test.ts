@@ -140,6 +140,17 @@ describe('the posting button', () => {
     expect(button(post({ status: 'published', publishedBy: 'manual' }), [connected('facebook')])).toBe('');
   });
 
+  it('sent to TikTok drafts: “In TikTok drafts”, never “Posted”, and no way to send it again', () => {
+    const p = post({ platform: 'tiktok', status: 'published', publishedBy: 'api', external: api('posted', { network: 'tiktok', drafts: true }) });
+    const b = words(button(p, [connected('tiktok', { targetKind: 'tt_account', targetLabel: 'joesbakery' })]));
+    expect(b).toContain('In TikTok drafts');
+    expect(b).toContain('Open TikTok to publish it.');
+    expect(b).not.toMatch(/\bPosted\b|Post on TikTok|Try again|View post/);
+    const s = words(status(p));
+    expect(s).toContain('Sent to your TikTok drafts');
+    expect(s).toContain('It isn’t public yet.');
+  });
+
   it('failed (nothing went out): “Try again” opens a new confirm when connected, else Post it yourself', () => {
     expect(words(button(post({ external: api('failed') }), [connected('facebook')]))).toContain('Try again');
     expect(words(button(post({ external: api('failed') }), []))).toContain('Post it yourself');
@@ -182,6 +193,7 @@ describe('the post’s status', () => {
   it('unknown: what to check, Check again, Mark as posted and Post it yourself, and no Try again', () => {
     const s = words(status(post({ external: api('unknown') }), [connected('facebook')]));
     expect(s).toContain('We couldn’t confirm the Facebook post went out');
+    expect(s).toContain('It may have been posted - check before trying again.');
     expect(s).toContain('Check your Facebook Page before trying anything else.');
     expect(s).toContain('Check again');
     expect(s).toContain('Mark as posted');
@@ -197,6 +209,11 @@ describe('the post’s status', () => {
     expect(s).toContain('Post it yourself');
     // its reason is text, never markup
     expect(status(post({ external: api('failed', { message: '<img src=x onerror=alert(1)>' }) }))).not.toContain('<img src=x');
+  });
+
+  it('unknown: the server’s own warning when it sent one', () => {
+    const s = words(status(post({ external: api('unknown', { message: 'The app restarted while posting. It may have been posted - check before trying again.' }) }), [connected('facebook')]));
+    expect(s).toContain('The app restarted while posting. It may have been posted - check before trying again.');
   });
 
   it('sending: Posting… ; posted: nothing extra on the card', () => {
@@ -234,7 +251,7 @@ describe('the windows', () => {
     use([x], [connected('x', { targetKind: 'x_account', targetLabel: '@copper' })]);
     usePublishConfirm.getState().open(x.id);
     const w = words(html(createElement(PublishConfirmHost)));
-    expect(w).toContain('Posts with links cost more on X.');
+    expect(w).toContain('The link may not show on X.');
     const media = { id: 'm1', kind: 'video', name: 'v.mp4', mime: 'video/mp4', size: 1, createdAt: 1, thumb: '' } as Post['media'];
     const tt = post({ platform: 'tiktok', format: 'video', media });
     use([tt], [connected('tiktok', { state: 'limited', limitedReason: 'private_only', targetKind: 'tt_account', targetLabel: '@copper' })]);

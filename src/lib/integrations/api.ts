@@ -19,7 +19,7 @@ import type {
   ConnectionStatus,
   ConnectionsResponse,
   CustomerUsage,
-  CustomerUsageRow,
+  CustomersResponse,
   NangoResponse,
   PublishJob,
   PublishRequest,
@@ -124,7 +124,7 @@ export const getSeoGoogleStatus = (projectId: string) => call<{ status: SeoGoogl
 
 export const getMyUsage = (days = 30) => call<{ usage: CustomerUsage }>('GET', `/api/billing/me${q({ days })}`);
 /** The owner only. */
-export const getCustomers = (days = 30) => call<{ customers: CustomerUsageRow[]; defaults: CapSettings }>('GET', `/api/billing/customers${q({ days })}`);
+export const getCustomers = (days = 30) => call<CustomersResponse>('GET', `/api/billing/customers${q({ days })}`);
 export const putCustomerCap = (customerTag: string, cap: CapSettings) => call<{ cap: CapSettings }>('PUT', `/api/billing/customers/${seg(customerTag)}/cap`, cap);
 export const putDefaults = (defaults: CapSettings) => call<{ defaults: CapSettings }>('PUT', '/api/billing/defaults', defaults);
 export const getReconcile = (days = 30) => call<ReconcileReport>('GET', `/api/billing/reconcile${q({ days })}`);

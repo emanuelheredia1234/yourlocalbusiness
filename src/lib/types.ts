@@ -767,6 +767,8 @@ export interface ExternalPublish {
   comment?: { state: 'asked' | 'added' | 'failed' | 'unknown'; detail?: string };
   requestedAt: number;
   checkedAt: number;
+  /** via 'api': sent to the account's TikTok drafts, not public yet (the owner publishes it in TikTok) */
+  drafts?: boolean;
 }
 
 // ───────────── Paid ads ─────────────

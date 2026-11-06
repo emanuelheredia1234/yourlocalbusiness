@@ -208,8 +208,8 @@ export function PublishConfirmHost() {
         {preview.linkNote && <p className="text-small text-muted">{preview.linkNote}</p>}
         {preview.xLinkCost && (
           <p className="flex items-center gap-1 text-small text-muted">
-            Posts with links cost more on X.
-            <InfoTip label="About X posts with links">X charges the app more for a post that has a link than for one without. It counts toward your usage.</InfoTip>
+            The link may not show on X.
+            <InfoTip label="About X posts with links">Links on X go through a small monthly allowance the app shares across everyone. Once it’s used up, X gets the post without the link. Put the link in your X bio to be sure.</InfoTip>
           </p>
         )}
         {status?.state === 'limited' && status.limitedReason === 'private_only' && (

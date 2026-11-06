@@ -145,5 +145,8 @@ describe('a post’s state', () => {
     expect(legacyManus(post({ external: ext('manus', 'posted') }))).toBe(true);
     expect(failureCopy({ errorCode: 'MEDIA_UNSUPPORTED' }, 'facebook')).toBe('Facebook refused the image or video format.');
     expect(failureCopy({}, 'x')).toBe('X didn’t take the post.');
+    expect(failureCopy({ errorCode: 'UNCONFIRMED' }, 'instagram')).toBe('It may have been posted - check before trying again.');
+    expect(failureCopy({ errorCode: 'DUPLICATE' }, 'linkedin')).toContain('the same as a recent post on LinkedIn');
+    expect(failureCopy({ errorCode: 'SERVICE_UNAVAILABLE' }, 'x')).not.toMatch(/upload-post|zernio|plan|balance/i);
   });
 });
