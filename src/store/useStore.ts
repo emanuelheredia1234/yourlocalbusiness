@@ -181,9 +181,11 @@ export const useStore = create<StoreState>()(
             const requestedAt = Date.parse(job.requestedAt) || Date.now();
             // an older job never overwrites a newer one, except an older try the network posted after all over a
             // newer one that failed or can't be confirmed (the post is out, maybe twice)
-            const postedAfterAll = job.state === 'sent' && job.note === 'POSTED_AFTER_ALL' && (prev?.state === 'failed' || prev?.state === 'unknown');
+            // (or a plain `sent` over a newer try that failed: the post went out once)
+            const postedAfterAll = job.state === 'sent' && ((job.note === 'POSTED_AFTER_ALL' && (prev?.state === 'failed' || prev?.state === 'unknown')) || prev?.state === 'failed');
             if (prev && prev.jobId !== job.id && prev.requestedAt > requestedAt && !postedAfterAll) return p;
-            const twice = job.note === 'POSTED_AFTER_ALL' || job.note === 'MAY_APPEAR_TWICE' || (prev?.jobId === job.id && prev.twice === true);
+            // a try that failed is never there twice
+            const twice = job.state !== 'failed' && (job.note === 'POSTED_AFTER_ALL' || job.note === 'MAY_APPEAR_TWICE' || (prev?.jobId === job.id && prev.twice === true));
             const state: NonNullable<Post['external']>['state'] = job.state === 'sent' ? 'posted' : job.state === 'failed' ? 'failed' : job.state === 'unknown' ? 'unknown' : 'working';
             const at = Date.parse(job.checkedAt ?? job.finishedAt ?? '') || Date.now();
             const external = {

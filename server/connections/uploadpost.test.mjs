@@ -214,7 +214,7 @@ describe('one profile per business', () => {
     // the hosted page was asked for each business's own profile, with no business id in the back button
     expect(mock.jwtBodies.slice(-3).map((b) => b.username)).toEqual([one, one, two]);
     expect(JSON.stringify(mock.jwtBodies.slice(-3))).not.toMatch(/proj_/);
-    expect(await t.connections.slots(ALICE)).toEqual({ used: 2, cap: 3, projects: [P1, P2] });
+    expect(await t.connections.slots(ALICE)).toEqual({ used: 2, cap: 3, projects: [P1, P2], orphans: [] });
     expect(mock.violations).toEqual([]);
   });
 
@@ -794,6 +794,8 @@ describe('posting (one attempt, through the post’s business)', () => {
       expect(mock.uploadCalls().pop().form.privacy_level).toBe('PUBLIC_TO_EVERYONE');
       // asked for one the account doesn't have: Upload-Post refuses it before TikTok (nothing posted)
       expect(await t.connections.publish(BOB, 'tiktok', { projectId: P2, jobId: JOB(), composed: { text: 'Buns' }, media: photo, privacy: 'PUBLIC_TO_EVERYONE' })).toMatchObject({ state: 'failed', errorCode: 'TIKTOK_PRIVACY' });
+      // the audience the customer asked for is sent as asked (never swapped for another), to that business's profile
+      expect(mock.uploadCalls().pop().form).toMatchObject({ user: second.username, privacy_level: 'PUBLIC_TO_EVERYONE' });
       mock.tiktokPrivacy.set(second.username, ['SELF_ONLY']);
       const before = mock.uploadCalls().length;
       expect(await t.connections.publish(BOB, 'tiktok', { projectId: P2, jobId: JOB(), composed: { text: 'Buns' }, media: photo })).toMatchObject({ state: 'failed', errorCode: 'TIKTOK_PRIVACY' });
@@ -926,9 +928,11 @@ describe('posting (one attempt, through the post’s business)', () => {
 });
 
 describe('X links', () => {
-  it('counts http(s) links, www. and bare domains, never an email, a hashtag, a price or an abbreviation', () => {
-    for (const s of ['https://joes.example', 'Order at mybiz.com', 'Visit MyBiz.COM/order', 'www.joesbakery', 'joes-bakery.co.uk', '(mybiz.com)', 'mybiz.de', 'mybiz.co', 'Bakery.Shop']) expect([s, hasXLink(s)]).toEqual([s, true]);
-    for (const s of ['No link today', 'joe@mybiz.com', '#mybiz.com', '$3.50 a loaf', 'e.g. this', 'Open 9a.m.-5p.m.', 'file.txt', 'St.Louis', 'Hello world.It’s fresh']) expect([s, hasXLink(s)]).toEqual([s, false]);
+  it('counts http(s) links, www. and bare domains, never an email, a hashtag, a price, an abbreviation or a missing space', () => {
+    for (const s of ['https://joes.example', 'Order at mybiz.com', 'Visit MyBiz.COM/order', 'www.joesbakery', 'joes-bakery.co.uk', '(mybiz.com)', 'mybiz.de/menu', 'mybiz.co', 'Bakery.Shop']) expect([s, hasXLink(s)]).toEqual([s, true]);
+    // a one-word country-code domain needs a path or a second-level label (as X links them): two letters after a
+    // missing space are a word, not a country
+    for (const s of ['No link today', 'joe@mybiz.com', '#mybiz.com', '$3.50 a loaf', 'e.g. this', 'Open 9a.m.-5p.m.', 'file.txt', 'St.Louis', 'Hello world.It’s fresh', 'Great deals.Go now', 'see you at 5.Be there', 'Thanks.So happy', 'Hi.My name is Joe', 'mybiz.de']) expect([s, hasXLink(s)]).toEqual([s, false]);
   });
 });
 
@@ -1035,7 +1039,7 @@ describe('deleting a business', () => {
     expect(mock.calls.slice(before).filter((c) => c.method !== 'GET')).toEqual([expect.objectContaining({ method: 'DELETE', path: '/api/uploadposts/users', body: { username: one.username } })]);
     expect(mock.profiles.has(one.username)).toBe(false);
     expect(mock.profiles.has(two.username)).toBe(true);
-    expect(await t.connections.slots(ROB)).toEqual({ used: 1, cap: 3, projects: [P2] });
+    expect(await t.connections.slots(ROB)).toEqual({ used: 1, cap: 3, projects: [P2], orphans: [] });
     expect((await statusOf(t, ROB, 'instagram', P1)).state).toBe('not_connected');
     expect((await statusOf(t, ROB, 'instagram', P2)).state).toBe('connected');
     // nothing left to delete the second time; a malformed id is refused
@@ -1043,25 +1047,96 @@ describe('deleting a business', () => {
     await expect(t.connections.forgetProject(ROB, '__proto__')).rejects.toMatchObject({ status: 400 });
   });
 
-  it('a delete that fails frees the user’s slot anyway (the profile is hidden and unused); the daily check deletes it', async () => {
+  it('a delete that fails hides the profile (nothing shows or posts) but it still holds the user’s slot until it’s gone, so failing deletes can’t pile up plan slots; Free it or the daily check finishes it', async () => {
     const t = setup({ env: { UPLOAD_POST_MAX_PROFILES_PER_USER: '1' } });
     const SAM = 'b8111111-2222-4333-8444-555555555555';
     const { username } = await connectVia(t, SAM, 'x', {}, P1);
     mock.failDeletes.add(username);
     try {
-      expect(await t.connections.forgetProject(SAM, P1)).toEqual({ freed: true, later: true });
+      expect(await t.connections.forgetProject(SAM, P1)).toEqual({ freed: false, later: true });
       expect(mock.profiles.has(username)).toBe(true);
       expect((await statusOf(t, SAM, 'x', P1)).state).toBe('not_connected');
       expect(await t.connections.publish(SAM, 'x', { projectId: P1, jobId: JOB(), composed: { text: 'gone' } })).toMatchObject({ state: 'failed' });
-      // the slot is the user's again: another business connects
+      // still one of the plan's: it counts toward the user's limit, and the app offers to free it
+      expect(await t.connections.slots(SAM)).toEqual({ used: 1, cap: 1, projects: [P1], orphans: [P1] });
       await business(t, SAM, P2);
-      expect((await t.connections.connectLink(SAM, 'x', { projectId: P2 })).connectLink).toBeDefined();
+      await expect(t.connections.connectLink(SAM, 'x', { projectId: P2 })).rejects.toMatchObject({ code: 'BUSINESS_LIMIT' });
+      expect([...mock.profiles.keys()].filter((u) => u.startsWith(username.slice(0, 29)))).toHaveLength(1);
+    } finally {
+      mock.failDeletes.delete(username);
+    }
+    // Free it (or a second delete of the business) finishes it now
+    expect(await t.connections.forgetProject(SAM, P1, { onlyIfGone: true })).toEqual({ freed: true });
+    expect(mock.profiles.has(username)).toBe(false);
+    expect((await t.connections.connectLink(SAM, 'x', { projectId: P2 })).connectLink).toBeDefined();
+    expect((await docOf(t, SAM)).profiles.map((p) => p.projectId)).toEqual([P2]);
+  });
+
+  it('the daily check finishes a delete that failed', async () => {
+    const t = setup();
+    const SID = 'b8211111-2222-4333-8444-555555555555';
+    const { username } = await connectVia(t, SID, 'x', {}, P1);
+    mock.failDeletes.add(username);
+    try {
+      expect(await t.connections.forgetProject(SID, P1)).toMatchObject({ freed: false, later: true });
     } finally {
       mock.failDeletes.delete(username);
     }
     expect((await t.impl.reconcileIfDue()).deleted).toBeGreaterThanOrEqual(1);
     expect(mock.profiles.has(username)).toBe(false);
-    expect((await docOf(t, SAM)).profiles.map((p) => p.projectId)).toEqual([P2]);
+    expect(await t.connections.slots(SID)).toMatchObject({ used: 0 });
+  });
+
+  it('"Free it" only frees a business that’s gone from the account: one made on another device and not pulled here yet is refused (409), and nothing is deleted', async () => {
+    const t = setup();
+    const UMA = 'b8311111-2222-4333-8444-555555555555';
+    const one = await connectVia(t, UMA, 'instagram', {}, P1);
+    const two = await connectVia(t, UMA, 'instagram', {}, P2);
+    // P1 is still saved in the account: never an orphan, and Free it is refused
+    expect((await t.connections.slots(UMA)).orphans).toEqual([]);
+    const err = await t.connections.forgetProject(UMA, P1, { onlyIfGone: true }).catch((e) => e);
+    expect(err).toMatchObject({ status: 409, code: 'BUSINESS_EXISTS' });
+    expect(mock.profiles.has(one.username)).toBe(true);
+    expect((await statusOf(t, UMA, 'instagram', P1)).state).toBe('connected');
+    // deleted from the account (the cloud save removed its row): now it's the server's orphan, and Free it works
+    await t.db.remove('user_docs', { user_id: UMA, kind: 'project', id: P1 });
+    expect((await t.connections.slots(UMA)).orphans).toEqual([P1]);
+    expect(await t.connections.forgetProject(UMA, P1, { onlyIfGone: true })).toEqual({ freed: true });
+    expect(mock.profiles.has(one.username)).toBe(false);
+    expect(mock.profiles.has(two.username)).toBe(true);
+    // the app's own delete of a business (no onlyIfGone) needs no check: the business is going
+    expect(await t.connections.forgetProject(UMA, P2)).toEqual({ freed: true });
+  });
+
+  it('a business deleted while its first Connect is making its profile: the profile goes; a cleanup delete that fails is kept for the daily check (no plan slot lost)', async () => {
+    const t = setup();
+    const VIC = 'b8411111-2222-4333-8444-555555555555';
+    await business(t, VIC, P1);
+    const key = `uploadpost:user:${sha256(VIC)}`;
+    let username;
+    // right before the create goes out (it takes today's slot first), the business is deleted: its entry was
+    // dropped (forgetProject found nothing at Upload-Post yet), and the cleanup delete after the create will fail
+    const put = t.storage.put.bind(t.storage);
+    t.storage.put = async (k, v, o) => {
+      if (String(k).startsWith('uploadpost:new-profiles:') && !username) {
+        const doc = (await t.storage.get(key)).value;
+        username = doc.profiles[0].username;
+        mock.failDeletes.add(username);
+        await put(key, { ...doc, profiles: [] });
+      }
+      return put(k, v, o);
+    };
+    try {
+      await expect(t.connections.connectLink(VIC, 'x', { projectId: P1 })).rejects.toMatchObject({ status: 404 });
+    } finally {
+      t.storage.put = put;
+      mock.failDeletes.delete(username);
+    }
+    expect(mock.profiles.has(username)).toBe(true);
+    expect((await docOf(t, VIC)).profiles).toEqual([expect.objectContaining({ projectId: P1, username, state: 'deleting' })]);
+    expect((await t.impl.reconcileIfDue()).deleted).toBe(1);
+    expect(mock.profiles.has(username)).toBe(false);
+    expect((await docOf(t, VIC)).profiles).toEqual([]);
   });
 
   it('the daily check gives back the profile of a business gone from the account for 2 days (deleted where the app couldn’t reach us), never on the first sight or for an empty account', async () => {
@@ -1084,6 +1159,152 @@ describe('deleting a business', () => {
     t.clock.t += 3 * 86_400_000;
     await t.impl.reconcileIfDue();
     expect(mock.profiles.has(two.username)).toBe(true);
+  });
+});
+
+describe('the plan’s slots: daily budget, missing profiles, refusals and the owner’s alerts', () => {
+  it('one user connecting, deleting and connecting again can’t use up the daily new-profile budget for everyone', async () => {
+    const t = setup({ env: { UPLOAD_POST_NEW_PROFILES_PER_DAY: '5' }, start: Date.parse('2026-11-06T09:00:00Z') });
+    const ANN = 'c1111111-2222-4333-8444-555555555555';
+    const BEN = 'c2111111-2222-4333-8444-555555555555';
+    await business(t, ANN, P1);
+    await business(t, BEN, P1);
+    let made = 0;
+    let refused = null;
+    for (let i = 0; i < 6; i += 1) {
+      try {
+        await t.connections.connectLink(ANN, 'instagram', { projectId: P1 });
+        made += 1;
+      } catch (e) {
+        refused = e;
+        break;
+      }
+      await t.connections.forgetProject(ANN, P1);
+      t.clock.t += 6 * 60_000;
+    }
+    // as many new profiles a day as the user's limit (3), then a plain refusal for that user only
+    expect(made).toBe(3);
+    expect(refused).toMatchObject({ status: 429, code: 'RATE_LIMITED' });
+    expect(errorBody(refused, null).body.error).toMatch(/tomorrow/);
+    expect(errorBody(refused, null).body.error).not.toMatch(/upload|plan/i);
+    // everyone else still connects
+    expect((await t.connections.connectLink(BEN, 'instagram', { projectId: P1 })).connectLink).toBeDefined();
+    // the next day ANN can again
+    t.clock.t += 86_400_000;
+    expect((await t.connections.connectLink(ANN, 'instagram', { projectId: P1 })).connectLink).toBeDefined();
+  });
+
+  it('a create Upload-Post refuses outright (a 400) tells the owner, reads “temporarily unavailable” to the customer, and gives the day’s slot back', async () => {
+    const t = setup({ env: { UPLOAD_POST_NEW_PROFILES_PER_DAY: '1' } });
+    const CAL = 'c3111111-2222-4333-8444-555555555555';
+    const DEE = 'c4111111-2222-4333-8444-555555555555';
+    await business(t, CAL, P1);
+    await business(t, DEE, P1);
+    mock.failCreates.push(400, 400);
+    try {
+      for (let i = 0; i < 2; i += 1) {
+        const err = await t.connections.connectLink(CAL, 'x', { projectId: P1 }).catch((e) => e);
+        expect(err).toMatchObject({ status: 503, code: 'CONNECTIONS_UNAVAILABLE' });
+        expect(errorBody(err, null).body.error).toBe('Social connections are temporarily unavailable. We’ve been notified.');
+        expect(errorBody(err, { isAdmin: true }).body.hint).toContain('HTTP 400');
+      }
+    } finally {
+      mock.failCreates.length = 0;
+    }
+    expect(Object.keys(await alertsOf(t))).toContain('profile_refused');
+    expect(Object.keys(await alertsOf(t))).not.toContain('profile_budget');
+    // nothing was made: the one slot of the day is still there for anyone, and the user's own count too
+    expect(await t.connections.slots(CAL)).toMatchObject({ used: 0 });
+    expect((await t.connections.connectLink(DEE, 'x', { projectId: P1 })).connectLink).toBeDefined();
+  });
+
+  it('a create with no trustworthy answer (5xx) keeps its reservation and the day’s slot; asking again for the same name takes no second slot', async () => {
+    const t = setup({ env: { UPLOAD_POST_NEW_PROFILES_PER_DAY: '1' } });
+    const EDD = 'c5111111-2222-4333-8444-555555555555';
+    await business(t, EDD, P1);
+    mock.failCreates.push(500);
+    try {
+      await expect(t.connections.connectLink(EDD, 'x', { projectId: P1 })).rejects.toMatchObject({ status: 502 });
+    } finally {
+      mock.failCreates.length = 0;
+    }
+    expect(await t.connections.slots(EDD)).toMatchObject({ used: 1 });
+    expect((await t.connections.connectLink(EDD, 'x', { projectId: P1 })).connectLink).toBeDefined();
+    expect(Object.keys(await alertsOf(t))).not.toContain('profile_budget');
+  });
+
+  it('a profile deleted by hand at Upload-Post stops holding the slot and being billed (found by a read or the daily check); its next Connect makes it again with the same name', async () => {
+    const t = setup({ start: Date.parse('2026-11-03T10:00:00Z') });
+    const FLO = 'c6111111-2222-4333-8444-555555555555';
+    const one = await connectVia(t, FLO, 'instagram', {}, P1);
+    const two = await connectVia(t, FLO, 'instagram', {}, P2);
+    mock.profiles.delete(one.username);
+    mock.profiles.delete(two.username);
+    // the daily check: not in the listing, read by name, 404: gone
+    t.clock.t += 86_400_000;
+    expect(await t.impl.reconcileIfDue()).toMatchObject({ missing: 2 });
+    expect(await t.connections.slots(FLO)).toMatchObject({ used: 0 });
+    expect((await statusOf(t, FLO, 'instagram', P1)).state).toBe('not_connected');
+    // Connect makes it again, with the same stored name
+    await t.connections.connectLink(FLO, 'instagram', { projectId: P1 });
+    expect(await nameOf(t, FLO, P1)).toBe(one.username);
+    expect(mock.profiles.has(one.username)).toBe(true);
+    // a read of the profile (Check) that answers 404 says the same, without waiting for the daily check
+    mock.profiles.delete(one.username);
+    await t.connections.check(FLO, 'instagram', { projectId: P1 });
+    expect(await t.connections.slots(FLO)).toMatchObject({ used: 0 });
+    // November is billed only for the days they were there
+    t.clock.t = Date.parse('2026-12-02T10:00:00Z');
+    await t.impl.meterIfDue();
+    const rows = t.db.rows('usage_ledger').filter((r) => r.endpoint === 'upload_post_profile 2026-11' && r.customer_tag === customerTag(FLO, t.env));
+    for (const r of rows) expect(r.cost_micro).toBeLessThan(300_000);
+    t.clock.t = Date.parse('2027-01-02T10:00:00Z');
+    await t.impl.meterIfDue();
+    expect(t.db.rows('usage_ledger').filter((r) => r.endpoint === 'upload_post_profile 2026-12' && r.customer_tag === customerTag(FLO, t.env))).toEqual([]);
+  });
+
+  it('the owner’s Billing page: one customer at their limit never hides “plan nearly full”', async () => {
+    const t = setup();
+    await t.storage.put('uploadpost:alerts', { profile_cap_low: { at: new Date(t.clock.t).toISOString() }, profile_user_cap: { at: new Date(t.clock.t).toISOString(), n: 3 } });
+    expect((await t.impl.ownerView()).alert).toMatchObject({ kind: 'profile_cap_low' });
+    await t.storage.put('uploadpost:alerts', { x_links_low: { at: new Date(t.clock.t).toISOString() }, profile_user_cap: { at: new Date(t.clock.t).toISOString(), n: 3 } });
+    expect((await t.impl.ownerView()).alert).toMatchObject({ kind: 'x_links_low' });
+    // a customer clicking Connect again and again re-stamps nothing within 10 minutes
+    const GUS = 'c7111111-2222-4333-8444-555555555555';
+    const u = setup({ env: { UPLOAD_POST_MAX_PROFILES_PER_USER: '1' } });
+    await connectVia(u, GUS, 'x', {}, P1);
+    await business(u, GUS, P2);
+    for (let i = 0; i < 3; i += 1) await u.connections.connectLink(GUS, 'x', { projectId: P2 }).catch(() => null);
+    await alertsOf(u);
+    expect(u.storage.puts('uploadpost:alerts')).toBe(1);
+  });
+
+  it('a name given back and made again is billed once for the days it overlaps (never twice)', async () => {
+    const t = setup({ start: Date.parse('2026-10-01T00:00:00Z') });
+    const HAL = 'c8111111-2222-4333-8444-555555555555';
+    const { username } = await connectVia(t, HAL, 'x', {}, P1);
+    // deleted on 10 October, the delete fails: the profile lives on at Upload-Post
+    t.clock.t = Date.parse('2026-10-10T00:00:00Z');
+    mock.failDeletes.add(username);
+    try {
+      await t.connections.forgetProject(HAL, P1);
+      // the business comes back (a backup), and its Connect gets no answer
+      t.clock.t = Date.parse('2026-10-20T00:00:00Z');
+      mock.failCreates.push(500);
+      await t.connections.connectLink(HAL, 'x', { projectId: P1 }).catch(() => null);
+    } finally {
+      mock.failDeletes.delete(username);
+      mock.failCreates.length = 0;
+    }
+    // the daily check finds it there: ready, from this reservation (not Upload-Post's first created_at)
+    await t.impl.reconcileIfDue();
+    const entry = (await docOf(t, HAL)).profiles.find((p) => p.projectId === P1);
+    expect(entry).toMatchObject({ state: 'ready' });
+    expect(Date.parse(entry.createdAt)).toBeGreaterThanOrEqual(Date.parse('2026-10-20T00:00:00Z'));
+    t.clock.t = Date.parse('2026-11-01T06:00:00Z');
+    await t.impl.meterIfDue();
+    const row = t.db.rows('usage_ledger').find((r) => r.endpoint === 'upload_post_profile 2026-10' && r.customer_tag === customerTag(HAL, t.env));
+    expect(row.cost_micro).toBeLessThanOrEqual(1_960_000);
   });
 });
 

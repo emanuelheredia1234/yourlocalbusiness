@@ -153,7 +153,7 @@ export function combineConnections({ social = null, ads = null } = {}) {
     /** The user's businesses with a social profile, of their limit (null when social is off). */
     slots: async (userId) => (typeof s.slots === 'function' ? s.slots(userId) : null),
     /** A business was deleted: its social profile goes (ad accounts aren't per business: nothing changes there). */
-    forgetProject: async (userId, projectId) => (typeof s.forgetProject === 'function' ? s.forgetProject(userId, projectId) : { freed: false }),
+    forgetProject: async (userId, projectId, opts) => (typeof s.forgetProject === 'function' ? s.forgetProject(userId, projectId, opts) : { freed: false }),
     /**
      * Social first: it only marks the profile (Upload-Post deletes it in userDeleted, once the account is gone, so a
      * deletion that stops here or later loses no social connection); then the ad accounts at Zernio.
@@ -222,11 +222,11 @@ export function createConnections(impl = nullConnections) {
       return typeof impl.slots === 'function' ? impl.slots(userId) : null;
     },
     /** A business was deleted (or its slot given back): only that user's own business is ever touched. */
-    async forgetProject(userId, projectId) {
+    async forgetProject(userId, projectId, opts = {}) {
       checkUser(userId);
       const id = projectOf({ projectId });
       if (!id) throw fail(400, 'BAD_REQUEST', 'Which business?');
-      return typeof impl.forgetProject === 'function' ? impl.forgetProject(userId, id) : { freed: false };
+      return typeof impl.forgetProject === 'function' ? impl.forgetProject(userId, id, { onlyIfGone: opts?.onlyIfGone === true }) : { freed: false };
     },
     async forgetUser(userId) {
       if (!isUuid(userId)) return;

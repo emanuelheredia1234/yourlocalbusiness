@@ -147,6 +147,7 @@ export const ROUTE_PREFIXES = Object.freeze({
 /** Rate-limit buckets (per user unless noted), as `${bucket}:user:<id>` keys for rateLimited(key, factor). */
 export const RATE_BUCKETS = Object.freeze({
   connect: 'integrations-connect', // 10 per hour
+  release: 'integrations-release', // 60 per hour (a deleted business frees its social slot)
   publish: 'posting-publish', // 30 per hour
   refresh: 'analytics-refresh', // 1 per business per 15 min (analytics_runs) + 10 per hour
   publicMedia: 'media-public', // 120 per minute per IP

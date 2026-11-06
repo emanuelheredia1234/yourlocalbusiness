@@ -10,8 +10,8 @@
 //   trying again", and "Check again" reads the status by the job id.
 // - A `failed` job that Upload-Post then posted after all (its own retry) becomes `sent`, unless the customer has
 //   posted it again since (another job is live): then the old job stays out of the live set and records
-//   POSTED_AFTER_ALL (shown as posted, with its address), and the live job says the post may now appear twice.
-//   Nothing is ever sent again.
+//   POSTED_AFTER_ALL (shown as posted, with its address), and the live job says the post may now appear twice. If
+//   that live job then fails, the earlier one becomes plain `sent` (the post is there once). Nothing is sent again.
 // Every query names the server-resolved user.
 
 import crypto from 'node:crypto';
@@ -67,7 +67,8 @@ export function jobOut(row) {
   const ref = row.provider_ref && typeof row.provider_ref === 'object' ? row.provider_ref : {};
   const late = row.state === 'failed' && row.error_code === POSTED_AFTER_ALL;
   const state = late ? 'sent' : row.state;
-  const note = late ? 'POSTED_AFTER_ALL' : typeof ref.twiceWith === 'string' ? 'MAY_APPEAR_TWICE' : state === 'sent' && ref.outcome === 'drafts' ? 'SENT_TO_DRAFTS' : null;
+  // a live try that then failed isn't on the network: it can't be there twice (the earlier try reads plain "Posted")
+  const note = late ? 'POSTED_AFTER_ALL' : typeof ref.twiceWith === 'string' && state !== 'failed' ? 'MAY_APPEAR_TWICE' : state === 'sent' && ref.outcome === 'drafts' ? 'SENT_TO_DRAFTS' : null;
   return {
     id: row.id,
     postId: row.post_id,
@@ -152,7 +153,25 @@ export function createJobs({ db, now = () => Date.now() }) {
       ...(ref ? { provider_ref: { ...(cur.provider_ref ?? {}), ...ref } } : {}),
     };
     const got = await db.update('post_publish_jobs', { id: jobId, user_id: userId, state: cur.state }, patch, { returning: true });
-    return got[0] ?? (await byId(userId, jobId));
+    const row = got[0] ?? (await byId(userId, jobId));
+    // this try failed after an earlier one was posted after all: that earlier one is the post (once), so it becomes
+    // plain `sent` (nothing is live now, so the one-live rule holds; nothing is sent)
+    const earlier = cur.provider_ref?.twiceWith;
+    if (state === 'failed' && row?.state === 'failed' && typeof earlier === 'string') await promoteEarlier(userId, earlier);
+    return row;
+  }
+
+  /** An earlier try recorded as POSTED_AFTER_ALL becomes `sent` when nothing else of its post is live. */
+  async function promoteEarlier(userId, jobId) {
+    const old = await byId(userId, jobId).catch(() => null);
+    if (!old || old.state !== 'failed' || old.error_code !== POSTED_AFTER_ALL) return;
+    if (await liveFor(userId, old.post_id, old.platform)) return;
+    try {
+      await db.update('post_publish_jobs', { id: old.id, user_id: userId, state: 'failed', error_code: POSTED_AFTER_ALL }, { state: 'sent', error_code: null }, { returning: true });
+    } catch (e) {
+      // another try went live meanwhile (the one-live index): the earlier one stays POSTED_AFTER_ALL
+      if (e?.code !== 'CONFLICT') throw e;
+    }
   }
 
   return {

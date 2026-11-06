@@ -43,19 +43,35 @@ export function holdsSocialSlot(id: string): boolean {
 /** The sentence a delete confirm adds for a business with social accounts (empty for one without). */
 export const socialDeleteNote = (id: string): string => (holdsSocialSlot(id) ? ' Its connected social accounts are disconnected too, which frees one of your business slots.' : '');
 
+const isArtifact = () => typeof __ARTIFACT_BUILD__ !== 'undefined' && __ARTIFACT_BUILD__;
+
+/**
+ * Read which businesses hold a slot now (another device may have connected one since this one last asked), so a
+ * delete or import confirm says what it disconnects. Signed out, or in the artifact, nothing is read.
+ */
+export async function refreshSocialSlots(): Promise<void> {
+  if (isArtifact() || useAuth.getState().phase !== 'ready') return;
+  await useAnalytics.getState().refreshConnections().catch(() => undefined);
+}
+
+/** socialDeleteNote with the slots read fresh first. */
+export async function freshSocialDeleteNote(id: string): Promise<string> {
+  await refreshSocialSlots();
+  return socialDeleteNote(id);
+}
+
 /**
  * Businesses that are gone (deleted here, by a workspace reset or a backup import): their social accounts are
- * disconnected at the posting service and their slots freed. One request per business that holds a slot, never
- * retried (the server's daily check finishes anything left over).
+ * disconnected at the posting service and their slots freed. One request per gone business, whatever this device
+ * last heard about its slots (the server answers freed: false for one without), never retried (the server's daily
+ * check finishes anything left over).
  */
 export async function releaseSocialFor(ids: string[]): Promise<void> {
-  if ((typeof __ARTIFACT_BUILD__ !== 'undefined' && __ARTIFACT_BUILD__) || !ids.length) return;
+  if (isArtifact() || !ids.length) return;
   // social accounts belong to a signed-in account: signed out, there's nothing of this device's to free
   if (useAuth.getState().phase !== 'ready') return;
-  const analytics = useAnalytics.getState();
-  // which businesses hold a slot: the last answer, or one read now
-  if (!analytics.slots) await analytics.refreshConnections().catch(() => undefined);
-  const slots = useAnalytics.getState().slots;
-  if (!slots) return;
-  for (const id of ids.filter((x) => slots.projects.includes(x))) await useAnalytics.getState().releaseBusiness(id);
+  // social posting is off on this server: there's nothing to free
+  const a = useAnalytics.getState();
+  if (a.connectionsLoaded && !a.socialEnabled && !a.slots) return;
+  for (const id of ids) await useAnalytics.getState().releaseBusiness(id);
 }

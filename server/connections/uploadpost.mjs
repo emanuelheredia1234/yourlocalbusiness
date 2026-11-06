@@ -21,6 +21,8 @@
 // - Slots: each user has at most UPLOAD_POST_MAX_PROFILES_PER_USER businesses with a profile (default 3), so one
 //   user can't use up the plan's 75 by making businesses. The slot is reserved in the user's doc (a version-checked
 //   write) before Upload-Post is asked, so two Connect clicks at once never make two profiles or pass the cap.
+//   A profile whose delete hasn't gone through still counts. Each user starts at most max(3, their limit) new
+//   profiles a day, inside the plan-wide UPLOAD_POST_NEW_PROFILES_PER_DAY (kept by name; given back on a definite no).
 // - The browser sees ConnectionStatus, opaque target handles and its own slot count only: no profile names, account
 //   or Page ids.
 // - A post is one attempt (request_id = Idempotency-Key = external_id = the job id), through its business's profile.
@@ -72,13 +74,18 @@ const DAY_MS = 86_400_000;
 const PROJECT_GONE_MS = 2 * DAY_MS;
 /** Ended profile lives kept for the monthly estimate (last month and this one). */
 const PAST_KEEP_MS = 70 * DAY_MS;
+/** The daily check reads at most this many profiles our docs have that Upload-Post's listing doesn't. */
+const MISSING_READS_PER_DAY = 25;
 /** The daily check deletes at most this many profiles (marked, gone businesses, reclaimed, the old per-customer one). */
 const DELETES_PER_DAY = 10;
 /** X Links: 50 link posts a month for the whole Upload-Post account; the owner hears at 40. */
 const X_LINKS_POOL = 50;
 const X_LINKS_POOL_ALERT = 40;
-/** The owner's alerts, most serious first (the Billing page shows the first one live), and how long one shows. */
-const ALERT_RANK = ['auth', 'rate_lockout', 'profile_cap', 'profile_blocked', 'plan', 'scheduled_limit', 'media_secret', 'profile_budget', 'profile_user_cap', 'x_links', 'profile_cap_low', 'x_links_low', 'profile_orphans', 'analytics_limit'];
+/**
+ * The owner's alerts, most serious first (the Billing page shows every live one, in this order), and how long one
+ * shows. One customer reaching their own limit is routine: it never hides a plan-wide alert.
+ */
+const ALERT_RANK = ['auth', 'rate_lockout', 'profile_cap', 'profile_blocked', 'profile_refused', 'plan', 'scheduled_limit', 'media_secret', 'profile_budget', 'x_links', 'profile_cap_low', 'x_links_low', 'profile_user_cap', 'profile_orphans', 'analytics_limit'];
 const ALERT_TTL_MS = 7 * DAY_MS;
 const ALERTS_KEY = 'uploadpost:alerts';
 const GONE_KEY = 'uploadpost:gone';
@@ -87,13 +94,19 @@ const REQUEST_ID = /^[A-Za-z0-9_.:-]{6,128}$/;
 const TIKTOK_PRIVACY = ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'];
 /** What each network's reach_timeseries counts when the answer has no metric_type (Upload-Post's metric_type). */
 const SERIES_METRIC = { facebook: 'reach', instagram: 'reach', linkedin: 'reach', tiktok: 'views', youtube: 'views', x: 'impressions', pinterest: 'impressions' };
-/** Top-level domains a bare address ends in that X turns into a link (any 2-letter country code counts too). */
+/**
+ * Top-level domains a bare address ends in that X turns into a link. A 2-letter country code counts only with a
+ * path (mybiz.de/menu) or after a second-level label (joes-bakery.co.uk), as X itself links them: "Thanks.So happy"
+ * or "Hi.My name" is no link.
+ */
 const X_TLDS = 'com|net|org|info|biz|app|dev|io|ai|co|me|tv|xyz|shop|store|online|site|website|club|live|blog|news|page|link|art|design|studio|agency|business|company|services|solutions|tech|digital|media|cafe|bar|pizza|salon|fitness|health|church|school|academy|travel|events|photography|beauty|clinic|dental|law|realty|homes|garden|farm|auto|pet|vet|restaurant|bakery|coffee|menu|delivery|today|world|life|fun|love|works|email|group|team|global|city|nyc|london|berlin|paris|tokyo';
+/** Second-level labels under a country code (co.uk, com.au, org.nz…). */
+const X_SLD = '(?:co|com|org|net|ac|gov|edu|ltd|plc|nom|biz|info|me|or|ne|gob|gen|firm)';
 /**
  * A web address X would turn into a link (Upload-Post strips those without the X Links add-on): http(s)://…,
  * www.…, or a bare domain such as mybiz.com or joes-bakery.co.uk/order (not part of an email, a hashtag or a word).
  */
-export const X_LINKISH = new RegExp(`https?:\\/\\/|\\bwww\\.[a-z0-9-]|(?:^|[^A-Za-z0-9@$#._'’-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:[a-z]{2}|${X_TLDS})(?![A-Za-z0-9'’-])`, 'i');
+export const X_LINKISH = new RegExp(`https?:\\/\\/|\\bwww\\.[a-z0-9-]|(?:^|[^A-Za-z0-9@$#._'’-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:${X_TLDS}|${X_SLD}\\.[a-z]{2}|[a-z]{2}(?=\\/))(?![A-Za-z0-9'’-])`, 'i');
 /** Whether a post's text has an address X turns into a link (it counts toward the X Links allowance). */
 export const hasXLink = (text) => X_LINKISH.test(String(text ?? ''));
 /** Estimated cost of one profile for a month: the Advanced plan ($147) over its 75 profiles, ≈ $1.96 (owner sign-off). */
@@ -228,6 +241,8 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   };
   /** Businesses with a profile per user (one user making businesses can't use up the plan's 75). */
   const maxPerUser = intEnv('UPLOAD_POST_MAX_PROFILES_PER_USER', 3, 1, 1000);
+  /** New profiles one user can start in a day (their limit, at least 3): connect, delete, connect again can't drain the day's budget. */
+  const userNewPerDay = Math.max(3, maxPerUser);
   /** New profiles a day at most (a burst of throwaway sign-ups must not fill the plan's 75 in an afternoon). */
   const newProfilesPerDay = intEnv('UPLOAD_POST_NEW_PROFILES_PER_DAY', 20, 1, 1000);
   /** A profile with nothing connected this long goes back to the plan. */
@@ -293,7 +308,8 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   function ownerAlert(kind, extra = {}) {
     log_('uploadpost_owner_alert', { kind });
     const last = alertSaved.get(kind) ?? 0;
-    if (now() - last < 10 * 60_000 && !Object.keys(extra).length) return;
+    // one write per kind per 10 minutes, its fields too (a customer clicking Connect again and again re-stamps nothing)
+    if (now() - last < 10 * 60_000) return;
     alertSaved.set(kind, now());
     track(
       changeAlerts((map) => {
@@ -545,11 +561,18 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
    * "delete this business" and "free a deleted business's slot").
    */
   async function slots(userId) {
-    if (!storageReady) return { used: 0, cap: maxPerUser, projects: [] };
+    if (!storageReady) return { used: 0, cap: maxPerUser, projects: [], orphans: [] };
     const { value } = await readDoc(userId);
-    if (forgotten(value)) return { used: 0, cap: maxPerUser, projects: [] };
-    const holding = value.profiles.filter(holdsSlot);
-    return { used: holding.length, cap: maxPerUser, projects: holding.map((p) => p.projectId) };
+    if (forgotten(value)) return { used: 0, cap: maxPerUser, projects: [], orphans: [] };
+    const holding = value.profiles.filter(holdsPlanSlot);
+    // a slot whose business is gone from the account (the server's own check, never one device's project list), or
+    // whose delete hasn't gone through yet: the app offers to free those
+    const orphans = [];
+    for (const p of holding) {
+      if (p.state === 'deleting') orphans.push(p.projectId);
+      else if (dbReady && (await businessThere(userId, p.projectId)) === false) orphans.push(p.projectId);
+    }
+    return { used: holding.length, cap: maxPerUser, projects: holding.map((p) => p.projectId), orphans };
   }
 
   // ───────────── a business's profile (one per business, of the plan's 75) ─────────────
@@ -609,8 +632,15 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       const p = profileOf(d, projectId);
       if (p?.state === 'ready') return { write: false, result: { username: p.username, ready: true } };
       if (p?.state === 'reserved') return { write: false, result: { username: p.username } };
-      const used = d.profiles.filter((x) => holdsSlot(x) && x.projectId !== projectId).length;
+      // a profile whose delete hasn't gone through yet still holds one of the plan's: it counts until it's gone
+      const used = d.profiles.filter((x) => holdsPlanSlot(x) && x.projectId !== projectId).length;
       if (used >= maxPerUser) return { write: false, result: { full: true, used } };
+      // new profiles a day per user (their limit, at least 3): connect, delete, connect again can't use up the
+      // plan's daily budget for everyone
+      const today = iso(now()).slice(0, 10);
+      const made = d.made?.day === today ? Number(d.made.n) || 0 : 0;
+      if (made >= userNewPerDay) return { write: false, result: { daily: true } };
+      d.made = { day: today, n: made + 1 };
       // a business that had a profile before (given back, or being deleted) gets the same name again
       const username = p?.username ?? freshUsername(d, tag, userId, projectId);
       putProfile(d, p ? { ...p, state: 'reserved', reservedAt: iso(now()), was: p.state, accounts: {}, pending: {}, lastError: {}, pages: {}, pins: {}, choice: {} } : blankProfile(projectId, username));
@@ -621,6 +651,10 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     if (held.full) {
       ownerAlert('profile_user_cap', { tag, n: maxPerUser });
       throw userCapFull(held.used);
+    }
+    if (held.daily) {
+      log_('uploadpost_profile_user_daily', {});
+      throw fail(429, 'RATE_LIMITED', `You’ve started connecting social accounts for ${userNewPerDay} new businesses today, the most for one day. Try again tomorrow.`);
     }
     let made;
     try {
@@ -633,6 +667,8 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
           // a business that never had a profile leaves nothing; one that had keeps its name (and a delete still due)
           if (p.was === 'reclaimed' || p.was === 'deleting') putProfile(d, { ...p, state: p.was });
           else dropProfile(d, projectId);
+          // nothing was made: today's count is as it was
+          if (d.made?.day === iso(now()).slice(0, 10)) d.made = { ...d.made, n: Math.max(0, (Number(d.made.n) || 0) - 1) };
           return { value: d };
         }).catch(() => null);
       }
@@ -650,16 +686,33 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       return { value: d, result: true };
     });
     if (!ready) {
-      if (made) await deleteProfile(held.username);
+      // it's there at Upload-Post (made now, or there already): it goes; a delete that fails is kept as `deleting`,
+      // so the daily check finishes it and the plan's slot isn't lost
+      const gone = await deleteProfile(held.username);
+      await updateDoc(userId, (d) => {
+        const p = profileOf(d, projectId);
+        if (gone) {
+          if (p?.username !== held.username || p.state !== 'deleting') return { write: false };
+          dropProfile(d, projectId);
+          return { value: d };
+        }
+        if (p) return { write: false };
+        putProfile(d, { projectId, username: held.username, state: 'deleting', deletingAt: iso(now()), accounts: {}, pages: {}, pins: {}, choice: {}, pending: {}, lastError: {} });
+        return { value: d };
+      }).catch(() => null);
       throw fail(404, 'NOT_FOUND', 'This business was deleted.');
     }
     log_('uploadpost_profile_ready', {});
     return { username: held.username, made };
   }
 
-  /** One of today's new-profile slots (UPLOAD_POST_NEW_PROFILES_PER_DAY), or false when they're used up. */
-  async function takeNewProfileSlot() {
-    const key = `uploadpost:new-profiles:${iso(now()).slice(0, 10)}`;
+  const budgetKey = () => `uploadpost:new-profiles:${iso(now()).slice(0, 10)}`;
+  /**
+   * One of today's new-profile slots (UPLOAD_POST_NEW_PROFILES_PER_DAY) for this profile name, or false when they're
+   * used up. Kept by name: asking again for the same name today (a create that got no answer) takes no second one.
+   */
+  async function takeNewProfileSlot(username) {
+    const key = budgetKey();
     for (let attempt = 0; attempt < 5; attempt += 1) {
       let got;
       try {
@@ -667,16 +720,40 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       } catch {
         return true;
       }
-      const n = Number(got?.value?.n) || 0;
+      const names = Array.isArray(got?.value?.names) ? got.value.names.filter((x) => typeof x === 'string') : [];
+      const n = Math.max(Number(got?.value?.n) || 0, names.length);
+      if (names.includes(username)) return true;
       if (n >= newProfilesPerDay) return false;
       try {
-        await storage.put(key, { n: n + 1 }, { ifVersion: got?.updatedAt ?? null });
+        await storage.put(key, { n: n + 1, names: [...names, username] }, { ifVersion: got?.updatedAt ?? null });
         return true;
       } catch (e) {
         if (e?.code !== 'CONFLICT') return true;
       }
     }
     return true;
+  }
+
+  /** Upload-Post said a definite no to making this profile: today's slot it took is everyone's again. */
+  async function giveBackNewProfileSlot(username) {
+    const key = budgetKey();
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      let got;
+      try {
+        got = await storage.get(key);
+      } catch {
+        return;
+      }
+      const names = Array.isArray(got?.value?.names) ? got.value.names.filter((x) => typeof x === 'string') : [];
+      if (!names.includes(username)) return;
+      const n = Math.max(Number(got?.value?.n) || 0, names.length);
+      try {
+        await storage.put(key, { n: Math.max(0, n - 1), names: names.filter((x) => x !== username) }, { ifVersion: got?.updatedAt ?? null });
+        return;
+      } catch (e) {
+        if (e?.code !== 'CONFLICT') return;
+      }
+    }
   }
 
   /**
@@ -694,7 +771,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       }
       if (remaining <= alertRemaining) ownerAlert('profile_cap_low');
     }
-    if (!listed && !(await takeNewProfileSlot())) {
+    if (!listed && !(await takeNewProfileSlot(username))) {
       ownerAlert('profile_budget');
       throw definite(fail(503, 'CONNECTIONS_UNAVAILABLE', 'Social connections are temporarily full. We’ve been notified and will let you know.', {}, `More than ${newProfilesPerDay} new business profiles were started today (UPLOAD_POST_NEW_PROFILES_PER_DAY): check the customers are real, then raise it if they are.`));
     }
@@ -704,8 +781,15 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       if (capCache && made.status !== 409) capCache = { ...capCache, used: capCache.used + 1, profiles: [...capCache.profiles, { username }] };
       return made.status !== 409;
     }
-    const err = callFailure(made);
-    throw made.status >= 500 ? err : definite(err);
+    log_('uploadpost_profile_create_failed', { status: made.status, code: upError(made).code });
+    // no answer we can trust (5xx): it may have been made, so the slot stays taken
+    if (made.status >= 500) throw callFailure(made);
+    // a definite no: nothing was made, so today's slot is everyone's again
+    if (!listed) await giveBackNewProfileSlot(username);
+    if (made.status === 429 || upError(made).code === 'PROFILE_LIMIT_REACHED' || made.status === 401 || made.status === 403) throw definite(callFailure(made));
+    // any other refusal (a 400 over the name, say) is the team's to fix, never the customer's to retry
+    ownerAlert('profile_refused');
+    throw definite(fail(503, 'CONNECTIONS_UNAVAILABLE', 'Social connections are temporarily unavailable. We’ve been notified.', {}, `Upload-Post refused to make a business profile (HTTP ${made.status}): check the plan and the server log.`));
   }
 
   // ───────────── connect and reconnect (the hosted white-label page) ─────────────
@@ -736,11 +820,16 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     if (!SOCIAL_PLATFORMS.includes(platform)) throw fail(404, 'NOT_FOUND', 'Unknown account type.');
     if (PHASE2_PLATFORMS.includes(platform)) throw fail(400, 'BAD_REQUEST', `${NAMES[platform]} is coming soon.`);
     if (!validProject(projectId)) throw needBusiness();
-    const { username, made } = await ensureProfile(userId, projectId);
+    let { username, made } = await ensureProfile(userId, projectId);
     let { value: doc } = await readDoc(userId);
     if (!reconnect) {
       // the profile as Upload-Post has it now: an account whose webhook never came is connected already
       if (!made || liveProfile(doc, projectId)?.accounts?.[platform]?.state === 'connected') doc = (await sync(userId, projectId).catch(() => null)) ?? doc;
+      // the read found the profile gone at Upload-Post (deleted by hand): it's made again, with the same name
+      if (!liveProfile(doc, projectId)) {
+        ({ username, made } = await ensureProfile(userId, projectId));
+        ({ value: doc } = await readDoc(userId));
+      }
       if (liveProfile(doc, projectId)?.accounts?.[platform]?.state === 'connected') {
         log_('uploadpost_connect_already', { platform });
         return { alreadyConnected: true };
@@ -826,6 +915,23 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     return id;
   }
 
+  /**
+   * The business's profile is gone at Upload-Post (deleted by hand in its dashboard): it stops holding the user's
+   * slot and stops being billed (its life ends now). The business's next Connect makes it again, with the same name.
+   * → the doc.
+   */
+  async function markMissing(userId, projectId, username) {
+    log_('uploadpost_profile_missing', {});
+    capCache = null;
+    return updateDoc(userId, (d) => {
+      const p = profileOf(d, projectId);
+      if (!p || p.username !== username || p.state !== 'ready') return { write: false, result: d };
+      endLife(d, p);
+      putProfile(d, { projectId, username, state: 'reclaimed', reclaimedAt: iso(now()), missing: true, accounts: {}, pages: {}, pins: {}, choice: {}, pending: {}, lastError: {} });
+      return { value: d, result: d };
+    });
+  }
+
   /** GET /uploadposts/users/{username} for one business → its accounts (labels, state), Pages and pins. → the doc. */
   async function sync(userId, projectId) {
     const { value: doc } = await readDoc(userId);
@@ -836,8 +942,8 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     if (lastSync.size > 5000) for (const [k, at] of lastSync) if (now() - at > 3_600_000) lastSync.delete(k);
     const res = await call('GET', `/uploadposts/users/${username}`, { retry429: true });
     let social = {};
-    if (res.status === 404) social = {};
-    else if (res.status < 200 || res.status >= 300) throw callFailure(res);
+    if (res.status === 404) return markMissing(userId, projectId, username);
+    if (res.status < 200 || res.status >= 300) throw callFailure(res);
     else social = isObj(res.body?.profile?.social_accounts) ? res.body.profile.social_accounts : {};
     const extra = {};
     for (const platform of ['facebook', 'linkedin']) {
@@ -1487,15 +1593,21 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   /**
    * A business was deleted in the app (or its user gave its slot back): its profile at Upload-Post goes, with every
    * social account in it, and the slot is the user's again at once. One attempt; a failed delete is finished by the
-   * daily check (the entry is marked `deleting`, hidden and out of the user's count). Only the signed-in user's own
-   * business is ever touched. → { freed: boolean, later?: true }.
+   * daily check (the entry is marked `deleting`, hidden, and still counted in the user's slots until it's gone).
+   * Only the signed-in user's own business is ever touched. `onlyIfGone` (the app's "Free it" for a slot it thinks a
+   * deleted business holds): refused while the business is still saved in the account. → { freed, later?: true }.
    */
-  async function forgetProject(userId, projectId) {
+  async function forgetProject(userId, projectId, { onlyIfGone = false } = {}) {
     if (!storageReady) return { freed: false };
     if (!validProject(projectId)) throw needBusiness();
     const { value: doc } = await readDoc(userId);
     const prof = profileOf(doc, projectId);
     if (!prof) return { freed: false };
+    if (onlyIfGone && prof.state !== 'deleting') {
+      const there = dbReady ? await businessThere(userId, projectId) : null;
+      if (there === true) throw fail(409, 'BUSINESS_EXISTS', 'This business is still in your account, so its social accounts stay connected. Refresh the page to see it.');
+      if (there !== false) throw fail(503, 'UNAVAILABLE', 'Couldn’t check that business just now. Try again shortly.');
+    }
     if (prof.state === 'reclaimed') {
       // nothing at Upload-Post any more: the business just leaves the doc
       await updateDoc(userId, (d) => {
@@ -1512,7 +1624,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       putProfile(d, { projectId, username: p.username, state: 'deleting', deletingAt: iso(now()), accounts: {}, pages: {}, pins: {}, choice: {}, pending: {}, lastError: {} });
       return { value: d };
     });
-    if (!setUp || !(await deleteProfile(prof.username))) return { freed: true, later: true };
+    if (!setUp || !(await deleteProfile(prof.username))) return { freed: false, later: true };
     await updateDoc(userId, (d) => {
       const p = profileOf(d, projectId);
       if (!p || p.username !== prof.username || p.state !== 'deleting') return { write: false };
@@ -1659,11 +1771,17 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     const p = profileOf(doc, projectId);
     if (p?.state === 'ready' && p.createdAt) lives.push([Date.parse(p.createdAt), Date.parse(doc.forgottenAt)]);
     for (const l of doc.past ?? []) if (l.projectId === projectId) lives.push([Date.parse(l.from), Date.parse(l.to)]);
+    // lives that overlap (a name given back and made again) count each day once
+    const spans = lives
+      .map(([from, to]) => [Math.max(month.start, Number.isFinite(from) ? from : month.start), Math.min(until, Number.isFinite(to) ? to : until)])
+      .filter(([a, b]) => b > a)
+      .sort((x, y) => x[0] - y[0]);
     let ms = 0;
-    for (const [from, to] of lives) {
-      const a = Math.max(month.start, Number.isFinite(from) ? from : month.start);
-      const b = Math.min(until, Number.isFinite(to) ? to : until);
-      if (b > a) ms += b - a;
+    let reach = -Infinity;
+    for (const [a, b] of spans) {
+      const start = Math.max(a, reach);
+      if (b > start) ms += b - start;
+      reach = Math.max(reach, b);
     }
     return Math.round((PROFILE_MONTH_MICRO * ms) / DAY_MS / month.days);
   }
@@ -1786,6 +1904,42 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   }
 
   /**
+   * Business profiles our docs have as there (`ready`, made over an hour ago) that Upload-Post's listing doesn't
+   * have: each is read by name (the listing may not be complete), and one Upload-Post answers 404 for (deleted by
+   * hand in its dashboard) stops holding its user's slot and stops being billed. At most MISSING_READS_PER_DAY
+   * reads. → how many were found gone.
+   */
+  async function reconcileMissing(listedNames) {
+    let reads = 0;
+    let found = 0;
+    for (let offset = 0; offset < 100_000 && reads < MISSING_READS_PER_DAY; offset += 1000) {
+      let customers;
+      try {
+        customers = await db.select('billing_customers', {}, { select: 'customer_tag,user_id', order: 'customer_tag', limit: 1000, offset });
+      } catch {
+        return found;
+      }
+      for (const c of customers) {
+        if (!c.user_id || reads >= MISSING_READS_PER_DAY) continue;
+        const got = await readDoc(c.user_id).catch(() => null);
+        if (!got || got.unreadable || forgotten(got.value)) continue;
+        for (const prof of got.value.profiles) {
+          if (prof.state !== 'ready' || listedNames.has(prof.username) || reads >= MISSING_READS_PER_DAY) continue;
+          const made = Date.parse(prof.createdAt);
+          if (!Number.isFinite(made) || now() - made < 3_600_000) continue;
+          reads += 1;
+          const res = await call('GET', `/uploadposts/users/${prof.username}`, { retry429: true }).catch(() => null);
+          if (res?.status !== 404) continue;
+          await markMissing(c.user_id, prof.projectId, prof.username).catch(() => null);
+          found += 1;
+        }
+      }
+      if (customers.length < 1000) break;
+    }
+    return found;
+  }
+
+  /**
    * Once a day: every profile's accounts against our docs (above), the cap (an owner alert when few profiles are
    * left), then our own `ylb_` profiles (never one named otherwise, at most 10 deletions a day), each mapped through
    * its customer tag to one customer and through their doc to one business:
@@ -1886,8 +2040,11 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
           const x = profileOf(d, projectId);
           if (!x || x.username !== username || x.state !== 'reserved') return { write: false };
           x.state = 'ready';
+          // never before this reservation (a name made before, given back and made again keeps Upload-Post's first
+          // created_at: an earlier life is billed already)
           const made = Date.parse(p.created_at);
-          x.createdAt = iso(Number.isFinite(made) && made <= now() ? made : now());
+          const reservedAt = Date.parse(x.reservedAt);
+          x.createdAt = iso(Math.min(now(), Math.max(Number.isFinite(made) ? made : now(), Number.isFinite(reservedAt) ? reservedAt : 0)));
           return { value: d };
         }).catch(() => null);
         continue;
@@ -1956,10 +2113,11 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
         return { value: d };
       }).catch(() => null);
     }
+    const missing = await reconcileMissing(new Set(listed.map((p) => String(p.username ?? '')))).catch(() => 0);
     if (unknown) ownerAlert('profile_orphans', { n: unknown });
     else clearAlerts(['profile_orphans']);
-    log_('uploadpost_reconciled', { checked, deleted, reclaimed, unknown });
-    return { checked, deleted, reclaimed, unknown };
+    log_('uploadpost_reconciled', { checked, deleted, reclaimed, unknown, missing });
+    return { checked, deleted, reclaimed, unknown, missing };
   }
 
   return {

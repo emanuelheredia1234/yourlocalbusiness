@@ -204,6 +204,7 @@ export const isUuid = (v) => UUID.test(String(v ?? ''));
 /** Each integration bucket's limits: every window must have room (contracts.mjs RATE_BUCKETS). */
 export const BUCKET_LIMITS = Object.freeze({
   'integrations-connect': [{ limit: 10, windowMs: 3_600_000 }],
+  'integrations-release': [{ limit: 60, windowMs: 3_600_000 }],
   'posting-publish': [{ limit: 30, windowMs: 3_600_000 }],
   'analytics-refresh': [{ limit: 10, windowMs: 3_600_000 }],
   'media-public': [{ limit: 120, windowMs: 60_000 }],

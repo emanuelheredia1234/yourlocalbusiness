@@ -57,7 +57,7 @@ Plain settings (not secret; Replit Secrets or env):
 | `UPLOAD_POST_RPM` | `150` | The app's own limit on Upload-Post calls per minute (plus 2 per profile; the Advanced plan allows 200 plus 2 per profile, and 1,000 per 10 minutes plus 10 per profile). |
 | `UPLOAD_POST_ALERT_REMAINING` | `5` | How many free profile slots (of the plan's 75) are left when the owner is alerted. |
 | `UPLOAD_POST_MAX_PROFILES_PER_USER` | `3` | How many of one user's businesses can have social accounts (one Upload-Post profile each), so one user making businesses can't use up the plan's 75. Past it the customer reads "You can connect social accounts for up to 3 businesses…" and you get an alert naming the customer. Raise it for everyone here. |
-| `UPLOAD_POST_NEW_PROFILES_PER_DAY` | `20` | New Upload-Post profiles a day at most (a burst of throwaway sign-ups can't fill the plan); past it customers read "temporarily full" and you get an alert. |
+| `UPLOAD_POST_NEW_PROFILES_PER_DAY` | `20` | New Upload-Post profiles a day at most, for everyone together (a burst of throwaway sign-ups can't fill the plan); past it customers read "temporarily full" and you get an alert. A create Upload-Post refuses outright gives its slot back. One user can start at most `UPLOAD_POST_MAX_PROFILES_PER_USER` (at least 3) new profiles a day, so one user connecting, deleting and connecting again can't use up the day for everyone; past it that user reads "Try again tomorrow". |
 | `UPLOAD_POST_RECLAIM_DAYS` | `7` | A business's profile with nothing connected for this many days goes back to the plan (it's made again, with the same name, on that business's next Connect). |
 | `UPLOAD_POST_X_LINKS` | unset | `on` once you've bought Upload-Post's X Links add-on: links stay in X posts. Unset, the app tells customers links are taken out on X. |
 | `UPLOAD_POST_X_LINK_POSTS_PER_CUSTOMER` | `5` | With X Links on: each customer's X posts with a link a month (the add-on's 50 are shared by everyone). |
@@ -110,11 +110,20 @@ the plan's 75 profiles. Facebook groups stay with Manus.
 - **Business slots**: each user can have social accounts on at most `UPLOAD_POST_MAX_PROFILES_PER_USER` businesses
   (default 3), so one user making businesses can't use up the plan. The slot is reserved before Upload-Post is
   asked, so two Connect clicks at once never make two profiles or pass the limit. Settings → Connected accounts
-  shows each user how many of their slots are used.
+  shows each user how many of their slots are used. A profile whose delete hasn't gone through yet still counts
+  (it still uses one of the plan's), so failing deletes can't pile up plan profiles.
 - **Deleting a business** (Settings → Projects & data, the assistant, a cancelled setup, a workspace reset or a
-  backup import) disconnects its social accounts and deletes its profile, freeing the slot; the delete confirm says
-  so. If the app couldn't reach the server, the daily check deletes the profile once the business has been gone
-  from the account for 2 days, and the user can also free a deleted business's slot on Connected accounts.
+  backup import) disconnects its social accounts and deletes its profile, freeing the slot; the delete confirm (read
+  fresh from the server) and the import confirm name what is disconnected. The app sends the release for every
+  deleted business, whatever it last heard (the server answers "nothing to free" for one without social accounts;
+  60 releases an hour per user). If the app couldn't reach the server, the daily check deletes the profile once the
+  business has been gone from the account for 2 days, and the user can also free the slot on Connected accounts:
+  **Free it** shows only for slots whose business the server finds gone from the account (never one another device
+  made that this one hasn't loaded yet), asks first, and the server refuses it while the business is still saved.
+- **A profile deleted by hand** in Upload-Post's dashboard stops holding its user's slot and stops being billed as
+  soon as a read of it (Check, Connect) or the daily check (which reads by name any profile our records have that
+  Upload-Post's list doesn't, at most 25 a day) gets a 404. The business's next Connect makes it again, with the
+  same name.
 
 **Set it up once**
 1. Subscribe to Upload-Post's **Advanced** plan, billed **yearly** ($1,411 a year, about $118 a month; $147 month
@@ -207,7 +216,9 @@ the plan's 75 profiles. Facebook groups stay with Manus.
   $1,150 a year); **they don't stack**, so past 125 you need a bigger plan or a second account. Each user can use at
   most `UPLOAD_POST_MAX_PROFILES_PER_USER` (default 3) of them. With 5 or fewer left (`UPLOAD_POST_ALERT_REMAINING`)
   you get an alert; at 0, customers connecting a new business read "Social connections are temporarily full. We've
-  been notified" until you add profiles. At most `UPLOAD_POST_NEW_PROFILES_PER_DAY` new profiles are made a day, and
+  been notified" until you add profiles. If Upload-Post refuses to make a profile for another reason (a 400, say),
+  customers read "temporarily unavailable" and you get the "refused to make a new business profile" alert. At most
+  `UPLOAD_POST_NEW_PROFILES_PER_DAY` new profiles are made a day (and a few per user), and
   a business's profile with nothing connected for `UPLOAD_POST_RECLAIM_DAYS` goes back to the plan. Deleting a
   business deletes its profile; deleting an account deletes all of them. The daily check (at most 10 deletions a
   day) only touches `ylb_` profiles it can map to one customer and one of their businesses, or that account deletion
@@ -414,7 +425,7 @@ One screen with two sections:
   again, and a ⋯ menu on connected rows (choose the Page for this business, check the connection, **Disconnect**,
   which stops only this business using it). **Business slots: 2 of 3 used** says how many of the user's businesses
   have social accounts; with all in use, a business without one is told to delete a business it no longer uses,
-  and a slot still held by a deleted business shows **Free it**. The "How connecting works" tip says plainly that
+  and a slot still held by a business the server finds deleted shows **Free it** (with a confirm). The "How connecting works" tip says plainly that
   the sign-in page is run by Upload-Post, so its name shows there and on the network's permission screen.
 - **Ad accounts** (Zernio): Google Ads, Meta Ads, LinkedIn Ads, TikTok Ads, Pinterest Ads, Reddit Ads, Microsoft
   Ads, and X Ads as "Coming soon". Read only: "The app only reads them and never changes your ads or spends

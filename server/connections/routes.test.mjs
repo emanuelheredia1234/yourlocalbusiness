@@ -275,6 +275,19 @@ describe('connecting end to end', () => {
     expect(up.profiles.has(await profileOf(ALICE))).toBe(true);
   });
 
+  it('"Free it" (?gone=1) is refused while the business is still saved; the release route has its own limit per user', async () => {
+    await connectOverHttp('alice', 'tiktok');
+    const name = await profileOf(ALICE);
+    const res = await app.call('alice', 'DELETE', `/api/integrations/connections?projectId=${P1}&gone=1`);
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('BUSINESS_EXISTS');
+    expect(up.profiles.has(name)).toBe(true);
+    // 60 an hour: a loop of releases is cut off
+    let last = 200;
+    for (let i = 0; i < 61 && last !== 429; i += 1) last = (await app.call('bob', 'DELETE', '/api/integrations/connections?projectId=proj_none0000001')).status;
+    expect(last).toBe(429);
+  });
+
   it('each business has its own LinkedIn: the business id picks whose accounts and which page it posts as', async () => {
     await business(ALICE, P2);
     const name = profileUsername(customerTag(ALICE.id, { CUSTOMER_TAG_SECRET: TAG_SECRET }), ALICE.id, P2, TAG_SECRET);

@@ -4,8 +4,9 @@
 //                                                                    slots? ({used, cap, projects}: the user's
 //                                                                    businesses with social accounts, of their limit),
 //                                                                    hint? (admins: a Secret still missing)}
-//   DELETE /api/integrations/connections?projectId=                {ok, freed}  a business was deleted: its social
-//                                                                    profile goes, with every account in it
+//   DELETE /api/integrations/connections?projectId=[&gone=1]       {ok, freed}  a business was deleted: its social
+//                                                                    profile goes, with every account in it (60 an
+//                                                                    hour; gone=1: 409 while the business is saved)
 //   POST   /api/integrations/connections/:platform/connect          {connectLink, expiresAt} | {alreadyConnected: true}
 //                                                                    body {projectId?}: the business that connects it
 //   POST   /api/integrations/connections/:platform/reconnect        same
@@ -127,7 +128,10 @@ export function createConnectionRoutes(deps = {}) {
         // a business was deleted in the app: its social profile (and every account in it) goes, its slot comes back
         const projectId = projectFrom(url.searchParams.get('projectId'));
         if (!projectId) throw fail(400, 'BAD_REQUEST', 'Which business?');
-        const out = connections.socialEnabled ? await connections.forgetProject(who.id, projectId) : { freed: false };
+        if (limit('integrations-release', who.id)) throw fail(429, 'RATE_LIMITED', 'Too many requests. Try again later.');
+        // ?gone=1: "Free it" for a slot the app thinks a deleted business holds (refused while the business is saved)
+        const onlyIfGone = url.searchParams.get('gone') === '1';
+        const out = connections.socialEnabled ? await connections.forgetProject(who.id, projectId, { onlyIfGone }) : { freed: false };
         reply(req, res, 200, { ok: true, freed: out?.freed === true });
         return true;
       }
@@ -146,7 +150,7 @@ export function createConnectionRoutes(deps = {}) {
           provider: { social: connections.socialEnabled ? 'upload_post' : null, ads: connections.adsEnabled ? 'zernio' : null },
           // whether links stay in X posts (the X Links add-on); without it Upload-Post takes them out
           xLinks: connections.xLinks === true,
-          ...(slots && Number.isFinite(slots.used) && Number.isFinite(slots.cap) ? { slots: { used: slots.used, cap: slots.cap, projects: Array.isArray(slots.projects) ? slots.projects : [] } } : {}),
+          ...(slots && Number.isFinite(slots.used) && Number.isFinite(slots.cap) ? { slots: { used: slots.used, cap: slots.cap, projects: Array.isArray(slots.projects) ? slots.projects : [], orphans: Array.isArray(slots.orphans) ? slots.orphans : [] } } : {}),
           // the owner reads which Secret a side still needs (names only), whichever side it is, set up or not
           ...(who.isAdmin === true && connections.hint ? { hint: connections.hint } : {}),
         });

@@ -126,7 +126,7 @@ export interface AnalyticsState {
   checkPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
   disconnectPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
   /** A business was deleted (or its slot is held by one that was): its social accounts are disconnected and its slot freed. One request each. */
-  releaseBusiness: (projectId: string) => Promise<{ ok: boolean; message?: string }>;
+  releaseBusiness: (projectId: string, opts?: { onlyIfGone?: boolean }) => Promise<{ ok: boolean; message?: string }>;
   loadOwner: () => Promise<void>;
   /** Read the project's analytics settings (a PUT with no fields changes nothing and answers them). */
   loadSettings: (projectId: string) => Promise<void>;
@@ -246,7 +246,8 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       const enabled = r.setUp === true && available.length > 0;
       // each side by its own flag; an older server sent only setUp (then both follow it)
       const side = (flag: boolean | undefined, list: readonly ConnectPlatform[]) => enabled && (flag ?? true) && available.some((p) => list.includes(p));
-      const slots = r.slots && Number.isFinite(r.slots.used) && Number.isFinite(r.slots.cap) ? { used: r.slots.used, cap: r.slots.cap, projects: Array.isArray(r.slots.projects) ? r.slots.projects.filter((x) => typeof x === 'string') : [] } : undefined;
+      const ids = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+      const slots = r.slots && Number.isFinite(r.slots.used) && Number.isFinite(r.slots.cap) ? { used: r.slots.used, cap: r.slots.cap, projects: ids(r.slots.projects), orphans: ids(r.slots.orphans) } : undefined;
       set({
         connections,
         slots,
@@ -424,12 +425,13 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       }
     },
 
-    releaseBusiness: async (projectId) => {
+    releaseBusiness: async (projectId, opts = {}) => {
       if (artifact() || !projectId) return { ok: false };
       try {
-        await releaseProjectSocial(projectId);
+        const { freed } = await releaseProjectSocial(projectId, opts.onlyIfGone === true);
         const slots = get().slots;
-        if (slots?.projects.includes(projectId)) set({ slots: { ...slots, used: Math.max(0, slots.used - 1), projects: slots.projects.filter((x) => x !== projectId) } });
+        // a delete that didn't go through yet still holds the slot (the server finishes it)
+        if (freed && slots?.projects.includes(projectId)) set({ slots: { ...slots, used: Math.max(0, slots.used - 1), projects: slots.projects.filter((x) => x !== projectId), orphans: (slots.orphans ?? []).filter((x) => x !== projectId) } });
         return { ok: true };
       } catch (e) {
         return { ok: false, message: messageOf(e, 'Couldn’t free that business’s slot just now. Try again shortly.') };
@@ -506,7 +508,10 @@ function installFocusRefetch(): void {
   // another business on screen: its own chosen accounts (the labels a posting confirm shows)
   try {
     useStore.subscribe((state, prev) => {
-      if (state.activeProjectId !== prev.activeProjectId && connectionsLoadedOnce()) void ensureConnections();
+      if (state.activeProjectId === prev.activeProjectId || !connectionsLoadedOnce()) return;
+      // the last business's accounts never show (or name a posting target) on this one while its own are read
+      useAnalytics.setState({ connections: [] });
+      void ensureConnections();
     });
   } catch {
     /* no store (tests): the next focus or mount reads them */

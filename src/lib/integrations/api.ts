@@ -91,7 +91,8 @@ export const disconnect = (platform: ConnectPlatform, projectId?: string) => cal
 export const getTargets = (platform: ConnectPlatform, projectId?: string) => call<{ targets: Target[] }>('GET', `/api/integrations/connections/${seg(platform)}/targets${q({ projectId })}`);
 export const setTarget = (platform: ConnectPlatform, targetId: string, projectId?: string) => call<{ connection: ConnectionStatus }>('PUT', `/api/integrations/connections/${seg(platform)}/target`, { targetId, ...(projectId ? { projectId } : {}) });
 /** A business was deleted: its social accounts are disconnected and its slot freed (one request; never retried). */
-export const releaseProjectSocial = (projectId: string) => call<{ ok: true; freed: boolean }>('DELETE', `/api/integrations/connections${q({ projectId })}`);
+/** A business was deleted (its social profile goes). `onlyIfGone`: "Free it", refused while the business is still saved. */
+export const releaseProjectSocial = (projectId: string, onlyIfGone = false) => call<{ ok: true; freed: boolean }>('DELETE', `/api/integrations/connections${q(onlyIfGone ? { projectId, gone: '1' } : { projectId })}`);
 
 // ───────────── other integrations (Nango; future booking tools and CRMs, shown only when the owner set it up) ─────────────
 

@@ -109,10 +109,15 @@ export function captionPreview(post: Post, project: Project | undefined): Captio
   return { text, firstComment, commentYourself, linkNote, droppedTags, xLinkCost: post.platform === 'x' && hasXLink(`${text}\n${firstComment ?? ''}`), blockers };
 }
 
-/** Top-level domains a bare address ends in that X turns into a link (any 2-letter country code counts too). The same list as the server's (server/connections/uploadpost.mjs). */
+/**
+ * Top-level domains a bare address ends in that X turns into a link; a 2-letter country code only with a path
+ * (mybiz.de/menu) or after a second-level label (joes-bakery.co.uk), so "Thanks.So happy" is no link. The same rule
+ * as the server's (server/connections/uploadpost.mjs).
+ */
 const X_TLDS =
   'com|net|org|info|biz|app|dev|io|ai|co|me|tv|xyz|shop|store|online|site|website|club|live|blog|news|page|link|art|design|studio|agency|business|company|services|solutions|tech|digital|media|cafe|bar|pizza|salon|fitness|health|church|school|academy|travel|events|photography|beauty|clinic|dental|law|realty|homes|garden|farm|auto|pet|vet|restaurant|bakery|coffee|menu|delivery|today|world|life|fun|love|works|email|group|team|global|city|nyc|london|berlin|paris|tokyo';
-const X_LINKISH = new RegExp(`https?:\\/\\/|\\bwww\\.[a-z0-9-]|(?:^|[^A-Za-z0-9@$#._'’-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:[a-z]{2}|${X_TLDS})(?![A-Za-z0-9'’-])`, 'i');
+const X_SLD = '(?:co|com|org|net|ac|gov|edu|ltd|plc|nom|biz|info|me|or|ne|gob|gen|firm)';
+const X_LINKISH = new RegExp(`https?:\\/\\/|\\bwww\\.[a-z0-9-]|(?:^|[^A-Za-z0-9@$#._'’-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:${X_TLDS}|${X_SLD}\\.[a-z]{2}|[a-z]{2}(?=\\/))(?![A-Za-z0-9'’-])`, 'i');
 
 /**
  * Whether a text has an address X turns into a link: http(s)://…, www.… or a bare domain such as mybiz.com (not part

@@ -66,7 +66,7 @@ describe('what each network gets (read-only preview)', () => {
 
   it('X: a bare address such as mybiz.com is a link too, exactly as the server counts it (never an email, a hashtag or a price)', async () => {
     const server = (await import('../../server/connections/uploadpost.mjs' as string)) as { hasXLink: (t: string) => boolean };
-    const cases = ['Order at mybiz.com', 'Visit MyBiz.COM/order', 'www.joesbakery', 'https://joes.example', 'joes-bakery.co.uk/menu', '(mybiz.com)', 'mybiz.de', 'No link today', 'joe@mybiz.com', '#mybiz.com', '$3.50 a loaf', 'e.g. this', 'Open 9a.m.-5p.m.', 'file.txt', 'St.Louis'];
+    const cases = ['Order at mybiz.com', 'Visit MyBiz.COM/order', 'www.joesbakery', 'https://joes.example', 'joes-bakery.co.uk/menu', '(mybiz.com)', 'mybiz.de/menu', 'No link today', 'joe@mybiz.com', '#mybiz.com', '$3.50 a loaf', 'e.g. this', 'Open 9a.m.-5p.m.', 'file.txt', 'St.Louis', 'Great deals.Go now', 'see you at 5.Be there', 'Thanks.So happy', 'Hi.My name is Joe'];
     for (const t of cases) expect([t, hasXLink(t)]).toEqual([t, server.hasXLink(t)]);
     expect(cases.filter(hasXLink)).toEqual(cases.slice(0, 7));
     expect(captionPreview(post({ platform: 'x', caption: 'Order at joesbakery.com today', hashtags: [] }), project()).xLinkCost).toBe(true);

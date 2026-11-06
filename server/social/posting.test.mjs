@@ -245,6 +245,35 @@ describe('unknown outcomes and Check again', () => {
     expect(await jobOf(alice, second.body.job.id)).toMatchObject({ state: 'sent', note: 'MAY_APPEAR_TWICE' });
   });
 
+  it('the old try’s late success while the new try is being sent, and then the new try fails: the failure shows (never “twice”) and the old try reads plain “Posted”', async () => {
+    const dan = await t.user('dan@example.com');
+    await t.project(dan);
+    await t.connect(dan, ['linkedin']);
+    const post = await t.post(dan, { platform: 'linkedin', caption: 'Racing tries, second fails' });
+    t.up.setUploadOutcome('platform_failed');
+    const first = await publishAndWait(dan, post);
+    let release;
+    t.up.setUploadOutcome({ waitFor: new Promise((r) => (release = r)), then: 'platform_failed' });
+    const second = await t.publish(dan, post);
+    for (let i = 0; i < 200 && !t.postCalls().some((c) => c.idempotencyKey === second.body.job.id); i += 1) await new Promise((res) => setTimeout(res, 5));
+    const before = t.postCalls().length;
+    const late = t.up.signed({ event: 'upload_completed', request_id: first.body.job.id, profile_username: await t.profileOf(dan), platform: 'linkedin', result: { success: true, url: 'https://linkedin.com/feed/update/7', post_id: 'li7' } }, { ts: Math.floor(t.clock.t / 1000) });
+    await t.impl.webhook(late.raw, late.headers);
+    await t.impl.settled();
+    release();
+    await t.settled();
+    const b = await jobOf(dan, second.body.job.id);
+    expect(b).toMatchObject({ state: 'failed' });
+    expect(b.note).toBeUndefined();
+    const a = await jobOf(dan, first.body.job.id);
+    expect(a).toMatchObject({ state: 'sent', url: 'https://linkedin.com/feed/update/7' });
+    expect(a.note).toBeUndefined();
+    // the earlier try is the live one now (one live job), and nothing was sent again
+    const rows = await t.db.select('post_publish_jobs', { user_id: dan.id, post_id: post.id, platform: 'linkedin' });
+    expect(rows.filter((r) => ['queued', 'sending', 'sent', 'unknown'].includes(r.state)).map((r) => r.id)).toEqual([first.body.job.id]);
+    expect(t.postCalls().length).toBe(before);
+  });
+
   it('a failed try posted after all with nothing posted since simply reads “Posted” (it’s the live one now)', async () => {
     const post = await t.post(alice, { platform: 'x', caption: 'Posted after all, alone' });
     t.up.setUploadOutcome('platform_failed');

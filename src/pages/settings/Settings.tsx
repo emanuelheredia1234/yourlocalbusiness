@@ -6,7 +6,7 @@ import { useRuntime } from '@/lib/platform';
 import { pushMyListings } from '@/lib/community';
 import { saveBrand, brandCopyFrom } from '@/lib/brandSave';
 import { EXPORT_KEYS, backupFileName, backupJson } from '@/lib/backup';
-import { deleteProjectEverywhere, releaseSocialFor, socialDeleteNote } from '@/lib/projectActions';
+import { deleteProjectEverywhere, freshSocialDeleteNote, holdsSocialSlot, refreshSocialSlots, releaseSocialFor } from '@/lib/projectActions';
 import { usePublishAccess } from '@/lib/publish';
 import { FORMATS } from '@/ai/knowledge';
 import { brandKitTask } from '@/ai/tasks';
@@ -360,7 +360,14 @@ function ProjectsData() {
       const parsed = JSON.parse(await readFileAsText(file)) as { app?: string; data?: Partial<StoreState> };
       const data = parsed?.data;
       if (parsed?.app !== 'yourlocalbusiness' || !data || !Array.isArray(data.projects)) throw new Error('bad');
-      if (!(await confirmAction({ title: 'Replace your workspace with this backup?', body: `${data.projects.length} project${data.projects.length === 1 ? '' : 's'} will be loaded. Your current data on this device is replaced. Images and videos aren’t part of backups.`, confirmLabel: 'Import backup', danger: true }))) return;
+      // businesses the backup doesn't have are gone: their social accounts are disconnected (their slots freed),
+      // and the confirm names the ones that have some
+      const kept = new Set(data.projects.map((p) => p.id));
+      const goneProjects = useStore.getState().projects.filter((p) => !kept.has(p.id));
+      if (goneProjects.length) await refreshSocialSlots();
+      const losing = goneProjects.filter((p) => holdsSocialSlot(p.id)).map((p) => `“${p.brand.name || 'Untitled'}”`);
+      const socialNote = losing.length ? ` ${losing.join(', ')} ${losing.length === 1 ? 'isn’t' : 'aren’t'} in the backup, so ${losing.length === 1 ? 'its' : 'their'} connected social accounts are disconnected too.` : '';
+      if (!(await confirmAction({ title: 'Replace your workspace with this backup?', body: `${data.projects.length} project${data.projects.length === 1 ? '' : 's'} will be loaded. Your current data on this device is replaced.${socialNote} Images and videos aren’t part of backups.`, confirmLabel: 'Import backup', danger: true }))) return;
       const d = defaultSettings();
       const patch: Partial<StoreState> = {};
       for (const k of EXPORT_KEYS) if (k in data) (patch as Record<string, unknown>)[k] = (data as Record<string, unknown>)[k];
@@ -368,8 +375,6 @@ function ProjectsData() {
       const serverUrl = useStore.getState().settings.ai.serverUrl;
       patch.settings = { ...d, ...(data.settings ?? {}), ai: { ...d.ai, ...(data.settings?.ai ?? {}), serverUrl }, profile: { ...d.profile, ...(data.settings?.profile ?? {}) } };
       if (!patch.activeProjectId || !data.projects.some((p) => p.id === patch.activeProjectId)) patch.activeProjectId = data.projects[0]?.id ?? null;
-      // businesses the backup doesn't have are gone: their social accounts are disconnected (their slots freed)
-      const kept = new Set(data.projects.map((p) => p.id));
       const gone = useStore.getState().projects.map((p) => p.id).filter((id) => !kept.has(id));
       replaceState(patch);
       void releaseSocialFor(gone);
@@ -382,7 +387,8 @@ function ProjectsData() {
   };
 
   const remove = async (p: Project) => {
-    if (await confirmAction({ title: `Delete ${p.brand.name || 'this project'}?`, body: `Its posts, campaigns and Marketplace listing are removed too.${socialDeleteNote(p.id)} This can’t be undone.`, confirmLabel: 'Delete project', danger: true })) deleteProjectEverywhere(p.id);
+    const note = await freshSocialDeleteNote(p.id);
+    if (await confirmAction({ title: `Delete ${p.brand.name || 'this project'}?`, body: `Its posts, campaigns and Marketplace listing are removed too.${note} This can’t be undone.`, confirmLabel: 'Delete project', danger: true })) deleteProjectEverywhere(p.id);
   };
   // the name lives in Brand: open it there, ready to type
   const rename = () => {

@@ -120,9 +120,38 @@ describe('a failed try the network posted after all (its post may be there twice
 
   it('other jobs in the list change nothing, and a list that can’t be read is left alone', async () => {
     useStore.setState({ posts: [post('p9', { external: { ...ext('failed', 'job_new'), requestedAt: Date.parse(NEW) } })] });
-    calls.list = [{ id: 'job_x', postId: 'p9', platform: 'facebook', state: 'sent', requestedAt: OLD }];
+    calls.list = [{ id: 'job_x', postId: 'p9', platform: 'facebook', state: 'failed', requestedAt: OLD }, { id: 'job_y', postId: 'p9', platform: 'facebook', state: 'unknown', requestedAt: OLD }];
     await syncPostedTwice('p1');
     expect(useStore.getState().posts[0].external).toMatchObject({ jobId: 'job_new', state: 'failed' });
     expect(toasts).toEqual([]);
+  });
+
+  it('a re-post that failed after the earlier try was posted after all: the failure shows (never “twice”), then the earlier try reads plain Posted', async () => {
+    useStore.setState({ posts: [post('p9', { external: { ...ext('working', 'job_new'), requestedAt: Date.parse(NEW) } })] });
+    // an older server could still send the note with the failure: the failure is what's said
+    const { announceJob } = await import('./PublishJobWatcher');
+    announceJob('p9', job('job_new', 'failed', 'MAY_APPEAR_TWICE', NEW, '') as never);
+    expect(toasts.map((t) => t.title)).toEqual(['The Facebook post didn’t go out']);
+    useStore.getState().applyPublishJob('p9', { ...job('job_new', 'failed', 'MAY_APPEAR_TWICE', NEW, ''), url: undefined } as never);
+    expect(useStore.getState().posts[0].external).toMatchObject({ jobId: 'job_new', state: 'failed' });
+    expect(useStore.getState().posts[0].external?.twice).toBeUndefined();
+    toasts.length = 0;
+    // the server promoted the earlier try to plain `sent` (no note): it goes on the post, once
+    calls.list = [{ id: 'job_new', postId: 'p9', platform: 'facebook', state: 'failed', requestedAt: NEW, errorCode: 'REFUSED' }, { id: 'job_old', postId: 'p9', platform: 'facebook', state: 'sent', requestedAt: OLD, url: 'https://facebook.com/p/1', finishedAt: OLD }];
+    await syncPostedTwice('p1');
+    expect(useStore.getState().posts[0]).toMatchObject({ status: 'published', postUrl: 'https://facebook.com/p/1', external: { jobId: 'job_old', state: 'posted' } });
+    expect(useStore.getState().posts[0].external?.twice).toBeUndefined();
+    expect(toasts.map((t) => t.title)).toEqual(['Posted on Facebook']);
+    expect(calls.publish).toBe(0);
+  });
+
+  it('a load with nothing new rewrites no post (cloud sync isn’t asked to save it again)', async () => {
+    useStore.setState({ posts: [post('p9', { status: 'published', publishedBy: 'api', postUrl: 'https://facebook.com/p/2', external: { ...ext('posted', 'job_new'), requestedAt: Date.parse(NEW) } })] });
+    calls.list = [job('job_new', 'sent', 'MAY_APPEAR_TWICE', NEW, 'https://facebook.com/p/2'), job('job_old', 'sent', 'POSTED_AFTER_ALL', OLD, 'https://facebook.com/p/1')];
+    await syncPostedTwice('p1');
+    const once = useStore.getState().posts[0];
+    await syncPostedTwice('p1');
+    await syncPostedTwice('p1');
+    expect(useStore.getState().posts[0]).toBe(once);
   });
 });

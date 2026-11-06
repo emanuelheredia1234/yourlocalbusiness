@@ -45,6 +45,7 @@ type Data = CustomersResponse;
 export const UPLOAD_POST_ALERTS: Record<string, string> = {
   profile_cap: 'Upload-Post’s profile limit is reached: new customers can’t connect social accounts. Add the +25 or +50 profile add-on in the Upload-Post dashboard.',
   profile_cap_low: 'Upload-Post profiles are running low. Add the +25 or +50 profile add-on before new customers are turned away.',
+  profile_refused: 'Upload-Post refused to make a new business profile (not the plan’s limit), so new businesses can’t connect social accounts. Check the plan and the API key in the Upload-Post dashboard, and the server log for the error code.',
   profile_blocked: 'Upload-Post blocked a customer profile over the plan’s limits. Check the plan and profile count in the Upload-Post dashboard.',
   scheduled_limit: 'Upload-Post’s limit on pending scheduled posts was reached. Check the scheduled posts in the Upload-Post dashboard.',
   analytics_limit: 'Upload-Post’s analytics limit was reached, so some social stats are waiting. They catch up on the next Update.',

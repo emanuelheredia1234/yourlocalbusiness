@@ -22,7 +22,8 @@ export function announceJob(postId: string, job: PublishJob) {
   const post = useStore.getState().posts.find((p) => p.id === postId);
   if (!post) return;
   const name = networkLabel(post.platform);
-  if (job.note === 'POSTED_AFTER_ALL' || job.note === 'MAY_APPEAR_TWICE') {
+  // a try that failed is never "there twice" (an older server could still send the note with it): its failure shows
+  if (job.note === 'POSTED_AFTER_ALL' || (job.note === 'MAY_APPEAR_TWICE' && job.state !== 'failed')) {
     toast({ kind: 'info', title: `This post may be on ${name} twice`, body: job.noteMessage || `An earlier try was posted after all. Check ${name} and delete one if it’s there twice.` });
     useStore.getState().notify({ kind: 'post', title: `May be on ${name} twice`, body: post.headline, route: 'calendar' });
   } else if (job.state === 'sent' && job.note === 'SENT_TO_DRAFTS') {
@@ -75,13 +76,20 @@ export async function syncPostedTwice(projectId: string): Promise<void> {
   }
   // newest first: a post's live try is applied before its older ones
   for (const job of jobs) {
-    if (job.note !== 'POSTED_AFTER_ALL' && job.note !== 'MAY_APPEAR_TWICE') continue;
     const before = useStore.getState().posts.find((p) => p.id === job.postId);
     if (!before) continue;
-    const had = before.external?.via === 'api' && before.external.twice === true;
+    const ext = before.external?.via === 'api' ? before.external : undefined;
+    const twiceNews = job.note === 'POSTED_AFTER_ALL' || (job.note === 'MAY_APPEAR_TWICE' && job.state !== 'failed');
+    // an earlier try that went out after all, over a later one that failed: the post is out (once)
+    const outOverFailed = job.state === 'sent' && !!ext && ext.jobId !== job.id && ext.state === 'failed';
+    if (!twiceNews && !outOverFailed) continue;
+    // already on the post as this job says: nothing changes (and nothing is saved again)
+    if (ext && ext.jobId === job.id && ext.state === (job.state === 'sent' ? 'posted' : job.state === 'failed' ? 'failed' : job.state === 'unknown' ? 'unknown' : 'working') && (ext.twice === true) === twiceNews && (ext.url ?? '') === (job.url ?? '')) continue;
+    const had = ext?.twice === true;
     useStore.getState().applyPublishJob(job.postId, job);
     const after = useStore.getState().posts.find((p) => p.id === job.postId);
-    if (!had && after?.external?.via === 'api' && after.external.twice) announceJob(job.postId, job);
+    const now = after?.external?.via === 'api' ? after.external : undefined;
+    if ((!had && now?.twice) || (outOverFailed && now?.jobId === job.id)) announceJob(job.postId, job);
   }
 }
 

@@ -87,11 +87,17 @@ describe('each business’s own accounts', () => {
     expect(html).toContain('3 of 3 used');
     expect(html).toContain('All 3 business slots are in use, so Joe’s Food Truck can’t connect social accounts yet.');
   });
-  it('a slot held by a business that was deleted can be freed', () => {
-    set([], { slots: { used: 2, cap: 3, projects: ['proj_1', 'proj_gone'] } });
+  it('a slot held by a business that was deleted can be freed: only one the server found gone from the account', () => {
+    set([], { slots: { used: 2, cap: 3, projects: ['proj_1', 'proj_gone'], orphans: ['proj_gone'] } });
     const html = render();
     expect(html).toContain('1 slot is held by a business you deleted.');
     expect(html).toContain('>Free it<');
+  });
+  it('a business this device hasn’t pulled yet (made on another device) is never offered to free', () => {
+    set([], { slots: { used: 2, cap: 3, projects: ['proj_1', 'proj_other_device'], orphans: [] } });
+    const html = render();
+    expect(html).not.toContain('held by a business you deleted');
+    expect(html).not.toContain('>Free it<');
   });
   it('no business on screen: nothing social to connect (ads still do)', () => {
     useStore.setState({ projects: [], activeProjectId: null });

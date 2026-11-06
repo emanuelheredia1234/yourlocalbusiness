@@ -76,6 +76,8 @@ export interface SocialSlots {
   cap: number;
   /** the user's own project ids that hold a slot */
   projects: string[];
+  /** of those, the ones the server found gone from the account (or still being deleted): "Free it" offers these */
+  orphans?: string[];
 }
 
 /** A connect link to open, or (ad accounts on a network already connected) nothing to open. */

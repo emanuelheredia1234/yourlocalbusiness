@@ -210,7 +210,7 @@ describe('each business’s own social accounts', () => {
   it('keeps the user’s business slots from the server’s answer (and none when social is off)', async () => {
     api.getConnections.mockResolvedValue({ connections: [], available: ['facebook'], setUp: true, slots: { used: 2, cap: 3, projects: ['biz-a', 'biz-b'] } });
     await useAnalytics.getState().refreshConnections();
-    expect(useAnalytics.getState().slots).toEqual({ used: 2, cap: 3, projects: ['biz-a', 'biz-b'] });
+    expect(useAnalytics.getState().slots).toEqual({ used: 2, cap: 3, projects: ['biz-a', 'biz-b'], orphans: [] });
     api.getConnections.mockResolvedValue({ connections: [], available: ['google_ads'], setUp: true, setUpSocial: false });
     await useAnalytics.getState().refreshConnections();
     expect(useAnalytics.getState().slots).toBeUndefined();
@@ -240,11 +240,19 @@ describe('each business’s own social accounts', () => {
     api.releaseProjectSocial.mockResolvedValue({ ok: true, freed: true });
     expect(await useAnalytics.getState().releaseBusiness('biz-gone')).toEqual({ ok: true });
     expect(api.releaseProjectSocial).toHaveBeenCalledTimes(1);
-    expect(api.releaseProjectSocial).toHaveBeenCalledWith('biz-gone');
-    expect(useAnalytics.getState().slots).toEqual({ used: 2, cap: 3, projects: ['biz-a', 'biz-b'] });
+    expect(api.releaseProjectSocial).toHaveBeenCalledWith('biz-gone', false);
+    expect(useAnalytics.getState().slots).toEqual({ used: 2, cap: 3, projects: ['biz-a', 'biz-b'], orphans: [] });
+    // "Free it" asks the server to free it only if the business is gone from the account
+    api.releaseProjectSocial.mockResolvedValueOnce({ ok: true, freed: true });
+    expect(await useAnalytics.getState().releaseBusiness('biz-b', { onlyIfGone: true })).toEqual({ ok: true });
+    expect(api.releaseProjectSocial).toHaveBeenLastCalledWith('biz-b', true);
+    // a delete that didn't go through yet (freed: false) still holds the slot
+    api.releaseProjectSocial.mockResolvedValueOnce({ ok: true, freed: false });
+    expect(await useAnalytics.getState().releaseBusiness('biz-a')).toEqual({ ok: true });
+    expect(useAnalytics.getState().slots).toEqual({ used: 1, cap: 3, projects: ['biz-a'], orphans: [] });
     api.releaseProjectSocial.mockRejectedValue(new IntegrationApiError(503, { error: 'Try again shortly.', code: 'UNAVAILABLE' }));
     expect(await useAnalytics.getState().releaseBusiness('biz-a')).toEqual({ ok: false, message: 'Try again shortly.' });
-    expect(api.releaseProjectSocial).toHaveBeenCalledTimes(2);
+    expect(api.releaseProjectSocial).toHaveBeenCalledTimes(4);
   });
 });
 

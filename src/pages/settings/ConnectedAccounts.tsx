@@ -244,19 +244,29 @@ export function ConnectedAccounts() {
 
 /**
  * How many of the user's businesses have social accounts, of their limit; a note when this business can't get one;
- * and Free for slots still held by businesses that were deleted (e.g. on a device that was offline).
+ * and Free for slots still held by businesses that were deleted (e.g. on a device that was offline). Which slots
+ * those are is the server's answer (the business is gone from the account), never this device's project list alone,
+ * which may not have a business made on another device yet; the server refuses to free one that's still saved.
  */
-export function BusinessSlots({ slots, businessId, businessName, projectIds }: { slots: { used: number; cap: number; projects: string[] }; businessId?: string; businessName: string; projectIds: string }) {
+export function BusinessSlots({ slots, businessId, businessName, projectIds }: { slots: { used: number; cap: number; projects: string[]; orphans?: string[] }; businessId?: string; businessName: string; projectIds: string }) {
   const [busy, setBusy] = useState(false);
   const mine = new Set(projectIds.split(' ').filter(Boolean));
-  const orphans = slots.projects.filter((id) => !mine.has(id));
+  const orphans = (slots.orphans ?? []).filter((id) => slots.projects.includes(id) && !mine.has(id));
   const full = slots.used >= slots.cap && !!businessId && !slots.projects.includes(businessId);
   const free = async () => {
     if (busy) return;
+    const one = orphans.length === 1;
+    const ok = await confirmAction({
+      title: one ? 'Free the slot of a deleted business?' : `Free ${orphans.length} slots of deleted businesses?`,
+      body: `${one ? 'A business' : 'Businesses'} you deleted from your account still ${one ? 'holds a slot' : 'hold slots'}. Freeing ${one ? 'it' : 'them'} disconnects ${one ? 'its' : 'their'} social accounts for good. Businesses still in your account aren’t touched.`,
+      confirmLabel: one ? 'Free it' : 'Free them',
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       for (const id of orphans) {
-        const r = await useAnalytics.getState().releaseBusiness(id);
+        const r = await useAnalytics.getState().releaseBusiness(id, { onlyIfGone: true });
         if (!r.ok) {
           toast({ title: 'Couldn’t free the slot', body: r.message, kind: 'error' });
           break;

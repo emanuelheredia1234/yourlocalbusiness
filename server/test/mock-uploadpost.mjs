@@ -10,6 +10,7 @@
 //   GET    /uploadposts/users                    {limit, plan, profiles}
 //   GET    /uploadposts/users/:username          {profile} | 404
 //   DELETE /uploadposts/users                    JSON {username} (mock.failDeletes: usernames that answer 500)
+//                                                (mock.failCreates: statuses the next POST /uploadposts/users answer)
 //   POST   /uploadposts/users/generate-jwt       {access_url, duration} | 403 PROFILE_BLOCKED | 404 PROFILE_NOT_FOUND
 //   DELETE /uploadposts/users/social             JSON {profile_username, social_platform}
 //   GET    /uploadposts/facebook/pages?profile=  GET /uploadposts/linkedin/pages?profile= (404: no LinkedIn pages)
@@ -69,6 +70,7 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
   const analytics = new Map(); // username → numbers that replace the standard ones on /analytics (e.g. { followers })
   const blocked = new Set(); // usernames that answer PROFILE_BLOCKED on generate-jwt
   const failDeletes = new Set(); // usernames whose DELETE /uploadposts/users answers 500 (nothing deleted)
+  const failCreates = []; // the next POST /uploadposts/users answers these statuses, one each (nothing made)
   let profileCap = cap;
   let entryStatus = false;
   let server = null;
@@ -177,6 +179,10 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
       if (!/^[A-Za-z0-9_@-]{1,64}$/.test(username)) return err(res, 400, 'Username required');
       // Upload-Post's documented characters; we keep within 40 (the longest the docs' own example scheme used)
       if (!/^[A-Za-z0-9_@-]{1,40}$/.test(username)) violations.push({ kind: 'username_invalid', length: username.length });
+      if (failCreates.length) {
+        const status = failCreates.shift();
+        return err(res, status, status === 400 ? 'Invalid username' : 'Internal error');
+      }
       if (profiles.has(username)) return err(res, 409, 'User already exists');
       if (profiles.size >= profileCap) return err(res, 403, 'You have reached the PROFILE_LIMIT_REACHED for your plan (Advanced, owner@example.com)', { error_code: 'PROFILE_LIMIT_REACHED' });
       const prof = { username, display_name: body?.display_name ?? null, created_at: new Date().toUTCString(), social_accounts: {} };
@@ -331,6 +337,7 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     analytics,
     blocked,
     failDeletes,
+    failCreates,
     get base() {
       return `${base}/api`;
     },
