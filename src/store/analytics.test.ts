@@ -189,12 +189,15 @@ describe('connected accounts', () => {
     expect(useAnalytics.getState()).toMatchObject({ connectionsEnabled: false, socialEnabled: false, adsEnabled: false });
   });
 
-  it('Check on a pending row re-reads; on a connected row asks the server once', async () => {
-    api.getConnections.mockResolvedValue({ connections: [], available: ['x'], setUp: true });
+  it('Check on a pending row asks the server to read the account back (its webhook may never have come), then re-reads; on a connected row asks the server once', async () => {
+    api.getConnections.mockResolvedValue({ connections: [{ platform: 'x', state: 'connected' }], available: ['x'], setUp: true });
+    api.checkConnection.mockResolvedValue({ connection: { platform: 'x', state: 'connected' } });
     useAnalytics.setState({ pending: { x: Date.now() } });
     await useAnalytics.getState().checkPlatform('x');
+    expect(api.checkConnection).toHaveBeenCalledTimes(1);
     expect(api.getConnections).toHaveBeenCalledTimes(1);
-    expect(api.checkConnection).not.toHaveBeenCalled();
+    expect(useAnalytics.getState().pending.x).toBeUndefined();
+    api.checkConnection.mockClear();
     api.checkConnection.mockResolvedValue({ connection: { platform: 'youtube', state: 'needs_reconnect' } });
     await useAnalytics.getState().checkPlatform('youtube');
     expect(api.checkConnection).toHaveBeenCalledTimes(1);

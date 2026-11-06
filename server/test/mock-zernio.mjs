@@ -8,13 +8,16 @@
 //   GET    /profiles?externalId=          {profiles}
 //   POST   /profiles                      201 {profile} | 409 profile_external_id_conflict {details.existingProfileId}
 //   GET    /connect/:platform/ads         {authUrl} (a test page on this mock) | {alreadyConnected: true}
-//   GET    /accounts?profileId=           {accounts}
+//   GET    /accounts?profileId=           {accounts} (a classic Meta Ads connect also lists its hidden Facebook
+//                                         account: enabled false, the metaads account's parentAccountId)
 //   DELETE /accounts/:id                  200 {gracePeriodEndsAt} (+ account.disconnected webhook) | 404
+//   DELETE /profiles/:id                  200 | 400 while it still has accounts | 404
 //   GET    /ads/timeline?accountId=       GET /ads/campaigns?accountId=
 //   POST   /ads/…                         501 (placeholder for campaign changes, task #157); records a violation
 // Ads only: social accounts, posting and social stats are Upload-Post's (server/test/mock-uploadpost.mjs).
-// Test hooks (no key): GET /__calls, GET /__violations, POST /__complete {platform, profileId, username, ads?}
-// (finishes a connect: makes the account and sends a signed account.connected webhook), GET /__connect (the page).
+// Test hooks (no key): GET /__calls, GET /__violations, POST /__complete {platform, profileId, username, ads?,
+// hiddenParent?} (finishes a connect: makes the account, with a hidden Facebook account for a classic Meta Ads
+// connect when hiddenParent, and sends a signed account.connected webhook), GET /__connect (the page).
 //
 // Violations a test fails on: an API key in a query string, any ad write (none is built yet).
 
@@ -64,15 +67,17 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     return p ? [{ id: p._id, externalId: p.externalId ?? null }] : [];
   };
 
-  function addAccount({ platform, profileId, username = 'joesbakery', displayName, isActive = true }) {
-    const a = { _id: oid(), platform, profileId, username, displayName: displayName ?? `${username} (${platform})`, isActive, createdAt: new Date().toISOString() };
+  function addAccount({ platform, profileId, username = 'joesbakery', displayName, isActive = true, enabled, parentAccountId }) {
+    const a = { _id: oid(), platform, profileId, username, displayName: displayName ?? `${username} (${platform})`, isActive, ...(enabled !== undefined ? { enabled } : {}), ...(parentAccountId ? { parentAccountId } : {}), createdAt: new Date().toISOString() };
     accounts.push(a);
     return a;
   }
 
-  async function complete({ platform, profileId, username = 'joesbakery', ads = false }) {
+  async function complete({ platform, profileId, username = 'joesbakery', ads = false, hiddenParent = false }) {
     const zPlatform = ads ? ADS[platform] ?? platform : platform;
-    const a = addAccount({ platform: zPlatform, profileId, username });
+    // Zernio's classic Meta Ads OAuth: a hidden Facebook account for the Page (not billed, not postable) is the parent
+    const parent = ads && hiddenParent ? addAccount({ platform: 'facebook', profileId, username, enabled: false }) : null;
+    const a = addAccount({ platform: zPlatform, profileId, username, ...(parent ? { parentAccountId: parent._id } : {}) });
     await sendWebhook({ event: 'account.connected', profiles: profileRef(profileId), account: { accountId: a._id, profileId, platform: zPlatform, username, displayName: a.displayName } });
     return a;
   }
@@ -99,6 +104,14 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       return json(res, 200, { authUrl: `${base}/__connect?platform=${m[1]}&profileId=${profileId}${m[2] ? '&ads=1' : ''}&state=${state}`, state });
     }
     if (req.method === 'GET' && p === '/accounts') return json(res, 200, { accounts: accounts.filter((a) => !q.get('profileId') || a.profileId === q.get('profileId')), hasAnalyticsAccess: true });
+    m = /^\/profiles\/([0-9a-f]{24})$/.exec(p);
+    if (m && req.method === 'DELETE') {
+      const i = profiles.findIndex((x) => x._id === m[1]);
+      if (i < 0) return err(res, 404, 'not_found', 'not_found');
+      if (accounts.some((a) => a.profileId === m[1])) return err(res, 400, 'profile_has_accounts');
+      profiles.splice(i, 1);
+      return json(res, 200, { message: 'Profile deleted' });
+    }
     m = /^\/accounts\/([0-9a-f]{24})$/.exec(p);
     if (m && req.method === 'DELETE') {
       const i = accounts.findIndex((a) => a._id === m[1]);

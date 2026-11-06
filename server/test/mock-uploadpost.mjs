@@ -12,13 +12,20 @@
 //   DELETE /uploadposts/users                    JSON {username}
 //   POST   /uploadposts/users/generate-jwt       {access_url, duration} | 403 PROFILE_BLOCKED | 404 PROFILE_NOT_FOUND
 //   DELETE /uploadposts/users/social             JSON {profile_username, social_platform}
-//   GET    /uploadposts/facebook/pages?profile=  GET /uploadposts/linkedin/pages?profile=
-//   GET    /uploadposts/users/facebook-page?profile_username=   GET /uploadposts/users/linkedin-page?…  (pins)
-//   GET    /uploadposts/tiktok/settings?profile=
-//   POST   /upload  /upload_photos  /upload_text  multipart; per the next queued outcome (setUploadOutcome)
-//   GET    /uploadposts/status?request_id=       GET /uploadposts/history?request_id=
-//   GET    /analytics/:username?platforms=       GET /uploadposts/post-analytics/cached?user=
-// Test hooks: mock.connect(username, platform, extra), mock.setStatus(requestId, …), mock.signed(event, …).
+//   GET    /uploadposts/facebook/pages?profile=  GET /uploadposts/linkedin/pages?profile= (404: no LinkedIn pages)
+//   GET    /uploadposts/users/facebook-page?profile_username=   (and linkedin-page) the pin, as documented:
+//          {success, pages[], selected_page_id, selected_page_name} (null without a pin); 401
+//          facebook_reauth_required (reauth_required: true) for a profile in mock.pinReauth
+//   DELETE /uploadposts/users/facebook-page  (and linkedin-page)  JSON {profile_username}: clears the pin
+//   GET    /uploadposts/tiktok/settings?profile=  (mock.tiktokSettings: username → { status, body } to answer instead)
+//   POST   /upload  /upload_photos  /upload_text  multipart; per the next queued outcome (setUploadOutcome). TikTok:
+//          a privacy_level the account doesn't have (a photo without one is public) answers tiktok_privacy_unavailable
+//   GET    /uploadposts/status?request_id=       the documented shapes: while running, top-level in_progress with
+//          entries {platform, success: true, message: "Queued"} and no status of their own; when done, top-level
+//          completed / failed (mock.entryStatus adds each entry's own status); mock.setStatus(id, body) overrides
+//   GET    /uploadposts/history?request_id=
+//   GET    /analytics/:username?platforms=       GET /uploadposts/post-analytics/cached?user= (empty unless seeded)
+// Test hooks: mock.connect(username, platform, extra), mock.setStatus(requestId, body), mock.signed(event, …).
 //
 // Violations a test fails on: an upload without Idempotency-Key, a second upload with a key it has seen (a
 // resend), the API key in a query string, a Pages/boards list without profile=, an external_id over 200 chars.
@@ -52,9 +59,14 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
   const idem = new Map(); // Idempotency-Key → request_id
   const pins = { facebook: new Map(), linkedin: new Map() }; // username → page id
   const pages = { facebook: new Map(), linkedin: new Map() }; // username → [{ id, name }]
+  const pinReauth = new Set(); // usernames whose pinned-Page read answers 401 facebook_reauth_required
   const tiktokPrivacy = new Map(); // username → options
+  const tiktokSettings = new Map(); // username → { status, body } answered instead of the options
+  const statusOverride = new Map(); // request_id → a /status body to answer as it is
+  const cachedPosts = new Map(); // username → cached post rows (empty unless a test seeds them)
   const blocked = new Set(); // usernames that answer PROFILE_BLOCKED on generate-jwt
   let profileCap = cap;
+  let entryStatus = false;
   let server = null;
   let base = '';
 
@@ -78,8 +90,11 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     if (outcome === 'skipped') return { success: false, skipped: true, skip_reason: 'profile_platform_not_configured', error_code: 'profile_platform_mapping_invalid' };
     if (outcome === 'inbox') return { success: true, fallback_to_inbox: true, post_url: 'Video sent to Inbox (No Public URL)' };
     if (outcome === 'privacy') return { success: false, error_code: 'tiktok_privacy_unavailable' };
+    if (outcome === 'tiktok_internal') return { success: false, error: 'TikTok received the video but answered with an internal error' };
     return { success: true, url: `https://social.example/${platform}/p/${requestId.slice(0, 8)}`, post_id: `pid_${requestId.slice(0, 8)}` };
   }
+
+  const PRIVACY_DEFAULT = ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'SELF_ONLY'];
 
   async function upload(req, res, kind, form) {
     const ik = req.headers['idempotency-key'];
@@ -108,16 +123,25 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
       await new Promise((r) => setTimeout(r, 60_000));
       return err(res, 504, 'timeout');
     }
-    if (!platforms.some((pl) => p.social_accounts[pl])) return err(res, 400, `Invalid platforms: ${platforms.join(',')}`, { invalid_platforms: platforms });
-    const requestId = String(form.get('request_id') || rid());
+    // none connected: 400 with invalid_platforms as documented, an object of platform → reason
+    if (!platforms.some((pl) => p.social_accounts[pl])) return err(res, 400, `None of the requested platforms are valid for profile "${p.username}"`, { invalid_platforms: Object.fromEntries(platforms.map((pl) => [pl, `Profile ${p.username} has no ${pl} account configured`])) });
+    // an identical upload a moment ago: Upload-Post answers with that request (its own id)
+    const requestId = next === 'existing_request' ? `up_${rid()}` : String(form.get('request_id') || rid());
     const record = { request_id: requestId, user: p.username, platforms, kind, external_id: external, form: Object.fromEntries([...form.keys()].map((k) => [k, form.getAll(k).length > 1 || k.endsWith('[]') ? form.getAll(k) : form.get(k)])), status: 'completed', results: {} };
     for (const pl of platforms) record.results[pl] = p.social_accounts[pl] ? resultFor(pl, next, requestId) : resultFor(pl, 'skipped', requestId);
+    if (platforms.includes('tiktok') && p.social_accounts.tiktok) {
+      // a level the account doesn't have is refused before anything reaches TikTok (a photo without one is public)
+      const level = form.get('privacy_level') || (kind === 'photo' ? 'PUBLIC_TO_EVERYONE' : '');
+      if (level && !(tiktokPrivacy.get(p.username) ?? PRIVACY_DEFAULT).includes(level)) record.results.tiktok = resultFor('tiktok', 'privacy', requestId);
+    }
+    if (platforms.includes('x') && next === 'x_links_stripped') record.results.x.warnings = ['URLs were removed from this X post (X Links quota used up)'];
+    record.status = Object.values(record.results).every((x) => !x.success) ? 'failed' : 'completed';
     requests.set(requestId, record);
     if (ik) idem.set(ik, requestId);
     if (next === 'accepted_then_500') return err(res, 502, 'Bad gateway');
     // 'async' / 'async_pending': answered in the background (as after the 59 s fallback); async_upload=true too
-    if (next === 'async' || next === 'async_pending' || form.get('async_upload') === 'true') {
-      record.pendingPolls = next === 'async_pending' ? Infinity : next === 'async' ? 1 : 0;
+    if (next === 'async' || next === 'async_pending' || next === 'existing_request' || form.get('async_upload') === 'true') {
+      record.pendingPolls = next === 'async_pending' ? Infinity : next === 'async' || next === 'existing_request' ? 1 : 0;
       return json(res, 200, { success: true, message: 'Upload initiated successfully in background.', request_id: requestId, total_platforms: platforms.length });
     }
     record.pendingPolls = 0;
@@ -125,15 +149,18 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
   }
 
   function statusOf(r) {
+    const at = new Date().toISOString();
     if (r.pendingPolls > 0) {
       r.pendingPolls -= 1;
-      return { request_id: r.request_id, external_id: r.external_id, status: 'in_progress', completed: 0, total: r.platforms.length, results: [], last_update: new Date().toISOString() };
+      // as documented: the post is listed as queued with success: true and no status of its own
+      return { request_id: r.request_id, external_id: r.external_id, status: 'in_progress', completed: 0, total: r.platforms.length, results: r.platforms.map((pl) => ({ platform: pl, success: true, message: 'Queued', upload_timestamp: at })), last_update: at };
     }
     const results = r.platforms.map((pl) => {
       const x = r.results[pl];
-      return { platform: pl, success: !!x.success, ...(x.skipped ? { status: 'skipped', skipped: true } : { status: x.success ? 'completed' : 'failed' }), ...(x.error_code ? { error_code: x.error_code } : {}), ...(x.error ? { message: x.error } : {}), ...(x.url ? { post_url: x.url } : {}), ...(x.post_url ? { post_url: x.post_url } : {}), ...(x.fallback_to_inbox ? { fallback_to_inbox: true } : {}), ...(x.reauth_required ? { reauth_required: true } : {}) };
+      const own = x.skipped ? { status: 'skipped', skipped: true } : entryStatus ? { status: x.success ? 'completed' : 'failed' } : {};
+      return { platform: pl, success: !!x.success, ...own, ...(x.error_code ? { error_code: x.error_code } : {}), message: x.error ?? (x.success ? 'Published' : 'Failed'), ...(x.url ? { post_url: x.url } : {}), ...(x.post_url ? { post_url: x.post_url } : {}), ...(x.fallback_to_inbox ? { fallback_to_inbox: true } : {}), ...(x.reauth_required ? { reauth_required: true } : {}), upload_timestamp: at };
     });
-    return { request_id: r.request_id, external_id: r.external_id, status: r.status, completed: results.length, total: results.length, results, last_update: new Date().toISOString() };
+    return { request_id: r.request_id, external_id: r.external_id, status: r.status, completed: results.length, total: results.length, results, last_update: at };
   }
 
   async function api(req, res, url, body, form) {
@@ -172,8 +199,18 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     }
     let mm = /^\/uploadposts\/users\/(facebook|linkedin)-page$/.exec(p);
     if (mm && m === 'GET') {
-      const pin = pins[mm[1]].get(String(q.get('profile_username') ?? ''));
-      return json(res, 200, { success: true, ...(pin ? { [`${mm[1]}_page_id`]: pin } : {}) });
+      const who = String(q.get('profile_username') ?? '');
+      if (!profiles.has(who)) return err(res, 404, 'Profile not found');
+      if (mm[1] === 'facebook' && pinReauth.has(who)) return json(res, 401, { success: false, message: 'Facebook session expired', error_code: 'facebook_reauth_required', reauth_required: true, details: 'Error validating access token' });
+      const list = pages[mm[1]].get(who) ?? [];
+      const pin = pins[mm[1]].get(who) ?? null;
+      return json(res, 200, { success: true, pages: list, selected_page_id: pin, selected_page_name: pin ? (list.find((x) => x.id === pin)?.name ?? null) : null });
+    }
+    if (mm && m === 'DELETE') {
+      const who = String(body?.profile_username ?? '');
+      if (!profiles.has(who)) return err(res, 404, 'Profile not found');
+      pins[mm[1]].delete(who);
+      return json(res, 200, { success: true });
     }
     mm = /^\/uploadposts\/users\/([A-Za-z0-9_@-]+)$/.exec(p);
     if (mm && m === 'GET') {
@@ -187,10 +224,14 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
         violations.push({ kind: 'pages_without_profile', platform: mm[1] });
         return json(res, 200, { success: true, pages: [...pages[mm[1]].values()].flat() });
       }
-      return json(res, 200, { success: true, pages: pages[mm[1]].get(who) ?? [] });
+      const list = pages[mm[1]].get(who) ?? [];
+      if (mm[1] === 'linkedin' && !list.length) return err(res, 404, 'No LinkedIn pages found');
+      return json(res, 200, { success: true, pages: list });
     }
     if (p === '/uploadposts/tiktok/settings' && m === 'GET') {
       const who = String(q.get('profile') ?? '');
+      const scripted = tiktokSettings.get(who);
+      if (scripted) return json(res, scripted.status, scripted.body);
       if (!profiles.get(who)?.social_accounts.tiktok) return err(res, 400, 'tiktok_reconnect_required', { error_code: 'tiktok_reconnect_required' });
       return json(res, 200, { success: true, privacy_level_options: tiktokPrivacy.get(who) ?? ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'SELF_ONLY'], max_video_post_duration_sec: 600, comment_disabled: false, duet_disabled: false, stitch_disabled: false });
     }
@@ -199,8 +240,10 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
       return upload(req, res, p === '/upload' ? 'video' : p === '/upload_photos' ? 'photo' : 'text', form);
     }
     if (p === '/uploadposts/status' && m === 'GET') {
-      const r = requests.get(String(q.get('request_id') ?? ''));
+      const id = String(q.get('request_id') ?? '');
       if (!q.get('request_id') && !q.get('job_id')) return json(res, 400, { error: 'request_id or job_id is required' });
+      if (statusOverride.has(id)) return json(res, 200, statusOverride.get(id));
+      const r = requests.get(id);
       if (!r) return json(res, 404, { status: 'not_found' });
       return json(res, 200, statusOf(r));
     }
@@ -219,12 +262,17 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
           out[pl] = { success: false, message: 'page_id is required for facebook' };
           continue;
         }
-        out[pl] = { followers: 1310, reach: 1000, views: 700, impressions: 700, likes: 52, comments: 8, shares: 3, saves: 1, reach_timeseries: [{ date: '2026-11-01', value: 700 }, { date: '2026-11-02', value: 300 }], metric_type: 'reach' };
+        // metric_type as documented: what reach_timeseries counts on each network
+        const metricType = ['youtube', 'tiktok', 'threads'].includes(pl) ? 'views' : ['x', 'pinterest'].includes(pl) ? 'impressions' : 'reach';
+        out[pl] = { followers: 1310, reach: 1000, views: 700, impressions: 700, likes: 52, comments: 8, shares: 3, saves: 1, reach_timeseries: [{ date: '2026-11-01', value: 700 }, { date: '2026-11-02', value: 300 }], metric_type: metricType };
       }
       return json(res, 200, out);
     }
     if (p === '/uploadposts/post-analytics/cached' && m === 'GET') {
-      return json(res, 200, { source: 'snapshot_cache', posts: [{ post_id: 'pid_1', platform: q.get('platform') ?? 'instagram', profile_username: q.get('user'), date: '2026-11-01', metrics: { likes: 40, comments: 6, shares: 3, views: 500 }, post_url: 'https://social.example/p/1', media_type: 'photo', upload_timestamp: '2026-11-01T09:00:00Z' }], limit: 50, has_more: false });
+      // only posts first read one by one are cached (nothing here unless a test seeds them); x isn't a platform here
+      const platform = q.get('platform');
+      if (platform && !['instagram', 'tiktok', 'youtube', 'linkedin', 'facebook', 'threads', 'pinterest', 'bluesky'].includes(platform)) return err(res, 400, 'Invalid platform');
+      return json(res, 200, { source: 'snapshot_cache', posts: cachedPosts.get(String(q.get('user') ?? '')) ?? [], limit: 50, next_cursor: null, has_more: false });
     }
     return err(res, 404, 'Not found');
   }
@@ -269,13 +317,25 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     requests,
     pins,
     pages,
+    pinReauth,
     tiktokPrivacy,
+    tiktokSettings,
+    cachedPosts,
     blocked,
     get base() {
       return `${base}/api`;
     },
     set cap(n) {
       profileCap = n;
+    },
+    /** each /status entry also carries its own status (completed / failed) */
+    set entryStatus(on) {
+      entryStatus = !!on;
+    },
+    /** Answer /status for a request id with this body as it is (e.g. a `retryable` entry); null stops. */
+    setStatus(requestId, body) {
+      if (body) statusOverride.set(requestId, body);
+      else statusOverride.delete(requestId);
     },
     connect,
     /** Add a profile directly (as if made earlier, e.g. by another customer). */
@@ -285,7 +345,8 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     /**
      * What the next upload does: 'ok' | 'async' | 'async_pending' | 'platform_failed' | 'reauth' | 'skipped' |
      * 'inbox' | 'privacy' | 'hard_cap' | 'scheduled_limit' | 'unauthorized' | 'error500' | 'hang' |
-     * 'accepted_then_500', or { waitFor: promise, then } to hold the answer.
+     * 'accepted_then_500' | 'existing_request' (answers with another request's id) | 'tiktok_internal' (failed with
+     * no error_code) | 'x_links_stripped', or { waitFor: promise, then } to hold the answer.
      */
     setUploadOutcome(...next) {
       outcomes.push(...next);

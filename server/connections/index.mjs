@@ -114,7 +114,8 @@ export function combineConnections({ social = null, ads = null } = {}) {
   const sideOf = (platform) => (AD_PLATFORMS.includes(platform) ? a : s);
   const socialEnabled = s.enabled !== false;
   const adsEnabled = a.enabled !== false;
-  const hints = [...(socialEnabled && s.setUp !== false ? [] : [s.hint]), ...(adsEnabled && a.setUp !== false ? [] : [a.hint])].filter(Boolean);
+  // what the owner still has to add: a side that isn't set up, or a set-up side's warning (e.g. MEDIA_URL_SECRET)
+  const hints = [...(socialEnabled && s.setUp !== false ? [s.warning] : [s.hint]), ...(adsEnabled && a.setUp !== false ? [a.warning] : [a.hint])].filter((h) => typeof h === 'string' && h);
   const via = (name) => (userId, platform, ...rest) => sideOf(platform)[name](userId, platform, ...rest);
   return {
     enabled: socialEnabled || adsEnabled,
@@ -124,6 +125,8 @@ export function combineConnections({ social = null, ads = null } = {}) {
     setUpAds: adsEnabled && a.setUp !== false,
     setUp: (socialEnabled && s.setUp !== false) || (adsEnabled && a.setUp !== false),
     hint: hints.join(' '),
+    /** the X Links add-on is bought: links stay in X posts (from a monthly allowance every customer shares) */
+    xLinks: socialEnabled && s.xLinks === true,
     social: socialEnabled ? s : null,
     ads: adsEnabled ? a : null,
     async status(userId, opts) {
@@ -141,7 +144,10 @@ export function combineConnections({ social = null, ads = null } = {}) {
     adResults: (userId, platform, opts) => (AD_PLATFORMS.includes(platform) ? a.adResults(userId, platform, opts) : null),
     publish: (userId, platform, opts) => s.publish(userId, platform, opts),
     postStatus: (userId, ref) => s.postStatus(userId, ref),
-    /** social first (its profile goes at Upload-Post), then the ad accounts at Zernio */
+    /**
+     * Social first: it only marks the profile (Upload-Post deletes it in userDeleted, once the account is gone, so a
+     * deletion that stops here or later loses no social connection); then the ad accounts at Zernio.
+     */
     async forgetUser(userId) {
       await s.forgetUser(userId);
       await a.forgetUser(userId);
@@ -181,8 +187,10 @@ export function createConnections(impl = nullConnections) {
     adsEnabled: typeof impl.adsEnabled === 'boolean' ? impl.adsEnabled : impl.enabled !== false,
     setUpSocial: typeof impl.setUpSocial === 'boolean' ? impl.setUpSocial : impl.setUp !== false,
     setUpAds: typeof impl.setUpAds === 'boolean' ? impl.setUpAds : impl.setUp !== false,
-    /** what the owner is told when it isn't set up (Secret names only) */
+    /** what the owner is told when it isn't set up, or set up without an optional Secret (names only) */
     hint: typeof impl.hint === 'string' ? impl.hint : '',
+    /** the X Links add-on is bought (UPLOAD_POST_X_LINKS) */
+    xLinks: impl.xLinks === true,
     /** the implementation (for the webhook route and the startup jobs) */
     impl,
     async status(userId, opts = {}) {

@@ -6,7 +6,7 @@ import { create } from 'zustand';
 import { Send, TriangleAlert, Type } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { IntegrationApiError, publishPost } from '@/lib/integrations/api';
-import { useConnections } from '@/store/analytics';
+import { useAnalytics, useConnections } from '@/store/analytics';
 import { buildPublishRequest, canPostFrom, captionPreview, legacyManus, newClientRequestId, targetText } from '@/lib/posting';
 import { ensureJpegVariant, ensureUploaded } from '@/lib/cloud/media';
 import { networkLabel } from '@/ai/postShared';
@@ -117,6 +117,7 @@ export function PublishConfirmHost() {
   const post = useStore((s) => s.posts.find((p) => p.id === id));
   const project = useStore((s) => s.projects.find((p) => p.id === post?.projectId));
   const { byPlatform } = useConnections();
+  const xLinks = useAnalytics((s) => s.xLinks);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState('');
   const [err, setErr] = useState<ReturnType<typeof refusal> | null>(null);
@@ -206,12 +207,18 @@ export function PublishConfirmHost() {
         )}
         {preview.commentYourself && <p className="text-small text-muted">{preview.commentYourself}</p>}
         {preview.linkNote && <p className="text-small text-muted">{preview.linkNote}</p>}
-        {preview.xLinkCost && (
-          <p className="flex items-center gap-1 text-small text-muted">
-            The link may not show on X.
-            <InfoTip label="About X posts with links">Links on X go through a small monthly allowance the app shares across everyone. Once it’s used up, X gets the post without the link. Put the link in your X bio to be sure.</InfoTip>
-          </p>
-        )}
+        {preview.xLinkCost &&
+          (xLinks ? (
+            <p className="flex items-center gap-1 text-small text-muted">
+              The link may not show on X.
+              <InfoTip label="About X posts with links">Links on X go through a small monthly allowance the app shares across everyone, and each account has a few a month. Once they’re used up, X gets the post without the link. Put the link in your X bio to be sure.</InfoTip>
+            </p>
+          ) : (
+            <p className="flex items-center gap-1 text-small text-muted">
+              The link is taken out on X.
+              <InfoTip label="About X posts with links">Posts to X from the app go out without links. Put the link in your X bio instead.</InfoTip>
+            </p>
+          ))}
         {status?.state === 'limited' && status.limitedReason === 'private_only' && (
           <p className="flex items-start gap-1.5 text-small text-warn">
             <TriangleAlert size={14} className="mt-0.5 shrink-0" aria-hidden="true" />

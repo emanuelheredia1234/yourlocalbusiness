@@ -70,7 +70,7 @@ export function SocialBody({ data, range, appPosted, now }: { data: SocialData; 
         items={[
           { label: 'Followers', value: fmt(t.followers) },
           { label: 'Posts', value: fmt(t.posts), sub: `Last ${range} days` },
-          { label: 'Engagement', value: fmt(t.engagement), info: 'Likes, comments and shares on posts in this range.' },
+          { label: 'Engagement', value: fmt(t.engagement), info: t.engagementTotals ? 'Likes, comments and shares on posts in this range. A connected account with no public handle counts its recent total instead.' : 'Likes, comments and shares on posts in this range.' },
           { label: 'Reach (connected accounts)', value: t.reach === null ? '–' : fmt(t.reach), info: t.reach === null ? 'Reach is only available from accounts you connect.' : undefined },
           { label: 'Posted from the app', value: fmt(appPosted) },
         ]}

@@ -1,6 +1,7 @@
 // The connected-accounts routes (social networks through Upload-Post, ad accounts through Zernio):
 //   GET    /api/integrations/connections[?projectId=]               {connections, available, setUp, setUpSocial,
-//                                                                    setUpAds, provider: {social, ads}, hint? (admins)}
+//                                                                    setUpAds, provider: {social, ads}, xLinks,
+//                                                                    hint? (admins: a Secret still missing)}
 //   POST   /api/integrations/connections/:platform/connect          {connectLink, expiresAt} | {alreadyConnected: true}
 //                                                                    body {projectId?}: the business that connects it
 //   POST   /api/integrations/connections/:platform/reconnect        same
@@ -128,8 +129,10 @@ export function createConnectionRoutes(deps = {}) {
           setUpSocial: connections.setUpSocial === true,
           setUpAds: connections.setUpAds === true,
           provider: { social: connections.socialEnabled ? 'upload_post' : null, ads: connections.adsEnabled ? 'zernio' : null },
-          // the owner reads which Secret a side still needs (names only), whichever side it is
-          ...(who.isAdmin === true && !(connections.setUpSocial === true && connections.setUpAds === true) && connections.hint ? { hint: connections.hint } : {}),
+          // whether links stay in X posts (the X Links add-on); without it Upload-Post takes them out
+          xLinks: connections.xLinks === true,
+          // the owner reads which Secret a side still needs (names only), whichever side it is, set up or not
+          ...(who.isAdmin === true && connections.hint ? { hint: connections.hint } : {}),
         });
         return true;
       }
@@ -179,7 +182,10 @@ export function createConnectionRoutes(deps = {}) {
     handle,
     async forgetUser() {},
     async unforgetUser() {},
-    async userDeleted() {},
+    /** After the account is gone: its Upload-Post profile (and every social account in it) is deleted now. */
+    async userDeleted(userId) {
+      await socialImpl?.userDeleted?.(userId);
+    },
     /** The monthly estimated rows per customer and Upload-Post's daily reconcile, on start and once a day. */
     async onStart() {
       const jobs = [socialImpl?.meterIfDue, socialImpl?.reconcileIfDue, adsImpl?.meterIfDue].filter((f) => typeof f === 'function');

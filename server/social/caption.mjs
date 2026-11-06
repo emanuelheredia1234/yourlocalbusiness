@@ -18,8 +18,6 @@ export const TIKTOK_MAX = 2200;
 export const YT_TITLE_MAX = 100;
 export const YT_DESCRIPTION_MAX = 5000;
 export const YT_TAGS_MAX_CHARS = 500;
-/** LinkedIn's "little text" format reserves these; a literal one must be escaped with a backslash. */
-const LINKEDIN_RESERVED = /[\\|{}@[\]()<>#*_~]/g;
 
 /** The request's placement words and the post's, as one set. */
 export function placementOf(p) {
@@ -58,21 +56,18 @@ const joinBlocks = (...blocks) =>
     .filter(Boolean)
     .join('\n\n');
 
-/** A text's length as X counts it: code points, with every link as 23. */
+/**
+ * A text's length as X counts it when the app posts it: code points, every link as 23, and every line break as 2
+ * (the upload is multipart form data, which sends a line break as CR LF, and both count; over 280 Upload-Post
+ * would split the post into a thread).
+ */
 export function xLength(text) {
-  const s = String(text ?? '');
+  const s = String(text ?? '').replace(/\r\n?/g, '\n');
   let len = [...s.replace(URL_RE, '')].length;
   len += urlsIn(s).length * X_URL_WEIGHT;
+  len += (s.match(/\n/g) ?? []).length;
   return len;
 }
-
-/** Escape LinkedIn's reserved characters in plain text. */
-export function escapeLinkedIn(text) {
-  return String(text ?? '').replace(LINKEDIN_RESERVED, (c) => `\\${c}`);
-}
-
-/** A LinkedIn hashtag in its own template ({hashtag|\#|word}), so it stays a hashtag after escaping. */
-const linkedInHashtag = (tag) => `{hashtag|\\#|${tag.replace(/^#/, '').replace(LINKEDIN_RESERVED, '')}}`;
 
 /** Cut to `max` code points, at a word break when one is close, with an ellipsis. */
 export function cut(text, max) {
@@ -106,8 +101,9 @@ export function composeFor(platform, post = {}) {
       return { text, ...(wantsComment ? { comment } : {}), commentSupported: true, hasUrl: urlsIn(text).length > 0 };
     }
     case 'linkedin': {
-      const text = joinBlocks(escapeLinkedIn(caption), tags.map(linkedInHashtag).join(' '));
-      return { text, ...(wantsComment ? { comment: escapeLinkedIn(comment) } : {}), commentSupported: true, hasUrl: urlsIn(caption).length > 0 };
+      // plain text and plain #tags: Upload-Post takes the post text as it is (LinkedIn's own escaping is its job)
+      const text = joinBlocks(caption, tags.join(' '));
+      return { text, ...(wantsComment ? { comment } : {}), commentSupported: true, hasUrl: urlsIn(caption).length > 0 };
     }
     case 'tiktok': {
       // links aren't clickable on TikTok: they're left out of the title

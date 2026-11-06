@@ -35,6 +35,13 @@ describe('social', () => {
   it('no connected account: reach is null (shown as –)', () => {
     expect(socialTotals({ networks: [data.networks[0]] }, 30, NOW).reach).toBeNull();
   });
+
+  it('says when an engagement number is a connected account’s recent total rather than this range’s posts', () => {
+    const own = { network: 'tiktok' as const, origin: 'own' as const, followers: 10, engagement: 40 };
+    expect(socialTotals({ networks: [own] }, 7, NOW)).toMatchObject({ engagement: 40, engagementTotals: true, posts: 0 });
+    const withPosts = { ...own, topPosts: [{ id: 'p', text: 'a', at: ago(1), likes: 3 }] };
+    expect(socialTotals({ networks: [withPosts] }, 7, NOW)).toMatchObject({ engagement: 3, engagementTotals: false, posts: 1 });
+  });
 });
 
 describe('ads', () => {

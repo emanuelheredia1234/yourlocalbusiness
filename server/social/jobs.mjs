@@ -38,6 +38,7 @@ export const JOB_MESSAGES = Object.freeze({
   TIKTOK_DRAFTS_FULL: 'TikTok paused uploads because there are too many unpublished drafts. Publish or delete drafts in TikTok, then try again.',
   BUSY: 'Posting is busy right now, so nothing was posted. Try again in a minute.',
   NOT_SENT: 'We couldn’t reach the posting service, so nothing was posted. Try again shortly.',
+  X_LINKS_USED: 'This month’s X posts with a link are used up for your account, so nothing was posted. Take the link out (or put it in your X bio) and try again, or post it yourself.',
   SERVICE_UNAVAILABLE: 'Posting from the app isn’t available right now, so nothing was posted. We’ve been notified. You can post it yourself.',
 });
 

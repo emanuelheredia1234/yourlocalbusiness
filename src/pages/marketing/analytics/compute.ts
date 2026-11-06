@@ -27,6 +27,8 @@ export interface SocialTotals {
   engagement: number;
   /** own-insights networks only; null when none is connected */
   reach: number | null;
+  /** some network's engagement is its account's recent total (a connected account with no posts read), not this range's */
+  engagementTotals: boolean;
   byNetwork: { network: SocialNetworkStats['network']; followers: number }[];
   topPosts: { key: string; network: SocialNetworkStats['network']; text: string; url?: string; engagement: number; at?: string }[];
 }
@@ -36,6 +38,7 @@ export function socialTotals(data: SocialData | undefined, days: number, now = D
   let posts = 0;
   let engagement = 0;
   let reach: number | null = null;
+  let engagementTotals = false;
   const top: SocialTotals['topPosts'] = [];
   for (const n of networks) {
     const inWindow = (n.topPosts ?? []).filter((p) => inRange(p.at, days, now));
@@ -44,6 +47,7 @@ export function socialTotals(data: SocialData | undefined, days: number, now = D
     const series = (n.series ?? []).filter((s) => inRange(s.date, days, now));
     const seriesEng = sum(series.map((s) => s.engagement));
     engagement += inWindow.length ? sum(inWindow.map(engagementOf)) : seriesEng || (n.engagement ?? 0);
+    if (!inWindow.length && !seriesEng && n.origin === 'own' && (n.engagement ?? 0) > 0) engagementTotals = true;
     if (n.origin === 'own') {
       const r = series.length ? sum(series.map((s) => s.reach)) : n.reach ?? 0;
       reach = (reach ?? 0) + r;
@@ -56,6 +60,7 @@ export function socialTotals(data: SocialData | undefined, days: number, now = D
     posts,
     engagement,
     reach,
+    engagementTotals,
     byNetwork: networks.filter((n) => typeof n.followers === 'number').map((n) => ({ network: n.network, followers: n.followers ?? 0 })),
     topPosts: top.slice(0, 5),
   };

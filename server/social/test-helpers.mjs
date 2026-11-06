@@ -127,6 +127,7 @@ export async function startPosting({ env: envExtra = {}, enabled = true } = {}) 
         const evt = up.signed({ event: 'social_account_connected', profile_username: doc.username, platform }, { ts: Math.floor(clock.t / 1000) });
         const res = await impl.webhook(evt.raw, evt.headers);
         if (res.status !== 200) throw new Error(`connect webhook ${res.status}`);
+        await impl.settled();
         made[platform] = account;
       }
       return made;

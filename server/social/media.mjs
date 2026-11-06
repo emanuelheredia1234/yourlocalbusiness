@@ -6,9 +6,10 @@
 //
 // Upload-Post fetches a post's photo or video itself from a short-lived public link
 // (server/connections/uploadpost.mjs puts it in the upload's form, so MEDIA_URL_SECRET is needed to post media):
-// <base>/api/media/public/<token>, token = base64url(JSON{u,m,e,k}) + '.' + base64url(HMAC-SHA256(
-// MEDIA_URL_SECRET, payload)). 30 minutes for a photo, 2 hours for a video. The link only ever goes in a POST
-// body (never a query string, so it isn't in anyone's URL logs) and is never logged.
+// <base>/api/media/public/<token>.<ext>, token = base64url(JSON{u,m,e,k}) + '.' + base64url(HMAC-SHA256(
+// MEDIA_URL_SECRET, payload)), ext the file's own (.jpg, .mp4, …: Upload-Post wants a direct link to the file; the
+// extension isn't signed). 30 minutes for a photo, 2 hours for a video. The link only ever goes in a POST body
+// (never a query string, so it isn't in anyone's URL logs) and is never logged.
 
 import crypto from 'node:crypto';
 import { serviceHeaders } from '../secretBox.mjs';
@@ -49,9 +50,16 @@ export function mediaToken(env, { userId, mediaId, kind }, now = Date.now()) {
   return `${payload}.${mac(mediaSecret(env), payload)}`;
 }
 
-/** The public link networks fetch (it goes in a POST body only). */
+/** The file ending a fetcher expects for a type (Upload-Post asks for "a direct link to the file", e.g. .mp4). */
+const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' };
+export const mediaExtension = ({ type, kind } = {}) => EXT[String(type ?? '').toLowerCase()] ?? (kind === 'video' ? 'mp4' : 'jpg');
+
+/**
+ * The public link networks fetch (it goes in a POST body only), ending in the file's own extension:
+ * <base>/api/media/public/<token>.jpg. ref: { userId, mediaId, kind, type? }.
+ */
 export function publicMediaUrl(env, ref, now = Date.now()) {
-  return `${publicBase(env)}${PUBLIC_MEDIA_PATH}${mediaToken(env, ref, now)}`;
+  return `${publicBase(env)}${PUBLIC_MEDIA_PATH}${mediaToken(env, ref, now)}.${mediaExtension(ref)}`;
 }
 
 /**
@@ -60,7 +68,8 @@ export function publicMediaUrl(env, ref, now = Date.now()) {
  */
 export function verifyMediaToken(env, token, now = Date.now()) {
   const secret = mediaSecret(env);
-  const m = /^([A-Za-z0-9_-]{10,600})\.([A-Za-z0-9_-]{43})$/.exec(String(token ?? ''));
+  // the link may end in the file's extension (publicMediaUrl adds it): it isn't part of what's signed
+  const m = /^([A-Za-z0-9_-]{10,600})\.([A-Za-z0-9_-]{43})(?:\.(?:jpe?g|png|webp|gif|mp4|mov|webm))?$/i.exec(String(token ?? ''));
   if (!m) return { ok: false, why: 'bad' };
   const want = Buffer.from(mac(secret, m[1]));
   const got = Buffer.from(m[2]);

@@ -1,6 +1,7 @@
 // Source `social`: one entry per network with a stored handle or a connected account. Connected (with a chosen
-// account): own insights from Upload-Post. Not connected: treg public data. Connected but needing a reconnect or limited: public data with
-// the note 'reconnect' (never a silent fallback).
+// account): own insights from Upload-Post, with the top posts from the public data of the business's handle
+// (Upload-Post's account stats carry no posts). Not connected: treg public data. Connected but needing a reconnect or
+// limited: public data with the note 'reconnect' (never a silent fallback).
 
 import { handlesOf } from '../handles.mjs';
 import { publicStats } from './social-public.mjs';
@@ -38,7 +39,19 @@ export async function socialSource({ project, statuses, runner, resolved, now })
         if (isOwnUsable(status)) {
           try {
             const own = await ownStats(network, { runner, now, handle });
-            if (own) return void results.push(own);
+            if (own) {
+              if (handle && !own.topPosts?.length) {
+                // the account's own numbers stand; its posts (top posts, posts and engagement in the range) are public
+                try {
+                  const got = await publicStats(runner, network, handle, resolved);
+                  patch = { ...patch, ...(got.resolved || {}) };
+                  if (got.stats.topPosts?.length) own.topPosts = got.stats.topPosts;
+                } catch {
+                  /* the own numbers still show */
+                }
+              }
+              return void results.push(own);
+            }
           } catch (e) {
             if (!handle) {
               results.push({ network, origin: 'own', note: e?.kind === 'reconnect' ? 'reconnect' : 'busy' });

@@ -93,6 +93,8 @@ export interface AnalyticsState {
   socialEnabled: boolean;
   /** ad accounts (connect, ad results) are switched on */
   adsEnabled: boolean;
+  /** links stay in X posts (the owner bought the X Links add-on); otherwise the posting service takes them out */
+  xLinks: boolean;
   /** the first answer has come in */
   connectionsLoaded: boolean;
   /** the owner only: which Replit Secret is missing (names, never values) */
@@ -116,7 +118,7 @@ export interface AnalyticsState {
   setRange: (r: AnalyticsRange) => void;
   /** Connect / Reconnect: one request for a link, opened in a new tab; then the row waits for the network. */
   connectPlatform: (platform: ConnectPlatform, mode?: 'connect' | 'reconnect') => Promise<{ ok: boolean; message?: string }>;
-  /** "Check": re-reads the status (pending rows) or asks the server to check the connection (connected rows). */
+  /** "Check": asks the server to read the account back from the network's service, then re-reads every row. */
   checkPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
   disconnectPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
   loadOwner: () => Promise<void>;
@@ -241,6 +243,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
         connectionsEnabled: enabled,
         socialEnabled: side(r.setUpSocial, SOCIAL_PLATFORMS),
         adsEnabled: side(r.setUpAds, AD_PLATFORMS),
+        xLinks: r.xLinks === true,
         connectionsLoaded: true,
         connectionsHint: typeof r.hint === 'string' && r.hint ? r.hint : undefined,
         connectionsError: undefined,
@@ -270,6 +273,7 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     connectionsEnabled: false,
     socialEnabled: false,
     adsEnabled: false,
+    xLinks: false,
     connectionsLoaded: false,
     pending: {},
     expired: {},
@@ -372,6 +376,12 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
     checkPlatform: async (platform) => {
       if (artifact()) return { ok: false };
       if (get().pending[platform] !== undefined) {
+        // the server reads the account back (the service's "connected" message can go missing), then every row
+        try {
+          await checkConnection(platform, activeProject());
+        } catch {
+          /* the re-read below still shows where it stands */
+        }
         await get().refreshConnections();
         // a fresh look at the network starts another 3 minutes of waiting
         if (get().pending[platform] !== undefined) {

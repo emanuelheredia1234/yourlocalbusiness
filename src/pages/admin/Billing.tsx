@@ -50,6 +50,11 @@ export const UPLOAD_POST_ALERTS: Record<string, string> = {
   auth: 'Upload-Post refused the API key, so social posting is paused. Check UPLOAD_POST_API_KEY in Replit Secrets.',
   rate_lockout: 'Upload-Post is turning requests away for a few minutes (too many at once, or a wrong key). Check UPLOAD_POST_API_KEY in Replit Secrets if it keeps happening.',
   plan: 'Upload-Post refused a post over the plan’s limits. Check the plan in the Upload-Post dashboard.',
+  media_secret: 'Photo and video posts can’t go out: MEDIA_URL_SECRET isn’t set. Add it (32+ random bytes) in Replit Secrets.',
+  profile_budget: 'More new customers started connecting social accounts today than UPLOAD_POST_NEW_PROFILES_PER_DAY allows. Check they’re real, then raise it if they are.',
+  x_links: 'Upload-Post took links out of X posts: the X Links allowance (50 a month for everyone) is used up, or the add-on is off.',
+  x_links_low: 'The X Links allowance (50 link posts a month for every customer together) is nearly used up.',
+  profile_orphans: 'Upload-Post has profiles named ylb_ that no customer here owns (another copy of the app on the same key, or another database). They were left alone; delete them in the Upload-Post dashboard if they’re yours to remove.',
 };
 
 export default function Billing() {

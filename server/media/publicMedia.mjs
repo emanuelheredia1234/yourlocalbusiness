@@ -1,4 +1,4 @@
-// GET /api/media/public/<token>: a short-lived, MAC'd link to one of a user's media files, for Upload-Post (and the
+// GET /api/media/public/<token>[.ext]: a short-lived, MAC'd link to one of a user's media files, for Upload-Post (and the
 // networks behind it) to fetch a post's photo or video. Spec §1.7 "Media".
 //
 // While social posting is off (no UPLOAD_POST_API_KEY) no link is ever made, so every request answers 503.

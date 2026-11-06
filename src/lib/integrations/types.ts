@@ -62,6 +62,8 @@ export interface ConnectionsResponse {
   /** social networks (Upload-Post) and ad accounts (Zernio) are each set up by their own key */
   setUpSocial?: boolean;
   setUpAds?: boolean;
+  /** links stay in X posts (the owner bought Upload-Post's X Links add-on); otherwise they're taken out */
+  xLinks?: boolean;
   /** admins only: which Replit Secret to add (names, never values) */
   hint?: string;
 }
@@ -170,7 +172,8 @@ export interface SocialNetworkStats {
   reach?: number;
   views?: number;
   engagement?: number;
-  series?: { date: string; followers?: number; reach?: number; engagement?: number }[];
+  /** per day; `reach` only where the network counts reach (views or impressions elsewhere) */
+  series?: { date: string; followers?: number; reach?: number; views?: number; impressions?: number; engagement?: number }[];
   topPosts?: { id: string; url?: string; text: string; at?: string; likes?: number; comments?: number; shares?: number; views?: number }[];
   note?: 'private' | 'not_found' | 'over_cost' | 'busy' | 'reconnect';
 }
@@ -323,7 +326,8 @@ export interface CustomersResponse {
   /** Upload-Post profiles in use out of the plan's limit (one per customer who connected a social account) */
   upProfiles?: { used: number; limit?: number };
   /** Upload-Post's last team-level alert (kind only) */
-  uploadPostAlert?: { kind: string; at: string };
+  /** the most serious of Upload-Post's current team-level alerts (n: how many, for the kinds that count) */
+  uploadPostAlert?: { kind: string; at: string; n?: number };
 }
 
 export interface ReconcileReport {

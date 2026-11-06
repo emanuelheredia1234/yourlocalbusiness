@@ -81,7 +81,7 @@ describe('posting a saved post', () => {
     expect(t.up.calls.length).toBe(before);
   });
 
-  it('posts a YouTube video with its title in the background (status reads by the job id), and a TikTok video with an audience the account allows', async () => {
+  it('posts a YouTube video with its title in the background (status reads by the job id), and a TikTok video with the account’s own audience', async () => {
     const video = t.file(alice, 'vid-yt-1', MP4, 'video/mp4');
     const yt = await t.post(alice, { platform: 'youtube', format: 'video', media: video, headline: 'Our sourdough, start to finish' });
     const r = await publishAndWait(alice, yt, { platform: 'youtube' });
@@ -91,7 +91,8 @@ describe('posting a saved post', () => {
     const tv = t.file(alice, 'vid-tt-1', MP4, 'video/mp4');
     const tt = await t.post(alice, { platform: 'tiktok', format: 'video', media: tv });
     expect((await jobOf(alice, (await publishAndWait(alice, tt)).body.job.id)).state).toBe('sent');
-    expect(t.postCalls().pop().form.privacy_level).toBe('PUBLIC_TO_EVERYONE');
+    // no audience sent: TikTok uses the account's own default, the only one that works on every account
+    expect(t.postCalls().pop().form.privacy_level).toBeUndefined();
   });
 
   it('a TikTok that went to the account’s drafts is sent with a note and no address', async () => {
@@ -165,6 +166,7 @@ describe('unknown outcomes and Check again', () => {
     expect((await jobOf(alice, r.body.job.id)).state).toBe('unknown');
     const evt = t.up.signed({ event: 'upload_completed', request_id: r.body.job.id, profile_username: await t.profileOf(alice), platform: 'facebook', result: { success: true, url: 'https://facebook.com/joe/posts/9', post_id: '9' } }, { ts: Math.floor(t.clock.t / 1000) });
     expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
+    await t.impl.settled();
     expect(await jobOf(alice, r.body.job.id)).toMatchObject({ state: 'sent', url: 'https://facebook.com/joe/posts/9' });
     // Bob's job can't be finished by an event for Alice's profile, nor a job on another platform
     expect(await t.routes.posting.fromWebhook(bob.id, r.body.job.id, { state: 'failed' })).toBeNull();
@@ -179,6 +181,7 @@ describe('unknown outcomes and Check again', () => {
     for (let i = 0; i < 200 && !t.postCalls().some((c) => c.idempotencyKey === r.body.job.id); i += 1) await new Promise((res) => setTimeout(res, 5));
     const evt = t.up.signed({ event: 'upload_completed', request_id: r.body.job.id, profile_username: await t.profileOf(alice), platform: 'facebook', result: { success: true, url: 'https://facebook.com/joe/posts/10' } }, { ts: Math.floor(t.clock.t / 1000) });
     expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
+    await t.impl.settled();
     expect((await jobOf(alice, r.body.job.id)).state).toBe('sending');
     release();
     await t.settled();
@@ -292,6 +295,32 @@ describe('connections switched off', () => {
       expect(off.up.calls).toHaveLength(0);
     } finally {
       await off.close();
+    }
+  });
+});
+
+describe('photo and video posts without MEDIA_URL_SECRET', () => {
+  it('are refused before a job is made (nothing sent), the owner is told, and text posts still go', async () => {
+    const s = await startPosting({ env: { MEDIA_URL_SECRET: '' } });
+    try {
+      const u = await s.user('erin@example.com');
+      await s.project(u);
+      await s.connect(u, ['instagram', 'facebook']);
+      const post = await s.post(u, { platform: 'instagram', media: s.file(u, 'img-nosecret.jpg', JPEG, 'image/jpeg') });
+      const before = s.postCalls().length;
+      const r = await s.publish(u, post);
+      expect(r).toMatchObject({ status: 503, body: { code: 'SERVICE_UNAVAILABLE' } });
+      expect(r.body.error).not.toMatch(/MEDIA_URL_SECRET|secret/i);
+      expect(s.postCalls().length).toBe(before);
+      expect(await s.db.select('post_publish_jobs', { user_id: u.id })).toHaveLength(0);
+      await s.impl.settled();
+      expect(Object.keys((await s.storage.get('uploadpost:alerts')).value)).toContain('media_secret');
+      const text = await s.post(u, { platform: 'facebook', caption: 'Text still goes' });
+      const ok = await s.publish(u, text);
+      await s.settled();
+      expect((await s.call(u, 'GET', `/api/posting/jobs/${ok.body.job.id}`)).body.job.state).toBe('sent');
+    } finally {
+      await s.close();
     }
   });
 });

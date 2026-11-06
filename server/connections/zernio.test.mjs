@@ -292,12 +292,30 @@ describe('ad results (reads)', () => {
 });
 
 describe('deleting an account and the monthly counts', () => {
-  it('forgetUser disconnects every ad account at Zernio, then reads as not connected', async () => {
+  it('forgetUser disconnects every account in the customer’s profile (the hidden Facebook account Meta Ads made too), then deletes the profile, then reads as not connected', async () => {
     const t = setup();
-    await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
+    const { profileId } = await connectVia(t, ALICE, 'meta_ads', { zPlatform: 'metaads' });
     await connectVia(t, ALICE, 'google_ads', { zPlatform: 'googleads' });
+    const hidden = mock.addAccount({ platform: 'facebook', profileId, username: 'joe', enabled: false });
     await t.connections.forgetUser(ALICE);
+    expect(mock.accounts.filter((a) => a.profileId === profileId)).toEqual([]);
+    expect(mock.accounts.some((a) => a._id === hidden._id)).toBe(false);
+    expect(mock.profiles.some((p) => p._id === profileId)).toBe(false);
     expect((await t.connections.status(ALICE)).every((s) => s.state === 'not_connected' || s.state === 'coming_soon')).toBe(true);
+  });
+
+  it('disconnecting Meta Ads also removes the hidden Facebook account its classic connect made (it holds the customer’s token)', async () => {
+    const t = setup();
+    const USER = '64111111-2222-4333-8444-555555555555';
+    await t.connections.connectLink(USER, 'meta_ads');
+    const profileId = (await t.storage.get(`zernio:user:${sha256(USER)}`)).value.profileId;
+    const res = await fetch(`${mock.base}/__complete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ platform: 'facebook', profileId, ads: true, hiddenParent: true }) });
+    const { account } = await res.json();
+    await t.connections.check(USER, 'meta_ads');
+    const parent = mock.accounts.find((a) => a._id === account.parentAccountId);
+    expect(parent).toMatchObject({ platform: 'facebook', enabled: false });
+    await t.connections.disconnect(USER, 'meta_ads');
+    expect(mock.accounts.some((a) => a._id === account._id || a._id === parent._id)).toBe(false);
   });
 
   it('writes one estimated ad-accounts row per customer for last month, once', async () => {

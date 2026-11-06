@@ -16,6 +16,9 @@
 // - The browser sees ConnectionStatus and opaque target handles only: no Zernio profile or account ids.
 // - Webhooks: HMAC-checked on the exact bytes, deduplicated by event id, routed by profiles[0].externalId, and
 //   applied only to that customer's own doc (account.* events for ad accounts; post events are ignored).
+// - Zernio's classic Meta Ads connect also makes a hidden Facebook account (enabled: false) that holds the
+//   customer's token: it goes with its ad account (disconnect), and deleting an account removes everything in the
+//   customer's Zernio profile, then the profile.
 // - Third-party text (account names, campaign names) is data: clipped and kept as plain text.
 
 import crypto from 'node:crypto';
@@ -314,7 +317,13 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     if (!doc.profileId) return doc;
     const res = await call('GET', '/accounts', { query: { profileId: doc.profileId, includeOverLimit: 'true' }, retry429: true });
     if (res.status < 200 || res.status >= 300) throw callFailure(res);
-    const listed = (Array.isArray(res.body?.accounts) ? res.body.accounts : []).filter((a) => isObj(a) && ZID.test(String(a._id ?? '')) && FROM_ZERNIO[a.platform] && (!a.profileId || a.profileId === doc.profileId));
+    const all = (Array.isArray(res.body?.accounts) ? res.body.accounts : []).filter((a) => isObj(a) && ZID.test(String(a._id ?? '')) && (!a.profileId || a.profileId === doc.profileId));
+    const listed = all.filter((a) => FROM_ZERNIO[a.platform]);
+    // the hidden posting account an ad account's connect made (enabled: false), which holds the customer's token
+    const hiddenParent = (a) => {
+      const id = String(a.parentAccountId ?? '');
+      return ZID.test(id) && all.some((x) => String(x._id) === id && x.enabled === false) ? id : null;
+    };
     return updateDoc(userId, (d) => {
       const before = d.accounts ?? {};
       const next = {};
@@ -328,6 +337,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
           // the listing's flag is `needsReconnection` (docs: accounts and webhooks); `needsReconnect` is the health check's
           state: a.isActive === false || a.needsReconnection === true || a.needsReconnect === true || a.status === 'disconnected' ? 'needs_reconnect' : 'connected',
           connectedAt: old?.connectedAt ?? (typeof a.createdAt === 'string' && Number.isFinite(Date.parse(a.createdAt)) ? a.createdAt : iso(now())),
+          ...(hiddenParent(a) ? { parent: hiddenParent(a) } : old?.parent ? { parent: old.parent } : {}),
         };
         if (!old) assignPending(d, platform, zid);
       }
@@ -367,7 +377,9 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     const { value: doc } = await readDoc(userId);
     const pick = chosen(doc, platform, projectId);
     const ids = pick ? [pick[0]] : accountsOf(doc, platform).map(([zid]) => zid);
-    for (const zid of ids) {
+    // a hidden posting account goes with the last ad account that uses it (it holds the customer's token)
+    const parents = [...new Set(ids.map((zid) => doc.accounts?.[zid]?.parent).filter((p) => p && !Object.entries(doc.accounts ?? {}).some(([z, a]) => !ids.includes(z) && a?.parent === p)))];
+    for (const zid of [...ids, ...parents]) {
       // one attempt each; a 404 means it's already gone
       const res = await call('DELETE', `/accounts/${zid}`);
       if ((res.status < 200 || res.status >= 300) && res.status !== 404) throw callFailure(res, platform);
@@ -598,14 +610,21 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
   async function forgetUser(userId) {
     if (!storageReady) return;
     const { value: doc } = await readDoc(userId);
-    // every connected account is disconnected (one attempt each; a failure stops the deletion), then the doc
+    // every account in the customer's profile is disconnected, hidden posting accounts too (one attempt each; a
+    // failure stops the deletion), then the profile itself, then the doc
     if (setUp && doc.profileId) {
-      for (const zid of Object.keys(doc.accounts ?? {})) {
+      const listed = await call('GET', '/accounts', { query: { profileId: doc.profileId, includeOverLimit: 'true' }, retry429: true }).catch(() => null);
+      const fromZernio = listed && listed.status >= 200 && listed.status < 300 && Array.isArray(listed.body?.accounts) ? listed.body.accounts.filter((a) => isObj(a) && ZID.test(String(a._id ?? '')) && (!a.profileId || a.profileId === doc.profileId)).map((a) => String(a._id)) : [];
+      const known = Object.entries(doc.accounts ?? {}).flatMap(([zid, a]) => [zid, ...(a?.parent ? [a.parent] : [])]);
+      for (const zid of [...new Set([...fromZernio, ...known])]) {
         const res = await call('DELETE', `/accounts/${zid}`);
         if ((res.status < 200 || res.status >= 300) && res.status !== 404) throw fail(503, 'UNAVAILABLE', 'Couldn’t disconnect your accounts just now. Try again shortly.');
       }
+      // the profile goes once it's empty (one attempt; a refusal leaves an empty profile, which costs nothing)
+      const gone = await call('DELETE', `/profiles/${doc.profileId}`).catch(() => null);
+      if (!gone || ((gone.status < 200 || gone.status >= 300) && gone.status !== 404)) log_('zernio_profile_delete_failed', { status: gone?.status ?? null });
     }
-    await updateDoc(userId, (d) => ({ value: { ...blankDoc(), profileId: d.profileId, customer: d.customer, forgottenAt: iso(now()) } }));
+    await updateDoc(userId, (d) => ({ value: { ...blankDoc(), customer: d.customer, forgottenAt: iso(now()) } }));
   }
 
   async function unforgetUser(userId) {

@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { useMediaQuery } from '@/lib/hooks';
-import { navigate, useRoute } from '@/lib/router';
+import { navigate, takeSettingsSection, useRoute } from '@/lib/router';
+import { useUI } from '@/store/ui';
 import { initRuntime } from '@/lib/platform';
 import { pingServer } from '@/ai/claude';
 import { startCommunitySync } from '@/lib/community';
@@ -121,6 +122,13 @@ export default function App() {
   }, [needsOnboarding, route]);
   // "Leave this page?" while something is generating
   useEffect(() => installLeaveGuard(), []);
+  // back from Upload-Post's connect page: Settings → Connected accounts (it reads the accounts again there)
+  useEffect(() => {
+    const section = takeSettingsSection();
+    if (!section || needsOnboarding) return;
+    useUI.getState().setSettingsTab(section);
+    void navigate('workspace-settings', { force: true });
+  }, []);
 
   if (needsOnboarding) {
     return (

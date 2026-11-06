@@ -276,7 +276,22 @@ describe('POST /api/analytics/refresh', () => {
     expect(JSON.stringify(after)).not.toMatch(/topup|balance/i);
   });
 
-  it('uses the business’s connected account (Zernio’s own stats) for a connected network and treg for the rest', async () => {
+  it('a connected account’s own numbers keep the business’s public top posts (Upload-Post’s account stats carry none)', async () => {
+    project(A.id, 'p1', { brand: { name: 'Joe', socials: { instagram: 'joesbakery' } } });
+    const connections = fakeConnections({
+      statuses: { instagram: { state: 'connected', targetLabel: 'Joe’s Bakery IG', targetKind: 'ig_account' } },
+      insights: async () => ({ followers: 999, engagement: 70, reach: 400, series: [{ date: '2026-11-02', reach: 400 }] }),
+    });
+    const { routes, treg } = makeRoutes({ connections });
+    await call(routes, 'POST', '/api/analytics/refresh', { token: 'a', body: { projectId: 'p1' } });
+    await routes.refresher.idle();
+    const ig = rows('analytics_snapshots').find((s) => s.source === 'social').data.networks.find((n) => n.network === 'instagram');
+    expect(ig).toMatchObject({ origin: 'own', followers: 999, reach: 400 });
+    expect(ig.topPosts?.length).toBeGreaterThan(0);
+    expect(treg.calls.some((c) => c.endpointId.includes('instagram'))).toBe(true);
+  });
+
+  it('uses the business’s connected account (Upload-Post’s own stats) for a connected network and treg for the rest', async () => {
     project(A.id, 'p1', { brand: { name: 'Joe', socials: { instagram: 'joesbakery', facebook: 'joesbakery' } } });
     const connections = fakeConnections({
       statuses: { facebook: { state: 'connected', targetLabel: 'Joe’s Bakery', targetKind: 'fb_page' } },

@@ -181,8 +181,9 @@ describe('placing the link in a caption', () => {
 });
 
 describe('X’s count', () => {
-  it('counts a link as 23, an emoji as 2 and “…” as 2', () => {
-    expect(xLength('a'.repeat(270) + '\n\n#one #two')).toBe(281);
+  it('counts a link as 23, an emoji as 2, “…” as 2 and a line break as 2 (the app posts it as CR LF)', () => {
+    expect(xLength('a'.repeat(270) + '\n\n#one #two')).toBe(283);
+    expect(xLength('a\r\nb')).toBe(4);
     expect(xLength('Hello')).toBe(5);
     expect(xLength('Hello 🔥')).toBe(8);
     expect(xLength('⚡️')).toBe(2);

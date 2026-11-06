@@ -54,8 +54,9 @@ describe('what each network gets (read-only preview)', () => {
     expect(captionPreview(post({ platform: 'instagram' }), project()).blockers).toEqual(['Instagram needs an image or a video. Add one first.']);
   });
 
-  it('X: hashtags only when they fit in 280 (a link counts 23), the comment is a reply, links cost more', () => {
-    const caption = `${'a'.repeat(250)} ${PAGE}`;
+  it('X: hashtags only when they fit in 280 (a link counts 23, a line break 2), the comment is a reply, links cost more', () => {
+    // 246 + 1 + 23 = 270; "\n\n#one" makes 278, " #two" would make 283
+    const caption = `${'a'.repeat(246)} ${PAGE}`;
     const p = captionPreview(post({ platform: 'x', caption, hashtags: ['#one', '#two'] }), project());
     expect(p.droppedTags).toBe(1);
     expect(p.text).toBe(`${caption}\n\n#one`);

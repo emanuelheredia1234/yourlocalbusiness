@@ -28,7 +28,7 @@ describe('the networks', () => {
     expect(postBlocker({ platform: 'facebook', format: 'video', media: video }, { viaServer: false })).toMatch(/self-hosted/);
     expect(postBlocker({ platform: 'facebook', format: 'video', media: video })).toBeNull();
     expect(postBlocker({ platform: 'x', format: 'image', media: image }, { viaServer: false })).toBeNull();
-    expect(textWarning({ platform: 'x', caption: 'a'.repeat(270), hashtags: ['#one', '#two'] })).toMatch(/X takes 280 characters on most accounts, and this post has 281/);
+    expect(textWarning({ platform: 'x', caption: 'a'.repeat(270), hashtags: ['#one', '#two'] })).toMatch(/X takes 280 characters on most accounts, and this post has 283/);
     expect(textWarning({ platform: 'x', caption: 'short', hashtags: [] })).toBeNull();
     expect(textWarning({ platform: 'linkedin', caption: 'a'.repeat(900), hashtags: [] })).toBeNull();
   });

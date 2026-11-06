@@ -1,6 +1,6 @@
 // What each network gets of a post (spec §1.7 "Caption composition", §9.2 WP2 caption tests).
 import { describe, expect, it } from 'vitest';
-import { cleanHashtags, composeFor, escapeLinkedIn, sameStart, X_MAX, xLength, xPostCost, YT_TITLE_MAX } from './caption.mjs';
+import { cleanHashtags, composeFor, sameStart, X_MAX, xLength, xPostCost, YT_TITLE_MAX } from './caption.mjs';
 
 const LONG_URL = `https://example.com/${'a'.repeat(120)}`;
 
@@ -10,13 +10,22 @@ describe('X', () => {
     expect(xLength('héllo')).toBe(5);
   });
 
+  it('counts a line break as 2: the upload is form data, which sends each one as CR LF (over 280 Upload-Post would make a thread)', () => {
+    expect(xLength('a\nb')).toBe(4);
+    expect(xLength('a\r\nb')).toBe(4);
+    const caption = 'x'.repeat(270);
+    // "\n\n#one" is 2 × 2 + 4 = 8 more: 278 fits; " #two" (283) doesn't
+    expect(composeFor('x', { caption, hashtags: ['one', 'two'] }).text).toBe(`${caption}\n\n#one`);
+    expect(composeFor('x', { caption: `${'y'.repeat(276)}\n\nzz` }).error).toBe('TEXT_TOO_LONG');
+  });
+
   it('fits 280 with a long link and appends only the hashtags that still fit', () => {
     const caption = `${'x'.repeat(250)} ${LONG_URL}`; // 250 + 1 + 23 = 274
     expect(xLength(caption)).toBe(274);
     const out = composeFor('x', { caption, hashtags: ['#a', 'bb', 'c'] });
     expect(out.error).toBeUndefined();
     expect(xLength(out.text)).toBeLessThanOrEqual(X_MAX);
-    // "\n\n#a" makes 278; adding " #bb" (282) or " #c" (281) would not fit
+    // "\n\n#a" makes 280 (each line break counts 2); adding " #bb" or " #c" would not fit
     expect(out.text).toBe(`${caption}\n\n#a`);
   });
 
@@ -51,10 +60,11 @@ describe('Instagram', () => {
 });
 
 describe('LinkedIn', () => {
-  it('escapes the reserved characters and keeps hashtags as hashtags', () => {
-    expect(escapeLinkedIn('a|b{c}@d[e](f)<g>#h*i_j~k\\l')).toBe('a\\|b\\{c\\}\\@d\\[e\\]\\(f\\)\\<g\\>\\#h\\*i\\_j\\~k\\\\l');
-    const out = composeFor('linkedin', { caption: 'Sale (today) @ 50%_off', hashtags: ['#local'] });
-    expect(out.text).toBe('Sale \\(today\\) \\@ 50%\\_off\n\n{hashtag|\\#|local}');
+  it('sends plain text and plain #tags (Upload-Post takes the text as it is; no little-text escapes to show up literally)', () => {
+    const out = composeFor('linkedin', { caption: 'Sale (today) @ 50%_off', hashtags: ['#local'], linkPlacement: 'comment', firstComment: 'Menu (new): https://joes.example' });
+    expect(out.text).toBe('Sale (today) @ 50%_off\n\n#local');
+    expect(out.comment).toBe('Menu (new): https://joes.example');
+    expect(out.text).not.toContain('\\');
   });
 });
 

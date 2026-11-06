@@ -1,6 +1,7 @@
 // The business's own stats from its connected account, normalized to SocialNetworkStats with origin 'own'. Reads
 // only, through Upload-Post (server/connections/uploadpost.mjs insights(): the account's followers, reach, views,
-// engagement, the reach series and its cached top posts), via the run's runner (one slot set per user).
+// engagement and its daily series), via the run's runner (one slot set per user). Top posts come from public data
+// (social.mjs).
 //
 // Numbers and post text from the network are data: kept as numbers and plain text (normalize/util.mjs).
 

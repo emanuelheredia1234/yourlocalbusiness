@@ -237,12 +237,12 @@ function OwnerSetup({ hint, socialOn, adsOn }: { hint: string; socialOn: boolean
         <div className="mt-2">
           <p className="font-medium text-ink">Social accounts (Upload-Post)</p>
           <ol className="mt-1 list-decimal space-y-0.5 pl-5">
-            <li>Take the Upload-Post Advanced plan (yearly) and turn on white label.</li>
+            <li>Take the Upload-Post Advanced plan (yearly). White label comes with it: the app sends your logo and text with every connect link.</li>
             <li>
               Add <span className={code}>UPLOAD_POST_API_KEY</span>, <span className={code}>UPLOAD_POST_WEBHOOK_SECRET</span>, <span className={code}>MEDIA_URL_SECRET</span> and <span className={code}>CUSTOMER_TAG_SECRET</span> in Replit Secrets.
             </li>
             <li>
-              In Upload-Post’s dashboard, send webhooks to <span className={cn(code, 'break-all')}>{urls.social}</span>.
+              In Upload-Post’s dashboard, send webhooks to <span className={cn(code, 'break-all')}>{urls.social}</span> with the events <span className={code}>upload_completed</span>, <span className={code}>social_account_connected</span>, <span className={code}>social_account_disconnected</span> and <span className={code}>social_account_reauth_required</span>.
             </li>
           </ol>
         </div>

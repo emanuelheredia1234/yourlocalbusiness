@@ -168,11 +168,15 @@ const graphemes = (s: string) => (segmenter ? [...segmenter.segment(s)].map((x) 
 const one = (cp: number) => X_ONE.some(([a, b]) => cp >= a && cp <= b);
 const weight = (g: string) => (EMOJI.test(g) ? 2 : [...g].reduce((n, ch) => n + (one(ch.codePointAt(0) ?? 0) ? 1 : 2), 0));
 
-/** The length X counts for a text (at worst a little over, never under, for links). */
+/**
+ * The length X counts for a text the app posts (at worst a little over, never under, for links). A line break
+ * counts 2: the posting service gets the text as form data, which sends each one as CR LF.
+ */
 export function xLength(text: string): number {
-  const t = text.normalize('NFC');
+  const t = text.normalize('NFC').replace(/\r\n?/g, '\n');
   const links = t.match(X_URL)?.length ?? 0;
-  return links * 23 + graphemes(t.replace(X_URL, '')).reduce((n, g) => n + weight(g), 0);
+  const breaks = t.match(/\n/g)?.length ?? 0;
+  return links * 23 + breaks + graphemes(t.replace(X_URL, '')).reduce((n, g) => n + weight(g), 0);
 }
 
 function clipX(s: string, room: number): string {
@@ -206,7 +210,9 @@ export function fitForX(caption: string, hashtags: string[] = [], max = 280): st
   let i = paras.length - 1;
   while (i > 0 && !LINKISH.test(paras[i])) i--;
   const tail = i > 0 ? paras[i] : paras.length > 1 ? paras[paras.length - 1] : '';
-  const room = max - (tail ? xLength(tail) + 2 : 0) - (tags ? xLength(tags) + 2 : 0);
+  // the blank line between parts counts too (each line break is 2 when the app posts it)
+  const sep = xLength('\n\n');
+  const room = max - (tail ? xLength(tail) + sep : 0) - (tags ? xLength(tags) + sep : 0);
   const head = clipX(paras[0], Math.max(20, room));
   return tail ? `${head}\n\n${tail}` : head;
 }

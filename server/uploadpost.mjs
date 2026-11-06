@@ -22,7 +22,11 @@
 //   We stay under it: UPLOAD_POST_RPM (default 150) + 2 per profile a minute, and 90% of the 10-minute allowance.
 //   A write waits at most 15 s for a slot, then gets a local 429 with nothing sent.
 // - The bad-key lockout: ten failed calls with a bad key lock the server's address out for 5 minutes, so after a
-//   401 no call goes out for 60 s (a local 401) and the owner is told (onAlert('auth')).
+//   401 for our key no call goes out for 60 s (a local 401) and the owner is told (onAlert('auth')). A 401 that is
+//   one customer's social sign-in running out (reauth_required, e.g. facebook_reauth_required on the pinned-Page
+//   read) is that customer's reconnect, never the key: it blocks nothing and alerts no one (isSocialReauth).
+// - After an 'auth' or 'rate_lockout' alert, the next answer that is a success tells the owner it's over
+//   (onRecover(kinds)).
 // - Third-party text in answers is data: callers read only the fields they need and render them as text.
 
 import crypto from 'node:crypto';
@@ -89,6 +93,12 @@ export function upError(res) {
   return { status: Number(res?.status) || 0, code, violations, ...(Number.isFinite(retryAfter) ? { retryAfter } : {}) };
 }
 
+/** A refusal that is one customer's social account asking to sign in again, never our key or plan. */
+export function isSocialReauth(res) {
+  const b = res?.body && typeof res.body === 'object' ? res.body : {};
+  return b.reauth_required === true || /reauth|reconnect/i.test(String(b.error_code ?? ''));
+}
+
 function sameHex(a, b) {
   const x = Buffer.from(String(a || ''), 'utf8');
   const y = Buffer.from(String(b || ''), 'utf8');
@@ -112,9 +122,10 @@ export function toForm(fields) {
 
 /**
  * env: UPLOAD_POST_API_KEY, UPLOAD_POST_BASE_URL (tests), UPLOAD_POST_RPM, UPLOAD_POST_WEBHOOK_SECRET (+ _PREVIOUS
- * while rotating). fetch, now, sleep, log: for tests. onAlert(kind): the owner hint ('auth', 'rate_lockout').
+ * while rotating). fetch, now, sleep, log: for tests. onAlert(kind): the owner hint ('auth', 'rate_lockout');
+ * onRecover(kinds): those are over (a later call succeeded).
  */
-export function createUploadPostClient({ env = process.env, fetch = globalThis.fetch, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = console, onAlert = () => {} } = {}) {
+export function createUploadPostClient({ env = process.env, fetch = globalThis.fetch, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = console, onAlert = () => {}, onRecover = () => {} } = {}) {
   const key = String(env.UPLOAD_POST_API_KEY || '').trim();
   const base = uploadPostBase(env);
   const rpmBase = Math.max(1, Math.min(900, Number.parseInt(env.UPLOAD_POST_RPM, 10) || 150));
@@ -122,6 +133,12 @@ export function createUploadPostClient({ env = process.env, fetch = globalThis.f
   let profiles = 0;
   let authBlockedUntil = 0;
   let serverHoldUntil = 0;
+  /** alerts raised that a later success ends ('auth', 'rate_lockout') */
+  const raised = new Set();
+  const alert = (kind) => {
+    raised.add(kind);
+    onAlert(kind);
+  };
 
   const minuteLimit = () => Math.min(900, rpmBase + 2 * profiles);
   const tenMinuteLimit = () => Math.min(4500, Math.floor(0.9 * (1000 + 10 * profiles)));
@@ -181,15 +198,20 @@ export function createUploadPostClient({ env = process.env, fetch = globalThis.f
     res.headers.forEach((v, k) => {
       if (HEADER_WHITELIST.includes(k)) out[k] = v;
     });
-    if (res.status === 401) {
+    if (res.status === 401 && !isSocialReauth({ body: parsed })) {
+      // our key (one customer's expired social sign-in also answers 401 on some reads: that blocks nobody)
       authBlockedUntil = now() + AUTH_GUARD_MS;
-      onAlert('auth');
+      alert('auth');
     } else if (res.status === 429) {
       const reset = Number.parseInt(out['x-ratelimit-reset'] ?? '', 10);
       const remaining = Number.parseInt(out['x-ratelimit-remaining'] ?? '', 10);
       // our whole budget is spent (or the address is locked out): hold every call until the window resets
       if (Number.isFinite(reset) && reset * 1000 > now() && (remaining === 0 || !Number.isFinite(remaining))) serverHoldUntil = Math.min(reset * 1000, now() + 600_000);
-      if (!Array.isArray(parsed?.violations) && !clipCode(parsed?.error_code)) onAlert('rate_lockout');
+      if (!Array.isArray(parsed?.violations) && !clipCode(parsed?.error_code)) alert('rate_lockout');
+    } else if (res.status >= 200 && res.status < 300 && raised.size) {
+      const over = [...raised];
+      raised.clear();
+      onRecover(over);
     }
     return { status: res.status, headers: out, body: parsed };
   }

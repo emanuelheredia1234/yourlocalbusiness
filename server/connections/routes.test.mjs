@@ -113,6 +113,8 @@ async function connectOverHttp(who, platform, account = {}) {
   const username = await profileOf(USERS[who]);
   const acct = up.connect(username, platform, account);
   expect((await upHook(app.base, { event: 'social_account_connected', profile_username: username, platform })).status).toBe(200);
+  // answered at once; the account is read back right after
+  await upImpl.settled();
   return { connectLink, accountId: acct.username, username };
 }
 
@@ -260,8 +262,9 @@ describe('connecting end to end', () => {
     expect((await r.json()).connection.targetLabel).toBe('Joe’s Bakery Co');
     const forP2 = (await (await app.call('alice', 'GET', '/api/integrations/connections?projectId=proj-2')).json()).connections.find((c) => c.platform === 'linkedin');
     expect(forP2).toMatchObject({ targetLabel: 'Joe’s Bakery Co', targetKind: 'li_org' });
+    // another business never inherits proj-2's company page: it posts as the person until it chooses
     const forOther = (await (await app.call('alice', 'GET', '/api/integrations/connections?projectId=proj-3')).json()).connections.find((c) => c.platform === 'linkedin');
-    expect(forOther.targetLabel).toBeDefined();
+    expect(forOther).toMatchObject({ targetLabel: 'Joe Baker', targetKind: 'li_person' });
   });
 
   it('refuses a malformed target id', async () => {
@@ -355,6 +358,7 @@ describe('through the server wiring (server/integrations/wiring.mjs)', () => {
       const username = (await appState.get(`uploadpost:user:${sha256(ALICE.id)}`)).value.username;
       up.connect(username, 'tiktok');
       expect((await upHook(base, { event: 'social_account_connected', profile_username: username, platform: 'tiktok' })).status).toBe(200);
+      await integrations.connections.impl.social.settled();
       const list = await (await fetch(`${base}/api/integrations/connections`, { headers: { 'x-test-user': 'alice' } })).json();
       expect(list.connections.find((c) => c.platform === 'tiktok')).toMatchObject({ state: 'connected', targetKind: 'tt_account' });
       const nangoList = await (await fetch(`${base}/api/integrations/nango`, { headers: { 'x-test-user': 'alice' } })).json();

@@ -18,7 +18,7 @@ import { ensureCustomer, fail, isUuid, safeLog, utcDay } from '../integrations/c
 import { PUBLISH_PLATFORMS } from '../integrations/contracts.mjs';
 import { cleanHashtags, composeFor, placementOf } from './caption.mjs';
 import { createJobs, jobOut } from './jobs.mjs';
-import { createMediaStore, formatProblem, MEDIA_ID_RE, mediaKind } from './media.mjs';
+import { canMakePublicLinks, createMediaStore, formatProblem, MEDIA_ID_RE, mediaKind } from './media.mjs';
 
 /** The posting caps when billing_caps has no row at all (the migration's '*' row says the same). */
 export const DEFAULT_POST_CAPS = Object.freeze({ postsPerDay: 50, xPostsPerDay: 20 });
@@ -208,6 +208,12 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       }
       const why = formatProblem(platform, media);
       if (why) throw fail(400, 'MEDIA_UNSUPPORTED', why);
+      // Upload-Post fetches photos and videos from our short-lived links: without MEDIA_URL_SECRET none can be made,
+      // so nothing is started (and the owner hears, never the customer: it's the app's setup)
+      if (media && !canMakePublicLinks(env)) {
+        connections.impl?.social?.alert?.('media_secret');
+        throw fail(503, 'SERVICE_UNAVAILABLE', 'Posting photos and videos from the app isn’t available right now, so nothing was posted. We’ve been notified. You can post it yourself.', {}, 'Add MEDIA_URL_SECRET (32+ random bytes) in Replit Secrets: Upload-Post fetches each photo and video from a short-lived link signed with it.');
+      }
 
       // the customer's daily posting cap (X bills each post)
       const tag = await ensureCustomer(db, userId, env);

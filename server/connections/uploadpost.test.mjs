@@ -47,6 +47,11 @@ function setup({ env = {}, start = Date.now() } = {}) {
 }
 
 const docOf = async (t, userId) => (await t.storage.get(`uploadpost:user:${sha256(userId)}`))?.value;
+/** The owner's stored alerts ({ kind: { at, n? } }), once their writes have landed. */
+const alertsOf = async (t) => {
+  await t.impl.settled();
+  return (await t.storage.get('uploadpost:alerts'))?.value ?? {};
+};
 
 /** Connect a network the way a customer does: the link, the hosted page (mock), then the signed webhook. */
 async function connectVia(t, userId, platform, account = {}) {
@@ -56,6 +61,8 @@ async function connectVia(t, userId, platform, account = {}) {
   const evt = mock.signed({ event: 'social_account_connected', profile_username: username, platform, account_name: acct.handle, status: 'connected' }, { ts: Math.floor(t.clock.t / 1000) });
   const res = await t.impl.webhook(evt.raw, evt.headers);
   expect(res.status).toBe(200);
+  // the webhook is answered at once; its work runs after
+  await t.impl.settled();
   return { link, username, acct };
 }
 
@@ -105,6 +112,37 @@ describe('the client (server/uploadpost.mjs)', () => {
     clock += 61_000;
     await client.call('GET', '/uploadposts/me');
     expect(mock.calls.length).toBe(before + 1);
+  });
+
+  it('a 401 that is one customer’s social sign-in running out (reauth_required) blocks nothing and alerts no one; after a key alert, the next success says it’s over', async () => {
+    let clock = 7_000_000;
+    const alerts = [];
+    const over = [];
+    const answers = [
+      { status: 401, body: { success: false, error_code: 'facebook_reauth_required', reauth_required: true } },
+      { status: 200, body: { success: true } },
+      { status: 401, body: { success: false, message: 'Invalid API key' } },
+      { status: 200, body: { success: true } },
+    ];
+    let sent = 0;
+    const fakeFetch = async () => {
+      const a = answers[sent];
+      sent += 1;
+      return new Response(JSON.stringify(a.body), { status: a.status, headers: { 'content-type': 'application/json' } });
+    };
+    const client = createUploadPostClient({ env: { UPLOAD_POST_API_KEY: TEST_UPLOAD_POST_KEY }, fetch: fakeFetch, now: () => clock, log: makeLog(), onAlert: (k) => alerts.push(k), onRecover: (k) => over.push(...k) });
+    expect((await client.call('GET', '/uploadposts/users/facebook-page', { query: { profile_username: 'ylb_aaaaaaaaaaaaaaaaaaaaaaaa' } })).status).toBe(401);
+    expect(alerts).toEqual([]);
+    // the next call, for anyone, goes out
+    expect((await client.call('POST', '/upload_text', { form: { user: 'ylb_bbbbbbbbbbbbbbbbbbbbbbbb' }, headers: { 'Idempotency-Key': 'k1' } })).status).toBe(200);
+    expect(sent).toBe(2);
+    // our key: the 60 s guard and the owner's alert; once a call works again, the alert is over
+    expect((await client.call('GET', '/uploadposts/me')).status).toBe(401);
+    expect(alerts).toEqual(['auth']);
+    expect(await client.call('GET', '/uploadposts/me')).toMatchObject({ status: 401, local: true });
+    clock += 61_000;
+    expect((await client.call('GET', '/uploadposts/me')).status).toBe(200);
+    expect(over).toEqual(['auth']);
   });
 
   it('checks the webhook signature over "<timestamp>.<raw body>", within 300 s, with the current or previous secret; unsigned is refused', () => {
@@ -160,7 +198,7 @@ describe('profiles and the connect page', () => {
     expect(Date.parse(a.expiresAt) - t.clock.t).toBe(48 * 3_600_000);
     const [first, second] = mock.jwtBodies.slice(-2);
     for (const body of [first, second]) {
-      expect(body).toMatchObject({ redirect_url: 'https://yourlocalbusiness.replit.app/settings?tab=accounts&from=connect', logo_image: 'https://cdn.example/logo.png', connect_title: 'Connect Joe’s accounts', redirect_button_text: expect.any(String), connect_description: expect.any(String), show_calendar: false, readonly_calendar: false, connect_theme: 'light' });
+      expect(body).toMatchObject({ redirect_url: 'https://yourlocalbusiness.replit.app/?settings=accounts#workspace-settings', logo_image: 'https://cdn.example/logo.png', connect_title: 'Connect Joe’s accounts', redirect_button_text: expect.any(String), connect_description: expect.any(String), show_calendar: false, readonly_calendar: false, connect_theme: 'light' });
     }
     expect(first.platforms).toEqual(['linkedin']);
     expect(second.platforms).toEqual(['tiktok']);
@@ -176,7 +214,7 @@ describe('profiles and the connect page', () => {
       const customer = JSON.stringify(errorBody(err, null).body);
       expect(customer).not.toMatch(/upload-post|plan|add-on|owner@|PROFILE_LIMIT/i);
       expect(errorBody(err, { isAdmin: true }).body.hint).toMatch(/profile/i);
-      expect((await t.storage.get('uploadpost:alert')).value.kind).toBe('profile_cap');
+      expect(Object.keys(await alertsOf(t))).toContain('profile_cap');
     } finally {
       mock.cap = 75;
     }
@@ -205,7 +243,7 @@ describe('profiles and the connect page', () => {
       const err = await t.connections.connectLink(ALICE, 'x').catch((e) => e);
       expect(err).toMatchObject({ status: 503, code: 'CONNECTIONS_UNAVAILABLE' });
       expect(errorBody(err, null).body.error).not.toMatch(/blocked|plan|upload/i);
-      expect((await t.storage.get('uploadpost:alert')).value.kind).toBe('profile_blocked');
+      expect(Object.keys(await alertsOf(t))).toContain('profile_blocked');
     } finally {
       mock.blocked.delete(username);
     }
@@ -216,6 +254,26 @@ describe('profiles and the connect page', () => {
     await expect(t.connections.connectLink(ALICE, 'pinterest')).rejects.toMatchObject({ status: 400 });
     expect((await t.connections.status(ALICE)).find((s) => s.platform === 'pinterest').state).toBe('coming_soon');
     await expect(t.connections.connectLink(ALICE, 'meta_ads')).rejects.toMatchObject({ code: 'CONNECTIONS_NOT_ENABLED' });
+  });
+
+  it('new profiles a day are limited (a burst of throwaway sign-ups can’t fill the plan); the customer reads a safe message and the owner is told', async () => {
+    const t = setup({ env: { UPLOAD_POST_NEW_PROFILES_PER_DAY: '1' } });
+    await t.connections.connectLink('d1111111-2222-4333-8444-555555555555', 'x');
+    const err = await t.connections.connectLink('d2111111-2222-4333-8444-555555555555', 'x').catch((e) => e);
+    expect(err).toMatchObject({ status: 503, code: 'CONNECTIONS_UNAVAILABLE' });
+    expect(errorBody(err, null).body.error).not.toMatch(/upload|plan|day/i);
+    expect(errorBody(err, { isAdmin: true }).body.hint).toContain('UPLOAD_POST_NEW_PROFILES_PER_DAY');
+    expect(Object.keys(await alertsOf(t))).toContain('profile_budget');
+    // a customer whose profile exists already isn't a new one
+    expect((await t.connections.connectLink('d1111111-2222-4333-8444-555555555555', 'tiktok')).connectLink).toBeDefined();
+  });
+
+  it('set up without MEDIA_URL_SECRET: text posts go, and the owner reads that photos and videos need it', async () => {
+    const t = setup({ env: { MEDIA_URL_SECRET: '' } });
+    expect(t.impl.setUp).toBe(true);
+    expect(t.impl.warning).toContain('MEDIA_URL_SECRET');
+    expect(t.connections.hint).toContain('MEDIA_URL_SECRET');
+    expect(t.impl.warning).not.toContain('test-media');
   });
 
   it('is not set up without the webhook secret or the tag secret, and names only the Secrets', async () => {
@@ -239,28 +297,84 @@ describe('accounts, Pages and isolation', () => {
     expect(text).not.toContain(acct.username);
   });
 
-  it('lists Facebook Pages with profile= only, lets each business choose its Page, and a pinned Page wins', async () => {
+  it('lists Facebook Pages with profile= only; each business chooses its own Page (never inherits another’s); a Page pinned on the connect page is seen, and choosing another clears it', async () => {
     const t = setup();
     const u = `ylb_${customerTag(ALICE, t.env).slice(5)}`;
     mock.addProfile(u);
     mock.pages.facebook.set(u, [{ id: '1001', name: 'Joe’s Bakery' }, { id: '1002', name: 'Joe’s Catering' }]);
     mock.pages.facebook.set('ylb_someoneelse0000000000000', [{ id: '9999', name: 'Not Alice’s' }]);
     await connectVia(t, ALICE, 'facebook');
-    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'facebook')).toMatchObject({ state: 'connected', targetsAvailable: 2 });
+    const fb = async (projectId) => (await t.connections.status(ALICE, { projectId })).find((s) => s.platform === 'facebook');
+    expect(await fb()).toMatchObject({ state: 'connected', targetsAvailable: 2 });
     const targets = await t.connections.targets(ALICE, 'facebook');
     expect(targets.map((x) => x.label)).toEqual(['Joe’s Bakery', 'Joe’s Catering']);
     expect(JSON.stringify(targets)).not.toMatch(/1001|1002|9999/);
     await t.connections.setTarget(ALICE, 'facebook', targets[1].id, { projectId: 'proj-b' });
     await t.connections.setTarget(ALICE, 'facebook', targets[0].id, { projectId: 'proj-a' });
-    expect((await t.connections.status(ALICE, { projectId: 'proj-b' })).find((s) => s.platform === 'facebook').targetLabel).toBe('Joe’s Catering');
-    expect((await t.connections.status(ALICE, { projectId: 'proj-a' })).find((s) => s.platform === 'facebook').targetLabel).toBe('Joe’s Bakery');
-    // the hosted page pinned a Page: every business uses it, and choosing another is refused
+    expect((await fb('proj-b')).targetLabel).toBe('Joe’s Catering');
+    expect((await fb('proj-a')).targetLabel).toBe('Joe’s Bakery');
+    // a business that never chose isn't handed another business's Page: it's asked to choose
+    expect((await fb('proj-c')).targetLabel).toBeUndefined();
+    expect(await t.connections.publish(ALICE, 'facebook', { projectId: 'proj-c', jobId: JOB(), composed: { text: 'x' } })).toMatchObject({ state: 'failed', errorCode: 'NO_TARGET' });
+
+    // the customer picks Catering on the hosted page, which pins it (GET answers selected_page_id): it's seen, and
+    // since it wins over the Page each upload names, every business shows it and the upload names it too
     mock.pins.facebook.set(u, '1002');
     await t.connections.check(ALICE, 'facebook');
-    expect((await t.connections.status(ALICE, { projectId: 'proj-a' })).find((s) => s.platform === 'facebook').targetLabel).toBe('Joe’s Catering');
-    await expect(t.connections.setTarget(ALICE, 'facebook', targets[0].id, { projectId: 'proj-a' })).rejects.toMatchObject({ status: 409 });
+    expect((await fb('proj-a')).targetLabel).toBe('Joe’s Catering');
+    await t.connections.publish(ALICE, 'facebook', { projectId: 'proj-a', jobId: JOB(), composed: { text: 'Pinned' } });
+    expect(mock.uploadCalls().pop().form.facebook_page_id).toBe('1002');
+
+    // proj-a chooses Bakery again: the pin goes at Upload-Post (one DELETE), proj-a posts on Bakery, and the
+    // businesses that never chose keep the pinned Page as their default
+    const before = mock.calls.length;
+    await t.connections.setTarget(ALICE, 'facebook', targets[0].id, { projectId: 'proj-a' });
+    expect(mock.calls.slice(before).filter((c) => c.method === 'DELETE')).toEqual([expect.objectContaining({ path: '/api/uploadposts/users/facebook-page', body: { profile_username: u } })]);
+    expect(mock.pins.facebook.has(u)).toBe(false);
+    expect((await fb('proj-a')).targetLabel).toBe('Joe’s Bakery');
+    expect((await fb('proj-b')).targetLabel).toBe('Joe’s Catering');
+    expect((await fb('proj-c')).targetLabel).toBe('Joe’s Catering');
+    await t.connections.publish(ALICE, 'facebook', { projectId: 'proj-a', jobId: JOB(), composed: { text: 'Mine' } });
+    expect(mock.uploadCalls().pop().form.facebook_page_id).toBe('1001');
     expect(mock.violations).toEqual([]);
-    mock.pins.facebook.delete(u);
+  });
+
+  it('LinkedIn: a company page pinned on the connect page (by number or URN) is what every post goes out as', async () => {
+    const t = setup();
+    const u = `ylb_${customerTag('a2111111-2222-4333-8444-555555555555', t.env).slice(5)}`;
+    mock.addProfile(u);
+    mock.pages.linkedin.set(u, [{ id: 'urn:li:organization:42', name: 'Joe’s Bakery Co' }]);
+    await connectVia(t, 'a2111111-2222-4333-8444-555555555555', 'linkedin', { display_name: 'Joe Baker' });
+    const li = async () => (await t.connections.status('a2111111-2222-4333-8444-555555555555')).find((s) => s.platform === 'linkedin');
+    expect(await li()).toMatchObject({ targetLabel: 'Joe Baker', targetKind: 'li_person' });
+    mock.pins.linkedin.set(u, '42');
+    await t.connections.check('a2111111-2222-4333-8444-555555555555', 'linkedin');
+    expect(await li()).toMatchObject({ targetLabel: 'Joe’s Bakery Co', targetKind: 'li_org' });
+    await t.connections.publish('a2111111-2222-4333-8444-555555555555', 'linkedin', { jobId: JOB(), composed: { text: 'As the company' } });
+    expect(mock.uploadCalls().pop().form.target_linkedin_page_id).toBe('urn:li:organization:42');
+    mock.pins.linkedin.delete(u);
+  });
+
+  it('one customer’s expired Facebook sign-in (401 facebook_reauth_required on the pin read) is their reconnect: nobody else is blocked and the owner isn’t told the key is bad', async () => {
+    const t = setup();
+    const CAROL = 'a3111111-2222-4333-8444-555555555555';
+    const DAVE = 'a4111111-2222-4333-8444-555555555555';
+    const u = `ylb_${customerTag(CAROL, t.env).slice(5)}`;
+    mock.addProfile(u);
+    mock.pages.facebook.set(u, [{ id: '5001', name: 'Carol’s Page' }]);
+    await connectVia(t, CAROL, 'facebook');
+    await connectVia(t, DAVE, 'x');
+    mock.pinReauth.add(u);
+    try {
+      expect(await t.connections.check(CAROL, 'facebook')).toMatchObject({ state: 'needs_reconnect' });
+      // the very next call, for someone else, goes out and posts
+      const before = mock.uploadCalls().length;
+      expect(await t.connections.publish(DAVE, 'x', { jobId: JOB(), composed: { text: 'Still posting' } })).toMatchObject({ state: 'sent' });
+      expect(mock.uploadCalls().length).toBe(before + 1);
+      expect(Object.keys(await alertsOf(t))).not.toContain('auth');
+    } finally {
+      mock.pinReauth.delete(u);
+    }
   });
 
   it('check reads the profile back: a reauth flag needs a reconnect; disconnect removes it at Upload-Post once (404 is fine)', async () => {
@@ -312,7 +426,59 @@ describe('the webhook', () => {
     expect((await t.impl.webhook(evt.raw, evt.headers)).status).toBe(200);
     const again = await t.impl.webhook(evt.raw, signUploadPost(evt.raw, { event: 'upload_completed' }));
     expect(again.body).toMatchObject({ duplicate: true });
+    await t.impl.settled();
     expect(seen).toEqual([{ userId: ALICE, jobId, outcome: { state: 'sent', platform: 'instagram', url: 'https://instagram.com/p/abc' } }]);
+  });
+
+  it('answers at once and works afterwards: a slow profile read can’t make Upload-Post wait (10 s) or pause deliveries; a failure is never a 5xx', async () => {
+    const t = setup();
+    const KIM = 'c1111111-2222-4333-8444-555555555555';
+    const { username } = await connectVia(t, KIM, 'instagram');
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const slow = createUploadPostConnections({
+      env: t.env,
+      storage: t.storage,
+      db: t.db,
+      log: makeLog(),
+      now: () => t.clock.t,
+      fetch: async (url, init) => {
+        if (String(url).includes(`/uploadposts/users/${username}`)) await gate;
+        return fetch(url, init);
+      },
+    });
+    mock.connect(username, 'x');
+    const evt = mock.signed({ event: 'social_account_connected', profile_username: username, platform: 'x' }, { ts: Math.floor(t.clock.t / 1000) });
+    const res = await slow.webhook(evt.raw, evt.headers);
+    expect(res).toMatchObject({ status: 200, body: { ok: true } });
+    expect((await docOf(t, KIM)).accounts.x).toBeUndefined();
+    release();
+    await slow.settled();
+    expect((await docOf(t, KIM)).accounts.x).toBeDefined();
+    // the work failing (the database is down for the routing read) still answered 200
+    t.db.fail.billing_customers = () => true;
+    try {
+      const evt2 = mock.signed({ event: 'social_account_disconnected', profile_username: username, platform: 'x' }, { ts: Math.floor(t.clock.t / 1000) });
+      expect((await slow.webhook(evt2.raw, evt2.headers)).status).toBe(200);
+      await slow.settled();
+    } finally {
+      delete t.db.fail.billing_customers;
+    }
+  });
+
+  it('a TikTok finished by its webhook with no web address reads the status first: drafts read as drafts, not “Posted”', async () => {
+    const t = setup();
+    const { username } = await connectVia(t, ALICE, 'tiktok');
+    const seen = [];
+    t.impl.setPostListener((userId, jobId, outcome) => seen.push(outcome));
+    const jobId = JOB();
+    mock.setUploadOutcome('inbox');
+    await t.connections.publish(ALICE, 'tiktok', { jobId, composed: { text: 'Bread' }, media: { id: 'vid-tt9', kind: 'video', type: 'video/mp4', size: 6000 } });
+    // the documented upload_completed result has no fallback_to_inbox
+    const evt = mock.signed({ event: 'upload_completed', request_id: jobId, profile_username: username, platform: 'tiktok', result: { success: true, url: null, publish_id: 'p1', error: null } });
+    await t.impl.webhook(evt.raw, evt.headers);
+    await t.impl.settled();
+    expect(seen).toEqual([{ state: 'sent', platform: 'tiktok', drafts: true }]);
   });
 });
 
@@ -336,7 +502,8 @@ describe('posting (one attempt)', () => {
     expect(out.state).toBe('sent');
     const call = mock.uploadCalls().pop();
     expect(call.path).toBe('/api/upload_photos');
-    expect(call.form['photos[]']).toEqual([expect.stringMatching(/^https:\/\/app\.test\/api\/media\/public\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/)]);
+    // a direct link to the file, ending in its extension (Upload-Post asks for one)
+    expect(call.form['photos[]']).toEqual([expect.stringMatching(/^https:\/\/app\.test\/api\/media\/public\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}\.jpg$/)]);
   });
 
   it('a video goes in the background: status reads by the job id until it’s done; the address comes back', async () => {
@@ -378,20 +545,55 @@ describe('posting (one attempt)', () => {
     expect((await t.connections.status(BOB)).find((s) => s.platform === 'facebook').state).toBe('needs_reconnect');
   });
 
-  it('TikTok: the account’s audience options are read first; drafts (inbox fallback) end sent with no address', async () => {
+  it('TikTok: a video keeps the account’s own audience (no setting sent, nothing read first); drafts (inbox fallback) end sent with no address', async () => {
     const t = setup();
     const { username } = await connectVia(t, ALICE, 'tiktok');
+    const video = { id: 'vid-tt', kind: 'video', type: 'video/mp4', size: 6000 };
     mock.setUploadOutcome('inbox');
-    const out = await t.connections.publish(ALICE, 'tiktok', { jobId: JOB(), composed: { text: 'Bread' }, media: { id: 'vid-tt', kind: 'video', type: 'video/mp4', size: 6000 } });
+    const reads = mock.calls.filter((c) => c.path === '/api/uploadposts/tiktok/settings').length;
+    const out = await t.connections.publish(ALICE, 'tiktok', { jobId: JOB(), composed: { text: 'Bread' }, media: video });
     expect(out).toMatchObject({ state: 'sent', ref: { outcome: 'drafts' } });
     expect(out.url).toBeUndefined();
+    expect(mock.uploadCalls().pop().form.privacy_level).toBeUndefined();
+    // a private account (no public option) posts its videos the same way, and an older connection the settings
+    // read refuses is never marked for a reconnect over it
+    mock.tiktokPrivacy.set(username, ['FOLLOWER_OF_CREATOR', 'SELF_ONLY']);
+    mock.tiktokSettings.set(username, { status: 400, body: { success: false, error_code: 'tiktok_reconnect_required' } });
+    try {
+      expect(await t.connections.publish(ALICE, 'tiktok', { jobId: JOB(), composed: { text: 'Bread' }, media: video })).toMatchObject({ state: 'sent' });
+      expect(mock.calls.filter((c) => c.path === '/api/uploadposts/tiktok/settings').length).toBe(reads);
+      expect((await t.connections.status(ALICE)).find((s) => s.platform === 'tiktok').state).toBe('connected');
+    } finally {
+      mock.tiktokPrivacy.delete(username);
+      mock.tiktokSettings.delete(username);
+    }
+  });
+
+  it('TikTok photos need an audience: public when the account has it, its followers on a private account, refused when neither; one asked for goes as it is (never quietly public)', async () => {
+    const t = setup();
+    const { username } = await connectVia(t, BOB, 'tiktok');
+    const photo = { id: 'img-tt.jpg', kind: 'image', type: 'image/jpeg', size: 10 };
+    expect(await t.connections.publish(BOB, 'tiktok', { jobId: JOB(), composed: { text: 'Buns' }, media: photo })).toMatchObject({ state: 'sent' });
     expect(mock.uploadCalls().pop().form.privacy_level).toBe('PUBLIC_TO_EVERYONE');
-    // a private account with no public option: refused before anything is sent
-    mock.tiktokPrivacy.set(username, ['SELF_ONLY']);
-    const before = mock.uploadCalls().length;
-    expect(await t.connections.publish(ALICE, 'tiktok', { jobId: JOB(), composed: { text: 'Bread' }, media: { id: 'vid-tt', kind: 'video', type: 'video/mp4', size: 6000 } })).toMatchObject({ state: 'failed', errorCode: 'TIKTOK_PRIVACY' });
-    expect(mock.uploadCalls().length).toBe(before);
-    mock.tiktokPrivacy.delete(username);
+    mock.tiktokPrivacy.set(username, ['FOLLOWER_OF_CREATOR', 'MUTUAL_FOLLOW_FRIENDS', 'SELF_ONLY']);
+    try {
+      expect(await t.connections.publish(BOB, 'tiktok', { jobId: JOB(), composed: { text: 'Buns' }, media: photo })).toMatchObject({ state: 'sent' });
+      expect(mock.uploadCalls().pop().form.privacy_level).toBe('FOLLOWER_OF_CREATOR');
+      // asked for one the account doesn't have: Upload-Post refuses it before TikTok (nothing posted)
+      expect(await t.connections.publish(BOB, 'tiktok', { jobId: JOB(), composed: { text: 'Buns' }, media: photo, privacy: 'PUBLIC_TO_EVERYONE' })).toMatchObject({ state: 'failed', errorCode: 'TIKTOK_PRIVACY' });
+      expect(mock.uploadCalls().pop().form.privacy_level).toBe('PUBLIC_TO_EVERYONE');
+      mock.tiktokPrivacy.set(username, ['SELF_ONLY']);
+      const before = mock.uploadCalls().length;
+      expect(await t.connections.publish(BOB, 'tiktok', { jobId: JOB(), composed: { text: 'Buns' }, media: photo })).toMatchObject({ state: 'failed', errorCode: 'TIKTOK_PRIVACY' });
+      expect(mock.uploadCalls().length).toBe(before);
+      // TikTok no longer takes the connection (409 reauth_required): a reconnect, not "couldn't reach the service"
+      mock.tiktokSettings.set(username, { status: 409, body: { success: false, reauth_required: true } });
+      expect(await t.connections.publish(BOB, 'tiktok', { jobId: JOB(), composed: { text: 'Buns' }, media: photo })).toMatchObject({ state: 'failed', errorCode: 'NEEDS_RECONNECT' });
+      expect((await t.connections.status(BOB)).find((s) => s.platform === 'tiktok').state).toBe('needs_reconnect');
+    } finally {
+      mock.tiktokPrivacy.delete(username);
+      mock.tiktokSettings.delete(username);
+    }
   });
 
   it('caps and team limits: a daily cap is PLATFORM_LIMIT; the scheduled-post cap and our key are the owner’s (safe code, alert)', async () => {
@@ -402,10 +604,12 @@ describe('posting (one attempt)', () => {
     expect(await t.connections.publish(ALICE, 'instagram', { jobId: JOB(), composed: { text: 'a' }, media: photo })).toMatchObject({ state: 'failed', errorCode: 'PLATFORM_LIMIT' });
     mock.setUploadOutcome('scheduled_limit');
     expect(await t.connections.publish(ALICE, 'instagram', { jobId: JOB(), composed: { text: 'b' }, media: photo })).toMatchObject({ state: 'failed', errorCode: 'SERVICE_UNAVAILABLE' });
-    expect((await t.storage.get('uploadpost:alert')).value.kind).toBe('scheduled_limit');
+    expect(Object.keys(await alertsOf(t))).toContain('scheduled_limit');
     mock.setUploadOutcome('unauthorized');
     expect(await t.connections.publish(ALICE, 'instagram', { jobId: JOB(), composed: { text: 'c' }, media: photo })).toMatchObject({ state: 'failed', errorCode: 'SERVICE_UNAVAILABLE' });
-    expect((await t.storage.get('uploadpost:alert')).value.kind).toBe('auth');
+    expect(Object.keys(await alertsOf(t))).toContain('auth');
+    // the owner sees the most serious one
+    expect((await t.impl.ownerView()).alert).toMatchObject({ kind: 'auth' });
     expect(t.log.text()).not.toMatch(/upgrade at|40000 pending/);
   });
 
@@ -424,6 +628,71 @@ describe('posting (one attempt)', () => {
     expect(await t.connections.postStatus(BOB, { requestId: JOB(), platform: 'x' })).toMatchObject({ pending: true });
   });
 
+  it('a status entry still “Queued” keeps the job waiting (never “Posted”); a retryable one too, and it ends “may have been posted”, never “failed”', async () => {
+    const t = setup();
+    await connectVia(t, ALICE, 'x');
+    const queued = JOB();
+    mock.setUploadOutcome('async');
+    // the first read answers the documented in-progress shape ({success: true, message: "Queued"}); the next one is done
+    expect(await t.connections.publish(ALICE, 'x', { jobId: queued, composed: { text: 'Queued first' } })).toMatchObject({ state: 'sent', url: expect.stringMatching(/^https:\/\/social\.example\/x\//) });
+    expect(mock.calls.filter((c) => c.path === '/api/uploadposts/status' && c.query.request_id === queued).length).toBe(2);
+    // Upload-Post will retry it by itself: never "failed" (a "Try again" would post it twice)
+    const retry = JOB();
+    mock.setStatus(retry, { request_id: retry, status: 'in_progress', results: [{ platform: 'x', success: false, status: 'retryable', error_code: 'content_rejected' }] });
+    mock.setUploadOutcome('async_pending');
+    try {
+      expect(await t.connections.publish(ALICE, 'x', { jobId: retry, composed: { text: 'Will be retried' } })).toMatchObject({ state: 'unknown', errorCode: 'UNCONFIRMED' });
+      expect(await t.connections.postStatus(ALICE, { requestId: retry, platform: 'x' })).toMatchObject({ pending: true });
+    } finally {
+      mock.setStatus(retry, null);
+    }
+  });
+
+  it('a TikTok that failed with no code (TikTok’s internal error) may still go out after moderation: “may have been posted”, not “Try again”', async () => {
+    const t = setup();
+    await connectVia(t, BOB, 'tiktok');
+    mock.setUploadOutcome('tiktok_internal');
+    expect(await t.connections.publish(BOB, 'tiktok', { jobId: JOB(), composed: { text: 'Loaves' }, media: { id: 'vid-tt3', kind: 'video', type: 'video/mp4', size: 6000 } })).toMatchObject({ state: 'unknown', errorCode: 'UNCONFIRMED' });
+  });
+
+  it('an identical upload a moment ago answers with that request’s id: its status is read (and kept) by that id', async () => {
+    const t = setup();
+    await connectVia(t, BOB, 'x');
+    const jobId = JOB();
+    mock.setUploadOutcome('existing_request');
+    const out = await t.connections.publish(BOB, 'x', { jobId, composed: { text: 'Same as before' } });
+    expect(out).toMatchObject({ state: 'sent', ref: { requestId: expect.stringMatching(/^up_/) } });
+    expect(out.ref.requestId).not.toBe(jobId);
+    expect(mock.calls.filter((c) => c.path === '/api/uploadposts/status').pop().query.request_id).toBe(out.ref.requestId);
+    expect(await t.connections.postStatus(BOB, out.ref)).toMatchObject({ found: true });
+  });
+
+  it('an account gone at Upload-Post (400 invalid_platforms, an object) is “not connected”, and the doc learns it', async () => {
+    const t = setup();
+    const { username } = await connectVia(t, 'c2111111-2222-4333-8444-555555555555', 'youtube');
+    delete mock.profiles.get(username).social_accounts.youtube;
+    expect(await t.connections.publish('c2111111-2222-4333-8444-555555555555', 'youtube', { jobId: JOB(), composed: { text: 'd', title: 'T', description: 'd', tags: [] }, media: { id: 'vid-y', kind: 'video', type: 'video/mp4', size: 6000 } })).toMatchObject({ state: 'failed', errorCode: 'NOT_CONNECTED' });
+    expect((await t.connections.status('c2111111-2222-4333-8444-555555555555')).find((s) => s.platform === 'youtube').state).toBe('not_connected');
+  });
+
+  it('X links (with the X Links add-on): each customer has a share of the 50 a month everyone shares; past it nothing is sent, and the owner hears when links were taken out', async () => {
+    const t = setup({ env: { UPLOAD_POST_X_LINKS: 'on', UPLOAD_POST_X_LINK_POSTS_PER_CUSTOMER: '2' } });
+    expect(t.impl.xLinks).toBe(true);
+    const JO = 'c3111111-2222-4333-8444-555555555555';
+    await connectVia(t, JO, 'x');
+    const link = 'Order now https://joes.example/order';
+    expect((await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: link } })).state).toBe('sent');
+    mock.setUploadOutcome('x_links_stripped');
+    expect((await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: link } })).state).toBe('sent');
+    expect(Object.keys(await alertsOf(t))).toContain('x_links');
+    const before = mock.uploadCalls().length;
+    expect(await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: link } })).toMatchObject({ state: 'failed', errorCode: 'X_LINKS_USED' });
+    expect(mock.uploadCalls().length).toBe(before);
+    // a post without a link is never counted
+    expect((await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: 'No link today' } })).state).toBe('sent');
+    expect(t.db.rows('usage_ledger').filter((r) => r.endpoint === 'x:link_post')).toHaveLength(2);
+  });
+
   it('refuses (nothing sent) when the business has no account there', async () => {
     const t = setup();
     const before = mock.uploadCalls().length;
@@ -432,20 +701,76 @@ describe('posting (one attempt)', () => {
   });
 });
 
+describe('a connect whose webhook never came (Upload-Post sends each one once)', () => {
+  it('the waiting row reads the profile back (at most every 30 s), and Connect again finds the account instead of a new link', async () => {
+    const t = setup();
+    const LEE = 'c4111111-2222-4333-8444-555555555555';
+    await t.connections.connectLink(LEE, 'instagram');
+    const { username } = await docOf(t, LEE);
+    // the customer connected on the hosted page; the social_account_connected webhook was lost
+    mock.connect(username, 'instagram');
+    const ig = async () => (await t.connections.status(LEE)).find((s) => s.platform === 'instagram');
+    t.clock.t += 31_000;
+    expect((await ig()).state).toBe('connected');
+    // reads are throttled while waiting
+    await t.connections.connectLink(LEE, 'tiktok');
+    mock.connect(username, 'tiktok');
+    const reads = mock.calls.filter((c) => c.path === `/api/uploadposts/users/${username}`).length;
+    await t.connections.status(LEE);
+    expect(mock.calls.filter((c) => c.path === `/api/uploadposts/users/${username}`).length).toBe(reads);
+    // Connect again: the profile is read first, so no second link
+    expect(await t.connections.connectLink(LEE, 'tiktok')).toEqual({ alreadyConnected: true });
+  });
+
+  it('Check on a waiting row reads the profile back right away', async () => {
+    const t = setup();
+    const MAY = 'c5111111-2222-4333-8444-555555555555';
+    await t.connections.connectLink(MAY, 'linkedin');
+    const { username } = await docOf(t, MAY);
+    mock.connect(username, 'linkedin');
+    expect(await t.connections.check(MAY, 'linkedin')).toMatchObject({ state: 'connected' });
+  });
+});
+
 describe('social stats (reads)', () => {
-  it('reads the account’s numbers (Facebook with its Page), the reach series and cached top posts; a missing key is unknown', async () => {
+  it('reads the account’s numbers (Facebook with its Page) and its daily series; no cached-posts read (it only holds posts read one by one); a missing key is unknown', async () => {
     const t = setup();
     await connectVia(t, ALICE, 'instagram');
     const got = await t.connections.insights(ALICE, 'instagram', {});
     expect(got).toMatchObject({ followers: 1310, reach: 1000, views: 700, engagement: 64, series: [{ date: '2026-11-01', reach: 700 }, { date: '2026-11-02', reach: 300 }] });
     expect(got.postsCount).toBeUndefined();
-    expect(got.topPosts[0]).toMatchObject({ id: 'pid_1', likes: 40, url: 'https://social.example/p/1' });
+    expect(got.topPosts).toBeUndefined();
+    expect(mock.calls.some((c) => c.path === '/api/uploadposts/post-analytics/cached')).toBe(false);
     expect(t.db.rows('usage_ledger').filter((r) => r.feature === 'social').every((r) => r.vendor === 'uploadpost')).toBe(true);
     const u = (await docOf(t, ALICE)).username;
     mock.pages.facebook.set(u, [{ id: '3001', name: 'Alice’s Page' }]);
     await connectVia(t, ALICE, 'facebook');
     expect((await t.connections.insights(ALICE, 'facebook', {})).followers).toBe(1310);
     expect(mock.calls.filter((c) => c.path === `/api/analytics/${u}` && c.query.platforms === 'facebook').pop().query).toMatchObject({ page_id: '3001', days: '30' });
+  });
+
+  it('a series is what the network counts: TikTok’s is views, X’s impressions (never charted as reach)', async () => {
+    const t = setup();
+    await connectVia(t, BOB, 'tiktok');
+    await connectVia(t, BOB, 'x');
+    expect((await t.connections.insights(BOB, 'tiktok', {})).series[0]).toEqual({ date: '2026-11-01', views: 700 });
+    expect((await t.connections.insights(BOB, 'x', {})).series[0]).toEqual({ date: '2026-11-01', impressions: 700 });
+  });
+
+  it('LinkedIn: a personal profile has no stats at Upload-Post (it would answer for some company page), so it reads public data; a company page is asked for by its URN', async () => {
+    const t = setup();
+    const CAROL = 'b1111111-2222-4333-8444-555555555555';
+    const u = `ylb_${customerTag(CAROL, t.env).slice(5)}`;
+    mock.addProfile(u);
+    mock.pages.linkedin.set(u, [{ id: 'urn:li:organization:77', name: 'Carol Co' }]);
+    await connectVia(t, CAROL, 'linkedin');
+    const reads = mock.calls.length;
+    expect(await t.connections.insights(CAROL, 'linkedin', {})).toBeNull();
+    expect(mock.calls.slice(reads).some((c) => c.path.startsWith('/api/analytics/'))).toBe(false);
+    const org = (await t.connections.targets(CAROL, 'linkedin')).find((x) => x.kind === 'li_org');
+    await t.connections.setTarget(CAROL, 'linkedin', org.id, { projectId: 'p1' });
+    expect((await t.connections.insights(CAROL, 'linkedin', { projectId: 'p1' })).followers).toBe(1310);
+    expect(mock.calls.filter((c) => c.path === `/api/analytics/${u}`).pop().query).toMatchObject({ platforms: 'linkedin', page_urn: 'urn:li:organization:77' });
   });
 
   it('answers null when nothing is connected, and { kind: reconnect } when the account needs one', async () => {
@@ -459,15 +784,64 @@ describe('social stats (reads)', () => {
 });
 
 describe('deletion, the monthly estimate and the daily reconcile', () => {
-  it('forgetUser deletes the profile at Upload-Post, then reads as not connected', async () => {
+  it('account deletion: forgetUser stops social and marks the profile but deletes nothing, so a deletion that stops (unforgetUser) loses no connection; userDeleted deletes the profile once the account is gone', async () => {
     const t = setup();
     const { username } = await connectVia(t, ALICE, 'instagram');
     await t.connections.forgetUser(ALICE);
-    expect(mock.profiles.has(username)).toBe(false);
+    expect(mock.profiles.has(username)).toBe(true);
     expect((await t.connections.status(ALICE)).every((s) => s.state === 'not_connected' || s.state === 'coming_soon')).toBe(true);
-    // a second time (already gone, 404) is fine
+    expect((await t.storage.get('uploadpost:gone')).value[username]).toBeDefined();
+    // the deletion stopped (Zernio, Omnisend or the account itself failed): everything is as it was
     await t.connections.unforgetUser(ALICE);
+    expect((await t.connections.status(ALICE)).find((s) => s.platform === 'instagram').state).toBe('connected');
+    expect((await t.storage.get('uploadpost:gone')).value[username]).toBeUndefined();
+    // it went through: the profile (and every account in it) goes now, and its cost so far is on the ledger
     await t.connections.forgetUser(ALICE);
+    await t.impl.userDeleted(ALICE);
+    expect(mock.profiles.has(username)).toBe(false);
+    expect((await t.storage.get('uploadpost:gone')).value[username]).toBeUndefined();
+    expect((await docOf(t, ALICE)).username).toBeUndefined();
+  });
+
+  it('a profile whose delete failed after the account went is deleted by the daily check (it was marked); a mark whose customer is still here is dropped', async () => {
+    const t = setup();
+    const ERIN = 'b2111111-2222-4333-8444-555555555555';
+    const { username } = await connectVia(t, ERIN, 'x');
+    await t.connections.forgetUser(ERIN);
+    // the account is gone (its billing row with it), but Upload-Post's delete didn't happen
+    t.db.tables.set('billing_customers', t.db.rows('billing_customers').filter((r) => r.user_id !== ERIN));
+    expect((await t.impl.reconcileIfDue()).deleted).toBe(1);
+    expect(mock.profiles.has(username)).toBe(false);
+    expect((await t.storage.get('uploadpost:gone')).value[username]).toBeUndefined();
+  });
+
+  it('the monthly estimate: a failed insert leaves the month open, the next run writes only what’s missing; a customer deleted mid-month is charged up to then', async () => {
+    const t = setup({ start: Date.parse('2026-10-01T00:00:00Z') });
+    const FRAN = 'b3111111-2222-4333-8444-555555555555';
+    const GIL = 'b4111111-2222-4333-8444-555555555555';
+    await connectVia(t, FRAN, 'x');
+    await connectVia(t, GIL, 'x');
+    t.clock.t = Date.parse('2026-11-01T06:00:00Z');
+    let inserts = 0;
+    t.db.fail.usage_ledger = (op) => op === 'insert' && (inserts += 1) === 1;
+    const first = await t.impl.meterIfDue();
+    expect(first).toMatchObject({ rows: 1, incomplete: true });
+    delete t.db.fail.usage_ledger;
+    // the next daily run (after the 2-hour claim) finishes the month without a second row for anyone
+    t.clock.t += 3 * 3_600_000;
+    expect((await t.impl.meterIfDue()).rows).toBe(1);
+    t.clock.t += 3 * 3_600_000;
+    expect((await t.impl.meterIfDue()).skipped).toBe(true);
+    const rows = t.db.rows('usage_ledger').filter((r) => r.endpoint === 'upload_post_profile 2026-10');
+    expect(rows.map((r) => r.customer_tag).sort()).toEqual([customerTag(FRAN, t.env), customerTag(GIL, t.env)].sort());
+    expect(rows.every((r) => r.cost_micro === 1_960_000)).toBe(true);
+    // GIL is deleted on 16 November: half of November is written now (the monthly run won't see GIL)
+    t.clock.t = Date.parse('2026-11-16T00:00:00Z');
+    await t.connections.forgetUser(GIL);
+    await t.impl.userDeleted(GIL);
+    const nov = t.db.rows('usage_ledger').find((r) => r.endpoint === 'upload_post_profile 2026-11' && r.customer_tag === customerTag(GIL, t.env));
+    expect(nov.cost_micro).toBeGreaterThan(900_000);
+    expect(nov.cost_micro).toBeLessThan(1_100_000);
   });
 
   it('writes one estimated profile row per customer for last month, once', async () => {
@@ -485,18 +859,50 @@ describe('deletion, the monthly estimate and the daily reconcile', () => {
     expect(await t.impl.ownerView()).toMatchObject({ profilesUsed: expect.any(Number), profilesLimit: 75 });
   });
 
-  it('the daily reconcile deletes our own orphaned profiles only (never one not named ylb_…, never a live customer’s)', async () => {
+  it('the daily reconcile never deletes a profile because its customer looks absent: an unknown ylb_ profile, an empty database or a doc it can’t read is left alone (the owner is told)', async () => {
     const t = setup();
     await connectVia(t, ALICE, 'x');
     const alices = (await docOf(t, ALICE)).username;
     mock.addProfile('ylb_abcabcabcabcabcabcabcabc');
     mock.addProfile('owner_test_profile');
+    // ALICE's doc can't be read (the app_state secret changed)
+    const key = `uploadpost:user:${sha256(ALICE)}`;
+    const kept = t.storage.documents.get(key);
+    t.storage.documents.set(key, { unreadable: true, value: null, updatedAt: kept.updatedAt });
     const r = await t.impl.reconcileIfDue();
-    expect(r.deleted).toBeGreaterThanOrEqual(1);
-    expect(mock.profiles.has('ylb_abcabcabcabcabcabcabcabc')).toBe(false);
-    expect(mock.profiles.has('owner_test_profile')).toBe(true);
-    expect(mock.profiles.has(alices)).toBe(true);
+    expect(r.deleted).toBe(0);
+    for (const u of ['ylb_abcabcabcabcabcabcabcabc', 'owner_test_profile', alices]) expect(mock.profiles.has(u)).toBe(true);
+    expect((await alertsOf(t)).profile_orphans).toMatchObject({ n: expect.any(Number) });
     expect((await t.impl.reconcileIfDue()).skipped).toBe(true);
+    // a copy of the app on an empty database (no customers at all) deletes nothing either
+    const empty = createUploadPostConnections({ env: t.env, storage: makeStorage(), db: makeDb(), log: makeLog(), now: () => t.clock.t });
+    expect((await empty.reconcileIfDue()).deleted).toBe(0);
+    expect(mock.profiles.has(alices)).toBe(true);
+    t.storage.documents.set(key, kept);
+    mock.profiles.delete('ylb_abcabcabcabcabcabcabcabc');
+  });
+
+  it('the daily reconcile reads back every profile whose accounts changed without a webhook, and gives back a profile nobody connected anything to for a week', async () => {
+    const t = setup();
+    const HAL = 'b5111111-2222-4333-8444-555555555555';
+    const IVY = 'b6111111-2222-4333-8444-555555555555';
+    const { username: hals } = await connectVia(t, HAL, 'youtube');
+    // IVY pressed Connect but never finished; HAL connected Instagram and its webhook was lost
+    await t.connections.connectLink(IVY, 'x');
+    const ivys = (await docOf(t, IVY)).username;
+    mock.connect(hals, 'instagram');
+    t.clock.t += 8 * 86_400_000;
+    const r = await t.impl.reconcileIfDue();
+    expect((await docOf(t, HAL)).accounts.instagram).toBeDefined();
+    expect(r.reclaimed).toBe(1);
+    expect(mock.profiles.has(ivys)).toBe(false);
+    expect(mock.profiles.has(hals)).toBe(true);
+    const ivy = await docOf(t, IVY);
+    expect(ivy.username).toBeUndefined();
+    expect(ivy.lastLife).toMatchObject({ from: expect.any(String), to: expect.any(String) });
+    // the next Connect makes it again
+    expect((await t.connections.connectLink(IVY, 'x')).connectLink).toMatch(/\/connect\?token=/);
+    expect(mock.profiles.has(ivys)).toBe(true);
   });
 
   it('never logs the API key, a connect link, a profile name or an account id', async () => {
@@ -513,13 +919,30 @@ describe('deletion, the monthly estimate and the daily reconcile', () => {
 });
 
 describe('outcomeOfEntry', () => {
-  it('reads one platform’s entry; never trusts a top-level success, never renders a non-https address', () => {
-    expect(outcomeOfEntry({ success: true, url: 'https://x.com/1' })).toEqual({ state: 'sent', url: 'https://x.com/1' });
-    expect(outcomeOfEntry({ success: true, post_url: 'Video sent to Inbox (No Public URL)', fallback_to_inbox: true })).toEqual({ state: 'sent', drafts: true });
-    expect(outcomeOfEntry({ success: true, post_url: 'javascript:alert(1)' })).toEqual({ state: 'sent' });
-    expect(outcomeOfEntry({ status: 'processing' })).toEqual({ state: 'pending' });
-    expect(outcomeOfEntry({ success: false, error_code: 'account_checkpoint_required' })).toEqual({ state: 'failed', errorCode: 'ACCOUNT_CHECK' });
-    expect(outcomeOfEntry({ success: false, error_code: 'spam_risk_too_many_pending_share' })).toEqual({ state: 'failed', errorCode: 'TIKTOK_DRAFTS_FULL' });
+  it('reads one platform’s finished entry (an upload’s own result, a webhook); never trusts a top-level success, never renders a non-https address', () => {
+    const final = { final: true };
+    expect(outcomeOfEntry({ success: true, url: 'https://x.com/1' }, final)).toEqual({ state: 'sent', url: 'https://x.com/1' });
+    expect(outcomeOfEntry({ success: true, post_url: 'Video sent to Inbox (No Public URL)', fallback_to_inbox: true }, final)).toEqual({ state: 'sent', drafts: true });
+    expect(outcomeOfEntry({ success: true, post_url: 'javascript:alert(1)' }, final)).toEqual({ state: 'sent' });
+    expect(outcomeOfEntry({ status: 'processing' }, final)).toEqual({ state: 'pending' });
+    expect(outcomeOfEntry({ success: false, error_code: 'account_checkpoint_required' }, final)).toEqual({ state: 'failed', errorCode: 'ACCOUNT_CHECK' });
+    expect(outcomeOfEntry({ success: false, error_code: 'spam_risk_too_many_pending_share' }, { ...final, platform: 'tiktok' })).toEqual({ state: 'failed', errorCode: 'TIKTOK_DRAFTS_FULL' });
     expect(outcomeOfEntry({ status: 'skipped' })).toEqual({ state: 'failed', errorCode: 'NOT_CONNECTED' });
+  });
+
+  it('a /status entry is an answer only when it or the whole request says so: “Queued” with success true is still going; retryable is still going', () => {
+    // the documented in-progress answer
+    expect(outcomeOfEntry({ platform: 'x', success: true, message: 'Queued' }, { top: 'in_progress' })).toEqual({ state: 'pending' });
+    expect(outcomeOfEntry({ platform: 'x', success: false }, { top: 'in_progress' })).toEqual({ state: 'pending' });
+    expect(outcomeOfEntry({ platform: 'x', success: false, status: 'retryable', error_code: 'content_rejected' }, { top: 'failed' })).toEqual({ state: 'pending' });
+    expect(outcomeOfEntry({ platform: 'x', success: true, message: 'Published' }, { top: 'completed' })).toEqual({ state: 'sent' });
+    expect(outcomeOfEntry({ platform: 'x', success: true, status: 'completed' }, { top: 'in_progress' })).toEqual({ state: 'sent' });
+    expect(outcomeOfEntry({ platform: 'x', success: false, error_code: 'content_rejected' }, { top: 'failed' })).toEqual({ state: 'failed', errorCode: 'REFUSED' });
+  });
+
+  it('a TikTok failure with no code (TikTok’s internal error, which TikTok sometimes publishes after moderation) may have been posted', () => {
+    expect(outcomeOfEntry({ success: false, error: 'TikTok received the video but answered with an internal error' }, { platform: 'tiktok', final: true })).toEqual({ state: 'unknown', errorCode: 'UNCONFIRMED' });
+    expect(outcomeOfEntry({ platform: 'tiktok', success: false }, { top: 'failed' })).toEqual({ state: 'unknown', errorCode: 'UNCONFIRMED' });
+    expect(outcomeOfEntry({ success: false }, { platform: 'instagram', final: true })).toEqual({ state: 'failed', errorCode: 'REFUSED' });
   });
 });

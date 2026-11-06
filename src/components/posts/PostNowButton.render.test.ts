@@ -246,11 +246,14 @@ describe('the windows', () => {
     expect(out).toMatch(/<button[^>]*btn-primary[^>]*disabled/);
   });
 
-  it('the confirm: X’s link cost is behind an InfoTip; TikTok private posting is said plainly', () => {
+  it('the confirm: an X link is taken out unless the owner has the X Links add-on (then it may not show, behind an InfoTip); TikTok private posting is said plainly', () => {
     const x = post({ platform: 'x', caption: `Fresh bread ${PAGE}`, hashtags: [] });
     use([x], [connected('x', { targetKind: 'x_account', targetLabel: '@copper' })]);
     usePublishConfirm.getState().open(x.id);
+    expect(words(html(createElement(PublishConfirmHost)))).toContain('The link is taken out on X.');
+    useAnalytics.setState({ xLinks: true });
     const w = words(html(createElement(PublishConfirmHost)));
+    useAnalytics.setState({ xLinks: false });
     expect(w).toContain('The link may not show on X.');
     const media = { id: 'm1', kind: 'video', name: 'v.mp4', mime: 'video/mp4', size: 1, createdAt: 1, thumb: '' } as Post['media'];
     const tt = post({ platform: 'tiktok', format: 'video', media });
