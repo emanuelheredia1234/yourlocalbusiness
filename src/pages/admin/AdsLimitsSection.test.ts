@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/cloud/auth', async (original) => ({ ...(await original<typeof import('@/lib/cloud/auth')>()), authHeaders: async () => ({ authorization: 'Bearer t' }) }));
 
-const { patchFrom } = await import('./AdsLimitsSection');
+const { patchFrom, zernioAlertText } = await import('./AdsLimitsSection');
 const { disconnectWarning, liveAdLine } = await import('@/components/ads/liveAds');
 const api = await import('@/lib/integrations/api');
 
@@ -21,6 +21,15 @@ describe('owner ad limits', () => {
     expect(patchFrom({ adsEnabled: 'on', adsCurrency: 'EURO' }, ceilings)).toMatchObject({ error: expect.stringContaining('3-letter') });
     expect(patchFrom({ adsEnabled: 'on', launchesPerDay: '1.5' }, ceilings)).toMatchObject({ error: expect.any(String) });
     expect(patchFrom({ adsEnabled: 'on', maxDaily: '10.123' }, ceilings)).toMatchObject({ error: expect.any(String) });
+  });
+});
+
+describe('Zernio’s team-level alerts', () => {
+  it('are plain words for the owner, naming where to fix it', () => {
+    expect(zernioAlertText('ads_addon_required')).toContain('ads add-on');
+    expect(zernioAlertText('payment_required')).toContain('billing gate');
+    expect(zernioAlertText('ads_allowance_exceeded')).toContain('payment method');
+    expect(zernioAlertText('http_401')).toContain('ZERNIO_API_KEY');
   });
 });
 

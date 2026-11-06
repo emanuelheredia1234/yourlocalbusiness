@@ -290,6 +290,8 @@ export interface AdLimitsCustomerRow {
 }
 
 export interface AdminLimitsResponse {
+  /** Zernio's last team-level problem (owner only; customers only ever saw "isn't available right now") */
+  zernioAlert?: { kind: string; at: string };
   defaults: AdLimitsPatch;
   defaultsVersion: number;
   ceilings: { maxDaily: number; maxChange: number };

@@ -398,7 +398,16 @@ export function createAdsRoutes(deps = {}) {
         version: own?.version ?? 0,
       });
     }
-    return { defaults: rowToApi(defaults ?? {}), defaultsVersion: defaults?.version ?? 0, ceilings: { maxDaily: Number(env.ADS_HARD_MAX_DAILY) > 0 ? Number(env.ADS_HARD_MAX_DAILY) : 500, maxChange: Number(env.ADS_HARD_MAX_CHANGE) > 0 ? Number(env.ADS_HARD_MAX_CHANGE) : 200 }, launchEnabled: String(env.ADS_LAUNCH_ENABLED ?? '').trim() === '1', customers };
+    // Zernio's last team-level problem (plan, billing, add-on, key), for the owner only: customers saw our words
+    let zernioAlert = null;
+    try {
+      const got = storage?.enabled === true ? await storage.get('zernio:alert') : null;
+      const v = got?.value;
+      if (v && typeof v.kind === 'string' && /^[a-z0-9_]{1,40}$/i.test(v.kind) && typeof v.at === 'string') zernioAlert = { kind: v.kind, at: v.at };
+    } catch {
+      /* no alert to show */
+    }
+    return { ...(zernioAlert ? { zernioAlert } : {}), defaults: rowToApi(defaults ?? {}), defaultsVersion: defaults?.version ?? 0, ceilings: { maxDaily: Number(env.ADS_HARD_MAX_DAILY) > 0 ? Number(env.ADS_HARD_MAX_DAILY) : 500, maxChange: Number(env.ADS_HARD_MAX_CHANGE) > 0 ? Number(env.ADS_HARD_MAX_CHANGE) : 200 }, launchEnabled: String(env.ADS_LAUNCH_ENABLED ?? '').trim() === '1', customers };
   }
 
   /** "The app owner set your daily ad limit to $100, …" */

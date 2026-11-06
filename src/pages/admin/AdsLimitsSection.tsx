@@ -15,6 +15,15 @@ import { Badge, Callout, Field, Modal, Select, SettingsSection, Spinner, confirm
 
 type Target = { tag: '*' } | { tag: string; row: AdLimitsCustomerRow };
 
+/** Zernio's team-level problem, in plain words for the owner. */
+export function zernioAlertText(kind: string): string {
+  if (/ads_addon|feature_not_available/.test(kind)) return 'The ads add-on is off for your Zernio team: turn it on in the Zernio dashboard.';
+  if (/allowance/.test(kind)) return 'Zernio’s free allowance of live ads is used up: add a payment method to your Zernio team.';
+  if (/payment|402/.test(kind)) return 'Zernio’s billing gate is closed for your team: add a card or pay the open invoice in the Zernio dashboard.';
+  if (/401|auth|key/.test(kind)) return 'Zernio refused the API key: check ZERNIO_API_KEY in Replit Secrets.';
+  return 'Zernio refused an ads request for a reason on your team’s side (plan, billing or key): check the Zernio dashboard and the server log (zernio_owner_alert).';
+}
+
 const FIELDS: { key: Exclude<keyof AdLimitsPatch, 'adsEnabled' | 'adsCurrency'>; label: string; money: boolean }[] = [
   { key: 'maxDaily', label: 'Daily limit across live campaigns', money: true },
   { key: 'maxChange', label: 'Most one launch or increase can add a day', money: true },
@@ -219,6 +228,11 @@ export function AdsLimitsSection() {
       <div className="flex flex-col gap-4 pb-4 pt-2">
         {err && <Callout tone="bad">{err}</Callout>}
         {!data && !err && <Spinner />}
+        {data?.zernioAlert && (
+          <Callout tone="warn" title="Ads need attention in Zernio">
+            {zernioAlertText(data.zernioAlert.kind)} ({fmtRelative(data.zernioAlert.at)}). Customers see only that launching and changing ads isn’t available right now.
+          </Callout>
+        )}
         {data && !data.launchEnabled && <Callout tone="info">Launching, resuming and raising budgets are off for everyone (ADS_LAUNCH_ENABLED isn’t 1 in Replit Secrets). Pausing and ending still work.</Callout>}
         {d && (
           <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-small sm:grid-cols-4">

@@ -573,6 +573,10 @@ describe('ads off and the owner', () => {
     const tag = (await t.row(r.campaign.id)).customer_tag;
     const list = await t.call(boss, 'GET', '/api/ads/admin/limits');
     expect(list.body.customers).toEqual([expect.objectContaining({ tag, liveCampaigns: 1, committedDaily: 25 })]);
+    expect(list.body.zernioAlert).toBeUndefined();
+    // Zernio's team-level alert reaches the owner's page (customers only ever saw our words)
+    await t.storage.put('zernio:alert', { kind: 'ads_addon_required', at: new Date().toISOString() });
+    expect((await t.call(boss, 'GET', '/api/ads/admin/limits')).body.zernioAlert).toMatchObject({ kind: 'ads_addon_required' });
     expect((await t.call(boss, 'PUT', `/api/ads/admin/limits/${tag}`, { maxDaily: 600 })).status).toBe(400);
     const put = await t.call(boss, 'PUT', `/api/ads/admin/limits/${tag}`, { maxDaily: 100 });
     expect(put.body.limits.maxDaily).toBe(100);
