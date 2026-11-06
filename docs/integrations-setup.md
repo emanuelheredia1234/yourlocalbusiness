@@ -1,16 +1,17 @@
 # Connected accounts, posting, analytics and per-customer usage: owner setup
 
 What this covers: each customer connects their own Facebook Page, Instagram, LinkedIn, TikTok, X and YouTube
-accounts and their ad accounts (Meta, Google, LinkedIn, TikTok, Pinterest, X, Reddit, Microsoft) through
-**Zernio**, which runs on its own approved platform apps and holds their logins; the app posts for them once they
-confirm; the Social, Ads, SEO page and Email Analytics tabs; the Marketing hub's **Update** button; "Submit to
+accounts through **Upload-Post** and their ad accounts (Meta, Google, LinkedIn, TikTok, Pinterest, Reddit,
+Microsoft) through **Zernio**; both run on their own approved platform apps and hold the logins; the app posts for
+them once they confirm; the Social, Ads, SEO page and Email Analytics tabs; the Marketing hub's **Update** button; "Submit to
 Google" for the SEO page; and each customer's usage, caps and a CSV to bill from (through **treg**).
 
 Who does what:
 
 | Service | Used for |
 |---|---|
-| **Zernio** (formerly Late) | Customers' social accounts and ad accounts, posting, their own social stats, their ad results (read only), connected-account counts per customer |
+| **Upload-Post** (Advanced, white-label) | Customers' social accounts (one profile each, of 75), posting, post status, their own social stats |
+| **Zernio** (formerly Late) | Ads only: customers' ad accounts and their ad results (read only; campaign changes later) |
 | **treg** | Public social data, competitor ads, Google rank and Maps position, Search Console (on your own team connection), per-customer usage, caps and billing |
 | **Omnisend** | Email stats |
 | **Manus** | Only "Post to Facebook groups" |
@@ -34,11 +35,14 @@ name only.
 
 | Secret | What it's for | Notes |
 |---|---|---|
-| `CUSTOMER_TAG_SECRET` | Each customer's id (`cust_…`) for usage, and their Zernio profile's `externalId` | 32+ random bytes. **Never change it**: each customer's history and Zernio profile would split in two. |
-| `ZERNIO_API_KEY` | **Turns connected social and ad accounts on** | Your Zernio API key (`sk_…`), from the Zernio dashboard → API keys. |
-| `ZERNIO_WEBHOOK_SECRET` | Checks that account and post news really comes from Zernio | A random string you choose (32+ characters); you give the same value to Zernio in §3. |
+| `CUSTOMER_TAG_SECRET` | Each customer's id (`cust_…`) for usage, their Upload-Post profile name (`ylb_…`) and their Zernio profile's `externalId` | 32+ random bytes. **Never change it**: each customer's history and vendor profiles would split in two. |
+| `UPLOAD_POST_API_KEY` | **Turns social accounts, posting and social stats on** (Upload-Post) | Your Upload-Post API key, from app.upload-post.com → API keys. Shown masked to its last 4 characters. |
+| `UPLOAD_POST_WEBHOOK_SECRET` | Checks that account and post news really comes from Upload-Post | The `whsec_…` secret Upload-Post issues (§3, step 4). |
+| `UPLOAD_POST_WEBHOOK_SECRET_PREVIOUS` | Only while rotating that secret | Upload-Post's rotation is immediate: keep the old one here until deliveries use the new one. |
+| `ZERNIO_API_KEY` | **Turns ad accounts on** (Zernio, ads only) | Your Zernio API key (`sk_…`), from the Zernio dashboard → API keys. |
+| `ZERNIO_WEBHOOK_SECRET` | Checks that ad-account news really comes from Zernio | A random string you choose (32+ characters); you give the same value to Zernio in §3a. |
 | `ZERNIO_WEBHOOK_SECRET_PREVIOUS` | Only while rotating the webhook secret | Remove it once Zernio uses the new one. |
-| `MEDIA_URL_SECRET` | Short-lived links to a post's photo or video | 32+ random bytes. |
+| `MEDIA_URL_SECRET` | Short-lived links to a post's photo or video (Upload-Post fetches them) | 32+ random bytes. **Needed to post photos and videos.** |
 | `TREG_TOKEN` | Analytics data, competitor ads, Google rank, Search Console | A **member-role agent token** (`treg org agent-new ylb-app`). Not your own dashboard key. |
 | `TREG_ADMIN_TOKEN` | Customer caps and the usage check against treg (billing only) | Admin-role agent token; only a team owner can make one. |
 | `NANGO_SECRET_KEY` | Optional, later: other integrations (booking tools, CRMs) | Leave unset until you add one (§3b). |
@@ -49,7 +53,14 @@ Plain settings (not secret; Replit Secrets or env):
 | Name | Default | Meaning |
 |---|---|---|
 | `TREG_ORG_ID` | — | Your treg team id (`treg org ls`). |
-| `CONNECTIONS_PROVIDER` | unset | `off` keeps connected accounts off even with `ZERNIO_API_KEY` set. |
+| `CONNECTIONS_PROVIDER` | unset | `off` keeps social and ad accounts off even with their keys set. |
+| `UPLOAD_POST_RPM` | `150` | The app's own limit on Upload-Post calls per minute (plus 2 per profile; the Advanced plan allows 200 plus 2 per profile, and 1,000 per 10 minutes plus 10 per profile). |
+| `UPLOAD_POST_ALERT_REMAINING` | `5` | How many free profile slots (of the plan's 75) are left when the owner is alerted. |
+| `UPLOAD_POST_BRAND_LOGO_URL` | — | An https link to your logo for Upload-Post's hosted connect page. |
+| `UPLOAD_POST_CONNECT_TITLE` | `Connect your social accounts` | That page's title. |
+| `UPLOAD_POST_CONNECT_DESCRIPTION` | a short default | That page's description. |
+| `UPLOAD_POST_BACK_BUTTON_TEXT` | `Back to Yourlocalbusiness` | That page's back button (it returns to Settings → Connected accounts). |
+| `UPLOAD_POST_BASE_URL` | — | Tests and the mock only (`node server/test/mock-uploadpost.mjs`). |
 | `ZERNIO_RPM` | `60` | The app's own limit on Zernio calls per minute. Zernio allows 60 with up to 2 connected accounts and 600 from 3; raise this to `600` then. |
 | `ZERNIO_BRAND_NAME` | `Yourlocalbusiness` | The name on Zernio's connect screen ("Yourlocalbusiness wants to connect to your Instagram"). |
 | `ZERNIO_BRAND_LOGO_URL` | — | An https link to a square logo for that screen. |
@@ -67,17 +78,68 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    customers and caps, the usage ledger, analytics settings, snapshots, runs and history, publish jobs, Search
    Console steps and webhook deliveries.
 2. `supabase/migrations/20261106000000_zernio.sql`: lets the usage ledger record Zernio rows.
+3. `supabase/migrations/20261107000000_upload_post.sql`: lets the usage ledger record Upload-Post rows
+   (vendor `uploadpost`).
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
-invoices. Each customer's connected accounts are disconnected at Zernio first.
+invoices. Each customer's Upload-Post profile is deleted (with its social connections) and their ad accounts are
+disconnected at Zernio first.
 
-## 3. Connected accounts (Zernio)
+## 3. Social accounts and posting (Upload-Post)
 
-Zernio holds each customer's logins on its own approved apps for every network, so **no Meta, LinkedIn, TikTok,
-X or Google app review is needed** to start. Each customer gets one Zernio **profile**, made the first time they
-press Connect, with `externalId` = their customer id (`cust_…`, never an email). The app keeps, per customer,
-which accounts are theirs and which account each of their businesses uses; Zernio account ids never reach the
-browser.
+Upload-Post (Advanced plan, white-label, 75 profiles) holds each customer's social logins on its own approved
+apps, so **no Meta, LinkedIn, TikTok, X or Google app review is needed**. Each customer gets one Upload-Post
+**profile**, made the first time they press Connect, named `ylb_` + the 24 hex characters of their customer id
+(never an email or a user id; Upload-Post profile names can't be changed). A profile holds one account per
+network, so Instagram, TikTok, X and YouTube are one account per customer, shared by their businesses; for
+Facebook and LinkedIn each business picks its Page. Facebook groups stay with Manus.
+
+**Set it up once**
+1. Subscribe to Upload-Post's **Advanced** plan ($147/month, 75 profiles, white label). More profiles: the +25
+   ($65/month) or +50 ($115/month) add-on; they don't stack. There is **no sandbox**: every test post is real, so
+   make your own test profile with test social accounts for the first live check.
+2. app.upload-post.com → **API keys** → create a key. Paste it **only** into Replit Secrets as `UPLOAD_POST_API_KEY`.
+   A wrong key locks the server's address out for 5 minutes after 10 tries; the app stops for 60 s after one 401
+   and tells you.
+3. Notifications → webhook: URL `https://yourlocalbusiness.replit.app/api/webhooks/upload-post`, events
+   `upload_completed`, `social_account_connected`, `social_account_disconnected`, `social_account_reauth_required`.
+4. Copy the `whsec_…` webhook secret Upload-Post shows into Replit Secrets as `UPLOAD_POST_WEBHOOK_SECRET`. Each
+   delivery is signed (`X-Upload-Post-Signature`, HMAC-SHA256 of `<timestamp>.<body>`); the app refuses unsigned
+   deliveries and ones more than 5 minutes old, and applies each event once. Upload-Post never sends a webhook
+   twice, so the app also reads post status and checks every profile once a day.
+5. Branding for the hosted connect page: `UPLOAD_POST_BRAND_LOGO_URL`, `UPLOAD_POST_CONNECT_TITLE`,
+   `UPLOAD_POST_CONNECT_DESCRIPTION`, `UPLOAD_POST_BACK_BUTTON_TEXT` (all sent on every link).
+6. Set `MEDIA_URL_SECRET` (Upload-Post fetches each photo and video from a short-lived link on this app).
+7. X: links in X posts are removed unless you buy Upload-Post's **X Links** add-on (50 link posts a month, shared
+   by all customers). X post stats are also a shared daily budget.
+8. Your privacy notice must name Upload-Post's company, **TONVI TECH SL** (Spain), as a processor.
+9. Run the migrations in §2, redeploy, and check the startup notes say "Social accounts and posting: on
+   (Upload-Post)".
+
+**What the app does with Upload-Post**
+- **Connect**: Settings → Connected accounts → Connect opens Upload-Post's hosted page (on app.upload-post.com)
+  for that one network, with your logo and text. Customers come back with its back button; the app sees the new
+  account from the webhook and reads the profile again when they return.
+- **Post**: one upload per post, with the job id as `request_id`, `Idempotency-Key` and `external_id`. Photos and
+  videos go as the app's short-lived link. The network's own result decides; videos finish in the background and
+  the app reads their status by the job id. A timeout or a 5xx reads "It may have been posted - check before
+  trying again": **Check again** reads the status by the job id and never sends it again. TikTok's audience setting
+  is checked first; a TikTok that lands in the account's drafts reads "Sent to your TikTok drafts".
+- **Stats**: each connected account's followers, reach, views, engagement and reach series, and cached top posts
+  (at most 80 reads per 5 minutes for the whole app).
+- **Usage**: every Upload-Post call is a row in the customer's usage ledger (vendor `uploadpost`, no cost), and
+  once a month each customer with a profile gets an estimated row ($147 / 75 ≈ $1.96 a profile-month, prorated).
+  The owner's Customer usage page shows social and ad account counts and profiles used out of 75.
+- **Team-level problems never reach customers**: our key, the profile cap, a blocked profile, the scheduled-post
+  cap and the shared X and analytics budgets show customers a plain "temporarily unavailable, we've been notified"
+  and leave an owner alert (`uploadpost:alert`) and hint.
+
+## 3a. Ad accounts (Zernio)
+
+Zernio is kept **for ads only**: connecting Meta, Google, LinkedIn, TikTok, Pinterest, Reddit and Microsoft ad
+accounts and reading ad results (later: launching and changing campaigns). Social accounts and posting are
+Upload-Post's (§3). Each customer gets one Zernio **profile**, made the first time they connect an ad account,
+with `externalId` = their customer id (`cust_…`, never an email). Zernio account ids never reach the browser.
 
 **Set it up once**
 1. Create a Zernio account at zernio.com. The first 2 connected accounts are free; after that Zernio bills per
@@ -88,8 +150,7 @@ browser.
 4. Dashboard → **Webhooks** → add an endpoint:
    - URL: `https://yourlocalbusiness.replit.app/api/webhooks/zernio`
    - Secret: the same value as `ZERNIO_WEBHOOK_SECRET`
-   - Events: `account.connected`, `account.disconnected`, `post.published`, `post.partial`, `post.failed`,
-     `post.platform.published`, `post.platform.failed`.
+   - Events: `account.connected`, `account.disconnected` (post events aren't needed any more).
    Press **Send test**: the app answers 200. Zernio signs each delivery (`X-Zernio-Signature`, HMAC-SHA256 of the
    body); the app ignores anything unsigned or for a profile that isn't one of your customers, and applies each
    event once.
@@ -98,8 +159,7 @@ browser.
    Zernio dashboard's welcome-screen settings. Customers then see "Yourlocalbusiness wants to connect to your
    Instagram" before the network's own sign-in. The network's own consent screen still names Zernio's app.
 6. Turn on the **ads add-on** in Zernio if customers will connect ad accounts.
-7. Run the migration in §2, redeploy, and check the startup notes say "Connected accounts (social and ads): on
-   (Zernio)".
+7. Run the migration in §2, redeploy, and check the startup notes say "Ad accounts: on (Zernio)".
 
 **Later (optional): your own platform apps.** Zernio can connect through your own Meta, LinkedIn, TikTok, X or
 Google apps instead of its own (Zernio dashboard → OAuth apps), so the consent screens show your app's name and
@@ -107,19 +167,11 @@ the network's limits are yours. That needs each network's app review (often week
 it beyond Zernio's settings.
 
 **What the app does with Zernio**
-- **Connect**: Settings → Connected accounts → Connect opens Zernio's branded screen in a new tab, then the
-  network's sign-in. Ad accounts use Zernio's ads connect (Meta, Google, LinkedIn, TikTok, Pinterest, X, Reddit,
-  Microsoft; X Ads needs the X account first). A customer with several Pages or accounts on one network picks
-  which one each business uses. Pinterest posting is "Coming soon" (posts in the app have no Pinterest format).
-- **Post**: one `POST /v1/posts` per post with `publishNow`, an `Idempotency-Key` (the job id) and our job id in
-  the post's metadata. Photos and videos are uploaded to Zernio's storage first. A timeout or a Zernio 5xx is
-  "We couldn't confirm the post went out": **Check again** reads the post's status at Zernio (by its id, or by
-  the job id in its metadata) and never sends it again. A `post.*` webhook finishes such a job too.
-- **Stats**: the Update button reads each connected account's daily metrics, follower counts and top posts, and
-  each ad account's daily spend and campaigns (read only: the app makes no ad changes).
-- **Usage**: every Zernio call is a row in the customer's usage ledger (vendor `zernio`, no cost), and once a
-  month each customer gets an estimated "connected accounts" row (count × Zernio's list price). The owner's
-  Customer usage page shows each customer's connected-account count.
+- **Connect**: Settings → Connected accounts → Connect on an ad account opens Zernio's branded ads connect. X Ads
+  is "Coming soon": Zernio's X Ads connect needs an X account inside Zernio, and X posting is Upload-Post's.
+- **Stats**: each ad account's daily spend and campaigns (read only: the app makes no ad changes yet).
+- **Usage**: every Zernio call is a ledger row (vendor `zernio`, no cost), and once a month an estimated "ad
+  accounts" row (count × Zernio's list price).
 - Rate limits: the app stays under `ZERNIO_RPM`; a read that gets a 429 waits once (10 s at most); writes are
   never repeated.
 
@@ -135,25 +187,27 @@ It is off until `NANGO_SECRET_KEY` is set, and nothing shows in the app until yo
 4. In Nango, point the webhook at `https://yourlocalbusiness.replit.app/api/webhooks/nango`.
 
 Customers then see **Settings → Connected accounts → Other integrations** with Connect and Disconnect. A key or
-integration id that names a social network, an ad platform or Search Console is refused (those go through Zernio
-and treg).
+integration id that names a social network, an ad platform or Search Console is refused (those go through
+Upload-Post, Zernio and treg).
 
 ## 4. Platform approvals
 
-None are needed to start: Zernio's own apps are already approved on every network. Networks still apply their
+None are needed to start: Upload-Post's and Zernio's own apps are already approved on every network. Networks still apply their
 own rules to each account (for example, Instagram needs a professional account, Facebook posts go to a Page the
 customer manages, Meta Ads needs a Facebook Page, TikTok videos are public only on TikTok Business connections).
 
 **How posting works once an account is connected**
 - The customer presses **Post on Facebook** (or another network) and confirms. The app sends the post **once**.
-  If it can't tell whether the post went out, the post shows **We couldn't confirm the post went out** with
+  If it can't tell whether the post went out, the post shows **It may have been posted - check before trying
+  again** with
   **Check again** (a read, at most every 30 seconds) and **Post it yourself**. It never sends the post again by
   itself, and there's no "Try again" for that case.
 - The post that goes out is the one saved in the customer's account. If the screen shows something older, the app
   asks them to save first.
 - Daily caps per customer: 20 posts on X, 50 on each other network. Change them in the `billing_caps` table
-  (`x_posts_per_day`, `posts_per_day`; the `*` row is the default). Zernio adds its own limits (25 posts an hour
-  per account, and daily caps per network).
+  (`x_posts_per_day`, `posts_per_day`; the `*` row is the default). Upload-Post adds its own daily caps per
+  account (Instagram 50, TikTok 15, LinkedIn 150, YouTube 30, Facebook 25 per Page, X 30); over one, the post
+  fails plainly and nothing is retried.
 - Formats: Instagram takes JPEG photos and MP4 Reels; Facebook and LinkedIn take photos and MP4 videos; TikTok
   needs a video or a photo; X takes up to one photo or video; YouTube needs a video. The first comment goes out
   with Facebook, Instagram and LinkedIn posts; on X and TikTok the customer adds it themselves.
@@ -202,7 +256,7 @@ send invoices: bill customers from the CSV outside the app.
 
 **The Update button** (Marketing hub) fetches four sources in the background, at most once every 15 minutes per
 business: Social (public stats through treg for each handle in Settings; a connected account's own stats from
-Zernio instead), Ads (every connected ad account's results from Zernio, read only, plus up to 3 competitors'
+Upload-Post instead), Ads (every connected ad account's results from Zernio, read only, plus up to 3 competitors'
 active ads through treg), SEO page
 (Google rank and Maps position per keyword in the business's city, Search Console numbers for this page) and
 Email (Omnisend). A source that fails keeps showing its last good numbers with an "as of" time. Before anything is
@@ -267,7 +321,7 @@ Every post shows one posting button, by its state:
 
 Manus only posts in Facebook groups (**Post to groups** on a Facebook post). Posts sent with Manus by older
 versions show **Sent with Manus earlier**, read-only. There is no bulk send: each post is confirmed on its own.
-Nothing to set up for this beyond Zernio (§3).
+Nothing to set up for this beyond Upload-Post (§3) and Zernio (§3a).
 
 ### Analytics, Settings and Customer usage (WP5)
 
@@ -288,7 +342,7 @@ Nothing to set up for this beyond Zernio (§3).
   caps (edit, block, reset), "Check against treg", and the monthly CSV. It tracks usage only; it charges nothing.
 - The artifact build shows "Connected accounts and live analytics need the full app" instead of any of this.
 
-## 8. What works on day one (no Zernio key yet, no approvals)
+## 8. What works on day one (no Upload-Post or Zernio key yet, no approvals)
 
 - Manual posting: **Post it yourself**, then **Mark as posted**.
 - Facebook groups through Manus.
@@ -299,6 +353,7 @@ Nothing to set up for this beyond Zernio (§3).
 - Email analytics (Omnisend, once the reporting scope is confirmed).
 - Per-customer usage, caps and the CSV.
 
-**As soon as `ZERNIO_API_KEY` and `ZERNIO_WEBHOOK_SECRET` are set** (and the §2 migrations run): customers connect
-their social and ad accounts, post from the app after a confirm, and see their own stats and ad results. No
-network approvals are needed, because Zernio's apps are already approved.
+**As soon as `UPLOAD_POST_API_KEY`, `UPLOAD_POST_WEBHOOK_SECRET` and `MEDIA_URL_SECRET` are set** (and the §2
+migrations run): customers connect their social accounts, post from the app after a confirm, and see their own
+stats. **With `ZERNIO_API_KEY` and `ZERNIO_WEBHOOK_SECRET`**: they connect ad accounts and see their ad results.
+Each side works without the other. No network approvals are needed: Upload-Post's and Zernio's apps are approved.
