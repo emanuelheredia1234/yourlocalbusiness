@@ -98,6 +98,9 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    business's chosen ad account, and the owner's ad limits (`ad_limits`; ads start **off** for everyone).
 5. `supabase/migrations/20261109000000_cron_tick.sql`: turns on pg_cron and pg_net and schedules the hourly call to
    `POST /api/cron/tick` (§2a). Create the Vault secret first (§2a, step 2).
+6. `supabase/migrations/20261112000000_leads_p2.sql` (P2, §11): tags every lead with its business, source and kind,
+   adds the `lead_files` table and the `lead-files` (private) and `public-files` (public, images only) buckets.
+   Run it after `20261103050000_page_leads.sql`.
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices. Their ad accounts are disconnected at Zernio first (every account in their Zernio profile, then the
@@ -905,3 +908,58 @@ production:
 4. Lock the slot (`update project_slots set state='locked'`): updating `p1` is refused. Delete `p1`: its slot is gone.
 5. `update billing_settings set enforce = false`: inserting a new project works and gets a slot by itself.
 6. Two sessions calling `claim_project_slot` at once at limit − 1: exactly one gets it.
+
+## 11. Leads and lead magnets (P2)
+
+Every form a customer publishes now sends to the app, and every answer shows in **Marketing Hub → Email → Leads**:
+the SEO page's form, an asset's widget (a lead form, a booking request, a quiz result, a calculator or ROI estimate, a
+checklist request), a Manus or Viktor page's form, and the lead magnet's sign-up.
+
+### Owner steps
+
+1. Run `supabase/migrations/20261112000000_leads_p2.sql` in Supabase → SQL Editor (safe to run again). It needs
+   `20261103050000_page_leads.sql` first. Before it's run, page and asset forms still work (kept without their
+   business, source and result fields, so "This business" shows the SEO page's leads); the source filter names the
+   file, and lead magnet downloads answer "not found".
+2. Optional: set `LEAD_LINK_SECRET` (16+ random characters) as a Secret. It signs the 15-minute download links a
+   sign-up gets. Without it, a key derived from `SUPABASE_SECRET_KEY` is used; changing either only ends links that
+   are still open. Start-up shows its last 4 characters, never more.
+3. Optional limits (defaults in brackets): `LEADS_PER_IP_PER_HOUR` (10) and `LEADS_PER_PAGE_PER_HOUR` (30) for every
+   form, the lead magnet's gate included; `MAGNET_HITS_PER_IP_PER_HOUR` (60) and
+   `MAGNET_DOWNLOADS_PER_FILE_PER_HOUR` (600) for `/m/<id>`.
+4. Republish pages and assets made before P2 if their forms should send: publishing is what turns `{{lead-action}}`
+   into the page's `/<name>/lead`. Existing assets aren't rewritten.
+
+### Where responses go
+
+| What the visitor uses | Sent to | In Leads as |
+|---|---|---|
+| The SEO page's form | `POST /<name>/lead` (plain form post: SEO pages run no scripts) | source **Pages**, kind form (lead with a lead magnet) |
+| An asset's lead form, booking widget, quiz, calculator, ROI or checklist step | `POST /<name>/lead` (the widget's script, `Accept: application/json`; a plain post without scripts) | source **Assets**, kind lead, booking, quiz, calculator, roi or checklist, with its result, score, answers, inputs or estimate |
+| A Manus or Viktor asset's form | the same (the app makes each form that fits post there; forms it can't receive are taken out) | source **Assets** |
+| The lead magnet's email gate | `POST /m/<id>` | source **Lead magnet**, kind magnet |
+
+- Nothing is emailed to visitors and nothing goes to an email provider: the owner reads leads in the app, adds one to
+  Subscribers (asked first when they didn't tick the email box) or exports a CSV (date, source, kind, business, page,
+  contact fields, consent and every result field).
+- Only a ticked "Email me tips and offers from {Brand}" box (`consent=yes`) counts as agreeing to emails. Sending
+  the form or downloading doesn't.
+- A widget's form sends nothing in the preview, nor in a copy of an asset that isn't published (it says so). A copy
+  of a published asset sends to its full `https://<app>/<name>/lead`.
+- The source filter and the CSV follow **This business / All businesses** and **All · Pages · Assets · Lead magnet**.
+  The filter is kept in memory only: leads are people's details, never saved in the browser.
+
+### The lead magnet download
+
+In **Email › Lead magnet › Delivery** the customer publishes the download once: a PDF made from the guide (the app's
+ebook builder, in the brand's colours with the listing cover), an uploaded file (PDF, EPUB, ZIP, Word, Excel,
+PowerPoint, PNG, JPEG, WebP, MP3 or MP4, up to 25 MB; never SVG or HTML) or a link to a page. "Ask for an email before
+the download" is on by default. The link is `https://<app>/m/<id>` (or `https://<their domain>/m/<id>` once the SEO
+page has a verified domain) and never changes: **Update download** replaces the file behind it, **Unpublish** ends it.
+Emails' `{{lead_magnet_link}}` is that link, and `{{product_link}}` is the page posts link to; until they exist the
+preview shows a placeholder and Omnisend drafts are refused. A lead form or SEO page form that sends the magnet's id
+answers with a direct download for 15 minutes. Downloads stop 30 days after the plan ends.
+
+Deleting an account deletes its leads and downloads (the rows cascade) and empties its folders in the `media`,
+`lead-files` and `public-files` buckets.
+
