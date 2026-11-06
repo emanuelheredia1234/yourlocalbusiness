@@ -246,7 +246,7 @@ function targetText(target, kind) {
 
 const JS = {
   seo: 'Use no JavaScript at all: the page must work with scripts turned off.',
-  asset: 'Plain JavaScript in one <script> at the end of the body, with no libraries; it must not send anything anywhere.',
+  asset: 'Plain JavaScript in one <script> at the end of the body, with no libraries; it must not send anything anywhere except the form’s own action.',
 };
 
 const TOKEN_RULE = 'Show an image only by writing its token exactly: <img src="{{img-1}}" alt="…"> in the HTML, or url({{img-1}}) in the CSS.';
@@ -255,8 +255,8 @@ function buttons(target, who) {
   // who: 'the' (Manus: the owner is "the owner") or 'my' (Viktor: the owner is the one posting)
   const app = who === 'my' ? 'My app' : 'The app';
   return target === 'seo'
-    ? `Buttons that book or buy open ${who} booking or payment link in the facts; without one, leave that button out. No booking calendar, cart or checkout. Only if this kind of page needs a form: exactly one <form method="post" action="{{lead-action}}"> with only fields named name, email, phone, message or time (email or phone at least) and a submit button. ${app} makes it work when the page is published. No other forms.`
-    : `Buttons that book or buy open ${who} booking or payment link in the facts; without one, leave that button out. No form, booking calendar, cart or checkout that only pretends to work: a form may only open an email to the email in the facts (a mailto: link), or be left out.`;
+    ? `Buttons that book or buy open ${who} booking or payment link in the facts; without one, leave that button out. No booking calendar, cart or checkout. Only if this kind of page needs a form: exactly one <form method="post" action="{{lead-action}}"> with only fields named name, email, phone, message or time (email or phone at least), an optional unticked checkbox name="consent" value="yes", and a submit button. ${app} makes it work when the page is published. No other forms.`
+    : `Buttons that book or buy open ${who} booking or payment link in the facts; without one, leave that button out. No form, booking calendar, cart or checkout that only pretends to work. If this section needs a form: <form method="post" action="{{lead-action}}"> with fields named name, email, phone, message or time (email or phone at least), an optional unticked checkbox name="consent" value="yes", and a submit button. ${app} makes it send when the page is published. Your script may send it with fetch to the form’s own action, adding the header Accept: application/json, or let it submit normally. No mailto: links for forms. Send nothing anywhere else.`;
 }
 
 const keyList = (images) => images.map((i) => i.key).join(', ');
