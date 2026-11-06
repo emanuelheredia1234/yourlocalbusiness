@@ -9,7 +9,7 @@ import type { LeadMagnet, LeadMagnetDelivery, Project } from '@/lib/types';
 import { fmtBytes, fmtRelative, slugify } from '@/lib/utils';
 import { showSignIn } from '@/lib/cloud/auth';
 import { fingerprint, usePublishAccess } from '@/lib/publish';
-import { LEAD_FILE_ACCEPT, LeadFilesError, PUBLIC_IMAGE_ACCEPT, createLeadFile, deleteLeadFile, domainLinkOf, listLeadFiles, patchLeadFile, refusedFileName, uploadLeadFileContent, uploadPublicImage, type LeadFile } from '@/lib/leadFiles';
+import { LEAD_FILE_ACCEPT, LeadFilesError, PUBLIC_IMAGE_ACCEPT, createLeadFile, deleteLeadFile, listLeadFiles, patchLeadFile, refusedFileName, uploadLeadFileContent, uploadPublicImage, type LeadFile } from '@/lib/leadFiles';
 import { leadMagnetHash, leadMagnetPdf } from '@/lib/leadMagnetPdf';
 import { updateMarketingOf } from '@/lib/emailFunnel';
 import { toast } from '@/store/ui';
@@ -40,6 +40,81 @@ async function sha256(blob: Blob): Promise<string> {
   } catch {
     return fingerprint(`${blob.size}`);
   }
+}
+
+/** After a new download (its id is new): the forms already published still send the old one, or none. */
+export const REPUBLISH_NOTE = 'Publish your page and your lead-form assets again so their forms offer this download.';
+
+/**
+ * Publish (or update) the download: the same row and link when there is one, a new one when it's gone from the
+ * server; then its file; then save() the delivery. A new row that didn't get its file is taken down again. The cover
+ * goes last, on its own: the download is live (and saved) whether or not it uploads, and coverError says so.
+ */
+export async function publishDownload(
+  project: Project,
+  lm: LeadMagnet,
+  o: { source: Source; url: string; file: File | null; cover: File | null; gate: boolean },
+  save: (d: LeadMagnetDelivery) => void,
+): Promise<{ delivery: LeadMagnetDelivery; isNew: boolean; coverError: string }> {
+  const d = lm.delivery;
+  const { source, url, file, cover, gate } = o;
+  const title = lm.title.trim().slice(0, 200) || 'Free download';
+  const brand = project.brand.name.trim().slice(0, 120);
+  let created: string | null = null;
+  let delivery: LeadMagnetDelivery;
+  let row: LeadFile | null = null;
+  try {
+    if (d?.fileId) {
+      try {
+        row = await patchLeadFile(d.fileId, { title, brand, gate, ...(source === 'url' ? { url: url.trim() } : {}) });
+      } catch (e) {
+        if (!(e instanceof LeadFilesError && e.status === 404)) throw e;
+      }
+    }
+    if (!row) {
+      row = await createLeadFile({ projectId: project.id, title, brand, kind: source === 'url' ? 'url' : 'file', ...(source === 'url' ? { url: url.trim() } : {}), gate });
+      created = row.id;
+    }
+    let hash = d?.hash;
+    if (source === 'pdf') {
+      const pdf = await leadMagnetPdf(lm, project);
+      row = await uploadLeadFileContent(row.id, new Blob([pdf.bytes as BlobPart], { type: 'application/pdf' }), `${slugify(title) || 'download'}.pdf`);
+      hash = leadMagnetHash(lm, project);
+    } else if (source === 'upload' && file) {
+      row = await uploadLeadFileContent(row.id, file, file.name);
+      hash = `sha256:${await sha256(file)}`;
+    } else if (source === 'url') {
+      hash = fingerprint(url.trim());
+    }
+    const fileName = row.kind === 'file' ? row.fileName || d?.fileName : undefined;
+    const bytes = row.kind === 'file' ? row.bytes || d?.bytes : undefined;
+    delivery = {
+      source,
+      fileId: row.id,
+      // the app's address: it always serves the download (a domain's copy stops when the domain does)
+      link: row.link || d?.link || '',
+      gate: row.gate,
+      ...(fileName ? { fileName } : {}),
+      ...(bytes ? { bytes } : {}),
+      ...(row.kind === 'url' ? { url: row.url } : {}),
+      ...(hash ? { hash } : {}),
+      publishedAt: Date.now(),
+    };
+    save(delivery);
+  } catch (e) {
+    // a new download that didn't get its file: take it down again, so there's no empty link
+    if (created) await deleteLeadFile(created).catch(() => undefined);
+    throw e;
+  }
+  let coverError = '';
+  if (cover) {
+    try {
+      await uploadPublicImage(cover, cover.name, row.id);
+    } catch (e) {
+      coverError = `The download is published, but its cover image didn’t upload. ${(e as Error)?.message || 'Try again.'}`;
+    }
+  }
+  return { delivery, isNew: row.id !== d?.fileId, coverError };
 }
 
 export function LeadMagnetDeliverySection({ project, lm }: { project: Project; lm: LeadMagnet }) {
@@ -136,61 +211,18 @@ function DeliveryForm({ project, lm }: { project: Project; lm: LeadMagnet }) {
     if (source === 'url' && !linkDownloadOk(url)) return setError('Use a full web address starting with https://.');
     if (source === 'upload' && !file && !(d?.source === 'upload' && d.fileId)) return setError('Choose a file to upload first.');
     setBusy('publish');
-    const title = lm.title.trim().slice(0, 200) || 'Free download';
-    const brand = project.brand.name.trim().slice(0, 120);
-    let created: string | null = null;
     try {
-      // the same download (and link) when there is one; a new one when it's gone from the server
-      let row: LeadFile | null = null;
-      if (d?.fileId) {
-        try {
-          row = await patchLeadFile(d.fileId, { title, brand, gate, ...(source === 'url' ? { url: url.trim() } : {}) });
-        } catch (e) {
-          if (!(e instanceof LeadFilesError && e.status === 404)) throw e;
-        }
-      }
-      if (!row) {
-        row = await createLeadFile({ projectId: project.id, title, brand, kind: source === 'url' ? 'url' : 'file', ...(source === 'url' ? { url: url.trim() } : {}), gate });
-        created = row.id;
-      }
-      let hash = d?.hash;
-      let fileName = d?.fileName;
-      let bytes = d?.bytes;
-      if (source === 'pdf') {
-        const pdf = await leadMagnetPdf(lm, project);
-        row = await uploadLeadFileContent(row.id, new Blob([pdf.bytes as BlobPart], { type: 'application/pdf' }), `${slugify(title) || 'download'}.pdf`);
-        hash = leadMagnetHash(lm, project);
-      } else if (source === 'upload' && file) {
-        row = await uploadLeadFileContent(row.id, file, file.name);
-        hash = `sha256:${await sha256(file)}`;
-      } else if (source === 'url') {
-        hash = fingerprint(url.trim());
-      }
-      if (cover) await uploadPublicImage(cover, cover.name, row.id);
-      fileName = row.kind === 'file' ? row.fileName || fileName : undefined;
-      bytes = row.kind === 'file' ? row.bytes || bytes : undefined;
-      const link = row.link || d?.link || '';
-      const domainLink = domainLinkOf(row.id, project.marketing.seoPublished);
-      save({
-        source,
-        fileId: row.id,
-        link,
-        ...(domainLink ? { domainLink } : {}),
-        gate: row.gate,
-        ...(fileName ? { fileName } : {}),
-        ...(bytes ? { bytes } : {}),
-        ...(row.kind === 'url' ? { url: row.url } : {}),
-        ...(hash ? { hash } : {}),
-        publishedAt: Date.now(),
-      });
+      const done = await publishDownload(project, lm, { source, url, file, cover, gate }, save);
       setFile(null);
-      setCover(null);
       if (fileRef.current) fileRef.current.value = '';
-      if (coverRef.current) coverRef.current.value = '';
-      toast({ kind: 'success', title: d ? 'Download updated' : 'Download published', body: 'Its link stays the same.' });
+      // forms hand out the download whose id they were published with: a new one needs them published again
+      toast({ kind: 'success', title: done.isNew ? 'Download published' : 'Download updated', body: done.isNew ? REPUBLISH_NOTE : 'Its link stays the same.' });
+      if (done.coverError) setError(done.coverError);
+      else if (cover) {
+        setCover(null);
+        if (coverRef.current) coverRef.current.value = '';
+      }
     } catch (e) {
-      // a new download that didn't get its file: take it down again, so there's no empty link
-      if (created) await deleteLeadFile(created).catch(() => undefined);
       setError((e as Error)?.message || 'Couldn’t publish the download. Try again.');
     } finally {
       setBusy(null);
@@ -214,7 +246,7 @@ function DeliveryForm({ project, lm }: { project: Project; lm: LeadMagnet }) {
   };
 
   const stale = deliveryStale(lm, project);
-  const live = d ? d.domainLink ?? d.link : '';
+  const live = d?.link ?? '';
   return (
     <div className="flex flex-col gap-4">
       <OptionCards<Source>

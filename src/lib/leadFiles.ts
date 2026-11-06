@@ -178,13 +178,3 @@ export async function uploadPublicImage(blob: Blob, name: string, leadFile?: str
   if (!/^https?:\/\//i.test(url)) throw new LeadFilesError('The server’s answer couldn’t be read. Try again.', 'BAD_ANSWER');
   return { url, path: str(j.path) };
 }
-
-/** The download's address on the SEO page's verified domain (https://<domain>/m/<id>), or undefined. */
-export function domainLinkOf(fileId: string, seo: { domain?: string; domainUrl?: string } | undefined): string | undefined {
-  if (!seo?.domain || !seo.domainUrl || !LEAD_FILE_ID.test(fileId)) return undefined;
-  try {
-    return `${new URL(seo.domainUrl).origin}/m/${fileId}`;
-  } catch {
-    return undefined;
-  }
-}

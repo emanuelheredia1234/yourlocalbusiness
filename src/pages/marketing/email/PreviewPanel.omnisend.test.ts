@@ -264,6 +264,17 @@ describe('Omnisend drafts', () => {
     await act(async () => buttons('Create Omnisend draft')[0].click());
     await settle();
     expect(calls(f, DRAFTS_PATH)).toHaveLength(0);
+    // its button links to the lead magnet: what fixes it is publishing the download, not a website
+    expect(host.querySelector('ol > li [role="alert"]')?.textContent).toBe('This email’s button has no web address yet. Publish your download in Email › Lead magnet › Delivery first: this button links to it.');
+  });
+
+  it('says to add a website when the button links to the offer and there’s none', async () => {
+    const p = project({ emails: true });
+    p.marketing.emails = p.marketing.emails.map((e, i) => (i === 0 ? { ...e, ctaUrl: '{{product_link}}' } : e));
+    const f = await renderConnected(p);
+    await act(async () => buttons('Create Omnisend draft')[0].click());
+    await settle();
+    expect(calls(f, DRAFTS_PATH)).toHaveLength(0);
     expect(host.querySelector('ol > li [role="alert"]')?.textContent).toBe('This email’s button has no web address yet. Add your website in Settings › Brand, or a full https:// link as its Button link in Sequence.');
   });
 

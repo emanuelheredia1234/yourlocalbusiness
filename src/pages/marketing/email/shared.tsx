@@ -22,8 +22,10 @@ export function PanelHead({ title, description, actions }: { title: ReactNode; d
 
 /**
  * Merge values for previews and drafts: a real subscriber's, or clear placeholders (never invented people or sites).
- * The lead magnet's link is its published download (/m/<id>, on the SEO page's domain when it has one); the offer's
- * is the page posts link to (pageLink: the published SEO page, else the website).
+ * The lead magnet's link is its published download on the app's address (https://<app>/m/<id>), which always serves
+ * it: a domain's copy works only while that domain stays verified and this account's, so an email (which can't be
+ * changed once sent) never uses it. The offer's is the page posts link to (pageLink: the published SEO page, else
+ * the website).
  */
 export function emailTokens(p: Project, sub?: Pick<Subscriber, 'name' | 'email'> | null): Record<string, string> {
   const profile = useStore.getState().settings.profile;
@@ -31,7 +33,7 @@ export function emailTokens(p: Project, sub?: Pick<Subscriber, 'name' | 'email'>
   return {
     first_name: sub?.name ? sub.name.split(' ')[0] : '[First name]',
     email: sub?.email || '[subscriber’s email]',
-    lead_magnet_link: d ? d.domainLink ?? d.link : '[link to your free download]',
+    lead_magnet_link: d?.link || '[link to your free download]',
     product_link: pageLink(p)?.url ?? '[link to your offer]',
     sender_name: profile.name || p.brand.name,
     sender_email: profile.email || 'your sending address',
@@ -84,7 +86,7 @@ export function EmailView({ project, email, tokens, compact }: { project: Projec
               {label}
             </a>
           ) : (
-            <span aria-disabled="true" title="Add a link in Sequence › Button link" style={{ ...button, cursor: 'not-allowed' }}>
+            <span aria-disabled="true" title={missingLinkFix(project, email.ctaUrl, 'short')} style={{ ...button, cursor: 'not-allowed' }}>
               {label}
             </span>
           ))}
@@ -94,6 +96,19 @@ export function EmailView({ project, email, tokens, compact }: { project: Projec
       </div>
     </div>
   );
+}
+
+const usesToken = (raw: string, name: string) => new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`).test(raw);
+
+/**
+ * What to do when an email's button has no web address yet, by what its link is: the lead magnet's (publish the
+ * download), the offer's (a website or a published page), or the owner's own (type a full link). short: for a
+ * tooltip; else a sentence for a notice.
+ */
+export function missingLinkFix(project: Project, ctaUrl: string, form: 'short' | 'long' = 'long'): string {
+  if (usesToken(ctaUrl, 'lead_magnet_link') && !project.marketing.leadMagnet?.delivery?.link) return form === 'short' ? 'Publish your download in Email › Lead magnet › Delivery' : 'Publish your download in Email › Lead magnet › Delivery first: this button links to it.';
+  if (usesToken(ctaUrl, 'product_link') && !pageLink(project)) return form === 'short' ? 'Add your website in Settings › Brand, or publish your page' : 'Add your website in Settings › Brand, or a full https:// link as its Button link in Sequence.';
+  return form === 'short' ? 'Add a link in Sequence › Button link' : 'Add a full https:// link as its Button link in Sequence.';
 }
 
 /** A button's address when it's a real web address (http or https with a host), else '' (a placeholder, a bad link). */

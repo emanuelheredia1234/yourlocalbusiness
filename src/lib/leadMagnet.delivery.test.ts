@@ -7,8 +7,8 @@ import { useStore } from '@/store/useStore';
 import { buildEbookPdf } from './ebook';
 import { leadMagnetEbook, leadMagnetHash } from './leadMagnetPdf';
 import { applyLeadMagnet } from './emailFunnel';
-import { LeadFilesError, createLeadFile, deleteLeadFile, domainLinkOf, leadFilesError, refusedFileName, toLeadFile, uploadLeadFileContent, uploadPublicImage } from './leadFiles';
-import { deliveryStale, linkDownloadOk } from '@/pages/marketing/email/LeadMagnetDelivery';
+import { LeadFilesError, createLeadFile, deleteLeadFile, leadFilesError, refusedFileName, toLeadFile, uploadLeadFileContent, uploadPublicImage } from './leadFiles';
+import { REPUBLISH_NOTE, deliveryStale, linkDownloadOk, publishDownload } from '@/pages/marketing/email/LeadMagnetDelivery';
 
 const ID = 'AbCdEfGhIjKlMnOpQrStUv';
 const lm = (over: Partial<LeadMagnet> = {}): LeadMagnet => ({
@@ -137,10 +137,58 @@ describe('the lead files client', () => {
     reply = () => new Response(JSON.stringify({ error: 'gone', code: 'NOT_FOUND' }), { status: 404 });
     await expect(deleteLeadFile(ID)).resolves.toBeUndefined();
   });
+});
 
-  it('the domain link is the SEO page’s domain, when it has one', () => {
-    expect(domainLinkOf(ID, { domain: 'mybakery.com', domainUrl: 'https://mybakery.com/' })).toBe(`https://mybakery.com/m/${ID}`);
-    expect(domainLinkOf(ID, { domainUrl: 'https://mybakery.com/' })).toBeUndefined();
-    expect(domainLinkOf(ID, undefined)).toBeUndefined();
+describe('publishing the download', () => {
+  type Call = { method: string; url: string };
+  function server(answers: Record<string, () => Response>) {
+    const calls: Call[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        const method = init?.method ?? 'GET';
+        const path = String(url).split('?')[0];
+        calls.push({ method, url: String(url) });
+        const answer = answers[`${method} ${path}`] ?? answers[`${method} *`];
+        return answer ? answer() : new Response(JSON.stringify({ error: 'nope' }), { status: 500 });
+      }),
+    );
+    return calls;
+  }
+  const row = (over: object = {}) => new Response(JSON.stringify({ file: { id: ID, kind: 'url', url: 'https://maya.example/video', gate: true, link: `https://app.example/m/${ID}`, ...over } }), { status: 200 });
+  const cover = () => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'cover.png', { type: 'image/png' });
+
+  it('a cover that doesn’t upload leaves the new download published and saved, and says so', async () => {
+    const calls = server({ 'POST /api/lead-files': () => row(), 'POST /api/public-images': () => new Response(JSON.stringify({ error: 'Storage is down.' }), { status: 503 }) });
+    const saved: unknown[] = [];
+    const out = await publishDownload(project(), lm(), { source: 'url', url: 'https://maya.example/video', file: null, cover: cover(), gate: true }, (d) => saved.push(d));
+    expect(saved).toHaveLength(1);
+    expect(out.delivery).toMatchObject({ source: 'url', fileId: ID, link: `https://app.example/m/${ID}`, url: 'https://maya.example/video' });
+    expect(out.delivery).not.toHaveProperty('domainLink');
+    expect(out.isNew).toBe(true);
+    expect(out.coverError).toMatch(/^The download is published, but its cover image didn’t upload\./);
+    // never taken down
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    expect(REPUBLISH_NOTE).toContain('again');
+  });
+
+  it('an update whose cover fails still saves what was published (so “the guide changed” clears)', async () => {
+    const calls = server({ [`PATCH /api/lead-files/${ID}`]: () => row(), 'POST /api/public-images': () => new Response('{}', { status: 500 }) });
+    const before = lm({ delivery: { source: 'url', fileId: ID, link: `https://app.example/m/${ID}`, url: 'https://maya.example/old', gate: true, hash: 'old', publishedAt: 1 } });
+    const saved: { hash?: string }[] = [];
+    const out = await publishDownload(project(), before, { source: 'url', url: 'https://maya.example/video', file: null, cover: cover(), gate: true }, (d) => saved.push(d));
+    expect(out.isNew).toBe(false);
+    expect(saved[0].hash).not.toBe('old');
+    expect(out.coverError).not.toBe('');
+    expect(calls.map((c) => c.method)).toEqual(['PATCH', 'POST']);
+  });
+
+  it('a new download whose file doesn’t upload is taken down again, and nothing is saved', async () => {
+    const calls = server({ 'POST /api/lead-files': () => row({ kind: 'file', url: '' }), [`PUT /api/lead-files/${ID}/content`]: () => new Response(JSON.stringify({ error: 'Too big.', code: 'TOO_LARGE' }), { status: 413 }), [`DELETE /api/lead-files/${ID}`]: () => new Response('{"ok":true}', { status: 200 }) });
+    const saved: unknown[] = [];
+    const file = new File(['%PDF-1.7'], 'guide.pdf', { type: 'application/pdf' });
+    await expect(publishDownload(project(), lm(), { source: 'upload', url: '', file, cover: null, gate: true }, (d) => saved.push(d))).rejects.toThrow();
+    expect(saved).toHaveLength(0);
+    expect(calls.at(-1)).toMatchObject({ method: 'DELETE' });
   });
 });

@@ -21,10 +21,16 @@ const email = (over: Partial<EmailStep> = {}): EmailStep => ({ id: 'e1', index: 
 const view = (p: Project, e: EmailStep) => renderToStaticMarkup(createElement(EmailView, { project: p, email: e, tokens: emailTokens(p) }));
 
 describe('merge values', () => {
-  it('the lead magnet’s link: its published /m/ link (the domain’s first), else a placeholder, never /free', () => {
+  it('the lead magnet’s link: its published /m/ link on the app’s address, else a placeholder, never /free', () => {
     expect(emailTokens(project()).lead_magnet_link).toBe('[link to your free download]');
     expect(emailTokens(withMagnet(project())).lead_magnet_link).toBe(`https://app.example/m/${ID}`);
-    expect(emailTokens(withMagnet(project(), `https://mayabakes.com/m/${ID}`)).lead_magnet_link).toBe(`https://mayabakes.com/m/${ID}`);
+    // a domain link saved before (or a domain the SEO page has now) is never what an email sends: it stops working
+    // when the domain is removed or loses its verification, and a sent email can't be changed
+    const p = withMagnet(project(), `https://olddomain.com/m/${ID}`);
+    p.marketing.seoPublished = { slug: 'maya', url: 'https://app.example/maya', domain: 'mayabakes.com', domainUrl: 'https://mayabakes.com/', publishedAt: 1, hash: '' };
+    expect(emailTokens(p).lead_magnet_link).toBe(`https://app.example/m/${ID}`);
+    p.marketing.seoPublished = undefined;
+    expect(emailTokens(p).lead_magnet_link).toBe(`https://app.example/m/${ID}`);
     expect(JSON.stringify(emailTokens(project()))).not.toContain('/free');
   });
 
@@ -51,7 +57,12 @@ describe('the preview’s button', () => {
   it('is not a link while it has no address, and says where to add one', () => {
     const html = view(project(), email());
     expect(html).not.toContain('<a ');
-    expect(html).toContain('<span aria-disabled="true" title="Add a link in Sequence › Button link"');
+    // the lead magnet's link, with nothing published: publish the download
+    expect(html).toContain('<span aria-disabled="true" title="Publish your download in Email › Lead magnet › Delivery"');
+    const noSite = project();
+    noSite.brand.websiteUrl = '';
+    expect(view(noSite, email({ ctaUrl: '{{product_link}}' }))).toContain('title="Add your website in Settings › Brand, or publish your page"');
+    expect(view(project(), email({ ctaUrl: '[link]' }))).toContain('title="Add a link in Sequence › Button link"');
     for (const bad of ['javascript:alert(1)', 'mailto:x@y.co', '[link]', 'https://localhost/x', 'https://u:p@x.com']) expect(webHref(bad), bad).toBe('');
     expect(webHref(' https://x.com/a ')).toBe('https://x.com/a');
   });

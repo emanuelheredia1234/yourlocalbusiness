@@ -172,7 +172,7 @@ function OptInPreview({ project, lm }: { project: Project; lm: LeadMagnet }) {
   const [touched, setTouched] = useState(false);
   const onPrimary = readableOn(c.primary);
   const typeLabel = LEAD_MAGNET_TYPES.find((t) => t.id === lm.type)?.label;
-  const link = lm.delivery ? lm.delivery.domainLink ?? lm.delivery.link : '';
+  const link = lm.delivery?.link ?? '';
   const field = { width: '100%', borderRadius: 8, border: '1px solid rgba(0,0,0,.12)', background: '#ffffff', padding: '10px 12px', fontSize: 14, color: PAGE_INK } as const;
   return (
     <section aria-label="Opt-in page preview">

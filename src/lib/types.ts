@@ -428,7 +428,7 @@ export interface LeadMagnetDelivery {
   fileId: string;
   /** https://<app>/m/<fileId> */
   link: string;
-  /** https://<the SEO page's verified domain>/m/<fileId>, when it has one */
+  /** no longer written or read: emails and the app use `link`, which always serves the download (a domain's copy stops when the domain does) */
   domainLink?: string;
   /** visitors give their email before the download */
   gate: boolean;
