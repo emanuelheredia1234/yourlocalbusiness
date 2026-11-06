@@ -744,6 +744,7 @@ export function CodeTab({ project }: { project: Project }) {
               key={active.id}
               pageId={artifactPageId(active.id)}
               kind="artifact"
+              projectId={project.id}
               title={active.name}
               defaultSlug={active.name}
               published={active.published}

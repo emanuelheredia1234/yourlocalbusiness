@@ -1,6 +1,7 @@
 import type { BrandColors, CodeKind, Directives, Project, PromptImage, ServicePackage } from '@/lib/types';
 import { escapeHtml, hashStr, readableOn, todayStr, toDateStr, lighten, darken, listJoin, truncate } from '@/lib/utils';
 import { imageKeyNumber, imageTokens, resolveImageTokens } from '@/lib/promptImages';
+import { LEAD_ACTION, previewLeadAction, resolveLeadAction } from '@/lib/leadAction';
 import type { CalcKind } from '../knowledge';
 import { buildFacts, verbOutcome, Voice, type Facts } from '../text';
 
@@ -1582,11 +1583,20 @@ export interface DocumentOptions {
   images?: Record<string, string>;
   /** start with STORAGE_SHIM (published pages and the preview run in a sandbox without storage) */
   storageShim?: boolean;
+  /**
+   * Where its forms send. An address replaces every {{lead-action}} (a copy of a published asset); LEAD_ACTION
+   * keeps the token for publishing to fill in. Unset (the preview, a copy of an unpublished asset): a form's
+   * action="{{lead-action}}" becomes action="#", and the script still sees the token, so it sends nothing.
+   */
+  leadAction?: string;
 }
 
 /** Full standalone document for preview, export and publishing. */
 export function buildDocument(code: { html: string; css: string; js: string }, title = 'Widget', opts: DocumentOptions = {}): string {
-  const fill = (text: string) => (opts.images ? resolveImageTokens(text, opts.images) : text);
+  const images = (text: string) => (opts.images ? resolveImageTokens(text, opts.images) : text);
+  const lead = opts.leadAction;
+  const fill = (text: string) => (lead === undefined || lead === LEAD_ACTION ? images(text) : resolveLeadAction(images(text), lead));
+  const fillHtml = (text: string) => (lead === undefined ? previewLeadAction(fill(text)) : fill(text));
   // in <head>, so it runs before any script in the page
   const shim = opts.storageShim ? `${SCRIPT_OPEN}\n${STORAGE_SHIM}\n${SCRIPT_CLOSE}\n` : '';
   return `<!doctype html>
@@ -1600,7 +1610,7 @@ ${fill(code.css)}
 </style>
 </head>
 <body>
-${fill(code.html)}
+${fillHtml(code.html)}
 ${SCRIPT_OPEN}
 ${fill(code.js)}
 ${SCRIPT_CLOSE}
