@@ -45,7 +45,7 @@ export const useVideoWeek = create<VideoWeekState>((set, get) => ({
   },
   set: (projectId, w) => {
     if (!projectId || !isWeek(w)) return;
-    set((s) => ({ byProject: { ...s.byProject, [projectId]: { used: w.used, limit: w.limit ?? null, resetsAt: w.resetsAt, enforced: w.enforced === true, known: w.known !== false, at: Date.now() } } }));
+    set((s) => ({ byProject: { ...s.byProject, [projectId]: { used: w.used, limit: w.limit ?? null, resetsAt: w.resetsAt, enforced: w.enforced === true, known: w.known !== false, ...(w.scope === 'account' ? { scope: 'account' as const } : {}), ...(typeof w.timeZone === 'string' ? { timeZone: w.timeZone } : {}), at: Date.now() } } }));
   },
   reset: () => set({ byProject: {} }),
 }));

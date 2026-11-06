@@ -464,7 +464,7 @@ const updateCampaign = defineTool({
     const now = p.marketing.campaign;
     const c = cadence(now);
     const allowance = currentVideoAllowance();
-    const problem = campaignProblem(now, allowance);
+    const problem = campaignProblem(now);
     const warning = videoDaysWarning(now, allowance);
     return {
       data: {
@@ -488,7 +488,7 @@ const generateCampaignPlan = defineTool({
   validate: ({ replace }) => {
     const p = activeProject();
     if (busyWith(campaignPlanTask.label)) return 'A 30-day plan is being written on Social right now. Wait for it to finish.';
-    const problem = campaignProblem(p.marketing.campaign, currentVideoAllowance());
+    const problem = campaignProblem(p.marketing.campaign);
     if (problem) return `The campaign setup can’t make a plan yet: ${problem} Fix it with update_campaign.`;
     return p.marketing.plan && !replace ? 'There is already a 30-day plan (posts made from it stay). Ask the owner, then call again with replace: true.' : null;
   },

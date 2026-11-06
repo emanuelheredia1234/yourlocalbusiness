@@ -8,6 +8,7 @@ import { confirmPlanChange, manageBilling, upgradeTier } from '@/lib/billing/act
 import { useBilling, useBillingOn } from '@/store/billing';
 import { useUI } from '@/store/ui';
 import { Modal } from '@/components/ui/primitives';
+import { shortDate } from '@/lib/videoWeek';
 
 const TITLES = {
   PLAN_REQUIRED: 'This needs a plan',
@@ -18,7 +19,7 @@ const TITLES = {
   VIDEO_WEEK_LIMIT: 'This week’s AI videos are used',
 } as const;
 
-const fmtDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '');
+const fmtDate = (iso?: string | null) => shortDate(iso);
 
 export function UpgradePrompt() {
   const on = useBillingOn();
@@ -133,7 +134,7 @@ export function UpgradePrompt() {
           {current ? `; you’re on ${tierName(current)}` : ''}.
         </p>
       )}
-      {req.code === 'VIDEO_WEEK_LIMIT' && <p className="mt-2 text-small text-muted">{req.resetsAt ? `This business’s videos reset on Monday, ${fmtDate(req.resetsAt)}.` : 'This business’s videos reset on Monday.'} Videos made with your own AI keys don’t count.</p>}
+      {req.code === 'VIDEO_WEEK_LIMIT' && <p className="mt-2 text-small text-muted">{req.resetsAt ? `This week’s videos reset on Monday, ${shortDate(req.resetsAt, req.timeZone)}.` : 'This week’s videos reset on Monday.'} Videos made with your own AI keys don’t count.</p>}
       {req.code === 'CREDITS_USED' && req.resetsAt && <p className="mt-2 text-small text-muted">Your credits renew on {fmtDate(req.resetsAt)}. Your own AI keys never use credits.</p>}
     </Modal>
   );

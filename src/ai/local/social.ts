@@ -53,8 +53,8 @@ export function defaultCampaign(): CampaignConfig {
   return {
     days: [true, true, true, true, true, false, false],
     postsPerDay: 2,
-    // one video on each posting day (Monday to Friday)
-    videoDays: [1, 1, 1, 1, 1, 0, 0],
+    // three videos a week (Monday, Wednesday, Friday): within every plan's weekly AI videos (Launch makes 3)
+    videoDays: [1, 0, 1, 0, 1, 0, 0],
     watermark: true,
     imageStyles: ['minimal', 'handcrafted', 'editorial'],
     videoStyles: ['ugc', 'kinetic'],

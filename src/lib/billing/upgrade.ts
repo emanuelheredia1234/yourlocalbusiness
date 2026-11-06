@@ -13,6 +13,21 @@ export interface RefusalBody {
   message?: unknown;
   need?: { feature?: unknown; tier?: unknown } | null;
   resetsAt?: unknown;
+  /** VIDEO_WEEK_LIMIT: the business's time zone (also in videoWeek.timeZone) */
+  timeZone?: unknown;
+  videoWeek?: { timeZone?: unknown } | null;
+}
+
+/** A time zone this browser can show dates in (the refusal's), else undefined (the browser's own). */
+function zoneOf(err: RefusalBody): string | undefined {
+  const tz = typeof err.timeZone === 'string' ? err.timeZone : typeof err.videoWeek?.timeZone === 'string' ? err.videoWeek.timeZone : '';
+  if (!tz) return undefined;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return tz;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Show the upgrade prompt for a refusal; false when it isn't one (or plans aren't shown here). */
@@ -22,7 +37,7 @@ export function showUpgrade(err: RefusalBody | null | undefined): boolean {
   if (!CODES.has(code)) return false;
   const message = typeof err.error === 'string' && err.error ? err.error : typeof err.message === 'string' ? err.message : '';
   const need = err.need && typeof err.need === 'object' ? { ...(typeof err.need.feature === 'string' ? { feature: err.need.feature } : {}), ...(typeof err.need.tier === 'string' ? { tier: err.need.tier } : {}) } : undefined;
-  useBilling.getState().showUpgrade({ code, message: message || fallback(code), ...(need ? { need } : {}), ...(typeof err.resetsAt === 'string' ? { resetsAt: err.resetsAt } : {}) });
+  useBilling.getState().showUpgrade({ code, message: message || fallback(code), ...(need ? { need } : {}), ...(typeof err.resetsAt === 'string' ? { resetsAt: err.resetsAt } : {}), ...(zoneOf(err) ? { timeZone: zoneOf(err) } : {}) });
   return true;
 }
 

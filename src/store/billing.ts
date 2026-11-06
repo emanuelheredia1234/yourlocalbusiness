@@ -20,6 +20,8 @@ export interface UpgradeRequest {
   message: string;
   need?: { feature?: string; tier?: string };
   resetsAt?: string;
+  /** the time zone resetsAt is shown in (the business's week, for VIDEO_WEEK_LIMIT) */
+  timeZone?: string;
 }
 
 interface BillingState {

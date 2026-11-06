@@ -107,6 +107,10 @@ describe('videos through your server', () => {
     expect(err).toMatchObject({ code: 'VIDEO_WEEK_LIMIT', message: 'You’ve made 3 of 3 videos this week. Resets Monday.' });
     expect(videoErrorMessage('VIDEO_WEEK_LIMIT', (err as Error).message)).toEqual({ title: 'This week’s AI videos are used', body: 'You’ve made 3 of 3 videos this week. Resets Monday.' });
     expect(useVideoWeek.getState().byProject.proj_w.used).toBe(3);
+    // refused by the account's week (another business used it): the account's count is kept, with its scope
+    fetchMock.mockResolvedValueOnce(json({ error: 'You’ve made 3 of 3 videos this week across your businesses. Resets Monday.', code: 'VIDEO_WEEK_LIMIT', used: 3, limit: 3, scope: 'account', videoWeek: { ...week, used: 3, scope: 'account', timeZone: 'America/Chicago' } }, 402));
+    await startVideo({ prompt: 'a candle', aspect: '9:16', duration: 6, resolution: '480p', projectId: 'proj_w' }).catch(() => null);
+    expect(useVideoWeek.getState().byProject.proj_w).toMatchObject({ used: 3, limit: 3, scope: 'account', timeZone: 'America/Chicago' });
   });
 
   it('says when the server lost the job', async () => {

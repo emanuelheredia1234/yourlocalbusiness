@@ -1,10 +1,13 @@
 // Weekly AI video limits per business (shared/plans.json videosPerWeek: Launch 3, Grow 5, Scale unlimited).
 //
-// A business's week runs Monday 00:00 to Sunday 23:59 in its time zone (Project.timeZone; else the browser's zone sent
-// with the request; else UTC). A video counts when the server starts it: claim() before the provider is asked, then
+// A business's week runs Monday 00:00 to Sunday 23:59 in its time zone (the saved business's Project.timeZone, read
+// by the server; else the zone the app sent; else UTC). While a limit applies the business must be one of the
+// account's (it holds a project_slots row): business() reads both. A video counts when the server starts it: claim() before the provider is asked, then
 // settle(id, 'started') once it accepted the job, or settle(id, 'refunded') when it certainly never started (the
 // provider refused before any paid work). A claim never settled (the server stopped in between) keeps counting: when
 // in doubt the video counts, so nothing is ever started twice on one claim.
+// The claim's id is made here and sent with it, so a claim written but whose answer was lost (a timeout) can still be
+// refunded when the video is then refused.
 //
 // With Supabase's secret key the claims live in public.video_starts and ylb_claim_video_start checks and inserts under
 // a per-user, per-week advisory lock, so two parallel starts (on any copy of the server) can't both pass at the limit.
@@ -100,14 +103,14 @@ export function createVideoWeek({ supabaseUrl = '', secretKey = '', fetch = glob
 
   const counted = (r, userId, weekStart) => r.user_id === userId && r.week_start === weekStart && r.state !== 'refunded' && !r.own_key;
 
-  function claimMemory({ userId, projectId, weekStart, limit, userLimit, own }) {
+  function claimMemory({ id, userId, projectId, weekStart, limit, userLimit, own }) {
     const mine = memory.filter((r) => counted(r, userId, weekStart));
     const usedProject = mine.filter((r) => r.project_id === projectId).length;
     if (!own) {
       if (limit != null && usedProject >= limit) return { ok: false, used: usedProject, limit, reason: 'business' };
-      if (userLimit != null && mine.length >= userLimit) return { ok: false, used: usedProject, limit, reason: 'account' };
+      // the account's total refused it: its count and limit, so the app's line matches the refusal
+      if (userLimit != null && mine.length >= userLimit) return { ok: false, used: mine.length, limit: userLimit, reason: 'account' };
     }
-    const id = crypto.randomUUID();
     memory.push({ id, user_id: userId, project_id: projectId, week_start: weekStart, state: 'pending', own_key: !!own, job_id: null });
     // memory is a stand-in only: keep about five weeks
     if (memory.length > 5000) {
@@ -130,27 +133,30 @@ export function createVideoWeek({ supabaseUrl = '', secretKey = '', fetch = glob
     /**
      * Claim one video start for a business's week. limit: the business's weekly limit (null = none: counted, never
      * refused); userLimit: the account's weekly total (null = none); own: an own-key video (recorded, never counted).
-     * → { ok, id, used, limit, reason? }. Throws { code: 'UNAVAILABLE' } when Supabase can't be reached (the caller
-     * refuses while a limit applies, and goes ahead uncounted otherwise).
+     * → { ok, id, used, limit, reason? } (reason 'account': used and limit are the account's). Throws
+     * { code: 'UNAVAILABLE', id } when Supabase can't be reached: the claim's id is made here, so a claim that was
+     * written but whose answer was lost can still be settled (the caller refunds it when it refuses, and settles it as
+     * usual when it goes ahead).
      */
     async claim({ userId, projectId = '', weekStart, limit = null, userLimit = null, own = false }) {
-      const a = { userId, projectId: String(projectId ?? ''), weekStart, limit: limit == null ? null : Math.max(0, Math.trunc(limit)), userLimit: userLimit == null ? null : Math.max(0, Math.trunc(userLimit)), own: !!own };
+      const id = crypto.randomUUID();
+      const a = { id, userId, projectId: String(projectId ?? ''), weekStart, limit: limit == null ? null : Math.max(0, Math.trunc(limit)), userLimit: userLimit == null ? null : Math.max(0, Math.trunc(userLimit)), own: !!own };
       if (!remote(userId)) return claimMemory(a);
       try {
         const res = await fetch(`${url}/rest/v1/rpc/ylb_claim_video_start`, {
           method: 'POST',
           headers,
-          body: JSON.stringify({ p_user: a.userId, p_project: a.projectId, p_week: a.weekStart, p_limit: a.limit, p_user_limit: a.userLimit, p_own: a.own }),
+          body: JSON.stringify({ p_id: a.id, p_user: a.userId, p_project: a.projectId, p_week: a.weekStart, p_limit: a.limit, p_user_limit: a.userLimit, p_own: a.own }),
           signal: AbortSignal.timeout(10_000),
         });
         if (!res.ok) throw upstream('update', res.status);
         problem = null;
         const out = await res.json();
-        return { ok: out?.ok === true, id: out?.id ?? null, used: Number(out?.used) || 0, limit: out?.limit ?? a.limit, ...(out?.reason ? { reason: out.reason } : {}) };
+        return { ok: out?.ok === true, id: out?.ok === true ? (out?.id ?? id) : null, used: Number(out?.used) || 0, limit: out?.limit ?? a.limit, ...(out?.reason ? { reason: out.reason } : {}) };
       } catch (e) {
         note(e);
         if (e?.code === 'NOT_SET_UP') return claimMemory(a);
-        throw Object.assign(new Error(problem.message), { code: 'UNAVAILABLE' });
+        throw Object.assign(new Error(problem.message), { code: 'UNAVAILABLE', id });
       }
     },
 
@@ -178,20 +184,53 @@ export function createVideoWeek({ supabaseUrl = '', secretKey = '', fetch = glob
       }
     },
 
-    /** A business's counted videos this week: { used, known } (known: false when Supabase couldn't be read). */
+    /**
+     * A business's counted videos this week, and the account's: { used, usedUser, known } (known: false when Supabase
+     * couldn't be read).
+     */
     async usage({ userId, projectId = '', weekStart }) {
       const proj = String(projectId ?? '');
-      const mem = () => memory.filter((r) => counted(r, userId, weekStart) && r.project_id === proj).length;
-      if (!remote(userId)) return { used: mem(), known: true };
+      const mem = () => {
+        const mine = memory.filter((r) => counted(r, userId, weekStart));
+        return { used: mine.filter((r) => r.project_id === proj).length, usedUser: mine.length };
+      };
+      if (!remote(userId)) return { ...mem(), known: true };
       try {
-        const q = `user_id=eq.${encodeURIComponent(userId)}&project_id=eq.${encodeURIComponent(proj)}&week_start=eq.${weekStart}&state=in.(pending,started)&own_key=eq.false&select=id&limit=1000`;
+        const q = `user_id=eq.${encodeURIComponent(userId)}&week_start=eq.${weekStart}&state=in.(pending,started)&own_key=eq.false&select=project_id&limit=5000`;
         const res = await fetch(`${url}/rest/v1/video_starts?${q}`, { headers, signal: AbortSignal.timeout(10_000) });
         if (!res.ok) throw upstream('read', res.status);
         problem = null;
-        return { used: (await res.json()).length, known: true };
+        const rows = await res.json();
+        return { used: rows.filter((r) => r.project_id === proj).length, usedUser: rows.length, known: true };
       } catch (e) {
         note(e);
-        return { used: mem(), known: e?.code === 'NOT_SET_UP' };
+        return { ...mem(), known: e?.code === 'NOT_SET_UP' };
+      }
+    },
+
+    /**
+     * The business as the account has it: { checked, slot: 'active' | 'locked' | null, timeZone: string | null }.
+     * slot: its project_slots row (every business has one; a made-up id has none); timeZone: the saved business's
+     * (user_docs), when it has a valid one. checked: false without Supabase (nothing to check against). Throws
+     * { code: 'UNAVAILABLE' } when Supabase can't be read.
+     */
+    async business({ userId, projectId = '' }) {
+      const proj = String(projectId ?? '');
+      if (!remote(userId) || !proj) return { checked: false, slot: null, timeZone: null };
+      const get = async (path) => {
+        const res = await fetch(`${url}/rest/v1/${path}`, { headers, signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) throw upstream('read', res.status);
+        return res.json();
+      };
+      try {
+        const u = encodeURIComponent(userId);
+        const p = encodeURIComponent(proj);
+        const [slots, docs] = await Promise.all([get(`project_slots?user_id=eq.${u}&project_id=eq.${p}&select=state&limit=1`), get(`user_docs?user_id=eq.${u}&kind=eq.project&id=eq.${p}&select=tz:data->>timeZone&limit=1`)]);
+        const tz = docs?.[0]?.tz;
+        return { checked: true, slot: slots?.[0]?.state === 'locked' ? 'locked' : slots?.[0] ? 'active' : null, timeZone: validTimeZone(tz) ? tz : null };
+      } catch (e) {
+        console.warn(`Video limits: couldn’t read the business (${e?.message || 'no answer'}).`);
+        throw Object.assign(new Error('Couldn’t check the business right now.'), { code: 'UNAVAILABLE' });
       }
     },
   };

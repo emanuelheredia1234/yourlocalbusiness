@@ -32,8 +32,13 @@ revoke all on table public.video_starts from anon, authenticated;
 -- weekly limit (null = unlimited, or plans not enforced: counted, never refused). p_user_limit: the account's total
 -- for the week (the limit times its businesses), so made-up business ids can't get around the limit. p_own: own-key
 -- videos are recorded but never counted or refused.
--- Returns {ok, id?, used, limit, reason?}: used = this business's counted videos this week, including this one.
+-- p_id: the claim's id, made by the server before it asks, so a claim whose answer was lost (a timeout) can still be
+-- settled ('refunded' when the server then refuses the video).
+-- Returns {ok, id?, used, limit, reason?}: used = this business's counted videos this week, including this one; for
+-- reason 'account', used and limit are the account's (so the app's count matches the refusal).
+drop function if exists public.ylb_claim_video_start(uuid, text, date, int, int, boolean);
 create or replace function public.ylb_claim_video_start(
+  p_id uuid,
   p_user uuid,
   p_project text,
   p_week date,
@@ -63,15 +68,16 @@ begin
       return jsonb_build_object('ok', false, 'used', used_project, 'limit', p_limit, 'reason', 'business');
     end if;
     if p_user_limit is not null and used_user >= p_user_limit then
-      return jsonb_build_object('ok', false, 'used', used_project, 'limit', p_limit, 'reason', 'account');
+      return jsonb_build_object('ok', false, 'used', used_user, 'limit', p_user_limit, 'reason', 'account');
     end if;
   end if;
-  insert into public.video_starts (user_id, project_id, week_start, own_key)
-  values (p_user, proj, p_week, own)
-  returning id into new_id;
+  new_id := coalesce(p_id, gen_random_uuid());
+  insert into public.video_starts (id, user_id, project_id, week_start, own_key)
+  values (new_id, p_user, proj, p_week, own)
+  on conflict (id) do nothing;
   return jsonb_build_object('ok', true, 'id', new_id, 'used', used_project + case when own then 0 else 1 end, 'limit', p_limit);
 end;
 $$;
 
-revoke execute on function public.ylb_claim_video_start(uuid, text, date, int, int, boolean) from public, anon, authenticated;
-grant execute on function public.ylb_claim_video_start(uuid, text, date, int, int, boolean) to service_role;
+revoke execute on function public.ylb_claim_video_start(uuid, uuid, text, date, int, int, boolean) from public, anon, authenticated;
+grant execute on function public.ylb_claim_video_start(uuid, uuid, text, date, int, int, boolean) to service_role;

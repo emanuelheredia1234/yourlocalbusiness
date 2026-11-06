@@ -8,7 +8,6 @@ import { Empty, PageHeader, StickyActionBar, Tabs, confirmAction } from '@/compo
 import { useUI, type SocialTab } from '@/store/ui';
 import { tabLabel } from '@/lib/pageTabs';
 import { applyCampaignPlan, campaignProblem, coveredSlots } from '@/ai/socialPlan';
-import { useVideoAllowance } from '@/store/videoWeek';
 import { QuickComposer } from '@/pages/dashboard/QuickComposer';
 import { CampaignSetup } from './social/CampaignSetup';
 import { PlanView } from './social/PlanView';
@@ -44,9 +43,7 @@ export default function SocialEngine() {
   const planAI = useAI(campaignPlanTask);
   const batchPosts = useMemo(() => allPosts.filter((p) => p.projectId === project.id && p.source === 'batch').sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)), [allPosts, project.id]);
   const covered = useMemo(() => coveredSlots(batchPosts, project.id), [batchPosts, project.id]);
-  // plans on: more chosen videos a week than the plan makes stop the plan (the setup says so)
-  const allowance = useVideoAllowance();
-  const invalid = !!campaignProblem(cfg, allowance);
+  const invalid = !!campaignProblem(cfg);
 
   const generatePlan = async () => {
     if (plan && !(await confirmAction({ title: 'Replace the 30-day plan?', body: 'A new plan is generated from your current setup. Posts you already generated stay in your batch and queue.', confirmLabel: 'Generate new plan' }))) return;
@@ -113,7 +110,7 @@ export default function SocialEngine() {
                 <Layers /> Go to the 7-day batch
               </button>
             </div>
-            <PlanView plan={plan} covered={covered} />
+            <PlanView plan={plan} covered={covered} config={cfg} />
           </>
         ) : (
           !planAI.running && <Empty variant="ai" title="No plan yet" body="Finish the setup, then plan 30 days that move people from hearing about you to booking." action={planButton()} />

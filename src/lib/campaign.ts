@@ -43,6 +43,27 @@ export function videoDaysPatch(cfg: VideoSetup, patch: Partial<Pick<CampaignConf
   return { videoDays: videoDaysOf(next) };
 }
 
+/**
+ * Video days held to at most `max` videos a week (null: no cap), one more on each day in turn from Monday, so they
+ * stay spread over the week (5 days of 2 with a cap of 3: one on Monday, Tuesday and Wednesday).
+ */
+export function capVideoDays(days: number[], max: number | null | undefined): number[] {
+  if (max == null) return days.slice();
+  const out = days.map(() => 0);
+  let left = Math.max(0, Math.trunc(max));
+  for (let added = true; left > 0 && added; ) {
+    added = false;
+    for (let i = 0; i < days.length && left > 0; i++) {
+      if (out[i] < days[i]) {
+        out[i]++;
+        left--;
+        added = true;
+      }
+    }
+  }
+  return out;
+}
+
 /** Businesses whose setup has no video days yet get them (the same array back when nothing changed). */
 export function fillVideoDays<P extends Pick<Project, 'marketing'>>(projects: P[]): P[] {
   const stale = (p: P) => !!p.marketing?.campaign && (!hasVideoDays(p.marketing.campaign) || 'videosPerDay' in p.marketing.campaign);

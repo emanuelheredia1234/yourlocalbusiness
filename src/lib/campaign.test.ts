@@ -8,7 +8,7 @@ import { addDays, weekdayIndex } from '@/lib/utils';
 import { defaultCampaign, fitSlotsToVideoDays, generateCampaignPlan, generateContentBatch } from '@/ai/local/social';
 import { cadence, campaignProblem, patchCampaign, setVideoDay, videoDaysWarning } from '@/ai/socialPlan';
 import { cleanWorkspace } from '@/store/cleanup';
-import { fillVideoDays, hasVideoDays, videoDaysOf, videoDaysPatch, videosPerWeek, withVideoDays } from './campaign';
+import { capVideoDays, fillVideoDays, hasVideoDays, videoDaysOf, videoDaysPatch, videosPerWeek, withVideoDays } from './campaign';
 
 const MON_FRI = [true, true, true, true, true, false, false];
 const cfg = (over: Partial<CampaignConfig> = {}): CampaignConfig => ({ ...defaultCampaign(), startDate: '2026-11-09', ...over });
@@ -24,6 +24,13 @@ describe('videoDaysOf', () => {
     // Saturday isn't a posting day; Thursday can't have 4 of 2
     expect(videoDaysOf(cfg({ videoDays: [1, 0, 0, 4, 0, 1, 0] }))).toEqual([1, 0, 0, 2, 0, 0, 0]);
     expect(videosPerWeek(cfg({ videoDays: [1, 0, 0, 2, 0, 0, 0] }))).toBe(3);
+  });
+
+  it('capVideoDays keeps at most the week’s videos, spread over the days', () => {
+    expect(capVideoDays([2, 2, 2, 2, 2, 0, 0], 3)).toEqual([1, 1, 1, 0, 0, 0, 0]);
+    expect(capVideoDays([2, 0, 1, 0, 2, 0, 0], 4)).toEqual([2, 0, 1, 0, 1, 0, 0]);
+    expect(capVideoDays([1, 1, 0, 0, 0, 0, 0], 5)).toEqual([1, 1, 0, 0, 0, 0, 0]);
+    expect(capVideoDays([1, 1, 1, 1, 1, 0, 0], null)).toEqual([1, 1, 1, 1, 1, 0, 0]);
   });
 
   it('migrates an older setup: its videos per day on each posting day', () => {
@@ -85,16 +92,19 @@ describe('the setup, the plan and the batch use the video days', () => {
     expect(cadence(legacy(1)).videos).toBe(5);
   });
 
-  it('campaignProblem stops the plan over the weekly limit only while plans are on; otherwise a warning', () => {
+  it('going over the weekly limit is a warning, never a stop (plans on or not): older setups and the default still plan', () => {
     const c = cfg({ videoDays: [1, 1, 1, 1, 1, 0, 0] });
     const launch = { perWeek: 3, enforced: true, planName: 'Launch' };
-    expect(campaignProblem(c, launch)).toBe('You chose 5 videos a week; Launch makes 3 AI videos a week for each business. Choose fewer video days, or upgrade.');
-    expect(campaignProblem(cfg({ videoDays: [1, 0, 1, 0, 1, 0, 0] }), launch)).toBeNull();
-    expect(campaignProblem(c, { ...launch, enforced: false })).toBeNull();
-    expect(videoDaysWarning(c, { ...launch, enforced: false })).toMatch(/You chose 5 videos a week/);
-    expect(videoDaysWarning(c, launch)).toBeNull();
-    expect(campaignProblem(c, { perWeek: null, enforced: true, planName: 'Scale' })).toBeNull();
+    // an older setup (one video on each posting day) on Launch once plans are on: a plan can still be made
+    expect(campaignProblem(legacy(1))).toBeNull();
     expect(campaignProblem(c)).toBeNull();
+    expect(videoDaysWarning(c, launch)).toBe('You chose 5 videos a week; Launch makes 3 AI videos a week for each business, so the rest won’t be made. Choose fewer video days, or upgrade.');
+    expect(videoDaysWarning(c, { ...launch, enforced: false })).toMatch(/You chose 5 videos a week.*before plans start/);
+    expect(videoDaysWarning(cfg({ videoDays: [1, 0, 1, 0, 1, 0, 0] }), launch)).toBeNull();
+    expect(videoDaysWarning(c, { perWeek: null, enforced: true, planName: 'Scale' })).toBeNull();
+    // a new business's setup fits every plan's week (Launch makes 3)
+    expect(videosPerWeek(defaultCampaign())).toBe(3);
+    expect(videoDaysWarning(defaultCampaign(), launch)).toBeNull();
     expect(campaignProblem(cfg({ videoDays: [1, 0, 0, 0, 0, 0, 0], videoStyles: [] }))).toBe('Choose at least one video style, or turn the video days off.');
   });
 

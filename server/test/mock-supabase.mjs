@@ -237,7 +237,14 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
   function project(row, select) {
     if (!select || select === '*') return { ...row };
     const out = {};
-    for (const c of select.split(',').map((s) => s.trim()).filter(Boolean)) out[c] = row[c];
+    for (const c of select.split(',').map((s) => s.trim()).filter(Boolean)) {
+      // alias:column->>key (a JSON field as text), as PostgREST reads it
+      const j = /^(?:(\w+):)?(\w+)->>(\w+)$/.exec(c);
+      if (j) {
+        const v = row[j[2]]?.[j[3]];
+        out[j[1] ?? j[3]] = v == null ? null : typeof v === 'object' ? JSON.stringify(v) : String(v);
+      } else out[c] = row[c];
+    }
     return out;
   }
 
@@ -449,8 +456,9 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     const usedProject = mine.filter((r) => r.project_id === proj).length;
     const limit = b.p_limit ?? null;
     if (!own && limit != null && usedProject >= limit) return send(res, 200, { ok: false, used: usedProject, limit, reason: 'business' });
-    if (!own && b.p_user_limit != null && mine.length >= b.p_user_limit) return send(res, 200, { ok: false, used: usedProject, limit, reason: 'account' });
-    const id = crypto.randomUUID();
+    if (!own && b.p_user_limit != null && mine.length >= b.p_user_limit) return send(res, 200, { ok: false, used: mine.length, limit: b.p_user_limit, reason: 'account' });
+    const id = b.p_id ?? crypto.randomUUID();
+    if (rows.some((r) => r.id === id)) return send(res, 200, { ok: true, id, used: usedProject, limit });
     const now = new Date().toISOString();
     rows.push({ id, user_id: b.p_user, project_id: proj, week_start: b.p_week, state: 'pending', own_key: own, job_id: null, created_at: now, updated_at: now });
     return send(res, 200, { ok: true, id, used: usedProject + (own ? 0 : 1), limit });

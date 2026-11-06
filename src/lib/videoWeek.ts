@@ -16,6 +16,10 @@ export interface VideoWeek {
   enforced: boolean;
   /** false when the server couldn't read the count */
   known?: boolean;
+  /** 'account': used and limit are the account's week across its businesses (that limit was reached first) */
+  scope?: 'account';
+  /** the business's time zone the week runs in */
+  timeZone?: string;
 }
 
 /** What the plan allows a business a week, for the campaign setup's warning (null: nothing to say). */
@@ -50,7 +54,18 @@ export function videoAllowance(plan: Entitlement | null | undefined, account: Pl
 export function videoWeekLine(w: VideoWeek | null | undefined): string | null {
   if (!w || w.known === false) return null;
   if (w.limit == null) return w.enforced ? `Unlimited AI videos · ${plural(w.used, 'video')} this week` : null;
-  return `${w.used} of ${plural(w.limit, 'video')} used this week · resets Monday`;
+  return `${w.used} of ${plural(w.limit, 'video')} used this week${w.scope === 'account' ? ' across your businesses' : ''} · resets Monday`;
+}
+
+/** A date as "Nov 9", in timeZone when given (a business's week resets at its own Monday midnight, not the browser's). */
+export function shortDate(iso?: string | null, timeZone?: string): string {
+  if (!iso) return '';
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+  try {
+    return new Date(iso).toLocaleDateString('en-US', timeZone ? { ...opts, timeZone } : opts);
+  } catch {
+    return new Date(iso).toLocaleDateString('en-US', opts);
+  }
 }
 
 /** The refusal's sentence: "You’ve made 3 of 3 videos this week. Resets Monday." */
@@ -65,5 +80,5 @@ export const videoWeekFull = (w: VideoWeek | null | undefined): boolean => !!w &
  */
 export function videoDaysOverLimit(videosPerWeek: number, a: VideoAllowance | null | undefined): string | null {
   if (!a || a.perWeek == null || videosPerWeek <= a.perWeek) return null;
-  return `You chose ${plural(videosPerWeek, 'video')} a week; ${a.planName} makes ${plural(a.perWeek, 'AI video')} a week for each business. Choose fewer video days${a.enforced ? '' : ' before plans start'}, or upgrade.`;
+  return `You chose ${plural(videosPerWeek, 'video')} a week; ${a.planName} makes ${plural(a.perWeek, 'AI video')} a week for each business${a.enforced ? ', so the rest won’t be made' : ''}. Choose fewer video days${a.enforced ? '' : ' before plans start'}, or upgrade.`;
 }

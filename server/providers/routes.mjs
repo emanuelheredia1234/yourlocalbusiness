@@ -443,34 +443,60 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     }
   };
 
+  const LIMITS_UNAVAILABLE = { error: 'Couldn’t check this week’s videos right now. Try again in a minute, or use your own AI keys.', code: 'LIMITS_UNAVAILABLE' };
+
   /**
-   * Claim this video in the business's week before anything is sent. Replies itself (402 VIDEO_WEEK_LIMIT, 503) and
-   * answers null when the video can't start; else { settle(state, jobId?), info }.
+   * Claim this video in the business's week before anything is sent. Replies itself (402 VIDEO_WEEK_LIMIT /
+   * BUSINESS_LIMIT, 404, 503) and answers null when the video can't start; else { settle(state, jobId?), info }.
+   * While a limit applies the business must be one of the account's (its slot), and its week follows the saved
+   * business's time zone (the browser's only when it has none), so made-up ids or zones can't stretch the limit.
    */
-  async function claimVideoWeek(req, res, who, { ent, own, projectId, zone }) {
+  async function claimVideoWeek(req, res, who, { ent, own, projectId, zone: askedZone }) {
     const none = { settle: async () => {}, info: null };
     if (!who?.id || !UUID.test(who.id)) return none;
     const { enforced, limit, userLimit } = videoLimitOf(req, who, ent);
+    const limited = limit != null && !own;
+    let zone = askedZone;
+    let biz = null;
+    try {
+      biz = await videoWeek.business({ userId: who.id, projectId });
+    } catch {
+      if (limited) {
+        reply(req, res, 503, LIMITS_UNAVAILABLE);
+        return null;
+      }
+    }
+    if (biz?.timeZone) zone = biz.timeZone;
+    if (limited && biz?.checked) {
+      if (biz.slot === 'locked') {
+        reply(req, res, 402, { error: 'This business is paused on your plan. Add a business, or choose which ones stay active in Settings › Plan.', code: 'BUSINESS_LIMIT', locked: true, upgrade: '#workspace-settings' });
+        return null;
+      }
+      if (biz.slot !== 'active') {
+        reply(req, res, 404, { error: 'Open one of your businesses to make a video for it.', code: 'UNKNOWN_BUSINESS' });
+        return null;
+      }
+    }
     const week = weekOf(Date.now(), zone);
     let out;
     try {
       out = await videoWeek.claim({ userId: who.id, projectId, weekStart: week.weekStart, limit, userLimit, own });
-    } catch {
-      // fail closed only while a limit applies; otherwise the video goes ahead uncounted
-      if (limit != null && !own) {
-        reply(req, res, 503, { error: 'Couldn’t check this week’s videos right now. Try again in a minute, or use your own AI keys.', code: 'LIMITS_UNAVAILABLE' });
+    } catch (e) {
+      // fail closed only while a limit applies; otherwise the video goes ahead (settled as usual if the claim was
+      // written after all). A claim refused here is refunded, in case it was written but its answer was lost.
+      if (limited) {
+        await videoWeek.settle(e?.id, 'refunded');
+        reply(req, res, 503, LIMITS_UNAVAILABLE);
         return null;
       }
-      return none;
+      return e?.id ? { settle: (state, jobId = null) => videoWeek.settle(e.id, state, { jobId }), info: null } : none;
     }
-    const info = { used: out.used, limit, resetsAt: week.resetsAt, weekStart: week.weekStart, timeZone: week.timeZone, enforced, own: !!own };
+    const account = out.reason === 'account';
+    const info = { used: out.used, limit: account ? out.limit : limit, ...(account ? { scope: 'account' } : {}), resetsAt: week.resetsAt, weekStart: week.weekStart, timeZone: week.timeZone, enforced, own: !!own };
     if (!out.ok) {
       const day = resetsDay(week.resetsAt, week.timeZone);
-      const error =
-        out.reason === 'account'
-          ? `You’ve made ${userLimit} of ${userLimit} videos this week across your businesses. Resets ${day}.`
-          : `You’ve made ${out.used} of ${limit} videos this week. Resets ${day}.`;
-      reply(req, res, 402, { error, code: 'VIDEO_WEEK_LIMIT', used: out.used, limit, resetsAt: week.resetsAt, videoWeek: info, need: { feature: 'videos_per_week', tier: ent?.tier === 'launch' ? 'grow' : 'scale' }, upgrade: '#plans' });
+      const error = account ? `You’ve made ${out.used} of ${out.limit} videos this week across your businesses. Resets ${day}.` : `You’ve made ${out.used} of ${limit} videos this week. Resets ${day}.`;
+      reply(req, res, 402, { error, code: 'VIDEO_WEEK_LIMIT', used: info.used, limit: info.limit, ...(account ? { scope: 'account' } : {}), resetsAt: week.resetsAt, timeZone: week.timeZone, videoWeek: info, need: { feature: 'videos_per_week', tier: ent?.tier === 'launch' ? 'grow' : 'scale' }, upgrade: '#plans' });
       return null;
     }
     return { settle: (state, jobId = null) => videoWeek.settle(out.id, state, { jobId }), info };
@@ -869,7 +895,16 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
 
     if (p === '/api/ai/video/week' && m === 'GET') {
       if (!sameOrigin(req, allowedOrigin)) return reply(req, res, 403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
-      const zone = zoneOf(url.searchParams.get('timeZone'), url.searchParams.get('browserTimeZone'));
+      const projectId = (url.searchParams.get('projectId') ?? '').trim().slice(0, 100);
+      let zone = zoneOf(url.searchParams.get('timeZone'), url.searchParams.get('browserTimeZone'));
+      if (who?.id && UUID.test(who.id)) {
+        // the saved business's time zone, as the video start uses
+        try {
+          zone = (await videoWeek.business({ userId: who.id, projectId })).timeZone ?? zone;
+        } catch {
+          // the browser's
+        }
+      }
       const week = weekOf(Date.now(), zone);
       const base = { resetsAt: week.resetsAt, weekStart: week.weekStart, timeZone: week.timeZone };
       if (!who?.id || !UUID.test(who.id)) return reply(req, res, 200, { used: 0, limit: null, enforced: false, known: false, ...base });
@@ -879,9 +914,10 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       } catch {
         ent = null;
       }
-      const { enforced, limit } = videoLimitOf(req, who, ent);
-      const projectId = (url.searchParams.get('projectId') ?? '').trim().slice(0, 100);
+      const { enforced, limit, userLimit } = videoLimitOf(req, who, ent);
       const u = await videoWeek.usage({ userId: who.id, projectId, weekStart: week.weekStart });
+      // the account's week is used up before this business's: say so, as a start would be refused
+      if (userLimit != null && u.usedUser >= userLimit && (limit == null || u.used < limit)) return reply(req, res, 200, { used: u.usedUser, limit: userLimit, scope: 'account', enforced, known: u.known, ...base });
       return reply(req, res, 200, { used: u.used, limit, enforced, known: u.known, ...base });
     }
 

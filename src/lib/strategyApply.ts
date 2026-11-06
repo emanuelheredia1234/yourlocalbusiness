@@ -10,7 +10,9 @@ import { useStore } from '@/store/useStore';
 import { newSkill, parseDirectives } from '@/ai/brain';
 import { PLATFORMS } from '@/ai/knowledge';
 import { campaignProblem } from '@/ai/socialPlan';
-import { videoDaysOf } from '@/lib/campaign';
+import { capVideoDays, videoDaysOf } from '@/lib/campaign';
+import type { VideoAllowance } from '@/lib/videoWeek';
+import { currentVideoAllowance } from '@/store/videoWeek';
 import { LINK_PLACEMENTS, LINK_PLACEMENT_LABEL, placementFor } from './pageLink';
 import { claimFree, noLinks, POST_NETWORKS, POST_TYPE_IDS } from './strategyNormalize';
 import { CTA_LABEL, GOAL_LABEL, LEAD_MAGNET_LABEL, MIX_WORD, POST_TYPE_WORD, capStrategy, ownerFacts, readStrategy } from './strategy';
@@ -177,7 +179,7 @@ const same = <T,>(a: T, b: T) => JSON.stringify(a) === JSON.stringify(b);
  * Days, times, watermark, start date and posts per day stay. Refused (with why) when the result couldn't
  * make a plan (as Campaign setup checks).
  */
-export function campaignPatch(cur: CampaignConfig, rec: StrategyContent['campaign']): { ok: true; next: CampaignConfig; before: CampaignBefore; lines: string[] } | { ok: false; problem: string } {
+export function campaignPatch(cur: CampaignConfig, rec: StrategyContent['campaign'], allowance?: VideoAllowance | null): { ok: true; next: CampaignConfig; before: CampaignBefore; lines: string[] } | { ok: false; problem: string } {
   const platforms = rec.platforms.filter((x, i, a) => POST_NETWORKS.includes(x) && a.indexOf(x) === i);
   const mix = Object.fromEntries(POST_TYPE_IDS.map((t) => [t, Math.min(3, Math.max(0, Math.round(Number(rec.postMix?.[t]) || 0)))])) as Record<PostType, number>;
   const postTypes = POST_TYPE_IDS.some((t) => mix[t] > 0) ? mix : cur.postTypes;
@@ -186,7 +188,10 @@ export function campaignPatch(cur: CampaignConfig, rec: StrategyContent['campaig
   const curDays = videoDaysOf(cur);
   const wantDays = rec.videoShare === 'none' ? curDays.map(() => 0) : rec.videoShare === 'most' ? cur.days.map((on) => (on ? cur.postsPerDay : 0)) : curDays.some((n) => n > 0) ? curDays : cur.days.map((on) => (on ? 1 : 0));
   const { videosPerDay: _old, ...base } = cur;
-  const videoDays = videoDaysOf({ ...base, videoDays: wantDays });
+  // never more videos a week than the plan makes for a business (spread over the days)
+  const fitted = videoDaysOf({ ...base, videoDays: wantDays });
+  const videoDays = capVideoDays(fitted, allowance?.perWeek);
+  const capped = videoDays.some((n, i) => n !== fitted[i]);
   const weekly = (d: number[]) => d.reduce((a, b) => a + b, 0);
   const next: CampaignConfig = { ...base, goal: rec.goal, platforms: platforms.length ? platforms : cur.platforms, postTypes, videoDays, videoStyles: weekly(videoDays) > 0 && !cur.videoStyles.length ? ['ugc'] : cur.videoStyles };
   const problem = campaignProblem(next);
@@ -195,7 +200,7 @@ export function campaignPatch(cur: CampaignConfig, rec: StrategyContent['campaig
     `Goal: ${GOAL_LABEL[next.goal]}${next.goal !== cur.goal ? ` (was: ${GOAL_LABEL[cur.goal]})` : ''}`,
     `Networks: ${nets(next.platforms)}${!same(next.platforms, cur.platforms) ? ` (was: ${nets(cur.platforms)})` : ''}`,
     `Post mix: ${mixLine(next.postTypes)}${!same(next.postTypes, cur.postTypes) ? ` (was: ${mixLine(cur.postTypes)})` : ''}`,
-    `Videos: ${rec.videoShare} (${weekly(videoDays)} a week${!same(videoDays, curDays) ? `, was ${weekly(curDays)}` : ''})`,
+    `Videos: ${rec.videoShare} (${weekly(videoDays)} a week${!same(videoDays, curDays) ? `, was ${weekly(curDays)}` : ''}${capped && allowance ? `; ${allowance.planName} makes ${allowance.perWeek} a week for each business` : ''})`,
   ];
   return { ok: true, next, before: { goal: cur.goal, platforms: cur.platforms, postTypes: cur.postTypes, videoDays: curDays, videoStyles: cur.videoStyles }, lines };
 }
@@ -272,7 +277,7 @@ export function applyCampaign(pid: string): { ok: true } | { ok: false; problem:
   let out: { ok: true } | { ok: false; problem: string } = { ok: false, problem: 'There’s no campaign recommendation yet.' };
   writeBoth(pid, (p, s) => {
     if (!s.content) return null;
-    const r = campaignPatch(p.marketing.campaign, s.content.campaign);
+    const r = campaignPatch(p.marketing.campaign, s.content.campaign, currentVideoAllowance());
     if (!r.ok) {
       out = r;
       return null;

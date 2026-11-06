@@ -34,23 +34,21 @@ export function cadence(cfg: CampaignConfig) {
 }
 
 /**
- * What stops a plan from being made from this setup (the setup tab highlights it), or null. allowance: the plan's
- * AI videos a week for a business (src/lib/videoWeek.ts): more chosen videos stop the plan only while plans are on;
- * otherwise videoDaysWarning says so without stopping anything.
+ * What stops a plan from being made from this setup (the setup tab highlights it), or null. More chosen videos a week
+ * than the plan makes never stop it (videoDaysWarning says so): the server refuses each video past the week's limit,
+ * and older setups (one video on each posting day) would otherwise be stuck the day plans start.
  */
-export function campaignProblem(cfg: CampaignConfig, allowance?: VideoAllowance | null): string | null {
+export function campaignProblem(cfg: CampaignConfig): string | null {
   const c = cadence(cfg);
   if (c.days === 0) return 'Pick at least one posting day.';
   if (!cfg.platforms.length) return 'Pick at least one platform.';
   if (c.images > 0 && !cfg.imageStyles.length) return 'Choose at least one image style for the image posts.';
   if (c.videos > 0 && !cfg.videoStyles.length) return 'Choose at least one video style, or turn the video days off.';
-  if (allowance?.enforced) return videoDaysOverLimit(c.videos, allowance);
   return null;
 }
 
-/** More chosen videos a week than the plan makes, while plans aren't on yet: said, never stopping the plan. */
+/** More chosen videos a week than the plan makes for a business: said, never stopping the plan. */
 export function videoDaysWarning(cfg: CampaignConfig, allowance?: VideoAllowance | null): string | null {
-  if (!allowance || allowance.enforced) return null;
   return videoDaysOverLimit(cadence(cfg).videos, allowance);
 }
 

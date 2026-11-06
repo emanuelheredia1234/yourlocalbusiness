@@ -10,6 +10,7 @@ import { cadence, patchCampaign, setVideoDay } from '@/ai/socialPlan';
 import { videoDaysOverLimit } from '@/lib/videoWeek';
 import { useVideoAllowance } from '@/store/videoWeek';
 import { VideoWeekLine } from '@/components/billing/VideoWeekLine';
+import { navigate } from '@/lib/router';
 import { DateTimeButton, Segmented, SettingsRow, Toggle } from '@/components/ui/primitives';
 import { StackedBar } from '@/components/charts/Charts';
 import { PostVisual, orderStyles } from '@/components/visuals/PostVisual';
@@ -74,7 +75,8 @@ export function CampaignSetup({ project }: { project: Project }) {
   const needVideoStyle = c.videos > 0 && cfg.videoStyles.length === 0;
 
   const toggleIn = <T extends string>(list: T[], id: T): T[] => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
-  // plans: AI videos a week for a business; over it stops the plan while plans are on, else a warning
+  // plans: AI videos a week for a business; going over is a warning (the server refuses each video past the week's
+  // limit), with the upgrade link while plans are on
   const allowance = useVideoAllowance();
   const overLimit = videoDaysOverLimit(c.videos, allowance);
   const videoDaysText = c.videos === 0 ? 'No videos. Add one to a posting day to mix videos in.' : `${c.videos} video${c.videos === 1 ? '' : 's'} a week, on ${c.videoDayCount} day${c.videoDayCount === 1 ? '' : 's'}. The rest are image posts.`;
@@ -134,7 +136,16 @@ export function CampaignSetup({ project }: { project: Project }) {
             {c.perWeek} posts a week · {c.videos} videos · {c.images} images · ≈ {c.month} over 30 days
           </p>
           {c.days === 0 && <Warn>Pick at least one posting day.</Warn>}
-          {overLimit && <Warn>{overLimit}</Warn>}
+          {overLimit && (
+            <Warn>
+              {overLimit}
+              {allowance?.enforced && (
+                <button type="button" className="link text-caption" onClick={() => void navigate('plans', { force: true })}>
+                  See plans
+                </button>
+              )}
+            </Warn>
+          )}
           <VideoWeekLine projectId={project.id} className="w-full" />
         </div>
       </SetupSection>

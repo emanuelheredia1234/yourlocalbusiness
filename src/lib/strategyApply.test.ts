@@ -154,6 +154,21 @@ describe('campaign settings', () => {
     expect(old).toMatchObject({ next: { videoDays: cur.days.map((on) => (on ? 1 : 0)) } });
   });
 
+  it('holds the videos to the plan’s week (Launch: 3), spread over the days, and says so', () => {
+    const days = [true, true, true, true, true, false, false];
+    const launch = { perWeek: 3, enforced: true, planName: 'Launch' };
+    const most = campaignPatch({ ...cur, days }, { ...s.content!.campaign, videoShare: 'most' }, launch);
+    if (!most.ok) throw new Error(most.problem);
+    expect(most.next.videoDays).toEqual([1, 1, 1, 0, 0, 0, 0]);
+    expect(most.lines[3]).toBe('Videos: most (3 a week, was 0; Launch makes 3 a week for each business)');
+    // none chosen yet: one on each posting day, held to 3
+    expect(campaignPatch({ ...cur, days }, { ...s.content!.campaign, videoShare: 'some' }, launch)).toMatchObject({ next: { videoDays: [1, 1, 1, 0, 0, 0, 0] } });
+    // within the week: unchanged, no note; no limit: as before
+    const fits = campaignPatch({ ...cur, days, videoDays: [1, 0, 1, 0, 0, 0, 0] }, { ...s.content!.campaign, videoShare: 'some' }, launch);
+    expect(fits.ok && fits.lines[3]).toBe('Videos: some (2 a week)');
+    expect(campaignPatch({ ...cur, days }, { ...s.content!.campaign, videoShare: 'most' }, { perWeek: null, enforced: true, planName: 'Scale' })).toMatchObject({ next: { videoDays: [2, 2, 2, 2, 2, 0, 0] } });
+  });
+
   it('refuses settings that can’t make a plan', () => {
     const r = campaignPatch({ ...cur, days: [false, false, false, false, false, false, false] }, s.content!.campaign);
     expect(r).toEqual({ ok: false, problem: 'Pick at least one posting day.' });
