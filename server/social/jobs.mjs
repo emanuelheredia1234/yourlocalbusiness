@@ -146,12 +146,13 @@ export function createJobs({ db, now = () => Date.now() }) {
 
     /**
      * The outcome: sent | failed | unknown, from sending (or from unknown, when the network gave a definite
-     * answer later). A job already finished stays as it is.
+     * answer later). A job already finished stays as it is, except that `fromFailed` lets a definite "it posted"
+     * (Upload-Post's webhook after its own retry) correct a failure, so nobody posts it again.
      */
-    async finish(userId, jobId, { state, url, errorCode, ref }) {
+    async finish(userId, jobId, { state, url, errorCode, ref }, { fromFailed = false } = {}) {
       const cur = await byId(userId, jobId);
       if (!cur) return null;
-      if (!['queued', 'sending', 'unknown'].includes(cur.state)) return cur;
+      if (!['queued', 'sending', 'unknown', ...(fromFailed && state === 'sent' ? ['failed'] : [])].includes(cur.state)) return cur;
       const patch = {
         state,
         finished_at: iso(now()),

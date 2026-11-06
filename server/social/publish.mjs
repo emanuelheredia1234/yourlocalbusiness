@@ -287,19 +287,21 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
 
     /**
      * An upload_completed webhook's definite answer for one of this user's jobs (routed by the customer's profile
-     * name, then the request id, which is our job id). Only a job still `sending` or `unknown` on that platform changes.
+     * name, then the request id, which is our job id). Only a job still `sending` or `unknown` on that platform
+     * changes, or a `failed` one that Upload-Post then posted after all (its own retry): that one reads "Posted", so
+     * it isn't posted twice.
      */
     async fromWebhook(userId, jobId, outcome) {
       if (!isUuid(userId) || !isUuid(jobId) || !outcome || !['sent', 'failed'].includes(outcome.state)) return null;
       const row = await jobs.byId(userId, jobId);
-      if (!row || !['sending', 'unknown'].includes(row.state)) return null;
+      if (!row || !['sending', 'unknown', ...(outcome.state === 'sent' ? ['failed'] : [])].includes(row.state)) return null;
       if (outcome.platform && outcome.platform !== row.platform) return null;
       // a job this process is still posting finishes from its own answer; this one is kept in case that is unclear
       if (row.state === 'sending' && jobs.active.has(row.id)) {
         early.set(row.id, outcome);
         return null;
       }
-      return jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.drafts ? { outcome: 'drafts' } : undefined });
+      return jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.drafts ? { outcome: 'drafts' } : undefined }, { fromFailed: true });
     },
 
     /** Startup: jobs a restart left `sending` become `unknown`. */

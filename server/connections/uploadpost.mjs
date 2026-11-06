@@ -1212,7 +1212,9 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     if (type === 'upload_completed') {
       const id = safe(evt.result?.post_id) || safe(evt.result?.publish_id);
       const req = safe(evt.request_id);
-      if (req && safe(evt.platform)) return `uploadpost:${req}:${safe(evt.platform)}:${type}`;
+      // a success after a failure (Upload-Post retried it) is a new answer, never a repeat of the failure
+      const outcome = evt.result?.success === true ? `ok:${id}` : 'failed';
+      if (req && safe(evt.platform)) return `uploadpost:${req}:${safe(evt.platform)}:${type}:${outcome}`;
       if (id) return `uploadpost:post:${id}`;
     }
     if (type && safe(evt.profile_username) && safe(evt.platform) && safe(evt.created_at)) return `uploadpost:${type}:${evt.profile_username}:${evt.platform}:${evt.created_at}`;

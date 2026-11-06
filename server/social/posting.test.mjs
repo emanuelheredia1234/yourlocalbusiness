@@ -173,6 +173,23 @@ describe('unknown outcomes and Check again', () => {
     expect(await t.routes.posting.fromWebhook(alice.id, r.body.job.id, { state: 'failed', platform: 'x' })).toBeNull();
   });
 
+  it('a success webhook after a failure (Upload-Post retried it by itself) is a new answer, not a repeat: the job reads “Posted”, so it isn’t posted again', async () => {
+    const post = await t.post(alice, { platform: 'facebook', caption: 'Retried by Upload-Post' });
+    t.up.setUploadOutcome('platform_failed');
+    const r = await publishAndWait(alice, post);
+    expect((await jobOf(alice, r.body.job.id)).state).toBe('failed');
+    const profile = await t.profileOf(alice);
+    const ts = Math.floor(t.clock.t / 1000);
+    const failed = t.up.signed({ event: 'upload_completed', request_id: r.body.job.id, profile_username: profile, platform: 'facebook', result: { success: false, error: 'temporary' } }, { ts });
+    expect((await t.impl.webhook(failed.raw, failed.headers)).status).toBe(200);
+    const posted = t.up.signed({ event: 'upload_completed', request_id: r.body.job.id, profile_username: profile, platform: 'facebook', result: { success: true, url: 'https://facebook.com/joe/posts/11', post_id: '11' } }, { ts });
+    expect((await t.impl.webhook(posted.raw, posted.headers)).body.duplicate).toBeUndefined();
+    await t.impl.settled();
+    expect(await jobOf(alice, r.body.job.id)).toMatchObject({ state: 'sent', url: 'https://facebook.com/joe/posts/11' });
+    // a failure never overwrites a post that went out
+    expect(await t.routes.posting.fromWebhook(alice.id, r.body.job.id, { state: 'failed' })).toBeNull();
+  });
+
   it('an upload_completed that arrives while the post is still being sent finishes the job when the answer is unclear', async () => {
     const post = await t.post(alice, { platform: 'facebook', caption: 'Webhook before the answer' });
     let release;
