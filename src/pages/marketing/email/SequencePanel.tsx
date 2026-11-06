@@ -14,6 +14,9 @@ import { AutoTextarea, Empty, Field, MoreMenu, Section, Segmented, confirmAction
 import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
 import { EmailView, PanelHead, emailTokens } from './shared';
+import { useProjectOffers } from '@/store/offers';
+import { offerPrice } from '@/lib/offers';
+import { buyToken } from '@/lib/buyLinks';
 
 /** "Day 3" (or "Day 0 · 2h"): when an email goes out, counted from sign-up. */
 function dayMarker(emails: EmailStep[], i: number): string {
@@ -32,6 +35,15 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
   const patch = (id: string, p: Partial<EmailStep>) => updateMarketing({ emails: getActiveProject()!.marketing.emails.map((e) => (e.id === id ? { ...e, ...p } : e)) });
   const totalDays = emails.reduce((n, e) => n + delayToMs(e.delay), 0) / 86_400_000;
   const tokens = emailTokens(project);
+  // the business's offers, for "Use a buy link" (the button then opens the offer's permanent buy link)
+  const { on: offersOn, offers } = useProjectOffers(project.id);
+  const buyIdOf = (url: string) => /^\s*\{\{\s*buy:([A-Za-z0-9_-]{22})\s*\}\}\s*$/.exec(url)?.[1] ?? '';
+  const buyHint = (url: string) => {
+    const id = buyIdOf(url);
+    if (!id) return undefined;
+    const o = offers.find((x) => x.id === id);
+    return o ? `Opens the buy link of “${o.title}”${o.environment === 'sandbox' ? ' (Test mode)' : ''}.` : 'This buy link isn’t one of this business’s offers.';
+  };
   const magnet = project.marketing.leadMagnet;
 
   const generate = async () => {
@@ -166,8 +178,20 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
                             <Field label="Button label" htmlFor={`cta-${e.id}`}>
                               <input id={`cta-${e.id}`} className="input" value={e.ctaLabel} onChange={(ev) => patch(e.id, { ctaLabel: ev.target.value })} />
                             </Field>
-                            <Field label="Button link" htmlFor={`url-${e.id}`}>
+                            <Field label="Button link" htmlFor={`url-${e.id}`} hint={buyHint(e.ctaUrl)}>
                               <input id={`url-${e.id}`} className="input font-mono" value={e.ctaUrl} onChange={(ev) => patch(e.id, { ctaUrl: ev.target.value })} />
+                              {offersOn && offers.length > 0 && (
+                                <select aria-label="Use a buy link" className="select mt-2" value={buyIdOf(e.ctaUrl)} onChange={(ev) => ev.target.value && patch(e.id, { ctaUrl: buyToken(ev.target.value) })}>
+                                  <option value="">Use a buy link…</option>
+                                  {offers.map((o) => (
+                                    <option key={o.id} value={o.id}>
+                                      {o.title}
+                                      {offerPrice(o) ? ` · ${offerPrice(o)}` : ''}
+                                      {o.environment === 'sandbox' ? ' · Test mode' : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
                             </Field>
                           </div>
                         </div>

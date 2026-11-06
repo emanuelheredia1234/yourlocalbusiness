@@ -9,7 +9,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Callout, 
 import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
 import { serverBaseNow } from '@/lib/cloud/auth';
-import { EmailView, PanelHead, emailTokens, missingLinkFix } from './shared';
+import { EmailView, PanelHead, emailTokens, hasUnknownBuyLink, missingLinkFix } from './shared';
 
 const OMNISEND_CALLBACK_URL = 'https://yourlocalbusiness.replit.app/api/integrations/omnisend/callback';
 const OMNISEND_PUBLIC_APP_URL = 'https://yourlocalbusiness.replit.app';
@@ -331,6 +331,11 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
     const email = emails[index];
     if (!email) return;
     const draft = omnisendDraft(project, email, index, tokens);
+    // a buy link that isn't one of this business's offers would go nowhere (the server refuses it anyway)
+    if (hasUnknownBuyLink(draft.ctaUrl) || hasUnknownBuyLink(draft.body)) {
+      settle(emailId, { tone: 'bad', message: 'This buy link isn’t one of this business’s offers. Choose one of its offers for the button, or paste a web address.' });
+      return;
+    }
     // the draft is what the preview shows, so its button needs somewhere to go first
     if (draft.ctaLabel && !isWebAddress(draft.ctaUrl)) {
       settle(emailId, { tone: 'bad', message: `This email’s button has no web address yet. ${missingLinkFix(project, email.ctaUrl)}` });
