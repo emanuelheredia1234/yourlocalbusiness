@@ -722,6 +722,13 @@ Nothing is enforced until the owner turns plans on; until then the app behaves a
 10. Live (only with the owner's explicit OK): create a **restricted live key** (`rk_live_…`, permissions below), run
     the setup script with it and `--live`, add the live webhook endpoint and its secret, set up the live Portal, and
     swap the Secrets.
+11. **$1 live check** (with the owner's OK, before turning plans on in live): the app has no promotion codes, so a $1
+    charge is made in the Dashboard, not through `#plans`. Stripe → Customers → add a customer with the owner's own
+    email (not linked to any app account) → Invoice → one item, $1.00, charge automatically → pay it with the owner's
+    own card. Check: the payment shows as succeeded; Developers → Webhooks → the live endpoint shows the
+    `invoice.paid` delivery answered 200 (the app ignores it as not its customer, which proves the live signing secret
+    works); then refund the $1 (Payments → the payment → Refund). Only after that, one real Launch purchase on the
+    owner's own app account is optional: cancel it in the Portal and refund it in the Dashboard.
 
 ### Secrets
 
