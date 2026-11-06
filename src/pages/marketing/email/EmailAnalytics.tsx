@@ -91,7 +91,7 @@ export function EmailBody({ data, range, now }: { data: EmailData; range: number
           )}
           {typeof data?.downloads === 'number' && (
             <p className="mt-3 text-small text-ink-2">
-              Downloads <span className="num font-mono text-ink">{n(data.downloads)}</span>
+              Downloads (all time) <span className="num font-mono text-ink">{n(data.downloads)}</span>
             </p>
           )}
         </section>

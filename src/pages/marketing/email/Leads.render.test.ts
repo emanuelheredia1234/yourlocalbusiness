@@ -210,7 +210,7 @@ describe('Email', () => {
     expect(html).toMatch(/<button role="tab" aria-selected="true"[^>]*>.*Leads<span class="num font-mono text-caption text-muted">2<\/span><\/button>/);
     // the Email channel's badge sits in the sidebar's Marketing group now (it replaced the channel switcher)
     expect(renderToStaticMarkup(createElement(Sidebar))).toMatch(/>Email<\/span><span class="nav-count">2<span class="sr-only">, 2 new leads<\/span><\/span><\/button>/);
-    expect(html).toContain('Messages from your published page’s form show under Leads.');
+    expect(html).toContain('What people send with your published forms shows under Leads: your page, your assets and your lead magnet.');
     expect(html).toContain('aria-label="Delete the lead from Cy"');
     // seen: no count, and the funnel opens where it always did
     p.marketing.leadsSeenAt = Date.now();

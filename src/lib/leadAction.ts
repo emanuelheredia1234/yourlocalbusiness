@@ -5,8 +5,23 @@
 // nothing.
 
 import { escapeHtml } from './utils';
+import { LEAD_FILE_ID } from './leadFields';
 
 export const LEAD_ACTION = '{{lead-action}}';
+
+/**
+ * Where a widget's form names the lead magnet it hands out: its hidden magnet field's value. Publishing writes the
+ * business's current download id there (or nothing), so a widget made before the download, or a download published
+ * again with a new id, still offers the right one once the asset is published again. Left as it is (a copy, the
+ * preview) the server ignores it.
+ */
+export const LEAD_MAGNET = '{{lead-magnet}}';
+
+/** Every {{lead-magnet}} becomes the download's id (22 URL-safe characters), or '' when there's none. */
+export function resolveLeadMagnet(text: string, fileId: string | undefined): string {
+  if (!text.includes(LEAD_MAGNET)) return text;
+  return text.split(LEAD_MAGNET).join(fileId && LEAD_FILE_ID.test(fileId) ? fileId : '');
+}
 
 /** Whether a text has the token anywhere. */
 export const hasLeadAction = (text: string): boolean => text.includes(LEAD_ACTION);

@@ -208,6 +208,11 @@ export function leadOfProject(lead: Pick<Lead, 'projectId' | 'pageId'>, projectI
   return lead.projectId ? lead.projectId === projectId : lead.pageId === seoPageIdOf(projectId);
 }
 
+/** How many of these leads are this business's (any source: page, assets, lead magnet) since a time (ms). */
+export function leadsSince(leads: readonly Lead[], projectId: string, since: number): number {
+  return leads.filter((l) => leadOfProject(l, projectId) && leadTime(l) >= since).length;
+}
+
 /** What each kind is called on a lead. */
 export const LEAD_KIND_LABELS: Record<LeadKind, string> = {
   form: 'Page form',

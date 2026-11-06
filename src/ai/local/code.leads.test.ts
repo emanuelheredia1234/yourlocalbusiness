@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { newProject } from '@/store/defaults';
 import type { CodeKind, Project } from '@/lib/types';
-import { resolveLeadAction } from '@/lib/leadAction';
+import { resolveLeadAction, resolveLeadMagnet } from '@/lib/leadAction';
 import { generateCode, modifyCode } from './code';
 
 function product(): Project {
@@ -73,13 +73,18 @@ describe('every form widget', () => {
     expect(modifyCode(code, 'make it blue').applied).not.toContain('Email step hidden');
   });
 
-  it('a lead form hands out the published lead magnet', () => {
+  it('a lead form hands out the lead magnet the business has when it’s published, not when it was made', () => {
     const p = product();
-    p.marketing.leadMagnet = { id: 'lm', type: 'checklist', title: 'Tax checklist', subtitle: '', intro: '', sections: [], cta: '', optInHeadline: '', optInBullets: [], buttonLabel: '', createdAt: 0, delivery: { source: 'pdf', fileId: 'AbCdEfGhIjKlMnOpQrStUv', link: 'https://app.example/m/AbCdEfGhIjKlMnOpQrStUv', gate: true, publishedAt: 1 } };
+    p.marketing.leadMagnet = { id: 'lm', type: 'checklist', title: 'Tax checklist', subtitle: '', intro: '', sections: [], cta: '', optInHeadline: '', optInBullets: [], buttonLabel: '', createdAt: 0 };
+    // made before the download was published: the placeholder publishing fills in
     const code = generateCode(p, 'leadform', '');
-    expect(code.html).toContain('<input type="hidden" name="magnet" value="AbCdEfGhIjKlMnOpQrStUv" />');
+    expect(code.html).toContain('<input type="hidden" name="magnet" value="{{lead-magnet}}" />');
     expect(code.html).toContain('<input type="hidden" name="request" value="Tax checklist" maxlength="200" />');
-    expect(generateCode(product(), 'leadform', '').html).not.toContain('name="magnet"');
+    // published later (or again, with a new id): the current one; none: an empty value the server ignores
+    expect(resolveLeadMagnet(code.html, 'AbCdEfGhIjKlMnOpQrStUv')).toContain('<input type="hidden" name="magnet" value="AbCdEfGhIjKlMnOpQrStUv" />');
+    expect(resolveLeadMagnet(code.html, 'ZyXwVuTsRqPoNmLkJiHgFe')).toContain('value="ZyXwVuTsRqPoNmLkJiHgFe"');
+    expect(resolveLeadMagnet(code.html, undefined)).toContain('<input type="hidden" name="magnet" value="" />');
+    expect(resolveLeadMagnet(code.html, '"><script>')).toContain('<input type="hidden" name="magnet" value="" />');
   });
 });
 

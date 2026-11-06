@@ -5,7 +5,7 @@ import { fmtDate, fmtDateTime } from '@/lib/utils';
 import { PLATFORMS, POST_TYPE_MAP } from '@/ai/knowledge';
 import { countBy, postedSince, useKpis } from '@/lib/kpis';
 import { postedFromApp } from '@/lib/metrics';
-import { leadTime, seoPageIdOf } from '@/lib/leads';
+import { leadsSince } from '@/lib/leads';
 import { navigate } from '@/lib/router';
 import { useMediaQuery } from '@/lib/hooks';
 import { useActiveProject, useStore } from '@/store/useStore';
@@ -53,9 +53,8 @@ export default function Analytics() {
   const total = series.reduce((s, d) => s + d.y, 0);
   const activeDays = series.filter((d) => d.y > 0).length;
   const prevPosted = k.prev.reduce((s, d) => s + d.posted, 0);
-  const pageId = seoPageIdOf(project.id);
   // null until the app has looked (a moment after it opens, signed in, with a page published): no count is shown until then
-  const leads = recentLeads ? recentLeads.filter((l) => l.pageId === pageId && leadTime(l) >= since).length : null;
+  const leads = recentLeads ? leadsSince(recentLeads, project.id, since) : null;
   const span = `${days} days`;
   const wide = useMediaQuery('(min-width: 768px)');
   const rangeControl = started ? (
@@ -79,7 +78,7 @@ export default function Analytics() {
           {!wide && rangeControl && <span className="mr-2">{rangeControl}</span>}
           <span>Real counts only</span>
           <InfoTip title="What’s counted" label="What’s counted">
-            Posts that went out (posted from the app, or you marked them posted), posts on your calendar, new leads from your page’s form, and what you made with AI. Likes, views, clicks and followers live on each network, and sales on your own checkout: this app doesn’t read them, so it doesn’t show or guess them.
+            Posts that went out (posted from the app, or you marked them posted), posts on your calendar, new leads from your published forms (your page, your assets and your lead magnet), and what you made with AI. Likes, views, clicks and followers live on each network, and sales on your own checkout: this app doesn’t read them, so it doesn’t show or guess them.
           </InfoTip>
         </>
       }

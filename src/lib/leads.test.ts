@@ -3,7 +3,7 @@
 // the page id matches the one the page is published with, and the server's refusals read in plain words.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from './types';
-import { LeadsError, csvCell, deleteLead, leadDetails, leadEmail, leadOfProject, leadSourceLine, leadTime, leadToSubscriber, leadsCsv, listLeads, seoPageIdOf, toLead, type Lead } from './leads';
+import { LeadsError, csvCell, deleteLead, leadDetails, leadEmail, leadOfProject, leadSourceLine, leadTime, leadToSubscriber, leadsCsv, leadsSince, listLeads, seoPageIdOf, toLead, type Lead } from './leads';
 import { seoPageId } from './seoPage';
 
 const lead = (over: Partial<Lead> = {}): Lead => ({ id: 'l1', pageId: 'seo:p1', projectId: null, source: 'page', kind: 'form', consent: false, payload: {}, slug: 'maya-bakes', name: 'Ann Lee', email: 'Ann.Lee@Example.com', phone: '', message: 'Hi', time: '', createdAt: '2026-11-03T10:00:00.123456+00:00', ...over });
@@ -112,6 +112,21 @@ describe('P2 fields', () => {
     // a source or kind can't be answered that way: the error stands
     first = true;
     await expect(listLeads({ projectId: 'p1', source: 'asset' })).rejects.toMatchObject({ code: 'LEADS_MIGRATION' });
+  });
+});
+
+describe('the Analytics page’s count', () => {
+  it('counts every source of this business’s leads in the range, not only the SEO page’s', () => {
+    const since = Date.parse('2026-11-01T00:00:00Z');
+    const leads = [
+      lead({ id: 'a' }),
+      lead({ id: 'b', pageId: 'artifact:quiz1', projectId: 'p1', source: 'asset', kind: 'quiz' }),
+      lead({ id: 'c', pageId: 'magnet:AbCdEfGhIjKlMnOpQrStUv', projectId: 'p1', source: 'magnet', kind: 'magnet', slug: '' }),
+      lead({ id: 'd', pageId: 'artifact:x', projectId: 'p2', source: 'asset' }),
+      lead({ id: 'e', pageId: 'artifact:quiz1', projectId: 'p1', source: 'asset', createdAt: '2026-10-01T00:00:00Z' }),
+    ];
+    expect(leadsSince(leads, 'p1', since)).toBe(3);
+    expect(leadsSince(leads, 'p2', since)).toBe(1);
   });
 });
 

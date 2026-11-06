@@ -143,7 +143,8 @@ describe('ok', () => {
     setSnaps([snap('email', { ...EMAIL, leadsBySource: { page: 3, asset: 2, magnet: 2 }, downloads: 12 })]);
     const html = panels.email();
     expect(html).toContain('Pages 3 · Assets 2 · Lead magnet 2');
-    expect(html).toMatch(/Downloads <span class="num font-mono text-ink">12<\/span>/);
+    // an all-time total beside a count for the chosen range: it says so
+    expect(html).toMatch(/Downloads \(all time\) <span class="num font-mono text-ink">12<\/span>/);
   });
 });
 

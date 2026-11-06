@@ -917,16 +917,19 @@ checklist request), a Manus or Viktor page's form, and the lead magnet's sign-up
 
 ### Owner steps
 
-1. Run `supabase/migrations/20261112000000_leads_p2.sql` in Supabase → SQL Editor (safe to run again). It needs
-   `20261103050000_page_leads.sql` first. Before it's run, page and asset forms still work (kept without their
-   business, source and result fields, so "This business" shows the SEO page's leads); the source filter names the
-   file, and lead magnet downloads answer "not found".
+1. Run `supabase/migrations/20261112000000_leads_p2.sql` in Supabase → SQL Editor (safe to run again) **before**
+   deploying the P2 code. It needs `20261103050000_page_leads.sql` first. If the code went out first, page and asset
+   forms still work (kept without their business, source and result fields, so "This business" shows the SEO page's
+   leads), the source filter names the file, and lead magnet downloads answer "not found". Assets published in that
+   time have no business on the server: once the file has run, publish them again, then run the file once more. It
+   marks their earlier leads as Assets and gives them the business their page now has.
 2. Optional: set `LEAD_LINK_SECRET` (16+ random characters) as a Secret. It signs the 15-minute download links a
    sign-up gets. Without it, a key derived from `SUPABASE_SECRET_KEY` is used; changing either only ends links that
    are still open. Start-up shows its last 4 characters, never more.
-3. Optional limits (defaults in brackets): `LEADS_PER_IP_PER_HOUR` (10) and `LEADS_PER_PAGE_PER_HOUR` (30) for every
-   form, the lead magnet's gate included; `MAGNET_HITS_PER_IP_PER_HOUR` (60) and
-   `MAGNET_DOWNLOADS_PER_FILE_PER_HOUR` (600) for `/m/<id>`.
+3. Optional limits (defaults in brackets): `LEADS_PER_IP_PER_HOUR` (10) for every form, the lead magnet's gate
+   included; `LEADS_PER_PAGE_PER_HOUR` (30) for page and asset forms; `MAGNET_SIGNUPS_PER_FILE_PER_HOUR` (300) for
+   the gate's sign-ups per download (its own count: a link in an email reaches many people at once);
+   `MAGNET_HITS_PER_IP_PER_HOUR` (60) and `MAGNET_DOWNLOADS_PER_FILE_PER_HOUR` (600) for `/m/<id>`.
 4. Republish pages and assets made before P2 if their forms should send: publishing is what turns `{{lead-action}}`
    into the page's `/<name>/lead`. Existing assets aren't rewritten.
 
@@ -954,11 +957,22 @@ checklist request), a Manus or Viktor page's form, and the lead magnet's sign-up
 In **Email › Lead magnet › Delivery** the customer publishes the download once: a PDF made from the guide (the app's
 ebook builder, in the brand's colours with the listing cover), an uploaded file (PDF, EPUB, ZIP, Word, Excel,
 PowerPoint, PNG, JPEG, WebP, MP3 or MP4, up to 25 MB; never SVG or HTML) or a link to a page. "Ask for an email before
-the download" is on by default. The link is `https://<app>/m/<id>` (or `https://<their domain>/m/<id>` once the SEO
-page has a verified domain) and never changes: **Update download** replaces the file behind it, **Unpublish** ends it.
-Emails' `{{lead_magnet_link}}` is that link, and `{{product_link}}` is the page posts link to; until they exist the
-preview shows a placeholder and Omnisend drafts are refused. A lead form or SEO page form that sends the magnet's id
-answers with a direct download for 15 minutes. Downloads stop 30 days after the plan ends.
+the download" is on by default. The link is `https://<app>/m/<id>` and never changes: **Update download** replaces the
+file behind it, **Unpublish** ends it. It also answers on the owner's verified domains (`https://<domain>/m/<id>`),
+but the app always shows and emails the app's address, which keeps working whatever happens to a domain. Emails'
+`{{lead_magnet_link}}` is that link, and `{{product_link}}` is the page posts link to; until they exist the preview
+says what to add (for the lead magnet's link: publish the download) and Omnisend drafts are refused.
+
+A link download (to a page of the owner's) redirects only on the owner's verified domain. On the app's address,
+`/m/<id>` shows a page that names the other site with a "Continue to <site>" link, so the app's address can't be
+used to bounce people somewhere else.
+
+A lead form or SEO page form that sends the magnet's id needs an email (as the gate does) and answers with a direct
+download for 15 minutes. Forms carry the download's id from when they were **published**: the SEO page picks it up
+when it's published (it shows as a change to publish), and a lead-form widget writes `{{lead-magnet}}`, which
+publishing fills in. So after publishing a download for the first time, or after **Unpublish** and publishing again
+(a new id), publish the SEO page and any lead-form assets again so their forms offer it; the app says so. Downloads
+stop 30 days after the plan ends.
 
 Deleting an account deletes its leads and downloads (the rows cascade) and empties its folders in the `media`,
 `lead-files` and `public-files` buckets.

@@ -8,7 +8,7 @@ import type { PromptImage, Published } from './types';
 import { serverFetch } from '@/ai/claude';
 import { serverBaseNow, useAuth } from './cloud/auth';
 import { imageTokens, imagesForPublish, resolveImageTokens, type PublishImage } from './promptImages';
-import { leadActionFor, resolveLeadAction } from './leadAction';
+import { leadActionFor, resolveLeadAction, resolveLeadMagnet } from './leadAction';
 
 export type PageKind = 'seo' | 'artifact';
 
@@ -217,13 +217,13 @@ export function publishedImagePaths(slug: string, images: Pick<PublishImage, 'na
 
 /**
  * A page's build, ready to send: the images it uses (redrawn for the web), its HTML with each image token
- * turned into that image's address and each {{lead-action}} into /<slug>/lead (so its forms send to Email →
- * Leads), and its fingerprint.
+ * turned into that image's address, each {{lead-action}} into /<slug>/lead (so its forms send to Email →
+ * Leads) and each {{lead-magnet}} into magnet (the business's current download id, or nothing), and its fingerprint.
  */
-export async function preparePublish(build: PublishBuild, slug: string): Promise<{ html: string; images: PublishImage[]; hash: string }> {
+export async function preparePublish(build: PublishBuild, slug: string, magnet?: string): Promise<{ html: string; images: PublishImage[]; hash: string }> {
   const keys = imageTokens(build.html);
   const images = keys.length ? await imagesForPublish(build.images, keys) : [];
-  const html = resolveLeadAction(resolveImageTokens(build.html, publishedImagePaths(slug, images)), leadActionFor(slug));
+  const html = resolveLeadMagnet(resolveLeadAction(resolveImageTokens(build.html, publishedImagePaths(slug, images)), leadActionFor(slug)), magnet);
   return { html, images, hash: buildHash(build.html, build.images) };
 }
 

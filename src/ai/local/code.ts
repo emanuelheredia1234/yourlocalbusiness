@@ -1,8 +1,8 @@
 import type { BrandColors, CodeKind, Directives, Project, PromptImage, ServicePackage } from '@/lib/types';
 import { escapeHtml, hashStr, readableOn, todayStr, toDateStr, lighten, darken, listJoin, truncate } from '@/lib/utils';
 import { imageKeyNumber, imageTokens, resolveImageTokens } from '@/lib/promptImages';
-import { LEAD_ACTION, previewLeadAction, resolveLeadAction } from '@/lib/leadAction';
-import { HONEYPOT, LEAD_FIELDS, LEAD_FILE_ID, LEAD_PAYLOAD_MAX, fitField } from '@/lib/leadFields';
+import { LEAD_ACTION, LEAD_MAGNET, previewLeadAction, resolveLeadAction } from '@/lib/leadAction';
+import { HONEYPOT, LEAD_FIELDS, LEAD_PAYLOAD_MAX, fitField } from '@/lib/leadFields';
 import { consentLabel, receivesNote } from '@/lib/consent';
 import type { CalcKind } from '../knowledge';
 import { buildFacts, verbOutcome, Voice, type Facts } from '../text';
@@ -718,20 +718,13 @@ ${emailStepJs(w, f.brand, title, "put('inputs',lines(IN,function(el){return !el?
 
 // ───────────── other widgets ─────────────
 
-/** The project's published lead-magnet download's id, for a form that should hand it out after the sign-up. */
-const magnetId = (project: Project): string => {
-  const id = project.marketing.leadMagnet?.delivery?.fileId ?? '';
-  return LEAD_FILE_ID.test(id) ? id : '';
-};
-
-function leadFormCode(f: Facts, c: BrandColors, v: Voice, s: WidgetSettings, project: Project): CodeResult {
+function leadFormCode(f: Facts, c: BrandColors, v: Voice, s: WidgetSettings, _project: Project): CodeResult {
   const lm = f.leadMagnet || `The ${f.topic} Starter Checklist`;
   const bullets = [
     `${v.pick(['Skip', 'Avoid', 'Stop'])} ${f.mistakes[0]}`,
     `${f.quickWins[0].charAt(0).toUpperCase() + f.quickWins[0].slice(1)}`,
     `A simple plan to ${verbOutcome(f.outcomes[0])}`,
   ];
-  const magnet = magnetId(project);
   const html = `<div class="ylb">
   <div class="ylb-card optin">
     <div class="cover" aria-hidden="true"><span>FREE</span><b>${escapeHtml(lm)}</b><em>${escapeHtml(f.brand)}</em></div>
@@ -744,7 +737,7 @@ function leadFormCode(f: Facts, c: BrandColors, v: Voice, s: WidgetSettings, pro
 ${bullets.map((b) => `        <li>${escapeHtml(b)}</li>`).join('\n')}
       </ul>
       ${formOpen(s, 'optin')}
-        ${hiddenFields({ kind: 'lead', request: lm, ...(magnet ? { magnet } : {}) })}${HONEYPOT_HTML}
+        ${hiddenFields({ kind: 'lead', request: lm, magnet: LEAD_MAGNET })}${HONEYPOT_HTML}
         ${leadInput('name', 'id="fname" placeholder="First name" autocomplete="given-name" aria-label="First name"')}
         ${leadInput('email', 'id="email" type="email" placeholder="you@email.com" autocomplete="email" aria-label="Email" required')}
         ${consentHtml(f.brand)}
