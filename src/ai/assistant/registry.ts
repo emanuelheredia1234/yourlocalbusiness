@@ -254,6 +254,10 @@ export type PubWindow =
   | { kind: 'publish'; page: 'asset'; assetId: string; name: string }
   /** "Build with Manus" or "Build with Viktor" for the SEO page or a Code & assets asset: the owner fills it in and sends it there */
   | { kind: 'agent-build'; target: 'asset' | 'seo'; agent: 'manus' | 'viktor' }
+  /** the Ads planner's launch window for a plan: the owner picks everything that spends and confirms the spend there */
+  | { kind: 'ad-launch'; planId: string }
+  /** a launched campaign's change window (pause, resume, budget…): the owner reviews and confirms there */
+  | { kind: 'ad-change'; campaignId: string; action: 'pause' | 'resume' | 'end' | 'budget' | 'end_date' | 'creative' }
   | { kind: 'page'; route: Route; tab?: string };
 
 /** Why an excluded tool isn't done by the assistant, and the page where the owner does it. */

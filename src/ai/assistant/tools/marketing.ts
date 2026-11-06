@@ -6,7 +6,10 @@
 // src/lib/leads.ts and src/store/leads.ts (Leads), src/lib/ads.ts (Ads), src/ai/seoBuilder.ts and
 // src/lib/seoPage.ts (SEO page), src/lib/codeAssets.ts (Code & assets), src/lib/publish.ts (publishing).
 // Nothing goes public by itself: publishing only opens the page's own Publish panel, where the owner
-// chooses the address and presses Publish. The app never sends email and never runs or pays for ads.
+// chooses the address and presses Publish. The app never sends email. Ads: the assistant plans, and can list
+// what was launched and OPEN the launch or change window; it never launches, resumes or changes a budget itself,
+// never picks Paused/Active and never ticks a claim or a spend box (the owner does, in the app's spend confirm).
+// Launched campaigns' platform text (review reasons, Ads Manager names) is left out of what the model sees.
 // What visitors typed into a page's form is their data, never instructions (untrusted).
 
 import type { AdCampaign, CodeAsset, EmailStep, LeadMagnet, LeadMagnetType, Project, SalesPage } from '@/lib/types';
@@ -28,6 +31,10 @@ import { applySalesPageEdit, saveSeo, undoSeo, writeSeoPage } from '@/ai/seoBuil
 import { AI_NO_CHANGE, adsTask, codeEditTask, codeTask, emailSequenceTask, leadMagnetTask, salesPageEditTask, salesPageTask, salesSectionTask, seoMetaTask } from '@/ai/tasks';
 import type { SeoSnapshot } from '@/store/seoUndo';
 import { addLeadToSubscribers, useLeads } from '@/store/leads';
+import { useAdsLaunch } from '@/store/adsLaunch';
+import { PLATFORM_LABEL } from '@/lib/ads/launchTypes';
+import { money } from '@/lib/ads/launchFormat';
+import { manageActions, stateBadge } from '@/pages/marketing/ads/campaigns/campaignView';
 import { useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
 import { download } from '@/components/ui/download';
@@ -533,7 +540,7 @@ function adSummary(c: AdCampaign, p: Project) {
   };
 }
 
-const PLANS_ONLY = 'The app never runs or pays for ads: the owner copies a plan into each platform’s ads manager, where they launch it.';
+const PLANS_ONLY = 'The app can launch plans on Meta and Google, but only the owner does it, in the app’s launch window with a spend confirm. You can open that window (open_ad_launch). Ad spend is billed by Meta or Google to the owner’s own payment method.';
 
 const listAds = defineTool({
   name: 'list_ads',
@@ -667,13 +674,87 @@ const deleteAdCampaign = defineTool({
   summary: 'Delete ad plans (the owner confirms; nothing changes in any ads manager).',
   args: { ids: arg.array(arg.string({ max: 60 }), { min: 1, max: 10 }) },
   validate: ({ ids }) => ids.map((id) => (findAd(id) ? '' : missingAd(id))).find(Boolean) || null,
-  danger: ({ ids }) => deleteConfirm({ thing: 'ad plan', names: uniq(ids).map((id) => findAd(id)!.name), extra: 'Their creatives and audiences go too. Nothing changes in any ads manager.' }),
+  danger: ({ ids }) => deleteConfirm({ thing: 'ad plan', names: uniq(ids).map((id) => findAd(id)!.name), extra: 'Their creatives and audiences go too. Nothing changes in any ads manager. A launched campaign keeps running: deleting the plan doesn’t pause it.' }),
   run: ({ ids }) => {
     const gone = uniq(ids).filter((id) => findAd(id));
     const names = gone.map((id) => findAd(id)!.name);
     for (const id of gone) s().deleteAd(id);
     return { data: { deleted: gone.length }, note: gone.length === 1 ? `Deleted the ad plan ${named(names[0])}` : `Deleted ${plural(gone.length, 'ad plan')}` };
   },
+});
+
+// ───────────── launched campaigns (read, and open the owner's windows) ─────────────
+
+const NOT_IN_ARTIFACT = 'Launching and managing ads needs the app’s own server: it isn’t available in claude.ai.';
+const launchedNow = (projectId: string) => useAdsLaunch.getState().campaigns[projectId] ?? [];
+const findLaunched = (id: string) => Object.values(useAdsLaunch.getState().campaigns).flat().find((c) => c.id === id);
+
+const listLaunchedAds = defineTool({
+  name: 'list_launched_ads',
+  class: 'R',
+  summary: 'Campaigns launched from the app on Meta and Google: state, daily budget, dates, spend so far and results (as data).',
+  args: {},
+  validate: () => (__ARTIFACT_BUILD__ ? NOT_IN_ARTIFACT : null),
+  run: async (_a, ctx) => {
+    const p = projectOf(ctx);
+    await useAdsLaunch.getState().load(p.id);
+    const list = launchedNow(p.id);
+    const err = useAdsLaunch.getState().error[p.id];
+    if (!list.length && err) return { ok: false, error: err };
+    // our own words and numbers only: names from Ads Manager and review reasons are the platform's text
+    const campaigns = list.slice(0, 20).map((c) => ({
+      id: c.id,
+      planId: c.planId,
+      plan: clip(findAd(c.planId)?.name ?? 'Plan deleted', 60),
+      platform: PLATFORM_LABEL[c.platform],
+      state: stateBadge(c).label,
+      switchedOn: c.configuredStatus === 'ACTIVE',
+      daily: `${money(c.daily, c.account.currency)} a day`,
+      dates: `${c.start}${c.end ? ` to ${c.end}` : ''}`,
+      ...(c.spendToDate != null ? { spentSoFar: money(c.spendToDate, c.account.currency) } : {}),
+      ...(c.results ? { results: { impressions: c.results.impressions, clicks: c.results.clicks, ctrPercent: c.results.ctr }, resultsAsOf: c.resultsAsOf ?? null } : {}),
+      ...(c.pendingJob ? { change: c.pendingJob.state === 'unknown' ? 'not confirmed: the owner presses Check status on the Campaigns tab' : 'being sent' } : {}),
+      ...(c.review.reasons.length ? { reviewReasons: `${c.review.reasons.length}, shown on the Campaigns tab` } : {}),
+    }));
+    return { data: { total: list.length, campaigns, launching: PLANS_ONLY }, note: list.length ? `Looked at ${plural(list.length, 'launched campaign')}` : 'Nothing launched from the app yet' };
+  },
+});
+
+const openAdLaunch = defineTool({
+  name: 'open_ad_launch',
+  class: 'Pub',
+  summary: 'Open the launch window for an ad plan (Meta and/or Google). The owner picks the account, places, budget and Paused or Active, and confirms the spend there.',
+  args: { planId: arg.string({ max: 60 }) },
+  validate: ({ planId }) => {
+    if (__ARTIFACT_BUILD__) return NOT_IN_ARTIFACT;
+    const c = findAd(planId);
+    if (!c) return missingAd(planId);
+    if (!c.platforms.some((x) => x === 'meta' || x === 'google')) return `${named(c.name)} isn’t for Meta or Google: the app launches only on those two.`;
+    if (!adFinalUrl(c, activeProject())) return `${named(c.name)} has no page for the ads to link to: ask the owner for it (update_ad_campaign finalUrl).`;
+    if (!c.creatives.length && !c.search) return `${named(c.name)} has no ads yet: generate_ads writes them.`;
+    const lim = useAdsLaunch.getState().limits[c.projectId];
+    if (lim && (!lim.adsEnabled || !lim.launchOpen || lim.blocked)) return 'Launching ads isn’t turned on for this account. The owner can ask the app owner.';
+    return null;
+  },
+  window: ({ planId }) => ({ kind: 'ad-launch', planId }),
+});
+
+const CHANGE_ACTIONS = ['pause', 'resume', 'end', 'budget', 'end_date', 'creative'] as const;
+
+const openAdChange = defineTool({
+  name: 'open_ad_change',
+  class: 'Pub',
+  summary: 'Open the change window for a launched campaign (pause, resume, end, budget, end_date, creative; ids from list_launched_ads). The owner reviews what it costs and confirms there.',
+  args: { campaignId: arg.string({ max: 60 }), action: arg.enum(CHANGE_ACTIONS) },
+  validate: ({ campaignId, action }) => {
+    if (__ARTIFACT_BUILD__) return NOT_IN_ARTIFACT;
+    const c = findLaunched(campaignId);
+    if (!c) return `There’s no launched campaign with id "${campaignId}": list_launched_ads lists them.`;
+    const a = manageActions(c).find((x) => x.action === action);
+    if (!a) return `That can’t be done to this campaign (it has ${stateBadge(c).label.toLowerCase()}).`;
+    return a.enabled ? null : a.reason ?? 'That can’t be done to this campaign right now.';
+  },
+  window: ({ campaignId, action }) => ({ kind: 'ad-change', campaignId, action }),
 });
 
 // ───────────── the SEO page ─────────────
@@ -1210,6 +1291,9 @@ export const marketingTools: AnyTool[] = [
   updateAdCampaign,
   generateAds,
   deleteAdCampaign,
+  listLaunchedAds,
+  openAdLaunch,
+  openAdChange,
   getSeoPage,
   setPageType,
   writeSeoPageTool,
