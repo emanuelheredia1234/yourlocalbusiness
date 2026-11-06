@@ -38,6 +38,10 @@ export interface PlansCatalog {
   pagesAfterCancelDays: number;
   dataAfterCancelDays: number;
   existingAccountTrial: { tier: Tier; days: number };
+  /** the card trial a first plan starts with (its length is the owner's setting; this is its allowance) */
+  cardTrial: { days: number; aiCredits: number; endingSoonDays: number };
+  /** setup's one-off AI allowance before any plan */
+  starter: { aiCredits: number };
 }
 
 export const PLANS = catalog as unknown as PlansCatalog;

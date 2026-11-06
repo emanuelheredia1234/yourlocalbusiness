@@ -41,6 +41,8 @@ describe('the 7-day card trial', () => {
     const u = await h.user('new@trial.test');
     const plan = await h.call(u, 'GET', '/api/billing/plan');
     expect(plan.body.trial).toEqual({ days: 7, eligible: true });
+    // what /api/config tells a visitor who isn't signed in yet
+    expect(await h.plans.refreshConfig()).toEqual({ enabled: true, enforce: true, trialDays: 7 });
     expect(plan.body.plan).toMatchObject({ plan: 'none', active: false, paused: 'plan', starter: true });
     const { sub, session } = await startTrial(u, { tier: 'scale', card: 'fp_card_new' });
     expect(session.subscription_data).toMatchObject({ trial_period_days: 7, trial_settings: { end_behavior: { missing_payment_method: 'cancel' } } });

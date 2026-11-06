@@ -18,8 +18,8 @@ import { StepBrand } from './StepBrand';
 import { finishOnboarding } from './finish';
 import { claimSlot, slotMessage, slotsNeeded, type SlotResult } from '@/lib/cloud/slots';
 import { newProjectId } from '@/store/defaults';
-import { PlanPickerScreen } from '@/pages/plans/Plans';
-import { useBilling } from '@/store/billing';
+import { LaunchPaywall, PlanPickerScreen } from '@/pages/plans/Plans';
+import { clearPlanIntent, useBilling, useBillingOn } from '@/store/billing';
 import { Callout } from '@/components/ui/primitives';
 
 /** The first project's creation, once (React may run the effect twice): its business slot is claimed first. */
@@ -136,6 +136,12 @@ export function Onboarding() {
   // a plan that just started (back from Stripe Checkout): try the first business again
   const planActive = useBilling((s) => s.plan?.active === true && s.plan.plan !== 'legacy');
   const canBuy = useBilling((s) => s.account?.source === 'stripe' && s.plan?.active === true);
+  // the paywall at Launch (P1c): plans on, signed in, and no plan yet (a new sign-up: setup was free)
+  const billingOn = useBillingOn();
+  const needsPlan = useBilling((s) => s.enforce && s.plan?.plan === 'none' && s.plan.active === false);
+  useEffect(() => {
+    if (billingOn && signedIn) void useBilling.getState().refresh();
+  }, [billingOn, signedIn]);
   useEffect(() => {
     if (project) return;
     let gone = false;
@@ -214,6 +220,7 @@ export function Onboarding() {
     finishOnboarding(project.id);
     navigate(dest);
   };
+  const paywall = step === 'done' && billingOn && signedIn && needsPlan;
 
   const name = project.brand.name.trim();
   const header: Record<StepId, { title: ReactNode; sub: string }> = {
@@ -238,7 +245,7 @@ export function Onboarding() {
     },
   };
 
-  const wide = step === 'brand' || step === 'research';
+  const wide = step === 'brand' || step === 'research' || paywall;
 
   return (
     <div className="flex h-full flex-col bg-surface">
@@ -325,6 +332,21 @@ export function Onboarding() {
             {step === 'setup' && <StepSetup project={project} />}
             {step === 'brand' && <StepBrand project={project} />}
             {step === 'done' && <Done project={project} />}
+            {paywall && (
+              <div className="mt-10 border-t border-line pt-8">
+                <LaunchPaywall
+                  // the business is finished (saved) before the browser leaves for Stripe; Checkout comes back to it
+                  before={() => {
+                    clearPlanIntent();
+                    finishOnboarding(project.id);
+                  }}
+                  onSkip={() => {
+                    clearPlanIntent();
+                    finish('dashboard');
+                  }}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -341,7 +363,11 @@ export function Onboarding() {
             </span>
           )}
           <span className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2 sm:flex-none">
-            {step === 'done' ? (
+            {paywall ? (
+              <button type="button" className="btn btn-secondary btn-lg max-sm:w-full" onClick={() => finish('dashboard')}>
+                Not now, look around first
+              </button>
+            ) : step === 'done' ? (
               <>
                 <button type="button" className="btn btn-secondary btn-lg max-sm:hidden" onClick={() => finish('dashboard')}>
                   Go to dashboard
@@ -360,7 +386,7 @@ export function Onboarding() {
           </span>
         </footer>
       )}
-      {step === 'done' && (
+      {step === 'done' && !paywall && (
         <div className="flex shrink-0 justify-center pb-3 sm:hidden" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))' }}>
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => finish('dashboard')}>
             Go to dashboard

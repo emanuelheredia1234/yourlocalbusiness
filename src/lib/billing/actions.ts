@@ -2,7 +2,7 @@
 // server once per user action (a clientRequestId the server turns into Stripe's Idempotency-Key); nothing here
 // retries a write. A "being confirmed" answer is read back later (getPlan / getBusinesses), never re-sent.
 
-import { changePlan, IntegrationApiError, newRequestId, openPortal, startCheckout } from '@/lib/integrations/api';
+import { changePlan, IntegrationApiError, newRequestId, openPortal, resumePlan, startCheckout } from '@/lib/integrations/api';
 import type { PlanInterval, PlanTier } from '@/lib/integrations/types';
 import { formatPrice, isTier, planFor, tierName, tierRank, type Interval, type Tier } from '@/lib/plans';
 import { navigate } from '@/lib/router';
@@ -159,4 +159,25 @@ export function upgradeTier(need: string | undefined, current: string | null | u
   if (isTier(need) && tierRank(need) > tierRank(current)) return need;
   const next = (['launch', 'grow', 'scale'] as Tier[]).find((t) => tierRank(t) > tierRank(current));
   return next ?? null;
+}
+
+/** The id of a "Keep my plan" that may have reached Stripe: the next press sends the same one (never a second write). */
+let unsureResume: string | null = null;
+
+/** "Keep my plan": undo a cancel at the period's end. One request per press; an unclear answer keeps its id. */
+export async function keepPlan(): Promise<boolean> {
+  const id = unsureResume ?? newRequestId();
+  try {
+    const out = await resumePlan(id);
+    unsureResume = null;
+    await useBilling.getState().refresh();
+    toast(out.op?.state === 'done' || out.ok ? { kind: 'success', title: 'You’re keeping your plan.' } : { kind: 'info', title: 'We’re confirming your change. This takes a minute.' });
+    return true;
+  } catch (e) {
+    const err = e instanceof IntegrationApiError ? e : null;
+    unsureResume = err && (err.code === 'BILLING_PENDING' || err.code === 'NETWORK') ? id : null;
+    toast({ kind: 'error', title: err?.message ?? 'Couldn’t keep your plan just now. Try again shortly.' });
+    void useBilling.getState().refresh();
+    return false;
+  }
 }

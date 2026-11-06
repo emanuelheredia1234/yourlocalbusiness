@@ -21,7 +21,7 @@ const { useBillingConfig } = await import('@/lib/billing/config');
 const { useBilling } = await import('@/store/billing');
 const { useStore } = await import('@/store/useStore');
 const { useSyncStatus } = await import('@/lib/cloud/sync');
-const { PlanCards, usePlanActions } = await import('./Plans');
+const { PlanCards, usePlanActions, LaunchPaywall } = await import('./Plans');
 const PlansPage = (await import('./Plans')).default;
 const { PlanSection, statusChip } = await import('@/pages/settings/PlanSection');
 const { UpgradePrompt } = await import('@/components/billing/UpgradePrompt');
@@ -64,7 +64,7 @@ function Cards({ interval }: { interval: 'month' | 'year' }) {
 }
 
 beforeEach(() => {
-  useBillingConfig.setState({ enabled: true, enforce: true });
+  useBillingConfig.setState({ enabled: true, enforce: true, trialDays: 0 });
   useAuth.setState({ phase: 'ready' });
   useBilling.getState().reset();
   useSyncStatus.getState().set({ held: [] });
@@ -229,5 +229,76 @@ describe('the plan banner', () => {
     expect(html(createElement(PlanBanner))).toContain('Your plan has ended.');
     useBilling.setState({ plan: ENT() as never });
     expect(html(createElement(PlanBanner))).toBe('');
+  });
+});
+
+describe('the 7-day card trial and the paywall after setup (P1c)', () => {
+  const NONE = (over: Record<string, unknown> = {}) => ENT({ plan: 'none', tier: 'none', active: false, paused: 'plan', banner: null, starter: true, creditsPerMonth: 200, creditWindow: { start: '2020-01-01T00:00:00.000Z', resetsAt: null }, ...over });
+
+  it('#plans for a visitor: “Start 7-day free trial” with what happens on day 8, and the trial in the FAQ', () => {
+    useAuth.setState({ phase: 'signed-out' });
+    useBillingConfig.setState({ trialDays: 7 });
+    const out = html(createElement(PlansPage));
+    expect(out).toContain('Start 7-day free trial');
+    expect(out).toContain('Free for 7 days, then $197/month. Cancel any time before day 8 and you pay nothing.');
+    expect(out).toContain('Try any plan free for 7 days.');
+    expect(out).toContain('How does the free trial work?');
+    expect(out).not.toContain('Start with Grow');
+  });
+
+  it('signed in with no plan: the server’s offer wins (no trial once one was used)', () => {
+    useBillingConfig.setState({ trialDays: 7 });
+    useBilling.setState({ plan: NONE() as never, account: null, trial: { days: 7, eligible: true } });
+    expect(html(createElement(Cards, { interval: 'month' }))).toContain('Start 7-day free trial');
+    useBilling.setState({ trial: { days: 7, eligible: false } });
+    const out = html(createElement(Cards, { interval: 'month' }));
+    expect(out).toContain('Start with Grow');
+    expect(out).not.toContain('free trial');
+  });
+
+  it('the Launch step’s paywall: the trial, the cards, and “Not now, look around first”', () => {
+    useBillingConfig.setState({ trialDays: 7 });
+    useBilling.setState({ plan: NONE() as never, account: null, trial: { days: 7, eligible: true } });
+    const out = html(createElement(LaunchPaywall, { before: () => {}, onSkip: () => {} }));
+    for (const t of ['Start your 7-day free trial', 'Nothing is charged for 7 days', 'Start 7-day free trial', 'Not now, look around first', 'publishing, posting, ads, AI video and connecting accounts wait for a plan']) expect(out).toContain(t);
+  });
+
+  it('Settings › Plan during a trial: days left, the price from the day it ends, Cancel trial; no plan yet: Start your free trial', () => {
+    useBilling.setState({ plan: ENT({ trial: true, trialDaysLeft: 4, banner: 'trial', trialEndsAt: '2026-11-20T12:00:00Z', creditsPerMonth: 300 }) as never, account: ACCT({ status: 'trialing', trialing: true, trialEndsAt: '2026-11-20T12:00:00Z', currentPeriodEnd: '2026-11-20T12:00:00Z' }) as never, credits: { monthly: 300, usedCredits: 12, resetsAt: '2026-11-20T12:00:00Z' }, businesses: BIZ() as never });
+    let out = html(createElement(PlanSection));
+    for (const t of ['Free trial · 4 days left', '4 days left · $197/month from Nov 20', 'Cancel trial', 'during your trial']) expect(out).toContain(t);
+    useBillingConfig.setState({ trialDays: 7 });
+    useBilling.setState({ plan: NONE() as never, account: null, trial: { days: 7, eligible: true }, credits: { monthly: 200, usedCredits: 30, resetsAt: null }, businesses: BIZ({ limit: 1, used: 1, slots: [{ projectId: 'p1', state: 'active' }] }) as never });
+    out = html(createElement(PlanSection));
+    expect(out).toContain('Start 7-day free trial');
+    expect(out).toContain('to set up (once, before a plan)');
+    expect(out).not.toContain('Cancel plan');
+  });
+
+  it('cancelling: the chip says when, and Keep my plan replaces Cancel', () => {
+    useBilling.setState({ plan: ENT({ banner: 'cancel_at_period_end' }) as never, account: ACCT({ cancelAtPeriodEnd: true }) as never, businesses: BIZ() as never });
+    const out = html(createElement(PlanSection));
+    expect(out).toContain('Cancels Dec 1, 2026');
+    expect(out).toContain('Keep my plan');
+    expect(out).not.toContain('Cancel plan');
+  });
+
+  it('a locked action before any plan: “Start your free trial”', () => {
+    useBillingConfig.setState({ trialDays: 7 });
+    useBilling.setState({ plan: NONE() as never, account: null, trial: { days: 7, eligible: true }, upgrade: { code: 'PLAN_REQUIRED', message: 'This needs a plan. Choose one to keep going.' } as never });
+    const out = html(createElement(UpgradePrompt));
+    expect(out).toContain('Start your free trial');
+    expect(out).toContain('Start 7-day free trial');
+    expect(out).toContain('nothing is charged until day 8');
+  });
+
+  it('the banners: no plan yet, the trial with days left, ending in its last days', () => {
+    useBillingConfig.setState({ trialDays: 7 });
+    useBilling.setState({ plan: NONE() as never, account: null, trial: { days: 7, eligible: true } });
+    expect(html(createElement(PlanBanner))).toContain('You’re looking around for free.');
+    useBilling.setState({ plan: ENT({ banner: 'trial', trial: true, trialDaysLeft: 5, trialEndsAt: '2026-11-20T12:00:00Z' }) as never, account: ACCT({ status: 'trialing', trialEndsAt: '2026-11-20T12:00:00Z' }) as never });
+    expect(html(createElement(PlanBanner))).toContain('Free trial: 5 days left. Grow is $197/month from Nov 20 unless you cancel.');
+    useBilling.setState({ plan: ENT({ banner: 'trial_ending', trial: true, trialDaysLeft: 2, trialEndsAt: '2026-11-20T12:00:00Z' }) as never });
+    expect(html(createElement(PlanBanner))).toContain('Your free trial ends on Nov 20. Then Grow is $197/month. Cancel before then in Settings › Plan to pay nothing.');
   });
 });

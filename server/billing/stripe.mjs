@@ -1745,7 +1745,8 @@ export function createStripeBilling({
         lastSettingsAt = now();
         void settings().catch(() => {});
       }
-      return { enabled: configured(), enforce: lastSettings?.enforce === true };
+      // trialDays: what #plans offers a visitor who isn't signed in yet ("Start 7-day free trial"; 0 = no trial)
+      return { enabled: configured(), enforce: lastSettings?.enforce === true, trialDays: Number(lastSettings?.card_trial_days) || 0 };
     },
     async refreshConfig() {
       await settings().catch(() => null);

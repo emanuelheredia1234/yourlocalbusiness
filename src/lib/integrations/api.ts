@@ -13,6 +13,9 @@ import type {
   BillingOp,
   BillingOpResponse,
   BillingSettingsResponse,
+  CancelOffer,
+  CancelReason,
+  CancelSurveysResponse,
   BusinessesResponse,
   AnalyticsSource,
   ApiError,
@@ -167,6 +170,13 @@ export const getBusinesses = () => call<BusinessesResponse>('GET', '/api/billing
 export const changeBusinesses = (req: { action: 'add' | 'remove' | 'undo_remove'; clientRequestId: string; confirm: true; projectId?: string }) => call<BillingOpResponse>('POST', '/api/billing/businesses', req);
 export const setActiveBusinesses = (projectIds: string[]) => call<BusinessesResponse>('PUT', '/api/billing/businesses/active', { projectIds });
 export const changePlan = (req: { tier: PlanTier; interval: PlanInterval; clientRequestId: string; confirm: true }) => call<BillingOpResponse>('POST', '/api/billing/plan', req);
+/** The cancel survey, then cancel at the period's end (sent once per clientRequestId; a 202 is read back, never resent). */
+export const cancelPlan = (req: { reason: CancelReason; comment?: string; offer?: CancelOffer; clientRequestId: string; confirm: true }) => call<BillingOpResponse>('POST', '/api/billing/cancel', req);
+/** The survey of someone who took the alternative instead (nothing changes in Stripe). */
+export const keepPlanSurvey = (req: { reason: CancelReason; comment?: string; offer: CancelOffer; outcome: 'kept' | 'switched' }) => call<{ ok: true }>('POST', '/api/billing/cancel/survey', req);
+/** Keep the plan after all (undo cancel at period end). */
+export const resumePlan = (clientRequestId: string) => call<BillingOpResponse>('POST', '/api/billing/resume', { clientRequestId, confirm: true });
+export const getCancelSurveys = () => call<CancelSurveysResponse>('GET', '/api/billing/surveys');
 /** The owner only. */
 export const getBillingAccounts = (status?: string) => call<{ accounts: OwnerBillingAccount[] }>('GET', `/api/billing/accounts${q({ status })}`);
 export const putCompPlan = (customerTag: string, body: { tier: PlanTier | 'none'; extraBusinesses?: number; until?: string | null; note?: string }) => call<{ ok: true }>('PUT', `/api/billing/accounts/${seg(customerTag)}/comp`, body);

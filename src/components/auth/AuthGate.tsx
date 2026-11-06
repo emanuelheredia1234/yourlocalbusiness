@@ -34,7 +34,7 @@ import { LogoMark } from '@/components/brand/Logo';
 import demoPost from '@/assets/auth/demo-post.webp';
 import { navigate, useRoute } from '@/lib/router';
 import { planFor, priceLine } from '@/lib/plans';
-import { readPlanIntent, useBillingOn } from '@/store/billing';
+import { readPlanIntent, useBillingOn, useTrialDays } from '@/store/billing';
 
 // #plans is public: signed out, the gate shows it instead of the sign-in screen (never in the artifact build)
 const PlansPage = lazy(() => import('@/pages/plans/Plans'));
@@ -162,6 +162,7 @@ function SignInScreen() {
   const notice = useAuth((s) => s.notice);
   const config = useAuth((s) => s.config);
   const billing = useBillingOn();
+  const trialDays = useTrialDays();
   // a plan chosen on #plans: straight to creating the account
   const intent = billing ? readPlanIntent() : null;
   const [mode, setMode] = useState<Mode>(() => (intent ? 'signup' : 'signin'));
@@ -357,7 +358,7 @@ function SignInScreen() {
       )}
       {billing && mode === 'signup' && (
         <p className="mt-3 text-center text-small text-muted">
-          Start → your account → Stripe Checkout → back to the app.{' '}
+          {trialDays ? `Create your account, set up your business free, then start a ${trialDays}-day free trial.` : 'Start → your account → Stripe Checkout → back to the app.'}{' '}
           <button type="button" className="link" onClick={() => void navigate('plans', { force: true })}>
             See plans
           </button>

@@ -5,7 +5,7 @@
 // Nothing here in the artifact build, or while the server hasn't set up Stripe (isBillingUi).
 
 import { create } from 'zustand';
-import type { BusinessesResponse, Entitlement, PlanAccount, PlanCredits, PlanResponse } from '@/lib/integrations/types';
+import type { BusinessesResponse, Entitlement, PlanAccount, PlanCredits, PlanResponse, TrialOffer } from '@/lib/integrations/types';
 import { getBusinesses, getPlan, IntegrationApiError } from '@/lib/integrations/api';
 import { useBillingConfig } from '@/lib/billing/config';
 import { isBillingUi } from '@/lib/plans';
@@ -31,6 +31,8 @@ interface BillingState {
   account: PlanAccount | null;
   businesses: BusinessesResponse | null;
   credits: PlanCredits | null;
+  /** the card trial this person may start (null: not known yet, or an older server) */
+  trial: TrialOffer | null;
   loading: boolean;
   error: string | null;
   loadedAt: number;
@@ -52,7 +54,7 @@ interface BillingState {
   reset: () => void;
 }
 
-const EMPTY = { plan: null, account: null, businesses: null, credits: null, loading: false, error: null, loadedAt: 0 };
+const EMPTY = { plan: null, account: null, businesses: null, credits: null, trial: null, loading: false, error: null, loadedAt: 0 };
 
 export const useBilling = create<BillingState>((set, get) => ({
   enforce: useBillingConfig.getState().enforce,
@@ -73,6 +75,7 @@ export const useBilling = create<BillingState>((set, get) => ({
         plan: plan.plan,
         account: plan.account,
         credits: plan.credits,
+        trial: plan.trial ?? null,
         businesses: businesses ?? {
           limit: plan.businesses.limit,
           used: plan.businesses.used,
@@ -197,4 +200,20 @@ export function clearPlanIntent(): void {
   } catch {
     /* ignore */
   }
+}
+
+/** The trial a person is offered now: from their plan once read, else what the server offers new sign-ups. */
+export function trialOffered(state: Pick<BillingState, 'trial' | 'plan'>, config: { trialDays: number }): number {
+  if (state.trial) return state.trial.eligible ? state.trial.days : 0;
+  // not read yet (signed out, or loading): a new sign-up is offered the server's trial
+  if (!state.plan) return config.trialDays;
+  return 0;
+}
+
+/** React: the trial days to offer here (0: none). */
+export function useTrialDays(): number {
+  const trial = useBilling((s) => s.trial);
+  const plan = useBilling((s) => s.plan);
+  const days = useBillingConfig((c) => c.trialDays);
+  return trialOffered({ trial, plan }, { trialDays: days });
 }
