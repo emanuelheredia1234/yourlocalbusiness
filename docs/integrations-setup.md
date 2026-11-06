@@ -106,6 +106,9 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    Run it after `20261103050000_page_leads.sql`.
 7. `supabase/migrations/20261113000000_offers.sql` (P3, §12): offers, payment connections, sales and their refunds,
    buy link clicks. Run it after `20261105000000_integrations.sql`.
+8. `supabase/migrations/20261114000000_trial_paywall.sql` (P1c, §10 "Free trial, paywall and cancelling"): the first
+   business needs no plan, the 7-day card trial (`billing_trials`), the cancel survey (`cancel_surveys`) and the
+   cancel / resume / end-trial operations. Run it after `20261110000000_billing.sql`.
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices. Their ad accounts are disconnected at Zernio first (every account in their Zernio profile, then the
@@ -860,8 +863,10 @@ Prices are found by lookup key, never by id: `ylb_{launch,grow,scale,business}_{
 ### Customer Portal
 
 Stripe → Settings → Billing → Customer portal (or `--apply --portal`): payment methods on, invoice history on,
-cancel **at period end** on, **subscription updates (plan and quantity changes) off** (the app does those so each one is
-sent once and confirmed). Business information and links to the terms and privacy pages
+cancel **at period end** on with the **cancellation reason survey on** (every reason: too expensive, missing features,
+switched service, unused, too complex, low quality, customer service, other: the app reads the answer from the
+subscription's `cancellation_details` and counts it with its own survey), **subscription updates (plan and quantity
+changes) off** (the app does those so each one is sent once and confirmed). Business information and links to the terms and privacy pages
 (`https://yourlocalbusiness.replit.app/terms` and `https://yourlocalbusiness.replit.app/privacy`).
 
 ### Stripe Tax (optional)
@@ -884,7 +889,8 @@ key, the webhook secret, `APP_URL` and all 8 prices are in place, and says which
 
 - Every existing account with at least one business gets **30 days of Grow free** (`existing_trial_days`), with as many
   businesses as it has. Then they choose a plan; Checkout preselects their extra businesses.
-- New sign-ups choose a plan (optional card trial: `card_trial_days`, off by default).
+- New sign-ups set up their first business free, then meet the paywall at setup's Launch step (the 7-day card trial,
+  `card_trial_days`, 7 by default; see "Free trial, paywall and cancelling").
 - Every business already has a slot (the migration's backfill, and the trigger while plans were off).
 
 **Rollback**: turn plans off (the same switch). Everything is ungated again at once; nothing is deleted, and turning
@@ -1003,11 +1009,50 @@ them on again later doesn't restart the free days (they start at the first `enfo
   weekly videos, spread across the week, and the saved plan view fits each day's formats to the video days.
 - Before the migration is run, the counts live in the server's memory (they reset when it restarts).
 
+### Free trial, paywall and cancelling (P1c)
+
+Migration `supabase/migrations/20261114000000_trial_paywall.sql`. No new Secrets: the trial's email and card hashes
+are keyed with `CUSTOMER_TAG_SECRET`.
+
+- **Sign-up and setup are free.** With plans on, a new account makes its first business without a plan
+  (`claim_project_slot` lets someone with no business start one; any other business still needs a plan's slot) and
+  goes through setup: business, brand board, strategy, first drafts. Setup's AI runs on a one-off allowance
+  (`starter.aiCredits` in `shared/plans.json`, 200 credits ≈ $2, never renewed; own AI keys never count).
+- **Locked before a plan:** publishing pages and assets, posting, connecting accounts, analytics updates, launching
+  ads, AI video and every other paid action answer 402 `PLAN_REQUIRED`; the app shows **Start your free trial**.
+  Browsing and editing stay open. A plan that ended gets no allowance and no trial.
+- **The paywall** is setup's Launch step: the plan cards with **Start 7-day free trial** and "Not now, look around
+  first". `#plans`, the sign-up screen, Settings › Plan and the upgrade prompt say the same.
+- **The trial:** Stripe Checkout with `trial_period_days` (the owner's `card_trial_days`, 7 by default; 0 turns it
+  off in Customer usage › Plans), the card required (`payment_method_collection=always`) and the subscription
+  cancelled if the card is gone at the end. Nothing is charged until day 8. The trial gives the chosen tier's features
+  with its own AI allowance (`cardTrial.aiCredits`, 300 credits ≈ $3) for the whole trial. The app shows the days left,
+  and "ending soon" in the last `cardTrial.endingSoonDays` (3) days. **Turn on Stripe's trial-ending email**: Stripe →
+  Settings → Billing → Subscriptions and emails → "Send a reminder email 3 days before a free trial ends" (owner step).
+  If the card fails on day 8, the normal past-due grace applies.
+- **One trial per person:** never after a plan, a free plan or a trial on the account, nor for an email that had one
+  (HMAC of the address in `billing_trials`). Checkout can't check the card before it's typed in, so a trial whose card
+  fingerprint (HMAC) already had a trial on another account is **ended at once**: one `trial_end=now` write with
+  Idempotency-Key `ylb-trial-end-<subscription>`, recorded as a money operation so it is never resent (an unclear
+  answer is read back). The owner is alerted (`billing_alert_trial_duplicate`; `billing_alert_trial_end_failed` when
+  the card declines, and nothing more is tried).
+- **Cancel plan** (Settings › Plan): a short survey first: one required reason (too expensive, not using it enough,
+  missing a feature, results not good enough, switching to another tool, too hard to use, only needed it for a short
+  time, other) and an optional comment. The reason brings up one alternative (a cheaper plan, tips through Strategy or
+  own AI keys, "tell us the missing feature"), never blocking the cancel. Cancelling is
+  `POST /api/billing/cancel` → `cancel_at_period_end` with Stripe's `cancellation_details` (sent once per press,
+  Idempotency-Key `ylb-cancel-<user>-<id>`); a trial cancelled this way ends without a charge. **Keep my plan** undoes it
+  (`POST /api/billing/resume`). Taking the alternative saves the answer only (`POST /api/billing/cancel/survey`).
+- **What the owner sees:** Customer usage › Plans → **Why people cancel** (`GET /api/billing/surveys`): counts by
+  reason (cancelled and stayed), the latest comments (from the app and from the Portal), trials running and second
+  trials ended early. The accounts table shows when each trial ends.
+
 ### Cron jobs
 
 `billing-hourly` (pending removals and downgrades at period end, due locks, free trials ending, unknown operations
 read back, slots claimed for a business that was never saved freed after a day), `stripe-reconcile` (04:17 UTC: re-reads every subscription, adopts a completed Checkout whose webhook was
-missed; never writes to Stripe), `billing-retention` (04:47 UTC: counts accounts past 90 days; deletes nothing).
+missed; never writes to Stripe, except ending a second trial on an already-used card once, as an operation that is
+never resent), `billing-retention` (04:47 UTC: counts accounts past 90 days; deletes nothing).
 
 ### The database rule (check on a Supabase branch, with the owner's OK)
 
