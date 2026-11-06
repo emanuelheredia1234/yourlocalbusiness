@@ -60,6 +60,12 @@ describe('the sections', () => {
     expect(html).not.toContain('Search Console');
     expect(html).not.toMatch(/nango|treg|zernio/i);
   });
+  it('the Ad accounts card says launching and changing campaigns needs a confirmation each time (not “read only”)', () => {
+    const html = render();
+    expect(html).toContain('When launching is turned on, you can also launch and change campaigns from the app, and each change waits for your confirmation.');
+    expect(html).not.toContain('never changes your ads');
+  });
+
   it('no Other integrations section until the owner sets Nango up', () => {
     expect(render()).not.toContain('Other integrations');
   });

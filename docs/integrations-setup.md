@@ -631,8 +631,8 @@ One screen with two sections:
   and a slot still held by a business the server finds deleted shows **Free it** (with a confirm). The "How connecting works" tip says plainly that
   the sign-in page is run by Upload-Post, so its name shows there and on the network's permission screen.
 - **Ad accounts** (Zernio): Google Ads, Meta Ads, LinkedIn Ads, TikTok Ads, Pinterest Ads, Reddit Ads, Microsoft
-  Ads, and X Ads as "Coming soon". Read only: "The app only reads them and never changes your ads or spends
-  money."
+  Ads, and X Ads as "Coming soon". The card says: "See your ad results here. When launching is turned on, you can
+  also launch and change campaigns from the app, and each change waits for your confirmation."
 - **Gmail** (§3d): one mailbox for this account, for outreach later. **Connect** and **Disconnect**. Until
   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set, customers see that Gmail isn’t set up yet and the owner
   sees those secret names and the redirect URI. Nothing is sent from this screen.

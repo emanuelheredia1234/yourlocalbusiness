@@ -235,7 +235,7 @@ export function ConnectedAccounts() {
         {socialEnabled && slots && <BusinessSlots slots={slots} businessId={business?.id} businessName={name} projectIds={projectIds} />}
         {SOCIAL.map(row)}
       </SettingsSection>
-      <SettingsSection title="Ad accounts" description="See your own ad results. The app only reads them and never changes your ads or spends money.">
+      <SettingsSection title="Ad accounts" description="See your ad results here. When launching is turned on, you can also launch and change campaigns from the app, and each change waits for your confirmation.">
         {sideOff(adsOn, 'Connecting ad accounts')}
         {ADS.map(row)}
       </SettingsSection>
