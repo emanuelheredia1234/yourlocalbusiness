@@ -8,14 +8,14 @@ import { primaryProvider } from '../functions';
 import type { ConfirmCardSpec, DangerSpec } from './registry';
 
 /** The card before a video: who makes it and roughly what it costs (charged when it starts). */
-export function videoCard(o: { what: string; seconds: number; resolution?: VideoResolution; confirmLabel?: string }): ConfirmCardSpec {
+export function videoCard(o: { what: string; seconds: number; resolution?: VideoResolution; confirmLabel?: string; /** plans: "2 of 3 videos used this week · resets Monday" */ week?: string | null }): ConfirmCardSpec {
   if (videoTransport.server) {
     const p = primaryProvider('videos');
     return {
       title: `Make a ${o.seconds}-second video?`,
       what: o.what,
       who: p ? `${p.label}, with ${p.models.video ?? 'its video model'} at ${p.effort.video?.label ?? 'its default'} quality (set in Settings › AI keys). It takes a minute or more.` : 'The key that powers Videos in Settings › AI keys.',
-      cost: 'Billed to that key by the second; the estimate counts toward today’s AI limit as soon as it starts.',
+      cost: `Billed to that key by the second; the estimate counts toward today’s AI limit as soon as it starts.${o.week ? ` This business: ${o.week}.` : ''}`,
       confirmLabel: o.confirmLabel ?? 'Make the video',
     };
   }

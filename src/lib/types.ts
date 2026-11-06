@@ -609,7 +609,10 @@ export interface CampaignConfig {
   /** index 0 = Monday … 6 = Sunday */
   days: boolean[];
   postsPerDay: number;
-  videosPerDay: number;
+  /** AI videos on each weekday (index 0 = Monday): 0 to postsPerDay, only on posting days (read through videoDaysOf) */
+  videoDays: number[];
+  /** @deprecated setups saved before video days: one count for every posting day (videoDaysOf reads it; fillVideoDays drops it) */
+  videosPerDay?: number;
   watermark: boolean;
   imageStyles: ImageStyleId[];
   videoStyles: VideoStyleId[];

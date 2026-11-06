@@ -28,6 +28,8 @@ export function featuresOf(plan) {
   return {
     adsLaunch: p.adsLaunch === true,
     video: { maxHeight: p.video.maxHeight, maxSeconds: p.video.maxSeconds, label: p.video.label },
+    // AI videos each business may start a week (null = unlimited)
+    videosPerWeek: p.videosPerWeek ?? null,
     treg: p.treg ? { monthlyMicro: p.treg.monthlyMicro, dailyMicro: p.treg.dailyMicro } : null,
     leadEmailsPerMonth: p.leadEmailsPerMonth ?? null,
     publicListings: p.publicListings ?? null,

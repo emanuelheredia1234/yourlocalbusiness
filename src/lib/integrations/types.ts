@@ -437,6 +437,8 @@ export interface Entitlement {
   features: {
     adsLaunch: boolean;
     video: { maxHeight: number; maxSeconds: number; label?: string };
+    /** AI videos each business may start a week (null = unlimited; absent from older servers) */
+    videosPerWeek?: number | null;
     treg: { monthlyMicro: number; dailyMicro: number } | null;
     leadEmailsPerMonth: number | null;
     publicListings: number | null;

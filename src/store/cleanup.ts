@@ -17,6 +17,7 @@ import { purgeListingWebsite, purgePostWebsite, purgeWebsite } from './legacy/do
 import { purgeCodeAssets } from './legacy/widgets';
 import { purgeSkills } from './legacy/brain';
 import { fillTimeZones } from '@/lib/timeZone';
+import { fillVideoDays } from '@/lib/campaign';
 
 type Data = Pick<StoreState, 'posts' | 'projects' | 'notices' | 'settings' | 'activeProjectId' | 'myListings' | 'ads' | 'skills'>;
 
@@ -160,6 +161,8 @@ export function cleanWorkspace(): boolean {
   // businesses saved before each had a time zone get this browser's (saved like any edit, so it happens once)
   const projects = useStore.getState().projects;
   const zoned = fillTimeZones(projects);
-  if (zoned !== projects) useStore.setState({ projects: zoned });
-  return !!patch || zoned !== projects;
+  // campaign setups saved before video days: "videos per day" becomes that count on each posting day
+  const filled = fillVideoDays(zoned);
+  if (filled !== projects) useStore.setState({ projects: filled });
+  return !!patch || filled !== projects;
 }

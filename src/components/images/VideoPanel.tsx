@@ -16,6 +16,8 @@ import { AutoTextarea, Callout, InfoTip, Segmented, Toggle, Tooltip } from '@/co
 import { cn as mergeCn } from '@/components/ui/shadcn/utils';
 import { artDirectionLabel, useArtDirection, useImageJob } from './useImageJob';
 import { videoWithArtDirection } from '@/ai/socialPosts';
+import { useStore } from '@/store/useStore';
+import { VideoWeekLine } from '@/components/billing/VideoWeekLine';
 
 const ASPECTS: { id: VideoAspect; label: string; hint: string }[] = [
   { id: '9:16', label: 'Vertical', hint: '9:16 · Reels, TikTok, Stories' },
@@ -63,11 +65,15 @@ export interface VideoPanelProps {
   pendingKey?: string;
   /** whose Brain skills apply: social posts or the listing (studio) */
   purpose?: 'post' | 'listing';
+  /** the business the video counts for (plans: AI videos a week); the open one by default */
+  projectId?: string;
   className?: string;
 }
 
-export function VideoPanel({ title = 'AI video', prompt, onPromptChange, defaultAspect, startImage, media, onChange, name, pendingKey, purpose = 'post', className }: VideoPanelProps) {
+export function VideoPanel({ title = 'AI video', prompt, onPromptChange, defaultAspect, startImage, media, onChange, name, pendingKey, purpose = 'post', projectId: forProject, className }: VideoPanelProps) {
   const fid = useId();
+  const activeId = useStore((s) => s.activeProjectId);
+  const projectId = forProject ?? activeId ?? undefined;
   const zapier = useRuntime((s) => s.zapier);
   const ai = useRuntime((s) => s.ai);
   const avail = videoAvailability(zapier, ai);
@@ -99,7 +105,7 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
     return job.run(
       async (signal, onStage) => {
         const first = fromImage && startImage && !resume ? await getBlob(startImage.id) : null;
-        return videoWithArtDirection({ prompt: text, aspect, duration, resolution, firstFrame: first, name, purpose, signal, onStage, pendingKey, resume });
+        return videoWithArtDirection({ prompt: text, aspect, duration, resolution, firstFrame: first, name, purpose, projectId, signal, onStage, pendingKey, resume });
       },
       (r) => {
         const old = current.current;
@@ -209,6 +215,7 @@ export function VideoPanel({ title = 'AI video', prompt, onPromptChange, default
         {!server && <Segmented<VideoResolution> size="sm" value={resolution} onChange={setResolution} options={VIDEO_RESOLUTIONS.map((r) => ({ id: r.id, label: r.label }))} />}
       </div>
       {startImage && <Toggle checked={fromImage} onChange={setFromImage} label="Start from the cover photo" />}
+      {server && <VideoWeekLine projectId={projectId} />}
       <AIThinking running={job.running} stage={job.stage} onStop={job.stop} compact />
       {job.error && (
         <Callout tone="bad" title={job.error.title}>
