@@ -1,5 +1,6 @@
 import type { AppSettings, Brand, Origin, Project, Studio, Track } from '@/lib/types';
 import { uid } from '@/lib/utils';
+import { browserTimeZone } from '@/lib/timeZone';
 import { defaultCampaign } from '@/ai/local/social';
 import { paletteFrom } from '@/ai/local/brand';
 
@@ -59,6 +60,7 @@ export function newProject(track: Track = 'product', origin: Origin = 'new'): Pr
     format: null,
     businessType: '',
     location: null,
+    timeZone: browserTimeZone(),
     summary: '',
     ideas: [],
     idea: null,

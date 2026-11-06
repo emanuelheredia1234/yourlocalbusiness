@@ -1054,6 +1054,11 @@ export interface Project {
   format: ProductFormat | null;
   businessType: string;
   location: { city: string; region: string; lat?: number; lng?: number } | null;
+  /**
+   * The business's IANA time zone (e.g. "America/Chicago"): the browser's when it was made, changed in Settings ›
+   * Brand › Business details. Older projects get one when the workspace opens (src/lib/timeZone.ts fillTimeZones).
+   */
+  timeZone?: string;
   summary: string;
   ideas: ProductIdea[];
   idea: ProductIdea | null;

@@ -25,6 +25,8 @@ import { download } from '@/components/ui/download';
 import { AIProviders, ArtifactAI } from './AIProviders';
 import { DomainsCard } from './Domains';
 import { ConnectedAccounts } from './ConnectedAccounts';
+import { TimeZoneSelect } from './TimeZoneSelect';
+import { isValidTimeZone, projectTimeZone } from '@/lib/timeZone';
 import { UsageSection } from './UsageSection';
 
 type Tab = 'brand' | 'domains' | 'ai' | 'accounts' | 'projects' | 'prefs' | 'account';
@@ -218,6 +220,8 @@ function BrandSettings({ project }: { project: Project }) {
   const set = (patch: Partial<Brand>) => saveBrand(patch);
   const identitySaved = useSaved([brand.name, brand.websiteUrl, brand.tagline, brand.pitch, brand.valueProp, brand.audience, brand.mission, brand.personality, brand.slug]);
   const lookSaved = useSaved([brand.logo, brand.colors, brand.banner]);
+  const timeZone = project.timeZone || projectTimeZone(project);
+  const detailsSaved = useSaved([project.timeZone]);
 
   const refreshCopy = async () => {
     const r = await ai.run({});
@@ -282,6 +286,12 @@ function BrandSettings({ project }: { project: Project }) {
             {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
           </div>
         )}
+      </SettingsSection>
+
+      <SettingsSection title="Business details" description="Where and when this business works." actions={<Saved shown={detailsSaved} />}>
+        <SettingsRow label="Time zone" htmlFor="b-tz" description="The business’s local time, for anything the app does on a schedule. It starts as this device’s.">
+          <TimeZoneSelect id="b-tz" value={timeZone} onChange={(tz) => isValidTimeZone(tz) && useStore.getState().updateProject(project.id, (p) => ({ ...p, timeZone: tz }))} />
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection title="Logo, colours & banner" description="Upload your logo or design one from an icon, a shape and a font." actions={<Saved shown={lookSaved} />}>

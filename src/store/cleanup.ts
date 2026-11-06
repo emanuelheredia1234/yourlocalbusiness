@@ -16,6 +16,7 @@ import { purgeAdClaims, purgeClaims, purgeListingClaims } from './legacy/claims'
 import { purgeListingWebsite, purgePostWebsite, purgeWebsite } from './legacy/domain';
 import { purgeCodeAssets } from './legacy/widgets';
 import { purgeSkills } from './legacy/brain';
+import { fillTimeZones } from '@/lib/timeZone';
 
 type Data = Pick<StoreState, 'posts' | 'projects' | 'notices' | 'settings' | 'activeProjectId' | 'myListings' | 'ads' | 'skills'>;
 
@@ -155,7 +156,10 @@ export function purgeInventedData(s: Data): Partial<Data> | null {
 /** Clean the open workspace (when it opens, and after a backup import). */
 export function cleanWorkspace(): boolean {
   const patch = purgeInventedData(useStore.getState());
-  if (!patch) return false;
-  useStore.setState(patch);
-  return true;
+  if (patch) useStore.setState(patch);
+  // businesses saved before each had a time zone get this browser's (saved like any edit, so it happens once)
+  const projects = useStore.getState().projects;
+  const zoned = fillTimeZones(projects);
+  if (zoned !== projects) useStore.setState({ projects: zoned });
+  return !!patch || zoned !== projects;
 }
