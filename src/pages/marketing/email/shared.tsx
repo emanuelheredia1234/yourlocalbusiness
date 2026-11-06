@@ -5,6 +5,7 @@ import { pageLink } from '@/lib/pageLink';
 import { renderTokens } from '@/ai/local/email';
 import { useStore } from '@/store/useStore';
 import { BrandLogo } from '@/components/brand/Logo';
+import { buyLinksOf } from '@/store/offers';
 
 /** A panel's title row: the title and its line on the left, the actions on the right. Unlike Section's own row it
  *  wraps, so on a phone the actions go under the title instead of squeezing it into a column one word wide. */
@@ -38,8 +39,13 @@ export function emailTokens(p: Project, sub?: Pick<Subscriber, 'name' | 'email'>
     sender_name: profile.name || p.brand.name,
     sender_email: profile.email || 'your sending address',
     brand: p.brand.name,
+    // each of the business's offers: buy:<id> → its full buy link (an id that isn't one stays as typed)
+    ...buyLinksOf(p.id),
   };
 }
+
+/** Whether a text still has a buy link that isn't one of the business's offers (after its tokens were filled in). */
+export const hasUnknownBuyLink = (text: string): boolean => /\{\{\s*buy:/.test(text);
 
 // The email as a subscriber's inbox shows it: the business's content, so its colours are the email's own
 // (a white message in both themes), not the app's.

@@ -185,6 +185,20 @@ describe('the listing draft', () => {
     expect(studio().listing.coverImageId).toBeUndefined();
   });
 
+  it('update_listing_draft: an offer of the business as the buy link, never another id', async () => {
+    business();
+    const { useOffers } = await import('@/store/offers');
+    const p = useStore.getState().projects.find((x) => x.id === useStore.getState().activeProjectId)!;
+    const ID = 'AAAAAAAAAAAAAAAAAAAAAA';
+    useOffers.getState().put({ id: ID, projectId: p.id, title: 'Deep clean', priceDisplay: '$149', priceMinor: 14900, currency: 'usd', provider: 'whop', status: 'active', environment: 'production', checkoutHost: 'whop.com', clicks: 0, lastClickAt: null, sales: { count: 0, last: null }, createdAt: null, updatedAt: null, link: `https://app.test/b/${ID}` });
+    expect((await runTool('update_listing_draft', { offerId: 'BBBBBBBBBBBBBBBBBBBBBB' })).error).toMatch(/no offer with id/);
+    expect(await runTool('update_listing_draft', { offerId: ID })).toMatchObject({ ok: true });
+    expect(studio().listing.offerId).toBe(ID);
+    await runTool('update_listing_draft', { offerId: '' });
+    expect(studio().listing.offerId).toBeUndefined();
+    useOffers.getState().reset();
+  });
+
   it('update_listing_draft: refuses links, emails and phones that aren’t, unknown images and categories, and business fields on a product', async () => {
     business();
     useStore.getState().updateBrand({ images: [photo('i1')] });

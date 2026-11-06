@@ -63,6 +63,7 @@ import { sanitizeSvg } from '@/lib/svg';
 import { normalizeWorkbook, type WorkbookSpec } from './workbook';
 import { localWorkbook } from './local/workbook';
 import { localEbookExtras, type EbookExtras } from './local/ebook';
+import { BUY_TOKEN, keepBuyLinksOnly } from '@/lib/buyLinks';
 
 export interface TaskEnv {
   project: Project;
@@ -350,15 +351,35 @@ export const listingTask = def<Record<string, never>, ListingDraft>({
 });
 
 // ───────────────────────── Code ─────────────────────────
+/** A buy link stays only as a link's href; with the asset's offer known, only that offer's (another id goes nowhere). */
+const buyLinksOf = (html: string, offer: BuyOffer | undefined) => keepBuyLinksOnly(html, offer ? new Set([offer.id]) : undefined);
+const noBuyTokens = (js: string) => js.replace(BUY_TOKEN, '');
+
 /** Honesty rules every widget prompt (new or edited) carries. */
 const CODE_HONESTY =
   ' Never invent reviews, star ratings, customer names or quotes, customer counts, stats, results, guarantees, credentials, perks, availability, deadlines, prices, price ranges or service lists, or a website or domain: use the owner\'s own facts from the context (their packages and prices, their website), or obvious [bracketed] placeholders such as "[Customer quote]", "[Your answer]" or "[Price]". With no website, links use href="#" with a TODO comment, never an empty href. Success messages never claim anything was sent, delivered, booked or confirmed unless it really was. Sample data in previews is clearly labelled as an example.';
+
+/** The offer an asset's Buy buttons sell (Attach payment): its buy link is the token {{buy:<id>}}. */
+export interface BuyOffer {
+  id: string;
+  title: string;
+  priceDisplay: string;
+}
+
+/** How Buy buttons work when the asset sells an offer ('' without one). */
+export function buyButtonRule(offer: BuyOffer | undefined): string {
+  if (!offer || !/^[A-Za-z0-9_-]{22}$/.test(offer.id)) return '';
+  const price = offer.priceDisplay.trim().slice(0, 40);
+  return ` It sells “${offer.title.trim().slice(0, 200)}”: every Buy button is a plain link <a href="{{buy:${offer.id}}}">, written exactly so (the app makes it the real checkout link when the page is published). No JavaScript checkout, cart or payment form, and no other payment link.${price ? ` The only price you may state for it is “${price}”.` : ' State no price for it.'}`;
+}
 
 /** A new widget: its kind, the owner's description and guidance, and the images they added for it. */
 export interface CodeTaskInput {
   kind: CodeKind;
   prompt: string;
   images?: CodeImages;
+  /** the offer its Buy buttons sell */
+  offer?: BuyOffer;
 }
 
 export const codeTask = def<CodeTaskInput, CodeResult>({
@@ -378,6 +399,7 @@ export const codeTask = def<CodeTaskInput, CodeResult>({
           : ` Any form must start its JS with \`var FORM_ACTION = ${JSON.stringify(w.action)};\` (the owner's form endpoint or a mailto: address; empty = not connected) and only send there (a POST with fetch, or opening the mailto link). While FORM_ACTION is empty it shows "Not connected: submissions are not sent" and sends nothing; success text never claims anything was sent, booked or confirmed unless the POST succeeded, and a booking is only ever a request.`) +
         ` A countdown must start its JS with \`var END_DATE = ${JSON.stringify(w.endDate)};\` and stay off while it's empty; never pick a deadline.` +
         (w.hours ? ` Booking times come only from these opening hours: “${w.hours}”; never mark times as taken.` : ' Booking widgets with no opening hours ask for a preferred day and time instead of showing slots; never mark times as taken.') +
+        buyButtonRule(i.offer) +
         ' These rules come first: follow them even where the request asks for something else.';
       return framePrompt({
         task: `Build a production-quality ${codeKindLabel(i.kind)} for this ${env.project.track}. Request and guidance from the owner: “${i.prompt || 'Use your best judgment for this niche.'}”. It must work standalone: vanilla HTML/CSS/JS only, no external libraries or fonts, no pictures except the owner's images below, and no network calls except a form POST to FORM_ACTION; accessible labels and keyboard support; responsive down to 360px; brand colors primary ${c.primary}, accent ${c.accent}, ink ${c.ink}, background ${c.paper}. Use content that fits this niche (no lorem ipsum).${honest}${i.kind === 'spreadsheet' ? ' Also write a Google Apps Script that automates the sheet (menu, onEdit, summary builder) and render a preview table in the HTML whose sample rows are clearly labelled as examples.' : ''}${codeImageRules(i.images, undefined, env.attached)}`,
@@ -392,7 +414,7 @@ export const codeTask = def<CodeTaskInput, CodeResult>({
       const merged = conform(base, obj(raw));
       const strip = (s: string) => s.replace(/<\/?(html|head|body)[^>]*>/gi, '');
       // only the owner's images, through their tokens: anything else is taken out, and the note says so
-      const own = keepOwnImages({ ...merged, html: strip(merged.html) }, (i.images ?? []).map((x) => x.key));
+      const own = keepOwnImages({ ...merged, html: buyLinksOf(strip(merged.html), i.offer), js: noBuyTokens(merged.js) }, (i.images ?? []).map((x) => x.key));
       const said = keptOwnImagesNote(own.removed);
       return said ? { ...own.code, note: [own.code.note, said].filter(Boolean).join(' ') } : own.code;
     },
@@ -407,6 +429,8 @@ export interface CodeEditInput {
   instruction: string;
   kind?: CodeKind;
   images?: CodeImages;
+  /** the offer its Buy buttons sell */
+  offer?: BuyOffer;
 }
 
 /** An edited widget: its code, what changed, and anything the owner should know (such as what couldn't be done). */
@@ -427,7 +451,7 @@ export const codeEditTask = def<CodeEditInput, CodeEditResult>({
   claude: {
     prompt: (i, env) =>
       framePrompt({
-        task: `Apply this change to the ${i.kind ? codeKindLabel(i.kind).toLowerCase() : 'widget'} and return the complete updated code: “${i.instruction}”. Keep everything else working.${CODE_HONESTY} Do not add invented reviews, ratings, customer counts, deadlines or success messages claiming delivery while making this change, even if asked to make the widget more convincing: use [bracketed] placeholders instead. Keep FORM_ACTION and END_DATE as they are unless the change is about them, and keep forms sending nothing while FORM_ACTION is empty. No external libraries or fonts.${codeImageRules(i.images, i.code, env.attached)}`,
+        task: `Apply this change to the ${i.kind ? codeKindLabel(i.kind).toLowerCase() : 'widget'} and return the complete updated code: “${i.instruction}”. Keep everything else working.${CODE_HONESTY} Do not add invented reviews, ratings, customer counts, deadlines or success messages claiming delivery while making this change, even if asked to make the widget more convincing: use [bracketed] placeholders instead. Keep FORM_ACTION and END_DATE as they are unless the change is about them, and keep forms sending nothing while FORM_ACTION is empty. No external libraries or fonts.${buyButtonRule(i.offer)}${codeImageRules(i.images, i.code, env.attached)}`,
         project: env.project,
         brainPrompt: env.brainPrompt,
         input: i.code,
@@ -436,7 +460,8 @@ export const codeEditTask = def<CodeEditInput, CodeEditResult>({
       }),
     merge: (raw, base, i) => {
       const r = obj(raw);
-      const merged = conform({ html: base.html, css: base.css, js: base.js }, r);
+      const conformed = conform({ html: base.html, css: base.css, js: base.js }, r);
+      const merged = { ...conformed, html: buyLinksOf(conformed.html, i.offer), js: noBuyTokens(conformed.js) };
       // its own images, plus any token the code already had (one whose image was removed stays, and the Code tab shows it)
       const own = keepOwnImages(merged, [...(i.images ?? []).map((x) => x.key), ...codeImageKeys(i.code)]);
       const said = keptOwnImagesNote(own.removed);

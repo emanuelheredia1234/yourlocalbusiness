@@ -104,6 +104,8 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
 6. `supabase/migrations/20261112000000_leads_p2.sql` (P2, §11): tags every lead with its business, source and kind,
    adds the `lead_files` table and the `lead-files` (private) and `public-files` (public, images only) buckets.
    Run it after `20261103050000_page_leads.sql`.
+7. `supabase/migrations/20261113000000_offers.sql` (P3, §12): offers, payment connections, sales and their refunds,
+   buy link clicks. Run it after `20261105000000_integrations.sql`.
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices. Their ad accounts are disconnected at Zernio first (every account in their Zernio profile, then the
@@ -123,6 +125,8 @@ through **pg_net**, with `Authorization: Bearer <CRON_SECRET>`. Each tick runs t
 | `uploadpost-meter` | daily from 02:10 UTC | Last month's estimated Upload-Post profile rows per customer (once per month) |
 | `zernio-meter` | daily from 02:20 UTC | Last month's estimated Zernio rows per customer (once per month) |
 | `uploadpost-reconcile` | daily from 03:10 UTC | The Upload-Post daily check (§3): accounts against our records, the profile cap, cleanup |
+| `offers-webhooks` | daily from 04:17 UTC | Reads each Whop connection's webhook; a turned-off one shows a banner (§12) |
+| `offers-reconcile` | daily from 04:47 UTC | Reads the last 72 hours of Whop payments and records missed sales for the customer's offers (§12) |
 | `posting-sweep`, `analytics-sweep`, `ads-sweep` | hourly (each tick) | Posts, analytics runs and ad changes left "sending"/"running" by a restart become "unknown"/ended; nothing is re-sent |
 
 Each job runs **at most once per period**: the run is claimed first in `app_state` (one row per job), so a repeated
@@ -873,6 +877,33 @@ key, the webhook secret, `APP_URL` and all 8 prices are in place, and says which
 **Rollback**: turn plans off (the same switch). Everything is ungated again at once; nothing is deleted, and turning
 them on again later doesn't restart the free days (they start at the first `enforced_at`).
 
+### In the app: attaching payment and where buy links go
+
+- **Settings → Payments** (signed in, self-hosted only): a card for **Live** and one for **Test mode** (Whop's
+  sandbox). Connected, it shows the account, the key's last 4 characters, whether sales updates arrive ("Receiving
+  sales", "Not confirmed yet", "Whop turned off sales updates" with **Turn back on**), the last sale update, **Check
+  again**, **Replace key** and **Disconnect** (a second confirm pauses the buy links that use it). The key and the
+  webhook secret are password fields, emptied after every try, success or not.
+- **Attach payment** (one dialog everywhere): pick one of the business's offers, or make one: **Whop** (product, then
+  plan; the price comes from Whop; one request id per dialog, so a double press makes one link; "Whop didn't
+  confirm the link yet" offers **Check again**) or **your own link** (address, price text, title; the hint says
+  whether buyers go straight there or see the "you're leaving" page first). Signed out, with offers off on the
+  server, or in the claude.ai build, the old plain link field shows instead.
+- **Where it's used:** an asset's **Payment** row (Code & assets: the AI then writes its Buy buttons as plain
+  `<a href="{{buy:<id>}}">` links, with no checkout of its own and no price but the offer's), the SEO page's
+  payment under **Page type** (the checkout page shows the offer's price), the listing's **Buy link** (the published
+  listing carries `https://<app>/b/<id>` and "Secure checkout on whop.com"), and an email's button (**Use a buy
+  link**). Pages hold the token `{{buy:<id>}}`; publishing asks the server which offers are the business's and
+  writes `/b/<id>` (relative, so a page on the customer's own domain stays there); any other id becomes `#`. The
+  in-app preview shows `#buy-preview`; a copy or export gets the full address. Published pages stay sandboxed: a Buy
+  button is a plain link.
+- **Studio → Listing & publish → Offers:** each offer with who takes the payment, Test mode, its state, clicks, live
+  sales and where it's used; **Copy link**, **Refresh from Whop** (re-reads the plan's price), **Pause**/**Resume**
+  and **Archive** (its link then says it's no longer available).
+- **Analytics → Sales:** live sales, revenue per currency (gross, refunds under it) and buy link clicks for the
+  range; Test mode sales only as a note; the sales list (Live/Test, CSV). Refunded, Partly refunded and "Disputed:
+  see Whop" come from Whop's events; refunds and disputes are handled in Whop.
+
 ### Money rules (what the code guarantees)
 
 - One money operation in flight per user (`billing_ops`); each Stripe write is sent once with a fixed Idempotency-Key
@@ -1048,3 +1079,101 @@ stop 30 days after the plan ends.
 Deleting an account deletes its leads and downloads (the rows cascade) and empties its folders in the `media`,
 `lead-files` and `public-files` buckets.
 
+
+## 12. Payments: offers and Whop (P3)
+
+An **offer** is one thing a business sells, with one permanent buy link: `https://<app>/b/<id>`. Assets, the SEO
+checkout page, listings and emails hold the offer, never a provider's URL, so the checkout behind it can change
+without republishing anything. Two kinds now:
+
+- **Whop:** the customer connects their own Whop account and picks one of their products and plans. The app makes
+  one Whop checkout link for it (once, when the plan is attached) and `/b/<id>` sends buyers there. Sales come back
+  through that account's signed webhook and show in the app. There is no platform fee on Whop sales.
+- **Your own checkout link:** any checkout page the customer already has. Known checkout sites
+  (`shared/checkout-hosts.json`: Stripe Payment Links, Gumroad, Lemon Squeezy, PayPal, Square, Shopify, Etsy, Payhip,
+  Ko-fi, Buy Me a Coffee, Whop, Podia, Kajabi, Thinkific, Teachable, Calendly, Cal.com) get a direct redirect; any
+  other site gets a short "This checkout is on another website" page on the app's address (a redirect only on the
+  customer's own verified domain). The app can't see those sales, only the clicks.
+
+### Owner steps
+
+1. Run `supabase/migrations/20261113000000_offers.sql` in Supabase → SQL Editor (safe to run again). It needs the
+   earlier files (`ylb_touch_updated_at` from `20261102000000_accounts.sql`, `webhook_deliveries` from
+   `20261105000000_integrations.sql`). Until it has run, the offers routes answer "isn't set up" (admins see the
+   file's name) and `/b/` links answer "not found".
+2. Set `PAYMENT_KEYS_SECRET` (32+ random characters) **before anyone connects Whop**, and never change it. It seals
+   each customer's Whop key and webhook secret (AES-256-GCM, its own key, bound to the row). Without it, a key made
+   from `USER_KEYS_SECRET` (else `SUPABASE_SECRET_KEY`) is used; changing whichever one is used makes every saved
+   Whop key unreadable (customers then use "Replace key" and paste the webhook secret again).
+3. Set `APP_PUBLIC_URL` to the app's https address (for example `https://yourapp.replit.app`). Whop sends each
+   connection's events to `APP_PUBLIC_URL/api/webhooks/whop/<connection id>`, and buyers come back to
+   `APP_PUBLIC_URL/b/<id>/done`. Without it the request's own address is used, and on a local or http address the
+   webhook can't be made automatically (customers make it by hand, below).
+4. Optional: `OFFERS_PROVIDER=off` turns offers off (routes 503, `/b/` "not found"); `WHOP_ENABLED=off` keeps
+   offers with outside links only; `OFFER_CLICKS_PER_IP_PER_HOUR` (60) and `OFFER_CLICKS_PER_OFFER_PER_HOUR` (3000)
+   limit `/b/` per visitor and per offer.
+5. **Before Whop goes live (with the owner's OK only):** in the Whop **sandbox** (cards only, `4242 4242 4242 4242`)
+   connect a sandbox account key in Test mode, attach a plan, buy through `/b/<id>`, see the sale arrive, refund it
+   in Whop and see "Refunded". Also send Whop's test webhook (Developer → Webhooks → Send test) and check the server
+   log says `whop_webhook` (not `whop_webhook_bad_signature`). This confirms what Whop's docs leave open: how the
+   `ws_…` secret becomes the HMAC key (`whopHmacKey` in `server/payments/whopWebhook.mjs`, the only place to change),
+   the API version date, the refund and dispute payload shapes, and whether an account key may manage webhooks. No
+   build step calls production Whop.
+
+The owner needs no Whop account or Secret of their own: each customer brings their own key.
+
+### What a customer does (Settings → Payments)
+
+1. In Whop's dashboard (Developer → API keys), make an account API key with these permissions:
+   `access_pass:basic:read`, `plan:basic:read`, `checkout_configuration:create`,
+   `checkout_configuration:basic:read`, `payment:basic:read`, `member:email:read` (without it sales arrive without
+   the buyer's email), `webhook_receive:payments`, and optionally `developer:manage_webhook` (then the app makes the
+   webhook itself).
+2. Copy the account id (`biz_…`).
+3. Paste both in Live or Test mode. The app checks the key with reads first and names any missing permission.
+
+Without `developer:manage_webhook` the app shows the webhook URL and the events (`payment.succeeded`,
+`payment.failed`, `payment.pending`, `refund.created`, `refund.updated`, `dispute.created`, `dispute.updated`):
+make it in Whop's dashboard and paste its signing secret (`ws_…`). If Whop turns the webhook off (72 hours of
+failed deliveries), the daily check shows it and the customer turns it back on with one click; Whop doesn't resend
+what it missed, so the daily reconcile reads the last 72 hours of payments and records any it finds.
+
+### Money rules (what the code guarantees)
+
+- A buyer's click never calls Whop: `/b/<id>` redirects to the checkout link stored when the plan was attached,
+  re-checked on every click (https, exactly `whop.com` or `sandbox.whop.com` for the offer's environment, no user
+  name or port, the stored `ch_` id). Anything else is a "not available right now" page, never a redirect. The
+  query string is ignored.
+- Each Whop write is tried once with an `Idempotency-Key` and never sent again by itself. A timeout or 5xx is
+  "Whop didn't confirm the link yet": "Check again" sends the **same** request with the **same** key (Whop answers
+  the first result) within 24 hours; after that, make a new link.
+- A sale is recorded only from the signed webhook (raw body, 5-minute timestamp window, constant-time compare,
+  deduped on `webhook-id` in `webhook_deliveries`) and only when its metadata names one of that customer's Whop
+  offers on that account and checkout. The seller's other Whop sales are acknowledged and dropped. A sale never
+  moves backwards (`record_sale`), so repeated and out-of-order deliveries change nothing.
+- Refunds and disputes stay in Whop: the app shows their status and does nothing that moves money. Only a refund
+  that went through (`succeeded`) changes a sale; a pending one may still fail. Without the payment's own refunded
+  total, each refund is kept once by its id (`sale_refunds`) and the distinct ones are added up (two $10 refunds are
+  $20), never more than was paid. A refund whose payment comes without our metadata changes the sale already
+  recorded for that payment id.
+- An outside checkout link is https only. A Whop offer whose checkout link was made can't be deleted (its checkout
+  stays open at Whop): it's archived, and a sale through it is still recorded. A paused Whop offer sells again only
+  while its connection is connected (a reconnect is a new connection: attach another plan).
+- Whop's own error text is never shown or logged; keys, webhook secrets and buyers' emails never appear in a log.
+  The email is shown to the customer in their own sales list only.
+- Deleting an account stops its buy links on that server at once and makes one attempt at removing each webhook
+  the app made; the rows go with the account.
+
+### Cron jobs
+
+`offers-webhooks` (daily 04:17 UTC): reads each active connection's webhook (or key) not checked for 20 hours;
+`disabled` or `key_rejected` shows a banner in the app, nothing turns itself back on. `offers-reconcile` (daily
+04:47 UTC): reads the last 72 hours of payments per connection (5 pages at most) and records the ones for the
+customer's offers; 50 connections a run, never-reconciled ones first, then the least recently reconciled
+(`reconciled_at`), so every connection gets its turn. Both only read Whop.
+
+### Offline QA
+
+`node server/test/mock-whop.mjs 0 sandbox` prints a stand-in Whop API (keys, products and plans, checkout links with
+idempotency, webhooks, payments, and hooks to pay, refund, dispute and redeliver). Tests point the server at it with
+`whopBases`; no environment variable can point production traffic elsewhere.

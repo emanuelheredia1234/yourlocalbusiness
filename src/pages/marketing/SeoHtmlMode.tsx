@@ -25,6 +25,7 @@ import { AgentButtons } from '@/components/agents/AgentButtons';
 import { AgentBuildList } from '@/components/agents/AgentBuildList';
 import { DeviceSwitch, SEO_SANDBOX } from '@/components/agents/HtmlPreview';
 import { Checklist, MetaPanel, RailItem, ScoreSummary, SourcePanel, liveAddress, useSeoFile, type RailPanel } from './SeoSalesPage';
+import { resolveBuyTokens } from '@/lib/buyLinks';
 
 const AGENT_NAME = { manus: 'Manus', viktor: 'Viktor' } as const;
 const FRAME_WIDTH = { desktop: '', tablet: 'max-w-[770px]', mobile: 'max-w-[392px]' } as const;
@@ -105,7 +106,8 @@ export function SeoHtmlMode({ project, publishRef, rail, onRail }: { project: Pr
       alive = false;
     };
   }, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
-  const doc = useMemo(() => seoHtmlDocument(project, { canonical: meta.canonical, origin: '', leadAction: '', imageUrl: (k) => urls[k] ?? '' }), [project, meta.canonical, urls]);
+  // a preview never opens a checkout: buy links become #buy-preview
+  const doc = useMemo(() => resolveBuyTokens(seoHtmlDocument(project, { canonical: meta.canonical, origin: '', leadAction: '', imageUrl: (k) => urls[k] ?? '' }), { mode: 'preview' }), [project, meta.canonical, urls]);
 
   const formNote = !h.hasLeadForm
     ? null
@@ -135,6 +137,7 @@ export function SeoHtmlMode({ project, publishRef, rail, onRail }: { project: Pr
               <PublishPanel
                 pageId={seoPageId(project)}
                 kind="seo"
+                projectId={projectId}
                 title={meta.metaTitle || h.title}
                 defaultSlug={meta.slug}
                 published={published}

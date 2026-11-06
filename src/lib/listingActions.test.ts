@@ -31,4 +31,13 @@ describe('a listing’s actions', () => {
     expect(safePhone('12')).toBeNull();
     expect(listingActions({ ...base, buyUrl: 'javascript:alert(1)', contactEmail: 'nope' })).toEqual([]);
   });
+
+  it('an offer’s buy link says where buyers really pay', () => {
+    const link = 'https://app.example.com/b/AAAAAAAAAAAAAAAAAAAAAA';
+    const a = listingActions({ ...base, buyUrl: link, offer: { id: 'AAAAAAAAAAAAAAAAAAAAAA', provider: 'whop', checkoutHost: 'whop.com' } });
+    expect(a[0]).toMatchObject({ kind: 'buy', href: link, hint: 'Secure checkout on whop.com' });
+    expect(listingActions({ ...base, buyUrl: link, offer: { id: 'AAAAAAAAAAAAAAAAAAAAAA', provider: 'whop', checkoutHost: 'sandbox.whop.com', test: true } })[0].hint).toBe('Test checkout on sandbox.whop.com');
+    // a host that isn't one is never shown
+    expect(listingActions({ ...base, buyUrl: link, offer: { id: 'AAAAAAAAAAAAAAAAAAAAAA', provider: 'external', checkoutHost: '<b>x</b>' } })[0].hint).toBe('On app.example.com');
+  });
 });

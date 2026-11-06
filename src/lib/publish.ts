@@ -9,6 +9,7 @@ import { serverFetch } from '@/ai/claude';
 import { serverBaseNow, useAuth } from './cloud/auth';
 import { imageTokens, imagesForPublish, resolveImageTokens, type PublishImage } from './promptImages';
 import { leadActionFor, resolveLeadAction, resolveLeadMagnet } from './leadAction';
+import { hasBuyToken, resolveBuyTokens } from './buyLinks';
 
 export type PageKind = 'seo' | 'artifact';
 
@@ -220,10 +221,26 @@ export function publishedImagePaths(slug: string, images: Pick<PublishImage, 'na
  * turned into that image's address, each {{lead-action}} into /<slug>/lead (so its forms send to Email →
  * Leads) and each {{lead-magnet}} into magnet (the business's current download id, or nothing), and its fingerprint.
  */
-export async function preparePublish(build: PublishBuild, slug: string, magnet?: string): Promise<{ html: string; images: PublishImage[]; hash: string }> {
+/**
+ * The offers a page's {{buy:<id>}} links may use, asked of its business now (ask: that business's offer ids from the
+ * server). undefined when the page has no buy link. A page with buy links and no business, or a business whose
+ * offers can't be asked now, isn't published: its Buy buttons would go nowhere.
+ */
+export async function offersForPublish(html: string, projectId: string | undefined, ask: (projectId: string) => Promise<ReadonlySet<string>>): Promise<ReadonlySet<string> | undefined> {
+  if (!hasBuyToken(html)) return undefined;
+  if (!projectId) throw new PublishError('This page’s buy links don’t know which business they’re for. Publish it from its business.', 'OFFERS_UNAVAILABLE');
+  try {
+    return await ask(projectId);
+  } catch {
+    throw new PublishError('Couldn’t check this page’s buy links. Try again in a moment.', 'OFFERS_UNAVAILABLE');
+  }
+}
+
+export async function preparePublish(build: PublishBuild, slug: string, magnet?: string, offers: ReadonlySet<string> = new Set()): Promise<{ html: string; images: PublishImage[]; hash: string }> {
   const keys = imageTokens(build.html);
   const images = keys.length ? await imagesForPublish(build.images, keys) : [];
-  const html = resolveLeadMagnet(resolveLeadAction(resolveImageTokens(build.html, publishedImagePaths(slug, images)), leadActionFor(slug)), magnet);
+  // each {{buy:<id>}} of the business's offers becomes /b/<id> (relative: a page on the owner's domain stays there); any other goes nowhere
+  const html = resolveBuyTokens(resolveLeadMagnet(resolveLeadAction(resolveImageTokens(build.html, publishedImagePaths(slug, images)), leadActionFor(slug)), magnet), { mode: 'page', known: offers });
   return { html, images, hash: buildHash(build.html, build.images) };
 }
 

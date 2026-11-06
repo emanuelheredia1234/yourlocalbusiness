@@ -17,6 +17,7 @@ import { PlatformMark } from '@/components/posts/PlatformIcon';
 import { PostTypeTag } from '@/components/posts/PostCard';
 import { PostLink } from '@/components/posts/PostActions';
 import { PostVisual } from '@/components/visuals/PostVisual';
+import { SalesSection } from '@/components/offers/SalesSection';
 
 type Range = '7' | '30' | '90';
 type Metric = 'posted' | 'planned' | 'made';
@@ -78,7 +79,7 @@ export default function Analytics() {
           {!wide && rangeControl && <span className="mr-2">{rangeControl}</span>}
           <span>Real counts only</span>
           <InfoTip title="What’s counted" label="What’s counted">
-            Posts that went out (posted from the app, or you marked them posted), posts on your calendar, new leads from your published forms (your page, your assets and your lead magnet), and what you made with AI. Likes, views, clicks and followers live on each network, and sales on your own checkout: this app doesn’t read them, so it doesn’t show or guess them.
+            Posts that went out (posted from the app, or you marked them posted), posts on your calendar, new leads from your published forms (your page, your assets and your lead magnet), and what you made with AI. Likes, views, clicks and followers live on each network: this app doesn’t read them, so it doesn’t show or guess them. Sales made through your Whop buy links show here. Sales on your own checkout links happen on that site, so only their clicks show.
           </InfoTip>
         </>
       }
@@ -101,6 +102,7 @@ export default function Analytics() {
             </button>
           }
         />
+        {!__ARTIFACT_BUILD__ && <SalesSection projectId={project.id} brand={project.brand.name} days={days} />}
       </div>
     );
 
@@ -116,6 +118,8 @@ export default function Analytics() {
           { label: 'New leads', value: leads ?? '–', sub: !project.marketing.seoPublished ? 'Publish your page to collect them' : leads === null ? 'Not checked yet' : 'From your page’s form' },
         ]}
       />
+
+      {!__ARTIFACT_BUILD__ && <SalesSection projectId={project.id} brand={project.brand.name} days={days} />}
 
       <ChartCard
         className="mt-6"

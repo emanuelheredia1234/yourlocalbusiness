@@ -9,7 +9,9 @@ import { create } from 'zustand';
 import type { CodeAsset, CodeKind, Project, PromptImage, Published } from '@/lib/types';
 import { buildDocument, type CodeResult } from '@/ai/local/code';
 import { imageDataUrls, imageKeyNumber, imageTokens } from '@/lib/promptImages';
-import { buildHash, type PublishBuild } from '@/lib/publish';
+import { appOriginNow, buildHash, type PublishBuild } from '@/lib/publish';
+import { allKnownOfferIds, offerIdsForCopy } from '@/store/offers';
+import { hasBuyToken } from './buyLinks';
 import { hasLeadAction, LEAD_ACTION } from '@/lib/leadAction';
 import { listJoin, uid } from '@/lib/utils';
 import { useStore } from '@/store/useStore';
@@ -136,7 +138,9 @@ export function documentWithImages(a: CodeAsset, urls: Record<string, string>): 
   const missing = imageTokens(allCode(code)).filter((k) => !urls[k] && (a.images ?? []).some((i) => i.key === k));
   const published = a.published?.url && /^https?:\/\//.test(a.published.url) ? `${a.published.url.replace(/\/+$/, '')}/lead` : '';
   const forms = hasLeadAction(allCode(code));
-  const html = buildDocument(forms && !published ? { ...code, html: `${LEAD_TODO}${code.html}` } : code, a.name, { images: urls, ...(published ? { leadAction: published } : {}) });
+  // its Buy buttons: the offer's full buy link, so the copy works from anywhere
+  const buy = { mode: 'absolute' as const, origin: appOriginNow(), known: allKnownOfferIds() };
+  const html = buildDocument(forms && !published ? { ...code, html: `${LEAD_TODO}${code.html}` } : code, a.name, { images: urls, buy, ...(published ? { leadAction: published } : {}) });
   return { html, missing };
 }
 
@@ -158,7 +162,9 @@ export function readyDocument(a: CodeAsset, ready: Record<string, string> | null
 }
 
 /** documentWithImages, making the data URLs (or using ones already made for the preview). */
-export async function downloadDocument(a: CodeAsset, ready?: Record<string, string> | null): Promise<{ html: string; missing: string[] }> {
+export async function downloadDocument(a: CodeAsset, ready?: Record<string, string> | null, projectId?: string): Promise<{ html: string; missing: string[] }> {
+  // its Buy buttons: the business's offers asked of the server first, so none is left a dead # link
+  if (projectId && hasBuyToken(allCode(codeOf(a)))) await offerIdsForCopy(projectId);
   return readyDocument(a, ready) ?? documentWithImages(a, await imageDataUrls(shownImages(a)));
 }
 

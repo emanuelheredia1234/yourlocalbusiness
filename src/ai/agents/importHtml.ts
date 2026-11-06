@@ -23,6 +23,7 @@ export const LARGE_PAGE_BYTES = 300 * 1024;
 
 import { HONEYPOT, LEAD_EXTRA_NAMES, LEAD_FIELDS, LEAD_PAYLOAD_MAX } from '@/lib/leadFields';
 import { LEAD_ACTION } from '@/lib/leadAction';
+import { BUY_TOKEN, keepBuyLinksOnly } from '@/lib/buyLinks';
 
 /** The fields a published page's form may send (server/leads.mjs LEAD_MAX), with their limits. */
 export { LEAD_FIELDS, LEAD_PAYLOAD_MAX, LEAD_ACTION };
@@ -420,7 +421,12 @@ export function importAgentHtml(raw: string, o: { target: BuildTarget; imageKeys
   }
   js = safeScriptText(js);
 
-  // 10. only the owner's own images
+  // 10. a buy link ({{buy:<offer id>}}) stays only as a link's href: the app writes the real address when publishing
+  html = keepBuyLinksOnly(html);
+  css = css.replace(BUY_TOKEN, '');
+  js = js.replace(BUY_TOKEN, '');
+
+  // 10b. only the owner's own images
   const own = keepOwnImages({ html, css, js }, o.imageKeys);
   html = own.code.html;
   css = own.code.css;

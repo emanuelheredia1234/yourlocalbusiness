@@ -157,7 +157,8 @@ export function cleanFacts(list) {
     if (id === 'booking' || id === 'payment') {
       // a link is checked whole, never cut
       if (value.length > 200) continue;
-      value = checkLink(value);
+      // an offer's buy link stays a token ({{buy:<offer id>}}): publishing makes it /b/<id>
+      if (!(id === 'payment' && /^\{\{buy:[A-Za-z0-9_-]{22}\}\}$/.test(value))) value = checkLink(value);
       if (!value) continue;
     } else if (id === 'email') {
       if (value.length > 200 || !EMAIL_RE.test(value)) continue;
@@ -251,9 +252,16 @@ const JS = {
 
 const TOKEN_RULE = 'Show an image only by writing its token exactly: <img src="{{img-1}}" alt="…"> in the HTML, or url({{img-1}}) in the CSS.';
 
+/** A payment link that is an offer's buy token: used as written, only as a link's href. */
+const BUY_RULE = 'A payment link written {{buy:…}} is used exactly as written, only as the href of a plain <a> link (never in a script, a form or text); the app makes it the real checkout link when the page is published. No price but the ones in the facts.';
+
 function buttons(target, who) {
   // who: 'the' (Manus: the owner is "the owner") or 'my' (Viktor: the owner is the one posting)
   const app = who === 'my' ? 'My app' : 'The app';
+  return `${buttonRules(target, who, app)} ${BUY_RULE}`;
+}
+
+function buttonRules(target, who, app) {
   return target === 'seo'
     ? `Buttons that book or buy open ${who} booking or payment link in the facts; without one, leave that button out. No booking calendar, cart or checkout. Only if this kind of page needs a form: exactly one <form method="post" action="{{lead-action}}"> with only fields named name, email, phone, message or time (email or phone at least), an optional unticked checkbox name="consent" value="yes", and a submit button. ${app} makes it work when the page is published. No other forms.`
     : `Buttons that book or buy open ${who} booking or payment link in the facts; without one, leave that button out. No form, booking calendar, cart or checkout that only pretends to work. If this section needs a form: <form method="post" action="{{lead-action}}"> with fields named name, email, phone, message or time (email or phone at least), an optional unticked checkbox name="consent" value="yes", and a submit button. ${app} makes it send when the page is published. Your script may send it with fetch to the form’s own action, adding the header Accept: application/json, or let it submit normally. No mailto: links for forms. Send nothing anywhere else.`;

@@ -13,6 +13,7 @@ import { imageDataUrls } from '@/lib/promptImages';
 import { findCodeAsset } from '@/lib/codeAssets';
 import { seoHtmlDocument } from '@/lib/seoHtml';
 import { buildDocument } from '@/ai/local/code';
+import { resolveBuyTokens } from '@/lib/buyLinks';
 import { importAgentHtml, type ImportResult } from '@/ai/agents/importHtml';
 import { applyAgentPage, type AgentHtmlSource } from '@/ai/agents/results';
 import { findBuild } from '@/ai/agents/buildRecords';
@@ -99,7 +100,7 @@ export function previewDocument(p: Project, target: BuildTarget, src: AgentHtmlS
       seoHtml: { html: page.html, css: page.css, images, source: { via: src.via, at: 0 }, title: page.title, description: page.description, notes: page.notes, active: true, hasLeadForm: page.hasLeadForm, importedAt: 0 },
     },
   };
-  return seoHtmlDocument(shown, { canonical: '', origin: '', leadAction: '', imageUrl: (k) => urls[k] ?? '' });
+  return resolveBuyTokens(seoHtmlDocument(shown, { canonical: '', origin: '', leadAction: '', imageUrl: (k) => urls[k] ?? '' }), { mode: 'preview' });
 }
 
 /** The preview window (mounted once, in App). */

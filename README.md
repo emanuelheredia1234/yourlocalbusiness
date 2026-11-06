@@ -34,7 +34,7 @@ Real:
 Not done by the app (it says so where it matters):
 - Sending email: you export the sequence to your email provider (Kit, Mailchimp, MailerLite…), which collects sign-ups and sends it. With Omnisend connected, the app can create campaign drafts there, which you review and send yourself (see "Omnisend: campaign drafts from the email sequence").
 - Paying for ads: ad spend is billed by Meta or Google to the customer's own payment method. The app can launch Meta and Google Search campaigns (once the owner turns it on, after a spend confirm with the amounts) and change them; TikTok and LinkedIn stay copy-and-export. The app never estimates reach or results.
-- Taking payments: buyers pay on each seller's own checkout link.
+- Taking payments: buyers pay on each seller's own Whop account or own checkout link, through the offer's buy link (see "Offers and buy links"). The app holds no money, charges no fee on Whop sales, and never refunds: refunds and disputes stay in Whop.
 
 ## AI: one AI, powered by your API keys
 
@@ -348,6 +348,7 @@ Lead forms: a page with a form (a lead form page, a booking page's "Request a ti
 - P2 (run `supabase/migrations/20261112000000_leads_p2.sql` too): artifacts with a real form (`<form method="post" action="/<name>/lead">`, which publishing makes from `{{lead-action}}`) take leads as well. Each lead is tagged with its business (`project_id`), its source (`page`, `asset` or `magnet`, always set by the server from the page) and its kind (form, lead, booking, quiz, calculator, roi, checklist, magnet). It keeps whether the visitor ticked the email checkbox (`consent=yes` only) and a few whitelisted result fields: `request`, `service`, `result`, `score`, `answers`, `inputs`, `outputs`. These are refused when too long, never cut. A widget may send the form with `fetch` and `Accept: application/json` (no preflight) to get `{ ok, title, text, download? }` with CORS `*`. Before the migration is run, page forms still work without the new columns.
 - Widgets and asset forms: Code & assets' form widgets (lead form, booking, and the "Email me my result" step of quizzes, calculators, ROI and checklists, off with "no email step") are real `<form method="post" action="{{lead-action}}">` forms with named fields, the hidden field and an unticked consent box; their script sends them with `fetch` and shows the answer, and says it's a preview until published. A prompt's own endpoint or `mailto:` still wins; the claude.ai build keeps the listing's email. Manus/Viktor assets' forms that fit are made to post there; others are taken out. Artifacts are published with their `projectId`.
 - Lead magnets (`server/leadFiles.mjs`, published from Email › Lead magnet › Delivery): an owner publishes a file or an outside link at `https://<app>/m/<id>` (also on their verified domains), optionally behind a script-free email gate whose sign-ups land in Leads as `magnet` leads. Files go in the private `lead-files` bucket and are handed out through 60-second signed links. They are typed by their bytes (PDF, EPUB, ZIP, DOCX, XLSX, PPTX, PNG, JPEG, WebP, MP3, MP4; never SVG or HTML), with limits of 25 MB per file, 20 files and 200 MB per account. Covers go in the public, images-only `public-files` bucket. Limits per visitor and per file: `MAGNET_HITS_PER_IP_PER_HOUR` (default 60), `MAGNET_DOWNLOADS_PER_FILE_PER_HOUR` (default 600) and `MAGNET_SIGNUPS_PER_FILE_PER_HOUR` (default 300, the gate's sign-ups). An outside link redirects only on the owner's verified domain; on the app's address it's a page that names the site and links there. A lead form that names the owner's lead magnet answers with a download link that skips the gate for 15 minutes, signed with `LEAD_LINK_SECRET` (optional, 16+ characters; otherwise a key derived from `SUPABASE_SECRET_KEY`). Downloads stop 30 days after the plan ends, like pages. Deleting an account clears all three buckets.
+- Offers and buy links (`server/offers/`, `server/payments/whop*.mjs`): each business's offer has one permanent buy link, `https://<app>/b/<id>` (also on the owner's verified domains). It redirects to a Whop checkout link the server made once for the customer's own Whop plan, or to the customer's own checkout link (known checkout sites directly; any other site through a "you're leaving" page on the app's address). Whop sales come back through each connection's signed webhook into `sales` (never moved backwards); a buyer's click never calls Whop and no Whop write is sent twice by itself. Customers connect Whop with their own account API key, sealed with `PAYMENT_KEYS_SECRET` and shown only as its last 4 characters. Setup and the money rules: docs/integrations-setup.md, "Payments: offers and Whop".
 
 ## Omnisend: campaign drafts from the email sequence
 
@@ -409,6 +410,27 @@ with your OK): run
 editing off) and Smart Retries; optionally Stripe Tax (`STRIPE_AUTOMATIC_TAX=1`); then Owner → Billing → Plans → Turn on plans. Turning plans off again is the rollback.
 Tests use `server/test/mock-stripe.mjs` and `server/test/mock-supabase.mjs` only.
 
+## Offers and buy links (Whop)
+
+One **offer** is one thing a business sells, with one permanent buy link, `https://<app>/b/<id>`. Self-hosted, signed
+in (never in the claude.ai build, which keeps the plain payment link fields):
+
+- **Settings › Payments:** connect your own Whop account in **Live** and/or **Test mode** (Whop's sandbox): an account
+  API key with the listed permissions and your `biz_…` id. The key is sent once and kept sealed on the server; you
+  only ever see its last 4 characters. The card says whether sales updates arrive, and offers Check again, Replace
+  key and Disconnect.
+- **Attach payment** on an asset (Code & assets › Payment), the SEO page (Page type, for checkout and showcase pages),
+  the listing's buy link and an email's button (Use a buy link): pick an offer, or make one from a Whop product and
+  plan (the price comes from Whop) or your own checkout link. Pages hold `{{buy:<id>}}`; publishing writes `/b/<id>`,
+  and Buy buttons are plain links (published pages run sandboxed).
+- **Studio › Listing & publish › Offers:** clicks, live sales and where each offer is used; Refresh from Whop, Pause,
+  Archive. **Analytics › Sales:** live sales, revenue per currency with refunds, buy link clicks, and the sales list
+  with CSV. Test mode is labelled everywhere and never counts as revenue.
+
+Owner setup (migration `supabase/migrations/20261113000000_offers.sql`, `PAYMENT_KEYS_SECRET`, `APP_PUBLIC_URL`, the
+webhook address `APP_PUBLIC_URL/api/webhooks/whop/<connection id>` and its seven events, and the sandbox check before
+going live): docs/integrations-setup.md, "Payments: offers and Whop".
+
 ## Scheduled jobs
 
 Replit Autoscale stops the app when it's idle, so nothing runs on a timer inside it. Supabase's pg_cron calls
@@ -451,6 +473,7 @@ Server environment:
 - `SLACK_USER_TOKEN`: the User OAuth Token of your own Slack app, so the app can talk to Viktor (see "Manus and Viktor (Slack): setup")
 - `LEADS_PER_IP_PER_HOUR` (default 10) and `LEADS_PER_PAGE_PER_HOUR` (default 30): lead form limits (see "Publishing pages")
 - `MAGNET_HITS_PER_IP_PER_HOUR` (default 60), `MAGNET_DOWNLOADS_PER_FILE_PER_HOUR` (default 600) and `MAGNET_SIGNUPS_PER_FILE_PER_HOUR` (default 300): lead magnet limits; `LEAD_LINK_SECRET` (optional, 16+ characters): signs the download tickets, never logged (see "Publishing pages")
+- offers and buy links (`/b/<id>`, Whop): `PAYMENT_KEYS_SECRET` (32+ characters; seals each customer's own Whop key and webhook secret; set it before anyone connects and never change it), `APP_PUBLIC_URL` (the app's https address: Whop webhooks and the buyers' way back), `OFFERS_PROVIDER` (`off` turns offers off), `WHOP_ENABLED` (`off` keeps outside checkout links only), `OFFER_CLICKS_PER_IP_PER_HOUR` (default 60) and `OFFER_CLICKS_PER_OFFER_PER_HOUR` (default 3000). They need `supabase/migrations/20261113000000_offers.sql` (see docs/integrations-setup.md, "Payments: offers and Whop")
 - accounts: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `ADMIN_EMAILS`, `SIGN_IN_REQUIRED` (see "Accounts")
 - `APP_HOSTS`: the app's own custom domains, comma-separated. The app and `/api` answer only on the app's own hosts (see "Publishing pages")
 - `PAGES_DNS_SERVERS` (optional): the DNS servers the domain check asks (see "Publishing pages")
@@ -472,7 +495,7 @@ npm run build:artifact      # dist-artifact/yourlocalbusiness.html (single file)
 
 Where to plug in real integrations:
 - Posting through the networks' own APIs instead of Manus: `startManusPost` in `src/ai/manusPost.ts` is the one place a post leaves the app.
-- Payments: sellers use their own checkout link (a listing's `buyUrl`). To take payments in the app, add Stripe Checkout on your server and record paid orders from its webhook.
+- Payments: each business sells through offers with permanent buy links (`/b/<id>`): the customer's own Whop account (Settings › Payments; sales come back through Whop's webhook) or their own checkout link. Stripe Connect is reserved for later (`PROVIDERS.stripe` in `server/offers/providers.mjs`). See docs/integrations-setup.md, "Payments: offers and Whop".
 - Email delivery: connect an email provider's API where the sequence is exported (`src/pages/marketing/email/PreviewPanel.tsx`).
 - Ads: push campaigns through the platforms' marketing APIs from `ExportPanel` in `src/pages/marketing/AdsEngine.tsx`.
 - Shared marketplace outside claude.ai: replace the Artifact database calls in `src/lib/community.ts` with your API.

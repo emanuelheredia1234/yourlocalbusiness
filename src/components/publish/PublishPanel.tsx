@@ -12,6 +12,7 @@ import {
   checkSlug,
   isValidSlug,
   listPublished,
+  offersForPublish,
   preparePublish,
   publishPage,
   publishTarget,
@@ -29,6 +30,7 @@ import {
 import { CopyButton, Field, Spinner, StatusDot, confirmAction } from '@/components/ui/primitives';
 import { toast, useUI } from '@/store/ui';
 import { useStore } from '@/store/useStore';
+import { offerIdsForPublish } from '@/store/offers';
 
 /** Open Settings at the Domains card. */
 export function openDomainSettings() {
@@ -233,7 +235,10 @@ export function PublishPanel({
       const target = publishTarget(appOrigin, to.slug, to.domain || null, to.home);
       // the business's current lead-magnet download, for a widget's {{lead-magnet}} (as it is now, not when the widget was made)
       const magnet = projectId ? useStore.getState().projects.find((x) => x.id === projectId)?.marketing.leadMagnet?.delivery?.fileId : undefined;
-      const ready = await preparePublish(await latest.current.build(target), to.slug, magnet);
+      const built = await latest.current.build(target);
+      // its buy links: which offers are really this business's, asked of the server now
+      const offers = await offersForPublish(built.html, projectId, offerIdsForPublish);
+      const ready = await preparePublish(built, to.slug, magnet, offers);
       const next = await publishPage({ pageId, kind, slug: to.slug, title, html: ready.html, images: ready.images, domain: to.domain || null, home: to.home, hash: ready.hash, ...(projectId ? { projectId } : {}) });
       latest.current.onChange(next);
       remember(next);

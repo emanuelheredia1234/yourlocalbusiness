@@ -153,6 +153,10 @@ export const ROUTE_PREFIXES = Object.freeze({
   billing: '/api/billing/',
   ads: '/api/ads/',
   stripeWebhook: '/api/webhooks/stripe',
+  // offers and buy links (server/offers/index.mjs), the users' own Whop accounts and their webhooks
+  offers: '/api/offers',
+  whop: '/api/payments/whop',
+  whopWebhook: '/api/webhooks/whop/',
 });
 
 /** Rate-limit buckets (per user unless noted), as `${bucket}:user:<id>` keys for rateLimited(key, factor). */
@@ -175,4 +179,9 @@ export const RATE_BUCKETS = Object.freeze({
   adsRefresh: 'ads-refresh', // 1 per business per 5 minutes
   billingWrite: 'billing-write', // 20 per hour (checkout, portal, businesses, plan changes)
   stripeWebhook: 'stripe-webhook', // 600 per minute per IP
+  offersRead: 'offers-read', // 120 per minute (offers, sales, summary, connections)
+  offersWrite: 'offers-write', // 60 per hour (create, edit, check, archive, delete)
+  whopConnect: 'whop-connect', // 10 per hour (connect, key, webhook secret, check, disconnect)
+  whopCatalog: 'whop-catalog', // 30 per minute (products and plans)
+  whopWebhook: 'whop-webhook', // 600 per minute per IP
 });

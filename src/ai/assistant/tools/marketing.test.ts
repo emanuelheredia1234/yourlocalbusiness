@@ -508,7 +508,7 @@ describe('the SEO page', () => {
     expect(lastActivity().text).toMatch(/^Wrote your landing page\. /);
     expect(lastActivity().buttons ?? []).toEqual([]);
     expect((await runTool('write_seo_page', { pageType: 'lead' })).error).toMatch(/^There is already an SEO page \(landing page\)\. Ask the owner, then call again with replace: true\./);
-    expect((await runTool('write_seo_page', { pageType: 'checkout', replace: true })).error).toMatch(/A checkout page needs the owner’s own payment link first/);
+    expect((await runTool('write_seo_page', { pageType: 'checkout', replace: true })).error).toMatch(/A checkout page needs a payment first/);
     expect(await runTool('write_seo_page', { pageType: 'lead', replace: true })).toMatchObject({ ok: true, result: { type: 'Lead form page' } });
     expect(marketing().pageType).toBe('lead');
     expect(lastActivity().text).toMatch(/^Rewrote your SEO page as a lead form page\. /);

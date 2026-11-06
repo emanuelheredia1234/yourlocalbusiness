@@ -60,6 +60,8 @@ interface Ctx {
   heroOff: string;
   /** why the pricing card's and the closing section's buttons are left off the page ('' when they go somewhere) */
   closingOff: string;
+  /** a checkout page's attached offer's price ("$49/month"): the pricing card shows it, as the page publishes it */
+  offerPrice?: string;
 }
 
 /** The sales page as visitors see it, with click-to-edit text when `editing` is on. Preview shows exactly
@@ -76,6 +78,7 @@ export function SalesPreview({
   pageType = 'landing',
   targets,
   formNote = 'Nothing was sent: this is a preview.',
+  offerPrice = '',
 }: {
   page: SalesPage;
   brand: Brand;
@@ -91,6 +94,8 @@ export function SalesPreview({
   targets?: PageTargets;
   /** what pressing Send says (the preview never sends anything) */
   formNote?: string;
+  /** a checkout page's attached offer's price (offerPriceOf): shown in place of the card's own, as published */
+  offerPrice?: string;
 }) {
   const t = salesTokens(page, brand);
   const root = useRef<HTMLDivElement>(null);
@@ -145,7 +150,7 @@ export function SalesPreview({
         .filter((s) => s.visible)
         .map((s) => (
           <div key={s.id} data-section={s.type}>
-            <SectionView s={s} ctx={{ t, editing, device, business, image, pageType, targets: tg, formNote, allImages, heroOff, closingOff, set: (d) => onData(s.id, d) }} />
+            <SectionView s={s} ctx={{ t, editing, device, business, image, pageType, targets: tg, formNote, allImages, heroOff, closingOff, offerPrice, set: (d) => onData(s.id, d) }} />
           </div>
         ))}
       <footer className="px-6 py-6 text-center text-[12px]" style={{ color: t.muted, borderTop: `1px solid ${withAlpha(t.ink, 0.08)}` }}>
@@ -509,6 +514,18 @@ function SectionView({ s, ctx }: { s: SalesSection; ctx: Ctx }) {
                 </span>
               )}
               <Editable editing={editing} value={d.planName} onChange={(v) => set({ planName: v })} label="Plan name" tag="h3" className="text-center text-[18px] font-bold" />
+              {ctx.offerPrice ? (
+                <>
+                  <p className="mt-2 flex flex-wrap items-baseline justify-center gap-2">
+                    <b className="text-[44px] font-extrabold leading-none">{ctx.offerPrice}</b>
+                  </p>
+                  {editing && (
+                    <p className="mt-2 text-center text-[13px]" style={{ color: t.muted }}>
+                      The attached offer’s price. Change it in Whop (then Refresh from Whop), or attach another offer.
+                    </p>
+                  )}
+                </>
+              ) : (
               <p className="mt-2 flex flex-wrap items-baseline justify-center gap-2">
                 {(showsCompareAt(d) || editing) && (
                   <s className="text-[18px]" style={{ color: t.muted }} title="Your earlier price, only if you really charged it">
@@ -526,7 +543,8 @@ function SectionView({ s, ctx }: { s: SalesSection; ctx: Ctx }) {
                 )}
                 <Editable editing={editing} value={d.priceNote} onChange={(v) => set({ priceNote: v })} label="Price note" className="text-[13px]" style={{ color: t.muted }} />
               </p>
-              {editing && d.compareAtNeedsReview && d.compareAt > 0 && (
+              )}
+              {editing && !ctx.offerPrice && d.compareAtNeedsReview && d.compareAt > 0 && (
                 <div className="mt-2 flex justify-center">
                   <ReviewNote ctx={ctx} text={`Was $${d.compareAt} a price you really charged? Hidden from your page.`} onKeep={() => set({ compareAtNeedsReview: undefined })} />
                 </div>

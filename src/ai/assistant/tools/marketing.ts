@@ -18,6 +18,7 @@ import { busyJobs } from '@/lib/busy';
 import { showSignIn, useAuth } from '@/lib/cloud/auth';
 import { AD_CTAS, adById, adFinalUrl, adsCsv, adsText, applyAds, patchAd } from '@/lib/ads';
 import { applyEmailSequence, applyLeadMagnet, delayLabel, importSubscribers, parseSubscriberCsv, sequenceCsv, subscriberEmailOk, subscribersCsv, updateMarketingOf } from '@/lib/emailFunnel';
+import { loadBuyLinks } from '@/store/offers';
 import { allLeads, deleteLead, leadDetails, leadEmail, leadOfProject, leadSourceLine, leadTime, leadsCsv, listLeads, seoPageIdOf, type Lead } from '@/lib/leads';
 import { PAGE_TYPES, PAGE_TYPE_LABEL, bookingLink, missingLink, pageTypeNoun, pageTypeOf, paymentLink, webLink } from '@/lib/pageTypes';
 import { listPublished, publishConfig, type ServerPage } from '@/lib/publish';
@@ -783,7 +784,7 @@ const htmlModeProblem = () => {
 /** What the owner should know about the page's buttons and form (the first that applies), as the builder says it. */
 function pageNeeds(p: Project): string | undefined {
   const type = pageTypeOf(p);
-  if (type === 'checkout' && !paymentLink(p)) return 'Buy now doesn’t open anything yet: the owner adds their own payment link under Page type (the app never takes payments).';
+  if (type === 'checkout' && !paymentLink(p)) return 'Buy now doesn’t open anything yet: the owner attaches payment (one of their offers, or their own payment link) under Page type. The app never takes payments itself.';
   if (type === 'booking' && !bookingLink(p)) return 'No booking link yet: visitors send a request with the form instead. The owner can add their booking link under Page type.';
   if (type === 'landing' && !ctaLink(p)) return 'The buttons don’t link anywhere yet: the owner adds a buy or booking link in Studio → Listing & publish, or their website in Settings.';
   if (p.marketing.salesPage?.sections.some((x) => x.type === 'leadForm' && x.visible) && !p.marketing.seoPublished) return 'Its form sends only once the page is published (publish_seo_page).';
@@ -833,7 +834,7 @@ const getSeoPage = defineTool({
     const meta = m.seo;
     if (!page || !meta) {
       return {
-        data: { ...base, page: null, next: 'write_seo_page writes it (set_page_type shows another type in the builder first).', ...(missingLink(p, type) === 'payment' ? { needs: 'A checkout page needs the owner’s own payment link first (the app never takes payments).' } : {}) },
+        data: { ...base, page: null, next: 'write_seo_page writes it (set_page_type shows another type in the builder first).', ...(missingLink(p, type) === 'payment' ? { needs: 'A checkout page needs a payment first: an offer from Attach payment, or the owner’s own payment link (the app never takes payments).' } : {}) },
         note: 'Your SEO page isn’t written yet',
       };
     }
@@ -878,7 +879,7 @@ const setPageType = defineTool({
         ...(exists
           ? { current: PAGE_TYPE_LABEL[now], next: pageType === now ? 'The page is already this type.' : 'The builder shows it under Page type → Change: the owner presses “Rewrite as …” there, or write_seo_page with this pageType and replace: true rewrites it (ask the owner first; it can be undone).' }
           : { next: 'It’s chosen in the builder: the owner presses Write page, or write_seo_page writes it.' }),
-        ...(missingLink(p, pageType) === 'payment' ? { needs: 'A checkout page needs the owner’s own payment link first: they add it in the builder (the app never takes payments).' } : {}),
+        ...(missingLink(p, pageType) === 'payment' ? { needs: 'A checkout page needs a payment first: the owner attaches an offer or pastes their own payment link in the builder (the app never takes payments).' } : {}),
       },
       note: `Opened the SEO page builder with “${PAGE_TYPE_LABEL[pageType]}” chosen`,
     };
@@ -896,7 +897,7 @@ const writeSeoPageTool = defineTool({
     const t = pageType ?? now;
     const busy = htmlModeProblem() ?? seoBusy();
     if (busy) return busy;
-    if (t === 'checkout' && !paymentLink(p) && (!p.marketing.salesPage || now !== 'checkout')) return 'A checkout page needs the owner’s own payment link first: they add it under Page type on the SEO page (set_page_type opens it). The app never takes payments.';
+    if (t === 'checkout' && !paymentLink(p) && (!p.marketing.salesPage || now !== 'checkout')) return 'A checkout page needs a payment first: the owner attaches one of their offers or their own payment link under Page type on the SEO page (set_page_type opens it). The app never takes payments itself.';
     if (p.marketing.salesPage && !replace) return `There is already an SEO page (${PAGE_TYPE_LABEL[now].toLowerCase()}). Ask the owner, then call again with replace: true. Its copy is rewritten following their guidance; kept: metadata, testimonials and facts, guarantee, prices, services, contact details and images. It can be undone.`;
     return null;
   },
@@ -1197,7 +1198,7 @@ const exportFile = defineTool({
       }
       case 'email_csv': {
         const name = `${fileBase(p)}-email-sequence.csv`;
-        return { data: { file: name, emails: p.marketing.emails.length, next: 'The owner imports it into their email provider, which sends the emails.' }, note: 'Your email sequence CSV is ready to download', buttons: [{ label: `Download ${name}`, icon: 'download', run: () => download(name, sequenceCsv(latest())).then(() => undefined) }] };
+        return { data: { file: name, emails: p.marketing.emails.length, next: 'The owner imports it into their email provider, which sends the emails.' }, note: 'Your email sequence CSV is ready to download', buttons: [{ label: `Download ${name}`, icon: 'download', run: async () => download(name, sequenceCsv(latest(), await loadBuyLinks(latest().id))).then(() => undefined) }] };
       }
       case 'subscribers_csv': {
         const name = `${fileBase(p)}-subscribers.csv`;
@@ -1260,12 +1261,12 @@ const exportFile = defineTool({
         // as Download on Studio → Code & assets: the asset as one page, its images inside it, as it is on the click
         const a = assetFor(id)!;
         ctx.stage('Getting the asset and its images ready…');
-        const out = await downloadDocument(a);
+        const out = await downloadDocument(a, undefined, pid);
         const name = `${slugify(a.name) || 'widget'}.html`;
         const run = async () => {
           const now = findCodeAsset(pid, a.id);
           if (!now) return noteInChat(`${named(a.name)} isn’t there any more, so there’s nothing to download.`, false);
-          const doc = await downloadDocument(now);
+          const doc = await downloadDocument(now, undefined, pid);
           await download(name, doc.html);
           if (doc.missing.length) noteInChat(`${plural(doc.missing.length, 'image')} couldn’t be loaded on this device, so the file leaves ${doc.missing.length === 1 ? 'it' : 'them'} out. If you added ${doc.missing.length === 1 ? 'it' : 'them'} on another device, try again in a minute.`, false);
         };

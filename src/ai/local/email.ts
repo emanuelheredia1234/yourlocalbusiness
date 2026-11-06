@@ -245,8 +245,9 @@ export function generateEmailSequence(project: Project, lm: LeadMagnet | null, d
   return [e1, e2, e3, e4, e5].map((e) => ({ ...e, body: v.includeMust(e.body) }));
 }
 
+/** Merge tags ({{first_name}}…) and buy links ({{buy:<offer id>}}) filled in; a tag with no value stays as typed (so the preview shows it). */
 export function renderTokens(text: string, tokens: Record<string, string>): string {
-  return text.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k: string) => tokens[k] ?? m);
+  return text.replace(/\{\{\s*(\w+(?::[A-Za-z0-9_-]{22})?)\s*\}\}/g, (m, k: string) => tokens[k] ?? m);
 }
 
 export function delayToMs(delay: EmailStep['delay']): number {

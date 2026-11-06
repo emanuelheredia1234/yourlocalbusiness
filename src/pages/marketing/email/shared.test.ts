@@ -73,3 +73,25 @@ describe('the preview’s button', () => {
     expect(view(p, email())).toContain('signed up at Maya Bakes.');
   });
 });
+
+describe('buy links in emails', () => {
+  const OFFER_ID = 'BBBBBBBBBBBBBBBBBBBBBB';
+  it('{{buy:<id>}} becomes the offer’s full buy link; an id that isn’t the business’s stays as typed', async () => {
+    const { useOffers } = await import('@/store/offers');
+    const { renderTokens } = await import('@/ai/local/email');
+    const { hasUnknownBuyLink } = await import('./shared');
+    const p = project();
+    useOffers.getState().put({ id: OFFER_ID, projectId: p.id, title: 'Course', priceDisplay: '$49', priceMinor: 4900, currency: 'usd', provider: 'whop', status: 'active', environment: 'production', checkoutHost: 'whop.com', clicks: 0, lastClickAt: null, sales: { count: 0, last: null }, createdAt: null, updatedAt: null, link: `https://app.example/b/${OFFER_ID}` });
+    const tokens = emailTokens(p);
+    expect(tokens[`buy:${OFFER_ID}`]).toBe(`https://app.example/b/${OFFER_ID}`);
+    expect(renderTokens(`Buy: {{ buy:${OFFER_ID} }}`, tokens)).toBe(`Buy: https://app.example/b/${OFFER_ID}`);
+    const other = `{{buy:${'C'.repeat(22)}}}`;
+    expect(renderTokens(other, tokens)).toBe(other);
+    expect(hasUnknownBuyLink(renderTokens(other, tokens))).toBe(true);
+    expect(hasUnknownBuyLink(renderTokens(`{{buy:${OFFER_ID}}}`, tokens))).toBe(false);
+    // the inbox preview's button opens it
+    const html = renderToStaticMarkup(createElement(EmailView, { project: p, email: email({ ctaUrl: `{{buy:${OFFER_ID}}}` }), tokens }));
+    expect(html).toContain(`href="https://app.example/b/${OFFER_ID}"`);
+    useOffers.getState().reset();
+  });
+});

@@ -571,3 +571,42 @@ describe('ai-server.mjs with the integrations', () => {
     expect(supa.users.has(leaving.user.id)).toBe(false);
   });
 });
+
+describe('offers in the wiring', () => {
+  it('routes /api/offers, /api/payments/whop and the Whop webhook to offers; never logs the webhook path as it is', async () => {
+    const { redactPath, unlogged } = await import('./common.mjs');
+    expect(moduleFor('/api/offers')).toBe('offers');
+    expect(moduleFor('/api/offers/AAAAAAAAAAAAAAAAAAAAAA/check')).toBe('offers');
+    expect(moduleFor('/api/payments/whop')).toBe('offers');
+    expect(moduleFor('/api/payments/whop/AAAAAAAAAAAAAAAAAAAAAA/plans')).toBe('offers');
+    expect(moduleFor('/api/webhooks/whop/AAAAAAAAAAAAAAAAAAAAAA')).toBe('offers');
+    expect(moduleFor('/api/offersx')).toBeNull();
+    expect(redactPath('/api/webhooks/whop/AAAAAAAAAAAAAAAAAAAAAA?x=1')).toBe('/api/webhooks/whop');
+    expect(unlogged('/api/webhooks/whop/AAAAAAAAAAAAAAAAAAAAAA')).toBe(true);
+  });
+
+  it('without the database: 503 NOT_SET_UP, /b/ off, config says off; deletion still asks offers before billing', async () => {
+    const r = recorder();
+    const integrations = createIntegrations({ env: {}, send: sendLike, factories: r.factories, db: { enabled: false } });
+    expect(integrations.offersConfig()).toEqual({ enabled: false, whop: { sandbox: false, production: false } });
+    expect(integrations.offers.buy.matchBuy(new URL('http://x/b/AAAAAAAAAAAAAAAAAAAAAA'))).toBe(true);
+    const s = await serve(integrations);
+    try {
+      const res = await fetch(`${s.base}/api/offers?projectId=p1`);
+      expect(res.status).toBe(503);
+      expect((await res.json()).code).toBe('NOT_SET_UP');
+    } finally {
+      await s.close();
+    }
+    const seen = [];
+    const order = createIntegrations({ env: {}, send: sendLike, factories: { ...r.factories, offers: () => ({ handle: async () => false, forgetUser: async () => seen.push('offers'), config: () => ({ enabled: false }) }), billing: () => ({ handle: async () => false, forgetUser: async () => seen.push('billing') }) }, db: { enabled: false } });
+    await order.forgetUser(UID);
+    expect(seen).toEqual(['offers', 'billing']);
+  });
+
+  it('OFFERS_PROVIDER=off: notes say so and every route is NOT_SET_UP', () => {
+    const integrations = createIntegrations({ env: { OFFERS_PROVIDER: 'off' }, send: sendLike, db: { enabled: true, select: async () => [], insert: async () => [], update: async () => [], upsert: async () => [], remove: async () => [] }, appState: { enabled: false } });
+    expect(integrations.offersConfig().enabled).toBe(false);
+    expect(integrations.notes().join('\n')).toContain('Offers and buy links: off (OFFERS_PROVIDER=off)');
+  });
+});

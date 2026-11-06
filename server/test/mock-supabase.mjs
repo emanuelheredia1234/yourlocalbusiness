@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
+import { mergeSale } from '../offers/sales.mjs';
 
 const PUBLISHABLE = 'sb_publishable_mock_123';
 const SECRET = 'sb_secret_mock_456';
@@ -51,9 +52,14 @@ const PRIMARY_KEYS = {
   video_starts: ['id'],
   // supabase/migrations/20261112000000_leads_p2.sql
   lead_files: ['id'],
+  // supabase/migrations/20261113000000_offers.sql
+  payment_connections: ['id'],
+  offers: ['id'],
+  sales: ['id'],
+  sale_refunds: ['provider', 'environment', 'refund_id'],
 };
 /** the integration tables (all server-only) */
-const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops'];
+const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops', 'payment_connections', 'offers', 'sales', 'sale_refunds'];
 /** tables users may read their own rows of but never write (only the server and the database functions do) */
 const USER_READ_ONLY = new Set(['project_slots']);
 /** `generated always as identity` columns: the mock numbers them 1, 2, 3… per table */
@@ -84,7 +90,11 @@ const UNIQUE = {
     { name: 'billing_ops_user_id_client_request_id_key', cols: ['user_id', 'client_request_id'] },
     { name: 'billing_ops_one_live', cols: ['user_id'], where: (r) => ['sending', 'unknown'].includes(r.state) },
   ],
+  payment_connections: [{ name: 'payment_connections_one_live', cols: ['user_id', 'provider', 'environment'], where: (r) => r.status !== 'disconnected' }],
+  sales: [{ name: 'sales_one_per_payment', cols: ['provider', 'environment', 'provider_payment_id'] }],
 };
+/** tables whose created_at defaults to now() here (the newer ones; older tests compare whole rows) */
+const DEFAULT_CREATED = new Set(['payment_connections', 'offers', 'sales']);
 /** tables with a user_id column that isn't a foreign key: deleting the user leaves their rows */
 const NO_USER_FK = new Set(['usage_ledger']);
 /** the claim_analytics_run slot: no second run for a business within this long of the last one's start */
@@ -95,7 +105,7 @@ const PUBLIC_READ = new Set(['market_listings']);
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'video_starts', 'published_pages', 'published_domains', 'page_leads', 'lead_files', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales', 'sale_refunds']);
 const PROJECT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
 /**
@@ -131,6 +141,45 @@ const CHECKS = {
     return null;
   },
 };
+Object.assign(CHECKS, {
+  payment_connections: (r) => {
+    const v = { kind: 'account_key', account_name: '', webhook_mode: 'none', webhook_state: 'missing', status: 'active', ...r };
+    if (!/^[A-Za-z0-9_-]{22}$/.test(String(v.id))) return 'payment_connections_id_format';
+    if (!['whop', 'stripe'].includes(v.provider)) return 'payment_connections_provider_check';
+    if (!['account_key', 'app_install'].includes(v.kind)) return 'payment_connections_kind_check';
+    if (!['sandbox', 'production'].includes(v.environment)) return 'payment_connections_environment_check';
+    if (!/^biz_[A-Za-z0-9]{4,64}$/.test(String(v.account_id))) return 'payment_connections_account_format';
+    if (typeof v.key_ciphertext !== 'string') return 'payment_connections_key_ciphertext_not_null';
+    if (String(v.key_last4 ?? '').length > 4) return 'payment_connections_last4_size';
+    if (!['none', 'auto', 'manual'].includes(v.webhook_mode)) return 'payment_connections_webhook_mode_check';
+    if (!['missing', 'ok', 'unknown', 'disabled'].includes(v.webhook_state)) return 'payment_connections_webhook_state_check';
+    if (!['active', 'key_rejected', 'disconnected'].includes(v.status)) return 'payment_connections_status_check';
+    return null;
+  },
+  offers: (r) => {
+    const v = { price_display: '', provider_ref: {}, delivery: { kind: 'provider' }, status: 'active', ...r };
+    if (!/^[A-Za-z0-9_-]{22}$/.test(String(v.id))) return 'offers_id_format';
+    if (!PROJECT_ID.test(String(v.project_id))) return 'offers_project_id_format';
+    if (typeof v.title !== 'string' || v.title.length > 200) return 'offers_title_size';
+    if (String(v.price_display).length > 40) return 'offers_price_display_size';
+    if (v.currency != null && !/^[a-z]{3}$/.test(String(v.currency))) return 'offers_currency_format';
+    if (!['whop', 'external', 'stripe'].includes(v.provider)) return 'offers_provider_check';
+    if (!['draft', 'active', 'paused', 'checkout_unknown', 'archived'].includes(v.status)) return 'offers_status_check';
+    if (!v.provider_ref || typeof v.provider_ref !== 'object' || Array.isArray(v.provider_ref) || Buffer.byteLength(JSON.stringify(v.provider_ref)) > 4096) return 'offers_provider_ref_check';
+    if (v.provider === 'whop' && v.connection_id == null) return 'offers_whop_connection';
+    if (v.provider === 'external' && !('url' in v.provider_ref)) return 'offers_external_url';
+    return null;
+  },
+  sales: (r) => {
+    if (!PROJECT_ID.test(String(r.project_id))) return 'sales_project_id_format';
+    if (!['whop', 'stripe'].includes(r.provider)) return 'sales_provider_check';
+    if (!['sandbox', 'production'].includes(r.environment)) return 'sales_environment_check';
+    if (!['pending', 'paid', 'failed', 'refunded', 'partially_refunded', 'disputed'].includes(r.status)) return 'sales_status_check';
+    if (!/^[a-z]{3}$/.test(String(r.currency))) return 'sales_currency_format';
+    if (r.buyer_email != null && String(r.buyer_email).length > 254) return 'sales_buyer_email_size';
+    return null;
+  },
+});
 const checkRefusal = (table, row) => {
   const name = CHECKS[table]?.(row);
   return name ? { code: '23514', details: null, hint: null, message: `new row for relation "${table}" violates check constraint "${name}"` } : null;
@@ -376,7 +425,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
           slots.onProjectInsert(item.user_id, item.id);
           if (!who.service && !slots.writeOk(item.user_id, item.id)) return send(res, 403, { code: '42501', message: 'new row violates row-level security policy for table "user_docs"' });
         }
-        const row = { ...item, updated_at: new Date().toISOString() };
+        const row = { ...(DEFAULT_CREATED.has(table) && item.created_at == null ? { created_at: new Date().toISOString() } : {}), ...item, updated_at: new Date().toISOString() };
         // `generated always as identity`: Postgres numbers the row itself and refuses a value from the caller
         if (IDENTITY[table]) {
           if (row[IDENTITY[table]] != null) return send(res, 400, { code: '428C9', details: `Column "${IDENTITY[table]}" is an identity column defined as GENERATED ALWAYS.`, hint: 'Use OVERRIDING SYSTEM VALUE to override.', message: `cannot insert a non-DEFAULT value into column "${IDENTITY[table]}"` });
@@ -460,6 +509,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (BILLING_FNS.has(fn)) return billingRpc(req, res, fn, raw);
     if (fn === 'ylb_claim_video_start') return claimVideoStart(req, res, raw);
     if (fn === 'lead_file_downloaded') return leadFileDownloaded(req, res, raw);
+    if (fn === 'offer_clicked' || fn === 'record_sale') return offersRpc(req, res, fn, raw);
     if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -507,6 +557,48 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       r.last_download_at = new Date().toISOString();
     }
     return send(res, 204, undefined);
+  }
+
+  /**
+   * public.offer_clicked and public.record_sale (supabase/migrations/20261113000000_offers.sql). record_sale applies
+   * server/offers/sales.mjs mergeSale, the same rule as the SQL, in one step (no await: like the row lock). Server-only.
+   */
+  async function offersRpc(req, res, fn, raw) {
+    if (missingTables.includes(fn === 'offer_clicked' ? 'offers' : 'sales')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    let b;
+    try {
+      b = JSON.parse(raw || '{}');
+    } catch {
+      return send(res, 400, { message: 'invalid json' });
+    }
+    if (fn === 'offer_clicked') {
+      for (const r of tables.get('offers') ?? []) {
+        if (r.id !== b.p_id) continue;
+        r.clicks = (Number(r.clicks) || 0) + 1;
+        r.last_click_at = new Date().toISOString();
+      }
+      return send(res, 204, undefined);
+    }
+    const p = b.p;
+    if (!p || typeof p !== 'object') return send(res, 400, { code: '22P02', message: 'invalid input' });
+    if (!users.has(p.user_id)) return send(res, 409, { code: '23503', message: 'insert or update on table "sales" violates foreign key constraint "sales_user_id_fkey"' });
+    const rows = tables.get('sales') ?? [];
+    tables.set('sales', rows);
+    const i = rows.findIndex((r) => r.provider === p.provider && r.environment === p.environment && r.provider_payment_id === p.provider_payment_id);
+    const { outcome, row } = mergeSale(i >= 0 ? rows[i] : null, p);
+    if (outcome === 'inserted') {
+      const refused = checkRefusal('sales', row);
+      if (refused) return send(res, 400, refused);
+      const at = new Date().toISOString();
+      rows.push({ id: crypto.randomUUID(), application_fee_minor: null, ...row, created_at: at, updated_at: at });
+    } else if (outcome === 'updated') {
+      const refused = checkRefusal('sales', row);
+      if (refused) return send(res, 400, refused);
+      rows[i] = { ...row, updated_at: new Date().toISOString() };
+    }
+    return send(res, 200, outcome);
   }
 
   /**

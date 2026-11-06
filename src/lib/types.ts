@@ -299,6 +299,8 @@ export interface CodeAsset {
   images?: PromptImage[];
   /** where it's published, if it is */
   published?: Published;
+  /** the offer its Buy buttons sell (src/lib/offers.ts): they link to {{buy:<id>}}, which publishing makes /b/<id> */
+  offerId?: string;
   /** made by Manus or Viktor (Build with…, or a page from the assistant chat): its code is theirs, untrusted */
   source?: AgentSource;
   createdAt: number;
@@ -349,6 +351,8 @@ export interface ListingDraft {
   hours: string;
   /** your own page where people buy or book (payment happens there, not in this app) */
   buyUrl?: string;
+  /** an offer as the listing's buy link instead (its /b/<id> link replaces buyUrl when the listing is published) */
+  offerId?: string;
   contactEmail?: string;
   phone?: string;
   coverImageId?: string;
@@ -449,6 +453,7 @@ export interface EmailStep {
   body: string;
   delay: { value: number; unit: 'minutes' | 'hours' | 'days' };
   ctaLabel: string;
+  /** an address, or {{buy:<offer id>}} (the offer's buy link, filled in when the email is exported or sent) */
   ctaUrl: string;
 }
 
@@ -904,6 +909,8 @@ export interface Listing {
   website?: string;
   /** the seller's own page to buy or book (a Stripe Payment Link, Gumroad, Etsy, Calendly…): payment happens there */
   buyUrl?: string;
+  /** set when buyUrl is an offer's buy link (https://<app>/b/<id>): where buyers pay, for the "Secure checkout on …" hint */
+  offer?: { id: string; provider: 'whop' | 'external'; checkoutHost: string; test?: boolean };
   /** how to reach the seller */
   contactEmail?: string;
   phone?: string;
@@ -1103,7 +1110,7 @@ export interface Project {
     /** the owner's standing guidance for the AI when it writes or edits the sales page */
     seoGuide?: string;
     /** links the SEO page's buttons use, typed in the page builder (owner facts, never the AI's); else the listing's link counts */
-    pageLinks?: { booking?: string; payment?: string };
+    pageLinks?: { booking?: string; payment?: string; offerId?: string };
     /** images added in the sales page's prompt boxes */
     seoImages?: PromptImage[];
     /** the highest image number (img-N) the sales page has used: a removed image's number is never given to a new one, since its published file may still be cached */

@@ -7,6 +7,7 @@ import { getBlob } from '@/lib/storage';
 import { loadImage } from '@/lib/imageCanvas';
 import { SHARED_GALLERY_MAX, SHARED_IMAGE_CHARS } from '@/lib/community';
 import { matchBusinessType } from '@/ai/knowledge';
+import { findOffer } from '@/store/offers';
 
 const PATTERNS: Listing['cover']['pattern'][] = ['blobs', 'waves', 'dots', 'grid', 'rays'];
 
@@ -48,6 +49,16 @@ export function listingSuggestions(p: Project): { hours: string; guarantee: stri
   return { hours: bt.hours, guarantee: bt.guarantee };
 }
 
+/**
+ * The offer a listing sells through, when it uses one: a product's always, a business's only while its button is
+ * "Buy" (switched to booking or a contact, the typed link is the button's again).
+ */
+export function listingOfferId(p: Project): string | undefined {
+  const d = p.studio.listing;
+  if (!d.offerId) return undefined;
+  return p.track !== 'business' || d.bookingType === 'buy' ? d.offerId : undefined;
+}
+
 /** Build the marketplace listing for a project from the shared Project Context (brand, studio, listing draft). */
 export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, gallery?: string[]): Listing {
   const isBiz = p.track === 'business';
@@ -60,6 +71,10 @@ export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, 
     : p.studio.outline.length
       ? p.studio.outline.slice(0, 8).map((s) => s.title)
       : p.idea?.features ?? [];
+  // an attached offer (as last loaded from the server) is the listing's buy link: its permanent /b/<id> address
+  const offerId = listingOfferId(p);
+  const offer = offerId ? findOffer(p.id, offerId) : undefined;
+  const sells = offer && offer.link && offer.status !== 'archived' && (offer.provider === 'whop' || offer.provider === 'external') ? offer : undefined;
   const logoUpload = p.brand.logo.mode === 'upload' && p.brand.logo.uploadDataUrl && p.brand.logo.uploadDataUrl.length < 30_000 ? p.brand.logo.uploadDataUrl : undefined;
   return {
     id: prev?.id ?? p.studio.publishedListingId ?? uid('lst'),
@@ -77,7 +92,8 @@ export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, 
     tags: d.tags,
     location: isBiz ? (p.location ? { city: p.location.city, region: p.location.region, lat: p.location.lat, lng: p.location.lng } : { city: 'Online', region: '', online: true }) : undefined,
     website: p.brand.websiteUrl || undefined,
-    buyUrl: d.buyUrl?.trim() || undefined,
+    buyUrl: sells ? sells.link : d.buyUrl?.trim() || undefined,
+    ...(sells ? { offer: { id: sells.id, provider: sells.provider as 'whop' | 'external', checkoutHost: sells.checkoutHost, ...(sells.environment === 'sandbox' ? { test: true } : {}) } } : {}),
     contactEmail: d.contactEmail?.trim() || undefined,
     phone: d.phone?.trim() || undefined,
     bookingType: isBiz ? d.bookingType : 'buy',
