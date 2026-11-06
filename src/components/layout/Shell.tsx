@@ -79,6 +79,7 @@ export const PAGE_NAMES: Record<Route, string> = {
   brain: 'Brain',
   'workspace-settings': 'Settings',
   'admin-billing': 'Customer usage',
+  plans: 'Plans',
 };
 
 const MARKETING_CHILDREN: Route[] = ['marketing-seo', 'marketing-email', 'marketing-social', 'marketing-ads'];

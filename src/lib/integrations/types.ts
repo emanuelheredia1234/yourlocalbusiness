@@ -402,4 +402,143 @@ export interface ApiError {
   period?: 'day' | 'month';
   /** admins only */
   hint?: string;
+  /** plans: what a refused action needs (402 PLAN_REQUIRED) */
+  need?: { feature?: string; tier?: string };
+  /** plans: when this month's AI credits renew (402 CREDITS_USED) */
+  resetsAt?: string;
+  /** plans: a removal is pending, so adding uses undo instead (no charge) */
+  useUndo?: boolean;
+  /** plans: the money operation this answer is about */
+  op?: BillingOp | null;
+}
+
+// ───────────── plans and billing (server/billing/stripe.mjs) ─────────────
+
+export type PlanTier = 'launch' | 'grow' | 'scale';
+export type PlanInterval = 'month' | 'year';
+export type PlanName = 'legacy' | 'owner' | 'none' | PlanTier;
+export type PlanBanner = 'grace' | 'trial_ending' | 'cancel_at_period_end' | 'payment' | 'plan_ended';
+export type PlanStatus = 'none' | 'trialing' | 'active' | 'past_due' | 'unpaid' | 'canceled' | 'incomplete' | 'incomplete_expired' | 'paused' | 'expired';
+
+/** What a user's plan allows now (entitlementOf on the server). */
+export interface Entitlement {
+  plan: PlanName;
+  active: boolean;
+  paused: null | 'plan' | 'payment';
+  banner: PlanBanner | null;
+  /** the effective tier (a downgrade keeps the old one to period end) */
+  tier: string | null;
+  status?: PlanStatus | null;
+  source?: 'stripe' | 'comp' | 'owner' | null;
+  /** null = unlimited */
+  businessLimit: number | null;
+  creditsPerMonth: number | null;
+  creditWindow: { start: string; resetsAt: string } | null;
+  features: {
+    adsLaunch: boolean;
+    video: { maxHeight: number; maxSeconds: number; label?: string };
+    treg: { monthlyMicro: number; dailyMicro: number } | null;
+    leadEmailsPerMonth: number | null;
+    publicListings: number | null;
+    customDomains: number | null;
+    platformFeePct: number;
+    promptControl: string;
+    support?: string;
+  };
+  graceUntil?: string | null;
+  trialEndsAt?: string | null;
+  pagesServeUntil: string | null;
+  dataKeptUntil: string | null;
+}
+
+export interface PlanAccount {
+  tier: string;
+  interval: PlanInterval | null;
+  status: PlanStatus;
+  source: 'stripe' | 'comp' | 'owner';
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  trialEndsAt: string | null;
+  graceUntil: string | null;
+  compUntil?: string | null;
+  extraBusinesses: number;
+  pendingRemove: { count: number; at: string } | null;
+  pendingDowngrade: { tier: string; at: string } | null;
+  hasCustomer: boolean;
+}
+
+export interface BusinessSlot {
+  projectId: string;
+  state: 'active' | 'locked';
+  lockAt?: string;
+  lockedReason?: 'limit' | 'removed' | 'plan_ended' | 'payment';
+}
+
+export interface BillingOp {
+  id: string;
+  kind: 'add_business' | 'remove_business' | 'undo_remove' | 'change_plan' | 'cancel_for_delete';
+  state: 'sending' | 'done' | 'failed' | 'unknown' | 'not_applied';
+  errorCode?: string;
+}
+
+export interface PlanCredits {
+  monthly: number | null;
+  usedCredits: number | null;
+  resetsAt: string | null;
+}
+
+export interface PlanResponse {
+  billing: { enabled: boolean; enforce: boolean };
+  plan: Entitlement;
+  account: PlanAccount | null;
+  businesses: { limit: number | null; used: number; slots: BusinessSlot[] };
+  credits: PlanCredits;
+}
+
+export interface BusinessesResponse {
+  limit: number | null;
+  used: number;
+  extraBusinesses: number;
+  pricePerBusiness: { month: number; year: number };
+  interval: PlanInterval | null;
+  slots: BusinessSlot[];
+  pendingRemove: { count: number; at: string } | null;
+  op: BillingOp | null;
+}
+
+/** A money operation's answer: 200 done (with the new businesses and plan), or 202 while it's being confirmed. */
+export interface BillingOpResponse {
+  ok?: true;
+  op: BillingOp | null;
+  businesses?: BusinessesResponse;
+  plan?: Entitlement;
+  /** 202: still confirming */
+  pending?: boolean;
+}
+
+export interface OwnerBillingAccount {
+  customerTag: string;
+  email?: string;
+  tier: string;
+  interval: PlanInterval | null;
+  status: PlanStatus;
+  source: 'stripe' | 'comp' | 'owner';
+  businessLimit: number | null;
+  extraBusinesses: number;
+  compExtra: number;
+  currentPeriodEnd: string | null;
+  graceUntil: string | null;
+  compUntil: string | null;
+  cancelAtPeriodEnd: boolean;
+  dataExpiresAt: string | null;
+  stripeCustomer: string | null;
+  stripeSubscription: string | null;
+  lastOp: { kind: string; state: string; at: string } | null;
+}
+
+export interface BillingSettingsResponse {
+  settings: { enforce: boolean; enforcedAt: string | null; cardTrialDays: number; existingTrialDays: number };
+  stripe: { mode: 'test' | 'live' | null; key: string | null; webhookSecret: string | null; prices: Record<string, 'ok' | 'missing'> | null };
+  missing: string[];
+  existingAccountsStarted?: number;
 }
