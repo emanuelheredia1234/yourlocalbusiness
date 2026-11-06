@@ -3,8 +3,13 @@
 // their first connect with externalId = our customer id (the opaque billing tag, never an email). Zernio runs on its
 // own approved platform apps; connect links open Zernio's white-label welcome screen with our brand. The methods are
 // those of server/connections/index.mjs for the ad platforms (the social ones answer "not here"), plus
-// webhook(rawBody, headers) for POST /api/webhooks/zernio and meterIfDue(). Later: campaign changes through
-// /v1/ads (one-shot writes, "may have been posted - check before trying again").
+// webhook(rawBody, headers) for POST /api/webhooks/zernio and meterIfDue(). Launching and changing campaigns lives in
+// server/ads/ (owned by that feature), which reaches this side through three additions only:
+//   adsAccountFor(userId, 'meta_ads'|'google_ads', projectId) → { zid, label, tag }   the business's connection
+//                                                     (refuses in plain words like the reads: NOT_CONNECTED, …)
+//   client                                           the same Zernio client (one ZERNIO_RPM window for everything)
+//   setAdsListener(fn)                               fn(userId, zid, event) for the ad.* and ad_account.* events of
+//                                                     one of that user's own connections (others: 'not_ours')
 //
 //   const impl = createZernioConnections({ env, fetch, now, storage, db, log });
 //
@@ -28,6 +33,9 @@ import { notConnectedStatuses } from './index.mjs';
 import { createZernioClient, ZernioCallError, zernioError } from '../zernio.mjs';
 import { appOrigin } from '../seo/sitemap.mjs';
 import { num, text } from '../analytics/normalize/util.mjs';
+
+/** The webhook events that belong to launched campaigns (server/ads/webhook.mjs). */
+const AD_EVENTS = Object.freeze(['ad.review.approved', 'ad.review.rejected', 'ad.status_changed', 'ad.delivery_issue', 'ad_account.status_changed']);
 
 /** Our ad platform → Zernio's connect path platform (GET /v1/connect/{platform}/ads) and its ads account platform. */
 export const ADS_CONNECT = Object.freeze({
@@ -86,6 +94,8 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
   const dbReady = db?.enabled === true;
   const tagSecret = String(env.CUSTOMER_TAG_SECRET || '');
   const log_ = (event, fields) => safeLog(event, fields, log);
+  /** server/ads/webhook.mjs fromWebhook(userId, zid, event), set by the wiring */
+  let adsListener = null;
 
   const missing = [...(zernio.enabled ? [] : ['ZERNIO_API_KEY']), ...(zernio.webhookReady ? [] : ['ZERNIO_WEBHOOK_SECRET']), ...(tagSecret.length >= 16 ? [] : ['CUSTOMER_TAG_SECRET'])];
   const setUp = missing.length === 0 && storageReady && dbReady;
@@ -561,6 +571,14 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
       });
       return 'applied';
     }
+    if (AD_EVENTS.includes(type)) {
+      // only an event about one of this customer's own connections reaches the ads side; a throw answers 500 so
+      // Zernio delivers it again (the dedupe row is written only after this succeeds)
+      const zid = String(evt.account?.accountId ?? '');
+      if (!ZID.test(zid) || !Object.hasOwn(who.doc.accounts ?? {}, zid)) return 'not_ours';
+      if (typeof adsListener === 'function') await adsListener(userId, zid, evt);
+      return 'applied';
+    }
     // post.* events: posting is Upload-Post's, nothing to do here
     return 'ignored';
   }
@@ -719,5 +737,16 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     webhook,
     meterIfDue,
     accountCount,
+    /** server/ads/: the business's Zernio connection for an ad platform → { zid, label, tag }, or a plain refusal */
+    async adsAccountFor(userId, platform, projectId) {
+      if (platform !== 'meta_ads' && platform !== 'google_ads') throw fail(404, 'NOT_FOUND', 'Unknown account type.');
+      const { zid, account, tag } = await usable(userId, platform, projectId);
+      return { zid, label: account.label, tag };
+    },
+    /** the one Zernio client: ads writes share its ZERNIO_RPM window with every other call */
+    client: zernio,
+    setAdsListener(fn) {
+      adsListener = typeof fn === 'function' ? fn : null;
+    },
   };
 }

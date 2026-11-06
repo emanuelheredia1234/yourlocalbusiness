@@ -12,18 +12,20 @@
 //                                         account: enabled false, the metaads account's parentAccountId)
 //   DELETE /accounts/:id                  200 {gracePeriodEndsAt} (+ account.disconnected webhook) | 404
 //   DELETE /profiles/:id                  200 | 400 while it still has accounts | 404
-//   GET    /ads/timeline?accountId=       GET /ads/campaigns?accountId=
-//   POST   /ads/…                         501 (placeholder for campaign changes, task #157); records a violation
+//   /ads/…                                every ads route: server/test/mock-zernio-ads.mjs (reads, launches, changes,
+//                                         fault injection and the write rules a test fails on)
 // Ads only: social accounts, posting and social stats are Upload-Post's (server/test/mock-uploadpost.mjs).
 // Test hooks (no key): GET /__calls, GET /__violations, POST /__complete {platform, profileId, username, ads?,
 // hiddenParent?} (finishes a connect: makes the account, with a hidden Facebook account for a classic Meta Ads
-// connect when hiddenParent, and sends a signed account.connected webhook), GET /__connect (the page).
+// connect when hiddenParent, and sends a signed account.connected webhook), GET /__connect (the page),
+// POST /__fail {route, mode, times} and POST /__expectRepeat {n} (the ads mock's fault injection and repeat rule).
 //
-// Violations a test fails on: an API key in a query string, any ad write (none is built yet).
+// Violations a test fails on: an API key in a query string, and the ads write rules (mock-zernio-ads.mjs).
 
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { createMockZernioAds } from './mock-zernio-ads.mjs';
 
 export const TEST_ZERNIO_KEY = 'sk_test_zernio_key_0000000000000000';
 export const TEST_ZERNIO_WEBHOOK_SECRET = 'test-zernio-webhook-secret';
@@ -39,7 +41,7 @@ const json = (res, status, body, headers = {}) => {
 const err = (res, status, code, type = 'invalid_request_error', extra = {}) => json(res, status, { error: `mock ${code}`, type, code, ...extra });
 const ADS = { facebook: 'metaads', googleads: 'googleads', linkedin: 'linkedinads', tiktok: 'tiktokads', pinterest: 'pinterestads', twitter: 'xads', redditads: 'redditads', microsoftads: 'microsoftads' };
 
-export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_ZERNIO_WEBHOOK_SECRET, webhookUrl = process.env.ZERNIO_WEBHOOK_URL || '' } = {}) {
+export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_ZERNIO_WEBHOOK_SECRET, webhookUrl = process.env.ZERNIO_WEBHOOK_URL || '', now = () => Date.now() } = {}) {
   const profiles = [];
   const accounts = [];
   const calls = [];
@@ -66,6 +68,7 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     const p = profiles.find((x) => x._id === profileId);
     return p ? [{ id: p._id, externalId: p.externalId ?? null }] : [];
   };
+  const ads = createMockZernioAds({ calls, violations, sendWebhook: (e) => sendWebhook(e), connections: () => accounts, profileRef, now });
 
   function addAccount({ platform, profileId, username = 'joesbakery', displayName, isActive = true, enabled, parentAccountId }) {
     const a = { _id: oid(), platform, profileId, username, displayName: displayName ?? `${username} (${platform})`, isActive, ...(enabled !== undefined ? { enabled } : {}), ...(parentAccountId ? { parentAccountId } : {}), createdAt: new Date().toISOString() };
@@ -120,19 +123,8 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       void sendWebhook({ event: 'account.disconnected', profiles: profileRef(a.profileId), account: { accountId: a._id, profileId: a.profileId, platform: a.platform, username: a.username, disconnectionType: 'intentional', reason: 'Removed through the API' } });
       return json(res, 200, { message: 'Account disconnected', gracePeriodEndsAt: new Date(Date.now() + 3_600_000).toISOString() });
     }
-    const acct = accounts.find((a) => a._id === (q.get('accountId') ?? q.get('accountIds')));
-    if (req.method === 'GET' && p === '/ads/timeline') {
-      if (!acct) return err(res, 404, 'account_not_found', 'not_found');
-      return json(res, 200, { rows: [{ date: '2026-11-01', currency: 'USD', spend: 12.5, impressions: 3000, reach: 2000, clicks: 40, conversions: 2 }, { date: '2026-11-02', currency: 'USD', spend: 7.5, impressions: 1000, reach: 900, clicks: 10, conversions: 1 }] });
-    }
-    if (req.method === 'GET' && p === '/ads/campaigns') {
-      if (!acct) return json(res, 200, { campaigns: [] });
-      return json(res, 200, { campaigns: [{ platformCampaignId: '120200001', platform: 'facebook', campaignName: 'Autumn bread', status: 'active', currency: 'USD', metrics: { spend: 20, impressions: 4000, clicks: 50, conversions: 3 } }] });
-    }
-    if (req.method !== 'GET' && p.startsWith('/ads')) {
-      violations.push({ kind: 'ad_write', path: p });
-      return err(res, 501, 'not_built', 'invalid_request_error');
-    }
+    // every /ads route (reads, launches and changes) is server/test/mock-zernio-ads.mjs's
+    if (await ads.handle(req, res, p, q, body, req.headers)) return;
     return err(res, 404, 'not_found', 'not_found');
   }
 
@@ -150,10 +142,18 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       }
     }
     if (url.search.includes(key)) violations.push({ kind: 'key_in_query', path: url.pathname });
-    calls.push({ method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), idempotencyKey: req.headers['idempotency-key'] ?? null, auth: req.headers.authorization ? 'bearer' : null, body, bytes: raw.length });
+    calls.push({ method: req.method, path: url.pathname, query: Object.fromEntries(url.searchParams), idempotencyKey: req.headers['idempotency-key'] ?? null, auth: req.headers.authorization ? 'bearer' : null, host: req.headers.host ?? null, body, bytes: raw.length });
     if (url.pathname === '/__calls') return json(res, 200, { calls });
     if (url.pathname === '/__violations') return json(res, 200, { violations });
     if (url.pathname === '/__complete' && req.method === 'POST') return json(res, 200, { account: await complete(body ?? {}) });
+    if (url.pathname === '/__fail' && req.method === 'POST') {
+      ads.fail(String(body?.route ?? ''), String(body?.mode ?? ''), body?.times);
+      return json(res, 200, { ok: true });
+    }
+    if (url.pathname === '/__expectRepeat' && req.method === 'POST') {
+      ads.expectRepeat(body?.n);
+      return json(res, 200, { ok: true });
+    }
     if (url.pathname === '/__connect') {
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end('<!doctype html><title>Connect (mock)</title><p>Mock Zernio connect screen.</p>');
@@ -181,6 +181,8 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     },
     addAccount,
     complete,
+    /** the ads side: state, fail(route, mode, times), expectRepeat(n), review(campaignId, outcome), campaignByTag(tag) */
+    ads,
     sendWebhook,
     /** An event as Zernio would sign it, for calling a webhook handler directly: { raw, headers }. */
     signed(event, secret = webhookSecret) {
@@ -196,6 +198,7 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       return this;
     },
     async close() {
+      ads.release();
       server?.closeAllConnections?.();
       await new Promise((r) => (server ? server.close(() => r()) : r()));
     },
