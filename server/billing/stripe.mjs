@@ -9,8 +9,14 @@
 //   GET  /api/billing/businesses                      limit, slots, pending removal, the op in flight
 //   POST /api/billing/businesses {action: add|remove|undo_remove, clientRequestId, confirm, projectId?}
 //   PUT  /api/billing/businesses/active {projectIds}  which businesses stay active when over the limit
+//   POST /api/billing/cancel {reason, comment?, offer?, clientRequestId, confirm}   the cancel survey, then cancel at
+//                                                     the period's end (a trial: before day 8, so nothing is charged)
+//   POST /api/billing/cancel/survey {reason, comment?, offer, outcome: kept|switched}   the survey of someone who took
+//                                                     the alternative instead (nothing changes in Stripe)
+//   POST /api/billing/resume {clientRequestId, confirm}   keep the plan after all (undo cancel at period end)
 //   owner: GET /api/billing/accounts, PUT /api/billing/accounts/:tag/comp, POST /api/billing/accounts/:tag/sync,
-//          GET|PUT /api/billing/settings {enforce?, cardTrialDays?, existingTrialDays?}
+//          GET|PUT /api/billing/settings {enforce?, cardTrialDays?, existingTrialDays?},
+//          GET /api/billing/surveys  (why people cancel: counts by reason, recent comments; trials)
 //   POST /api/webhooks/stripe                         Stripe's events (signature on the raw body)
 //
 // Money rules (each one is a test in stripe.test.mjs):
@@ -25,6 +31,10 @@
 // - STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET are read from env only, never logged or returned (the owner sees the
 //   last 4). Stripe's text never reaches a customer; platform problems go to the owner as `hint` and safeLog.
 // - The owner (server/auth.mjs isAdmin) is on the 'owner' plan: no Stripe Customer is ever made for them.
+// - The card trial (billing_settings.card_trial_days, 7 by default) is offered once per person: never to someone who
+//   had a plan, a free plan or a trial, nor to an email or card a trial was already on (keyed hashes in
+//   billing_trials). A second trial that slips through Checkout (another account, the same card) is ended at once:
+//   one write, Idempotency-Key per subscription, never resent (an unclear answer is read back).
 
 import crypto from 'node:crypto';
 import { createStripeClient, StripeError } from './stripeClient.mjs';
@@ -53,7 +63,14 @@ const SIGNATURE_TOLERANCE_S = 300;
 /** The events the webhook acts on (the rest answer 200 and are ignored). */
 export const STRIPE_EVENTS = Object.freeze(['checkout.session.completed', 'customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted', 'customer.subscription.paused', 'customer.subscription.resumed', 'invoice.paid', 'invoice.payment_succeeded', 'invoice.payment_failed', 'invoice.payment_action_required']);
 /** /api/billing/<sub> paths this module answers. */
-export const STRIPE_ROUTES = /^(plan|checkout|portal|businesses|businesses\/active|accounts|accounts\/[^/]+\/(comp|sync)|settings)$/;
+export const STRIPE_ROUTES = /^(plan|checkout|portal|businesses|businesses\/active|cancel|cancel\/survey|resume|surveys|accounts|accounts\/[^/]+\/(comp|sync)|settings)$/;
+/** The cancel survey's reasons (the app's), and the alternative each one offers (never blocking the cancel). */
+export const CANCEL_REASONS = Object.freeze(['too_expensive', 'not_using', 'missing_feature', 'results', 'switching', 'too_hard', 'short_term', 'other']);
+export const CANCEL_OFFERS = Object.freeze(['cheaper_plan', 'tips', 'tell_feature', 'none']);
+/** Our reason → Stripe's cancellation_details.feedback. */
+const FEEDBACK_OF = Object.freeze({ too_expensive: 'too_expensive', not_using: 'unused', missing_feature: 'missing_features', results: 'low_quality', switching: 'switched_service', too_hard: 'too_complex', short_term: 'other', other: 'other' });
+/** Stripe's feedback (the Customer Portal's survey) → our reason. */
+const REASON_OF = Object.freeze({ too_expensive: 'too_expensive', unused: 'not_using', missing_features: 'missing_feature', low_quality: 'results', switched_service: 'switching', too_complex: 'too_hard', customer_service: 'other', other: 'other' });
 
 const MSG = Object.freeze({
   notReady: 'Plans aren’t available yet.',
@@ -67,6 +84,7 @@ const MSG = Object.freeze({
   unavailable: 'Billing is unavailable right now. Try again in a minute.',
   notOnPlan: 'Your plan is managed by us. Contact support to change it.',
   cancelLater: 'We couldn’t cancel your subscription just now. Try again shortly.',
+  noTrial: 'This plan starts today: free trials are for first plans only.',
 });
 
 /** A timing-safe check of a Stripe-Signature header against one secret: any v1 matches and t is recent. */
@@ -395,6 +413,9 @@ export function createStripeBilling({
     const wrote = await store.apply(userId, patch, iso(fetchedAt));
     forgetCache(userId);
     pagesCache.delete(userId);
+    // the card trial (once per subscription) and a Customer Portal cancel's survey answer
+    if (!opts.skipTrial && (sub.status === 'trialing' || sub.trial_end)) await noteTrial(userId, sub);
+    if (sub.cancel_at_period_end === true || sub.status === 'canceled') await notePortalCancel(userId, sub, acct);
     if (wrote && patch.tier !== acct.tier) {
       try {
         await caps?.syncToTreg?.(acct.customer_tag);
@@ -444,7 +465,7 @@ export function createStripeBilling({
     if (ent.creditsPerMonth == null || !ent.creditWindow) return { monthly: ent.creditsPerMonth ?? null, usedCredits: null, resetsAt: null };
     let usd = 0;
     try {
-      const rows = await db.select('ai_usage_daily', { user_id: userId, day: ['gte', ent.creditWindow.start.slice(0, 10)] }, { select: 'usd', limit: 40 });
+      const rows = await db.select('ai_usage_daily', { user_id: userId, day: ['gte', ent.creditWindow.start.slice(0, 10)] }, { select: 'usd', order: 'day.desc', limit: 400 });
       usd = rows.reduce((n, r) => n + (Number(r.usd) || 0), 0);
     } catch {
       return { monthly: ent.creditsPerMonth, usedCredits: null, resetsAt: ent.creditWindow.resetsAt };
@@ -464,6 +485,7 @@ export function createStripeBilling({
       currentPeriodEnd: acct.current_period_end ?? null,
       cancelAtPeriodEnd: acct.cancel_at_period_end === true,
       trialEndsAt: acct.trial_ends_at ?? null,
+      trialing: acct.source === 'stripe' && acct.status === 'trialing',
       graceUntil: acct.grace_until ?? null,
       compUntil: acct.comp_until ?? null,
       extraBusinesses: acct.extra_businesses ?? 0,
@@ -499,10 +521,231 @@ export function createStripeBilling({
     const rows = await store.slots(userId);
     return {
       billing: { enabled: configured(), enforce: s.enforce === true },
+      // the card trial offered on #plans and at the end of setup ("Start 7-day free trial")
+      trial: who?.isAdmin ? { days: 0, eligible: false } : await trialOffer(userId, who, acct),
       plan: ent,
       account: who?.isAdmin ? { ...(accountView(acct) ?? {}), tier: 'owner', source: 'owner' } : accountView(acct),
       businesses: { limit: ent.plan === 'legacy' || ent.plan === 'owner' ? null : ent.businessLimit, used: rows.filter((r) => r.state === 'active').length, slots: slotView(rows) },
       credits: await creditsView(userId, ent),
+    };
+  }
+
+  // ───────────── the card trial ─────────────
+
+  /** A keyed hash (CUSTOMER_TAG_SECRET) of an email or a card fingerprint: the same one matches, nothing reads back. */
+  const keyedHash = (kind, value) => {
+    const v = String(value ?? '').trim().toLowerCase();
+    if (!v || String(env.CUSTOMER_TAG_SECRET || '').length < 16) return null;
+    return crypto.createHmac('sha256', String(env.CUSTOMER_TAG_SECRET)).update(`ylb-trial:${kind}:${v}`).digest('hex');
+  };
+
+  async function trialRows(filter) {
+    try {
+      return await db.select('billing_trials', filter, { limit: 5 });
+    } catch (e) {
+      // the P1c migration isn't run: no trial is offered (we couldn't tell a second one)
+      if (e?.code === 'NOT_SET_UP') return null;
+      throw e;
+    }
+  }
+
+  /**
+   * The card trial this person may start: { days, eligible }. Only a first plan: never after a plan, a free plan or a
+   * trial (theirs, or one on the same email), and never for the owner. Fail-closed: no trial when it can't be checked.
+   */
+  async function trialOffer(userId, who, acct = null) {
+    const s = await settings().catch(() => ({}));
+    const days = Number(s.card_trial_days) || 0;
+    if (!days || who?.isAdmin === true) return { days, eligible: false };
+    const a = acct ?? (await store.account(userId).catch(() => null));
+    if (a && (a.source !== 'stripe' || a.stripe_subscription_id || a.ended_at || !['none', null, undefined].includes(a.status))) return { days, eligible: false };
+    try {
+      const mine = await trialRows({ user_id: userId });
+      if (!mine || mine.length) return { days, eligible: false };
+      const emailHash = keyedHash('email', who?.email);
+      if (emailHash) {
+        const same = await trialRows({ email_hash: emailHash });
+        if (!same || same.length) return { days, eligible: false };
+      }
+    } catch {
+      return { days, eligible: false };
+    }
+    return { days, eligible: true };
+  }
+
+  /**
+   * A subscription that is trialing: its trial is recorded once (billing_trials), with the email hash Checkout put in
+   * its metadata and the card's fingerprint (hashed). A trial whose person, email or card had one before is ended now:
+   * one write (trial_end=now), Idempotency-Key per subscription, an op so it's sent once; an unclear answer is read
+   * back by the op's recheck, never resent. Never throws (the plan is applied either way).
+   */
+  async function noteTrial(userId, sub) {
+    try {
+      if (!SUB_ID.test(String(sub?.id ?? ''))) return;
+      const seen = await trialRows({ subscription_id: sub.id });
+      // the P1c migration isn't run: nothing to record (and no trial is offered)
+      if (!seen) return;
+      const known = seen[0] ?? null;
+      if (known && known.outcome !== 'duplicate') return;
+      if (sub.status !== 'trialing') {
+        if (known?.outcome === 'duplicate') await db.update('billing_trials', { subscription_id: sub.id }, { outcome: 'ended_early', updated_at: iso() });
+        return;
+      }
+      let row = known;
+      if (!row) {
+        const acct = await store.account(userId);
+        let cardHash = null;
+        const pmId = typeof sub.default_payment_method === 'string' ? sub.default_payment_method : sub.default_payment_method?.id;
+        if (/^pm_[A-Za-z0-9_]+$/.test(String(pmId ?? ''))) {
+          try {
+            const pm = typeof sub.default_payment_method === 'object' ? sub.default_payment_method : await stripe.get(`/v1/payment_methods/${encodeURIComponent(pmId)}`);
+            cardHash = keyedHash('card', pm?.card?.fingerprint);
+          } catch {
+            cardHash = null;
+          }
+        }
+        const emailHash = /^[0-9a-f]{64}$/.test(String(sub.metadata?.ylb_email_hash ?? '')) ? sub.metadata.ylb_email_hash : null;
+        const before = [
+          ...((await trialRows({ user_id: userId })) ?? []),
+          ...(emailHash ? (await trialRows({ email_hash: emailHash })) ?? [] : []),
+          ...(cardHash ? (await trialRows({ card_hash: cardHash })) ?? [] : []),
+        ].filter((r) => r.subscription_id !== sub.id);
+        const { tierItem } = subscriptionItems(sub);
+        row = { subscription_id: sub.id, user_id: userId, customer_tag: acct?.customer_tag ?? customerTag(userId, env), email_hash: emailHash, card_hash: cardHash, tier: tierFromLookupKey(tierItem?.price?.lookup_key), started_at: secToIso(sub.trial_start) ?? iso(), trial_ends_at: secToIso(sub.trial_end), outcome: before.length ? 'duplicate' : 'trialing', updated_at: iso() };
+        await db.insert('billing_trials', row, { ignoreDuplicates: true, onConflict: 'subscription_id' });
+        if (!before.length) return;
+        alert('trial_duplicate', { tag: row.customer_tag });
+      }
+      await endTrialNow(userId, sub);
+    } catch (e) {
+      safeLog('billing_trial_note_failed', { code: e?.code, kind: e?.kind }, log);
+    }
+  }
+
+  /** End a duplicate trial now (charged today), once per subscription. */
+  async function endTrialNow(userId, sub) {
+    const key = `ylb-trial-end-${sub.id}`;
+    const ins = await store.insertOp(userId, { kind: 'end_trial', clientRequestId: uuidFrom(key), request: { subscription: sub.id, from: { status: 'trialing' }, to: { status: 'active' } }, idempotencyKey: key });
+    // sent before (this op or its outcome): never again; another op in flight: the next sync tries
+    if (!ins.op) return;
+    const out = await stripe.post(`/v1/subscriptions/${sub.id}`, { trial_end: 'now', proration_behavior: 'none' }, { idempotencyKey: key });
+    if (out.outcome === 'ok') {
+      await store.finishOp(ins.op, { state: 'done', stripe_ref: { subscription: sub.id } });
+      await db.update('billing_trials', { subscription_id: sub.id }, { outcome: 'ended_early', updated_at: iso() });
+      await applySubscription(userId, out.value, now(), { skipTrial: true });
+      return;
+    }
+    if (out.outcome === 'failed') {
+      await store.finishOp(ins.op, { state: 'failed', error_code: out.error?.kind === 'card' ? 'CARD_DECLINED' : 'UNAVAILABLE' });
+      await db.update('billing_trials', { subscription_id: sub.id }, { outcome: 'end_failed', updated_at: iso() });
+      alert('trial_end_failed', { errorKind: out.error?.kind, code: out.error?.code });
+      return;
+    }
+    // no answer: read back later (recheckLiveOp / the hourly job), never resent
+    await store.finishOp(ins.op, { state: 'unknown' });
+  }
+
+  // ───────────── cancel surveys ─────────────
+
+  const surveyText = (v) => (v == null ? null : String(v).replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 1000) || null);
+
+  async function saveSurvey(row) {
+    try {
+      await db.insert('cancel_surveys', { id: crypto.randomUUID(), created_at: iso(), ...row }, row.source === 'portal' ? { ignoreDuplicates: true, onConflict: 'subscription_id' } : {});
+      return true;
+    } catch (e) {
+      safeLog('billing_survey_save_failed', { code: e?.code }, log);
+      return false;
+    }
+  }
+
+  /** A cancel made in the Customer Portal: its survey answer (cancellation_details), kept once per subscription. */
+  async function notePortalCancel(userId, sub, acct) {
+    try {
+      const fb = sub?.cancellation_details?.feedback;
+      if (!(sub?.cancel_at_period_end === true || sub?.status === 'canceled') || !REASON_OF[fb]) return;
+      const mine = await db.select('cancel_surveys', { subscription_id: sub.id }, { select: 'source,outcome', limit: 5 });
+      // the app's own cancel wrote its survey (and put the same answer in Stripe): not twice
+      if (mine.some((r) => r.source === 'app' && r.outcome === 'cancelled') || mine.some((r) => r.source === 'portal')) return;
+      const { tierItem } = subscriptionItems(sub);
+      await saveSurvey({ user_id: userId, customer_tag: acct?.customer_tag ?? null, source: 'portal', reason: REASON_OF[fb], comment: surveyText(sub.cancellation_details?.comment), offer: null, outcome: 'cancelled', tier: tierFromLookupKey(tierItem?.price?.lookup_key), status: String(sub.status ?? ''), subscription_id: sub.id });
+    } catch (e) {
+      safeLog('billing_survey_portal_failed', { code: e?.code }, log);
+    }
+  }
+
+  function surveyFields(body) {
+    const reason = body?.reason;
+    if (!CANCEL_REASONS.includes(reason)) throw fail(400, 'BAD_REQUEST', 'Choose why you’re leaving.');
+    const offer = body?.offer == null ? 'none' : body.offer;
+    if (!CANCEL_OFFERS.includes(offer)) throw fail(400, 'BAD_REQUEST', 'Choose one of the offers.');
+    const comment = surveyText(body?.comment);
+    return { reason, offer, comment };
+  }
+
+  /** The cancel: the survey first, then cancel at the period's end (a trial ends without a charge). */
+  async function cancelPlan(who, body) {
+    if (body?.confirm !== true) throw fail(400, 'BAD_REQUEST', 'Confirm the change first.');
+    const { reason, offer, comment } = surveyFields(body);
+    const crid = body?.clientRequestId;
+    let saved = false;
+    return moneyOp(who, 'cancel', crid, async (sub, acct) => {
+      if (sub.cancel_at_period_end === true) throw fail(409, 'BAD_REQUEST', 'Your plan is already set to end.');
+      if (!saved) {
+        const { tierItem } = subscriptionItems(sub);
+        saved = await saveSurvey({ user_id: who.id, customer_tag: acct.customer_tag, source: 'app', reason, comment, offer, outcome: 'cancelled', tier: tierFromLookupKey(tierItem?.price?.lookup_key), status: String(sub.status ?? ''), subscription_id: sub.id });
+      }
+      return {
+        request: { from: { cancel: false }, to: { cancel: true }, reason },
+        path: `/v1/subscriptions/${sub.id}`,
+        body: { cancel_at_period_end: 'true', cancellation_details: { feedback: FEEDBACK_OF[reason], ...(comment ? { comment } : {}) } },
+        key: `ylb-cancel-${who.id}-${crid}`,
+      };
+    });
+  }
+
+  /** Someone answered the survey and took the offer instead (a cheaper plan, tips, telling us the missing feature). */
+  async function keepSurvey(who, body) {
+    const { reason, offer, comment } = surveyFields(body);
+    const outcome = body?.outcome === 'switched' ? 'switched' : 'kept';
+    const acct = await store.account(who.id);
+    await saveSurvey({ user_id: who.id, customer_tag: acct?.customer_tag ?? null, source: 'app', reason, comment, offer, outcome, tier: isTier(acct?.tier) ? acct.tier : null, status: acct?.status ?? null, subscription_id: acct?.stripe_subscription_id ?? null });
+    return { ok: true };
+  }
+
+  async function resumePlan(who, body) {
+    if (body?.confirm !== true) throw fail(400, 'BAD_REQUEST', 'Confirm the change first.');
+    const crid = body?.clientRequestId;
+    return moneyOp(who, 'resume', crid, async (sub) => {
+      if (sub.cancel_at_period_end !== true) throw fail(409, 'BAD_REQUEST', 'Your plan isn’t set to end.');
+      return { request: { from: { cancel: true }, to: { cancel: false } }, path: `/v1/subscriptions/${sub.id}`, body: { cancel_at_period_end: 'false' }, key: `ylb-resume-${who.id}-${crid}` };
+    });
+  }
+
+  /** Owner: why people cancel (counts by reason, the latest comments) and the trials. */
+  async function ownerSurveys(url) {
+    const n = Math.min(500, Math.max(1, Math.trunc(Number(url.searchParams.get('limit')) || 200)));
+    let rows = [];
+    let trials = [];
+    try {
+      rows = await db.select('cancel_surveys', {}, { order: 'created_at.desc', limit: n });
+      trials = await db.select('billing_trials', {}, { order: 'started_at.desc', limit: n });
+    } catch (e) {
+      if (e?.code === 'NOT_SET_UP') return { missing: 'supabase/migrations/20261114000000_trial_paywall.sql', counts: {}, recent: [], trials: { trialing: 0, endedEarly: 0, duplicates: 0, list: [] } };
+      throw e;
+    }
+    const counts = Object.fromEntries(CANCEL_REASONS.map((r) => [r, { cancelled: 0, kept: 0 }]));
+    for (const r of rows) if (counts[r.reason]) counts[r.reason][r.outcome === 'cancelled' ? 'cancelled' : 'kept'] += 1;
+    const live = (t) => t.outcome === 'trialing' && ms(t.trial_ends_at) != null && ms(t.trial_ends_at) > now();
+    return {
+      counts,
+      recent: rows.slice(0, 50).map((r) => ({ reason: r.reason, comment: r.comment ?? null, source: r.source, outcome: r.outcome, offer: r.offer ?? null, tier: r.tier ?? null, at: r.created_at, customerTag: r.customer_tag ?? null })),
+      trials: {
+        trialing: trials.filter(live).length,
+        endedEarly: trials.filter((t) => t.outcome === 'ended_early').length,
+        duplicates: trials.filter((t) => t.outcome === 'duplicate' || t.outcome === 'ended_early' || t.outcome === 'end_failed').length,
+        list: trials.slice(0, 50).map((t) => ({ customerTag: t.customer_tag, tier: t.tier ?? null, startedAt: t.started_at, trialEndsAt: t.trial_ends_at ?? null, outcome: live(t) ? 'trialing' : t.outcome === 'trialing' ? 'ended' : t.outcome })),
+      },
     };
   }
 
@@ -612,6 +855,7 @@ export function createStripeBilling({
       if ((list?.data ?? []).some((s) => !ENDED_STATUSES.includes(s.status))) throw fail(409, 'ALREADY_SUBSCRIBED', MSG.already);
     }
     const wanted = `${tier}:${interval}:${extra}`;
+    // (an open session for the same choice is handed back as is: it was made with the same trial offer)
     // one open session at a time: the same choice gets the same page back, any other open page closes first (so only
     // one can ever be paid). Every session is made with the customer, so the customer's list has them all.
     if (acct.stripe_customer_id) {
@@ -624,9 +868,10 @@ export function createStripeBilling({
     const tierPrice = await priceId(lookupKeyFor(tier, interval));
     const lineItems = [{ price: tierPrice, quantity: 1 }];
     if (extra > 0) lineItems.push({ price: await priceId(lookupKeyFor('business', interval)), quantity: extra });
-    const s = await settings();
-    const firstTime = !acct.stripe_subscription_id && acct.source !== 'comp' && !acct.ended_at;
-    const trialDays = Number(s.card_trial_days) > 0 && firstTime ? Number(s.card_trial_days) : 0;
+    // the card trial: a first plan only, once per person (and their email); the card is taken now, charged on day 8
+    const offer = await trialOffer(who.id, who, acct);
+    const trialDays = offer.eligible ? offer.days : 0;
+    const emailHash = keyedHash('email', who.email);
     const expiresAt = Math.floor(now() / 1000) + 31 * 60;
     const params = {
       mode: 'subscription',
@@ -634,7 +879,11 @@ export function createStripeBilling({
       client_reference_id: who.id,
       line_items: lineItems,
       metadata: { ylb_user: who.id, ylb_plan: wanted },
-      subscription_data: { metadata: { ylb_user: who.id }, ...(trialDays ? { trial_period_days: trialDays } : {}) },
+      subscription_data: {
+        metadata: { ylb_user: who.id, ...(emailHash ? { ylb_email_hash: emailHash } : {}) },
+        ...(trialDays ? { trial_period_days: trialDays, trial_settings: { end_behavior: { missing_payment_method: 'cancel' } } } : {}),
+      },
+      ...(trialDays ? { payment_method_collection: 'always' } : {}),
       allow_promotion_codes: 'false',
       success_url: `${base}/?billing=success&session_id={CHECKOUT_SESSION_ID}#dashboard`,
       cancel_url: `${base}/#plans`,
@@ -680,6 +929,9 @@ export function createStripeBilling({
   function opStateOn(op, sub) {
     const req = op.request ?? {};
     if (op.kind === 'cancel_for_delete') return sub.status === 'canceled' ? 'to' : 'from';
+    if (op.kind === 'cancel') return sub.cancel_at_period_end === true || sub.status === 'canceled' ? 'to' : 'from';
+    if (op.kind === 'resume') return sub.cancel_at_period_end === true ? 'from' : 'to';
+    if (op.kind === 'end_trial') return sub.status === 'trialing' ? 'from' : 'to';
     const { tierItem, businessItem } = subscriptionItems(sub);
     if (op.kind === 'change_plan') {
       const key = tierItem?.price?.lookup_key;
@@ -936,6 +1188,7 @@ export function createStripeBilling({
         extraBusinesses: r.extra_businesses,
         compExtra: r.comp_extra,
         currentPeriodEnd: r.current_period_end,
+        trialEndsAt: r.status === 'trialing' ? r.trial_ends_at ?? null : null,
         graceUntil: r.grace_until,
         compUntil: r.comp_until,
         cancelAtPeriodEnd: r.cancel_at_period_end === true,
@@ -1421,7 +1674,7 @@ export function createStripeBilling({
     const m = req.method;
     const write = m !== 'GET';
     if (write && limit('billing-write', who.id)) throw fail(429, 'RATE_LIMITED', 'Too many requests. Try again in a minute.');
-    const ownerRoute = sub === 'accounts' || sub === 'settings' || /^accounts\//.test(sub);
+    const ownerRoute = sub === 'accounts' || sub === 'settings' || sub === 'surveys' || /^accounts\//.test(sub);
     if (ownerRoute && who.isAdmin !== true) throw fail(403, 'FORBIDDEN', 'Only the app owner can see this.');
     if (!db?.enabled) throw notReady();
     // the owner's settings page works before Stripe is set up (it says what's missing)
@@ -1436,6 +1689,10 @@ export function createStripeBilling({
     }
     if (sub === 'businesses' && m === 'POST') return changeBusinesses(who, await body(req));
     if (sub === 'businesses/active' && m === 'PUT') return { status: 200, body: await chooseActive(who, await body(req)) };
+    if (sub === 'cancel' && m === 'POST') return cancelPlan(who, await body(req));
+    if (sub === 'cancel/survey' && m === 'POST') return { status: 200, body: await keepSurvey(who, await body(req)) };
+    if (sub === 'resume' && m === 'POST') return resumePlan(who, await body(req));
+    if (sub === 'surveys' && m === 'GET') return { status: 200, body: await ownerSurveys(url) };
     if (sub === 'accounts' && m === 'GET') return { status: 200, body: await ownerAccounts(url) };
     const tagRoute = /^accounts\/([^/]+)\/(comp|sync)$/.exec(sub);
     if (tagRoute && tagRoute[2] === 'comp' && m === 'PUT') return { status: 200, body: await putComp(decodeURIComponent(tagRoute[1]), await body(req)) };
@@ -1478,6 +1735,7 @@ export function createStripeBilling({
     stripe,
     /** for tests: the read-back and the cron jobs, run directly */
     resolveOp,
+    trialOffer,
     hourly,
     reconcile,
     retention,
