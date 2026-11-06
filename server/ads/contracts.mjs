@@ -77,6 +77,8 @@
  */
 
 export const ADS_PLATFORMS = Object.freeze(['meta', 'google']);
+/** The last 4 digits of an ad account id (act_123456789 → 6789), what the app shows to tell accounts apart. */
+export const idTailOf = (id) => String(id ?? '').replace(/^act_/, '').slice(-4);
 /** our ads platform → the connected-account platform (server/connections/zernio.mjs, analytics) */
 export const CONNECTION_OF = Object.freeze({ meta: 'meta_ads', google: 'google_ads' });
 /** our ads platform → the `platform` field Zernio's update bodies take */
