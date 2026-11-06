@@ -10,7 +10,8 @@ import type { CodeAsset, CodeKind, Project, PromptImage, Published } from '@/lib
 import { buildDocument, type CodeResult } from '@/ai/local/code';
 import { imageDataUrls, imageKeyNumber, imageTokens } from '@/lib/promptImages';
 import { appOriginNow, buildHash, type PublishBuild } from '@/lib/publish';
-import { allKnownOfferIds } from '@/store/offers';
+import { allKnownOfferIds, offerIdsForCopy } from '@/store/offers';
+import { hasBuyToken } from './buyLinks';
 import { hasLeadAction, LEAD_ACTION } from '@/lib/leadAction';
 import { listJoin, uid } from '@/lib/utils';
 import { useStore } from '@/store/useStore';
@@ -161,7 +162,9 @@ export function readyDocument(a: CodeAsset, ready: Record<string, string> | null
 }
 
 /** documentWithImages, making the data URLs (or using ones already made for the preview). */
-export async function downloadDocument(a: CodeAsset, ready?: Record<string, string> | null): Promise<{ html: string; missing: string[] }> {
+export async function downloadDocument(a: CodeAsset, ready?: Record<string, string> | null, projectId?: string): Promise<{ html: string; missing: string[] }> {
+  // its Buy buttons: the business's offers asked of the server first, so none is left a dead # link
+  if (projectId && hasBuyToken(allCode(codeOf(a)))) await offerIdsForCopy(projectId);
   return readyDocument(a, ready) ?? documentWithImages(a, await imageDataUrls(shownImages(a)));
 }
 

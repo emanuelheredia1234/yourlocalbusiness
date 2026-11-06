@@ -95,6 +95,8 @@ export function describeOffer(r, origin, sales = null) {
     provider: r.provider,
     status: r.status,
     environment: r.provider === 'whop' ? (ref.environment === 'sandbox' ? 'sandbox' : 'production') : null,
+    // the Whop connection it sells through (the browser matches it by id: a reconnect makes a new one)
+    connectionId: r.provider === 'whop' ? r.connection_id ?? null : null,
     checkoutHost,
     // an outside link is the owner's own: they see it to edit it
     ...(r.provider === 'external' ? { url: typeof ref.url === 'string' ? ref.url : '' } : {}),

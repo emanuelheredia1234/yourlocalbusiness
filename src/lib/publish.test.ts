@@ -3,6 +3,9 @@
 // refusals become plain results and messages.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MediaRef, PromptImage } from './types';
+import seoSalesSrc from '@/pages/marketing/SeoSalesPage.tsx?raw';
+import seoHtmlSrc from '@/pages/marketing/SeoHtmlMode.tsx?raw';
+import codeTabSrc from '@/pages/studio/CodeTab.tsx?raw';
 
 vi.mock('./promptImages', async (original) => ({
   ...(await original<typeof import('./promptImages')>()),
@@ -311,6 +314,30 @@ describe('where forms send', () => {
     expect(ready.html).toBe(`<a href="/b/${A}">Buy</a><a href="#">Other</a><script>var x = "{{buy:${A}}}";</script>`);
     // with no offers known, nothing points anywhere
     expect((await preparePublish({ html: `<a href="{{buy:${A}}}">Buy</a>`, images: [] }, 'shop')).html).toBe('<a href="#">Buy</a>');
+  });
+
+  it('an SEO page’s buy links: its business’s offers are asked for, so publishing gives /b/<id> (never #)', async () => {
+    const A = 'AAAAAAAAAAAAAAAAAAAAAA';
+    const html = `<a class="btn" href="{{buy:${A}}}">Buy now</a>`;
+    const asked: string[] = [];
+    const ask = async (projectId: string) => (asked.push(projectId), new Set([A]));
+    const offers = await pub.offersForPublish(html, 'proj_1', ask);
+    expect(asked).toEqual(['proj_1']);
+    expect((await preparePublish({ html, images: [] }, 'shop', undefined, offers)).html).toBe(`<a class="btn" href="/b/${A}">Buy now</a>`);
+    // a page without buy links asks nothing
+    expect(await pub.offersForPublish('<p>Hi</p>', 'proj_1', ask)).toBeUndefined();
+    expect(asked).toHaveLength(1);
+    // no business, or the server can't say: not published (its Buy buttons would go nowhere)
+    await expect(pub.offersForPublish(html, undefined, ask)).rejects.toMatchObject({ code: 'OFFERS_UNAVAILABLE' });
+    await expect(pub.offersForPublish(html, 'proj_1', () => Promise.reject(new Error('down')))).rejects.toMatchObject({ code: 'OFFERS_UNAVAILABLE' });
+  });
+
+  it('every Publish panel is given its business (so its buy links can be checked)', () => {
+    for (const [f, src] of Object.entries({ SeoSalesPage: seoSalesSrc, SeoHtmlMode: seoHtmlSrc, CodeTab: codeTabSrc })) {
+      const panels = src.split('<PublishPanel').slice(1).map((p: string) => p.slice(0, p.indexOf('/>')));
+      expect(panels.length, f).toBeGreaterThan(0);
+      for (const p of panels) expect(p, f).toMatch(/\bprojectId=\{/);
+    }
   });
 
   it('sends the page’s project with it, only when it’s a valid id', async () => {

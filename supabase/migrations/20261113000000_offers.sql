@@ -43,6 +43,7 @@ create table if not exists public.payment_connections (
   status text not null default 'active',
   last_event_at timestamptz,
   checked_at timestamptz,
+  reconciled_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint payment_connections_id_format check (id ~ '^[A-Za-z0-9_-]{22}$'),
@@ -62,6 +63,9 @@ create table if not exists public.payment_connections (
 create unique index if not exists payment_connections_one_live on public.payment_connections (user_id, provider, environment)
   where status <> 'disconnected';
 create index if not exists payment_connections_user on public.payment_connections (user_id);
+-- the daily reconcile takes the least recently reconciled connections first (a table made by an earlier run of this
+-- file gets the column here)
+alter table public.payment_connections add column if not exists reconciled_at timestamptz;
 
 create or replace trigger payment_connections_touch before insert or update on public.payment_connections
   for each row execute function public.ylb_touch_updated_at();
@@ -151,6 +155,30 @@ create or replace trigger sales_touch before insert or update on public.sales
 
 alter table public.sales enable row level security;
 revoke all on table public.sales from anon, authenticated;
+
+-- ───────────── sale_refunds ─────────────
+
+-- Each refund of a sale, once, by the provider's refund id: when a refund event doesn't carry its payment's own
+-- refunded total, the sale's refunded amount is the sum of its distinct refunds (two $10 refunds are $20).
+create table if not exists public.sale_refunds (
+  provider text not null,
+  environment text not null,
+  refund_id text not null,
+  provider_payment_id text not null,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  amount_minor bigint not null default 0,
+  created_at timestamptz not null default now(),
+  primary key (provider, environment, refund_id),
+  constraint sale_refunds_provider_check check (provider in ('whop', 'stripe')),
+  constraint sale_refunds_environment_check check (environment in ('sandbox', 'production')),
+  constraint sale_refunds_amount_check check (amount_minor >= 0),
+  constraint sale_refunds_ids_size check (length(refund_id) <= 100 and length(provider_payment_id) <= 100)
+);
+
+create index if not exists sale_refunds_payment on public.sale_refunds (provider, environment, provider_payment_id);
+
+alter table public.sale_refunds enable row level security;
+revoke all on table public.sale_refunds from anon, authenticated;
 
 -- ───────────── functions (server-only) ─────────────
 

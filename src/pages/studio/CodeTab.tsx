@@ -47,7 +47,8 @@ import {
   type Draft,
 } from '@/lib/codeAssets';
 import { AttachPayment } from '@/components/offers/AttachPayment';
-import { findOffer, useProjectOffers } from '@/store/offers';
+import { findOffer, useOffers, useProjectOffers } from '@/store/offers';
+import { hasBuyToken } from '@/lib/buyLinks';
 import { offerPrice } from '@/lib/offers';
 import type { BuyOffer } from '@/ai/tasks';
 
@@ -428,8 +429,10 @@ export function CodeTab({ project }: { project: Project }) {
       if (d.missing.length) toast({ kind: 'error', ...leftOutNote(d.missing) });
       return d.html;
     };
-    const ready = readyDocument(a, a.id === active?.id ? preview.full : null);
-    return ready ? finish(ready) : downloadDocument(a).then(finish);
+    // Buy buttons before the business's offers loaded: asked of the server first (not straight away)
+    const offersKnown = !hasBuyToken(codeOf(a).html + codeOf(a).js) || !!useOffers.getState().byProject[project.id];
+    const ready = offersKnown ? readyDocument(a, a.id === active?.id ? preview.full : null) : null;
+    return ready ? finish(ready) : downloadDocument(a, a.id === active?.id ? preview.full : null, project.id).then(finish);
   };
 
   const exportHtml = async (a: CodeAsset) => {

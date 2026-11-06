@@ -14,9 +14,11 @@ import {
   checkoutHint,
   createExternalOffer,
   createWhopOffer,
+  offerConnection,
   offerPrice,
   offerProblem,
   requestId,
+  requestIdsAfter,
   whopPlans,
   whopProducts,
   type Offer,
@@ -45,7 +47,7 @@ export function OfferBadges({ offer }: { offer: Offer }) {
 }
 
 /** The attached offer, compact: title · price · provider · Copy link · Change · Remove, and a warning when it isn't selling. */
-export function AttachedOffer({ offer, connection, onChange, onRemove }: { offer: Offer; connection?: WhopConnection | null; onChange: () => void; onRemove: () => void }) {
+export function AttachedOffer({ offer, connection, onChange, onRemove }: { offer: Offer; connection?: Pick<WhopConnection, 'status'> | null; onChange: () => void; onRemove: () => void }) {
   const problem = offerProblem(offer, connection);
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
@@ -99,8 +101,9 @@ export function AttachPaymentForm({
 }) {
   const choosable = offers.filter((o) => o.status !== 'archived' && o.status !== 'draft');
   const [tab, setTab] = useState<Tab>(initialTab ?? (choosable.length ? 'pick' : whopOn && connections.length ? 'whop' : 'external'));
-  // one per dialog open: a double press of Create makes one offer, and one Whop checkout link
-  const [crid] = useState(requestId);
+  // a double press of Create makes one offer, and one Whop checkout link: each kind keeps its request id until the
+  // server definitely refused it (then nothing was made, and another try is a new request, never Whop's replay)
+  const [crids, setCrids] = useState(() => ({ whop: requestId(), own: requestId() }));
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [pending, setPending] = useState<Offer | null>(initialPending ?? null);
@@ -152,13 +155,15 @@ export function AttachPaymentForm({
   const [url, setUrl] = useState('');
   const [price, setPrice] = useState('');
 
-  const run = async (what: string, fn: () => Promise<void>) => {
+  const run = async (what: string, fn: () => Promise<void>, kind?: 'whop' | 'own') => {
     setBusy(what);
     setError('');
     try {
       await fn();
     } catch (e) {
       setError(message(e));
+      // an answer from the server (not a lost connection): nothing was made, so the next try is a new request
+      if (kind) setCrids((c) => requestIdsAfter(c, kind, e));
     } finally {
       setBusy('');
     }
@@ -176,13 +181,13 @@ export function AttachPaymentForm({
         connectionId: conn.id,
         productId,
         variantId: planId,
-        clientRequestId: crid,
+        clientRequestId: crids.whop,
         title: title.trim() || product?.title || undefined,
       });
       useOffers.getState().put(got.offer);
       if (got.unconfirmed) setPending(got.offer);
       else done(got.offer);
-    });
+    }, 'whop');
   const checkAgain = () =>
     run('check', async () => {
       if (!pending) return;
@@ -202,10 +207,10 @@ export function AttachPaymentForm({
           title: title.trim(),
           url: url.trim(),
           priceDisplay: price.trim() || undefined,
-          clientRequestId: crid,
+          clientRequestId: crids.own,
         }),
       );
-    });
+    }, 'own');
 
   const tabs = [
     ...(choosable.length ? [{ id: 'pick' as const, label: 'Your offers' }] : []),
@@ -406,7 +411,7 @@ export function AttachPayment({
   }, [on, whop, connections]);
   if (!on) return <>{fallback ?? null}</>;
   const offer = value ? offers.find((o) => o.id === value) : undefined;
-  const conn = offer?.provider === 'whop' ? connections?.find((c) => c.environment === offer.environment) : null;
+  const conn = offer ? offerConnection(offer, connections) : null;
   const show = () => {
     setOpenKey((k) => k + 1);
     setOpen(true);

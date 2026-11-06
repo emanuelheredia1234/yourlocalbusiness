@@ -49,6 +49,16 @@ export function listingSuggestions(p: Project): { hours: string; guarantee: stri
   return { hours: bt.hours, guarantee: bt.guarantee };
 }
 
+/**
+ * The offer a listing sells through, when it uses one: a product's always, a business's only while its button is
+ * "Buy" (switched to booking or a contact, the typed link is the button's again).
+ */
+export function listingOfferId(p: Project): string | undefined {
+  const d = p.studio.listing;
+  if (!d.offerId) return undefined;
+  return p.track !== 'business' || d.bookingType === 'buy' ? d.offerId : undefined;
+}
+
 /** Build the marketplace listing for a project from the shared Project Context (brand, studio, listing draft). */
 export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, gallery?: string[]): Listing {
   const isBiz = p.track === 'business';
@@ -62,7 +72,8 @@ export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, 
       ? p.studio.outline.slice(0, 8).map((s) => s.title)
       : p.idea?.features ?? [];
   // an attached offer (as last loaded from the server) is the listing's buy link: its permanent /b/<id> address
-  const offer = d.offerId ? findOffer(p.id, d.offerId) : undefined;
+  const offerId = listingOfferId(p);
+  const offer = offerId ? findOffer(p.id, offerId) : undefined;
   const sells = offer && offer.link && offer.status !== 'archived' && (offer.provider === 'whop' || offer.provider === 'external') ? offer : undefined;
   const logoUpload = p.brand.logo.mode === 'upload' && p.brand.logo.uploadDataUrl && p.brand.logo.uploadDataUrl.length < 30_000 ? p.brand.logo.uploadDataUrl : undefined;
   return {

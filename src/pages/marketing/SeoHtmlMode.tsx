@@ -137,6 +137,7 @@ export function SeoHtmlMode({ project, publishRef, rail, onRail }: { project: Pr
               <PublishPanel
                 pageId={seoPageId(project)}
                 kind="seo"
+                projectId={projectId}
                 title={meta.metaTitle || h.title}
                 defaultSlug={meta.slug}
                 published={published}

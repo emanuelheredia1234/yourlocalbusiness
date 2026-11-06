@@ -39,13 +39,16 @@ export function SalesSection({ projectId, brand, days }: { projectId: string; br
   useEffect(() => {
     if (on) void useOffers.getState().refreshSummary(projectId, days);
   }, [on, projectId, days]);
-  if (!on || !loaded || !offers.length) return null;
+  // archived offers aren't in the list, but their sales and clicks stay: those keep the section
+  const sold = !!summary && (summary.live.count > 0 || summary.test.count > 0);
+  const history = sold || (!!summary && (summary.clicks > 0 || summary.offers.length > 0));
+  if (!on || !loaded || (!offers.length && !history)) return null;
   const fresh = summary && summary.days === days ? summary : null;
   return (
     <Section title="Sales" description="Sales made through your Whop buy links show here. Sales on your own checkout links happen on that site, so only their clicks show." className="mt-6">
       <div className="flex flex-col gap-6">
         <SalesTiles summary={fresh} days={days} />
-        {offers.some((o) => o.provider === 'whop') && <SalesTable projectId={projectId} brand={brand} offers={offers} />}
+        {(sold || offers.some((o) => o.provider === 'whop')) && <SalesTable projectId={projectId} brand={brand} offers={offers} />}
       </div>
     </Section>
   );

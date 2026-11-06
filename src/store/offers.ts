@@ -104,6 +104,30 @@ export async function offerIdsForPublish(projectId: string): Promise<Set<string>
   return new Set(offers.filter((o) => o.status !== 'archived' && o.status !== 'draft').map((o) => o.id));
 }
 
+/** A business's buy links as last loaded: buy:<id> → its full /b/<id> link (for {{buy:<id>}} in emails). */
+export function buyLinksOf(projectId: string): Record<string, string> {
+  return Object.fromEntries((useOffers.getState().byProject[projectId] ?? []).filter((o) => o.link).map((o) => [`buy:${o.id}`, o.link]));
+}
+
+/** buyLinksOf, the business's offers loaded first when they haven't been (an export made away from its page). */
+export async function loadBuyLinks(projectId: string): Promise<Record<string, string>> {
+  if (!__ARTIFACT_BUILD__ && !useOffers.getState().byProject[projectId]) await useOffers.getState().refresh(projectId);
+  return buyLinksOf(projectId);
+}
+
+/**
+ * A copy of a business's page (Copy HTML, Export HTML): its offer ids asked of the server now, so its Buy buttons
+ * get their links even when no offers were loaded yet. Throws, in plain words, when they can't be asked now.
+ */
+export async function offerIdsForCopy(projectId: string): Promise<Set<string>> {
+  if (__ARTIFACT_BUILD__) return new Set();
+  try {
+    return await offerIdsForPublish(projectId);
+  } catch {
+    throw new Error('Couldn’t check this page’s buy links. Try again in a moment.');
+  }
+}
+
 /** The ids of a business's offers as last loaded (for resolving {{buy:<id>}}). */
 export function knownOfferIds(projectId: string): Set<string> {
   return new Set((useOffers.getState().byProject[projectId] ?? []).map((o) => o.id));

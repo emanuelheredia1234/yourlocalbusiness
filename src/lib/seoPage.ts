@@ -7,8 +7,8 @@
 import type { Project, PromptImage, SalesPage } from '@/lib/types';
 import { imageDataUrls, imageKeyNumber, nextImageKey } from '@/lib/promptImages';
 import { appOriginNow, type PublishBuild, type PublishTarget } from '@/lib/publish';
-import { resolveBuyTokens } from '@/lib/buyLinks';
-import { allKnownOfferIds } from '@/store/offers';
+import { hasBuyToken, resolveBuyTokens } from '@/lib/buyLinks';
+import { offerIdsForCopy } from '@/store/offers';
 import { exportSalesHtml, ownCanonical, pageImageIds, type SalesHtmlOptions } from '@/ai/local/seo';
 import { seoHtmlDocument, seoHtmlShownImages } from './seoHtml';
 
@@ -57,8 +57,11 @@ export function seoSourceHtml(project: Project): string {
   return salesPage && seo ? exportSalesHtml(salesPage, seo, project.brand, project, { imageUrl: tokens(seoImages), imageSize: sizes(seoImages), leadAction: leadActionOf(project) }) : '';
 }
 
-/** A copy's buy links: each offer's full address, so the file works from anywhere. */
-const copyBuyLinks = (html: string) => resolveBuyTokens(html, { mode: 'absolute', origin: appOriginNow(), known: allKnownOfferIds() });
+/**
+ * A copy's buy links: each of the business's offers' full address, so the file works from anywhere. Its offers are
+ * asked of the server first (a copy made before any were loaded would otherwise have dead # buttons).
+ */
+const copyBuyLinks = async (html: string, projectId: string) => (hasBuyToken(html) ? resolveBuyTokens(html, { mode: 'absolute', origin: appOriginNow(), known: await offerIdsForCopy(projectId) }) : html);
 
 /**
  * The page as one file, with its images inside it (Copy and Export HTML). `missing` lists the numbers
@@ -70,14 +73,14 @@ export async function seoFileHtml(project: Project): Promise<{ html: string; mis
     const keys = new Set(seoHtmlShownImages(project));
     const used = seoHtml.images.filter((i) => keys.has(i.key));
     const urls = used.length ? await imageDataUrls(used) : {};
-    const html = copyBuyLinks(seoHtmlDocument(project, { canonical: seo!.canonical, origin: '', leadAction: leadActionOf(project), imageUrl: (k) => urls[k] }));
+    const html = await copyBuyLinks(seoHtmlDocument(project, { canonical: seo!.canonical, origin: '', leadAction: leadActionOf(project), imageUrl: (k) => urls[k] }), project.id);
     return { html, missing: used.filter((i) => !urls[i.key]).map((i) => imageKeyNumber(i.key)) };
   }
   if (!salesPage || !seo) return { html: '', missing: [] };
   const used = shownPromptImages(salesPage, seoImages);
   const urls = used.length ? await imageDataUrls(used) : {};
   const byId = new Map(used.map((i) => [i.media.id, urls[i.key]]));
-  const html = copyBuyLinks(exportSalesHtml(salesPage, seo, project.brand, project, { imageUrl: (id) => byId.get(id), imageSize: sizes(seoImages), leadAction: leadActionOf(project) }));
+  const html = await copyBuyLinks(exportSalesHtml(salesPage, seo, project.brand, project, { imageUrl: (id) => byId.get(id), imageSize: sizes(seoImages), leadAction: leadActionOf(project) }), project.id);
   return { html, missing: used.filter((i) => !urls[i.key]).map((i) => imageKeyNumber(i.key)) };
 }
 

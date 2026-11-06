@@ -37,6 +37,7 @@ const KEY_RE = /^[\x21-\x7e]{20,300}$/;
 const SECRET_RE = /^[\x21-\x7e]{8,300}$/;
 const WEBHOOK_ID_RE = /^[A-Za-z0-9_-]{4,100}$/;
 const HEADER_ID_RE = /^[A-Za-z0-9_.-]{1,128}$/;
+const REFUND_ID_RE = /^[A-Za-z]{2,8}_[A-Za-z0-9]{4,64}$/;
 const PAY_STATUS_EVENT = { paid: 'payment.succeeded', pending: 'payment.pending', open: 'payment.pending', void: 'payment.failed', uncollectible: 'payment.failed' };
 
 const iso = (t) => new Date(t).toISOString();
@@ -523,8 +524,24 @@ export function createWhop({ db, crypto: pc, fetch = globalThis.fetch, now = () 
     const [sale] = await within(DB_TIMEOUT_MS, db.select('sales', { provider: 'whop', environment: conn.environment, provider_payment_id: paymentId }, { limit: 1 }));
     if (!sale || sale.user_id !== conn.user_id || sale.provider_account !== conn.account_id) return 'not_ours';
     const s = { paymentId, membershipId: sale.provider_membership_id, amountMinor: Number(sale.amount_minor) || 0, refundedMinor: Number(sale.refunded_minor) || 0, netMinor: sale.net_minor == null ? null : Number(sale.net_minor), currency: sale.currency, email: sale.buyer_email, paidAt: sale.paid_at };
-    const { status, refundedMinor } = change(s);
+    const { status, refundedMinor } = await change(s);
     return within(DB_TIMEOUT_MS, db.rpc('record_sale', { p: salePayload(conn, { id: sale.offer_id, project_id: sale.project_id }, { ...s, refundedMinor }, status, at) }));
+  }
+
+  const refundStatus = (s, refunded) => (s.amountMinor > 0 && refunded >= s.amountMinor ? 'refunded' : refunded > 0 ? 'partially_refunded' : 'paid');
+
+  /**
+   * The total refunded on a sale we have, from one refund event that doesn't carry the payment's own total: each
+   * refund is kept once by its id (sale_refunds) and the distinct ones are added up (never more than was paid).
+   * A refund without a readable id counts as the largest single refund seen.
+   */
+  async function refundedWith(conn, s, refundId, amountMinor) {
+    if (!REFUND_ID_RE.test(String(refundId ?? ''))) return Math.max(s.refundedMinor, amountMinor);
+    await within(DB_TIMEOUT_MS, db.insert('sale_refunds', { provider: 'whop', environment: conn.environment, refund_id: refundId, provider_payment_id: s.paymentId, user_id: conn.user_id, amount_minor: amountMinor }, { ignoreDuplicates: true, onConflict: 'provider,environment,refund_id' }));
+    const rows = await within(DB_TIMEOUT_MS, db.select('sale_refunds', { provider: 'whop', environment: conn.environment, provider_payment_id: s.paymentId, user_id: conn.user_id }, { select: 'amount_minor', limit: 500 }));
+    const sum = rows.reduce((n, r) => n + (Number(r.amount_minor) || 0), 0);
+    const capped = s.amountMinor > 0 ? Math.min(sum, s.amountMinor) : sum;
+    return Math.max(s.refundedMinor, capped);
   }
 
   async function processEvent(conn, evt) {
@@ -534,15 +551,25 @@ export function createWhop({ db, crypto: pc, fetch = globalThis.fetch, now = () 
     if (t === 'refund.created' || t === 'refund.updated') {
       const po = paymentOf(evt.data);
       if (!po) return 'ignored';
-      // a refund that failed or was canceled changes nothing
+      // only a refund that went through changes the sale: a pending one may still fail or be canceled, and a sale
+      // marked refunded never goes back (record_sale)
       const rs = typeof evt.data.status === 'string' ? evt.data.status : 'succeeded';
-      if (!['succeeded', 'pending', 'processing'].includes(rs)) return 'ignored';
-      if (po.payment) return recordPayment(conn, PAY_STATUS_EVENT[po.payment.status] ?? 'payment.succeeded', po.payment, at);
-      const amount = toMinor(evt.data.amount, evt.data.currency);
-      return updateStored(conn, po.paymentId, at, (s) => {
-        // without the payment's own total refunded, the largest single refund seen (never more than was refunded)
-        const refunded = Math.max(s.refundedMinor, amount.ok ? amount.minor : 0);
-        return { status: s.amountMinor > 0 && refunded >= s.amountMinor ? 'refunded' : refunded > 0 ? 'partially_refunded' : 'paid', refundedMinor: refunded };
+      if (rs !== 'succeeded') return 'ignored';
+      if (po.payment && offerIdOf(po.payment)) {
+        const out = await recordPayment(conn, PAY_STATUS_EVENT[po.payment.status] ?? 'payment.succeeded', po.payment, at);
+        if (out !== 'not_ours') return out;
+      }
+      // the payment without our metadata, or only the refund: change the sale we already have
+      const own = po.payment ? saleFromPayment('payment.succeeded', { ...po.payment, status: 'paid' }) : null;
+      const ownRefunded = po.payment?.refunded_amount != null && own ? own.refundedMinor : null;
+      return updateStored(conn, po.paymentId, at, async (s) => {
+        let refunded;
+        if (ownRefunded != null) refunded = Math.max(s.refundedMinor, ownRefunded);
+        else {
+          const amount = toMinor(evt.data.amount, evt.data.currency ?? s.currency);
+          refunded = await refundedWith(conn, s, evt.data.id, amount.ok ? amount.minor : 0);
+        }
+        return { status: refundStatus(s, refunded), refundedMinor: refunded };
       });
     }
     if (t === 'dispute.created' || t === 'dispute.updated') {
@@ -666,12 +693,20 @@ export function createWhop({ db, crypto: pc, fetch = globalThis.fetch, now = () 
     return out;
   }
 
-  /** Daily: payments of the last 72 hours on each active connection (5 pages at most), recorded once (reads only). */
+  /**
+   * Daily: payments of the last 72 hours on each active connection (5 pages at most), recorded once (reads only).
+   * 50 connections a run, those never reconciled first, then the least recently reconciled: every connection gets its
+   * turn however many there are.
+   */
   async function reconcile(ctx = {}) {
-    const rows = await db.select('payment_connections', { provider: 'whop', status: 'active' }, { order: 'created_at.asc', limit: 50 });
+    const batch = Number.isInteger(ctx.batch) && ctx.batch > 0 ? Math.min(ctx.batch, 50) : 50;
+    const fresh = await db.select('payment_connections', { provider: 'whop', status: 'active', reconciled_at: null }, { order: 'created_at.asc', limit: batch });
+    const rows = fresh.length >= batch ? fresh : [...fresh, ...(await db.select('payment_connections', { provider: 'whop', status: 'active', reconciled_at: ['lt', iso(now())] }, { order: 'reconciled_at.asc', limit: batch - fresh.length }))];
     const out = { connections: 0, recorded: 0, failed: 0 };
     for (const row of rows) {
       if (ctx.deadline && now() > ctx.deadline - 2000) break;
+      // its turn is taken whatever happens, so one connection that always fails can't hold the others back
+      await db.update('payment_connections', { id: row.id, user_id: row.user_id }, { reconciled_at: iso(now()) }).catch(() => {});
       try {
         const w = client(row, keyOf(row));
         let after;

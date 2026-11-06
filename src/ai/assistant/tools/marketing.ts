@@ -18,6 +18,7 @@ import { busyJobs } from '@/lib/busy';
 import { showSignIn, useAuth } from '@/lib/cloud/auth';
 import { AD_CTAS, adById, adFinalUrl, adsCsv, adsText, applyAds, patchAd } from '@/lib/ads';
 import { applyEmailSequence, applyLeadMagnet, delayLabel, importSubscribers, parseSubscriberCsv, sequenceCsv, subscriberEmailOk, subscribersCsv, updateMarketingOf } from '@/lib/emailFunnel';
+import { loadBuyLinks } from '@/store/offers';
 import { allLeads, deleteLead, leadDetails, leadEmail, leadOfProject, leadSourceLine, leadTime, leadsCsv, listLeads, seoPageIdOf, type Lead } from '@/lib/leads';
 import { PAGE_TYPES, PAGE_TYPE_LABEL, bookingLink, missingLink, pageTypeNoun, pageTypeOf, paymentLink, webLink } from '@/lib/pageTypes';
 import { listPublished, publishConfig, type ServerPage } from '@/lib/publish';
@@ -1197,7 +1198,7 @@ const exportFile = defineTool({
       }
       case 'email_csv': {
         const name = `${fileBase(p)}-email-sequence.csv`;
-        return { data: { file: name, emails: p.marketing.emails.length, next: 'The owner imports it into their email provider, which sends the emails.' }, note: 'Your email sequence CSV is ready to download', buttons: [{ label: `Download ${name}`, icon: 'download', run: () => download(name, sequenceCsv(latest())).then(() => undefined) }] };
+        return { data: { file: name, emails: p.marketing.emails.length, next: 'The owner imports it into their email provider, which sends the emails.' }, note: 'Your email sequence CSV is ready to download', buttons: [{ label: `Download ${name}`, icon: 'download', run: async () => download(name, sequenceCsv(latest(), await loadBuyLinks(latest().id))).then(() => undefined) }] };
       }
       case 'subscribers_csv': {
         const name = `${fileBase(p)}-subscribers.csv`;
@@ -1260,12 +1261,12 @@ const exportFile = defineTool({
         // as Download on Studio → Code & assets: the asset as one page, its images inside it, as it is on the click
         const a = assetFor(id)!;
         ctx.stage('Getting the asset and its images ready…');
-        const out = await downloadDocument(a);
+        const out = await downloadDocument(a, undefined, pid);
         const name = `${slugify(a.name) || 'widget'}.html`;
         const run = async () => {
           const now = findCodeAsset(pid, a.id);
           if (!now) return noteInChat(`${named(a.name)} isn’t there any more, so there’s nothing to download.`, false);
-          const doc = await downloadDocument(now);
+          const doc = await downloadDocument(now, undefined, pid);
           await download(name, doc.html);
           if (doc.missing.length) noteInChat(`${plural(doc.missing.length, 'image')} couldn’t be loaded on this device, so the file leaves ${doc.missing.length === 1 ? 'it' : 'them'} out. If you added ${doc.missing.length === 1 ? 'it' : 'them'} on another device, try again in a minute.`, false);
         };

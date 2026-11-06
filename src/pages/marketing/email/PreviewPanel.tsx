@@ -10,6 +10,8 @@ import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
 import { serverBaseNow } from '@/lib/cloud/auth';
 import { EmailView, PanelHead, emailTokens, hasUnknownBuyLink, missingLinkFix } from './shared';
+import { useProjectOffers } from '@/store/offers';
+import { toast } from '@/store/ui';
 
 const OMNISEND_CALLBACK_URL = 'https://yourlocalbusiness.replit.app/api/integrations/omnisend/callback';
 const OMNISEND_PUBLIC_APP_URL = 'https://yourlocalbusiness.replit.app';
@@ -322,15 +324,27 @@ function OmnisendCard({ omnisend }: { omnisend: Omnisend }) {
 /** See each email the way subscribers will, then take the sequence to your email provider. */
 export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: () => void }) {
   const emails = project.marketing.emails;
+  // the business's offers, so {{buy:<id>}} buttons show and send their buy links (this tab can open first)
+  const { on: offersOn, loaded: offersLoaded } = useProjectOffers(project.id);
   const tokens = emailTokens(project);
   const omnisend = useOmnisend();
   const [drafts, setDrafts] = useState<Record<string, DraftState>>({});
   const settle = (emailId: string, state: DraftState) => setDrafts((current) => ({ ...current, [emailId]: state }));
 
+  const exportCsv = () => {
+    const csv = sequenceCsv(project, tokens);
+    if (hasUnknownBuyLink(csv)) toast({ kind: 'info', title: 'A buy link wasn’t filled in', body: offersOn && !offersLoaded ? 'This business’s offers are still loading. Export again in a moment.' : 'A button’s buy link isn’t one of this business’s offers. Choose one of its offers for it in Sequence.' });
+    void download(`${slugify(project.brand.name)}-email-sequence.csv`, csv);
+  };
+
   async function createOmnisendDraft(emailId: string, index: number) {
     const email = emails[index];
     if (!email) return;
     const draft = omnisendDraft(project, email, index, tokens);
+    if (offersOn && !offersLoaded && (hasUnknownBuyLink(draft.ctaUrl) || hasUnknownBuyLink(draft.body))) {
+      settle(emailId, { tone: 'bad', message: 'This business’s offers are still loading. Try again in a moment.' });
+      return;
+    }
     // a buy link that isn't one of this business's offers would go nowhere (the server refuses it anyway)
     if (hasUnknownBuyLink(draft.ctaUrl) || hasUnknownBuyLink(draft.body)) {
       settle(emailId, { tone: 'bad', message: 'This buy link isn’t one of this business’s offers. Choose one of its offers for the button, or paste a web address.' });
@@ -397,7 +411,7 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
         }
         description="Set it up as an automation in your email tool. Values in [brackets] are filled in by it."
         actions={
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => download(`${slugify(project.brand.name)}-email-sequence.csv`, sequenceCsv(project))}>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => exportCsv()}>
             <Download /> Export CSV
           </button>
         }

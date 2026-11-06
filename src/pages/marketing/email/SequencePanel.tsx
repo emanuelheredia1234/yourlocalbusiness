@@ -13,7 +13,7 @@ import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, Empty, Field, MoreMenu, Section, Segmented, confirmAction } from '@/components/ui/primitives';
 import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
-import { EmailView, PanelHead, emailTokens } from './shared';
+import { EmailView, PanelHead, emailTokens, hasUnknownBuyLink } from './shared';
 import { useProjectOffers } from '@/store/offers';
 import { offerPrice } from '@/lib/offers';
 import { buyToken } from '@/lib/buyLinks';
@@ -55,7 +55,8 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
     }
   };
   const copyAll = async () => {
-    if (await copyText(sequenceText(getActiveProject()!))) toast({ kind: 'success', title: 'All five emails copied' });
+    const text = sequenceText(getActiveProject()!, tokens);
+    if (await copyText(text)) toast(hasUnknownBuyLink(text) ? { kind: 'info', title: 'All five emails copied', body: 'A button’s buy link isn’t one of this business’s offers, so it wasn’t filled in. Choose one of its offers for it.' } : { kind: 'success', title: 'All five emails copied' });
     else toast({ kind: 'error', title: 'Copy was blocked', body: 'Use Export instead.' });
   };
   const copyOne = async (e: EmailStep) => {
@@ -103,7 +104,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
             <MoreMenu
               items={[
                 { label: 'Copy all', icon: <Copy />, onSelect: () => void copyAll() },
-                { label: 'Export .txt', icon: <Download />, onSelect: () => void download(`${slugify(project.brand.name)}-email-sequence.txt`, sequenceText(project)) },
+                { label: 'Export .txt', icon: <Download />, onSelect: () => void download(`${slugify(project.brand.name)}-email-sequence.txt`, sequenceText(project, tokens)) },
               ]}
             />
           </>

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { offersServer } from './test-helpers.mjs';
 import { signWhopPayload } from '../payments/whopWebhook.mjs';
 import { createPaymentCrypto } from './store.mjs';
-import { PAYMENT_SECRET } from './test-helpers.mjs';
+import { ALL_PERMISSIONS, PAYMENT_SECRET } from './test-helpers.mjs';
 
 const uuid = () => crypto.randomUUID();
 const checkoutOf = (h, offerId) => h.rows('offers').find((o) => o.id === offerId).provider_ref.checkoutId;
@@ -187,6 +187,74 @@ describe('/api/offers', () => {
   });
 });
 
+describe('/api/offers: review fixes', () => {
+  let h;
+  beforeAll(async () => {
+    h = await offersServer();
+  });
+  afterAll(() => h.close());
+
+  it('an outside checkout link is https only: http is refused, and a stored one is never redirected to', async () => {
+    const who = await h.user('http@example.com');
+    const http = await h.call(who, 'POST', '/api/offers', { projectId: 'p1', title: 'Consult', provider: 'external', url: 'http://buy.stripe.com/test_abc' });
+    expect(http.body.code).toBe('BAD_URL');
+    const made = await h.call(who, 'POST', '/api/offers', { projectId: 'p1', title: 'Consult', provider: 'external', url: 'https://buy.stripe.com/test_abc' });
+    expect((await h.call(who, 'PATCH', `/api/offers/${made.body.offer.id}`, { url: 'http://gumroad.com/l/x' })).body.code).toBe('BAD_URL');
+    // an older row with a plain-http link: /b/ never sends a buyer there
+    const row = h.rows('offers').find((o) => o.id === made.body.offer.id);
+    row.provider_ref = { url: 'http://buy.stripe.com/test_abc' };
+    await h.call(who, 'PATCH', `/api/offers/${row.id}`, { title: 'Consult 2' });
+    const visit = await h.visit(`/b/${row.id}`);
+    expect(visit.status).not.toBe(302);
+    expect(String(visit.headers?.location ?? '')).not.toMatch(/^http:/);
+  });
+
+  it('a Whop offer with a checkout link (no sales yet) can’t be deleted: it’s archived, so a late sale is still recorded', async () => {
+    const s = await h.seller('del@example.com', { price: 15 });
+    const offer = (await h.whopOffer(s)).body.offer;
+    expect((await h.call(s.who, 'DELETE', `/api/offers/${offer.id}`)).body.code).toBe('HAS_CHECKOUT');
+    expect((await h.call(s.who, 'POST', `/api/offers/${offer.id}/archive`)).body.offer.status).toBe('archived');
+    const paid = await s.mock.pay({ checkoutId: checkoutOf(h, offer.id) });
+    expect(paid.deliveries[0].status).toBe(200);
+    expect(h.rows('sales').filter((r) => r.offer_id === offer.id)).toHaveLength(1);
+  });
+
+  it('a paused Whop offer resumes only while its connection is connected; it carries its connection id', async () => {
+    const s = await h.seller('resume@example.com');
+    const offer = (await h.whopOffer(s)).body.offer;
+    expect(offer.connectionId).toBe(s.connection.id);
+    expect((await h.call(s.who, 'PATCH', `/api/offers/${offer.id}`, { status: 'paused' })).body.offer.status).toBe('paused');
+    expect((await h.call(s.who, 'PATCH', `/api/offers/${offer.id}`, { status: 'active' })).body.offer.status).toBe('active');
+    await h.call(s.who, 'DELETE', `/api/payments/whop/${s.connection.id}?confirm=1`);
+    expect(h.rows('offers').find((o) => o.id === offer.id).status).toBe('paused');
+    // the same environment connected again: a new connection; the old offer still can't sell
+    s.mock.addKey(`${s.whopKey}_2`, s.accountId, ALL_PERMISSIONS);
+    const again = await h.call(s.who, 'POST', '/api/payments/whop', { environment: 'production', accountId: s.accountId, key: `${s.whopKey}_2` });
+    expect(again.body.connection.id).not.toBe(s.connection.id);
+    const resumed = await h.call(s.who, 'PATCH', `/api/offers/${offer.id}`, { status: 'active' });
+    expect(resumed.status).toBe(409);
+    expect(resumed.body.code).toBe('NOT_SELLABLE');
+    expect(h.rows('offers').find((o) => o.id === offer.id).status).toBe('paused');
+  });
+
+  it('a Test mode offer counts its test sales; a live one its live sales', async () => {
+    const t = await h.seller('count-test@example.com', { environment: 'sandbox', price: 5 });
+    const tOffer = (await h.whopOffer(t)).body.offer;
+    await t.mock.pay({ checkoutId: checkoutOf(h, tOffer.id) });
+    await t.mock.pay({ checkoutId: checkoutOf(h, tOffer.id) });
+    expect((await h.call(t.who, 'GET', '/api/offers?projectId=p1')).body.offers[0].sales.count).toBe(2);
+  });
+
+  it('an outside link made with a request id another kind of offer used is refused, not answered with that offer', async () => {
+    const s = await h.seller('crid@example.com');
+    const crid = uuid();
+    const whop = await h.whopOffer(s, { clientRequestId: crid });
+    expect(whop.status).toBe(200);
+    const own = await h.call(s.who, 'POST', '/api/offers', { projectId: 'p1', title: 'Mine', provider: 'external', url: 'https://buy.stripe.com/x', clientRequestId: crid });
+    expect(own.status).toBe(409);
+  });
+});
+
 describe('the Whop webhook', () => {
   let h;
   beforeAll(async () => {
@@ -225,6 +293,49 @@ describe('the Whop webhook', () => {
     expect(salesOf(s).find((r) => r.provider_payment_id === p2.payment.id)).toMatchObject({ status: 'partially_refunded', refunded_minor: 1000 });
     await s.mock.dispute({ paymentId: p2.payment.id });
     expect(salesOf(s).find((r) => r.provider_payment_id === p2.payment.id).status).toBe('disputed');
+  });
+
+  it('a pending refund changes nothing (it may still fail); only a refund that went through does', async () => {
+    const s = await h.seller('pending-refund@example.com', { price: 30 });
+    const offer = (await h.whopOffer(s)).body.offer;
+    const paid = await s.mock.pay({ checkoutId: checkoutOf(h, offer.id) });
+    const sale = () => salesOf(s).find((r) => r.provider_payment_id === paid.payment.id);
+    const pending = await s.mock.refund({ paymentId: paid.payment.id, amount: 1000, status: 'pending', id: 'rfnd_pendingone1' });
+    expect(pending.deliveries[0].status).toBe(200);
+    expect(sale()).toMatchObject({ status: 'paid', refunded_minor: 0 });
+    await s.mock.refund({ paymentId: paid.payment.id, amount: 1000, status: 'failed', id: 'rfnd_pendingone1', type: 'refund.updated' });
+    expect(sale()).toMatchObject({ status: 'paid', refunded_minor: 0 });
+    await s.mock.refund({ paymentId: paid.payment.id, amount: 1000, status: 'succeeded', id: 'rfnd_pendingone1', type: 'refund.updated' });
+    expect(sale()).toMatchObject({ status: 'partially_refunded', refunded_minor: 1000 });
+  });
+
+  it('separate partial refunds add up; the same refund twice counts once; never more than was paid', async () => {
+    const s = await h.seller('partials@example.com', { price: 30 });
+    const offer = (await h.whopOffer(s)).body.offer;
+    const paid = await s.mock.pay({ checkoutId: checkoutOf(h, offer.id) });
+    const sale = () => salesOf(s).find((r) => r.provider_payment_id === paid.payment.id);
+    await s.mock.refund({ paymentId: paid.payment.id, amount: 1000, id: 'rfnd_firstone11' });
+    await s.mock.refund({ paymentId: paid.payment.id, amount: 1000, id: 'rfnd_secondone1' });
+    expect(sale()).toMatchObject({ status: 'partially_refunded', refunded_minor: 2000 });
+    // refund.updated of the first one: the same refund
+    await s.mock.refund({ paymentId: paid.payment.id, amount: 1000, id: 'rfnd_firstone11', type: 'refund.updated' });
+    expect(sale().refunded_minor).toBe(2000);
+    await s.mock.refund({ paymentId: paid.payment.id, amount: 1500, id: 'rfnd_thirdone11' });
+    expect(sale()).toMatchObject({ status: 'refunded', refunded_minor: 3000 });
+  });
+
+  it('a refund whose payment comes without our metadata still changes the sale we have (by its payment id)', async () => {
+    const s = await h.seller('bare-refund@example.com', { price: 40 });
+    const offer = (await h.whopOffer(s)).body.offer;
+    const paid = await s.mock.pay({ checkoutId: checkoutOf(h, offer.id) });
+    const got = await s.mock.refund({ paymentId: paid.payment.id, amount: 1500, bare: true });
+    expect(got.deliveries[0].status).toBe(200);
+    expect(salesOf(s).find((r) => r.provider_payment_id === paid.payment.id)).toMatchObject({ status: 'partially_refunded', refunded_minor: 1500 });
+    // another seller's payment id with no metadata: still not ours
+    const other = await h.seller('bare-other@example.com');
+    const foreign = await post(h, other, { type: 'refund.created', account_id: other.accountId, data: { id: 'rfnd_foreign111', status: 'succeeded', amount: { amount: '5.00', currency: 'usd' }, payment: { id: paid.payment.id, total: { amount: '40.00', currency: 'usd' }, refunded_amount: { amount: '40.00', currency: 'usd' } } } });
+    expect(foreign.status).toBe(200);
+    expect(salesOf(s).find((r) => r.provider_payment_id === paid.payment.id).refunded_minor).toBe(1500);
   });
 
   it('keeps nothing that isn’t ours: no metadata, another user’s offer, another account’s event, another checkout', async () => {
@@ -389,6 +500,26 @@ describe('account deletion and the cron jobs', () => {
     expect(mine).toHaveLength(1);
     expect(mine[0]).toMatchObject({ status: 'paid', amount_minor: 1200 });
     expect(h.rows('sales').some((r) => r.provider_payment_id === 'pay_foreign123')).toBe(false);
+  });
+
+  it('the reconcile takes turns: the least recently reconciled connections first, so none is left out', async () => {
+    const sellers = [];
+    for (let i = 0; i < 3; i++) sellers.push(await h.seller(`turns${i}@example.com`, { price: 7 }));
+    for (const r of h.rows('payment_connections')) r.reconciled_at = new Date(Date.now() - 3_600_000).toISOString();
+    const job = h.offers.cronJobs()[1];
+    const order = [];
+    const seen = () => h.rows('payment_connections').filter((r) => r.status === 'active').sort((a, b) => String(b.reconciled_at).localeCompare(String(a.reconciled_at)));
+    // a batch of 2 each run: every active connection gets its turn within a few runs
+    const active = h.rows('payment_connections').filter((r) => r.status === 'active').length;
+    for (let run = 0; run < Math.ceil(active / 2); run++) {
+      h.advance(60_000);
+      const out = await job.run({ batch: 2 });
+      expect(out.connections + out.failed).toBe(2);
+      order.push(...seen().slice(0, 2).map((r) => r.id));
+    }
+    for (const s of sellers) expect(order).toContain(s.connection.id);
+    const fresh = Date.now() - 2 * 3_600_000;
+    expect(h.rows('payment_connections').filter((r) => r.status === 'active').every((r) => Date.parse(r.reconciled_at) > fresh)).toBe(true);
   });
 });
 

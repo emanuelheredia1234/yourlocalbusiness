@@ -12,6 +12,7 @@ import {
   checkSlug,
   isValidSlug,
   listPublished,
+  offersForPublish,
   preparePublish,
   publishPage,
   publishTarget,
@@ -30,7 +31,6 @@ import { CopyButton, Field, Spinner, StatusDot, confirmAction } from '@/componen
 import { toast, useUI } from '@/store/ui';
 import { useStore } from '@/store/useStore';
 import { offerIdsForPublish } from '@/store/offers';
-import { hasBuyToken } from '@/lib/buyLinks';
 
 /** Open Settings at the Domains card. */
 export function openDomainSettings() {
@@ -237,7 +237,7 @@ export function PublishPanel({
       const magnet = projectId ? useStore.getState().projects.find((x) => x.id === projectId)?.marketing.leadMagnet?.delivery?.fileId : undefined;
       const built = await latest.current.build(target);
       // its buy links: which offers are really this business's, asked of the server now
-      const offers = hasBuyToken(built.html) && projectId ? await offerIdsForPublish(projectId).catch(() => Promise.reject(new PublishError('Couldn’t check this page’s buy links. Try again in a moment.', 'OFFERS_UNAVAILABLE'))) : undefined;
+      const offers = await offersForPublish(built.html, projectId, offerIdsForPublish);
       const ready = await preparePublish(built, to.slug, magnet, offers);
       const next = await publishPage({ pageId, kind, slug: to.slug, title, html: ready.html, images: ready.images, domain: to.domain || null, home: to.home, hash: ready.hash, ...(projectId ? { projectId } : {}) });
       latest.current.onChange(next);

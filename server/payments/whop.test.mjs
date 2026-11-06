@@ -163,3 +163,12 @@ describe('secrets never leak', () => {
     expect(sales.body.sales[0].buyerEmail).toBe('secret.buyer@example.com');
   });
 });
+
+describe('a Whop plan’s price', () => {
+  it('a bare price in a zero-decimal currency is whole yen: ¥1000 shows ¥1,000, never ¥100,000', async () => {
+    const { planOut } = await import('./whop.mjs');
+    const p = planOut({ id: 'plan_yen1234', title: 'Lifetime', initial_price: 1000, currency: 'jpy' });
+    expect(p.price).toEqual({ minor: 1000, currency: 'jpy', display: '¥1,000' });
+    expect(planOut({ id: 'plan_usd1234', title: 'Lifetime', initial_price: 49, currency: 'usd' }).price).toEqual({ minor: 4900, currency: 'usd', display: '$49' });
+  });
+});

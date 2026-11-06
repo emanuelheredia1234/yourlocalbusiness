@@ -83,6 +83,14 @@ describe('toMinor', () => {
   it('takes the payment’s currency when the money has none', () => {
     expect(toMinor('12.00', 'EUR')).toEqual({ minor: 1200, currency: 'eur', ok: true });
   });
+  it('a bare amount in a zero-decimal currency is in whole units: ¥1000 is 1000, never 100000', () => {
+    expect(toMinor(1000, 'jpy')).toEqual({ minor: 1000, currency: 'jpy', ok: true });
+    expect(toMinor('1000', 'JPY')).toEqual({ minor: 1000, currency: 'jpy', ok: true });
+    expect(toMinor({ amount: 1500, currency: 'krw' })).toEqual({ minor: 1500, currency: 'krw', ok: true });
+    expect(toMinor(10.5, 'jpy').ok).toBe(false);
+    // the total's own decimals win for its other amounts
+    expect(toMinor(1000, 'usd', 0)).toEqual({ minor: 1000, currency: 'usd', ok: true });
+  });
 });
 
 describe('saleFromPayment', () => {
@@ -140,5 +148,10 @@ describe('saleFromPayment', () => {
     expect(paymentOf({ payment_id: 'pay_abc123' })).toEqual({ paymentId: 'pay_abc123', payment: null });
     expect(paymentOf({ payment: pay() }).payment.id).toBe('pay_abc123');
     expect(paymentOf({ payment_id: 'x' })).toBeNull();
+  });
+  it('a zero-decimal payment’s bare refunded amount and net are in its own units', () => {
+    const p = { id: 'pay_yen12345', status: 'paid', total: { amount: '1000', currency: 'jpy', decimals: 0 }, currency: 'jpy', refunded_amount: 400, amount_after_fees: 940 };
+    expect(saleFromPayment('payment.succeeded', p)).toMatchObject({ status: 'partially_refunded', amountMinor: 1000, refundedMinor: 400, netMinor: 940, currency: 'jpy' });
+    expect(saleFromPayment('payment.succeeded', { ...p, refunded_amount: 1000 })).toMatchObject({ status: 'refunded', refundedMinor: 1000 });
   });
 });

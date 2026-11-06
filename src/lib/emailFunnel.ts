@@ -43,18 +43,26 @@ export function delayLabel(e: EmailStep, i: number): string {
   return `${v} ${unit} after ${i === 0 ? 'sign-up' : `email ${i}`}`;
 }
 
-/** The sequence as plain text (Copy all, Export). */
-export function sequenceText(p: Project): string {
+/**
+ * {{buy:<id>}} in a text as the business's buy link. links: buy:<id> → its full link (emailTokens' entries, or
+ * buyLinksOf); an id that isn't one of them stays as typed (hasUnknownBuyLink finds it).
+ */
+export function renderBuyLinks(text: string, links: Record<string, string>): string {
+  return text.replace(/\{\{\s*(buy:[A-Za-z0-9_-]{22})\s*\}\}/g, (m, k: string) => links[k] ?? m);
+}
+
+/** The sequence as plain text (Copy all, Export), its buy links filled in (links: see renderBuyLinks). */
+export function sequenceText(p: Project, links: Record<string, string> = {}): string {
   return p.marketing.emails
-    .map((e, i) => [`EMAIL ${i + 1}: ${e.purpose}`, `Send: ${delayLabel(e, i)}`, `Subject: ${e.subject}`, `Preview: ${e.preview}`, '', e.body, '', `[${e.ctaLabel}] → ${e.ctaUrl}`].join('\n'))
+    .map((e, i) => [`EMAIL ${i + 1}: ${e.purpose}`, `Send: ${delayLabel(e, i)}`, `Subject: ${e.subject}`, `Preview: ${e.preview}`, '', renderBuyLinks(e.body, links), '', `[${e.ctaLabel}] → ${renderBuyLinks(e.ctaUrl ?? '', links)}`].join('\n'))
     .join('\n\n────────────────────────\n\n');
 }
 
 const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 
-/** The sequence as a CSV: one row per email, ready to copy into an email provider. */
-export function sequenceCsv(p: Project): string {
-  return ['step,send,subject,preview,body,button,button_link', ...p.marketing.emails.map((e, i) => [i + 1, delayLabel(e, i), e.subject, e.preview ?? '', e.body, e.ctaLabel ?? '', e.ctaUrl ?? ''].map(csvCell).join(','))].join('\n');
+/** The sequence as a CSV: one row per email, ready to copy into an email provider (its buy links filled in). */
+export function sequenceCsv(p: Project, links: Record<string, string> = {}): string {
+  return ['step,send,subject,preview,body,button,button_link', ...p.marketing.emails.map((e, i) => [i + 1, delayLabel(e, i), e.subject, e.preview ?? '', renderBuyLinks(e.body, links), e.ctaLabel ?? '', renderBuyLinks(e.ctaUrl ?? '', links)].map(csvCell).join(','))].join('\n');
 }
 
 // ───────────── subscribers ─────────────

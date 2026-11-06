@@ -1076,7 +1076,14 @@ what it missed, so the daily reconcile reads the last 72 hours of payments and r
   deduped on `webhook-id` in `webhook_deliveries`) and only when its metadata names one of that customer's Whop
   offers on that account and checkout. The seller's other Whop sales are acknowledged and dropped. A sale never
   moves backwards (`record_sale`), so repeated and out-of-order deliveries change nothing.
-- Refunds and disputes stay in Whop: the app shows their status and does nothing that moves money.
+- Refunds and disputes stay in Whop: the app shows their status and does nothing that moves money. Only a refund
+  that went through (`succeeded`) changes a sale; a pending one may still fail. Without the payment's own refunded
+  total, each refund is kept once by its id (`sale_refunds`) and the distinct ones are added up (two $10 refunds are
+  $20), never more than was paid. A refund whose payment comes without our metadata changes the sale already
+  recorded for that payment id.
+- An outside checkout link is https only. A Whop offer whose checkout link was made can't be deleted (its checkout
+  stays open at Whop): it's archived, and a sale through it is still recorded. A paused Whop offer sells again only
+  while its connection is connected (a reconnect is a new connection: attach another plan).
 - Whop's own error text is never shown or logged; keys, webhook secrets and buyers' emails never appear in a log.
   The email is shown to the customer in their own sales list only.
 - Deleting an account stops its buy links on that server at once and makes one attempt at removing each webhook
@@ -1087,7 +1094,8 @@ what it missed, so the daily reconcile reads the last 72 hours of payments and r
 `offers-webhooks` (daily 04:17 UTC): reads each active connection's webhook (or key) not checked for 20 hours;
 `disabled` or `key_rejected` shows a banner in the app, nothing turns itself back on. `offers-reconcile` (daily
 04:47 UTC): reads the last 72 hours of payments per connection (5 pages at most) and records the ones for the
-customer's offers. Both only read Whop.
+customer's offers; 50 connections a run, never-reconciled ones first, then the least recently reconciled
+(`reconciled_at`), so every connection gets its turn. Both only read Whop.
 
 ### Offline QA
 

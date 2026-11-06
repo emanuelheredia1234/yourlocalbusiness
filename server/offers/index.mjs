@@ -36,7 +36,7 @@ import { normalizeLink } from '../leadFiles.mjs';
 import { drain } from '../leads.mjs';
 import { createWhop } from '../payments/whop.mjs';
 import { createBuy, offerLimitsFromEnv } from './buy.mjs';
-import { CHECKOUT_HOSTS } from './providers.mjs';
+import { CHECKOUT_HOSTS, PROVIDERS } from './providers.mjs';
 import { ID_RE, MAX_OFFERS_PER_USER, OFFERS_MIGRATION, PROJECT_ID_RE, createPaymentCrypto, describeOffer, describeSale, newId, paymentKeysSecret } from './store.mjs';
 
 const MAX_JSON = 16 * 1024;
@@ -175,16 +175,20 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   };
   const linkOf = (v) => {
     const href = normalizeLink(v);
-    if (!href) throw fail(400, 'BAD_URL', 'Use a full web address starting with https://, without a user name or password.');
+    // a checkout link is https only: a buyer is never sent to a payment page over plain http
+    if (!href || !href.startsWith('https:')) throw fail(400, 'BAD_URL', 'Use a full web address starting with https://, without a user name or password.');
     return href;
   };
 
   // ── offers ──
-  async function salesByOffer(userId, ids) {
+  /** Each offer's counted sales in its own environment (a sandbox offer's test sales, a live one's real ones). */
+  async function salesByOffer(userId, offers) {
     const map = new Map();
-    if (!ids.length) return map;
-    const rows = await db.select('sales', { user_id: userId, environment: 'production', offer_id: ['in', ids], status: ['in', SALE_COUNTED] }, { select: 'offer_id,paid_at,created_at', limit: 5000 });
+    if (!offers.length) return map;
+    const envOf = new Map(offers.map((o) => [o.id, o.provider_ref?.environment === 'sandbox' ? 'sandbox' : 'production']));
+    const rows = await db.select('sales', { user_id: userId, offer_id: ['in', [...envOf.keys()]], status: ['in', SALE_COUNTED] }, { select: 'offer_id,environment,paid_at,created_at', limit: 5000 });
     for (const r of rows) {
+      if (r.environment !== envOf.get(r.offer_id)) continue;
       const cur = map.get(r.offer_id) ?? { count: 0, last: null };
       cur.count++;
       const at = r.paid_at ?? r.created_at ?? null;
@@ -199,13 +203,13 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
     if (!row) throw fail(404, 'NOT_FOUND', 'That offer isn’t in your account.');
     return row;
   }
-  const out = async (row, origin) => describeOffer(row, origin, (await salesByOffer(row.user_id, [row.id])).get(row.id) ?? { count: 0, last: null });
+  const out = async (row, origin) => describeOffer(row, origin, (await salesByOffer(row.user_id, [row])).get(row.id) ?? { count: 0, last: null });
 
   async function listOffers(who, url, origin) {
     const projectId = url.searchParams.get('projectId');
     const filters = { user_id: who.id, ...(projectId ? { project_id: projectOf(projectId) } : {}), ...(url.searchParams.get('archived') === '1' ? {} : { status: ['neq', 'archived'] }) };
     const rows = await db.select('offers', filters, { order: 'created_at.desc', limit: MAX_OFFERS_PER_USER });
-    const sales = await salesByOffer(who.id, rows.map((r) => r.id));
+    const sales = await salesByOffer(who.id, rows);
     return { offers: rows.map((r) => describeOffer(r, origin, sales.get(r.id) ?? { count: 0, last: null })) };
   }
 
@@ -220,7 +224,8 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
     const id = crid ? pc.offerIdFor(who.id, crid) : newId();
     const [existing] = crid ? await db.select('offers', { id }, { limit: 1 }) : [];
     if (existing) {
-      if (existing.user_id !== who.id) throw fail(409, 'CONFLICT', 'Try again.');
+      // the same request again (a double press) answers the offer it made; anything else with this id is refused
+      if (existing.user_id !== who.id || existing.provider !== 'external') throw fail(409, 'CONFLICT', 'Try again.');
       return { offer: await out(existing, origin) };
     }
     const mine = await db.select('offers', { user_id: who.id, status: ['neq', 'archived'] }, { select: 'id', limit: MAX_OFFERS_PER_USER + 1 });
@@ -248,13 +253,22 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
     }
     if (b.status !== undefined) {
       if (b.status === 'paused' && ['active', 'paused'].includes(row.status)) patch.status = 'paused';
-      else if (b.status === 'active' && ['active', 'paused'].includes(row.status)) patch.status = 'active';
-      else throw fail(409, 'BAD_STATUS', row.status === 'archived' ? 'This offer is archived.' : 'This offer’s link isn’t ready yet: use “Check again”.');
+      else if (b.status === 'active' && ['active', 'paused'].includes(row.status)) {
+        if (row.status === 'paused' && row.provider === 'whop') await sellable(row);
+        patch.status = 'active';
+      } else throw fail(409, 'BAD_STATUS', row.status === 'archived' ? 'This offer is archived.' : 'This offer’s link isn’t ready yet: use “Check again”.');
     }
     if (!Object.keys(patch).length) return { offer: await out(row, origin) };
     const [saved] = await db.update('offers', { id: row.id, user_id: who.id }, patch, { returning: true });
     buy.drop(row.id);
     return { offer: await out(saved ?? { ...row, ...patch }, origin) };
+  }
+
+  /** A paused Whop offer sells again only with its checkout link made and its Whop connection still connected. */
+  async function sellable(row) {
+    if (!PROVIDERS.whop.checkoutTarget(row)) throw fail(409, 'NOT_SELLABLE', 'This offer’s checkout link isn’t ready: attach a plan again.');
+    const [conn] = row.connection_id ? await db.select('payment_connections', { id: row.connection_id, user_id: row.user_id }, { select: 'id,status', limit: 1 }) : [];
+    if (!conn || conn.status !== 'active') throw fail(409, 'NOT_SELLABLE', 'The Whop account this offer used isn’t connected any more: attach another plan.');
   }
 
   async function archive(who, id, origin) {
@@ -268,6 +282,10 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
     if (!ID_RE.test(String(id ?? ''))) return { ok: true };
     const [sale] = await db.select('sales', { user_id: who.id, offer_id: id }, { select: 'id', limit: 1 });
     if (sale) throw fail(409, 'HAS_SALES', 'This offer has sales, so it stays for your records. Archive it instead.');
+    // a Whop checkout link stays open at Whop after it's made: the row stays (archived) so a sale through it is
+    // still recorded
+    const [row] = await db.select('offers', { id, user_id: who.id }, { select: 'id,provider,provider_ref', limit: 1 });
+    if (row?.provider === 'whop' && row.provider_ref?.checkoutId) throw fail(409, 'HAS_CHECKOUT', 'Whop’s checkout for this offer stays open, so it stays for your records. Archive it instead.');
     await db.remove('offers', { id, user_id: who.id });
     buy.drop(id);
     return { ok: true };

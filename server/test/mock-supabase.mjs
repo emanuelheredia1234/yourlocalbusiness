@@ -56,9 +56,10 @@ const PRIMARY_KEYS = {
   payment_connections: ['id'],
   offers: ['id'],
   sales: ['id'],
+  sale_refunds: ['provider', 'environment', 'refund_id'],
 };
 /** the integration tables (all server-only) */
-const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops', 'payment_connections', 'offers', 'sales'];
+const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops', 'payment_connections', 'offers', 'sales', 'sale_refunds'];
 /** tables users may read their own rows of but never write (only the server and the database functions do) */
 const USER_READ_ONLY = new Set(['project_slots']);
 /** `generated always as identity` columns: the mock numbers them 1, 2, 3… per table */
@@ -104,7 +105,7 @@ const PUBLIC_READ = new Set(['market_listings']);
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'video_starts', 'published_pages', 'published_domains', 'page_leads', 'lead_files', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales', 'sale_refunds']);
 const PROJECT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
 /**

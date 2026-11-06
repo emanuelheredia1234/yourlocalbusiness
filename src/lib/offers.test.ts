@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkoutHint, formatMoney, isCheckoutHost, offerPrice, offerProblem, offersError, toConnection, toOffer } from './offers';
+import { OffersError, checkoutHint, formatMoney, isCheckoutHost, offerConnection, offerPrice, offerProblem, offersError, requestIdsAfter, toConnection, toOffer, type WhopConnection } from './offers';
 
 const ID = 'AAAAAAAAAAAAAAAAAAAAAA';
 
@@ -39,5 +39,27 @@ describe('offers client', () => {
     expect(offerProblem({ status: 'checkout_unknown' })).toMatch(/Check again/);
     expect(offerProblem({ status: 'active' }, { status: 'key_rejected' })).toMatch(/Settings › Payments/);
     expect(offerProblem({ status: 'active' })).toBe('');
+  });
+
+  it('a refused create gets a new request id; a lost answer keeps it (no second link)', () => {
+    const ids = { whop: 'w-1', own: 'o-1' };
+    const refused = requestIdsAfter(ids, 'whop', new OffersError('Whop didn’t accept this.', 'WHOP_REFUSED', 422));
+    expect(refused.whop).not.toBe('w-1');
+    expect(refused.own).toBe('o-1');
+    expect(requestIdsAfter(ids, 'own', new OffersError('Use https', 'BAD_URL', 400)).own).not.toBe('o-1');
+    expect(requestIdsAfter(ids, 'whop', new OffersError('Couldn’t reach the server.', 'NETWORK', 0))).toBe(ids);
+    expect(requestIdsAfter(ids, 'whop', new Error('boom'))).toBe(ids);
+  });
+
+  it('an offer’s Whop connection is matched by id: a reconnect doesn’t make an old offer look live', () => {
+    const conn = (id: string, status: WhopConnection['status'] = 'active') => ({ id, environment: 'production', status }) as WhopConnection;
+    const offer = { provider: 'whop' as const, connectionId: 'old-conn' };
+    expect(offerConnection(offer, null)).toBeNull();
+    expect(offerConnection(offer, [conn('old-conn')])?.status).toBe('active');
+    // disconnected, then the same environment connected again: a new connection
+    const now = offerConnection(offer, [conn('new-conn')]);
+    expect(now?.status).toBe('disconnected');
+    expect(offerProblem({ status: 'active' }, now)).toMatch(/isn’t connected any more/);
+    expect(offerConnection({ provider: 'external', connectionId: null }, [conn('new-conn')])).toBeNull();
   });
 });

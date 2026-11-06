@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { Archive, Pause, Play, RefreshCw } from 'lucide-react';
 import type { Project } from '@/lib/types';
 import { fmtNum, fmtRelative } from '@/lib/utils';
-import { OffersError, archiveOffer, checkOffer, offerPrice, offerProblem, offerUses, updateOffer, type Offer, type WhopConnection } from '@/lib/offers';
+import { OffersError, archiveOffer, checkOffer, offerConnection, offerPrice, offerProblem, offerUses, updateOffer, type Offer, type WhopConnection } from '@/lib/offers';
 import { useOffers, useProjectOffers } from '@/store/offers';
 import { toast } from '@/store/ui';
 import { CopyButton, MoreMenu, SettingsSection, Spinner, confirmAction } from '@/components/ui/primitives';
@@ -24,7 +24,7 @@ export function OfferRow({
 }: {
   offer: Offer;
   uses: string[];
-  connection?: WhopConnection | null;
+  connection?: Pick<WhopConnection, 'status'> | null;
   busy?: boolean;
   onCheck: () => void;
   onPause: (paused: boolean) => void;
@@ -135,7 +135,7 @@ export function OffersPanel({ project }: { project: Project }) {
               key={o.id}
               offer={o}
               uses={offerUses(project, o.id)}
-              connection={o.provider === 'whop' ? connections?.find((c) => c.environment === o.environment) : null}
+              connection={offerConnection(o, connections)}
               busy={busy === o.id}
               onCheck={() => void act(o.id, async () => (await checkOffer(o.id)).offer, o.status === 'checkout_unknown' ? undefined : 'Price refreshed from Whop')}
               onPause={(paused) => void act(o.id, () => updateOffer(o.id, { status: paused ? 'paused' : 'active' }), paused ? 'Paused' : 'Selling again')}

@@ -63,7 +63,8 @@ export const PROVIDERS = Object.freeze({
   external: {
     checkoutTarget(row, { site = null } = {}) {
       const href = normalizeLink(row?.provider_ref?.url);
-      if (!href) return null;
+      // a buyer is only ever sent to a checkout over https
+      if (!href || !href.startsWith('https:')) return null;
       const host = new URL(href).hostname;
       return isCheckoutHost(host) || site ? { redirect: href } : { leave: href };
     },

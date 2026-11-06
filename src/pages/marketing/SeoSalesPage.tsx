@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'rea
 import { ArrowDown, ArrowUp, Check, CircleDashed, Copy, Download, ExternalLink, Eye, EyeOff, ImagePlus, Monitor, PenLine, RefreshCw, Smartphone, Undo2, X } from 'lucide-react';
 import type { MediaRef, PageType, Project, PromptImage, Published, SalesPage, SalesSection, SalesTheme, SeoMeta } from '@/lib/types';
 import { cn, listJoin, moveItem, plural, slugify, stripProtocol, truncate } from '@/lib/utils';
-import { claimsToReview, canonicalForSlugChange, ctaLink, ownCanonical, pageImageIds, pageTargets, placeNewImages, pruneImages, scoreSeo, SECTION_LABEL, sectionsKeptHidden, siteUrl, type SeoCheck } from '@/ai/local/seo';
+import { claimsToReview, canonicalForSlugChange, ctaLink, offerPriceOf, ownCanonical, pageImageIds, pageTargets, placeNewImages, pruneImages, scoreSeo, SECTION_LABEL, sectionsKeptHidden, siteUrl, type SeoCheck } from '@/ai/local/seo';
 import { AI_NO_CHANGE, salesPageEditTask, salesPageTask, salesSectionTask, seoMetaTask, type SalesEditInput, type SalesEditResult, type SalesSectionInput } from '@/ai/tasks';
 import { applySalesPageEdit, applySalesSection, applySeoMeta, undoSeo, writeSeoPage, type SeoWriters } from '@/ai/seoBuilder';
 import { useAI } from '@/ai/useAI';
@@ -21,6 +21,7 @@ import { SeoAnalytics } from './seo/SeoAnalytics';
 import { AIComposer, AIResultBar, AIThinking, GenerateButton, Spark } from '@/components/ai/AI';
 import { PromptImages, usePasteImages } from '@/components/ai/PromptImages';
 import { PublishPanel } from '@/components/publish/PublishPanel';
+import { useProjectOffers } from '@/store/offers';
 import {
   Accordion,
   AccordionContent,
@@ -125,6 +126,8 @@ export default function SeoSalesPage() {
 
 function SeoBuilder({ tabs }: { tabs?: ReactNode }) {
   const project = useActiveProject()!;
+  // the business's offers (a checkout page shows its attached offer's price, as it publishes)
+  useProjectOffers(project.id);
   const updateMarketing = useStore((s) => s.updateMarketing);
   const meta = project.marketing.seo;
   const page = project.marketing.salesPage;
@@ -454,6 +457,7 @@ function SeoBuilder({ tabs }: { tabs?: ReactNode }) {
                   <PublishPanel
                     pageId={seoPageId(project)}
                     kind="seo"
+                    projectId={project.id}
                     title={meta.metaTitle}
                     defaultSlug={meta.slug}
                     published={published}
@@ -559,6 +563,7 @@ function SeoBuilder({ tabs }: { tabs?: ReactNode }) {
                   pageType={type}
                   targets={pageTargets(page, project)}
                   formNote={formNote}
+                  offerPrice={offerPriceOf(project)}
                   onData={(id, data) => setPage((p) => ({ ...p, sections: p.sections.map((s) => (s.id === id ? ({ ...s, data } as SalesSection) : s)) }))}
                 />
               </BrowserFrame>
@@ -732,7 +737,14 @@ export function useSeoFile(projectId: string, fileName: string) {
   const html = async (): Promise<string | null> => {
     const p = useStore.getState().projects.find((x) => x.id === projectId);
     if (!p) return null;
-    const out = await seoFileHtml(p);
+    let out: Awaited<ReturnType<typeof seoFileHtml>>;
+    try {
+      out = await seoFileHtml(p);
+    } catch (e) {
+      // its buy links couldn't be checked: no file with dead Buy buttons
+      toast({ kind: 'error', title: 'Couldn’t make the file', body: (e as Error)?.message || 'Please try again.' });
+      return null;
+    }
     if (out.missing.length) {
       const which = out.missing.length === 1 ? `Image ${out.missing[0]} couldn’t` : `Images ${listJoin(out.missing.map(String))} couldn’t`;
       toast({ kind: 'info', title: `${which} be loaded`, body: 'It’s left out of the file. If you added it on another device, it may still be uploading: try again in a minute.' });

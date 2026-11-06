@@ -8,7 +8,8 @@ import { toast, useUI } from '@/store/ui';
 import { navigate } from './router';
 import { useRuntime } from './platform';
 import { pushMyListings, startCommunitySync } from './community';
-import { buildListing, coverFromMedia, galleryFromMedia, galleryIds, leadPrice } from './listing';
+import { buildListing, coverFromMedia, galleryFromMedia, galleryIds, leadPrice, listingOfferId } from './listing';
+import { offerIdsForPublish, useOffers } from '@/store/offers';
 import { listingActions, safeEmail, safeUrl } from './listingActions';
 
 export interface ListingCheck {
@@ -46,7 +47,31 @@ export const blockingChecks = (p: Project): ListingCheck[] => listingChecks(p).f
 
 /** Whether the live listing differs from what publishing now would share (its words, price, images…). */
 export function listingChanged(p: Project, live: Listing | undefined): boolean {
-  return !!live && (JSON.stringify({ ...buildListing(p, live), cover: null, gallery: null }) !== JSON.stringify({ ...live, cover: null, gallery: null }) || galleryIds(p).length !== (live.gallery?.length ?? 0));
+  if (!live) return false;
+  // its offer's buy link is only known once the business's offers have loaded: until then it isn't compared
+  const unsure = !!listingOfferId(p) && !useOffers.getState().byProject[p.id];
+  const strip = (l: Listing) => {
+    const { buyUrl, offer, ...rest } = l;
+    return { ...rest, cover: null, gallery: null, ...(unsure ? {} : { buyUrl, offer }) };
+  };
+  return JSON.stringify(strip(buildListing(p, live))) !== JSON.stringify(strip(live)) || galleryIds(p).length !== (live.gallery?.length ?? 0);
+}
+
+/**
+ * Before a listing with an offer is published: the business's offers asked of the server now, so its buy link is the
+ * offer's. One that isn't the business's (any more), or can't be checked now, isn't published without it.
+ */
+export async function checkListingOffer(p: Project, ask: (projectId: string) => Promise<ReadonlySet<string>> = offerIdsForPublish): Promise<void> {
+  const id = listingOfferId(p);
+  // this build has no offers (no server): the listing keeps its typed link
+  if (!id || __ARTIFACT_BUILD__) return;
+  let ids: ReadonlySet<string>;
+  try {
+    ids = await ask(p.id);
+  } catch {
+    throw new Error('Couldn’t check this listing’s buy link. Try again in a moment.');
+  }
+  if (!ids.has(id)) throw new Error('This listing’s buy link isn’t one of this business’s offers any more. Attach payment again, or remove it.');
 }
 
 /** Whether your listings are shared with everyone who uses the app (the shared Marketplace is on, and you show them). */
@@ -67,6 +92,7 @@ export async function publishProjectListing(): Promise<{ listing: Listing; updat
   const p = getActiveProject();
   if (!p) throw new Error('Open a project first.');
   const live = liveListing(p);
+  await checkListingOffer(p);
   const cover = await coverFromMedia(p);
   const gallery = await galleryFromMedia(p);
   const listing = { ...buildListing(p, live, cover, gallery), gallery };

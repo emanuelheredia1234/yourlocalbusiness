@@ -182,15 +182,21 @@ export function createMockWhop({ environment = 'sandbox', webhookTarget = null, 
     return { payment: p, event, deliveries: sent };
   }
 
-  async function refund({ paymentId, amount = null, full = false } = {}) {
+  /**
+   * A refund event. full: the event carries the whole payment; bare: the payment without its metadata (id, total and
+   * refunded amount only); else only its id. status: 'succeeded', or 'pending' / 'failed' (nothing refunded yet).
+   * id: the refund's id (the same id again is the same refund, e.g. refund.updated).
+   */
+  async function refund({ paymentId, amount = null, full = false, bare = false, status = 'succeeded', id = null, type = 'refund.created' } = {}) {
     const p = payments.get(paymentId);
     if (!p) return null;
     const total = Math.round(Number(p.total.amount) * 100);
     const minor = amount ?? total;
     const already = Math.round(Number(p.refunded_amount.amount) * 100);
-    p.refunded_amount = money(Math.min(total, already + minor), p.currency);
-    const r = { id: rid('rfnd'), amount: money(minor, p.currency), status: 'succeeded', created_at: iso(), payment: full ? { ...p } : { id: p.id } };
-    const event = newEvent('refund.created', p.account_id, r);
+    if (status === 'succeeded') p.refunded_amount = money(Math.min(total, already + minor), p.currency);
+    const payment = full ? { ...p } : bare ? { id: p.id, total: p.total, refunded_amount: p.refunded_amount, currency: p.currency, status: p.status } : { id: p.id };
+    const r = { id: id ?? rid('rfnd'), amount: money(minor, p.currency), status, created_at: iso(), payment };
+    const event = newEvent(type, p.account_id, r);
     return { refund: r, event, deliveries: await deliver(event.id) };
   }
 

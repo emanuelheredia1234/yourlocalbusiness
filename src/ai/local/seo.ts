@@ -33,7 +33,7 @@ import { FORMATS } from '../knowledge';
 import { buildFacts, singular, verbOutcome, Voice, type Facts } from '../text';
 import { SCRIPT_CLOSE } from './code';
 import { findOffer } from '@/store/offers';
-import { offerPrice } from '@/lib/offers';
+import { minorToDecimal, offerPrice } from '@/lib/offers';
 
 const LT = String.fromCharCode(60);
 
@@ -167,8 +167,9 @@ export function canonicalForSlugChange(project: Project, canonical: string, oldS
 /** Where the page's buttons go: the owner's own buy or booking link, else their website, else ''.
  *  Landing pages only: the other page types' buttons follow pageTargets(). */
 export function ctaLink(project: Project): string {
-  const offer = project.studio.listing.offerId;
-  // the listing's offer: its buy link ({{buy:<id>}}, made /b/<id> when published)
+  const l = project.studio.listing;
+  // the listing's offer, while the listing's button is a Buy one: its buy link ({{buy:<id>}}, made /b/<id> when published)
+  const offer = l.offerId && (project.track !== 'business' || l.bookingType === 'buy') ? l.offerId : undefined;
   if (offer && /^[A-Za-z0-9_-]{22}$/.test(offer)) return `{{buy:${offer}}}`;
   return ensureUrl(project.studio.listing.buyUrl ?? '') || siteUrl(project);
 }
@@ -178,6 +179,16 @@ export function offerPriceOf(project: Project): string {
   if (pageTypeOf(project) !== 'checkout') return '';
   const o = findOffer(project.id, project.marketing.pageLinks?.offerId);
   return o ? offerPrice(o) : '';
+}
+
+/**
+ * A checkout page's price for its structured data, from its attached offer (Google wants it to match the price shown):
+ * { price: '49.00', currency: 'EUR' }; {} when the offer's price isn't known (none is given); null without an offer.
+ */
+export function offerLdPrice(project: Project): { price?: string; currency?: string } | null {
+  if (!offerPriceOf(project)) return null;
+  const o = findOffer(project.id, project.marketing.pageLinks?.offerId);
+  return o && o.priceMinor != null && o.currency ? { price: minorToDecimal(o.priceMinor, o.currency), currency: o.currency.toUpperCase() } : {};
 }
 
 /** The section of this type on the page being replaced, so a rewrite keeps what the owner entered. */
@@ -1376,6 +1387,8 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
     const offers = shownSection(page, 'offers');
     const items = offers?.data.items ?? [];
     const card = shownSection(page, 'pricing');
+    // a checkout page with an offer shows the offer's price, so its structured data says the same
+    const paid = card ? offerLdPrice(project) : null;
     if (business) {
       const contact = shownSection(page, 'contact');
       const telephone = contact && contactTel(contact.data.phone) ? contact.data.phone.trim() : '';
@@ -1403,10 +1416,13 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
               },
             }
           : {}),
-        ...(type === 'checkout' && card && card.data.price > 0 ? { makesOffer: { '@type': 'Offer', itemOffered: { '@type': 'Service', name: card.data.planName }, price: card.data.price, priceCurrency: 'USD' } } : {}),
+        ...(type === 'checkout' && card && (paid ? !!paid.price : card.data.price > 0)
+          ? { makesOffer: { '@type': 'Offer', itemOffered: { '@type': 'Service', name: card.data.planName }, price: paid?.price ?? card.data.price, priceCurrency: paid?.currency ?? 'USD' } }
+          : {}),
       };
     }
     const price = card ? card.data.price : items[0]?.price ?? 0;
+    const shown = paid ? (paid.price ? { priceCurrency: paid.currency, price: paid.price } : null) : price > 0 ? { priceCurrency: 'USD', price } : null;
     return {
       '@context': 'https://schema.org',
       '@type': 'Product',
@@ -1414,7 +1430,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
       description: meta.metaDescription,
       ...(shareImage ? { image: SHARE_IMAGE } : {}),
       brand: { '@type': 'Brand', name: brand.name },
-      ...(price > 0 ? { offers: { '@type': 'Offer', priceCurrency: 'USD', price, ...(canonical ? { url: canonical } : {}) } } : {}),
+      ...(shown ? { offers: { '@type': 'Offer', ...shown, ...(canonical ? { url: canonical } : {}) } } : {}),
     };
   };
 

@@ -27,6 +27,8 @@ export interface Offer {
   status: OfferStatus;
   /** Whop: which of the owner's connections (sandbox = Test mode); null for an outside link */
   environment: WhopEnvironment | null;
+  /** Whop: the connection it sells through (a reconnect makes a new one, so it's matched by id) */
+  connectionId?: string | null;
   /** where buyers pay: whop.com, sandbox.whop.com or the outside link's host */
   checkoutHost: string;
   /** the owner's own outside link (external offers only) */
@@ -151,6 +153,8 @@ const MESSAGES: Record<string, string> = {
   ALREADY_CONNECTED: 'A Whop account is already connected here. Disconnect it first.',
   CHECKOUT_EXPIRED: 'Whop no longer remembers this request. Make a new link for this plan.',
   HAS_SALES: 'This offer has sales, so it stays for your records. Archive it instead.',
+  HAS_CHECKOUT: 'Whop’s checkout for this offer stays open, so it stays for your records. Archive it instead.',
+  NOT_SELLABLE: 'This offer can’t sell again as it is. Attach another plan.',
 };
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -176,6 +180,7 @@ export function toOffer(raw: unknown): Offer | null {
     provider,
     status: STATUSES.includes(r.status as OfferStatus) ? (r.status as OfferStatus) : 'draft',
     environment: r.environment === 'sandbox' ? 'sandbox' : r.environment === 'production' ? 'production' : null,
+    connectionId: provider === 'whop' && str(r.connectionId) ? str(r.connectionId) : null,
     checkoutHost: str(r.checkoutHost),
     ...(provider === 'external' ? { url: /^https:\/\//i.test(str(r.url)) ? str(r.url) : '' } : {}),
     clicks: num(r.clicks),
@@ -477,11 +482,21 @@ export function checkoutHint(href: string): string {
 export const PROVIDER_LABEL: Record<OfferProvider, string> = { whop: 'Whop', external: 'Your own link', stripe: 'Stripe' };
 
 /** An offer's state in plain words, or '' when it's selling. */
+/**
+ * The Whop connection an offer sells through, matched by id (null: not a Whop offer, or connections not loaded yet).
+ * One that isn't in the list any more (disconnected; a reconnect is a new one) is { status: 'disconnected' }.
+ */
+export function offerConnection(o: Pick<Offer, 'provider' | 'connectionId'>, connections: WhopConnection[] | null | undefined): Pick<WhopConnection, 'status'> | null {
+  if (o.provider !== 'whop' || !connections) return null;
+  return connections.find((c) => c.id === o.connectionId) ?? { status: 'disconnected' };
+}
+
 export function offerProblem(o: Pick<Offer, 'status'>, connection?: Pick<WhopConnection, 'status'> | null): string {
   if (o.status === 'paused') return 'Paused: its buy link says it isn’t available right now.';
   if (o.status === 'checkout_unknown') return 'Whop didn’t confirm the checkout link yet. Use Check again.';
   if (o.status === 'archived') return 'Archived: its buy link says it’s no longer available.';
   if (o.status === 'draft') return 'Not ready yet.';
+  if (connection?.status === 'disconnected') return 'The Whop account it used isn’t connected any more, so it isn’t selling. Attach another plan.';
   if (connection && connection.status !== 'active') return 'Its Whop account needs attention in Settings › Payments, so it isn’t selling.';
   return '';
 }
@@ -523,6 +538,15 @@ export function requestId(): string {
   b[8] = (b[8] & 0x3f) | 0x80;
   const h = b.map((x) => x.toString(16).padStart(2, '0')).join('');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/**
+ * A create's request ids after it failed. The server answered (a refusal: nothing was made, the draft is gone): that
+ * kind gets a new id, so the next try is a new request and never Whop's replay of the refused one. No answer (a lost
+ * connection, unknown outcome): the same id, so a retry can't make a second offer or checkout link.
+ */
+export function requestIdsAfter<T extends Record<string, string>>(ids: T, kind: keyof T, e: unknown): T {
+  return e instanceof OffersError && e.status >= 400 ? { ...ids, [kind]: requestId() } : ids;
 }
 
 /** Where a business uses an offer, in plain words (its assets, the SEO page, the listing, its emails). */

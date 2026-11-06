@@ -91,26 +91,36 @@ export function parseEvent(raw) {
   return { id: evt.id.slice(0, 128), type: evt.type.slice(0, 80), timestamp: Number.isFinite(at) ? new Date(at).toISOString() : null, account, data: evt.data };
 }
 
+/** Currencies with no minor unit (the same set as priceText in server/offers/store.mjs). */
+const ZERO_DECIMAL = new Set(['jpy', 'krw', 'vnd', 'clp', 'isk', 'huf']);
+/** How many decimals a currency's amounts have when Whop doesn't say: 0 for the zero-decimal ones, else 2. */
+export const currencyDecimals = (currency) => (typeof currency === 'string' && ZERO_DECIMAL.has(currency.toLowerCase()) ? 0 : 2);
+
 /**
  * Money in minor units, without floats. Whop sends { amount: "10.00", currency, decimals } (older shapes a number).
+ * Without `decimals`: fallbackDecimals when given (the payment total's), else the currency's own (¥1000 is 1000).
  * → { minor, currency, ok }; anything unreadable is { minor: 0, ok: false } (the caller keeps the sale at 0 and tells
  * the owner), never a throw.
  */
-export function toMinor(money, fallbackCurrency = null) {
+export function toMinor(money, fallbackCurrency = null, fallbackDecimals = null) {
   const cur = (c) => (typeof c === 'string' && /^[A-Za-z]{3}$/.test(c) ? c.toLowerCase() : null);
   let amount = money;
-  let decimals = 2;
+  let decimals = null;
   let currency = cur(fallbackCurrency);
   if (money && typeof money === 'object' && !Array.isArray(money)) {
     amount = money.amount;
     if (money.decimals != null) decimals = Number(money.decimals);
     currency = cur(money.currency) ?? currency;
   }
+  if (decimals == null) decimals = fallbackDecimals != null ? Number(fallbackDecimals) : currencyDecimals(currency);
   const bad = { minor: 0, currency, ok: false };
   if (!Number.isInteger(decimals) || decimals < 0 || decimals > 6) return bad;
   let text;
   if (typeof amount === 'number') {
     if (!Number.isFinite(amount)) return bad;
+    // more precision than the currency has (¥10.5) is refused, not rounded; float noise (0.1 + 0.2) isn't precision
+    const scaled = amount * 10 ** decimals;
+    if (Math.abs(scaled - Math.round(scaled)) > 1e-6) return bad;
     text = amount.toFixed(decimals);
   } else if (typeof amount === 'string') text = amount.trim();
   else return bad;
@@ -162,9 +172,12 @@ export function offerIdOf(payment) {
  */
 export function saleFromPayment(type, p) {
   if (!p || typeof p !== 'object' || !PAY_ID.test(String(p.id ?? ''))) return null;
-  const total = toMinor(p.total ?? p.final_amount ?? p.subtotal, p.currency);
-  const net = p.amount_after_fees != null ? toMinor(p.amount_after_fees, total.currency) : null;
-  const refunded = p.refunded_amount != null ? toMinor(p.refunded_amount, total.currency) : null;
+  const money = p.total ?? p.final_amount ?? p.subtotal;
+  const total = toMinor(money, p.currency);
+  // a bare number is in the total's units (its decimals when it says them, else its currency's)
+  const dec = money && typeof money === 'object' && money.decimals != null ? money.decimals : null;
+  const net = p.amount_after_fees != null ? toMinor(p.amount_after_fees, total.currency, dec) : null;
+  const refunded = p.refunded_amount != null ? toMinor(p.refunded_amount, total.currency, dec) : null;
   let status = STATUS_BY_EVENT[type] ?? null;
   if (p.status === 'paid' && (!status || status === 'pending')) status = 'paid';
   if (!status) status = p.status === 'paid' ? 'paid' : null;

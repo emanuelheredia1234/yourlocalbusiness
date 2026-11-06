@@ -131,6 +131,8 @@ export function PublishTab({ project }: { project: Project }) {
     setBusy(true);
     try {
       await publishProjectListing();
+    } catch (e) {
+      toast({ kind: 'error', title: 'Couldn’t publish the listing', body: (e as Error)?.message || 'Please try again.' });
     } finally {
       setBusy(false);
     }

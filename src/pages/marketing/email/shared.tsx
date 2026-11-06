@@ -5,7 +5,7 @@ import { pageLink } from '@/lib/pageLink';
 import { renderTokens } from '@/ai/local/email';
 import { useStore } from '@/store/useStore';
 import { BrandLogo } from '@/components/brand/Logo';
-import { useOffers } from '@/store/offers';
+import { buyLinksOf } from '@/store/offers';
 
 /** A panel's title row: the title and its line on the left, the actions on the right. Unlike Section's own row it
  *  wraps, so on a phone the actions go under the title instead of squeezing it into a column one word wide. */
@@ -40,7 +40,7 @@ export function emailTokens(p: Project, sub?: Pick<Subscriber, 'name' | 'email'>
     sender_email: profile.email || 'your sending address',
     brand: p.brand.name,
     // each of the business's offers: buy:<id> → its full buy link (an id that isn't one stays as typed)
-    ...Object.fromEntries((useOffers.getState().byProject[p.id] ?? []).filter((o) => o.link).map((o) => [`buy:${o.id}`, o.link])),
+    ...buyLinksOf(p.id),
   };
 }
 
