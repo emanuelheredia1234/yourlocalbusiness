@@ -336,6 +336,8 @@ Visitors' lookups:
 
 Security: published pages are other people's HTML and scripts, served from the app's own address, where the app keeps its sign-in. So on the app's address every page is sent with a `Content-Security-Policy: sandbox` header that never allows the app's origin: the page can't read the sign-in or use the API as the visitor, and SEO pages can't run scripts at all. Images are served only when they're listed with their page and are still the exact files checked when it was published (JPEG, PNG, WebP or GIF; never SVG). Each publish stores its images in a new folder, and the page moves to them only once it's saved (a publish that fails removes them, unless the page was saved after all and its answer got lost). Nothing is stored for an account that no longer exists: once someone deletes their account, the server that deleted it stops taking their sign-in, and every copy of the server checks with Supabase that the account is still there before it stores anything. On a person's own domain, pages run unsandboxed on that domain's own origin. That's why the app never answers there, and why a domain needs its TXT record.
 
+Names are 3 to 60 lower-case letters, numbers and hyphens, and some stay the app's own (`server/pages.mjs` `RESERVED_SLUGS`, plus every top-level name in `dist/`), including `market`, `pricing`, `plans`, `unsubscribe`, `offers`, `thank-you`, `thanks`, `download`, `store`, `listings`, `cron` and `webhooks` for routes to come. The app's short public routes `/b/…` (buy links), `/m/…` (lead magnet downloads) and `/o/…` (opt-outs) can never be a page: a name has at least 3 characters, and those prefixes are checked before any page.
+
 API (signed in, same site only): `GET /api/pages`, `GET /api/pages/check?slug=&pageId=`, `PUT` and `DELETE /api/pages/<pageId>`, `POST /api/domains`, `POST /api/domains/<domain>/check`, `DELETE /api/domains/<domain>`, `GET /api/leads?before=&limit=&pageId=`, `DELETE /api/leads/<id>`. Public: `POST /<name>/lead`.
 
 Lead forms: a page with a form (a lead form page, a booking page's "Request a time", a showcase's questions, a website's contact form) posts to `/<name>/lead` on the app's address or the owner's domain. Set it up once: also run `supabase/migrations/20261103050000_page_leads.sql` in Supabase → SQL Editor. Until then, forms answer that the message wasn't sent, and Email → Leads names the file.
@@ -376,7 +378,21 @@ Full owner setup, every Secret and the four database migrations: [docs/integrati
 
 Works immediately, before any key: manual posting (Post it yourself, then Mark as posted), Facebook groups through Manus, public social stats, competitor ads and Google rank through treg, Search Console for pages on the app's address, and per-customer usage. With `UPLOAD_POST_API_KEY`, `UPLOAD_POST_WEBHOOK_SECRET` and `MEDIA_URL_SECRET` set, customers connect their social accounts in Settings → Connected accounts → Social accounts and post from the app; with `ZERNIO_API_KEY` and `ZERNIO_WEBHOOK_SECRET`, they connect ad accounts under Ad accounts. Each side works without the other, and no network approvals are needed. Until a side's Secrets are set, the owner sees the missing names and the webhook address to register on that screen.
 
-Tests use stand-ins only (no live calls): `node server/test/mock-uploadpost.mjs` prints a mock Upload-Post base URL (use it as `UPLOAD_POST_BASE_URL`), `node server/test/mock-zernio.mjs` a mock Zernio ads base URL (`ZERNIO_BASE_URL`), and `server/test/mock-nango.mjs`, `mock-treg.mjs`, `mock-omnisend.mjs` do the same for the others.
+Tests use stand-ins only (no live calls): `node server/test/mock-uploadpost.mjs` prints a mock Upload-Post base URL (use it as `UPLOAD_POST_BASE_URL`), `node server/test/mock-zernio.mjs` a mock Zernio ads base URL (`ZERNIO_BASE_URL`), and `server/test/mock-nango.mjs`, `mock-treg.mjs`, `mock-omnisend.mjs` do the same for the others. `node server/test/mock-stripe.mjs` prints a mock Stripe API base (customers, prices by `lookup_key`, Checkout, subscriptions with quantities, the billing portal, signed webhooks with valid `Stripe-Signature` headers, and Connect accounts) for the paid plans and seller payments to come; the owner's steps before them (Stripe Sandbox key in the workspace Secrets, Google `gmail.send` and Microsoft publisher verification, the Stripe Connect platform profile) are in `docs/integrations-setup.md` §9.
+
+## Scheduled jobs
+
+Replit Autoscale stops the app when it's idle, so nothing runs on a timer inside it. Supabase's pg_cron calls
+`POST /api/cron/tick` every hour (with `Authorization: Bearer <CRON_SECRET>`), and the tick runs whatever is due:
+the treg settle, Upload-Post's and Zernio's monthly metering, Upload-Post's daily check and the stuck-job sweeps
+(`server/cron/`). Each job runs at most once per period behind a claim in `app_state`, a tick answers within 40 s
+with a JSON summary, and a failed job waits for its next period. Owner steps: put a random `CRON_SECRET` in Replit
+Secrets, store the same value as the Supabase Vault secret `cron_secret`, then run
+`supabase/migrations/20261109000000_cron_tick.sql` (see `docs/integrations-setup.md` §2a). Local dev needs none of
+it: without `CRON_SECRET`, outside a Replit deployment, the server ticks itself every minute.
+
+Each business has its own time zone (Settings → Brand → Business details), the browser's by default; scheduled
+features use it for the business's local time.
 
 ## Run it
 
@@ -410,6 +426,7 @@ Server environment:
 - `PAGES_DNS_SERVERS` (optional): the DNS servers the domain check asks (see "Publishing pages")
 - `TRUSTED_PROXY_HOPS` (optional, default 2): how many `X-Forwarded-For` addresses the platform's proxies add at its end, so visitors are told apart by the address they connected from (see "Publishing pages")
 - `OMNISEND_CLIENT_ID` and `OMNISEND_CLIENT_SECRET`: the OAuth credentials Omnisend issues (see "Omnisend: campaign drafts from the email sequence")
+- `CRON_SECRET`: the bearer for `POST /api/cron/tick`, which runs the scheduled jobs; the same value goes in the Supabase Vault secret `cron_secret` (see "Scheduled jobs"). `CRON_BUDGET_MS` (default 40000) is one tick's time budget
 
 `GET /api/config` tells the app whether accounts are on and whether it can publish pages, and `DELETE /api/account` deletes the signed-in user, with their saved workspace, files, published pages and leads.
 
