@@ -106,8 +106,19 @@ export function captionPreview(post: Post, project: Project | undefined): Captio
         : firstComment
           ? `The link goes in the first ${post.platform === 'x' ? 'reply' : 'comment'}.`
           : undefined;
-  return { text, firstComment, commentYourself, linkNote, droppedTags, xLinkCost: post.platform === 'x' && /https?:\/\/|\b[a-z0-9-]+\.[a-z]{2,}\//i.test(text + (firstComment ?? '')), blockers };
+  return { text, firstComment, commentYourself, linkNote, droppedTags, xLinkCost: post.platform === 'x' && hasXLink(`${text}\n${firstComment ?? ''}`), blockers };
 }
+
+/** Top-level domains a bare address ends in that X turns into a link (any 2-letter country code counts too). The same list as the server's (server/connections/uploadpost.mjs). */
+const X_TLDS =
+  'com|net|org|info|biz|app|dev|io|ai|co|me|tv|xyz|shop|store|online|site|website|club|live|blog|news|page|link|art|design|studio|agency|business|company|services|solutions|tech|digital|media|cafe|bar|pizza|salon|fitness|health|church|school|academy|travel|events|photography|beauty|clinic|dental|law|realty|homes|garden|farm|auto|pet|vet|restaurant|bakery|coffee|menu|delivery|today|world|life|fun|love|works|email|group|team|global|city|nyc|london|berlin|paris|tokyo';
+const X_LINKISH = new RegExp(`https?:\\/\\/|\\bwww\\.[a-z0-9-]|(?:^|[^A-Za-z0-9@$#._'’-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:[a-z]{2}|${X_TLDS})(?![A-Za-z0-9'’-])`, 'i');
+
+/**
+ * Whether a text has an address X turns into a link: http(s)://…, www.… or a bare domain such as mybiz.com (not part
+ * of an email, a hashtag or a word). The server counts the same ones toward the shared X Links allowance.
+ */
+export const hasXLink = (text: string): boolean => X_LINKISH.test(text);
 
 /** A fresh id for one press of Confirm: a double click makes one job on the server, a new press a new one. */
 export function newClientRequestId(): string {

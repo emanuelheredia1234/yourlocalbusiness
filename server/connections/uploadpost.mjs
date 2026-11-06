@@ -69,8 +69,15 @@ const REQUEST_ID = /^[A-Za-z0-9_.:-]{6,128}$/;
 const TIKTOK_PRIVACY = ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'];
 /** What each network's reach_timeseries counts when the answer has no metric_type (Upload-Post's metric_type). */
 const SERIES_METRIC = { facebook: 'reach', instagram: 'reach', linkedin: 'reach', tiktok: 'views', youtube: 'views', x: 'impressions', pinterest: 'impressions' };
-/** A web address X would turn into a link (Upload-Post strips those without the X Links add-on). */
-const X_LINKISH = /https?:\/\/|\b[a-z0-9-]+\.[a-z]{2,}\//i;
+/** Top-level domains a bare address ends in that X turns into a link (any 2-letter country code counts too). */
+const X_TLDS = 'com|net|org|info|biz|app|dev|io|ai|co|me|tv|xyz|shop|store|online|site|website|club|live|blog|news|page|link|art|design|studio|agency|business|company|services|solutions|tech|digital|media|cafe|bar|pizza|salon|fitness|health|church|school|academy|travel|events|photography|beauty|clinic|dental|law|realty|homes|garden|farm|auto|pet|vet|restaurant|bakery|coffee|menu|delivery|today|world|life|fun|love|works|email|group|team|global|city|nyc|london|berlin|paris|tokyo';
+/**
+ * A web address X would turn into a link (Upload-Post strips those without the X Links add-on): http(s)://…,
+ * www.…, or a bare domain such as mybiz.com or joes-bakery.co.uk/order (not part of an email, a hashtag or a word).
+ */
+export const X_LINKISH = new RegExp(`https?:\\/\\/|\\bwww\\.[a-z0-9-]|(?:^|[^A-Za-z0-9@$#._'’-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?:[a-z]{2}|${X_TLDS})(?![A-Za-z0-9'’-])`, 'i');
+/** Whether a post's text has an address X turns into a link (it counts toward the X Links allowance). */
+export const hasXLink = (text) => X_LINKISH.test(String(text ?? ''));
 /** Estimated cost of one profile for a month: the Advanced plan ($147) over its 75 profiles, ≈ $1.96 (owner sign-off). */
 export const PROFILE_MONTH_MICRO = 1_960_000;
 /** Analytics reads: 100 per 5 minutes at Upload-Post; we keep to 80 so on-demand views have room. */
@@ -1037,7 +1044,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     }
     // X: with the X Links add-on, links stay in X posts out of 50 a month for every customer together, so each
     // customer has a share (without it Upload-Post takes links out, and the app says so before posting)
-    const xLink = platform === 'x' && xLinks && X_LINKISH.test(String(composed?.text ?? ''));
+    const xLink = platform === 'x' && xLinks && hasXLink(composed?.text);
     if (xLink) {
       const used = await xLinkPosts(tag);
       if (used !== null && used >= xLinkPostsPerCustomer) return { state: 'failed', errorCode: 'X_LINKS_USED', ref };

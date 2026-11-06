@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Post, Project } from '@/lib/types';
 import type { PublishJob } from '@/lib/integrations/types';
 import { newProject } from '@/store/defaults';
-import { apiHolds, buildPublishRequest, canPostFrom, captionPreview, failureCopy, followJob, legacyManus, newClientRequestId, targetText } from './posting';
+import { apiHolds, buildPublishRequest, canPostFrom, captionPreview, failureCopy, followJob, hasXLink, legacyManus, newClientRequestId, targetText } from './posting';
 
 const PAGE = 'https://app.example/copper-kettle';
 const project = (): Project => {
@@ -62,6 +62,15 @@ describe('what each network gets (read-only preview)', () => {
     expect(p.text).toBe(`${caption}\n\n#one`);
     expect(p.xLinkCost).toBe(true);
     expect(captionPreview(post({ platform: 'x', caption: 'No link here', hashtags: [] }), project()).xLinkCost).toBe(false);
+  });
+
+  it('X: a bare address such as mybiz.com is a link too, exactly as the server counts it (never an email, a hashtag or a price)', async () => {
+    const server = (await import('../../server/connections/uploadpost.mjs' as string)) as { hasXLink: (t: string) => boolean };
+    const cases = ['Order at mybiz.com', 'Visit MyBiz.COM/order', 'www.joesbakery', 'https://joes.example', 'joes-bakery.co.uk/menu', '(mybiz.com)', 'mybiz.de', 'No link today', 'joe@mybiz.com', '#mybiz.com', '$3.50 a loaf', 'e.g. this', 'Open 9a.m.-5p.m.', 'file.txt', 'St.Louis'];
+    for (const t of cases) expect([t, hasXLink(t)]).toEqual([t, server.hasXLink(t)]);
+    expect(cases.filter(hasXLink)).toEqual(cases.slice(0, 7));
+    expect(captionPreview(post({ platform: 'x', caption: 'Order at joesbakery.com today', hashtags: [] }), project()).xLinkCost).toBe(true);
+    expect(captionPreview(post({ platform: 'x', caption: 'Email joe@joesbakery.com', hashtags: [] }), project()).xLinkCost).toBe(false);
   });
 
   it('TikTok: no first comment through the app, and it needs media', () => {

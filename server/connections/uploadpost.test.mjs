@@ -5,7 +5,7 @@
 // per-platform result, background status reads and no resend, social stats, deletion, the monthly estimate and the
 // daily reconcile. Nothing here reaches Upload-Post.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createUploadPostConnections, outcomeOfEntry } from './uploadpost.mjs';
+import { createUploadPostConnections, hasXLink, outcomeOfEntry } from './uploadpost.mjs';
 import { combineConnections, createConnections } from './index.mjs';
 import { createUploadPostClient, UPLOAD_POST_BASE_URL, uploadPostBase, upError } from '../uploadpost.mjs';
 import { customerTag, errorBody, sha256 } from '../integrations/common.mjs';
@@ -675,21 +675,21 @@ describe('posting (one attempt)', () => {
     expect((await t.connections.status('c2111111-2222-4333-8444-555555555555')).find((s) => s.platform === 'youtube').state).toBe('not_connected');
   });
 
-  it('X links (with the X Links add-on): each customer has a share of the 50 a month everyone shares; past it nothing is sent, and the owner hears when links were taken out', async () => {
+  it('X links (with the X Links add-on): each customer has a share of the 50 a month everyone shares; bare addresses like mybiz.com count; past it nothing is sent, and the owner hears when links were taken out', async () => {
     const t = setup({ env: { UPLOAD_POST_X_LINKS: 'on', UPLOAD_POST_X_LINK_POSTS_PER_CUSTOMER: '2' } });
     expect(t.impl.xLinks).toBe(true);
     const JO = 'c3111111-2222-4333-8444-555555555555';
     await connectVia(t, JO, 'x');
-    const link = 'Order now https://joes.example/order';
-    expect((await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: link } })).state).toBe('sent');
+    expect((await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: 'Order now https://joes.example/order' } })).state).toBe('sent');
+    // a bare address is a link on X too
     mock.setUploadOutcome('x_links_stripped');
-    expect((await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: link } })).state).toBe('sent');
+    expect((await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: 'Order at joesbakery.com today' } })).state).toBe('sent');
     expect(Object.keys(await alertsOf(t))).toContain('x_links');
     const before = mock.uploadCalls().length;
-    expect(await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: link } })).toMatchObject({ state: 'failed', errorCode: 'X_LINKS_USED' });
+    expect(await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: 'See mybiz.com' } })).toMatchObject({ state: 'failed', errorCode: 'X_LINKS_USED' });
     expect(mock.uploadCalls().length).toBe(before);
-    // a post without a link is never counted
-    expect((await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: 'No link today' } })).state).toBe('sent');
+    // a post without a link is never counted (an email address or a price isn't one)
+    expect((await t.connections.publish(JO, 'x', { jobId: JOB(), composed: { text: 'No link today: email joe@joes.example, $3.50 a loaf' } })).state).toBe('sent');
     expect(t.db.rows('usage_ledger').filter((r) => r.endpoint === 'x:link_post')).toHaveLength(2);
   });
 
@@ -698,6 +698,13 @@ describe('posting (one attempt)', () => {
     const before = mock.uploadCalls().length;
     expect(await t.connections.publish('31111111-2222-4333-8444-555555555555', 'facebook', { jobId: JOB(), composed: { text: 'x' } })).toMatchObject({ state: 'failed', errorCode: 'NO_TARGET' });
     expect(mock.uploadCalls().length).toBe(before);
+  });
+});
+
+describe('X links', () => {
+  it('counts http(s) links, www. and bare domains, never an email, a hashtag, a price or an abbreviation', () => {
+    for (const s of ['https://joes.example', 'Order at mybiz.com', 'Visit MyBiz.COM/order', 'www.joesbakery', 'joes-bakery.co.uk', '(mybiz.com)', 'mybiz.de', 'mybiz.co', 'Bakery.Shop']) expect([s, hasXLink(s)]).toEqual([s, true]);
+    for (const s of ['No link today', 'joe@mybiz.com', '#mybiz.com', '$3.50 a loaf', 'e.g. this', 'Open 9a.m.-5p.m.', 'file.txt', 'St.Louis', 'Hello world.It’s fresh']) expect([s, hasXLink(s)]).toEqual([s, false]);
   });
 });
 
