@@ -697,3 +697,182 @@ These start the things later phases wait on. None of them charges anyone.
    fill in the platform profile (what the platform does, who the sellers are, that sellers own their Stripe
    accounts and see the full Stripe Dashboard, that Stripe collects its fees from the seller and sellers carry
    negative balances). Don't enable live charges yet.
+
+## 10. Plans and billing (P1: Launch, Grow, Scale)
+
+Code: `server/billing/stripe.mjs` (routes, webhook, money operations, cron), `server/billing/entitlement.mjs` (what a
+plan allows), `server/billing/plans.mjs` + `shared/plans.json` (every price and limit), `server/billing/accounts.mjs`
+(the tables), `scripts/stripe-setup.mjs` (products and prices). Database: `supabase/migrations/20261110000000_billing.sql`.
+Nothing is enforced until the owner turns plans on; until then the app behaves as before.
+
+### Owner steps, in order
+
+1. **Stripe Sandbox first.** In the Stripe Dashboard, open a Sandbox (Developers → Sandboxes) and copy its secret key
+   (`sk_test_…`) into the workspace Secrets as `STRIPE_SECRET_KEY`. Everything below is done in the Sandbox, end to
+   end, before anything live.
+2. Run the migration `supabase/migrations/20261110000000_billing.sql` (and check the rule on a branch, below).
+3. Set `APP_URL` (the app's https address).
+4. **Products and prices** with the setup script (below): a dry run, then `--apply`.
+5. **Webhook** (below): the endpoint URL and the 10 events; its signing secret into `STRIPE_WEBHOOK_SECRET`.
+6. **Customer Portal** settings (below).
+7. Optional: **Stripe Tax** (below).
+8. Try it in the Sandbox: create an account, choose a plan on `#plans`, pay with `4242 4242 4242 4242`, come back to
+   the app, add a business, try `4000 0000 0000 0341` (a card that declines later) for the failed-payment path.
+9. Owner → Billing → Plans → **Turn on plans**.
+10. Live (only with the owner's explicit OK): create a **restricted live key** (`rk_live_…`, permissions below), run
+    the setup script with it and `--live`, add the live webhook endpoint and its secret, set up the live Portal, and
+    swap the Secrets.
+11. **$1 live check** (with the owner's OK, before turning plans on in live): the app has no promotion codes, so a $1
+    charge is made in the Dashboard, not through `#plans`. Stripe → Customers → add a customer with the owner's own
+    email (not linked to any app account) → Invoice → one item, $1.00, charge automatically → pay it with the owner's
+    own card. Check: the payment shows as succeeded; Developers → Webhooks → the live endpoint shows the
+    `invoice.paid` delivery answered 200 (the app ignores it as not its customer, which proves the live signing secret
+    works); then refund the $1 (Payments → the payment → Refund). Only after that, one real Launch purchase on the
+    owner's own app account is optional: cancel it in the Portal and refund it in the Dashboard.
+
+### Secrets
+
+| Secret | What it is |
+|---|---|
+| `STRIPE_SECRET_KEY` | In production a **restricted live key** (`rk_live_…`) with: Customers write, Checkout Sessions write, Subscriptions write, Billing Portal write (sessions; configurations if you use `--portal`), Prices read, Products read, Invoices read, Events read. For setup only, the script needs Products and Prices write too (use a separate key for that, or add and remove the permission). The Sandbox key (`sk_test_…`) goes in the workspace Secrets only. The app shows only its last 4 characters. |
+| `STRIPE_WEBHOOK_SECRET` | The endpoint's signing secret (`whsec_…`). |
+| `STRIPE_WEBHOOK_SECRET_PREVIOUS` | Only while rotating the signing secret: the old one, so events signed with it still verify. Remove it once rotated. |
+| `STRIPE_PORTAL_CONFIGURATION` | Optional: the Customer Portal configuration id (`bpc_…`) to use instead of the default one. |
+| `STRIPE_AUTOMATIC_TAX` | Optional: `1` turns on Stripe Tax at Checkout (decide on tax registration first). |
+| `APP_URL` | The app's https address (Checkout and the portal return there). Falls back to `GSC_APP_PROPERTY`. |
+| `STRIPE_API_BASE` | Tests only (the mock). Honoured only with an `sk_test_` key, so a live key only ever goes to Stripe. |
+| `CUSTOMER_TAG_SECRET` | Already set for usage tracking; plans use the same customer tag. |
+
+### Webhook
+
+Stripe Dashboard → Developers → Webhooks → Add endpoint: `https://yourlocalbusiness.replit.app/api/webhooks/stripe`,
+events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`,
+`customer.subscription.deleted`, `customer.subscription.paused`, `customer.subscription.resumed`, `invoice.paid`,
+`invoice.payment_succeeded`, `invoice.payment_failed`, `invoice.payment_action_required`. Copy its signing secret into
+`STRIPE_WEBHOOK_SECRET`. The app checks the signature on the raw body, records each event id once
+(`webhook_deliveries`, `stripe:<evt_id>`), reads the subscription again from Stripe instead of trusting the event, and
+answers 500 when it couldn't finish (Stripe then delivers it again). A live-mode event with a test key (or the other
+way round) and Connect events are ignored.
+
+### Products and prices: `npm run stripe:setup`
+
+Prices are found by lookup key, never by id: `ylb_{launch,grow,scale,business}_{monthly,yearly}` (products
+`ylb_launch`, `ylb_grow`, `ylb_scale`, `ylb_additional_business`). Run it in this order:
+
+1. `npm run stripe:setup` with the Sandbox key: a dry run. It lists each lookup key as `ok`, `missing (dry run)` or
+   `MISMATCH` and changes nothing.
+2. `npm run stripe:setup -- --apply` creates what's missing (each write has a fixed Idempotency-Key: running it twice
+   never makes a second product or price). `--portal` also makes a Customer Portal configuration and prints its id.
+3. A `MISMATCH` (an amount, currency or interval that differs) stops with exit 1. Prices can't be edited: decide, then
+   `--apply --replace` makes a new price that takes the lookup key (existing subscriptions keep the old price).
+4. Live: the same with the live key and `--live`, only with the owner's explicit OK.
+
+### Customer Portal
+
+Stripe → Settings → Billing → Customer portal (or `--apply --portal`): payment methods on, invoice history on,
+cancel **at period end** on, **subscription updates (plan and quantity changes) off** (the app does those so each one is
+sent once and confirmed). Business information and links to the terms and privacy pages.
+
+### Stripe Tax (optional)
+
+Off by default. Decide on tax registration first (Stripe → Tax → Registrations), then set `STRIPE_AUTOMATIC_TAX=1`:
+Checkout then collects the address it needs and adds tax where it applies (prices are `tax_behavior=exclusive`, so
+tax goes on top). Leaving it off charges the plan price only.
+
+### Failed payments (dunning)
+
+Stripe → Settings → Billing → Subscriptions and emails: Smart Retries for 2 weeks, then **cancel** the subscription;
+send emails for failed payments and expiring cards. In the app a failed payment gives 7 days of full access
+(`grace_until`), then paid actions pause (402 `PAYMENT_REQUIRED`); `unpaid` locks businesses above the first;
+everything comes back when a payment goes through.
+
+### Turning on plans
+
+Owner → Billing → Plans → Turn on plans (`PUT /api/billing/settings {enforce: true}`). It refuses until the Stripe
+key, the webhook secret, `APP_URL` and all 8 prices are in place, and says which is missing. When it turns on:
+
+- Every existing account with at least one business gets **30 days of Grow free** (`existing_trial_days`), with as many
+  businesses as it has. Then they choose a plan; Checkout preselects their extra businesses.
+- New sign-ups choose a plan (optional card trial: `card_trial_days`, off by default).
+- Every business already has a slot (the migration's backfill, and the trigger while plans were off).
+
+**Rollback**: turn plans off (the same switch). Everything is ungated again at once; nothing is deleted, and turning
+them on again later doesn't restart the free days (they start at the first `enforced_at`).
+
+### Money rules (what the code guarantees)
+
+- One money operation in flight per user (`billing_ops`); each Stripe write is sent once with a fixed Idempotency-Key
+  built from the user and the app's request id. A timeout is read back from Stripe and never resent; after 10 minutes
+  without the change it's marked `not_applied` and the user may try again. An op a crashed process left `sending` is
+  read back the same way after 2 minutes (never resent).
+- One Checkout at a time per user: before a new Checkout page is made, every other open page of the customer is
+  expired (`POST /v1/checkout/sessions/:id/expire`, its own Idempotency-Key), so two pages can never both be paid.
+- Adding a business charges the prorated price now (`always_invoice` + `error_if_incomplete`): a declined card changes
+  nothing. Removing one lowers the quantity with no proration (no refund, no charge); the business stays until the
+  period ends, then the hourly job locks the one the user chose. Upgrades and monthly → yearly are immediate and
+  charged now; a downgrade applies at renewal and keeps the old tier's features until then; yearly → monthly is done
+  by support in the Stripe Dashboard (the webhook picks it up). A lower plan together with yearly is two steps (the
+  lower plan first). What was paid for a period is kept to its end: a second removal or downgrade never cuts the
+  first one's keep, moving back up to (or below) the tier paid for is free, and above it is refused until the user
+  switches back. Undoing a removal is free only within the same period (after a switch to yearly it's an add).
+- The owner's account is the `owner` plan: no Stripe Customer is ever made for it.
+- Deleting an account cancels every subscription of its Stripe customer that isn't over (read from Stripe, not only
+  the stored one); if that can't be confirmed the deletion stops (409 `BILLING_PENDING`), and Stripe failing is a 503
+  in our words. The Stripe Customer is kept (receipts, tax records).
+- Owner rights come from `isAdmin` at sign-in, never from the stored row alone: the owner row is made the first time
+  any gated request of theirs is seen, and a former admin's row goes back to no plan.
+- A free (comp) plan is never replaced by an old subscription's events, only by a plan the customer buys.
+- Turning plans on gives existing users their free days first; if that fails, plans stay off and the switch can be
+  pressed again.
+- A business locked on the plan can't post, connect accounts or refresh analytics (402 `BUSINESS_LIMIT`).
+- After a plan ends, published pages keep serving 30 days; data is kept 90 days and is never deleted automatically
+  (the owner list shows `dataExpiresAt`).
+
+### What customers see (the app)
+
+- **`#plans`** (public, signed out too): a Monthly / Annual switch (annual shows "2 months free" and the saving),
+  the Launch, Grow ("Most popular") and Scale cards, the comparison table and the FAQ, all from `shared/plans.json`.
+  **Start with …** signed out remembers the choice, opens Create your account ("Then you'll finish starting Grow
+  ($197/month) with Stripe."), and after sign-in goes straight to Stripe Checkout; back in the app
+  (`?billing=success&session_id=…`) the plan is read again: "You're on Grow.", or "Payment is still processing" with
+  a refresh. Signed in with a plan, the buttons read Current plan / Switch to … (upgrades and monthly → yearly are
+  charged now, downgrades start at renewal; yearly → monthly says to contact support).
+- **New sign-ups** with plans on and no plan see the plan picker before their first business.
+- **Every new business claims a slot first** (project menu, palette, Settings › Projects & data, the setup, the
+  assistant, a backup import). A full paid plan opens **Add a business** ($97/month, charged today for the rest of
+  the period; a declined card changes nothing; "Confirming your payment…" is read back, never re-sent); no plan opens
+  `#plans`; the assistant only says the plan is full (it never buys).
+- **A business the account refused** (no free slot: the database's rule) stays on that device with a note: Add a
+  business, or Remove from this device. Other changes keep saving.
+- **Settings › Plan**: the plan, price, status (Active, Trial ends, Payment problem until, Cancels, Ended), next
+  renewal, the AI credits meter, Change plan, Manage billing (the Portal: card, invoices, cancelling); the businesses
+  (N of M, Active / Locked / Ends), Add a business, Remove one at renewal (choose which; no refund), Undo, and
+  Choose which businesses stay active when over the limit. The owner sees "Owner plan — unlimited".
+- **Banners** for a failed payment (grace, then paused), a trial ending, a plan that cancels or ended; **one upgrade
+  prompt** for any refused paid action (`PLAN_REQUIRED`, `PAYMENT_REQUIRED`, `CREDITS_USED`, `BUSINESS_LIMIT`,
+  `CARD_DECLINED`) with the server's own sentence and See plans / Upgrade to … / Update card / Add a business / Use my
+  own AI keys. Ads' Launch shows "Part of Grow and Scale" on Launch; longer videos show the tier that has them.
+- Owner → Billing → **Plans**: the switch (with what's missing), card-trial days, free days for existing accounts,
+  every account's plan (Stripe ids as …last4), Grant free plan, Re-check with Stripe.
+- None of this exists in the claude.ai artifact build.
+
+### Cron jobs
+
+`billing-hourly` (pending removals and downgrades at period end, due locks, free trials ending, unknown operations
+read back, slots claimed for a business that was never saved freed after a day), `stripe-reconcile` (04:17 UTC: re-reads every subscription, adopts a completed Checkout whose webhook was
+missed; never writes to Stripe), `billing-retention` (04:47 UTC: counts accounts past 90 days; deletes nothing).
+
+### The database rule (check on a Supabase branch, with the owner's OK)
+
+The migration makes `user_docs` project rows writable only while the business holds an active `project_slots` row
+(once plans are enforced). Tests check it against the mock only; check the real policy on a Supabase branch before
+production:
+
+1. Create a branch, apply `supabase/migrations/20261110000000_billing.sql`, `update billing_settings set enforce = true`.
+2. As an authenticated test user (no plan): inserting a `user_docs` row with `kind='project'` is refused (42501).
+3. Give the user a plan row (`billing_accounts`, status `active`, `business_limit` 1), call
+   `select claim_project_slot('p1')` as that user, then insert project `p1`: allowed; a second project's claim answers
+   `{"ok":false,"reason":"limit"}`.
+4. Lock the slot (`update project_slots set state='locked'`): updating `p1` is refused. Delete `p1`: its slot is gone.
+5. `update billing_settings set enforce = false`: inserting a new project works and gets a slot by itself.
+6. Two sessions calling `claim_project_slot` at once at limit − 1: exactly one gets it.

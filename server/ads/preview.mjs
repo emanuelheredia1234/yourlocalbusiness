@@ -341,7 +341,7 @@ export async function previewLaunch(ctx, who, body) {
   const lim = await ctx.limits.effective(conn.tag);
   const sw = switchesProblem(lim, env);
   if (sw) throw fail(403, sw, messageFor(sw));
-  if (!(await ctx.canLaunchAds(who.id, ctx))) throw fail(403, 'PLAN_REQUIRED', messageFor('PLAN_REQUIRED'));
+  if (!(await ctx.canLaunchAds(who.id, who))) throw fail(403, 'PLAN_REQUIRED', messageFor('PLAN_REQUIRED'));
   const committed = await ctx.limits.committed(who.id, account.currency ?? lim.ads_currency);
   const launchesToday = await ctx.limits.countToday(who.id, ['launch']);
   const limitNotes = Number.isInteger(picks.dailyBudget) && Number.isInteger(picks.durationDays) ? launchProblems({ lim, currency: account.currency, daily: picks.dailyBudget, days: picks.durationDays, choice: picks.status, committed: committed.daily, launchesToday }) : [];
@@ -666,7 +666,7 @@ export async function previewChange(ctx, who, row, body) {
     lim = await ctx.limits.effective(row.customer_tag);
     const sw = switchesProblem(lim, env);
     if (sw) throw fail(403, sw, messageFor(sw));
-    if (!(await ctx.canLaunchAds(who.id, ctx))) throw fail(403, 'PLAN_REQUIRED', messageFor('PLAN_REQUIRED'));
+    if (!(await ctx.canLaunchAds(who.id, who))) throw fail(403, 'PLAN_REQUIRED', messageFor('PLAN_REQUIRED'));
     planned.blockers.push(...(await spendLimitNotes(ctx, who, row, planned, lim)));
   } else if (action === 'creative') {
     lim = await ctx.limits.effective(row.customer_tag);

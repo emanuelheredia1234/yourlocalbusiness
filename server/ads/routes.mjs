@@ -89,7 +89,8 @@ export function createAdsRoutes(deps = {}) {
     limits,
     /** ad accounts with a write in flight here (one at a time per ad account; pause and end never wait) */
     busy: new Set(),
-    canLaunchAds: (userId) => gate(userId, { db, env }),
+    /** who: the signed-in user (the owner is on the owner plan whatever their billing row says) */
+    canLaunchAds: (userId, who = null) => gate(userId, { db, env, billing: deps.billing ?? null, who: who && who.id === userId ? who : null }),
     mediaStore: deps.mediaStore ?? createMediaStore({ env, fetch }),
     tagOf: (userId) => customerTag(userId, env),
   };
@@ -229,7 +230,7 @@ export function createAdsRoutes(deps = {}) {
       const lim = await limits.effective(rebuilt.conn.tag);
       const sw = switchesProblem(lim, env);
       if (sw) throw fail(403, sw, messageFor(sw));
-      if ((await ctx.canLaunchAds(who.id)) !== true) throw fail(403, 'PLAN_REQUIRED', messageFor('PLAN_REQUIRED'));
+      if ((await ctx.canLaunchAds(who.id, who)) !== true) throw fail(403, 'PLAN_REQUIRED', messageFor('PLAN_REQUIRED'));
       if (lim.version !== tok.limitsVersion) throw fail(409, 'LIMITS_CHANGED', messageFor('LIMITS_CHANGED'));
       const committed = await limits.committed(who.id, tok.acct.currency);
       const launchesToday = await limits.countToday(who.id, ['launch']);
@@ -382,7 +383,7 @@ export function createAdsRoutes(deps = {}) {
         const lim = await limits.effective(row.customer_tag);
         const sw = switchesProblem(lim, env);
         if (sw) throw fail(403, sw, messageFor(sw));
-        if ((await ctx.canLaunchAds(who.id)) !== true) throw fail(403, 'PLAN_REQUIRED', messageFor('PLAN_REQUIRED'));
+        if ((await ctx.canLaunchAds(who.id, who)) !== true) throw fail(403, 'PLAN_REQUIRED', messageFor('PLAN_REQUIRED'));
         if (lim.version !== tok.limitsVersion) throw fail(409, 'LIMITS_CHANGED', messageFor('LIMITS_CHANGED'));
         const problems = await spendLimitNotes(ctx, who, row, planned, lim);
         if (problems.length) throw noteError(problems[0]);

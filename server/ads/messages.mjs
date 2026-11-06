@@ -116,7 +116,7 @@ const MESSAGES = {
   ADS_OFF: 'Launching ads isn’t turned on for your account. Ask the app owner.',
   KILL_SWITCH: 'Launching ads and raising budgets is switched off on this app right now. Pausing and ending still work.',
   BLOCKED: 'Your account can’t launch ads or raise budgets right now. Ask the app owner. Pausing and ending still work.',
-  PLAN_REQUIRED: 'Launching ads isn’t part of your plan.',
+  PLAN_REQUIRED: 'Launching ads is part of Grow and Scale.',
   LIMIT_DAILY: (c) => `This would put ${money(c, 'after')} a day across your live campaigns; your limit is ${money(c, 'limit')}. Lower the amount or ask the app owner.`,
   LIMIT_CHANGE: (c) => `That’s ${money(c, 'amount')} a day; one launch or increase can be at most ${money(c, 'limit')} a day. Lower it or ask the app owner.`,
   LIMIT_TOTAL: (c) => `This campaign would come to ${money(c, 'amount')} in total; your limit for one campaign is ${money(c, 'limit')}. Shorten it, lower the amount or ask the app owner.`,

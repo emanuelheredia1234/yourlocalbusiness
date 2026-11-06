@@ -205,6 +205,7 @@ const notice = (title, text) => `<!doctype html>
 `;
 const NOT_FOUND_PAGE = notice('Page not found', 'This page doesn’t exist, or it’s no longer published.');
 const UNAVAILABLE_PAGE = notice('This page can’t be shown right now', 'Try again in a minute.');
+const GONE_PAGE = notice('This page is no longer available', 'This page is no longer available.');
 
 /** The image type its first bytes show (only the types a page may publish), or null. */
 export function imageTypeOf(buf) {
@@ -686,6 +687,8 @@ export function pagesFromEnv(env = process.env, deps = {}) {
  * appHostExtras(req, res, url) → boolean | Promise<boolean>: more GET/HEAD paths on the app's own host, asked
  * before page names (the app-host /sitemap.xml, /robots.txt and the Search Console verification file, from
  * server/seo/sitemap.mjs); true when it answered. Never asked on people's own domains (serveDomain has theirs).
+ * billing: the plans facade (server/integrations/wiring.mjs): a page whose owner's plan ended more than 30 days ago
+ * answers 410 (fail-open: plans off or unreachable → served), and publishing needs an active plan.
  */
 export function createPages({
   supabaseUrl = '',
@@ -707,6 +710,7 @@ export function createPages({
   tuning = {},
   fetch = globalThis.fetch,
   appHostExtras = null,
+  billing = null,
 } = {}) {
   const tune = { ...TUNING, ...tuning };
   const hops = trustedHops;
@@ -1103,6 +1107,17 @@ export function createPages({
     }
     write(req, res, 503, { ...COMMON, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '60', 'content-security-policy': NOTICE_CSP }, UNAVAILABLE_PAGE);
   };
+  const gone = (req, res) => write(req, res, 410, { ...COMMON, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': NOTICE_CSP }, GONE_PAGE);
+  /** Whether a page's owner's plan ended more than 30 days ago (pages keep serving until then). Fail-open. */
+  async function expired(page) {
+    if (!billing?.pagesServeUntil || !page?.user_id) return false;
+    try {
+      const until = await billing.pagesServeUntil(page.user_id);
+      return !!until && Date.parse(until) < Date.now();
+    } catch {
+      return false;
+    }
+  }
   /** A published page with its HTML; with html null (HEAD), its headers only: the row says how big it is. */
   function sendPage(req, res, page, html, { sandbox }) {
     const hdrs = { ...COMMON, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=60', ...(sandbox ? { 'content-security-policy': page.kind === 'artifact' ? ARTIFACT_CSP : SEO_CSP } : {}) };
@@ -1305,6 +1320,7 @@ export function createPages({
         const shows = (page) => !!page && page.domain === host && page.user_id === site.user_id && (p !== '/' || !!page.home);
         const page = await findPage(slug, client);
         if (!shows(page)) notFound(req, res);
+        else if (await expired(page)) gone(req, res);
         else if (m?.[3] !== undefined) await sendImage(req, res, page, m[3], client);
         else if (headOnly(req, page)) sendPage(req, res, page, null, { sandbox: false });
         else {
@@ -1365,6 +1381,7 @@ export function createPages({
     try {
       const page = await findPage(slug, client);
       if (!page) notFound(req, res);
+      else if (await expired(page)) gone(req, res);
       else if (image !== undefined) await sendImage(req, res, page, image, client);
       else if (headOnly(req, page)) sendPage(req, res, page, null, { sandbox: true });
       else {
@@ -1386,7 +1403,7 @@ export function createPages({
   async function leadPage(slug, req) {
     const client = visitor(req);
     const page = await findPage(slug, client);
-    if (!page) return null;
+    if (!page || (await expired(page))) return null;
     const got = await pageWithHtml(page, client);
     return got ? { ...got.page, html: got.html.toString('utf8') } : null;
   }
@@ -1451,6 +1468,15 @@ export function createPages({
   }
 
   async function publish(req, who, pageId, b, origin) {
+    // publishing (new or again) needs an active plan once plans are enforced (402; a no-op without plans)
+    if (billing?.requireActive) {
+      try {
+        await billing.requireActive(who, 'publish');
+      } catch (e) {
+        if (e?.status === 402) throw fail(402, e.code, e.message, { need: e.extra?.need, upgrade: '#plans' });
+        throw fail(503, 'UNAVAILABLE', 'Couldn’t check your plan just now. Try again in a minute.');
+      }
+    }
     const kind = pageId.slice(0, pageId.indexOf(':'));
     if (b.kind !== undefined && b.kind !== kind) throw fail(400, 'BAD_REQUEST', 'The page’s kind doesn’t match its id.');
     const slug = typeof b.slug === 'string' ? b.slug.trim() : '';
@@ -1741,7 +1767,7 @@ export function createPages({
     } catch (e) {
       if (!e?.status) console.error(e);
       if (res.headersSent) return;
-      return reply(e?.status || 500, { error: e?.status ? e.message : 'Unexpected server error', code: e?.code || 'UPSTREAM', ...(e?.reason ? { reason: e.reason } : {}), ...(e?.reply ?? {}) });
+      return reply(e?.status || 500, { error: e?.status ? e.message : 'Unexpected server error', code: e?.code || 'UPSTREAM', ...(e?.reason ? { reason: e.reason } : {}), ...(e?.need ? { need: e.need } : {}), ...(e?.upgrade ? { upgrade: e.upgrade } : {}), ...(e?.reply ?? {}) });
     }
   }
 

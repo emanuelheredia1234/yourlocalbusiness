@@ -149,10 +149,11 @@ function queryString(query) {
   return s ? `?${s}` : '';
 }
 
-export function createTreg({ env = process.env, fetch = globalThis.fetch, now = () => Date.now(), db = null, ledger = null, caps = null, storage = null, log = console, maxInFlight = MAX_IN_FLIGHT_PER_CUSTOMER, replayDelayMs = 5_000 } = {}) {
+export function createTreg({ env = process.env, fetch = globalThis.fetch, now = () => Date.now(), db = null, ledger = null, caps = null, storage = null, log = console, maxInFlight = MAX_IN_FLIGHT_PER_CUSTOMER, replayDelayMs = 5_000, tierFor = null } = {}) {
   const base = String(env.TREG_BASE_URL || 'https://treg.to').replace(/\/+$/, '');
   const book = ledger ?? (db ? createLedger({ db, now, log }) : null);
-  const limits = caps ?? (db && book ? createCaps({ db, ledger: book, now, log }) : null);
+  // tierFor: the customer's plan layer of caps (server/billing/caps.mjs)
+  const limits = caps ?? (db && book ? createCaps({ db, ledger: book, now, log, tierFor }) : null);
   let store = storage;
   const appState = () => (store ??= appStateFromEnv(env, fetch));
   const gate = createGate(maxInFlight);

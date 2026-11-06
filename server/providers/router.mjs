@@ -20,7 +20,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { PROVIDERS, adapterId, defaultEffort, effortIds, effortLabel, estimateCost, fnById, kindDef } from './registry.mjs';
+import { PROVIDERS, adapterId, defaultEffort, effortIds, effortLabel, estimateCost, fnById, kindDef, modelDef } from './registry.mjs';
 import { USER_KEY_PROVIDERS } from '../userKeys.mjs';
 import { ProviderError, sniffImage } from './http.mjs';
 import { RESEARCH_TIMEOUT_MS, canResearch, researchMeta, searchPrice } from './research.mjs';
@@ -447,7 +447,12 @@ export class AIRouter {
    * the owner's keys that has to be polled is checked by the server too, so it finishes (and its cost
    * is counted) even if nobody asks about it.
    */
-  async startVideo({ prompt, aspect = '9:16', duration = 8, firstFrame = null, signal, owner = null, ownKeys = null, meter = null, onFinished = null }) {
+  /**
+   * maxHeight (plans: the plan's video height, e.g. 768 or 1440): a key whose resolution setting is above it uses
+   * that model's highest resolution at or under it (the same provider, never a silent switch); models without a
+   * resolution setting ignore it.
+   */
+  async startVideo({ prompt, aspect = '9:16', duration = 8, firstFrame = null, signal, owner = null, ownKeys = null, meter = null, onFinished = null, maxHeight = null }) {
     const fn = 'videos';
     let route = this.plan(fn, 'video', ownKeys);
     if (!route.length) throw this.noProvider(fn);
@@ -457,7 +462,8 @@ export class AIRouter {
     const attempts = [];
     let last = null;
     for (const step of route) {
-      const { id, model, effort } = step;
+      const { id, model } = step;
+      const effort = maxHeight ? effortWithin(modelDef(id, 'video', model)?.efforts ?? kindDef(id, 'video')?.efforts ?? [], step.effort, maxHeight) : step.effort;
       const t0 = Date.now();
       try {
         meter?.start?.();
@@ -856,4 +862,20 @@ export class AIRouter {
     }
     return { provider: id, model, field: kindDef(id, 'text').field, results };
   }
+}
+
+/** A video resolution setting's height ('768p' → 768, '2K' → 1440, '4k' → 2160), or null for anything else. */
+export function effortHeight(effort) {
+  const e = String(effort ?? '').trim().toLowerCase();
+  const p = /^(\d{3,4})p$/.exec(e);
+  if (p) return Number(p[1]);
+  return { '1k': 1080, '2k': 1440, '4k': 2160 }[e] ?? null;
+}
+
+/** The setting to use under a height cap: `effort` when it fits (or isn't a resolution), else the highest that fits. */
+export function effortWithin(efforts, effort, maxHeight) {
+  const h = effortHeight(effort);
+  if (h === null || h <= maxHeight) return effort;
+  const fits = (efforts ?? []).filter((e) => effortHeight(e) !== null && effortHeight(e) <= maxHeight).sort((a, b) => effortHeight(b) - effortHeight(a));
+  return fits[0] ?? effort;
 }

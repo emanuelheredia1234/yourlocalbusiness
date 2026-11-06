@@ -15,7 +15,7 @@ import { priceLabel } from '@/lib/listing';
 import { listingChanged, liveListing } from '@/lib/listingPublish';
 import { allListings, filterListings, listingCities } from '@/lib/marketplace';
 import { useRuntime } from '@/lib/platform';
-import { deleteProjectEverywhere, socialDeleteNote, startNewProject } from '@/lib/projectActions';
+import { deleteProjectEverywhere, socialDeleteNote, startProject } from '@/lib/projectActions';
 import { CATEGORY_META, FEEDBACK_REASONS, SCOPE_META, SKILL_LIBRARY, describeDirectives, effectiveDirectives, newSkill, skillFromLibrary, templatePlaceholders, unfilledPlaceholders } from '@/ai/brain';
 import { MAX_DOC, MIN_DOC_CHARS, docText, knowledgeDocSkill, playgroundSets } from '@/ai/brainSkills';
 import { runTask, type RunResult } from '@/ai/engine';
@@ -868,8 +868,11 @@ const createProject = defineTool({
   summary: 'Start a new business or digital product project and open its setup (it becomes the open project; this chat stays here, so this ends your turn).',
   args: { track: arg.enum(['business', 'product']) },
   run: async ({ track }) => {
-    const id = await startNewProject(track);
-    if (!id) return { ok: false, error: 'The owner chose to stay (something is still generating).', note: 'Stayed here: something is still generating' };
+    // the plan's business slot is claimed first; a full plan is only reported (the assistant never buys anything)
+    const r = await startProject(track, { interactive: false });
+    if ('stayed' in r) return { ok: false, error: 'The owner chose to stay (something is still generating).', note: 'Stayed here: something is still generating' };
+    if ('refused' in r) return { ok: false, error: r.refused, note: 'No free business slot on the plan' };
+    const id = r.id;
     return { data: { projectId: id, track, next: 'Its setup is open; the owner finishes it there.' }, note: `Started a new ${track === 'business' ? 'business' : 'product'} project: its setup is open`, end: true };
   },
 });

@@ -33,6 +33,10 @@
 // (429 DAILY_LIMIT once today's requests or dollars reach them; counters reset at midnight UTC).
 // With accounts on but sign-in not required, signed-out visitors share the same limits, counted per
 // network address in this server's memory (so signing out never lifts a limit).
+//
+// Plans (server/billing/stripe.mjs, through setBilling): once enforced, a request on the app's keys also needs an
+// active plan (402 PLAN_REQUIRED / PAYMENT_REQUIRED) and room in the month's AI credits (402 CREDITS_USED; the daily
+// dollar cap still stops bursts). Own keys are never limited by either. Videos are held to the plan's length.
 
 import crypto from 'node:crypto';
 import path from 'node:path';
@@ -110,7 +114,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * auth (server/auth.mjs): with accounts on, AI needs a signed-in user, the owner (ADMIN_EMAILS) manages
  * the keys, and each video job or Manus task can only be read by whoever started it.
  */
-export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS, userKeys = NO_USER_KEYS, appState = LOCAL_ONLY, limits = createLimits(), slackOptions = {} }) {
+export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataDir, adminToken = '', allowedOrigin = '', env = process.env, fetch = globalThis.fetch, baseUrls = {}, auth = NO_ACCOUNTS, userKeys = NO_USER_KEYS, appState = LOCAL_ONLY, limits = createLimits(), slackOptions = {}, billing: billingIn = null }) {
+  // the plans (server/integrations/wiring.mjs integrations.billing): set after the integrations are made
+  let billing = billingIn;
   // appState (server/appState.mjs): with Supabase's secret key, the owner's keys and settings, the
   // Manus task list and the usage log are also kept in Supabase, so they survive restarts
   const store = new AIStore(path.join(dataDir, 'ai-providers.json'), { env, legacyFile: path.join(dataDir, 'image-providers.json'), remote: appState });
@@ -253,7 +259,48 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
    * A web research request that failed after it started (timed out, stopped, cut off) adds the estimate
    * too: its searches may be billed and its real cost never arrives (the router says so: cost(usd, { unsure })).
    */
-  async function gate(req, res, who, kind, { estimateUsd = 0, charge = false, strict = charge } = {}) {
+  /**
+   * The signed-in user's plan for a request on the app's keys, or null when plans don't apply (not enforced, the
+   * owner, no billing). Replies 402/503 itself and answers false when the request can't run.
+   */
+  async function planFor(req, res, who) {
+    if (!billing?.entitlement) return null;
+    let ent;
+    try {
+      ent = who?.id ? await billing.entitlement(who.id, who) : null;
+    } catch {
+      // the plan can't be read: refuse only when plans are known to be on
+      if (billing.config?.().enforce !== true) return null;
+      reply(req, res, 503, { error: 'Couldn’t check your plan right now. Try again in a minute, or use your own AI keys.', code: 'UNAVAILABLE' });
+      return false;
+    }
+    if (!who?.id) {
+      // signed-out visitors (sign-in not required): no plan, once plans are enforced
+      if (billing.config?.().enforce !== true) return null;
+      reply(req, res, 402, { error: 'This needs a plan. Choose one to keep going.', code: 'PLAN_REQUIRED', need: { feature: 'ai', tier: 'launch' }, upgrade: '#plans' });
+      return false;
+    }
+    if (ent.plan === 'legacy' || ent.plan === 'owner') return null;
+    if (!ent.active) {
+      const payment = ent.paused === 'payment';
+      reply(req, res, 402, payment ? { error: 'Your last payment didn’t go through. Update your card in Billing to keep going.', code: 'PAYMENT_REQUIRED', upgrade: '#plans' } : { error: 'This needs a plan. Choose one to keep going.', code: 'PLAN_REQUIRED', need: { feature: 'ai', tier: 'launch' }, upgrade: '#plans' });
+      return false;
+    }
+    return ent;
+  }
+
+  const creditsError = (ent, st) => {
+    const resets = st.resetsAt ? new Date(st.resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' }) : 'next month';
+    return {
+      error: `You’ve used this month’s AI credits. They renew on ${resets}. Add a business or upgrade for more, or use your own AI keys.`,
+      code: 'CREDITS_USED',
+      resetsAt: st.resetsAt,
+      credits: { monthly: ent.creditsPerMonth },
+      upgrade: '#plans',
+    };
+  };
+
+  async function gate(req, res, who, kind, { estimateUsd = 0, charge = false, strict = charge, ent: knownPlan } = {}) {
     const noop = { ownKeys: null, meter: null, done: async () => {}, later: null };
     if (!isMetered(req, who)) return noop;
     const m = meterId(req, who);
@@ -261,6 +308,9 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     let own = router.ownRoute(kind, ownKeys).length > 0;
     let release = () => {};
     const day = utcDay();
+    // own keys are never limited by a plan; on the app's keys the plan must be active and have credits left
+    const plan = own ? null : knownPlan !== undefined ? knownPlan : await planFor(req, res, who);
+    if (plan === false) return null;
     if (!own) {
       // reserve first (no await in between), then read: requests ahead of this one count against it
       release = limits.reserve(m.id, { usd: estimateUsd });
@@ -282,6 +332,24 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         }
         reply(req, res, 429, dailyLimitError(st, who));
         return null;
+      }
+      // the month's AI credits (after the daily cap, which stops bursts)
+      if (!own && plan && plan.creditsPerMonth != null && plan.creditWindow) {
+        const mst = await limits.monthStatus(m.id, { budgetUsd: plan.creditsPerMonth * 0.01, sinceDay: plan.creditWindow.start.slice(0, 10), resetsAt: plan.creditWindow.resetsAt }, { reservation: release, strict });
+        if (mst.reached) {
+          ownKeys = await ownKeysOf(who, { fresh: true });
+          own = router.ownRoute(kind, ownKeys).length > 0;
+          release();
+          if (!own) {
+            if (mst.unavailable) {
+              reply(req, res, 503, { error: 'Couldn’t check this month’s AI credits right now (Supabase didn’t answer). Try again in a minute, or add your own API keys in Settings › AI keys.', code: 'LIMITS_UNAVAILABLE' });
+              return null;
+            }
+            reply(req, res, 402, creditsError(plan, mst));
+            return null;
+          }
+          release = () => {};
+        }
       }
     }
     const meter = {
@@ -595,7 +663,18 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       const days = await limits.history(who.id, { days: 7 });
       const today = days[0];
       const st = isAdmin(req, who) ? { unlimited: true } : { ...(await limits.status(who.id, store.limits())), unlimited: false };
-      return reply(req, res, 200, { day: today.day, today: { requests: today.requests, usd: today.usd, ownRequests: today.ownRequests, ownUsd: today.ownUsd }, days, limits: st, ...countersWhere() });
+      // plans: the month's AI credits (1 credit = $0.01 on the app's keys; own keys never count)
+      let credits;
+      try {
+        const ent = billing?.entitlement && !isAdmin(req, who) ? await billing.entitlement(who.id, who) : null;
+        if (ent && ent.creditsPerMonth != null && ent.creditWindow) {
+          const used = await limits.monthUsage(who.id, ent.creditWindow.start.slice(0, 10));
+          credits = { monthly: ent.creditsPerMonth, usedCredits: Math.ceil(Math.round(used.usd * 100 * 1e6) / 1e6), resetsAt: ent.creditWindow.resetsAt };
+        }
+      } catch {
+        credits = undefined;
+      }
+      return reply(req, res, 200, { day: today.day, today: { requests: today.requests, usd: today.usd, ownRequests: today.ownRequests, ownUsd: today.ownUsd }, days, limits: st, ...(credits ? { credits } : {}), ...countersWhere() });
     }
 
     if (p === '/api/ai/usage' && m === 'GET') {
@@ -676,6 +755,22 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       const firstFrame = typeof b.firstFrame === 'string' && parseDataUrl(b.firstFrame) && IMAGE_TYPES.has(parseDataUrl(b.firstFrame).mime) ? b.firstFrame : null;
       const aspect = VIDEO_ASPECTS.has(b.aspect) ? b.aspect : '9:16';
       const duration = Math.max(1, Math.min(15, Number(b.duration) || 8));
+      // plans: the video's length and height follow the plan (asking for more than the plan allows is refused, not
+      // cut short); own keys keep the app's limits
+      let maxHeight;
+      let ent;
+      if (billing?.entitlement && isMetered(req, who) && who?.id) {
+        try {
+          ent = await billing.entitlement(who.id, who);
+        } catch {
+          ent = null;
+        }
+        const v = ent && ent.plan !== 'legacy' && ent.plan !== 'owner' ? ent.features?.video : null;
+        if (v) {
+          if (duration > v.maxSeconds) return reply(req, res, 402, { error: `Videos up to ${v.maxSeconds} seconds are part of your plan. Longer videos are part of Grow and Scale.`, code: 'PLAN_REQUIRED', need: { feature: 'video_length', tier: 'grow' }, upgrade: '#plans' });
+          maxHeight = v.maxHeight;
+        }
+      }
       // on the owner's keys, the video's estimated cost counts toward the day as soon as it starts
       const g = await gate(req, res, who, 'video', { estimateUsd: router.estimate('video', { duration }), charge: true });
       if (!g) return;
@@ -683,7 +778,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         // one-shot paid job: started once, never retried (withFreshKeys retries only when no key was found,
         // before anything was sent). When it finishes (the server checks on it even if nobody asks), the
         // estimate is corrected to its real cost.
-        const job = await withFreshKeys(() => router.startVideo({ prompt, aspect, duration, firstFrame, owner: who?.id ?? null, ownKeys: g.ownKeys, meter: g.meter, onFinished: g.later ? (usd, j) => g.later(usd, { failed: j?.state === 'failed' }) : null }));
+        const job = await withFreshKeys(() => router.startVideo({ prompt, aspect, duration, firstFrame, ...(maxHeight ? { maxHeight } : {}), owner: who?.id ?? null, ownKeys: g.ownKeys, meter: g.meter, onFinished: g.later ? (usd, j) => g.later(usd, { failed: j?.state === 'failed' }) : null }));
         await g.done();
         return reply(req, res, 200, { job });
       } catch (e) {
@@ -916,6 +1011,10 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     store,
     router,
     usage,
+    /** The plans (integrations.billing), once the integrations exist. */
+    setBilling(b) {
+      billing = b ?? null;
+    },
     match: (url) => url.pathname.startsWith('/api/ai/'),
     handle,
     /** Who's calling (for routes outside /api/ai/*). */

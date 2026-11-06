@@ -4,7 +4,7 @@
 // Wide screens: the form on the left, and on the right what the app makes (a post, a plan, a week, a live
 // page), drawn with the app's own components. Phones: the form only.
 
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { ArrowLeft, CircleAlert, Eye, EyeOff, MailCheck, RefreshCw } from 'lucide-react';
 import type { Brand, MediaRef } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -32,12 +32,27 @@ import { PostFrame } from '@/components/frames/Frames';
 import { PostVisual } from '@/components/visuals/PostVisual';
 import { LogoMark } from '@/components/brand/Logo';
 import demoPost from '@/assets/auth/demo-post.webp';
+import { navigate, useRoute } from '@/lib/router';
+import { planFor, priceLine } from '@/lib/plans';
+import { readPlanIntent, useBillingOn } from '@/store/billing';
+
+// #plans is public: signed out, the gate shows it instead of the sign-in screen (never in the artifact build)
+const PlansPage = lazy(() => import('@/pages/plans/Plans'));
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const phase = useAuth((s) => s.phase);
+  const route = useRoute();
+  const billing = useBillingOn();
   useEffect(() => {
     void startAuth();
   }, []);
+  if (phase === 'signed-out' && route === 'plans' && billing) {
+    return (
+      <Suspense fallback={<Waiting text="Loading…" />}>
+        <PlansPage />
+      </Suspense>
+    );
+  }
   switch (phase) {
     case 'off':
     case 'ready':
@@ -146,7 +161,10 @@ type Mode = 'signin' | 'signup' | 'forgot' | 'sent-confirm' | 'sent-reset';
 function SignInScreen() {
   const notice = useAuth((s) => s.notice);
   const config = useAuth((s) => s.config);
-  const [mode, setMode] = useState<Mode>('signin');
+  const billing = useBillingOn();
+  // a plan chosen on #plans: straight to creating the account
+  const intent = billing ? readPlanIntent() : null;
+  const [mode, setMode] = useState<Mode>(() => (intent ? 'signup' : 'signin'));
   const [email, setEmail] = useState(() => safeStorage.getItem(LAST_EMAIL) ?? '');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -246,7 +264,13 @@ function SignInScreen() {
 
   const titles: Record<'signin' | 'signup' | 'forgot', { title: string; sub: string; cta: string }> = {
     signin: { title: 'Welcome back', sub: 'Sign in to your marketing workspace.', cta: 'Sign in' },
-    signup: { title: 'Create your free workspace', sub: 'Your projects, posts and files stay in your account, on any device.', cta: 'Create account' },
+    signup: billing
+      ? {
+          title: 'Create your account',
+          sub: intent ? `Then you’ll finish starting ${planFor(intent.tier).name} (${priceLine(intent.tier, intent.interval)}) with Stripe.` : 'Then pick Launch, Grow or Scale. You’ll pay securely with Stripe.',
+          cta: 'Create account',
+        }
+      : { title: 'Create your free workspace', sub: 'Your projects, posts and files stay in your account, on any device.', cta: 'Create account' },
     forgot: { title: 'Reset your password', sub: 'We’ll email you a link to choose a new one.', cta: 'Send reset link' },
   };
   const t = titles[mode as 'signin' | 'signup' | 'forgot'];
@@ -311,7 +335,7 @@ function SignInScreen() {
             <>
               New here?{' '}
               <button type="button" className="link" onClick={() => go('signup')}>
-                Create a free account
+                {billing ? 'Create an account' : 'Create a free account'}
               </button>
             </>
           ) : (
@@ -322,6 +346,14 @@ function SignInScreen() {
               </button>
             </>
           )}
+        </p>
+      )}
+      {billing && mode === 'signup' && (
+        <p className="mt-3 text-center text-small text-muted">
+          Start → your account → Stripe Checkout → back to the app.{' '}
+          <button type="button" className="link" onClick={() => void navigate('plans', { force: true })}>
+            See plans
+          </button>
         </p>
       )}
       {config && !config.signInRequired && (

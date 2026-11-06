@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowLeft, ArrowRight, Compass, LogOut, Megaphone, Package, PencilRuler, Search, Store, Upload, X } from 'lucide-react';
 import type { Origin, Project, Track } from '@/lib/types';
 import { cn, fmtMoney, stripProtocol } from '@/lib/utils';
@@ -16,6 +16,37 @@ import { StepResearch } from './StepResearch';
 import { StepSetup } from './StepSetup';
 import { StepBrand } from './StepBrand';
 import { finishOnboarding } from './finish';
+import { claimSlot, slotMessage, slotsNeeded, type SlotResult } from '@/lib/cloud/slots';
+import { newProjectId } from '@/store/defaults';
+import { PlanPickerScreen } from '@/pages/plans/Plans';
+import { useBilling } from '@/store/billing';
+import { Callout } from '@/components/ui/primitives';
+
+/** The first project's creation, once (React may run the effect twice): its business slot is claimed first. */
+let firstProject: Promise<SlotResult> | null = null;
+
+/**
+ * With no project at all, the setup makes one. Plans on: its slot is claimed first; no plan yet → the plan picker
+ * instead (nothing is created). Plans off, the artifact build, a guest: created at once, as before.
+ */
+function createFirst(): Promise<SlotResult> | null {
+  if (!slotsNeeded()) {
+    useStore.getState().createProject();
+    return null;
+  }
+  if (!firstProject) {
+    const id = newProjectId();
+    firstProject = claimSlot(id)
+      .then((r) => {
+        if (r.ok && !useStore.getState().projects.length) useStore.getState().createProject(undefined, 'new', id);
+        return r;
+      })
+      .finally(() => {
+        firstProject = null;
+      });
+  }
+  return firstProject;
+}
 
 type StepId = 'goal' | 'start' | 'research' | 'setup' | 'brand' | 'done';
 
@@ -100,12 +131,54 @@ export function Onboarding() {
   const setActive = useStore((s) => s.setActiveProject);
   const signedIn = useAuth((s) => s.phase === 'ready');
 
+  const [refused, setRefused] = useState<SlotResult | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  // a plan that just started (back from Stripe Checkout): try the first business again
+  const planActive = useBilling((s) => s.plan?.active === true && s.plan.plan !== 'legacy');
+  const canBuy = useBilling((s) => s.account?.source === 'stripe' && s.plan?.active === true);
   useEffect(() => {
-    if (!project) create();
-  }, [project, create]);
+    if (project) return;
+    let gone = false;
+    void createFirst()?.then((r) => !gone && setRefused(r.ok ? null : r));
+    return () => {
+      gone = true;
+    };
+  }, [project, create, attempt, planActive]);
 
   const path = useMemo(() => (project ? pathFor(project) : (['goal'] as StepId[])), [project]);
-  if (!project) return null;
+  if (!project) {
+    const out = signedIn ? (
+      <button type="button" className="btn btn-ghost btn-sm" onClick={() => void logOut()}>
+        <LogOut /> Log out
+      </button>
+    ) : null;
+    // plans on and no plan yet: choose one first (Stripe Checkout, then back here to set up the first business)
+    if (refused?.reason === 'plan_required') return <PlanPickerScreen footer={out} />;
+    if (refused)
+      return (
+        <div className="mx-auto flex min-h-full max-w-[480px] flex-col justify-center gap-4 gutter py-10">
+          <Callout tone={refused.reason === 'offline' ? 'warn' : 'bad'}>{slotMessage(refused)}</Callout>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => setAttempt((n) => n + 1)}>
+              Try again
+            </button>
+            {refused.reason === 'limit' && canBuy && (
+              // a paying plan buys a slot right here; then the first business is tried again
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => useBilling.getState().openAddBusiness(() => setAttempt((n) => n + 1))}>
+                Add a business
+              </button>
+            )}
+            {refused.reason === 'limit' && !canBuy && (
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => void navigate('plans', { force: true })}>
+                See plans
+              </button>
+            )}
+            {out}
+          </div>
+        </div>
+      );
+    return null;
+  }
   const step = (path.includes(project.wizardStep as StepId) ? project.wizardStep : 'goal') as StepId;
   const idx = path.indexOf(step);
   const go = (s: StepId) => {
