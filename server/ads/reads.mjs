@@ -58,6 +58,32 @@ export function stateText(row) {
   }
 }
 
+/** How many of the campaign's ads the platform refused, when only some were (else null). */
+export function adsNotApproved(row) {
+  const r = isObj(row.review) ? row.review : {};
+  const remote = isObj(row.remote) ? row.remote : {};
+  const of = Math.max((remote.zernioAdIds ?? []).length, (remote.adIds ?? []).length);
+  const count = Array.isArray(r.adsRejected) ? r.adsRejected.length : 0;
+  return count > 0 && of > 1 && count < of ? { count, of } : null;
+}
+
+/**
+ * One ad's verdict from GET /ads/{id}/review (Meta and Google shapes): Google puts DISAPPROVED / APPROVED_LIMITED in
+ * approvalStatus (its reviewStatus is REVIEWED); Meta's `approved` is true only while the ad delivers, so an ad under a
+ * paused campaign that left review with no rejection reads approved too. → 'approved'|'rejected'|'with_issues'|'in_review'
+ */
+export function verdictOf(review) {
+  const r = isObj(review) ? review : {};
+  const appr = String(r.approvalStatus ?? '').toUpperCase();
+  const rs = String(r.reviewStatus ?? '').toUpperCase();
+  const rejections = (Array.isArray(r.rejections) ? r.rejections : []).filter(Boolean);
+  if (appr === 'DISAPPROVED' || rs === 'DISAPPROVED') return 'rejected';
+  if (appr === 'APPROVED_LIMITED' || appr === 'AREA_OF_INTEREST_ONLY' || rs === 'WITH_ISSUES') return 'with_issues';
+  if (r.approved === true || appr === 'APPROVED') return 'approved';
+  if (!appr && !rejections.length && ['PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED'].includes(rs)) return 'approved';
+  return 'in_review';
+}
+
 /** A launched campaign as the app sees it (LaunchedCampaign): no Zernio ids, our words, cut platform text. */
 export function campaignOut(row, job = null, planIds = null) {
   const r = isObj(row.review) ? row.review : {};
@@ -84,6 +110,7 @@ export function campaignOut(row, job = null, planIds = null) {
     ...(remote.campaignId ? { platformCampaignId: String(remote.campaignId), openInManagerUrl: managerUrl(row) } : {}),
     ...(Array.isArray(remote.offAds) && remote.offAds.length ? { adsOff: remote.offAds.length } : {}),
     ...(remote.offAdSet ? { adSetOff: true } : {}),
+    ...(adsNotApproved(row) ? { adsNotApproved: adsNotApproved(row) } : {}),
     ...(job && ['queued', 'sending', 'unknown'].includes(job.state) ? { pendingJob: jobOut(job, row.platform) } : job ? { lastJob: jobOut(job, row.platform) } : {}),
     ...(row.last_read_at ? { lastReadAt: row.last_read_at } : {}),
     ...(planIds && !planIds.has(row.plan_id) ? { planDeleted: true } : {}),
@@ -169,7 +196,8 @@ export async function targeting(ctx, who, q) {
   await loadProject(ctx.db, who.id, projectId);
   const conn = await connectionFor(ctx, who, projectId, platform);
   if (!conn.ok) throw fail(409, conn.code, conn.message);
-  const got = await ctx.zads.reads.targetingSearch(conn.zid, { q: term, dimension }, { userId: who.id, tag: conn.tag, projectId, platform });
+  // Meta's geo search defaults to cities: `all` returns countries, regions and ZIPs too (Google ignores geoType)
+  const got = await ctx.zads.reads.targetingSearch(conn.zid, { q: term, dimension, ...(dimension === 'geo' && platform === 'meta' ? { geoType: 'all' } : {}) }, { userId: who.id, tag: conn.tag, projectId, platform });
   if (!got.ok) throw fail(got.code === 'ADS_UNAVAILABLE' ? 503 : 502, got.code === 'ADS_UNAVAILABLE' ? 'ADS_UNAVAILABLE' : 'UNAVAILABLE', messageFor(got.code === 'ADS_UNAVAILABLE' ? 'ADS_UNAVAILABLE' : 'UNAVAILABLE'));
   const KIND = { city: 'city', City: 'city', region: 'region', State: 'region', Region: 'region', zip: 'zip', Postal_Code: 'zip', country: 'country', Country: 'country', interest: 'interest' };
   const results = (Array.isArray(got.body.results) ? got.body.results : [])
@@ -213,12 +241,16 @@ export function stateFromNode(row, node) {
   const spend = Number(node.metrics?.spend) || 0;
   if (st === 'cancelled') return { state: 'ended', reviewPatch: { deleted: true } };
   if (st === 'completed' || (cap != null && cap > 0 && spend >= cap)) return { state: 'completed' };
-  if (st === 'rejected' || rs === 'rejected') return { state: 'rejected', reviewPatch: { status: 'rejected' } };
-  if (st === 'error' || rs === 'with_issues' || (node.campaignIssuesInfo && st === 'active')) return { state: 'with_issues', reviewPatch: { status: rs === 'with_issues' ? 'with_issues' : row.review?.status ?? null } };
+  // the verdict is per ad: the campaign is refused only when every ad is (one refused ad of three leaves two to run)
+  const ads = (Array.isArray(node.adSets) ? node.adSets : []).flatMap((x) => (Array.isArray(x?.ads) ? x.ads : [])).filter(isObj);
+  const refused = ads.filter((a) => a.reviewStatus === 'rejected');
+  if (ads.length ? refused.length === ads.length : st === 'rejected' || rs === 'rejected') return { state: 'rejected', reviewPatch: { status: 'rejected', adsRejected: refused.map((a) => String(a._id ?? a.platformAdId ?? '')).filter(Boolean) } };
+  const partial = refused.length ? { adsRejected: refused.map((a) => String(a._id ?? a.platformAdId ?? '')).filter(Boolean) } : { adsRejected: [] };
+  if (st === 'error' || rs === 'with_issues' || (node.campaignIssuesInfo && st === 'active')) return { state: 'with_issues', reviewPatch: { ...partial, status: rs === 'with_issues' ? 'with_issues' : row.review?.status ?? null } };
   const configured = node.configuredStatus === 'PAUSED' || st === 'paused' ? 'PAUSED' : node.configuredStatus === 'ACTIVE' ? 'ACTIVE' : row.configured_status;
-  if (configured === 'PAUSED') return { state: 'paused', configured, reviewPatch: rs === 'approved' ? { status: 'approved' } : {} };
-  if (st === 'pending_review' || rs === 'in_review') return { state: 'in_review', configured, reviewPatch: { status: 'in_review' } };
-  if (st === 'active') return { state: 'active', configured, reviewPatch: { status: 'approved' } };
+  if (configured === 'PAUSED') return { state: 'paused', configured, reviewPatch: { ...partial, ...(rs === 'approved' ? { status: 'approved' } : {}) } };
+  if (st === 'pending_review' || rs === 'in_review' || (st === 'rejected' && refused.length)) return { state: 'in_review', configured, reviewPatch: { ...partial, status: 'in_review' } };
+  if (st === 'active') return { state: 'active', configured, reviewPatch: { ...partial, status: 'approved' } };
   return null;
 }
 
@@ -231,44 +263,75 @@ export async function refresh(ctx, who, projectId) {
   for (const r of rows) byZid.set(r.zernio_account_id, [...(byZid.get(r.zernio_account_id) ?? []), r]);
   const notes = [];
   let reviewReads = 0;
-  for (const [zid, list] of byZid) {
-    const earliest = list.map((r) => todayIn(r.timezone, Date.parse(r.start_at))).sort()[0];
-    const lctx = { userId: who.id, tag: list[0].customer_tag, projectId, platform: list[0].platform };
-    const got = await ctx.zads.reads.tree(zid, { fromDate: earliest, toDate: todayIn(list[0].timezone, ctx.now()), source: 'zernio' }, lctx);
-    if (!got.ok) {
-      notes.push({ code: got.code, message: messageFor(got.code === 'ADS_UNAVAILABLE' ? 'ADS_UNAVAILABLE' : 'UNAVAILABLE', { platform: list[0].platform }) });
-      continue;
+  // our own last write per campaign: stored data synced before it (or while one is still going) can't overwrite it
+  const lastJobs = await ctx.jobs.latestFor(who.id, rows.map((r) => r.id));
+  const ownAt = (r) => {
+    const j = lastJobs.get(r.id);
+    if (!j) return 0;
+    return ['queued', 'sending', 'unknown'].includes(j.state) ? Number.POSITIVE_INFINITY : Date.parse(j.finished_at ?? j.requested_at) || 0;
+  };
+  for (const [zid, all] of byZid) {
+    const p0 = all[0].platform;
+    const lctx = { userId: who.id, tag: all[0].customer_tag, projectId, platform: p0 };
+    // only our own campaigns, by id (the tree is paged at campaign level, and an account can hold many more)
+    for (let i = 0; i < all.length; i += TREE_IDS_PER_READ) {
+      const list = all.slice(i, i + TREE_IDS_PER_READ);
+      const earliest = list.map((r) => todayIn(r.timezone, Date.parse(r.start_at))).sort()[0];
+      const got = await ctx.zads.reads.tree(zid, { campaignId: list.map((r) => String(r.remote.campaignId)).join(','), limit: list.length, fromDate: earliest, toDate: todayIn(list[0].timezone, ctx.now()), source: 'zernio' }, lctx);
+      if (!got.ok) {
+        notes.push({ code: got.code, message: messageFor(got.code === 'ADS_UNAVAILABLE' ? 'ADS_UNAVAILABLE' : 'UNAVAILABLE', { platform: p0 }) });
+        break;
+      }
+      if (got.status === 202) {
+        notes.push({ code: 'BACKFILL', message: `Results are still loading at ${PLATFORM_LABEL[p0]}.` });
+        break;
+      }
+      await refreshList(ctx, who, projectId, list, got.body, lctx, ownAt, () => reviewReads++ < 5);
     }
-    if (got.status === 202) {
-      notes.push({ code: 'BACKFILL', message: `Results are still loading at ${PLATFORM_LABEL[list[0].platform]}.` });
-      continue;
-    }
-    const nodes = (Array.isArray(got.body.campaigns) ? got.body.campaigns : []).filter(isObj);
-    const asOf = typeof got.body.syncedAt === 'string' ? got.body.syncedAt : iso(ctx.now());
+  }
+  return { ...(await campaigns(ctx, who, projectId)), ...(notes.length ? { notes } : {}) };
+}
+
+/** How many campaign ids one tree read asks for. */
+const TREE_IDS_PER_READ = 20;
+
+/** Apply one tree page to our rows: results always; state, switch and budget only from data synced after our last write. */
+async function refreshList(ctx, who, projectId, list, body, lctx, ownAt, mayReadReview) {
+  {
+    const nodes = (Array.isArray(body.campaigns) ? body.campaigns : []).filter(isObj);
+    const synced = Date.parse(body.syncedAt ?? '');
+    const asOf = typeof body.syncedAt === 'string' ? body.syncedAt : iso(ctx.now());
     for (const r of list) {
       const n = nodes.find((x) => String(x.platformCampaignId) === String(r.remote.campaignId));
       if (!n) continue;
       const m = n.metrics ?? {};
       const results = { spend: Number(m.spend) || 0, impressions: Number(m.impressions) || 0, clicks: Number(m.clicks) || 0, ctr: Number(m.ctr) || 0, ...(m.conversions != null ? { conversions: Number(m.conversions) || 0 } : {}), asOf };
-      const s = stateFromNode(r, n);
+      // Zernio's stored copy is 15 to 60 minutes behind: it never undoes a switch or budget we set after it was read
+      const fresh = Number.isFinite(synced) && synced > ownAt(r);
+      const s = fresh ? stateFromNode(r, n) : null;
       const review = { ...(r.review ?? {}), ...(s?.reviewPatch ?? {}) };
-      // a paused launch whose review finished sends no "approved": read the verdict (a few per refresh)
-      if (s?.state === 'paused' && review.status !== 'approved' && review.status !== 'rejected' && reviewReads < 5 && (r.remote.zernioAdIds ?? [])[0]) {
-        reviewReads += 1;
-        const rv = await ctx.zads.reads.review(r.remote.zernioAdIds[0], lctx);
-        if (rv.ok && rv.body.review?.approved === true) review.status = 'approved';
-        if (rv.ok && /DISAPPROVED/.test(String(rv.body.review?.reviewStatus ?? ''))) review.status = 'rejected';
+      // a paused launch whose review finished sends no "approved": read each ad's verdict (a few campaigns per refresh)
+      const adIds = (r.remote.zernioAdIds ?? []).slice(0, 3);
+      if (s?.state === 'paused' && review.status !== 'approved' && review.status !== 'rejected' && adIds.length && mayReadReview()) {
+        const verdicts = [];
+        for (const adId of adIds) {
+          const rv = await ctx.zads.reads.review(adId, lctx);
+          verdicts.push(rv.ok ? verdictOf(rv.body.review) : 'unknown');
+        }
+        const refusedIds = adIds.filter((_, i) => verdicts[i] === 'rejected');
+        review.adsRejected = refusedIds;
+        if (refusedIds.length === adIds.length) review.status = 'rejected';
+        else if (verdicts.every((v) => v === 'approved' || v === 'rejected')) review.status = 'approved';
       }
       const patch = { results, last_read_at: iso(ctx.now()), updated_at: iso(ctx.now()), review, ...(s ? { state: review.status === 'rejected' && s.state === 'paused' ? 'paused' : s.state } : {}), ...(s?.configured ? { configured_status: s.configured } : {}) };
       await ctx.db.update('ad_campaigns', { id: r.id, user_id: who.id }, patch);
       if (s && s.state !== r.state) await ctx.audit.append({ userId: who.id, tag: r.customer_tag, projectId, campaignId: r.id, actor: 'platform', action: 'review', summary: `${PLATFORM_LABEL[r.platform]} reports: ${stateText({ ...r, ...patch })}`, outcome: 'info' });
-      if (n.campaignBudget?.amount != null && r.platform === 'google' && zernioWhole(n.campaignBudget.amount) !== Number(r.daily_budget)) {
+      if (fresh && n.campaignBudget?.amount != null && r.platform === 'google' && zernioWhole(n.campaignBudget.amount) !== Number(r.daily_budget)) {
         await ctx.db.update('ad_campaigns', { id: r.id, user_id: who.id }, { daily_budget: zernioWhole(n.campaignBudget.amount) });
         await ctx.audit.append({ userId: who.id, tag: r.customer_tag, projectId, campaignId: r.id, actor: 'platform', action: 'budget', summary: `Budget was changed outside the app: ${formatMoney(zernioWhole(n.campaignBudget.amount), r.currency)} a day`, outcome: 'info' });
       }
     }
   }
-  return { ...(await campaigns(ctx, who, projectId)), ...(notes.length ? { notes } : {}) };
 }
 
 /** GET /api/ads/campaigns/:id/review: each ad's verdict (at most 3 reads), reasons cut, as text. */
@@ -285,7 +348,7 @@ export async function reviewOf(ctx, who, row) {
     const reasons = [];
     for (const rej of Array.isArray(r.rejections) ? r.rejections : []) for (const x of Array.isArray(rej?.reasons) ? rej.reasons : []) reasons.push(typeof x === 'string' ? x : x?.message ?? '');
     for (const t of Array.isArray(r.policyTopics) ? r.policyTopics : []) reasons.push(t?.topic ?? '');
-    const status = r.approved === true ? 'approved' : /DISAPPROVED/.test(String(r.reviewStatus ?? r.approvalStatus ?? '')) ? 'rejected' : /LIMITED|WITH_ISSUES/.test(String(r.reviewStatus ?? r.approvalStatus ?? '')) ? 'with_issues' : 'in_review';
+    const status = verdictOf(r);
     ads.push({ index: i, status, reasons: reasons.filter(Boolean).slice(0, 5).map((x) => cut(x, 200)) });
   }
   return { review: { platform: row.platform, ads, readAt: iso(ctx.now()) } };

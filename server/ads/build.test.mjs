@@ -82,13 +82,25 @@ describe('golden bodies', () => {
 });
 
 describe('status (R3, R11)', () => {
-  it('always sends all four statuses; Meta holds the campaign PAUSED whatever the choice', () => {
+  it('always sends all four statuses; the campaign is created PAUSED on Meta and Google whatever the choice', () => {
     for (const status of ['PAUSED', 'ACTIVE']) {
       const m = meta({}, { status }).body;
       expect([m.status, m.campaignStatus, m.adSetStatus, m.adStatus]).toEqual(['PAUSED', 'PAUSED', 'ACTIVE', 'ACTIVE']);
       const g = google({}, { status }).body;
-      expect([g.status, g.campaignStatus, g.adSetStatus, g.adStatus]).toEqual([status, status, 'ACTIVE', 'ACTIVE']);
+      expect([g.status, g.campaignStatus, g.adSetStatus, g.adStatus]).toEqual(['PAUSED', 'PAUSED', 'ACTIVE', 'ACTIVE']);
     }
+  });
+
+  it('a Meta spending limit is at least Meta’s minimum in USD (and says so); other currencies keep the planned total', () => {
+    const small = meta({}, { dailyBudget: 5, durationDays: 14 });
+    expect(small.plannedTotal).toBe(70);
+    expect(small.spendCap).toBe(100);
+    expect(small.summary.spendCap).toBe(100);
+    expect(small.warnings.map((w) => w.code)).toContain('CAP_MINIMUM');
+    const big = meta({}, { dailyBudget: 25, durationDays: 14 });
+    expect(big.spendCap).toBe(350);
+    expect(big.warnings.map((w) => w.code)).not.toContain('CAP_MINIMUM');
+    expect(google({}, { dailyBudget: 5, durationDays: 14 }).spendCap).toBeNull();
   });
 
   it('has no default: a missing choice blocks', () => {

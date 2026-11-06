@@ -134,6 +134,8 @@ export function createMockZernioAds({ violations, sendWebhook = async () => ({})
     failures: [],
     expectRepeat: 0,
     syncedAt: null, // an ISO time the tree reports (null: now)
+    livePageSize: null, // accounts/live rows per level per page (null: everything on one page)
+    treePageSize: null, // tree campaigns per page (null: everything on one page)
     backfillPending: false,
     sharedBudget: new Set(), // Google campaign ids whose budget is shared
     hung: new Set(),
@@ -352,16 +354,28 @@ export function createMockZernioAds({ violations, sendWebhook = async () => ({})
     const adAccountId = q.get('adAccountId');
     const acct = (state.adAccounts.meta ?? []).find((a) => a.id === adAccountId);
     if (!acct) return err(res, 403, 'ad_account_not_selected', 'permission_error');
+    const level = q.get('level');
+    const after = q.get('after');
+    if (after && !['campaign', 'adSet'].includes(level)) return err(res, 400, 'invalid_request', 'invalid_request_error');
+    // older campaigns first, like an account with history: a new one lands on the last page
     const mine = [...state.campaigns.values()].filter((c) => c.platform === 'meta' && c.adAccountId === adAccountId && !c.cancelled);
+    const page = (rows, k) => {
+      const size = state.livePageSize;
+      if (!size) return { rows, after: null };
+      const from = after && level === k ? Number(after) : 0;
+      return { rows: rows.slice(from, from + size), after: from + size < rows.length ? String(from + size) : null };
+    };
+    const cs = page(mine.map((c) => ({ platformCampaignId: c.id, campaignName: c.name, platformCampaignStatus: c.configuredStatus, configuredStatus: c.configuredStatus, status: c.configuredStatus === 'PAUSED' ? 'paused' : 'active', budget: c.campaignBudget, dailyBudget: c.campaignBudget?.amount ?? null, lifetimeBudget: c.lifetimeBudget, budgetRemaining: c.spendCap != null ? Math.max(0, c.spendCap - c.spend) : null, spendCap: c.spendCap, bidStrategy: null })), 'campaign');
+    const ss = page(mine.flatMap((c) => c.adSets.map((s) => ({ platformAdSetId: s.id, adSetName: s.name, platformCampaignId: c.id, platformAdSetStatus: c.configuredStatus === 'PAUSED' ? 'CAMPAIGN_PAUSED' : s.configuredStatus, configuredStatus: s.configuredStatus, status: s.configuredStatus === 'PAUSED' ? 'paused' : 'active', budget: s.dailyBudget != null ? { amount: s.dailyBudget, type: 'daily' } : null, dailyBudget: s.dailyBudget, lifetimeBudget: null, budgetRemaining: null }))), 'adSet');
     return json(res, 200, {
       accountId: zid,
       adAccountId,
       platform: 'facebook',
       currency: acct.currency,
       readAt: iso(),
-      campaigns: mine.map((c) => ({ platformCampaignId: c.id, campaignName: c.name, platformCampaignStatus: c.configuredStatus, configuredStatus: c.configuredStatus, status: c.configuredStatus === 'PAUSED' ? 'paused' : 'active', budget: c.campaignBudget, dailyBudget: c.campaignBudget?.amount ?? null, lifetimeBudget: c.lifetimeBudget, budgetRemaining: c.spendCap != null ? Math.max(0, c.spendCap - c.spend) : null, spendCap: c.spendCap, bidStrategy: null })),
-      adSets: mine.flatMap((c) => c.adSets.map((s) => ({ platformAdSetId: s.id, adSetName: s.name, platformCampaignId: c.id, platformAdSetStatus: c.configuredStatus === 'PAUSED' ? 'CAMPAIGN_PAUSED' : s.configuredStatus, configuredStatus: s.configuredStatus, status: s.configuredStatus === 'PAUSED' ? 'paused' : 'active', budget: s.dailyBudget != null ? { amount: s.dailyBudget, type: 'daily' } : null, dailyBudget: s.dailyBudget, lifetimeBudget: null, budgetRemaining: null }))),
-      paging: { campaigns: { after: null }, adSets: { after: null } },
+      ...(level !== 'adSet' ? { campaigns: cs.rows } : {}),
+      ...(level !== 'campaign' ? { adSets: ss.rows } : {}),
+      paging: { ...(level !== 'adSet' ? { campaigns: { after: cs.after } } : {}), ...(level !== 'campaign' ? { adSets: { after: ss.after } } : {}) },
     });
   }
 
@@ -374,7 +388,10 @@ export function createMockZernioAds({ violations, sendWebhook = async () => ({})
     const ids = String(q.get('campaignId') ?? '').split(',').filter(Boolean);
     const source = q.get('source') ?? 'all';
     const list = [...state.campaigns.values()].filter((c) => c.zid === zid || (connection(c.zid)?.platform && platformOf(c.zid) === platform && c.zid === zid)).filter((c) => (source === 'zernio' ? c.stored : true)).filter((c) => (!search || c.name.toLowerCase().includes(search) || c.id === search) && (!ids.length || ids.includes(c.id)));
-    return json(res, 200, { campaigns: list.map(campaignNode), pagination: { total: list.length, page: 1 }, syncedAt: state.syncedAt ?? iso() });
+    const size = state.treePageSize;
+    const pageNo = Math.max(1, Number(q.get('page')) || 1);
+    const shown = size ? list.slice((pageNo - 1) * size, pageNo * size) : list;
+    return json(res, 200, { campaigns: shown.map(campaignNode), pagination: { total: list.length, page: pageNo }, syncedAt: shown.length ? state.syncedAt ?? iso() : null });
   }
 
   function findAd(adId) {

@@ -3,12 +3,16 @@
 // definite NOT_CREATED / PARTIAL_LEFT is a new launch with a new key and tag, through a new spend confirm.
 //
 // What each kind reads:
-//   launch, Meta    accounts/live (every status, campaigns with no ads too), matched on the "YLB <12 hex>" tag and the
-//                   row's own ad account; the tree (source=all) for the ads. Not found → NOT_CREATED only when the
-//                   live read is at least 2 minutes after the send and Zernio didn't report an unconfirmed write.
-//   launch, Google  the tree (source=all): Google has no live read. Not found → NOT_CREATED only when the sync is at
-//                   least 10 minutes after the send.
-//   status          Meta accounts/live configuredStatus; Google GET /ads/{id}?live=true (statusReadAt must be set)
+//   launch, Meta    accounts/live (every status, campaigns with no ads too, every page: live.mjs), matched on the
+//                   "YLB <12 hex>" tag and the row's own ad account; the tree (source=all) for the ads. Not found →
+//                   NOT_CREATED only when every page was read, at least 2 minutes after the send, and Zernio didn't
+//                   report an unconfirmed write.
+//   launch, Google  the tree (source=all): Google has no live read. Not found → NOT_CREATED only 10 minutes after the
+//                   send, on a read that answered (an empty page has no syncedAt). Safe because every launch creates
+//                   the campaign PAUSED: one Zernio finished late can't spend.
+//   activate        (the create went through) Meta accounts/live configuredStatus; Google the ad's live status
+//   status          Meta accounts/live configuredStatus (campaign, ad set); an ad's own switch, and Google's campaign,
+//                   from GET /ads/{id}?live=true (statusReadAt must be set)
 //   budget          Meta accounts/live (whole units); Google the tree with a sync after the send
 //   spend cap       accounts/live spendCap
 //   end date        the raw ad set's end_time (instants compared, not strings)
@@ -17,9 +21,12 @@
 import { createIds } from './zernioAds.mjs';
 import { messageFor } from './messages.mjs';
 import { compareWhole, zernioWhole } from './money.mjs';
+import { findLive, findOwn } from './live.mjs';
 
 const META_NOT_FOUND_AFTER_MS = 2 * 60_000;
 const GOOGLE_NOT_FOUND_AFTER_MS = 10 * 60_000;
+/** a tree read that answered, with no ads under a campaign that exists: Meta's half-made campaign after this long */
+const PARTIAL_AFTER_MS = 10 * 60_000;
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const iso = (t) => new Date(t).toISOString();
 const tagOf = (row) => /YLB [0-9a-f]{12}/.exec(String(row.name ?? ''))?.[0] ?? null;
@@ -31,19 +38,28 @@ export async function decide(ctx, job, row, lctx) {
   const remote = row.remote ?? {};
   const z = ctx.zads.reads;
 
-  const metaLive = async () => {
-    const got = await z.liveEntities(row.zernio_account_id, row.ad_account_id, lctx);
-    return got.ok ? got.body : null;
+  /** our campaign (and ad set) read live, every page; null when it couldn't be read or found */
+  const metaOwn = async (ids = {}) => {
+    const got = await findOwn(ctx, row, lctx, { campaignId: ids.campaignId ?? remote.campaignId, adSetId: ids.adSetId ?? remote.adSetId });
+    return got.ok && got.campaign ? got : null;
   };
-  const campaignIn = (live, id) => (Array.isArray(live?.campaigns) ? live.campaigns : []).find((c) => isObj(c) && String(c.platformCampaignId) === String(id)) ?? null;
+  const elapsed = ctx.now() - sentAt;
 
   if (job.kind === 'launch') {
     const tag = tagOf(row);
     const step = ref.step ?? 'create';
+    if (row.platform === 'google' && step === 'activate') {
+      // the create went through (created PAUSED): only the switch is read, from the ad's live status
+      const adId = (remote.zernioAdIds ?? ref.ids?.zernioAdIds ?? [])[0];
+      const r = adId ? await z.ad(adId, { live: true }, lctx) : { ok: false };
+      if (!r.ok || !r.body.statusReadAt) return { state: 'unknown', note: 'STILL_UNKNOWN_GOOGLE' };
+      const on = r.body.ad?.status !== 'paused';
+      return on ? { state: 'done', campaign: { state: 'in_review', configured_status: 'ACTIVE' } } : { state: 'done', code: 'ACTIVATION_NOT_SENT', campaign: { state: 'paused', configured_status: 'PAUSED' } };
+    }
     if (row.platform === 'meta' && (step === 'cap' || step === 'activate')) {
       // the create went through (ids stored): only the step that was unclear is read
-      const live = await metaLive();
-      const c = live && campaignIn(live, remote.campaignId ?? ref.ids?.campaignId);
+      const live = await metaOwn({ campaignId: remote.campaignId ?? ref.ids?.campaignId, adSetId: remote.adSetId ?? ref.ids?.adSetId });
+      const c = live?.campaign;
       if (!c) return { state: 'unknown', note: 'STILL_UNKNOWN_META' };
       const capSet = zernioWhole(c.spendCap) != null;
       if (step === 'cap') {
@@ -56,15 +72,17 @@ export async function decide(ctx, job, row, lctx) {
     }
     if (!tag) return { state: 'unknown' };
     if (row.platform === 'meta') {
-      const live = await metaLive();
-      if (!live) return { state: 'unknown', note: 'STILL_UNKNOWN_META' };
-      const c = (Array.isArray(live.campaigns) ? live.campaigns : []).find((x) => isObj(x) && String(x.campaignName ?? '').includes(tag));
+      const live = await findLive(ctx, row.zernio_account_id, row.ad_account_id, lctx, { campaign: (x) => String(x.campaignName ?? '').includes(tag), adSet: (s, c) => !!c && String(s.platformCampaignId) === String(c.platformCampaignId), allAdSets: true });
+      if (!live.ok) return { state: 'unknown', note: 'STILL_UNKNOWN_META' };
+      const c = live.campaign;
       if (!c) {
+        // "not there" only from every page of the account's campaigns
         const readAt = Date.parse(live.readAt ?? '');
-        if (Number.isFinite(readAt) && readAt - sentAt >= META_NOT_FOUND_AFTER_MS && !ref.unconfirmedWrite) return { state: 'failed', code: 'NOT_CREATED', campaign: { state: 'failed', configured_status: null } };
+        if (live.complete.campaigns && Number.isFinite(readAt) && readAt - sentAt >= META_NOT_FOUND_AFTER_MS && !ref.unconfirmedWrite) return { state: 'failed', code: 'NOT_CREATED', campaign: { state: 'failed', configured_status: null } };
         return { state: 'unknown', note: 'STILL_UNKNOWN_META' };
       }
-      const sets = (Array.isArray(live.adSets) ? live.adSets : []).filter((s) => isObj(s) && String(s.platformCampaignId) === String(c.platformCampaignId));
+      if (!live.complete.adSets) return { state: 'unknown', note: 'STILL_UNKNOWN_META' };
+      const sets = live.adSets;
       const leftBehind = [{ type: 'campaign', id: String(c.platformCampaignId), cleanup: 'left_behind' }, ...sets.map((s) => ({ type: 'adset', id: String(s.platformAdSetId), cleanup: 'left_behind' }))];
       if (!sets.length) return { state: 'failed', code: 'PARTIAL_LEFT', ref: { leftBehind }, campaign: { state: 'failed', configured_status: null } };
       // the ads: the tree (source=all sees objects Meta made that Zernio never stored)
@@ -72,8 +90,8 @@ export async function decide(ctx, job, row, lctx) {
       const node = t.ok ? (Array.isArray(t.body.campaigns) ? t.body.campaigns : []).find((n) => isObj(n) && String(n.platformCampaignId) === String(c.platformCampaignId)) : null;
       const ads = node ? (node.adSets ?? []).flatMap((s) => (Array.isArray(s?.ads) ? s.ads : [])).filter(isObj) : [];
       if (!ads.length) {
-        const synced = t.ok ? Date.parse(t.body.syncedAt ?? '') : Number.NaN;
-        if (Number.isFinite(synced) && synced - sentAt >= GOOGLE_NOT_FOUND_AFTER_MS) return { state: 'failed', code: 'PARTIAL_LEFT', ref: { leftBehind }, campaign: { state: 'failed', configured_status: null } };
+        // a page with no ads has no syncedAt: decided on the time since the send and a read that answered
+        if (t.ok && t.status !== 202 && elapsed >= PARTIAL_AFTER_MS) return { state: 'failed', code: 'PARTIAL_LEFT', ref: { leftBehind }, campaign: { state: 'failed', configured_status: null } };
         return { state: 'unknown', note: 'STILL_UNKNOWN_META' };
       }
       const ids = { ...createIds({ ads: ads.map((a) => ({ ...a, platformCampaignId: c.platformCampaignId, platformAdSetId: sets[0].platformAdSetId })) }) };
@@ -86,14 +104,16 @@ export async function decide(ctx, job, row, lctx) {
     if (!t.ok || t.status === 202) return { state: 'unknown', note: 'STILL_UNKNOWN_GOOGLE' };
     const node = (Array.isArray(t.body.campaigns) ? t.body.campaigns : []).find((n) => isObj(n) && String(n.campaignName ?? '').includes(tag));
     if (!node) {
-      const synced = Date.parse(t.body.syncedAt ?? '');
-      if (Number.isFinite(synced) && synced - sentAt >= GOOGLE_NOT_FOUND_AFTER_MS) return { state: 'failed', code: 'NOT_CREATED', campaign: { state: 'failed', configured_status: null } };
+      // an empty page has no syncedAt: decided on the time since the send and a read that answered. The campaign is
+      // created PAUSED, so one Zernio finished after this can't spend (the Launch again confirm warns about it).
+      if (elapsed >= GOOGLE_NOT_FOUND_AFTER_MS) return { state: 'failed', code: 'NOT_CREATED', campaign: { state: 'failed', configured_status: null } };
       return { state: 'unknown', note: 'STILL_UNKNOWN_GOOGLE' };
     }
     const ads = (node.adSets ?? []).flatMap((s) => (Array.isArray(s?.ads) ? s.ads : [])).filter(isObj);
     const ids = createIds({ ads: ads.map((a) => ({ ...a, platformCampaignId: node.platformCampaignId, platformAdSetId: node.adSets?.[0]?.platformAdSetId })) });
-    const on = node.configuredStatus === 'ACTIVE' || (node.configuredStatus == null && node.status !== 'paused');
-    return { state: 'done', ref: { ids }, campaign: { remote: { ...remote, ...ids, campaignId: String(node.platformCampaignId) }, state: on ? 'in_review' : 'paused', configured_status: on ? 'ACTIVE' : 'PAUSED', review: { status: 'in_review' } } };
+    // created PAUSED; its switch never went (the check never writes): Resume switches it on
+    const on = node.configuredStatus === 'ACTIVE' || node.configuredStatus === 'ENABLED';
+    return { state: 'done', code: row.launched_as === 'ACTIVE' && !on ? 'ACTIVATION_NOT_SENT' : null, ref: { ids }, campaign: { remote: { ...remote, ...ids, campaignId: String(node.platformCampaignId) }, state: on ? 'in_review' : 'paused', configured_status: on ? 'ACTIVE' : 'PAUSED', review: { status: 'in_review' } } };
   }
 
   // a change: read the one write that was unclear
@@ -108,8 +128,11 @@ export async function decide(ctx, job, row, lctx) {
     const want = op.status === 'active' ? 'ACTIVE' : 'PAUSED';
     let got = null;
     if (row.platform === 'meta' && op.op === 'campaignStatus') {
-      const live = await metaLive();
-      got = live ? campaignIn(live, remote.campaignId)?.configuredStatus ?? null : null;
+      got = (await metaOwn())?.campaign?.configuredStatus ?? null;
+    } else if (row.platform === 'meta' && op.op === 'adSetStatus') {
+      // the ad set's own switch (an ad's delivery status inherits the campaign's pause)
+      const live = await metaOwn({ adSetId: op.id });
+      got = live ? live.adSets[0]?.configuredStatus ?? null : null;
     } else {
       const adId = op.op === 'adStatus' ? op.id : (remote.zernioAdIds ?? [])[0];
       const r = adId ? await z.ad(adId, { live: true }, lctx) : { ok: false };
@@ -124,8 +147,7 @@ export async function decide(ctx, job, row, lctx) {
     return { ...res, campaign: patch };
   }
   if (op.op === 'cap') {
-    const live = await metaLive();
-    const c = live && campaignIn(live, remote.campaignId);
+    const c = (await metaOwn())?.campaign;
     if (!c) return { state: 'unknown', note: 'STILL_UNKNOWN_META' };
     const cap = zernioWhole(c.spendCap);
     if (cap != null && compareWhole(cap, op.amount, row.currency) === 0) return { ...after(true), campaign: { spend_cap: cap } };
@@ -135,11 +157,9 @@ export async function decide(ctx, job, row, lctx) {
     const from = job.before?.daily;
     let now = null;
     if (row.platform === 'meta') {
-      const live = await metaLive();
-      const c = live && campaignIn(live, remote.campaignId);
-      const s = live && (live.adSets ?? []).find((x) => isObj(x) && String(x.platformAdSetId) === String(remote.adSetId));
-      now = op.op === 'campaignBudget' ? zernioWhole(c?.dailyBudget) : zernioWhole(s?.dailyBudget);
+      const live = await metaOwn();
       if (!live) return { state: 'unknown', note: 'STILL_UNKNOWN_META' };
+      now = op.op === 'campaignBudget' ? zernioWhole(live.campaign?.dailyBudget) : zernioWhole(live.adSets[0]?.dailyBudget);
     } else {
       const t = await z.tree(row.zernio_account_id, { campaignId: remote.campaignId, source: 'all' }, lctx);
       const synced = t.ok ? Date.parse(t.body.syncedAt ?? '') : Number.NaN;

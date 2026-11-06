@@ -168,16 +168,21 @@ export function createAdLimits({ db, env = process.env, now = () => Date.now() }
    */
   async function committed(userId, currency, { exclude } = {}) {
     const rows = await db.select('ad_campaigns', { user_id: userId, state: ['in', ['launching', 'in_review', 'active', 'paused', 'rejected', 'with_issues', 'unknown']] }, { select: 'id,state,configured_status,daily_budget,currency,platform,name,ad_account_id,project_id', limit: 1000 });
-    const live = new Set((await db.select('ad_jobs', { user_id: userId, state: ['in', LIVE_JOB_STATES] }, { select: 'campaign_id', limit: 1000 })).map((j) => j.campaign_id));
+    const jobs = await db.select('ad_jobs', { user_id: userId, state: ['in', LIVE_JOB_STATES] }, { select: 'campaign_id,kind,request', limit: 1000 });
+    const live = new Set(jobs.map((j) => j.campaign_id));
+    // a budget change still sending (or not confirmed) counts at the higher of the two amounts
+    const pending = new Map();
+    for (const j of jobs) if (j.kind === 'budget' && Number.isFinite(Number(j.request?.to))) pending.set(j.campaign_id, Math.max(pending.get(j.campaign_id) ?? 0, Number(j.request.to)));
     const on = rows.filter((r) => r.id !== exclude && switchMayBeOn(r, live));
     const mine = on.filter((r) => r.currency === currency);
-    return { daily: sumWhole(mine.map((r) => r.daily_budget), currency), count: on.length, rows: on, liveJobs: live };
+    const amount = (r) => (pending.has(r.id) && compareWhole(pending.get(r.id), r.daily_budget, currency) > 0 ? pending.get(r.id) : r.daily_budget);
+    return { daily: sumWhole(mine.map(amount), currency), count: on.length, rows: on, liveJobs: live };
   }
 
-  /** Jobs this user started today (UTC) of these kinds (launch attempts, or changes without pause/end). */
-  async function countToday(userId, kinds) {
+  /** Jobs this user started today (UTC) of these kinds (launch attempts, or changes without pause/end). exclude: a job id. */
+  async function countToday(userId, kinds, { exclude } = {}) {
     const rows = await db.select('ad_jobs', { user_id: userId, kind: ['in', kinds], requested_at: ['gte', dayStart(now())] }, { select: 'id', limit: 1000 });
-    return rows.length;
+    return rows.filter((r) => r.id !== exclude).length;
   }
 
   async function rows() {

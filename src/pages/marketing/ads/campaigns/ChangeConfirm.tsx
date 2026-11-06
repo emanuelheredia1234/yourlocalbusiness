@@ -1,10 +1,11 @@
 // A change to a launched campaign (spec §9.1): the customer's input, then the server's preview (one live read,
 // nothing sent), then a confirm, then ONE change request. Raising spend (resume, a higher budget, a later end
 // date) gets the spend confirm with the money; lowering, pausing and ending get the short one. Rules:
-//   - one clientRequestId per opening; after an uncertain answer, the next press sends the same id, so the server
-//     answers with the job it already has; nothing is retried by itself;
+//   - one clientRequestId per review (per review token); after an uncertain answer, the next press of the same
+//     review sends the same id, so the server answers with the job it already has; a new review gets a new id;
+//     nothing is retried by itself; a replayed answer that failed is shown as failed, never as done;
 //   - a module-level `sending` set stops a reopened window from sending twice; the button is off while in flight.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ClipboardCheck } from 'lucide-react';
 import type { ChangeAction, ChangePreviewRequest, ChangeReview, LaunchedCampaign } from '@/lib/ads/launchTypes';
 import { PLATFORM_LABEL } from '@/lib/ads/launchTypes';
@@ -17,8 +18,9 @@ import { Callout, Checkbox, Field, Modal, Select, Spinner } from '@/components/u
 import { ClaimTicks } from '../launch/ReviewStep';
 
 const sending = new Set<string>();
+/** A review (by its token) whose last press got no definite answer: its next press carries the same request id. */
 const uncertainRequest = new Map<string, string>();
-export const changeRequestIdFor = (key: string) => uncertainRequest.get(key) ?? newRequestId();
+export const changeRequestIdFor = (reviewToken: string) => uncertainRequest.get(reviewToken) ?? newRequestId();
 
 export type ChangeOutcome = { ok: true } | { ok: false; message: string; uncertain: boolean };
 
@@ -30,15 +32,17 @@ export async function sendChange(campaignId: string, action: ChangeAction, revie
   beginBusy(`ads-change:${key}`, 'Sending an ad change', 'app');
   try {
     const r = await send(campaignId, reviewToken, requestId);
-    uncertainRequest.delete(key);
+    uncertainRequest.delete(reviewToken);
     const s = useAdsLaunch.getState();
     s.applyJob(r.job);
     void s.follow(r.job.id);
+    // the server answered with the job this review already had: an old failure is a failure, not done
+    if (r.replayed && r.job.state === 'failed') return { ok: false, uncertain: false, message: r.job.message };
     return { ok: true };
   } catch (e) {
     const uncertain = e instanceof AdsApiError && e.uncertain;
-    if (uncertain) uncertainRequest.set(key, requestId);
-    else uncertainRequest.delete(key);
+    if (uncertain) uncertainRequest.set(reviewToken, requestId);
+    else uncertainRequest.delete(reviewToken);
     return { ok: false, uncertain, message: uncertain ? `We may have sent this change. ${MAY_HAVE_HAPPENED} Pressing it again can’t send it twice.` : e instanceof AdsApiError ? e.message : 'Nothing was sent. Try again shortly.' };
   } finally {
     sending.delete(key);
@@ -67,12 +71,13 @@ export function ChangeConfirm({ c, action, onClose }: { c: LaunchedCampaign; act
   const [adIndex, setAdIndex] = useState('0');
   const [claims, setClaims] = useState<string[]>([]);
   const [review, setReview] = useState<ChangeReview | null>(null);
+  // the claim words of the last review stay listed while the customer ticks them (one review round for all)
+  const [lastClaims, setLastClaims] = useState<NonNullable<ChangeReview['claims']>>([]);
   const [token, setToken] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(false);
-  const requestId = useRef(changeRequestIdFor(`${c.id}:${action}`));
   const key = `${c.id}:${action}`;
   const inFlight = busy || sending.has(key);
 
@@ -90,6 +95,7 @@ export function ChangeConfirm({ c, action, onClose }: { c: LaunchedCampaign; act
       const r = await previewChange(c.id, request());
       setReview(r.review);
       setToken(r.reviewToken ?? null);
+      setLastClaims(r.review.claims ?? []);
     } catch (e) {
       setReview(null);
       setToken(null);
@@ -110,7 +116,7 @@ export function ChangeConfirm({ c, action, onClose }: { c: LaunchedCampaign; act
     if (inFlight || blocked || (tickNeeded && !tick)) return;
     setBusy(true);
     setErr(null);
-    const r = await sendChange(c.id, action, token!, requestId.current);
+    const r = await sendChange(c.id, action, token!, changeRequestIdFor(token!));
     setBusy(false);
     if (!r) return;
     if (r.ok) onClose();
@@ -185,6 +191,7 @@ export function ChangeConfirm({ c, action, onClose }: { c: LaunchedCampaign; act
                 value={creativeId}
                 onChange={(v) => {
                   setCreativeId(v);
+                  setLastClaims([]);
                   resetReview();
                 }}
                 options={offered.map((x) => ({ value: x.id, label: `Version ${x.variant}`, description: x.headline }))}
@@ -209,6 +216,16 @@ export function ChangeConfirm({ c, action, onClose }: { c: LaunchedCampaign; act
           </p>
         )}
         {err && <Callout tone={/may have/i.test(err) ? 'warn' : 'bad'}>{err}</Callout>}
+        {lastClaims.length > 0 && (
+          <ClaimTicks
+            claims={lastClaims}
+            confirmed={claims}
+            onChange={(v) => {
+              setClaims(v);
+              resetReview();
+            }}
+          />
+        )}
         {review && (
           <>
             {review.blockers.length > 0 && (
@@ -219,16 +236,6 @@ export function ChangeConfirm({ c, action, onClose }: { c: LaunchedCampaign; act
                   ))}
                 </ul>
               </Callout>
-            )}
-            {review.claims && review.claims.length > 0 && (
-              <ClaimTicks
-                claims={review.claims}
-                confirmed={claims}
-                onChange={(v) => {
-                  setClaims(v);
-                  resetReview();
-                }}
-              />
             )}
             <dl className="grid grid-cols-1 gap-x-4 gap-y-1.5 text-small sm:grid-cols-[8.5rem_minmax(0,1fr)]" data-testid="change-lines">
               {changeLines(review).map((l) => (

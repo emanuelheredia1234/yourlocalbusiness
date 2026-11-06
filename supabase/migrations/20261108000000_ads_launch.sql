@@ -39,6 +39,7 @@ create table if not exists public.ad_campaigns (
   goal text not null check (goal in ('traffic', 'awareness')),
   budget_level text not null default 'adset' check (budget_level in ('adset', 'campaign')),
   daily_budget numeric(14, 3) not null check (daily_budget > 0),   -- whole units of `currency`
+  min_daily numeric(14, 3),                  -- the ad account's minimum daily budget when launched (Meta), if known
   spend_cap numeric(14, 3),                  -- the Meta campaign spending limit as last set or read; null on Google
   start_at timestamptz not null,
   end_at timestamptz,
@@ -69,6 +70,7 @@ create table if not exists public.ad_jobs (
   kind text not null check (kind in ('launch', 'pause', 'resume', 'end', 'budget', 'end_date', 'creative')),
   actor text not null default 'customer' check (actor in ('customer', 'owner')),
   client_request_id uuid not null,
+  review_nonce uuid,                         -- the review token's one-write id (null for the owner's Pause all)
   state text not null check (state in ('queued', 'sending', 'done', 'failed', 'unknown')),
   request jsonb not null,                    -- what the confirm showed: amounts, dates, status, account tail
   before jsonb,                              -- live values read at preview
@@ -83,6 +85,9 @@ create table if not exists public.ad_jobs (
 create unique index if not exists ad_jobs_one_live on public.ad_jobs (campaign_id)
   where state in ('queued', 'sending', 'unknown');
 create index if not exists ad_jobs_user_time on public.ad_jobs (user_id, requested_at desc);
+-- a review token starts one write, ever: a second write needs a new review and a new confirm
+create unique index if not exists ad_jobs_review_once on public.ad_jobs (user_id, review_nonce)
+  where review_nonce is not null;
 
 -- Append-only log the customer can see. The server has no update or delete path for it.
 create table if not exists public.ad_audit (
@@ -144,18 +149,19 @@ begin
   end if;
   insert into public.ad_campaigns (id, user_id, customer_tag, project_id, plan_id, platform, zernio_account_id,
       ad_account_id, ad_account_name, currency, timezone, name, launch_key, goal, budget_level, daily_budget,
-      spend_cap, start_at, end_at, launched_as, state, configured_status, review, remote, sent_body)
+      min_daily, spend_cap, start_at, end_at, launched_as, state, configured_status, review, remote, sent_body)
     values ((c ->> 'id')::uuid, (c ->> 'user_id')::uuid, c ->> 'customer_tag', c ->> 'project_id', c ->> 'plan_id',
       c ->> 'platform', c ->> 'zernio_account_id', c ->> 'ad_account_id', c ->> 'ad_account_name', c ->> 'currency',
       c ->> 'timezone', c ->> 'name', (c ->> 'launch_key')::uuid, c ->> 'goal', coalesce(c ->> 'budget_level', 'adset'),
-      (c ->> 'daily_budget')::numeric, (c ->> 'spend_cap')::numeric, (c ->> 'start_at')::timestamptz,
+      (c ->> 'daily_budget')::numeric, (c ->> 'min_daily')::numeric, (c ->> 'spend_cap')::numeric,
+      (c ->> 'start_at')::timestamptz,
       (c ->> 'end_at')::timestamptz, c ->> 'launched_as', c ->> 'state', c ->> 'configured_status',
       coalesce(c -> 'review', '{}'::jsonb), coalesce(c -> 'remote', '{}'::jsonb), c -> 'sent_body')
     returning * into camp_row;
-  insert into public.ad_jobs (id, user_id, campaign_id, kind, actor, client_request_id, state, request, before,
-      provider_ref)
+  insert into public.ad_jobs (id, user_id, campaign_id, kind, actor, client_request_id, review_nonce, state, request,
+      before, provider_ref)
     values ((j ->> 'id')::uuid, (j ->> 'user_id')::uuid, camp_row.id, j ->> 'kind', coalesce(j ->> 'actor', 'customer'),
-      (j ->> 'client_request_id')::uuid, j ->> 'state', j -> 'request', j -> 'before',
+      (j ->> 'client_request_id')::uuid, (j ->> 'review_nonce')::uuid, j ->> 'state', j -> 'request', j -> 'before',
       coalesce(j -> 'provider_ref', '{}'::jsonb))
     returning * into job_row;
   insert into public.ad_audit (user_id, customer_tag, project_id, campaign_id, job_id, actor, action, summary, before,
@@ -185,10 +191,11 @@ begin
   if found then
     return jsonb_build_object('existing', true, 'job', to_jsonb(job_row));
   end if;
-  insert into public.ad_jobs (id, user_id, campaign_id, kind, actor, client_request_id, state, request, before,
-      provider_ref)
+  insert into public.ad_jobs (id, user_id, campaign_id, kind, actor, client_request_id, review_nonce, state, request,
+      before, provider_ref)
     values ((j ->> 'id')::uuid, (j ->> 'user_id')::uuid, (j ->> 'campaign_id')::uuid, j ->> 'kind',
-      coalesce(j ->> 'actor', 'customer'), (j ->> 'client_request_id')::uuid, j ->> 'state', j -> 'request',
+      coalesce(j ->> 'actor', 'customer'), (j ->> 'client_request_id')::uuid, (j ->> 'review_nonce')::uuid,
+      j ->> 'state', j -> 'request',
       j -> 'before', coalesce(j -> 'provider_ref', '{}'::jsonb))
     returning * into job_row;
   insert into public.ad_audit (user_id, customer_tag, project_id, campaign_id, job_id, actor, action, summary, before,

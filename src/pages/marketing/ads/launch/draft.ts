@@ -125,5 +125,7 @@ export function splitLine(drafts: LaunchDraft[], plan: AdCampaign, currencyOf: (
   const fmt = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: c, maximumFractionDigits: 0 }).format(n);
   const sum = inc.reduce((s, d) => s + (dailyOf(d) ?? 0), 0);
   const parts = inc.map((d) => `${d.platform === 'meta' ? 'Meta' : 'Google'} ${fmt(dailyOf(d) ?? 0)}`).join(' + ');
+  // the plan's amount is in US dollars: never shown in, or compared with, another currency (never converted)
+  if (c !== 'USD') return { text: `${parts} = ${fmt(sum)} a day`, over: false };
   return { text: `${parts} = ${fmt(sum)} a day (plan: ${fmt(plan.dailyBudget)})`, over: sum > plan.dailyBudget };
 }

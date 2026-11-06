@@ -62,6 +62,7 @@ const UNIQUE = {
   ad_jobs: [
     { name: 'ad_jobs_user_client_request', cols: ['user_id', 'client_request_id'] },
     { name: 'ad_jobs_one_live', cols: ['campaign_id'], where: (r) => ['queued', 'sending', 'unknown'].includes(r.state) },
+    { name: 'ad_jobs_review_once', cols: ['user_id', 'review_nonce'], where: (r) => r.review_nonce != null },
   ],
 };
 /** tables with a user_id column that isn't a foreign key: deleting the user leaves their rows */

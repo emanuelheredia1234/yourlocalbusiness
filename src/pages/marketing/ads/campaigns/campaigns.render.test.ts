@@ -159,19 +159,26 @@ describe('sending a change', () => {
     const send = vi.fn(async () => {
       throw new AdsApiError(504, { code: 'UNAVAILABLE', error: 'gateway' });
     });
-    const id = changeRequestIdFor('c9:budget');
-    const r = await sendChange('c9', 'budget', 'tok', id, send);
+    const id = changeRequestIdFor('tok-9');
+    const r = await sendChange('c9', 'budget', 'tok-9', id, send);
     expect(r).toMatchObject({ ok: false, uncertain: true });
     expect(r && !r.ok && r.message).toContain('It may have happened - check status before trying again.');
     expect(send).toHaveBeenCalledTimes(1);
-    expect(changeRequestIdFor('c9:budget')).toBe(id);
+    expect(changeRequestIdFor('tok-9')).toBe(id);
+    // a new review (after Check status, or a new amount) never reuses the old id
+    expect(changeRequestIdFor('tok-10')).not.toBe(id);
+  });
+  it('a replayed answer whose job failed is shown as failed, never closes as done', async () => {
+    const send = vi.fn(async () => ({ replayed: true, job: { id: 'j9', kind: 'pause' as const, platform: 'meta' as const, state: 'failed' as const, code: 'NOT_CHANGED', message: 'Meta didn’t make this change. Nothing changed.', requestedAt: '' } }));
+    const r = await sendChange('c7', 'pause', 'tok-7', 'id-7', send);
+    expect(r).toMatchObject({ ok: false, uncertain: false, message: 'Meta didn’t make this change. Nothing changed.' });
   });
   it('a refusal is not uncertain and gets a fresh id next time', async () => {
     const send = vi.fn(async () => {
       throw new AdsApiError(409, { code: 'LIVE_CHANGED', error: 'This campaign was changed in Ads Manager since you looked. Review it again.' });
     });
-    const r = await sendChange('c8', 'pause', 'tok', 'id-1', send);
+    const r = await sendChange('c8', 'pause', 'tok-8', 'id-1', send);
     expect(r).toMatchObject({ ok: false, uncertain: false });
-    expect(changeRequestIdFor('c8:pause')).not.toBe('id-1');
+    expect(changeRequestIdFor('tok-8')).not.toBe('id-1');
   });
 });

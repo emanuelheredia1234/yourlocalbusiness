@@ -118,7 +118,7 @@ export function changeLines(r: ChangeReview): ConfirmLine[] {
     lines.push({ label: 'Daily budget', value: `${money(r.current.daily, cur)} → ${money(r.proposed.daily, cur)} a day${delta} (now: ${asOf})` });
   }
   if (r.action === 'end_date' && r.proposed.end) lines.push({ label: 'Last day', value: `${r.current.end ? dayLabel(r.current.end) : 'none'} → ${dayLabel(r.proposed.end)} 23:59 (${r.account.timezone})` });
-  if (r.action === 'resume') lines.push({ label: 'Daily budget', value: `${money(r.current.daily, cur)} a day (now: ${asOf})` });
+  if (r.action === 'resume' || (r.action === 'creative' && r.confirmKind === 'spend')) lines.push({ label: 'Daily budget', value: `${money(r.current.daily, cur)} a day (now: ${asOf})` });
   if (r.proposed.remainingDays != null && r.proposed.remainingTotal != null) lines.push({ label: 'Remaining', value: `${r.proposed.remainingDays} day${r.proposed.remainingDays === 1 ? '' : 's'}: ${money(r.proposed.remainingTotal, cur)}` });
   if (r.spentSoFar != null && r.confirmKind === 'spend') lines.push({ label: 'Spent so far', value: money(r.spentSoFar, cur) });
   if (r.proposed.total != null && r.confirmKind === 'spend') lines.push({ label: 'Whole campaign', value: money(r.proposed.total, cur) });
@@ -146,5 +146,5 @@ export function changeButton(r: ChangeReview): string {
   if (r.action === 'end_date') return r.confirmKind === 'spend' ? 'Run it longer' : 'End it sooner';
   if (r.action === 'end') return 'End campaign';
   if (r.action === 'pause') return 'Pause';
-  return 'Swap the ad';
+  return r.confirmKind === 'spend' ? `Swap and spend ${money(r.current.daily, cur)} a day` : 'Swap the ad';
 }

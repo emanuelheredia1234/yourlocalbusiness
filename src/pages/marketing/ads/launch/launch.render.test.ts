@@ -100,24 +100,32 @@ describe('the spend confirm', () => {
 
 describe('sending a launch', () => {
   beforeEach(() => vi.restoreAllMocks());
-  it('one request per press with the window’s id; an uncertain answer keeps the id for the next opening', async () => {
+  it('one request per press; an uncertain answer keeps the id for the same review only', async () => {
     const sent: string[] = [];
     const send = vi.fn(async (_t: string, id: string) => {
       sent.push(id);
       throw new AdsApiError(0, null);
     });
     const it1 = item(review(), 'p:meta');
-    const id = launchRequestIdFor(it1.key);
-    const out = await sendLaunches([it1], { [it1.key]: id }, send);
+    const out = await sendLaunches([it1], {}, send);
     expect(out[0]).toMatchObject({ ok: false, uncertain: true });
     expect(!out[0].ok && out[0].message).toMatch(/may have happened - check status before trying again/);
     expect(send).toHaveBeenCalledTimes(1);
-    // a reopened window gets the same id: the server answers with the job it already has
-    expect(launchRequestIdFor(it1.key)).toBe(id);
+    const id = sent[0];
+    // the same review pressed again gets the same id: the server answers with the job it already has
+    expect(launchRequestIdFor(it1.reviewToken)).toBe(id);
+    // a new review never reuses it
+    expect(launchRequestIdFor('another-review')).not.toBe(id);
     const ok = vi.fn(async (_t: string, _id: string) => ({ job: { id: 'j1', kind: 'launch' as const, platform: 'meta' as const, state: 'sending' as const, message: '', requestedAt: '' } }));
-    await sendLaunches([it1], { [it1.key]: launchRequestIdFor(it1.key) }, ok);
+    await sendLaunches([it1], {}, ok);
     expect(ok.mock.calls[0][1]).toBe(id);
-    expect(launchRequestIdFor(it1.key)).not.toBe(id);
+    expect(launchRequestIdFor(it1.reviewToken)).not.toBe(id);
+  });
+
+  it('a replayed answer whose job failed is a failure, never “launched”', async () => {
+    const send = vi.fn(async () => ({ replayed: true, job: { id: 'j2', kind: 'launch' as const, platform: 'meta' as const, state: 'failed' as const, code: 'NOT_CREATED', message: 'Meta didn’t create this campaign.', requestedAt: '' } }));
+    const out = await sendLaunches([item(review(), 'p4:meta')], {}, send);
+    expect(out[0]).toMatchObject({ ok: false, uncertain: false, code: 'NOT_CREATED' });
   });
 
   it('a press while the first is on its way sends nothing', async () => {
@@ -165,6 +173,8 @@ describe('the launch choices', () => {
     const s = splitLine([a, b], plan, () => 'USD');
     expect(s).toEqual({ text: 'Meta $15 + Google $15 = $30 a day (plan: $25)', over: true });
     expect(splitLine([a, b], plan, (p) => (p === 'meta' ? 'USD' : 'EUR'))).toBeNull();
+    // both in EUR: the USD plan amount is never shown as euros or compared with them
+    expect(splitLine([a, b], plan, () => 'EUR')).toEqual({ text: 'Meta €15 + Google €15 = €30 a day', over: false });
   });
 
   it('an account in another currency empties a prefilled amount (never converted)', () => {

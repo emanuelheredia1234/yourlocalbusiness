@@ -51,11 +51,13 @@ export default function AdsEngine() {
   useEffect(() => {
     if (!__ARTIFACT_BUILD__) void useAdsLaunch.getState().load(project.id);
   }, [project.id]);
-  const launchAgain = (planId: string) => {
+  const launchAgain = (row: LaunchedCampaign) => {
+    const planId = row.planId;
     if (!campaigns.some((c) => c.id === planId)) return;
     setActiveId(planId);
     setPageTab('plan');
-    useAdsLaunch.getState().openLaunch({ planId });
+    // the spend confirm warns when the last try may still turn up late (Google's data lags)
+    useAdsLaunch.getState().openLaunch({ planId, again: { platform: row.platform, tag: row.tag, code: row.lastJob?.code ?? null } });
   };
 
   const create = () => {

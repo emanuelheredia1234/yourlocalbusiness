@@ -51,7 +51,7 @@ function SetupSummary({ projectId }: { projectId: string }) {
   );
 }
 
-export function CampaignsTab({ project, onLaunchAgain }: { project: Project; onLaunchAgain: (planId: string) => void }) {
+export function CampaignsTab({ project, onLaunchAgain }: { project: Project; onLaunchAgain: (c: LaunchedCampaign) => void }) {
   const campaigns = useAdsLaunch((s) => s.campaigns[project.id] ?? EMPTY);
   const limits = useAdsLaunch((s) => s.limits[project.id]);
   const notes = useAdsLaunch((s) => s.notes[project.id]);
@@ -125,14 +125,14 @@ export function CampaignsTab({ project, onLaunchAgain }: { project: Project; onL
               </thead>
               <tbody>
                 {campaigns.map((c) => (
-                  <CampaignRow key={c.id} c={c} onManage={() => openManage(c.id)} onLaunchAgain={() => onLaunchAgain(c.planId)} />
+                  <CampaignRow key={c.id} c={c} onManage={() => openManage(c.id)} onLaunchAgain={() => onLaunchAgain(c)} />
                 ))}
               </tbody>
             </table>
           </section>
           <ul className="flex flex-col gap-3 sm:hidden" aria-label="Launched campaigns">
             {campaigns.map((c) => (
-              <CampaignCard key={c.id} c={c} onManage={() => openManage(c.id)} onLaunchAgain={() => onLaunchAgain(c.planId)} />
+              <CampaignCard key={c.id} c={c} onManage={() => openManage(c.id)} onLaunchAgain={() => onLaunchAgain(c)} />
             ))}
           </ul>
         </>

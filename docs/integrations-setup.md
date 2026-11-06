@@ -341,14 +341,17 @@ non-discrimination policy accepted, no security hold; on Google an approved bill
 A customer blocked in Billing can't launch, resume or increase. `ADS_HARD_MAX_DAILY` and `ADS_HARD_MAX_CHANGE` cap
 what you can set. Every change to a limit bumps its version (open reviews must be done again) and shows in the
 customer's activity ("The app owner set your daily limit … to $100.00"). **Pausing and ending always work**: with
-ads off, a blocked customer, `ADS_LAUNCH_ENABLED` unset or the hourly change limit used up. **Pause all** on a
+ads off, a blocked customer, `ADS_LAUNCH_ENABLED` unset or the daily change limit used up. **Pause all** on a
 customer's row pauses every campaign of theirs that is on, one by one (audited as "Paused by the app owner").
 Turning ads off or blocking a customer never pauses anything by itself.
 
-**Money safety.** Every launch is created with its campaign switched off. On Meta the app then sets a campaign
-spending limit equal to the confirmed planned total, and only then switches it on (only if the customer chose
-Active); a budget increase or a later end date raises that limit first, and the app never lowers it. Google has no
-such limit from the app: the owner limits and the end date are the bounds there. Every launch and every change that
+**Money safety.** Every launch, on Meta and Google, is created with its campaign switched off, and switched on by
+the launch's own next step only if the customer chose Active (so a create that answers late can never be running
+untracked). On Meta the app first sets a campaign spending limit equal to the confirmed planned total (at least
+Meta's smallest limit, 100 US dollars, which the confirm shows); a budget increase or a later end date raises that
+limit first, and the app never lowers it. Google has no such limit from the app: the owner limits and the end date
+are the bounds there. Each review can start one write only, and launches or increases sent at the same moment are
+checked against the limits one after another. Every launch and every change that
 can raise spend needs the customer's spend confirm with the amounts, dates and account; the server sends exactly
 what the review showed (a plan edited, a limit changed or a budget changed in Ads Manager since then is refused
 before anything is sent). Meta's text optimisations are all off; Google gets at least 3 headlines and 2

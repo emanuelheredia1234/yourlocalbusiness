@@ -213,10 +213,10 @@ export function createZernioAds({ client, ledger = null, storage = null, log = c
     billing: (zid, adAccountId, ctx) => get('/ads/accounts/billing', '/ads/accounts/billing', { accountId: zid, adAccountId }, ctx),
     hierarchy: (zid, ctx) => get('/ads/accounts/hierarchy', '/ads/accounts/hierarchy', { accountId: zid }, ctx),
     targetingSearch: (zid, { q, dimension, geoType, countryCode }, ctx) => get('/ads/targeting/search', '/ads/targeting/search', { accountId: zid, q, dimension, geoType, countryCode }, ctx),
-    tree: (zid, { search, campaignId, fromDate, toDate, source = 'zernio', adAccountId } = {}, ctx) => get('/ads/tree', '/ads/tree', { accountId: zid, search, campaignId, fromDate, toDate, source, adAccountId }, ctx),
+    tree: (zid, { search, campaignId, fromDate, toDate, source = 'zernio', adAccountId, limit } = {}, ctx) => get('/ads/tree', '/ads/tree', { accountId: zid, search, campaignId, fromDate, toDate, source, adAccountId, limit }, ctx),
     campaigns: (zid, adAccountId, { search, includeEmpty = true } = {}, ctx) => get('/ads/campaigns', '/ads/campaigns', { accountId: zid, adAccountId, search, includeEmpty: includeEmpty ? 'true' : undefined }, ctx),
-    /** Meta only: campaigns and ad sets read live from Meta, whole units, with readAt */
-    liveEntities: (zid, adAccountId, ctx) => get('/ads/accounts/live', '/ads/accounts/live', { accountId: zid, adAccountId }, ctx),
+    /** Meta only: campaigns and ad sets read live from Meta, whole units, with readAt; each level paged on its own (live.mjs) */
+    liveEntities: (zid, adAccountId, ctx, { level, after } = {}) => get('/ads/accounts/live', '/ads/accounts/live', { accountId: zid, adAccountId, ...(level ? { level } : {}), ...(after ? { after } : {}) }, ctx),
     /** with live: the switches re-read from the platform; statusReadAt null = the live read failed */
     ad: (adId, { live = true } = {}, ctx) => get('/ads/:adId', `/ads/${need(adId, 'ad id')}`, live ? { live: 'true' } : {}, ctx),
     review: (adId, ctx) => get('/ads/:adId/review', `/ads/${need(adId, 'ad id')}/review`, {}, ctx),

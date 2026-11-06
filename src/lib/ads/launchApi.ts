@@ -133,15 +133,22 @@ const sleep = (ms: number, signal?: AbortSignal) =>
   });
 
 /**
+ * How long a sending job is followed: longer than the server takes to call a job that nobody is running anymore
+ * `unknown` (STUCK_AFTER_MS, 300 s, in server/ads/jobs.mjs) plus one read, so following never stops while the
+ * campaign still says "Launching…" with nothing to press.
+ */
+export const FOLLOW_MAX_MS = 300_000 + 60_000;
+
+/**
  * Follow an ad job while it's sending: GET our own job route every few seconds (never Check status, never a
- * resend) for up to two minutes. Returns the last job seen. A read that fails is skipped; the next one tries.
+ * resend) for up to FOLLOW_MAX_MS. Returns the last job seen. A read that fails is skipped; the next one tries.
  */
 export async function followAdJob(
   jobId: string,
   o: { intervalMs?: number; maxMs?: number; signal?: AbortSignal; onUpdate?: (job: AdJob, campaign?: LaunchedCampaign) => void; read?: (id: string) => Promise<{ job: AdJob; campaign?: LaunchedCampaign }> } = {},
 ): Promise<AdJob | null> {
   const interval = o.intervalMs ?? 3000;
-  const until = Date.now() + (o.maxMs ?? 120_000);
+  const until = Date.now() + (o.maxMs ?? FOLLOW_MAX_MS);
   const read = o.read ?? getAdJob;
   let last: AdJob | null = null;
   while (!o.signal?.aborted) {

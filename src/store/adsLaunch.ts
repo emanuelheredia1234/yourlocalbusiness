@@ -6,7 +6,7 @@
 // only ever the customer's own press; nothing here retries, resends, or calls a write from a catch.
 
 import { create } from 'zustand';
-import type { AdJob, AdLimitsView, AuditEntry, CampaignsResponse, ChangeAction, LaunchedCampaign, PlainNote } from '@/lib/ads/launchTypes';
+import type { AdJob, AdLimitsView, AdsPlatform, AuditEntry, CampaignsResponse, ChangeAction, LaunchedCampaign, PlainNote } from '@/lib/ads/launchTypes';
 import { AdsApiError, checkAdJob, followAdJob, getAdAudit, getCampaigns, refreshCampaigns } from '@/lib/ads/launchApi';
 
 /** Refresh reads Meta/Google at most once per business every 5 minutes (the server enforces it too). */
@@ -16,6 +16,8 @@ export interface LaunchWindowState {
   planId: string;
   /** opened by the assistant: nothing is prefilled that spends (no PAUSED/ACTIVE, no ticks) */
   fromAssistant?: boolean;
+  /** "Launch again" after a failed launch: which one, so the confirm can warn about a late campaign */
+  again?: { platform: AdsPlatform; tag: string | null; code: string | null };
 }
 
 export interface ChangeWindowState {
@@ -116,6 +118,7 @@ export const useAdsLaunch = create<AdsLaunchState>((set, get) => {
       try {
         const r = await refreshCampaigns(projectId);
         take(projectId, r);
+        followSending(r.campaigns);
         set((s) => ({ refreshedAt: { ...s.refreshedAt, [projectId]: Date.now() } }));
         return { ok: true };
       } catch (e) {

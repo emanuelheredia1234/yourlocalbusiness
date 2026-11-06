@@ -1,7 +1,7 @@
 // One launched campaign: state in plain words (spec §9.3), money in the account's own currency, results as of
 // their read time, and what can be done now. An unknown outcome offers Check status only (never "Try again");
 // platform text (review reasons) is rendered as plain text, never a link.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ExternalLink, RefreshCw, Settings2 } from 'lucide-react';
 import type { LaunchedCampaign } from '@/lib/ads/launchTypes';
 import { PLATFORM_LABEL } from '@/lib/ads/launchTypes';
@@ -14,7 +14,14 @@ import { canLaunchAgain, managerLink, managerName, sendingJob, stateBadge, unkno
 
 export function CheckStatusButton({ jobId, canCheckAt, size = 'xs' }: { jobId: string; canCheckAt?: string; size?: 'xs' | 'sm' }) {
   const [busy, setBusy] = useState(false);
+  const [, setNow] = useState(0);
   const wait = canCheckAt ? Date.parse(canCheckAt) - Date.now() : 0;
+  // re-render when the wait is over (nothing else may: the Manage drawer has no clock of its own)
+  useEffect(() => {
+    if (wait <= 0) return;
+    const t = setTimeout(() => setNow(Date.now()), wait + 50);
+    return () => clearTimeout(t);
+  }, [canCheckAt, wait]);
   const check = async () => {
     if (busy) return;
     setBusy(true);
@@ -89,6 +96,11 @@ export function CampaignNotes({ c, onLaunchAgain }: { c: LaunchedCampaign; onLau
       )}
       {c.lastJob?.state === 'done' && c.lastJob.code && <p className="mt-1 text-caption text-warn">{c.lastJob.message}</p>}
       {c.lastJob?.state === 'failed' && c.state !== 'failed' && <p className="mt-1 text-caption text-bad">{c.lastJob.message}</p>}
+      {c.adsNotApproved && (
+        <p className="mt-1 text-caption text-warn">
+          {c.adsNotApproved.count} of {c.adsNotApproved.of} ads {c.adsNotApproved.count === 1 ? 'was' : 'were'} not approved by {PLATFORM_LABEL[c.platform]}; the others can still run. Swap the refused one, or open {managerName(c)} to ask for another review.
+        </p>
+      )}
       {(c.adsOff ?? 0) > 0 && <p className="mt-1 text-caption text-warn">{c.adsOff === 1 ? 'One ad is' : `${c.adsOff} ads are`} switched off: {PLATFORM_LABEL[c.platform]} didn’t accept switching {c.adsOff === 1 ? 'it' : 'them'} on. Resume switches {c.adsOff === 1 ? 'it' : 'them'} on.</p>}
       {c.review.accountMessage && <p className="mt-1 text-caption text-bad">{c.review.accountMessage}</p>}
       {c.planDeleted && <p className="mt-1 text-caption text-muted">Plan deleted</p>}

@@ -41,7 +41,7 @@ import { createAudit } from './audit.mjs';
 import { createAdLimits, launchProblems, limitsToApi, parsePatch, rowToApi, switchesProblem, switchMayBeOn } from './limits.mjs';
 import { canLaunchAds as defaultGate } from './gate.mjs';
 import { ADS_PLATFORMS, CONNECTION_OF, FINAL_STATES, LIVE_JOB_STATES, PLATFORM_LABEL, STOP_ACTIONS } from './contracts.mjs';
-import { beforeOf, loadPlan, mediaUrlFor, opsHash, planChange, previewChange, previewLaunch, readNow, rebuildLaunch, sameBefore, signToken, spendLimitNotes, unreadNow, userHash, verifyToken } from './preview.mjs';
+import { beforeOf, loadPlan, mediaUrlFor, opsHash, planChange, previewChange, previewLaunch, readNow, rebuildLaunch, reviewNonceOf, sameBefore, signToken, spendLimitNotes, unreadNow, userHash, verifyToken } from './preview.mjs';
 import { storedBody } from './build.mjs';
 import { launchSummary, changeSummary, runChange, runLaunch, where } from './writes.mjs';
 import { checkJob } from './reconcile.mjs';
@@ -63,6 +63,9 @@ function fromDbError(e) {
   if (e.code === 'NOT_SET_UP') return fail(503, 'NOT_SET_UP', messageFor('NOT_SET_UP'), {}, 'Run supabase/migrations/20261108000000_ads_launch.sql in Supabase.');
   return fail(503, 'UNAVAILABLE', messageFor('UNAVAILABLE'));
 }
+
+/** A missing ads table (the migration not run yet): read as "nothing launched", never a failure. */
+const notSetUpTable = (e) => e?.name === 'DbError' && e.code === 'NOT_SET_UP';
 
 /** deps: the integration deps (server/integrations/wiring.mjs); tests may add canLaunchAds, mediaStore, adTimeouts. */
 export function createAdsRoutes(deps = {}) {
@@ -90,7 +93,36 @@ export function createAdsRoutes(deps = {}) {
     mediaStore: deps.mediaStore ?? createMediaStore({ env, fetch }),
     tagOf: (userId) => customerTag(userId, env),
   };
-  const fromWebhook = createAdsWebhook({ db, audit, now });
+  const fromWebhook = createAdsWebhook({ db, audit, now, log });
+
+  // Limits are checked and then acted on: one launch or increase per customer at a time in this process, and a
+  // second check after the job row exists (other processes) that cancels the job before anything is sent.
+  const userLocks = new Map();
+  async function oneAtATime(userId, fn) {
+    const prev = userLocks.get(userId) ?? Promise.resolve();
+    let release;
+    const mine = new Promise((r) => {
+      release = r;
+    });
+    const chain = prev.then(() => mine);
+    userLocks.set(userId, chain);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (userLocks.get(userId) === chain) userLocks.delete(userId);
+    }
+  }
+
+  /** A begun job whose limits no longer hold: failed before anything was sent (and its launch row with it). */
+  async function cancelBegun(who, jobRow, campaignId, entry, n, isLaunch) {
+    await jobs.finish(who.id, jobRow.id, { state: 'failed', code: n.code, ref: { sent: false } });
+    if (isLaunch) await db.update('ad_campaigns', { id: campaignId, user_id: who.id }, { state: 'failed', configured_status: null, updated_at: iso(now()) });
+    const err = noteError(n);
+    await refused(entry, err);
+    return err;
+  }
   const running = new Set();
   const track = (p) => {
     const q = Promise.resolve(p).catch((e) => safeLog('ads_background_error', { error: e?.name || 'Error' }, log));
@@ -154,8 +186,24 @@ export function createAdsRoutes(deps = {}) {
 
   // ───────────── the launch ─────────────
 
+  /** The token as far as its MAC and user go, expired or not (a replay answers whatever its age). */
+  const peekToken = (token, uid, kind) => {
+    try {
+      return verifyToken(env, token, { uid, kind, now: now(), allowExpired: true });
+    } catch {
+      return null;
+    }
+  };
+
+  /** A job started with this clientRequestId answers only the review it was started for (else 409, nothing sent). */
+  function sameReview(job, tok) {
+    const rid = reviewNonceOf(tok);
+    if (!rid || (job.review_nonce ?? null) !== rid) throw fail(409, 'REQUEST_MISMATCH', messageFor('REQUEST_MISMATCH'));
+  }
+
   /** A launch already started with this clientRequestId: its job and campaign, nothing sent. */
-  async function replay(who, job) {
+  async function replay(who, job, tok) {
+    sameReview(job, tok);
     const row = (await db.select('ad_campaigns', { id: job.campaign_id, user_id: who.id }, { limit: 1 }))[0];
     return { job: jobOut(job, row?.platform), ...(row ? { campaign: campaignOut(row, job) } : {}), replayed: true };
   }
@@ -165,8 +213,14 @@ export function createAdsRoutes(deps = {}) {
     if (!isUuid(b.clientRequestId)) throw fail(400, 'BAD_REQUEST', 'Open the launch window again.');
     // a second press of the same confirm: the same job, nothing sent
     const same = await jobs.byClientRequest(who.id, b.clientRequestId);
-    if (same) return replay(who, same);
+    if (same) return replay(who, same, peekToken(b.reviewToken, who.id, 'launch'));
     const tok = verifyToken(env, b.reviewToken, { uid: who.id, kind: 'launch', now: now() });
+    // a review made before reviews carried their one-write id: review it again
+    if (!reviewNonceOf(tok)) throw fail(409, 'REVIEW_EXPIRED', messageFor('REVIEW_EXPIRED'));
+    return oneAtATime(who.id, () => launchLocked(who, b, tok));
+  }
+
+  async function launchLocked(who, b, tok) {
     const tag = ctx.tagOf(who.id);
     const entry = { userId: who.id, tag, projectId: tok.projectId, actor: 'customer', action: 'launch', summary: `Launch on ${PLATFORM_LABEL[tok.platform]} (${tok.acct.name} …${tok.acct.idTail})` };
     let rebuilt;
@@ -185,11 +239,12 @@ export function createAdsRoutes(deps = {}) {
     } catch (e) {
       // the same confirm pressed twice at once: the first press is already sending (busy), answer its job
       const raced = await jobs.byClientRequest(who.id, b.clientRequestId);
-      if (raced) return replay(who, raced);
+      if (raced) return replay(who, raced, tok);
       if (e instanceof IntegrationError) await refused(entry, e);
       throw e;
     }
     const { conn, built } = rebuilt;
+    const lim = await limits.effective(rebuilt.conn.tag);
     const id = crypto.randomUUID();
     const row = {
       id,
@@ -208,6 +263,7 @@ export function createAdsRoutes(deps = {}) {
       goal: built.goal,
       budget_level: tok.platform === 'google' ? 'campaign' : 'adset',
       daily_budget: tok.picks.dailyBudget,
+      min_daily: Number.isFinite(tok.acct.minDaily) && tok.acct.minDaily > 0 ? tok.acct.minDaily : null,
       spend_cap: null,
       start_at: built.dates.startAt,
       end_at: built.dates.endAt,
@@ -218,7 +274,7 @@ export function createAdsRoutes(deps = {}) {
       remote: {},
       sent_body: storedBody(built.body, built.ads),
     };
-    const job = { id: crypto.randomUUID(), user_id: who.id, kind: 'launch', actor: 'customer', client_request_id: b.clientRequestId, state: 'sending', request: { ...built.summary, claims: built.claims.filter((c) => c.confirmed).map((c) => c.phrase) }, before: null, provider_ref: {} };
+    const job = { id: crypto.randomUUID(), user_id: who.id, kind: 'launch', actor: 'customer', client_request_id: b.clientRequestId, review_nonce: reviewNonceOf(tok), state: 'sending', request: { ...built.summary, claims: built.claims.filter((c) => c.confirmed).map((c) => c.phrase) }, before: null, provider_ref: {} };
     const summary = launchSummary(row);
     let got;
     try {
@@ -226,20 +282,33 @@ export function createAdsRoutes(deps = {}) {
     } catch (e) {
       // two presses of the same confirm at the same moment: the other one won, answer its job
       const raced = e?.name === 'DbError' && e.code === 'CONFLICT' ? await jobs.byClientRequest(who.id, b.clientRequestId) : null;
-      if (raced) return replay(who, raced);
+      if (raced) return replay(who, raced, tok);
       if (e?.name === 'DbError' && e.code === 'CONFLICT' && e.constraint === 'ad_campaigns_one_live') {
         const err = fail(409, 'ALREADY_LAUNCHED', messageFor('ALREADY_LAUNCHED', { platform: tok.platform }));
+        await refused(entry, err);
+        throw err;
+      }
+      if (e?.name === 'DbError' && e.code === 'CONFLICT' && e.constraint === 'ad_jobs_review_once') {
+        const err = fail(409, 'REVIEW_USED', messageFor('REVIEW_USED'));
         await refused(entry, err);
         throw err;
       }
       throw e;
     }
     const begun = Array.isArray(got) ? got[0] : got;
-    if (begun?.existing) return { job: jobOut(begun.job, tok.platform), ...(begun.campaign ? { campaign: campaignOut(begun.campaign, begun.job) } : {}), replayed: true };
+    if (begun?.existing) {
+      sameReview(begun.job, tok);
+      return { job: jobOut(begun.job, tok.platform), ...(begun.campaign ? { campaign: campaignOut(begun.campaign, begun.job) } : {}), replayed: true };
+    }
     const jobRow = begun?.job ?? job;
     const campRow = begun?.campaign ?? row;
+    // the limits again, now that this launch's rows exist: a launch begun elsewhere at the same moment is counted
+    const committedNow = await limits.committed(who.id, tok.acct.currency, { exclude: campRow.id });
+    const launchesNow = await limits.countToday(who.id, ['launch'], { exclude: jobRow.id });
+    const late = launchProblems({ lim, currency: tok.acct.currency, daily: tok.picks.dailyBudget, days: tok.picks.durationDays, choice: tok.picks.status, committed: committedNow.daily, launchesToday: launchesNow });
+    if (late.length) throw await cancelBegun(who, jobRow, campRow.id, entry, late[0], true);
     // the one send, in the background; the app follows the job with GET /api/ads/jobs/:id
-    track(runLaunch(ctx, { userId: who.id, tag: conn.tag, job: jobRow, row: campRow, body: built.body, plannedTotal: built.plannedTotal }));
+    track(runLaunch(ctx, { userId: who.id, tag: conn.tag, job: jobRow, row: campRow, body: built.body, spendCap: built.spendCap }));
     return { job: jobOut(jobRow, tok.platform), campaign: campaignOut(campRow, jobRow) };
   }
 
@@ -264,10 +333,18 @@ export function createAdsRoutes(deps = {}) {
     const same = await jobs.byClientRequest(who.id, b.clientRequestId);
     if (same) {
       if (same.campaign_id !== row.id) throw fail(409, 'BAD_REQUEST', 'Open the window again.');
+      sameReview(same, peekToken(b.reviewToken, who.id, 'change'));
       return { job: jobOut(same, row.platform), replayed: true };
     }
     const tok = verifyToken(env, b.reviewToken, { uid: who.id, kind: 'change', now: now() });
     if (tok.cid !== row.id) throw fail(400, 'BAD_REQUEST', 'That review isn’t valid. Review it again.');
+    if (!reviewNonceOf(tok)) throw fail(409, 'REVIEW_EXPIRED', messageFor('REVIEW_EXPIRED'));
+    const stop = STOP_ACTIONS.includes(tok.action);
+    // stopping never waits behind a launch or an increase (R7)
+    return stop ? changeLocked(who, row, b, tok) : oneAtATime(who.id, () => changeLocked(who, row, b, tok));
+  }
+
+  async function changeLocked(who, row, b, tok) {
     const action = tok.action;
     const stop = STOP_ACTIONS.includes(action);
     // stopping has its own bucket: never throttled by launches and increases (R7)
@@ -293,13 +370,13 @@ export function createAdsRoutes(deps = {}) {
         project = await loadProject(db, who.id, row.project_id);
         plan = await loadPlan(db, who.id, row.project_id, row.plan_id).catch(() => null);
       }
-      const nv = stop ? { ...nowVals, configured: tok.before?.configured ?? nowVals.configured } : nowVals;
-      planned = planChange({ row, action, params: tok.params, nowVals: nv, nowMs: tok.builtAt, plan, project, mediaUrl: mediaUrlFor(env, who.id, tok.builtAt) });
+      planned = planChange({ row, action, params: tok.params, nowVals, nowMs: tok.builtAt, plan, project, mediaUrl: mediaUrlFor(env, who.id, tok.builtAt) });
       if (!stop) {
         if (planned.blockers.length || opsHash(planned.ops) !== tok.opsHash) throw fail(409, 'PLAN_CHANGED', messageFor('PLAN_CHANGED'));
       } else {
-        // pause and end: the campaign switch goes off (Zernio skips it when it already is), nothing else
-        planned.ops = action === 'end' && tok.before?.configured === 'PAUSED' ? [] : [{ op: 'campaignStatus', status: 'paused' }];
+        // pause and end: the campaign switch always goes off (Zernio skips it when it already is), nothing else. End
+        // never trusts the switch the review saw: it may have been switched on since, in another tab or Ads Manager.
+        planned.ops = [{ op: 'campaignStatus', status: 'paused' }];
       }
       if (tok.spend) {
         const lim = await limits.effective(row.customer_tag);
@@ -316,30 +393,50 @@ export function createAdsRoutes(deps = {}) {
       if (!stop && ctx.busy.has(`${row.platform}:${row.ad_account_id}`)) throw fail(409, 'AD_ACCOUNT_BUSY', messageFor('AD_ACCOUNT_BUSY', { platform: row.platform }));
     } catch (e) {
       const raced = await jobs.byClientRequest(who.id, b.clientRequestId);
-      if (raced && raced.campaign_id === row.id) return { job: jobOut(raced, row.platform), replayed: true };
+      if (raced && raced.campaign_id === row.id) {
+        sameReview(raced, tok);
+        return { job: jobOut(raced, row.platform), replayed: true };
+      }
       if (e instanceof IntegrationError) await refused(entry, e);
       throw e;
     }
     const endAt = Date.parse(planned.ops.find((o) => o.op === 'endDate')?.value ?? '');
     planned.newEndAt = Number.isFinite(endAt) ? iso(endAt) : null;
     const request = requestOf(row, action, planned, tok.params);
-    const job = { id: crypto.randomUUID(), user_id: who.id, campaign_id: row.id, kind: action, actor: 'customer', client_request_id: b.clientRequestId, state: 'sending', request, before: tok.before ?? null, provider_ref: {} };
+    const job = { id: crypto.randomUUID(), user_id: who.id, campaign_id: row.id, kind: action, actor: 'customer', client_request_id: b.clientRequestId, review_nonce: reviewNonceOf(tok), state: 'sending', request, before: tok.before ?? null, provider_ref: {} };
     let got;
     try {
       got = await db.rpc('ads_begin_change', { p: { job, audit: { user_id: who.id, customer_tag: row.customer_tag, project_id: row.project_id, actor: 'customer', action, summary: `${changeSummary(row, action, request)}: sending`, outcome: 'sending' } } });
     } catch (e) {
       const raced = e?.name === 'DbError' && e.code === 'CONFLICT' ? await jobs.byClientRequest(who.id, b.clientRequestId) : null;
-      if (raced) return { job: jobOut(raced, row.platform), replayed: true };
+      if (raced) {
+        sameReview(raced, tok);
+        return { job: jobOut(raced, row.platform), replayed: true };
+      }
       if (e?.name === 'DbError' && e.code === 'CONFLICT' && e.constraint === 'ad_jobs_one_live') {
         const err = fail(409, 'JOB_LIVE', messageFor('JOB_LIVE'));
+        await refused(entry, err);
+        throw err;
+      }
+      if (e?.name === 'DbError' && e.code === 'CONFLICT' && e.constraint === 'ad_jobs_review_once') {
+        const err = fail(409, 'REVIEW_USED', messageFor('REVIEW_USED'));
         await refused(entry, err);
         throw err;
       }
       throw e;
     }
     const begun = Array.isArray(got) ? got[0] : got;
-    if (begun?.existing) return { job: jobOut(begun.job, row.platform), replayed: true };
+    if (begun?.existing) {
+      sameReview(begun.job, tok);
+      return { job: jobOut(begun.job, row.platform), replayed: true };
+    }
     const jobRow = begun?.job ?? job;
+    if (tok.spend) {
+      // the limits again, now that this job exists: an increase begun elsewhere at the same moment is counted
+      const lim = await limits.effective(row.customer_tag);
+      const late = await spendLimitNotes(ctx, who, row, planned, lim, { excludeJob: jobRow.id });
+      if (late.length) throw await cancelBegun(who, jobRow, row.id, entry, late[0], false);
+    }
     track(runChange(ctx, { userId: who.id, tag: row.customer_tag, job: jobRow, row, ops: planned.ops, action, request }));
     return { job: jobOut(jobRow, row.platform) };
   }
@@ -599,7 +696,13 @@ export function createAdsRoutes(deps = {}) {
     if (!db?.enabled) return [];
     const platform = Object.entries(CONNECTION_OF).find(([, v]) => v === connectionPlatform)?.[0];
     if (!platform) return [];
-    return (await liveRows(ctx, userId, platform)).map(liveRowOut);
+    try {
+      return (await liveRows(ctx, userId, platform)).map(liveRowOut);
+    } catch (e) {
+      if (!notSetUpTable(e)) throw e;
+      safeLog('ads_not_set_up', { where: 'disconnect', hint: 'run supabase/migrations/20261108000000_ads_launch.sql' }, log);
+      return [];
+    }
   }
 
   return {
@@ -624,7 +727,15 @@ export function createAdsRoutes(deps = {}) {
      */
     async beforeForget(userId, { ackLiveAds = false } = {}) {
       if (!db?.enabled) return;
-      const rows = await liveRows(ctx, userId);
+      let rows;
+      try {
+        rows = await liveRows(ctx, userId);
+      } catch (e) {
+        // the ads tables aren't there yet: nothing was ever launched
+        if (!notSetUpTable(e)) throw e;
+        safeLog('ads_not_set_up', { where: 'account_delete', hint: 'run supabase/migrations/20261108000000_ads_launch.sql' }, log);
+        return;
+      }
       if (!rows.length) return;
       if (!ackLiveAds) throw fail(409, 'ADS_LIVE', 'These campaigns are still on and will keep spending on your own Meta or Google account after you delete this app account. Pause or end them first, or confirm that you’ll manage them in Ads Manager.', { live: rows.map(liveRowOut) });
       await audit.append({ userId, tag: rows[0].customer_tag, actor: 'customer', action: 'account', summary: `Deleted the app account with ${rows.length} campaign${rows.length === 1 ? '' : 's'} still on; ${rows.length === 1 ? 'it keeps' : 'they keep'} running in Ads Manager.`, outcome: 'info' });

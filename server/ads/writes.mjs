@@ -3,20 +3,21 @@
 // from a catch: an uncertain step leaves the job `unknown` (Check status reads, never sends), and the next send
 // only ever comes from a new customer confirm (R1, R8).
 //
-// Launch: Google = one create (the campaign takes the customer's PAUSED/ACTIVE). Meta = (a) create, campaign held
-// PAUSED → (b) the campaign spending limit = the planned total → (c) only for ACTIVE, switch the campaign on. All
-// three are covered by the one spend confirm. A tree that exists without its limit or its switch spends nothing.
+// Launch: the campaign is always created PAUSED. Google = (a) create → (c) only for ACTIVE, switch the campaign on.
+// Meta = (a) create → (b) the campaign spending limit (the planned total, at least Meta's minimum) → (c) only for
+// ACTIVE, switch it on. All of it is covered by the one spend confirm. A tree that exists without its limit or its
+// switch spends nothing, so a create that answers late can never be running untracked.
 // Change: the cap goes up first and is never lowered, children before the campaign switch, the switch last.
 
 import { safeLog } from '../integrations/common.mjs';
 import { createIds } from './zernioAds.mjs';
+import { findOwn } from './live.mjs';
 import { messageFor } from './messages.mjs';
 import { PLATFORM_LABEL, idTailOf } from './contracts.mjs';
 import { formatMoney } from './money.mjs';
 import { dayLabel, todayIn } from './build.mjs';
 
 const iso = (t) => new Date(t).toISOString();
-const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
 /** "Meta (Acme Plumbing …1234)" */
 export const where = (row) => `${PLATFORM_LABEL[row.platform]} (${row.ad_account_name} …${idTailOf(row.ad_account_id)})`;
@@ -65,11 +66,8 @@ async function patchCampaign(ctx, userId, id, patch) {
  */
 async function readOffLevels(ctx, row, ids, lctx) {
   const out = { offAdSet: false, offAds: [] };
-  const live = await ctx.zads.reads.liveEntities(row.zernio_account_id, row.ad_account_id, lctx);
-  if (live.ok) {
-    const s = (Array.isArray(live.body.adSets) ? live.body.adSets : []).find((x) => isObj(x) && String(x.platformAdSetId) === String(ids.adSetId));
-    out.offAdSet = s?.configuredStatus === 'PAUSED';
-  }
+  const live = await findOwn(ctx, row, lctx, { campaignId: ids.campaignId, adSetId: ids.adSetId });
+  if (live.ok) out.offAdSet = live.adSets[0]?.configuredStatus === 'PAUSED';
   for (const adId of ids.zernioAdIds ?? []) {
     const got = await ctx.zads.reads.ad(adId, { live: true }, lctx);
     if (got.ok && got.body.statusReadAt && got.body.ad?.configuredStatus === 'PAUSED') out.offAds.push(adId);
@@ -78,7 +76,7 @@ async function readOffLevels(ctx, row, ids, lctx) {
 }
 
 /** The background run of a launch job (sending). Never throws, never resends. */
-export async function runLaunch(ctx, { userId, tag, job, row, body, plannedTotal }) {
+export async function runLaunch(ctx, { userId, tag, job, row, body, spendCap }) {
   const { jobs, zads, audit } = ctx;
   const platform = row.platform;
   const lctx = { userId, tag, projectId: row.project_id, platform };
@@ -103,23 +101,22 @@ export async function runLaunch(ctx, { userId, tag, job, row, body, plannedTotal
     }
     const ids = createIds(a.body);
     const remote = { ...ids };
-    await patchCampaign(ctx, userId, row.id, { remote, configured_status: platform === 'google' ? row.launched_as : 'PAUSED' });
-    if (platform === 'google') {
-      return await finishWith('done', null, { ids }, { state: row.launched_as === 'ACTIVE' ? 'in_review' : 'paused', configured_status: row.launched_as, review: { status: 'in_review' } });
-    }
+    await patchCampaign(ctx, userId, row.id, { remote, configured_status: 'PAUSED' });
     let code = null;
-    // (b) the spending limit, before anything can spend
-    await jobs.note(userId, job.id, { step: 'cap', sentAt: iso(ctx.now()), ids });
-    const b = ids.campaignId ? await zads.writes.setCampaignSpendCap(ids.campaignId, plannedTotal, lctx) : { outcome: 'failed', code: 'CAP_NOT_SET' };
-    if (b.outcome === 'failed') return await finishWith('done', 'CAP_NOT_SET', { ids, capFailed: b.code }, { state: 'paused', configured_status: 'PAUSED', review: { status: 'in_review' } });
-    if (b.outcome === 'unknown') return await finishWith('unknown', 'UNKNOWN', { step: 'cap', ids, sentAt: iso(ctx.now()) }, { state: 'paused', configured_status: 'PAUSED', review: { status: 'in_review' } });
-    await patchCampaign(ctx, userId, row.id, { spend_cap: plannedTotal });
+    if (platform === 'meta') {
+      // (b) the spending limit, before anything can spend
+      await jobs.note(userId, job.id, { step: 'cap', sentAt: iso(ctx.now()), ids });
+      const b = ids.campaignId ? await localSafe(() => zads.writes.setCampaignSpendCap(ids.campaignId, spendCap, lctx)) : { outcome: 'failed', code: 'CAP_NOT_SET' };
+      if (b.outcome === 'failed') return await finishWith('done', 'CAP_NOT_SET', { ids, capFailed: b.code }, { state: 'paused', configured_status: 'PAUSED', review: { status: 'in_review' } });
+      if (b.outcome === 'unknown') return await finishWith('unknown', 'UNKNOWN', { step: 'cap', ids, sentAt: iso(ctx.now()) }, { state: 'paused', configured_status: 'PAUSED', review: { status: 'in_review' } });
+      await patchCampaign(ctx, userId, row.id, { spend_cap: spendCap });
+    }
     // (c) only for ACTIVE: switch the campaign on
     let state = 'paused';
     let configured = 'PAUSED';
     if (row.launched_as === 'ACTIVE') {
       await jobs.note(userId, job.id, { step: 'activate', sentAt: iso(ctx.now()), ids });
-      const c = await zads.writes.setCampaignStatus(ids.campaignId, 'meta', 'active', lctx);
+      const c = ids.campaignId ? await localSafe(() => zads.writes.setCampaignStatus(ids.campaignId, platform, 'active', lctx)) : { outcome: 'failed', code: 'REFUSED' };
       if (c.outcome === 'failed') code = 'ACTIVATION_NOT_SENT';
       else if (c.outcome === 'unknown') return await finishWith('unknown', 'UNKNOWN', { step: 'activate', ids, sentAt: iso(ctx.now()) }, { state: 'unknown', configured_status: 'PAUSED', review: { status: 'in_review' } });
       else {
@@ -127,7 +124,7 @@ export async function runLaunch(ctx, { userId, tag, job, row, body, plannedTotal
         configured = 'ACTIVE';
       }
     }
-    if (a.activationFailed) {
+    if (a.activationFailed && platform === 'meta') {
       const off = await readOffLevels(ctx, row, ids, lctx).catch(() => ({ offAdSet: false, offAds: [] }));
       remote.offAds = off.offAds;
       remote.offAdSet = off.offAdSet;
@@ -144,8 +141,25 @@ export async function runLaunch(ctx, { userId, tag, job, row, body, plannedTotal
   }
 }
 
+/** The codes zernioAds.mjs throws before sending anything (a bad amount, id or date: our own check). */
+const LOCAL_REFUSALS = ['BAD_AMOUNT', 'BAD_ID', 'BAD_DATE'];
+
+/** A write whose own argument check throws before anything is sent: a definite failure, never "may have happened". */
+async function localSafe(fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (LOCAL_REFUSALS.includes(e?.code)) return { outcome: 'failed', code: 'REFUSED', sent: false, local: e.code };
+    throw e;
+  }
+}
+
 /** One write of a change. → zernioAds result */
 function exec(ctx, row, op, lctx) {
+  return localSafe(() => send(ctx, row, op, lctx));
+}
+
+function send(ctx, row, op, lctx) {
   const w = ctx.zads.writes;
   const r = row.remote ?? {};
   switch (op.op) {

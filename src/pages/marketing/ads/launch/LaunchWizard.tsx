@@ -17,7 +17,7 @@ import { AudienceStep } from './AudienceStep';
 import { AdsStep } from './AdsStep';
 import { BudgetStep } from './BudgetStep';
 import { ReviewStep } from './ReviewStep';
-import { SpendConfirm, type LaunchItem, type LaunchOutcome } from './SpendConfirm';
+import { SpendConfirm, type LaunchAgain, type LaunchItem, type LaunchOutcome } from './SpendConfirm';
 import { draftProblems, forCurrency, launchablePlatforms, newDraft, previewRequest, readyToConfirm, requestKey, splitLine, type LaunchDraft } from './draft';
 
 const STEPS = ['Ad account', 'Who sees it', 'The ads', 'Budget and dates', 'Review'] as const;
@@ -28,10 +28,10 @@ export function LaunchWizardHost() {
   const plan = useStore((s) => s.ads.find((a) => a.id === w?.planId));
   const project = useStore((s) => s.projects.find((p) => p.id === plan?.projectId));
   if (__ARTIFACT_BUILD__ || !w || !plan || !project) return null;
-  return <LaunchWizard key={plan.id} project={project} plan={plan} onClose={close} />;
+  return <LaunchWizard key={plan.id} project={project} plan={plan} again={w.again ?? null} onClose={close} />;
 }
 
-export function LaunchWizard({ project, plan, onClose }: { project: Project; plan: AdCampaign; onClose: () => void }) {
+export function LaunchWizard({ project, plan, again = null, onClose }: { project: Project; plan: AdCampaign; again?: LaunchAgain | null; onClose: () => void }) {
   const platforms = useMemo(() => launchablePlatforms(plan), [plan]);
   const [tab, setTab] = useState<AdsPlatform>(platforms[0] ?? 'meta');
   const [drafts, setDrafts] = useState<Record<string, LaunchDraft>>(() => Object.fromEntries(platforms.map((p) => [p, newDraft(plan, p, platforms.length)])));
@@ -195,6 +195,7 @@ export function LaunchWizard({ project, plan, onClose }: { project: Project; pla
       <SpendConfirm
         open={confirming}
         items={items}
+        again={again}
         onClose={() => setConfirming(false)}
         onLaunched={(done) => {
           launched(done);

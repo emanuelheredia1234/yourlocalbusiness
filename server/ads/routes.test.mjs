@@ -198,12 +198,30 @@ describe('launch: confirm, token, one send (R1, R2)', () => {
 describe('Google', () => {
   beforeEach(async () => ready({}, { platforms: ['google_ads'] }));
 
-  it('one create with the customer’s choice on the campaign; Check status waits for a sync after the send', async () => {
+  it('creates the campaign PAUSED, then switches it on only for ACTIVE (a late create can never be live untracked)', async () => {
     const r = await t.launchPlan(u, 'google', { status: 'ACTIVE' });
-    expect(writePaths()).toEqual(['POST /ads/create']);
-    expect(t.writes()[0].body).toMatchObject({ campaignType: 'search', status: 'ACTIVE', campaignStatus: 'ACTIVE', adSetStatus: 'ACTIVE', adStatus: 'ACTIVE' });
+    expect(writePaths()).toEqual(['POST /ads/create', 'PUT /ads/campaigns/:id/status']);
+    expect(t.writes()[0].body).toMatchObject({ campaignType: 'search', status: 'PAUSED', campaignStatus: 'PAUSED', adSetStatus: 'ACTIVE', adStatus: 'ACTIVE' });
+    expect(t.writes()[1].body).toEqual({ status: 'active', platform: 'google' });
     expect(r.campaign).toMatchObject({ state: 'in_review', configuredStatus: 'ACTIVE' });
     expect(r.campaign.spendCap).toBeUndefined();
+  });
+
+  it('a Google PAUSED launch is the create only', async () => {
+    const r = await t.launchPlan(u, 'google', { status: 'PAUSED' });
+    expect(writePaths()).toEqual(['POST /ads/create']);
+    expect(r.campaign).toMatchObject({ state: 'paused', configuredStatus: 'PAUSED' });
+  });
+
+  it('a raise is never shown or handled as a cut when Google’s synced figure lags behind our own last change', async () => {
+    const r = await t.launchPlan(u, 'google', { status: 'ACTIVE', dailyBudget: 40 });
+    const lower = await t.changeCampaign(u, r.campaign.id, { action: 'budget', dailyBudget: 20 });
+    expect(lower.job.state).toBe('done');
+    // the synced tree still says 40; the customer now sets 30: that is a raise from 20
+    t.zm.ads.state.campaigns.get(r.campaign.platformCampaignId).campaignBudget = { amount: 40, type: 'daily' };
+    const pv = await t.changePreview(u, r.campaign.id, { action: 'budget', dailyBudget: 30 });
+    expect(pv.body.review).toMatchObject({ confirmKind: 'spend', dailyDelta: 10, current: { daily: 20 } });
+    expect(codes(pv.body.review.notes)).toContain('GOOGLE_BUDGET_LAG');
   });
 
   it('a timed-out Google create stays unknown until a sync newer than the send, then reads NOT_CREATED', async () => {
@@ -383,6 +401,110 @@ describe('changes (§9.1)', () => {
     expect(t.writes(from)[0].body).toEqual({ status: 'paused', platform: 'facebook' });
   });
 
+  it('end always sends the pause: a campaign switched on after the review is never marked ended while running', async () => {
+    const pv = await t.changePreview(u, launched.campaign.id, { action: 'end' });
+    expect(pv.body.review.current.configured).toBe('PAUSED');
+    // resumed in Ads Manager (or another tab) after the review
+    metaCampaign(await t.row(launched.campaign.id)).configuredStatus = 'ACTIVE';
+    const from = t.writes().length;
+    const res = await t.change(u, launched.campaign.id, pv.body.reviewToken);
+    expect(res.status).toBe(200);
+    await t.settled();
+    expect(writePaths(from)).toEqual(['PUT /ads/campaigns/:id/status']);
+    expect(t.writes(from)[0].body).toEqual({ status: 'paused', platform: 'facebook' });
+    expect(metaCampaign(await t.row(launched.campaign.id)).configuredStatus).toBe('PAUSED');
+    expect((await t.row(launched.campaign.id)).state).toBe('ended');
+  });
+
+  it('a review token starts one write, ever: a fresh request id with the same token is REVIEW_USED', async () => {
+    const pv = await t.changePreview(u, launched.campaign.id, { action: 'resume' });
+    const first = await t.change(u, launched.campaign.id, pv.body.reviewToken);
+    expect(first.status).toBe(200);
+    await t.settled();
+    // paused again in Ads Manager, so the live values match the review once more
+    metaCampaign(await t.row(launched.campaign.id)).configuredStatus = 'PAUSED';
+    await t.db.update('ad_campaigns', { id: launched.campaign.id }, { configured_status: 'PAUSED', state: 'paused' });
+    const from = t.writes().length;
+    const again = await t.change(u, launched.campaign.id, pv.body.reviewToken);
+    expect(again).toMatchObject({ status: 409, body: { code: 'REVIEW_USED' } });
+    expect(t.writes(from)).toEqual([]);
+  });
+
+  it('the same request id sent with a different review is REQUEST_MISMATCH, never the old job’s answer', async () => {
+    const id = crypto.randomUUID();
+    const up = await t.changePreview(u, launched.campaign.id, { action: 'budget', dailyBudget: 40 });
+    expect((await t.change(u, launched.campaign.id, up.body.reviewToken, id)).status).toBe(200);
+    await t.settled();
+    const down = await t.changePreview(u, launched.campaign.id, { action: 'budget', dailyBudget: 30 });
+    const from = t.writes().length;
+    const res = await t.change(u, launched.campaign.id, down.body.reviewToken, id);
+    expect(res).toMatchObject({ status: 409, body: { code: 'REQUEST_MISMATCH' } });
+    expect(t.writes(from)).toEqual([]);
+    // the same review pressed twice still answers its own job
+    expect((await t.change(u, launched.campaign.id, up.body.reviewToken, id)).body).toMatchObject({ replayed: true });
+  });
+
+  it('finds the campaign past the first page of the account’s live campaigns', async () => {
+    t.zm.ads.state.livePageSize = 1;
+    // an older campaign in the same ad account lands first
+    await t.plan(u, { id: 'plan-2' });
+    const other = await t.preview(u, { ...(await t.request(u, 'meta')), planId: 'plan-2' });
+    await t.launch(u, other.body.reviewToken);
+    await t.settled();
+    // the account lists the other campaign (and its ad set) before ours
+    const m = t.zm.ads.state.campaigns;
+    const all = [...m.entries()].reverse();
+    m.clear();
+    for (const [k, v] of all) m.set(k, v);
+    const r = await t.changeCampaign(u, launched.campaign.id, { action: 'resume' });
+    expect(r.preview.body.review.blockers).toEqual([]);
+    expect(r.job.state).toBe('done');
+    expect(t.zm.calls.some((c) => c.path.endsWith('/ads/accounts/live') && c.query?.after && c.query?.level)).toBe(true);
+  });
+
+  it('a budget set to 12.50 in Ads Manager: the spending limit is rounded down and sent, never a false “may have happened”', async () => {
+    const c = metaCampaign(await t.row(launched.campaign.id));
+    c.spendCap = null;
+    c.adSets[0].dailyBudget = 12.5;
+    const r = await t.changeCampaign(u, launched.campaign.id, { action: 'resume' });
+    expect(r.job.state).toBe('done');
+    const cap = t.writes().find((w) => w.body?.platformSpecificData?.spendCap != null && w.body.platformSpecificData.spendCap !== 350);
+    expect(Number.isInteger(cap.body.platformSpecificData.spendCap)).toBe(true);
+  });
+
+  it('a decrease below the ad account’s minimum is blocked in the preview', async () => {
+    await t.db.update('ad_campaigns', { id: launched.campaign.id }, { min_daily: 5 });
+    const pv = await t.changePreview(u, launched.campaign.id, { action: 'budget', dailyBudget: 3 });
+    expect(codes(pv.body.review.blockers)).toContain('BUDGET_TOO_LOW');
+    expect(pv.body.reviewToken).toBeUndefined();
+  });
+
+  it('a swap on a refused campaign whose switch is on is a spend: money confirm, owner switches and plan gate', async () => {
+    metaCampaign(await t.row(launched.campaign.id)).configuredStatus = 'ACTIVE';
+    await t.db.update('ad_campaigns', { id: launched.campaign.id }, { configured_status: 'ACTIVE', state: 'rejected' });
+    const pv = await t.changePreview(u, launched.campaign.id, { action: 'creative', creativeId: 'cr-B', adIndex: 0 });
+    expect(pv.body.review).toMatchObject({ confirmKind: 'spend', proposed: { daily: 25 } });
+    expect(codes(pv.body.review.notes)).toContain('SWAP_SPENDS');
+    await t.db.update('ad_limits', { customer_tag: '*' }, { ads_enabled: false, version: 2 });
+    const from = t.writes().length;
+    expect((await t.change(u, launched.campaign.id, pv.body.reviewToken)).body.code).toBe('ADS_OFF');
+    expect(t.writes(from)).toEqual([]);
+  });
+
+  it('Refresh never undoes our own newer write from Zernio’s older stored copy', async () => {
+    const r = await t.changeCampaign(u, launched.campaign.id, { action: 'resume' });
+    expect(r.campaign.configuredStatus).toBe('ACTIVE');
+    // the stored copy was read before the resume and still says paused
+    t.zm.ads.state.syncedAt = new Date(t.clock.t - 30 * 60_000).toISOString();
+    metaCampaign(await t.row(launched.campaign.id)).configuredStatus = 'PAUSED';
+    t.clock.t += 6 * 60_000;
+    const res = await t.call(u, 'POST', '/api/ads/campaigns/refresh', { projectId: 'proj-1' });
+    expect(res.status).toBe(200);
+    expect(res.body.campaigns.find((c) => c.id === launched.campaign.id)).toMatchObject({ configuredStatus: 'ACTIVE' });
+    // Refresh asks for our own campaigns by id
+    expect(t.zm.calls.some((c) => c.path.endsWith('/ads/tree') && c.query?.campaignId === launched.campaign.platformCampaignId)).toBe(true);
+  });
+
   it('end pauses and ends; ended campaigns can’t be resumed', async () => {
     metaCampaign(await t.row(launched.campaign.id)).configuredStatus = 'ACTIVE';
     const r = await t.changeCampaign(u, launched.campaign.id, { action: 'end' });
@@ -413,6 +535,21 @@ describe('limits (§10) and the plan gate', () => {
   it('the kill switch stops launches', async () => {
     await ready({ env: { ADS_LAUNCH_ENABLED: '' } });
     expect((await t.preview(u, await t.request(u))).body.code).toBe('KILL_SWITCH');
+  });
+
+  it('launches sent at the same moment are checked one after another against the daily limit', async () => {
+    await ready();
+    const tokens = [];
+    for (const id of ['plan-1', 'plan-2', 'plan-3']) {
+      await t.plan(u, { id });
+      const pv = await t.preview(u, { ...(await t.request(u, 'meta', { status: 'ACTIVE', dailyBudget: 40 })), planId: id });
+      tokens.push(pv.body.reviewToken);
+    }
+    const res = await Promise.all(tokens.map((tk) => t.launch(u, tk)));
+    await t.settled();
+    expect(res.filter((r) => r.status === 200)).toHaveLength(1);
+    expect(res.filter((r) => r.body?.code === 'LIMIT_DAILY')).toHaveLength(2);
+    expect(writePaths().filter((p) => p === 'POST /ads/create')).toHaveLength(1);
   });
 
   it('counts a rejected campaign whose switch is on toward the daily limit', async () => {
@@ -483,6 +620,13 @@ describe('ownership', () => {
     expect(res.status).toBe(400);
   });
 
+  it('Meta place search asks for every kind of place (countries, regions, ZIPs), not cities only', async () => {
+    await ready();
+    await t.place(u, 'meta', 'Texas');
+    const q = t.zm.calls.filter((c) => c.path.endsWith('/ads/targeting/search')).at(-1).query;
+    expect(q).toMatchObject({ dimension: 'geo', geoType: 'all' });
+  });
+
   it('ignores a Zernio accountId in the request: the server resolves the connection', async () => {
     await ready();
     const pv = await t.preview(u, { ...(await t.request(u)), accountId: 'ffffffffffffffffffffffff', zernioAccountId: 'ffffffffffffffffffffffff' });
@@ -533,6 +677,19 @@ describe('audit (R9) and the webhook', () => {
     const res = await t.zm.sendWebhook({ event: 'ad.review.rejected', profiles: t.zm.profileRef(doc.profileId), account: { accountId: eveAcct._id, profileId: doc.profileId, platform: 'metaads' }, adObject: { level: 'AD', platformId: row.remote.adIds[0], platformAdAccountId: 'act_1', adId: row.remote.zernioAdIds[0], name: 'x' }, review: { status: 'rejected', reasons: [] } });
     expect(res.status).toBe(200);
     expect((await t.row(r.campaign.id)).state).toBe('in_review');
+  });
+});
+
+describe('before the ads migration is run', () => {
+  it('account deletion and disconnect read “nothing launched” instead of failing', async () => {
+    const { createAdsRoutes } = await import('./routes.mjs');
+    const err = Object.assign(new Error('missing'), { name: 'DbError', code: 'NOT_SET_UP' });
+    const lines = [];
+    const r = createAdsRoutes({ db: { enabled: true, select: async () => Promise.reject(err) }, env: {}, log: { log: (l) => lines.push(l), warn: (l) => lines.push(l), error: (l) => lines.push(l) } });
+    await expect(r.beforeForget('0b6f3a52-5d0e-4c58-9a0c-0e7c5b1d2a11')).resolves.toBeUndefined();
+    await expect(r.liveOn('0b6f3a52-5d0e-4c58-9a0c-0e7c5b1d2a11', 'meta_ads')).resolves.toEqual([]);
+    expect(lines.join('\n')).toMatch(/ads_not_set_up/);
+    t = { violations: () => [], close: async () => {} };
   });
 });
 

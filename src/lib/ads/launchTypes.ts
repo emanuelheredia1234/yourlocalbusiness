@@ -215,6 +215,8 @@ export interface LaunchedCampaign {
   openInManagerUrl?: string;
   adsOff?: number;
   adSetOff?: boolean;
+  /** some of the campaign's ads (not all) were refused: it still runs on the others */
+  adsNotApproved?: { count: number; of: number };
   pendingJob?: AdJob;
   lastJob?: AdJob;
   lastReadAt?: string;

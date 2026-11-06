@@ -1,7 +1,9 @@
 // The spend confirm (spec §7.4): exactly what will spend money, per platform, in each account's own currency,
 // then ONE launch request per platform when the customer presses the button. Rules:
-//   - one clientRequestId per platform per opening of this window; a second press after an uncertain answer
-//     (no answer, or a gateway error) sends the same id, so the server answers with the job it already has;
+//   - one clientRequestId per review (per review token): a second press of the same review after an uncertain
+//     answer (no answer, or a gateway error) sends the same id, so the server answers with the job it already has;
+//     a new review always gets a new id (the server refuses an old id sent with another review);
+//   - a replayed answer is read for what it is: an old failed launch is shown as failed, never as launched;
 //   - a module-level `sending` set stops a reopened window from sending while a request is on its way;
 //   - the button is disabled from the first press until the answer (Enter or a double click can't fire twice);
 //   - an ACTIVE launch needs the "real money" tick; nothing is ever retried by itself.
@@ -22,15 +24,22 @@ export interface LaunchItem {
   review: LaunchReview;
 }
 
+/** The launch this window follows up on ("Launch again" after a failed one): its platform, tag and code. */
+export interface LaunchAgain {
+  platform: AdsPlatform;
+  tag: string | null;
+  code: string | null;
+}
+
 export type LaunchOutcome = { key: string; platform: AdsPlatform; ok: true; job: AdJob; campaign?: LaunchedCampaign } | { key: string; platform: AdsPlatform; ok: false; message: string; uncertain: boolean; code: string };
 
 /** Launches on their way right now (outside the window, so reopening it can't send twice). */
 const sending = new Set<string>();
-/** A launch whose last press got no definite answer: its next confirm carries the same request id. */
+/** A review (by its token) whose last press got no definite answer: its next press carries the same request id. */
 const uncertainRequest = new Map<string, string>();
 
-/** The request id for a new opening of the window: the uncertain one if there is one, else a fresh one. */
-export const launchRequestIdFor = (key: string) => uncertainRequest.get(key) ?? newRequestId();
+/** The request id for a press of this review: the uncertain one if there is one, else a fresh one. */
+export const launchRequestIdFor = (reviewToken: string) => uncertainRequest.get(reviewToken) ?? newRequestId();
 export const isSending = (key: string) => sending.has(key);
 
 function refusal(e: unknown, platform: AdsPlatform): { message: string; uncertain: boolean; code: string } {
@@ -43,21 +52,23 @@ function refusal(e: unknown, platform: AdsPlatform): { message: string; uncertai
  * Send each launch once, one after another (one platform failing never cancels, retries or changes the other).
  * Items already on their way are skipped. Never retried here.
  */
-export async function sendLaunches(items: LaunchItem[], requestIds: Record<string, string>, send = launchAds): Promise<LaunchOutcome[]> {
+export async function sendLaunches(items: LaunchItem[], requestIds: Record<string, string> = {}, send = launchAds): Promise<LaunchOutcome[]> {
   const out: LaunchOutcome[] = [];
   for (const it of items) {
     if (sending.has(it.key)) continue;
-    const id = requestIds[it.key] ?? launchRequestIdFor(it.key);
+    const id = requestIds[it.key] ?? launchRequestIdFor(it.reviewToken);
     sending.add(it.key);
     beginBusy(`ads-launch:${it.key}`, `Launching on ${PLATFORM_LABEL[it.platform]}`, 'app');
     try {
       const r = await send(it.reviewToken, id);
-      uncertainRequest.delete(it.key);
-      out.push({ key: it.key, platform: it.platform, ok: true, job: r.job, campaign: r.campaign });
+      uncertainRequest.delete(it.reviewToken);
+      // the server answered with the job this review already had: an old failure is a failure, not a launch
+      if (r.replayed && r.job.state === 'failed') out.push({ key: it.key, platform: it.platform, ok: false, message: r.job.message, uncertain: false, code: r.job.code ?? 'REFUSED' });
+      else out.push({ key: it.key, platform: it.platform, ok: true, job: r.job, campaign: r.campaign });
     } catch (e) {
       const f = refusal(e, it.platform);
-      if (f.uncertain) uncertainRequest.set(it.key, id);
-      else uncertainRequest.delete(it.key);
+      if (f.uncertain) uncertainRequest.set(it.reviewToken, id);
+      else uncertainRequest.delete(it.reviewToken);
       out.push({ key: it.key, platform: it.platform, ok: false, ...f });
     } finally {
       sending.delete(it.key);
@@ -67,22 +78,22 @@ export async function sendLaunches(items: LaunchItem[], requestIds: Record<strin
   return out;
 }
 
-export function SpendConfirm({ open, items, onClose, onLaunched }: { open: boolean; items: LaunchItem[]; onClose: () => void; onLaunched: (done: LaunchOutcome[]) => void }) {
+export function SpendConfirm({ open, items, again, onClose, onLaunched }: { open: boolean; items: LaunchItem[]; again?: LaunchAgain | null; onClose: () => void; onLaunched: (done: LaunchOutcome[]) => void }) {
   const [busy, setBusy] = useState(false);
   const [tick, setTick] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [doneKeys, setDoneKeys] = useState<string[]>([]);
-  // one request id per platform per opening of the window
-  const ids = useRef<Record<string, string>>({});
-  const keys = items.map((i) => i.key).join(',');
+  // a fresh window only when it opens: a platform that launched leaving `items` must not wipe the other's outcome
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (!open) return;
-    ids.current = Object.fromEntries(items.map((i) => [i.key, launchRequestIdFor(i.key)]));
-    setBusy(false);
-    setTick(false);
-    setErrors({});
-    setDoneKeys([]);
-  }, [open, keys]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (open && !wasOpen.current) {
+      setBusy(false);
+      setTick(false);
+      setErrors({});
+      setDoneKeys([]);
+    }
+    wasOpen.current = open;
+  }, [open]);
   if (!open || !items.length) return null;
   const left = items.filter((i) => !doneKeys.includes(i.key));
   const reviews = left.map((i) => i.review);
@@ -94,7 +105,7 @@ export function SpendConfirm({ open, items, onClose, onLaunched }: { open: boole
     if (inFlight || (tickNeeded && !tick) || !left.length) return;
     setBusy(true);
     setErrors({});
-    const out = await sendLaunches(left, ids.current);
+    const out = await sendLaunches(left);
     setBusy(false);
     const ok = out.filter((o) => o.ok);
     const bad = out.filter((o): o is Extract<LaunchOutcome, { ok: false }> => !o.ok);
@@ -135,6 +146,11 @@ export function SpendConfirm({ open, items, onClose, onLaunched }: { open: boole
                 </div>
               ))}
             </dl>
+            {again && again.platform === it.platform && again.code === 'NOT_CREATED' && it.platform === 'google' && (
+              <Callout tone="warn">
+                Google’s data can lag: if you see a campaign tagged {again.tag ?? 'YLB'} in Google Ads, don’t launch again. It was created paused, so it isn’t spending.
+              </Callout>
+            )}
             {errors[it.key] && <Callout tone={/may have/i.test(errors[it.key]) ? 'warn' : 'bad'}>{errors[it.key]}</Callout>}
           </section>
         ))}

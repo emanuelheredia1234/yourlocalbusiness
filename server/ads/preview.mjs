@@ -13,7 +13,8 @@ import { fail, IntegrationError, isUuid, notSetUp, sha256 } from '../integration
 import { loadProject } from '../social/publish.mjs';
 import { canMakePublicLinks, publicMediaUrl } from '../social/media.mjs';
 import { ADS_PLATFORMS, CONNECTION_OF, LAUNCH_CHOICES, idTailOf } from './contracts.mjs';
-import { buildLaunch, canonical, daysBetween, hashOf, isYmd, metaCreativeFor, searchTextFor, todayIn, validTimeZone, withOffset } from './build.mjs';
+import { buildLaunch, canonical, daysBetween, hashOf, isYmd, metaCreativeFor, metaSpendCap, searchTextFor, todayIn, validTimeZone, withOffset } from './build.mjs';
+import { findOwn } from './live.mjs';
 import { cut, messageFor, note, safeFixUrl } from './messages.mjs';
 import { compareWhole, isCurrency, sumWhole, timesDays, toMinor, fromMinor, zernioWhole, dailyProblem } from './money.mjs';
 import { increaseProblems, launchProblems, switchesProblem } from './limits.mjs';
@@ -48,7 +49,7 @@ export function signToken(env, payload) {
 }
 
 /** The token's payload when its MAC, user, kind and expiry are right; else a 400 or 409 (never sent anything). */
-export function verifyToken(env, token, { uid, kind, now }) {
+export function verifyToken(env, token, { uid, kind, now, allowExpired = false }) {
   const m = /^([A-Za-z0-9_-]{10,16000})\.([A-Za-z0-9_-]{43})$/.exec(String(token ?? ''));
   if (!m || !sameMac(mac(env, m[1]), m[2])) throw fail(400, 'BAD_REQUEST', 'That review isn’t valid. Review it again.');
   let p;
@@ -58,10 +59,13 @@ export function verifyToken(env, token, { uid, kind, now }) {
     throw fail(400, 'BAD_REQUEST', 'That review isn’t valid. Review it again.');
   }
   if (!isObj(p) || p.v !== 1 || p.kind !== kind || p.uid !== h16(uid)) throw fail(400, 'BAD_REQUEST', 'That review isn’t valid. Review it again.');
-  if (!Number.isFinite(p.exp) || p.exp <= now) throw fail(409, 'REVIEW_EXPIRED', messageFor('REVIEW_EXPIRED'));
+  if (!allowExpired && (!Number.isFinite(p.exp) || p.exp <= now)) throw fail(409, 'REVIEW_EXPIRED', messageFor('REVIEW_EXPIRED'));
   return p;
 }
 export const userHash = h16;
+
+/** The one-write id of a review (each token can start one write, ever: ad_jobs_review_once). */
+export const reviewNonceOf = (tok) => (typeof tok?.rid === 'string' && /^[0-9a-f-]{36}$/.test(tok.rid) ? tok.rid : null);
 
 /** A place or interest the customer can pick: signed, bound to the user, platform and dimension. */
 export function targetRef(env, uid, platform, dim, item) {
@@ -288,7 +292,7 @@ export function launchReview({ platform, account, built, committedAfter, lim, se
     blockers: built.blockers,
     committedDailyAfter: committedAfter,
     limitDaily: lim?.ads_max_daily ?? null,
-    ...(platform === 'meta' ? { spendCap: built.plannedTotal } : {}),
+    ...(platform === 'meta' ? { spendCap: built.spendCap } : {}),
     linkUrl: built.summary.linkUrl,
     setup,
   };
@@ -349,6 +353,7 @@ export async function previewLaunch(ctx, who, body) {
   const token = signToken(env, {
     v: 1,
     kind: 'launch',
+    rid: crypto.randomUUID(),
     uid: h16(who.id),
     projectId,
     planId,
@@ -395,11 +400,12 @@ export async function rebuildLaunch(ctx, who, tok) {
 export async function readNow(ctx, row, lctx, { withEndTime = false } = {}) {
   const remote = row.remote ?? {};
   if (row.platform === 'meta') {
-    const got = await ctx.zads.reads.liveEntities(row.zernio_account_id, row.ad_account_id, lctx);
+    // every page of the account's live campaigns and ad sets until ours is found (live.mjs)
+    const got = await findOwn(ctx, row, lctx);
     if (!got.ok) return { ok: false, code: got.code };
-    const c = (Array.isArray(got.body.campaigns) ? got.body.campaigns : []).find((x) => isObj(x) && String(x.platformCampaignId) === String(remote.campaignId));
-    if (!c) return { ok: false, code: 'META_OBJECT_GONE' };
-    const s = (Array.isArray(got.body.adSets) ? got.body.adSets : []).find((x) => isObj(x) && String(x.platformAdSetId) === String(remote.adSetId)) ?? null;
+    const c = got.campaign;
+    if (!c) return { ok: false, code: got.complete.campaigns ? 'META_OBJECT_GONE' : 'UNAVAILABLE' };
+    const s = got.adSets[0] ?? null;
     const cbo = zernioWhole(c.dailyBudget) != null || isObj(c.budget);
     let endAt = null;
     if (withEndTime && remote.adSetId) {
@@ -411,7 +417,7 @@ export async function readNow(ctx, row, lctx, { withEndTime = false } = {}) {
     return {
       ok: true,
       live: true,
-      asOf: typeof got.body.readAt === 'string' ? got.body.readAt : iso(ctx.now()),
+      asOf: got.readAt ?? iso(ctx.now()),
       configured: c.configuredStatus === 'ACTIVE' ? 'ACTIVE' : c.configuredStatus === 'PAUSED' ? 'PAUSED' : String(c.configuredStatus ?? ''),
       adSetConfigured: s?.configuredStatus ?? null,
       budgetLevel: cbo ? 'campaign' : 'adset',
@@ -493,7 +499,10 @@ export function planChange({ row, action, params, nowVals, nowMs, plan, project,
   const daily = nowVals.daily ?? Number(row.daily_budget);
   const remaining = remainingDays(row, nowMs);
   const spent = Math.max(0, Math.floor(Number(row.results?.spend) || 0));
-  const capFor = (d, days) => spent + Number(timesDays(d, days, cur));
+  // whole units only (a budget set in Ads Manager can be 12.50); rounded down, so the limit never allows more
+  const capFor = (d, days) => Math.floor(spent + Number(timesDays(d, days, cur)));
+  // Meta refuses a spending limit below its minimum (USD: 100): never send one it can't take
+  const metaCap = (d, days) => metaSpendCap(capFor(d, days), cur);
   let spend = false;
   let confirmKind = 'short';
   const out = { current: { daily, configured: nowVals.configured, spendCap: nowVals.spendCap ?? null, end: row.end_at ? todayIn(row.timezone, Date.parse(row.end_at)) : null, asOf: nowVals.asOf, live: nowVals.live }, proposed: {} };
@@ -512,7 +521,7 @@ export function planChange({ row, action, params, nowVals, nowMs, plan, project,
     const offAdSet = remote.offAdSet === true && nowVals.adSetConfigured !== 'ACTIVE';
     if (nowVals.configured === 'ACTIVE' && !offAds.length && !offAdSet) blockers.push(note('NOTHING_TO_CHANGE'));
     if (p === 'meta') {
-      const need = capFor(daily, remaining);
+      const need = metaCap(daily, remaining);
       if (nowVals.spendCap == null) {
         notes.push(note('NO_SPEND_CAP'));
         if (need > 0) ops.push({ op: 'cap', amount: need });
@@ -526,17 +535,26 @@ export function planChange({ row, action, params, nowVals, nowMs, plan, project,
     out.limitCheck = { isResume: true, daily, total: capFor(daily, remaining) };
   } else if (action === 'budget') {
     const next = params.dailyBudget;
-    const dp = dailyProblem(next, 1);
-    if (dp) blockers.push(note(dp, { platform: p, currency: cur }));
+    const minDaily = Number(row.min_daily) > 0 ? Number(row.min_daily) : 1;
+    const dp = dailyProblem(next, minDaily);
+    if (dp) blockers.push(note(dp, { platform: p, currency: cur, min: minDaily }));
     if (nowVals.lifetime != null) blockers.push(note('LIFETIME_BUDGET'));
-    if (daily != null && next === daily) blockers.push(note('NOTHING_TO_CHANGE'));
-    const up = daily == null || compareWhole(next, daily, cur) > 0;
+    // Google's figure is the synced copy and can lag behind our own last change: an increase is decided against the
+    // lower of the two, so a raise is never treated as a cut (no limit check, no money confirm)
+    const ours = Number(row.daily_budget);
+    const base = p === 'google' && daily != null && Number.isFinite(ours) && ours > 0 && compareWhole(ours, daily, cur) < 0 ? ours : daily;
+    if (base !== daily) {
+      notes.push(note('GOOGLE_BUDGET_LAG', { currency: cur, amount: daily, ours }));
+      out.current.daily = base;
+    }
+    if (daily != null && next === daily && next === base) blockers.push(note('NOTHING_TO_CHANGE'));
+    const up = base == null || compareWhole(next, base, cur) > 0;
     if (up) {
       spend = true;
       confirmKind = 'spend';
     }
     if (p === 'meta' && up && !dp) {
-      const need = capFor(next, remaining);
+      const need = metaCap(next, remaining);
       if (nowVals.spendCap == null || need > nowVals.spendCap) {
         ops.push({ op: 'cap', amount: need });
         out.newSpendCap = need;
@@ -548,8 +566,8 @@ export function planChange({ row, action, params, nowVals, nowMs, plan, project,
     }
     if (nowVals.live === true && nowVals.ownLearning && ['LEARNING', 'SUCCESS'].includes(nowVals.ownLearning)) notes.push(note('LEARNING_RESTART'));
     out.proposed = { daily: next, remainingDays: remaining, remainingTotal: Number.isInteger(next) ? timesDays(next, remaining, cur) : null, total: Number.isInteger(next) ? capFor(next, remaining) : null };
-    out.dailyDelta = Number.isInteger(next) && daily != null ? fromMinor(toMinor(next, cur) - toMinor(daily, cur), cur) : null;
-    out.totalDeltaEstimate = Number.isInteger(next) && daily != null ? fromMinor((toMinor(next, cur) - toMinor(daily, cur)) * remaining, cur) : null;
+    out.dailyDelta = Number.isInteger(next) && base != null ? fromMinor(toMinor(next, cur) - toMinor(base, cur), cur) : null;
+    out.totalDeltaEstimate = Number.isInteger(next) && base != null ? fromMinor((toMinor(next, cur) - toMinor(base, cur)) * remaining, cur) : null;
     out.limitCheck = { isResume: false, delta: out.dailyDelta ?? next, daily: next, total: Number.isInteger(next) ? capFor(next, remaining) : 0 };
   } else if (action === 'end_date') {
     if (p === 'google') blockers.push(note('GOOGLE_NO_DATES'));
@@ -564,7 +582,7 @@ export function planChange({ row, action, params, nowVals, nowMs, plan, project,
       if (later) {
         spend = true;
         confirmKind = 'spend';
-        const need = capFor(daily, days);
+        const need = metaCap(daily, days);
         if (nowVals.spendCap == null || need > nowVals.spendCap) {
           ops.push({ op: 'cap', amount: need });
           out.newSpendCap = need;
@@ -598,6 +616,16 @@ export function planChange({ row, action, params, nowVals, nowMs, plan, project,
       out.proposed = { headlines: got.headlines, descriptions: got.descriptions };
     }
     notes.push(note('BACK_TO_REVIEW'));
+    // a refused ad under a campaign whose switch is on: once the new ad is approved it spends, so this is a spend
+    // (the money confirm, the owner's switches, the plan gate and the limits), like a resume
+    if ((nowVals.configured === 'ACTIVE' || row.configured_status === 'ACTIVE') && ['rejected', 'with_issues'].includes(row.state)) {
+      spend = true;
+      confirmKind = 'spend';
+      if (row.end_at && remaining <= 0) blockers.push(note('ENDED'));
+      out.proposed = { ...out.proposed, daily, remainingDays: remaining, remainingTotal: timesDays(daily, remaining, cur), total: capFor(daily, remaining) };
+      out.limitCheck = { isResume: true, daily, total: capFor(daily, remaining) };
+      notes.push(note('SWAP_SPENDS', { currency: cur, amount: daily }));
+    }
   }
   return { ops, confirmKind, spend, blockers, notes, spentSoFar: spent, ...out };
 }
@@ -665,6 +693,7 @@ export async function previewChange(ctx, who, row, body) {
   const token = signToken(env, {
     v: 1,
     kind: 'change',
+    rid: crypto.randomUUID(),
     uid: h16(who.id),
     cid: row.id,
     action,
@@ -680,10 +709,10 @@ export async function previewChange(ctx, who, row, body) {
 }
 
 /** The limit notes for a change that can raise spend (committed daily counts this campaign at its new amount). */
-export async function spendLimitNotes(ctx, who, row, planned, lim) {
+export async function spendLimitNotes(ctx, who, row, planned, lim, { excludeJob } = {}) {
   const c = planned.limitCheck ?? { daily: Number(row.daily_budget), total: 0 };
   const others = await ctx.limits.committed(who.id, row.currency, { exclude: row.id });
-  const changesToday = await ctx.limits.countToday(who.id, ['resume', 'budget', 'end_date', 'creative']);
+  const changesToday = await ctx.limits.countToday(who.id, ['resume', 'budget', 'end_date', 'creative'], { exclude: excludeJob });
   // this campaign counts at its new daily when its switch is (or will be) on
   const counts = c.isResume === true || planned.current?.configured === 'ACTIVE';
   return increaseProblems({ lim, currency: row.currency, delta: c.delta ?? 0, daily: c.daily, total: c.total, committedAfter: counts ? sumWhole([others.daily, c.daily], row.currency) : others.daily, changesToday, isResume: c.isResume === true });

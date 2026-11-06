@@ -10,8 +10,9 @@
 //   dates helpers: todayIn(tz, t), addDays(ymd, n), localInstant(ymd, hms, tz), withOffset(ymd, hms, tz)
 //
 // R3: a launch always sends status, campaignStatus, adSetStatus and adStatus. Ad set and ad are ACTIVE, the campaign
-// holds the money (R11): Google's campaign takes the customer's choice; Meta's is always created PAUSED and switched
-// on only after its spending limit is set (server/ads/writes.mjs). R4: only the plan's own text is sent; Google gets
+// holds the money (R11): the campaign is always created PAUSED (Meta and Google) and switched on only by the launch's
+// own next step (after Meta's spending limit is set), so a create that answers late can never be live untracked
+// (server/ads/writes.mjs). R4: only the plan's own text is sent; Google gets
 // at least 3 headlines and 2 descriptions, Meta gets every creative feature OPT_OUT; claim words need a tick.
 
 import crypto from 'node:crypto';
@@ -26,6 +27,13 @@ export const CTA_MAP = Object.freeze({ 'Learn More': 'LEARN_MORE', 'Shop Now': '
 export const CREATIVE_FEATURES = Object.freeze({ enhance_cta: 'OPT_OUT', image_brightness_and_contrast: 'OPT_OUT', text_optimizations: 'OPT_OUT' });
 /** EU and EEA countries: Meta needs DSA payer/beneficiary details the app doesn't collect in v1. */
 export const EU_EEA = Object.freeze(['AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'IS', 'LI', 'NO']);
+/**
+ * Meta refuses a campaign spending limit below about 100 US dollars. In USD the limit is at least that (the daily
+ * budget and the last day keep the spend to the planned total); other currencies keep the planned total, and a
+ * refusal leaves the campaign paused with CAP_NOT_SET.
+ */
+export const META_MIN_SPEND_CAP = Object.freeze({ USD: 100 });
+export const metaSpendCap = (plannedTotal, currency) => (plannedTotal > 0 && Object.hasOwn(META_MIN_SPEND_CAP, currency) ? Math.max(plannedTotal, META_MIN_SPEND_CAP[currency]) : plannedTotal);
 const SHORTENERS = ['bit.ly', 'tinyurl.com', 't.co', 'goo.gl', 'ow.ly', 'is.gd', 'buff.ly', 'rebrand.ly', 'cutt.ly', 'shorturl.at', 'tiny.cc', 'rb.gy', 'lnkd.in'];
 export const LIMITS = Object.freeze({ metaHeadline: 255, metaHeadlineWarn: 40, metaBody: 2000, metaDescription: 255, googleHeadline: 30, googleDescription: 90, keyword: 80, maxDays: 90 });
 export const META_MIN_RADIUS_MI = 10;
@@ -232,11 +240,10 @@ export function buildLaunch({ platform, plan, project, account, zid, picks, laun
   const names = namesFor(plan.name, platform, launchKey);
   const days = Number.isInteger(picks.durationDays) ? picks.durationDays : 0;
   const plannedTotal = Number.isInteger(picks.dailyBudget) && days > 0 ? timesDays(picks.dailyBudget, days, currency) : 0;
-  const statuses =
-    platform === 'google'
-      ? { status: picks.status, campaignStatus: picks.status, adSetStatus: 'ACTIVE', adStatus: 'ACTIVE' }
-      : // Meta: the campaign is created PAUSED whatever the choice; it is switched on only after its spending limit
-        { status: 'PAUSED', campaignStatus: 'PAUSED', adSetStatus: 'ACTIVE', adStatus: 'ACTIVE' };
+  // the campaign is created PAUSED whatever the choice; the launch switches it on afterwards (Meta: after its limit)
+  const statuses = { status: 'PAUSED', campaignStatus: 'PAUSED', adSetStatus: 'ACTIVE', adStatus: 'ACTIVE' };
+  const spendCap = platform === 'meta' ? metaSpendCap(plannedTotal, currency) : null;
+  if (spendCap != null && plannedTotal > 0 && spendCap > plannedTotal) warn('CAP_MINIMUM', { currency, cap: spendCap, amount: plannedTotal });
   const common = {
     accountId: zid,
     adAccountId: account.adAccountId,
@@ -392,7 +399,7 @@ export function buildLaunch({ platform, plan, project, account, zid, picks, laun
     asap: dates.asap ?? null,
     end: dates.endDay ?? null,
     plannedTotal,
-    spendCap: platform === 'meta' ? plannedTotal : null,
+    spendCap,
     ads: ads.map((a) => a.variant),
     linkUrl,
     claimsConfirmed: claims.filter((c) => !open.includes(c)).map((c) => c.phrase),
@@ -410,6 +417,7 @@ export function buildLaunch({ platform, plan, project, account, zid, picks, laun
     names,
     dates,
     plannedTotal,
+    spendCap,
     summary,
     bodyHash: hashOf(body),
     summaryHash: hashOf(summary),
