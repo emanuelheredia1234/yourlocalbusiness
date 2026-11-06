@@ -10,7 +10,7 @@ import { PAGE_TYPES, PAGE_TYPE_DESC, PAGE_TYPE_LABEL, bookingLink, linkFromListi
 // pages change through the router; here it only records where it was asked to go
 vi.mock('@/lib/router', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/lib/router')>()), navigate: vi.fn(async () => true) }));
 
-function project(track: 'business' | 'product', listing: { bookingType?: BookingType; buyUrl?: string } = {}, pageLinks?: { booking?: string; payment?: string }): Project {
+function project(track: 'business' | 'product', listing: { bookingType?: BookingType; buyUrl?: string; offerId?: string } = {}, pageLinks?: { booking?: string; payment?: string; offerId?: string }): Project {
   const p = newProject(track, 'new');
   p.studio.listing = { ...p.studio.listing, ...listing };
   if (pageLinks) p.marketing.pageLinks = pageLinks;
@@ -90,6 +90,18 @@ describe('the links the page’s buttons open', () => {
     expect(missingLink(project('business'), 'booking')).toBe('booking');
     expect(missingLink(project('business', { bookingType: 'book', buyUrl: 'cal.com/me' }), 'booking')).toBeNull();
     for (const t of ['lead', 'website', 'landing', 'showcase'] as const) expect(missingLink(project('business'), t)).toBeNull();
+  });
+
+  it('an attached offer is the payment link: its buy token, before a typed link or the listing’s', () => {
+    const ID = 'AAAAAAAAAAAAAAAAAAAAAA';
+    expect(paymentLink(project('business', {}, { offerId: ID, payment: 'buy.stripe.com/1' }))).toBe(`{{buy:${ID}}}`);
+    expect(missingLink(project('business', {}, { offerId: ID }), 'checkout')).toBeNull();
+    expect(linkFromListing(project('product', { buyUrl: 'gum.co/x' }, { offerId: ID }), 'payment')).toBe(false);
+    // the listing's offer, when the listing is for buying
+    expect(paymentLink(project('product', { offerId: ID, buyUrl: 'gum.co/x' }))).toBe(`{{buy:${ID}}}`);
+    expect(paymentLink(project('business', { bookingType: 'book', offerId: ID }))).toBe('');
+    // not an offer id: ignored
+    expect(paymentLink(project('business', {}, { offerId: 'nope', payment: 'buy.stripe.com/1' }))).toBe('https://buy.stripe.com/1');
   });
 });
 

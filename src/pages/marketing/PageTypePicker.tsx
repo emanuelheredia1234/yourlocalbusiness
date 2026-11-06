@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { PAGE_TYPES, PAGE_TYPE_DESC, PAGE_TYPE_LABEL, PAGE_TYPE_LINKS, bookingLink, linkFromListing, paymentLink, webLink } from '@/lib/pageTypes';
 import { useStore } from '@/store/useStore';
 import { InfoTip } from '@/components/ui/primitives';
+import { AttachPayment } from '@/components/offers/AttachPayment';
 
 const ICONS: Record<PageType, LucideIcon> = { lead: MessageSquareText, booking: CalendarCheck, website: Globe, landing: PanelTop, showcase: LayoutGrid, checkout: CreditCard };
 
@@ -136,8 +137,12 @@ export function PageTypeLinks({ project, type }: { project: Project; type: PageT
     const cur = useStore.getState().projects.find((p) => p.id === project.id)?.marketing.pageLinks ?? {};
     updateMarketing({ pageLinks: { ...cur, [kind]: v.trim() || undefined } });
   };
+  const setOffer = (offerId: string | undefined) => {
+    const cur = useStore.getState().projects.find((p) => p.id === project.id)?.marketing.pageLinks ?? {};
+    updateMarketing({ pageLinks: { ...cur, offerId } });
+  };
   const notes: string[] = [];
-  if (type === 'checkout' && checkoutPrice(project) <= 0) notes.push('Checkout pages show the price: set it in Studio, or type it on the page.');
+  if (type === 'checkout' && checkoutPrice(project) <= 0 && !links.offerId) notes.push('Checkout pages show the price: set it in Studio, or type it on the page.');
   if (type === 'lead') notes.push(__ARTIFACT_BUILD__ ? 'Lead forms work on pages published from the app’s own site, not in claude.ai.' : 'What people send arrives in Email → Leads once the page is published.');
   if (!kinds.length && !notes.length) return null;
 
@@ -148,7 +153,17 @@ export function PageTypeLinks({ project, type }: { project: Project; type: PageT
   return (
     <div className="flex min-w-0 flex-col gap-3">
       {kinds.includes('booking') && <LinkField id={`${id}-booking`} label="Your booking link (optional)" value={links.booking ?? ''} onChange={(v) => set('booking', v)} hint={bookingHint} />}
-      {kinds.includes('payment') && <LinkField id={`${id}-payment`} label={type === 'checkout' ? 'Your payment link' : 'Your payment link (optional)'} required={type === 'checkout'} value={links.payment ?? ''} onChange={(v) => set('payment', v)} hint={paymentHint} />}
+      {kinds.includes('payment') && (
+        // an offer (Whop, or your own checkout behind a permanent buy link), or paste your own link as before
+        <AttachPayment
+          projectId={project.id}
+          value={links.offerId}
+          label={type === 'checkout' ? 'Attach payment' : 'Attach payment (optional)'}
+          onAttach={(o) => setOffer(o.id)}
+          onDetach={() => setOffer(undefined)}
+          fallback={<LinkField id={`${id}-payment`} label={type === 'checkout' ? 'Your payment link' : 'Your payment link (optional)'} required={type === 'checkout'} value={links.payment ?? ''} onChange={(v) => set('payment', v)} hint={paymentHint} />}
+        />
+      )}
       {notes.map((n) => (
         <p key={n} className="well px-3 py-2 text-small text-ink-2">
           {n}

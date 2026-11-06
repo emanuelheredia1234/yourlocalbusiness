@@ -2,6 +2,7 @@ import type { BrandColors, CodeKind, Directives, Project, PromptImage, ServicePa
 import { escapeHtml, hashStr, readableOn, todayStr, toDateStr, lighten, darken, listJoin, truncate } from '@/lib/utils';
 import { imageKeyNumber, imageTokens, resolveImageTokens } from '@/lib/promptImages';
 import { LEAD_ACTION, LEAD_MAGNET, previewLeadAction, resolveLeadAction } from '@/lib/leadAction';
+import { resolveBuyTokens, type BuyResolveOptions } from '@/lib/buyLinks';
 import { HONEYPOT, LEAD_FIELDS, LEAD_PAYLOAD_MAX, fitField } from '@/lib/leadFields';
 import { consentLabel, receivesNote } from '@/lib/consent';
 import type { CalcKind } from '../knowledge';
@@ -1741,6 +1742,8 @@ export interface DocumentOptions {
    * action="{{lead-action}}" becomes action="#", and the script still sees the token, so it sends nothing.
    */
   leadAction?: string;
+  /** how {{buy:<id>}} links are written; unset: as preview links (#buy-preview) where forms are a preview too, else left for publishing */
+  buy?: BuyResolveOptions;
 }
 
 /** Full standalone document for preview, export and publishing. */
@@ -1748,7 +1751,11 @@ export function buildDocument(code: { html: string; css: string; js: string }, t
   const images = (text: string) => (opts.images ? resolveImageTokens(text, opts.images) : text);
   const lead = opts.leadAction;
   const fill = (text: string) => (lead === undefined || lead === LEAD_ACTION ? images(text) : resolveLeadAction(images(text), lead));
-  const fillHtml = (text: string) => (lead === undefined ? previewLeadAction(fill(text)) : fill(text));
+  const buy = opts.buy ?? (lead === undefined ? ({ mode: 'preview' } as const) : null);
+  const fillHtml = (text: string) => {
+    const t = lead === undefined ? previewLeadAction(fill(text)) : fill(text);
+    return buy ? resolveBuyTokens(t, buy) : t;
+  };
   // in <head>, so it runs before any script in the page
   const shim = opts.storageShim ? `${SCRIPT_OPEN}\n${STORAGE_SHIM}\n${SCRIPT_CLOSE}\n` : '';
   return `<!doctype html>

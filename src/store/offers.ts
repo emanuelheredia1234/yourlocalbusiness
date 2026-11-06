@@ -92,6 +92,18 @@ export function findOffer(projectId: string, id: string | undefined): Offer | un
   return useOffers.getState().byProject[projectId]?.find((o) => o.id === id);
 }
 
+/** Every offer id loaded so far, all businesses (a copy of a page made outside a business's own view). */
+export function allKnownOfferIds(): Set<string> {
+  return new Set(Object.values(useOffers.getState().byProject).flatMap((l) => l.map((o) => o.id)));
+}
+
+/** A business's offers, asked of the server now (publishing: which {{buy:<id>}} links are really its). */
+export async function offerIdsForPublish(projectId: string): Promise<Set<string>> {
+  const offers = await listOffers(projectId);
+  useOffers.setState((s) => ({ byProject: { ...s.byProject, [projectId]: offers.filter((o) => o.status !== 'archived') } }));
+  return new Set(offers.filter((o) => o.status !== 'archived' && o.status !== 'draft').map((o) => o.id));
+}
+
 /** The ids of a business's offers as last loaded (for resolving {{buy:<id>}}). */
 export function knownOfferIds(projectId: string): Set<string> {
   return new Set((useOffers.getState().byProject[projectId] ?? []).map((o) => o.id));

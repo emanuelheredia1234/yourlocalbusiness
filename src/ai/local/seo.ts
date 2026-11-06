@@ -32,6 +32,8 @@ import { bookingLink, pageTypeOf, paymentLink, sectionPlan, webLink } from '@/li
 import { FORMATS } from '../knowledge';
 import { buildFacts, singular, verbOutcome, Voice, type Facts } from '../text';
 import { SCRIPT_CLOSE } from './code';
+import { findOffer } from '@/store/offers';
+import { offerPrice } from '@/lib/offers';
 
 const LT = String.fromCharCode(60);
 
@@ -165,7 +167,17 @@ export function canonicalForSlugChange(project: Project, canonical: string, oldS
 /** Where the page's buttons go: the owner's own buy or booking link, else their website, else ''.
  *  Landing pages only: the other page types' buttons follow pageTargets(). */
 export function ctaLink(project: Project): string {
+  const offer = project.studio.listing.offerId;
+  // the listing's offer: its buy link ({{buy:<id>}}, made /b/<id> when published)
+  if (offer && /^[A-Za-z0-9_-]{22}$/.test(offer)) return `{{buy:${offer}}}`;
   return ensureUrl(project.studio.listing.buyUrl ?? '') || siteUrl(project);
+}
+
+/** A checkout page's price as its attached offer says it ("$49", "$19/month" from Whop), or ''. */
+export function offerPriceOf(project: Project): string {
+  if (pageTypeOf(project) !== 'checkout') return '';
+  const o = findOffer(project.id, project.marketing.pageLinks?.offerId);
+  return o ? offerPrice(o) : '';
 }
 
 /** The section of this type on the page being replaced, so a rewrite keeps what the owner entered. */
@@ -1330,6 +1342,8 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
         : 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
   // Text never carries a working {{img-N}}: publishing turns those into image addresses, and copy isn't an image.
   const e = (s: string) => escapeHtml(s).replace(/\{\{/g, '{&#123;');
+  // a link that is an offer's buy token stays as written (publishing makes it /b/<id>); anything else as text
+  const eh = (s: string) => (/^\{\{buy:[A-Za-z0-9_-]{22}\}\}$/.test(s) ? s : e(s));
   // Only the owner's own addresses: no guessed domain. Without a link, buttons stay on the page.
   const site = ensureUrl(brand.websiteUrl).replace(/\/$/, '');
   const type = pageTypeOf(project);
@@ -1457,7 +1471,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
       <h1>${e(s.data.headline)}</h1>
       <p class="lead">${e(s.data.subheadline)}</p>
       ${s.data.bullets.length ? `<ul class="ticks">${s.data.bullets.map((b) => `<li>${e(b)}</li>`).join('')}</ul>` : ''}
-      ${heroTo ? `<a class="btn" href="${e(heroTo)}">${e(s.data.ctaLabel)}</a>` : ''}
+      ${heroTo ? `<a class="btn" href="${eh(heroTo)}">${e(s.data.ctaLabel)}</a>` : ''}
       ${s.data.ctaSubtext.trim() ? `<p class="fine">${e(s.data.ctaSubtext)}</p>` : ''}`;
           const open = `<header class="hero"${website ? ' id="home"' : ''}>`;
           const pic = s.data.imageId ? img(s.data.imageId, s.data.imageAlt ?? '', ' fetchpriority="high" decoding="async"') : '';
@@ -1523,9 +1537,9 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
       <div class="price-card">
         ${s.data.badge ? `<span class="badge">${e(s.data.badge)}</span>` : ''}
         <h3>${e(s.data.planName)}</h3>
-        <p class="price">${showsCompareAt(s.data) ? `<s>$${s.data.compareAt}</s> ` : ''}<b>${e(priceText(s.data.price, project.track === 'business'))}</b> <span>${e(s.data.priceNote)}</span></p>
+        <p class="price">${offerPriceOf(project) ? `<b>${e(offerPriceOf(project))}</b>` : `${showsCompareAt(s.data) ? `<s>$${s.data.compareAt}</s> ` : ''}<b>${e(priceText(s.data.price, project.track === 'business'))}</b> <span>${e(s.data.priceNote)}</span>`}</p>
         <ul class="ticks">${s.data.includes.map((i) => `<li>${e(i)}</li>`).join('')}</ul>
-        ${link ? `<a class="btn block" href="${e(link)}">${e(s.data.ctaLabel)}</a>` : ''}
+        ${link ? `<a class="btn block" href="${eh(link)}">${e(s.data.ctaLabel)}</a>` : ''}
       </div>
     </div>
   </section>`;
@@ -1545,7 +1559,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
           return `  <section class="guarantee">
     <div class="wrap narrow">
       ${top}
-      ${link ? `<a class="btn" href="${e(link)}">${e(s.data.finalCta)}</a>` : ''}
+      ${link ? `<a class="btn" href="${eh(link)}">${e(s.data.finalCta)}</a>` : ''}
     </div>
   </section>`;
         }
@@ -1617,7 +1631,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
               it.duration.trim() && `<p class="meta">${e(it.duration.trim())}</p>`,
               it.description.trim() && `<p>${e(it.description.trim())}</p>`,
               `<p class="price-line">${price}</p>`,
-              to && `<a class="btn" href="${e(to.href)}">${e(to.label)}</a>`,
+              to && `<a class="btn" href="${eh(to.href)}">${e(to.label)}</a>`,
               '</article>',
             ]
               .filter(Boolean)
@@ -1683,7 +1697,7 @@ export function exportSalesHtml(page: SalesPage, meta: SeoMeta, brand: Brand, pr
     .join('\n');
   // The page's one call to action in its top bar: the hero's button, where it goes (none when it goes nowhere).
   const heroCta = heroSec?.type === 'hero' ? heroSec.data.ctaLabel.trim() : '';
-  const topCta = heroTo && heroCta ? `<a class="topbar-cta" href="${e(heroTo)}">${e(heroCta)}</a>` : '';
+  const topCta = heroTo && heroCta ? `<a class="topbar-cta" href="${eh(heroTo)}">${e(heroCta)}</a>` : '';
   const mark = brandMarkHtml(brand, e);
   // A website's menu, above the first section: only links to sections the page shows.
   const menu = website ? websiteMenu(page, business).filter((m) => anchors.has(m.anchor.slice(1))) : [];

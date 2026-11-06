@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buyHref, buyToken, buyTokenIds, hasBuyToken, offerHref, resolveBuyTokens } from './buyLinks';
+import { buyHref, buyToken, buyTokenIds, hasBuyToken, keepBuyLinksOnly, offerHref, resolveBuyTokens } from './buyLinks';
 
 const A = 'AAAAAAAAAAAAAAAAAAAAAA';
 const B = 'BBBBBBBBBBBBBBBBBBBBBB';
@@ -48,5 +48,16 @@ describe('buy tokens', () => {
   it('text without tokens is returned as it is', () => {
     const t = '<a href="https://x.test">x</a>';
     expect(resolveBuyTokens(t, { mode: 'page', known })).toBe(t);
+  });
+});
+
+describe('keepBuyLinksOnly (generated and imported pages)', () => {
+  it('keeps the token only as a link’s href', () => {
+    const html = `<a class="btn" href="{{buy:${A}}}">Buy</a><p>{{buy:${A}}}</p><button data-x="{{buy:${A}}}">x</button><script>location.href="{{buy:${A}}}"</script><form action="{{buy:${A}}}"></form>`;
+    expect(keepBuyLinksOnly(html)).toBe(`<a class="btn" href="{{buy:${A}}}">Buy</a><p></p><button data-x="">x</button><script>location.href=""</script><form action=""></form>`);
+  });
+  it('with the business’s offers: another id goes nowhere', () => {
+    expect(keepBuyLinksOnly(`<a href="{{buy:${B}}}">Buy</a>`, known)).toBe('<a href="#">Buy</a>');
+    expect(keepBuyLinksOnly(`<a href="{{buy:${A}}}">Buy</a>`, known)).toBe(`<a href="{{buy:${A}}}">Buy</a>`);
   });
 });

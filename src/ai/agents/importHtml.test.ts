@@ -232,3 +232,18 @@ describe('its name', () => {
     expect(long.description.length).toBeLessThanOrEqual(300);
   });
 });
+
+describe('buy links', () => {
+  const ID = 'AAAAAAAAAAAAAAAAAAAAAA';
+  it('{{buy:<id>}} stays only as a link’s href, on an asset and an SEO page', () => {
+    const body = `<a class="buy" href="{{buy:${ID}}}">Buy now</a><p>Pay at {{buy:${ID}}}</p><img src="{{buy:${ID}}}" alt="x"><script>var u = "{{buy:${ID}}}";</script>`;
+    const a = ok(asset(doc('', body)));
+    expect(a.html).toContain(`<a class="buy" href="{{buy:${ID}}}">Buy now</a>`);
+    expect(a.html).toContain('<p>Pay at </p>');
+    expect(a.html).not.toContain(`src="{{buy:`);
+    expect(a.js).not.toContain('{{buy:');
+    const s = ok(seo(doc('', body)));
+    expect(s.html).toContain(`href="{{buy:${ID}}}"`);
+    expect(s.html.match(/\{\{buy:/g)?.length).toBe(1);
+  });
+});

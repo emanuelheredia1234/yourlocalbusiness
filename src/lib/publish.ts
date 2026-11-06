@@ -9,6 +9,7 @@ import { serverFetch } from '@/ai/claude';
 import { serverBaseNow, useAuth } from './cloud/auth';
 import { imageTokens, imagesForPublish, resolveImageTokens, type PublishImage } from './promptImages';
 import { leadActionFor, resolveLeadAction, resolveLeadMagnet } from './leadAction';
+import { resolveBuyTokens } from './buyLinks';
 
 export type PageKind = 'seo' | 'artifact';
 
@@ -220,10 +221,11 @@ export function publishedImagePaths(slug: string, images: Pick<PublishImage, 'na
  * turned into that image's address, each {{lead-action}} into /<slug>/lead (so its forms send to Email →
  * Leads) and each {{lead-magnet}} into magnet (the business's current download id, or nothing), and its fingerprint.
  */
-export async function preparePublish(build: PublishBuild, slug: string, magnet?: string): Promise<{ html: string; images: PublishImage[]; hash: string }> {
+export async function preparePublish(build: PublishBuild, slug: string, magnet?: string, offers: ReadonlySet<string> = new Set()): Promise<{ html: string; images: PublishImage[]; hash: string }> {
   const keys = imageTokens(build.html);
   const images = keys.length ? await imagesForPublish(build.images, keys) : [];
-  const html = resolveLeadMagnet(resolveLeadAction(resolveImageTokens(build.html, publishedImagePaths(slug, images)), leadActionFor(slug)), magnet);
+  // each {{buy:<id>}} of the business's offers becomes /b/<id> (relative: a page on the owner's domain stays there); any other goes nowhere
+  const html = resolveBuyTokens(resolveLeadMagnet(resolveLeadAction(resolveImageTokens(build.html, publishedImagePaths(slug, images)), leadActionFor(slug)), magnet), { mode: 'page', known: offers });
   return { html, images, hash: buildHash(build.html, build.images) };
 }
 

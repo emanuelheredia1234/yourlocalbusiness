@@ -46,6 +46,10 @@ import {
   useCodeTabMemory,
   type Draft,
 } from '@/lib/codeAssets';
+import { AttachPayment } from '@/components/offers/AttachPayment';
+import { findOffer, useProjectOffers } from '@/store/offers';
+import { offerPrice } from '@/lib/offers';
+import type { BuyOffer } from '@/ai/tasks';
 
 type Lang = CodeLang | 'script';
 type View = 'split' | 'code' | 'preview';
@@ -246,6 +250,15 @@ export function CodeTab({ project }: { project: Project }) {
 
   const patchAsset = (id: string, patch: Partial<CodeAsset>) => updateStudio({ codeAssets: assets().map((a) => (a.id === id ? { ...a, ...patch, updatedAt: Date.now() } : a)) });
   /** Where an asset is published. Not a change to the asset, so its "updated" time stays. */
+  // the offer its Buy buttons sell: not a change to its code, so nothing to republish for it alone
+  const setOffer = (id: string, offerId: string | undefined) =>
+    updateStudio({
+      codeAssets: assets().map((a) => {
+        if (a.id !== id) return a;
+        const { offerId: _was, ...rest } = a;
+        return offerId ? { ...rest, offerId } : rest;
+      }),
+    });
   const setPublished = (id: string, published: Published | undefined) =>
     updateStudio({
       codeAssets: assets().map((a) => {
@@ -328,7 +341,7 @@ export function CodeTab({ project }: { project: Project }) {
   /** Rebuild an outdated asset in place with the current templates (same kind, request and images). */
   const regenerate = async (a: CodeAsset) => {
     if (!(await confirmAction({ title: `Regenerate “${a.name}”?`, body: 'This replaces its code with a new version. Any changes you made to this code are lost. Undo puts it back.', confirmLabel: 'Regenerate' }))) return;
-    const r = await gen.run({ kind: a.kind, prompt: a.prompt, ...(a.images?.length ? { images: a.images } : {}) });
+    const r = await gen.run({ kind: a.kind, prompt: a.prompt, ...(a.images?.length ? { images: a.images } : {}), ...buyOfferOf(project.id, a) });
     const now = r && assets().find((x) => x.id === a.id);
     if (!r || !now) return;
     remember(a.id, snapshotOf(now, true));
@@ -341,7 +354,7 @@ export function CodeTab({ project }: { project: Project }) {
     const ask = text.trim();
     if (!a || !ask || edit.running) return;
     const before = snapshotOf(a);
-    const r = await edit.run({ code: codeOf(a), instruction: ask, kind: a.kind, ...(before.images.length ? { images: before.images } : {}) });
+    const r = await edit.run({ code: codeOf(a), instruction: ask, kind: a.kind, ...(before.images.length ? { images: before.images } : {}), ...buyOfferOf(project.id, a) });
     if (!r) return;
     const saved = applyCodeEdit(project.id, a.id, before, r);
     if (saved === 'gone') return;
@@ -737,6 +750,8 @@ export function CodeTab({ project }: { project: Project }) {
         {/* a regeneration (Outdated) or a New asset run whose window was closed: its progress and any error show here */}
         {!newOpen && <AIThinking running={gen.running} stage={gen.stage} onStop={gen.stop} compact />}
         {!newOpen && gen.error && <Callout tone="bad">{gen.error}</Callout>}
+
+        {!__ARTIFACT_BUILD__ && <AssetPayment project={project} asset={active} onChange={(offerId) => setOffer(active.id, offerId)} />}
 
         {publishOpen && !__ARTIFACT_BUILD__ && (
           <div id="code-publish" className="card p-4 outline-none focus-visible:shadow-focus sm:p-5" tabIndex={-1}>
@@ -1180,5 +1195,28 @@ function CopyPageButton({ make }: { make: () => string | Promise<string> }) {
       {state === 'busy' ? <Spinner size={14} /> : state === 'done' ? <Check className="text-good" /> : <Copy />}
       {state === 'done' ? 'Copied' : 'Copy HTML'}
     </button>
+  );
+}
+
+/** The offer an asset's Buy buttons sell, for the AI (only when it's loaded and selling or paused). */
+function buyOfferOf(projectId: string, a: CodeAsset): { offer?: BuyOffer } {
+  const o = findOffer(projectId, a.offerId);
+  return o && o.status !== 'archived' ? { offer: { id: o.id, title: o.title, priceDisplay: offerPrice(o) } } : {};
+}
+
+/** An asset's payment: the offer its Buy buttons sell, and whether its code uses it yet. */
+function AssetPayment({ project, asset, onChange }: { project: Project; asset: CodeAsset; onChange: (offerId: string | undefined) => void }) {
+  const { on } = useProjectOffers(project.id);
+  if (!on) return null;
+  const uses = asset.offerId ? new RegExp(`\\{\\{\\s*buy:${asset.offerId}\\s*\\}\\}`).test(asset.html) : false;
+  return (
+    <div className="card flex flex-col gap-2 p-4 sm:p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-ui font-medium text-ink">Payment</h3>
+        <p className="text-caption text-muted">What this asset’s Buy buttons sell</p>
+      </div>
+      <AttachPayment projectId={project.id} value={asset.offerId} onAttach={(o) => onChange(o.id)} onDetach={() => onChange(undefined)} />
+      {asset.offerId && !uses && <p className="text-caption text-muted">Its Buy buttons use this after you edit or regenerate the asset (for example: “Make the Buy button open the checkout”).</p>}
+    </div>
   );
 }

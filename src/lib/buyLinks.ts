@@ -74,3 +74,41 @@ export function resolveBuyTokens(text: string, o: BuyResolveOptions): string {
   }
   return out + outside(text.slice(at));
 }
+
+const A_TAG = /<a\b[^>]*>/gi;
+
+/**
+ * Generated or imported HTML: {{buy:<id>}} stays only as the href of an <a> (and, with `allowed`, only for those
+ * offers: another id becomes '#'); anywhere else, scripts included, it's removed. Like {{lead-action}}, the token is
+ * the app's to place.
+ */
+export function keepBuyLinksOnly(html: string, allowed?: ReadonlySet<string>): string {
+  if (!html || !html.includes('{{')) return html;
+  const re = () => new RegExp(BUY_TOKEN.source, 'g');
+  const strip = (chunk: string) => chunk.replace(re(), '');
+  const inTag = (tag: string) => {
+    let kept = false;
+    const out = tag.replace(HREF, (_whole, pre: string, q: string, value: string) => {
+      const v = value.replace(re(), (_tok: string, id: string) => (allowed && !allowed.has(id) ? '#' : ((kept = true), buyToken(id))));
+      return `${pre}${q}${v}${q}`;
+    });
+    // a token in any other attribute of the link goes
+    return kept ? out.replace(/(\s(?!href\b)[a-z-]+\s*=\s*)(["'])([^"']*)\2/gi, (_w, pre: string, q: string, value: string) => `${pre}${q}${strip(value)}${q}`) : strip(out);
+  };
+  const outside = (chunk: string) => {
+    let out = '';
+    let at = 0;
+    for (const m of chunk.matchAll(A_TAG)) {
+      out += strip(chunk.slice(at, m.index)) + inTag(m[0]);
+      at = (m.index ?? 0) + m[0].length;
+    }
+    return out + strip(chunk.slice(at));
+  };
+  let out = '';
+  let at = 0;
+  for (const m of html.matchAll(SCRIPT)) {
+    out += outside(html.slice(at, m.index)) + strip(m[0]);
+    at = (m.index ?? 0) + m[0].length;
+  }
+  return out + outside(html.slice(at));
+}

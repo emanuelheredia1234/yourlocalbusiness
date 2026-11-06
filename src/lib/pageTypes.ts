@@ -88,17 +88,25 @@ export function bookingLink(project: Project): string {
   return project.track === 'business' && l.bookingType === 'book' ? webLink(l.buyUrl) : '';
 }
 
-/** The payment link the page uses: the one typed in the builder, else the listing's when it's for buying (a product, or bookingType 'buy'). '' when none. */
+/** An offer id as a buy token ({{buy:<id>}}: publishing makes it /b/<id>), or ''. */
+const buyTokenOf = (id: string | undefined): string => (id && /^[A-Za-z0-9_-]{22}$/.test(id) ? `{{buy:${id}}}` : '');
+
+/**
+ * The payment link the page uses: an offer attached in the builder ({{buy:<id>}}), else the link typed there, else
+ * the listing's when it's for buying (a product, or bookingType 'buy': its offer, else its link). '' when none.
+ */
 export function paymentLink(project: Project): string {
+  const offer = buyTokenOf(project.marketing.pageLinks?.offerId);
+  if (offer) return offer;
   const own = webLink(project.marketing.pageLinks?.payment);
   if (own) return own;
   const l = project.studio.listing;
-  return project.track === 'product' || l.bookingType === 'buy' ? webLink(l.buyUrl) : '';
+  return project.track === 'product' || l.bookingType === 'buy' ? buyTokenOf(l.offerId) || webLink(l.buyUrl) : '';
 }
 
 /** Whether a link comes from the listing (for "Using your listing’s link" hints). */
 export function linkFromListing(project: Project, kind: 'booking' | 'payment'): boolean {
-  if (webLink(project.marketing.pageLinks?.[kind])) return false;
+  if (webLink(project.marketing.pageLinks?.[kind]) || (kind === 'payment' && buyTokenOf(project.marketing.pageLinks?.offerId))) return false;
   return !!(kind === 'booking' ? bookingLink(project) : paymentLink(project));
 }
 

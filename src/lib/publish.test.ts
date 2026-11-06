@@ -303,6 +303,16 @@ describe('where forms send', () => {
     expect((await preparePublish({ html, images: [] }, 'free-guide')).html).toContain('name="magnet" value=""');
   });
 
+  it('publishing makes each of the business’s {{buy:<id>}} links /b/<id>; any other goes nowhere', async () => {
+    const A = 'AAAAAAAAAAAAAAAAAAAAAA';
+    const B = 'BBBBBBBBBBBBBBBBBBBBBB';
+    const html = `<a href="{{buy:${A}}}">Buy</a><a href="{{buy:${B}}}">Other</a><script>var x = "{{buy:${A}}}";</script>`;
+    const ready = await preparePublish({ html, images: [] }, 'shop', undefined, new Set([A]));
+    expect(ready.html).toBe(`<a href="/b/${A}">Buy</a><a href="#">Other</a><script>var x = "{{buy:${A}}}";</script>`);
+    // with no offers known, nothing points anywhere
+    expect((await preparePublish({ html: `<a href="{{buy:${A}}}">Buy</a>`, images: [] }, 'shop')).html).toBe('<a href="#">Buy</a>');
+  });
+
   it('sends the page’s project with it, only when it’s a valid id', async () => {
     calls.length = 0;
     answer = () => json(200, { page: { pageId: 'artifact:code_1', kind: 'artifact', slug: 'calc', title: 'Calc', home: false, updatedAt: 1, url: 'https://app.example/calc' } });
