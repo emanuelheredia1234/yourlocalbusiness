@@ -47,6 +47,7 @@ name only.
 | `TREG_ADMIN_TOKEN` | Customer caps and the usage check against treg (billing only) | Admin-role agent token; only a team owner can make one. |
 | `NANGO_SECRET_KEY` | Optional, later: other integrations (booking tools, CRMs) | Leave unset until you add one (§3b). |
 | `NANGO_WEBHOOK_SIGNING_KEY` | Optional, with Nango only | |
+| `NANGO_WEBHOOK_SIGNING_KEY_PREVIOUS` | Only while rotating Nango's signing key | Remove it once Nango signs with the new one. |
 
 Plain settings (not secret; Replit Secrets or env):
 
@@ -66,6 +67,8 @@ Plain settings (not secret; Replit Secrets or env):
 | `UPLOAD_POST_CONNECT_DESCRIPTION` | a short default | That page's description. |
 | `UPLOAD_POST_BACK_BUTTON_TEXT` | `Back to Yourlocalbusiness` | That page's back button. It opens Settings → Connected accounts (`/?settings=accounts#workspace-settings`) on the host of `GSC_APP_PROPERTY` (default `https://yourlocalbusiness.replit.app`). |
 | `UPLOAD_POST_BASE_URL` | — | Tests and the mock only (`node server/test/mock-uploadpost.mjs`). |
+| `ZERNIO_BASE_URL`, `NANGO_BASE_URL`, `TREG_BASE_URL` | — | Tests and mocks only; leave unset in production. |
+| `MEDIA_PUBLIC_BASE_URL` | `ALLOWED_ORIGIN`, else `https://yourlocalbusiness.replit.app` | The public address Upload-Post fetches a post's photo or video from. Set it only if the app's public address is not one of those. |
 | `ZERNIO_RPM` | `60` | The app's own limit on Zernio calls per minute. Zernio allows 60 with up to 2 connected accounts and 600 from 3; raise this to `600` then. |
 | `ZERNIO_BRAND_NAME` | `Yourlocalbusiness` | The name on Zernio's ads connect screen ("Yourlocalbusiness wants to connect to your Meta Ads account"). |
 | `ZERNIO_BRAND_LOGO_URL` | — | An https link to a square logo for that screen. |
@@ -74,7 +77,7 @@ Plain settings (not secret; Replit Secrets or env):
 | `GSC_APP_PROPERTY` | — | `https://yourlocalbusiness.replit.app/` once that Search Console property is verified. Its host is also the app's own address for the back button on Upload-Post's connect page (unset: `https://yourlocalbusiness.replit.app`), so set it to the app's real address if that ever changes. |
 | `GSC_APP_VERIFICATION_FILE` | — | Google's HTML verification file name, e.g. `google1a2b3c4d5e6f7a8b.html`. |
 
-The Supabase and Omnisend Secrets you already have are unchanged.
+The Supabase and Omnisend Secrets you already have are unchanged (`SUPABASE_SERVICE_ROLE_KEY` is still read as an older name for `SUPABASE_SECRET_KEY`).
 
 ## 2. Database
 
