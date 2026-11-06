@@ -63,6 +63,8 @@ create table if not exists public.lead_files (
   user_id uuid not null references auth.users (id) on delete cascade,
   project_id text not null,
   title text not null default '',
+  -- the business's name as the email gate shows it ("Email me tips and offers from <brand>")
+  brand text not null default '',
   kind text not null,
   file_name text not null default '',
   mime text not null default '',
@@ -79,12 +81,16 @@ create table if not exists public.lead_files (
   constraint lead_files_id_format check (id ~ '^[A-Za-z0-9_-]{22}$'),
   constraint lead_files_project_id_format check (project_id ~ '^[A-Za-z0-9_-]{1,80}$'),
   constraint lead_files_title_size check (length(title) <= 200),
+  constraint lead_files_brand_size check (length(brand) <= 120),
   constraint lead_files_kind_check check (kind in ('file', 'url')),
   constraint lead_files_file_name_size check (length(file_name) <= 120),
   constraint lead_files_bytes_range check (bytes between 0 and 26214400),
   constraint lead_files_url_format check (length(url) <= 2000 and (url = '' or url ~ '^https?://')),
   constraint lead_files_url_needed check ((kind = 'url' and url <> '') or kind = 'file')
 );
+
+-- (a table made by an earlier run of this file gets the column too)
+alter table public.lead_files add column if not exists brand text not null default '';
 
 create index if not exists lead_files_user_project on public.lead_files (user_id, project_id);
 

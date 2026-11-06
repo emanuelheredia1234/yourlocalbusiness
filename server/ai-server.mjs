@@ -366,6 +366,7 @@ server.listen(PORT, HOST, async () => {
         : 'AI keys and settings: kept on this server’s disk. To keep them in Supabase, add the SUPABASE_URL and SUPABASE_SECRET_KEY Secrets (published Replit apps wipe the disk when they restart).',
   );
   if (auth.enabled && pages.enabled) console.log('Lead forms: on (they need supabase/migrations/20261103050000_page_leads.sql in Supabase too; limits: LEADS_PER_IP_PER_HOUR, LEADS_PER_PAGE_PER_HOUR).');
+  if (auth.enabled && pages.enabled) console.log('Lead magnets: on at /m/<id> (they need supabase/migrations/20261112000000_leads_p2.sql; limits: MAGNET_HITS_PER_IP_PER_HOUR, MAGNET_DOWNLOADS_PER_FILE_PER_HOUR; tickets signed with LEAD_LINK_SECRET or a key derived from SUPABASE_SECRET_KEY).');
   if (ai.store.imported) console.log('Imported your image keys from the old Image generation settings.');
   for (const line of integrations.notes()) console.log(line);
   for (const line of cron.notes()) console.log(line);

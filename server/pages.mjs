@@ -56,7 +56,9 @@ import path from 'node:path';
 import { serviceHeaders } from './secretBox.mjs';
 import { sameOrigin } from './providers/routes.mjs';
 // lead forms on published pages: POST /<slug>/lead and /api/leads (server/leads.mjs)
-import { LEADS_P2_MIGRATION, createLeads, leadLimitsFromEnv } from './leads.mjs';
+import { LEADS_P2_MIGRATION, createLeads, leadCounters, leadLimitsFromEnv } from './leads.mjs';
+// lead magnets: /m/<id>, /api/lead-files and /api/public-images (server/leadFiles.mjs)
+import { createLeadFiles, leadLinkSecret, magnetLimitsFromEnv } from './leadFiles.mjs';
 
 export const PAGES_MIGRATION = 'supabase/migrations/20261103040000_published_pages.sql';
 
@@ -678,6 +680,8 @@ export function pagesFromEnv(env = process.env, deps = {}) {
     supabaseUrl: env.SUPABASE_URL || '',
     secretKey: env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '',
     leadLimits: leadLimitsFromEnv(env),
+    magnetLimits: magnetLimitsFromEnv(env),
+    linkSecret: leadLinkSecret(env),
     appHosts: env.APP_HOSTS || '',
     resolveTxt: txtResolver(env.PAGES_DNS_SERVERS || ''),
     trustedHops: hopsFrom(env.TRUSTED_PROXY_HOPS),
@@ -709,6 +713,9 @@ export function createPages({
   distDir = '',
   // lead forms: { perIp, perPage, windowMs } (server/leads.mjs)
   leadLimits,
+  // lead magnets: { perIp, perFile, windowMs } and the download tickets' secret (server/leadFiles.mjs)
+  magnetLimits,
+  linkSecret = null,
   appHosts = '',
   resolveTxt = txtResolver(),
   trustedHops = TRUSTED_PROXY_HOPS,
@@ -1400,6 +1407,7 @@ export function createPages({
    * (/b/ with offers, /o/ with opt-outs), it's the published pages' "not found" page.
    */
   async function servePublicRoute(req, res, url, site = null) {
+    if (magnets.matchMagnet(url)) return magnets.serveMagnet(req, res, url, site);
     return notFound(req, res);
   }
 
@@ -1442,7 +1450,31 @@ export function createPages({
     const got = await pageWithHtml(page, client);
     return got ? { ...got.page, html: got.html.toString('utf8') } : null;
   }
-  const leads = createLeads({ enabled, supabaseUrl: url, secretKey, fetch, limits: leadLimits, findPage: leadPage, reserved, notFound, whoIs, send, corsHeaders, rateLimited, allowedOrigin });
+  // one pair of per-visitor and per-page counters for every form: the pages' and the lead magnets' email gate
+  const counters = leadCounters(leadLimits);
+  const magnets = createLeadFiles({
+    enabled,
+    supabaseUrl: url,
+    secretKey,
+    fetch,
+    whoIs,
+    send,
+    readJson,
+    rateLimited,
+    corsHeaders,
+    allowedOrigin,
+    billing,
+    mustExist,
+    originOf,
+    notFound,
+    gone,
+    visitor,
+    keepLead: (row) => leads.keepLead(row),
+    counters,
+    limits: magnetLimits,
+    linkSecret,
+  });
+  const leads = createLeads({ enabled, supabaseUrl: url, secretKey, fetch, counters, findPage: leadPage, findMagnet: magnets.findMagnet, ticket: magnets.ticket, reserved, notFound, whoIs, send, corsHeaders, rateLimited, allowedOrigin });
 
   // ── the signed-in API ──
   const describePage = (r, origin) => ({
@@ -1724,10 +1756,11 @@ export function createPages({
     return { ok: true };
   }
 
-  const matchApi = (url) => /^\/api\/(pages|domains)(\/|$)/.test(url.pathname) || leads.matchApi(url);
+  const matchApi = (url) => /^\/api\/(pages|domains)(\/|$)/.test(url.pathname) || leads.matchApi(url) || magnets.matchApi(url);
 
   async function handleApi(req, res, url) {
     if (leads.matchApi(url)) return leads.handleApi(req, res, url);
+    if (magnets.matchApi(url)) return magnets.handleApi(req, res, url);
     const reply = (status, body) => send(res, status, body, corsHeaders(req));
     if (!sameOrigin(req, allowedOrigin)) return reply(403, { error: 'Cross-site request refused.', code: 'FORBIDDEN' });
     if (!enabled) return reply(503, { error: 'Publishing isn’t set up on this server yet: it needs accounts and the SUPABASE_SECRET_KEY Secret. Ask the app’s owner.', code: 'PAGES_OFF' });
@@ -1820,6 +1853,7 @@ export function createPages({
     htmlCache.deleteWhere(theirHtml);
     bigHtmlCache.deleteWhere(theirHtml);
     imageCache.dropPrefix(`${userId}/`);
+    magnets.forgetUser(userId);
   }
 
   return {

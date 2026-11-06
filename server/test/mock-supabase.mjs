@@ -122,6 +122,7 @@ const CHECKS = {
     if (!/^[A-Za-z0-9_-]{22}$/.test(String(v.id))) return 'lead_files_id_format';
     if (!PROJECT_ID.test(String(v.project_id))) return 'lead_files_project_id_format';
     if (v.title.length > 200) return 'lead_files_title_size';
+    if (String(v.brand ?? '').length > 120) return 'lead_files_brand_size';
     if (!['file', 'url'].includes(v.kind)) return 'lead_files_kind_check';
     if (v.file_name.length > 120) return 'lead_files_file_name_size';
     if (!(Number(v.bytes) >= 0 && Number(v.bytes) <= 26214400)) return 'lead_files_bytes_range';
