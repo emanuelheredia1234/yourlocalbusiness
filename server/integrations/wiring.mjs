@@ -145,6 +145,7 @@ export function createIntegrations({
   corsHeaders = () => ({}),
   sameOrigin = () => true,
   clientKey = (req) => req.socket?.remoteAddress || 'unknown',
+  releaseDirectSocial = null,
   fetch = globalThis.fetch,
   now = () => Date.now(),
   log = console,
@@ -166,7 +167,7 @@ export function createIntegrations({
   const treg = make.treg({ env, fetch, now, db: database, log, tierFor: (tag) => billing.tregCapsFor(tag) });
   // the disconnect route asks the ads module which launched campaigns are still on (R12); the module is made below
   let adsModule = null;
-  const deps = { ...base, connections, nango, treg, liveAdsGuard: (userId, platform) => adsModule?.liveOn?.(userId, platform) ?? [] };
+  const deps = { ...base, connections, nango, treg, releaseDirectSocial, liveAdsGuard: (userId, platform) => adsModule?.liveOn?.(userId, platform) ?? [] };
 
   const modules = {
     connections: make.connectionRoutes(deps),
