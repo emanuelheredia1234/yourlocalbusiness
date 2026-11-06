@@ -1,14 +1,17 @@
 // Connected accounts, vendor-neutral: each app user connects their own Facebook Page, Instagram, LinkedIn, TikTok,
-// X and YouTube accounts and their ad accounts (Meta, Google, LinkedIn, TikTok, Pinterest, X, Reddit, Microsoft).
-// The implementation is Zernio (server/connections/zernio.mjs, the owner's choice): one Zernio profile per customer
-// on Zernio's own approved platform apps. Until ZERNIO_API_KEY is set the app uses nullConnections, where every
-// network shows "Not connected" and posting stays manual ("Post it yourself", then "Mark as posted").
+// X and YouTube accounts and their ad accounts (Meta, Google, LinkedIn, TikTok, Pinterest, Reddit, Microsoft).
+// Two implementations behind one facade (the owner's choice):
+// - social networks: Upload-Post (server/connections/uploadpost.mjs), on with UPLOAD_POST_API_KEY: connecting,
+//   posting, post status and social stats, one Upload-Post profile per customer;
+// - ad accounts: Zernio (server/connections/zernio.mjs), on with ZERNIO_API_KEY: connecting ad accounts and ad results.
+// combineConnections({ social, ads }) routes each platform to its side; either side can be off (nullConnections),
+// where every network shows "Not connected" and posting stays manual ("Post it yourself", then "Mark as posted").
 //
 // Nango is not here: it stays for future non-social integrations (booking tools, CRMs) in server/nango.mjs.
 //
 // Every method takes the server-resolved user id (never a value from the browser). Account ids stay on the
 // server: the browser gets ConnectionStatus (server/integrations/contracts.mjs) and opaque target handles only.
-// `opts.projectId` (a business of that user) picks the account that business uses; without it, the default.
+// `opts.projectId` (a business of that user) picks the account or Page that business uses; without it, the default.
 //
 //   status(userId, {projectId}) → ConnectionStatus[]            every platform, phase 2 ones 'coming_soon'
 //   connectLink(userId, platform, {projectId}) → {connectLink, expiresAt} | {alreadyConnected: true}
@@ -24,7 +27,7 @@
 //   postStatus(userId, ref) → {found, url} | {failed} | {pending} | null   a read for "Check again"
 //   forgetUser(userId) / unforgetUser(userId)
 
-import { PHASE2_PLATFORMS, PLATFORMS } from '../integrations/contracts.mjs';
+import { AD_PLATFORMS, PHASE2_PLATFORMS, PLATFORMS, SOCIAL_PLATFORMS } from '../integrations/contracts.mjs';
 import { fail, isUuid } from '../integrations/common.mjs';
 
 export const CONNECTION_METHODS = Object.freeze(['status', 'connectLink', 'reconnectLink', 'check', 'disconnect', 'targets', 'setTarget', 'insights', 'adResults', 'publish', 'postStatus', 'forgetUser', 'unforgetUser']);
@@ -44,12 +47,15 @@ export function notConnectedStatuses() {
   return PLATFORMS.map((platform) => ({ platform, state: PHASE2_PLATFORMS.includes(platform) ? 'coming_soon' : 'not_connected' }));
 }
 
-/** The app until ZERNIO_API_KEY is set: nothing is connected and nothing can be. */
+export const SOCIAL_OFF_HINT = 'Social accounts and posting are off: add UPLOAD_POST_API_KEY (and UPLOAD_POST_WEBHOOK_SECRET, CUSTOMER_TAG_SECRET) in Replit Secrets.';
+export const ADS_OFF_HINT = 'Ad accounts are off: add ZERNIO_API_KEY (and ZERNIO_WEBHOOK_SECRET) in Replit Secrets.';
+
+/** One side (or both) while its key isn't set: nothing is connected and nothing can be. */
 export const nullConnections = Object.freeze({
   enabled: false,
   /** for GET /api/integrations/connections: setUp false, and the owner's hint names the Secret */
   setUp: false,
-  hint: 'Connecting social and ad accounts is off: add ZERNIO_API_KEY (and ZERNIO_WEBHOOK_SECRET) in Replit Secrets.',
+  hint: `${SOCIAL_OFF_HINT} ${ADS_OFF_HINT}`,
   async status() {
     return notConnectedStatuses();
   },
@@ -94,8 +100,61 @@ export const nullConnections = Object.freeze({
 /** A project id from a request ('' when absent); the implementation checks it's the user's own when it matters. */
 const projectOf = (opts) => (typeof opts?.projectId === 'string' && /^[A-Za-z0-9._:-]{1,120}$/.test(opts.projectId) ? opts.projectId : undefined);
 
+const sideOff = (hint) => Object.freeze({ ...nullConnections, hint });
+
 /**
- * The connections every route uses, around an implementation (createZernioConnections(...) or nullConnections):
+ * One implementation from the two sides: social platforms go to `social` (Upload-Post), ad platforms to `ads`
+ * (Zernio). A side that is null or off answers like nullConnections for its platforms. status() merges both.
+ * The sides stay reachable as .social and .ads (the webhook routes, the startup jobs, the owner's counts).
+ */
+export function combineConnections({ social = null, ads = null } = {}) {
+  const s = social && social.enabled !== false ? social : sideOff(SOCIAL_OFF_HINT);
+  const a = ads && ads.enabled !== false ? ads : sideOff(ADS_OFF_HINT);
+  for (const side of [s, a]) for (const m of CONNECTION_METHODS) if (typeof side[m] !== 'function') throw new Error(`connections: a side has no ${m}()`);
+  const sideOf = (platform) => (AD_PLATFORMS.includes(platform) ? a : s);
+  const socialEnabled = s.enabled !== false;
+  const adsEnabled = a.enabled !== false;
+  const hints = [...(socialEnabled && s.setUp !== false ? [] : [s.hint]), ...(adsEnabled && a.setUp !== false ? [] : [a.hint])].filter(Boolean);
+  const via = (name) => (userId, platform, ...rest) => sideOf(platform)[name](userId, platform, ...rest);
+  return {
+    enabled: socialEnabled || adsEnabled,
+    socialEnabled,
+    adsEnabled,
+    setUpSocial: socialEnabled && s.setUp !== false,
+    setUpAds: adsEnabled && a.setUp !== false,
+    setUp: (socialEnabled && s.setUp !== false) || (adsEnabled && a.setUp !== false),
+    hint: hints.join(' '),
+    social: socialEnabled ? s : null,
+    ads: adsEnabled ? a : null,
+    async status(userId, opts) {
+      const [fromSocial, fromAds] = await Promise.all([s.status(userId, opts), a.status(userId, opts)]);
+      const pick = (list, p) => (Array.isArray(list) ? list.find((x) => x?.platform === p) : null);
+      return PLATFORMS.map((p) => pick(AD_PLATFORMS.includes(p) ? fromAds : fromSocial, p) ?? { platform: p, state: PHASE2_PLATFORMS.includes(p) ? 'coming_soon' : 'not_connected' });
+    },
+    connectLink: via('connectLink'),
+    reconnectLink: via('reconnectLink'),
+    check: via('check'),
+    disconnect: via('disconnect'),
+    targets: via('targets'),
+    setTarget: via('setTarget'),
+    insights: (userId, platform, opts) => (SOCIAL_PLATFORMS.includes(platform) ? s.insights(userId, platform, opts) : null),
+    adResults: (userId, platform, opts) => (AD_PLATFORMS.includes(platform) ? a.adResults(userId, platform, opts) : null),
+    publish: (userId, platform, opts) => s.publish(userId, platform, opts),
+    postStatus: (userId, ref) => s.postStatus(userId, ref),
+    /** social first (its profile goes at Upload-Post), then the ad accounts at Zernio */
+    async forgetUser(userId) {
+      await s.forgetUser(userId);
+      await a.forgetUser(userId);
+    },
+    async unforgetUser(userId) {
+      await a.unforgetUser(userId);
+      await s.unforgetUser(userId);
+    },
+  };
+}
+
+/**
+ * The connections every route uses, around an implementation (combineConnections(...) or nullConnections):
  * checks the user id and the platform before the implementation sees them.
  */
 export function createConnections(impl = nullConnections) {
@@ -117,6 +176,11 @@ export function createConnections(impl = nullConnections) {
   return Object.freeze({
     enabled: impl.enabled !== false,
     setUp: impl.setUp !== false,
+    /** social networks (Upload-Post) and ad accounts (Zernio) are each on or off by their own key */
+    socialEnabled: typeof impl.socialEnabled === 'boolean' ? impl.socialEnabled : impl.enabled !== false,
+    adsEnabled: typeof impl.adsEnabled === 'boolean' ? impl.adsEnabled : impl.enabled !== false,
+    setUpSocial: typeof impl.setUpSocial === 'boolean' ? impl.setUpSocial : impl.setUp !== false,
+    setUpAds: typeof impl.setUpAds === 'boolean' ? impl.setUpAds : impl.setUp !== false,
     /** what the owner is told when it isn't set up (Secret names only) */
     hint: typeof impl.hint === 'string' ? impl.hint : '',
     /** the implementation (for the webhook route and the startup jobs) */
