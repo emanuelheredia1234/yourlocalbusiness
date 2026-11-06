@@ -124,7 +124,8 @@ export interface AnalyticsState {
   connectPlatform: (platform: ConnectPlatform, mode?: 'connect' | 'reconnect') => Promise<{ ok: boolean; message?: string }>;
   /** "Check": asks the server to read the account back from the network's service, then re-reads every row. */
   checkPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
-  disconnectPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
+  /** ackLiveAds: the customer saw the ad campaigns on this connection that stay on (the server refuses without it). */
+  disconnectPlatform: (platform: ConnectPlatform, opts?: { ackLiveAds?: boolean }) => Promise<{ ok: boolean; message?: string }>;
   /** A business was deleted (or its slot is held by one that was): its social accounts are disconnected and its slot freed. One request each. */
   releaseBusiness: (projectId: string, opts?: { onlyIfGone?: boolean }) => Promise<{ ok: boolean; message?: string }>;
   loadOwner: () => Promise<void>;
@@ -411,10 +412,10 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       }
     },
 
-    disconnectPlatform: async (platform) => {
+    disconnectPlatform: async (platform, opts = {}) => {
       if (artifact()) return { ok: false };
       try {
-        await disconnectApi(platform, activeProject());
+        await disconnectApi(platform, activeProject(), opts.ackLiveAds === true);
         const pending = { ...get().pending };
         delete pending[platform];
         set({ connections: get().connections.map((c) => (c.platform === platform ? { platform, state: 'not_connected' } : c)), pending });

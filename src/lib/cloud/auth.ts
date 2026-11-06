@@ -643,21 +643,25 @@ export async function signOut({ force = false } = {}): Promise<'unsaved' | 'done
   return 'done';
 }
 
-/** Delete the account, its saved workspace and its files (the server does this with the secret key). */
-export async function deleteAccount(): Promise<{ error?: string }> {
+/**
+ * Delete the account, its saved workspace and its files (the server does this with the secret key). With ad
+ * campaigns still switched on, the server refuses (409 ADS_LIVE, with the list) unless `ackLiveAds`: the customer
+ * ticked that they'll manage them in Ads Manager (they keep spending after the account is gone).
+ */
+export async function deleteAccount(opts: { ackLiveAds?: boolean } = {}): Promise<{ error?: string; code?: string; live?: { id: string; name: string; platform: 'meta' | 'google'; daily: number; currency: string; idTail: string }[] }> {
   const st = useAuth.getState();
   if (!client || !st.user) return { error: 'You’re not signed in.' };
-  const target = `${serverBaseNow()}/api/account`;
+  const target = `${serverBaseNow()}/api/account${opts.ackLiveAds ? '?ackLiveAds=1' : ''}`;
   // nothing may upload into the folder while the server empties it, nor spend on the account's keys
   await stopRunningWork();
   sync?.stop();
   await media?.stop();
   const res = await fetch(target, { method: 'DELETE', headers: await authHeaders(target) }).catch(() => null);
-  const body = res ? ((await res.json().catch(() => null)) as { error?: string } | null) : null;
+  const body = res ? ((await res.json().catch(() => null)) as { error?: string; code?: string; live?: unknown } | null) : null;
   if (!res?.ok) {
     sync?.start();
     media?.start();
-    return { error: body?.error || 'Couldn’t reach the server to delete your account. Try again.' };
+    return { error: body?.error || 'Couldn’t reach the server to delete your account. Try again.', ...(body?.code ? { code: body.code } : {}), ...(Array.isArray(body?.live) ? { live: body.live as never } : {}) };
   }
   const userId = st.user.id;
   st.set({ phase: 'leaving' });
