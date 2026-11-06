@@ -255,9 +255,15 @@ async function deleteAccount(req, res) {
     await integrations.userDeleted(ident.who.id);
     return send(res, 200, { ok: true }, corsHeaders(req));
   } catch (e) {
-    // our own refusals carry their extra fields (ADS_LIVE: the campaigns still on); nothing else's text goes out
+    // our own refusals carry their extra fields (ADS_LIVE: the campaigns still on); nothing else's text goes out: a
+    // provider's or the database's failure (or anything without our code) is a plain "try again" here
+    const ours = e?.code && typeof e.code === 'string' && e?.name !== 'StripeError' && e?.name !== 'DbError';
+    if (!ours) {
+      console.error('account_delete_failed', e?.name ?? 'Error', e?.code ?? '');
+      return send(res, 503, { error: 'We couldn’t delete your account just now. Try again shortly.', code: 'UNAVAILABLE' }, corsHeaders(req));
+    }
     const live = e?.code === 'ADS_LIVE' && Array.isArray(e.extra?.live) ? { live: e.extra.live } : {};
-    return send(res, e.status || 500, { error: e.message, code: e.code || 'UPSTREAM', ...live }, corsHeaders(req));
+    return send(res, e.status || 500, { error: e.message, code: e.code, ...live }, corsHeaders(req));
   }
 }
 

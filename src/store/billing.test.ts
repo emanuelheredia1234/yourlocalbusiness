@@ -13,7 +13,8 @@ const { useAuth } = await import('@/lib/cloud/auth');
 const { useBillingConfig } = await import('@/lib/billing/config');
 const { useUI } = await import('@/store/ui');
 const { clearPlanIntent, hasLivePlan, readPlanIntent, savePlanIntent, takeCheckoutReturn, useBilling } = await import('./billing');
-const { changeKind, checkout, confirmPlanChange, setGoTo, upgradeTier } = await import('@/lib/billing/actions');
+const { changeKind, changeRefusal, checkout, confirmPlanChange, setGoTo, upgradeTier } = await import('@/lib/billing/actions');
+const { checkoutTotal } = await import('@/pages/plans/Plans');
 const { showUpgrade } = await import('@/lib/billing/upgrade');
 
 const PLAN = (over: Record<string, unknown> = {}) => ({
@@ -185,6 +186,32 @@ describe('changing the plan', () => {
     expect(await confirmPlanChange('launch', 'month')).toBe(false);
     expect(confirm.confirmAction.mock.calls[0][0]).toMatchObject({ title: 'Switch to Launch at renewal?', body: expect.stringContaining('no refund') });
     expect(api.changePlan).not.toHaveBeenCalled();
+  });
+
+  it('a lower plan with yearly isn’t one step (yearly is charged now, a lower plan waits): nothing is sent', async () => {
+    expect(changeKind('scale', 'month', 'launch', 'year')).toBe('down_to_year');
+    api.getPlan.mockResolvedValue(PLAN());
+    await useBilling.getState().refresh();
+    expect(await confirmPlanChange('launch', 'year')).toBe(false);
+    expect(confirm.confirmAction).not.toHaveBeenCalled();
+    expect(api.changePlan).not.toHaveBeenCalled();
+    expect(useUI.getState().toasts.at(-1)?.title).toContain('Launch monthly first');
+  });
+
+  it('while a downgrade waits: back up to the plan paid for is free; above it or to yearly isn’t one step', async () => {
+    expect(changeRefusal('upgrade', 'grow', 'scale')).toBeNull();
+    expect(changeRefusal('upgrade', 'scale', 'grow')).toContain('Switch back to it first');
+    expect(changeRefusal('to_year', 'launch', 'scale')).toContain('then to yearly');
+    // on Launch until renewal, Scale paid for: back to Grow says there's no charge
+    api.getPlan.mockResolvedValue(PLAN({ plan: { ...PLAN().plan, tier: 'scale' }, account: { ...PLAN().account, tier: 'launch', pendingDowngrade: { tier: 'launch', at: '2026-12-01T00:00:00Z' } } }));
+    await useBilling.getState().refresh();
+    api.changePlan.mockResolvedValue({ ok: true, op: { id: 'o1', kind: 'change_plan', state: 'done' } });
+    expect(await confirmPlanChange('grow', 'month')).toBe(true);
+    expect(confirm.confirmAction.mock.calls[0][0]).toMatchObject({ title: 'Switch to Grow now?', body: expect.stringContaining('There’s no charge') });
+  });
+
+  it('Checkout with several businesses says the total', () => {
+    expect(checkoutTotal('launch', 'month', 4)).toBe('You have 4 businesses: $388/month in total ($97 + 3 × $97).');
   });
 
   it('yearly → monthly isn’t self-serve; a declined card opens the prompt', async () => {

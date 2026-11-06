@@ -18,13 +18,14 @@
 //        GET /prices?lookup_keys[]=&active=&product=
 //   POST /checkout/sessions (mode payment|subscription, customer, client_reference_id, line_items, success_url,
 //        cancel_url, metadata, expires_at, subscription_data[metadata], subscription_data[trial_period_days] (the
-//        subscription starts trialing), payment_intent_data[application_fee_amount]), GET /checkout/sessions/:id
+//        subscription starts trialing), payment_intent_data[application_fee_amount]), GET /checkout/sessions/:id,
+//        GET /checkout/sessions?customer=&status=, POST /checkout/sessions/:id/expire (only an open one)
 //   GET /subscriptions/:id, GET /subscriptions?customer=&status=, POST /subscriptions/:id (items[n][id|price|
 //        quantity|deleted], cancel_at_period_end, proration_behavior, payment_behavior, metadata),
 //        DELETE /subscriptions/:id. Subscriptions carry current_period_* on each item too (the basil API version),
-//        billing_cycle_anchor and trial_end. A change with proration_behavior=always_invoice makes a paid invoice;
-//        with payment_behavior=error_if_incomplete and a customer whose card declines (POST /__customers/decline) it
-//        answers 402 card_declined and changes nothing.
+//        billing_cycle_anchor and trial_end (a change of interval starts a new period now). A change with
+//        proration_behavior=always_invoice makes a paid invoice; with payment_behavior=error_if_incomplete and a
+//        customer whose card declines (POST /__customers/decline) it answers 402 card_declined and changes nothing.
 //   POST /subscription_items/:id (quantity, proration_behavior, payment_behavior)
 //   POST /billing_portal/sessions (customer, return_url, configuration)
 //   POST /billing_portal/configurations (features[…], business_profile[…]), GET /billing_portal/configurations/:id
@@ -312,9 +313,20 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
         r.sessions.set(s.id, s);
         return { status: 200, body: s };
       }
+      if (method === 'GET' && !sid) {
+        const all = [...r.sessions.values()].filter((s) => (!query.get('customer') || s.customer === query.get('customer')) && (!query.get('status') || s.status === query.get('status')));
+        return { status: 200, body: list(all.slice(0, int(query.get('limit'), 10)), '/v1/checkout/sessions') };
+      }
       const s = r.sessions.get(sid);
       if (!s) return notFound('checkout.session', sid);
-      if (method === 'GET') return { status: 200, body: s };
+      if (method === 'GET' && !parts[3]) return { status: 200, body: s };
+      if (method === 'POST' && parts[3] === 'expire') {
+        // like Stripe: only an open session can be expired
+        if (s.status !== 'open') return stripeError(400, 'invalid_request_error', `This Checkout Session is ${s.status}, so it can't be expired.`, { code: 'checkout_session_not_open' });
+        s.status = 'expired';
+        s.url = null;
+        return { status: 200, body: s };
+      }
     }
 
     if (res === 'subscriptions') {
@@ -342,6 +354,7 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
           return { status: 402, body: { error: { type: 'card_error', code: 'card_declined', decline_code: 'generic_decline', message: 'Your card was declined.' } } };
         }
         const previous = {};
+        const lenBefore = periodSec(r, s);
         for (const it of Array.isArray(body.items) ? body.items : []) {
           if (it.id) {
             const item = r.items.get(it.id);
@@ -366,6 +379,12 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
           s.cancel_at_period_end = bool(body.cancel_at_period_end);
         }
         if (body.metadata) s.metadata = { ...s.metadata, ...body.metadata };
+        // like Stripe: a change of billing interval starts a new period now (the billing cycle anchor resets)
+        if (previous.items && periodSec(r, s) !== lenBefore) {
+          previous.current_period_start = s.current_period_start;
+          s.current_period_start = s.billing_cycle_anchor = sec();
+          s.current_period_end = s.current_period_start + periodSec(r, s);
+        }
         if (previous.items && body.proration_behavior === 'always_invoice') newInvoice(r, s, { reason: 'subscription_update' });
         await emit('customer.subscription.updated', subscriptionView(r, s), account, previous);
         return { status: 200, body: subscriptionView(r, s) };

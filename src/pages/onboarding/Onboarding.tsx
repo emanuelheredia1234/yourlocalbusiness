@@ -135,6 +135,7 @@ export function Onboarding() {
   const [attempt, setAttempt] = useState(0);
   // a plan that just started (back from Stripe Checkout): try the first business again
   const planActive = useBilling((s) => s.plan?.active === true && s.plan.plan !== 'legacy');
+  const canBuy = useBilling((s) => s.account?.source === 'stripe' && s.plan?.active === true);
   useEffect(() => {
     if (project) return;
     let gone = false;
@@ -161,7 +162,13 @@ export function Onboarding() {
             <button type="button" className="btn btn-primary btn-sm" onClick={() => setAttempt((n) => n + 1)}>
               Try again
             </button>
-            {refused.reason === 'limit' && (
+            {refused.reason === 'limit' && canBuy && (
+              // a paying plan buys a slot right here; then the first business is tried again
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => useBilling.getState().openAddBusiness(() => setAttempt((n) => n + 1))}>
+                Add a business
+              </button>
+            )}
+            {refused.reason === 'limit' && !canBuy && (
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => void navigate('plans', { force: true })}>
                 See plans
               </button>

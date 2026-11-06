@@ -9,7 +9,7 @@ import { ArrowLeft, Check, Minus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { PLANS, SHARED_FEATURES, TIERS, compareRows, creditsUsd, formatPrice, microUsd, monthsFree, planFor, tierRank, yearlySavings, type Interval, type Tier } from '@/lib/plans';
-import { changeKind, checkout, confirmPlanChange } from '@/lib/billing/actions';
+import { changeKind, changeRefusal, checkout, confirmPlanChange } from '@/lib/billing/actions';
 import { useAuth, showSignIn } from '@/lib/cloud/auth';
 import { hasLivePlan, savePlanIntent, useBilling, useBillingOn } from '@/store/billing';
 import { useStore } from '@/store/useStore';
@@ -106,6 +106,7 @@ export function usePlanActions(interval: Interval): { action: (tier: Tier) => Ca
   const phase = useAuth((s) => s.phase);
   const plan = useBilling((s) => s.plan);
   const account = useBilling((s) => s.account);
+  const used = useBilling((s) => s.businesses?.used ?? 0);
   const [busy, setBusy] = useState<Tier | null>(null);
   const live = hasLivePlan(plan, account);
   const run = (tier: Tier, fn: () => Promise<unknown>) => async () => {
@@ -131,13 +132,24 @@ export function usePlanActions(interval: Interval): { action: (tier: Tier) => Ca
       };
     }
     if (plan?.plan === 'owner') return { label: 'Owner plan', disabled: true };
-    if (!live || account?.source !== 'stripe') return { label: `Start with ${name}`, onClick: run(tier, () => checkout(tier, interval)) };
+    // Checkout keeps every active business: more than one is charged as extra businesses, so the card says the total
+    if (!live || account?.source !== 'stripe') return { label: `Start with ${name}`, onClick: run(tier, () => checkout(tier, interval)), ...(used > 1 ? { note: checkoutTotal(tier, interval, used) } : {}) };
     const kind = changeKind(account.tier, account.interval, tier, interval);
     if (kind === 'same') return { label: 'Current plan', disabled: true };
     if (kind === 'to_month') return { label: `Switch to ${name}`, disabled: true, note: 'Yearly to monthly happens at renewal: contact support.' };
+    const refused = changeRefusal(kind, tier, account.pendingDowngrade ? plan?.tier : null);
+    if (refused) return { label: `Switch to ${name}`, disabled: true, note: refused };
     return { label: `Switch to ${name}`, onClick: run(tier, () => confirmPlanChange(tier, interval)), ...(tierRank(tier) < tierRank(account.tier) && kind === 'downgrade' ? { note: 'Starts at your next renewal.' } : {}) };
   };
   return { action, busy };
+}
+
+/** "You have 4 businesses: $388/month in total ($97 + 3 × $97)." */
+export function checkoutTotal(tier: Tier, interval: Interval, businesses: number): string {
+  const base = planFor(tier).price[interval];
+  const each = PLANS.additionalBusiness.price[interval];
+  const extra = Math.max(0, businesses - 1);
+  return `You have ${businesses} businesses: ${formatPrice(base + extra * each)}/${interval} in total (${formatPrice(base)} + ${extra} × ${formatPrice(each)}).`;
 }
 
 // ───────────── the page ─────────────

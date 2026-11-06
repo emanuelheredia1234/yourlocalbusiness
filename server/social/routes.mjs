@@ -75,7 +75,10 @@ export function createPostingRoutes(deps = {}) {
       // a paused plan refuses before anything is sent (402; a no-op without plans)
       await deps.billing?.requireActive?.(who, 'posting');
       limited('posting-publish', who.id);
-      const out = await posting.publish(who, await body(req));
+      const b = await body(req);
+      // a business that's locked on the plan (over its limit) can't post
+      await deps.billing?.requireSlot?.(who, typeof b?.projectId === 'string' ? b.projectId : null);
+      const out = await posting.publish(who, b);
       return reply(req, res, 200, out);
     }
     if (p === `${PREFIX}jobs` && req.method === 'GET') {

@@ -74,7 +74,7 @@ create index if not exists billing_accounts_grace on public.billing_accounts (gr
 create table if not exists public.billing_ops (
   id uuid primary key,
   user_id uuid not null references auth.users (id) on delete cascade,
-  kind text not null check (kind in ('add_business', 'remove_business', 'undo_remove', 'change_plan', 'cancel_for_delete')),
+  kind text not null check (kind in ('add_business', 'remove_business', 'undo_remove', 'change_plan', 'cancel_for_delete', 'checkout')),
   client_request_id uuid not null,
   state text not null check (state in ('sending', 'done', 'failed', 'unknown', 'not_applied')),
   -- {from:{qty,tier,interval}, to:{…}, projectId?}: never secrets

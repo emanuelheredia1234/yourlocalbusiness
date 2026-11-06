@@ -179,7 +179,7 @@ export function PlanSection() {
       {!owner && !legacy && (
         <SettingsSection
           title="Businesses"
-          description={limit == null ? 'Unlimited businesses.' : `${used} of ${limit} ${limit === 1 ? 'business' : 'businesses'}. Each extra business is ${formatPrice(PLANS.additionalBusiness.price.month)}/month.`}
+          description={limit == null ? 'Unlimited businesses.' : `${used} of ${limit} ${limit === 1 ? 'business' : 'businesses'}. Each extra business is ${formatPrice(PLANS.additionalBusiness.price[interval ?? 'month'])}/${interval ?? 'month'}.`}
           actions={
             canChangeBusinesses ? (
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => useBilling.getState().openAddBusiness()}>
@@ -230,7 +230,7 @@ export function PlanSection() {
       )}
 
       {loading && <span className="sr-only" role="status">Updating your plan</span>}
-      <RemoveDialog open={removing} onClose={() => setRemoving(false)} slots={slots.filter((s) => s.state === 'active')} name={name} at={account?.currentPeriodEnd ?? null} />
+      <RemoveDialog open={removing} onClose={() => setRemoving(false)} slots={slots.filter((s) => s.state === 'active' && !s.lockAt)} name={name} at={account?.currentPeriodEnd ?? null} />
       <ChooseDialog open={choosing} onClose={() => setChoosing(false)} slots={slots} limit={limit ?? 1} name={name} />
     </div>
   );
@@ -242,17 +242,32 @@ function SlotBadge({ slot }: { slot: BusinessSlot }) {
   return <Badge tone="good">Active</Badge>;
 }
 
-/** Remove one business at renewal: pick which one is locked then; no refund, no charge. */
-function RemoveDialog({ open, onClose, slots, name, at }: { open: boolean; onClose: () => void; slots: BusinessSlot[]; name: (id: string) => string; at: string | null }) {
+/** Runs `start` once each time `open` goes from false to true (never again on a re-render while open). */
+function useOnOpen(open: boolean, start: () => void): void {
+  const was = useRef(false);
+  const startRef = useRef(start);
+  startRef.current = start;
+  useEffect(() => {
+    if (open && !was.current) startRef.current();
+    was.current = open;
+  }, [open]);
+}
+
+/** Codes where the request may have gone through: the same id is sent again (the server reads it back, never twice). */
+const UNSURE = new Set(['NETWORK', 'BILLING_PENDING']);
+
+/**
+ * Remove one business at renewal: pick which one is locked then; no refund, no charge. The id and the default pick are
+ * set when the dialog opens (a background refresh never changes them); after an unclear answer the same id goes again.
+ */
+export function RemoveDialog({ open, onClose, slots, name, at }: { open: boolean; onClose: () => void; slots: BusinessSlot[]; name: (id: string) => string; at: string | null }) {
   const [pick, setPick] = useState<string>('');
   const [sending, setSending] = useState(false);
   const requestId = useRef('');
-  useEffect(() => {
-    if (open) {
-      requestId.current = newRequestId();
-      setPick(slots[slots.length - 1]?.projectId ?? '');
-    }
-  }, [open, slots]);
+  useOnOpen(open, () => {
+    requestId.current = newRequestId();
+    setPick(slots[slots.length - 1]?.projectId ?? '');
+  });
   if (!open) return null;
   const send = async () => {
     setSending(true);
@@ -261,8 +276,10 @@ function RemoveDialog({ open, onClose, slots, name, at }: { open: boolean; onClo
       toast(out.op?.state === 'done' || out.ok ? { kind: 'success', title: `${name(pick)} stays until ${fmtDate(at)}` } : { kind: 'info', title: 'We’re confirming your last change. This takes a minute.' });
       onClose();
     } catch (e) {
-      toast({ kind: 'error', title: e instanceof IntegrationApiError ? e.message : 'Couldn’t remove a business. Try again shortly.' });
-      requestId.current = newRequestId();
+      const err = e instanceof IntegrationApiError ? e : null;
+      toast({ kind: 'error', title: err?.message ?? 'Couldn’t remove a business. Try again shortly.' });
+      // a definite refusal: a new try is a new request; an unclear answer keeps the id (Stripe sees one request)
+      if (err && !UNSURE.has(err.code)) requestId.current = newRequestId();
     } finally {
       setSending(false);
       void useBilling.getState().refresh();
@@ -300,13 +317,11 @@ function RemoveDialog({ open, onClose, slots, name, at }: { open: boolean; onClo
   );
 }
 
-/** Over the limit: which businesses stay active (the rest are locked, never deleted). */
-function ChooseDialog({ open, onClose, slots, limit, name }: { open: boolean; onClose: () => void; slots: BusinessSlot[]; limit: number; name: (id: string) => string }) {
+/** Over the limit: which businesses stay active (the rest are locked, never deleted). The choice is set on open only. */
+export function ChooseDialog({ open, onClose, slots, limit, name }: { open: boolean; onClose: () => void; slots: BusinessSlot[]; limit: number; name: (id: string) => string }) {
   const [picked, setPicked] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
-  useEffect(() => {
-    if (open) setPicked(slots.filter((s) => s.state === 'active').map((s) => s.projectId).slice(0, limit));
-  }, [open, slots, limit]);
+  useOnOpen(open, () => setPicked(slots.filter((s) => s.state === 'active').map((s) => s.projectId).slice(0, limit)));
   if (!open) return null;
   const toggle = (id: string, on: boolean) => setPicked((p) => (on ? (p.length >= limit ? p : [...p, id]) : p.filter((x) => x !== id)));
   const save = async () => {

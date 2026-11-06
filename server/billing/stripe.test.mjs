@@ -362,7 +362,7 @@ describe('adding and removing businesses', () => {
     h.advance(11 * 60_000);
     const view = await h.call(u, 'GET', '/api/billing/businesses');
     expect(view.body.op).toBe(null);
-    expect((h.supa.tables.get('billing_ops') ?? []).find((o) => o.user_id === u.id).state).toBe('not_applied');
+    expect((h.supa.tables.get('billing_ops') ?? []).find((o) => o.user_id === u.id && o.kind === 'add_business').state).toBe('not_applied');
     expect(subWrites()).toHaveLength(1);
     void sub;
   });

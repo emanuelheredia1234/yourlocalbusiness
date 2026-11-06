@@ -156,8 +156,12 @@ export function createBillingStore({ db, env = process.env, now = () => Date.now
     return { ...op, ...fields };
   }
 
-  async function unknownOps({ olderThan, limit = 20 }) {
-    return db.select('billing_ops', { state: 'unknown', requested_at: ['lte', iso(olderThan)] }, { order: 'requested_at.asc', limit });
+  /** Ops to read back: 'unknown' since `olderThan`, and 'sending' ones whose process is gone (since `staleBefore`). */
+  async function unknownOps({ olderThan, staleBefore = null, limit = 20 }) {
+    const unknown = await db.select('billing_ops', { state: 'unknown', requested_at: ['lte', iso(olderThan)] }, { order: 'requested_at.asc', limit });
+    if (staleBefore == null) return unknown;
+    const stale = await db.select('billing_ops', { state: 'sending', requested_at: ['lte', iso(staleBefore)] }, { order: 'requested_at.asc', limit });
+    return [...stale, ...unknown].slice(0, limit);
   }
 
   return { settings, putSettings, account, ensureAccount, apply, slots, applySlots, opByRequest, liveOp, lastOp, insertOp, finishOp, unknownOps, invalidate: () => (cachedSettings = null) };

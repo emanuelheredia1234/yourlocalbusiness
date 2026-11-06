@@ -31,7 +31,7 @@ import { createStripeClient, StripeError } from './stripeClient.mjs';
 import { createBillingStore, emptyAccount, BILLING_MIGRATION } from './accounts.mjs';
 import { entitlementOf, pausedError } from './entitlement.mjs';
 import { PLANS, PRICE_TABLE, isInterval, isTier, lookupKeyFor, lookupKeysAll, planFor, tierRank, usdToCredits, isBusinessLookupKey, tierFromLookupKey } from './plans.mjs';
-import { customerTag, errorBody, fail, isUuid, mask, notSetUp, safeLog, sha256 } from '../integrations/common.mjs';
+import { customerTag, errorBody, fail, IntegrationError, isUuid, mask, notSetUp, safeLog, sha256 } from '../integrations/common.mjs';
 
 const DAY_MS = 86_400_000;
 const TAG = /^cust_[0-9a-f]{24}$/;
@@ -44,6 +44,11 @@ const PRICE_TTL_MS = 10 * 60_000;
 const ENT_TTL_MS = 30_000;
 const OP_RECHECK_MS = 60_000;
 const OP_GIVE_UP_MS = 10 * 60_000;
+/** An op still 'sending' this long after it started lost its process (a crash or a failed write of the outcome): it's
+ * read back like an 'unknown' one. Well past the write timeout (30 s), so a write still on its way is never raced. */
+const OP_STALE_SENDING_MS = 2 * 60_000;
+/** An active slot with no business saved this long after its claim (an abandoned setup) goes back to the plan. */
+const ORPHAN_SLOT_MS = 24 * 3_600_000;
 const SIGNATURE_TOLERANCE_S = 300;
 /** The events the webhook acts on (the rest answer 200 and are ignored). */
 export const STRIPE_EVENTS = Object.freeze(['checkout.session.completed', 'customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted', 'customer.subscription.paused', 'customer.subscription.resumed', 'invoice.paid', 'invoice.payment_succeeded', 'invoice.payment_failed', 'invoice.payment_action_required']);
@@ -61,6 +66,7 @@ const MSG = Object.freeze({
   owner: 'You’re on the owner plan.',
   unavailable: 'Billing is unavailable right now. Try again in a minute.',
   notOnPlan: 'Your plan is managed by us. Contact support to change it.',
+  cancelLater: 'We couldn’t cancel your subscription just now. Try again shortly.',
 });
 
 /** A timing-safe check of a Stripe-Signature header against one secret: any v1 matches and t is recent. */
@@ -145,10 +151,35 @@ export function createStripeBilling({
     return lastSettings;
   }
 
+  const ownerChecked = new Map(); // user id → until (the owner row was made, or a removed admin's dropped)
+
+  /**
+   * The owner's row is made the first time any gated request of theirs is seen (so a gate that only knows the user id,
+   * e.g. Upload-Post's cap or a cron job, sees the owner plan too); someone who signs in and is no longer an admin has
+   * a stale owner row dropped (owner rights come from server/auth.mjs isAdmin, never from the row alone).
+   */
+  async function checkOwnerRow(userId, who) {
+    if (!userId || !who || typeof who.isAdmin !== 'boolean') return;
+    const hit = ownerChecked.get(userId);
+    if (hit && hit.until > now() && hit.admin === who.isAdmin) return;
+    try {
+      if (who.isAdmin) await ensureOwner(userId);
+      else {
+        const acct = await store.account(userId);
+        if (acct?.source === 'owner') await dropOwner(userId, acct);
+      }
+      ownerChecked.set(userId, { admin: who.isAdmin, until: now() + 10 * 60_000 });
+      if (ownerChecked.size > 10_000) ownerChecked.delete(ownerChecked.keys().next().value);
+    } catch (e) {
+      safeLog('billing_owner_row_failed', { code: e?.code }, log);
+    }
+  }
+
   /** The user's entitlement (cached 30 s). who: the signed-in user ({ isAdmin }). */
   async function entitlement(userId, who = null) {
     const s = await settings();
     if (s.enforce !== true) return entitlementOf(null, s, now());
+    await checkOwnerRow(userId, who);
     if (who?.isAdmin === true) return entitlementOf(null, s, now(), { isAdmin: true });
     if (!userId) return entitlementOf(null, s, now());
     const hit = entCache.get(userId);
@@ -166,6 +197,27 @@ export function createStripeBilling({
     if (ent.active) return ent;
     const [status, code, message] = pausedError(ent);
     throw fail(status, code, message, { need: { feature, ...(ent.paused === 'plan' ? { tier: 'launch' } : {}) }, upgrade: '#plans' });
+  }
+
+  /**
+   * Throws 402 BUSINESS_LIMIT ({locked: true}) when this business is locked on the user's plan (over the limit: removed at renewal, a
+   * smaller plan). A no-op when plans aren't enforced, for the owner, without a project id or a slot row. Cached 30 s.
+   */
+  const slotCache = new Map();
+  async function requireSlot(who, projectId) {
+    if (!who?.id || projectId == null || projectId === '') return;
+    const ent = await entitlement(who.id, who);
+    if (ent.plan === 'legacy' || ent.plan === 'owner') return;
+    const key = `${who.id}:${projectId}`;
+    let hit = slotCache.get(key);
+    if (!hit || hit.until <= now()) {
+      const [row] = await db.select('project_slots', { user_id: who.id, project_id: String(projectId) }, { select: 'state', limit: 1 });
+      hit = { state: row?.state ?? null, until: now() + ENT_TTL_MS };
+      slotCache.set(key, hit);
+      if (slotCache.size > 10_000) slotCache.delete(slotCache.keys().next().value);
+    }
+    // BUSINESS_LIMIT: the app's upgrade prompt offers Add a business / Settings › Plan
+    if (hit.state === 'locked') throw fail(402, 'BUSINESS_LIMIT', 'This business is paused on your plan. Add a business, or choose which ones stay active in Settings › Plan.', { locked: true, upgrade: '#workspace-settings' });
   }
 
   /** The user's business limit for Upload-Post's cap: null = not enforced (use the env cap), 1000 for the owner. */
@@ -322,13 +374,15 @@ export function createStripeBilling({
     if (!sub || typeof sub !== 'object' || !SUB_ID.test(String(sub.id ?? ''))) return { applied: false, refused: 'bad_subscription' };
     const acct = await store.ensureAccount(userId);
     if (acct.source === 'owner') return { applied: false, refused: 'owner' };
+    // a free plan the owner gave is only replaced by a plan the customer buys, never by an old subscription's end
+    if (acct.source === 'comp' && ENDED_STATUSES.includes(String(sub.status))) return { applied: false, refused: 'comp' };
     const customer = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id;
     if (acct.stripe_customer_id && customer && customer !== acct.stripe_customer_id) {
       alert('stripe_customer_mismatch', { tag: acct.customer_tag });
       return { applied: false, refused: 'customer' };
     }
     if (acct.stripe_subscription_id && acct.stripe_subscription_id !== sub.id) {
-      const heldLive = LIVE_STATUSES.includes(acct.status);
+      const heldLive = acct.source === 'stripe' && LIVE_STATUSES.includes(acct.status);
       const incomingLive = !ENDED_STATUSES.includes(sub.status);
       if (heldLive && incomingLive) {
         alert('stripe_second_subscription', { tag: acct.customer_tag });
@@ -369,6 +423,19 @@ export function createStripeBilling({
     await store.apply(userId, { source: 'owner', tier: 'owner', status: 'active', business_limit: null, comp_extra: 0 }, null);
     forgetCache(userId);
     return { ...acct, source: 'owner', tier: 'owner', status: 'active', business_limit: null };
+  }
+
+  /** A former admin's owner row goes back to no plan (their extra businesses lock, as for any plan that ends). */
+  async function dropOwner(userId, acct) {
+    await store.apply(userId, { source: 'stripe', tier: 'none', interval: null, status: 'none', business_limit: 1, comp_extra: 0, extra_keep: 0, extra_keep_until: null, tier_keep: null, tier_keep_until: null }, null);
+    forgetCache(userId);
+    pagesCache.delete(userId);
+    alert('owner_row_dropped', { tag: acct.customer_tag });
+    try {
+      await store.applySlots(userId);
+    } catch {
+      /* the hourly job and the next claim apply it */
+    }
   }
 
   // ───────────── views ─────────────
@@ -487,6 +554,29 @@ export function createStripeBilling({
     return out.value.id;
   }
 
+  /**
+   * Expire every open Checkout Session of the customer but `keep` (two open pages could each make a subscription, and
+   * Stripe would charge both). Once per session (Idempotency-Key); an unclear answer is read back, never resent.
+   * Throws 409 ALREADY_SUBSCRIBED when one was paid meanwhile, 503 when one can't be closed.
+   */
+  async function expireOpenSessions(userId, customer, wanted) {
+    const list = await stripe.get('/v1/checkout/sessions', { customer, status: 'open', limit: 20 });
+    const sessions = (Array.isArray(list?.data) ? list.data : []).filter((x) => SESSION_ID.test(String(x?.id ?? '')) && x.status === 'open');
+    // the same choice, still good for a while: that page comes back (it may be one whose answer never reached us)
+    const keep = sessions.find((x) => x.metadata?.ylb_plan === wanted && x.client_reference_id === userId && x.url && Number(x.expires_at) * 1000 > now() + 60_000) ?? null;
+    for (const open of sessions) {
+      if (open === keep) continue;
+      const out = await stripe.post(`/v1/checkout/sessions/${encodeURIComponent(open.id)}/expire`, {}, { idempotencyKey: `ylb-co-expire-${open.id}` });
+      if (out.outcome === 'ok' && out.value?.status === 'expired') continue;
+      const now_ = await stripe.get(`/v1/checkout/sessions/${encodeURIComponent(open.id)}`);
+      if (now_?.status === 'expired') continue;
+      if (now_?.status === 'complete') throw fail(409, 'ALREADY_SUBSCRIBED', MSG.already);
+      alert('stripe_checkout_expire_failed', { kind: out.error?.kind, code: out.error?.code });
+      throw fail(503, 'UNAVAILABLE', MSG.unavailable);
+    }
+    return keep;
+  }
+
   async function checkout(who, body) {
     if (who.isAdmin === true) throw fail(409, 'OWNER_PLAN', MSG.owner);
     const tier = body?.tier;
@@ -494,9 +584,24 @@ export function createStripeBilling({
     const crid = body?.clientRequestId;
     if (!isTier(tier) || !isInterval(interval)) throw fail(400, 'BAD_REQUEST', 'Choose Launch, Grow or Scale, monthly or yearly.');
     if (!isUuid(crid)) throw fail(400, 'BAD_REQUEST', 'Refresh the page and try again.');
+    const acct0 = await store.ensureAccount(who.id);
+    if (acct0.source === 'owner') throw fail(409, 'OWNER_PLAN', MSG.owner);
+    // one Checkout at a time per user (two tabs, a double click with two ids): the one-live-op lock
+    await recheckLiveOp(who.id);
+    const lock = await store.insertOp(who.id, { kind: 'checkout', clientRequestId: uuidFrom(`checkout:${who.id}:${crid}:${now()}`), request: { tier, interval }, idempotencyKey: `ylb-co-${who.id}-${crid}` });
+    if (!lock.op) throw fail(409, 'BILLING_PENDING', MSG.pending);
+    let result = null;
+    try {
+      result = await checkoutLocked(who, body, { tier, interval, crid });
+      return result;
+    } finally {
+      await store.finishOp(lock.op, result ? { state: 'done' } : { state: 'failed', error_code: 'CHECKOUT' }).catch(() => {});
+    }
+  }
+
+  async function checkoutLocked(who, body, { tier, interval, crid }) {
     const acct = await store.ensureAccount(who.id);
-    if (acct.source === 'owner') throw fail(409, 'OWNER_PLAN', MSG.owner);
-    if (acct.stripe_subscription_id && LIVE_STATUSES.includes(acct.status)) throw fail(409, 'ALREADY_SUBSCRIBED', MSG.already);
+    if (acct.source === 'stripe' && acct.stripe_subscription_id && LIVE_STATUSES.includes(acct.status)) throw fail(409, 'ALREADY_SUBSCRIBED', MSG.already);
     const active = (await store.slots(who.id)).filter((r) => r.state === 'active').length;
     let extra = body.extraBusinesses;
     if (extra === undefined || extra === null) extra = Math.max(0, active - 1);
@@ -507,14 +612,11 @@ export function createStripeBilling({
       if ((list?.data ?? []).some((s) => !ENDED_STATUSES.includes(s.status))) throw fail(409, 'ALREADY_SUBSCRIBED', MSG.already);
     }
     const wanted = `${tier}:${interval}:${extra}`;
-    // one open session at a time: the same choice gets the same page back
-    if (acct.checkout_session_id && ms(acct.checkout_expires_at) > now() + 60_000) {
-      try {
-        const open = await stripe.get(`/v1/checkout/sessions/${encodeURIComponent(acct.checkout_session_id)}`);
-        if (open?.status === 'open' && open.metadata?.ylb_plan === wanted && open.url && open.client_reference_id === who.id) return { url: open.url };
-      } catch {
-        /* make a new one */
-      }
+    // one open session at a time: the same choice gets the same page back, any other open page closes first (so only
+    // one can ever be paid). Every session is made with the customer, so the customer's list has them all.
+    if (acct.stripe_customer_id) {
+      const keep = await expireOpenSessions(who.id, acct.stripe_customer_id, wanted);
+      if (keep) return { url: keep.url };
     }
     const base = appUrl();
     if (!base) throw notSetUp('Add APP_URL (the app’s https address) in Replit Secrets.', MSG.notReady);
@@ -549,7 +651,7 @@ export function createStripeBilling({
     try {
       await db.update('billing_accounts', { user_id: who.id }, { checkout_session_id: out.value.id, checkout_expires_at: secToIso(out.value.expires_at ?? expiresAt), updated_at: iso() });
     } catch {
-      /* the session still works; the reconcile finds it through the webhook or the customer */
+      /* the session still works; the next Checkout finds it by the customer and closes it */
     }
     return { url: out.value.url };
   }
@@ -591,19 +693,31 @@ export function createStripeBilling({
     return 'drift';
   }
 
+  /** The extra businesses / the tier kept to the end of a period already paid for, while that's still on. */
+  const liveExtraKeep = (acct) => (acct?.extra_keep_until && ms(acct.extra_keep_until) > now() && acct.extra_keep > 0 ? { count: acct.extra_keep, until: acct.extra_keep_until } : null);
+  const liveTierKeep = (acct) => (acct?.tier_keep && acct.tier_keep_until && ms(acct.tier_keep_until) > now() ? { tier: acct.tier_keep, until: acct.tier_keep_until } : null);
+
   /** What an op does to our own fields once it's done (a removal keeps the extra until the period ends, …). */
   async function afterDone(op, sub) {
     const req = op.request ?? {};
     const { tierItem } = subscriptionItems(sub);
     const periodEnd = secToIso(tierItem?.current_period_end ?? sub.current_period_end);
+    const acct = (await store.account(op.user_id)) ?? {};
     if (op.kind === 'remove_business') {
-      await applySubscription(op.user_id, sub, now(), { extraKeep: { count: req.from.qty, until: periodEnd } });
+      // a second removal in the same period never cuts what the first one kept (it was paid for)
+      const kept = liveExtraKeep(acct);
+      await applySubscription(op.user_id, sub, now(), { extraKeep: { count: Math.max(kept ? kept.count : 0, req.from.qty), until: kept?.until ?? periodEnd } });
       if (req.projectId) await db.update('project_slots', { user_id: op.user_id, project_id: req.projectId }, { lock_at: periodEnd });
     } else if (op.kind === 'undo_remove') {
       await applySubscription(op.user_id, sub, now(), { extraKeep: 'clear' });
       await db.update('project_slots', { user_id: op.user_id, state: 'active' }, { lock_at: null });
     } else if (op.kind === 'change_plan') {
-      await applySubscription(op.user_id, sub, now(), req.downgrade ? { tierKeep: { tier: req.from.tier, until: periodEnd } } : { tierKeep: 'clear' });
+      // the highest tier paid for this period stays until it ends (a second downgrade, or a move back up to or below
+      // it, keeps it); a charged upgrade ends the keep
+      const kept = liveTierKeep(acct);
+      let keepTier = req.downgrade || req.withinKept ? kept?.tier ?? null : null;
+      if (req.downgrade && (!keepTier || tierRank(req.from.tier) > tierRank(keepTier))) keepTier = req.from.tier;
+      await applySubscription(op.user_id, sub, now(), keepTier ? { tierKeep: { tier: keepTier, until: kept?.until ?? periodEnd } } : { tierKeep: 'clear' });
     } else {
       await applySubscription(op.user_id, sub, now());
     }
@@ -613,7 +727,14 @@ export function createStripeBilling({
   async function resolveOp(op) {
     const subId = op.request?.subscription;
     if (!SUB_ID.test(String(subId ?? ''))) return store.finishOp(op, { state: 'failed', error_code: 'UNAVAILABLE' });
-    const sub = await getSubscription(subId);
+    let sub;
+    try {
+      sub = await getSubscription(subId);
+    } catch (e) {
+      // Stripe doesn't know the subscription: the write had nothing to change
+      if (e instanceof StripeError && e.status === 404) return store.finishOp(op, { state: op.kind === 'cancel_for_delete' ? 'done' : 'not_applied', error_code: 'GONE' });
+      throw e;
+    }
     const seen = opStateOn(op, sub);
     if (seen === 'to') {
       const done = await store.finishOp(op, { state: 'done', stripe_ref: { subscription: sub.id, invoice: typeof sub.latest_invoice === 'string' ? sub.latest_invoice : sub.latest_invoice?.id ?? null } });
@@ -631,13 +752,16 @@ export function createStripeBilling({
     return store.finishOp(op, { state: 'unknown' });
   }
 
-  /** The user's op in flight, read back when it's been unknown for a minute or more. */
+  /** An op left 'sending' by a process that's gone: it's read back like an unknown one (never resent). */
+  const staleSending = (op) => op?.state === 'sending' && now() - (ms(op.requested_at) ?? now()) >= OP_STALE_SENDING_MS;
+
+  /** The user's op in flight, read back when it's been unknown for a minute or more (or stuck 'sending'). */
   async function recheckLiveOp(userId) {
     if (!configured()) return null;
     let op = null;
     try {
       op = await store.liveOp(userId);
-      if (op?.state === 'unknown' && now() - ms(op.checked_at ?? op.requested_at) >= OP_RECHECK_MS) op = await resolveOp(op);
+      if ((op?.state === 'unknown' && now() - ms(op.checked_at ?? op.requested_at) >= OP_RECHECK_MS) || staleSending(op)) op = await resolveOp(op);
     } catch (e) {
       safeLog('billing_op_recheck_failed', { kind: e?.kind, code: e?.code }, log);
     }
@@ -719,8 +843,10 @@ export function createStripeBilling({
       const projectId = body.projectId == null ? null : String(body.projectId);
       if (projectId !== null && (projectId.length < 1 || projectId.length > 80)) throw fail(400, 'BAD_REQUEST', 'Choose a business.');
       if (projectId) {
-        const mine = (await store.slots(who.id)).some((r) => r.project_id === projectId);
-        if (!mine) throw fail(404, 'NOT_FOUND', 'No such business.');
+        const slot = (await store.slots(who.id)).find((r) => r.project_id === projectId);
+        if (!slot) throw fail(404, 'NOT_FOUND', 'No such business.');
+        // already leaving at renewal: a second press (or a retry with a new id) never removes another one
+        if (slot.lock_at && ms(slot.lock_at) > now()) throw fail(409, 'BAD_REQUEST', 'That business is already set to be removed at renewal.');
       }
       return moneyOp(who, 'remove_business', crid, async (sub) => {
         const { businessItem } = subscriptionItems(sub);
@@ -734,6 +860,10 @@ export function createStripeBilling({
         const { businessItem } = subscriptionItems(sub);
         const from = Number(businessItem?.quantity ?? 0);
         if (!acct.extra_keep_until || ms(acct.extra_keep_until) <= now() || !(acct.extra_keep > from) || !businessItem) throw fail(409, 'BAD_REQUEST', 'There’s no removal to undo.');
+        // free only within the period that was paid for: after a switch to yearly (a new period) it's an added business
+        const { tierItem } = subscriptionItems(sub);
+        const periodEnd = secToIso(tierItem?.current_period_end ?? sub.current_period_end);
+        if (ms(periodEnd) !== ms(acct.extra_keep_until)) throw fail(409, 'BAD_REQUEST', 'Your billing period changed since the removal. Add a business instead.', { useAdd: true });
         return { request: { from: { qty: from }, to: { qty: acct.extra_keep } }, path: `/v1/subscriptions/${sub.id}`, body: { items: [{ id: businessItem.id, quantity: acct.extra_keep }], proration_behavior: 'none' }, key: `ylb-biz-undo-${who.id}-${crid}` };
       });
     }
@@ -745,7 +875,7 @@ export function createStripeBilling({
     const tier = body?.tier;
     const interval = body?.interval;
     if (!isTier(tier) || !isInterval(interval)) throw fail(400, 'BAD_REQUEST', 'Choose Launch, Grow or Scale, monthly or yearly.');
-    return moneyOp(who, 'change_plan', body?.clientRequestId, async (sub) => {
+    return moneyOp(who, 'change_plan', body?.clientRequestId, async (sub, acct) => {
       const { tierItem, businessItem } = subscriptionItems(sub);
       const fromKey = tierItem?.price?.lookup_key;
       const fromTier = tierFromLookupKey(fromKey);
@@ -753,15 +883,24 @@ export function createStripeBilling({
       if (!fromTier || !isInterval(fromInterval)) throw fail(503, 'UNAVAILABLE', MSG.unavailable, {}, 'The subscription has no plan price with a known lookup key.');
       if (fromTier === tier && fromInterval === interval) throw fail(400, 'BAD_REQUEST', 'That’s your plan already.');
       if (fromInterval === 'year' && interval === 'month') throw fail(409, 'NOT_ALLOWED_ON_PLAN', 'Switching from yearly to monthly happens at renewal: contact support.');
+      const intervalChange = fromInterval !== interval;
+      // a lower plan starts at renewal and yearly starts now: both at once would charge today for a plan the app said
+      // waits, so they're two steps
+      if (intervalChange && tierRank(tier) < tierRank(fromTier)) throw fail(409, 'NOT_ALLOWED_ON_PLAN', `Choose ${PLANS.plans[tier]?.name ?? 'the lower plan'} monthly first (it starts at renewal). You can switch to yearly after that.`);
+      const kept = liveTierKeep(acct);
+      if (kept && intervalChange) throw fail(409, 'NOT_ALLOWED_ON_PLAN', `You’re moving to a lower plan at renewal. Switch back to ${PLANS.plans[kept.tier]?.name ?? 'your plan'} first, then to yearly.`);
+      // back up to (or below) the tier already paid for this period: no second charge
+      const withinKept = !!kept && !intervalChange && tierRank(tier) > tierRank(fromTier) && tierRank(tier) <= tierRank(kept.tier);
+      if (kept && !intervalChange && tierRank(tier) > tierRank(kept.tier)) throw fail(409, 'NOT_ALLOWED_ON_PLAN', `You’ve paid for ${PLANS.plans[kept.tier]?.name ?? 'your plan'} until renewal. Switch back to it first (no charge), then upgrade.`);
       const toKey = lookupKeyFor(tier, interval);
       const items = [{ id: tierItem.id, price: await priceId(toKey) }];
-      const intervalChange = fromInterval !== interval;
       if (intervalChange && businessItem) items.push({ id: businessItem.id, price: await priceId(lookupKeyFor('business', interval)) });
       const downgrade = !intervalChange && tierRank(tier) < tierRank(fromTier);
+      const free = downgrade || withinKept;
       return {
-        request: { from: { tier: fromTier, interval: fromInterval, lookupKey: fromKey }, to: { tier, interval, lookupKey: toKey }, downgrade },
+        request: { from: { tier: fromTier, interval: fromInterval, lookupKey: fromKey }, to: { tier, interval, lookupKey: toKey }, downgrade, withinKept },
         path: `/v1/subscriptions/${sub.id}`,
-        body: downgrade ? { items, proration_behavior: 'none' } : { items, proration_behavior: 'always_invoice', payment_behavior: 'error_if_incomplete' },
+        body: free ? { items, proration_behavior: 'none' } : { items, proration_behavior: 'always_invoice', payment_behavior: 'error_if_incomplete' },
         key: `ylb-plan-${who.id}-${body.clientRequestId}`,
       };
     });
@@ -895,8 +1034,20 @@ export function createStripeBilling({
       patch.enforce = body.enforce;
       if (body.enforce && !current.enforced_at) patch.enforced_at = iso();
     }
-    const next = await store.putSettings(patch);
-    if (patch.enforce === true && !current.enforce) started = await startExisting(Number(next.existing_trial_days ?? 30));
+    // existing users get their free Grow BEFORE plans go on: if that fails, plans stay off and the owner can try again
+    // (it's idempotent: only users with businesses and no billing row get one)
+    const turningOn = patch.enforce === true && !current.enforce;
+    const trialDays = Number(patch.existing_trial_days ?? current.existing_trial_days ?? 30);
+    if (turningOn) started = await startExisting(trialDays);
+    await store.putSettings(patch);
+    if (turningOn) {
+      // anyone who made a first business in between
+      try {
+        started += await startExisting(trialDays);
+      } catch (e) {
+        safeLog('billing_existing_start_failed', { code: e?.code }, log);
+      }
+    }
     entCache.clear();
     pagesCache.clear();
     return { ...(await settingsView()), ...(started != null ? { existingAccountsStarted: started } : {}) };
@@ -1040,7 +1191,7 @@ export function createStripeBilling({
 
   async function hourly(ctx = {}) {
     const deadline = ctx.deadline ?? now() + 30_000;
-    const out = { keepsApplied: 0, locksApplied: 0, compsEnded: 0, opsResolved: 0, pastDueAfterGrace: 0 };
+    const out = { keepsApplied: 0, locksApplied: 0, compsEnded: 0, opsResolved: 0, pastDueAfterGrace: 0, orphanSlotsFreed: 0 };
     const t = iso();
     // (a) pending removals and downgrades whose period ended
     const due = [...(await db.select('billing_accounts', { extra_keep_until: ['lte', t] }, { limit: 200 })), ...(await db.select('billing_accounts', { tier_keep_until: ['lte', t] }, { limit: 200 }))];
@@ -1074,7 +1225,7 @@ export function createStripeBilling({
     }
     // (d) money ops whose outcome is still unknown: read back, never resent
     if (configured()) {
-      const ops = await store.unknownOps({ olderThan: now() - OP_RECHECK_MS, limit: 20 });
+      const ops = await store.unknownOps({ olderThan: now() - OP_RECHECK_MS, staleBefore: now() - OP_STALE_SENDING_MS, limit: 20 });
       for (const op of ops) {
         if (now() > deadline - 5_000) break;
         try {
@@ -1084,6 +1235,25 @@ export function createStripeBilling({
           safeLog('billing_op_readback_failed', { kind: op.kind, errorKind: e?.kind }, log);
         }
       }
+    }
+    // (f) a slot claimed for a business that was never saved (setup abandoned, the tab closed) goes back to the plan
+    // after a day (users can't delete slot rows; only deleting a saved business frees one)
+    try {
+      const old = await db.select('project_slots', { state: 'active', claimed_at: ['lte', iso(now() - ORPHAN_SLOT_MS)] }, { select: 'user_id,project_id,claimed_at', order: 'claimed_at.desc', limit: 1000 });
+      const byUser = new Map();
+      for (const r of old) if (ms(r.claimed_at) >= now() - 7 * DAY_MS) byUser.set(r.user_id, [...(byUser.get(r.user_id) ?? []), r.project_id]);
+      for (const [u, ids] of byUser) {
+        if (now() > deadline - 5_000) break;
+        const docs = await db.select('user_docs', { user_id: u, kind: 'project', id: ['in', ids] }, { select: 'id', limit: ids.length });
+        const saved = new Set(docs.map((d) => d.id));
+        const gone = ids.filter((id) => !saved.has(id));
+        if (!gone.length) continue;
+        await db.remove('project_slots', { user_id: u, project_id: ['in', gone], state: 'active' });
+        await store.applySlots(u);
+        out.orphanSlotsFreed += gone.length;
+      }
+    } catch (e) {
+      safeLog('billing_orphan_slots_failed', { code: e?.code }, log);
     }
     // (e) past due after grace: the entitlement pauses them; counted for the owner
     out.pastDueAfterGrace = (await db.select('billing_accounts', { status: 'past_due', grace_until: ['lte', t] }, { select: 'user_id', limit: 1000 })).length;
@@ -1158,7 +1328,12 @@ export function createStripeBilling({
 
   // ───────────── account deletion ─────────────
 
-  /** Before an account is deleted: its live subscription is cancelled (once). Unconfirmed → 409 BILLING_PENDING. */
+  /**
+   * Before an account is deleted: every subscription of its Stripe customer that isn't over is cancelled (the stored
+   * one, and any the database hasn't caught up with: a Checkout whose webhook hasn't come, a second one that was
+   * refused). One op and key per subscription. Unconfirmed → 409 BILLING_PENDING; Stripe or the database failing →
+   * 503 in our words (their text stays here). A subscription Stripe doesn't know is over.
+   */
   async function forgetUser(userId) {
     if (!db?.enabled) return;
     let acct;
@@ -1166,44 +1341,66 @@ export function createStripeBilling({
       acct = await store.account(userId);
     } catch (e) {
       if (e?.code === 'NOT_SET_UP') return;
-      throw e;
+      alert('delete_read_failed', { code: e?.code });
+      throw fail(503, 'UNAVAILABLE', MSG.cancelLater);
     }
     forgetCache(userId);
-    if (!acct?.stripe_subscription_id || ENDED_STATUSES.includes(acct.status)) return;
-    if (!stripe.enabled) throw fail(503, 'UNAVAILABLE', 'We couldn’t cancel your subscription just now. Try again shortly.');
+    if (!acct?.stripe_customer_id && !acct?.stripe_subscription_id) return;
+    if (!stripe.enabled) throw fail(503, 'UNAVAILABLE', MSG.cancelLater);
+    try {
+      await cancelAllFor(userId, acct);
+    } catch (e) {
+      if (e instanceof IntegrationError) throw e;
+      alert('stripe_cancel_failed', { errorKind: e?.kind, code: e?.code });
+      throw fail(503, 'UNAVAILABLE', MSG.cancelLater);
+    }
+  }
+
+  async function cancelAllFor(userId, acct) {
     const pendingErr = () => fail(409, 'BILLING_PENDING', 'We couldn’t confirm your subscription was cancelled. Try again in a minute.');
     const live = await store.liveOp(userId);
     if (live) {
-      const r = live.state === 'unknown' ? await resolveOp(live) : live;
+      const r = live.state === 'unknown' || staleSending(live) ? await resolveOp(live).catch(() => live) : live;
       if (['sending', 'unknown'].includes(r.state)) throw pendingErr();
     }
-    const sub = await getSubscription(acct.stripe_subscription_id);
-    if (ENDED_STATUSES.includes(sub.status)) {
-      await applySubscription(userId, sub, now());
-      return;
+    const subs = new Map();
+    if (acct.stripe_customer_id) {
+      const list = await stripe.get('/v1/subscriptions', { customer: acct.stripe_customer_id, status: 'all', limit: 100 });
+      for (const sub of Array.isArray(list?.data) ? list.data : []) if (SUB_ID.test(String(sub?.id ?? ''))) subs.set(sub.id, sub);
     }
-    const key = `ylb-cancel-${userId}-${sub.id}`;
-    const ins = await store.insertOp(userId, { kind: 'cancel_for_delete', clientRequestId: uuidFrom(`${key}:${now()}`), request: { subscription: sub.id, from: { status: sub.status }, to: { status: 'canceled' } }, idempotencyKey: key });
-    if (!ins.op) throw pendingErr();
-    let op = ins.op;
-    const out = await stripe.del(`/v1/subscriptions/${sub.id}`, { invoice_now: 'false', prorate: 'false' }, { idempotencyKey: key });
-    if (out.outcome === 'ok') {
-      op = await store.finishOp(op, { state: 'done', stripe_ref: { subscription: sub.id } });
-      await applySubscription(userId, out.value, now());
-      return;
+    if (acct.stripe_subscription_id && !subs.has(acct.stripe_subscription_id)) {
+      try {
+        subs.set(acct.stripe_subscription_id, await getSubscription(acct.stripe_subscription_id));
+      } catch (e) {
+        // Stripe doesn't know it (deleted, or another mode's): nothing left to bill
+        if (!(e instanceof StripeError && e.status === 404)) throw e;
+      }
     }
-    if (out.outcome === 'failed') {
-      await store.finishOp(op, { state: 'failed', error_code: 'UNAVAILABLE' });
-      alert('stripe_cancel_failed', { errorKind: out.error?.kind, code: out.error?.code });
-      throw fail(503, 'UNAVAILABLE', 'We couldn’t cancel your subscription just now. Try again shortly.');
+    for (const sub of subs.values()) {
+      if (ENDED_STATUSES.includes(sub.status)) continue;
+      const key = `ylb-cancel-${userId}-${sub.id}`;
+      const ins = await store.insertOp(userId, { kind: 'cancel_for_delete', clientRequestId: uuidFrom(`${key}:${now()}`), request: { subscription: sub.id, from: { status: sub.status }, to: { status: 'canceled' } }, idempotencyKey: key });
+      if (!ins.op) throw pendingErr();
+      let op = ins.op;
+      const out = await stripe.del(`/v1/subscriptions/${sub.id}`, { invoice_now: 'false', prorate: 'false' }, { idempotencyKey: key });
+      if (out.outcome === 'ok') {
+        await store.finishOp(op, { state: 'done', stripe_ref: { subscription: sub.id } });
+        if (sub.id === acct.stripe_subscription_id) await applySubscription(userId, out.value, now()).catch(() => null);
+        continue;
+      }
+      if (out.outcome === 'failed') {
+        await store.finishOp(op, { state: 'failed', error_code: 'UNAVAILABLE' });
+        alert('stripe_cancel_failed', { errorKind: out.error?.kind, code: out.error?.code });
+        throw fail(503, 'UNAVAILABLE', MSG.cancelLater);
+      }
+      op = await store.finishOp(op, { state: 'unknown' });
+      try {
+        op = await resolveOp(op);
+      } catch {
+        /* still unknown */
+      }
+      if (op.state !== 'done') throw pendingErr();
     }
-    op = await store.finishOp(op, { state: 'unknown' });
-    try {
-      op = await resolveOp(op);
-    } catch {
-      /* still unknown */
-    }
-    if (op.state !== 'done') throw pendingErr();
   }
 
   // ───────────── routes ─────────────
@@ -1269,6 +1466,7 @@ export function createStripeBilling({
     webhook,
     entitlement,
     requireActive,
+    requireSlot,
     businessLimit,
     pagesServeUntil,
     tregCapsFor,

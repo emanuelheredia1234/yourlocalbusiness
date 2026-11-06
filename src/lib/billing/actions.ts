@@ -64,20 +64,27 @@ export function openPlanSettings(): void {
   void navigate('workspace-settings', { force: true });
 }
 
-export type PlanChangeKind = 'same' | 'upgrade' | 'downgrade' | 'to_year' | 'to_month';
+export type PlanChangeKind = 'same' | 'upgrade' | 'downgrade' | 'to_year' | 'to_month' | 'down_to_year';
 
-/** What switching from the current plan to tier/interval is (upgrades and month → year are now; downgrades at renewal). */
+/**
+ * What switching from the current plan to tier/interval is (upgrades and month → year are now; downgrades at renewal).
+ * A lower plan and yearly at once ('down_to_year') isn't one step: yearly is charged now, a lower plan waits for renewal.
+ */
 export function changeKind(fromTier: string | null | undefined, fromInterval: string | null | undefined, tier: Tier, interval: Interval): PlanChangeKind {
   if (fromTier === tier && fromInterval === interval) return 'same';
   if (fromInterval === 'year' && interval === 'month') return 'to_month';
-  if (fromInterval === 'month' && interval === 'year') return tierRank(tier) < tierRank(fromTier) ? 'downgrade' : 'to_year';
+  if (fromInterval === 'month' && interval === 'year') return tierRank(tier) < tierRank(fromTier) ? 'down_to_year' : 'to_year';
   return tierRank(tier) > tierRank(fromTier) ? 'upgrade' : 'downgrade';
 }
 
 /** The confirm's words for a plan change. */
-export function changeConfirm(kind: PlanChangeKind, tier: Tier, interval: Interval, renewsAt: string | null, fromTier: string | null | undefined): { title: string; body: string; confirmLabel: string } | null {
+export function changeConfirm(kind: PlanChangeKind, tier: Tier, interval: Interval, renewsAt: string | null, fromTier: string | null | undefined, keptTier?: string | null): { title: string; body: string; confirmLabel: string } | null {
   const name = planFor(tier).name;
   const price = `${formatPrice(planFor(tier).price[interval])}/${interval}`;
+  // back up to (or below) the plan already paid for this period: nothing is charged now
+  if (kind === 'upgrade' && keptTier && tierRank(tier) <= tierRank(keptTier)) {
+    return { title: `Switch to ${name} now?`, body: `There’s no charge: you’ve paid for ${tierName(keptTier)} until your renewal${renewsAt ? ` on ${fmtDate(renewsAt)}` : ''}. Then ${price}.`, confirmLabel: `Switch to ${name}` };
+  }
   switch (kind) {
     case 'upgrade':
     case 'to_year':
@@ -85,7 +92,7 @@ export function changeConfirm(kind: PlanChangeKind, tier: Tier, interval: Interv
     case 'downgrade':
       return {
         title: `Switch to ${name} at renewal?`,
-        body: `${price} from your next renewal${renewsAt ? ` on ${fmtDate(renewsAt)}` : ''}. You keep ${tierName(fromTier)} until then. There’s no refund for the rest of this period.`,
+        body: `${price} from your next renewal${renewsAt ? ` on ${fmtDate(renewsAt)}` : ''}. You keep ${tierName(keptTier && tierRank(keptTier) > tierRank(fromTier) ? keptTier : fromTier)} until then. There’s no refund for the rest of this period.`,
         confirmLabel: `Switch to ${name}`,
       };
     default:
@@ -109,11 +116,12 @@ export async function confirmPlanChange(tier: Tier, interval: Interval): Promise
   }
   const kind = changeKind(acct.tier, acct.interval, tier, interval);
   if (kind === 'same') return false;
-  if (kind === 'to_month') {
-    toast({ kind: 'info', title: 'Switching from yearly to monthly happens at renewal: contact support.' });
+  const refused = changeRefusal(kind, tier, acct.pendingDowngrade ? b.plan?.tier : null);
+  if (refused) {
+    toast({ kind: 'info', title: refused });
     return false;
   }
-  const words = changeConfirm(kind, tier, interval, acct.currentPeriodEnd, acct.tier);
+  const words = changeConfirm(kind, tier, interval, acct.currentPeriodEnd, acct.tier, acct.pendingDowngrade ? b.plan?.tier : null);
   // the id is made with the question: pressing the confirm twice is still one change
   const clientRequestId = newRequestId();
   if (!words || !(await confirmAction(words))) return false;
@@ -130,6 +138,20 @@ export async function confirmPlanChange(tier: Tier, interval: Interval): Promise
     void useBilling.getState().refresh();
     return false;
   }
+}
+
+/**
+ * Why a change isn't self-serve as one step (the server refuses the same), or null. keptTier: the higher plan paid for
+ * until renewal while a downgrade waits (Entitlement.tier then).
+ */
+export function changeRefusal(kind: PlanChangeKind, tier: Tier, keptTier?: string | null): string | null {
+  if (kind === 'to_month') return 'Switching from yearly to monthly happens at renewal: contact support.';
+  if (kind === 'down_to_year') return `Choose ${planFor(tier).name} monthly first (it starts at renewal). You can switch to yearly after that.`;
+  if (keptTier && isTier(keptTier)) {
+    if (kind === 'to_year') return `You’re moving to a lower plan at renewal. Switch back to ${tierName(keptTier)} first, then to yearly.`;
+    if (kind === 'upgrade' && tierRank(tier) > tierRank(keptTier)) return `You’ve paid for ${tierName(keptTier)} until renewal. Switch back to it first (no charge), then upgrade.`;
+  }
+  return null;
 }
 
 /** The tier to offer in "Upgrade to …": the server's need, else the next tier up. */

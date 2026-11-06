@@ -73,6 +73,7 @@ export function billingFacade(get) {
   return {
     entitlement: async (userId, who = null) => (impl() ? impl().entitlement(userId, who) : LEGACY),
     requireActive: async (who, feature = null) => (impl() ? impl().requireActive(who, feature) : null),
+    requireSlot: async (who, projectId) => (impl()?.requireSlot ? impl().requireSlot(who, projectId) : null),
     businessLimit: async (userId, who = null) => (impl() ? impl().businessLimit(userId, who) : null),
     pagesServeUntil: async (userId) => (impl() ? impl().pagesServeUntil(userId) : null),
     tregCapsFor: async (tag) => (impl() ? impl().tregCapsFor(tag) : null),

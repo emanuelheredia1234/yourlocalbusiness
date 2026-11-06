@@ -796,15 +796,28 @@ them on again later doesn't restart the free days (they start at the first `enfo
 
 - One money operation in flight per user (`billing_ops`); each Stripe write is sent once with a fixed Idempotency-Key
   built from the user and the app's request id. A timeout is read back from Stripe and never resent; after 10 minutes
-  without the change it's marked `not_applied` and the user may try again.
+  without the change it's marked `not_applied` and the user may try again. An op a crashed process left `sending` is
+  read back the same way after 2 minutes (never resent).
+- One Checkout at a time per user: before a new Checkout page is made, every other open page of the customer is
+  expired (`POST /v1/checkout/sessions/:id/expire`, its own Idempotency-Key), so two pages can never both be paid.
 - Adding a business charges the prorated price now (`always_invoice` + `error_if_incomplete`): a declined card changes
   nothing. Removing one lowers the quantity with no proration (no refund, no charge); the business stays until the
   period ends, then the hourly job locks the one the user chose. Upgrades and monthly → yearly are immediate and
   charged now; a downgrade applies at renewal and keeps the old tier's features until then; yearly → monthly is done
-  by support in the Stripe Dashboard (the webhook picks it up).
+  by support in the Stripe Dashboard (the webhook picks it up). A lower plan together with yearly is two steps (the
+  lower plan first). What was paid for a period is kept to its end: a second removal or downgrade never cuts the
+  first one's keep, moving back up to (or below) the tier paid for is free, and above it is refused until the user
+  switches back. Undoing a removal is free only within the same period (after a switch to yearly it's an add).
 - The owner's account is the `owner` plan: no Stripe Customer is ever made for it.
-- Deleting an account cancels a live subscription first; if that can't be confirmed the deletion stops (409
-  `BILLING_PENDING`). The Stripe Customer is kept (receipts, tax records).
+- Deleting an account cancels every subscription of its Stripe customer that isn't over (read from Stripe, not only
+  the stored one); if that can't be confirmed the deletion stops (409 `BILLING_PENDING`), and Stripe failing is a 503
+  in our words. The Stripe Customer is kept (receipts, tax records).
+- Owner rights come from `isAdmin` at sign-in, never from the stored row alone: the owner row is made the first time
+  any gated request of theirs is seen, and a former admin's row goes back to no plan.
+- A free (comp) plan is never replaced by an old subscription's events, only by a plan the customer buys.
+- Turning plans on gives existing users their free days first; if that fails, plans stay off and the switch can be
+  pressed again.
+- A business locked on the plan can't post, connect accounts or refresh analytics (402 `BUSINESS_LIMIT`).
 - After a plan ends, published pages keep serving 30 days; data is kept 90 days and is never deleted automatically
   (the owner list shows `dataExpiresAt`).
 
@@ -839,7 +852,7 @@ them on again later doesn't restart the free days (they start at the first `enfo
 ### Cron jobs
 
 `billing-hourly` (pending removals and downgrades at period end, due locks, free trials ending, unknown operations
-read back), `stripe-reconcile` (04:17 UTC: re-reads every subscription, adopts a completed Checkout whose webhook was
+read back, slots claimed for a business that was never saved freed after a day), `stripe-reconcile` (04:17 UTC: re-reads every subscription, adopts a completed Checkout whose webhook was
 missed; never writes to Stripe), `billing-retention` (04:47 UTC: counts accounts past 90 days; deletes nothing).
 
 ### The database rule (check on a Supabase branch, with the owner's OK)

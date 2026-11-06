@@ -28,6 +28,8 @@ export function createAnalyticsRoutes(deps = {}) {
       if (kit.limited(req, res, { bucket: 'analytics-refresh' }, who.id)) return;
       const body = await kit.body(req);
       const projectId = projectIdFrom(body.projectId);
+      // a business that's locked on the plan (over its limit) refreshes nothing
+      await deps.billing?.requireSlot?.(who, projectId);
       const sources = body.sources === undefined ? undefined : Array.isArray(body.sources) ? body.sources.map(String) : [];
       const run = await refresher.start(who, projectId, sources);
       return kit.reply(req, res, 202, { run });
