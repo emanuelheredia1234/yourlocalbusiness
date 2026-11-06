@@ -833,7 +833,7 @@ const getSeoPage = defineTool({
     const meta = m.seo;
     if (!page || !meta) {
       return {
-        data: { ...base, page: null, next: 'write_seo_page writes it (set_page_type shows another type in the builder first).', ...(missingLink(p, type) === 'payment' ? { needs: 'A checkout page needs the owner’s own payment link first (the app never takes payments).' } : {}) },
+        data: { ...base, page: null, next: 'write_seo_page writes it (set_page_type shows another type in the builder first).', ...(missingLink(p, type) === 'payment' ? { needs: 'A checkout page needs a payment first: an offer from Attach payment, or the owner’s own payment link (the app never takes payments).' } : {}) },
         note: 'Your SEO page isn’t written yet',
       };
     }
@@ -878,7 +878,7 @@ const setPageType = defineTool({
         ...(exists
           ? { current: PAGE_TYPE_LABEL[now], next: pageType === now ? 'The page is already this type.' : 'The builder shows it under Page type → Change: the owner presses “Rewrite as …” there, or write_seo_page with this pageType and replace: true rewrites it (ask the owner first; it can be undone).' }
           : { next: 'It’s chosen in the builder: the owner presses Write page, or write_seo_page writes it.' }),
-        ...(missingLink(p, pageType) === 'payment' ? { needs: 'A checkout page needs the owner’s own payment link first: they add it in the builder (the app never takes payments).' } : {}),
+        ...(missingLink(p, pageType) === 'payment' ? { needs: 'A checkout page needs a payment first: the owner attaches an offer or pastes their own payment link in the builder (the app never takes payments).' } : {}),
       },
       note: `Opened the SEO page builder with “${PAGE_TYPE_LABEL[pageType]}” chosen`,
     };
