@@ -8,6 +8,10 @@
 //   10 minutes for a video) that this process isn't working on was left by a restart: it becomes `unknown`, on
 //   startup and on every read. `unknown` never means "send again": it reads "may have been posted - check before
 //   trying again", and "Check again" reads the status by the job id.
+// - A `failed` job that Upload-Post then posted after all (its own retry) becomes `sent`, unless the customer has
+//   posted it again since (another job is live): then the old job stays out of the live set and records
+//   POSTED_AFTER_ALL (shown as posted, with its address), and the live job says the post may now appear twice.
+//   Nothing is ever sent again.
 // Every query names the server-resolved user.
 
 import crypto from 'node:crypto';
@@ -42,30 +46,42 @@ export const JOB_MESSAGES = Object.freeze({
   SERVICE_UNAVAILABLE: 'Posting from the app isn’t available right now, so nothing was posted. We’ve been notified. You can post it yourself.',
 });
 
-/** Plain words for a job that was sent but isn't public yet (TikTok put it in the account's drafts). */
+/** Plain words for a job that was sent but isn't public yet (TikTok put it in the account's drafts), or may be there twice. */
 export const JOB_NOTES = Object.freeze({
   SENT_TO_DRAFTS: 'Sent to your TikTok drafts. Open TikTok to publish it.',
+  POSTED_AFTER_ALL: 'Posted after all: the network put this try up after it had failed. If you posted it again since, it may now appear twice. Check the network and delete one if so.',
+  MAY_APPEAR_TWICE: 'An earlier try that failed was posted after all, so this post may now appear twice. Check the network and delete one if so.',
 });
+/** The error code an old failed job keeps when the network posted it after all (its row stays out of the live set). */
+export const POSTED_AFTER_ALL = 'POSTED_AFTER_ALL';
 
 const iso = (ms) => new Date(ms).toISOString();
 
-/** A job as the app sees it (PublishJob): no provider ids, no user id. */
+/**
+ * A job as the app sees it (PublishJob): no provider ids, no user id. An old try the network posted after all reads
+ * as sent (with the POSTED_AFTER_ALL note), though its row stays `failed` so it never counts as a second live post;
+ * the live try of the same post then carries MAY_APPEAR_TWICE.
+ */
 export function jobOut(row) {
   if (!row) return null;
   const ref = row.provider_ref && typeof row.provider_ref === 'object' ? row.provider_ref : {};
+  const late = row.state === 'failed' && row.error_code === POSTED_AFTER_ALL;
+  const state = late ? 'sent' : row.state;
+  const note = late ? 'POSTED_AFTER_ALL' : typeof ref.twiceWith === 'string' ? 'MAY_APPEAR_TWICE' : state === 'sent' && ref.outcome === 'drafts' ? 'SENT_TO_DRAFTS' : null;
   return {
     id: row.id,
     postId: row.post_id,
     platform: row.platform,
-    state: row.state,
+    state,
     ...(typeof row.url === 'string' && /^https:\/\//.test(row.url) ? { url: row.url } : {}),
-    ...(row.error_code ? { errorCode: row.error_code, errorMessage: JOB_MESSAGES[row.error_code] ?? JOB_MESSAGES.REFUSED } : {}),
+    ...(row.error_code && !late ? { errorCode: row.error_code, errorMessage: JOB_MESSAGES[row.error_code] ?? JOB_MESSAGES.REFUSED } : {}),
     requestedAt: row.requested_at,
     ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
     ...(row.checked_at ? { checkedAt: row.checked_at } : {}),
     ...(typeof ref.comment === 'string' ? { comment: ref.comment } : {}),
     ...(ref.checkable === false ? { checkable: false } : {}),
-    ...(row.state === 'sent' && ref.outcome === 'drafts' ? { note: 'SENT_TO_DRAFTS', noteMessage: JOB_NOTES.SENT_TO_DRAFTS } : {}),
+    ...(late && ref.outcome === 'drafts' ? { drafts: true } : {}),
+    ...(note ? { note, noteMessage: JOB_NOTES[note] } : {}),
   };
 }
 
@@ -162,6 +178,43 @@ export function createJobs({ db, now = () => Date.now() }) {
       };
       const got = await db.update('post_publish_jobs', { id: jobId, user_id: userId, state: cur.state }, patch, { returning: true });
       return got[0] ?? (await byId(userId, jobId));
+    },
+
+    /**
+     * Upload-Post posted a job that had failed (its own retry): the job becomes `sent` when nothing else is live for
+     * that post and network. When the customer has posted it again since (another job is live, now or in a race on
+     * the one-live index), the old job stays `failed` (out of the live set, so the rule holds), records
+     * POSTED_AFTER_ALL with its address, and the live job is marked as maybe appearing twice. Nothing is sent.
+     * → the old job's row.
+     */
+    async postedAfterAll(userId, row, { url, drafts } = {}) {
+      if (row.state !== 'failed' || row.error_code === POSTED_AFTER_ALL) return row;
+      let live = await liveFor(userId, row.post_id, row.platform);
+      if (!live) {
+        try {
+          const done = await this.finish(userId, row.id, { state: 'sent', url, ref: drafts ? { outcome: 'drafts' } : undefined }, { fromFailed: true });
+          if (done?.state === 'sent') return done;
+        } catch (e) {
+          // another try went live in the meantime (the one-live index refused this one): recorded below instead
+          if (e?.code !== 'CONFLICT') throw e;
+        }
+        live = await liveFor(userId, row.post_id, row.platform);
+      }
+      const at = iso(now());
+      const got = await db.update('post_publish_jobs', { id: row.id, user_id: userId, state: 'failed' }, { error_code: POSTED_AFTER_ALL, ...(url ? { url } : {}), provider_ref: { ...(row.provider_ref ?? {}), postedAfterAllAt: at, ...(drafts ? { outcome: 'drafts' } : {}) } }, { returning: true });
+      if (live && live.id !== row.id) await this.note(userId, live.id, { twiceWith: row.id, twiceAt: at });
+      return got[0] ?? (await byId(userId, row.id));
+    },
+
+    /**
+     * After a job finished: when an older try of the same post was posted after all meanwhile (a race between the
+     * two), this one says the post may appear twice. → the row (changed or not).
+     */
+    async markIfTwice(userId, row) {
+      if (!row || row.provider_ref?.twiceWith || !['sent', 'unknown', 'sending'].includes(row.state)) return row;
+      const older = await db.select('post_publish_jobs', { user_id: userId, post_id: row.post_id, platform: row.platform, state: 'failed', error_code: POSTED_AFTER_ALL }, { select: 'id', limit: 1 });
+      if (!older[0] || older[0].id === row.id) return row;
+      return (await this.note(userId, row.id, { twiceWith: older[0].id, twiceAt: iso(now()) })) ?? row;
     },
 
     /**
