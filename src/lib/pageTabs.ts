@@ -7,7 +7,7 @@ export const PAGE_TABS = {
   strategy: { plan: 'Plan', research: 'Research', promote: 'Where to promote', content: 'Social content', assets: 'Assets to create', outreach: 'Email outreach', seo: 'SEO page' },
   studio: { structure: 'Structure & outline (Business model for a business)', code: 'Code & assets', publish: 'Listing & publish' },
   'workspace-settings': { brand: 'Brand', ai: 'AI keys', accounts: 'Social accounts', projects: 'Projects & data', prefs: 'Preferences', account: 'Account', domains: 'Domains' },
-  'marketing-social': { setup: 'Campaign setup', plan: '30-day plan', batch: '7-day batch', create: 'Create post', analytics: 'Analytics' },
+  'marketing-social': { setup: 'Campaign setup', plan: '30-day plan', batch: '7-day batch', create: 'Create post', abtests: 'A/B tests', analytics: 'Analytics' },
   'marketing-email': { magnet: 'Lead magnet', sequence: 'Sequence', preview: 'Preview & export', subscribers: 'Subscribers', leads: 'Leads', analytics: 'Analytics' },
   'marketing-ads': { plan: 'Plans', campaigns: 'Campaigns', analytics: 'Analytics' },
   'marketing-seo': { builder: 'Page', analytics: 'Analytics' },

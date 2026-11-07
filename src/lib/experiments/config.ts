@@ -40,6 +40,11 @@ export function experimentsOn(phase: string, config: ExperimentsConfig | null, a
   return phase === 'ready' && config?.enabled === true;
 }
 
+/** The same, read now outside React (menus): false until the config was asked once. */
+export function experimentsOnNow(): boolean {
+  return experimentsOn(useAuth.getState().phase, useExperimentsConfig.getState().config);
+}
+
 /** Whether "Make variations", the A/B tests tab and Trial Reels show here (asks the server's config once when signed in). */
 export function useExperimentsOn(): boolean {
   const phase = useAuth((s) => s.phase);

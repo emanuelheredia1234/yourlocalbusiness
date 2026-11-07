@@ -5,6 +5,7 @@ import type {
   CodeKind,
   Directives,
   EmailStep,
+  ExperimentChanged,
   LeadMagnet,
   LeadMagnetType,
   ImageAspect,
@@ -64,6 +65,7 @@ import { normalizeWorkbook, type WorkbookSpec } from './workbook';
 import { localWorkbook } from './local/workbook';
 import { localEbookExtras, type EbookExtras } from './local/ebook';
 import { BUY_TOKEN, keepBuyLinksOnly } from '@/lib/buyLinks';
+import { localPieces, validatePieces, type VariantsResult } from '@/lib/experiments/variants';
 
 export interface TaskEnv {
   project: Project;
@@ -1088,3 +1090,56 @@ export const skillTestTask = def<{ sample: 'caption' | 'email' | 'headline' | 'a
 export type AnyTask = TaskDef<never, unknown>;
 
 export * from './strategyTasks';
+
+// ───────────────────────── A/B variations (P4b) ─────────────────────────
+// One request makes 1–2 new versions of ONE piece (a hook, a caption, a call to action, an image description, a
+// subject line, an email's opening, a page headline or hero, a button's text). Only that piece comes back, so the
+// rest stays word for word; a reply that doesn't fit gives { problem } and the dialog offers one "Try again".
+
+export interface VariantsInput {
+  change: ExperimentChanged;
+  count: number;
+  /** the piece as it is now (version A) */
+  original: string;
+  /** hero: the subheading as it is */
+  originalSub?: string;
+  /** what the piece belongs to, for context (never rewritten) */
+  context: { platform?: string; topic?: string; whole?: string };
+}
+
+const PIECE: Record<string, string> = {
+  hook: 'the hook (the first line of the caption, one line)',
+  caption: 'the whole caption (same idea, same facts, same link and call to action intent)',
+  cta: 'the call to action (the last line of the caption, one line)',
+  visual: 'the image description used to make the picture or video (what is shown, not words on it)',
+  subject: 'the email subject line (one line, under 80 characters)',
+  opening: 'the first paragraph of the email',
+  headline: 'the page headline (one line)',
+  hero: 'the page headline (one line) and its subheading ("sub")',
+};
+
+const variantsDef = (id: string, label: string, module: ModuleScope) =>
+  def<VariantsInput, VariantsResult>({
+    id,
+    label,
+    module,
+    tier: 'quick',
+    local: (i) => ({ variants: localPieces(i.change, i.original, { count: i.count, topic: i.context.topic, originalSub: i.originalSub }) }),
+    claude: {
+      prompt: (i, env) =>
+        framePrompt({
+          task: `A/B test: write ${i.count} new version${i.count > 1 ? 's' : ''} of ${PIECE[i.change] ?? i.change}. Change only that one thing; everything else stays exactly as it is, word for word. Each version tries a clearly different idea (for example a question, a number, a bold claim, a short story), so the test can tell which idea works better. Give each a 2–5 word label naming its idea.`,
+          project: env.project,
+          brainPrompt: env.brainPrompt,
+          variation: env.variation,
+          input: { original: i.original, ...(i.change === 'hero' ? { originalSub: i.originalSub ?? '' } : {}), ...i.context },
+          shape: `{"variants": [{"label": string, "text": string${i.change === 'hero' ? ', "sub": string' : ''}}] (${i.count})`,
+          extraRules: [OWNER_FACTS_ONLY, 'Keep any web address, price, offer or name exactly as the original has it.', 'Never write the same text as the original.'],
+        }),
+      merge: (raw, _base, i) => validatePieces(raw, { change: i.change, count: i.count, original: i.original, originalSub: i.originalSub }),
+    },
+  });
+
+export const postVariantsTask = variantsDef('postVariants', 'Post variations (A/B)', 'social');
+export const emailVariantsTask = variantsDef('emailVariants', 'Email variations (A/B)', 'email');
+export const pageVariantsTask = variantsDef('pageVariants', 'Page variations (A/B)', 'seo');

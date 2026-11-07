@@ -7,6 +7,8 @@ import { create } from 'zustand';
 import { experimentErrorCopy, getTrialEligibility, listExperiments } from '@/lib/experiments/api';
 import { useExperimentsOn } from '@/lib/experiments/config';
 import { useAuth } from '@/lib/cloud/auth';
+import { navigate } from '@/lib/router';
+import { useUI } from './ui';
 import type { Experiment, ExperimentUsage, TrialEligibility } from '@/lib/types';
 
 export interface ExperimentsEntry {
@@ -118,4 +120,15 @@ export function useProjectExperiments(projectId: string | undefined): { on: bool
     if (on && projectId) void useExperiments.getState().load(projectId);
   }, [on, projectId, account]);
   return { on, experiments: on ? (entry?.experiments ?? EMPTY_LIST) : EMPTY_LIST, usage: entry?.usage ?? null, loading: !!entry?.loading, error: entry?.error ?? '' };
+}
+
+/** Open a test's card: Social › A/B tests, with that test open (a badge, a morning action, the assistant). */
+export function openExperimentCard(id: string): Promise<boolean> {
+  return navigate('marketing-social').then((ok) => {
+    if (ok) {
+      useUI.getState().setSocialTab('abtests');
+      useExperiments.getState().open(id);
+    }
+    return ok;
+  });
 }

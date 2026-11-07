@@ -5,7 +5,7 @@ import { navigate, type Route } from '@/lib/router';
 import type { PageType } from '@/lib/types';
 
 /** The Social media engine's tabs (create = Create individual post; analytics = the Analytics tab). */
-export type SocialTab = 'setup' | 'plan' | 'batch' | 'create' | 'analytics';
+export type SocialTab = 'setup' | 'plan' | 'batch' | 'create' | 'abtests' | 'analytics';
 
 export interface Toast {
   id: string;

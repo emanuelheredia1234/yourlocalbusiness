@@ -15,6 +15,7 @@ import { ConfirmHost, Toaster } from '@/components/ui/primitives';
 import { installLeaveGuard } from '@/components/ui/leave';
 import { PostEditorHost } from '@/components/posts/PostCard';
 import { PublishConfirmHost } from '@/components/posts/PublishConfirm';
+import { MakeVariationsHost } from '@/components/experiments/MakeVariations';
 import { PostItYourselfHost } from '@/components/posts/PostItYourselfModal';
 import { PublishJobWatcher } from '@/components/posts/PublishJobWatcher';
 import { MarkPostedHost } from '@/components/posts/PostActions';
@@ -241,6 +242,7 @@ export default function App() {
       <CommandPalette />
       <PostEditorHost />
       <PublishConfirmHost />
+      <MakeVariationsHost />
       <PostItYourselfHost />
       <PublishJobWatcher />
       <AgentBuildHost />

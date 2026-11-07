@@ -1,5 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Bookmark, CalendarClock, FilePlus2, Heart, ImageUp, MessageCircle, Send, X } from 'lucide-react';
+import { Bookmark, CalendarClock, FilePlus2, Heart, ImageUp, MessageCircle, Send, X, FlaskConical } from 'lucide-react';
+import { useExperimentsOn } from '@/lib/experiments/config';
+import { useMakeVariations } from '@/components/experiments/MakeVariations';
 import type { LinkPlacement, MediaRef, Post, PostFormat, PostPlatform, PostType, Project, StyleId } from '@/lib/types';
 import { addDays, cn, todayStr, truncate } from '@/lib/utils';
 import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
@@ -44,6 +46,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
   const allPosts = useStore((s) => s.posts);
   const saved = savedIds.map((id) => allPosts.find((p) => p.id === id)).filter((p): p is Post => !!p && p.status === 'scheduled');
   const addPosts = useStore((s) => s.addPosts);
+  const abOn = useExperimentsOn();
   const schedule = useStore((s) => s.schedulePosts);
   const ai = useAI(postTask);
   const [topic, setTopic] = useState(initialTopic ?? '');
@@ -350,6 +353,11 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
                 <li key={p.id} className="flex flex-wrap items-center gap-2">
                   <PlatformChip platform={p.platform} />
                   <span className="min-w-0 flex-1 truncate text-small text-ink-2">{p.headline}</span>
+                  {abOn && !p.experiment && (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => useMakeVariations.getState().open({ kind: 'post', postId: p.id })}>
+                      <FlaskConical /> Make variations
+                    </button>
+                  )}
                   <PostNowButton post={p} />
                 </li>
               ))}
