@@ -57,6 +57,15 @@ afterEach(() => {
 const open = (after?: () => void) => act(() => useBilling.getState().openAddBusiness(after));
 
 describe('Add a business', () => {
+  it('during a free trial: says when (the trial covers one business), never “charged today”, and sends nothing', async () => {
+    act(() => useBilling.setState({ account: { ...PLAN.account, status: 'trialing', trialEndsAt: '2026-11-20T12:00:00Z' } as never }));
+    open();
+    expect(text()).toContain('Extra businesses start after your free trial, which ends on November 20. You can add one then');
+    expect(text()).not.toContain('charged today');
+    expect([...host.querySelectorAll('button')].some((b) => b.textContent?.trim().endsWith('Add a business'))).toBe(false);
+    expect(api.changeBusinesses).not.toHaveBeenCalled();
+  });
+
   it('says the price and the charge today; done → the plan is read again, the dialog closes and what it was opened for runs', async () => {
     const after = vi.fn();
     open(after);

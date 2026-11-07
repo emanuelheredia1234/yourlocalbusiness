@@ -21,7 +21,7 @@ const { useBillingConfig } = await import('@/lib/billing/config');
 const { useBilling } = await import('@/store/billing');
 const { useStore } = await import('@/store/useStore');
 const { useSyncStatus } = await import('@/lib/cloud/sync');
-const { PlanCards, usePlanActions, LaunchPaywall } = await import('./Plans');
+const { PlanCards, usePlanActions, LaunchPaywall, TRIAL_FAQ } = await import('./Plans');
 const PlansPage = (await import('./Plans')).default;
 const { PlanSection, statusChip } = await import('@/pages/settings/PlanSection');
 const { UpgradePrompt } = await import('@/components/billing/UpgradePrompt');
@@ -300,5 +300,83 @@ describe('the 7-day card trial and the paywall after setup (P1c)', () => {
     expect(html(createElement(PlanBanner))).toContain('Free trial: 5 days left. Grow is $197/month from Nov 20 unless you cancel.');
     useBilling.setState({ plan: ENT({ banner: 'trial_ending', trial: true, trialDaysLeft: 2, trialEndsAt: '2026-11-20T12:00:00Z' }) as never });
     expect(html(createElement(PlanBanner))).toContain('Your free trial ends on Nov 20. Then Grow is $197/month. Cancel before then in Settings › Plan to pay nothing.');
+  });
+});
+
+describe('P1c review: what the person is told', () => {
+  const NONE = (over: Record<string, unknown> = {}) => ENT({ plan: 'none', tier: 'none', active: false, paused: 'plan', banner: null, starter: true, creditsPerMonth: 200, creditWindow: { start: '2020-01-01T00:00:00.000Z', resetsAt: null }, ...over });
+  const TRIAL = (over: Record<string, unknown> = {}) => ENT({ trial: true, trialDaysLeft: 4, banner: 'trial', trialEndsAt: '2026-11-20T12:00:00Z', creditsPerMonth: 300, ...over });
+  const TRIAL_ACCT = (over: Record<string, unknown> = {}) => ACCT({ status: 'trialing', trialing: true, trialEndsAt: '2026-11-20T12:00:00Z', currentPeriodEnd: '2026-11-20T12:00:00Z', extraBusinesses: 0, ...over });
+
+  it('the chip says Ended only for a plan that ended: no plan yet, a Checkout left half way, or a second trial refused says No plan', () => {
+    expect(statusChip(NONE() as never, ACCT({ tier: 'none', status: 'none', hasCustomer: true }) as never).label).toBe('No plan');
+    expect(statusChip(ENT({ active: false, paused: 'plan', banner: 'plan_ended' }) as never, ACCT({ status: 'canceled' }) as never).label).toBe('Ended');
+    expect(statusChip(ENT({ active: false, paused: 'plan', banner: 'plan_ended' }) as never, ACCT({ status: 'canceled', trialRefused: 'refused' }) as never).label).toBe('No plan');
+  });
+
+  it('a cancelled trial: the row says it ends with no charge (never the price from that day), and Keep my plan', () => {
+    useBilling.setState({ plan: TRIAL({ banner: 'cancel_at_period_end' }) as never, account: TRIAL_ACCT({ cancelAtPeriodEnd: true }) as never, businesses: BIZ({ limit: 1, used: 1, extraBusinesses: 0, slots: [{ projectId: 'p1', state: 'active' }] }) as never });
+    const out = html(createElement(PlanSection));
+    expect(out).toContain('4 days left · ends Nov 20');
+    expect(out).toContain('nothing is charged, and your plan ends with the trial');
+    expect(out).not.toContain('$197/month from Nov 20');
+    expect(out).toContain('Cancels Nov 20');
+    expect(out).toContain('Keep my plan');
+  });
+
+  it('during a trial: no Add a business (it covers one business), no reminder promised by email', () => {
+    useBilling.setState({ plan: TRIAL() as never, account: TRIAL_ACCT() as never, businesses: BIZ({ limit: 1, used: 1, extraBusinesses: 0, slots: [{ projectId: 'p1', state: 'active' }] }) as never });
+    const out = html(createElement(PlanSection));
+    expect(out).not.toContain('Add a business —');
+    expect(out).toContain('added once your free trial ends');
+    expect(out).not.toMatch(/emails you|days before/);
+  });
+
+  it('a payment that failed: Cancel plan is still there (it ends the plan now)', () => {
+    useBilling.setState({ plan: ENT({ banner: 'grace', graceUntil: '2026-11-13T00:00:00Z' }) as never, account: ACCT({ status: 'past_due' }) as never, businesses: BIZ() as never });
+    expect(html(createElement(PlanSection))).toContain('Cancel plan');
+    useBilling.setState({ plan: ENT({ active: false, paused: 'payment', banner: 'payment' }) as never, account: ACCT({ status: 'unpaid' }) as never });
+    expect(html(createElement(PlanSection))).toContain('Cancel plan');
+  });
+
+  it('a second trial that was refused: Settings, the banner and the chip say it didn’t start and nothing was charged', () => {
+    const plan = ENT({ active: false, paused: 'plan', banner: 'plan_ended' });
+    const account = ACCT({ status: 'canceled', trialRefused: 'refused' });
+    useBilling.setState({ plan: plan as never, account: account as never, businesses: BIZ({ limit: 1, used: 1, slots: [{ projectId: 'p1', state: 'active' }] }) as never });
+    const settings = html(createElement(PlanSection));
+    expect(settings).toContain('Your free trial didn’t start: this card or email already had one. We cancelled it, so nothing was charged.');
+    expect(settings).not.toContain('Cancel plan');
+    const banner = html(createElement(PlanBanner));
+    expect(banner).toContain('Your free trial didn’t start: this card or email already had one, so nothing was charged.');
+    expect(banner).not.toContain('Your plan has ended.');
+  });
+
+  it('a card trial’s AI credits used up: only own keys help until it ends (no Add a business, no upgrade)', () => {
+    useBilling.setState({ plan: TRIAL() as never, account: TRIAL_ACCT() as never, upgrade: { code: 'CREDITS_USED', message: 'You’ve used the 300 AI credits included in your free trial.', resetsAt: '2026-11-20T12:00:00Z', trial: true } as never });
+    const out = html(createElement(UpgradePrompt));
+    expect(out).toContain('Your trial’s AI credits are used');
+    expect(out).toContain('Use my own AI keys');
+    expect(out).toContain('Your plan’s monthly credits start on Nov 20, when the trial ends.');
+    expect(out).not.toContain('Add a business');
+    expect(out).not.toContain('See plans');
+  });
+
+  it('more than one business: the plan starts paid (no trial button), with the total', () => {
+    useBillingConfig.setState({ trialDays: 7 });
+    useBilling.setState({ plan: NONE() as never, account: null, trial: { days: 7, eligible: true }, businesses: BIZ({ limit: 1, used: 2 }) as never });
+    const out = html(createElement(Cards, { interval: 'month' }));
+    expect(out).toContain('Start with Grow');
+    expect(out).not.toContain('Start 7-day free trial');
+    expect(out).toContain('You have 2 businesses: $294/month in total');
+  });
+
+  it('the trial’s FAQ promises no email “3 days before” (Stripe’s reminder is 7 days before, at the start of a 7-day trial)', () => {
+    useAuth.setState({ phase: 'signed-out' });
+    useBillingConfig.setState({ trialDays: 7 });
+    expect(html(createElement(PlansPage))).toContain('How does the free trial work?');
+    const a = TRIAL_FAQ(7).a;
+    expect(a).toContain('One trial per person and card: if yours had one before, the trial doesn’t start and nothing is charged.');
+    expect(a).toContain('for one business; you can add more businesses once it ends');
+    expect(a).not.toMatch(/reminder|email|days before/);
   });
 });

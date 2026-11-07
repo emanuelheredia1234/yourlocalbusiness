@@ -56,13 +56,13 @@ export async function seedPrices(stripeMock) {
 
 /**
  * A running billing server. opts: env overrides, enforce (billing_settings.enforce), seed (the prices; default true),
- * log (a spy). Returns { base, supa, stripe, db, routes, plans, logs, clock, advance(ms), user(email, {admin}), call(…),
+ * log (a spy), missingTables (tables a migration that isn't run would make). Returns { base, supa, stripe, db, routes, plans, logs, clock, advance(ms), user(email, {admin}), call(…),
  * close() }.
  */
-export async function billingServer({ env: envOver = {}, enforce = true, seed = true, webhook = true } = {}) {
+export async function billingServer({ env: envOver = {}, enforce = true, seed = true, webhook = true, missingTables = [] } = {}) {
   let offset = 0;
   const clock = () => Date.now() + offset;
-  const supa = await createMockSupabase({ projectSlots: true }).then((m) => m.start());
+  const supa = await createMockSupabase({ projectSlots: true, missingTables }).then((m) => m.start());
   supa.behavior.now = clock;
   const stripe = await createMockStripe({ now: clock }).start();
   if (seed) await seedPrices(stripe);

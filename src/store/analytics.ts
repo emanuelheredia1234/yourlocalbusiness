@@ -238,6 +238,12 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
         if (c && c.state !== 'not_connected' && c.state !== 'pending') {
           delete pending[p];
           delete expired[p];
+        } else if (c?.state === 'not_connected' && c.lastError) {
+          // the server stopped waiting (a connect starts by clearing lastError): the connect came back with an error,
+          // in another tab (its row says why), or the server's own wait ran out ("That didn't finish")
+          delete pending[p];
+          if (c.lastError === 'not_finished') expired[p] = true;
+          else delete expired[p];
         } else if (now - at > PENDING_EXPIRES_MS) {
           delete pending[p];
           expired[p] = true;

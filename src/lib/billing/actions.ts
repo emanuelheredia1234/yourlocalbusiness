@@ -164,8 +164,13 @@ export function upgradeTier(need: string | undefined, current: string | null | u
 /** The id of a "Keep my plan" that may have reached Stripe: the next press sends the same one (never a second write). */
 let unsureResume: string | null = null;
 
-/** "Keep my plan": undo a cancel at the period's end. One request per press; an unclear answer keeps its id. */
+/**
+ * "Keep my plan": undo a cancel at the period's end. One request per press; an unclear answer keeps its id (a
+ * definite one, NOT_APPLIED included, makes the next press a new request). While the server can't do it here
+ * (cancelInApp false, USE_PORTAL), the Customer Portal does.
+ */
 export async function keepPlan(): Promise<boolean> {
+  if (!useBilling.getState().cancelInApp) return manageBilling();
   const id = unsureResume ?? newRequestId();
   try {
     const out = await resumePlan(id);
@@ -176,6 +181,10 @@ export async function keepPlan(): Promise<boolean> {
   } catch (e) {
     const err = e instanceof IntegrationApiError ? e : null;
     unsureResume = err && (err.code === 'BILLING_PENDING' || err.code === 'NETWORK') ? id : null;
+    if (err?.code === 'USE_PORTAL') {
+      useBilling.setState({ cancelInApp: false });
+      return manageBilling();
+    }
     toast({ kind: 'error', title: err?.message ?? 'Couldn’t keep your plan just now. Try again shortly.' });
     void useBilling.getState().refresh();
     return false;

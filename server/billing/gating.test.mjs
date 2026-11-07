@@ -21,13 +21,14 @@ import { billingServer } from './test-helpers.mjs';
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ylb-gating-'));
 const OWN_KEY = 'o-own-key-gate-00000001';
+const OWN_VIDEO_KEY = 'x-own-key-gate-00000001';
 const DAY = 86_400_000;
 let supa;
 let providers;
 
 beforeAll(async () => {
   supa = await (await createMockSupabase()).start();
-  providers = await createMockProviders({ keys: { openai: ['o-key-owner-1', OWN_KEY], xai: ['x-key-owner-1'] } }).start();
+  providers = await createMockProviders({ keys: { openai: ['o-key-owner-1', OWN_KEY], xai: ['x-key-owner-1', OWN_VIDEO_KEY] } }).start();
 });
 afterAll(async () => {
   await supa.close();
@@ -116,8 +117,56 @@ describe('the AI gate with plans', () => {
     const calls = providers.calls.length;
     const v = await fetch(`${app.base}/api/ai/video`, { method: 'POST', headers: headersFor(fresh), body: JSON.stringify({ prompt: 'a cafe', duration: 5 }) });
     expect(v.status).toBe(402);
-    expect(await v.json()).toMatchObject({ code: 'PLAN_REQUIRED', need: { feature: 'video' } });
+    expect(await v.json()).toMatchObject({ code: 'PLAN_REQUIRED', need: { feature: 'video' }, error: 'AI video is part of every plan. Choose a plan to make videos, or use your own AI keys.' });
+    // a longer one says the same on the app's keys (not the plan's length)
+    const long = await fetch(`${app.base}/api/ai/video`, { method: 'POST', headers: headersFor(fresh), body: JSON.stringify({ prompt: 'a cafe', duration: 15 }) });
+    expect(await long.json()).toMatchObject({ code: 'PLAN_REQUIRED', need: { feature: 'video' } });
     expect(providers.calls.length).toBe(calls);
+  });
+
+  it('own keys are never limited by a plan: AI video on the user’s own key with no plan, or a plan that ended', async () => {
+    for (const [email, acct] of [['ownvideo@gate.test', null], ['ownlapsed@gate.test', row({ tier: 'none', status: 'canceled', ended_at: new Date(Date.now() - DAY).toISOString() })]]) {
+      const u = await supa.tokenFor(email);
+      if (acct) billing.accounts.set(u.user.id, acct);
+      const put = await fetch(`${app.base}/api/ai/my-keys/xai`, { method: 'PUT', headers: headersFor(u), body: JSON.stringify({ apiKey: OWN_VIDEO_KEY }) });
+      expect(put.status).toBe(200);
+      const v = await fetch(`${app.base}/api/ai/video`, { method: 'POST', headers: headersFor(u), body: JSON.stringify({ prompt: 'a cafe', duration: 5 }) });
+      expect(v.status).toBe(200);
+      expect((await v.json()).job).toBeTruthy();
+      await fetch(`${app.base}/api/ai/my-keys/xai`, { method: 'DELETE', headers: headersFor(u) });
+    }
+  });
+
+  it('a card trial: its 300 credits on top of what setup spent that day before it; used up, it says so (nothing to add during a trial)', async () => {
+    const u = await supa.tokenFor('trialgate@gate.test');
+    const start = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    const trial = row({ tier: 'grow', status: 'trialing', current_period_start: start, current_period_end: new Date(Date.now() + 7 * DAY).toISOString(), trial_ends_at: new Date(Date.now() + 7 * DAY).toISOString() });
+    const day = utcDay(Date.parse(start));
+    supa.tables.set('ai_usage_daily', [...(supa.tables.get('ai_usage_daily') ?? []).filter((r) => r.user_id !== u.user.id), { user_id: u.user.id, day, email: '', requests: 9, usd: 4, own_requests: 0, own_usd: 0 }]);
+    const withBaseline = { ...billing, entitlement: async (id, who) => {
+      const ent = await billing.entitlement(id, who);
+      return id === u.user.id ? { ...ent, creditWindow: { ...ent.creditWindow, baselineUsd: 1.8 } } : ent;
+    } };
+    billing.accounts.set(u.user.id, trial);
+    const t = await startApp(withBaseline);
+    try {
+      // $4 spent today, $1.80 of it by setup before the trial: $2.20 of the trial's $3 used, so it still runs
+      expect((await fetch(`${t.base}/api/ai/generate`, { method: 'POST', headers: headersFor(u), body: JSON.stringify({ fn: 'research', prompt: 'ideas' }) })).status).toBe(200);
+      const usage = await (await fetch(`${t.base}/api/ai/my-usage`, { headers: headersFor(u) })).json();
+      expect(usage.credits.monthly).toBe(300);
+      expect(usage.credits.usedCredits).toBeGreaterThanOrEqual(220);
+      expect(usage.credits.usedCredits).toBeLessThan(230);
+      // the trial's credits used up: what to do now, never "add a business or upgrade"
+      supa.tables.get('ai_usage_daily').find((r) => r.user_id === u.user.id).usd = 4.8;
+      const r = await fetch(`${t.base}/api/ai/generate`, { method: 'POST', headers: headersFor(u), body: JSON.stringify({ fn: 'research', prompt: 'ideas' }) });
+      expect(r.status).toBe(402);
+      const j = await r.json();
+      expect(j).toMatchObject({ code: 'CREDITS_USED', trial: true, credits: { monthly: 300 } });
+      expect(j.error).toMatch(/^You’ve used the 300 AI credits included in your free trial\. Your plan’s monthly credits start when the trial ends on .+\. Until then, use your own AI keys\.$/);
+      expect(j.error).not.toMatch(/business|upgrade/i);
+    } finally {
+      await t.close();
+    }
   });
 
   it('stops at the month’s credits with CREDITS_USED and when they renew; own keys are never counted or limited', async () => {

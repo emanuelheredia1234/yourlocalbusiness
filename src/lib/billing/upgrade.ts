@@ -16,6 +16,8 @@ export interface RefusalBody {
   /** VIDEO_WEEK_LIMIT: the business's time zone (also in videoWeek.timeZone) */
   timeZone?: unknown;
   videoWeek?: { timeZone?: unknown } | null;
+  /** CREDITS_USED during a card trial */
+  trial?: unknown;
 }
 
 /** A time zone this browser can show dates in (the refusal's), else undefined (the browser's own). */
@@ -37,7 +39,7 @@ export function showUpgrade(err: RefusalBody | null | undefined): boolean {
   if (!CODES.has(code)) return false;
   const message = typeof err.error === 'string' && err.error ? err.error : typeof err.message === 'string' ? err.message : '';
   const need = err.need && typeof err.need === 'object' ? { ...(typeof err.need.feature === 'string' ? { feature: err.need.feature } : {}), ...(typeof err.need.tier === 'string' ? { tier: err.need.tier } : {}) } : undefined;
-  useBilling.getState().showUpgrade({ code, message: message || fallback(code), ...(need ? { need } : {}), ...(typeof err.resetsAt === 'string' ? { resetsAt: err.resetsAt } : {}), ...(zoneOf(err) ? { timeZone: zoneOf(err) } : {}) });
+  useBilling.getState().showUpgrade({ code, message: message || fallback(code), ...(need ? { need } : {}), ...(typeof err.resetsAt === 'string' ? { resetsAt: err.resetsAt } : {}), ...(zoneOf(err) ? { timeZone: zoneOf(err) } : {}), ...(err.trial === true ? { trial: true } : {}) });
   return true;
 }
 

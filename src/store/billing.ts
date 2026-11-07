@@ -22,6 +22,8 @@ export interface UpgradeRequest {
   resetsAt?: string;
   /** the time zone resetsAt is shown in (the business's week, for VIDEO_WEEK_LIMIT) */
   timeZone?: string;
+  /** CREDITS_USED during a card trial: its allowance is fixed (nothing to add until it ends) */
+  trial?: boolean;
 }
 
 interface BillingState {
@@ -33,6 +35,8 @@ interface BillingState {
   credits: PlanCredits | null;
   /** the card trial this person may start (null: not known yet, or an older server) */
   trial: TrialOffer | null;
+  /** Cancel plan and Keep my plan run in the app (false: they open the Customer Portal; the server isn't ready) */
+  cancelInApp: boolean;
   loading: boolean;
   error: string | null;
   loadedAt: number;
@@ -54,7 +58,7 @@ interface BillingState {
   reset: () => void;
 }
 
-const EMPTY = { plan: null, account: null, businesses: null, credits: null, trial: null, loading: false, error: null, loadedAt: 0 };
+const EMPTY = { plan: null, account: null, businesses: null, credits: null, trial: null, cancelInApp: true, loading: false, error: null, loadedAt: 0 };
 
 export const useBilling = create<BillingState>((set, get) => ({
   enforce: useBillingConfig.getState().enforce,
@@ -76,6 +80,7 @@ export const useBilling = create<BillingState>((set, get) => ({
         account: plan.account,
         credits: plan.credits,
         trial: plan.trial ?? null,
+        cancelInApp: plan.billing.cancelInApp !== false,
         businesses: businesses ?? {
           limit: plan.businesses.limit,
           used: plan.businesses.used,

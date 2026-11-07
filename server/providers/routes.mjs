@@ -305,6 +305,16 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       return { error: 'You’ve used the AI included for setting up. Start your free trial to keep going, or use your own AI keys.', code: 'PLAN_REQUIRED', need: { feature: 'ai', tier: 'launch' }, credits: { monthly: ent.creditsPerMonth }, upgrade: '#plans' };
     }
     const resets = st.resetsAt ? new Date(st.resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' }) : 'next month';
+    // a card trial's allowance is fixed: neither a business nor another plan adds to it before the trial ends
+    if (ent.trial === true) {
+      return {
+        error: `You’ve used the ${Number(ent.creditsPerMonth).toLocaleString('en-US')} AI credits included in your free trial. Your plan’s monthly credits start when the trial ends${st.resetsAt ? ` on ${resets}` : ''}. Until then, use your own AI keys.`,
+        code: 'CREDITS_USED',
+        trial: true,
+        resetsAt: st.resetsAt,
+        credits: { monthly: ent.creditsPerMonth },
+      };
+    }
     return {
       error: `You’ve used this month’s AI credits. They renew on ${resets}. Add a business or upgrade for more, or use your own AI keys.`,
       code: 'CREDITS_USED',
@@ -349,7 +359,9 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       }
       // the month's AI credits (after the daily cap, which stops bursts)
       if (!own && plan && plan.creditsPerMonth != null && plan.creditWindow) {
-        const mst = await limits.monthStatus(m.id, { budgetUsd: plan.creditsPerMonth * 0.01, sinceDay: plan.creditWindow.start.slice(0, 10), resetsAt: plan.creditWindow.resetsAt }, { reservation: release, strict });
+        // a card trial's first day: what setup spent before the trial (baselineUsd) is on top of the trial's credits
+        const budgetUsd = plan.creditsPerMonth * 0.01 + Math.max(0, Number(plan.creditWindow.baselineUsd) || 0);
+        const mst = await limits.monthStatus(m.id, { budgetUsd, sinceDay: plan.creditWindow.start.slice(0, 10), resetsAt: plan.creditWindow.resetsAt }, { reservation: release, strict });
         if (mst.reached) {
           ownKeys = await ownKeysOf(who, { fresh: true });
           own = router.ownRoute(kind, ownKeys).length > 0;
@@ -763,7 +775,9 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         const ent = billing?.entitlement && !isAdmin(req, who) ? await billing.entitlement(who.id, who) : null;
         if (ent && ent.creditsPerMonth != null && ent.creditWindow) {
           const used = await limits.monthUsage(who.id, ent.creditWindow.start.slice(0, 10));
-          credits = { monthly: ent.creditsPerMonth, usedCredits: Math.ceil(Math.round(used.usd * 100 * 1e6) / 1e6), resetsAt: ent.creditWindow.resetsAt };
+          // a card trial's first day: what setup spent before it isn't the trial's
+          const usd = Math.max(0, used.usd - (Number(ent.creditWindow.baselineUsd) || 0));
+          credits = { monthly: ent.creditsPerMonth, usedCredits: Math.ceil(Math.round(usd * 100 * 1e6) / 1e6), resetsAt: ent.creditWindow.resetsAt };
         }
       } catch {
         credits = undefined;
@@ -856,21 +870,24 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       // cut short); own keys keep the app's limits
       let maxHeight;
       let ent;
+      let v = null;
+      const tooLong = () => ({ error: `Videos up to ${v.maxSeconds} seconds are part of your plan. Longer videos are part of Grow and Scale.`, code: 'PLAN_REQUIRED', need: { feature: 'video_length', tier: 'grow' }, upgrade: '#plans' });
+      const notOnPlan = (e) => (e.paused === 'payment' ? { error: 'Your last payment didn’t go through. Update your card in Billing to keep going.', code: 'PAYMENT_REQUIRED', upgrade: '#plans' } : { error: 'AI video is part of every plan. Choose a plan to make videos, or use your own AI keys.', code: 'PLAN_REQUIRED', need: { feature: 'video', tier: 'launch' }, upgrade: '#plans' });
       if (billing?.entitlement && isMetered(req, who) && who?.id) {
         try {
           ent = await billing.entitlement(who.id, who);
         } catch {
           ent = null;
         }
-        // AI video is a paid action: not part of setup's allowance before a plan
-        if (ent && ent.plan !== 'legacy' && ent.plan !== 'owner' && !ent.active) {
-          return reply(req, res, 402, ent.paused === 'payment' ? { error: 'Your last payment didn’t go through. Update your card in Billing to keep going.', code: 'PAYMENT_REQUIRED', upgrade: '#plans' } : { error: 'AI video is part of every plan. Start your free trial to make one.', code: 'PLAN_REQUIRED', need: { feature: 'video', tier: 'launch' }, upgrade: '#plans' });
-        }
-        const v = ent && ent.plan !== 'legacy' && ent.plan !== 'owner' ? ent.features?.video : null;
+        v = ent && ent.plan !== 'legacy' && ent.plan !== 'owner' ? ent.features?.video ?? null : null;
         if (v) {
-          if (duration > v.maxSeconds) return reply(req, res, 402, { error: `Videos up to ${v.maxSeconds} seconds are part of your plan. Longer videos are part of Grow and Scale.`, code: 'PLAN_REQUIRED', need: { feature: 'video_length', tier: 'grow' }, upgrade: '#plans' });
+          // no plan (or a paused one): on the app's keys the plan's own refusal comes first, below
+          if (duration > v.maxSeconds && ent.active) return reply(req, res, 402, tooLong());
           maxHeight = v.maxHeight;
         }
+        // AI video on the app's keys is a paid action, never part of setup's allowance before a plan. Own keys are
+        // never limited by a plan (read fresh: one added through another copy of the server counts too).
+        if (v && !ent.active && !router.ownRoute('video', await ownKeysOf(who, { fresh: true })).length) return reply(req, res, 402, notOnPlan(ent));
       }
       // on the owner's keys, the video's estimated cost counts toward the day as soon as it starts
       const g = await gate(req, res, who, 'video', { estimateUsd: router.estimate('video', { duration }), charge: true });
@@ -879,6 +896,16 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       if (ent === null && !g.own && billing?.config?.().enforce === true) {
         await g.done({ failed: true });
         return reply(req, res, 503, { error: 'Couldn’t check your plan right now. Try again in a minute, or use your own AI keys.', code: 'UNAVAILABLE' });
+      }
+      // the same rule if the gate ended up on the app's keys after all (it lets setup's allowance through)
+      if (!g.own && v && !ent.active) {
+        await g.done({ failed: true });
+        return reply(req, res, 402, notOnPlan(ent));
+      }
+      // own keys without an active plan keep the entry plan's length (as before plans)
+      if (v && duration > v.maxSeconds) {
+        await g.done({ failed: true });
+        return reply(req, res, 402, tooLong());
       }
       // this business's week: claimed before the provider is asked (two parallel starts can't both pass at the limit)
       const week = await claimVideoWeek(req, res, who, { ent, own: !!g.own, projectId, zone });

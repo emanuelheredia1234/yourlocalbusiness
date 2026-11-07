@@ -19,10 +19,21 @@ const fmtDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString
 
 export const REFRESH_AFTER_MS = 5 * 60_000;
 
-/** After Checkout: "You're on Grow." once the plan shows it; still processing → a toast with a refresh. */
-async function afterCheckout(sessionId: string): Promise<void> {
+/**
+ * After Checkout: "You're on Grow." (or the trial's dates) once the plan shows it; a second trial on a card or email
+ * that had one says it didn't start and nothing was charged; still processing → a toast with a refresh.
+ */
+export async function afterCheckout(sessionId: string): Promise<void> {
   const r = await useBilling.getState().refresh({ sessionId });
   const acct = r?.account;
+  if (r && acct?.trialRefused === 'refused') {
+    toast({ kind: 'error', title: 'Your free trial didn’t start', body: 'This card or email already had a free trial, so we cancelled this one: nothing was charged. Choose a plan to start today.', action: { label: 'See plans', run: () => void navigate('plans', { force: true }) } });
+    return;
+  }
+  if (r && acct?.trialRefused === 'checking') {
+    toast({ kind: 'info', title: 'We’re checking your free trial', body: 'This card or email may have had one already. This takes a minute.', action: { label: 'Refresh', run: () => void afterCheckout(sessionId) } });
+    return;
+  }
   if (r && acct && ['active', 'trialing'].includes(acct.status)) {
     if (acct.status === 'trialing') toast({ kind: 'success', title: `Your free trial of ${tierName(acct.tier)} has started.`, body: `Nothing is charged until ${fmtDate(acct.trialEndsAt)}. Cancel any time before in Settings › Plan.` });
     else toast({ kind: 'success', title: `You’re on ${tierName(acct.tier)}.` });
@@ -167,6 +178,14 @@ export function PlanBanner() {
         </Callout>
       );
     case 'plan_ended':
+      // a second trial on a card or email that had one never was a plan: it was cancelled, nothing charged
+      if (account?.trialRefused) {
+        return (
+          <Callout tone="warn" className="mb-5" action={plans('See plans')}>
+            Your free trial didn’t start: this card or email already had one, so nothing was charged. Choose a plan to start today.
+          </Callout>
+        );
+      }
       return (
         <Callout tone="warn" className="mb-5" action={plans('See plans')}>
           Your plan has ended. Your work is kept; choose a plan to keep using paid features.

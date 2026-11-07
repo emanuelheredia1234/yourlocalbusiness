@@ -20,9 +20,9 @@ describe('entitlementOf', () => {
 
   it('a new sign-up has no plan (paused, no banner) but setup’s one-off AI allowance; an ended one says so and gets none', () => {
     expect(entitlementOf(null, ON, NOW)).toMatchObject({ plan: 'none', active: false, paused: 'plan', banner: null, starter: true, creditsPerMonth: 200, creditWindow: { start: '2020-01-01T00:00:00.000Z', resetsAt: null }, features: { adsLaunch: false } });
-    // a row made at sign-up (no plan yet): the allowance counts from that day, once
+    // a billing row made later (a Checkout that was abandoned) never moves the start: what setup used before it counts
     const fresh = entitlementOf(acct({ tier: 'none', status: 'none', created_at: '2026-11-10T15:00:00Z' }), ON, NOW);
-    expect(fresh).toMatchObject({ starter: true, creditsPerMonth: 200, creditWindow: { start: '2026-11-10T00:00:00.000Z', resetsAt: null } });
+    expect(fresh).toMatchObject({ starter: true, creditsPerMonth: 200, creditWindow: { start: '2020-01-01T00:00:00.000Z', resetsAt: null } });
     expect(entitlementOf(acct({ tier: 'none', status: 'canceled', ended_at: at(-1) }), ON, NOW)).toMatchObject({ plan: 'none', banner: 'plan_ended', starter: false, creditsPerMonth: 0 });
     // a free plan that ended, or a subscription that never finished: no allowance either
     expect(entitlementOf(acct({ source: 'comp', tier: 'none', status: 'expired' }), ON, NOW)).toMatchObject({ starter: false, creditsPerMonth: 0 });

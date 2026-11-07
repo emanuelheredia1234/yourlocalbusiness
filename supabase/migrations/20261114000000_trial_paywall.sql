@@ -7,14 +7,19 @@
 --                       set to 7 (the owner can set it back in Customer usage › Plans).
 --   billing_trials      one row per card trial that started: who, a keyed hash of their email and card fingerprint
 --                       (never the card or the address), and what happened. One trial per person. Server-only.
---   cancel_surveys      why people cancel: in-app answers before cancelling, and the Customer Portal's own survey read
---                       from the subscription's cancellation_details. Server-only; the owner reads counts and comments.
---   billing_ops.kind    adds 'cancel' and 'resume' (cancel at period end / keep the plan) and 'end_trial' (a second
---                       trial on a card or email already used ends at once). Each is sent to Stripe once, never resent.
+--                       Deleting the account keeps the row (user_id becomes null): its hashes can't be read back, and
+--                       they stop the same email or card from starting a new trial on a new account.
+--   cancel_surveys      why people cancel: in-app answers once the cancel went through, and the Customer Portal's own
+--                       survey read from the subscription's cancellation_details. Server-only; the owner reads totals
+--                       (ylb_cancel_survey_totals) and the latest comments.
+--   billing_ops.kind    adds 'cancel' and 'resume' (cancel at period end, or now when a payment failed / keep the plan)
+--                       and 'end_trial' (a second trial on a card or email already used is cancelled at once, nothing
+--                       charged). Each is sent to Stripe once, never resent.
 --
 -- Check it:   select card_trial_days from public.billing_settings;
 --             select outcome, count(*) from public.billing_trials group by 1;
 --             select reason, count(*) from public.cancel_surveys group by 1 order by 2 desc;
+--             select public.ylb_cancel_survey_totals();
 -- Roll back:  the old claim_project_slot is in 20261110000000_billing.sql; the new tables can stay (nothing reads them
 --             without this app version).
 
@@ -27,7 +32,8 @@ update public.billing_settings set card_trial_days = 7 where card_trial_days = 0
 
 create table if not exists public.billing_trials (
   subscription_id text primary key check (subscription_id ~ '^sub_[A-Za-z0-9_]{6,200}$'),
-  user_id uuid not null references auth.users (id) on delete cascade,
+  -- null once the account is deleted: the row stays so the same email or card never gets a second trial
+  user_id uuid references auth.users (id) on delete set null,
   customer_tag text not null check (customer_tag ~ '^cust_[0-9a-f]{24}$'),
   -- HMAC-SHA256 with CUSTOMER_TAG_SECRET (hex): the same email or card matches, the value can't be read back
   email_hash text check (email_hash ~ '^[0-9a-f]{64}$'),
@@ -35,11 +41,22 @@ create table if not exists public.billing_trials (
   tier text check (tier in ('launch', 'grow', 'scale')),
   started_at timestamptz not null default now(),
   trial_ends_at timestamptz,
-  -- 'trialing' while it runs; 'duplicate' when this person or card had a trial before (it is ended at once);
-  -- 'ended_early' once that end went through; 'end_failed' when Stripe refused it (the owner is alerted)
+  -- when this row was written: of two trials started in the same second, the one recorded first keeps it
+  created_at timestamptz not null default now(),
+  -- 'trialing' while it runs; 'duplicate' when this person or card had a trial before (its subscription is cancelled
+  -- at once); 'ended_early' once that cancel went through (nothing was charged); 'end_failed' when Stripe refused it
+  -- or it was never confirmed (the owner is alerted; nothing is sent again)
   outcome text not null default 'trialing' check (outcome in ('trialing', 'duplicate', 'ended_early', 'end_failed')),
+  -- what setup spent on the app's AI keys on the trial's first (UTC) day before it began: not counted in the trial
+  ai_baseline_usd numeric check (ai_baseline_usd is null or ai_baseline_usd >= 0),
   updated_at timestamptz not null default now()
 );
+-- a database that ran an earlier draft of this file: the same columns and rules
+alter table public.billing_trials add column if not exists ai_baseline_usd numeric check (ai_baseline_usd is null or ai_baseline_usd >= 0);
+alter table public.billing_trials add column if not exists created_at timestamptz not null default now();
+alter table public.billing_trials alter column user_id drop not null;
+alter table public.billing_trials drop constraint if exists billing_trials_user_id_fkey;
+alter table public.billing_trials add constraint billing_trials_user_id_fkey foreign key (user_id) references auth.users (id) on delete set null;
 create index if not exists billing_trials_user on public.billing_trials (user_id);
 create index if not exists billing_trials_email on public.billing_trials (email_hash) where email_hash is not null;
 create index if not exists billing_trials_card on public.billing_trials (card_hash) where card_hash is not null;
@@ -64,12 +81,29 @@ create table if not exists public.cancel_surveys (
   created_at timestamptz not null default now()
 );
 create index if not exists cancel_surveys_created on public.cancel_surveys (created_at desc);
--- the portal's answer is read on every sync of a cancelled subscription: kept once
+-- the portal's answer is read on every sync of a cancelled subscription: kept once. The server inserts without
+-- ON CONFLICT (a partial index can't be named there through PostgREST) and takes 23505 as "already kept".
 create unique index if not exists cancel_surveys_portal_once on public.cancel_surveys (subscription_id) where source = 'portal';
 
 alter table public.billing_trials enable row level security;
 alter table public.cancel_surveys enable row level security;
 revoke all on table public.billing_trials, public.cancel_surveys from anon, authenticated;
+
+-- the owner's totals (Customer usage › Why people cancel): every answer and trial, not only the latest rows read
+create or replace function public.ylb_cancel_survey_totals() returns jsonb
+  language sql stable security definer set search_path = '' as $$
+  select jsonb_build_object(
+    'answers', (select count(*) from public.cancel_surveys),
+    'byReason', coalesce((select jsonb_object_agg(r.reason, jsonb_build_object('cancelled', r.cancelled, 'kept', r.kept))
+      from (select reason, count(*) filter (where outcome = 'cancelled') as cancelled,
+              count(*) filter (where outcome <> 'cancelled') as kept
+            from public.cancel_surveys group by reason) r), '{}'::jsonb),
+    'trialing', (select count(*) from public.billing_trials where outcome = 'trialing' and trial_ends_at > now()),
+    'endedEarly', (select count(*) from public.billing_trials where outcome = 'ended_early'),
+    'duplicates', (select count(*) from public.billing_trials where outcome in ('duplicate', 'ended_early', 'end_failed')));
+$$;
+revoke all on function public.ylb_cancel_survey_totals() from public, anon, authenticated;
+grant execute on function public.ylb_cancel_survey_totals() to service_role;
 
 -- ───────────── money operations: cancel, resume, end a duplicate trial ─────────────
 

@@ -34,6 +34,7 @@ import { UsageSection } from './UsageSection';
 import { PlanSection } from './PlanSection';
 import { PaymentsSection } from './PaymentsSection';
 import { OwnerSection } from './OwnerSection';
+import { settingsTabAllowed } from './tabs';
 import { useAnalytics } from '@/store/analytics';
 import { useBillingOn } from '@/store/billing';
 
@@ -64,9 +65,8 @@ export default function Settings() {
   useEffect(() => {
     if (!__ARTIFACT_BUILD__ && signedIn) void useAnalytics.getState().loadOwner();
   }, [signedIn]);
-  // Plan only when signed in with plans shown (never in the artifact build)
-  // Payments only where the app's server is (never in the artifact build)
-  const allowed = (id: string) => (id !== 'account' || signedIn) && (id !== 'plan' || (signedIn && billing)) && (id !== 'payments' || !__ARTIFACT_BUILD__) && (id !== 'owner' || (owner && !__ARTIFACT_BUILD__));
+  // Account and Plan signed in (Plan with plans shown), Payments where the app's server is, Owner for the owner only
+  const allowed = (id: string) => settingsTabAllowed(id, { signedIn, billing, owner, artifact: __ARTIFACT_BUILD__ });
   const { access } = usePublishAccess();
   const wanted = useUI((s) => s.settingsTab);
   const [tab, setTab] = useState<Tab>(() => (wanted && TAB_IDS.includes(wanted) && allowed(wanted) ? (wanted as Tab) : 'brand'));

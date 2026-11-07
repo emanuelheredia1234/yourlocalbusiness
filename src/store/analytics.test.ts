@@ -163,6 +163,25 @@ describe('connected accounts', () => {
     expect(useAnalytics.getState().expired.tiktok).toBe(true);
   });
 
+  it('the connect came back with an error in another tab: this tab stops waiting and the row shows why (the server’s lastError)', async () => {
+    useAnalytics.setState({ pending: { meta_ads: Date.now() - 60_000 } });
+    api.getConnections.mockResolvedValue({ connections: [{ platform: 'meta_ads', state: 'not_connected', lastError: 'ad_accounts_not_granted' }], available: ['meta_ads'], setUp: true });
+    await useAnalytics.getState().refreshConnections();
+    expect(useAnalytics.getState().pending.meta_ads).toBeUndefined();
+    expect(useAnalytics.getState().expired.meta_ads).toBeUndefined();
+    // the server's own wait ran out: "That didn't finish"
+    useAnalytics.setState({ pending: { google_ads: Date.now() - 60_000 } });
+    api.getConnections.mockResolvedValue({ connections: [{ platform: 'google_ads', state: 'not_connected', lastError: 'not_finished' }], available: ['google_ads'], setUp: true });
+    await useAnalytics.getState().refreshConnections();
+    expect(useAnalytics.getState().pending.google_ads).toBeUndefined();
+    expect(useAnalytics.getState().expired.google_ads).toBe(true);
+    // still waiting on the server (a connect clears lastError when it starts): keeps waiting
+    useAnalytics.setState({ pending: { tiktok_ads: Date.now() - 60_000 } });
+    api.getConnections.mockResolvedValue({ connections: [{ platform: 'tiktok_ads', state: 'pending' }], available: ['tiktok_ads'], setUp: true });
+    await useAnalytics.getState().refreshConnections();
+    expect(useAnalytics.getState().pending.tiktok_ads).toBeTypeOf('number');
+  });
+
   it('switched off (no available platforms) or unreachable: nothing is enabled', async () => {
     api.getConnections.mockResolvedValue({ connections: [], available: [], setUp: false, hint: 'add ZERNIO_API_KEY in Replit Secrets' });
     await useAnalytics.getState().refreshConnections();
