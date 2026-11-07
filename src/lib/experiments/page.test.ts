@@ -18,7 +18,7 @@ describe('the SEO page’s version B', () => {
 
   it('HTML mode: the first h1 and the form’s button, escaped; no image swap', () => {
     const p = { ...newProject('business', 'existing'), id: 'p1' } as Project;
-    p.marketing = { ...p.marketing, seo: { metaTitle: 't' } as Project['marketing']['seo'], seoHtml: { html: '<h1 class="x">Fresh <em>bread</em></h1><h1>Second</h1><form action="{{lead-action}}"><button type="button">x</button><button>Get the menu</button></form>', css: '', images: [], source: 'manus', title: '', description: '', notes: [], active: true, hasLeadForm: true, importedAt: 1 } as Project['marketing']['seoHtml'] };
+    p.marketing = { ...p.marketing, seo: { metaTitle: 't' } as Project['marketing']['seo'], seoHtml: { html: '<h1 class="x">Fresh <em>bread</em></h1><h1>Second</h1><form action="{{lead-action}}"><button type="button">x</button><button>Get the menu</button></form>', css: '', images: [], source: 'manus', title: '', description: '', notes: [], active: true, hasLeadForm: true, importedAt: 1 } as unknown as Project['marketing']['seoHtml'] };
     expect(heroOf(p)).toMatchObject({ mode: 'html', headline: 'Fresh bread', ctaLabel: 'Get the menu' });
     const b = withSeoVariant(p, { headline: 'Bread & <butter>', ctaLabel: 'Book a table' });
     expect(b.marketing.seoHtml!.html).toBe('<h1 class="x">Bread &amp; &lt;butter&gt;</h1><h1>Second</h1><form action="{{lead-action}}"><button type="button">x</button><button>Book a table</button></form>');
