@@ -152,11 +152,15 @@ describe('quality keys and status words', () => {
 
 describe('a shared listing’s web address', () => {
   const origin = 'https://app.example.com';
-  it('is kept only when it is this app’s own /market/<slug> page', () => {
-    expect(webOf({ slug: 'cut-ab12cd', url: `${origin}/market/cut-ab12cd` }, origin)).toEqual({ slug: 'cut-ab12cd', url: `${origin}/market/cut-ab12cd` });
-    expect(webOf({ slug: 'cut-ab12cd', url: 'https://evil.example/market/cut-ab12cd' }, origin)).toBeUndefined();
-    expect(webOf({ slug: 'cut-ab12cd', url: `${origin}/market/other-slug` }, origin)).toBeUndefined();
+  it('reads only the slug: the address is always this app’s own /market/<slug>, whatever the seller wrote', () => {
+    const own = { slug: 'cut-ab12cd', url: `${origin}/market/cut-ab12cd` };
+    expect(webOf({ slug: 'cut-ab12cd', url: `${origin}/market/cut-ab12cd` }, origin)).toEqual(own);
+    // an outside address, or this app's under another host (a staging or custom app host): rebuilt from the slug
+    expect(webOf({ slug: 'cut-ab12cd', url: 'https://evil.example/market/cut-ab12cd' }, origin)).toEqual(own);
+    expect(webOf({ slug: 'cut-ab12cd', url: 'https://staging.example.com/market/cut-ab12cd' }, origin)).toEqual(own);
+    expect(webOf({ slug: 'cut-ab12cd' }, origin)).toEqual(own);
     expect(webOf({ slug: 'Bad Slug', url: `${origin}/market/Bad Slug` }, origin)).toBeUndefined();
+    expect(webOf({ slug: '../x' }, origin)).toBeUndefined();
     expect(webOf('x', origin)).toBeUndefined();
   });
 });
@@ -181,10 +185,10 @@ describe('the server calls', () => {
     expect(calls.map((c) => c.method)).toEqual(['PUT', 'GET', 'DELETE', 'PUT']);
   });
 
-  it('a report sends the slug, reason and a note of at most 500 characters', async () => {
+  it('a report sends the slug, the in-app listing’s seller, the reason and a note of at most 500 characters', async () => {
     const calls = server({ 'POST /api/market/reports': json({ ok: true }) });
-    await reportListing('cut-ab12cd', 'scam', 'n'.repeat(900));
-    expect(JSON.parse(calls[0].body!)).toEqual({ slug: 'cut-ab12cd', reason: 'scam', note: 'n'.repeat(500) });
+    await reportListing('cut-ab12cd', '11111111-2222-4333-8444-555555555555', 'scam', 'n'.repeat(900));
+    expect(JSON.parse(calls[0].body!)).toEqual({ slug: 'cut-ab12cd', sellerId: '11111111-2222-4333-8444-555555555555', reason: 'scam', note: 'n'.repeat(500) });
   });
 });
 
@@ -193,7 +197,7 @@ describe('the claude.ai build', () => {
     vi.stubGlobal('__ARTIFACT_BUILD__', true);
     const calls = server({});
     expect(await marketConfig(true)).toMatchObject({ enabled: false });
-    for (const run of [() => fetchPublicListings(), () => unlistPublic('lst_1'), () => reportListing('cut-ab12cd', 'spam'), () => submitMarketSitemap(), () => publicImagesFor(project(), { deps: deps().deps })]) {
+    for (const run of [() => fetchPublicListings(), () => unlistPublic('lst_1'), () => reportListing('cut-ab12cd', '11111111-2222-4333-8444-555555555555', 'spam'), () => submitMarketSitemap(), () => publicImagesFor(project(), { deps: deps().deps })]) {
       await expect(run()).rejects.toMatchObject({ code: 'NOT_HERE' });
     }
     expect(calls).toEqual([]);

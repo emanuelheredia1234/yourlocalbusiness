@@ -205,10 +205,13 @@ export async function unlistPublic(listingId: string): Promise<void> {
   await call('DELETE', `/api/market/public/${idPath(listingId)}`);
 }
 
-/** Report another seller's public listing to the app's owner. */
-export async function reportListing(slug: string, reason: ReportReason, note = ''): Promise<void> {
+/**
+ * Report another seller's public listing to the app's owner. sellerId: the in-app listing's seller (the server sends
+ * the report only when that web page is theirs: a listing can't point its reports at someone else's page).
+ */
+export async function reportListing(slug: string, sellerId: string, reason: ReportReason, note = ''): Promise<void> {
   if (!SLUG_RE.test(slug)) throw new MarketError('That listing isn’t on the web.', 'NOT_FOUND');
-  await call('POST', '/api/market/reports', { slug, reason, ...(note.trim() ? { note: note.trim().slice(0, 500) } : {}) });
+  await call('POST', '/api/market/reports', { slug, sellerId, reason, ...(note.trim() ? { note: note.trim().slice(0, 500) } : {}) });
 }
 
 // ───────────── owner moderation ─────────────
@@ -255,7 +258,7 @@ const uuidPath = (id: string) => {
   if (!/^[0-9a-f-]{36}$/i.test(id)) throw new MarketError('That item can’t be found.', 'BAD_ID');
   return id;
 };
-export const hideListing = async (id: string, reason: ReportReason, note = ''): Promise<void> => void (await call('POST', `/api/market/admin/listings/${uuidPath(id)}/hide`, { reason, ...(note.trim() ? { note: note.trim() } : {}) }));
+export const hideListing = async (id: string, reason: ReportReason): Promise<void> => void (await call('POST', `/api/market/admin/listings/${uuidPath(id)}/hide`, { reason }));
 export const unhideListing = async (id: string): Promise<void> => void (await call('POST', `/api/market/admin/listings/${uuidPath(id)}/unhide`));
 export const dismissReport = async (id: string): Promise<void> => void (await call('POST', `/api/market/admin/reports/${uuidPath(id)}/dismiss`));
 export async function submitMarketSitemap(): Promise<SubmitOutcome> {

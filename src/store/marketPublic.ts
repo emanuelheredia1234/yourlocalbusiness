@@ -47,16 +47,40 @@ export const useMarketPublic = create<MarketPublicState>((set, get) => ({
   error: null,
   busy: {},
   load: async () => {
-    if (!marketOn() || get().loading) return;
+    if (!marketOn()) return;
+    if (get().loading) return inflight ?? undefined;
     set({ loading: true, error: null });
-    try {
-      const r = await fetchPublicListings();
-      set({ byListing: Object.fromEntries(r.listings.map((l) => [l.listingId, l])), limit: r.limit, used: r.used, loaded: true, loading: false });
-    } catch (e) {
-      set({ loading: false, error: (e as Error).message });
-    }
+    inflight = (async () => {
+      try {
+        const r = await fetchPublicListings();
+        set({ byListing: Object.fromEntries(r.listings.map((l) => [l.listingId, l])), limit: r.limit, used: r.used, loaded: true, loading: false });
+        syncWeb();
+      } catch (e) {
+        set({ loading: false, error: (e as Error).message });
+      } finally {
+        inflight = null;
+      }
+    })();
+    return inflight;
   },
 }));
+
+let inflight: Promise<void> | null = null;
+
+/**
+ * Your listings' saved web addresses as the server says they are now: a listing the owner hid, the sweep put over
+ * your plan's limit, or that's off the web for any other reason loses its address (so other people's Marketplace
+ * stops offering "View on the web" and "Report listing" for it); one that is on the web gets its address back.
+ */
+function syncWeb(): void {
+  const { byListing } = useMarketPublic.getState();
+  for (const l of useStore.getState().myListings) {
+    const s = byListing[l.id];
+    if (isOnWeb(s)) {
+      if (l.web?.slug !== s!.slug || l.web?.url !== s!.url) saveWeb(l.id, { slug: s!.slug, url: s!.url });
+    } else if (l.web) saveWeb(l.id, undefined);
+  }
+}
 
 /** The plan's name for the counter ("Launch"), when known. */
 export const planName = (): string => {
@@ -148,11 +172,18 @@ export function isPublic(l: Listing | undefined): boolean {
 }
 
 /**
- * After the in-app listing was published again: its web page gets the same content. A failure is a toast; the
- * in-app listing stays published either way.
+ * After the in-app listing was published again: its web page gets the same content, only when the server says it is
+ * on the web now (live, thin or held). Its state is read first when this device hasn't yet (a listing the owner hid,
+ * or the sweep put over the plan's limit, never goes back on by itself; its saved address is dropped instead). A
+ * failure is a toast; the in-app listing stays published either way.
  */
 export async function refreshWebPage(p: Project, listing: Listing): Promise<void> {
-  if (!marketOn() || !isPublic(listing)) return;
+  if (!marketOn()) return;
+  const store = useMarketPublic.getState();
+  if (!store.loaded) await store.load();
+  // the state couldn't be read: nothing is sent (it may be off the web)
+  if (!useMarketPublic.getState().loaded) return;
+  if (!isOnWeb(useMarketPublic.getState().byListing[listing.id])) return;
   try {
     await putListingOnWeb(p, listing);
   } catch (e) {

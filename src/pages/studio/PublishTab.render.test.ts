@@ -27,13 +27,23 @@ describe('Public on the web', () => {
     expect(marketOn(null, 'ready', false)).toBe(false);
     expect(marketOn(on, 'signed-out', false)).toBe(false);
     expect(marketOn(on, 'guest', false)).toBe(false);
-    // the Studio's toggle draws nothing until the server said it's on (here: not asked yet), nor in the claude.ai build
+    // the Studio's toggle draws nothing until the server said it's on (here: not asked yet)
     const p = newProject('business', 'new');
     const html = () => wrap(createElement(PublicWebToggle, { project: p, listing: buildListing(p) }));
     expect(html()).toBe('');
-    vi.stubGlobal('__ARTIFACT_BUILD__', true);
-    expect(html()).toBe('');
-    expect(view()).toContain('Anyone can find this listing on Google at yourlocalbusiness.replit.app/market. Turn it off anytime.');
+    // (shown when it's on, and nothing in the claude.ai build: src/components/market/PublicWebToggle.dom.test.ts)
+    expect(view()).toContain('Anyone can open this listing at yourlocalbusiness.replit.app/market, and Google can list it once it’s complete. Turn it off anytime.');
+    expect(view()).not.toMatch(/find this listing on Google/);
+  });
+
+  it('while the listing’s state isn’t read: the switch waits, and a failed read says so with a Retry', () => {
+    const waiting = view({ loaded: false });
+    expect(switchOf(waiting)).toContain('disabled');
+    expect(waiting).not.toContain('Public listings:');
+    const failed = view({ loaded: false, loadError: 'Public web listings aren’t set up on this app’s server yet.', onRetry: () => {} });
+    expect(failed).toContain('Couldn’t check whether this listing is on the web. Public web listings aren’t set up on this app’s server yet.');
+    expect(failed).toContain('>Retry</button>');
+    expect(switchOf(failed)).toContain('disabled');
   });
 
   it('counts the plan’s public listings, and none for an unlimited plan', () => {

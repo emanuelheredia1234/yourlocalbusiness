@@ -11,6 +11,9 @@ import { useMarketOn } from '@/lib/marketConfig';
 import { atLimit, counterLine, planName, putListingOnWeb, takeListingOffWeb, useMarketPublic } from '@/store/marketPublic';
 import { toast } from '@/store/ui';
 
+/** Where a thin listing's checklist is (the toast says it wherever the toggle was used). */
+export const WHAT_TO_ADD = 'See what to add in Studio › Listing & publish, under “Public on the web”.';
+
 /** What the confirm says before a listing comes off the web. */
 export const UNLIST_CONFIRM = { title: 'Take this listing off the web?', body: 'Its address stops working and Google drops it.', confirmLabel: 'Take it off' };
 
@@ -23,11 +26,16 @@ export interface PublicWebViewProps {
   marketHost: string;
   busy: boolean;
   error?: string | null;
+  /** the server's state was read (until then the toggle waits: it can't say whether the listing is on) */
+  loaded?: boolean;
+  /** why the state couldn't be read, with a Retry */
+  loadError?: string | null;
+  onRetry?: () => void;
   onToggle: (on: boolean) => void;
 }
 
 /** The toggle and its status, drawn from props (the render tests use this). */
-export function PublicWebView({ state, limit, used, plan, marketHost, busy, error, onToggle }: PublicWebViewProps) {
+export function PublicWebView({ state, limit, used, plan, marketHost, busy, error, loaded = true, loadError = null, onRetry, onToggle }: PublicWebViewProps) {
   const on = isOnWeb(state);
   const hidden = state?.status === 'hidden';
   const full = limit !== null && !on && used >= limit;
@@ -37,12 +45,26 @@ export function PublicWebView({ state, limit, used, plan, marketHost, busy, erro
     <section className="flex flex-col gap-3 border-t border-line pt-5" aria-label="Public on the web">
       <Toggle
         checked={on}
-        disabled={busy || hidden || (full && !on)}
+        disabled={busy || !loaded || hidden || (full && !on)}
         onChange={onToggle}
         label="Public on the web"
-        description={`Anyone can find this listing on Google at ${marketHost}. Turn it off anytime.`}
+        description={`Anyone can open this listing at ${marketHost}, and Google can list it once it’s complete. Turn it off anytime.`}
       />
-      {counter && <p className="num text-caption text-muted">{counter}</p>}
+      {!loaded && loadError && (
+        <Callout
+          tone="bad"
+          action={
+            onRetry && (
+              <button type="button" className="btn btn-secondary btn-sm" onClick={onRetry}>
+                Retry
+              </button>
+            )
+          }
+        >
+          Couldn’t check whether this listing is on the web. {loadError}
+        </Callout>
+      )}
+      {loaded && counter && <p className="num text-caption text-muted">{counter}</p>}
       {full && (
         <p className="text-caption text-ink-2">
           {limitText(limit ?? 0)}{' '}
@@ -88,7 +110,7 @@ export async function toggleWeb(p: Project, listing: Listing, on: boolean): Prom
     return useMarketPublic.getState().byListing[listing.id] ?? null;
   }
   const s = await putListingOnWeb(p, listing);
-  toast({ kind: 'success', title: s.status === 'live' ? 'On the web' : 'On the web, not on Google yet', body: s.status === 'live' ? GOOGLE_NOTE : 'See what to add under the toggle.' });
+  toast({ kind: 'success', title: s.status === 'live' ? 'On the web' : 'On the web, not on Google yet', body: s.status === 'live' ? GOOGLE_NOTE : WHAT_TO_ADD });
   return s;
 }
 
@@ -100,6 +122,7 @@ export function PublicWebToggle({ project, listing }: { project: Project; listin
   const used = useMarketPublic((s) => s.used);
   const busy = useMarketPublic((s) => !!s.busy[listing.id]);
   const loaded = useMarketPublic((s) => s.loaded);
+  const loadError = useMarketPublic((s) => s.error);
   const publicUrl = useMarketConfig((s) => s.config?.publicUrl);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -115,5 +138,5 @@ export function PublicWebToggle({ project, listing }: { project: Project; listin
       setError((e as Error).message || 'Please try again.');
     }
   };
-  return <PublicWebView state={state} limit={limit} used={used} plan={planName()} marketHost={(publicUrl ?? '').replace(/^https?:\/\//, '') || 'this app’s /market'} busy={busy} error={error} onToggle={(v) => void run(v)} />;
+  return <PublicWebView state={state} limit={limit} used={used} plan={planName()} marketHost={(publicUrl ?? '').replace(/^https?:\/\//, '') || 'this app’s /market'} busy={busy} error={error} loaded={loaded} loadError={loadError} onRetry={() => void useMarketPublic.getState().load()} onToggle={(v) => void run(v)} />;
 }

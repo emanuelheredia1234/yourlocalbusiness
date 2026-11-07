@@ -188,10 +188,9 @@ export function MarketAdminView({ data, error, origin, busy, last, actions }: { 
   );
 }
 
-/** Choose a reason before a listing is hidden. */
-function HideDialog({ title, onDone }: { title: string; onDone: (r: { reason: ReportReason; note: string } | null) => void }) {
+/** Choose a reason before a listing is hidden (the seller sees it; nothing else is kept). */
+function HideDialog({ title, onDone }: { title: string; onDone: (r: { reason: ReportReason } | null) => void }) {
   const [reason, setReason] = useState<ReportReason | ''>('');
-  const [note, setNote] = useState('');
   return (
     <Modal
       open
@@ -203,7 +202,7 @@ function HideDialog({ title, onDone }: { title: string; onDone: (r: { reason: Re
           <button type="button" className="btn btn-secondary" onClick={() => onDone(null)}>
             Cancel
           </button>
-          <button type="button" className="btn btn-danger" disabled={!reason} onClick={() => reason && onDone({ reason, note })}>
+          <button type="button" className="btn btn-danger" disabled={!reason} onClick={() => reason && onDone({ reason })}>
             Hide
           </button>
         </>
@@ -212,9 +211,6 @@ function HideDialog({ title, onDone }: { title: string; onDone: (r: { reason: Re
       <div className="flex flex-col gap-4">
         <Field label="Reason (the seller sees it)" htmlFor="hide-reason">
           <Select id="hide-reason" value={reason} onChange={setReason} options={REPORT_REASONS} placeholder="Choose a reason" />
-        </Field>
-        <Field label="Note for your records (optional)" htmlFor="hide-note">
-          <textarea id="hide-note" className="input min-h-[80px]" maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
       </div>
     </Modal>
@@ -294,7 +290,7 @@ export function MarketSection() {
             setHiding(null);
             if (!r) return;
             void (async () => {
-              if (await confirmAction({ title: 'Hide this listing from the web?', body: `${h.title} answers “gone” at once and its seller can’t turn it back on.`, confirmLabel: 'Hide', danger: true })) await act(() => hideListing(h.id, r.reason, r.note), 'Listing hidden');
+              if (await confirmAction({ title: 'Hide this listing from the web?', body: `${h.title} answers “gone” at once and its seller can’t turn it back on.`, confirmLabel: 'Hide', danger: true })) await act(() => hideListing(h.id, r.reason), 'Listing hidden');
             })();
           }}
         />

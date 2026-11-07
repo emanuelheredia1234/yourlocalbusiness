@@ -58,14 +58,19 @@ export function marketOrigin(): string {
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
 
 /**
- * A shared listing's web address as it came from another seller: kept only when it is this app's own public page
- * for that slug (never an outside address).
+ * A shared listing's web address as it came from another seller: only its slug is read (a valid public listing
+ * address part), and the address is this app's own /market/<slug>, never what the seller wrote (an outside address,
+ * or this app's under another of its hosts). Who owns that page is the server's to check (a report is refused when
+ * it isn't the listing's seller's).
  */
 export function webOf(raw: unknown, origin = marketOrigin()): Listing['web'] | undefined {
-  const w = raw as { slug?: unknown; url?: unknown } | null;
+  const w = raw as { slug?: unknown } | null;
   if (!w || typeof w !== 'object' || typeof w.slug !== 'string' || !SLUG_RE.test(w.slug) || !origin) return undefined;
-  return w.url === `${origin}/market/${w.slug}` ? { slug: w.slug, url: w.url } : undefined;
+  return { slug: w.slug, url: webUrl(w.slug, origin) };
 }
+
+/** A public listing's address on this app (the server's config origin when known). */
+export const webUrl = (slug: string, origin = marketOrigin()): string => `${origin}/market/${slug}`;
 
 
 /** Whether "Public on the web" is offered here (React): asks the server's config once you're signed in. */

@@ -3,11 +3,30 @@
 // own, never in the claude.ai build.
 
 import { useState } from 'react';
-import { Field, Modal, Select, Spinner } from '@/components/ui/primitives';
+import { Flag, Globe } from 'lucide-react';
+import type { Listing } from '@/lib/types';
+import { Field, Modal, MoreMenu, Select, Spinner } from '@/components/ui/primitives';
 import { REPORT_REASONS, reportListing, type ReportReason } from '@/lib/marketPublic';
+import { webUrl } from '@/lib/marketConfig';
 import { toast } from '@/store/ui';
 
-export function ReportListingDialog({ slug, title, onClose }: { slug: string; title: string; onClose: () => void }) {
+/**
+ * A listing's "View on the web" (its public page, at this app's address) and, for another seller's listing, "Report
+ * listing". Nothing in the claude.ai build, where the market is off, or for a listing that isn't on the web.
+ */
+export function ListingWebRow({ listing: l, mine, webOn, onReport }: { listing: Listing; mine: boolean; webOn: boolean; onReport: () => void }) {
+  if (__ARTIFACT_BUILD__ || !webOn || !l.web) return null;
+  return (
+    <div className="flex items-center justify-between gap-2 border-t border-line pt-3">
+      <a className="link inline-flex items-center gap-1.5 text-small" href={webUrl(l.web.slug)} target="_blank" rel="noopener">
+        <Globe size={14} aria-hidden="true" /> View on the web
+      </a>
+      {!mine && l.seller.ownerId && <MoreMenu label="More for this listing" items={[{ label: 'Report listing', icon: <Flag />, onSelect: onReport }]} />}
+    </div>
+  );
+}
+
+export function ReportListingDialog({ slug, sellerId, title, onClose }: { slug: string; sellerId: string; title: string; onClose: () => void }) {
   const [reason, setReason] = useState<ReportReason | ''>('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -17,7 +36,7 @@ export function ReportListingDialog({ slug, title, onClose }: { slug: string; ti
     setBusy(true);
     setError(null);
     try {
-      await reportListing(slug, reason, note);
+      await reportListing(slug, sellerId, reason, note);
       toast({ kind: 'success', title: 'Thanks. The owner will take a look.' });
       onClose();
     } catch (e) {

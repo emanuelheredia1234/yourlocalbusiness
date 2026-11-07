@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarCheck, Check, Clock, ExternalLink, Flag, Globe, Mail, Phone, ShoppingBag } from 'lucide-react';
+import { CalendarCheck, Check, Clock, ExternalLink, Mail, Phone, ShoppingBag } from 'lucide-react';
 import { cn, fmtMoney } from '@/lib/utils';
 import { FORMATS } from '@/ai/knowledge';
 import { useUI } from '@/store/ui';
-import { Badge, InfoTip, Modal, MoreMenu } from '@/components/ui/primitives';
+import { Badge, InfoTip, Modal } from '@/components/ui/primitives';
 import { useMarketOn } from '@/lib/marketConfig';
-import { ReportListingDialog } from '@/components/market/ReportListing';
+import { ListingWebRow, ReportListingDialog } from '@/components/market/ReportListing';
 import { MiniMark } from '@/components/brand/Logo';
 import { ListingCover } from './ListingParts';
 import { priceLabel } from '@/lib/listing';
@@ -127,17 +127,10 @@ function ListingModal() {
           ) : (
             <p className="text-small text-muted">{mine ? 'Add your own buy or booking link, email or phone in the Studio (Publish tab), so people can reach you.' : 'The seller hasn’t added a way to buy or get in touch yet.'}</p>
           )}
-          {!__ARTIFACT_BUILD__ && webOn && l.web && (
-            <div className="flex items-center justify-between gap-2 border-t border-line pt-3">
-              <a className="link inline-flex items-center gap-1.5 text-small" href={l.web.url} target="_blank" rel="noopener">
-                <Globe size={14} aria-hidden="true" /> View on the web
-              </a>
-              {!mine && <MoreMenu label="More for this listing" items={[{ label: 'Report listing', icon: <Flag />, onSelect: () => setReporting(true) }]} />}
-            </div>
-          )}
+          <ListingWebRow listing={l} mine={mine} webOn={webOn} onReport={() => setReporting(true)} />
         </aside>
       </div>
-      {reporting && l.web && <ReportListingDialog slug={l.web.slug} title={l.title} onClose={() => setReporting(false)} />}
+      {reporting && l.web && l.seller.ownerId && <ReportListingDialog slug={l.web.slug} sellerId={l.seller.ownerId} title={l.title} onClose={() => setReporting(false)} />}
     </Modal>
   );
 }
