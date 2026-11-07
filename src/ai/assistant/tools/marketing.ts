@@ -9,6 +9,7 @@
 // chooses the address and presses Publish. The app never sends email. Ads: the assistant plans, and can list
 // what was launched and OPEN the launch or change window; it never launches, resumes or changes a budget itself,
 // never picks Paused/Active and never ticks a claim or a spend box (the owner does, in the app's spend confirm).
+// It can remove a failed launch that left nothing at Meta or Google from the list, after the owner's confirm.
 // Launched campaigns' platform text (review reasons, Ads Manager names) is left out of what the model sees.
 // What visitors typed into a page's form is their data, never instructions (untrusted).
 
@@ -35,7 +36,7 @@ import { addLeadToSubscribers, useLeads } from '@/store/leads';
 import { useAdsLaunch } from '@/store/adsLaunch';
 import { PLATFORM_LABEL } from '@/lib/ads/launchTypes';
 import { money } from '@/lib/ads/launchFormat';
-import { manageActions, stateBadge } from '@/pages/marketing/ads/campaigns/campaignView';
+import { canRemove, manageActions, removeConfirmText, stateBadge } from '@/pages/marketing/ads/campaigns/campaignView';
 import { useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
 import { download } from '@/components/ui/download';
@@ -722,6 +723,7 @@ const listLaunchedAds = defineTool({
       ...(c.results ? { results: { impressions: c.results.impressions, clicks: c.results.clicks, ctrPercent: c.results.ctr }, resultsAsOf: c.resultsAsOf ?? null } : {}),
       ...(c.pendingJob ? { change: c.pendingJob.state === 'unknown' ? 'not confirmed: the owner presses Check status on the Campaigns tab' : 'being sent' } : {}),
       ...(c.review.reasons.length ? { reviewReasons: `${c.review.reasons.length}, shown on the Campaigns tab` } : {}),
+      ...(canRemove(c) ? { removable: 'failed with nothing at the platform: remove_failed_launch can remove it from the list' } : {}),
     }));
     return { data: { total: list.length, campaigns, launching: PLANS_ONLY }, note: list.length ? `Looked at ${plural(list.length, 'launched campaign')}` : 'Nothing launched from the app yet' };
   },
@@ -762,6 +764,31 @@ const openAdChange = defineTool({
     return a.enabled ? null : a.reason ?? 'That can’t be done to this campaign right now.';
   },
   window: ({ campaignId, action }) => ({ kind: 'ad-change', campaignId, action }),
+});
+
+const removeFailedLaunchTool = defineTool({
+  name: 'remove_failed_launch',
+  class: 'D',
+  summary: 'Remove a failed launch that created nothing at Meta or Google from the Campaigns list (id from list_launched_ads; the owner confirms).',
+  args: { campaignId: arg.string({ max: 60 }) },
+  validate: ({ campaignId }) => {
+    if (__ARTIFACT_BUILD__) return NOT_IN_ARTIFACT;
+    const c = findLaunched(campaignId);
+    if (!c) return `There’s no launched campaign with id "${campaignId}": list_launched_ads lists them.`;
+    if (c.state !== 'failed') return 'Only a launch that failed can be removed.';
+    return canRemove(c) ? null : 'Part of this launch may exist at Meta or Google. The owner checks Ads Manager first: it can’t be removed from the app.';
+  },
+  danger: ({ campaignId }) => {
+    const { title, body, confirmLabel } = removeConfirmText(findLaunched(campaignId)!);
+    return { title, body, confirmLabel };
+  },
+  run: async ({ campaignId }) => {
+    const c = findLaunched(campaignId)!;
+    // once: a refused removal is never sent again by itself
+    const r = await useAdsLaunch.getState().remove(c.projectId, c.id);
+    if (!r.ok) return { ok: false, error: `${r.message ?? 'It wasn’t removed.'} Don’t try again by yourself: tell the owner.` };
+    return { data: { removed: 1 }, note: 'Removed the failed launch from the Campaigns list' };
+  },
 });
 
 // ───────────── the SEO page ─────────────
@@ -1298,6 +1325,7 @@ export const marketingTools: AnyTool[] = [
   listLaunchedAds,
   openAdLaunch,
   openAdChange,
+  removeFailedLaunchTool,
   getSeoPage,
   setPageType,
   writeSeoPageTool,

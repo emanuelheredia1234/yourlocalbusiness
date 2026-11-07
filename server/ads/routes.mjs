@@ -11,6 +11,7 @@
 //   POST /api/ads/campaigns/:id/change/preview            ChangePreviewRequest → {review, reviewToken?}
 //   POST /api/ads/campaigns/:id/change                    {reviewToken, confirm: true, clientRequestId} → {job}
 //   GET  /api/ads/campaigns/:id/review                    {review}
+//   DELETE /api/ads/campaigns/:id?projectId=              {removed}  a failed launch with nothing at the platform (remove.mjs)
 //   GET  /api/ads/jobs/:jobId                             {job, campaign}              (our database only)
 //   POST /api/ads/jobs/:jobId/check                       {} → {job, campaign, note?}  (reads only; 1 per 30 s)
 //   GET  /api/ads/audit?projectId=&campaignId=&before=    {entries, next?}
@@ -47,6 +48,7 @@ import { launchSummary, changeSummary, runChange, runLaunch, where } from './wri
 import { checkJob } from './reconcile.mjs';
 import { accounts, campaignOut, campaigns, liveRowOut, liveRows, refresh, reviewOf, setChoice, targeting } from './reads.mjs';
 import { createAdsWebhook } from './webhook.mjs';
+import { removeFailed } from './remove.mjs';
 import { loadProject } from '../social/publish.mjs';
 import { messageFor } from './messages.mjs';
 import { formatMoney, sumWhole } from './money.mjs';
@@ -619,8 +621,15 @@ export function createAdsRoutes(deps = {}) {
       return reply(req, res, 200, { live: (await liveRows(ctx, who.id, platform)).map(liveRowOut) });
     }
 
+    // removing a failed launch: our database only (nothing is sent anywhere), so it works with ads off
+    let c = /^\/api\/ads\/campaigns\/([^/]+)$/.exec(p);
+    if (c && m === 'DELETE') {
+      limited('ads-read', who.id);
+      return reply(req, res, 200, await removeFailed(ctx, who, c[1], q.get('projectId')));
+    }
+
     // a change's route decides its own bucket and "ads off" words once it knows the action (pause/end never wait)
-    let c = /^\/api\/ads\/campaigns\/([^/]+)\/change$/.exec(p);
+    c = /^\/api\/ads\/campaigns\/([^/]+)\/change$/.exec(p);
     if (c && m === 'POST') return reply(req, res, 200, await change(who, c[1], await body(req)));
 
     const checkRoute = /^\/api\/ads\/jobs\/[^/]+\/check$/.test(p);

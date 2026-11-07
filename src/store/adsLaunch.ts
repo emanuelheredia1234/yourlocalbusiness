@@ -7,7 +7,7 @@
 
 import { create } from 'zustand';
 import type { AdJob, AdLimitsView, AdsPlatform, AuditEntry, CampaignsResponse, ChangeAction, LaunchedCampaign, PlainNote } from '@/lib/ads/launchTypes';
-import { AdsApiError, checkAdJob, followAdJob, getAdAudit, getCampaigns, refreshCampaigns } from '@/lib/ads/launchApi';
+import { AdsApiError, checkAdJob, followAdJob, getAdAudit, getCampaigns, refreshCampaigns, removeFailedCampaign } from '@/lib/ads/launchApi';
 
 /** Refresh reads Meta/Google at most once per business every 5 minutes (the server enforces it too). */
 export const REFRESH_EVERY_MS = 5 * 60_000;
@@ -52,6 +52,8 @@ interface AdsLaunchState {
   follow: (jobId: string) => Promise<AdJob | null>;
   /** The customer's "Check status": reads only, once. */
   check: (jobId: string) => Promise<{ ok: boolean; message?: string }>;
+  /** Remove a failed launch with nothing at Meta or Google from this business's list (one request, never retried). */
+  remove: (projectId: string, campaignId: string) => Promise<{ ok: boolean; message?: string }>;
   openLaunch: (w: LaunchWindowState) => void;
   closeLaunch: () => void;
   openChange: (w: ChangeWindowState) => void;
@@ -176,6 +178,21 @@ export const useAdsLaunch = create<AdsLaunchState>((set, get) => {
       } catch (e) {
         return { ok: false, message: messageOf(e) };
       }
+    },
+
+    remove: async (projectId, campaignId) => {
+      if (__ARTIFACT_BUILD__ || !projectId) return { ok: false };
+      try {
+        // once: a refused or failed removal is never sent again by itself
+        await removeFailedCampaign(campaignId, projectId);
+      } catch (e) {
+        // already gone (another tab): drop it from the list too
+        if (e instanceof AdsApiError && e.status === 404) set((s) => ({ campaigns: { ...s.campaigns, [projectId]: (s.campaigns[projectId] ?? []).filter((c) => c.id !== campaignId) } }));
+        return { ok: false, message: messageOf(e) };
+      }
+      set((s) => ({ campaigns: { ...s.campaigns, [projectId]: (s.campaigns[projectId] ?? []).filter((c) => c.id !== campaignId) }, manageId: s.manageId === campaignId ? null : s.manageId }));
+      void get().loadAudit(projectId);
+      return { ok: true };
     },
 
     openLaunch: (w) => set({ launchWindow: w }),

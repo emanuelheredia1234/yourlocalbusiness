@@ -9,6 +9,7 @@ import { loadProject } from '../social/publish.mjs';
 import { ADS_PLATFORMS, CONNECTION_OF, FINAL_STATES, PLATFORM_LABEL, idTailOf } from './contracts.mjs';
 import { accountOption, adAccountRef, choiceFor, connectionFor, listAccounts, setupChecks, targetRef } from './preview.mjs';
 import { jobOut } from './jobs.mjs';
+import { removeProblem } from './remove.mjs';
 import { cut, messageFor } from './messages.mjs';
 import { formatMoney, zernioWhole } from './money.mjs';
 import { limitsToApi, switchesProblem, switchMayBeOn } from './limits.mjs';
@@ -114,6 +115,8 @@ export function campaignOut(row, job = null, planIds = null) {
     ...(job && ['queued', 'sending', 'unknown'].includes(job.state) ? { pendingJob: jobOut(job, row.platform) } : job ? { lastJob: jobOut(job, row.platform) } : {}),
     ...(row.last_read_at ? { lastReadAt: row.last_read_at } : {}),
     ...(planIds && !planIds.has(row.plan_id) ? { planDeleted: true } : {}),
+    // a failed launch with nothing at the platform can be removed from the list (the route checks every job again)
+    ...(row.state === 'failed' && !removeProblem(row, job ? [job] : []) ? { canRemove: true } : {}),
   };
 }
 
