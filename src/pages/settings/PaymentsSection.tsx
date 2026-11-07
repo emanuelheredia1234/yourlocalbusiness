@@ -2,16 +2,18 @@
 // server/payments/whop.mjs). One connection per mode: Live, and Test (Whop's sandbox, where nothing is charged).
 // The API key goes to the server once and stays there, sealed; the browser only ever sees its last 4 characters,
 // and the field is emptied after every try. Whop's own error text never reaches this page: the server answers in
-// our words. Refunds and disputes stay in Whop.
+// our words. Refunds and disputes stay in Whop. Above it, "Get paid with Stripe" (StripeConnectCard.tsx) when the
+// server has Stripe Connect on.
 
 import { useEffect, useState, type FormEvent } from 'react';
 import { CircleAlert, ExternalLink, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { fmtRelative } from '@/lib/utils';
 import { useAuth } from '@/lib/cloud/auth';
-import { OffersError, WHOP_EVENTS, WHOP_PERMISSIONS, checkWhop, connectWhop, disconnectWhop, enableWhopWebhook, pasteWebhookSecret, replaceWhopKey, type WhopConnection, type WhopEnvironment } from '@/lib/offers';
+import { OffersError, WHOP_EVENTS, WHOP_PERMISSIONS, checkWhop, connectWhop, disconnectWhop, enableWhopWebhook, pasteWebhookSecret, replaceWhopKey, type OffersConfig, type WhopConnection, type WhopEnvironment } from '@/lib/offers';
 import { useOffers } from '@/store/offers';
 import { toast } from '@/store/ui';
 import { Badge, Callout, CopyButton, Field, Segmented, SettingsSection, Spinner, confirmAction } from '@/components/ui/primitives';
+import { StripeConnectCard } from './StripeConnectCard';
 
 const MODE_LABEL: Record<WhopEnvironment, string> = { production: 'Live', sandbox: 'Test mode' };
 const NOTICE: Record<string, string> = {
@@ -298,6 +300,11 @@ export function PaymentsView({ status, connections, environment, onEnvironment, 
   );
 }
 
+/** Whether "Get paid with Stripe" shows: the server has Stripe Connect on, signed in, never in the claude.ai build. */
+export function showStripeCard(config: OffersConfig | null, signedIn: boolean): boolean {
+  return !__ARTIFACT_BUILD__ && signedIn && !!config?.enabled && !!config.stripe.available;
+}
+
 /** Settings › Payments. */
 export function PaymentsSection() {
   const signedIn = useAuth((s) => s.phase === 'ready');
@@ -357,5 +364,14 @@ export function PaymentsSection() {
   };
 
   const status = !config ? 'checking' : !whopOn ? 'off' : !signedIn ? 'signed-out' : 'ready';
-  return <PaymentsView status={status} connections={connections} environment={environment} onEnvironment={setEnvironment} actions={actions} />;
+  // selling through the seller's own Stripe account (P6) comes first; never in the claude.ai build
+  const stripeOn = showStripeCard(config, signedIn);
+  if (!stripeOn) return <PaymentsView status={status} connections={connections} environment={environment} onEnvironment={setEnvironment} actions={actions} />;
+  return (
+    <div className="flex max-w-[880px] flex-col gap-4">
+      <StripeConnectCard />
+      {/* Whop off here: Stripe alone, without the "payments aren't set up" note */}
+      {status !== 'off' && <PaymentsView status={status} connections={connections} environment={environment} onEnvironment={setEnvironment} actions={actions} />}
+    </div>
+  );
 }

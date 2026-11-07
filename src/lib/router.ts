@@ -108,6 +108,23 @@ export function takeSettingsSection(): string | null {
   return section;
 }
 
+/**
+ * Back from Stripe's setup page: the server's fixed /connect/return and /connect/refresh send the browser to
+ * /#settings/payments?stripe=return (or =refresh). The kind, once, and the address becomes #workspace-settings
+ * (nothing else is read from it). Null if this isn't one.
+ */
+export function takeStripeLanding(): 'return' | 'refresh' | null {
+  if (typeof location === 'undefined') return null;
+  const m = /^#settings\/payments\?stripe=(return|refresh)$/.exec(location.hash);
+  if (!m) return null;
+  try {
+    history.replaceState(null, '', `${location.pathname}${location.search}#workspace-settings`);
+  } catch {
+    /* it's still taken once */
+  }
+  return m[1] as 'return' | 'refresh';
+}
+
 /** The page showing now, outside React (the assistant reads it; components use useRoute). */
 export function currentRoute(): Route | null {
   return current;

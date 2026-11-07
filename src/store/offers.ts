@@ -108,6 +108,17 @@ export const useOffers: UseBoundStore<StoreApi<OffersState>> = create<OffersStat
   reset: () => set({ byProject: {}, summary: {}, connections: null, error: {}, connect: null, connectError: '' }),
 }));
 
+let landing: 'return' | 'refresh' | null = null;
+/** Back from Stripe's setup page (App reads the address once): Settings › Payments' Stripe card takes it. */
+export function setConnectLanding(kind: 'return' | 'refresh' | null): void {
+  landing = kind;
+}
+export function takeConnectLanding(): 'return' | 'refresh' | null {
+  const k = landing;
+  landing = null;
+  return k;
+}
+
 /**
  * Back from Stripe's setup page (Settings › Payments ?stripe=return): read the account again each time the window
  * regains focus for the next 10 minutes (Stripe can finish its checks a little later, or in another tab).
