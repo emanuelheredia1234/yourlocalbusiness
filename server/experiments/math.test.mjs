@@ -13,7 +13,7 @@ const page = (rows, over = {}) => decide({ kind: 'page', mode: 'split', changed:
 
 describe('the constants', () => {
   it('are the documented ones', () => {
-    expect(MINIMUMS).toEqual({ social: { trials: 300, successes: 20 }, page: { trials: 100, successes: 10 }, email: { trials: 200, successes: 0 }, counts: { total: 400 } });
+    expect(MINIMUMS).toEqual({ social: { trials: 300, successes: 20 }, page: { trials: 100, successes: 10 }, email: { trials: 200, successes: 0 }, counts: { total: 400, perVariant: 100 } });
     expect([Z_TWO, Z_THREE, MIN_LIFT]).toEqual([1.96, 2.394, 0.1]);
     expect(zTwoProportions(50, 1000, 30, 1000)).toBeCloseTo(2.282, 2);
     expect(zCounts(260, 200)).toBeCloseTo(2.797, 2);
@@ -83,10 +83,26 @@ describe('rates', () => {
 describe('counts (Trial Reels views)', () => {
   it('a conditional binomial test with the same thresholds and lift rule', () => {
     const tr = (a, b, endsAt = BEFORE) => decide({ kind: 'post', mode: 'trial_reels', changed: 'hook', metric: 'views', endsAt, now: NOW, variants: [social('a', { views: a }), social('b', { views: b })] });
-    expect(tr(260, 200)).toMatchObject({ verdict: 'winner', winner: 'a', note: 'non_followers', perVariant: { a: { count: 260 }, b: { count: 200 } } });
+    expect(tr(260, 200, AFTER)).toMatchObject({ verdict: 'winner', winner: 'a', note: 'non_followers', perVariant: { a: { count: 260 }, b: { count: 200 } } });
     expect(tr(215, 200, AFTER).verdict).toBe('too_close');
     expect(tr(150, 100).verdict).toBe('keep_going');
     expect(tr(150, 100, AFTER)).toMatchObject({ verdict: 'not_enough', missing: [{ what: 'views', have: 250, need: 400 }] });
+  });
+
+  it('never calls counts before the deadline (one version may have been out longer), and needs a minimum per version', () => {
+    const tr = (a, b, endsAt = BEFORE) => decide({ kind: 'post', mode: 'trial_reels', changed: 'hook', metric: 'views', endsAt, now: NOW, variants: [social('a', { views: a }), social('b', { views: b })] });
+    // A posted Monday, B Wednesday: A is far ahead only because it's been out longer
+    expect(tr(2000, 60)).toMatchObject({ verdict: 'keep_going', reason: 'sample' });
+    expect(tr(2000, 300)).toMatchObject({ verdict: 'keep_going', leader: 'a' });
+    expect(tr(2000, 60).winner).toBeUndefined();
+    expect(tr(260, 200)).toMatchObject({ verdict: 'keep_going', leader: 'a' });
+    // no deadline yet (Trial Reels before the first one is out): never a winner
+    expect(tr(2000, 300, null).verdict).toBe('keep_going');
+    // at the deadline, a version under the per-version minimum is not enough, not a loser
+    expect(tr(400, 0, AFTER)).toMatchObject({ verdict: 'not_enough', reason: 'sample', missing: [{ key: 'b', what: 'views', have: 0, need: 100 }] });
+    expect(tr(2000, 60, AFTER)).toMatchObject({ verdict: 'not_enough', minimums: { total: 400, perVariant: 100 } });
+    const reach = decide({ kind: 'post', mode: 'times', changed: 'hook', metric: 'reach', endsAt: BEFORE, now: NOW, variants: [social('a', { reach: 900 }), social('b', { reach: 300 })] });
+    expect(reach.verdict).toBe('keep_going');
   });
 });
 

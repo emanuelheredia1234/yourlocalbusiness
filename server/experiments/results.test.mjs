@@ -120,6 +120,59 @@ describe('the hourly results job', () => {
     expect(t.up.analyticsReads - reads0).toBe(2);
   });
 
+  it('the first read past the deadline reads every version again, so the verdict never uses numbers from before it', async () => {
+    const { exp, jobs } = await postedTest();
+    for (const e of await t.db.select('experiments', { user_id: alice.id, state: 'running' })) if (e.id !== exp.id) await t.db.update('experiments', { id: e.id }, { state: 'stopped' });
+    t.up.postMetrics.set(jobs[0], { facebook: { reach: 1000, likes: 20 } });
+    t.up.postMetrics.set(jobs[1], { facebook: { reach: 1000, likes: 21 } });
+    t.clock.t += 5 * DAY;
+    await tick();
+    // the deadline passes 2 hours after that read (inside the 12-hour cadence)
+    await t.db.update('experiments', { id: exp.id }, { ends_at: new Date(t.clock.t + HOUR).toISOString() });
+    t.up.postMetrics.set(jobs[1], { facebook: { reach: 1000, likes: 60 } });
+    t.clock.t += 2 * HOUR;
+    await t.db.update('experiments', { id: exp.id }, { last_read_at: new Date(t.clock.t - 13 * HOUR).toISOString() });
+    const reads0 = t.up.analyticsReads;
+    await tick();
+    expect(t.up.analyticsReads - reads0).toBe(2);
+    const r = await row(exp.id);
+    expect(r.state).toBe('finished');
+    expect(r.result).toMatchObject({ verdict: 'winner', winner: 'b', perVariant: { b: { successes: 60 } } });
+  });
+
+  it('a version still going out (queued or sending) is waiting, not missing: the test never ends on it', async () => {
+    const { exp, jobs } = await postedTest();
+    for (const j of jobs) t.up.postMetrics.set(j, { facebook: { reach: 1000, likes: 30 } });
+    await t.db.update('post_publish_jobs', { id: jobs[1] }, { state: 'sending' });
+    await t.db.update('experiments', { id: exp.id }, { ends_at: new Date(t.clock.t - HOUR).toISOString(), last_read_at: null });
+    await tick();
+    const r = await row(exp.id);
+    expect(r.state).toBe('running');
+    expect(r.result).toMatchObject({ verdict: 'keep_going', reason: 'not_posted' });
+    await t.db.update('post_publish_jobs', { id: jobs[1] }, { state: 'sent' });
+  });
+
+  it('“Update results” on a finished test keeps “your pick” and the verdict it was picked on', async () => {
+    const { exp, jobs } = await postedTest();
+    for (const j of jobs) t.up.postMetrics.set(j, { facebook: { reach: 1000, likes: 30 } });
+    await t.db.update('experiments', { id: exp.id }, { result: { verdict: 'too_close', leader: 'b', metric: 'engagement_rate' } });
+    const w = await t.x(alice, 'POST', `/api/experiments/${exp.id}/winner`, { key: 'b', override: true });
+    expect(w.status, w.text).toBe(200);
+    t.up.postMetrics.set(jobs[0], { facebook: { reach: 1000, likes: 10 } });
+    t.clock.t += 20 * 60_000;
+    const r = await t.x(alice, 'POST', `/api/experiments/${exp.id}/refresh`);
+    expect(r.status).toBe(200);
+    expect(r.body.experiment).toMatchObject({ state: 'finished', winner: 'b', result: { verdict: 'too_close', pickedByYou: true } });
+    expect(r.body.experiment.result.perVariant.a).toMatchObject({ successes: 10 });
+  });
+
+  it('a plan-level refusal of the read (402) tells the owner; the customer sees “delayed”', async () => {
+    const id = crypto.randomUUID();
+    const logs0 = t.logs.length;
+    t.up.postMetrics.set(id, { status: 402, body: { success: false, message: 'Your plan does not include analytics' } });
+    expect(await t.connections.postMetrics(alice.id, 'facebook', { projectId: 'proj-1', requestId: id })).toEqual({ error: 'delayed' });
+    expect(t.logs.slice(logs0).some((l) => l.includes('uploadpost_owner_alert'))).toBe(true);
+  });
   it('when the analytics limit is used up the tick stops and the rest wait; a team-level error tells the owner, the customer sees “delayed”', async () => {
     const { exp, jobs } = await postedTest();
     for (const e of await t.db.select('experiments', { user_id: alice.id, state: 'running' })) if (e.id !== exp.id) await t.db.update('experiments', { id: e.id }, { last_read_at: new Date(t.clock.t).toISOString() });
@@ -141,4 +194,5 @@ describe('the hourly results job', () => {
     expect(JSON.stringify(got.body)).not.toContain('Invalid API key');
     expect(t.logs.some((l) => l.includes('uploadpost_owner_alert'))).toBe(true);
   });
+
 });

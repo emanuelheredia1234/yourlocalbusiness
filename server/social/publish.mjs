@@ -298,7 +298,18 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       if (made.existing) throw fail(409, 'ALREADY_PUBLISHING', `This post is already being posted on ${NETWORK[platform]}.`, { job: jobOut(made.row) });
       // what the experiment card shows: the Reel mode and the test, kept on the job
       if (trial || exp) await jobs.note(userId, made.row.id, { ...(trial ? { shareMode } : {}), ...(exp ? { experiment: { id: exp.id, key: exp.key } } : {}) }).catch(() => null);
-      if (exp) await hooks.jobCreated(userId, exp, made.row.id);
+      if (exp) {
+        try {
+          await hooks.jobCreated(userId, exp, made.row.id);
+        } catch (e) {
+          // the test couldn't record its job: nothing is sent; the job ends `failed` (out of the live set, so Post now
+          // works again) and the start is given back
+          safeLog('experiment_job_link_failed', { code: e?.code || e?.name || 'Error' }, log);
+          await jobs.finish(userId, made.row.id, { state: 'failed', errorCode: 'NOT_SENT' }).catch(() => null);
+          await hooks.undoStart(userId, exp).catch(() => {});
+          throw fail(503, 'UNAVAILABLE', 'The A/B test couldn’t be updated just now, so nothing was posted. Try again shortly.');
+        }
+      }
       const row = (await jobs.start(userId, made.row.id)) ?? made.row;
       const p = run({ userId, platform, composed, media, privacy, shareMode: trial ? shareMode : undefined }, row).finally(() => running.delete(p));
       running.add(p);
@@ -379,7 +390,10 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
         early.set(row.id, outcome);
         return null;
       }
-      const done = row.state === 'failed' ? await jobs.postedAfterAll(userId, row, { url: outcome.url, drafts: outcome.drafts }) : await jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.drafts ? { outcome: 'drafts' } : undefined });
+      // Instagram refusing a Trial Reel: only a job that was one (its Reel mode, kept on the job) reads as that
+      const isTrialJob = ['TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED', 'TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS'].includes(row.provider_ref?.shareMode);
+      const errorCode = outcome.trialRefused && isTrialJob ? 'TRIAL_REEL_REFUSED' : outcome.errorCode;
+      const done = row.state === 'failed' ? await jobs.postedAfterAll(userId, row, { url: outcome.url, drafts: outcome.drafts }) : await jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode, ref: outcome.drafts ? { outcome: 'drafts' } : undefined });
       await experimentDone(userId, done);
       return done;
     },

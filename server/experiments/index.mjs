@@ -202,6 +202,8 @@ export function createExperiments(deps) {
       network = NETWORKS.includes(b.network) ? b.network : null;
       if (!network) throw fail(400, 'BAD_REQUEST', 'Which network?');
       if (b.mode === 'trial_reels' && network !== 'instagram') throw fail(400, 'BAD_REQUEST', 'Trial Reels are for Instagram videos only.');
+      // Trial Reels go out back to back: a test of the posting time (or a call to action) has nothing to compare
+      if (b.mode === 'trial_reels' && !['hook', 'caption', 'visual'].includes(b.changed)) throw fail(400, 'BAD_REQUEST', 'A Trial Reels test compares hooks, captions or visuals.');
     }
     const subjectRef = typeof b.subjectRef === 'string' ? b.subjectRef : '';
     if (!subjectRef || subjectRef.length > 120) throw fail(400, 'BAD_REQUEST', 'What does this test?');
@@ -317,10 +319,14 @@ export function createExperiments(deps) {
     if (!e.winner) {
       if (!['running', 'finished', 'stopped'].includes(e.state)) throw fail(409, 'BAD_REQUEST', 'This A/B test hasn’t started.');
       const r = e.result ?? {};
+      // the page was published again mid-test: the versions can't be compared, and B would replace the newer page
+      if (r.stoppedBy === 'page_changed' || r.reason === 'page_changed') throw fail(409, 'BAD_REQUEST', 'The page was published again during this test, so its versions can’t be compared. Start a new test to try version B.');
       const clear = r.verdict === 'winner' && r.winner === key;
       const anyway = override && ['too_close', 'tie'].includes(r.verdict);
       if (!clear && !anyway) throw fail(409, 'BAD_REQUEST', r.verdict === 'winner' ? `The winner is version ${String(r.winner).toUpperCase()}.` : 'There’s no clear winner yet. When the test is too close to call, you can pick one anyway.');
     }
+    // putting B live changes the page: a paused plan can't (P1's 402), and nothing is saved before that check
+    if (e.kind === 'page' && key === 'b' && billing?.requireActive) await billing.requireActive(who, 'publish');
     if (e.kind === 'page' && e.state === 'running') await split.flush().catch(() => {});
     const t = iso(now());
     let row = e.winner ? e : await store.swap(who.id, e.id, ['running', 'finished', 'stopped'], { winner: key, winner_used_at: t, state: e.state === 'running' ? 'finished' : e.state, result: { ...(e.result ?? {}), ...(override ? { pickedByYou: true } : {}) } });

@@ -39,7 +39,7 @@ export const MINIMUMS = Object.freeze({
   social: Object.freeze({ trials: 300, successes: 20 }),
   page: Object.freeze({ trials: 100, successes: 10 }),
   email: Object.freeze({ trials: 200, successes: 0 }),
-  counts: Object.freeze({ total: 400 }),
+  counts: Object.freeze({ total: 400, perVariant: 100 }),
 });
 /** |z| needed: two variants (α 0.05, two-sided), three (Bonferroni, α 0.05/3). */
 export const Z_TWO = 1.96;
@@ -71,6 +71,8 @@ export const FLUSH_KEEP_MS = 10 * MINUTE_MS;
 export const FLUSH_MAX_ROWS = 200;
 /** How long another server copy's new split can go unseen (the running-split cache). */
 export const SPLIT_TTL_MS = 60_000;
+/** What the running-split cache may hold in all (B's HTML and the rendered copies), like the pages' HTML cache. */
+export const SPLIT_CACHE_BYTES = 64 * 1024 * 1024;
 
 const int = (v, def, lo, hi) => {
   const n = Number.parseInt(String(v ?? ''), 10);

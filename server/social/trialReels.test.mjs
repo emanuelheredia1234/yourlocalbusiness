@@ -152,4 +152,15 @@ describe('Instagram refusing a Trial Reel', () => {
     expect(all).not.toContain('private detail');
     expect(all).not.toMatch(/not eligible for trial reels/i);
   });
+
+  it('a team-level refusal that mentions a trial (Upload-Post’s own plan) is never “Trial Reel refused”: the owner is told', async () => {
+    const post = await reel(alice, { instagram: { shareMode: IF_LIKED } });
+    const logs0 = t.logs.length;
+    t.up.setUploadOutcome('trial_plan');
+    const r = await publishAndWait(alice, post);
+    expect(r.status).toBe(200);
+    const job = (await t.call(alice, 'GET', `/api/posting/jobs/${r.body.job.id}`)).body.job;
+    expect(job).toMatchObject({ state: 'failed', errorCode: 'SERVICE_UNAVAILABLE' });
+    expect(t.logs.slice(logs0).some((l) => l.includes('uploadpost_owner_alert'))).toBe(true);
+  });
 });

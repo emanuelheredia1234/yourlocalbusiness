@@ -8,7 +8,7 @@
 
 import { fail } from '../integrations/common.mjs';
 import { EMAIL_EVERY_MS, WINDOW, HOUR_MS, iso, ms } from './config.mjs';
-import { decide } from './math.mjs';
+import { decide, keepMarks } from './math.mjs';
 import { startTest } from './start.mjs';
 
 const HEX24 = /^[0-9a-f]{24}$/;
@@ -32,11 +32,13 @@ export function createEmailExperiments(deps) {
     };
     // counted first (the limit is checked before anything is made in Omnisend); given back when nothing was made
     const { row: started, started: mine } = await startTest(deps, who, e, { endsAt: now() + settings.decisionHours * HOUR_MS + WINDOW.emailExtra });
+    // another request started it a moment ago (a double click, two tabs): that one makes the draft, never a second
+    if (!mine) throw fail(409, 'BAD_REQUEST', 'This email test already has its Omnisend draft.');
     let made;
     try {
       made = await omnisend.createAbDraft(who.id, { name: e.name || '', variants: { a: v.a, b: v.b }, settings });
     } catch (err) {
-      if (mine && !err?.campaignMayExist) await store.swap(who.id, e.id, 'running', { state: 'draft', started_at: null, counted_month: null, ends_at: null }).catch(() => {});
+      if (!err?.campaignMayExist) await store.swap(who.id, e.id, 'running', { state: 'draft', started_at: null, counted_month: null, ends_at: null }).catch(() => {});
       if (typeof err?.status === 'number' && typeof err?.code === 'string') throw fail(err.status, err.code, err.publicMessage ?? err.message);
       throw err;
     }
@@ -79,7 +81,15 @@ export function createEmailExperiments(deps) {
     let result = ours;
     // Omnisend's own pick wins for its A/B draft (ours is shown beside it)
     const picked = got.status === 'ok' && got.winnerId ? fresh.find((v) => v.omnisend_variant_id === got.winnerId || v.omnisend_campaign_id === got.winnerId) : null;
-    if (picked) result = { ...ours, verdict: 'winner', winner: picked.key, source: 'omnisend', ours: { verdict: ours.verdict, ...(ours.winner ? { winner: ours.winner } : {}) } };
+    const oursShort = { verdict: ours.verdict, ...(ours.winner ? { winner: ours.winner } : {}) };
+    if (picked) result = { ...ours, verdict: 'winner', winner: picked.key, source: 'omnisend', ours: oursShort };
+    else if (e.mode === 'omnisend_ab') {
+      // Omnisend picks the winner of its own A/B draft: until it has, ours is only shown beside it, never the verdict
+      const { winner: _w, leader: _l, lift: _lift, z: _z, missing: _m, ...rest } = ours;
+      const ended = endsAt != null && t >= endsAt;
+      result = { ...rest, verdict: ended ? 'not_enough' : 'keep_going', reason: ended ? 'omnisend_no_pick' : 'omnisend_picks', ours: oursShort };
+    }
+    result = keepMarks(e, result);
     if (got.status === 'ok' && got.campaignStatus) result = { ...result, campaignStatus: got.campaignStatus };
     const finished = (picked && e.state === 'running') || (endsAt != null && t >= endsAt && e.state === 'running');
     const row = await store.patch(userId, e.id, { result, last_read_at: iso(t), ...(finished ? { state: 'finished' } : {}) });

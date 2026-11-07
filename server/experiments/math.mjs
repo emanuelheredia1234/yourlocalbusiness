@@ -7,6 +7,8 @@
 // verdict: 'winner' | 'tie' | 'too_close' | 'not_enough' | 'keep_going'. Rules, in order:
 //  1. A variant whose post is gone, or whose job failed or may not have gone out → not_enough (variant_missing).
 //  2. The minimum sample (config.mjs MINIMUMS): before the deadline keep_going, after it not_enough (what's missing).
+//     Counts (views, reach) also need a minimum per variant, and are only called at the deadline: the versions go
+//     out at different times, so before it the one out longer is simply ahead (keep_going, with the leader).
 //  3. Identical rates (or counts), 0 and 0 included → tie.
 //  4. Rates: a two-proportion z-test of the best against each other variant (pooled p); counts (views, reach): a
 //     conditional binomial test, z = (a − n/2) / √(n/4). |z| ≥ 1.96 with two variants, ≥ 2.394 with three
@@ -71,6 +73,7 @@ function shortfall(m, rows) {
   const out = [];
   if (m.kind === 'count') {
     const total = Object.values(rows).reduce((a, r) => a + r.count, 0);
+    for (const [key, r] of Object.entries(rows)) if (r.count < MINIMUMS.counts.perVariant) out.push({ key, what: m.measure ?? 'views', have: r.count, need: MINIMUMS.counts.perVariant });
     if (total < MINIMUMS.counts.total) out.push({ what: m.measure ?? 'views', have: total, need: MINIMUMS.counts.total });
     return out;
   }
@@ -91,7 +94,7 @@ export function decide({ kind, mode, changed, metric, endsAt = null, now = Date.
   if (list.some((v) => v.missing)) return { ...base, verdict: 'not_enough', reason: 'variant_missing', perVariant: {}, minimums: null };
   const m = measure({ kind, metric }, list);
   if (m.reason) return { ...base, verdict: ended ? 'not_enough' : 'keep_going', reason: m.reason, perVariant: {}, minimums: null };
-  const minimums = m.kind === 'count' ? { total: MINIMUMS.counts.total } : { ...MINIMUMS[m.group] };
+  const minimums = m.kind === 'count' ? { total: MINIMUMS.counts.total, perVariant: MINIMUMS.counts.perVariant } : { ...MINIMUMS[m.group] };
   const perVariant = Object.fromEntries(
     Object.entries(m.rows).map(([k, r]) => [k, m.kind === 'count' ? { count: r.count } : { successes: r.successes, trials: r.trials, rate: r.trials > 0 ? r3(r.successes / r.trials) : 0 }]),
   );
@@ -104,6 +107,8 @@ export function decide({ kind, mode, changed, metric, endsAt = null, now = Date.
   if (keys.every((k) => value(k) === value(keys[0]))) return { ...out, verdict: 'tie' };
 
   const best = keys.reduce((a, k) => (value(k) > value(a) ? k : a), keys[0]);
+  // counts aren't compared at the same age after posting: only the deadline (every version's window over) calls them
+  if (m.kind === 'count' && !ended) return { ...out, verdict: 'keep_going', leader: best };
   const threshold = keys.length >= 3 ? Z_THREE : Z_TWO;
   let zMin = Infinity;
   let liftMin = Infinity;
@@ -117,4 +122,28 @@ export function decide({ kind, mode, changed, metric, endsAt = null, now = Date.
   const stats = { z: r2(zMin), ...(Number.isFinite(liftMin) ? { lift: Math.round(liftMin * 1000) / 10 } : {}) };
   if (zMin >= threshold && liftMin >= MIN_LIFT) return { ...out, ...stats, verdict: 'winner', winner: best };
   return { ...out, ...stats, verdict: ended ? 'too_close' : 'keep_going', leader: best };
+}
+
+/**
+ * A recomputed result keeps what people and events decided on the test: "Pick one anyway" (pickedByYou), who or
+ * what stopped it (stoppedBy, stoppedAt, a page_changed reason) and, once a winner is in use, the verdict it was
+ * picked on (the numbers still update). The Trial Reels eligibility shown when the test was made stays too.
+ */
+export function keepMarks(e, fresh) {
+  const old = e?.result && typeof e.result === 'object' ? e.result : {};
+  const out = { ...fresh };
+  for (const k of ['pickedByYou', 'stoppedBy', 'stoppedAt', 'eligibility']) if (old[k] !== undefined) out[k] = old[k];
+  if (old.stoppedBy === 'page_changed') {
+    out.verdict = 'not_enough';
+    out.reason = 'page_changed';
+    delete out.winner;
+    delete out.leader;
+  }
+  if (e?.winner) {
+    for (const k of ['verdict', 'winner', 'lift', 'z', 'leader', 'reason', 'source', 'ours']) {
+      if (old[k] !== undefined) out[k] = old[k];
+      else delete out[k];
+    }
+  }
+  return out;
 }

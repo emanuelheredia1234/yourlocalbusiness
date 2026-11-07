@@ -169,8 +169,6 @@ export function jobErrorForCode(code) {
   if (c === 'spam_risk_too_many_pending_share') return 'TIKTOK_DRAFTS_FULL';
   if (c === 'reached_active_user_cap' || c === 'x_daily_write_limit' || c === 'hard_cap') return 'PLATFORM_LIMIT';
   if (/^(MEDIA_REQUIRED|MEDIA_LIMITS|invalid_video_file)$/.test(c)) return 'MEDIA_REFUSED';
-  // Instagram refused a Trial Reel (the account isn't eligible yet, or hit Instagram's trial limit)
-  if (/trial/i.test(c)) return 'TRIAL_REEL_REFUSED';
   if (/duplicate|similar/i.test(c)) return 'DUPLICATE';
   return 'REFUSED';
 }
@@ -185,7 +183,7 @@ export function jobErrorForCode(code) {
  * (Upload-Post tries it again by itself), and a TikTok failure with no code is TikTok's internal error, which
  * TikTok sometimes publishes once moderation finishes: it may have been posted.
  */
-export function outcomeOfEntry(entry, { platform = '', top = '', final = false } = {}) {
+export function outcomeOfEntry(entry, { platform = '', top = '', final = false, trial = false } = {}) {
   if (!isObj(entry)) return { state: 'pending' };
   const st = String(entry.status ?? '');
   if (entry.skipped === true || st === 'skipped') return { state: 'failed', errorCode: 'NOT_CONNECTED' };
@@ -202,8 +200,9 @@ export function outcomeOfEntry(entry, { platform = '', top = '', final = false }
     const code = String(entry.error_code ?? '');
     if (entry.reauth_required === true || /reauth|reconnect/i.test(code)) return { state: 'failed', errorCode: 'NEEDS_RECONNECT', reauth: true };
     if ((platform || entry.platform) === 'tiktok' && !clip(code, 60)) return { state: 'unknown', errorCode: 'UNCONFIRMED' };
-    // Instagram refusing a Trial Reel says so only in its text (looked at, never kept or passed on)
-    if ((platform || entry.platform) === 'instagram' && trialRefusal(entry)) return { state: 'failed', errorCode: 'TRIAL_REEL_REFUSED' };
+    // Instagram refusing a Trial Reel says so only in its text (looked at, never kept or passed on); only a job that
+    // was a Trial Reel, so a regular post's own error never reads as one
+    if (trial && (platform || entry.platform) === 'instagram' && trialRefusal(entry)) return { state: 'failed', errorCode: 'TRIAL_REEL_REFUSED' };
     return { state: 'failed', errorCode: jobErrorForCode(code) };
   }
   return { state: 'pending' };
@@ -1237,7 +1236,8 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
         await markReconnect(userId, projectId, platform);
         return { error: 'reconnect' };
       }
-      if (e.kind === 'config') {
+      // our key, or the Upload-Post plan (402, a plan or quota refusal): the team's to fix, never the customer's
+      if (e.kind === 'config' || e.status === 402 || /plan|quota|subscription/i.test(String(e.code ?? ''))) {
         ownerAlert('post_analytics');
         return { error: 'delayed' };
       }
@@ -1353,14 +1353,14 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   }
 
   /** One /status read for a request (our job id) → { state, url?, drafts?, errorCode? } for this platform. */
-  async function readStatus(username, requestId, platform) {
+  async function readStatus(username, requestId, platform, { trial = false } = {}) {
     const res = await call('GET', '/uploadposts/status', { query: { request_id: requestId } });
     if (res.status === 404) return { state: 'pending', missing: true };
     if (res.status < 200 || res.status >= 300) return null;
     const b = isObj(res.body) ? res.body : {};
     const top = String(b.status ?? '');
     const entry = (Array.isArray(b.results) ? b.results : []).find((r) => isObj(r) && r.platform === UP_PLATFORM[platform]);
-    let out = entry ? outcomeOfEntry(entry, { platform, top }) : { state: 'pending' };
+    let out = entry ? outcomeOfEntry(entry, { platform, top, trial }) : { state: 'pending' };
     if (!entry && top === 'failed') out = { state: 'failed', errorCode: 'REFUSED' };
     if (out.state === 'sent' && !out.url && !out.drafts) {
       // the final address comes from the history when the status has none (asked for this business's profile only)
@@ -1373,13 +1373,13 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   }
 
   /** Poll /status for a request Upload-Post answers in the background: 5 s, then every 10 s (15 s for video). */
-  async function poll(username, requestId, platform, video) {
+  async function poll(username, requestId, platform, video, { trial = false } = {}) {
     const deadline = now() + (video ? 10 * 60_000 : 2 * 60_000);
     let wait = 5_000;
     while (now() + wait <= deadline) {
       await sleep(wait);
       wait = video ? 15_000 : 10_000;
-      const got = await readStatus(username, requestId, platform).catch(() => null);
+      const got = await readStatus(username, requestId, platform, { trial }).catch(() => null);
       if (got && got.state !== 'pending') return got;
     }
     return { state: 'unknown', errorCode: 'UNCONFIRMED' };
@@ -1476,7 +1476,9 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     }
     if (sent.outcome === 'failed') {
       // Instagram (through Upload-Post) refusing the Trial Reel outright: our own words, nothing was posted
-      const refused = trial && res?.status >= 400 && res?.status < 500 && trialRefusal(res?.body) ? { state: 'failed', errorCode: 'TRIAL_REEL_REFUSED' } : refusalOutcome(res);
+      // only a 400 or 422 about the Trial Reel itself: a team-level answer (our key, the plan, a limit) or the account's
+      // own reconnect goes through refusalOutcome (the owner is told; the customer never hears it's their account)
+      const refused = trial && (res?.status === 400 || res?.status === 422) && !isSocialReauth(res) && trialRefusal(res?.body) ? { state: 'failed', errorCode: 'TRIAL_REEL_REFUSED' } : refusalOutcome(res);
       // the account isn't connected at Upload-Post any more: the doc learns it now (one read), not on every post
       if (refused.resync) await sync(userId, projectId).catch(() => null);
       if (refused.reauth) await markReconnect(userId, projectId, platform);
@@ -1488,11 +1490,11 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     const at = requestId === jobId ? ref : { ...ref, requestId };
     const entry = isObj(body.results) ? body.results[UP_PLATFORM[platform]] : null;
     let out;
-    if (entry) out = outcomeOfEntry(entry, { platform, final: true });
-    else if (typeof body.request_id === 'string') out = await poll(username, requestId, platform, media?.kind === 'video');
+    if (entry) out = outcomeOfEntry(entry, { platform, final: true, trial });
+    else if (typeof body.request_id === 'string') out = await poll(username, requestId, platform, media?.kind === 'video', { trial });
     else out = { state: 'unknown', errorCode: 'UNCONFIRMED' };
     if (out.state === 'sent' && !out.url && !out.drafts && entry) {
-      const later = await readStatus(username, requestId, platform).catch(() => null);
+      const later = await readStatus(username, requestId, platform, { trial }).catch(() => null);
       if (later?.state === 'sent') out = later;
     }
     if (out.state === 'pending') out = { state: 'unknown', errorCode: 'UNCONFIRMED' };
@@ -1516,7 +1518,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     if (!prof) return null;
     const requestId = String(ref.requestId ?? ref.jobId ?? '');
     if (!REQUEST_ID.test(requestId)) return null;
-    const got = await readStatus(prof.username, requestId, ref.platform);
+    const got = await readStatus(prof.username, requestId, ref.platform, { trial: TRIAL_SHARE_MODES.includes(ref.shareMode) });
     if (!got) return null;
     if (got.state === 'sent') return { found: true, ...(got.url ? { url: got.url } : {}), ...(got.drafts ? { drafts: true, ref: { outcome: 'drafts' } } : {}) };
     if (got.state === 'failed') {
@@ -1584,7 +1586,9 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       }
       if (out.reauth) await markReconnect(userId, projectId, platform);
       // the job must be this user's and this business's (it went out through this business's profile)
-      await postListener(userId, jobId, { state: out.state, platform, ...(out.url ? { url: out.url } : {}), ...(out.errorCode ? { errorCode: out.errorCode } : {}), ...(out.drafts ? { drafts: true } : {}) }, { projectId });
+      // the event doesn't say whether the job was a Trial Reel: posting decides (it knows the job's Reel mode)
+      const trialRefused = out.state === 'failed' && out.errorCode === 'REFUSED' && platform === 'instagram' && trialRefusal(result);
+      await postListener(userId, jobId, { state: out.state, platform, ...(out.url ? { url: out.url } : {}), ...(out.errorCode ? { errorCode: out.errorCode } : {}), ...(out.drafts ? { drafts: true } : {}), ...(trialRefused ? { trialRefused: true } : {}) }, { projectId });
       return 'applied';
     }
     return 'ignored';

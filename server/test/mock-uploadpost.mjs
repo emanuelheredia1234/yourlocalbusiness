@@ -134,6 +134,7 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
       next = next.then ?? 'ok';
     }
     if (next === 'unauthorized') return err(res, 401, 'Invalid API key');
+    if (next === 'trial_plan') return err(res, 403, 'Your Upload-Post free trial has ended. Upgrade your plan.');
     if (next === 'hard_cap') return json(res, 429, { success: false, message: 'Post verification failed', violations: [{ platform: platforms[0], type: 'hard_cap', message: 'Daily cap reached', used_last_24h: 50, cap: 50 }] });
     if (next === 'scheduled_limit') return json(res, 429, { success: false, error_code: 'SCHEDULED_POSTS_LIMIT', message: 'Your plan (Advanced) allows 40000 pending posts; upgrade at https://upload-post.com/pricing' });
     if (next === 'error500') return err(res, 500, 'Internal error: something about our infrastructure');
@@ -398,7 +399,8 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
      * What the next upload does: 'ok' | 'async' | 'async_pending' | 'platform_failed' | 'reauth' | 'skipped' |
      * 'inbox' | 'privacy' | 'hard_cap' | 'scheduled_limit' | 'unauthorized' | 'error500' | 'hang' |
      * 'accepted_then_500' | 'existing_request' (answers with another request's id) | 'tiktok_internal' (failed with
-     * no error_code) | 'x_links_stripped' | 'trial_refused' (Instagram refused the Trial Reel, in its own words), or
+     * no error_code) | 'x_links_stripped' | 'trial_refused' (Instagram refused the Trial Reel, in its own words) |
+     * 'trial_plan' (a 403 about Upload-Post's own free trial: team-level, never a Trial Reel refusal), or
      * { waitFor: promise, then } to hold the answer.
      */
     setUploadOutcome(...next) {

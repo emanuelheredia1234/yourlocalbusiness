@@ -190,3 +190,29 @@ describe('what can’t be posted from a test', () => {
     expect((await t.publish(alice, ghost)).status).toBe(404);
   });
 });
+
+describe('when the test can’t record its job', () => {
+  it('nothing is sent, the job ends failed (Post now works again), and the start is given back', async () => {
+    const [a, b] = [await fbPost('link A'), await fbPost('link B')];
+    const exp = await t.draft(alice, [a, b]);
+    const sends = t.postCalls().length;
+    t.supa.behavior.fail = (method, pathname) => (method === 'PATCH' && pathname === '/rest/v1/experiment_variants' ? { status: 503, body: { message: 'down' } } : null);
+    let r;
+    try {
+      r = await publish(a);
+    } finally {
+      t.supa.behavior.fail = null;
+    }
+    expect([r.status, r.body.code]).toEqual([503, 'UNAVAILABLE']);
+    expect(t.postCalls().length).toBe(sends);
+    const jobs = await t.db.select('post_publish_jobs', { user_id: alice.id, post_id: a.id });
+    expect(jobs.map((j) => j.state)).toEqual(['failed']);
+    expect(await t.row(exp.id)).toMatchObject({ state: 'draft', counted_month: null });
+    expect(await usage()).toMatchObject({ used: 0 });
+    // pressed again: it goes out, once
+    const again = await publish(a);
+    expect(again.status).toBe(200);
+    expect(t.postCalls().length).toBe(sends + 1);
+    expect((await t.row(exp.id)).state).toBe('running');
+  });
+});

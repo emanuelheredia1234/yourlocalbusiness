@@ -35,6 +35,11 @@ describe('drafts', () => {
     expect(await bad({ changed: 'subject' })).toBe('BAD_REQUEST');
     expect(await bad({ metric: 'lead_rate' })).toBe('BAD_REQUEST');
     expect(await bad({ mode: 'trial_reels' })).toBe('BAD_REQUEST');
+    // a Trial Reels test compares a hook, a caption or a visual (never a posting time or a call to action)
+    for (const changed of ['time', 'cta']) {
+      const r = await t.x(alice, 'POST', '/api/experiments', { ...base, mode: 'trial_reels', network: 'instagram', changed });
+      expect([r.status, r.body.error]).toEqual([400, 'A Trial Reels test compares hooks, captions or visuals.']);
+    }
     expect(await bad({ variants: [{ key: 'a', postId: a.id }] })).toBe('BAD_REQUEST');
     expect(await bad({ variants: [{ key: 'a', postId: a.id }, { key: 'c', postId: b.id }] })).toBe('BAD_REQUEST');
     expect(await bad({ variants: [{ key: 'a', postId: a.id }, { key: 'b', postId: a.id }] })).toBe('BAD_REQUEST');

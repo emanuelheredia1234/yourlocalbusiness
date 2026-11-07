@@ -190,6 +190,79 @@ describe('Use the winner', () => {
   });
 });
 
+describe('review fixes', () => {
+  it('a page republished mid-test: no verdict, Use the winner refused (409), and the newer page is kept', async () => {
+    const e = await split();
+    // an earlier look had found B ahead
+    await t.db.update('experiments', { id: e.id }, { result: { verdict: 'winner', winner: 'b', lift: 25, metric: 'lead_rate' } });
+    expect((await t.publishPage(alice, { html: page('Version A2') })).status).toBe(200);
+    const row = await t.row(e.id);
+    expect(row).toMatchObject({ state: 'stopped', result: { verdict: 'not_enough', reason: 'page_changed', stoppedBy: 'page_changed' } });
+    expect(row.result.winner).toBeUndefined();
+    const r = await t.x(alice, 'POST', `/api/experiments/${e.id}/winner`, { key: 'b' });
+    expect([r.status, r.body.code]).toEqual([409, 'BAD_REQUEST']);
+    expect(r.body.error).toMatch(/published again/);
+    // even a result written as a winner after the stop (an old copy) is refused on the stop's mark
+    await t.db.update('experiments', { id: e.id }, { result: { ...row.result, verdict: 'winner', winner: 'b' } });
+    expect((await t.x(alice, 'POST', `/api/experiments/${e.id}/winner`, { key: 'b' })).status).toBe(409);
+    expect((await get('/joes-bakery')).text).toContain('Version A2');
+  });
+
+  it('Use the winner with B on a paused plan: 402 before anything is saved or republished', async () => {
+    const e = await split();
+    await t.db.update('experiments', { id: e.id }, { result: { verdict: 'winner', winner: 'b', lift: 25, metric: 'lead_rate' } });
+    t.billing.state.enforce = true;
+    t.plan(alice, 'grow', { status: 'paused' });
+    try {
+      const r = await t.x(alice, 'POST', `/api/experiments/${e.id}/winner`, { key: 'b' });
+      expect(r.status).toBe(402);
+      expect(await t.row(e.id)).toMatchObject({ state: 'running', winner: null });
+    } finally {
+      t.billing.state.enforce = false;
+      t.billing.state.accounts.delete(alice.id);
+    }
+  });
+
+  it('two starts at once: one stores B and runs; the other is refused and never replaces B', async () => {
+    expect((await t.publishPage(alice, { html: A })).status).toBe(200);
+    const made = await t.x(alice, 'POST', '/api/experiments', { projectId: 'proj-1', kind: 'page', mode: 'split', changed: 'headline', subjectRef: 'seo:proj-1', variants: [{ key: 'a' }, { key: 'b' }] });
+    const id = made.body.experiment.id;
+    const stale = await t.row(id);
+    const B2 = page('Version B2');
+    expect((await t.x(alice, 'POST', `/api/experiments/${id}/page`, { html: B, sha256: t.sha(B) })).status).toBe(200);
+    // the second request read the test while it was still a draft
+    await expect(t.mod.split.startSplit({ id: alice.id }, stale, { html: B2, sha256: t.sha(B2) })).rejects.toMatchObject({ status: 409 });
+    const [, b] = await t.db.select('experiment_variants', { experiment_id: id }, { order: 'key.asc' });
+    expect(b.html).toBe(B);
+  });
+
+  it('lead tokens: 7 days from when the split ended, however often the row is written after', async () => {
+    const e = await split();
+    const tokenB = t.mod.split.tokenOf(e.id, 'b');
+    expect((await t.x(alice, 'POST', `/api/experiments/${e.id}/stop`)).status).toBe(200);
+    t.clock.t += 6 * 86_400_000;
+    // a later write moves updated_at, not the window
+    await t.db.update('experiments', { id: e.id }, { name: 'renamed' });
+    expect((await lead(`/joes-bakery/lead?xv=${tokenB}`, { email: 'day6@example.com' })).status).toBe(200);
+    expect((await t.db.select('page_leads', { email: 'day6@example.com' }))[0]).toMatchObject({ experiment_id: e.id, variant_key: 'b' });
+    t.clock.t += 2 * 86_400_000;
+    await t.db.update('experiments', { id: e.id }, { name: 'renamed again' });
+    expect((await lead(`/joes-bakery/lead?xv=${tokenB}`, { email: 'day8@example.com' })).status).toBe(200);
+    const [late] = await t.db.select('page_leads', { email: 'day8@example.com' });
+    expect([late.experiment_id ?? null, late.variant_key ?? null]).toEqual([null, null]);
+  });
+
+  it('the split cache keeps B and its rendered copies within its byte budget, and lets expired entries go', async () => {
+    await split();
+    await get('/joes-bakery');
+    const s1 = t.mod.split.cacheStats();
+    expect(s1.entries).toBe(1);
+    expect(s1.bytes).toBeGreaterThanOrEqual(Buffer.byteLength(B));
+    t.mod.split.forgetUser(alice.id);
+    expect(t.mod.split.cacheStats()).toEqual({ entries: 0, bytes: 0 });
+  });
+});
+
 describe('counters', () => {
   it('flush through ylb_experiment_add_counts; a failed flush is kept for the next one', async () => {
     const e = await split();

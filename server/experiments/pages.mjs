@@ -20,8 +20,8 @@
 import crypto from 'node:crypto';
 import { fail, safeLog } from '../integrations/common.mjs';
 import { hasLeadForm } from '../leads.mjs';
-import { COOKIE_MAX_AGE_S, FLUSH_EVERY_MS, FLUSH_KEEP_MS, FLUSH_MAX_ROWS, SPLIT_TTL_MS, TOKEN_AFTER_STOP_MS, UUID_RE, WINDOW, iso, ms } from './config.mjs';
-import { decide } from './math.mjs';
+import { COOKIE_MAX_AGE_S, FLUSH_EVERY_MS, SPLIT_CACHE_BYTES, FLUSH_KEEP_MS, FLUSH_MAX_ROWS, SPLIT_TTL_MS, TOKEN_AFTER_STOP_MS, UUID_RE, WINDOW, iso, ms } from './config.mjs';
+import { decide, keepMarks } from './math.mjs';
 import { startTest } from './start.mjs';
 
 const MAX_HTML_BYTES = 1_500_000;
@@ -59,32 +59,56 @@ export function createPageSplit(deps) {
   };
 
   // ── the running split of each page, kept SPLIT_TTL_MS (a split another server copy starts is seen within that) ──
-  /** `${user_id}|${page_id}` → { at, exp: { id, user_id, page_id, bHtml, out: {} } | null } */
+  // B's HTML and the rendered copies are held within SPLIT_CACHE_BYTES in all (like the pages' own HTML cache):
+  // expired entries go first, then the oldest. A page served from outside the budget is still served, just not kept.
+  /** `${user_id}|${page_id}` → { at, ttl, exp: { k, id, user_id, page_id, bHtml, out: {}, bytes } | null } */
   const cache = new Map();
   const inflight = new Map();
+  let cacheBytes = 0;
   let pages = null;
+  const entryBytes = (entry) => entry?.exp?.bytes ?? 0;
+  function drop(k) {
+    const cur = cache.get(k);
+    if (!cur) return;
+    cacheBytes -= entryBytes(cur);
+    cache.delete(k);
+  }
+  function trim() {
+    const t = now();
+    for (const [k, v] of [...cache.entries()]) if (t - v.at >= v.ttl) drop(k);
+    while ((cacheBytes > SPLIT_CACHE_BYTES || cache.size > 5000) && cache.size) drop(cache.keys().next().value);
+  }
+  function keep(k, exp, ttl = SPLIT_TTL_MS) {
+    drop(k);
+    if (exp) exp.bytes = exp.bHtml.length;
+    cache.set(k, { at: now(), ttl, exp });
+    cacheBytes += entryBytes(cache.get(k));
+    trim();
+  }
 
   async function running(page) {
     const k = `${page.user_id}|${page.page_id}`;
     const kept = cache.get(k);
-    if (kept && now() - kept.at < SPLIT_TTL_MS) return kept.exp;
+    if (kept && now() - kept.at < kept.ttl) return kept.exp;
     if (!inflight.has(k)) {
       inflight.set(
         k,
         (async () => {
           let exp = null;
+          let ttl = SPLIT_TTL_MS;
           try {
             const e = await store.runningSplit(page.user_id, page.page_id);
             if (e) {
               const b = await store.variant(page.user_id, e.id, 'b', { withHtml: true });
-              if (b?.html) exp = { id: e.id, user_id: e.user_id, page_id: e.subject_ref, bHtml: Buffer.from(b.html, 'utf8'), out: {} };
+              if (b?.html) exp = { k, id: e.id, user_id: e.user_id, page_id: e.subject_ref, bHtml: Buffer.from(b.html, 'utf8'), out: {}, bytes: 0 };
+              // a split that has just started may not have its B stored yet: looked at again shortly
+              else ttl = 2_000;
             }
           } catch (err) {
             // can't tell right now (or the migration isn't run): version A, nothing counted, for one TTL
             if (err?.code !== 'NOT_SET_UP') safeLog('experiment_split_lookup_failed', { code: err?.code || err?.name || 'Error' }, log);
           }
-          cache.set(k, { at: now(), exp });
-          while (cache.size > 5000) cache.delete(cache.keys().next().value);
+          keep(k, exp, ttl);
           return exp;
         })().finally(() => inflight.delete(k)),
       );
@@ -141,7 +165,14 @@ export function createPageSplit(deps) {
     if (kept && kept.src === src) return kept.body;
     const action = `action="/${slug}/lead"`;
     const body = Buffer.from(src.toString('utf8').split(action).join(`action="/${slug}/lead?xv=${tokenOf(exp.id, key)}"`), 'utf8');
+    const delta = body.length - (kept?.body.length ?? 0);
     exp.out[key] = { src, body };
+    exp.bytes += delta;
+    // counted against the budget while the split is still kept (a split no longer kept is let go with its request)
+    if (cache.get(exp.k)?.exp === exp) {
+      cacheBytes += delta;
+      trim();
+    }
     return body;
   }
 
@@ -194,7 +225,10 @@ export function createPageSplit(deps) {
       try {
         const e = await store.byIdAny(id);
         if (!e || e.kind !== 'page' || e.user_id !== page.user_id || e.subject_ref !== page.page_id) return null;
-        const recent = ['stopped', 'finished'].includes(e.state) && now() - (ms(e.updated_at) ?? 0) <= TOKEN_AFTER_STOP_MS;
+        // the 7 days run from when the split ended (fixed), never from the row's last write
+        const ended = [ms(e.result?.stoppedAt), ms(e.winner_used_at), ms(e.ends_at)].filter((x) => x != null);
+        const endedAt = ended.length ? Math.min(...ended) : null;
+        const recent = ['stopped', 'finished'].includes(e.state) && endedAt != null && now() - endedAt <= TOKEN_AFTER_STOP_MS;
         if (e.state !== 'running' && !recent) return null;
         if (key === 'a') return { experimentId: id, key, running: e.state === 'running' };
         const b = await store.variant(e.user_id, id, 'b', { withHtml: true });
@@ -217,8 +251,10 @@ export function createPageSplit(deps) {
         const e = await store.runningSplit(userId, pageId);
         if (!e) return;
         await flush().catch(() => {});
-        await store.swap(userId, e.id, 'running', { state: 'stopped', result: { ...(e.result ?? {}), stoppedBy: 'page_changed', reason: 'page_changed', stoppedAt: iso(now()) } });
-        cache.delete(`${userId}|${pageId}`);
+        // a page that changed mid-test can't be compared: no verdict (a winner read before it no longer stands)
+        const { winner: _w, leader: _l, lift: _lift, z: _z, ...kept } = e.result ?? {};
+        await store.swap(userId, e.id, 'running', { state: 'stopped', result: { ...kept, verdict: 'not_enough', stoppedBy: 'page_changed', reason: 'page_changed', stoppedAt: iso(now()) } });
+        drop(`${userId}|${pageId}`);
       } catch (err) {
         if (err?.code !== 'NOT_SET_UP') safeLog('experiment_page_stop_failed', { code: err?.code || err?.name || 'Error' }, log);
       }
@@ -244,11 +280,21 @@ export function createPageSplit(deps) {
       if (!names.has(name)) throw fail(400, 'BAD_REQUEST', 'Version B uses an image that isn’t published with the page. Publish the page with both images first.');
     }
     if (hasLeadForm(page.html, page.slug) && !hasLeadForm(html, page.slug)) throw fail(400, 'VARIANT_NO_FORM', 'Version B needs the page’s form, so its leads can be compared.');
-    const stored = await store.patchVariant(who.id, e.id, 'b', { html, html_sha256: sha256(html) });
+    if (!(await store.variant(who.id, e.id, 'b'))) throw fail(409, 'BAD_REQUEST', 'This page test has no version B.');
+    // started first (a compare-and-swap on the draft), then B stored: a second start at the same moment never
+    // replaces the B of a split that's already running
+    const { row, started } = await startTest(deps, who, e, { endsAt: now() + WINDOW.page });
+    if (!started) throw fail(409, 'BAD_REQUEST', 'This page test is already running.');
+    let stored = null;
+    try {
+      stored = await store.patchVariant(who.id, e.id, 'b', { html, html_sha256: sha256(html) });
+    } finally {
+      // B couldn't be stored: the start is given back (nothing was served)
+      if (!stored) await store.swap(who.id, e.id, 'running', { state: 'draft', started_at: null, counted_month: null, ends_at: null }).catch(() => {});
+    }
     if (!stored) throw fail(409, 'BAD_REQUEST', 'This page test has no version B.');
-    const { row } = await startTest(deps, who, e, { endsAt: now() + WINDOW.page });
-    cache.delete(`${who.id}|${e.subject_ref}`);
-    return row;
+    drop(`${who.id}|${e.subject_ref}`);
+    return (await store.byId(who.id, e.id)) ?? row;
   }
 
   /** A page test's verdict from its counters (flushed first); past its deadline it finishes. → the row */
@@ -259,8 +305,8 @@ export function createPageSplit(deps) {
     const t = now();
     const result = decide({ kind: 'page', mode: 'split', changed: e.changed, metric: 'lead_rate', endsAt, now: t, variants: variants.map((v) => ({ key: v.key, visitors: Number(v.visitors) || 0, leads: Number(v.leads) || 0 })) });
     const finished = e.state === 'running' && endsAt != null && t >= endsAt;
-    const row = await store.patch(e.user_id, e.id, { result: { ...result, ...(e.result?.stoppedBy ? { stoppedBy: e.result.stoppedBy } : {}) }, ...(finished ? { state: 'finished' } : {}) });
-    if (finished) cache.delete(`${e.user_id}|${e.subject_ref}`);
+    const row = await store.patch(e.user_id, e.id, { result: keepMarks(e, result), ...(finished ? { state: 'finished' } : {}) });
+    if (finished) drop(`${e.user_id}|${e.subject_ref}`);
     return row ?? e;
   }
 
@@ -291,10 +337,10 @@ export function createPageSplit(deps) {
       pages = p;
     },
     forget(row) {
-      cache.delete(`${row.user_id}|${row.subject_ref}`);
+      drop(`${row.user_id}|${row.subject_ref}`);
     },
     forgetUser(userId) {
-      for (const k of [...cache.keys()]) if (k.startsWith(`${userId}|`)) cache.delete(k);
+      for (const k of [...cache.keys()]) if (k.startsWith(`${userId}|`)) drop(k);
     },
     startTimer() {
       if (timer || !on) return;
@@ -307,5 +353,6 @@ export function createPageSplit(deps) {
     },
     /** for tests */
     counts,
+    cacheStats: () => ({ entries: cache.size, bytes: cacheBytes }),
   };
 }

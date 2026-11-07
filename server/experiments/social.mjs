@@ -10,7 +10,7 @@
 import { fail, safeLog } from '../integrations/common.mjs';
 import { CADENCE, GAP_MS, KEYS, UUID_RE, WINDOW, iso, ms } from './config.mjs';
 import { startTest } from './start.mjs';
-import { decide } from './math.mjs';
+import { decide, keepMarks } from './math.mjs';
 
 /** A job that went out, or may have (it counts as posted for the order, the gap and the refund rule). */
 const OUT = ['queued', 'sending', 'sent', 'unknown'];
@@ -112,7 +112,9 @@ export function createSocialExperiments(deps) {
       if (endsAt != null && t > endsAt + CADENCE.after) continue;
       const every = t - postedAt < CADENCE.earlyFor ? CADENCE.early : CADENCE.late;
       const last = ms(v.metrics_at);
-      if (!force && last != null && t - last < every) continue;
+      // past the deadline, the final numbers are read at or after it (never a read from before it)
+      const final = endsAt != null && t >= endsAt && (last == null || last < endsAt);
+      if (!force && !final && last != null && t - last < every) continue;
       let got;
       try {
         got = await connections.postMetrics(userId, e.network, { projectId: e.project_id, requestId: job.id });
@@ -128,8 +130,13 @@ export function createSocialExperiments(deps) {
       else await store.patchVariant(userId, e.id, v.key, { metrics_error: String(got.error ?? 'unavailable').slice(0, 40) });
     }
     const fresh = await store.variants(userId, e.id);
-    const result = postResult(e, fresh, jobs, posts, t);
-    const finished = endsAt != null && t >= endsAt && !['keep_going'].includes(result.verdict) && result.reason !== 'not_posted';
+    const result = keepMarks(e, postResult(e, fresh, jobs, posts, t));
+    // it finishes on numbers read at or after the deadline (each posted version's), or once reads have stopped
+    const readAfterEnd = fresh.every((v) => {
+      const job = jobs.find((j) => j.id === v.job_id);
+      return !job || job.state !== 'sent' || (ms(v.metrics_at) ?? 0) >= endsAt;
+    });
+    const finished = endsAt != null && t >= endsAt && (readAfterEnd || t > endsAt + CADENCE.after) && !['keep_going'].includes(result.verdict) && result.reason !== 'not_posted';
     const row = (await store.patch(userId, e.id, { result, ...(finished && e.state === 'running' ? { state: 'finished' } : {}) })) ?? e;
     return { row, ...(busy ? { busy: true } : {}) };
   }
@@ -141,8 +148,10 @@ export function createSocialExperiments(deps) {
     const rows = variants.map((v) => {
       const job = jobs.find((j) => j.id === v.job_id);
       const gone = v.post_id && !posts.some((p) => p.id === v.post_id);
-      const failed = job && job.state !== 'sent';
-      return { key: v.key, metrics: v.metrics ?? {}, missing: !!(gone || failed || (!job && ended)), waiting: !job };
+      // queued or sending: still going out (waiting), not missing
+      const inFlight = job && (job.state === 'queued' || job.state === 'sending');
+      const failed = job && !inFlight && job.state !== 'sent';
+      return { key: v.key, metrics: v.metrics ?? {}, missing: !!(gone || failed || (!job && ended)), waiting: !job || inFlight };
     });
     const delayed = variants.some((v) => v.metrics_error === 'delayed');
     if (!rows.some((r) => r.missing) && rows.some((r) => r.waiting)) return { verdict: 'keep_going', reason: 'not_posted', metric: e.metric, computedAt: iso(t), perVariant: {}, minimums: null, ...(delayed ? { delayed: true } : {}) };

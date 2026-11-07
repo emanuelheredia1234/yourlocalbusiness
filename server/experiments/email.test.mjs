@@ -46,6 +46,16 @@ describe('the Omnisend A/B draft', () => {
     expect(t.omnisend.state.calls).toHaveLength(1);
   });
 
+  it('two presses at once: the one that started the test makes the draft; the other makes nothing (409)', async () => {
+    const e = await emailTest();
+    const stale = await t.row(e.id);
+    expect((await draft(e)).status).toBe(201);
+    // the second request had read the test while it was still a draft
+    await expect(t.mod.email.createDraft({ id: alice.id }, stale, { variants: VARIANTS })).rejects.toMatchObject({ status: 409 });
+    expect(t.omnisend.state.calls.filter((c) => c[0] === 'createAbDraft')).toHaveLength(1);
+    expect(await t.row(e.id)).toMatchObject({ state: 'running' });
+  });
+
   it('at the month’s limit nothing is made in Omnisend', async () => {
     for (let i = 0; i < 2; i++) expect((await draft(await emailTest())).status).toBe(201);
     const e = await emailTest();
@@ -92,6 +102,21 @@ describe('email results', () => {
     // "Use the winner" takes Omnisend's pick
     const w = await t.x(alice, 'POST', `/api/experiments/${e.id}/winner`, { key: 'b' });
     expect(w.body.learning.summary).toMatch(/^subject lines: “Number” beat “Plain” in email/);
+  });
+
+  it('before Omnisend picks, its A/B test has no winner of ours (ours is only beside it); Use the winner is refused', async () => {
+    const e = await emailTest();
+    await draft(e);
+    t.omnisend.state.results = { status: 'ok', campaignStatus: 'sent', rates: { va: { sent: 500, openRate: 0.2, clickRate: 0.02 }, vb: { sent: 500, openRate: 0.45, clickRate: 0.03 } } };
+    t.clock.t += 6 * 60_000;
+    const r = await t.x(alice, 'POST', `/api/experiments/${e.id}/refresh`);
+    expect(r.body.experiment).toMatchObject({ state: 'running', result: { verdict: 'keep_going', reason: 'omnisend_picks', ours: { verdict: 'winner', winner: 'b' } } });
+    expect(r.body.experiment.result.winner).toBeUndefined();
+    expect((await t.x(alice, 'POST', `/api/experiments/${e.id}/winner`, { key: 'b' })).status).toBe(409);
+    // past the decision time with no pick: not enough, never ours as the verdict
+    t.clock.t += 40 * HOUR;
+    const late = await t.x(alice, 'POST', `/api/experiments/${e.id}/refresh`);
+    expect(late.body.experiment).toMatchObject({ state: 'finished', result: { verdict: 'not_enough', reason: 'omnisend_no_pick' } });
   });
 
   it('a lost connection is our own words on each version', async () => {

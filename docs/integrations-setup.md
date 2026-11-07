@@ -855,7 +855,8 @@ The artifact build shows "Connected accounts and live analytics need the full ap
 
 - **Make variations** on a post (its ⋯ menu, or "Make variations" next to a post just added in Create post), an
   email step (its ⋯ menu) or the SEO page (its "A/B test" panel): choose the one thing that differs (the cost shows
-  first: about 3 AI credits; a visual makes an image, or uses one of this week's videos for a video post), 1 or 2 new
+  first: about 3 AI credits, none on your own AI keys; a visual makes one image per new version, or uses one of this
+  week's videos per new version for a video post; Trial Reels compare a hook, caption or visual only), 1 or 2 new
   versions, review and edit them side by side ("Also changed" warns when an edit touches something else), and save a
   draft. Then a test card in **Social › A/B tests** with each version's planned time, **Post now** in order (12 hours
   apart for "different times", with the reason when it can't go yet), the results ("Clear winner", "Too close to
@@ -1560,8 +1561,9 @@ tried again; writes never are). Team-level errors (key refused, plan limit) rais
 
 `POST /api/experiments/<id>/page` stores version B's HTML (same size and image rules as a publish: B may only use
 images published with the page; when A has a lead form B must have one too, else 400 `VARIANT_NO_FORM`) and starts
-the split. At most one running split per page (409 `EXPERIMENT_RUNNING`); **republishing the page stops it**
-(`page_changed`). Serving, with no scripts:
+the split (started first, then B stored, so a second start at the same moment never replaces a running B). At most
+one running split per page (409 `EXPERIMENT_RUNNING`); **republishing the page stops it** (`page_changed`: no verdict,
+and Use the winner is refused, so B never replaces the newer page). Serving, with no scripts:
 
 - The server picks A or B 50/50 for a new visitor and remembers it in a signed cookie `ylbx_<12 hex>` (HttpOnly,
   Secure, SameSite=Lax, 90 days). A valid cookie keeps the same version; a tampered one is reassigned.
@@ -1573,7 +1575,9 @@ the split. At most one running split per page (409 `EXPERIMENT_RUNNING`); **repu
   own domain the cookie is used when there is no token.
 - Visitors, views and leads are counted in memory and written every 30 seconds (and on the tick) through
   `ylb_experiment_add_counts`; counts that can't be written are kept up to 10 minutes. A crash can lose a few counts.
-- Another server copy sees a new split within 60 seconds. Tests run up to 30 days.
+- Another server copy sees a new split within 60 seconds. Tests run up to 30 days. B's HTML and the rendered copies
+  are kept within 64 MB in all (expired entries first, then the oldest).
+- A lead token keeps counting for 7 days from when the split ended (stopped, the winner used, or its deadline).
 
 ### Email: Omnisend A/B drafts
 
@@ -1581,20 +1585,26 @@ the split. At most one running split per page (409 `EXPERIMENT_RUNNING`); **repu
 and b, a test size of 10–50%, the winning metric: open rate for a subject test, click rate for an opening test, and a
 decision time of 4–48 hours). It is a **draft**: the customer picks the audience and sends in Omnisend. Each write is
 one attempt; a timeout after the campaign POST is 502 `CAMPAIGN_UNCONFIRMED` ("check Omnisend before trying again").
+Two presses at once make one draft: the one that started the test makes it, the other gets 409.
 When Omnisend answers that the A/B type isn't available for the brand (a 4xx saying so, not a 5xx or a timeout), two
 regular drafts are made instead ("— version A", "— version B") with a note to send each to half of the list using two
 segments made in Omnisend. Results are read at most every 6 hours, inside `REPORTS_PER_DAY`: Omnisend's own pick
-(`abTest.result`) is the verdict for an A/B draft; our math decides the two-draft fallback.
+(`abTest.result`) is the verdict for an A/B draft (until it picks: "Keep going", with ours shown beside it, never as
+the verdict); our math decides the two-draft fallback.
 
 ### The verdict
 
 `server/experiments/math.mjs` (the app shows the server's result). Minimum sample first: social 300 reach (or views)
 per version and 20 engagements in all; pages 100 visitors per version and 10 leads in all; email 200 sent per
-version; Trial Reels 400 views in all. Then a two-proportion z-test for rates (a binomial test for view counts) at
+version; view or reach counts 100 per version and 400 in all. Counts are only called at the deadline (the versions
+went out at different times, so before it the one out longer is just ahead). Then a two-proportion z-test for rates
+(a binomial test for view counts) at
 |z| ≥ 1.96 for two versions, 2.394 for three (Bonferroni), **and** at least a 10% relative lift. Otherwise "Keep
 going" before the deadline, then "Too close to call", "Tie" or "Not enough data". Engagement compares only the
 numbers both versions report; a missing number is never 0. Notes: "These went out at different times" (a times test
-that didn't change the time) and "non-followers" (Trial Reels). A removed post or failed job: "Not enough data".
+that didn't change the time) and "non-followers" (Trial Reels). A removed post or failed job: "Not enough data"; a
+version still going out is waited for. Past the deadline each version is read once more before the test finishes.
+"Update results" keeps "your pick", who stopped the test and the verdict a winner in use was picked on.
 Deadlines: posts 7 days after the last planned time, Trial Reels 72 hours after the last one, pages 30 days, email
 Omnisend's decision time + 24 hours.
 
