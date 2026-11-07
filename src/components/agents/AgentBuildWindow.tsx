@@ -110,6 +110,8 @@ export function BuildForm({ project, target, f, onNext }: { project: Project; ta
   const defaultProfile = MANUS_PROFILES.find((x) => x.id === profile);
   const chosenProfile = MANUS_PROFILES.find((x) => x.id === f.profile);
 
+  // a lead magnet's PDF is the app's own design, with no pictures yet: no images for it
+  const withImages = target !== 'leadMagnet';
   // images pasted or dropped on the text box join the request's images
   const paste = usePasteImages(
     (media: MediaRef[]) => {
@@ -224,19 +226,21 @@ export function BuildForm({ project, target, f, onNext }: { project: Project; ta
           label="What to build and the features you want"
           htmlFor={`${ids}-request`}
           right={<span className={cn('num font-mono', f.request.trim().length > cap && 'text-bad')}>{`${f.request.trim().length.toLocaleString('en-US')} / ${cap.toLocaleString('en-US')}`}</span>}
-          hint="Your own words, sent as you write them inside the app’s template. Paste or drop images here too."
+          hint={withImages ? 'Your own words, sent as you write them inside the app’s template. Paste or drop images here too.' : 'Your own words, sent as you write them inside the app’s template.'}
         >
-          <AutoTextarea id={`${ids}-request`} value={f.request} onChange={(v) => setWindowFields({ request: v })} minRows={4} placeholder={PLACEHOLDER[target]} {...paste} />
+          <AutoTextarea id={`${ids}-request`} value={f.request} onChange={(v) => setWindowFields({ request: v })} minRows={4} placeholder={PLACEHOLDER[target]} {...(withImages ? paste : {})} />
         </Field>
 
-        <PromptImages
-          images={f.images}
-          onChange={(images) => setWindowFields({ images })}
-          reserved={reserved}
-          busy={adding}
-          label="Images"
-          hint={`Your images go to ${f.via === 'manus' ? 'Manus' : 'Slack'} with your request. The page shows each one as {{img-N}}; add a note to say where it goes.`}
-        />
+        {withImages && (
+          <PromptImages
+            images={f.images}
+            onChange={(images) => setWindowFields({ images })}
+            reserved={reserved}
+            busy={adding}
+            label="Images"
+            hint={`Your images go to ${f.via === 'manus' ? 'Manus' : 'Slack'} with your request. The page shows each one as {{img-N}}; add a note to say where it goes.`}
+          />
+        )}
 
         <Field label="Your website (reference)" htmlFor={`${ids}-site`} error={websiteError} hint={f.website.trim() ? `${name} opens it only to see your colors, fonts and style. They don’t sign in or change anything there.` : 'No reference: leave it empty, or add your website’s https address.'}>
           <div className="relative">

@@ -12,6 +12,7 @@ const { generateEmailSequence } = await import('@/ai/local/email');
 const { importAgentEmailHtml } = await import('./emailImport');
 const { setAgentEmail, setAgentLeadMagnet } = await import('./results');
 const { undoDoc } = await import('@/lib/emailDoc');
+const { deliveryStale } = await import('@/pages/marketing/email/LeadMagnetDelivery');
 
 const PAGE = `<!doctype html><html><head><title>Welcome!</title><style>.box{color:#123456} @import url(https://evil.example/x.css);</style><script>alert(1)</script></head>
 <body><table role="presentation" width="600"><tr><td class="box"><h1>Welcome, {{first_name}}</h1><p onclick="x()">Thanks for joining.</p><img src="{{img-1}}" alt="Our shop"><img src="https://track.example/p.gif" alt=""><a href="{{lead_magnet_link}}">Get it</a><a href="javascript:alert(1)">bad</a></td></tr>
@@ -94,6 +95,18 @@ describe('a lead magnet from an agent', () => {
       { heading: 'Steps', items: ['Wet the hair.', 'Cut slowly.'] },
     ]);
     expect(lm.delivery?.hash).toBe('old');
+    // the Delivery card shows the download as out of date with the new words
+    expect(deliveryStale(lm, now(p.id))).toBe(true);
     expect(lm.design).toMatchObject({ source: 'agent', via: 'manus', buildId: 'b2' });
+  });
+
+  it('a picture in it is left out with an honest note (the PDF has no pictures yet), never "not one of your images"', () => {
+    const p = setup();
+    const html = `<html><body><h1>Checklist</h1><img src="{{img-1}}" alt="cover"><h2>Tools</h2><ul><li>Comb</li></ul><img src="https://track.example/p.gif" alt=""></body></html>`;
+    const r = setAgentLeadMagnet(p.id, { via: 'viktor', html, images: [image], kind: 'checklist' });
+    expect(r).toMatchObject({ ok: true });
+    const notes = r.ok ? r.notes : [];
+    expect(notes).toContain('Left out the pictures: the app makes the PDF in your brand, without pictures for now.');
+    expect(notes.join(' ')).not.toMatch(/wasn’t one of your images|weren’t your images/);
   });
 });

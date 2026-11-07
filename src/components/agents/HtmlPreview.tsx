@@ -34,6 +34,14 @@ type Device = 'desktop' | 'tablet' | 'mobile';
 const WIDTH: Record<Device, string> = { desktop: '100%', tablet: '768px', mobile: '390px' };
 
 /** A whole page in a sandboxed frame (it never gets the app's origin), in a browser window on a well, at the device's width. */
+/** The line above the preview: what was cleaned or how it runs, per target. */
+export function previewCaption(target: BuildTarget, hasLeadForm = false): string {
+  if (target === 'email') return 'Cleaned for email: no scripts, forms or outside pictures. The app adds the footer and unsubscribe link.';
+  if (target === 'leadMagnet') return 'Cleaned: no scripts or forms. The app makes the PDF in your brand when you publish.';
+  if (target === 'seo') return 'Scripts are off and its form doesn’t send from here.';
+  return `Its script runs here in a sandbox, as on a published page.${hasLeadForm ? ' Forms send to Email → Leads once published.' : ''}`;
+}
+
 export function HtmlPreviewFrame({ doc, sandbox, device = 'desktop', title, className }: { doc: string; sandbox: string; device?: Device; title: string; className?: string }) {
   return (
     <div className={cn('well flex min-h-0 justify-center overflow-auto p-3 sm:p-5', className)}>
@@ -198,7 +206,7 @@ export function HtmlPreviewHost() {
           {req.target === 'seo' && <Callout tone="warn">{name} wrote this page. Check every claim, price and testimonial before you publish: the app can’t check free HTML.</Callout>}
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <DeviceSwitch value={device} onChange={setDevice} />
-            <span className="text-caption text-muted">{req.target === 'email' || req.target === 'leadMagnet' ? 'Cleaned for email: no scripts, forms or outside pictures. The app adds the footer and unsubscribe link.' : req.target === 'seo' ? 'Scripts are off and its form doesn’t send from here.' : `Its script runs here in a sandbox, as on a published page.${result.page.hasLeadForm ? ' Forms send to Email → Leads once published.' : ''}`}</span>
+            <span className="text-caption text-muted">{previewCaption(req.target, result.page.hasLeadForm)}</span>
           </div>
           {doc ? (
             <HtmlPreviewFrame doc={doc} sandbox={req.target === 'asset' ? ASSET_SANDBOX : SEO_SANDBOX} device={device} title={`Preview of ${req.title}`} />
