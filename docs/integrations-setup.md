@@ -125,6 +125,11 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    accepted Meta's non-discrimination policy for the chosen ad account. Run it after `20261108000000_ads_launch.sql`.
    Until it is run, the policy shows as not confirmed and ticking the box says it couldn't be saved (log:
    `ads_policy_confirm_not_saved`).
+12. `supabase/migrations/20261117000000_experiments.sql` (P4b, §14): `experiments` and `experiment_variants` (A/B
+   tests and their versions; users read their own rows except a page version's HTML, only the server writes), two
+   columns on `page_leads` (`experiment_id`, `variant_key`), the start, count, counter and claim functions, and a
+   trigger that deletes a business's tests with the business. Run it after `20261116100000_ad_policy_confirmed.sql`.
+   Until it is run, A/B tests answer "not set up" and pages serve one version.
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices, and `billing_trials` rows, which keep only keyed hashes of the email and card (their `user_id` becomes
@@ -848,12 +853,26 @@ The artifact build shows "Connected accounts and live analytics need the full ap
 
 ### A/B tests and Trial Reels (P4b)
 
-- **Make variations** on a post, an email step or the SEO page: 2–3 versions that differ in one thing, then a test
-  card with each version's planned time, **Post now** in order (12 hours apart for "different times"), the results
-  ("Clear winner", "Too close to call", "Tie", "Not enough data yet"), **Update results** and **Use the winner**.
-- **Trial Reel** on Instagram videos, with the 1,000-follower check, "Post as a trial anyway" when the count can't be
-  read, and "Post it as a regular Reel instead?" when Instagram refuses.
-- **A/B tests this month: N of M** with the reset date; Leads shows "Version A/B" for leads from a split page.
+- **Make variations** on a post (its ⋯ menu, or "Make variations" next to a post just added in Create post), an
+  email step (its ⋯ menu) or the SEO page (its "A/B test" panel): choose the one thing that differs (the cost shows
+  first: about 3 AI credits; a visual makes an image, or uses one of this week's videos for a video post), 1 or 2 new
+  versions, review and edit them side by side ("Also changed" warns when an edit touches something else), and save a
+  draft. Then a test card in **Social › A/B tests** with each version's planned time, **Post now** in order (12 hours
+  apart for "different times", with the reason when it can't go yet), the results ("Clear winner", "Too close to
+  call", "Tie", "Not enough data yet"; unknown numbers show as "—"), **Update results**, **Stop test** and **Use the
+  winner** (or "Pick A/B anyway" when it's too close to call).
+- **Use the winner** saves a "Learned: hooks" (or captions, subject lines…) Brain skill for that business (the last 5
+  results), offers "Rewrite N upcoming posts in this style" (AI credits, only when pressed), puts version B's subject
+  or opening into the email step, and for the page keeps the saved page in step with version B when B won.
+- Version posts carry an "A/B" marker on the calendar and a "Test A/B" button on their card; the morning action's A/B
+  reminders open the test; Social, Email and SEO analytics list recent tests.
+- **Trial Reel** ("Post as" on Instagram videos: in Create post, the post editor, and a campaign setup switch for
+  the batch's Instagram videos), with the 1,000-follower check, "Post as a trial anyway" when the count can't be read,
+  and "Post as a regular Reel" (a new confirmation) when Instagram refuses.
+- **A/B tests this month: N of M** with the reset date; at the limit the upgrade prompt names the reset date and the
+  next plan. Leads shows "Version A/B" for leads from a split page, with a filter by version.
+- The assistant can list tests and their results, and open Make variations, a version's posting window, the page's
+  split, the Omnisend draft or Use the winner, where the customer confirms; it never posts or sends by itself.
 - None of this exists in the claude.ai artifact build. Details: §14.
 
 ## 8. What works on day one (no Upload-Post or Zernio key yet, no approvals)
@@ -1582,8 +1601,27 @@ Omnisend's decision time + 24 hours.
 ### Use the winner
 
 `POST /api/experiments/<id>/winner` records the pick (the clear winner, or the customer's own call on a close one,
-labelled so) and returns a short "learned" line the app saves as a Brain skill. It changes no content itself, except a
-page: when B wins, the page is republished once with B's HTML and the split ends.
+labelled so) and returns a short "learned" line the app saves as a Brain skill (one per business and thing tested,
+category learned, the last 5 lines kept; hook and call-to-action wins also set the skill's hook style or call to
+action). It changes no content itself, except a page: when B wins, the page is republished once with B's HTML and the
+split ends; the app then puts B's hero into the saved page. The app also offers to rewrite upcoming posts on that
+network in the winning style (one AI request per post, only when the customer confirms).
+
+### In the app
+
+- Everything shows only when `GET /api/config` says `experiments.enabled` and the customer is signed in. The
+  claude.ai artifact build has none of it: no buttons, no requests to `/api/experiments`, no assistant tools (one
+  excluded tool explains); its built-in engine still makes rule-based versions if the dialog is ever opened.
+- Making variations is one AI request in the **social**, **email** or **seo** function (tasks `postVariants`,
+  `emailVariants`, `pageVariants`), so routing, credits and the Brain apply. Only the one changed piece comes back and
+  is checked (not empty, not the same as the original, one line where it must be); an answer that doesn't fit offers
+  one "Try again", never automatic.
+- Post versions are ordinary posts (`experiment: { id, key }`) saved to the account before the draft is made; a
+  refused draft takes them back out. An email's version B is kept on the step until "Create A/B draft in Omnisend";
+  the page's version B is kept as `marketing.seoVariant` (hero fields only; in HTML mode the first `<h1>` and the
+  form's button) and built at "Start the split" the same way a publish is.
+- A post's Instagram Reel mode is `instagram.shareMode`; the publish request sends it (and `trialUnknownOk` after the
+  tick), and the server checks it against the saved post.
 
 ### Check it (SQL)
 

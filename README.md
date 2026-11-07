@@ -470,6 +470,10 @@ settings, capacity and the backlog alert): docs/integrations-setup.md §13.
 - **Results** from Upload-Post's per-post analytics, Omnisend's reports and the page's own visitors and leads; a
   winner needs enough data and a 10% lift. **Use the winner** saves what was learned to the Brain.
 - **Limits:** Launch 2, Grow 10, Scale unlimited A/B tests a month, counted when a test starts.
+- **In the app:** "Make variations" on a post's ⋯ menu, an email step or the SEO page's A/B test panel (the cost shows
+  first; a draft is free), then Social › A/B tests for each test's card. Instagram videos get a "Post as" choice
+  (Reel or Trial Reel) in Create post, the post editor and the campaign setup. The assistant can open all of these;
+  you confirm there. Not in the claude.ai build.
 
 Owner setup (migration `supabase/migrations/20261117000000_experiments.sql`, the optional settings, how the split and
 the results work): docs/integrations-setup.md §14.
