@@ -83,6 +83,9 @@ Plain settings (not secret; Replit Secrets or env):
 | `ZERNIO_BRAND_COLOR` | — | Its button colour, `#RRGGBB`. |
 | `NANGO_INTEGRATIONS` | — | Only with Nango (§3b): JSON of the integrations customers may connect. |
 | `CRON_BUDGET_MS` | `40000` | How long one cron tick may run jobs before it answers (§2a); a job still running then finishes in the background. |
+| `MORNING_ACTIONS` | on | `off` turns the morning action off (§13): its routes answer 503 NOT_SET_UP and its jobs don't run. |
+| `MORNING_PER_TICK` | `24` | Businesses the hourly `morning-actions` job handles at most per tick (1–200; the rest wait for the next tick or their first Dashboard visit). |
+| `MORNING_CONCURRENCY` | `6` | How many of them at a time (1–10). |
 | `GSC_APP_PROPERTY` | — | `https://yourlocalbusiness.replit.app/` once that Search Console property is verified. Its host is also the app's own address for the back button on Upload-Post's connect page (unset: `https://yourlocalbusiness.replit.app`), so set it to the app's real address if that ever changes. |
 | `GSC_APP_VERIFICATION_FILE` | — | Optional extra HTML verification file name, e.g. `google1a2b3c4d5e6f7a8b.html`. The homepage file `google2598e017b2dc1e02.html` is already served (§6). |
 
@@ -113,6 +116,10 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    Customer Portal instead.
 9. `supabase/migrations/20261115000000_ad_job_error_detail.sql` (§3c): `ad_jobs.error_detail`, why Zernio refused a
    launch or a change. Run it after `20261108000000_ads_launch.sql`.
+10. `supabase/migrations/20261116000000_morning_action.sql` (P4, §13): `business_settings` (each business's zone and
+   when its next action is due) and `daily_actions` (one action per business per local day); users read their own
+   rows and only the server writes; the claim and backlog functions for the hourly job; deleting a business deletes
+   its morning rows. Run it after `20261110000000_billing.sql`.
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices, and `billing_trials` rows, which keep only keyed hashes of the email and card (their `user_id` becomes
@@ -136,6 +143,8 @@ through **pg_net**, with `Authorization: Bearer <CRON_SECRET>`. Each tick runs t
 | `offers-webhooks` | daily from 04:17 UTC | Reads each Whop connection's webhook; a turned-off one shows a banner (§12) |
 | `offers-reconcile` | daily from 04:47 UTC | Reads the last 72 hours of Whop payments and records missed sales for the customer's offers (§12) |
 | `posting-sweep`, `analytics-sweep`, `ads-sweep` | hourly (each tick) | Posts, analytics runs and ad changes left "sending"/"running" by a restart become "unknown"/ended; nothing is re-sent |
+| `morning-actions` | hourly (each tick, last) | Makes the morning action of each business that is due (§13), up to `MORNING_PER_TICK`; the rest wait. Marks interrupted ones failed; never re-runs one |
+| `morning-prune` | daily from 05:23 UTC | Deletes morning actions older than 120 days |
 
 Each job runs **at most once per period**: the run is claimed first in `app_state` (one row per job), so a repeated
 call, a slow pg_net retry or two copies of the app never run it twice. A job that fails is recorded and waits for
@@ -1308,3 +1317,84 @@ customer's offers; 50 connections a run, never-reconciled ones first, then the l
 `node server/test/mock-whop.mjs 0 sandbox` prints a stand-in Whop API (keys, products and plans, checkout links with
 idempotency, webhooks, payments, and hooks to pay, refund, dispute and redeliver). Tests point the server at it with
 `whopBases`; no environment variable can point production traffic elsewhere.
+
+## 13. Morning action (P4)
+
+Each business gets one **action for today** on its Dashboard by about 5:00 AM in its own time zone: the one most
+useful thing to do today, why, and a Do it button that opens the right screen (or the assistant with a message in its
+box). Nothing is ever posted, sent, bought or launched: it's advice plus a link inside the app.
+
+### Owner steps
+
+1. Run `supabase/migrations/20261116000000_morning_action.sql` in Supabase → SQL Editor (after
+   `20261110000000_billing.sql`; safe to run again).
+2. In Settings › AI keys, leave **Morning action** ticked only on a **low-cost** key (a fast, cheap model is enough:
+   one short request a day per business; the app caps the effort at low and asks for a short answer). A key saved
+   before this function existed has it ticked on every writing key: untick it on the expensive ones. Without a key
+   for it, actions come from the built-in rules (the startup notes say so).
+3. Optional: `MORNING_PER_TICK`, `MORNING_CONCURRENCY` (§1). Nothing new is secret.
+
+### Who is due, and when
+
+A business is due when it is set up (onboarded), its Dashboard was opened in the last 14 days, its slot isn't locked,
+and it is on a plan (every business while plans aren't enforced). Its action day starts at 05:00 local (daylight
+saving, :30 and :45 zones and the date line come from the server's tz data). The tick runs at minute 7 UTC, so the
+first chance is **05:07** local in whole-hour zones, **05:37** in :30 zones (India, Adelaide) and **05:52** in :45
+zones (Nepal, Chatham). Between 02:00 and 05:00 local nothing new is made for the day that's ending. The first
+Dashboard visit after 05:00 makes the action when the tick hasn't (about 3–20 s); two tabs or a tick at the same
+moment still make one.
+
+### Capacity and the backlog alert
+
+About 18–24 businesses per tick with the defaults (three batches of six fit in a 40 s tick), roughly 430–575 a day.
+Mornings cluster (US time zones), so a backlog drains over the next hours, and anyone the tick hasn't reached gets
+theirs on their first visit. When businesses wait more than 3 hours, Customer usage shows "Morning actions are falling
+behind": raise `MORNING_PER_TICK` or `MORNING_CONCURRENCY`.
+
+### AI, credits and fallbacks
+
+The AI request goes through the same gate as every AI request: own keys first, then the plan, the daily limit and
+the monthly credits; the owner is never metered (while plans aren't enforced the owner is metered like everyone,
+which only touches their own counters). A key that may have billed is never followed by a second key. Built-in rules
+pick instead when: no key powers Morning action, the customer's credits or daily limit are used up (no provider is
+called), the answer fails the schema check (the call was paid and is still metered), the provider refused, timed out
+or failed, or the business is brand new. Customers only ever read our words: "Your own AI key didn't answer…", "This
+month's AI credits are used up…" or "Today's AI limit is reached…". Problems with your keys (refused, out of credits,
+rate limited, model not found) raise an owner alert instead (Customer usage, and the `morning_owner_alert` log line,
+kinds only).
+
+### Failures: "Get today's action"
+
+A generation fails only when the business's data couldn't be read or the server stopped mid-way (swept after 10
+minutes as interrupted). It is **never re-run by itself**: the card shows "Today's action didn't come through" and a
+**Get today's action** button, which tries again up to 3 times a day, each try metered like any AI request.
+
+### What customers see
+
+The card on the Dashboard: the action ("AI pick" or "From your plan"), Do it, Done (with Undo) and Not useful (with an
+optional reason; the next idea shows, and later days avoid it for 30 days). Before 5 am: "Your next action comes at
+5:00 AM". A paused plan: "Your morning action is part of every plan" with the trial or card button. In the claude.ai
+build, without accounts or as a guest: a built-in version made in the browser ("Built in"), with no server calls.
+
+### Customer usage (owner)
+
+The **Morning action** section: the last run's counts, whether a key powers it, the per-tick settings, and one
+warning per alert of the last week.
+
+### Turning it off
+
+`MORNING_ACTIONS=off` and republish: the card disappears and the jobs stop. Dropping the two tables loses only the
+actions.
+
+### How to test
+
+- **Offline:** `node server/test/mock-supabase.mjs 54321` and `node server/test/mock-providers.mjs 9911`, then the app
+  against them: sign up, make a business with a Strategy plan, set its time zone (Settings › Brand › Business
+  details) to one just past 5 am, open the Dashboard: the card appears. Type `qa-morning-invalid` in Strategy → Your
+  details → Anything else to see the rule fallback.
+- **Published app:** `curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://yourlocalbusiness.replit.app/api/cron/tick`
+  and look for `morning-actions` in the summary.
+- **SQL checks:** `select local_date, state, engine, count(*) from public.daily_actions group by 1, 2, 3 order by 1 desc limit 20;`
+  and `select public.ylb_morning_backlog(10800);`.
+- **On a Supabase branch, with the owner's OK:** a signed-in user selects only their own rows and can't insert,
+  update or delete; two SQL sessions calling `ylb_morning_claim` at once get disjoint rows.

@@ -431,12 +431,38 @@ Owner setup (migration `supabase/migrations/20261113000000_offers.sql`, `PAYMENT
 webhook address `APP_PUBLIC_URL/api/webhooks/whop/<connection id>` and its seven events, and the sandbox check before
 going live): docs/integrations-setup.md, "Payments: offers and Whop".
 
+## Morning action
+
+The Dashboard opens with **Today's action**: the one most useful thing to do today for that business, why, and a
+**Do it** button that opens the right screen (the SEO builder with the page type, the composer with a topic, the
+leads, the plan, a due post's editor) or the assistant with a message in its box (sent only when you press Send).
+
+- **When:** every business on a plan (or every business while plans aren't enforced) that was opened in the last 14
+  days gets one by about 5:00 AM in its own time zone (Settings › Brand › Business details). The hourly tick makes
+  them in the background (`morning-actions`); the first Dashboard visit after 5 am makes it when the tick hasn't.
+- **AI:** the new **Morning action** function in Settings › AI keys, at low effort: one short request a day per active
+  business, metered to the customer's AI credits like every other AI request (their own key first). It ranks 3 ideas
+  from the business's Strategy, posts, leads, sales and numbers. Tick Morning action only on a low-cost key.
+- **Built-in rules** pick instead whenever AI can't be used (no key powers it, credits or the daily limit used up, an
+  answer that fails the schema check, a provider problem). Provider account problems never reach customers: the owner
+  gets an alert on Customer usage.
+- **Done** marks it done (Undo on the card); **Not useful**, with an optional reason, shows the next idea, and later
+  days avoid repeats and anything marked Not useful.
+- **Never retried by itself:** a generation that fails is recorded, and the card offers **Get today's action** (up to
+  3 tries a day).
+- **Nothing is posted, sent, bought or launched:** the action is advice plus a link inside the app.
+- **claude.ai build** (and without accounts, or as a guest): a built-in, rule-based version made in the browser from
+  the plan, posts and page, with Done and Not useful kept on that device. No server calls.
+
+Owner setup (migration `supabase/migrations/20261116000000_morning_action.sql`, the key to tick, the optional
+settings, capacity and the backlog alert): docs/integrations-setup.md §13.
+
 ## Scheduled jobs
 
 Replit Autoscale stops the app when it's idle, so nothing runs on a timer inside it. Supabase's pg_cron calls
 `POST /api/cron/tick` every hour (with `Authorization: Bearer <CRON_SECRET>`), and the tick runs whatever is due:
-the treg settle, Upload-Post's and Zernio's monthly metering, Upload-Post's daily check and the stuck-job sweeps
-(`server/cron/`). Each job runs at most once per period behind a claim in `app_state`, a tick answers within 40 s
+the treg settle, Upload-Post's and Zernio's monthly metering, Upload-Post's daily check, the stuck-job sweeps
+(`server/cron/`), and last each tick `morning-actions` (each due business's action for today; `morning-prune` daily). Each job runs at most once per period behind a claim in `app_state`, a tick answers within 40 s
 with a JSON summary, and a failed job waits for its next period. Owner steps: put a random `CRON_SECRET` in Replit
 Secrets, store the same value as the Supabase Vault secret `cron_secret`, then run
 `supabase/migrations/20261109000000_cron_tick.sql` (see `docs/integrations-setup.md` §2a). Local dev needs none of
@@ -479,6 +505,7 @@ Server environment:
 - `PAGES_DNS_SERVERS` (optional): the DNS servers the domain check asks (see "Publishing pages")
 - `TRUSTED_PROXY_HOPS` (optional, default 2): how many `X-Forwarded-For` addresses the platform's proxies add at its end, so visitors are told apart by the address they connected from (see "Publishing pages")
 - `OMNISEND_CLIENT_ID` and `OMNISEND_CLIENT_SECRET`: the OAuth credentials Omnisend issues (see "Omnisend: campaign drafts from the email sequence")
+- the morning action (see "Morning action"): `MORNING_ACTIONS` (`off` turns it off), `MORNING_PER_TICK` (default 24, 1–200 businesses per hourly tick) and `MORNING_CONCURRENCY` (default 6, 1–10 at a time). It needs `supabase/migrations/20261116000000_morning_action.sql`
 - `CRON_SECRET`: the bearer for `POST /api/cron/tick`, which runs the scheduled jobs; the same value goes in the Supabase Vault secret `cron_secret` (see "Scheduled jobs"). `CRON_BUDGET_MS` (default 40000) is one tick's time budget
 
 `GET /api/config` tells the app whether accounts are on and whether it can publish pages, and `DELETE /api/account` deletes the signed-in user, with their saved workspace, files, published pages and leads.
@@ -507,6 +534,7 @@ With accounts on, each user's workspace is saved in Supabase:
 - their files go to Storage, under `media/<user id>/` (a published page's images under `media/<user id>/published/`);
 - published pages are rows in `published_pages`, and their own domains in `published_domains`;
 - what visitors send with a page's form is a row in `page_leads` (server-only) until the owner deletes it;
+- each business's morning action settings (its zone, when its next action is due) are a row in `business_settings`, and each day's action a row in `daily_actions` (both written only by the server; kept 120 days);
 - each device they use keeps a copy for speed and offline work.
 
 Theme, server address and demo switches stay per device.
