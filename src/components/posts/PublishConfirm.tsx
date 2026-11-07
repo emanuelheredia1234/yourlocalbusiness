@@ -13,7 +13,8 @@ import { networkLabel } from '@/ai/postShared';
 import { beginBusy, endBusy } from '@/lib/busy';
 import { useStore } from '@/store/useStore';
 import type { PublishJob } from '@/lib/integrations/types';
-import { Callout, InfoTip, Modal, Spinner } from '../ui/primitives';
+import { Callout, Checkbox, InfoTip, Modal, Spinner } from '../ui/primitives';
+import { TRIAL_HELP, isTrialMode, shareModeLabel, shareModeOf } from '@/lib/trialReels';
 import { MediaThumb } from '../media/MediaUpload';
 import { PlatformChip } from './PlatformIcon';
 import { trackJob } from './PublishJobWatcher';
@@ -41,8 +42,18 @@ export const requestIdFor = (postId: string) => uncertainRequest.get(postId) ?? 
 /** No definite answer: the server may have taken the request (it can't be reached, or a gateway timed out). */
 export const mayHaveBeenSent = (e: unknown) => e instanceof IntegrationApiError && (e.code === 'NETWORK' || (e.status >= 500 && e.code === 'UNAVAILABLE'));
 
+export interface Refusal {
+  title: string;
+  body: string;
+  uncertain?: boolean;
+  /** Trial Reels: offer "Post as a regular Reel" (re-saves the post as a Reel and opens a new confirmation) */
+  regularReel?: boolean;
+  /** Trial Reels: the followers couldn't be read; ticking "Post as a trial anyway" lets it go */
+  askAnyway?: boolean;
+}
+
 /** The words for a refused request (the server's codes; never a provider's own text). */
-function refusal(e: unknown, network: string): { title: string; body: string; uncertain?: boolean } {
+function refusal(e: unknown, network: string): Refusal {
   if (!(e instanceof IntegrationApiError)) return { title: 'Something went wrong', body: 'Nothing was sent. Try again shortly, or post it yourself.' };
   if (mayHaveBeenSent(e))
     // the request may have reached the server: pressing again sends the same request id
@@ -63,18 +74,27 @@ function refusal(e: unknown, network: string): { title: string; body: string; un
       return { title: 'Posting limit reached', body: `${e.message} You can still post it yourself.` };
     case 'RATE_LIMITED':
       return { title: 'Too many posts at once', body: 'Wait a few minutes, then try again.' };
+    // A/B tests and Trial Reels (P4b): nothing was sent
+    case 'TRIAL_REEL_NOT_ELIGIBLE':
+      return { title: 'It can’t go out as a Trial Reel', body: `${e.message} Nothing was sent.`, regularReel: e.reason !== 'unreadable', askAnyway: e.reason === 'unreadable' };
+    case 'TRIAL_REEL_REFUSED':
+      return { title: 'Instagram didn’t take the Trial Reel', body: 'Instagram didn’t accept this as a Trial Reel (the account may not be eligible yet, or has hit Instagram’s trial limit). Nothing was posted. Post it as a regular Reel instead?', regularReel: true };
+    case 'EXPERIMENT_LIMIT':
+      return { title: 'This month’s A/B tests are used', body: `${e.message} You can still post it as a normal post: take it out of the test first.` };
+    case 'TOO_SOON_AFTER_VARIANT':
+      return { title: 'Too soon after the last version', body: e.message };
     default:
       return { title: 'It wasn’t sent', body: e.message };
   }
 }
 
-export type SendOutcome = { ok: true; job: PublishJob } | { ok: false; error: { title: string; body: string; uncertain?: boolean } };
+export type SendOutcome = { ok: true; job: PublishJob } | { ok: false; error: Refusal };
 
 /**
  * One confirm: save the file to the account, then ONE publish request with this window's request id. Never
  * retried here. A post already on its way returns without sending.
  */
-export async function sendPublish(postId: string, requestId: string, onStage: (s: string) => void = () => {}): Promise<SendOutcome | null> {
+export async function sendPublish(postId: string, requestId: string, onStage: (s: string) => void = () => {}, o: { trialUnknownOk?: boolean } = {}): Promise<SendOutcome | null> {
   const post = useStore.getState().posts.find((p) => p.id === postId);
   if (!post || sending.has(postId)) return null;
   const project = useStore.getState().projects.find((p) => p.id === post.projectId);
@@ -93,7 +113,7 @@ export async function sendPublish(postId: string, requestId: string, onStage: (s
     onStage(`Sending to ${network}…`);
     const latest = useStore.getState().posts.find((p) => p.id === postId) ?? post;
     try {
-      const { job } = await publishPost(buildPublishRequest(latest, project, { clientRequestId: requestId, mediaIds }));
+      const { job } = await publishPost(buildPublishRequest(latest, project, { clientRequestId: requestId, mediaIds, trialUnknownOk: o.trialUnknownOk }));
       uncertainRequest.delete(postId);
       useStore.getState().applyPublishJob(postId, job);
       if (job.state === 'queued' || job.state === 'sending') void trackJob(postId, job.id);
@@ -120,7 +140,8 @@ export function PublishConfirmHost() {
   const xLinks = useAnalytics((s) => s.xLinks);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState('');
-  const [err, setErr] = useState<ReturnType<typeof refusal> | null>(null);
+  const [err, setErr] = useState<Refusal | null>(null);
+  const [anyway, setAnyway] = useState(false);
   // one request id per opening of the window: a second press (after a network error) is the same request
   const requestId = useRef('');
   useEffect(() => {
@@ -129,6 +150,7 @@ export function PublishConfirmHost() {
     setBusy(false);
     setStage('');
     setErr(null);
+    setAnyway(false);
   }, [id]);
   if (!id || !post) return null;
   const network = networkLabel(post.platform);
@@ -142,7 +164,7 @@ export function PublishConfirmHost() {
     if (inFlight || blocked) return;
     setBusy(true);
     setErr(null);
-    const r = await sendPublish(post.id, requestId.current, setStage);
+    const r = await sendPublish(post.id, requestId.current, setStage, { trialUnknownOk: anyway });
     setBusy(false);
     setStage('');
     if (!r) return;
@@ -151,6 +173,13 @@ export function PublishConfirmHost() {
   };
 
   const word = post.platform === 'x' ? 'reply' : 'comment';
+  const trial = post.platform === 'instagram' && post.media?.kind === 'video' && isTrialMode(shareModeOf(post));
+  /** "Post as a regular Reel": the post is saved as a Reel, then a NEW confirmation opens (a new request: never automatic). */
+  const asRegularReel = () => {
+    useStore.getState().updatePost(post.id, { instagram: undefined });
+    close();
+    setTimeout(() => usePublishConfirm.getState().open(post.id), 0);
+  };
   return (
     <Modal
       open
@@ -184,7 +213,7 @@ export function PublishConfirmHost() {
               <PlatformChip platform={post.platform} />
               <span className="min-w-0 truncate text-small text-muted">{targetText(status, post.platform)}</span>
             </div>
-            <p className="text-small text-muted">{post.media ? (post.media.kind === 'video' ? 'With the video' : 'With the image') : 'Text only'}</p>
+            <p className="text-small text-muted">{post.media ? (post.media.kind === 'video' ? (trial ? `As a ${shareModeLabel(shareModeOf(post))}` : 'With the video') : 'With the image') : 'Text only'}</p>
           </div>
         </div>
         <div>
@@ -241,11 +270,23 @@ export function PublishConfirmHost() {
             Connect it in Settings › Connected accounts, or post it yourself.
           </Callout>
         )}
+        {trial && <p className="text-small text-muted">{TRIAL_HELP} Instagram may refuse it if the account isn’t eligible: then nothing is posted.</p>}
         {err && (
-          <Callout tone={err.uncertain ? 'warn' : 'bad'} title={err.title}>
+          <Callout
+            tone={err.uncertain ? 'warn' : 'bad'}
+            title={err.title}
+            action={
+              err.regularReel ? (
+                <button type="button" className="btn btn-secondary btn-xs" onClick={asRegularReel}>
+                  Post as a regular Reel
+                </button>
+              ) : undefined
+            }
+          >
             {err.body}
           </Callout>
         )}
+        {trial && err?.askAnyway && <Checkbox checked={anyway} onChange={setAnyway} label="Post as a trial anyway" description="If Instagram refuses, nothing is posted." />}
       </div>
     </Modal>
   );

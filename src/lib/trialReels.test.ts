@@ -41,3 +41,19 @@ describe('Trial Reels in the app', () => {
     expect(eligibilityView({ eligible: false, reason: 'not_connected' }).line).toBe('Connect Instagram to post Trial Reels');
   });
 });
+
+describe('the campaign setup switch', () => {
+  it('"Post Instagram videos as Trial Reels" sets only the batch’s new Instagram videos (off by default)', async () => {
+    const { applyWeekBatch } = await import('@/ai/socialPlan');
+    const { useStore } = await import('@/store/useStore');
+    const { newProject } = await import('@/store/defaults');
+    const p = { ...newProject('business', 'existing'), id: 'p1' };
+    useStore.setState({ projects: [p], activeProjectId: 'p1', posts: [] });
+    applyWeekBatch([post({ id: 'v1', batchId: 'b1' }), post({ id: 'i1', format: 'image', media: undefined, batchId: 'b1' })], 'p1');
+    expect(useStore.getState().posts.every((x) => !x.instagram)).toBe(true);
+    useStore.setState({ projects: [{ ...p, marketing: { ...p.marketing, campaign: { ...p.marketing.campaign, instagramTrialReels: true } } }], posts: [] });
+    applyWeekBatch([post({ id: 'v1', batchId: 'b1' }), post({ id: 'i1', format: 'image', media: undefined, batchId: 'b1' }), post({ id: 'f1', platform: 'facebook', batchId: 'b1' })], 'p1');
+    const by = Object.fromEntries(useStore.getState().posts.map((x) => [x.id, x.instagram?.shareMode]));
+    expect(by).toEqual({ v1: 'TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS', i1: undefined, f1: undefined });
+  });
+});

@@ -1,4 +1,7 @@
 import { useMemo, type ReactNode } from 'react';
+import { useExperimentsOn } from '@/lib/experiments/config';
+import { TRIAL_HELP } from '@/lib/trialReels';
+import { TrialEligibilityLine } from '@/components/experiments/TrialReelPicker';
 import { Check, Minus, Plus, TriangleAlert } from 'lucide-react';
 import type { CampaignConfig, ImageStyleId, PostPlatform, PostType, Project, StyleId, VideoStyleId } from '@/lib/types';
 import { cn, parseDateStr, WEEKDAYS } from '@/lib/utils';
@@ -78,6 +81,8 @@ export function CampaignSetup({ project }: { project: Project }) {
   // plans: AI videos a week for a business; going over is a warning (the server refuses each video past the week's
   // limit), with the upgrade link while plans are on
   const allowance = useVideoAllowance();
+  // Trial Reels (P4b): an optional switch for the batch's Instagram videos
+  const abOn = useExperimentsOn();
   const overLimit = videoDaysOverLimit(c.videos, allowance);
   const videoDaysText = c.videos === 0 ? 'No videos. Add one to a posting day to mix videos in.' : `${c.videos} video${c.videos === 1 ? '' : 's'} a week, on ${c.videoDayCount} day${c.videoDayCount === 1 ? '' : 's'}. The rest are image posts.`;
 
@@ -186,6 +191,11 @@ export function CampaignSetup({ project }: { project: Project }) {
           <div className="pb-4">
             <Warn>Pick at least one platform.</Warn>
           </div>
+        )}
+        {abOn && cfg.platforms.includes('instagram') && c.videos > 0 && (
+          <SettingsRow label="Post Instagram videos as Trial Reels" htmlFor="cmp-trial" description={<><span>Instagram shows them to non-followers first; you decide later in Instagram whether to share them. {TRIAL_HELP}</span><TrialEligibilityLine projectId={project.id} className="mt-1" /></>}>
+            <Toggle id="cmp-trial" checked={cfg.instagramTrialReels === true} onChange={(v) => set({ instagramTrialReels: v })} />
+          </SettingsRow>
         )}
       </SetupSection>
 

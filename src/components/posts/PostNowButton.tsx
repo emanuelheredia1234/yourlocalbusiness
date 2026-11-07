@@ -8,6 +8,7 @@
 //   not connected              → "Post it yourself" (copy, download, open the network, then Mark as posted)
 // Manus no longer posts here; it only posts in Facebook groups (ManusGroups). Older posts sent with Manus
 // show "Sent with Manus earlier", read-only.
+import { isTrialMode, shareModeOf } from '@/lib/trialReels';
 import { useEffect, useState } from 'react';
 import { CircleAlert, CircleCheck, ExternalLink, Hand, Loader2, RefreshCw, Send } from 'lucide-react';
 import type { Post } from '@/lib/types';
@@ -220,6 +221,19 @@ export function PublishStatus({ post, compact }: { post: Post; compact?: boolean
           {canPostFrom(status) && (
             <button type="button" className="link" onClick={() => usePublishConfirm.getState().open(post.id)}>
               Try again
+            </button>
+          )}
+          {/* a refused Trial Reel: save it as a regular Reel, then a new confirmation (never sent by itself) */}
+          {canPostFrom(status) && post.platform === 'instagram' && isTrialMode(shareModeOf(post)) && (
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                useStore.getState().updatePost(post.id, { instagram: undefined });
+                usePublishConfirm.getState().open(post.id);
+              }}
+            >
+              Post as a regular Reel
             </button>
           )}
           {yourself}

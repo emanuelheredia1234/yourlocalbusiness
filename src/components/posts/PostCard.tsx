@@ -22,6 +22,7 @@ import { PostNowButton, PublishStatus } from './PostNowButton';
 import { GroupShareBadge, useManusGroups } from './ManusGroups';
 import { useExperimentsOn } from '@/lib/experiments/config';
 import { ExperimentBadge } from '../experiments/ExperimentBadge';
+import { TrialReelPicker } from '../experiments/TrialReelPicker';
 import { DueBadge, PostedBy, addToCalendarFlow, isDue, postHeld, postMenuEntries, useMarkPosted } from './PostActions';
 import { postVideoPrompt } from '@/ai/image';
 import { makePostImage, rewriteInput, rewritePatch } from '@/ai/socialPosts';
@@ -85,6 +86,7 @@ export function PostFields({ post, onChange }: EditableProps) {
         <ChipInput values={post.hashtags} onChange={(v) => onChange({ hashtags: v })} prefix="#" placeholder="#hashtag" />
       </Field>
       <LinkFields post={post} onChange={onChange} />
+      <TrialReelPicker post={post} onChange={onChange} />
       {post.format === 'image' && project ? (
         <PostImagePanel project={project} headline={post.headline} prompt={post.visualPrompt} onPromptChange={(v) => onChange({ visualPrompt: v })} style={post.style} watermark={post.watermark} platform={post.platform} media={post.media} onChange={(m) => onChange({ media: m ?? undefined })} pendingKey={`post:${post.id}`} />
       ) : project ? (

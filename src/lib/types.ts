@@ -657,6 +657,8 @@ export interface CampaignConfig {
   startDate: string;
   times: string[];
   goal: 'awareness' | 'leads' | 'sales';
+  /** P4b: new Instagram video posts in a batch go out as Trial Reels (only non-followers first); off by default */
+  instagramTrialReels?: boolean;
 }
 
 export interface PlanSlot {
