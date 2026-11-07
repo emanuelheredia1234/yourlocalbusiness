@@ -8,10 +8,11 @@
 //                                                    limit and the per-day count under a lock per seller (409 LIMIT,
 //                                                    409 HIDDEN, 429 RATE_LIMITED), the quality check (live or thin)
 //   DELETE /api/market/public/<listingId>           → { ok: true }: the seller unlists (410 from then on; the slug stays)
-//   POST   /api/market/reports {slug, reason, note?} → { ok: true }: a signed-in report (not your own listing)
+//   POST   /api/market/reports {slug, sellerId, reason, note?} → { ok: true }: a signed-in report (not your own listing;
+//                                                    the page must be sellerId's, the in-app listing's seller)
 // Owner only (who.isAdmin):
 //   GET    /api/market/admin                         → { reports, held, hidden, submit, alert }
-//   POST   /api/market/admin/listings/<id>/hide {reason, note?} · …/unhide · /api/market/admin/reports/<id>/dismiss
+//   POST   /api/market/admin/listings/<id>/hide {reason} · …/unhide · /api/market/admin/reports/<id>/dismiss
 //   POST   /api/market/admin/submit-sitemap {confirm: true} → { outcome, alreadySubmittedAt? }
 // Visitors (the app's host only: a custom domain never reaches this; GET and HEAD, plus POST for a report):
 //   /market[?category=&q=&page=]  /market/<slug>  /market/<slug>/report
@@ -35,7 +36,7 @@ import { appOrigin } from '../seo/sitemap.mjs';
 import { publicStatus, qualityOf, statusOf } from './quality.mjs';
 import { gridHtml, gridPath, listingHtml, marketCsp, MAX_PAGE, reportFormHtml } from './render.mjs';
 import { checkFormToken, cleanNote, createReports, makeFormToken, reporterHash } from './reports.mjs';
-import { createMarketStore, normalizeQuery } from './store.mjs';
+import { createMarketStore, normalizeQuery, PAGE_ROWS } from './store.mjs';
 import { createMarketSubmit } from './submit.mjs';
 import { CATEGORY_SLUG_RE, LISTING_ID_RE, PROJECT_ID_RE, REPORT_REASONS, SLUG_RE, slugFor, validatePublicListing } from './validate.mjs';
 
@@ -66,10 +67,15 @@ const PUBLIC_PATH = /^\/market(?:\/([^/]{1,80})(\/|\/report)?)?(\/)?$/;
 
 /**
  * deps: the integration modules' own (server/integrations/wiring.mjs): auth, db, storage (appState), treg,
- * connections, send, readJson, limit, corsHeaders, sameOrigin, clientKey, env, fetch, now, log, billing. Tests:
- * visitor(req) (the client key for the public pages).
+ * connections, send, readJson, limit, corsHeaders, sameOrigin, clientKey, env, fetch, now, log, billing; offersConfig()
+ * (the offers module's config(), late-bound: its stripe.environment says whether Stripe offers sell in test mode).
+ * Tests: visitor(req) (the client key for the public pages).
+ *
+ * Every address on a public page (canonical, og:url, JSON-LD, Buy, the links) and in the seller's state is built
+ * from appOrigin(env) (GSC_APP_PROPERTY, else the app's fixed address), never from the request's Host: the pages are
+ * publicly cacheable and must have one canonical whichever of the app's hosts served them.
  */
-export function createMarket({ auth = null, db = null, storage = null, treg = null, connections = null, send, readJson, limit = () => false, corsHeaders = () => ({}), sameOrigin = () => true, env = process.env, fetch = globalThis.fetch, now = () => Date.now(), log = console, billing = null, visitor = visitorOf } = {}) {
+export function createMarket({ auth = null, db = null, storage = null, treg = null, connections = null, send, readJson, limit = () => false, corsHeaders = () => ({}), sameOrigin = () => true, env = process.env, fetch = globalThis.fetch, now = () => Date.now(), log = console, billing = null, visitor = visitorOf, offersConfig = () => null } = {}) {
   const cfg = marketSettings(env);
   const enabled = !cfg.switchedOff && !!db?.enabled && auth?.enabled === true && !!cfg.reportSecret;
   const supabaseBase = String(env.SUPABASE_URL || '').replace(/\/+$/, '');
@@ -82,6 +88,7 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
   })();
   const secretKey = String(env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '');
   const CSP = marketCsp(supabaseOrigin);
+  const siteOrigin = appOrigin(env);
   const imageUrl = (path) => `${supabaseBase}/storage/v1/object/public/${PUBLIC_FILES_BUCKET}/${String(path).split('/').map(encodeURIComponent).join('/')}`;
   const blocked = new Set();
   const store = createMarketStore({ db, billing, now });
@@ -95,7 +102,9 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
     sitemap?.clearCache?.();
     await submitter.markChanged();
   }
-  const reports = createReports({ db, now, holdAt: cfg.holdAt, onChanged: (slug) => void onChanged(slug), log: log1 });
+  /** A seller's public-listing limit (null: unlimited or not known). */
+  const limitOf = async (userId) => (billing?.entitlement ? ((await billing.entitlement(userId))?.features?.publicListings ?? null) : null);
+  const reports = createReports({ db, now, holdAt: cfg.holdAt, onChanged: (slug) => void onChanged(slug), log: log1, limitOf });
 
   const perVisitor = windowCounter(cfg.reportsPerIp, 3_600_000);
   const perListing = windowCounter(cfg.reportsPerListing, 3_600_000);
@@ -109,7 +118,7 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
     if (!String(env.GSC_APP_PROPERTY || '').trim()) lines.push('Public marketplace: GSC_APP_PROPERTY isn’t set, so sitemap submissions are off (listings still appear in /sitemap.xml).');
     return lines;
   };
-  const config = () => ({ enabled, publicUrl: enabled ? `${appOrigin(env)}/market` : null });
+  const config = () => ({ enabled, publicUrl: enabled ? `${siteOrigin}/market` : null });
 
   // ───────────── shared helpers ─────────────
 
@@ -188,16 +197,32 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
     return statusOf(row, { blocked: blocked.has(row.user_id), serveUntil: until, now: now() });
   }
 
-  /** The Buy button's state from the offer as it is now (cached 60 s). */
+  /** Whether an offer sells in test mode: a Stripe offer in this deployment's Stripe mode, a Whop one by its own. */
+  function testMode(o) {
+    if (o.provider === 'stripe') {
+      try {
+        return offersConfig()?.stripe?.environment === 'sandbox';
+      } catch {
+        return false;
+      }
+    }
+    return o.provider_ref?.environment === 'sandbox';
+  }
+
+  /**
+   * The Buy button's state from the offer as it is now (cached 60 s), and a Stripe offer's price as it is now (the
+   * seller may have changed it since the listing was put on the web; the page and its JSON-LD match the checkout).
+   */
   async function offerState(row, client) {
-    if (!row.offer_id) return { state: 'none', test: false };
+    if (!row.offer_id) return { state: 'none', test: false, priceMinor: undefined };
     const o = await store.offer(row.offer_id, client);
-    if (!o || o.user_id !== row.user_id || ['archived', 'draft'].includes(o.status)) return { state: 'none', test: false };
-    return { state: o.status === 'active' ? 'active' : 'paused', test: o.provider_ref?.environment === 'sandbox' };
+    if (!o || o.user_id !== row.user_id || ['archived', 'draft'].includes(o.status)) return { state: 'none', test: false, priceMinor: undefined };
+    const priceMinor = o.provider === 'stripe' && Number.isSafeInteger(o.price_minor) && o.price_minor >= 0 ? o.price_minor : undefined;
+    return { state: o.status === 'active' ? 'active' : 'paused', test: testMode(o), priceMinor };
   }
 
   async function gridPage(req, res, url, client) {
-    const origin = appOrigin(env, req);
+    const origin = siteOrigin;
     const rawPage = url.searchParams.get('page');
     const pageNo = rawPage === null ? 1 : /^\d{1,3}$/.test(rawPage) ? Number(rawPage) : 0;
     if (pageNo < 1 || pageNo > MAX_PAGE) return notFound(req, res);
@@ -210,7 +235,7 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
       category = categories.find((c) => c.slug === catParam) ?? null;
       if (!category) return notFound(req, res);
     }
-    const got = q ? await store.search({ q, page: pageNo }, client) : await store.grid({ category: category?.slug ?? null, page: pageNo }, client);
+    const got = q ? await store.search({ q, category: category?.slug ?? null, page: pageNo }, client) : await store.grid({ category: category?.slug ?? null, page: pageNo }, client);
     // sellers whose plan ended more than 30 days ago, or whose account is being deleted, are off the grid
     const rows = [];
     for (const r of got.rows) if (!blocked.has(r.user_id) && (await serving({ ...r, status: 'live' })) === 'live') rows.push(r);
@@ -227,13 +252,31 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
     const st = await serving(row);
     if (st === 'missing') return notFound(req, res);
     if (st === 'gone') return gone(req, res);
-    const origin = appOrigin(env, req);
+    const origin = siteOrigin;
     const offer = await offerState(row, client);
     const robots = st === 'live' ? 'index, follow' : 'noindex, follow';
-    return html(req, res, listingHtml(row, { origin, imageUrl, offer, robots }), { cache: 'public, max-age=60, stale-while-revalidate=300', robots: st === 'live' ? null : 'noindex' });
+    // the category's own page answers only while it has live listings: the breadcrumb links it only then
+    const categoryLive = (await store.categories(client)).some((c) => c.slug === row.category_slug);
+    const shown = offer.priceMinor !== undefined && !['quote', 'free'].includes(row.price_model) ? { ...row, price_minor: offer.priceMinor } : row;
+    return html(req, res, listingHtml(shown, { origin, imageUrl, offer, robots, categoryLive }), { cache: 'public, max-age=60, stale-while-revalidate=300', robots: st === 'live' ? null : 'noindex' });
   }
 
-  const formPage = (req, res, status, row, problem = '') => write(req, res, status, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP, 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' }, reportFormHtml(row, { origin: appOrigin(env, req), token: makeFormToken(cfg.reportSecret, row.slug, now()), problem }));
+  const formPage = (req, res, status, row, problem = '') => write(req, res, status, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP, 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow' }, reportFormHtml(row, { origin: siteOrigin, token: makeFormToken(cfg.reportSecret, row.slug, visitor(req), now()), problem }));
+
+  /**
+   * Whether a report POST came from another site: Sec-Fetch-Site says cross-site, or an Origin that isn't this host's
+   * or the app's own (an auto-submitting form elsewhere would file reports from every visitor's browser).
+   */
+  function crossSite(req) {
+    const site = String(req.headers['sec-fetch-site'] ?? '').toLowerCase();
+    if (site === 'cross-site') return true;
+    const origin = req.headers.origin;
+    if (origin === undefined) return false;
+    const o = String(origin).toLowerCase();
+    if (o === siteOrigin.toLowerCase()) return false;
+    const host = String(req.headers.host ?? '').toLowerCase();
+    return !host || (o !== `https://${host}` && o !== `http://${host}`);
+  }
 
   async function reportPage(req, res, slug, client) {
     const row = await store.bySlug(slug, client);
@@ -247,6 +290,11 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
       return gone(req, res);
     }
     if (req.method !== 'POST') return formPage(req, res, 200, row);
+    // from another site: nothing is read, counted or stored
+    if (crossSite(req)) {
+      drain(req);
+      return formPage(req, res, 403, row, 'Please send the form again.');
+    }
     const back = { back: `/market/${row.slug}` };
     if (perVisitor.full(client) || perListing.full(row.id) || allReports.full('all')) {
       drain(req);
@@ -264,7 +312,7 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
     const thanks = () => notice(req, res, 200, 'Thanks, we’ll take a look', 'Your report was sent to Your Local Business.', back);
     // a bot filled the hidden field: the same answer, nothing kept
     if (String(form.get('website') ?? '') !== '') return thanks();
-    if (!checkFormToken(cfg.reportSecret, row.slug, form.get('t'), now())) return formPage(req, res, 400, row, 'Please send the form again.');
+    if (!checkFormToken(cfg.reportSecret, row.slug, client, form.get('t'), now())) return formPage(req, res, 400, row, 'Please send the form again.');
     const reason = String(form.get('reason') ?? '');
     if (!REPORT_REASONS.includes(reason)) return formPage(req, res, 400, row, 'Choose what’s wrong with this listing.');
     if (String(form.get('note') ?? '').length > 2000) return formPage(req, res, 400, row, 'Keep the note to 500 characters.');
@@ -483,12 +531,18 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
     return { ok: true };
   }
 
+  /**
+   * A signed-in report from the in-app Marketplace. sellerId: the in-app listing's seller; the web page must be that
+   * seller's (a listing can't carry another seller's address and send its reports there).
+   */
   async function userReport(who, b) {
     const slug = String(b.slug ?? '');
     if (!SLUG_RE.test(slug)) throw fail(404, 'NOT_FOUND', 'That listing isn’t on the web.');
+    if (!isUuid(String(b.sellerId ?? ''))) throw fail(400, 'BAD_REQUEST', 'That listing can’t be reported from here.');
     const row = await store.bySlug(slug);
     const st = await serving(row);
     if (st === 'missing' || st === 'gone') throw fail(404, 'NOT_FOUND', 'That listing isn’t on the web.');
+    if (row.user_id !== b.sellerId) throw fail(404, 'NOT_FOUND', 'That listing isn’t on the web.');
     if (row.user_id === who.id) throw fail(400, 'BAD_REQUEST', 'You can’t report your own listing.');
     if (!REPORT_REASONS.includes(b.reason)) throw fail(400, 'BAD_REQUEST', 'Choose a reason.');
     if (b.note !== undefined && (typeof b.note !== 'string' || b.note.length > 2000)) throw fail(400, 'BAD_REQUEST', 'Keep the note to 500 characters.');
@@ -524,7 +578,7 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
     if (!isUuid(id)) throw fail(404, 'NOT_FOUND', 'Not found.');
     if (kind === 'listings' && action === 'hide') {
       const b = await body(req);
-      return reply(req, res, 200, await reports.hide(id, { reason: b.reason, note: b.note }));
+      return reply(req, res, 200, await reports.hide(id, { reason: b.reason }));
     }
     if (kind === 'listings' && action === 'unhide') {
       drain(req);
@@ -539,7 +593,7 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
 
   async function route(req, res, url, who) {
     const p = url.pathname;
-    const origin = appOrigin(env, req);
+    const origin = siteOrigin;
     if (p === `${ROUTE_PREFIXES.market}/admin` || p.startsWith(`${ROUTE_PREFIXES.market}/admin/`)) return routeAdmin(req, res, url, who);
     if (p === `${ROUTE_PREFIXES.market}/reports`) {
       if (req.method !== 'POST') throw fail(405, 'BAD_REQUEST', 'Method not allowed.');
@@ -576,7 +630,13 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
    * older than 180 days deleted. Counts only in the logs.
    */
   async function sweep() {
-    const rows = await db.select('public_listings', { status: ['in', ['live', 'thin', 'held']] }, { select: 'id,user_id,slug,status,public_at,held_at,title,description,cover_path,category,tags,offer_id,outside_buy_url,website,phone,price_minor,price_model,content_hash,quality', order: 'public_at.asc', limit: 10_000 });
+    // page by page: PostgREST answers at most its max-rows (1,000 by default) per request
+    const rows = [];
+    for (let offset = 0; offset < 200_000; offset += PAGE_ROWS) {
+      const page = await db.select('public_listings', { status: ['in', ['live', 'thin', 'held']] }, { select: 'id,user_id,slug,status,public_at,held_at,title,description,cover_path,category,tags,offer_id,outside_buy_url,website,phone,price_minor,price_model,content_hash,quality', order: 'public_at.asc,id.asc', limit: PAGE_ROWS, offset });
+      rows.push(...page);
+      if (page.length < PAGE_ROWS) break;
+    }
     const byUser = new Map();
     for (const r of rows) byUser.set(r.user_id, [...(byUser.get(r.user_id) ?? []), r]);
     let changed = false;
@@ -596,7 +656,8 @@ export function createMarket({ auth = null, db = null, storage = null, treg = nu
       if (lim === null || list.length <= lim) continue;
       const extra = list.slice(lim);
       for (const r of extra) over.add(r.id);
-      await db.update('public_listings', { id: ['in', extra.map((r) => r.id)] }, { status: 'over_limit' });
+      // 200 ids per request (an id list in the address can't grow without bound)
+      for (let i = 0; i < extra.length; i += 200) await db.update('public_listings', { id: ['in', extra.slice(i, i + 200).map((r) => r.id)] }, { status: 'over_limit' });
       log1('market_over_limit', { count: extra.length });
       changed = true;
     }

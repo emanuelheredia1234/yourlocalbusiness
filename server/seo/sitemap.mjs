@@ -136,7 +136,10 @@ export function createSitemapRoutes({ db = null, env = process.env, now = () => 
   async function sitemap(origin) {
     const hit = cache.get(origin);
     if (hit && now() - hit.at < SITEMAP_TTL_MS) return hit.xml;
-    const xml = sitemapXml(origin, await appPages(), market?.sitemapRows ? await market.sitemapRows() : []);
+    // the market's pages have one canonical address, the app's (appOrigin without a request): they are listed only in
+    // the sitemap served there, never under another of the app's hosts
+    const marketHere = !!market?.sitemapRows && origin === appOrigin(env);
+    const xml = sitemapXml(origin, await appPages(), marketHere ? await market.sitemapRows() : []);
     cache.clear();
     cache.set(origin, { xml, at: now() });
     return xml;

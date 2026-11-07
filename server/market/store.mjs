@@ -1,6 +1,6 @@
 // The public marketplace's reads and their caches (P7). Per server copy, in memory:
 //   rows by slug 60 s (a miss 30 s, at most 5,000) · grid pages by (category, page) 60 s (200) · search pages by
-//   normalized q 30 s (200, least recently used out first) · offers by id 60 s · the category list 5 min ·
+//   (category, normalized q) 30 s (200, least recently used out first) · offers by id 60 s · the category list 5 min ·
 //   pagesServeUntil per seller 10 min.
 // onChanged() drops this copy's entries; other copies converge within their TTLs (60 s for a page). A database
 // failure throws (the caller answers the 503 notice): a page is never served from a stale copy after a hide on this
@@ -12,6 +12,8 @@ const CARD_COLUMNS = 'id,user_id,slug,title,seller_name,price_minor,price_model,
 const OFFER_COLUMNS = 'id,user_id,status,provider,price_minor,currency,provider_ref';
 export const LOOKUP_BUDGET = Object.freeze({ perMin: 600, perClient: 60, searchPerClient: 30 });
 const LOOKUP_TIMEOUT = 5000;
+/** Rows per request when reading every live row (PostgREST's default max-rows). */
+export const PAGE_ROWS = 1000;
 
 /** A small TTL map, least recently used out first past `max`. */
 export function ttlCache({ max = 1000, ttlMs = 60_000, now = () => Date.now() } = {}) {
@@ -116,7 +118,13 @@ export function createMarketStore({ db, billing = null, now = () => Date.now() }
     /** The live categories: [{ slug, name, count }], most listings first. */
     categories: (client = null) =>
       cached(cats, 'all', client, 'page', async () => {
-        const list = await db.select('public_listings', { status: 'live' }, { select: 'category,category_slug,user_id', limit: 5000 });
+        // page by page: PostgREST answers at most its max-rows (1,000 by default) per request
+        const list = [];
+        for (let offset = 0; offset < 50_000; offset += PAGE_ROWS) {
+          const page = await db.select('public_listings', { status: 'live' }, { select: 'category,category_slug', order: 'id.asc', limit: PAGE_ROWS, offset });
+          list.push(...page);
+          if (page.length < PAGE_ROWS) break;
+        }
         const by = new Map();
         for (const r of list) {
           const c = by.get(r.category_slug) ?? { slug: r.category_slug, name: r.category, count: 0 };
@@ -131,10 +139,10 @@ export function createMarketStore({ db, billing = null, now = () => Date.now() }
         const list = await db.select('public_listings', { status: 'live', ...(category ? { category_slug: category } : {}) }, { select: CARD_COLUMNS, order: 'content_updated_at.desc,id.asc', limit: 25, offset: (page - 1) * 24 });
         return { rows: list.slice(0, 24), hasNext: list.length > 24 };
       }),
-    /** A search page: { rows, hasNext }. q: normalizeQuery's. */
-    search: ({ q, page = 1 }, client = null) =>
-      cached(searches, `${q}|${page}`, client, 'search', async () => {
-        const list = await db.select('public_listings', { status: 'live', search: ['wfts', q] }, { select: CARD_COLUMNS, order: 'content_updated_at.desc,id.asc', limit: 25, offset: (page - 1) * 24 });
+    /** A search page: { rows, hasNext }. q: normalizeQuery's; category: a slug to search within, or null. */
+    search: ({ q, category = null, page = 1 }, client = null) =>
+      cached(searches, `${category ?? ''}|${q}|${page}`, client, 'search', async () => {
+        const list = await db.select('public_listings', { status: 'live', ...(category ? { category_slug: category } : {}), search: ['wfts', q] }, { select: CARD_COLUMNS, order: 'content_updated_at.desc,id.asc', limit: 25, offset: (page - 1) * 24 });
         return { rows: list.slice(0, 24), hasNext: list.length > 24 };
       }),
     /** billing.pagesServeUntil(userId), cached 10 min (null: still served). */

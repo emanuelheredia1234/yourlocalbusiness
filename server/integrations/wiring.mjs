@@ -217,8 +217,8 @@ export function createIntegrations({
     morning: make.morning({ ...deps, aiText, aiPowered }),
     // A/B tests: after morning (its hourly results job runs after the morning action's)
     experiments: make.experiments(deps),
-    // the public marketplace: after offers and billing (it reads both)
-    market: make.market(deps),
+    // the public marketplace: after offers and billing (it reads both; the offers config late-bound, for test mode)
+    market: make.market({ ...deps, offersConfig: () => modules.offers?.config?.() ?? null }),
   };
   experimentsModule = modules.experiments;
   adsModule = modules.ads;

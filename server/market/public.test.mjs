@@ -7,13 +7,16 @@ import { createMarket } from './index.mjs';
 import { sendJson } from '../billing/test-helpers.mjs';
 
 let s;
+/** this deployment's Stripe mode, as the offers module's config() says it */
+let stripeEnv = 'production';
 beforeAll(async () => {
-  s = await marketServer();
+  s = await marketServer({ offersConfig: () => ({ stripe: { environment: stripeEnv } }) });
 });
 afterAll(async () => {
   await s.close();
 });
 beforeEach(() => {
+  stripeEnv = 'production';
   for (const t of ['public_listings', 'public_listing_reports', 'offers']) s.supa.tables.set(t, []);
   s.market.store.drop();
   s.sitemap.clearCache();
@@ -193,7 +196,8 @@ describe('public pages', () => {
     expect(r.text).toContain(`<link rel="canonical" href="${APP}/market">`);
     expect(r.headers.get('cache-control')).toBe('public, max-age=30');
     const evil = await s.visit(`/market?q=${encodeURIComponent('"><script>alert(1)</script>')}`);
-    expect(evil.text.match(/<script/g)).toHaveLength(1);
+    // no category: a one-item breadcrumb, so no data block at all
+    expect(evil.text).not.toContain('<script');
   });
 
   it('an empty grid is noindex', async () => {
@@ -417,5 +421,112 @@ describe('accounts and switches', () => {
     await m.publicRoutes.handle(req, res2, new URL('http://x/market/some-name-abcdef'));
     expect(res2.status).toBe(503);
     expect(res2.headers['cache-control']).toBe('no-store');
+  });
+});
+
+describe('review fixes', () => {
+  // a fresh minute for the per-visitor lookup budget (every visit here is the same visitor)
+  beforeEach(() => s.advance(61_000));
+  it('a Stripe offer in test mode says so; a live one doesn’t; a Whop sandbox offer says so', async () => {
+    const a = await s.user('testmode@example.com');
+    const offer = s.offer(a, { provider: 'stripe', price_minor: 2500, currency: 'usd', provider_ref: {} });
+    const r = await s.put(a, 'lst_tm', s.listing(a, { offerId: offer.id }));
+    expect((await s.visit(`/market/${slugOf(r)}`)).text).not.toContain('Test mode');
+    stripeEnv = 'sandbox';
+    s.market.store.drop();
+    const test = await s.visit(`/market/${slugOf(r)}`);
+    expect(test.text).toContain('Test mode: this checkout takes no real payments.');
+    const whop = s.offer(a, { provider: 'whop', price_minor: 1500, currency: 'usd', provider_ref: { environment: 'sandbox' } });
+    const w = await s.put(a, 'lst_wh', s.listing(a, { offerId: whop.id, title: 'Stoneware bowl, river glaze', description: `bowl ${DESCRIPTION}` }));
+    stripeEnv = 'production';
+    expect((await s.visit(`/market/${slugOf(w)}`)).text).toContain('Test mode');
+  });
+
+  it('a Stripe offer’s price is read at render: a later price change shows on the page and in its JSON-LD', async () => {
+    const a = await s.user('reprice@example.com');
+    const offer = s.offer(a, { provider: 'stripe', price_minor: 2500, currency: 'usd' });
+    const r = await s.put(a, 'lst_rp', s.listing(a, { offerId: offer.id }));
+    offer.price_minor = 3900;
+    s.market.store.dropOffer(offer.id);
+    s.market.store.drop();
+    const page = await s.visit(`/market/${slugOf(r)}`);
+    expect(page.text).toContain('"price":"39.00"');
+    expect(page.text).toContain('<p class="price">$39</p>');
+    expect(page.text).not.toContain('25.00');
+  });
+
+  it('every address on a page comes from the app’s address, never the request’s Host', async () => {
+    const t = await marketServer({ env: { GSC_APP_PROPERTY: '' } });
+    try {
+      const a = await t.user('host@example.com');
+      const r = await t.put(a, 'lst_h', t.listing(a));
+      expect(r.body.listing.url).toBe(`${APP}/market/${slugOf(r)}`);
+      const host = new URL(t.base).host;
+      for (const p of [`/market/${slugOf(r)}`, '/market', `/market/${slugOf(r)}/report`]) {
+        const page = await t.visit(p);
+        expect(page.text, p).not.toContain(host);
+      }
+      const page = await t.visit(`/market/${slugOf(r)}`);
+      expect(page.text).toContain(`<link rel="canonical" href="${APP}/market/${slugOf(r)}">`);
+      expect(page.text).toContain(`<meta property="og:url" content="${APP}/market/${slugOf(r)}">`);
+      // the sitemap on another of the app's hosts doesn't list the market (its pages' one address is the app's)
+      expect((await t.visit('/sitemap.xml')).text).not.toContain('/market');
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('categories past PostgREST’s 1,000 rows still answer, and their counts are right', async () => {
+    const a = await s.user('many@example.com');
+    seed(a.id, 1000, { category: 'Home', category_slug: 'home' });
+    // ids after the first 1,000 (they sort last)
+    for (let i = 0; i < 3; i++) seed(a.id, 1, { id: `ffffffff-ffff-4fff-8fff-00000000000${i}`, listing_id: `z${i}`, slug: `zeta-item-${i}-abcdef`, category: 'Zeta', category_slug: 'zeta' });
+    const cats = await s.market.store.categories();
+    expect(cats).toEqual([{ slug: 'home', name: 'Home', count: 1000 }, { slug: 'zeta', name: 'Zeta', count: 3 }]);
+    const z = await s.visit('/market?category=zeta');
+    expect(z.status).toBe(200);
+    expect(z.text).toContain('<meta name="robots" content="index, follow">');
+  });
+
+  it('the sweep reads every public row, past 1,000', async () => {
+    const a = await s.user('sweep-many@example.com');
+    seed(a.id, 1003);
+    const got = await s.market.sweep();
+    expect(got.overLimit).toBe(1000);
+    expect(s.rows('public_listings').filter((r) => ['live', 'thin'].includes(r.status))).toHaveLength(3);
+  });
+
+  it('search keeps the category it was made in', async () => {
+    const a = await s.user('catsearch@example.com');
+    seed(a.id, 1, { listing_id: 'c1', slug: 'cake-home-abcdef', title: 'Cake stand', category: 'Home', category_slug: 'home' });
+    seed(a.id, 1, { id: crypto.randomUUID(), listing_id: 'c2', slug: 'cake-food-abcdef', title: 'Chocolate cake', category: 'Food', category_slug: 'food' });
+    const r = await s.visit('/market?category=food&q=cake');
+    expect(r.text).toContain('cake-food-abcdef');
+    expect(r.text).not.toContain('cake-home-abcdef');
+    expect((await s.visit('/market?q=cake')).text).toContain('cake-home-abcdef');
+  });
+
+  it('breadcrumbs: none in the data on /market itself; a category with no live listings isn’t linked', async () => {
+    const a = await s.user('crumbs@example.com');
+    seed(a.id, 3);
+    const grid = await s.visit('/market');
+    expect(grid.text).not.toContain('BreadcrumbList');
+    expect((await s.visit('/market?category=home')).text).toContain('BreadcrumbList');
+    const b = await s.user('crumbs2@example.com');
+    const thin = await s.put(b, 'lst_th', s.listing(b, { category: 'Lonely things', coverPath: null }));
+    expect(thin.body).toMatchObject({ listing: { status: 'thin' } });
+    const page = await s.visit(`/market/${slugOf(thin)}`);
+    expect(page.text).not.toContain('category=lonely-things');
+    expect(page.text).toContain('<span>Lonely things</span>');
+    const live = await s.visit('/market/item-000-abcdef');
+    expect(live.text).toContain(`href="${APP}/market?category=home"`);
+  });
+
+  it('a quote listing sends no Product; a business listing is a Service', async () => {
+    const a = await s.user('ld@example.com');
+    const q = await s.put(a, 'lst_q', s.listing(a, { price: 0, priceModel: 'quote' }));
+    const page = await s.visit(`/market/${slugOf(q)}`);
+    expect(page.text).not.toContain('"Product"');
+    expect(page.text).toContain('BreadcrumbList');
   });
 });

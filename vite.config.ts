@@ -18,6 +18,7 @@ function publishedPages(): Plugin {
   const page = new RegExp(`^/${name}/?$`);
   const image = new RegExp(`^/${name}/img/[^/]+$`);
   const lead = new RegExp(`^/${name}/lead$`);
+  const marketGrid = /^\/market\/?$/;
   const marketPage = new RegExp(`^/market/${name}/?$`);
   const marketReport = new RegExp(`^/market/${name}/report$`);
   const isFile = (p: string) => {
@@ -49,7 +50,7 @@ function publishedPages(): Plugin {
           return;
         }
         if (req.method !== 'GET' && req.method !== 'HEAD') return next();
-        if (!isPage && !image.test(pathname) && !marketPage.test(pathname) && !marketReport.test(pathname)) return next();
+        if (!isPage && !image.test(pathname) && !marketGrid.test(pathname) && !marketPage.test(pathname) && !marketReport.test(pathname)) return next();
         if (/^\/(@|src\/|node_modules\/)/.test(pathname) || isFile(path.join(root, pathname)) || (publicDir && isFile(path.join(publicDir, pathname)))) return next();
         const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() || 'http';
         // as the /api proxy does: the client's address goes at the end, where the server reads it from

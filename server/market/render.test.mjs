@@ -102,6 +102,19 @@ describe('listing page links and content', () => {
   });
 });
 
+describe('narrow screens', () => {
+  it('a long service name wraps instead of pushing its price off a 320 px screen', () => {
+    const html = listingHtml(row({ services: [{ name: 'S'.repeat(120), priceMinor: 5000, priceModel: 'fixed' }] }), { origin: ORIGIN, imageUrl });
+    expect(html).toContain('.svc > span:first-child { min-width: 0; overflow-wrap: anywhere; }');
+    expect(html).toContain('.svc > span:last-child { flex-shrink: 0; }');
+  });
+
+  it('the test-mode note shows when the offer sells in test mode', () => {
+    expect(listingHtml(row({ offer_id: 'abcdefghijklmnopqrstuv' }), { origin: ORIGIN, imageUrl, offer: { state: 'active', test: true } })).toContain('Test mode: this checkout takes no real payments.');
+    expect(listingHtml(row({ offer_id: 'abcdefghijklmnopqrstuv' }), { origin: ORIGIN, imageUrl, offer: { state: 'active', test: false } })).not.toContain('Test mode');
+  });
+});
+
 describe('JSON-LD', () => {
   const canonical = `${ORIGIN}/market/mug-abc123`;
   it('parses, with a Product, its Offer and a 3-item BreadcrumbList', () => {
@@ -121,9 +134,21 @@ describe('JSON-LD', () => {
 
   it('paused or unconfirmed: OutOfStock; quote: no offer; free: 0.00; monthly: a unit price', () => {
     expect(productJsonLd(row(), { canonical, offerState: 'paused' }).offers.availability).toBe('https://schema.org/OutOfStock');
-    expect(productJsonLd(row({ price_minor: null, price_model: 'quote' }), { canonical }).offers).toBeUndefined();
+    // nothing to state: no Product at all (Google wants offers, a review or a rating; there are never reviews)
+    expect(productJsonLd(row({ price_minor: null, price_model: 'quote' }), { canonical })).toBeNull();
+    expect(productJsonLd(row({ price_minor: null, price_model: 'one-time' }), { canonical })).toBeNull();
     expect(productJsonLd(row({ price_minor: 0, price_model: 'free' }), { canonical }).offers.price).toBe('0.00');
     expect(productJsonLd(row({ price_model: 'monthly' }), { canonical }).offers.priceSpecification).toMatchObject({ '@type': 'UnitPriceSpecification', referenceQuantity: { unitCode: 'MON' } });
+  });
+
+  it('a business listing is a Service; a project price is an AggregateOffer with lowPrice', () => {
+    const svc = productJsonLd(row({ kind: 'business' }), { canonical });
+    expect(svc['@type']).toBe('Service');
+    expect(svc.provider).toMatchObject({ '@type': 'Organization' });
+    expect(svc.brand).toBeUndefined();
+    const project = productJsonLd(row({ price_model: 'project', price_minor: 50000 }), { canonical });
+    expect(project.offers).toMatchObject({ '@type': 'AggregateOffer', lowPrice: '500.00', priceCurrency: 'USD' });
+    expect(project.offers.price).toBeUndefined();
   });
 
   it('keeps </script> inside the block', () => {

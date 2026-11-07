@@ -703,6 +703,19 @@ describe('which host gets what', () => {
     }
   });
 
+  it('the public marketplace answers on the app’s own host only; a custom domain gets “not found” (P7 S10)', async () => {
+    // the app's host: the market's own page (a server-rendered grid, or its notice), never the SPA
+    const own = await at('yourlocalbusiness.replit.app', '/market');
+    expect(own.text).toMatch(/Marketplace|right now/);
+    // anyone's domain (claimed or not): serveDomain's 404, whatever the path or method
+    for (const [method, pathname] of [['GET', '/market'], ['GET', '/market/some-name-abcdef'], ['HEAD', '/market/some-name-abcdef'], ['GET', '/market/some-name-abcdef/report'], ['POST', '/market/some-name-abcdef/report']]) {
+      const res = await at('shop.example.com', pathname, { method, ...(method === 'POST' ? { headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'reason=scam' } : {}) });
+      expect([method, pathname, res.status]).toEqual([method, pathname, 404]);
+      expect(res.text).not.toContain('Report this listing');
+      expect(res.text).not.toContain('Marketplace');
+    }
+  });
+
   it('says at startup where the app answers, that its own domain goes in APP_HOSTS, and how visitors are told apart', async () => {
     expect(serverLog).toContain('The app and /api answer on *.replit.app, *.replit.dev, *.repl.co, localhost and IP addresses.');
     expect(serverLog).toContain('If the app has a custom domain of its own, list it in the APP_HOSTS Secret (it’s empty now).');

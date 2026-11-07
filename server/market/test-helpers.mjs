@@ -22,8 +22,8 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
 
 export const DESCRIPTION = 'Hand-thrown stoneware mugs made in our small studio by the river. Each mug holds about twelve ounces, is glazed in a food-safe satin finish, and goes through the dishwasher without fading. We fire every piece twice and check it by hand before it leaves the shop, so you get a sturdy everyday mug that feels good to hold.';
 
-/** opts: env overrides; treg (a fake treg); sitemap: also serve /sitemap.xml and /robots.txt. */
-export async function marketServer({ env: envOver = {}, treg: tregOver = null, now: nowOver = null } = {}) {
+/** opts: env overrides; treg (a fake treg); offersConfig (the offers module's config(), for Stripe's test mode). */
+export async function marketServer({ env: envOver = {}, treg: tregOver = null, now: nowOver = null, offersConfig = () => null } = {}) {
   let offset = 0;
   const clock = nowOver ?? (() => Date.now() + offset);
   const supa = await (await createMockSupabase()).start();
@@ -37,7 +37,7 @@ export async function marketServer({ env: envOver = {}, treg: tregOver = null, n
   const storage = makeStorage();
   const treg = tregOver ?? fakeTreg(() => ({}));
   const limiter = createBucketLimiter({ now: clock });
-  const market = createMarket({ auth, db, storage, treg, send: sendJson, readJson, limit: limiter, env, now: clock, log, billing, visitor: (req) => String(req.headers['x-test-ip'] ?? 'visitor-1') });
+  const market = createMarket({ auth, db, storage, treg, send: sendJson, readJson, limit: limiter, env, now: clock, log, billing, offersConfig, visitor: (req) => String(req.headers['x-test-ip'] ?? 'visitor-1') });
   const sitemap = createSitemapRoutes({ db, env, now: clock, log });
   sitemap.setMarket(market);
   market.setSitemap(sitemap);

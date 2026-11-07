@@ -52,6 +52,8 @@ p { margin: 0 0 0.9em; color: var(--ink-2); overflow-wrap: anywhere; }
 ul.plain { padding-left: 1.2em; margin: 0; }
 ul.plain li { color: var(--ink-2); margin: 0.2em 0; overflow-wrap: anywhere; }
 .svc { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding: 8px 0; }
+.svc > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.svc > span:last-child { flex-shrink: 0; }
 .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); list-style: none; padding: 0; margin: 16px 0; }
 .grid a.item { display: block; height: 100%; text-decoration: none; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
 .grid .cover { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: var(--soft); }
@@ -150,16 +152,18 @@ export function gridPath({ category = '', page = 1, q = '' } = {}) {
 
 /**
  * One listing. row: public_listings; ctx: { origin (the app's), imageUrl(path) → absolute URL, offer: { state:
- * 'active' | 'paused' | 'none', test }, robots ('index, follow' | 'noindex, follow') }.
+ * 'active' | 'paused' | 'none', test }, robots ('index, follow' | 'noindex, follow'), categoryLive (the category's
+ * page answers: it has live listings; else the breadcrumb names the category without a link) }.
  */
-export function listingHtml(row, { origin, imageUrl, offer = { state: 'none', test: false }, robots = 'index, follow' }) {
+export function listingHtml(row, { origin, imageUrl, offer = { state: 'none', test: false }, robots = 'index, follow', categoryLive = true }) {
   const canonical = `${origin}/market/${row.slug}`;
-  const catUrl = `${origin}${gridPath({ category: row.category_slug })}`;
+  const catUrl = categoryLive ? `${origin}${gridPath({ category: row.category_slug })}` : '';
   const images = [row.cover_path, ...(row.gallery_paths ?? [])].filter(Boolean).map((p) => imageUrl(p));
   const label = priceLabel(row.price_minor, row.price_model);
   const title = cutText(`${row.title} — ${row.seller_name} | ${MARKET_NAME}`, 70);
   const description = row.tagline ? cutText(row.tagline, 155) : cutText(row.description, 155);
-  const graph = [productJsonLd(row, { canonical, images, offerState: offer.state }), breadcrumbJsonLd([{ name: 'Marketplace', url: `${origin}/market` }, { name: row.category, url: catUrl }, { name: row.title, url: canonical }])];
+  const crumbs = [{ name: 'Marketplace', url: `${origin}/market` }, ...(catUrl ? [{ name: row.category, url: catUrl }] : []), { name: row.title, url: canonical }];
+  const graph = [productJsonLd(row, { canonical, images, offerState: offer.state }), breadcrumbJsonLd(crumbs)].filter(Boolean);
   const meta = [
     ['og:type', 'product'],
     ['og:title', row.title],
@@ -197,7 +201,7 @@ export function listingHtml(row, { origin, imageUrl, offer = { state: 'none', te
   const tel = telOf(row.phone);
   if (row.phone && tel) actions.push(`<a class="btn ghost" href="tel:${escapeHtml(tel)}">Call ${escapeHtml(row.phone)}</a>`);
   const body = `${topBar(origin)}
-<nav class="crumbs" aria-label="Breadcrumb"><a href="${escapeHtml(origin)}/market">Marketplace</a> › <a href="${escapeHtml(catUrl)}">${escapeHtml(row.category)}</a> › <span>${escapeHtml(row.title)}</span></nav>
+<nav class="crumbs" aria-label="Breadcrumb"><a href="${escapeHtml(origin)}/market">Marketplace</a> › ${catUrl ? `<a href="${escapeHtml(catUrl)}">${escapeHtml(row.category)}</a>` : `<span>${escapeHtml(row.category)}</span>`} › <span>${escapeHtml(row.title)}</span></nav>
 <main class="card">
 <h1>${escapeHtml(row.title)}</h1>
 ${row.tagline ? `<p class="tagline">${escapeHtml(row.tagline)}</p>\n` : ''}<p class="muted">By ${escapeHtml(row.seller_name)}${place ? ` · ${escapeHtml(place)}` : ''}</p>
@@ -245,7 +249,8 @@ ${nav}
 ${rows.length ? `<ul class="grid">\n${cards}\n</ul>` : '<p class="muted">No listings here yet.</p>'}
 ${pager}
 ${footerHtml(origin)}`;
-  return page({ title, description, canonical, robots, links, jsonld: jsonLdScript([breadcrumbJsonLd(crumbs)]), body });
+  // a BreadcrumbList needs two or more items: none on /market itself
+  return page({ title, description, canonical, robots, links, jsonld: crumbs.length >= 2 ? jsonLdScript([breadcrumbJsonLd(crumbs)]) : '', body });
 }
 
 export const REASON_LABELS = Object.freeze({

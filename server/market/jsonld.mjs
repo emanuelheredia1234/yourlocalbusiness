@@ -1,6 +1,7 @@
 // The public marketplace's structured data (P7): one <script type="application/ld+json"> data block per page (it never
-// runs: the page's CSP has no script-src), an @graph with a Product (and its Offer when there is a price to state)
-// and a BreadcrumbList. Never aggregateRating or review: there are no ratings or reviews, ever.
+// runs: the page's CSP has no script-src), an @graph with a Product or Service and its Offer (only when there is a
+// price to state) and a BreadcrumbList (only with two or more items). Never aggregateRating or review: there are no
+// ratings or reviews, ever.
 //
 // Escaping: JSON.stringify, then < > & and U+2028/U+2029 as \u escapes, so "</script>" in any field can't end the
 // block and the text stays the same JSON.
@@ -30,36 +31,34 @@ export function breadcrumbJsonLd(items) {
 }
 
 /**
- * The Product. row: public_listings; ctx: { canonical, images: [absolute https URLs], offerState: 'active' | 'paused' |
- * 'none' } ('paused': the offer is paused or its checkout isn't confirmed: OutOfStock).
+ * The listing's item: a Product (kind 'product') or a Service (kind 'business': Google's Product markup isn't for
+ * services), with its Offer. null when there is no price to state (a quote, or no price): Google's Product snippets
+ * need offers, a review or a rating, and there are never reviews or ratings, so then only the BreadcrumbList is sent.
+ * A project price ("From $X") is an AggregateOffer with lowPrice, never an exact price. row: public_listings; ctx: {
+ * canonical, images: [absolute https URLs], offerState: 'active' | 'paused' | 'none' } ('paused': the offer is
+ * paused or its checkout isn't confirmed: OutOfStock).
  */
 export function productJsonLd(row, { canonical, images = [], offerState = 'none' }) {
-  const product = {
-    '@type': 'Product',
-    name: row.title,
-    description: String(row.description ?? '').slice(0, 5000),
-    url: canonical,
-    sku: row.slug,
-    category: row.category,
-    brand: { '@type': 'Brand', name: row.seller_name },
-  };
-  if (images.length) product.image = images;
   const hasPrice = row.price_model !== 'quote' && ((row.price_minor !== null && row.price_minor !== undefined) || row.price_model === 'free');
-  if (hasPrice) {
-    const price = priceText(row.price_model === 'free' ? 0 : row.price_minor);
-    const offer = {
-      '@type': 'Offer',
-      price,
-      priceCurrency: 'USD',
-      availability: offerState === 'paused' ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
-      url: canonical,
-      seller: { '@type': 'Organization', name: row.seller_name },
-    };
+  if (!hasPrice) return null;
+  const service = row.kind === 'business';
+  const seller = { '@type': 'Organization', name: row.seller_name };
+  const item = service
+    ? { '@type': 'Service', name: row.title, description: String(row.description ?? '').slice(0, 5000), url: canonical, category: row.category, provider: seller }
+    : { '@type': 'Product', name: row.title, description: String(row.description ?? '').slice(0, 5000), url: canonical, sku: row.slug, category: row.category, brand: { '@type': 'Brand', name: row.seller_name } };
+  if (images.length) item.image = images;
+  const price = priceText(row.price_model === 'free' ? 0 : row.price_minor);
+  const availability = offerState === 'paused' ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock';
+  let offer;
+  if (row.price_model === 'project') {
+    offer = { '@type': 'AggregateOffer', lowPrice: price, priceCurrency: 'USD', availability, url: canonical, seller };
+  } else {
+    offer = { '@type': 'Offer', price, priceCurrency: 'USD', availability, url: canonical, seller };
     if (row.kind === 'product') offer.itemCondition = 'https://schema.org/NewCondition';
     if (row.price_model === 'monthly') offer.priceSpecification = { '@type': 'UnitPriceSpecification', price, priceCurrency: 'USD', referenceQuantity: { '@type': 'QuantitativeValue', value: 1, unitCode: 'MON' } };
     else if (row.price_model === 'yearly') offer.priceSpecification = { '@type': 'UnitPriceSpecification', price, priceCurrency: 'USD', referenceQuantity: { '@type': 'QuantitativeValue', value: 1, unitCode: 'ANN' } };
     else if (row.price_model === 'per-session') offer.priceSpecification = { '@type': 'UnitPriceSpecification', price, priceCurrency: 'USD', unitText: 'session' };
-    product.offers = offer;
   }
-  return product;
+  item.offers = offer;
+  return item;
 }
