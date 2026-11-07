@@ -172,6 +172,33 @@ export const accountOption = (env, zid, platform, a) => ({
   ...(Number.isFinite(a.minDaily) ? { minDailyBudget: a.minDaily } : {}),
 });
 
+/** Zernio's health blocker codes → ours (anything else: ACTION_BLOCKED). */
+const HEALTH_CODES = Object.freeze({ ad_account_payment_required: 'PAYMENT_REQUIRED', ad_account_policy_not_accepted: 'POLICY_NOT_ACCEPTED', meta_security_check_required: 'SECURITY_CHECK', ad_account_unusable: 'ACTION_BLOCKED', meta_action_blocked: 'ACTION_BLOCKED', meta_ad_consent_required: 'AD_CONSENT', instagram_account_restricted: 'IG_RESTRICTED', verified_advertiser_required: 'VERIFIED_ADVERTISER', linked_account_required: 'NO_PAGE' });
+const healthCode = (z) => (typeof z === 'string' && Object.hasOwn(HEALTH_CODES, z) ? HEALTH_CODES[z] : 'ACTION_BLOCKED');
+
+/**
+ * The refusals Zernio remembers (health check `last_refusal`) that a launch may go ahead with, and what we say. Zernio
+ * keeps one until a later create succeeds or for 7 days, even after it was fixed, and only a create clears it (a later
+ * refusal of another kind doesn't, so we say "a launch … in the last 7 days", never "the last launch"); Meta checks
+ * again at the launch itself. A temporary block (meta_action_blocked, kept 1 day) and any other code still block.
+ */
+const REMEMBERED = Object.freeze({
+  ad_account_payment_required: 'Meta refused a launch on this ad account in the last 7 days because of its payment method. If you’ve added or fixed it since, you can launch again: Meta checks it when you launch.',
+  ad_account_policy_not_accepted: 'Meta refused a launch on this ad account in the last 7 days because its non-discrimination policy hadn’t been accepted. If a business admin has accepted it since, you can launch again: Meta checks it when you launch.',
+  ad_account_unusable: 'Meta refused a launch on this ad account in the last 7 days because the account was disabled or restricted. If Meta has lifted that since, you can launch again: Meta checks it when you launch.',
+  meta_security_check_required: 'Meta refused a launch from the Facebook login connected here in the last 7 days because of a security check. If you’ve done the check on facebook.com since, you can launch again: Meta checks it when you launch.',
+});
+/** The payment line next to a remembered payment refusal: neutral (never "that's fine" beside Meta's refusal). */
+const PAYMENT_UNSEEN = 'We can’t see this ad account’s payment method from here.';
+
+/**
+ * The checklist line a blocker is about, by its check, else by our code: the red line takes its place, so the list
+ * never says both (e.g. a green "The ad account is active." next to a red "Meta isn't letting this ad account…").
+ */
+const LINE_OF_CHECK = Object.freeze({ account_status: 'account', payment: 'payment', page: 'page' });
+const LINE_OF_CODE = Object.freeze({ PAYMENT_REQUIRED: 'payment', NO_PAGE: 'page', ACTION_BLOCKED: 'account' });
+const lineOf = (b, code) => (typeof b?.check === 'string' && Object.hasOwn(LINE_OF_CHECK, b.check) ? LINE_OF_CHECK[b.check] : LINE_OF_CODE[code]);
+
 /** The setup checklist for the chosen ad account (§12). Reads health (Meta) or billing (Google). */
 export async function setupChecks(ctx, zid, platform, account, lctx) {
   const checks = [{ id: 'connected', state: 'ok', message: messageFor('CONNECTED_OK', { platform }) }];
@@ -192,8 +219,9 @@ export async function setupChecks(ctx, zid, platform, account, lctx) {
     const byId = (id) => list.find((c) => c.id === id);
     const pay = byId('payment');
     const fixOf = (c) => safeFixUrl(c?.fix?.url);
-    if (pay?.status === 'ok' && account.billingStatus !== 'missing') checks.push({ id: 'payment', state: 'ok', message: 'A payment method is on the ad account.' });
-    else if (pay?.status === 'missing' || pay?.status === 'error' || account.billingStatus === 'missing') checks.push({ id: 'payment', state: 'missing', code: 'PAYMENT_REQUIRED', message: messageFor('PAYMENT_REQUIRED'), ...(fixOf(pay) ? { fixUrl: fixOf(pay) } : {}) });
+    const payFails = pay?.status === 'missing' || pay?.status === 'error' || account.billingStatus === 'missing';
+    if (pay?.status === 'ok' && !payFails) checks.push({ id: 'payment', state: 'ok', message: 'A payment method is on the ad account.' });
+    else if (payFails) checks.push({ id: 'payment', state: 'missing', code: 'PAYMENT_REQUIRED', message: messageFor('PAYMENT_REQUIRED'), ...(fixOf(pay) ? { fixUrl: fixOf(pay) } : {}) });
     else checks.push({ id: 'payment', state: 'unknown', code: 'PAYMENT_UNKNOWN', message: messageFor('PAYMENT_UNKNOWN') });
     const page = byId('page');
     checks.push(page && page.status !== 'ok' ? { id: 'page', state: 'missing', code: 'NO_PAGE', message: messageFor('NO_PAGE') } : { id: 'page', state: 'ok', message: messageFor('PAGE_OK') });
@@ -202,9 +230,34 @@ export async function setupChecks(ctx, zid, platform, account, lctx) {
     const cap = byId('spend_cap');
     if ((cap && cap.status !== 'ok') || (hb.status === 'blocked' && hb.ready === true)) checks.push({ id: 'spend_cap', state: 'warn', code: 'ACCOUNT_SPEND_CAP', message: messageFor('ACCOUNT_SPEND_CAP') });
     if (hb.ready === false) {
-      const first = (Array.isArray(hb.blockers) ? hb.blockers : []).find(isObj);
-      const code = (first?.code && { ad_account_payment_required: 'PAYMENT_REQUIRED', ad_account_policy_not_accepted: 'POLICY_NOT_ACCEPTED', meta_security_check_required: 'SECURITY_CHECK', ad_account_unusable: 'ACTION_BLOCKED', meta_action_blocked: 'ACTION_BLOCKED', meta_ad_consent_required: 'AD_CONSENT', instagram_account_restricted: 'IG_RESTRICTED', verified_advertiser_required: 'VERIFIED_ADVERTISER', linked_account_required: 'NO_PAGE' }[first.code]) || 'ACTION_BLOCKED';
-      if (!checks.some((c) => c.code === code && c.state === 'missing')) checks.push({ id: 'ready', state: 'missing', code, message: messageFor(code), ...(fixOf(first) ? { fixUrl: fixOf(first) } : {}) });
+      const blockers = (Array.isArray(hb.blockers) ? hb.blockers : []).filter(isObj);
+      // an account status check that fails is a live blocker, even when Zernio lists none for it
+      const acct = byId('account_status');
+      const accountFails = ['missing', 'error'].includes(acct?.status);
+      if (accountFails && !blockers.some((b) => b.check === 'account_status')) blockers.push({ check: 'account_status', code: acct.code, fix: acct.fix });
+      // a live blocker (or one without a check) holds; a remembered refusal (REMEMBERED) holds only while a live check
+      // for its cause fails: the payment check or the listing's billingStatus, or the account's own status
+      const liveFails = { ad_account_payment_required: payFails, ad_account_unusable: !!account.reason || accountFails };
+      const live = (b) => b.check !== 'last_refusal';
+      const holds = (b) => live(b) || !Object.hasOwn(REMEMBERED, b.code) || liveFails[b.code] === true;
+      if (!blockers.length || blockers.some(holds)) {
+        // the red line names a live blocker first, else the first that holds
+        const first = blockers.find(live) ?? blockers.find(holds) ?? blockers[0];
+        const code = healthCode(first?.code);
+        const line = { id: 'ready', state: 'missing', code, message: messageFor(code), ...(fixOf(first) ? { fixUrl: fixOf(first) } : {}) };
+        const at = checks.findIndex((c) => c.id === lineOf(first, code));
+        if (at >= 0 && checks[at].state !== 'missing') checks[at] = { ...line, id: checks[at].id };
+        else if (!checks.some((c) => c.code === code && c.state === 'missing')) checks.push(line);
+      } else if (!checks.some((c) => c.state === 'missing')) {
+        // only remembered refusals that nothing live confirms: the launch goes ahead, with one warning for each (a red
+        // line above already stops it, and the warning shows once that's fixed)
+        for (const b of blockers) {
+          const code = healthCode(b.code);
+          if (!checks.some((c) => c.id === 'last_refusal' && c.code === code)) checks.push({ id: 'last_refusal', state: 'warn', code, message: REMEMBERED[b.code], ...(fixOf(b) ? { fixUrl: fixOf(b) } : {}) });
+        }
+        const unseen = checks.find((c) => c.id === 'payment' && c.state === 'unknown');
+        if (unseen && blockers.some((b) => b.code === 'ad_account_payment_required')) unseen.message = PAYMENT_UNSEEN;
+      }
     }
   } else {
     const b = await ctx.zads.reads.billing(zid, account.adAccountId, lctx);
@@ -336,6 +389,8 @@ export async function previewLaunch(ctx, who, body) {
     }
   }
   for (const c of setup) if (c.state === 'missing') built.blockers.push({ code: c.code ?? 'ACCOUNT_UNUSABLE', message: c.message, ...(c.fixUrl ? { fixUrl: c.fixUrl } : {}) });
+  // a remembered refusal the launch may go ahead with: the review says it too, right before the confirm
+  for (const c of setup) if (c.id === 'last_refusal' && c.state === 'warn') built.warnings.push({ code: c.code, message: c.message, ...(c.fixUrl ? { fixUrl: c.fixUrl } : {}) });
 
   // the owner's switches, the plan gate, then the limits (§D10 order)
   const lim = await ctx.limits.effective(conn.tag);
