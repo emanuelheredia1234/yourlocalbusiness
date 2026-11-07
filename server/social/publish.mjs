@@ -303,11 +303,12 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
           await hooks.jobCreated(userId, exp, made.row.id);
         } catch (e) {
           // the test couldn't record its job: nothing is sent; the job ends `failed` (out of the live set, so Post now
-          // works again) and the start is given back
+          // works again) and the start is given back. A definite answer (409, never a 5xx the app would read as "may
+          // have been sent" and resend with the same request id, which would only find this failed job)
           safeLog('experiment_job_link_failed', { code: e?.code || e?.name || 'Error' }, log);
           await jobs.finish(userId, made.row.id, { state: 'failed', errorCode: 'NOT_SENT' }).catch(() => null);
           await hooks.undoStart(userId, exp).catch(() => {});
-          throw fail(503, 'UNAVAILABLE', 'The A/B test couldn’t be updated just now, so nothing was posted. Try again shortly.');
+          throw fail(409, 'BAD_REQUEST', 'The A/B test couldn’t be updated just now, so nothing was posted. Try again shortly.');
         }
       }
       const row = (await jobs.start(userId, made.row.id)) ?? made.row;
