@@ -14,9 +14,10 @@ import { matchPageIntent } from './intents';
 import type { StepResult } from './prompt';
 import { arg, catalogLine, defineTool, type AnyTool } from './registry';
 import { experimentsOnNow } from '@/lib/experiments/config';
+import { getActiveProject } from '@/store/useStore';
 
 /** The groups listed by name until they're needed (any other group, the core and the excluded tools, is always in full). */
-export const TOOL_GROUP_NAMES = ['social', 'studio', 'marketing', 'brand', 'agents', 'ab'] as const;
+export const TOOL_GROUP_NAMES = ['social', 'studio', 'marketing', 'brand', 'agents', 'ab', 'email'] as const;
 export type ToolGroupName = (typeof TOOL_GROUP_NAMES)[number];
 
 /** What each group covers, in a few words (shown with its tools' names). */
@@ -27,6 +28,7 @@ export const GROUP_ABOUT: Record<ToolGroupName, string> = {
   brand: 'brand kit, Brain skills and documents, brand voice, analytics, the Marketplace, product ideas, projects, backup',
   agents: 'Manus and Viktor (Slack): open their build window for a page or asset, draft a message the owner confirms and sends them, what they’re working on',
   ab: 'A/B tests, Trial Reels',
+  email: 'email designs: blocks, themes, AI design, HTML export',
 };
 
 /** The groups that fit each page, most fitting first (Code & assets is in Studio, its tools are marketing's). */
@@ -37,7 +39,7 @@ const PAGE_GROUPS: Partial<Record<Route, ToolGroupName[]>> = {
   studio: ['studio', 'marketing', 'agents'],
   marketing: ['marketing'],
   'marketing-seo': ['marketing', 'agents'],
-  'marketing-email': ['marketing'],
+  'marketing-email': ['marketing', 'email'],
   'marketing-ads': ['marketing'],
   store: ['brand', 'studio'],
   brain: ['brand'],
@@ -59,9 +61,9 @@ const isGroupName = (g: unknown): g is ToolGroupName => typeof g === 'string' &&
 
 /**
  * Groups listed only while their feature is on here, so they cost the prompt nothing otherwise: A/B tests (signed
- * in, and the server has them; never in the claude.ai build).
+ * in, and the server has them; never in the claude.ai build), and the email studio (once the business has emails).
  */
-const GROUP_ON: Partial<Record<ToolGroupName, () => boolean>> = { ab: experimentsOnNow };
+const GROUP_ON: Partial<Record<ToolGroupName, () => boolean>> = { ab: experimentsOnNow, email: () => (getActiveProject()?.marketing.emails.length ?? 0) > 0 };
 export const groupOn = (g: ToolGroupName) => GROUP_ON[g]?.() ?? true;
 const uniq = <T>(list: T[]) => [...new Set(list)];
 

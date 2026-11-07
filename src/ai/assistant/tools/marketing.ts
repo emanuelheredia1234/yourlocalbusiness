@@ -20,6 +20,8 @@ import { showSignIn, useAuth } from '@/lib/cloud/auth';
 import { AD_CTAS, adById, adFinalUrl, adsCsv, adsText, applyAds, patchAd } from '@/lib/ads';
 import { applyEmailSequence, applyLeadMagnet, delayLabel, importSubscribers, parseSubscriberCsv, sequenceCsv, subscriberEmailOk, subscribersCsv, updateMarketingOf } from '@/lib/emailFunnel';
 import { loadBuyLinks } from '@/store/offers';
+import { isPlainShape, setDoc } from '@/lib/emailDoc';
+import { docFromPlain } from '../../../../shared/email/migrate.mjs';
 import { allLeads, deleteLead, leadDetails, leadEmail, leadOfProject, leadSourceLine, leadTime, leadsCsv, listLeads, seoPageIdOf, type Lead } from '@/lib/leads';
 import { PAGE_TYPES, PAGE_TYPE_LABEL, bookingLink, missingLink, pageTypeNoun, pageTypeOf, paymentLink, webLink } from '@/lib/pageTypes';
 import { listPublished, publishConfig, type ServerPage } from '@/lib/publish';
@@ -271,6 +273,10 @@ const editEmail = defineTool({
     if (!findEmail(a.id)) return missingEmail(a.id);
     if (!EMAIL_FIELDS.some((k) => a[k] !== undefined)) return 'Say what to change.';
     if (a.ctaUrl && !MERGE_LINK.test(a.ctaUrl) && !webLink(a.ctaUrl)) return 'ctaUrl must be a web address like https://…, {{lead_magnet_link}} or {{product_link}} ("" clears it).';
+    // a designed email (P5): its words live in its blocks, unless it's still the plain email's shape
+    const doc = findEmail(a.id)!.doc;
+    if (doc && (a.body !== undefined || a.ctaLabel !== undefined || a.ctaUrl !== undefined) && !isPlainShape(doc))
+      return `This email uses blocks: use edit_email_block. Its blocks: ${doc.blocks.map((b) => `${b.id} (${b.type})`).join(', ')}.`;
     return null;
   },
   run: (a, ctx) => {
@@ -285,6 +291,12 @@ const editEmail = defineTool({
       ...(a.delay ? { delay: a.delay } : {}),
     };
     updateMarketingOf(ctx.projectId, (m) => ({ emails: m.emails.map((x) => (x.id === e.id ? { ...x, ...patch } : x)) }));
+    // a designed email still in the plain shape: its blocks follow its new words (the theme stays)
+    const changedWords = a.body !== undefined || a.ctaLabel !== undefined || a.ctaUrl !== undefined;
+    if (e.doc && changedWords) {
+      const x = projectOf(ctx).marketing.emails.find((y) => y.id === e.id)!;
+      setDoc(ctx.projectId, e.id, docFromPlain(x, { theme: e.doc.theme }));
+    }
     const list = projectOf(ctx).marketing.emails;
     const i = list.findIndex((x) => x.id === e.id);
     const now = list[i];

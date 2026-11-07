@@ -65,6 +65,14 @@ export function setDoc(projectId: string, stepId: string, doc: EmailDoc): void {
   }));
 }
 
+/** The project's default theme, and every designed email's theme ("Use for all emails"). */
+export function updateEmailTheme(projectId: string, theme: ThemeRef): void {
+  useStore.getState().updateProject(projectId, (x) => ({
+    ...x,
+    marketing: { ...x.marketing, emailTheme: theme, emails: x.marketing.emails.map((e) => (e.doc ? { ...e, doc: { ...e.doc, theme } } : e)) },
+  }));
+}
+
 /** The email back to its plain words only (the doc is dropped; body, button and link stay as they were derived). */
 export function dropDoc(projectId: string, stepId: string): void {
   useStore.getState().updateProject(projectId, (x) => ({

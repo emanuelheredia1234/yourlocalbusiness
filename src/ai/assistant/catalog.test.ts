@@ -1,7 +1,7 @@
 // The tool list at two levels: the core and the groups a step needs in full (asked for with list_tools,
 // used this turn, the latest message's, the chat's last, the page's), within a character budget, and the
 // others by name only; a turn that asks for a group gets it in full in its next step.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import type { ChatMessage } from '@/store/assistant';
 import { chatOf, clearChat, useAssistant } from '@/store/assistant';
 import { setAssistantHost } from './host';
@@ -13,6 +13,8 @@ import { TOOL_GROUPS, registry } from './tools';
 import { runTool, seedWorkspace } from './testing';
 import { useAuth } from '@/lib/cloud/auth';
 import { useExperimentsConfig } from '@/lib/experiments/config';
+import { useStore } from '@/store/useStore';
+import { generateEmailSequence } from '@/ai/local/email';
 
 /** A/B tests on here (signed in, the server has them), or off. */
 const abOn = (on = true) => {
@@ -33,6 +35,13 @@ const ALL = Infinity;
 describe('the tool list', () => {
   it('has the core and the excluded tools in full, the page’s group in full, the others by name with how to get them', () => {
     abOn();
+    // the email studio's group is listed once the business has emails
+    const before = useStore.getState();
+    seedWorkspace();
+    useStore.setState((st) => ({ projects: st.projects.map((x) => ({ ...x, marketing: { ...x.marketing, emails: generateEmailSequence(x, null) } })) }));
+    onTestFinished(() => {
+      useStore.setState(before, true);
+    });
     const c = toolCatalog(TOOL_GROUPS, { route: 'marketing-ads', message: 'hello' });
     expect(c.groups).toEqual(['marketing']);
     expect(full(c.full, 'core') && full(c.full, 'excluded') && full(c.full, 'marketing')).toBe(true);

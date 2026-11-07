@@ -11,8 +11,7 @@ import { applyTemplate, TEMPLATES, templateFor, type TemplateId } from '../../..
 import { renderEmail, resolveTheme } from '../../../../../shared/email/render.mjs';
 import type { EmailStep, Project } from '@/lib/types';
 import { cn } from '@/lib/utils';
-import { plainOf, renderCtx, replaceDoc, setDoc } from '@/lib/emailDoc';
-import { updateMarketingOf } from '@/lib/emailFunnel';
+import { plainOf, renderCtx, replaceDoc, setDoc, updateEmailTheme } from '@/lib/emailDoc';
 import { useProjectOffers } from '@/store/offers';
 import { offerPrice } from '@/lib/offers';
 import { toast } from '@/store/ui';
@@ -40,10 +39,7 @@ export function ThemePicker({ project, step, doc }: { project: Project; step: Em
       }))
     )
       return;
-    updateMarketingOf(project.id, (m) => ({
-      emailTheme: current,
-      emails: m.emails.map((e) => (e.doc ? { ...e, doc: { ...e.doc, theme: current } } : e)),
-    }));
+    updateEmailTheme(project.id, current);
     toast({ kind: 'success', title: 'Theme set for all emails' });
   };
 
