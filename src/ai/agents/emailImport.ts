@@ -55,6 +55,12 @@ export function importAgentEmailHtml(raw: string, o: { target: 'email' | 'leadMa
       return { ok: false, reason: 'too_big', message: o.target === 'email' ? `The agent’s email is too big for one block (${kb(doc.body.innerHTML)} KB). Ask for a simpler email.` : 'The agent’s document is too big. Ask for a shorter one.' };
     throw e;
   }
+  // a lead magnet's PDF is the app's own design, with no pictures for now: say so (they may well be the owner's)
+  if (o.target === 'leadMagnet') {
+    let pictures = 0;
+    html = html.replace(/<img\b[^>]*>/g, () => (pictures++, ''));
+    if (pictures) notes.push('Left out the pictures: the app makes the PDF in your brand, without pictures for now.');
+  }
   // a token for an image the build didn't send: the picture goes
   let unknown = 0;
   html = html.replace(TOKEN_IMG, (whole, n: string) => (o.imageKeys.includes(`img-${Number(n)}`) ? whole : (unknown++, '')));
