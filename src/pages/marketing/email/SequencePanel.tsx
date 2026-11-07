@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Blocks, ChevronDown, Copy, Download, Eye, FlaskConical, PenLine, Type } from 'lucide-react';
 import { useExperimentsOn } from '@/lib/experiments/config';
 import { useProjectExperiments } from '@/store/experiments';
@@ -21,6 +21,7 @@ import { EmailStudio } from './studio/EmailStudio';
 import { EmailPreview } from './studio/EmailFrame';
 import { EmailAIActions, designInput } from './studio/AIActions';
 import { replaceDoc } from '@/lib/emailDoc';
+import { designAllNotice, designEmails } from './designAll';
 import { AgentButtons } from '@/components/agents/AgentButtons';
 import { AgentBuildList } from '@/components/agents/AgentBuildList';
 import { emailKindFor } from '@/ai/agents/builds';
@@ -43,9 +44,10 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
   const designAll = useAI(emailDesignTask);
   const [open, setOpen] = useState<string | null>(emails[0]?.id ?? null);
   const [preview, setPreview] = useState<Record<string, boolean>>({});
-  // Blocks (the studio) or Plain text, per email: an email without a design opens on its plain words
+  // Blocks (the studio) or Plain text, per email: the studio is the Edit view (opening it writes nothing: an email
+  // without a design shows the blocks made from its words until one is changed)
   const [mode, setMode] = useState<Record<string, 'blocks' | 'plain'>>({});
-  const modeOf = (e: EmailStep) => mode[e.id] ?? (e.doc ? 'blocks' : 'plain');
+  const modeOf = (e: EmailStep) => mode[e.id] ?? 'blocks';
   const patch = (id: string, p: Partial<EmailStep>) => updateMarketing({ emails: getActiveProject()!.marketing.emails.map((e) => (e.id === id ? { ...e, ...p } : e)) });
   const totalDays = emails.reduce((n, e) => n + delayToMs(e.delay), 0) / 86_400_000;
   const tokens = emailTokens(project);
@@ -71,22 +73,40 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
       setOpen(r[0]?.id ?? null);
     }
   };
-  // one AI request per email, one after another; the first failure stops it (nothing is retried)
+  // one AI request per email, one after another; the first failure or a Stop ends it (nothing is retried), and the
+  // next Design all carries on from that email
+  const [resumeAt, setResumeAt] = useState(0);
+  const stopped = useRef(false);
+  const stopDesignAll = () => {
+    stopped.current = true;
+    designAll.stop();
+  };
   const designEvery = async () => {
-    const n = getActiveProject()!.marketing.emails.length;
-    if (!(await confirmAction({ title: `Design all ${n} emails?`, body: `Uses AI credits for ${n} emails, one request each. Each email’s blocks are replaced; your words stay. Undo is on each email.`, confirmLabel: `Design all ${n}` }))) return;
-    for (let i = 0; i < n; i++) {
-      const p = getActiveProject();
-      const e = p?.id === project.id ? p.marketing.emails[i] : undefined;
-      if (!p || !e) return;
-      const doc = await designAll.run(designInput(e, p, i));
-      if (!doc) {
-        toast({ kind: 'error', title: `Stopped at email ${i + 1}`, body: 'Its design didn’t come back. The emails before it are designed; press Design all again or design this one on its own.' });
-        return;
-      }
-      replaceDoc(project.id, e.id, doc);
+    const total = getActiveProject()!.marketing.emails.length;
+    const from = resumeAt > 0 && resumeAt < total ? resumeAt : 0;
+    const n = total - from;
+    const what = from ? `the other ${n} emails (from email ${from + 1})` : `all ${n} emails`;
+    if (!(await confirmAction({ title: `Design ${what}?`, body: `Uses AI credits for ${n} emails, one request each. Each email’s blocks are replaced; your words stay. Undo is on each email.`, confirmLabel: from ? `Design ${n} more` : `Design all ${n}` }))) return;
+    stopped.current = false;
+    const outcome = await designEmails({
+      from,
+      count: () => getActiveProject()?.marketing.emails.length ?? 0,
+      emailAt: (i) => {
+        const p = getActiveProject();
+        const e = p?.id === project.id ? p.marketing.emails[i] : undefined;
+        return p && e ? { p, e } : undefined;
+      },
+      run: ({ p, e }, i) => designAll.run(designInput(e, p, i)),
+      write: ({ e }, doc) => replaceDoc(project.id, e.id, doc as Parameters<typeof replaceDoc>[2]),
+      stopped: () => stopped.current,
+    });
+    if (outcome.kind === 'stopped' || outcome.kind === 'failed') {
+      setResumeAt(outcome.at);
+      toast(designAllNotice(outcome));
+      return;
     }
-    toast({ kind: 'success', title: `Designed all ${n} emails`, body: 'Open an email to change its blocks, or Undo on it.' });
+    setResumeAt(0);
+    if (outcome.kind === 'done') toast({ kind: 'success', title: from ? `Designed the other ${n} emails` : `Designed all ${n} emails`, body: 'Open an email to change its blocks, or Undo on it.' });
   };
   const copyAll = async () => {
     const text = sequenceText(getActiveProject()!, tokens);
@@ -150,7 +170,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
       />
       <div className="flex flex-col gap-4">
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
-        <AIThinking running={designAll.running} stage={designAll.stage} chars={designAll.chars} onStop={designAll.stop} />
+        <AIThinking running={designAll.running} stage={designAll.stage} chars={designAll.chars} onStop={stopDesignAll} />
         {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
         <ol className="relative flex flex-col gap-3 before:absolute before:bottom-5 before:left-[39px] before:top-5 before:w-px before:bg-line max-sm:before:hidden">
           {emails.map((e, i) => {
