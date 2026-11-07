@@ -20,6 +20,9 @@
 //   is not started when less than its `minMs` (5 s by default) is left; it stays unclaimed for the next tick. A job
 //   still running when the budget is spent is reported as `running` and finishes in the background; its claim
 //   stays, so nothing starts it again in this period. ctx.deadline (ms) and ctx.signal let a job stop early.
+// - Jobs run in the order registered, except that `first: true` jobs run before the rest (a customer-facing job that
+//   a slow earlier job must not push out of its hour). A job's `leaveMs` is kept for the jobs after it: its
+//   ctx.deadline (and its minMs check) is the tick's deadline minus leaveMs; only the tick's own deadline aborts it.
 // - Without app_state (no SUPABASE_SECRET_KEY) the claims are kept in memory: enough for one dev server.
 // - The secret is compared in constant time and never logged. No CRON_SECRET → 503 NOT_SET_UP.
 // - Where the driver is: with CRON_SECRET, or on a Replit deployment (REPLIT_DEPLOYMENT), only the tick runs jobs.
@@ -76,6 +79,7 @@ function checkJob(job) {
   if (every === daily) throw new TypeError(`cron job ${job.name}: give everyMs or dailyAtUtc (one of them)`);
   if (every && !(Number.isInteger(job.everyMs) && job.everyMs >= 60_000)) throw new TypeError(`cron job ${job.name}: everyMs must be a whole number of ms, at least 60000`);
   if (daily && !HHMM.test(String(job.dailyAtUtc))) throw new TypeError(`cron job ${job.name}: dailyAtUtc must be "HH:MM" (UTC)`);
+  if (job.leaveMs !== undefined && !(Number.isInteger(job.leaveMs) && job.leaveMs >= 0)) throw new TypeError(`cron job ${job.name}: leaveMs must be a whole number of ms`);
 }
 
 /** In-memory claims with app_state's put contract (ifVersion null: create only). */
@@ -132,7 +136,11 @@ export function createCron({ env = process.env, storage = null, now = () => Date
   function register(job) {
     checkJob(job);
     if (jobs.some((j) => j.name === job.name)) throw new TypeError(`cron job ${job.name}: registered twice`);
-    jobs.push({ minMs: DEFAULT_MIN_MS, ...job });
+    const entry = { minMs: DEFAULT_MIN_MS, leaveMs: 0, ...job };
+    // `first` jobs go after the other `first` jobs and before everything else
+    const at = entry.first ? jobs.findIndex((j) => !j.first) : -1;
+    if (at === -1) jobs.push(entry);
+    else jobs.splice(at, 0, entry);
   }
 
   /** Record how a claimed run ended (best effort: the claim itself already stops a second run). */
@@ -149,7 +157,8 @@ export function createCron({ env = process.env, storage = null, now = () => Date
     const period = periodOf(job, t);
     const key = `cron:${job.name}`;
     const base = { name: job.name, period: period.id };
-    if (deadline - t < job.minMs) return { ...base, status: 'skipped', reason: 'budget' };
+    const own = deadline - job.leaveMs;
+    if (own - t < job.minMs) return { ...base, status: 'skipped', reason: 'budget' };
     let version;
     try {
       const existing = await claims.get(key);
@@ -162,7 +171,7 @@ export function createCron({ env = process.env, storage = null, now = () => Date
       return { ...base, status: 'skipped', reason: 'no_claim', error: errorCode(e) };
     }
     const controller = new AbortController();
-    const ctx = { now, deadline, signal: controller.signal, period: period.id, periodStartsAt: period.startsAt, tickStartedAt: tickStart, log };
+    const ctx = { now, deadline: own, signal: controller.signal, period: period.id, periodStartsAt: period.startsAt, tickStartedAt: tickStart, log };
     const started = now();
     const work = Promise.resolve()
       .then(() => job.run(ctx))

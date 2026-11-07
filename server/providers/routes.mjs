@@ -269,35 +269,42 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
    * too: its searches may be billed and its real cost never arrives (the router says so: cost(usd, { unsure })).
    */
   /**
-   * The signed-in user's plan for a request on the app's keys, or null when plans don't apply (not enforced, the
-   * owner, no billing). Replies 402/503 itself and answers false when the request can't run.
+   * The signed-in user's plan for a request on the app's keys: { plan } (null when plans don't apply: not enforced, the
+   * owner, no billing), or { refusal: { status, body } } (402/503) when the request can't run. Pure: never replies.
    */
-  async function planFor(req, res, who) {
-    if (!billing?.entitlement) return null;
+  async function planOf(who) {
+    if (!billing?.entitlement) return { plan: null };
     let ent;
     try {
       ent = who?.id ? await billing.entitlement(who.id, who) : null;
     } catch {
       // the plan can't be read: refuse only when plans are known to be on
-      if (billing.config?.().enforce !== true) return null;
-      reply(req, res, 503, { error: 'Couldn’t check your plan right now. Try again in a minute, or use your own AI keys.', code: 'UNAVAILABLE' });
-      return false;
+      if (billing.config?.().enforce !== true) return { plan: null };
+      return { refusal: { status: 503, body: { error: 'Couldn’t check your plan right now. Try again in a minute, or use your own AI keys.', code: 'UNAVAILABLE' } } };
     }
     if (!who?.id) {
       // signed-out visitors (sign-in not required): no plan, once plans are enforced
-      if (billing.config?.().enforce !== true) return null;
-      reply(req, res, 402, { error: 'This needs a plan. Choose one to keep going.', code: 'PLAN_REQUIRED', need: { feature: 'ai', tier: 'launch' }, upgrade: '#plans' });
-      return false;
+      if (billing.config?.().enforce !== true) return { plan: null };
+      return { refusal: { status: 402, body: { error: 'This needs a plan. Choose one to keep going.', code: 'PLAN_REQUIRED', need: { feature: 'ai', tier: 'launch' }, upgrade: '#plans' } } };
     }
-    if (ent.plan === 'legacy' || ent.plan === 'owner') return null;
+    if (ent.plan === 'legacy' || ent.plan === 'owner') return { plan: null };
     // before any plan: setup's one-off AI allowance (the brand board, strategy and first posts), metered below
-    if (!ent.active && ent.starter === true && ent.creditsPerMonth > 0) return ent;
+    if (!ent.active && ent.starter === true && ent.creditsPerMonth > 0) return { plan: ent };
     if (!ent.active) {
       const payment = ent.paused === 'payment';
-      reply(req, res, 402, payment ? { error: 'Your last payment didn’t go through. Update your card in Billing to keep going.', code: 'PAYMENT_REQUIRED', upgrade: '#plans' } : { error: 'This needs a plan. Choose one to keep going.', code: 'PLAN_REQUIRED', need: { feature: 'ai', tier: 'launch' }, upgrade: '#plans' });
+      return { refusal: { status: 402, body: payment ? { error: 'Your last payment didn’t go through. Update your card in Billing to keep going.', code: 'PAYMENT_REQUIRED', upgrade: '#plans' } : { error: 'This needs a plan. Choose one to keep going.', code: 'PLAN_REQUIRED', need: { feature: 'ai', tier: 'launch' }, upgrade: '#plans' } } };
+    }
+    return { plan: ent };
+  }
+
+  /** planOf, replying itself: the plan, null, or false after replying 402/503. */
+  async function planFor(req, res, who) {
+    const r = await planOf(who);
+    if (r.refusal) {
+      reply(req, res, r.refusal.status, r.refusal.body);
       return false;
     }
-    return ent;
+    return r.plan;
   }
 
   const creditsError = (ent, st) => {
@@ -324,17 +331,18 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     };
   };
 
-  async function gate(req, res, who, kind, { estimateUsd = 0, charge = false, strict = charge, ent: knownPlan } = {}) {
+  /** gate without a request: { refusal: { status, body } } instead of a reply (metered and m: who is counted). */
+  async function admit(who, kind, { estimateUsd = 0, charge = false, strict = charge, ent: knownPlan, metered = false, m = null } = {}) {
     const noop = { ownKeys: null, meter: null, done: async () => {}, later: null };
-    if (!isMetered(req, who)) return noop;
-    const m = meterId(req, who);
+    if (!metered) return noop;
     let ownKeys = await ownKeysOf(who);
     let own = router.ownRoute(kind, ownKeys).length > 0;
     let release = () => {};
     const day = utcDay();
     // own keys are never limited by a plan; on the app's keys the plan must be active and have credits left
-    const plan = own ? null : knownPlan !== undefined ? knownPlan : await planFor(req, res, who);
-    if (plan === false) return null;
+    const pr = own ? { plan: null } : knownPlan !== undefined ? { plan: knownPlan } : await planOf(who);
+    if (pr.refusal) return pr;
+    const plan = pr.plan;
     if (!own) {
       // reserve first (no await in between), then read: requests ahead of this one count against it
       release = limits.reserve(m.id, { usd: estimateUsd });
@@ -350,12 +358,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
       }
       if (!own && st.reached) {
         release();
-        if (st.unavailable) {
-          reply(req, res, 503, { error: 'Couldn’t check today’s AI usage right now (Supabase didn’t answer). Try again in a minute, or add your own API keys in Settings › AI keys.', code: 'LIMITS_UNAVAILABLE' });
-          return null;
-        }
-        reply(req, res, 429, dailyLimitError(st, who));
-        return null;
+        if (st.unavailable) return { refusal: { status: 503, body: { error: 'Couldn’t check today’s AI usage right now (Supabase didn’t answer). Try again in a minute, or add your own API keys in Settings › AI keys.', code: 'LIMITS_UNAVAILABLE' } } };
+        return { refusal: { status: 429, body: dailyLimitError(st, who) } };
       }
       // the month's AI credits (after the daily cap, which stops bursts)
       if (!own && plan && plan.creditsPerMonth != null && plan.creditWindow) {
@@ -367,12 +371,8 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
           own = router.ownRoute(kind, ownKeys).length > 0;
           release();
           if (!own) {
-            if (mst.unavailable) {
-              reply(req, res, 503, { error: 'Couldn’t check this month’s AI credits right now (Supabase didn’t answer). Try again in a minute, or add your own API keys in Settings › AI keys.', code: 'LIMITS_UNAVAILABLE' });
-              return null;
-            }
-            reply(req, res, 402, creditsError(plan, mst));
-            return null;
+            if (mst.unavailable) return { refusal: { status: 503, body: { error: 'Couldn’t check this month’s AI credits right now (Supabase didn’t answer). Try again in a minute, or add your own API keys in Settings › AI keys.', code: 'LIMITS_UNAVAILABLE' } } };
+            return { refusal: { status: 402, body: creditsError(plan, mst) } };
           }
           release = () => {};
         }
@@ -439,6 +439,46 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
         charged = real;
       }
       return d ? add(d).catch((e) => console.warn(`AI limits: ${e.message}`)) : Promise.resolve();
+    }
+  }
+
+  /**
+   * Before an AI request on a route: admit, replying the refusal itself (402/429/503) and answering null; else
+   * { ownKeys, meter, done, later }.
+   */
+  async function gate(req, res, who, kind, opts = {}) {
+    const g = await admit(who, kind, { ...opts, metered: isMetered(req, who), m: meterId(req, who) });
+    if (g.refusal) {
+      reply(req, res, g.refusal.status, g.refusal.body);
+      return null;
+    }
+    return g;
+  }
+
+  /**
+   * Writing for the server itself (the morning action), from the same gate as POST /api/ai/generate: own keys first,
+   * the plan, the daily limit's reservation, the month's credits, then the router; usage is recorded either way.
+   * who: { id, email, isAdmin }. → { text, meta, own }. A refusal throws a coded error (PLAN_REQUIRED,
+   * PAYMENT_REQUIRED, CREDITS_USED, DAILY_LIMIT, LIMITS_UNAVAILABLE, UNAVAILABLE) before any provider is asked; a
+   * provider failure throws its ProviderError (code, attempts). No request: callers make their own checks.
+   */
+  async function generateText(who, fn, prompt, { tier = 'default', effortCap = null, strictFallback = false, signal } = {}) {
+    if (fnById[fn]?.kind !== 'text') throw new ProviderError('BAD_REQUEST', 'Unknown AI function.', { status: 400 });
+    const text = typeof prompt === 'string' ? prompt.trim() : '';
+    if (!text || text.length > MAX_PROMPT_CHARS) throw new ProviderError('BAD_REQUEST', 'Bad prompt.', { status: 400 });
+    const metered = auth.enabled && !who?.isAdmin;
+    const g = await admit(who, 'text', { estimateUsd: router.estimate('text', { fn }), metered, m: { id: who?.id, email: who?.email || '' } });
+    if (g.refusal) {
+      const e = new Error(g.refusal.body?.error || 'Refused.');
+      e.code = g.refusal.body?.code || 'UNAVAILABLE';
+      e.status = g.refusal.status;
+      throw e;
+    }
+    try {
+      const out = await withFreshKeys(() => router.text(fn, { prompt: text, tier: tier === 'quick' ? 'quick' : 'default', signal, userId: who?.id ?? null, ownKeys: g.ownKeys, meter: g.meter, effortCap, strictFallback }));
+      return { text: out.text, meta: out.meta, own: !!g.own };
+    } finally {
+      await g.done();
     }
   }
 
@@ -1181,6 +1221,7 @@ export function createAIRoutes({ send, readJson, corsHeaders, rateLimited, dataD
     store,
     router,
     usage,
+    generateText,
     /** The plans (integrations.billing), once the integrations exist. */
     setBilling(b) {
       billing = b ?? null;

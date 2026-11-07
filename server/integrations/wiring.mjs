@@ -32,6 +32,8 @@
 //   /api/offers…  /api/payments/whop…  /api/webhooks/whop/<id>   server/offers/index.mjs (offers and buy links, the
 //                                                          users' own Whop accounts; /b/<id> through pages.mjs with
 //                                                          integrations.offers.buy)
+//   /api/morning/…                                         server/morning/index.mjs (the morning action; its hourly job
+//                                                          runs first in each tick; aiText: the AI routes' generateText)
 //
 // Each module's factory gets the same deps: { auth, storage (appState), db (server/integrations/db.mjs),
 // connections, treg, omnisend, send, readJson, readRaw, rateLimited, limit, corsHeaders, sameOrigin,
@@ -59,6 +61,7 @@ import { createSitemapRoutes } from '../seo/sitemap.mjs';
 import { createBillingRoutes } from '../billing/routes.mjs';
 import { createAdsRoutes } from '../ads/routes.mjs';
 import { createOffers } from '../offers/index.mjs';
+import { createMorning } from '../morning/index.mjs';
 import { createTreg } from '../treg.mjs';
 import { dbFromEnv, INTEGRATIONS_MIGRATION } from './db.mjs';
 import { createBucketLimiter, readRaw, redactPath, safeLog } from './common.mjs';
@@ -100,6 +103,7 @@ export const DEFAULT_FACTORIES = Object.freeze({
   billing: createBillingRoutes,
   ads: createAdsRoutes,
   offers: createOffers,
+  morning: createMorning,
   treg: createTreg,
 });
 
@@ -133,12 +137,15 @@ export function moduleFor(pathname) {
   if (under(ROUTE_PREFIXES.billing) || under(ROUTE_PREFIXES.stripeWebhook)) return 'billing';
   if (under(ROUTE_PREFIXES.ads)) return 'ads';
   if (under(ROUTE_PREFIXES.offers) || under(ROUTE_PREFIXES.whop) || under(ROUTE_PREFIXES.whopWebhook)) return 'offers';
+  if (under(ROUTE_PREFIXES.morning)) return 'morning';
   return null;
 }
 
 /**
  * env, auth, appState, omnisend, send, readJson, rateLimited, corsHeaders, sameOrigin(req), clientKey(req): the
- * server's own (ai-server.mjs). fetch, now, log, db, factories: for tests.
+ * server's own (ai-server.mjs). aiText(who, fn, prompt, opts): server-side writing through the AI routes' gate (the
+ * morning action; null: rules only); aiPowered(): some ready key powers Morning action. fetch, now, log, db,
+ * factories: for tests.
  */
 export function createIntegrations({
   env = process.env,
@@ -156,6 +163,8 @@ export function createIntegrations({
   log = console,
   db = null,
   factories = {},
+  aiText = null,
+  aiPowered = () => false,
 } = {}) {
   const make = { ...DEFAULT_FACTORIES, ...factories };
   const database = db ?? dbFromEnv(env, fetch);
@@ -184,6 +193,8 @@ export function createIntegrations({
     billing: make.billing(deps),
     ads: make.ads(deps),
     offers: make.offers(deps),
+    // last: its hourly job runs after the quick sweeps in each tick
+    morning: make.morning({ ...deps, aiText, aiPowered }),
   };
   adsModule = modules.ads;
   billingModule = modules.billing;
@@ -212,6 +223,8 @@ export function createIntegrations({
     /** offers and buy links: .buy for pages.mjs (/b/<id>), .config() for /api/config */
     offers: modules.offers,
     offersConfig: () => modules.offers.config?.() ?? { enabled: false, whop: { sandbox: false, production: false } },
+    /** the morning action, for /api/config */
+    morningConfig: () => modules.morning.config?.() ?? { enabled: false },
     /** for tests and the startup notes */
     connectionsProvider: selected.provider,
     connectionsSelected: selected,
@@ -332,7 +345,8 @@ export function createIntegrations({
       if (!has(env, 'CUSTOMER_TAG_SECRET')) lines.push('Usage tracking per customer needs the CUSTOMER_TAG_SECRET Secret (32+ random bytes; never change it).');
       lines.push(...billing.notes());
       lines.push(...(modules.offers.notes?.() ?? []));
-      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql, supabase/migrations/20261108000000_ads_launch.sql, supabase/migrations/20261110000000_billing.sql and supabase/migrations/20261111000000_video_week.sql in Supabase.`);
+      lines.push(...(modules.morning.notes?.() ?? []));
+      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql, supabase/migrations/20261108000000_ads_launch.sql, supabase/migrations/20261110000000_billing.sql, supabase/migrations/20261111000000_video_week.sql and supabase/migrations/20261116000000_morning_action.sql in Supabase.`);
       return lines;
     },
   };

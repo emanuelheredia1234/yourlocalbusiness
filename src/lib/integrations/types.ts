@@ -2,6 +2,9 @@
 // (the app's side; the server mirrors them as JSDoc in server/integrations/contracts.mjs). Everything here is
 // what the browser may see: no connection ids, no tokens, no other customer's data.
 
+import type { ActionKind } from '@/lib/strategyTypes';
+import type { CodeKind, LeadMagnetType, PageType, PostPlatform } from '@/lib/types';
+
 /** The accounts a user can connect: social networks through Upload-Post (each business its own), ad accounts through Zernio (phase 2 ones show "Coming soon"). */
 export type ConnectPlatform =
   | 'facebook'
@@ -401,7 +404,9 @@ export type ApiErrorCode =
   /** a money change read back and not there: definite (the next press is a new request) */
   | 'NOT_APPLIED'
   /** cancelling or keeping the plan happens in the Customer Portal for now (the P1c migration isn't run) */
-  | 'USE_PORTAL';
+  | 'USE_PORTAL'
+  /** the morning action asked for in the late window (02:00–05:00 local): { nextAt } */
+  | 'NOT_DUE';
 
 export interface ApiError {
   error: string;
@@ -592,4 +597,98 @@ export interface CancelSurveysResponse {
   partial?: boolean;
   recent: { reason: CancelReason; comment: string | null; source: 'app' | 'portal'; outcome: 'cancelled' | 'kept' | 'switched'; offer: CancelOffer | null; tier: string | null; at: string; customerTag: string | null }[];
   trials: { trialing: number; endedEarly: number; duplicates: number; list: { customerTag: string; tier: string | null; startedAt: string; trialEndsAt: string | null; outcome: string }[] };
+}
+
+// ───────────── the morning action (P4) ─────────────
+// One "action for today" per business (GET/POST /api/morning/today, server/morning/index.mjs). Rendered as plain text.
+
+/** The 21 Strategy action kinds plus the morning action's own four (shared/morning.json `kinds`). */
+export type MorningKind = ActionKind | 'leads' | 'analytics' | 'strategy' | 'assistant';
+
+/** Where "Do it" goes: a kind from a fixed list plus a few checked fields, never a URL. */
+export interface MorningTarget {
+  pageType?: PageType;
+  topic?: string;
+  codeKind?: CodeKind;
+  leadMagnetType?: LeadMagnetType;
+  platform?: PostPlatform;
+  planActionId?: string;
+  postId?: string;
+  /** assistant: the message put in the chat's box (nothing is sent until the owner presses Send) */
+  prompt?: string;
+}
+
+export interface MorningCandidate {
+  /** what "the same idea" means for repeats and Not useful */
+  key: string;
+  kind: MorningKind;
+  title: string;
+  why: string;
+  steps?: string[];
+  target: MorningTarget;
+  from: 'ai' | 'plan' | 'rule';
+}
+
+export type MorningReason = 'doesnt_fit' | 'already_done' | 'no_time' | 'unclear' | 'other';
+
+/** A Not useful answer about candidate `i`. */
+export interface MorningFeedback {
+  i: number;
+  reason?: MorningReason;
+  note?: string;
+  at: string;
+}
+
+export type MorningState = 'generating' | 'ready' | 'done' | 'dismissed' | 'failed';
+export type MorningFallback = 'no_ai' | 'own_key' | 'credits' | 'daily_limit' | 'invalid_output' | 'refused' | 'ai_error' | 'fresh';
+
+export interface MorningAction {
+  id: string;
+  projectId: string;
+  /** the business's action day, YYYY-MM-DD */
+  localDate: string;
+  timeZone: string;
+  state: MorningState;
+  source: 'cron' | 'visit' | 'manual';
+  engine: 'ai' | 'rules' | null;
+  /** the candidate shown (null while generating or failed) */
+  chosen: number | null;
+  candidates: MorningCandidate[];
+  feedback: MorningFeedback[];
+  fallback: MorningFallback | null;
+  /** whole AI credits on the app's keys (null: own key, rules, or nothing spent) */
+  credits: number | null;
+  ownKey: boolean;
+  attempts?: number;
+  errorCode?: string | null;
+  generatedAt: string | null;
+  doneAt: string | null;
+}
+
+/** GET /api/morning/today: today's state (the read never generates). */
+export interface MorningToday {
+  actionDay: string;
+  timeZone: string;
+  action: MorningAction | null;
+  /** no action yet for the action day, not late, set up and on a plan: the first visit makes it */
+  dueNow: boolean;
+  /** 02:00–05:00 local: nothing new until 5 am */
+  late: boolean;
+  nextAt: string;
+  attemptsLeft: number;
+  plan: 'active' | 'paused';
+  /** the 402 code P1 would answer while paused */
+  planCode?: string;
+}
+
+export type MorningVerdict = 'done' | 'undo' | 'not_useful';
+
+/** GET /api/morning/owner (the owner only). */
+export interface MorningOwner {
+  /** the latest alert, and the latest of each kind in the last 7 days (kinds only, never a provider's words) */
+  alert: { kind: string; at: string; n?: number; kinds?: Record<string, { at: string; n?: number }> } | null;
+  last: { at?: string; claimed?: number; ai?: number; rules?: number; failed?: number; skipped?: number; exists?: number; late?: number; backlog?: number; notSetUp?: number } | null;
+  powered: boolean;
+  perTick: number;
+  concurrency: number;
 }

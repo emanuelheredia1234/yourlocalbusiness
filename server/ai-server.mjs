@@ -44,6 +44,8 @@
 // Offers and buy links /b/<id> with the customers' own Whop accounts (server/offers/index.mjs; they need
 //   supabase/migrations/20261113000000_offers.sql): PAYMENT_KEYS_SECRET (seals their Whop keys), APP_PUBLIC_URL,
 //   OFFERS_PROVIDER (off), WHOP_ENABLED (off), OFFER_CLICKS_PER_IP_PER_HOUR (60), OFFER_CLICKS_PER_OFFER_PER_HOUR (3000).
+// Morning action (server/morning/index.mjs; it needs supabase/migrations/20261116000000_morning_action.sql): plain env
+//   MORNING_ACTIONS (off), MORNING_PER_TICK (24 businesses per hourly tick), MORNING_CONCURRENCY (6 at a time).
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -224,6 +226,9 @@ const integrations = createIntegrations({
   corsHeaders,
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
   clientKey: (req) => pages.visitor(req),
+  // the morning action writes through the same gate and metering as /api/ai/generate
+  aiText: (...a) => ai.generateText(...a),
+  aiPowered: () => ai.store.route('morning').some((id) => ai.store.ready(id)),
 });
 // periodic jobs (server/cron): Supabase pg_cron calls POST /api/cron/tick hourly with "Authorization: Bearer
 // <CRON_SECRET>"; each job runs once per period behind an app_state claim. Local dev (no CRON_SECRET, not a Replit
@@ -314,7 +319,7 @@ function route(req, res, url) {
     // what the browser needs to sign in (the publishable key is meant to be public), and whether it can publish pages
     // billing: whether plans are set up and enforced (no key, no ids)
     // offers: whether buy links and Whop are on (booleans only)
-    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config(), billing: integrations.billing.config(), offers: integrations.offersConfig() }, corsHeaders(req));
+    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config(), billing: integrations.billing.config(), offers: integrations.offersConfig(), morning: integrations.morningConfig() }, corsHeaders(req));
   }
   if (url.pathname === '/api/health' && req.method === 'GET') {
     // `ok`: the server is up; `ai` says which keys are ready and what powers each function (signed-in users only, with accounts on)

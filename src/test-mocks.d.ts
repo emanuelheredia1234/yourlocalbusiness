@@ -17,3 +17,13 @@ declare module '*/server/ads/build.mjs' {
   /** the fewest days a Meta daily budget runs more than 24 hours from this start (src/lib/ads/launchFormat.ts metaMinDays) */
   export function metaMinDays(o: { startDay: string; time?: string | null; asap?: boolean; tz: string; builtAt: number }): number;
 }
+declare module '*/server/morning/rules.mjs' {
+  /** the server's candidate key (src/lib/morning/contract.ts morningKey makes the same) */
+  export function keyOf(c: { kind: string; title?: string; target?: Record<string, unknown> }, facts: unknown): string;
+}
+declare module '*/server/localTime.mjs' {
+  export function actionDayOf(now: number, tz: string): string;
+  export function nextMorningAt(now: number, tz: string): number;
+  export function isLate(now: number, tz: string): boolean;
+  export function localToUtc(ymd: string, hh: number, mm: number, tz: string): number;
+}

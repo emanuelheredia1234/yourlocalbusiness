@@ -16,6 +16,7 @@ import { download } from '@/components/ui/download';
 import { AdsLimitsSection } from './AdsLimitsSection';
 import { PlansAdminSection } from './PlansAdminSection';
 import { CancelSurveysSection } from './CancelSurveysSection';
+import { MorningSection } from './MorningSection';
 import { OWNER_SECTION_ID, scrollToOwnerSection, takeOwnerSection } from './ownerLinks';
 import { Badge, Callout, Empty, Field, InfoTip, Modal, MoreMenu, PageHeader, Select, SettingsSection, Skeleton, Spinner, StatStrip, confirmAction, type MenuEntry } from '@/components/ui/primitives';
 
@@ -304,6 +305,7 @@ export function BillingView({ data, report, onEdit, onChanged }: { data: Data; r
       <div id={OWNER_SECTION_ID['ad-limits']} className="scroll-mt-4">
         <AdsLimitsSection />
       </div>
+      <MorningSection />
     </div>
   );
 }

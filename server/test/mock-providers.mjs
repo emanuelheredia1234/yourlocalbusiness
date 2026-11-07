@@ -115,11 +115,37 @@ export function mockAssistantReply(prompt) {
   return step(`QA assistant: I read your message (${message.length} characters). Try “calendar”, “qa-confirm” or “qa-delete”.`);
 }
 
+// ───────────── the morning action (server/morning/prompt.mjs) ─────────────
+// Its prompts start with this marker. The answer is 3 valid candidates (the first takes the first open plan action
+// in the prompt's DATA, with its kind), unless a QA marker in the DATA (the owner's Strategy notes or brand name)
+// asks for a broken one:
+//   qa-morning-invalid  not JSON            qa-morning-badkind  every kind unknown
+//   qa-morning-url      a link in a title   qa-morning-two      2 valid + 1 with a one-word title
+//   qa-morning-percent  an invented percentage in the first candidate
+export const MORNING_MARKER = '[ylb-morning v1]';
+
+export function mockMorningReply(sent) {
+  if (sent.includes('qa-morning-invalid')) return 'Sorry, here are some ideas: post more, reply to people.';
+  const plan = /\\?"id\\?":\\?"(a_[A-Za-z0-9_-]+)\\?",\\?"kind\\?":\\?"([a-z_0-9]+)\\?"/.exec(sent);
+  const first = plan
+    ? { kind: plan[2], title: 'Do this week’s plan step first thing', why: 'It is the next open step of your plan for this week, and it moves the rest of the plan forward.', steps: ['Open your plan', 'Do the step', 'Tick it off'], target: { planActionId: plan[1] } }
+    : { kind: 'write_post', title: 'Share a quick tip your customers ask about', why: 'Tips get saved and shared, and they show you know your craft without a hard sell.', steps: ['Pick one question you hear often', 'Answer it in three short lines'], target: { topic: 'A quick tip customers ask about' } };
+  const second = { kind: 'assistant', title: 'Ask a happy customer for a short review', why: 'A few kind words from a real customer help new people trust you, and asking takes two minutes.', target: { prompt: 'Help me ask a happy customer for a short review.' } };
+  const third = { kind: 'offline', title: 'Reply to every comment from this week', why: 'Quick replies make people feel heard, and the networks show active accounts to more people.' };
+  let list = [first, second, third];
+  if (sent.includes('qa-morning-badkind')) list = list.map((c) => ({ ...c, kind: 'launch_rocket' }));
+  if (sent.includes('qa-morning-url')) list = [{ ...first, title: 'Visit https://example.com/promo and copy it' }, second, third];
+  if (sent.includes('qa-morning-two')) list = [first, second, { ...third, title: 'Go' }];
+  if (sent.includes('qa-morning-percent')) list = [{ ...first, why: 'Businesses that do this every week see 37% more sales, so it is worth the time today.' }, second, third];
+  return JSON.stringify({ candidates: list });
+}
+
 /** What a text model answers: a scripted step for an assistant prompt, a scripted QA answer for a marker, else the fixed answer. */
 function answerFor(body) {
   const prompt = assistantPromptIn(body);
   if (prompt) return mockAssistantReply(prompt);
   const sent = JSON.stringify(body ?? '');
+  if (sent.includes(MORNING_MARKER)) return mockMorningReply(sent);
   return SCRIPTED.find(([marker]) => sent.includes(marker))?.[1] ?? ANSWER;
 }
 
