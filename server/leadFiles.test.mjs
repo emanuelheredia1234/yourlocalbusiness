@@ -305,6 +305,40 @@ describe('email images (P5)', () => {
   });
 });
 
+describe('listing images (P7)', () => {
+  const put = (who, q = '') => request(app.base, `/api/public-images${q}`, { method: 'POST', headers: { authorization: `Bearer ${who.token}`, 'content-type': 'application/octet-stream' }, body: PNG }).then((r) => ({ ...r, json: () => JSON.parse(r.text) }));
+  const list = async (who) => (await api('/api/public-images', { who })).json();
+  const remove = (who, name) => api(`/api/public-images/${name}`, { who, method: 'DELETE' });
+
+  it('use=listing names the image l-<random> and the list says listing', async () => {
+    const r = await put(alice, '?use=listing');
+    expect(r.status).toBe(200);
+    expect(r.json().path).toMatch(new RegExp(`^${alice.user.id}/l-[A-Za-z0-9_-]{22}\\.png$`));
+    expect((await list(alice)).images.find((i) => i.path === r.json().path)).toMatchObject({ use: 'listing' });
+    expect((await remove(alice, r.json().path.split('/')[1])).status).toBe(200);
+  });
+
+  it('an image a public listing shows is IN_USE until the listing is unlisted', async () => {
+    const img = (await put(alice, '?use=listing')).json();
+    const gallery = (await put(alice, '?use=listing')).json();
+    const row = { id: crypto.randomUUID(), user_id: alice.user.id, slug: 'in-use-abcdef', status: 'live', cover_path: img.path, gallery_paths: [gallery.path] };
+    supa.tables.set('public_listings', [row]);
+    try {
+      for (const p of [img.path, gallery.path]) {
+        const r = await remove(alice, p.split('/')[1]);
+        expect([r.status, r.json().code]).toEqual([409, 'IN_USE']);
+        expect(r.json().error).toBe('This image is on a public listing. Change the listing’s images first.');
+      }
+      row.status = 'unlisted';
+      expect((await remove(alice, img.path.split('/')[1])).status).toBe(200);
+      expect(supa.objects.has(`public-files/${img.path}`)).toBe(false);
+    } finally {
+      supa.tables.set('public_listings', []);
+      await remove(alice, gallery.path.split('/')[1]);
+    }
+  });
+});
+
 describe('/m/<id> for visitors', () => {
   let gated;
   let open;
