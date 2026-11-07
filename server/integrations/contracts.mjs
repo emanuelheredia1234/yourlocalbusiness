@@ -178,6 +178,8 @@ export const ROUTE_PREFIXES = Object.freeze({
   morning: '/api/morning/',
   // A/B tests and Trial Reels' eligibility (server/experiments/index.mjs)
   experiments: '/api/experiments',
+  // the public marketplace's seller and owner routes (server/market/index.mjs; the pages are /market on the app host)
+  market: '/api/market',
 });
 
 /** Rate-limit buckets (per user unless noted), as `${bucket}:user:<id>` keys for rateLimited(key, factor). */
@@ -214,4 +216,8 @@ export const RATE_BUCKETS = Object.freeze({
   morningFeedback: 'morning-feedback', // 60 per hour (Done, Undo, Not useful)
   experiments: 'experiments', // 60 per hour (create, change, start, refresh, stop, use the winner, delete)
   experimentsRead: 'experiments-read', // 120 per minute (the list, one test, usage, Trial Reels eligibility)
+  marketWrite: 'market-write', // 30 per hour (put a listing on the web, update it, take it off)
+  marketRead: 'market-read', // 120 per minute (the seller's public listings)
+  marketReport: 'market-report', // 10 per hour (a signed-in report of a public listing)
+  marketAdmin: 'market-admin', // 120 per hour (the owner's moderation and sitemap submit)
 });
