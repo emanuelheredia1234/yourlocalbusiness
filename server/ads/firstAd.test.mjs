@@ -240,7 +240,7 @@ describe('the answer can’t be saved', () => {
     expect(r.body).toMatchObject({ code: 'UNAVAILABLE', error: 'Your answer couldn’t be saved just now. Try again later.' });
     expect(JSON.stringify(r.body)).not.toMatch(/database|PGRST|refused that value|migration/i);
     const line = t.lines.find((l) => l.includes('ads_policy_confirm_not_saved'));
-    expect(JSON.parse(line)).toEqual({ event: 'ads_policy_confirm_not_saved', code: 'BAD_REQUEST', pg: 'PGRST204', hint: 'run supabase/migrations/20261116000000_ad_policy_confirmed.sql' });
+    expect(JSON.parse(line)).toEqual({ event: 'ads_policy_confirm_not_saved', code: 'BAD_REQUEST', pg: 'PGRST204', hint: 'run supabase/migrations/20261116100000_ad_policy_confirmed.sql' });
     expect((await choiceRow()).policy_confirmed_for ?? null).toBeNull();
   });
 

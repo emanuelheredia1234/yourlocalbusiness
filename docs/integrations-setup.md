@@ -113,7 +113,7 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    Customer Portal instead.
 9. `supabase/migrations/20261115000000_ad_job_error_detail.sql` (§3c): `ad_jobs.error_detail`, why Zernio refused a
    launch or a change. Run it after `20261108000000_ads_launch.sql`.
-10. `supabase/migrations/20261116000000_ad_policy_confirmed.sql` (§3c "Before your first ad"):
+10. `supabase/migrations/20261116100000_ad_policy_confirmed.sql` (§3c "Before your first ad"):
    `ad_account_choices.policy_confirmed_for` and `policy_confirmed_at`, the customer's answer that a business admin
    accepted Meta's non-discrimination policy for the chosen ad account. Run it after `20261108000000_ads_launch.sql`.
    Until it is run, the policy shows as not confirmed and ticking the box says it couldn't be saved (log:
@@ -373,7 +373,7 @@ Taiwan, Thailand: Zernio's `verified_advertiser_required`; customers are told to
 
 **Turn it on**
 1. Run `supabase/migrations/20261108000000_ads_launch.sql`, `20261115000000_ad_job_error_detail.sql` and
-   `20261116000000_ad_policy_confirmed.sql` (§2).
+   `20261116100000_ad_policy_confirmed.sql` (§2).
 2. Zernio: the **ads add-on** must be on your Zernio plan (`ads_addon_required` otherwise). Managed ads cost $0.01
    per active ad a month after the first 500 free, and Zernio needs a payment method on your team past 500 live ads
    (`ads_allowance_exceeded`). These calls show in the ledger as vendor `zernio` with no cost: check Zernio's invoice.

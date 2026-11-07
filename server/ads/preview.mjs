@@ -284,7 +284,7 @@ export async function setupChecks(ctx, zid, platform, account, lctx, seen = {}) 
 
 /**
  * The customer's own answer that a business admin accepted Meta's non-discrimination policy, for this ad account
- * (ad_account_choices.policy_confirmed_for, 20261116000000_ad_policy_confirmed.sql). Before that migration is run
+ * (ad_account_choices.policy_confirmed_for, 20261116100000_ad_policy_confirmed.sql). Before that migration is run
  * the column isn't there and the answer reads as not given.
  */
 export const policyConfirmedFor = (row, adAccountId) => !!row && !!adAccountId && row.policy_confirmed_for === adAccountId;

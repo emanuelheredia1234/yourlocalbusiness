@@ -188,7 +188,7 @@ export async function setPolicyConfirmed(ctx, who, body) {
     // the owner's to fix, never shown to the customer: the migration is blamed only for a column that isn't there
     // (PGRST204 on a write, 42703); anything else (a check refusing the value, 23514) is logged as itself
     const noColumn = e.pg === 'PGRST204' || e.pg === '42703';
-    safeLog('ads_policy_confirm_not_saved', { code: e.code, pg: e.pg ?? null, ...(noColumn ? { hint: 'run supabase/migrations/20261116000000_ad_policy_confirmed.sql' } : {}) }, ctx.log);
+    safeLog('ads_policy_confirm_not_saved', { code: e.code, pg: e.pg ?? null, ...(noColumn ? { hint: 'run supabase/migrations/20261116100000_ad_policy_confirmed.sql' } : {}) }, ctx.log);
     throw fail(503, 'UNAVAILABLE', 'Your answer couldn’t be saved just now. Try again later.');
   }
   if (!got?.length) throw fail(409, 'ACCOUNT_CHANGED', messageFor('ACCOUNT_CHANGED'));
