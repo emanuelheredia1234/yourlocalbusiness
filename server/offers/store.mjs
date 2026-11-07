@@ -120,6 +120,7 @@ export function describeSale(r) {
     id: r.id,
     offerId: r.offer_id ?? null,
     projectId: r.project_id,
+    provider: r.provider ?? null,
     status: r.status,
     amountMinor: Number(r.amount_minor) || 0,
     refundedMinor: Number(r.refunded_minor) || 0,

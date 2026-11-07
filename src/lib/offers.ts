@@ -1,7 +1,8 @@
 // Offers and buy links: the client for server/offers/index.mjs. One offer is one thing a business sells, with one
-// permanent buy link https://<app>/b/<id>; the checkout behind it is the owner's own Whop account (sales come back
-// through Whop's webhook) or their own checkout link (only its clicks show). The app never takes payments itself
-// and never holds a checkout address in a page: pages hold {{buy:<id>}} (src/lib/buyLinks.ts). Needs the app's
+// permanent buy link https://<app>/b/<id>; the checkout behind it is the owner's own Stripe account (Stripe Checkout
+// on their account, P6: src/lib/stripeConnect.ts), their own Whop account (sales come back through Whop's webhook)
+// or their own checkout link (only its clicks show). The money goes to the owner's own account, never the app's,
+// and the app never holds a checkout address in a page: pages hold {{buy:<id>}} (src/lib/buyLinks.ts). Needs the app's
 // server with accounts, so none of this is offered in the claude.ai build.
 
 import { serverFetch } from '@/ai/claude';
@@ -33,6 +34,10 @@ export interface Offer {
   checkoutHost: string;
   /** the owner's own outside link (external offers only) */
   url?: string;
+  /** Stripe: how the buyer gets it (nothing to download: the seller delivers; or one of the seller's product files) */
+  delivery?: OfferDelivery;
+  /** Stripe: the seller still has Stripe setup to finish, so its buy link doesn't sell yet */
+  problem?: 'stripe_setup';
   clicks: number;
   lastClickAt: string | null;
   /** live sales */
@@ -41,6 +46,11 @@ export interface Offer {
   updatedAt: string | null;
   /** https://<app>/b/<id> */
   link: string;
+}
+
+export interface OfferDelivery {
+  kind: 'none' | 'file' | 'provider';
+  fileId?: string;
 }
 
 export type SaleStatus = 'pending' | 'paid' | 'failed' | 'refunded' | 'partially_refunded' | 'disputed';
@@ -58,6 +68,16 @@ export interface Sale {
   buyerEmail: string | null;
   paidAt: string | null;
   createdAt: string | null;
+  /** who took the payment (older servers don't say: before Stripe, every recorded sale was Whop's) */
+  provider?: OfferProvider | null;
+  /** Stripe: our fee on it (minor units, null when none was taken), its percentage, how much of it went back */
+  feeMinor?: number | null;
+  feePct?: number | null;
+  feeReturnedMinor?: number;
+  /** Stripe: a dispute's state as Stripe says it (needs_response, under_review, won, lost…) */
+  disputeStatus?: string | null;
+  /** Stripe: how many times its file was downloaded */
+  downloads?: number;
 }
 
 export interface SalesSummary {
@@ -157,6 +177,9 @@ const MESSAGES: Record<string, string> = {
   NOT_SELLABLE: 'This offer can’t sell again as it is. Attach another plan.',
 };
 
+/** Codes whose server sentence is already ours and says what to do next (Stripe's: never Stripe's own text). */
+const SERVER_WORDS = new Set(['OFFERS_LIVE', 'TOO_MANY', 'BAD_REQUEST', 'NOT_FOUND', 'STRIPE_NOT_CONNECTED', 'STRIPE_SETUP', 'STRIPE_REJECTED', 'STRIPE_REFUSED', 'TAX_NOT_READY', 'PENDING', 'CONFIRM', 'BAD_COUNTRY', 'TERMS_REQUIRED', 'BAD_PRICE', 'BAD_DELIVERY', 'NO_FILE', 'NOT_PAID', 'UNAVAILABLE', 'ACCOUNT_DELETING', 'IN_USE']);
+
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 const strOrNull = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
@@ -183,6 +206,8 @@ export function toOffer(raw: unknown): Offer | null {
     connectionId: provider === 'whop' && str(r.connectionId) ? str(r.connectionId) : null,
     checkoutHost: str(r.checkoutHost),
     ...(provider === 'external' ? { url: /^https:\/\//i.test(str(r.url)) ? str(r.url) : '' } : {}),
+    ...(provider === 'stripe' ? { delivery: toDelivery(r.delivery) } : {}),
+    ...(provider === 'stripe' && r.problem === 'stripe_setup' ? { problem: 'stripe_setup' as const } : {}),
     clicks: num(r.clicks),
     lastClickAt: strOrNull(r.lastClickAt),
     sales: { count: num(sales.count), last: strOrNull(sales.last) },
@@ -192,9 +217,18 @@ export function toOffer(raw: unknown): Offer | null {
   };
 }
 
+const FILE_ID = /^[A-Za-z0-9_-]{22}$/;
+function toDelivery(raw: unknown): OfferDelivery {
+  const d = (raw ?? {}) as Record<string, unknown>;
+  if (d.kind === 'file' && FILE_ID.test(str(d.fileId))) return { kind: 'file', fileId: str(d.fileId) };
+  return { kind: d.kind === 'provider' ? 'provider' : 'none' };
+}
+const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : null);
+
 export function toSale(raw: unknown): Sale | null {
   const r = raw as Record<string, unknown> | null;
   if (!r || typeof r !== 'object' || !str(r.id)) return null;
+  const stripe = r.provider === 'stripe' || 'feeMinor' in r;
   return {
     id: str(r.id),
     offerId: OFFER_ID.test(str(r.offerId)) ? str(r.offerId) : null,
@@ -207,6 +241,16 @@ export function toSale(raw: unknown): Sale | null {
     buyerEmail: strOrNull(r.buyerEmail),
     paidAt: strOrNull(r.paidAt),
     createdAt: strOrNull(r.createdAt),
+    provider: r.provider === 'whop' || r.provider === 'external' || r.provider === 'stripe' ? r.provider : stripe ? 'stripe' : null,
+    ...(stripe
+      ? {
+          feeMinor: numOrNull(r.feeMinor),
+          feePct: numOrNull(r.feePct),
+          feeReturnedMinor: num(r.feeReturnedMinor),
+          disputeStatus: /^[a-z_]{1,40}$/.test(str(r.disputeStatus)) ? str(r.disputeStatus) : null,
+          downloads: num(r.downloads),
+        }
+      : {}),
   };
 }
 
@@ -230,7 +274,7 @@ export function toConnection(raw: unknown): WhopConnection | null {
 }
 
 /** The error for a refused answer: the server's code, in plain words. */
-export function offersError(status: number, body: Record<string, unknown> | null): OffersError {
+export function offersError(status: number, body: Record<string, unknown> | null, serverWords: readonly string[] = []): OffersError {
   let code = str(body?.code) || (status === 429 ? 'RATE_LIMITED' : status === 401 ? 'AUTH_REQUIRED' : `HTTP_${status}`);
   if (status === 402) code = 'UPGRADE';
   const { error: _e, code: _c, hint: _h, ...extra } = body ?? {};
@@ -238,11 +282,12 @@ export function offersError(status: number, body: Record<string, unknown> | null
   if (code === 'WHOP_PERMISSION') message = str(extra.missing) ? `This Whop API key needs the ${str(extra.missing)} permission. Add it to the key in Whop, then try again.` : 'This Whop API key is missing a permission this needs. See the list below.';
   if (code === 'WHOP_BUSY' && typeof extra.retryAfter === 'number') message = `Whop is busy. Try again in ${Math.max(1, Math.round(extra.retryAfter))} seconds.`;
   // the server's own words for these (they're already ours: counts, what to do next)
-  if ((code === 'OFFERS_LIVE' || code === 'TOO_MANY' || code === 'BAD_REQUEST' || code === 'NOT_FOUND') && str(body?.error)) message = str(body?.error);
+  if ((SERVER_WORDS.has(code) || serverWords.includes(code)) && str(body?.error)) message = str(body?.error);
   return new OffersError(message, code, status, extra);
 }
 
-async function call<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, json?: unknown, signal?: AbortSignal): Promise<{ status: number; body: T }> {
+/** One call to the app's server (exported for the Stripe client, src/lib/stripeConnect.ts). */
+export async function offersCall<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, json?: unknown, signal?: AbortSignal, serverWords: readonly string[] = []): Promise<{ status: number; body: T }> {
   let res: Response;
   try {
     const headers: Record<string, string> = {};
@@ -257,9 +302,10 @@ async function call<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path
     throw new OffersError(MESSAGES.NETWORK, 'NETWORK');
   }
   const got = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-  if (!res.ok) throw offersError(res.status, got);
+  if (!res.ok) throw offersError(res.status, got, serverWords);
   return { status: res.status, body: (got ?? {}) as T };
 }
+const call = offersCall;
 
 const idPath = (id: string) => {
   if (!OFFER_ID.test(id)) throw new OffersError('That isn’t one of your offers.', 'BAD_ID');
@@ -302,7 +348,15 @@ export async function createWhopOffer(input: { projectId: string; title?: string
   return { offer, unconfirmed: status === 202 || offer.status === 'checkout_unknown' };
 }
 
-export async function updateOffer(id: string, patch: { title?: string; priceDisplay?: string; url?: string; status?: 'active' | 'paused' }): Promise<Offer> {
+/**
+ * An offer sold through the seller's own Stripe account (Settings › Payments). No Stripe call is made here: each
+ * checkout sends its price. clientRequestId (one per press of Create) makes a double press one offer.
+ */
+export async function createStripeOffer(input: { projectId: string; title: string; priceMinor: number; currency: string; delivery: { kind: 'none' } | { kind: 'file'; fileId: string }; clientRequestId: string }): Promise<Offer> {
+  return one((await call<{ offer?: unknown }>('POST', '/api/offers', { ...input, provider: 'stripe' })).body);
+}
+
+export async function updateOffer(id: string, patch: { title?: string; priceDisplay?: string; url?: string; status?: 'active' | 'paused'; priceMinor?: number; currency?: string; delivery?: { kind: 'none' } | { kind: 'file'; fileId: string } }): Promise<Offer> {
   return one((await call<{ offer?: unknown }>('PATCH', `/api/offers/${idPath(id)}`, patch)).body);
 }
 
@@ -426,11 +480,13 @@ export async function whopPlans(id: string, productId: string, after?: string | 
 export interface OffersConfig {
   enabled: boolean;
   whop: { sandbox: boolean; production: boolean };
+  /** selling through the seller's own Stripe account (P6): on here, and in which Stripe mode */
+  stripe: { available: boolean; environment: WhopEnvironment | null };
   /** the server answered */
   reachable: boolean;
 }
 
-const OFF: OffersConfig = { enabled: false, whop: { sandbox: false, production: false }, reachable: false };
+const OFF: OffersConfig = { enabled: false, whop: { sandbox: false, production: false }, stripe: { available: false, environment: null }, reachable: false };
 let configAsk: Promise<OffersConfig> | null = null;
 
 /** Whether this app's server has offers (GET /api/config → offers). Never in the claude.ai build. */
@@ -439,9 +495,15 @@ export function offersConfig(refresh = false): Promise<OffersConfig> {
   if (!configAsk || refresh) {
     const ask: Promise<OffersConfig> = fetch(`${serverBaseNow()}/api/config`, { signal: AbortSignal.timeout(8000) })
       .then(async (res) => {
-        const body = res.ok ? ((await res.json().catch(() => null)) as { offers?: { enabled?: unknown; whop?: { sandbox?: unknown; production?: unknown } } } | null) : null;
+        const body = res.ok ? ((await res.json().catch(() => null)) as { offers?: { enabled?: unknown; whop?: { sandbox?: unknown; production?: unknown }; stripe?: { available?: unknown; environment?: unknown } } } | null) : null;
         const o = body?.offers;
-        return { enabled: o?.enabled === true, whop: { sandbox: o?.whop?.sandbox === true, production: o?.whop?.production === true }, reachable: res.ok || res.status === 404 };
+        const env = o?.stripe?.environment;
+        return {
+          enabled: o?.enabled === true,
+          whop: { sandbox: o?.whop?.sandbox === true, production: o?.whop?.production === true },
+          stripe: { available: o?.enabled === true && o?.stripe?.available === true, environment: env === 'sandbox' || env === 'production' ? (env as WhopEnvironment) : null },
+          reachable: res.ok || res.status === 404,
+        };
       })
       .catch(() => OFF);
     configAsk = ask;
@@ -491,11 +553,12 @@ export function offerConnection(o: Pick<Offer, 'provider' | 'connectionId'>, con
   return connections.find((c) => c.id === o.connectionId) ?? { status: 'disconnected' };
 }
 
-export function offerProblem(o: Pick<Offer, 'status'>, connection?: Pick<WhopConnection, 'status'> | null): string {
+export function offerProblem(o: Pick<Offer, 'status'> & Partial<Pick<Offer, 'problem'>>, connection?: Pick<WhopConnection, 'status'> | null): string {
   if (o.status === 'paused') return 'Paused: its buy link says it isn’t available right now.';
   if (o.status === 'checkout_unknown') return 'Whop didn’t confirm the checkout link yet. Use Check again.';
   if (o.status === 'archived') return 'Archived: its buy link says it’s no longer available.';
   if (o.status === 'draft') return 'Not ready yet.';
+  if (o.problem === 'stripe_setup') return 'Finish Stripe setup to start selling.';
   if (connection?.status === 'disconnected') return 'The Whop account it used isn’t connected any more, so it isn’t selling. Attach another plan.';
   if (connection && connection.status !== 'active') return 'Its Whop account needs attention in Settings › Payments, so it isn’t selling.';
   return '';
@@ -510,9 +573,64 @@ export const SALE_STATUS_LABEL: Record<SaleStatus, string> = {
   disputed: 'Disputed: see Whop',
 };
 
+/** A dispute's state in words ("Dispute: needs response", "Dispute won"…). */
+export function disputeWords(status: string | null | undefined): string {
+  switch (status) {
+    case 'warning_needs_response':
+    case 'needs_response':
+      return 'Dispute: needs response';
+    case 'warning_under_review':
+    case 'under_review':
+      return 'Dispute: under review';
+    case 'warning_closed':
+      return 'Dispute closed';
+    case 'won':
+      return 'Dispute won';
+    case 'lost':
+      return 'Dispute lost';
+    default:
+      return 'Disputed';
+  }
+}
+
+/** A sale's status in words: a Stripe dispute by its own state ("Dispute won"), a Whop one points to Whop. */
+export function saleStatusLabel(s: Pick<Sale, 'status'> & Partial<Pick<Sale, 'provider' | 'disputeStatus'>>): string {
+  if (s.status === 'disputed' && s.provider === 'stripe') return disputeWords(s.disputeStatus);
+  return SALE_STATUS_LABEL[s.status];
+}
+
 const ZERO_DECIMAL = new Set(['JPY', 'KRW', 'VND', 'CLP', 'ISK', 'HUF']);
 /** Minor units as a plain decimal ("49.00"; zero-decimal currencies as they are). */
 export const minorToDecimal = (minor: number, currency: string): string => (ZERO_DECIMAL.has(currency.toUpperCase()) ? String(minor) : (minor / 100).toFixed(2));
+
+/**
+ * The opposite: what someone typed ("49", "49.5", "1,299.00") as minor units, or null when it isn't a price. A
+ * zero-decimal currency (JPY…) takes whole numbers only.
+ */
+export function decimalToMinor(text: string, currency: string): number | null {
+  const t = text.trim().replace(/^[^\d.]+/, '').replace(/,/g, '');
+  const zero = ZERO_DECIMAL.has(currency.toUpperCase());
+  if (!(zero ? /^\d{1,9}$/ : /^\d{1,7}(\.\d{1,2})?$/).test(t)) return null;
+  if (zero) return Number(t);
+  const [whole, frac = ''] = t.split('.');
+  return Number(whole) * 100 + Number(frac.padEnd(2, '0'));
+}
+
+/** Stripe's limits on a price we check before sending (the server checks again): 0.50 to 999,999.99. */
+export const STRIPE_PRICE_MIN = 50;
+export const STRIPE_PRICE_MAX = 99_999_999;
+
+/**
+ * Our fee on a Stripe sale, for display only (the server decides): floor(amount × pct / 100), and none when that's
+ * 0 or not below the amount, as the server's platformFee (server/payments/connectFee.mjs).
+ */
+export function feePreview(amountMinor: number, pct: number, sellerCountry?: string | null, platformCountry = 'US'): number {
+  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0 || !Number.isFinite(pct) || pct <= 0) return 0;
+  // Stripe doesn't take a platform's fee from a seller in Brazil unless the platform is there too
+  if (sellerCountry === 'BR' && platformCountry !== 'BR') return 0;
+  const fee = Math.floor((amountMinor * Math.min(100, Math.trunc(pct))) / 100);
+  return fee > 0 && fee < amountMinor ? fee : 0;
+}
 
 /** Money from minor units ("$49.00"; zero-decimal currencies as they are). */
 export function formatMoney(minor: number, currency: string): string {
@@ -570,7 +688,7 @@ const csvCell = (v: string): string => {
 export function salesCsv(sales: Sale[], offerTitle: (id: string | null) => string): string {
   const head = ['date', 'offer', 'amount', 'refunded', 'currency', 'status', 'buyer_email', 'mode'];
   const rows = sales.map((s) =>
-    [s.paidAt ?? s.createdAt ?? '', offerTitle(s.offerId), minorToDecimal(s.amountMinor, s.currency), minorToDecimal(s.refundedMinor, s.currency), s.currency.toUpperCase(), SALE_STATUS_LABEL[s.status], s.buyerEmail ?? '', s.environment === 'sandbox' ? 'test' : 'live'].map(csvCell).join(','),
+    [s.paidAt ?? s.createdAt ?? '', offerTitle(s.offerId), minorToDecimal(s.amountMinor, s.currency), minorToDecimal(s.refundedMinor, s.currency), s.currency.toUpperCase(), saleStatusLabel(s), s.buyerEmail ?? '', s.environment === 'sandbox' ? 'test' : 'live'].map(csvCell).join(','),
   );
   return [head.join(','), ...rows].join('\n');
 }
