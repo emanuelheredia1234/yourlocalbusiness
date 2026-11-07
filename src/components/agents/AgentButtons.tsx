@@ -36,9 +36,12 @@ export function AgentButtons({
   rebuild,
   kind,
   lead,
+  stepId,
   className,
 }: {
   target: BuildTarget;
+  /** an email build: which email of the sequence it designs */
+  stepId?: string;
   rebuild?: boolean;
   /** the kind to start on (the SEO builder's chosen page type) */
   kind?: string;
@@ -67,7 +70,7 @@ export function AgentButtons({
               disabled={!r.ready}
               aria-label={lead ? `${lead} ${agentName(via)}`.replace(/^or /, '').replace(/^\w/, (c) => c.toUpperCase()) : undefined}
               aria-describedby={r.ready ? undefined : `${ids}-${via}`}
-              onClick={() => void openAgentBuild({ target, via, ...(kind ? { kind } : {}) })}
+              onClick={() => void openAgentBuild({ target, via, ...(kind ? { kind } : {}), ...(stepId ? { stepId } : {}) })}
             >
               <AgentAvatar via={via} size={16} className={cn(!r.ready && 'bg-surface-2 text-faint')} /> {label}
             </button>

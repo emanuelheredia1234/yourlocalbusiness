@@ -6,8 +6,10 @@ import targets from '../../../shared/agent-targets.json';
 import { CODE_KINDS } from '@/ai/local/code';
 import { PAGE_TYPES, PAGE_TYPE_LABEL } from '@/lib/pageTypes';
 import { describeProviders } from '../../../server/providers/registry.mjs';
-import { AGENT_TARGETS, KIND_LABELS } from '../../../server/agents/templates.mjs';
+import { AGENT_TARGETS, BUILD_TARGETS, KIND_LABELS } from '../../../server/agents/templates.mjs';
+import { LEAD_MAGNET_TYPES } from '@/ai/local/email';
 import { MANUS_PROFILES } from './who';
+import { EMAIL_KIND_LABEL, emailKindFor, kindLabel } from './builds';
 
 describe('what Manus and Viktor are told to build', () => {
   it('covers every Code & assets kind and every SEO page type, and nothing else', () => {
@@ -20,6 +22,27 @@ describe('what Manus and Viktor are told to build', () => {
   it('names each kind as the app does (the Manus task title)', () => {
     expect(KIND_LABELS.asset).toEqual(Object.fromEntries(CODE_KINDS.map((k) => [k.id, k.label])));
     expect(KIND_LABELS.seo).toEqual(PAGE_TYPE_LABEL);
+  });
+
+  it('P5: emails and lead magnets too — the four targets, each kind with its words and its name', () => {
+    expect(Object.keys(targets).sort()).toEqual([...BUILD_TARGETS].sort());
+    expect(Object.keys(targets.email).sort()).toEqual(['newsletter', 'nurture', 'offer', 'welcome']);
+    // the lead magnet's kinds are the LeadMagnetType ids, named as the app names them
+    expect(Object.keys(targets.leadMagnet).sort()).toEqual(LEAD_MAGNET_TYPES.map((t) => t.id).sort());
+    expect(KIND_LABELS.leadMagnet).toEqual(Object.fromEntries(LEAD_MAGNET_TYPES.map((t) => [t.id, t.label])));
+    for (const target of BUILD_TARGETS) {
+      expect(Object.keys(KIND_LABELS[target]).sort()).toEqual(Object.keys(targets[target]).sort());
+      for (const desc of Object.values(targets[target])) expect(desc).toMatch(/^[A-Z0-9].*\.$/);
+    }
+  });
+});
+
+describe('the app’s names for emails and lead magnets (P5)', () => {
+  it('match the server’s, and each email of the sequence gets a kind', () => {
+    expect(EMAIL_KIND_LABEL).toEqual(KIND_LABELS.email);
+    expect([0, 1, 2, 3, 4].map((i) => emailKindFor(i, 5))).toEqual(['welcome', 'nurture', 'nurture', 'nurture', 'offer']);
+    expect(kindLabel('email', 'offer')).toBe('offer email');
+    expect(kindLabel('leadMagnet', 'checklist')).toBe('checklist');
   });
 });
 

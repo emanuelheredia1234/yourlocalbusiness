@@ -253,7 +253,7 @@ export type PubWindow =
   | { kind: 'publish'; page: 'seo' }
   | { kind: 'publish'; page: 'asset'; assetId: string; name: string }
   /** "Build with Manus" or "Build with Viktor" for the SEO page or a Code & assets asset: the owner fills it in and sends it there */
-  | { kind: 'agent-build'; target: 'asset' | 'seo'; agent: 'manus' | 'viktor' }
+  | { kind: 'agent-build'; target: 'asset' | 'seo' | 'email' | 'leadMagnet'; agent: 'manus' | 'viktor'; stepId?: string }
   /** the Ads planner's launch window for a plan: the owner picks everything that spends and confirms the spend there */
   | { kind: 'ad-launch'; planId: string }
   /** a launched campaign's change window (pause, resume, budget…): the owner reviews and confirms there */

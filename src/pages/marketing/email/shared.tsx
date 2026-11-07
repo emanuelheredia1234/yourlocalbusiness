@@ -1,10 +1,7 @@
-import type { CSSProperties, ReactNode } from 'react';
-import type { EmailStep, Project, Subscriber } from '@/lib/types';
-import { readableOn } from '@/lib/utils';
+import type { ReactNode } from 'react';
+import type { Project, Subscriber } from '@/lib/types';
 import { pageLink } from '@/lib/pageLink';
-import { renderTokens } from '@/ai/local/email';
 import { useStore } from '@/store/useStore';
-import { BrandLogo } from '@/components/brand/Logo';
 import { buyLinksOf } from '@/store/offers';
 
 /** A panel's title row: the title and its line on the left, the actions on the right. Unlike Section's own row it
@@ -46,63 +43,6 @@ export function emailTokens(p: Project, sub?: Pick<Subscriber, 'name' | 'email'>
 
 /** Whether a text still has a buy link that isn't one of the business's offers (after its tokens were filled in). */
 export const hasUnknownBuyLink = (text: string): boolean => /\{\{\s*buy:/.test(text);
-
-// The email as a subscriber's inbox shows it: the business's content, so its colours are the email's own
-// (a white message in both themes), not the app's.
-const INK = '#1d2420';
-const META = '#5b6861';
-const RULE = '#e6ebe8';
-const FINE = '#8a968f';
-const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
-
-/** An email rendered the way a subscriber’s inbox shows it. */
-export function EmailView({ project, email, tokens, compact }: { project: Project; email: EmailStep; tokens: Record<string, string>; compact?: boolean }) {
-  const c = project.brand.colors;
-  const body = renderTokens(email.body, tokens);
-  const label = renderTokens(email.ctaLabel, tokens);
-  const href = webHref(renderTokens(email.ctaUrl, tokens));
-  const button: CSSProperties = { display: 'inline-block', marginTop: 20, borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 700, background: c.primary, color: readableOn(c.primary), textDecoration: 'none' };
-  const where = signedUpAt(project);
-  const row: CSSProperties = { fontSize: 13, lineHeight: '20px', color: META };
-  return (
-    <div className="overflow-hidden" style={{ background: '#ffffff', color: INK, fontFamily: FONT }}>
-      {!compact && (
-        <div style={{ borderBottom: `1px solid ${RULE}`, padding: '12px 20px' }}>
-          <p style={row}>
-            <span style={{ display: 'inline-block', width: 56, color: FINE }}>From</span>
-            <b style={{ color: INK, fontWeight: 600 }}>{project.brand.name}</b> &lt;{tokens.sender_email}&gt;
-          </p>
-          <p style={row}>
-            <span style={{ display: 'inline-block', width: 56, color: FINE }}>To</span>
-            {tokens.email}
-          </p>
-          <p style={{ ...row, marginTop: 4, fontSize: 16, lineHeight: '24px', fontWeight: 600, color: INK }}>{renderTokens(email.subject, tokens)}</p>
-        </div>
-      )}
-      <div style={{ padding: '20px 24px 22px' }}>
-        <div style={{ marginBottom: 16, color: c.ink }}>
-          <BrandLogo brand={project.brand} size={26} layout="horizontal" />
-        </div>
-        <div className="whitespace-pre-line" style={{ fontSize: 14, lineHeight: 1.65 }}>
-          {body}
-        </div>
-        {email.ctaLabel &&
-          (href ? (
-            <a href={href} target="_blank" rel="noopener noreferrer" aria-label={`${label} (opens in a new tab)`} className="focus-visible:shadow-focus outline-none" style={button}>
-              {label}
-            </a>
-          ) : (
-            <span aria-disabled="true" title={missingLinkFix(project, email.ctaUrl, 'short')} style={{ ...button, cursor: 'not-allowed' }}>
-              {label}
-            </span>
-          ))}
-        <p style={{ marginTop: 24, borderTop: `1px solid ${RULE}`, paddingTop: 12, fontSize: 11, lineHeight: '16px', color: FINE }}>
-          You’re receiving this because you signed up at {where}. Unsubscribe anytime.
-        </p>
-      </div>
-    </div>
-  );
-}
 
 const usesToken = (raw: string, name: string) => new RegExp(`\\{\\{\\s*${name}\\s*\\}\\}`).test(raw);
 

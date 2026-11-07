@@ -118,7 +118,7 @@ export default defineConfig(({ mode }) => {
     },
     test: {
       environment: 'node',
-      include: ['src/**/*.test.ts', 'server/**/*.test.mjs'],
+      include: ['src/**/*.test.ts', 'server/**/*.test.mjs', 'shared/**/*.test.mjs'],
     },
   };
 });

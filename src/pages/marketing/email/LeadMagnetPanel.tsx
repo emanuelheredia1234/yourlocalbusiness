@@ -16,6 +16,8 @@ import { BrandLogo } from '@/components/brand/Logo';
 import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
 import { PanelHead } from './shared';
+import { AgentButtons } from '@/components/agents/AgentButtons';
+import { AgentBuildList } from '@/components/agents/AgentBuildList';
 import { LeadMagnetDeliverySection } from './LeadMagnetDelivery';
 import { consentLabel, magnetReceivesNote } from '@/lib/consent';
 
@@ -56,6 +58,8 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
           }
           className="pb-10"
         />
+        <AgentButtons target="leadMagnet" kind={type} lead="or make it with" className="justify-center" />
+        <AgentBuildList target="leadMagnet" />
         <div className="mx-auto w-full max-w-[880px]">
           <p className="label">What kind of freebie?</p>
           <OptionCards<LeadMagnetType>
@@ -95,6 +99,8 @@ export function LeadMagnetPanel({ project }: { project: Project }) {
             }
           />
           <div className="flex flex-col gap-4">
+            <AgentButtons target="leadMagnet" kind={lm.type} rebuild lead="or remake it with" />
+            <AgentBuildList target="leadMagnet" />
             {thinking}
             {resultBar}
             <Field label="Title" htmlFor="lm-title">

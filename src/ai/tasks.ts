@@ -65,6 +65,8 @@ import { normalizeWorkbook, type WorkbookSpec } from './workbook';
 import { localWorkbook } from './local/workbook';
 import { localEbookExtras, type EbookExtras } from './local/ebook';
 import { BUY_TOKEN, keepBuyLinksOnly } from '@/lib/buyLinks';
+import type { EmailDoc } from '../../shared/email/blocks.mjs';
+import { allowedForDoc, allowedFrom, applyBolder, localBolder, localDesign, validateBlocksEdit, validateBolder, validateDesign, type EmailDesignInput } from './emailDesign';
 import { localPieces, validatePieces, type VariantsResult } from '@/lib/experiments/variants';
 
 export interface TaskEnv {
@@ -517,6 +519,92 @@ export const emailSequenceTask = def<{ leadMagnet: LeadMagnet | null }, EmailSte
     },
   },
 });
+
+// ───────────────────────── Email studio (P5) ─────────────────────────
+const EMAIL_DOC_SHAPE = `{"theme": {"id": "brand"|"clean"|"bold"|"warm"|"minimal"|"editorial", "overrides"?: {"primary"?: "#rrggbb", "size"?: 14-18, "density"?: "airy"|"regular"|"tight", "headingCase"?: "normal"|"upper", "radius"?: 0-24}}, "blocks": [ {"type": "heading", "text": string, "level": 1|2|3} | {"type": "text", "text": string (**bold**, *italic*, [label](link), "- " list lines, blank line between paragraphs)} | {"type": "image", "prompt": string (what a picture should show), "alt": string} | {"type": "button", "label": string, "link": LINK, "style": "solid"|"outline", "full"?: boolean} | {"type": "columns", "ratio": "50/50"|"33/67"|"67/33", "cols": [{"blocks": [heading|text|image|button]}, {"blocks": [...]}]} | {"type": "offer", "offerId": string (an id from offers), "buttonLabel": string, "blurb"?: string} | {"type": "divider", "style": "line"|"space", "size": 8-64} ]} where LINK is {"kind": "magnet"} (the free download) | {"kind": "page"} | {"kind": "offer", "offerId": string} | {"kind": "url", "url": string (only an address the email already has)}`;
+const EMAIL_DESIGN_RULES = [
+  'Keep the email’s message: you may tighten wording, add a heading and split it into sections, but add no new claims, prices, testimonials, numbers, guarantees or deadlines.',
+  'Never write HTML. Pictures are ideas only ("prompt" and "alt"): the owner decides whether to make them.',
+  'Links only to what INPUT lists: the free download if hasMagnet, the page if hasPage, the offers by id, or an address already in the email. Merge tags like {{first_name}} stay exactly as written.',
+  'At most 20 blocks. One clear main button.',
+];
+
+export const emailDesignTask = def<EmailDesignInput, EmailDoc>({
+  id: 'emailDesign',
+  label: 'Design this email',
+  module: 'email',
+  tier: 'default',
+  local: (i) => localDesign(i),
+  claude: {
+    prompt: (i, env) =>
+      framePrompt({
+        task: `Design email ${i.index + 1} of ${i.total} (“${i.purpose}”) as blocks: lay out the email’s own words with a heading, short sections and one clear button, in a theme that suits the brand.`,
+        project: env.project,
+        brainPrompt: env.brainPrompt,
+        variation: env.variation,
+        input: { subject: i.subject, preview: i.preview, body: i.body, button: { label: i.ctaLabel, link: i.ctaUrl }, theme: i.theme, offers: i.offers, hasMagnet: i.hasMagnet, hasPage: i.hasPage },
+        shape: EMAIL_DOC_SHAPE,
+        extraRules: [...EMAIL_DESIGN_RULES, NO_INVENTED_CLAIMS_EMAIL],
+      }),
+    merge: (raw, base, i) => validateDesign(raw, i) ?? base,
+  },
+});
+
+export const emailBolderTask = def<{ doc: EmailDoc; brandColors?: Record<string, string> }, EmailDoc>({
+  id: 'emailBolder',
+  label: 'Make it bolder',
+  module: 'email',
+  tier: 'quick',
+  local: (i) => applyBolder(i.doc, localBolder(i.doc, i.brandColors)),
+  claude: {
+    prompt: (i, env) =>
+      framePrompt({
+        task: 'Make this designed email bolder: more contrast, a larger heading size, roomier spacing, upper-case headings if it suits, and shorter, more direct heading and button labels. Change nothing else: the body text stays word for word.',
+        project: env.project,
+        brainPrompt: env.brainPrompt,
+        variation: env.variation,
+        input: { theme: i.doc.theme, headings: emailLabels(i.doc, 'heading'), buttons: emailLabels(i.doc, 'button') },
+        shape: `{"overrides": {"primary"?: "#rrggbb", "ink"?: "#rrggbb", "bg"?: "#rrggbb", "paper"?: "#rrggbb", "size"?: 14-18, "density"?: "airy"|"regular"|"tight", "headingCase"?: "normal"|"upper", "radius"?: 0-24}, "labels": {"<block id>": string (a heading or button label, not longer than it is now)}}`,
+        extraRules: ['Labels: only the ids given. Never longer than now, no links, no new claims, prices or deadlines.', 'Text must stay readable: dark text on a light card, or the reverse.'],
+      }),
+    merge: (raw, _base, i) => applyBolder(i.doc, validateBolder(raw, i.doc)),
+  },
+});
+
+export const emailBlocksEditTask = def<{ doc: EmailDoc; instruction: string; design: EmailDesignInput }, EmailDoc>({
+  id: 'emailBlocksEdit',
+  label: 'Edit the email’s blocks',
+  module: 'email',
+  tier: 'default',
+  local: (i) => i.doc,
+  claude: {
+    prompt: (i, env) =>
+      framePrompt({
+        task: `Change this designed email as the owner asks: “${truncate(i.instruction.trim(), 600)}”. Keep each block’s "id" when you keep a block; leave out the ones to remove. Change only what the request needs.`,
+        project: env.project,
+        brainPrompt: env.brainPrompt,
+        variation: env.variation,
+        input: { doc: i.doc, offers: i.design.offers, hasMagnet: i.design.hasMagnet, hasPage: i.design.hasPage },
+        shape: `{"doc": {"theme": …, "blocks": [ … each with its "id" when it's a block that was there ]}} using the block shapes: ${EMAIL_DOC_SHAPE}`,
+        extraRules: [...EMAIL_DESIGN_RULES, 'Blocks of type "custom", "video" and "social" are the owner’s: keep or remove them by id, never change or add one.', OWNER_WORDS_RULE],
+      }),
+    merge: (raw, base, i) => validateBlocksEdit(raw, i.doc, allowedForDoc(i.doc, allowedFrom(i.design)), i.design.offers) ?? base,
+  },
+});
+
+const NO_INVENTED_CLAIMS_EMAIL = 'Never invent testimonials, reviews, ratings, statistics, results, guarantees, refunds, discounts, prices or deadlines: use only the email’s words and PROJECT CONTEXT.';
+
+/** A doc's headings or buttons by id (what "Make it bolder" may relabel). */
+function emailLabels(doc: EmailDoc, type: 'heading' | 'button'): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (b: EmailDoc['blocks'][number]) => {
+    if (b.type === 'columns') return b.cols.forEach((c) => c.blocks.forEach(walk));
+    if (b.type === 'heading' && type === 'heading') out[b.id] = b.text;
+    if (b.type === 'button' && type === 'button') out[b.id] = b.label;
+  };
+  doc.blocks.forEach(walk);
+  return out;
+}
 
 // ───────────────────────── SEO ─────────────────────────
 /** The same rule as the Brain's no-hype skill, for every piece of sales copy. */

@@ -92,7 +92,8 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
 
   if (!enabled) {
     const stub = stubRoutes({ prefixes, send, corsHeaders, message: 'Offers aren’t set up on this app yet.' });
-    return { ...stub, buy, config, notes, cronJobs: () => [], enabled: false };
+    // no offers on this app: no email may carry a buy link (server/omnisend.mjs refuses them)
+    return { ...stub, buy, config, notes, cronJobs: () => [], enabled: false, idsFor: async () => [] };
   }
 
   const reply = (req, res, status, body, extra = {}) => send(res, status, body, { ...corsHeaders(req), 'cache-control': 'no-store', ...extra });
@@ -489,6 +490,19 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
     async unforgetUser(userId) {
       blocked.delete(userId);
       buy.unforgetUser(userId);
+    },
+    /**
+     * The ids of a user's offers (every status: a paused or archived one's /b/ link says so to buyers). Omnisend
+     * drafts (server/omnisend.mjs) check an email's buy links against them: only the caller's own become links.
+     */
+    async idsFor(userId) {
+      if (!isUuid(userId)) return [];
+      try {
+        const rows = await db.select('offers', { user_id: userId }, { select: 'id', limit: MAX_OFFERS_PER_USER * 20 });
+        return rows.map((r) => r.id).filter((id) => ID_RE.test(id));
+      } catch (e) {
+        throw fromDb(e);
+      }
     },
     /** For the app's hints: the checkout sites buyers go to straight from /b/. */
     checkoutHosts: CHECKOUT_HOSTS,

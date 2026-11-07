@@ -71,7 +71,7 @@ function windowNote(w: PubWindow): string {
     case 'publish':
       return `Opened the Publish panel for ${w.page === 'seo' ? 'your SEO page' : `“${w.name}”`}: check the address, then publish there`;
     case 'agent-build':
-      return `Opened “Build with ${w.agent === 'manus' ? 'Manus' : 'Viktor'}” for ${w.target === 'seo' ? 'your SEO page' : 'a new asset in Code & assets'}: fill it in and send it there`;
+      return `Opened “Build with ${w.agent === 'manus' ? 'Manus' : 'Viktor'}” for ${w.target === 'seo' ? 'your SEO page' : w.target === 'email' ? 'your email' : w.target === 'leadMagnet' ? 'your lead magnet' : 'a new asset in Code & assets'}: fill it in and send it there`;
     case 'ad-launch':
       return 'Opened the launch window: pick the ad account, places, budget and Paused or Active, review it, then confirm the spend there';
     case 'ad-change':

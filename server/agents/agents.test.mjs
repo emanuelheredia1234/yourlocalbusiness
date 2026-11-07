@@ -3,11 +3,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   AGENT_TARGETS,
+  BUILD_TARGETS,
   CAPS,
   MANUS_LIMIT,
   MANUS_MISSING_FILE,
   SLACK_LIMIT,
   TemplateError,
+  checkKind,
   checkLink,
   checkWebsite,
   cleanBuild,
@@ -185,6 +187,86 @@ describe('Manus’s messages', () => {
     expect(manusBuild(b, 'ylb-ABC123').prompt.length).toBeLessThanOrEqual(MANUS_LIMIT);
     const e = err(() => manusChatLater({ text: 'z'.repeat(MANUS_LIMIT + 1), website: '', images: [] }));
     expect(e).toMatchObject({ status: 413, code: 'TOO_LONG', data: { limit: MANUS_LIMIT } });
+  });
+});
+
+describe('emails and lead magnets (P5)', () => {
+  const OFFER_FACT = { id: 'payment', value: '{{buy:AbCdEfGhIjKlMnOpQrStUv}}' };
+  it('an email: its own first line and rules (tables, inline CSS, no JavaScript, no footer, merge tags)', () => {
+    const { prompt, title } = manusBuild(cleanBuild(build({ target: 'email', kind: 'welcome', facts: [...FACTS, OFFER_FACT] }), 'manus'), 'ylb-ABC123');
+    expect(prompt).toMatch(/^Build ONE HTML email as ONE self-contained HTML file\. Use your own computer and browser\./);
+    expect(prompt).toContain(`What to build: ${AGENT_TARGETS.email.welcome} It's an HTML email for my subscribers: it has to work in Gmail, Outlook and Apple Mail.`);
+    expect(prompt).toContain('Lay it out with tables (role="presentation"), 600 pixels wide.');
+    expect(prompt).toContain('Put all CSS inline in style attributes; one <style> in the <head> only for @media rules.');
+    expect(prompt).toContain('Web-safe fonts only');
+    expect(prompt).toContain('Use no JavaScript at all.');
+    expect(prompt).toContain('No forms, no video, no scripts, no iframes and no background images. No footer and no unsubscribe link: the app adds the footer and the unsubscribe link.');
+    expect(prompt).toContain('{{first_name}}');
+    expect(prompt).toContain('{{lead_magnet_link}}');
+    expect(prompt).toContain('{{product_link}}');
+    expect(prompt).toContain('- Payment link: {{buy:AbCdEfGhIjKlMnOpQrStUv}}');
+    expect(prompt).toContain('<img src="{{img-1}}" alt="…" width="…">');
+    expect(prompt).not.toContain('url({{img-1}})');
+    expect(prompt).not.toContain('{{lead-action}}');
+    expect(prompt).not.toContain('<script> at the end');
+    expect(prompt).toMatch(/RESULT: BUILT \| page\.html\nRESULT: FAILED \| <short reason>$/);
+    expect(title).toBe('Build · Welcome email · Bean & Leaf · ylb-ABC123');
+  });
+
+  it('a lead magnet: a printable document the app turns into its PDF; no payment links (its payment fact isn’t sent)', () => {
+    const b = cleanBuild(build({ target: 'leadMagnet', kind: 'checklist', facts: [...FACTS, OFFER_FACT] }), 'manus');
+    expect(b.facts.some((f) => f.id === 'payment')).toBe(false);
+    const { prompt, title } = manusBuild(b, 'ylb-ABC123');
+    expect(prompt).toMatch(/^Write ONE printable document as ONE HTML file\./);
+    expect(prompt).toContain("It's a printable document (US Letter) that people download for free after they sign up.");
+    expect(prompt).toContain('an <h1> title and, if you like, a subtitle in <p class="subtitle">');
+    expect(prompt).toContain('one <h2> per section, each with a <ul> of <li> items or short paragraphs');
+    expect(prompt).toContain('End with a call to action in <p class="cta">.');
+    expect(prompt).toContain('The app turns it into a designed PDF in the brand\'s colors');
+    expect(prompt).toContain('No payment links in the document');
+    expect(prompt).not.toContain('{{buy:');
+    expect(prompt).not.toContain('{{lead-action}}');
+    expect(title).toBe('Build · Checklist · Bean & Leaf · ylb-ABC123');
+    const text = renderParts(viktorBuildParts(cleanBuild(build({ target: 'leadMagnet', kind: 'guide' }), 'viktor'), { ref: 'ylb-ABC123' }));
+    expect(text.startsWith('Hi Viktor, please build ONE printable document for me as ONE HTML file.')).toBe(true);
+    expect(text).toContain('My app turns it into a designed PDF in my brand\'s colors');
+    expect(isBuildRequestText(text)).toBe(true);
+  });
+
+  it('Viktor: the email build is recognised as a build, with “my app adds the footer”', () => {
+    const text = renderParts(viktorBuildParts(cleanBuild(build({ target: 'email', kind: 'newsletter' }), 'viktor'), { ref: 'ylb-ABC123', mention: 'UQAVIKTOR' }));
+    expect(text.startsWith('<@UQAVIKTOR> Hi Viktor, please build ONE HTML email for me as ONE self-contained HTML file.')).toBe(true);
+    expect(text).toContain('No footer and no unsubscribe link: my app adds the footer and the unsubscribe link.');
+    expect(text).toMatch(/\n\nRef: ylb-ABC123$/);
+    expect(isBuildRequestText(text)).toBe(true);
+  });
+
+  it('checkKind takes the four targets and refuses unknown kinds per target', () => {
+    expect(BUILD_TARGETS).toEqual(['asset', 'seo', 'email', 'leadMagnet']);
+    for (const target of BUILD_TARGETS) for (const kind of Object.keys(AGENT_TARGETS[target])) expect(checkKind(target, kind)).toBe(kind);
+    expect(err(() => checkKind('email', 'checklist'))).toMatchObject({ status: 400 });
+    expect(err(() => checkKind('leadMagnet', 'welcome'))).toMatchObject({ status: 400 });
+    expect(err(() => checkKind('email', 'casino'))).toMatchObject({ status: 400 });
+    expect(err(() => checkKind('emails', 'welcome'))).toMatchObject({ status: 400 });
+  });
+
+  it('the largest owner input fits Manus for every target; Viktor’s new messages are no longer than an asset’s', () => {
+    const facts = [...Array.from({ length: 8 }, (_, i) => ({ id: 'offer', value: `${'Long offer '.repeat(14)}${i}` })), ...FACTS, { id: 'hours', value: 'H'.repeat(200) }, OFFER_FACT];
+    expect(facts.length).toBe(17);
+    const images = Array.from({ length: 8 }, (_, i) => ({ key: `img-${i + 1}`, note: 'n'.repeat(200) }));
+    const viktorLength = (target, kind) => renderParts(viktorBuildParts(cleanBuild(build({ target, kind, facts, request: 'y'.repeat(CAPS.viktor.build), images }), 'viktor'), { ref: 'ylb-ABC123', mention: 'UQAVIKTOR' })).length;
+    for (const target of BUILD_TARGETS) {
+      const kind = Object.keys(AGENT_TARGETS[target])[0];
+      const b = cleanBuild(build({ target, kind, facts, request: 'y'.repeat(CAPS.manus.build), images }), 'manus');
+      expect(b.facts.length).toBeLessThanOrEqual(16);
+      expect(manusBuild(b, 'ylb-ABC123').prompt.length, target).toBeLessThanOrEqual(MANUS_LIMIT);
+    }
+    // (Slack's own limit is checked when the message is sent: over SLACK_LIMIT it's refused as TOO_LONG, as for an asset)
+    expect(viktorLength('email', 'newsletter')).toBeLessThanOrEqual(viktorLength('asset', 'calculator'));
+    expect(viktorLength('leadMagnet', 'workbook')).toBeLessThanOrEqual(viktorLength('asset', 'calculator'));
+    // a typical owner's request fits one Slack message
+    const typical = renderParts(viktorBuildParts(cleanBuild(build({ target: 'email', kind: 'welcome', request: 'y'.repeat(600), images: images.slice(0, 2) }), 'viktor'), { ref: 'ylb-ABC123', mention: 'UQAVIKTOR' }));
+    expect(typical.length).toBeLessThanOrEqual(SLACK_LIMIT);
   });
 });
 

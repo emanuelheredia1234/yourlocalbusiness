@@ -30,7 +30,7 @@ import {
   costLine,
   defaultPlannedTimes,
   emailDiff,
-  firstParagraph,
+  openingOf,
   heroAlsoChanged,
   heroDiff,
   postDiff,
@@ -133,7 +133,7 @@ export function MakeVariations({ target }: { target: VariationTarget }) {
 
   const original = (): { text: string; sub?: string; topic: string; whole?: string } => {
     if (kind === 'post' && post) return { text: postPiece(post, change as PostChange), topic: post.headline, whole: post.caption };
-    if (kind === 'email' && step) return { text: change === 'subject' ? step.subject : firstParagraph(step.body), topic: step.purpose || step.subject, whole: step.body };
+    if (kind === 'email' && step) return { text: change === 'subject' ? step.subject : openingOf(step), topic: step.purpose || step.subject, whole: step.body };
     return { text: change === 'cta' ? (hero?.ctaLabel ?? '') : (hero?.headline ?? ''), sub: hero?.subheadline, topic: project.brand.name };
   };
 

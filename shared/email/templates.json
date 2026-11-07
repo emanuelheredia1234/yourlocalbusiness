@@ -1,0 +1,76 @@
+{
+  "templates": [
+    {
+      "id": "delivery",
+      "label": "Deliver the freebie",
+      "desc": "Your logo, a heading, a short welcome, a big button to the download.",
+      "themeOverrides": { "headerLogo": true },
+      "blocks": [
+        { "type": "heading", "level": 1, "slot": "subject" },
+        { "type": "text", "slot": "text" },
+        { "type": "button", "slot": "cta", "label": "Download your free guide", "link": { "kind": "magnet" }, "full": true },
+        { "type": "text", "slot": "text" }
+      ]
+    },
+    {
+      "id": "quick_win",
+      "label": "Quick win",
+      "desc": "A heading, the tip, a picture, the rest and a button.",
+      "blocks": [
+        { "type": "heading", "level": 1, "slot": "subject" },
+        { "type": "text", "slot": "text" },
+        { "type": "image", "src": "", "alt": "Add a picture", "width": "full", "origin": "url" },
+        { "type": "text", "slot": "text" },
+        { "type": "button", "slot": "cta", "label": "Read more", "link": { "kind": "page" } }
+      ]
+    },
+    {
+      "id": "story",
+      "label": "Story",
+      "desc": "A heading and a picture, the story, a line, the takeaway and a button.",
+      "blocks": [
+        { "type": "heading", "level": 1, "slot": "subject" },
+        { "type": "image", "src": "", "alt": "Add a picture", "width": "full", "origin": "url" },
+        { "type": "text", "slot": "text" },
+        { "type": "divider", "style": "line", "size": 24 },
+        { "type": "text", "slot": "text" },
+        { "type": "button", "slot": "cta", "label": "See how", "link": { "kind": "page" } }
+      ]
+    },
+    {
+      "id": "offer",
+      "label": "Offer",
+      "desc": "A heading, the pitch, an offer card, the rest and a button.",
+      "blocks": [
+        { "type": "heading", "level": 1, "slot": "subject" },
+        { "type": "text", "slot": "text" },
+        { "type": "offer", "offerId": "", "title": "", "price": "", "buttonLabel": "Buy now" },
+        { "type": "text", "slot": "text" },
+        { "type": "button", "slot": "cta", "label": "Get it now", "link": { "kind": "page" }, "full": true }
+      ]
+    },
+    {
+      "id": "newsletter",
+      "label": "Newsletter",
+      "desc": "A heading and a picture, an intro, two side-by-side sections, a button and your social links.",
+      "themeOverrides": { "headerLogo": true },
+      "blocks": [
+        { "type": "heading", "level": 1, "slot": "subject" },
+        { "type": "image", "src": "", "alt": "Add a picture", "width": "full", "origin": "url" },
+        { "type": "text", "slot": "text" },
+        { "type": "columns", "ratio": "50/50", "stack": true, "cols": [ { "blocks": [ { "type": "text", "slot": "text" } ] }, { "blocks": [ { "type": "text", "slot": "text" } ] } ] },
+        { "type": "button", "slot": "cta", "label": "Read more", "link": { "kind": "page" } },
+        { "type": "social", "links": [], "style": "text" }
+      ]
+    },
+    {
+      "id": "plain",
+      "label": "Plain",
+      "desc": "Your words and one button, like a personal email.",
+      "blocks": [
+        { "type": "text", "slot": "text" },
+        { "type": "button", "slot": "cta", "label": "Learn more", "link": { "kind": "page" } }
+      ]
+    }
+  ]
+}

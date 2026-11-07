@@ -24,12 +24,14 @@ import { openAgentBuild } from './buildWindow';
 import { AgentAvatar } from './AgentButtons';
 
 const NO_BUILDS: AgentBuild[] = [];
+const USE_LABEL: Record<BuildTarget, string> = { asset: 'Use this', seo: 'Use as my SEO page', email: 'Use this', leadMagnet: 'Use as my lead magnet' };
 
 /** The rows of this page's builds (nothing when there are none, and nothing in the claude.ai build). */
-export function AgentBuildList({ target, className }: { target: BuildTarget; className?: string }) {
+export function AgentBuildList({ target, stepId, className }: { target: BuildTarget; stepId?: string; className?: string }) {
   const project = useActiveProject();
   const all = project?.agentBuilds ?? NO_BUILDS;
-  const builds = all.filter((b) => b.target === target);
+  // an email's own builds, when it's for one email
+  const builds = all.filter((b) => b.target === target && (!stepId || b.stepId === stepId));
   useBuildPolling(project?.id ?? '', builds);
   if (__ARTIFACT_BUILD__ || !project || !builds.length) return null;
   return (
@@ -83,9 +85,9 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
     }
   };
   const preview = () => void withPage((src) => openHtmlPreview({ title: `${name}’s ${what}`, target: b.target, src }), 'page');
-  const use = (replaceAssetId?: string) =>
+  const use = (replaceAssetId?: string, append?: boolean) =>
     void withPage(async (src) => {
-      const r = await applyAgentPage(projectId, b.target, src, { ...(replaceAssetId ? { replaceAssetId } : {}), resultAt: b.result?.at });
+      const r = await applyAgentPage(projectId, b.target, src, { ...(replaceAssetId ? { replaceAssetId } : {}), ...(append ? { append } : {}), resultAt: b.result?.at });
       if (!r.ok) toast({ kind: 'error', title: 'Couldn’t use this page', body: r.message });
     }, 'use');
   const follow = async (f: Followup): Promise<boolean> => {
@@ -219,7 +221,12 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
             </button>
           ) : (
             <button type="button" className="btn btn-secondary btn-xs" disabled={!!busy} onClick={() => use()}>
-              {busy === 'use' ? <Spinner /> : <Check aria-hidden="true" />} {b.target === 'seo' ? 'Use as my SEO page' : 'Use this'}
+              {busy === 'use' ? <Spinner /> : <Check aria-hidden="true" />} {USE_LABEL[b.target]}
+            </button>
+          )}
+          {b.target === 'email' && (
+            <button type="button" className="btn btn-ghost btn-xs" disabled={!!busy} onClick={() => use(undefined, true)}>
+              Add below
             </button>
           )}
           {changes}
@@ -229,7 +236,7 @@ export function BuildCard({ projectId, build: b }: { projectId: string; build: A
       break;
     case 'imported': {
       const asset = b.imported?.assetId ? findCodeAsset(projectId, b.imported.assetId) : undefined;
-      status = <StateLine tone="good">{b.imported?.seo ? 'Used as your SEO page' : asset ? `Used as “${asset.name}”` : 'Used'}</StateLine>;
+      status = <StateLine tone="good">{b.imported?.seo ? 'Used as your SEO page' : b.imported?.email ? 'Used in your email' : b.imported?.leadMagnet ? 'Used as your lead magnet' : asset ? `Used as “${asset.name}”` : 'Used'}</StateLine>;
       actions = (
         <>
           {asset && (

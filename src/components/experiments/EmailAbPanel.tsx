@@ -10,6 +10,9 @@ import { openExperimentCard, useExperiments } from '@/store/experiments';
 import { IntegrationApiError } from '@/lib/integrations/api';
 import { createEmailAbDraft, deleteExperiment, experimentErrorCopy } from '@/lib/experiments/api';
 import { Callout, Field, Spinner } from '../ui/primitives';
+import { docOf, variantDoc } from '@/lib/emailDoc';
+import { draftProblem, emailDraftPayload } from '@/lib/emailDraft';
+import { openingOf, variantOpening } from '@/lib/experiments/variants';
 
 export function EmailAbPanel({ project, step }: { project: Project; step: EmailStep }) {
   const v = step.variants;
@@ -30,8 +33,16 @@ export function EmailAbPanel({ project, step }: { project: Project; step: EmailS
     setBusy(true);
     setError(null);
     try {
-      const a = { subject: step.subject, preheader: step.preview, body: step.body, ctaLabel: step.ctaLabel, ctaUrl: step.ctaUrl };
-      const b = { ...a, subject: v.b.subject, preheader: v.b.preview, body: v.b.body };
+      // both versions as block docs (P5): B is A's design with B's subject, or B's opening in its first text block
+      const index = Math.max(0, project.marketing.emails.findIndex((e) => e.id === step.id));
+      const { name: _a, ...a } = emailDraftPayload(project, step, index);
+      const bDoc = variantDoc(step, project) ?? docOf({ ...step, body: v.b.body }, project);
+      const { name: _b, ...b } = emailDraftPayload(project, step, index, { doc: bDoc, subject: v.b.subject, preview: v.b.preview });
+      const problem = draftProblem(project, { name: '', ...a }) || draftProblem(project, { name: '', ...b });
+      if (problem) {
+        setError({ title: 'The A/B draft wasn’t made', body: problem });
+        return;
+      }
       const got = await createEmailAbDraft(v.experimentId, { a, b }, { testSizePercent: size, decisionHours: hours });
       useExperiments.getState().upsert(got.experiment);
       setMade({ url: got.campaign.url, note: got.split?.note });
@@ -61,11 +72,11 @@ export function EmailAbPanel({ project, step }: { project: Project; step: EmailS
       <div className="grid gap-2 text-small text-ink-2 sm:grid-cols-2">
         <p>
           <span className="label">A · Original</span>
-          {v.changed === 'subject' ? step.subject : step.body.split(/\n\s*\n/)[0]}
+          {v.changed === 'subject' ? step.subject : openingOf(step)}
         </p>
         <p>
           <span className="label">B</span>
-          {v.changed === 'subject' ? v.b.subject : v.b.body.split(/\n\s*\n/)[0]}
+          {v.changed === 'subject' ? v.b.subject : variantOpening(step, v.b.body)}
         </p>
       </div>
       {!started && !made && (

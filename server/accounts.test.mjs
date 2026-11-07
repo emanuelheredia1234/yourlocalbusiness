@@ -200,6 +200,24 @@ describe('AI routes with accounts on', () => {
     expect(ok.status).toBe(200);
   });
 
+  it('P5: an email or a lead magnet built by Manus: the owner’s Manus for the owner, a customer’s own key otherwise', async () => {
+    const build = (target, kind, n) => JSON.stringify({ fn: 'build', ref: `ylb-P5BLD${n}`, dryRun: true, build: { target, kind, facts: [{ id: 'name', value: 'Bean & Leaf' }], website: '', request: 'Make it warm', images: [] } });
+    for (const [target, kind, words] of [['email', 'welcome', 'Build ONE HTML email'], ['leadMagnet', 'checklist', 'Write ONE printable document']]) {
+      // bob has no Manus key of his own: the owner's Manus isn't his
+      const refused = await call('/api/ai/manus/create', { method: 'POST', headers: as(bob), body: build(target, kind, 1) });
+      expect(refused.status).toBe(403);
+      expect((await refused.json()).code).toBe('OWN_KEY_NEEDED');
+      // alice (her own key) and the owner get the message the server writes
+      for (const who of [alice, owner]) {
+        const r = await call('/api/ai/manus/create', { method: 'POST', headers: as(who), body: build(target, kind, 2) });
+        expect(r.status).toBe(200);
+        expect((await r.json()).preview.text.startsWith(words)).toBe(true);
+      }
+      // an unknown kind for the target is refused
+      expect((await call('/api/ai/manus/create', { method: 'POST', headers: as(owner), body: build(target, 'casino', 3) })).status).toBe(400);
+    }
+  });
+
   it('gives signed-out callers no AI details', async () => {
     expect(await app.ai.health(null)).toEqual({ ready: false, providers: [], routing: {}, signedIn: false });
     expect((await app.ai.health({ id: alice.user.id })).routing.research.length).toBeGreaterThan(0);
@@ -258,7 +276,8 @@ describe('deleting an account clears every bucket of theirs', () => {
     const leaving = await supa.tokenFor('leaving-buckets@example.com');
     const staying = await supa.tokenFor('staying-buckets@example.com');
     const put = (key) => supa.objects.set(key, { bytes: Buffer.from('x'), type: 'application/pdf', created: Date.now() });
-    const theirs = [`media/${leaving.user.id}/m1`, `lead-files/${leaving.user.id}/AAAAAAAAAAAAAAAAAAAAAA/v1-abc/guide.pdf`, `public-files/${leaving.user.id}/BBBBBBBBBBBBBBBBBBBBBB.png`];
+    // (public-files: a download's cover, and an email image (P5: e-<random>))
+    const theirs = [`media/${leaving.user.id}/m1`, `lead-files/${leaving.user.id}/AAAAAAAAAAAAAAAAAAAAAA/v1-abc/guide.pdf`, `public-files/${leaving.user.id}/BBBBBBBBBBBBBBBBBBBBBB.png`, `public-files/${leaving.user.id}/e-EEEEEEEEEEEEEEEEEEEEEE.webp`];
     const others = [`lead-files/${staying.user.id}/CCCCCCCCCCCCCCCCCCCCCC/v1-abc/guide.pdf`, `public-files/${staying.user.id}/DDDDDDDDDDDDDDDDDDDDDD.png`];
     for (const k of [...theirs, ...others]) put(k);
     await auth.deleteUser(leaving.user.id);

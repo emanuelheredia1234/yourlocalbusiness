@@ -10,6 +10,7 @@ import type { EmailStep, LeadMagnet, Project, Subscriber } from './types';
 import { emailValid, uid } from './utils';
 import { csvCell as safeCell, MAX_EMAIL } from './leads';
 import { useStore } from '@/store/useStore';
+import { emailText } from './emailDoc';
 
 type Marketing = Project['marketing'];
 
@@ -51,18 +52,28 @@ export function renderBuyLinks(text: string, links: Record<string, string>): str
   return text.replace(/\{\{\s*(buy:[A-Za-z0-9_-]{22})\s*\}\}/g, (m, k: string) => links[k] ?? m);
 }
 
+/** An email's words as text: a designed email's plain-text part (P5), else its body; buy links filled in. */
+const bodyText = (p: Project, e: EmailStep, links: Record<string, string>) => (e.doc ? emailText(e, p, links).trim() : renderBuyLinks(e.body, links));
+
 /** The sequence as plain text (Copy all, Export), its buy links filled in (links: see renderBuyLinks). */
 export function sequenceText(p: Project, links: Record<string, string> = {}): string {
   return p.marketing.emails
-    .map((e, i) => [`EMAIL ${i + 1}: ${e.purpose}`, `Send: ${delayLabel(e, i)}`, `Subject: ${e.subject}`, `Preview: ${e.preview}`, '', renderBuyLinks(e.body, links), '', `[${e.ctaLabel}] → ${renderBuyLinks(e.ctaUrl ?? '', links)}`].join('\n'))
+    .map((e, i) => [`EMAIL ${i + 1}: ${e.purpose}`, `Send: ${delayLabel(e, i)}`, `Subject: ${e.subject}`, `Preview: ${e.preview}`, '', bodyText(p, e, links), ...(e.ctaLabel ? ['', `[${e.ctaLabel}] → ${renderBuyLinks(e.ctaUrl ?? '', links)}`] : [])].join('\n'))
     .join('\n\n────────────────────────\n\n');
 }
 
 const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
 
-/** The sequence as a CSV: one row per email, ready to copy into an email provider (its buy links filled in). */
-export function sequenceCsv(p: Project, links: Record<string, string> = {}): string {
-  return ['step,send,subject,preview,body,button,button_link', ...p.marketing.emails.map((e, i) => [i + 1, delayLabel(e, i), e.subject, e.preview ?? '', renderBuyLinks(e.body, links), e.ctaLabel ?? '', renderBuyLinks(e.ctaUrl ?? '', links)].map(csvCell).join(','))].join('\n');
+/**
+ * The sequence as a CSV: one row per email, ready to copy into an email provider (its buy links filled in). html: one
+ * more column with each email's designed HTML (Export all, "with HTML"), made by the caller for the chosen email tool.
+ */
+export function sequenceCsv(p: Project, links: Record<string, string> = {}, html?: (e: EmailStep) => string): string {
+  const head = `step,send,subject,preview,body,button,button_link${html ? ',html' : ''}`;
+  return [
+    head,
+    ...p.marketing.emails.map((e, i) => [i + 1, delayLabel(e, i), e.subject, e.preview ?? '', bodyText(p, e, links), e.ctaLabel ?? '', renderBuyLinks(e.ctaUrl ?? '', links), ...(html ? [html(e)] : [])].map(csvCell).join(',')),
+  ].join('\n');
 }
 
 // ───────────── subscribers ─────────────

@@ -20,6 +20,8 @@ import { findBuild } from '@/ai/agents/buildRecords';
 import { getActiveProject, useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { Callout, Modal, Segmented, Spinner } from '@/components/ui/primitives';
+import { renderEmail } from '../../../shared/email/render.mjs';
+import { renderCtx } from '@/lib/emailDoc';
 import { BrowserFrame } from '@/components/frames/Frames';
 
 const AGENT_NAME: Record<AgentId, string> = { manus: 'Manus', viktor: 'Viktor' };
@@ -32,6 +34,14 @@ type Device = 'desktop' | 'tablet' | 'mobile';
 const WIDTH: Record<Device, string> = { desktop: '100%', tablet: '768px', mobile: '390px' };
 
 /** A whole page in a sandboxed frame (it never gets the app's origin), in a browser window on a well, at the device's width. */
+/** The line above the preview: what was cleaned or how it runs, per target. */
+export function previewCaption(target: BuildTarget, hasLeadForm = false): string {
+  if (target === 'email') return 'Cleaned for email: no scripts, forms or outside pictures. The app adds the footer and unsubscribe link.';
+  if (target === 'leadMagnet') return 'Cleaned: no scripts or forms. The app makes the PDF in your brand when you publish.';
+  if (target === 'seo') return 'Scripts are off and its form doesn’t send from here.';
+  return `Its script runs here in a sandbox, as on a published page.${hasLeadForm ? ' Forms send to Email → Leads once published.' : ''}`;
+}
+
 export function HtmlPreviewFrame({ doc, sandbox, device = 'desktop', title, className }: { doc: string; sandbox: string; device?: Device; title: string; className?: string }) {
   return (
     <div className={cn('well flex min-h-0 justify-center overflow-auto p-3 sm:p-5', className)}>
@@ -90,6 +100,18 @@ export function previewImport(p: Project, target: BuildTarget, src: AgentHtmlSou
 
 /** The document the preview shows: the asset as Code & assets would build it, or the SEO page with the app's own head. */
 export function previewDocument(p: Project, target: BuildTarget, src: AgentHtmlSource, page: Extract<ImportResult, { ok: true }>['page'], urls: Record<string, string>): string {
+  // an email (P5): as the email studio would show it, one custom block in the app's frame and footer; a lead magnet: its cleaned words
+  const fill = (h: string) => h.replace(/\{\{\s*(img-\d+)\s*\}\}/g, (m, k: string) => urls[k] ?? m);
+  if (target === 'email') {
+    const doc = { v: 1 as const, theme: { id: 'brand' as const }, blocks: [{ id: 'b_agentprevw', type: 'custom' as const, html: page.html, ...(page.css ? { css: page.css } : {}), source: 'agent' as const }] };
+    try {
+      // the build's pictures stay {{img-N}} through the renderer, then show here from this device
+      return fill(renderEmail(doc, renderCtx(p, 'preview', { subject: page.title })).html);
+    } catch {
+      return '';
+    }
+  }
+  if (target === 'leadMagnet') return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Georgia,serif;max-width:640px;margin:32px auto;padding:0 16px;line-height:1.6}${page.css}</style></head><body>${fill(page.html)}</body></html>`;
   if (target === 'asset') return buildDocument({ html: page.html, css: page.css, js: page.js }, page.title, { images: urls, storageShim: true });
   const images: PromptImage[] = src.images;
   const shown: Project = {
@@ -171,7 +193,7 @@ export function HtmlPreviewHost() {
               </>
             ) : (
               <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void use()}>
-                {busy && <Spinner size={14} />} {req.target === 'seo' ? 'Use as my SEO page' : 'Use this'}
+                {busy && <Spinner size={14} />} {req.target === 'seo' ? 'Use as my SEO page' : req.target === 'leadMagnet' ? 'Use as my lead magnet' : 'Use this'}
               </button>
             ))}
         </>
@@ -184,10 +206,10 @@ export function HtmlPreviewHost() {
           {req.target === 'seo' && <Callout tone="warn">{name} wrote this page. Check every claim, price and testimonial before you publish: the app can’t check free HTML.</Callout>}
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <DeviceSwitch value={device} onChange={setDevice} />
-            <span className="text-caption text-muted">{req.target === 'seo' ? 'Scripts are off and its form doesn’t send from here.' : `Its script runs here in a sandbox, as on a published page.${result.page.hasLeadForm ? ' Forms send to Email → Leads once published.' : ''}`}</span>
+            <span className="text-caption text-muted">{previewCaption(req.target, result.page.hasLeadForm)}</span>
           </div>
           {doc ? (
-            <HtmlPreviewFrame doc={doc} sandbox={req.target === 'seo' ? SEO_SANDBOX : ASSET_SANDBOX} device={device} title={`Preview of ${req.title}`} />
+            <HtmlPreviewFrame doc={doc} sandbox={req.target === 'asset' ? ASSET_SANDBOX : SEO_SANDBOX} device={device} title={`Preview of ${req.title}`} />
           ) : (
             <p className="well flex h-[60vh] min-h-[360px] items-center justify-center gap-2 text-small text-muted" role="status">
               <Spinner size={16} /> Getting your images ready…

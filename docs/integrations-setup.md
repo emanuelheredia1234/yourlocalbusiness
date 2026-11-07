@@ -1651,3 +1651,32 @@ exactly one passes.
 
 `EXPERIMENTS=off` and republish: pages serve version A, nothing is counted or read, posts post as regular posts.
 Dropping the two tables loses only the tests; the `page_leads` columns can stay.
+
+## 15. Email studio (P5)
+
+**Nothing to set up.** P5 adds no Secrets, no webhooks and no database migration: emails' block designs live in the
+project document, and their images in the `public-files` bucket from P2
+(`supabase/migrations/20261112000000_leads_p2.sql`).
+
+- **Omnisend:** the scopes are unchanged (`campaigns.write`, `email-templates.write`), and so is the redirect URI. The
+  draft's HTML is now the designed email, rendered on the server from the email's blocks (`shared/email/render.mjs`);
+  `[[unsubscribe_link]]` is always added by the app. The server refuses a buy link that isn't one of the caller's own
+  offers (400 `UNKNOWN_BUY_LINK`), an image that isn't in the caller's `public-files/<user id>/` folder or the app's
+  `/email-icons/` (400 `IMAGE_NOT_HOSTED`), and an email over 200 KB once rendered (413 `TOO_LARGE`). The plain-text
+  request shape of older tabs is still taken for one release. Each write to Omnisend is still one attempt.
+- **Images:** `POST /api/public-images?use=email` stores an email image as `public-files/<user id>/e-<random>.<ext>`
+  (same limits: 5 MB, 200 per account, JPEG, PNG, WebP or GIF). `GET /api/public-images` lists the caller's images
+  (email images and download covers); `DELETE /api/public-images/<name>` removes one of the caller's own (409
+  `IN_USE` while a download uses it as its cover). Deleting an account clears the bucket, as before.
+- **Social icons (optional):** to show icons instead of text links, add 48×48 PNGs to `public/email-icons/`
+  (`facebook`, `instagram`, `tiktok`, `linkedin`, `x`, `youtube`, `pinterest`, `threads`), republish, then set
+  `EMAIL_ICONS=on` in Replit Secrets. The server serves them with `Cache-Control: public, max-age=31536000`.
+- **Manus and Viktor** can build an email or a lead magnet (`target: 'email' | 'leadMagnet'`). Who may use them is
+  unchanged: Viktor is the owner's only (`OWNER_ONLY`), and Manus runs on the owner's key for the owner and on the
+  customer's own key otherwise (`OWN_KEY_NEEDED`). These builds spend Manus credits (the customer's own, or the
+  owner's), never the app's AI credits.
+- **In the app:** the studio is under Marketing Hub → Email → Sequence (an email's **Blocks**); exports and Omnisend
+  drafts are under Preview & export. The app sends Omnisend the email's block doc and the merge values it owns
+  (`{ name, subject, preheader, doc, values, brand, footerNote, assetLinks }`), never HTML, after checking buy links,
+  links without an address and images the app doesn't host. In the claude.ai artifact build, uploads, Omnisend and
+  Manus/Viktor are hidden; an image block takes an https address there, and the HTML export works.

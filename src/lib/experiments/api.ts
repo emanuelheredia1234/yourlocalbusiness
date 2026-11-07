@@ -34,12 +34,18 @@ export interface ExperimentPatch {
   removeVariant?: 'c';
 }
 
+/** One version of an A/B email: its block doc and the values the app owns (P5; the server renders it), or the old plain shape. */
 export interface EmailVersion {
   subject: string;
   preheader?: string;
-  body: string;
+  body?: string;
   ctaLabel?: string;
   ctaUrl?: string;
+  doc?: import('../types').EmailDoc;
+  values?: Record<string, string>;
+  brand?: { name: string; colors: Record<string, string> };
+  footerNote?: string;
+  assetLinks?: Record<string, string>;
 }
 
 export interface EmailDraftAnswer {

@@ -1,5 +1,8 @@
 // Omnisend: each signed-in customer connects their own Omnisend brand (OAuth), and the app creates email
 // campaign drafts there from their email sequence. It never sends: they review and send in Omnisend.
+// The HTML Omnisend gets is rendered here (P5): the app sends the email's block doc and the merge values it owns,
+// and this server checks it, resolves buy links against the caller's own offers, refuses images it doesn't host,
+// re-sanitizes custom HTML and renders it with shared/email/render.mjs, which always adds [[unsubscribe_link]].
 //
 // Routes, under /api/integrations/omnisend/: GET status, POST connect, GET callback (where Omnisend sends the
 // browser back), DELETE connection, POST campaign-drafts. Every route but the callback needs the app's own
@@ -22,6 +25,10 @@
 // values /connect handed out, to a signed-in customer and within its rate limit, can cost one.
 
 import crypto from 'node:crypto';
+import { ASSET_ID_RE, LINK_TAGS, MERGE_TAGS, docBuyIds, docImageSrcs, docLinks, normalizeDoc } from '../shared/email/blocks.mjs';
+import { docFromPlain } from '../shared/email/migrate.mjs';
+import { RenderError, renderEmail } from '../shared/email/render.mjs';
+import { safeLog } from './integrations/common.mjs';
 
 export const OMNISEND_PUBLIC_BASE_URL = 'https://yourlocalbusiness.replit.app';
 export const OMNISEND_REDIRECT_URI = `${OMNISEND_PUBLIC_BASE_URL}/api/integrations/omnisend/callback`;
@@ -39,8 +46,8 @@ export const REPORTS_EVERY_MS = 60 * 60 * 1000;
 const CAMPAIGN_NAMES_TTL_MS = 24 * 60 * 60 * 1000;
 /** The cookie that ties a callback to the browser that started the connection (HTTPS only: Secure, host-only). */
 export const BINDING_COOKIE = '__Host-ylb_omnisend';
-/** The most a draft request may send: a little over the largest draft the field limits below allow. */
-export const DRAFT_BODY_LIMIT = 128 * 1024;
+/** The most a draft request may send: an email's block doc (at most 100 KB) with its merge values and brand. */
+export const DRAFT_BODY_LIMIT = 256 * 1024;
 
 const OAUTH_AUTHORIZE_URL = 'https://app.omnisend.com/oauth2/authorize';
 const OAUTH_TOKEN_URL = 'https://app.omnisend.com/oauth2/token';
@@ -52,8 +59,15 @@ const STATE_TTL_MS = 10 * 60 * 1000;
 const MAX_PENDING_PER_USER = 3;
 /** A deleted account's Omnisend documents refuse new tokens this long: the longest a sign-in token can last. */
 const FORGOTTEN_FOR_MS = 7 * 24 * 60 * 60 * 1000;
-/** Draft fields: Omnisend's own limits for the name, subject and preheader; the app's for the rest. */
-const LIMITS = { name: 250, subject: 250, preheader: 250, body: 24_000, ctaLabel: 100, ctaUrl: 2048 };
+/** Draft fields: Omnisend's own limits for the name, subject and preheader; the app's for the rest (body, ctaLabel and ctaUrl: the plain-text shape older tabs send). */
+const LIMITS = { name: 250, subject: 250, preheader: 250, body: 24_000, ctaLabel: 100, ctaUrl: 2048, value: 500, brandName: 120, footerNote: 300, assetLinks: 50 };
+/** A link merge value that isn't an address yet: the app's bracketed placeholder ([link to your free download]). */
+const PLACEHOLDER = /^\[[^\][]{1,200}\]$/;
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+const BRAND_COLORS = ['primary', 'secondary', 'accent', 'ink', 'paper'];
+/** A public-files object as the app names it (P2, and P5's email images: e-<random>). */
+const PUBLIC_FILE_NAME = /^(e-)?[A-Za-z0-9_-]{22}\.(png|jpg|webp|gif)$/;
+const IMAGE_NOT_HOSTED = 'Upload this image in the email studio first: images in emails have to be hosted by the app.';
 /** A state: 32 random bytes, its owner's pending-document tag, and the server's MAC of both (all base64url). */
 const STATE_RE = /^([A-Za-z0-9_-]{43}\.([A-Za-z0-9_-]{22}))\.([A-Za-z0-9_-]{22})$/;
 /** The binding cookie's value: 32 random bytes, then the server's MAC of them (base64url). */
@@ -137,15 +151,6 @@ function matchesBinding(storedHex, nonce) {
   return crypto.timingSafeEqual(Buffer.from(storedHex, 'hex'), crypto.createHash('sha256').update(nonce).digest());
 }
 
-function escapeHtml(text) {
-  return String(text)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
 function safeHttpUrl(value) {
   try {
     const url = new URL(String(value || ''));
@@ -153,21 +158,6 @@ function safeHttpUrl(value) {
   } catch {
     return '';
   }
-}
-
-// Omnisend needs [[unsubscribe_link]] in every template; the app's preview shows the same line under each email.
-const FOOTER = '<p style="margin:24px 0 0;border-top:1px solid #e6ebe8;padding-top:12px;font-size:12px;line-height:1.5;color:#6b7280">You’re receiving this because you signed up. <a href="[[unsubscribe_link]]" style="color:#6b7280">Unsubscribe</a> anytime.</p>';
-
-/** The email as the app's preview shows it: its paragraphs, its button, and the footer (no heading: the subject is the subject). */
-function campaignHtml({ subject, body, ctaLabel, ctaUrl }) {
-  const paragraphs = body
-    .split(/\n{2,}/)
-    .map((part) => `<p style="margin:0 0 14px">${escapeHtml(part).replaceAll('\n', '<br>')}</p>`)
-    .join('\n');
-  const button = ctaUrl && ctaLabel
-    ? `<p style="margin:20px 0 0"><a href="${escapeHtml(ctaUrl)}" style="display:inline-block;padding:10px 20px;background:#176b52;color:#fff;font-weight:bold;text-decoration:none;border-radius:8px">${escapeHtml(ctaLabel)}</a></p>`
-    : '';
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(subject)}</title></head><body style="margin:0;padding:24px;font-family:Arial,sans-serif;font-size:14px;line-height:1.65;color:#1d2420"><main style="max-width:600px;margin:0 auto">${paragraphs}${button}${FOOTER}</main></body></html>`;
 }
 
 /**
@@ -188,6 +178,8 @@ export function createOmnisendRoutes({
   fetch: fetchImpl = globalThis.fetch,
   now = () => Date.now(),
   optionalScopes = OMNISEND_OPTIONAL_SCOPES,
+  offerIds = null,
+  log = console,
 } = {}) {
   const askedScopes = [...OMNISEND_SCOPES, ...optionalScopes.filter((scope) => !OMNISEND_SCOPES.includes(scope))];
   const clientId = String(env.OMNISEND_CLIENT_ID || '').trim();
@@ -199,6 +191,12 @@ export function createOmnisendRoutes({
   ];
   const storageReady = storage?.enabled === true;
   const signer = createSigner(clientSecret);
+  // where an email's images may live: the caller's own folder in the public-files bucket, and the app's icons
+  const supabaseBase = String(env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const iconsPrefix = `${OMNISEND_PUBLIC_BASE_URL}/email-icons/`;
+  // social icons (public/email-icons/<platform>.png) only once the owner has added them: text links until then
+  const iconBase = ['on', 'true', '1'].includes(String(env.EMAIL_ICONS || '').trim().toLowerCase()) ? OMNISEND_PUBLIC_BASE_URL : '';
+  const appOrigins = new Set([OMNISEND_PUBLIC_BASE_URL, ...[env.APP_PUBLIC_URL].map((u) => safeHttpUrl(u)).filter(Boolean).map((u) => new URL(u).origin)]);
   const reply = (req, res, status, body, headers = {}) => send(res, status, body, { ...corsHeaders(req), ...headers });
 
   /**
@@ -533,22 +531,91 @@ export function createOmnisendRoutes({
     return body;
   }
 
-  /** The draft's fields, checked: anything too long is refused, never cut (the draft must be what the preview shows). */
-  function draftFrom(body) {
-    const text = (value) => (typeof value === 'string' ? value.replace(/\u0000/g, '').replace(/\r\n?/g, '\n').trim() : '');
-    const draft = {
-      subject: text(body.subject),
-      preheader: text(body.preheader),
-      body: text(body.body),
-      ctaLabel: text(body.ctaLabel),
-      ctaUrl: text(body.ctaUrl),
-    };
-    if (!draft.subject || !draft.body) throw new OmnisendError(400, 'INVALID_DRAFT', 'A subject and email body are required.');
-    const words = { subject: 'The subject', preheader: 'The preview text', body: 'The email body', ctaLabel: 'The button label', ctaUrl: 'The button link' };
-    for (const field of Object.keys(words)) {
-      if (chars(draft[field]).length > LIMITS[field]) {
-        throw new OmnisendError(400, 'INVALID_DRAFT', `${words[field]} can be up to ${LIMITS[field].toLocaleString('en-US')} characters.`);
+  /** An image the app hosts for this user: their public-files folder, or the app's email icons. */
+  function hostedImage(src, userId) {
+    if (typeof src !== 'string') return false;
+    if (src.startsWith(iconsPrefix)) return /^[a-z]{1,20}\.png$/.test(src.slice(iconsPrefix.length));
+    if (!supabaseBase || !userId) return false;
+    const prefix = `${supabaseBase}/storage/v1/object/public/public-files/${encodeURIComponent(userId)}/`;
+    return src.startsWith(prefix) && PUBLIC_FILE_NAME.test(src.slice(prefix.length));
+  }
+
+  /** The caller's offer ids (P3), for their email's buy links. */
+  async function callerOffers(userId) {
+    if (typeof offerIds !== 'function') return new Set();
+    try {
+      return new Set((await offerIds(userId)) ?? []);
+    } catch {
+      throw new OmnisendError(503, 'OFFERS_UNAVAILABLE', 'Couldn’t check this email’s buy links just now. Try again shortly.');
+    }
+  }
+
+  const invalid = (message) => new OmnisendError(400, 'INVALID_DRAFT', message);
+  const noAddress = () => new OmnisendError(400, 'INVALID_CTA', 'A button or link in this email has no web address yet.');
+
+  /** The merge values the app sends: known tags only, short, and the link tags an address or the app's placeholder. */
+  function valuesFrom(raw) {
+    if (raw === undefined || raw === null) return {};
+    if (!isRecord(raw)) throw invalid('Send the email’s merge values as an object.');
+    const out = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (!MERGE_TAGS.includes(k)) throw invalid(`{{${String(k).slice(0, 40)}}} isn’t a merge tag the app fills in.`);
+      if (typeof v !== 'string' || chars(v).length > LIMITS.value) throw invalid(`The value for {{${k}}} must be text, at most ${LIMITS.value} characters.`);
+      const value = v.replace(/\u0000/g, '').trim();
+      if (LINK_TAGS.includes(k) && value && !safeHttpUrl(value) && !PLACEHOLDER.test(value)) throw invalid('The download and page links must be full web addresses (https://…).');
+      out[k] = LINK_TAGS.includes(k) && safeHttpUrl(value) ? safeHttpUrl(value) : value;
+    }
+    // Omnisend's own first-name tag isn't confirmed yet: the app's placeholder, never a raw {{first_name}}
+    if (!out.first_name) out.first_name = '[First name]';
+    return out;
+  }
+
+  /** The brand the email shows: its name, #rrggbb colours, and a logo the app hosts. */
+  function brandFrom(raw) {
+    if (raw === undefined || raw === null) return {};
+    if (!isRecord(raw)) throw invalid('Send the brand as an object.');
+    const out = {};
+    if (raw.name !== undefined) {
+      if (typeof raw.name !== 'string' || chars(raw.name.trim()).length > LIMITS.brandName) throw invalid(`The business name can be up to ${LIMITS.brandName} characters.`);
+      out.name = raw.name.trim();
+    }
+    if (raw.colors !== undefined) {
+      if (!isRecord(raw.colors)) throw invalid('Send the brand’s colours as an object.');
+      out.colors = {};
+      for (const [k, v] of Object.entries(raw.colors)) {
+        if (!BRAND_COLORS.includes(k)) continue;
+        if (typeof v !== 'string' || !HEX_COLOR.test(v)) throw invalid('Brand colours must be written like #1a7f5a.');
+        out.colors[k] = v.toLowerCase();
       }
+    }
+    if (raw.logoUrl !== undefined && raw.logoUrl !== '') {
+      if (typeof raw.logoUrl !== 'string') throw new OmnisendError(400, 'IMAGE_NOT_HOSTED', IMAGE_NOT_HOSTED);
+      out.logoUrl = raw.logoUrl;
+      for (const k of ['logoWidth', 'logoHeight']) if (Number.isInteger(raw[k]) && raw[k] > 0 && raw[k] <= 20_000) out[k] = raw[k];
+    }
+    return out;
+  }
+
+  /** Published assets' addresses: on the app's own address only (custom domains: later). */
+  function assetLinksFrom(raw) {
+    if (raw === undefined || raw === null) return {};
+    if (!isRecord(raw) || Object.keys(raw).length > LIMITS.assetLinks) throw invalid('Send the asset links as an object.');
+    const out = {};
+    for (const [id, v] of Object.entries(raw)) {
+      const url = safeHttpUrl(v);
+      if (!ASSET_ID_RE.test(id) || !url || !url.startsWith('https://') || !appOrigins.has(new URL(url).origin)) throw invalid('An asset link must be its published address on this app.');
+      out[id] = url;
+    }
+    return out;
+  }
+
+  /** The plain-text shape older tabs send (one release): checked as before, then made a doc. */
+  function legacyDoc(body, text) {
+    const draft = { body: text(body.body), ctaLabel: text(body.ctaLabel), ctaUrl: text(body.ctaUrl) };
+    if (!draft.body) throw invalid('A subject and email body are required.');
+    const words = { body: 'The email body', ctaLabel: 'The button label', ctaUrl: 'The button link' };
+    for (const field of Object.keys(words)) {
+      if (chars(draft[field]).length > LIMITS[field]) throw invalid(`${words[field]} can be up to ${LIMITS[field].toLocaleString('en-US')} characters.`);
     }
     if (draft.ctaUrl) {
       const url = safeHttpUrl(draft.ctaUrl);
@@ -556,9 +623,79 @@ export function createOmnisendRoutes({
       draft.ctaUrl = url;
     }
     if (draft.ctaLabel && !draft.ctaUrl) throw new OmnisendError(400, 'INVALID_CTA', 'The button needs a link: a full web address (https://…).');
+    // a link without a label: no button (as the preview shows it)
+    const button = draft.ctaLabel && draft.ctaUrl;
+    return docFromPlain({ id: 'draft', body: draft.body, ctaLabel: button ? draft.ctaLabel : '', ctaUrl: button ? draft.ctaUrl : '' });
+  }
+
+  /**
+   * The draft, checked and rendered here: { name, subject, preheader, html }. The app sends the block doc and the
+   * merge values it owns (or, for one release, the old plain-text shape); this server re-checks everything, resolves
+   * buy links against the caller's own offers, refuses images it doesn't host, re-sanitizes custom blocks and renders
+   * the HTML Omnisend gets (with [[unsubscribe_link]]). Anything too long is refused, never cut.
+   */
+  async function draftFrom(body, userId) {
+    const text = (value) => (typeof value === 'string' ? value.replace(/\u0000/g, '').replace(/\r\n?/g, '\n').trim() : '');
+    const subject = text(body.subject);
+    const preheader = text(body.preheader);
+    const legacy = body.doc === undefined;
+    if (!subject) throw invalid(legacy ? 'A subject and email body are required.' : 'A subject is required.');
+    if (chars(subject).length > LIMITS.subject) throw invalid(`The subject can be up to ${LIMITS.subject} characters.`);
+    if (chars(preheader).length > LIMITS.preheader) throw invalid(`The preview text can be up to ${LIMITS.preheader} characters.`);
+    let doc;
+    let values = { first_name: '[First name]' };
+    let brand = {};
+    let footerNote = '';
+    let assetLinks = {};
+    if (legacy) doc = legacyDoc(body, text);
+    else {
+      if (!isRecord(body.doc)) throw invalid('Send the email’s design.');
+      const normalized = normalizeDoc(body.doc);
+      if (normalized.problems.length) throw invalid(normalized.problems[0].message);
+      doc = normalized.doc;
+      values = valuesFrom(body.values);
+      brand = brandFrom(body.brand);
+      footerNote = text(body.footerNote);
+      if (chars(footerNote).length > LIMITS.footerNote) throw invalid(`The footer note can be up to ${LIMITS.footerNote} characters.`);
+      assetLinks = assetLinksFrom(body.assetLinks);
+    }
+    // every link must go somewhere real: no placeholders, no unpublished assets
+    for (const link of docLinks(doc)) {
+      if (link.kind === 'magnet' || link.kind === 'page') {
+        if (!safeHttpUrl(values[link.kind === 'magnet' ? 'lead_magnet_link' : 'product_link'])) throw noAddress();
+      } else if (link.kind === 'url') {
+        if (!safeHttpUrl(link.url) && !/^(mailto:[^\s@]+@[^\s@]+|tel:\+?[0-9().\s-]{3,30})$/i.test(link.url)) throw new OmnisendError(400, 'INVALID_CTA', 'The button link must be a full web address (https://…).');
+      } else if (link.kind === 'asset' && !assetLinks[link.assetId]) {
+        throw new OmnisendError(400, 'INVALID_CTA', 'This email links to an asset that isn’t published yet. Publish it first.');
+      }
+    }
+    // buy links: only the caller's own offers; the address is this server's (a client's is never used)
+    const links = {};
+    const buyIds = docBuyIds(doc);
+    if (buyIds.length) {
+      const mine = await callerOffers(userId);
+      for (const id of buyIds) {
+        if (!mine.has(id)) throw new OmnisendError(400, 'UNKNOWN_BUY_LINK', 'This buy link isn’t one of this business’s offers.');
+        links[`buy:${id}`] = `${OMNISEND_PUBLIC_BASE_URL}/b/${id}`;
+      }
+    }
+    for (const [id, url] of Object.entries(assetLinks)) links[`asset:${id}`] = url;
+    // images: only the ones the app hosts for this user (no tracking pixels, nothing hotlinked)
+    for (const src of [...docImageSrcs(doc), ...(brand.logoUrl ? [brand.logoUrl] : [])]) {
+      if (!hostedImage(src, userId)) throw new OmnisendError(400, 'IMAGE_NOT_HOSTED', IMAGE_NOT_HOSTED);
+    }
+    let rendered;
+    try {
+      rendered = renderEmail(doc, { target: 'omnisend', subject, preheader, brand, values, links, footerNote, iconBase, imageAllowed: (src) => hostedImage(src, userId) });
+    } catch (e) {
+      if (e instanceof RenderError && e.code === 'TOO_LARGE') throw new OmnisendError(413, 'TOO_LARGE', 'This email is too large for an Omnisend draft.');
+      // a bug on our side (the unsubscribe guard, anything else): the owner's log, generic words for the customer
+      safeLog('omnisend_render_failed', { owner: true, code: e instanceof RenderError ? e.code : e?.name || 'Error' }, log);
+      throw new OmnisendError(500, 'RENDER_FAILED', 'Omnisend couldn’t take this draft. Try again later.');
+    }
     // the campaign's name isn't part of the email, so a long one is shortened to Omnisend's limit
-    const name = chars(text(body.name) || `Email campaign — ${draft.subject}`).slice(0, LIMITS.name).join('').trim();
-    return { ...draft, name };
+    const name = chars(text(body.name) || `Email campaign — ${subject}`).slice(0, LIMITS.name).join('').trim();
+    return { name, subject, preheader, html: rendered.html };
   }
 
   async function createCampaignDraft(req, res, user) {
@@ -574,13 +711,13 @@ export function createOmnisendRoutes({
     if (!connection.accessToken) throw new OmnisendError(409, 'NOT_CONNECTED', 'Connect your Omnisend account before creating a draft.');
     const accessToken = connection.accessToken;
 
-    const draft = draftFrom(await readDraftBody(req));
+    const draft = await draftFrom(await readDraftBody(req), user.id);
 
     let template;
     try {
       template = await omnisendCall(accessToken, '/email-templates/import', {
         name: chars(`${draft.name} — email content`).slice(0, 255).join(''),
-        html: campaignHtml(draft),
+        html: draft.html,
       });
     } catch (failure) {
       throw await draftFailure(failure, 'template', user.id, accessToken);
@@ -652,8 +789,9 @@ export function createOmnisendRoutes({
   async function createAbDraft(userId, { name, variants, settings = {} } = {}) {
     const accessToken = await usableToken(userId);
     if (!isRecord(variants?.a) || !isRecord(variants?.b)) throw new OmnisendError(400, 'INVALID_DRAFT', 'Both versions need a subject and a body.');
-    const a = draftFrom({ ...variants.a, name });
-    const b = draftFrom({ ...variants.b, name });
+    // each version is checked and rendered on its own (the app sends both docs: B is A with its subject or opening changed)
+    const a = await draftFrom({ ...variants.a, name }, userId);
+    const b = await draftFrom({ ...variants.b, name }, userId);
     const intIn = (v, lo, hi, d) => (Number.isInteger(v) && v >= lo && v <= hi ? v : d);
     const testSizePercent = intIn(settings.testSizePercent, 10, 50, 30);
     const decisionHours = intIn(settings.decisionHours, 4, 48, 24);
@@ -663,7 +801,7 @@ export function createOmnisendRoutes({
     for (const [i, d] of [a, b].entries()) {
       let template;
       try {
-        template = await omnisendCall(accessToken, '/email-templates/import', { name: chars(`${title} — version ${i ? 'B' : 'A'}`).slice(0, 255).join(''), html: campaignHtml(d) });
+        template = await omnisendCall(accessToken, '/email-templates/import', { name: chars(`${title} — version ${i ? 'B' : 'A'}`).slice(0, 255).join(''), html: d.html });
       } catch (failure) {
         const err = await draftFailure(failure, 'template', userId, accessToken);
         if (i && err instanceof OmnisendError) err.publicMessage = err.message = `Version A’s email template was imported. ${err.publicMessage}`;

@@ -18,6 +18,15 @@ import { openPage } from '@/ai/assistant/nav';
 import { useStore } from '@/store/useStore';
 import { toast, useUI } from '@/store/ui';
 import { importAgentHtml, rewriteImageTokens } from './importHtml';
+import { importAgentEmailHtml, magnetFromHtml } from './emailImport';
+import type { LeadMagnetType } from '@/lib/types';
+import { LEAD_MAGNET_TYPES } from '@/ai/local/email';
+import { applyLeadMagnet } from '@/lib/emailFunnel';
+import { docOf, newBlockId, replaceDoc } from '@/lib/emailDoc';
+import { uploadPublicImage } from '@/lib/leadFiles';
+import { getBlob } from '@/lib/storage';
+import { uid } from '@/lib/utils';
+import { confirmAction } from '@/components/ui/primitives';
 import { findBuild, markImported } from './buildRecords';
 
 export interface AgentHtmlSource {
@@ -33,6 +42,8 @@ export interface AgentHtmlSource {
   kind?: string;
   /** the owner's words, kept as the asset's prompt */
   request?: string;
+  /** an email build: which email it designs */
+  stepId?: string;
 }
 
 const AGENT_NAME: Record<AgentId, string> = { manus: 'Manus', viktor: 'Viktor' };
@@ -227,6 +238,58 @@ export function setAgentSeoPage(projectId: string, src: AgentHtmlSource): { ok: 
   return { ok: true, notes: page.notes, replaced };
 }
 
+/** Upload the build's images an email shows ({{img-N}}) to the app's public images; all or nothing. */
+export async function hostEmailImages(html: string, images: PromptImage[], upload = uploadPublicImage): Promise<{ ok: true; html: string } | { ok: false; message: string }> {
+  let out = html;
+  for (const key of imageTokens(html)) {
+    const img = images.find((i) => i.key === key);
+    const blob = img ? await getBlob(img.media.id).catch(() => null) : null;
+    if (!img || !blob) return { ok: false, message: `The picture ${key} from this build isn’t on this device. Nothing was changed.` };
+    try {
+      const name = /\.(png|jpe?g|webp|gif)$/i.test(img.media.name ?? '') ? img.media.name! : `${key}.${blob.type === 'image/jpeg' ? 'jpg' : 'png'}`;
+      const { url } = await upload(blob, name, undefined, 'email');
+      out = out.split(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g')).join(url);
+    } catch (e) {
+      return { ok: false, message: `A picture couldn’t be uploaded, so nothing was changed: ${e instanceof Error ? e.message : 'try again.'}` };
+    }
+  }
+  return { ok: true, html: out };
+}
+
+/**
+ * A designed email from Manus or Viktor: one custom block (cleaned by the shared sanitizer, its pictures uploaded
+ * first), in place of the email's blocks (Undo puts them back) or added below them. Nothing is half-applied.
+ */
+export async function setAgentEmail(projectId: string, src: AgentHtmlSource, o: { append?: boolean; upload?: typeof uploadPublicImage } = {}): Promise<{ ok: true; notes: string[] } | { ok: false; message: string }> {
+  const p = projectOf(projectId);
+  const step = p?.marketing.emails.find((e) => e.id === src.stepId);
+  if (!p || !step) return { ok: false, message: 'That email isn’t in the sequence any more.' };
+  const imported = importAgentEmailHtml(src.html, { target: 'email', imageKeys: src.images.map((i) => i.key) });
+  if (!imported.ok) return { ok: false, message: imported.message };
+  const hosted = await hostEmailImages(imported.html, src.images, o.upload);
+  if (!hosted.ok) return hosted;
+  const now = projectOf(projectId)?.marketing.emails.find((e) => e.id === step.id);
+  if (!now) return { ok: false, message: 'That email isn’t in the sequence any more.' };
+  const current = docOf(now, projectOf(projectId)!);
+  const block = { id: newBlockId(), type: 'custom' as const, html: hosted.html, ...(imported.css ? { css: imported.css } : {}), source: 'agent' as const, ...(imported.notes.length ? { notes: imported.notes.slice(0, 20) } : {}) };
+  replaceDoc(projectId, step.id, { ...current, blocks: o.append ? [...current.blocks, block] : [block] });
+  return { ok: true, notes: imported.notes };
+}
+
+/** A lead magnet from Manus or Viktor: its words read into the guide (the app makes the PDF); the download stays, to publish again. */
+export function setAgentLeadMagnet(projectId: string, src: AgentHtmlSource): { ok: true; notes: string[] } | { ok: false; message: string } {
+  const p = projectOf(projectId);
+  if (!p) return { ok: false, message: 'That project isn’t here any more.' };
+  const imported = importAgentEmailHtml(src.html, { target: 'leadMagnet', imageKeys: [] });
+  if (!imported.ok) return { ok: false, message: imported.message };
+  const current = p.marketing.leadMagnet;
+  const type = (LEAD_MAGNET_TYPES.some((t) => t.id === src.kind) ? src.kind : current?.type ?? 'checklist') as LeadMagnetType;
+  const lm = magnetFromHtml(imported.html, { type, current, id: current?.id ?? uid('lm'), now: Date.now(), typeLabel: LEAD_MAGNET_TYPES.find((t) => t.id === type)?.label ?? 'guide' });
+  if (!lm) return { ok: false, message: 'That document has no title and sections the app can use. Ask for one with an h1 title and h2 sections.' };
+  applyLeadMagnet({ ...lm, design: { source: 'agent', via: src.via, ...(src.buildId ? { buildId: src.buildId } : {}), importedAt: Date.now() } }, projectId);
+  return { ok: true, notes: imported.notes };
+}
+
 /** Studio → Code & assets, with that asset open (through the leave guard). */
 export async function showAgentAsset(assetId: string): Promise<boolean> {
   if (!(await openPage('studio', 'code'))) return false;
@@ -243,8 +306,28 @@ export function showAgentSeoPage(): Promise<boolean> {
  * "Use this": the page as an asset (a new one, or `replaceAssetId`) or as the SEO page, then that page opens. A
  * build it came from is marked as used. Says what happened in a toast; nothing is published.
  */
-export async function applyAgentPage(projectId: string, target: BuildTarget, src: AgentHtmlSource, o: { replaceAssetId?: string; resultAt?: string } = {}): Promise<{ ok: true; notes: string[] } | { ok: false; message: string }> {
+export async function applyAgentPage(projectId: string, target: BuildTarget, src: AgentHtmlSource, o: { replaceAssetId?: string; resultAt?: string; append?: boolean } = {}): Promise<{ ok: true; notes: string[] } | { ok: false; message: string }> {
   const name = AGENT_NAME[src.via];
+  if (target === 'email') {
+    const step = projectOf(projectId)?.marketing.emails.find((e) => e.id === src.stepId);
+    if (step?.doc && !o.append && !(await confirmAction({ title: `Use ${name}’s email?`, body: 'It replaces this email’s blocks. Undo in the email studio puts them back.', confirmLabel: 'Use this' }))) return { ok: false, message: 'Kept your email as it was.' };
+    const r = await setAgentEmail(projectId, src, { append: o.append });
+    if (!r.ok) return r;
+    if (src.buildId && findBuild(projectId, src.buildId)) markImported(projectId, src.buildId, { at: Date.now(), result: o.resultAt ?? '', email: src.stepId });
+    toast({ kind: 'success', title: o.append ? `Added ${name}’s design below` : `Your email is now ${name}’s design`, body: r.notes[0] ?? 'Undo in the email studio puts the earlier blocks back.' });
+    void openPage('marketing-email', 'sequence');
+    return r;
+  }
+  if (target === 'leadMagnet') {
+    if (projectOf(projectId)?.marketing.leadMagnet && !(await confirmAction({ title: `Use ${name}’s lead magnet?`, body: 'Its words replace your lead magnet’s. Your download stays: publish it again to update it.', confirmLabel: 'Use this' }))) return { ok: false, message: 'Kept your lead magnet as it was.' };
+    const r = setAgentLeadMagnet(projectId, src);
+    if (!r.ok) return r;
+    if (src.buildId && findBuild(projectId, src.buildId)) markImported(projectId, src.buildId, { at: Date.now(), result: o.resultAt ?? '', leadMagnet: true });
+    const published = !!projectOf(projectId)?.marketing.leadMagnet?.delivery;
+    toast({ kind: 'success', title: `Your lead magnet is now ${name}’s`, body: published ? 'Your download is out of date: publish it again in Lead magnet › Delivery.' : 'Publish it in Lead magnet › Delivery when you’re ready.' });
+    void openPage('marketing-email', 'magnet');
+    return r;
+  }
   if (target === 'asset') {
     const r = addAgentAsset(projectId, src, o);
     if (!r.ok) return r;

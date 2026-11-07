@@ -225,3 +225,47 @@ describe('the buttons', () => {
     }
   });
 });
+
+describe('emails and lead magnets (P5)', () => {
+  it('the window has its own title, kinds and words for each', () => {
+    const email = renderToStaticMarkup(createElement(BuildForm, { project, target: 'email', f: fields({ kind: 'welcome', request: 'Design this email.' }), onNext: () => {} }));
+    expect(email).toContain('Design an email with Manus or Viktor');
+    expect(email).toContain('Welcome email');
+    expect(email).toContain('Offer email');
+    const magnet = renderToStaticMarkup(createElement(BuildForm, { project, target: 'leadMagnet', f: fields({ kind: 'checklist', request: '' }), onNext: () => {} }));
+    expect(magnet).toContain('Make your lead magnet with Manus or Viktor');
+    expect(magnet).toContain('7-day workbook');
+    expect(confirmWhat('email', 'offer', { words: true, images: 0, facts: 2, website: false })).toBe('Build an offer email from your words and 2 facts.');
+  });
+
+  it('the per-email buttons show their lead words (clicking them: AgentButtons.dom.test.ts)', async () => {
+    const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(AgentButtons, { target: 'email', stepId: 'em_1', kind: 'welcome', lead: 'or design it with' })));
+    expect(html).toContain('or design it with');
+    expect(html).toContain('Manus');
+  });
+
+  it('the preview’s line for a lead magnet talks about its PDF, not an email footer', async () => {
+    const { previewCaption } = await import('./HtmlPreview');
+    expect(previewCaption('leadMagnet')).toBe('Cleaned: no scripts or forms. The app makes the PDF in your brand when you publish.');
+    expect(previewCaption('leadMagnet')).not.toMatch(/footer|unsubscribe/);
+    expect(previewCaption('email')).toContain('unsubscribe link');
+  });
+
+  it('a lead magnet build takes no images (its PDF is the app’s design); an email build does', () => {
+    const email = renderToStaticMarkup(createElement(BuildForm, { project, target: 'email', f: fields({ kind: 'welcome', request: 'Design this email.' }), onNext: () => {} }));
+    expect(email).toContain('Your images go to');
+    const magnet = renderToStaticMarkup(createElement(BuildForm, { project, target: 'leadMagnet', f: fields({ kind: 'checklist', request: 'A checklist', images: [] }), onNext: () => {} }));
+    expect(magnet).not.toContain('Your images go to');
+    expect(magnet).not.toContain('Paste or drop images');
+  });
+
+  it('prefills an email build with the email’s words, cut at a paragraph to fit', async () => {
+    const { emailRequestOf } = await import('./buildWindow');
+    expect(emailRequestOf('Hi', 'One.\n\nTwo.', 4000)).toBe('Design this email. Subject: Hi\n\nThe email’s words:\nOne.\n\nTwo.');
+    const long = emailRequestOf('Hi', `${'a'.repeat(900)}\n\n${'b'.repeat(900)}`, 1500);
+    expect(long.length).toBeLessThanOrEqual(1500);
+    expect(long).toContain('a'.repeat(900));
+    expect(long).not.toContain('b'.repeat(900));
+    expect(long).toContain('(The rest of the email is left out: keep it short.)');
+  });
+});

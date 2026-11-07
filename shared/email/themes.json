@@ -1,0 +1,49 @@
+{
+  "fonts": {
+    "system": { "label": "System sans", "stack": "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" },
+    "arial": { "label": "Arial", "stack": "Arial, Helvetica, sans-serif" },
+    "georgia": { "label": "Georgia", "stack": "Georgia, 'Times New Roman', Times, serif" },
+    "verdana": { "label": "Verdana", "stack": "Verdana, Geneva, sans-serif" },
+    "trebuchet": { "label": "Trebuchet MS", "stack": "'Trebuchet MS', Arial, Helvetica, sans-serif" },
+    "tahoma": { "label": "Tahoma", "stack": "Tahoma, Verdana, Geneva, sans-serif" }
+  },
+  "brandDefaults": { "primary": "#176b52", "accent": "#e0a526", "ink": "#1d2420", "paper": "#ffffff" },
+  "themes": [
+    {
+      "id": "brand",
+      "label": "Your brand",
+      "from": ["primary", "accent", "ink", "paper"],
+      "tokens": { "font": "system", "headingFont": "system", "size": 16, "radius": 8, "width": 600, "density": "regular", "headingCase": "normal", "headerLogo": false }
+    },
+    {
+      "id": "clean",
+      "label": "Clean",
+      "from": ["primary", "accent"],
+      "tokens": { "bg": "#f3f5f7", "paper": "#ffffff", "ink": "#1d2420", "muted": "#5f6b66", "rule": "#e3e8e6", "font": "arial", "headingFont": "arial", "size": 16, "radius": 6, "width": 600, "density": "regular", "headingCase": "normal", "headerLogo": true }
+    },
+    {
+      "id": "bold",
+      "label": "Bold",
+      "from": ["primary", "accent"],
+      "tokens": { "bg": "#151515", "paper": "#ffffff", "ink": "#111111", "muted": "#555555", "rule": "#dddddd", "font": "arial", "headingFont": "trebuchet", "size": 17, "radius": 0, "width": 600, "density": "airy", "headingCase": "upper", "headerLogo": true }
+    },
+    {
+      "id": "warm",
+      "label": "Warm",
+      "from": ["primary", "accent"],
+      "tokens": { "bg": "#f5ede2", "paper": "#fffaf3", "ink": "#3a2e28", "muted": "#7a6a5f", "rule": "#eadccb", "font": "georgia", "headingFont": "georgia", "size": 17, "radius": 14, "width": 600, "density": "airy", "headingCase": "normal", "headerLogo": true }
+    },
+    {
+      "id": "minimal",
+      "label": "Minimal",
+      "from": ["primary"],
+      "tokens": { "bg": "#ffffff", "paper": "#ffffff", "ink": "#222222", "muted": "#666666", "rule": "#e6e6e6", "font": "arial", "headingFont": "arial", "size": 15, "radius": 0, "width": 560, "density": "tight", "headingCase": "normal", "headerLogo": false }
+    },
+    {
+      "id": "editorial",
+      "label": "Editorial",
+      "from": ["primary", "accent"],
+      "tokens": { "bg": "#f1efe9", "paper": "#ffffff", "ink": "#1a1a1a", "muted": "#5c5c5c", "rule": "#dedbd2", "font": "georgia", "headingFont": "georgia", "size": 17, "radius": 2, "width": 620, "density": "airy", "headingCase": "normal", "headerLogo": true }
+    }
+  ]
+}

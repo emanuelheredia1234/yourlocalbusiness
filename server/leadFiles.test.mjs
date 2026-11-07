@@ -257,6 +257,54 @@ describe('public images', () => {
   });
 });
 
+describe('email images (P5)', () => {
+  const put = (who, q = '') => request(app.base, `/api/public-images${q}`, { method: 'POST', headers: { authorization: `Bearer ${who.token}`, 'content-type': 'application/octet-stream' }, body: PNG }).then((r) => ({ ...r, json: () => JSON.parse(r.text) }));
+  const list = async (who) => (await api('/api/public-images', { who })).json();
+  const remove = (who, name) => api(`/api/public-images/${name}`, { who, method: 'DELETE' });
+
+  it('use=email names the image e-<random>; the list tells email images from covers, the caller’s only', async () => {
+    const r = await put(alice, '?use=email');
+    expect(r.status).toBe(200);
+    expect(r.json().path).toMatch(new RegExp(`^${alice.user.id}/e-[A-Za-z0-9_-]{22}\\.png$`));
+    expect((await put(alice, '?use=banner')).status).toBe(400);
+    const { file } = await create(alice, {});
+    const cover = await put(alice, `?leadFile=${file.id}&use=email`);
+    // a download's cover is never named as an email image
+    expect(cover.json().path).toMatch(new RegExp(`^${alice.user.id}/[A-Za-z0-9_-]{22}\\.png$`));
+    const mine = await list(alice);
+    expect(mine.limit).toBe(200);
+    const email = mine.images.find((i) => i.path === r.json().path);
+    expect(email).toMatchObject({ url: r.json().url, use: 'email', bytes: PNG.length });
+    expect(mine.images.find((i) => i.path === cover.json().path)).toMatchObject({ use: 'cover' });
+    expect(mine.images.every((i) => i.path.startsWith(`${alice.user.id}/`))).toBe(true);
+    expect((await list(bob)).images.some((i) => i.path.startsWith(`${alice.user.id}/`))).toBe(false);
+    // signed in, same site
+    expect((await request(app.base, '/api/public-images')).status).toBe(401);
+    expect((await api('/api/public-images', { who: alice, headers: { origin: 'https://evil.example' } })).status).toBe(403);
+    await api(`/api/lead-files/${file.id}`, { who: alice, method: 'DELETE' });
+  });
+
+  it('deletes the caller’s own image only; a download’s cover is IN_USE', async () => {
+    const img = (await put(alice, '?use=email')).json();
+    const name = img.path.split('/')[1];
+    // bob's delete of the same name is his own folder: alice's image stays
+    expect((await remove(bob, name)).status).toBe(200);
+    expect(supa.objects.has(`public-files/${img.path}`)).toBe(true);
+    expect((await remove(alice, name)).status).toBe(200);
+    expect(supa.objects.has(`public-files/${img.path}`)).toBe(false);
+    // already gone counts as done
+    expect((await remove(alice, name)).status).toBe(200);
+    const { file } = await create(alice, {});
+    const cover = (await put(alice, `?leadFile=${file.id}`)).json();
+    const r = await remove(alice, cover.path.split('/')[1]);
+    expect([r.status, r.json().code]).toEqual([409, 'IN_USE']);
+    expect(supa.objects.has(`public-files/${cover.path}`)).toBe(true);
+    for (const bad of ['..%2Fx.png', 'x.png', `${'A'.repeat(22)}.svg`, `${'A'.repeat(22)}.png%2F..`]) expect((await remove(alice, bad)).status, bad).toBe(404);
+    expect((await api(`/api/public-images/${name}`, { who: alice, method: 'PUT' })).status).toBe(405);
+    await api(`/api/lead-files/${file.id}`, { who: alice, method: 'DELETE' });
+  });
+});
+
 describe('/m/<id> for visitors', () => {
   let gated;
   let open;

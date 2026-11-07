@@ -5,8 +5,8 @@
 import type { PromptImage } from './types';
 
 export type AgentId = 'manus' | 'viktor';
-/** what a build makes: a Code & assets asset, or the SEO page */
-export type BuildTarget = 'asset' | 'seo';
+/** what a build makes: a Code & assets asset, the SEO page, an email of the sequence (P5) or the lead magnet (P5) */
+export type BuildTarget = 'asset' | 'seo' | 'email' | 'leadMagnet';
 
 /** A fact the owner lets the agent use: one line, as entered in the workspace. */
 export type BuildFactId = 'name' | 'what' | 'place' | 'offer' | 'booking' | 'payment' | 'email' | 'phone' | 'hours';
@@ -100,8 +100,10 @@ export interface AgentBuild {
   id: string;
   via: AgentId;
   target: BuildTarget;
-  /** CodeKind (asset) or PageType (seo) */
+  /** CodeKind (asset), PageType (seo), an email kind (email) or a LeadMagnetType (leadMagnet) */
   kind: string;
+  /** an email build: which email of the sequence it designs */
+  stepId?: string;
   /** what was sent, so Ask for changes and Use this know it */
   request: string;
   website: string;
@@ -130,7 +132,7 @@ export interface AgentBuild {
   /** where the latest round's page is: Manus "<event id>:<index>" or "<event id>:code"; Slack "<ts>" or "<ts>:<file id>" */
   result?: { at: string; filename: string; bytes: number; source: 'file' | 'code' };
   /** what the owner did with a page */
-  imported?: { at: number; result: string; assetId?: string; seo?: boolean };
+  imported?: { at: number; result: string; assetId?: string; seo?: boolean; email?: string; leadMagnet?: boolean };
 }
 
 // ───────────── reading replies ─────────────

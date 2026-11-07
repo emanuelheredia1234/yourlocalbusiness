@@ -160,9 +160,11 @@ function serveStatic(req, res, url) {
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(DIST, 'index.html');
   const ext = path.extname(file).toLowerCase();
   const immutable = file.includes(`${path.sep}assets${path.sep}`);
+  // email icons (P5) are fetched by inbox apps for every email that shows them: cached a year (not renamed per build)
+  const emailIcon = file.startsWith(path.join(DIST, 'email-icons') + path.sep);
   res.writeHead(200, {
     'content-type': MIME[ext] || 'application/octet-stream',
-    'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+    'cache-control': immutable ? 'public, max-age=31536000, immutable' : emailIcon ? 'public, max-age=31536000' : 'no-cache',
     'x-content-type-options': 'nosniff',
   });
   // a file that can't be read after all ends this response, not the server
@@ -206,6 +208,8 @@ const omnisend = createOmnisendRoutes({
   corsHeaders,
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
   clientKey: (req) => pages.visitor(req),
+  // an email's buy links must be the caller's own offers (P3; read when a draft is made, after startup)
+  offerIds: (userId) => integrations.offers?.idsFor?.(userId) ?? [],
 });
 // Customer Gmail (server/gmail.mjs): the customer's own mailbox for later outreach. Not Nango.
 const gmail = createGmailRoutes({

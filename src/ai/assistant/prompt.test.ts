@@ -17,6 +17,7 @@ import { TOOL_GROUPS, registry } from './tools';
 import { workspaceSummary } from './workspace';
 import { useAuth } from '@/lib/cloud/auth';
 import { useExperimentsConfig } from '@/lib/experiments/config';
+import { generateEmailSequence } from '@/ai/local/email';
 
 const post = (id: string, extra: Partial<Post> = {}): Post =>
   ({ id, projectId: 'p1', status: 'scheduled', platform: 'instagram', format: 'image', style: 'minimal', postType: 'tip', headline: `Headline ${id}`, visualPrompt: '', caption: 'Caption', hashtags: [], scheduledAt: '2020-01-01T10:00:00.000Z', watermark: false, source: 'composer', createdAt: 1, updatedAt: 1, seed: 1, ...extra }) as Post;
@@ -40,6 +41,8 @@ describe('the prompt', () => {
     // every tool: with A/B tests on (their group is listed only then)
     useAuth.setState({ phase: 'ready' } as never);
     useExperimentsConfig.setState({ config: { enabled: true, reachable: true } });
+    // and the email studio's (listed once the business has emails)
+    useStore.setState((st) => ({ projects: st.projects.map((x) => ({ ...x, marketing: { ...x.marketing, emails: generateEmailSequence(x, null) } })) }));
     const history = [msg('user', 'Hi there'), msg('assistant', 'Hello! How can I help?'), msg('activity', 'Opened Content calendar', { tool: 'navigate', status: 'ok' }), msg('card', 'Make a video?', { card: { title: 'Make a video?', what: 'x', who: 'y', confirmLabel: 'Go', state: 'declined' } })];
     const p = buildPrompt(input({ history, results: [{ step: 1, tool: 'list_posts', ok: true, status: 'ok', result: { total: 2 } }] }));
     expect(p.startsWith(ASSISTANT_MARKER)).toBe(true);

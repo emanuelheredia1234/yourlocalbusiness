@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ChevronDown, Copy, Download, Eye, FlaskConical, PenLine } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Blocks, ChevronDown, Copy, Download, Eye, FlaskConical, PenLine, Type } from 'lucide-react';
 import { useExperimentsOn } from '@/lib/experiments/config';
 import { useProjectExperiments } from '@/store/experiments';
 import { useMakeVariations } from '@/components/experiments/MakeVariations';
@@ -7,7 +7,7 @@ import { EmailAbPanel } from '@/components/experiments/EmailAbPanel';
 import type { EmailStep, Project } from '@/lib/types';
 import { cn, slugify } from '@/lib/utils';
 import { delayToMs, renderTokens } from '@/ai/local/email';
-import { emailSequenceTask } from '@/ai/tasks';
+import { emailDesignTask, emailSequenceTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { applyEmailSequence, delayLabel, sequenceText } from '@/lib/emailFunnel';
 import { copyText } from '@/lib/platform';
@@ -15,9 +15,16 @@ import { getActiveProject, useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, Empty, Field, MoreMenu, Section, Segmented, confirmAction } from '@/components/ui/primitives';
-import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
-import { EmailView, PanelHead, emailTokens, hasUnknownBuyLink } from './shared';
+import { PanelHead, emailTokens, hasUnknownBuyLink } from './shared';
+import { EmailStudio } from './studio/EmailStudio';
+import { EmailPreview } from './studio/EmailFrame';
+import { EmailAIActions, designInput } from './studio/AIActions';
+import { replaceDoc } from '@/lib/emailDoc';
+import { designAllNotice, designEmails } from './designAll';
+import { AgentButtons } from '@/components/agents/AgentButtons';
+import { AgentBuildList } from '@/components/agents/AgentBuildList';
+import { emailKindFor } from '@/ai/agents/builds';
 import { useProjectOffers } from '@/store/offers';
 import { offerPrice } from '@/lib/offers';
 import { buyToken } from '@/lib/buyLinks';
@@ -34,8 +41,13 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
   const updateMarketing = useStore((s) => s.updateMarketing);
   const emails = project.marketing.emails;
   const ai = useAI(emailSequenceTask);
+  const designAll = useAI(emailDesignTask);
   const [open, setOpen] = useState<string | null>(emails[0]?.id ?? null);
   const [preview, setPreview] = useState<Record<string, boolean>>({});
+  // Blocks (the studio) or Plain text, per email: the studio is the Edit view (opening it writes nothing: an email
+  // without a design shows the blocks made from its words until one is changed)
+  const [mode, setMode] = useState<Record<string, 'blocks' | 'plain'>>({});
+  const modeOf = (e: EmailStep) => mode[e.id] ?? 'blocks';
   const patch = (id: string, p: Partial<EmailStep>) => updateMarketing({ emails: getActiveProject()!.marketing.emails.map((e) => (e.id === id ? { ...e, ...p } : e)) });
   const totalDays = emails.reduce((n, e) => n + delayToMs(e.delay), 0) / 86_400_000;
   const tokens = emailTokens(project);
@@ -60,6 +72,41 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
       applyEmailSequence(r, project.id);
       setOpen(r[0]?.id ?? null);
     }
+  };
+  // one AI request per email, one after another; the first failure or a Stop ends it (nothing is retried), and the
+  // next Design all carries on from that email
+  const [resumeAt, setResumeAt] = useState(0);
+  const stopped = useRef(false);
+  const stopDesignAll = () => {
+    stopped.current = true;
+    designAll.stop();
+  };
+  const designEvery = async () => {
+    const total = getActiveProject()!.marketing.emails.length;
+    const from = resumeAt > 0 && resumeAt < total ? resumeAt : 0;
+    const n = total - from;
+    const what = from ? `the other ${n} emails (from email ${from + 1})` : `all ${n} emails`;
+    if (!(await confirmAction({ title: `Design ${what}?`, body: `Uses AI credits for ${n} emails, one request each. Each email’s blocks are replaced; your words stay. Undo is on each email.`, confirmLabel: from ? `Design ${n} more` : `Design all ${n}` }))) return;
+    stopped.current = false;
+    const outcome = await designEmails({
+      from,
+      count: () => getActiveProject()?.marketing.emails.length ?? 0,
+      emailAt: (i) => {
+        const p = getActiveProject();
+        const e = p?.id === project.id ? p.marketing.emails[i] : undefined;
+        return p && e ? { p, e } : undefined;
+      },
+      run: ({ p, e }, i) => designAll.run(designInput(e, p, i)),
+      write: ({ e }, doc) => replaceDoc(project.id, e.id, doc as Parameters<typeof replaceDoc>[2]),
+      stopped: () => stopped.current,
+    });
+    if (outcome.kind === 'stopped' || outcome.kind === 'failed') {
+      setResumeAt(outcome.at);
+      toast(designAllNotice(outcome));
+      return;
+    }
+    setResumeAt(0);
+    if (outcome.kind === 'done') toast({ kind: 'success', title: from ? `Designed the other ${n} emails` : `Designed all ${n} emails`, body: 'Open an email to change its blocks, or Undo on it.' });
   };
   const copyAll = async () => {
     const text = sequenceText(getActiveProject()!, tokens);
@@ -102,9 +149,13 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
         description={`${magnet ? `For everyone who claims “${magnet.title}” · ` : ''}Runs over ${span}`}
         actions={
           <>
-            <GenerateButton size="sm" running={ai.running} runningLabel="Writing…" onClick={generate}>
+            <GenerateButton size="sm" running={ai.running} disabled={designAll.running} runningLabel="Writing…" onClick={generate}>
               Rewrite sequence
             </GenerateButton>
+            <GenerateButton size="sm" running={designAll.running} disabled={ai.running} runningLabel="Designing…" onClick={() => void designEvery()}>
+              Design all {emails.length}
+            </GenerateButton>
+            <AgentButtons target="email" stepId={open ?? emails[0]?.id} kind={emailKindFor(Math.max(0, emails.findIndex((x) => x.id === open)), emails.length)} lead="Design with" />
             <button type="button" className="btn btn-primary btn-sm" onClick={onPreview}>
               <Eye /> Preview & export
             </button>
@@ -119,6 +170,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
       />
       <div className="flex flex-col gap-4">
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
+        <AIThinking running={designAll.running} stage={designAll.stage} chars={designAll.chars} onStop={stopDesignAll} />
         {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
         <ol className="relative flex flex-col gap-3 before:absolute before:bottom-5 before:left-[39px] before:top-5 before:w-px before:bg-line max-sm:before:hidden">
           {emails.map((e, i) => {
@@ -164,9 +216,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
                       />
                       {abOn && e.variants && <EmailAbPanel project={project} step={e} />}
                       {pv ? (
-                        <BrowserFrame>
-                          <EmailView project={project} email={e} tokens={tokens} />
-                        </BrowserFrame>
+                        <EmailPreview project={project} step={e} />
                       ) : (
                         <div className="grid gap-4">
                           <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_auto]">
@@ -187,29 +237,68 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
                           <Field label="Preview text" htmlFor={`pre-${e.id}`} right={<span className={cn('num font-mono', e.preview.length > 90 && 'text-warn')}>{e.preview.length}/90</span>} hint="Shown next to the subject in most inboxes.">
                             <input id={`pre-${e.id}`} className="input" value={e.preview} onChange={(ev) => patch(e.id, { preview: ev.target.value })} />
                           </Field>
-                          <Field label="Body" htmlFor={`body-${e.id}`} hint="Merge tags: {{first_name}}, {{lead_magnet_link}}, {{product_link}}, {{sender_name}}">
-                            <AutoTextarea id={`body-${e.id}`} value={e.body} onChange={(v) => patch(e.id, { body: v })} minRows={8} />
-                          </Field>
-                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                            <Field label="Button label" htmlFor={`cta-${e.id}`}>
-                              <input id={`cta-${e.id}`} className="input" value={e.ctaLabel} onChange={(ev) => patch(e.id, { ctaLabel: ev.target.value })} />
-                            </Field>
-                            <Field label="Button link" htmlFor={`url-${e.id}`} hint={buyHint(e.ctaUrl)}>
-                              <input id={`url-${e.id}`} className="input font-mono" value={e.ctaUrl} onChange={(ev) => patch(e.id, { ctaUrl: ev.target.value })} />
-                              {offersOn && offers.length > 0 && (
-                                <select aria-label="Use a buy link" className="select mt-2" value={buyIdOf(e.ctaUrl)} onChange={(ev) => ev.target.value && patch(e.id, { ctaUrl: buyToken(ev.target.value) })}>
-                                  <option value="">Use a buy link…</option>
-                                  {offers.map((o) => (
-                                    <option key={o.id} value={o.id}>
-                                      {o.title}
-                                      {offerPrice(o) ? ` · ${offerPrice(o)}` : ''}
-                                      {o.environment === 'sandbox' ? ' · Test mode' : ''}
-                                    </option>
-                                  ))}
-                                </select>
-                              )}
-                            </Field>
-                          </div>
+                          <Segmented
+                            size="sm"
+                            aria-label="Edit as"
+                            value={modeOf(e)}
+                            onChange={(v) => setMode((x) => ({ ...x, [e.id]: v }))}
+                            options={[
+                              { id: 'blocks', label: 'Blocks', icon: <Blocks /> },
+                              { id: 'plain', label: 'Plain text', icon: <Type /> },
+                            ]}
+                          />
+                          {modeOf(e) === 'blocks' ? (
+                            <div className="flex flex-col gap-4">
+                              <EmailStudio
+                                project={project}
+                                step={e}
+                                index={i}
+                                total={emails.length}
+                                actions={
+                                  <>
+                                    <EmailAIActions project={project} step={e} index={i} />
+                                    <AgentButtons target="email" stepId={e.id} kind={emailKindFor(i, emails.length)} lead="or design it with" />
+                                  </>
+                                }
+                              />
+                              <AgentBuildList target="email" stepId={e.id} />
+                            </div>
+                          ) : e.doc ? (
+                            <div className="grid gap-2">
+                              <Field label="Plain text" hint="Made from this email’s blocks, for exports and plain-text inboxes.">
+                                <textarea className="input min-h-40 whitespace-pre-wrap" readOnly value={`${e.body}${e.ctaLabel ? `\n\n[${e.ctaLabel}] → ${e.ctaUrl}` : ''}`} aria-label="Plain text (read only)" />
+                              </Field>
+                              <button type="button" className="btn btn-secondary btn-sm self-start" onClick={() => setMode((x) => ({ ...x, [e.id]: 'blocks' }))}>
+                                <Blocks aria-hidden="true" /> Edit blocks
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <Field label="Body" htmlFor={`body-${e.id}`} hint="Merge tags: {{first_name}}, {{lead_magnet_link}}, {{product_link}}, {{sender_name}}">
+                                <AutoTextarea id={`body-${e.id}`} value={e.body} onChange={(v) => patch(e.id, { body: v })} minRows={8} />
+                              </Field>
+                              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                <Field label="Button label" htmlFor={`cta-${e.id}`}>
+                                  <input id={`cta-${e.id}`} className="input" value={e.ctaLabel} onChange={(ev) => patch(e.id, { ctaLabel: ev.target.value })} />
+                                </Field>
+                                <Field label="Button link" htmlFor={`url-${e.id}`} hint={buyHint(e.ctaUrl)}>
+                                  <input id={`url-${e.id}`} className="input font-mono" value={e.ctaUrl} onChange={(ev) => patch(e.id, { ctaUrl: ev.target.value })} />
+                                  {offersOn && offers.length > 0 && (
+                                    <select aria-label="Use a buy link" className="select mt-2" value={buyIdOf(e.ctaUrl)} onChange={(ev) => ev.target.value && patch(e.id, { ctaUrl: buyToken(ev.target.value) })}>
+                                      <option value="">Use a buy link…</option>
+                                      {offers.map((o) => (
+                                        <option key={o.id} value={o.id}>
+                                          {o.title}
+                                          {offerPrice(o) ? ` · ${offerPrice(o)}` : ''}
+                                          {o.environment === 'sandbox' ? ' · Test mode' : ''}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  )}
+                                </Field>
+                              </div>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>

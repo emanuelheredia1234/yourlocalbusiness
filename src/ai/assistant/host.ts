@@ -67,7 +67,7 @@ export const host: AssistantHost = {
       }
       case 'agent-build':
         // the page (Code & assets, or the SEO page), then "Build with Manus / Viktor" there: the owner fills it in and sends it
-        return openAgentBuild({ target: w.target, via: w.agent });
+        return openAgentBuild({ target: w.target, via: w.agent, ...(w.stepId ? { stepId: w.stepId } : {}) });
       case 'ad-launch': {
         // the Plans tab, then the launch window: nothing is picked for the owner (no PAUSED/ACTIVE, no ticks)
         if (__ARTIFACT_BUILD__) return false;
