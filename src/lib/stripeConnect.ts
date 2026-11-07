@@ -11,7 +11,7 @@
 
 import countries from '../../shared/connect-countries.json';
 import { PLANS, tierName } from './plans';
-import { OffersError, offersCall, type WhopEnvironment } from './offers';
+import { OffersError, feePreview, formatMoney, offersCall, type WhopEnvironment } from './offers';
 
 export type ConnectStatus = 'creating' | 'unknown' | 'onboarding' | 'restricted' | 'active' | 'rejected' | 'disconnected';
 export type FeeTier = 'launch' | 'grow' | 'scale' | 'owner' | 'legacy' | 'none';
@@ -332,3 +332,14 @@ export function feeLabel(fee: ConnectFee | null | undefined): string {
 
 /** The Stripe Dashboard (Test mode: its test pages). */
 export const dashboardUrl = (env: WhopEnvironment | null | undefined, path = ''): string => `https://dashboard.stripe.com/${env === 'sandbox' ? 'test/' : ''}${path}`;
+
+/** "Buyer pays $49.00 · Our fee $1.47 (3% on Launch) · Stripe's fee comes out of your Stripe balance." */
+export function stripePreview(priceMinor: number | null, currency: string, fee: ConnectState['fee'], sellerCountry?: string | null): string {
+  if (priceMinor == null) return '';
+  const pays = `Buyer pays ${formatMoney(priceMinor, currency)}`;
+  const stripe = 'Stripe’s fee comes out of your Stripe balance.';
+  if (!fee || noFee(fee)) return `${pays} · No platform fee · ${stripe}`;
+  const ours = feePreview(priceMinor, fee.pct, sellerCountry);
+  if (!ours) return `${pays} · No platform fee on this price · ${stripe}`;
+  return `${pays} · Our fee ${formatMoney(ours, currency)} (${feeLabel(fee)}) · ${stripe}`;
+}

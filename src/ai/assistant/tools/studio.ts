@@ -221,8 +221,9 @@ const getListing = defineTool({
         ...(biz ? { howCustomersBuy: d.bookingType, hours: d.hours || null } : {}),
         buyUrl: d.buyUrl || null,
         offerId: d.offerId ?? null,
-        // the business's offers (what Attach payment made): id, title, price, who takes the payment, Test mode
-        offers: (useOffers.getState().byProject[p.id] ?? []).map((o) => ({ id: o.id, title: o.title, price: o.priceDisplay, provider: o.provider, test: o.environment === 'sandbox', status: o.status })),
+        // the business's offers (what Attach payment made): id, title, price, who takes the payment (stripe, whop,
+        // external), Test mode, and a Stripe one's unfinished setup
+        offers: (useOffers.getState().byProject[p.id] ?? []).map((o) => ({ id: o.id, title: o.title, price: o.priceDisplay, provider: o.provider, test: o.environment === 'sandbox', status: o.status, ...(o.problem === 'stripe_setup' ? { problem: 'Finish Stripe setup to start selling.' } : {}) })),
         contactEmail: d.contactEmail || null,
         phone: d.phone || null,
         website: p.brand.websiteUrl || null,

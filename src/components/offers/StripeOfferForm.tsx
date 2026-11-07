@@ -6,8 +6,8 @@
 
 import { useEffect, useState } from 'react';
 import { CircleAlert, Plus, Upload } from 'lucide-react';
-import { STRIPE_PRICE_MAX, STRIPE_PRICE_MIN, decimalToMinor, feePreview, formatMoney, type OffersError } from '@/lib/offers';
-import { feeLabel, noFee, type ConnectState } from '@/lib/stripeConnect';
+import { STRIPE_PRICE_MAX, STRIPE_PRICE_MIN, decimalToMinor, formatMoney, type OffersError } from '@/lib/offers';
+import { stripePreview, type ConnectState } from '@/lib/stripeConnect';
 import { LEAD_FILE_ACCEPT, MAX_LEAD_FILE_BYTES, createLeadFile, listLeadFiles, refusedFileName, uploadLeadFileContent, type LeadFile } from '@/lib/leadFiles';
 import { navigate } from '@/lib/router';
 import { useUI } from '@/store/ui';
@@ -15,6 +15,8 @@ import { Callout, Field, Segmented, Spinner } from '@/components/ui/primitives';
 
 /** Currencies offered first (the account's own default is always offered too). */
 export const STRIPE_CURRENCIES = ['usd', 'eur', 'gbp', 'cad', 'aud', 'nzd', 'chf', 'sek', 'nok', 'dkk', 'pln', 'czk', 'huf', 'ron', 'bgn', 'mxn', 'brl', 'jpy', 'sgd', 'hkd', 'myr', 'thb', 'aed'] as const;
+
+export { stripePreview };
 
 export interface StripeOfferInput {
   title: string;
@@ -24,17 +26,6 @@ export interface StripeOfferInput {
 }
 
 const message = (e: unknown) => ((e as OffersError | Error)?.message ? (e as Error).message : 'Something went wrong. Try again.');
-
-/** "Buyer pays $49.00 · Our fee $1.47 (3% on Launch) · Stripe's fee comes out of your Stripe balance." */
-export function stripePreview(priceMinor: number | null, currency: string, fee: ConnectState['fee'], sellerCountry?: string | null): string {
-  if (priceMinor == null) return '';
-  const pays = `Buyer pays ${formatMoney(priceMinor, currency)}`;
-  const stripe = 'Stripe’s fee comes out of your Stripe balance.';
-  if (!fee || noFee(fee)) return `${pays} · No platform fee · ${stripe}`;
-  const ours = feePreview(priceMinor, fee.pct, sellerCountry);
-  if (!ours) return `${pays} · No platform fee on this price · ${stripe}`;
-  return `${pays} · Our fee ${formatMoney(ours, currency)} (${feeLabel(fee)}) · ${stripe}`;
-}
 
 /** What's wrong with the price, in words ('' when it's fine), before anything is sent. */
 export function priceProblem(text: string, currency: string): string {
