@@ -4,12 +4,13 @@
 // clears it. The setup checklist (preview.mjs setupChecks) warns about it instead of blocking while the live checks for
 // its cause pass, so a launch goes ahead (one create; Meta checks again). A live problem, a blocker without a check, a
 // missing billingStatus or a temporary block still block. Against the mock Zernio's custom health answer only
-// (state.health), with the launch window's own checklist and summary rendered from the server's answers.
+// (state.health), with the launch window's own checklist, summary and review rendered from the server's answers.
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startAds } from './test-helpers.mjs';
 import { SetupChecklist, checklistSummary } from '../../src/pages/marketing/ads/campaigns/SetupChecklist.tsx';
+import { ReviewStep } from '../../src/pages/marketing/ads/launch/ReviewStep.tsx';
 
 const BILLING = 'https://business.facebook.com/billing_hub/payment_settings';
 /** each refusal's fix link as Zernio sends it (a Zernio dashboard path is never passed on) */
@@ -91,6 +92,7 @@ describe('a remembered refusal the live checks don’t confirm: a warning, and t
 
     const r = await t.launchPlan(u, 'meta', { status: 'PAUSED' });
     expect(r.preview.body.review.blockers).toEqual([]);
+    expect(r.preview.body.review.warnings).toContainEqual({ code: 'PAYMENT_REQUIRED', message: SAYS.ad_account_payment_required, fixUrl: BILLING });
     expect(creates()).toHaveLength(1);
     expect(r.job).toMatchObject({ state: 'done' });
     expect(await t.db.select('ad_jobs', { user_id: u.id })).toHaveLength(1);
@@ -98,13 +100,19 @@ describe('a remembered refusal the live checks don’t confirm: a warning, and t
     expect(JSON.stringify([s, r])).not.toMatch(/SECRET/);
   });
 
-  it('(a) the launch window’s checklist shows the warning with its fix link, and no red line', async () => {
+  it('(a) the launch window shows the warning on its checklist and in the review, before the confirm', async () => {
     listing({ billingStatus: 'unknown' });
     health({ payment: 'unknown' });
     const list = renderToStaticMarkup(createElement(SetupChecklist, { checks: await setup() }));
     expect(list).toContain(SAYS.ad_account_payment_required);
     expect(list).toContain(`href="${BILLING}"`);
     expect(list).not.toContain('Add a payment method');
+    const pv = await t.preview(u, await t.request(u));
+    expect(pv.body.reviewToken).toEqual(expect.any(String));
+    const html = renderToStaticMarkup(createElement(ReviewStep, { review: pv.body.review, error: null, stale: false, confirmed: [], onClaims: () => {} }));
+    expect(html).toContain('Good to know');
+    expect(html).toContain(SAYS.ad_account_payment_required);
+    expect(html).not.toContain('Fix these first');
   });
 
   it('(a) if Meta refuses the payment method again, the job fails PAYMENT_REQUIRED after one create and nothing is sent again', async () => {
@@ -147,6 +155,8 @@ describe('a remembered refusal the live checks don’t confirm: a warning, and t
     const pv = await t.preview(u, await t.request(u));
     expect(pv.body.review.blockers).toEqual([]);
     expect(pv.body.reviewToken).toEqual(expect.any(String));
+    const { id, state, ...note } = warnFor(remembered, code);
+    expect(pv.body.review.warnings).toContainEqual(note);
   });
 
   it('(g) a security check remembered for the connection and a payment refusal for the ad account: one warning each', async () => {

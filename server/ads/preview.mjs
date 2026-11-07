@@ -373,6 +373,8 @@ export async function previewLaunch(ctx, who, body) {
     }
   }
   for (const c of setup) if (c.state === 'missing') built.blockers.push({ code: c.code ?? 'ACCOUNT_UNUSABLE', message: c.message, ...(c.fixUrl ? { fixUrl: c.fixUrl } : {}) });
+  // a remembered refusal the launch may go ahead with: the review says it too, right before the confirm
+  for (const c of setup) if (c.id === 'last_refusal' && c.state === 'warn') built.warnings.push({ code: c.code, message: c.message, ...(c.fixUrl ? { fixUrl: c.fixUrl } : {}) });
 
   // the owner's switches, the plan gate, then the limits (§D10 order)
   const lim = await ctx.limits.effective(conn.tag);
