@@ -70,9 +70,12 @@ const PRIMARY_KEYS = {
   connect_accounts: ['id'],
   connect_fee_returns: ['environment', 'source_id'],
   connect_alerts: ['kind'],
+  // supabase/migrations/20261119000000_public_market.sql
+  public_listings: ['id'],
+  public_listing_reports: ['id'],
 };
 /** the integration tables (all server-only) */
-const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys', 'connect_accounts', 'connect_fee_returns', 'connect_alerts'];
+const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys', 'connect_accounts', 'connect_fee_returns', 'connect_alerts', 'public_listings', 'public_listing_reports'];
 /** tables users may read their own rows of but never write (only the server and the database functions do) */
 const USER_READ_ONLY = new Set(['project_slots', 'business_settings', 'daily_actions', 'experiments', 'experiment_variants']);
 /** columns users are not granted (column-level `grant select`): naming one, or `*`, is refused as Postgres does */
@@ -116,6 +119,11 @@ const UNIQUE = {
   ],
   cancel_surveys: [{ name: 'cancel_surveys_portal_once', cols: ['subscription_id'], where: (r) => r.source === 'portal' }],
   daily_actions: [{ name: 'daily_actions_one_per_day', cols: ['user_id', 'project_id', 'local_date'] }],
+  public_listings: [
+    { name: 'public_listings_slug_key', cols: ['slug'] },
+    { name: 'public_listings_user_id_listing_id_key', cols: ['user_id', 'listing_id'] },
+  ],
+  public_listing_reports: [{ name: 'public_listing_reports_public_listing_id_reporter_hash_day_key', cols: ['public_listing_id', 'reporter_hash', 'day'] }],
   experiments: [{ name: 'experiments_one_running_page', cols: ['user_id', 'subject_ref'], where: (r) => r.kind === 'page' && r.state === 'running' }],
   experiment_variants: [{ name: 'experiment_variants_one_per_post', cols: ['user_id', 'post_id'], where: (r) => r.post_id != null }],
 };
@@ -126,6 +134,7 @@ const INSERT_DEFAULTS = {
   business_settings: () => ({ time_zone: 'UTC', next_action_at: null, last_active_at: new Date().toISOString(), claim_id: null, claimed_until: null, last_outcome: null, last_run_at: null, created_at: new Date().toISOString() }),
   experiments: () => ({ id: crypto.randomUUID(), network: null, name: '', started_at: null, ends_at: null, result: {}, winner: null, winner_used_at: null, counted_month: null, last_read_at: null, read_claim: null, read_claimed_until: null, created_at: new Date().toISOString() }),
   experiment_variants: () => ({ label: '', post_id: null, job_id: null, planned_at: null, share_mode: null, html: null, html_sha256: null, omnisend_campaign_id: null, omnisend_variant_id: null, metrics: {}, metrics_at: null, metrics_error: null, visitors: 0, views: 0, leads: 0, created_at: new Date().toISOString() }),
+  public_listing_reports: () => ({ id: crypto.randomUUID(), note: '', status: 'open', created_at: new Date().toISOString(), resolved_at: null }),
   daily_actions: () => ({ id: crypto.randomUUID(), engine: null, candidates: [], chosen: null, feedback: [], fallback: null, error_code: null, cost_usd: 0, own_key: false, provider: null, model: null, attempts: 1, started_at: new Date().toISOString(), generated_at: null, done_at: null, created_at: new Date().toISOString() }),
 };
 /** tables whose created_at defaults to now() here (the newer ones; older tests compare whole rows) */
@@ -144,7 +153,7 @@ const PUBLIC_READ = new Set(['market_listings']);
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'video_starts', 'published_pages', 'published_domains', 'page_leads', 'lead_files', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys', 'business_settings', 'daily_actions', 'experiments', 'experiment_variants', 'connect_accounts', 'connect_fee_returns']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys', 'business_settings', 'daily_actions', 'experiments', 'experiment_variants', 'connect_accounts', 'connect_fee_returns', 'public_listings']);
 const PROJECT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
 /**
@@ -462,6 +471,12 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       // ISO times compare correctly as text
       if (f.op === 'lt') return String(v) < f.value;
       if (f.op === 'lte') return String(v) <= f.value;
+      // websearch_to_tsquery('simple', …) on public_listings.search (a generated column): every word must appear
+      if (f.op.startsWith('wfts')) {
+        const hay = (col === 'search' ? [row.title, row.tagline, row.category, ...(row.tags ?? [])].join(' ') : String(v ?? '')).toLowerCase().split(/[^\p{L}\p{N}]+/u);
+        const words = f.value.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+        return words.length > 0 && words.every((w) => hay.includes(w));
+      }
       return true;
     });
   }
@@ -664,6 +679,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       // 20261117000000_experiments.sql: deleting a business deletes its tests (always on); a test's variants go with it
       if (table === 'user_docs') for (const d of gone) if (d.kind === 'project') experimentsOnProjectDelete(d.user_id, d.id);
       if (table === 'experiments' && gone.length) experimentsCascade(gone);
+      // a public listing's reports go with it (public_listing_reports.public_listing_id: on delete cascade)
+      if (table === 'public_listings' && gone.length) tables.set('public_listing_reports', (tables.get('public_listing_reports') ?? []).filter((r) => !gone.some((g) => g.id === r.public_listing_id)));
       // a removed ad campaign's jobs go with it (ad_jobs.campaign_id: on delete cascade)
       if (table === 'ad_campaigns' && gone.length) tables.set('ad_jobs', (tables.get('ad_jobs') ?? []).filter((j) => !gone.some((c) => c.id === j.campaign_id)));
       // a removed domain's pages lose it (published_pages.domain: on delete set null)
@@ -685,6 +702,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (fn === 'ylb_cancel_survey_totals') return surveyTotals(req, res, fn);
     if (fn === 'ylb_morning_claim' || fn === 'ylb_morning_backlog') return morningRpc(req, res, fn, raw);
     if (EXPERIMENT_FNS.has(fn)) return experimentsRpc(req, res, fn, raw);
+    if (fn === 'ylb_market_set_public') return marketSetPublic(req, res, fn, raw);
     if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -1195,6 +1213,53 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
   }
   const dayOf = (v) => String(v ?? '').slice(0, 10);
 
+  /**
+   * supabase/migrations/20261119000000_public_market.sql ylb_market_set_public: the seller's lock (this body runs
+   * without an await, so two calls never interleave), the plan's limit, the per-day count, then the upsert that keeps
+   * the slug, public_at, the hidden and held state. A slug another row has: 23505, as Postgres raises it.
+   */
+  async function marketSetPublic(req, res, fn, raw) {
+    if (missingTables.includes('public_listings')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    let b;
+    try {
+      b = JSON.parse(raw || '{}');
+    } catch {
+      return send(res, 400, { message: 'invalid json' });
+    }
+    if (!users.has(b.p_user)) return send(res, 409, { code: '23503', message: 'insert or update on table "public_listings" violates foreign key constraint "public_listings_user_id_fkey"' });
+    const rows = tables.get('public_listings') ?? [];
+    tables.set('public_listings', rows);
+    const at = new Date(dbNow()).toISOString();
+    const old = rows.find((r) => r.user_id === b.p_user && r.listing_id === b.p_listing_id);
+    if (old?.hidden_at) return send(res, 200, { ok: false, code: 'HIDDEN' });
+    const used = rows.filter((r) => r.user_id === b.p_user && r.listing_id !== b.p_listing_id && ['live', 'thin', 'held'].includes(r.status)).length;
+    if (b.p_limit != null && used >= b.p_limit) return send(res, 200, { ok: false, code: 'LIMIT', used });
+    if (!old && b.p_new_per_day != null) {
+      const today = rows.filter((r) => r.user_id === b.p_user && r.public_at && dbNow() - Date.parse(r.public_at) < 86_400_000).length;
+      if (today >= b.p_new_per_day) return send(res, 200, { ok: false, code: 'DAILY' });
+    }
+    const r = b.p_row ?? {};
+    const fields = {
+      project_id: r.project_id, kind: r.kind, title: r.title, tagline: r.tagline ?? '', description: r.description, category: r.category, category_slug: r.category_slug,
+      tags: r.tags ?? [], price_minor: r.price_minor ?? null, currency: r.currency ?? 'usd', price_model: r.price_model, compare_at_minor: r.compare_at_minor ?? null,
+      services: r.services ?? [], includes: r.includes ?? [], location: r.location ?? null, seller_name: r.seller_name, website: r.website ?? null,
+      outside_buy_url: r.outside_buy_url ?? null, phone: r.phone ?? null, offer_id: r.offer_id ?? null, cover_path: r.cover_path ?? null,
+      gallery_paths: r.gallery_paths ?? [], content_hash: r.content_hash, quality: r.quality ?? {},
+    };
+    let next;
+    if (old) next = { ...old, ...fields, status: old.held_at ? 'held' : r.status, public_at: old.public_at ?? at, content_updated_at: at, unlisted_at: null, updated_at: at };
+    else {
+      if (!SLUG.test(String(r.slug))) return send(res, 400, { code: '23514', message: 'new row for relation "public_listings" violates check constraint "public_listings_slug_check"' });
+      next = { id: crypto.randomUUID(), user_id: b.p_user, listing_id: b.p_listing_id, slug: r.slug, ...fields, status: r.status, public_at: at, content_updated_at: at, unlisted_at: null, hidden_at: null, hidden_reason: null, held_at: null, report_count: 0, created_at: at, updated_at: at };
+      if (rows.some((x) => x.slug === next.slug)) return send(res, 409, { code: '23505', details: `Key (slug)=(${next.slug}) already exists.`, hint: null, message: 'duplicate key value violates unique constraint "public_listings_slug_key"' });
+    }
+    if (old) Object.assign(old, next);
+    else rows.push(next);
+    return send(res, 200, { ok: true, row: { ...next } });
+  }
+
   async function experimentsRpc(req, res, fn, raw) {
     if (missingTables.includes('experiments')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -1491,6 +1556,9 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
         if (USER_SET_NULL.has(t)) for (const r of rows) if (r.user_id === adminUser[1]) r.user_id = null;
         if (!NO_USER_FK.has(t) && !USER_SET_NULL.has(t)) tables.set(t, rows.filter((r) => r.user_id !== adminUser[1]));
       }
+      // a deleted account's public listings take their reports with them (on delete cascade)
+      const listingIds = new Set((tables.get('public_listings') ?? []).map((r) => r.id));
+      if (tables.has('public_listing_reports')) tables.set('public_listing_reports', tables.get('public_listing_reports').filter((r) => listingIds.has(r.public_listing_id)));
       // other accounts' pages on a domain that went with it lose it (on delete set null)
       for (const p of tables.get('published_pages') ?? []) if (theirDomains.has(p.domain)) p.domain = null;
       return send(res, 200, {});
