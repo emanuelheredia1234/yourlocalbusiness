@@ -13,6 +13,7 @@
 import type { BuildTarget } from '@/lib/agentTypes';
 import { MAX_HTML_BYTES } from '@/lib/publish';
 import { keepOwnImages, keptOwnImagesNote } from '@/ai/codeImages';
+import { importAgentEmailHtml } from './emailImport';
 
 export type ImportResult =
   | { ok: true; page: { html: string; css: string; js: string; title: string; description: string; notes: string[]; bytes: number; hasLeadForm: boolean } }
@@ -234,6 +235,12 @@ function isEmpty(html: string): boolean {
  * the owner's website's host (an asset's form may send there). Nothing in the page runs while it's cleaned.
  */
 export function importAgentHtml(raw: string, o: { target: BuildTarget; imageKeys: readonly string[]; fallbackTitle: string; ownHost?: string }): ImportResult {
+  // an email or a lead magnet (P5): only its title, body and head styles are read, then the shared email sanitizer cleans them
+  if (o.target === 'email' || o.target === 'leadMagnet') {
+    const r = importAgentEmailHtml(raw, { target: o.target, imageKeys: o.imageKeys });
+    if (!r.ok) return r;
+    return { ok: true, page: { html: r.html, css: r.css, js: '', title: r.title || o.fallbackTitle, description: '', notes: r.notes, bytes: byteLength(r.html), hasLeadForm: false } };
+  }
   if (byteLength(raw) > MAX_HTML_BYTES) return { ok: false, reason: 'too_big', message: 'The page is over 1.5 MB, too big to use. Ask for a smaller page.' };
   if (!/<html|<!doctype/i.test(raw)) return { ok: false, reason: 'not_html', message: 'That reply isn’t a usable page: it isn’t an HTML document.' };
   const seo = o.target === 'seo';
