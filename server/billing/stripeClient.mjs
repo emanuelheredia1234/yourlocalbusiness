@@ -4,6 +4,8 @@
 //   await stripe.get('/v1/subscriptions/sub_…', { 'expand[]': 'items.data.price' })   → the object (throws StripeError)
 //   await stripe.post('/v1/subscriptions/sub_…', { items: [...] }, { idempotencyKey })   → { outcome, value?, error? }
 //   await stripe.del('/v1/subscriptions/sub_…', { invoice_now: false }, { idempotencyKey })
+//   await stripe.get('/v1/checkout/sessions/cs_…', {}, { account: 'acct_…' })      → on a connected account (P6)
+//   await stripe.post('/v1/checkout/sessions', {...}, { idempotencyKey, account: 'acct_…' })
 //
 // Rules (docs/integrations-setup.md "Plans and billing"):
 // - STRIPE_SECRET_KEY is read from env only; it never goes in a log, a reply or an error. mask() shows its last 4.
@@ -13,6 +15,8 @@
 // - Reads may be tried once more after a 429, a 5xx or a network error (reads only).
 // - STRIPE_API_BASE (tests and the mock) is honoured only with an sk_test_ key, so a live key can't be sent elsewhere.
 // - Stripe's own error text stays in the server (StripeError keeps kind and code; its message is ours).
+// - { account } (Stripe Connect) is sent as the Stripe-Account header: an acct_ id checked by shape before anything
+//   is sent (a bad one throws). It never goes in a log line.
 
 import { mask, oneShot } from '../integrations/common.mjs';
 
@@ -20,6 +24,14 @@ export const STRIPE_API_VERSION = '2025-06-30.basil';
 const LIVE_BASE = 'https://api.stripe.com';
 const READ_TIMEOUT_MS = 20_000;
 const WRITE_TIMEOUT_MS = 30_000;
+export const ACCOUNT_ID_RE = /^acct_[A-Za-z0-9]{6,64}$/;
+
+/** The Stripe-Account header for { account } (none without one); a malformed id throws before anything is sent. */
+function accountHeader(account) {
+  if (account === undefined || account === null) return {};
+  if (typeof account !== 'string' || !ACCOUNT_ID_RE.test(account)) throw new Error('A Stripe-Account must be an acct_ id.');
+  return { 'stripe-account': account };
+}
 
 /** 'live' | 'test' | null for a key (sk_/rk_ live or test). */
 export function stripeMode(key) {
@@ -90,10 +102,10 @@ export function createStripeClient({ env = process.env, fetch = globalThis.fetch
     if (!enabled) throw new StripeError('config');
   };
 
-  async function readOnce(path, query) {
+  async function readOnce(path, query, extra = {}) {
     let res;
     try {
-      res = await fetch(`${base}${path}${queryString(query)}`, { method: 'GET', headers: headers(), signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+      res = await fetch(`${base}${path}${queryString(query)}`, { method: 'GET', headers: headers(extra), signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
     } catch {
       throw new StripeError('network');
     }
@@ -108,15 +120,16 @@ export function createStripeClient({ env = process.env, fetch = globalThis.fetch
     return body;
   }
 
-  async function write(method, path, body, { idempotencyKey, timeoutMs = WRITE_TIMEOUT_MS } = {}) {
+  async function write(method, path, body, { idempotencyKey, timeoutMs = WRITE_TIMEOUT_MS, account } = {}) {
     check();
     if (!idempotencyKey || typeof idempotencyKey !== 'string') throw new Error('Every Stripe write needs an Idempotency-Key.');
+    const acct = accountHeader(account);
     const encoded = body && Object.keys(body).length ? encodeForm(body) : '';
     const got = await oneShot(
       async (signal) => {
         const res = await fetch(`${base}${path}${method === 'DELETE' && encoded ? `?${encoded}` : ''}`, {
           method,
-          headers: headers({ 'idempotency-key': idempotencyKey, ...(method === 'POST' ? { 'content-type': 'application/x-www-form-urlencoded' } : {}) }),
+          headers: headers({ 'idempotency-key': idempotencyKey, ...acct, ...(method === 'POST' ? { 'content-type': 'application/x-www-form-urlencoded' } : {}) }),
           ...(method === 'POST' ? { body: encoded } : {}),
           signal,
         });
@@ -147,15 +160,16 @@ export function createStripeClient({ env = process.env, fetch = globalThis.fetch
     baseRefused,
     live: mode === 'live',
 
-    /** GET → the object; one retry after a 429/5xx/network error. Throws StripeError. */
-    async get(path, query = {}) {
+    /** GET → the object; one retry after a 429/5xx/network error. Throws StripeError. opts.account: Stripe-Account. */
+    async get(path, query = {}, { account } = {}) {
       check();
+      const extra = accountHeader(account);
       try {
-        return await readOnce(path, query);
+        return await readOnce(path, query, extra);
       } catch (e) {
         if (!(e instanceof StripeError) || !['rate', 'server', 'network'].includes(e.kind)) throw e;
         await new Promise((r) => setTimeout(r, readRetryDelayMs));
-        return readOnce(path, query);
+        return readOnce(path, query, extra);
       }
     },
 
