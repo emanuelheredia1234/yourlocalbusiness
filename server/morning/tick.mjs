@@ -1,11 +1,15 @@
 // The hourly `morning-actions` job (server/cron runs it once per hour behind its own claim) and the daily
 // `morning-prune` job.
 //
-// One run: sweep stale `generating` rows to failed (INTERRUPTED; never re-run) → claim due businesses in small
-// batches (ylb_morning_claim: `for update skip locked` + a lease), up to MORNING_PER_TICK, while more than 22 s of the
-// tick are left and it isn't stopped; the rest wait for the next tick (or the first Dashboard visit) → for each:
-// late window → skipped; P1's entitlement and slot re-checked → skipped; else the day's row is inserted (one per
-// business per day), next_action_at moved on and the claim released BEFORE any AI call, then the action is made →
+// One run (first in the tick; its deadline leaves LEAVE_FOR_OTHERS_MS of the tick to the other jobs): sweep stale
+// `generating` rows to failed (INTERRUPTED; never re-run) → claim due businesses in small batches (ylb_morning_claim:
+// `for update skip locked` + a lease), up to MORNING_PER_TICK, while more than 22 s (the AI's limit + 2 s) are left
+// before that deadline and it isn't stopped; the rest wait for the next tick (or the first Dashboard visit) → for each:
+// late window → skipped; P1's entitlement and slot re-checked → skipped (a read that fails throws instead, leaving
+// the business claimed until the lease ends, so the next tick tries again before any AI call); else the day's row
+// is inserted (one per business per day), next_action_at moved on and the claim released BEFORE any AI call (a
+// failed release is only logged: the row blocks a second action and the next tick's `exists` path releases it),
+// then the action is made →
 // the backlog check when the run stopped early → a summary (counts only) in app_state `morning:last` and the log.
 
 import { safeLog } from '../integrations/common.mjs';
@@ -31,12 +35,8 @@ export function createMorningJobs(deps) {
       await release({ next_action_at: iso(nextMorningAt(t, tz)), last_outcome: 'skipped_late' });
       return 'late';
     }
-    let ent;
-    try {
-      ent = await billing.entitlement(c.user_id);
-    } catch {
-      ent = null;
-    }
+    // a failed read throws (counted failed): no skip recorded, the lease runs out, the next tick tries again
+    const ent = await billing.entitlement(c.user_id);
     if (!ent?.active) {
       await release({ next_action_at: iso(nextMorningAt(t, tz)), last_outcome: 'skipped_plan' });
       return 'skipped';
@@ -53,8 +53,17 @@ export function createMorningJobs(deps) {
     }
     const row = await store.begin({ userId: c.user_id, projectId: c.project_id, localDate: actionDayOf(t, tz), timeZone: tz, source: 'cron', now: t });
     // move on and release before any AI call: from here the day's row is the record, a crash leaves it `generating`
-    await release({ next_action_at: iso(nextMorningAt(t, tz)), ...(row ? {} : { last_outcome: 'exists' }) });
-    if (!row) return 'exists';
+    const moveOn = { next_action_at: iso(nextMorningAt(t, tz)), ...(row ? {} : { last_outcome: 'exists' }) };
+    if (!row) {
+      await release(moveOn);
+      return 'exists';
+    }
+    try {
+      await release(moveOn);
+    } catch (e) {
+      // the day's row is there: make it anyway (the lease ends, the next tick finds the row and releases)
+      safeLog('morning_release_failed', { code: e?.code || e?.name || 'Error' }, log);
+    }
     const done = await makeAction(deps, { who, row, now, signal: ctx.signal });
     const outcome = outcomeOf(done);
     await store.patchSettings(c.user_id, c.project_id, { last_outcome: outcome }).catch(() => {});

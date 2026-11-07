@@ -141,9 +141,11 @@ export function strategyFacts(p, ctx, now) {
   };
 }
 
-/** Post counts in the business's zone (ids of up to 3 due posts, with their headline as the owner wrote it). */
-export function postFacts(posts, tz, now) {
-  const today = localDateOf(now, tz);
+/**
+ * Post counts in the business's zone (ids of up to 3 due posts, with their headline as the owner wrote it). today:
+ * the action day (before 05:00 local that is still yesterday, so "due today" and "overdue" match the action's day).
+ */
+export function postFacts(posts, tz, now, today = actionDayOf(now, tz)) {
   const planned = posts.filter((x) => x.status === 'scheduled');
   const at = (x) => ms(x.scheduledAt);
   const dueToday = planned.filter((x) => at(x) != null && localDateOf(at(x), tz) === today);
@@ -265,7 +267,7 @@ export async function readFacts(db, { userId, projectId, tz, now }) {
     },
     strategy,
     fresh: !strategy.has && posts.length === 0,
-    posts: postFacts(posts, tz, now),
+    posts: postFacts(posts, tz, now, today),
     page: { built: !!m.salesPage, type: MORNING.pageTypes.includes(m.pageType) ? m.pageType : 'landing', published: !!m.seoPublished },
     leadMagnet: !!m.leadMagnet,
     emails: arr(m.emails).length,

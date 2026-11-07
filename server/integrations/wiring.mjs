@@ -33,7 +33,7 @@
 //                                                          users' own Whop accounts; /b/<id> through pages.mjs with
 //                                                          integrations.offers.buy)
 //   /api/morning/…                                         server/morning/index.mjs (the morning action; its hourly job
-//                                                          runs last in each tick; aiText: the AI routes' generateText)
+//                                                          runs first in each tick; aiText: the AI routes' generateText)
 //
 // Each module's factory gets the same deps: { auth, storage (appState), db (server/integrations/db.mjs),
 // connections, treg, omnisend, send, readJson, readRaw, rateLimited, limit, corsHeaders, sameOrigin,

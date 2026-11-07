@@ -208,6 +208,49 @@ describe('the morning-actions job', () => {
     }
   });
 
+  it('a failed release after the row is in still makes the action; the next tick releases through `exists`', async () => {
+    const who = await app.user('rel2@t.test');
+    await app.business(who, 'proj_rel2');
+    const orig = app.morning.store.advance;
+    app.morning.store.advance = async () => {
+      throw Object.assign(new Error('network'), { code: 'UNAVAILABLE' });
+    };
+    try {
+      expect(await app.tick()).toMatchObject({ claimed: 1, ai: 1, failed: 0 });
+    } finally {
+      app.morning.store.advance = orig;
+    }
+    expect(app.actions('proj_rel2')[0]).toMatchObject({ state: 'ready', engine: 'ai' });
+    expect(app.aiCalls).toHaveLength(1);
+    expect(app.logs.some((l) => l.includes('morning_release_failed'))).toBe(true);
+    // still claimed until the lease ends; then the row is found, the business released, no second AI call
+    app.advance(11 * 60_000);
+    expect(await app.tick()).toMatchObject({ claimed: 1, exists: 1 });
+    expect(app.aiCalls).toHaveLength(1);
+    expect(app.settingsOf('proj_rel2')).toMatchObject({ next_action_at: '2026-11-08T13:00:00.000Z', claim_id: null });
+  });
+
+  it('a billing read that fails skips nothing: no skipped_plan, the business is tried again after the lease', async () => {
+    const who = await app.user('ent@t.test');
+    await app.business(who, 'proj_ent');
+    const orig = app.billing.entitlement;
+    app.billing.entitlement = async () => {
+      throw Object.assign(new Error('db'), { code: 'UNAVAILABLE' });
+    };
+    try {
+      expect(await app.tick()).toMatchObject({ claimed: 1, failed: 1, skipped: 0 });
+    } finally {
+      app.billing.entitlement = orig;
+    }
+    expect(app.actions('proj_ent')).toEqual([]);
+    expect(app.aiCalls).toHaveLength(0);
+    expect(app.settingsOf('proj_ent').last_outcome).not.toBe('skipped_plan');
+    expect(Date.parse(app.settingsOf('proj_ent').next_action_at)).toBeLessThan(app.clock());
+    app.advance(HOUR);
+    expect(await app.tick()).toMatchObject({ claimed: 1, ai: 1 });
+    expect(app.actions('proj_ent')[0]).toMatchObject({ state: 'ready', local_date: '2026-11-07' });
+  });
+
   it('no auto-retry: a failed day is left alone by every later run that day; the next day is made normally', async () => {
     const who = await app.user('retry@t.test');
     await app.business(who, 'proj_fail');

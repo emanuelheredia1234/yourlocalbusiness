@@ -18,6 +18,8 @@ export const LEASE_SECONDS = 600;
 export const STALE_MS = MORNING.staleMinutes * 60_000;
 /** The AI call's own limit (the tick keeps this plus 2 s in hand before claiming another batch). */
 export const AI_TIMEOUT_MS = 20_000;
+/** What the morning-actions job (first in the tick) leaves of the tick's budget for the jobs after it. */
+export const LEAVE_FOR_OTHERS_MS = 8_000;
 /** A backlog worth an owner alert: businesses still due 3 hours after their 05:00. */
 export const BACKLOG_SECONDS = 10_800;
 

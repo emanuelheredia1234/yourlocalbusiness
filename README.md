@@ -462,7 +462,8 @@ settings, capacity and the backlog alert): docs/integrations-setup.md §13.
 Replit Autoscale stops the app when it's idle, so nothing runs on a timer inside it. Supabase's pg_cron calls
 `POST /api/cron/tick` every hour (with `Authorization: Bearer <CRON_SECRET>`), and the tick runs whatever is due:
 the treg settle, Upload-Post's and Zernio's monthly metering, Upload-Post's daily check, the stuck-job sweeps
-(`server/cron/`), and last each tick `morning-actions` (each due business's action for today; `morning-prune` daily). Each job runs at most once per period behind a claim in `app_state`, a tick answers within 40 s
+(`server/cron/`), and first each tick `morning-actions` (each due business's action for today, about 6–12 a tick,
+leaving 8 s of the tick to the other jobs; `morning-prune` daily). Each job runs at most once per period behind a claim in `app_state`, a tick answers within 40 s
 with a JSON summary, and a failed job waits for its next period. Owner steps: put a random `CRON_SECRET` in Replit
 Secrets, store the same value as the Supabase Vault secret `cron_secret`, then run
 `supabase/migrations/20261109000000_cron_tick.sql` (see `docs/integrations-setup.md` §2a). Local dev needs none of

@@ -7,6 +7,7 @@
 // with the chosen index, the verdicts, and the keys shown (7 days, shown last) or marked Not useful (30 days, never
 // offered again).
 
+import { create } from 'zustand';
 import type { Post, Project } from '@/lib/types';
 import type { MorningAction, MorningCandidate, MorningFeedback, MorningReason, MorningToday, MorningVerdict } from '@/lib/integrations/types';
 import { currentWeek, readStrategy, strategyNextSteps, type ActionCtx } from '@/lib/strategy';
@@ -50,8 +51,8 @@ export function localCandidates(project: Project, ctx: ActionCtx, day: string, n
     out.push({ ...c, key: morningKey(c), rule, score });
   };
 
-  // posts in the business's zone: due today or overdue, and planned in the next 7 days
-  const today = localDateOf(now, tz);
+  // posts in the business's zone: due on the action day or overdue, and planned in the next 7 days
+  const today = day;
   const planned = ctx.posts.filter((p) => p.projectId === project.id && p.status === 'scheduled');
   const at = (p: Post) => Date.parse(goesOut(p));
   const due = planned
@@ -117,6 +118,9 @@ interface LocalRecord {
 
 export const localKey = (projectId: string) => `ylb-morning:${projectId}`;
 
+/** Bumped on every answer saved here (the card's buttons or the assistant), so an open card redraws at once. */
+export const useLocalMorningVersion = create<{ version: number }>(() => ({ version: 0 }));
+
 function readRecord(projectId: string): LocalRecord | null {
   try {
     const raw = safeStorage.getItem(localKey(projectId));
@@ -179,8 +183,13 @@ const actionOf = (projectId: string, tz: string, r: LocalRecord): MorningAction 
 export function localMorning(project: Project, ctx: ActionCtx, now = ctx.now): MorningToday {
   const tz = projectTimeZone(project);
   const day = actionDayOf(now, tz);
+  const late = isLate(now, tz);
+  const nextAt = new Date(nextMorningAt(now, tz)).toISOString();
+  // 02:00–05:00 local: nothing new is made for the day that's ending (as on the server); a kept one still shows
+  const cur = readRecord(project.id);
+  if (late && cur?.day !== day) return { actionDay: day, timeZone: tz, action: null, dueNow: false, late, nextAt, attemptsLeft: 0, plan: 'active' };
   const r = recordFor(project, ctx, day, now);
-  return { actionDay: day, timeZone: tz, action: actionOf(project.id, tz, r), dueNow: false, late: isLate(now, tz), nextAt: new Date(nextMorningAt(now, tz)).toISOString(), attemptsLeft: 0, plan: 'active' };
+  return { actionDay: day, timeZone: tz, action: actionOf(project.id, tz, r), dueNow: false, late, nextAt, attemptsLeft: 0, plan: 'active' };
 }
 
 /** Done, Undo or Not useful on this device (the server's rules). Returns the action as it is now, or null. */
@@ -209,6 +218,7 @@ export function localFeedback(project: Project, verdict: MorningVerdict, reason?
     }
   }
   writeRecord(project.id, r);
+  useLocalMorningVersion.setState((s) => ({ version: s.version + 1 }));
   return actionOf(project.id, tz, r);
 }
 

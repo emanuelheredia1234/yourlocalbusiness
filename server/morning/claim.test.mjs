@@ -78,6 +78,13 @@ describe('mock morning claim', () => {
     const headers = { apikey: supa.PUBLISHABLE, authorization: `Bearer ${t.token}`, 'content-type': 'application/json' };
     const read = await fetch(`${supa.url}/rest/v1/daily_actions?select=id,state`, { headers });
     expect(await read.json()).toEqual([{ id: row.id, state: 'ready' }]);
+    // the cost, provider and model columns aren't granted to users (nor is `*`); the server still reads them
+    for (const select of ['cost_usd', 'provider', 'id,model', '*']) {
+      const r = await fetch(`${supa.url}/rest/v1/daily_actions?select=${select}`, { headers });
+      expect(r.status, select).toBe(401);
+    }
+    expect((await fetch(`${supa.url}/rest/v1/daily_actions`, { headers })).status).toBe(401);
+    expect(await db.select('daily_actions', { id: row.id }, { select: 'cost_usd,provider,model' })).toEqual([{ cost_usd: 0, provider: null, model: null }]);
     const write = await fetch(`${supa.url}/rest/v1/daily_actions?id=eq.${row.id}`, { method: 'PATCH', headers, body: JSON.stringify({ state: 'done' }) });
     expect(write.status).toBe(401);
     // nested JSON paths

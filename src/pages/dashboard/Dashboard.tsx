@@ -128,7 +128,7 @@ export function Dashboard() {
         <FirstSteps project={project} />
       ) : (
         <>
-          <MorningCard project={project} ctx={ctx} className="mb-4" />
+          <MorningCard key={project.id} project={project} ctx={ctx} className="mb-4" />
           <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
             <PlanCard project={project} s={s} ctx={ctx} className="lg:col-span-8" primaryTaken={!!next && !postHeld(next)} />
             <NextPost project={project} post={next} now={now} className="lg:col-span-4" />

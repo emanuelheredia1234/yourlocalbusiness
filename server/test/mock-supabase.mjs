@@ -68,6 +68,8 @@ const PRIMARY_KEYS = {
 const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys'];
 /** tables users may read their own rows of but never write (only the server and the database functions do) */
 const USER_READ_ONLY = new Set(['project_slots', 'business_settings', 'daily_actions']);
+/** columns users are not granted (column-level `grant select`): naming one, or `*`, is refused as Postgres does */
+const USER_HIDDEN_COLUMNS = { daily_actions: ['cost_usd', 'provider', 'model'] };
 /** `generated always as identity` columns: the mock numbers them 1, 2, 3… per table */
 const IDENTITY = { usage_ledger: 'id', analytics_history: 'id', ad_audit: 'id' };
 /**
@@ -423,6 +425,12 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     const prefer = String(req.headers.prefer || '');
 
     if (req.method === 'GET' || req.method === 'HEAD') {
+      const hidden = USER_HIDDEN_COLUMNS[table];
+      if (hidden && !who.service) {
+        const sel = String(url.searchParams.get('select') ?? '*');
+        const names = sel.split(',').map((c) => c.trim().split(':').pop().split('->')[0].trim());
+        if (names.some((c) => c === '*' || hidden.includes(c)) || [...url.searchParams.keys()].some((k) => hidden.includes(k))) return send(res, 401, { code: '42501', message: 'permission denied for table ' + table });
+      }
       let out = rows.filter((r) => visible(r) && matches(r, filters));
       const order = url.searchParams.get('order');
       if (order) {

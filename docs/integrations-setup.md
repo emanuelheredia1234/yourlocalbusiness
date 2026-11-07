@@ -143,7 +143,7 @@ through **pg_net**, with `Authorization: Bearer <CRON_SECRET>`. Each tick runs t
 | `offers-webhooks` | daily from 04:17 UTC | Reads each Whop connection's webhook; a turned-off one shows a banner (§12) |
 | `offers-reconcile` | daily from 04:47 UTC | Reads the last 72 hours of Whop payments and records missed sales for the customer's offers (§12) |
 | `posting-sweep`, `analytics-sweep`, `ads-sweep` | hourly (each tick) | Posts, analytics runs and ad changes left "sending"/"running" by a restart become "unknown"/ended; nothing is re-sent |
-| `morning-actions` | hourly (each tick, last) | Makes the morning action of each business that is due (§13), up to `MORNING_PER_TICK`; the rest wait. Marks interrupted ones failed; never re-runs one |
+| `morning-actions` | hourly (each tick, first; leaves 8 s of the tick to the rest) | Makes the morning action of each business that is due (§13), up to `MORNING_PER_TICK`; the rest wait. Marks interrupted ones failed; never re-runs one |
 | `morning-prune` | daily from 05:23 UTC | Deletes morning actions older than 120 days |
 
 Each job runs **at most once per period**: the run is claimed first in `app_state` (one row per job), so a repeated
@@ -1346,10 +1346,14 @@ moment still make one.
 
 ### Capacity and the backlog alert
 
-About 18–24 businesses per tick with the defaults (three batches of six fit in a 40 s tick), roughly 430–575 a day.
-Mornings cluster (US time zones), so a backlog drains over the next hours, and anyone the tick hasn't reached gets
-theirs on their first visit. When businesses wait more than 3 hours, Customer usage shows "Morning actions are falling
-behind": raise `MORNING_PER_TICK` or `MORNING_CONCURRENCY`.
+`morning-actions` runs first in each tick, so slower jobs can't push it out of its hour, and it keeps the last 8 s of
+the 40 s tick for the other jobs. It starts a batch of `MORNING_CONCURRENCY` (6) only while more than 22 s (the AI's
+20 s limit plus 2 s) are left of its 32 s, so with the defaults it makes **6 per tick**, or **12** when the first batch
+answers in under about 10 s: roughly **145–290 a day**. Mornings cluster (US time zones), so a backlog drains over the
+next hours, and anyone the tick hasn't reached gets theirs on their first visit. When businesses wait more than 3
+hours, Customer usage shows "Morning actions are falling behind": raise `MORNING_CONCURRENCY` (up to 10 per batch,
+so 10–20 per tick) and, if the platform allows a longer request, `CRON_BUDGET_MS` (each extra 20 s fits one more
+batch). `MORNING_PER_TICK` only caps the total.
 
 ### AI, credits and fallbacks
 
@@ -1366,7 +1370,8 @@ kinds only).
 ### Failures: "Get today's action"
 
 A generation fails only when the business's data couldn't be read or the server stopped mid-way (swept after 10
-minutes as interrupted). It is **never re-run by itself**: the card shows "Today's action didn't come through" and a
+minutes as interrupted). A billing read that fails during the tick skips nothing: the business stays due and the next
+tick tries again, before any AI call. It is **never re-run by itself**: the card shows "Today's action didn't come through" and a
 **Get today's action** button, which tries again up to 3 times a day, each try metered like any AI request.
 
 ### What customers see
@@ -1396,5 +1401,5 @@ actions.
   and look for `morning-actions` in the summary.
 - **SQL checks:** `select local_date, state, engine, count(*) from public.daily_actions group by 1, 2, 3 order by 1 desc limit 20;`
   and `select public.ylb_morning_backlog(10800);`.
-- **On a Supabase branch, with the owner's OK:** a signed-in user selects only their own rows and can't insert,
-  update or delete; two SQL sessions calling `ylb_morning_claim` at once get disjoint rows.
+- **On a Supabase branch, with the owner's OK:** a signed-in user selects only their own rows (and never
+  `daily_actions.cost_usd`, `provider` or `model`: those columns aren't granted) and can't insert, update or delete; two SQL sessions calling `ylb_morning_claim` at once get disjoint rows.

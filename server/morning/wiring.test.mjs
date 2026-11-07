@@ -1,8 +1,9 @@
-// The morning module in server/integrations/wiring.mjs: its route prefix, /api/config's flag, the cron job names (last
-// in each tick), MORNING_ACTIONS=off, the env settings, the startup notes and the migration list.
+// The morning module in server/integrations/wiring.mjs: its route prefix, /api/config's flag, the cron job names (the
+// hourly one first in each tick), MORNING_ACTIONS=off, the env settings, the startup notes and the migration list.
 import { describe, expect, it } from 'vitest';
 import http from 'node:http';
 import { createIntegrations, moduleFor } from '../integrations/wiring.mjs';
+import { createCron } from '../cron/index.mjs';
 import { morningSettings } from './config.mjs';
 
 const send = (res, status, body, headers = {}) => {
@@ -19,13 +20,17 @@ describe('morning wiring', () => {
     expect(moduleFor('/api/morningx')).toBeNull();
   });
 
-  it('on: the config flag, both jobs (the hourly one last in each tick), the notes and the migration list', () => {
+  it('on: the config flag, both jobs (the hourly one first in each tick, leaving time for the rest), the notes and the migration list', () => {
     const integrations = createIntegrations({ env: {}, send, db, auth, appState: { enabled: false } });
     expect(integrations.morningConfig()).toEqual({ enabled: true });
     const names = integrations.cronJobs().map((j) => j.name);
     expect(names.slice(-2)).toEqual(['morning-actions', 'morning-prune']);
     const hourly = integrations.cronJobs().find((j) => j.name === 'morning-actions');
-    expect(hourly).toMatchObject({ everyMs: 3_600_000, minMs: 25_000 });
+    expect(hourly).toMatchObject({ everyMs: 3_600_000, minMs: 25_000, first: true, leaveMs: 8_000 });
+    // registered with the others, it runs first
+    const cron = createCron({ env: {}, storage: { enabled: false }, log: { info() {} } });
+    for (const j of integrations.cronJobs()) cron.register(j);
+    expect(cron.jobs()[0].name).toBe('morning-actions');
     expect(integrations.cronJobs().find((j) => j.name === 'morning-prune')).toMatchObject({ dailyAtUtc: '05:23' });
     const notes = integrations.notes().join('\n');
     expect(notes).toContain('Morning action: on (needs supabase/migrations/20261116000000_morning_action.sql); up to 24 businesses per hourly tick');

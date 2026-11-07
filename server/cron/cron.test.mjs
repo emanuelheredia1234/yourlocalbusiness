@@ -149,6 +149,41 @@ describe('cron budget', () => {
   });
 });
 
+describe('cron order and leaveMs', () => {
+  it('runs `first` jobs before the others (in their own order) and keeps leaveMs for the jobs after', async () => {
+    let t = 1_000_000;
+    const cron = createCron({ env: {}, now: () => t, log: quiet, budgetMs: 40_000 });
+    const order = [];
+    let seen;
+    cron.register({ name: 'early-a', everyMs: 60_000, run: () => order.push('early-a') });
+    cron.register({ name: 'slow-b', everyMs: 60_000, run: () => {
+      order.push('slow-b');
+      t += 20_000;
+    } });
+    cron.register({ name: 'urgent', everyMs: 60_000, first: true, leaveMs: 8_000, minMs: 25_000, run: (ctx) => {
+      order.push('urgent');
+      seen = ctx.deadline;
+    } });
+    cron.register({ name: 'urgent-2', everyMs: 60_000, first: true, run: () => order.push('urgent-2') });
+    expect(cron.jobs().map((j) => j.name)).toEqual(['urgent', 'urgent-2', 'early-a', 'slow-b']);
+    const s = await cron.tick();
+    // a slow earlier job can no longer push the urgent one out of its period
+    expect(order).toEqual(['urgent', 'urgent-2', 'early-a', 'slow-b']);
+    expect(s.jobs[0]).toMatchObject({ name: 'urgent', status: 'ran' });
+    expect(seen).toBe(1_000_000 + 40_000 - 8_000);
+  });
+
+  it('minMs counts against the deadline less leaveMs; a bad leaveMs is refused', async () => {
+    const t = 1_000_000;
+    const cron = createCron({ env: {}, now: () => t, log: quiet, budgetMs: 30_000 });
+    const run = vi.fn();
+    cron.register({ name: 'tight', everyMs: 60_000, first: true, leaveMs: 8_000, minMs: 25_000, run });
+    expect((await cron.tick()).jobs[0]).toMatchObject({ status: 'skipped', reason: 'budget' });
+    expect(run).not.toHaveBeenCalled();
+    expect(() => cron.register({ name: 'bad', everyMs: 60_000, leaveMs: -1, run })).toThrow(/leaveMs/);
+  });
+});
+
 describe('POST /api/cron/tick', () => {
   const make = (env) => {
     const cron = createCron({ env, log: quiet });

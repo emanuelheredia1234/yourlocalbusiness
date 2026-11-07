@@ -10,8 +10,8 @@
 --                      and how many attempts were made (at most 3, only ever started by the owner's own press).
 --                      Written only by the server.
 --
--- Users read their own rows (defence in depth: the app reads through the server's routes); nobody but the server's
--- secret key writes. Deleting a business deletes its rows (a trigger on user_docs); deleting an account deletes
+-- Users read their own rows (defence in depth: the app reads through the server's routes), except daily_actions'
+-- cost_usd, provider and model; nobody but the server's secret key writes. Deleting a business deletes its rows (a trigger on user_docs); deleting an account deletes
 -- everything (foreign keys). Run it after 20261102000000_accounts.sql and 20261110000000_billing.sql.
 -- Safe to run again.
 --
@@ -82,7 +82,11 @@ create trigger daily_actions_touch before insert or update on public.daily_actio
 alter table public.business_settings enable row level security;
 alter table public.daily_actions enable row level security;
 revoke all on table public.business_settings, public.daily_actions from anon, authenticated;
-grant select on table public.business_settings, public.daily_actions to authenticated;
+grant select on table public.business_settings to authenticated;
+-- every column but what the call cost and which provider and model ran it (the app shows whole credits only)
+grant select (id, user_id, project_id, local_date, time_zone, state, source, engine, candidates, chosen, feedback,
+  fallback, error_code, own_key, attempts, started_at, generated_at, done_at, created_at, updated_at)
+  on public.daily_actions to authenticated;
 
 drop policy if exists "Users read their own business settings" on public.business_settings;
 create policy "Users read their own business settings" on public.business_settings

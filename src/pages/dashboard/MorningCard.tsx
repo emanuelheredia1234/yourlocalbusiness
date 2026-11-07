@@ -18,7 +18,7 @@ import { useNow } from '@/lib/hooks';
 import { showUpgrade } from '@/lib/billing/upgrade';
 import { MORNING, MORNING_REASONS } from '@/lib/morning/contract';
 import { useMorningMode } from '@/lib/morning/config';
-import { localFeedback, localMorning } from '@/lib/morning/local';
+import { localFeedback, localMorning, useLocalMorningVersion } from '@/lib/morning/local';
 import { askHow, doIt } from '@/lib/morning/targets';
 import { openPage } from '@/ai/assistant/nav';
 import { entryOf, useMorningStore, type MorningEntry } from '@/store/morning';
@@ -54,7 +54,8 @@ export interface MorningViewProps {
   browserZone?: string;
   onStart: () => void;
   onRefresh: () => void;
-  onFeedback: (v: MorningVerdict, reason?: MorningReason, note?: string) => Promise<boolean> | boolean;
+  /** the action as it is after the answer (or true when not known), false/null when it wasn't saved */
+  onFeedback: (v: MorningVerdict, reason?: MorningReason, note?: string) => Promise<MorningAction | boolean | null> | MorningAction | boolean | null;
   onUpgrade: (code: string) => void;
   /** tests: open the Not useful panel */
   asking?: boolean;
@@ -80,6 +81,18 @@ export function MorningCardView({ project, local, entry, browserZone, onStart, o
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [live, setLive] = useState('');
+  // another business: nothing typed, asked or announced for the last one carries over
+  const [forId, setForId] = useState(project.id);
+  if (forId !== project.id) {
+    setForId(project.id);
+    setAsk(false);
+    setReason(null);
+    setNote('');
+    setBusy(false);
+    setLive('');
+  }
+  const shownId = useRef(project.id);
+  shownId.current = project.id;
   const { today, loading, starting, error, notice, locked, stalled } = entry;
   const tz = today?.timeZone ?? projectTimeZone(project);
   const at = `${MORNING_TIME}${zoneNote(tz, browserZone)}`;
@@ -87,10 +100,13 @@ export function MorningCardView({ project, local, entry, browserZone, onStart, o
 
   const send = async (v: MorningVerdict, r?: MorningReason, n?: string) => {
     if (busy) return;
+    const from = project.id;
     setBusy(true);
-    const ok = await onFeedback(v, r, n);
+    const out = await onFeedback(v, r, n);
+    // the owner switched business meanwhile: that answer isn't this card's to announce
+    if (shownId.current !== from) return;
     setBusy(false);
-    if (!ok) {
+    if (!out) {
       setLive('Couldn’t save that. Try again.');
       return;
     }
@@ -99,7 +115,8 @@ export function MorningCardView({ project, local, entry, browserZone, onStart, o
     setNote('');
     if (v === 'done') setLive('Marked done. Nice work.');
     else if (v === 'undo') setLive('Marked not done.');
-    else setLive('Thanks. Here’s another idea.');
+    // the last idea answered: no other idea today
+    else setLive(typeof out === 'object' && out.state === 'dismissed' ? 'Thanks. We’ll pick differently tomorrow.' : 'Thanks. Here’s another idea.');
   };
 
   let body: ReactNode;
@@ -369,15 +386,12 @@ function useServerMorning(project: Project, on: boolean): { entry: MorningEntry;
 }
 
 /** The built-in version: made in this browser for the action day, Done and Not useful kept on this device. */
-function useLocalMorning(project: Project, ctx: ActionCtx, on: boolean): { today: MorningToday | null; feedback: (v: MorningVerdict, r?: MorningReason, n?: string) => boolean } {
+function useLocalMorning(project: Project, ctx: ActionCtx, on: boolean): { today: MorningToday | null; feedback: (v: MorningVerdict, r?: MorningReason, n?: string) => MorningAction | null } {
   const now = useNow(60_000);
-  const [version, setVersion] = useState(0);
+  // bumped by every localFeedback (this card's buttons or the assistant's tool), so the card shows it at once
+  const version = useLocalMorningVersion((s) => s.version);
   const today = useMemo(() => (on ? localMorning(project, { ...ctx, now }, now) : null), [on, project, ctx, now, version]); // eslint-disable-line react-hooks/exhaustive-deps
-  const feedback = (v: MorningVerdict, r?: MorningReason, n?: string) => {
-    const out = localFeedback(project, v, r, n);
-    setVersion((x) => x + 1);
-    return !!out;
-  };
+  const feedback = (v: MorningVerdict, r?: MorningReason, n?: string) => localFeedback(project, v, r, n);
   return { today, feedback };
 }
 
@@ -406,9 +420,10 @@ export function MorningCard({ project, ctx, className }: { project: Project; ctx
         entry={server.entry}
         onStart={() => void store.start(project.id, 'manual', server.tz)}
         onRefresh={() => void store.load(project.id, server.tz)}
-        onFeedback={(v, r, n) => {
+        onFeedback={async (v, r, n) => {
           const id = server.entry.today?.action?.id;
-          return id ? store.feedback(project.id, id, v, r, n) : false;
+          if (!id || !(await store.feedback(project.id, id, v, r, n))) return false;
+          return entryOf(useMorningStore.getState(), project.id).today?.action ?? true;
         }}
         onUpgrade={(code) => showUpgrade({ code, error: '' })}
       />

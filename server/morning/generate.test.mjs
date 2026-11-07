@@ -6,7 +6,7 @@ import { BASE, morningServer } from './test-helpers.mjs';
 import { checkContext, checkCandidate, parseAnswer, validateAnswer } from './validate.mjs';
 import { ruleCandidates, keyOf } from './rules.mjs';
 import { chooseCandidates, fallbackFor, makeAction } from './generate.mjs';
-import { readFacts, derivedDoneOf } from './facts.mjs';
+import { readFacts, derivedDoneOf, postFacts } from './facts.mjs';
 import { buildPrompt, MORNING_MARKER } from './prompt.mjs';
 import { mockMorningReply } from '../test/mock-providers.mjs';
 import { utcDay } from '../limits.mjs';
@@ -237,5 +237,24 @@ describe('making an action', () => {
   it('keys for repeats and Not useful are the server’s', () => {
     expect(keyOf({ kind: 'assistant', target: { prompt: 'Help me write a thank-you note to a customer' } })).toBe('assistant:help-me-write-a-thank-you-note-to-a-cust');
     expect(keyOf({ kind: 'leads', target: {} }, { leads: { newest: '2026-11-06' } })).toBe('leads:2026-11-06');
+  });
+});
+
+describe('postFacts: due and overdue against the action day', () => {
+  const LA = 'America/Los_Angeles';
+  // 2026-11-08 01:30 in Los Angeles (PST, UTC−8): the action day is still 2026-11-07
+  const now = Date.parse('2026-11-08T09:30:00Z');
+  const post = (id, at) => ({ id, status: 'scheduled', scheduledAt: at, headline: id });
+  const posts = [post('yesterday_evening', '2026-11-08T02:00:00Z'), post('two_days_ago', '2026-11-06T18:00:00Z'), post('later_today', '2026-11-08T18:00:00Z')];
+
+  it('before 05:00 an unpublished post from the action day is due, not overdue; the next calendar day is neither', () => {
+    const f = postFacts(posts, LA, now);
+    expect(f).toMatchObject({ dueToday: 1, overdue: 1 });
+    expect(f.due.map((d) => d.id)).toEqual(['two_days_ago', 'yesterday_evening']);
+  });
+
+  it('after 05:00 the calendar day is the action day', () => {
+    const later = Date.parse('2026-11-08T14:00:00Z');
+    expect(postFacts(posts, LA, later)).toMatchObject({ dueToday: 1, overdue: 2 });
   });
 });

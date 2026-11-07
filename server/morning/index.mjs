@@ -19,7 +19,7 @@ import { createKit, fromDbError } from '../analytics/http.mjs';
 import { errorBody, fail, notSetUp, safeLog, stubRoutes } from '../integrations/common.mjs';
 import { ROUTE_PREFIXES, RATE_BUCKETS } from '../integrations/contracts.mjs';
 import { actionDayOf, isLate, nextMorningAt, zoneOf } from '../localTime.mjs';
-import { HOUR_MS, MORNING, MORNING_MIGRATION, PROJECT_ID_RE, UUID_RE, iso, morningSettings } from './config.mjs';
+import { HOUR_MS, LEAVE_FOR_OTHERS_MS, MORNING, MORNING_MIGRATION, PROJECT_ID_RE, UUID_RE, iso, morningSettings } from './config.mjs';
 import { ALERT_KEY, LAST_KEY, createAlerts } from './alerts.mjs';
 import { createMorningStore, attemptsLeft, isStale } from './store.mjs';
 import { makeAction } from './generate.mjs';
@@ -296,7 +296,8 @@ export function createMorning(deps) {
     store,
     jobs,
     cronJobs: () => [
-      { name: 'morning-actions', everyMs: HOUR_MS, minMs: 25_000, run: (ctx) => jobs.run(ctx) },
+      // first in the tick (a slow earlier job can't push it out of its hour), leaving the rest of the tick time
+      { name: 'morning-actions', everyMs: HOUR_MS, first: true, leaveMs: LEAVE_FOR_OTHERS_MS, minMs: 25_000, run: (ctx) => jobs.run(ctx) },
       { name: 'morning-prune', dailyAtUtc: '05:23', run: (ctx) => jobs.prune(ctx) },
     ],
   };

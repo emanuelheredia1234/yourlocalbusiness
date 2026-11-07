@@ -48,9 +48,10 @@ describe('the clock', () => {
 describe('localMorning', () => {
   it('is the same all day, and a date-line business flips at its own 5 am', () => {
     const p = project('Pacific/Kiritimati');
-    const before = localMorning(p, ctxAt(Z('2026-11-07T14:59:00Z')));
+    const before = localMorning(p, ctxAt(Z('2026-11-07T11:59:00Z'))); // 01:59 on the 8th there
     expect(before.actionDay).toBe('2026-11-07');
-    const again = localMorning(p, ctxAt(Z('2026-11-07T14:59:30Z')));
+    expect(before.action).toMatchObject({ localDate: '2026-11-07' });
+    const again = localMorning(p, ctxAt(Z('2026-11-07T14:59:30Z'))); // 04:59: late, the day's one still shows
     expect(again.action).toEqual(before.action);
     const after = localMorning(p, ctxAt(Z('2026-11-07T15:00:00Z')));
     expect(after.actionDay).toBe('2026-11-08');
@@ -60,6 +61,27 @@ describe('localMorning', () => {
     // Pago Pago, the same instant: still the 6th
     safeStorage.removeItem(localKey('p1'));
     expect(localMorning(project('Pacific/Pago_Pago'), ctxAt(Z('2026-11-07T15:30:00Z'))).actionDay).toBe('2026-11-06');
+  });
+  it('02:00–05:00 makes nothing new for the ending day (as the server); a day already made still shows', () => {
+    const p = project('America/Los_Angeles');
+    const late = localMorning(p, ctxAt(Z('2026-11-07T11:00:00Z'))); // 03:00 PST
+    expect(late).toMatchObject({ actionDay: '2026-11-06', action: null, late: true, dueNow: false });
+    expect(safeStorage.getItem(localKey('p1'))).toBeNull();
+    // 05:00: the new day's one action
+    expect(localMorning(p, ctxAt(Z('2026-11-07T13:00:00Z'))).action).toMatchObject({ localDate: '2026-11-07', state: 'ready' });
+    // made at 01:00 for the 6th, it still shows at 03:00
+    safeStorage.removeItem(localKey('p1'));
+    const early = localMorning(p, ctxAt(Z('2026-11-07T09:00:00Z'))); // 01:00 PST
+    expect(early.action).toMatchObject({ localDate: '2026-11-06' });
+    expect(localMorning(p, ctxAt(Z('2026-11-07T11:00:00Z'))).action).toEqual(early.action);
+  });
+  it('before 05:00 a post from the action day is due; one for the coming calendar day isn’t', () => {
+    const p = project('America/Los_Angeles');
+    const now = Z('2026-11-07T09:00:00Z'); // 01:00 PST on the 7th: the action day is the 6th
+    const c = localCandidates(p, ctxAt(now, [post('post_8', '2026-11-07T18:00:00Z')]), '2026-11-06', now);
+    expect(c.some((x) => x.rule === 'post_due')).toBe(false);
+    const d = localCandidates(p, ctxAt(now, [post('post_7', '2026-11-07T06:00:00Z')]), '2026-11-06', now); // 22:00 on the 6th
+    expect(d[0]).toMatchObject({ rule: 'post_due', target: { postId: 'post_7' } });
   });
   it('without a plan, planning comes first; a due post beats the plan and the habits', () => {
     const now = Z('2026-11-07T15:00:00Z'); // 07:00 in Chicago
