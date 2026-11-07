@@ -6,15 +6,23 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createOmnisendRoutes, OMNISEND_PUBLIC_BASE_URL, OMNISEND_REDIRECT_URI, OMNISEND_SCOPES, REPORTS_PER_DAY } from './omnisend.mjs';
+import { createOmnisendRoutes, DRAFT_BODY_LIMIT, OMNISEND_PUBLIC_BASE_URL, OMNISEND_REDIRECT_URI, OMNISEND_SCOPES, REPORTS_PER_DAY } from './omnisend.mjs';
+import { normalizeDoc } from '../shared/email/blocks.mjs';
+import { docFromPlain } from '../shared/email/migrate.mjs';
+import { renderEmail } from '../shared/email/render.mjs';
 import { createMockSupabase } from './test/mock-supabase.mjs';
 import { createSecretBox } from './secretBox.mjs';
 
 const API = '/api/integrations/omnisend';
 /** The cookie that ties Omnisend's callback to the browser that started the connection. */
 const COOKIE = '__Host-ylb_omnisend';
-/** The most a draft request may send (a little over the largest draft the field limits allow). */
-const BODY_LIMIT = 128 * 1024;
+/** The most a draft request may send (an email's block doc with its values and brand). */
+const BODY_LIMIT = 256 * 1024;
+/** The test Supabase project: its public-files bucket hosts each user's email images. */
+const SUPABASE = 'https://sb.example.co';
+const imageOf = (userId, name = 'e-AAAAAAAAAAAAAAAAAAAAAA.png') => `${SUPABASE}/storage/v1/object/public/public-files/${userId}/${name}`;
+/** Each account's offers (P3), as server/offers' idsFor answers them. */
+const OFFERS = { 'account-alpha': ['AlphaOfferAlphaOffer01', 'AlphaOfferAlphaOffer02'], 'account-beta': ['BetaOfferBetaOfferBe01'] };
 const NOW = 1_800_000_000_000;
 const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
 const userKey = (id) => `omnisend:user:${sha256(id)}`;
@@ -111,10 +119,12 @@ const USERS = {
   'Bearer owner': { id: 'account-owner', email: 'owner@example.com', isAdmin: true },
 };
 
-function makeService({ env, fetch = vi.fn(), storage = makeStorage(), rateLimited, auth, clock = { now: NOW } } = {}) {
+function makeService({ env, fetch = vi.fn(), storage = makeStorage(), rateLimited, auth, clock = { now: NOW }, offerIds = async (userId) => OFFERS[userId] ?? [], log = { log: vi.fn() } } = {}) {
   const readJson = vi.fn(readJsonLike);
   const service = createOmnisendRoutes({
-    env: env || { OMNISEND_CLIENT_ID: 'client-id-test', OMNISEND_CLIENT_SECRET: 'client-secret-test' },
+    env: env || { OMNISEND_CLIENT_ID: 'client-id-test', OMNISEND_CLIENT_SECRET: 'client-secret-test', SUPABASE_URL: `${SUPABASE}/` },
+    offerIds,
+    log,
     storage,
     fetch,
     send,
@@ -134,7 +144,7 @@ function makeService({ env, fetch = vi.fn(), storage = makeStorage(), rateLimite
     },
     now: () => clock.now,
   });
-  return { service, storage, fetch, readJson, clock };
+  return { service, storage, fetch, readJson, clock, log };
 }
 
 async function call(service, method, pathname, { authorization = 'Bearer alpha', origin = 'https://app.test', body, rawBody, cookie, headers = {} } = {}) {
@@ -514,13 +524,17 @@ describe('campaign drafts', () => {
       expect(c.headers['omnisend-version']).toBe('2026-03-15');
     }
     const html = template.body.html;
-    expect(html).toContain('<p style="margin:0 0 14px">Hello &lt;script&gt;bad()&lt;/script&gt;</p>');
+    // the plain-text shape (older tabs) is made a doc and rendered here, as a designed email
+    const expected = renderEmail(docFromPlain({ id: 'draft', body: 'Hello <script>bad()</script>\n\nThanks\nThe team', ctaLabel: DRAFT.ctaLabel, ctaUrl: DRAFT.ctaUrl }), { target: 'omnisend', subject: '<script>alert(1)</script>', preheader: DRAFT.preheader, brand: {}, values: { first_name: '[First name]' }, links: {}, footerNote: '', iconBase: OMNISEND_PUBLIC_BASE_URL }).html;
+    expect(html).toBe(expected);
+    expect(html).toMatch(/<p style="[^"]*">Hello &lt;script&gt;bad\(\)&lt;\/script&gt;<\/p>/);
     expect(html).toContain('Thanks<br>The team');
     expect(html).not.toContain('<script');
-    // the subject is the subject: the preview doesn't repeat it in the body
+    expect(html).toContain('<title>&lt;script&gt;alert(1)&lt;/script&gt;</title>');
+    // the subject is the subject: the email doesn't repeat it in the body
     expect(html).not.toMatch(/<h1/);
-    expect(html).toContain('<a href="https://copperandcomb.com/free" style="display:inline-block;');
-    expect(html).toContain('>Download your free guide</a>');
+    expect(html).toMatch(/<a href="https:\/\/copperandcomb\.com\/free" target="_blank" rel="noopener" style="display:inline-block;[^"]*">Download your free guide<\/a>/);
+    expect(html).toContain('<v:roundrect');
     expect(campaign.body).toEqual({ channel: 'email', type: 'regular', name: DRAFT.name, language: 'en_US', content: { email: { templateID: 'a'.repeat(24), subject: '<script>alert(1)</script>', preheader: DRAFT.preheader } } });
 
     const betaDraft = await call(service, 'POST', `${API}/campaign-drafts`, { authorization: 'Bearer beta', body: DRAFT });
@@ -535,7 +549,8 @@ describe('campaign drafts', () => {
     await connected(service);
     await call(service, 'POST', `${API}/campaign-drafts`, { body: { subject: 'Hello', body: 'Just text, no button.' } });
     const html = fetch.log.find((c) => c.kind === 'template').body.html;
-    expect(html).toMatch(/<p style="[^"]*">You’re receiving this because you signed up\. <a href="\[\[unsubscribe_link\]\]"[^>]*>Unsubscribe<\/a> anytime\.<\/p><\/main>/);
+    expect(html.split('[[unsubscribe_link]]')).toHaveLength(2);
+    expect(html).toMatch(/<p style="[^"]*">You’re receiving this because you signed up\.<\/p><p style="[^"]*"><a href="\[\[unsubscribe_link\]\]" style="[^"]*">Unsubscribe<\/a><\/p><\/td>\n<\/tr>\n<\/table>/);
     expect(html).not.toContain('<a href="http');
   });
 
@@ -590,6 +605,148 @@ describe('campaign drafts', () => {
     expect(campaign.content.email.subject).toBe(`${'S'.repeat(249)}😀`);
     expect(campaign.name).toBe('N'.repeat(250));
     expect([...fetch.log.find((c) => c.kind === 'template').body.name].length).toBeLessThanOrEqual(255);
+  });
+});
+
+// ───────────── designed emails (P5): the server renders what Omnisend gets ─────────────
+
+describe('designed email drafts', () => {
+  const ALPHA_OFFER = OFFERS['account-alpha'][0];
+  const BETA_OFFER = OFFERS['account-beta'][0];
+  const VALUES = { first_name: '[First name]', lead_magnet_link: 'https://yourlocalbusiness.replit.app/m/AAAAAAAAAAAAAAAAAAAAAA', product_link: 'https://copperandcomb.com/guide', sender_name: 'Maya' };
+  const BRAND = { name: 'Copper & Comb', colors: { primary: '#7a1f5c', accent: '#e0a526', ink: '#1d2420', paper: '#ffffff' } };
+  const DOC = {
+    v: 1,
+    theme: { id: 'brand' },
+    blocks: [
+      { type: 'heading', text: 'Welcome, {{first_name}}', level: 1 },
+      { type: 'text', text: 'Here is **your guide**: [open it]({{lead_magnet_link}}).' },
+      { type: 'image', src: imageOf('account-alpha'), alt: 'The guide', width: 'full', origin: 'upload' },
+      { type: 'button', label: 'Get the course', link: { kind: 'offer', offerId: ALPHA_OFFER } },
+    ],
+  };
+  const designed = (o = {}) => ({ name: 'Welcome', subject: 'Your guide', preheader: 'Page one', doc: DOC, values: VALUES, brand: BRAND, footerNote: 'You signed up at copperandcomb.com.', ...o });
+  const draftWith = async (body, authorization = 'Bearer alpha') => {
+    const fetch = omnisendFetch();
+    const made = makeService({ fetch });
+    await connected(made.service, authorization);
+    const res = await call(made.service, 'POST', `${API}/campaign-drafts`, { body, authorization });
+    const template = fetch.log.find((c) => c.kind === 'template');
+    return { ...made, res, html: template?.body.html ?? null, calls: fetch.log.filter((c) => c.kind !== 'token').map((c) => c.kind) };
+  };
+
+  it('imports the HTML the shared renderer makes from the doc, with the buy link this server resolves', async () => {
+    const { res, html, calls } = await draftWith(designed({ links: { [`buy:${ALPHA_OFFER}`]: 'https://evil.example/pay' } }));
+    expect(res.statusCode).toBe(201);
+    expect(calls).toEqual(['template', 'campaign']);
+    const expected = renderEmail(normalizeDoc(DOC).doc, { target: 'omnisend', subject: 'Your guide', preheader: 'Page one', brand: BRAND, values: VALUES, links: { [`buy:${ALPHA_OFFER}`]: `https://yourlocalbusiness.replit.app/b/${ALPHA_OFFER}` }, footerNote: 'You signed up at copperandcomb.com.', iconBase: OMNISEND_PUBLIC_BASE_URL }).html;
+    expect(html).toBe(expected);
+    expect(html).toContain(`href="https://yourlocalbusiness.replit.app/b/${ALPHA_OFFER}"`);
+    // a client-sent link is never used
+    expect(html).not.toContain('evil.example');
+    expect(html.split('[[unsubscribe_link]]')).toHaveLength(2);
+    // the brand's colours, inline
+    expect(html).toContain('bgcolor="#7a1f5c"');
+    expect(html).toContain('Welcome, &#91;First name&#93;');
+  });
+
+  it('re-sanitizes custom blocks: no script, handler, javascript: or iframe reaches Omnisend', async () => {
+    const evil = { v: 1, blocks: [{ type: 'custom', html: '<script>alert(1)</script><img src=x onerror=alert(1)><a href="javascript:alert(1)" onclick="x()">x</a><iframe src="https://evil.example"></iframe><p style="background:url(https://track.example/p.gif)">[[unsubscribe_link]]</p><img src="https://track.example/pixel.gif" alt=""><!--[if mso]><script>x</script><![endif]-->', css: '@import url(https://evil.example/x.css); p{color:red}' }] };
+    const { res, html } = await draftWith(designed({ doc: evil }));
+    expect(res.statusCode).toBe(201);
+    expect(html).not.toMatch(/<script|<iframe/i);
+    expect(html).not.toMatch(/<[^>]*\son\w+=/i);
+    expect(html).not.toMatch(/javascript:|track\.example|evil\.example|@import/i);
+    expect(html.split('[[unsubscribe_link]]')).toHaveLength(2);
+  });
+
+  it('buy links: the caller’s own offers only (UNKNOWN_BUY_LINK otherwise, nothing made in Omnisend)', async () => {
+    for (const doc of [
+      { v: 1, blocks: [{ type: 'button', label: 'Buy', link: { kind: 'offer', offerId: BETA_OFFER } }] },
+      { v: 1, blocks: [{ type: 'text', text: `Buy here: {{buy:${BETA_OFFER}}}` }] },
+      { v: 1, blocks: [{ type: 'offer', offerId: BETA_OFFER, title: 'Theirs', price: '$1' }] },
+      { v: 1, blocks: [{ type: 'custom', html: `<a href="{{buy:${BETA_OFFER}}}">x</a>` }] },
+    ]) {
+      const { res, calls } = await draftWith(designed({ doc }));
+      expect([res.statusCode, res.body.code, res.body.error]).toEqual([400, 'UNKNOWN_BUY_LINK', 'This buy link isn’t one of this business’s offers.']);
+      expect(calls).toEqual([]);
+    }
+    // the same offer is beta's own
+    expect((await draftWith(designed({ doc: { v: 1, blocks: [{ type: 'button', label: 'Buy', link: { kind: 'offer', offerId: BETA_OFFER } }] } }), 'Bearer beta')).res.statusCode).toBe(201);
+  });
+
+  it('images: the caller’s public-files folder and the app’s icons only (IMAGE_NOT_HOSTED otherwise)', async () => {
+    const img = (src) => designed({ doc: { v: 1, blocks: [{ type: 'image', src, alt: 'x' }] } });
+    for (const src of ['https://track.example/pixel.gif', imageOf('account-beta'), imageOf('account-alpha', '../account-beta/e-AAAAAAAAAAAAAAAAAAAAAA.png'), `${SUPABASE}/storage/v1/object/public/lead-files/account-alpha/x.png`, 'https://yourlocalbusiness.replit.app/m/AAAAAAAAAAAAAAAAAAAAAA']) {
+      const { res, calls } = await draftWith(img(src));
+      expect([res.statusCode, res.body.code], src).toEqual([400, 'IMAGE_NOT_HOSTED']);
+      expect(res.body.error).toBe('Upload this image in the email studio first: images in emails have to be hosted by the app.');
+      expect(calls).toEqual([]);
+    }
+    expect((await draftWith(img(imageOf('account-alpha', 'AAAAAAAAAAAAAAAAAAAAAA.jpg')))).res.statusCode).toBe(201);
+    expect((await draftWith(designed({ brand: { ...BRAND, logoUrl: 'https://elsewhere.example/logo.png' } }))).res.body.code).toBe('IMAGE_NOT_HOSTED');
+    const icons = await draftWith(designed({ doc: { v: 1, blocks: [{ type: 'social', style: 'icons', links: [{ platform: 'instagram', url: 'https://instagram.com/cc' }] }] } }));
+    expect(icons.html).toContain('src="https://yourlocalbusiness.replit.app/email-icons/instagram.png"');
+  });
+
+  it('checks the values, the brand, the links and the doc before anything is made', async () => {
+    const cases = [
+      [designed({ brand: { ...BRAND, colors: { primary: 'red' } } }), 400, 'INVALID_DRAFT'],
+      [designed({ values: { ...VALUES, coupon: 'X' } }), 400, 'INVALID_DRAFT'],
+      [designed({ values: { ...VALUES, product_link: 'javascript:alert(1)' } }), 400, 'INVALID_DRAFT'],
+      [designed({ values: { ...VALUES, sender_name: 'x'.repeat(501) } }), 400, 'INVALID_DRAFT'],
+      [designed({ doc: { v: 1, blocks: [{ type: 'marquee' }] } }), 400, 'INVALID_DRAFT'],
+      [designed({ doc: 'html' }), 400, 'INVALID_DRAFT'],
+      [designed({ subject: '' }), 400, 'INVALID_DRAFT'],
+      // a button to the download while it has no address yet (the app's placeholder)
+      [designed({ doc: { v: 1, blocks: [{ type: 'button', label: 'Get it', link: { kind: 'magnet' } }] }, values: { ...VALUES, lead_magnet_link: '[link to your free download]' } }), 400, 'INVALID_CTA'],
+      [designed({ doc: { v: 1, blocks: [{ type: 'button', label: 'Go', link: { kind: 'url', url: '[link to your offer]' } }] } }), 400, 'INVALID_CTA'],
+      [designed({ doc: { v: 1, blocks: [{ type: 'button', label: 'Calc', link: { kind: 'asset', assetId: 'calc' } }] } }), 400, 'INVALID_CTA'],
+      [designed({ doc: { v: 1, blocks: [{ type: 'button', label: 'Calc', link: { kind: 'asset', assetId: 'calc' } }] }, assetLinks: { calc: 'https://elsewhere.example/p/calc' } }), 400, 'INVALID_DRAFT'],
+    ];
+    for (const [body, status, code] of cases) {
+      const { res, calls } = await draftWith(body);
+      expect([res.statusCode, res.body.code], JSON.stringify(body).slice(0, 200)).toEqual([status, code]);
+      expect(calls).toEqual([]);
+    }
+    const { res: first } = await draftWith(designed({ doc: { v: 1, blocks: [{ type: 'text', text: 'x'.repeat(5001) }] } }));
+    expect(first.body.error).toBe('Block 1 (text) is too long: 5,001 characters, and at most 5,000 fit.');
+    // a placeholder in text is fine (it's words, not a button), and a published asset on the app's address is a link
+    const ok = await draftWith(designed({ doc: { v: 1, blocks: [{ type: 'text', text: 'Soon: {{lead_magnet_link}}' }, { type: 'button', label: 'Calc', link: { kind: 'asset', assetId: 'calc' } }] }, values: { ...VALUES, lead_magnet_link: '[link to your free download]' }, assetLinks: { calc: 'https://yourlocalbusiness.replit.app/p/calc' } }));
+    expect(ok.res.statusCode).toBe(201);
+    expect(ok.html).toContain('href="https://yourlocalbusiness.replit.app/p/calc"');
+    expect(ok.html).toContain('Soon: &#91;link to your free download&#93;');
+  });
+
+  it('a rendered email over 200 KB is 413, nothing made; a missing first name is the placeholder', async () => {
+    const doc = { v: 1, blocks: Array.from({ length: 60 }, () => ({ type: 'text', text: '<'.repeat(1500) })) };
+    expect(JSON.stringify(designed({ doc })).length).toBeLessThan(DRAFT_BODY_LIMIT);
+    const { res, calls } = await draftWith(designed({ doc }));
+    expect([res.statusCode, res.body.code]).toEqual([413, 'TOO_LARGE']);
+    expect(calls).toEqual([]);
+    const { html } = await draftWith(designed({ values: { product_link: VALUES.product_link, lead_magnet_link: VALUES.lead_magnet_link } }));
+    expect(html).toContain('Welcome, &#91;First name&#93;');
+  });
+
+  it('one attempt per write: a template import that may have happened is never sent again', async () => {
+    const fetch = omnisendFetch({ template: () => Promise.reject(new DOMException('aborted', 'TimeoutError')) });
+    const { service } = makeService({ fetch });
+    await connected(service);
+    const res = await call(service, 'POST', `${API}/campaign-drafts`, { body: designed() });
+    expect([res.statusCode, res.body.code]).toEqual([502, 'OUTCOME_UNKNOWN']);
+    expect(fetch.log.filter((c) => c.kind === 'template')).toHaveLength(1);
+  });
+
+  it('offers that can’t be read: 503, nothing made', async () => {
+    const fetch = omnisendFetch();
+    const failing = async () => {
+      throw new Error('db down');
+    };
+    const { service } = makeService({ fetch, offerIds: failing });
+    await connected(service);
+    const res = await call(service, 'POST', `${API}/campaign-drafts`, { body: designed() });
+    expect([res.statusCode, res.body.code]).toEqual([503, 'OFFERS_UNAVAILABLE']);
+    expect(fetch.log.filter((c) => c.kind !== 'token')).toHaveLength(0);
   });
 });
 
@@ -747,6 +904,36 @@ describe('A/B test drafts', () => {
     expect(html.every((h) => h.includes('[[unsubscribe_link]]'))).toBe(true);
   });
 
+  it('designed versions: each doc rendered here, the two templates differing only in the opening (or the subject)', async () => {
+    const doc = (opening) => ({ v: 1, blocks: [{ id: 'b_opening001', type: 'text', text: opening }, { id: 'b_rest000001', type: 'text', text: 'The rest of the email.' }, { id: 'b_button0001', type: 'button', label: 'Get it', link: { kind: 'magnet' } }] });
+    const values = { first_name: '[First name]', lead_magnet_link: 'https://yourlocalbusiness.replit.app/m/AAAAAAAAAAAAAAAAAAAAAA' };
+    const opening = { a: { subject: 'Your guide', doc: doc('Here it is.'), values }, b: { subject: 'Your guide', doc: doc('You asked, so here it is.'), values } };
+    for (const [variants, changed] of [[opening, 'opening'], [{ a: { ...opening.a }, b: { ...opening.a, subject: 'Free guide inside' } }, 'subject']]) {
+      const fetch = abFetch();
+      const { service } = makeService({ fetch });
+      await connected(service);
+      await service.createAbDraft('account-alpha', { name: 'Designed A/B', variants });
+      const [a, b] = fetch.log.filter((c) => c.kind === 'template').map((c) => c.body.html);
+      for (const h of [a, b]) expect(h.split('[[unsubscribe_link]]')).toHaveLength(2);
+      if (changed === 'opening') {
+        expect(a).not.toBe(b);
+        expect(a.replace('Here it is.', 'You asked, so here it is.')).toBe(b);
+      } else {
+        // only the subject (the <title>) differs
+        expect(a.replace('<title>Your guide</title>', '<title>Free guide inside</title>')).toBe(b);
+        const subjects = fetch.log.find((c) => c.kind === 'campaign').body.abTest.variants;
+        expect([subjects.a.content.email.subject, subjects.b.content.email.subject]).toEqual(['Your guide', 'Free guide inside']);
+      }
+    }
+    // a version whose buy link isn't the caller's: nothing imported
+    const fetch = abFetch();
+    const { service } = makeService({ fetch });
+    await connected(service);
+    const theirs = { ...opening.b, doc: { v: 1, blocks: [{ type: 'button', label: 'Buy', link: { kind: 'offer', offerId: OFFERS['account-beta'][0] } }] } };
+    await expect(service.createAbDraft('account-alpha', { name: 'x', variants: { a: opening.a, b: theirs } })).rejects.toMatchObject({ status: 400, code: 'UNKNOWN_BUY_LINK' });
+    expect(kinds(fetch)).toEqual([]);
+  });
+
   it('a timeout after the campaign POST is CAMPAIGN_UNCONFIRMED and is never retried', async () => {
     const fetch = abFetch({ campaign: () => Promise.reject(new DOMException('aborted', 'TimeoutError')) });
     const { service } = makeService({ fetch });
@@ -766,6 +953,8 @@ describe('A/B test drafts', () => {
     expect(got.campaigns.b).toMatchObject({ id: 'b'.repeat(24), name: 'Fallback — version B' });
     const regular = fetch.log.filter((c) => c.kind === 'campaign' && c.body.type === 'regular');
     expect(regular.map((c) => c.body.content.email.templateID)).toEqual(['1'.repeat(24), '2'.repeat(24)]);
+    // both drafts' templates carry the unsubscribe link
+    for (const t of fetch.log.filter((c) => c.kind === 'template')) expect(t.body.html.split('[[unsubscribe_link]]')).toHaveLength(2);
     const server = abFetch({ campaign: refuse(503, 'campaign-type-not-supported') });
     const made = makeService({ fetch: server });
     await connected(made.service);
@@ -1069,7 +1258,7 @@ describe('the real server', () => {
       // the real sameOrigin and readJson
       const crossSite = await request(port, 'POST', drafts, { token: alice.token, origin: 'https://evil.example', body: DRAFT });
       expect(crossSite.status).toBe(403);
-      const big = await request(port, 'POST', drafts, { token: alice.token, origin: APP, rawBody: JSON.stringify({ ...DRAFT, body: 'x'.repeat(200 * 1024) }) });
+      const big = await request(port, 'POST', drafts, { token: alice.token, origin: APP, rawBody: JSON.stringify({ ...DRAFT, body: 'x'.repeat(300 * 1024) }) });
       expect([big.status, big.json?.code]).toEqual([413, 'TOO_LARGE']);
       const nothing = await request(port, 'POST', drafts, { token: alice.token, origin: APP, rawBody: 'null', timeoutMs: 5000 });
       expect([nothing.status, nothing.json?.code]).toEqual([400, 'INVALID_DRAFT']);
@@ -1078,6 +1267,17 @@ describe('the real server', () => {
       const imported = server.calls().find((c) => c.path === '/api/email-templates/import');
       expect(imported.bearer).toBe('Bearer fake-at-alice-code');
       expect(imported.payload.html).toContain('<a href="[[unsubscribe_link]]"');
+      // a designed email: its buy link checked against alice's own offers (server/offers, wired in ai-server.mjs)
+      const offerId = 'RealServerOfferId00001';
+      if (!supa.tables.has('offers')) supa.tables.set('offers', []);
+      supa.tables.get('offers').push({ id: offerId, user_id: alice.user.id, project_id: 'proj-1', title: 'Course', provider: 'external', provider_ref: { url: 'https://pay.example/x' }, status: 'active', clicks: 0, created_at: new Date().toISOString() });
+      const designed = { name: 'Designed', subject: 'Hi', doc: { v: 1, blocks: [{ type: 'text', text: 'Hi {{first_name}}' }, { type: 'button', label: 'Buy', link: { kind: 'offer', offerId } }] }, values: { first_name: '[First name]' } };
+      const made = await request(port, 'POST', drafts, { token: alice.token, origin: APP, body: designed });
+      expect([made.status, made.json]).toEqual([201, expect.anything()]);
+      const html = server.calls().filter((c) => c.path === '/api/email-templates/import').at(-1).payload.html;
+      expect(html).toContain(`href="https://yourlocalbusiness.replit.app/b/${offerId}"`);
+      const notHers = await request(port, 'POST', drafts, { token: alice.token, origin: APP, body: { ...designed, doc: { v: 1, blocks: [{ type: 'button', label: 'Buy', link: { kind: 'offer', offerId: 'SomebodyElsesOffer0001' } }] } } });
+      expect([notHers.status, notHers.json?.code]).toEqual([400, 'UNKNOWN_BUY_LINK']);
 
       // bob starts connecting, deletes his account, then his Omnisend tab comes back: no token for the deleted account
       const bobStart = await request(port, 'POST', `${API}/connect`, { token: bob.token, origin: APP, body: {} });

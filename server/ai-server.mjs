@@ -206,6 +206,8 @@ const omnisend = createOmnisendRoutes({
   corsHeaders,
   sameOrigin: (req) => sameOrigin(req, ALLOWED_ORIGIN),
   clientKey: (req) => pages.visitor(req),
+  // an email's buy links must be the caller's own offers (P3; read when a draft is made, after startup)
+  offerIds: (userId) => integrations.offers?.idsFor?.(userId) ?? [],
 });
 // Customer Gmail (server/gmail.mjs): the customer's own mailbox for later outreach. Not Nango.
 const gmail = createGmailRoutes({
