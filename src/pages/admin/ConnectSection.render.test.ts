@@ -24,7 +24,7 @@ describe('Owner › Stripe Connect', () => {
     const html = wrap(createElement(ConnectView, { data: DATA, error: null, onResolve: () => {} }));
     for (const t of ['Connect is on in Stripe', 'Connect webhook secret', 'APP_PUBLIC_URL is the app’s https address', 'Seller terms published']) expect(html).toContain(t);
     expect(html).toContain('Missing in Replit Secrets: STRIPE_CONNECT_WEBHOOK_SECRET');
-    expect(html).toContain('docs/integrations-setup.md#stripe-connect-sellers-get-paid-p6');
+    expect(html).toContain('docs/integrations-setup.md#16-stripe-connect-sellers-get-paid-p6');
     expect(html).toContain('Review the draft at /seller-terms');
   });
 

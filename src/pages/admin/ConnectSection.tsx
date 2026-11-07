@@ -13,7 +13,7 @@ import { toast } from '@/store/ui';
 import { Badge, Callout, SettingsSection, Spinner } from '@/components/ui/primitives';
 
 /** Where the owner's steps are (docs/integrations-setup.md, "Stripe Connect: sellers get paid (P6)"). */
-export const CONNECT_DOCS = 'docs/integrations-setup.md#stripe-connect-sellers-get-paid-p6';
+export const CONNECT_DOCS = 'docs/integrations-setup.md#16-stripe-connect-sellers-get-paid-p6';
 
 /** Platform alerts in plain words, with what to do. */
 export const CONNECT_ALERTS: Record<string, string> = {
