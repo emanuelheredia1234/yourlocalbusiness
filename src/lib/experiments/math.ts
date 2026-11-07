@@ -79,6 +79,9 @@ const WHAT: Record<string, string> = { reach: 'reached', views: 'views', impress
 export function missingCopy(r: ExperimentResult): string {
   if (r.reason === 'variant_missing') return 'A version is missing: its post was deleted, or it didn’t go out.';
   if (r.reason === 'no_common_measure') return 'The networks didn’t report the same numbers for each version, so they can’t be compared.';
+  if (r.reason === 'page_changed') return 'The page was published again during the test, so its versions can’t be compared.';
+  if (r.reason === 'omnisend_picks') return 'Omnisend picks the winner from the test group’s opens or clicks.';
+  if (r.reason === 'omnisend_no_pick') return 'Omnisend didn’t pick a winner by its decision time.';
   const parts = (r.missing ?? []).map((m) => (m.key ? `${versionName(m.key)} needs ${n(m.need)} ${WHAT[m.what] ?? m.what} (has ${n(m.have)})` : `${n(m.need)} ${WHAT[m.what] ?? m.what} in all (has ${n(m.have)})`));
   return parts.length ? parts.join('; ') : 'Not enough data yet.';
 }

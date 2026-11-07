@@ -152,6 +152,7 @@ export async function runAction(action: Action, turn: Turn, tools: Registry = re
   const args = checked.args;
   const ctx: ToolContext = { signal: turn.signal, projectId: turn.projectId, stage: setStage, ai: [] };
   try {
+    await tool.prepare?.(args as never, ctx);
     const problem = tool.validate?.(args as never, ctx);
     if (problem) return failed(problem, `Couldn’t ${words(tool.name)}: ${problem}`);
   } catch (e) {

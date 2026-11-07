@@ -41,18 +41,22 @@ export interface CostLine {
   reason?: string;
 }
 
-/** The cost shown before generating (P4b: text credits; images; this week's videos). */
+/** "about 3 AI credits (none on your own AI keys)": requests on the user's own keys never use credits. */
+const TEXT_COST = `about ${TEXT_REQUEST_CREDITS} AI credits (none on your own AI keys)`;
+
+/** The cost shown before generating (P4b: text credits; images; this week's videos): the exact count it makes. */
 export function costLine(kind: ExperimentKind, change: ExperimentChanged, o: { count: number; video?: boolean; videosLeft?: number | null } = { count: 1 }): CostLine {
   if (change === 'time') return { text: 'No AI: the same post goes out at different times.' };
+  const n = Math.max(1, Math.round(o.count));
   if (kind === 'post' && change === 'visual') {
     if (o.video) {
       const left = o.videosLeft;
-      if (left != null && left < o.count) return { text: `Uses ${o.count === 1 ? '1' : '1–2'} of this week’s videos (${left} left)`, disabled: true, reason: left === 0 ? 'This week’s videos are used up.' : `Only ${left} of this week’s videos left.` };
-      return { text: `Uses ${o.count === 1 ? '1' : '1–2'} of this week’s videos${left != null ? ` (${left} left)` : ''}, plus about ${TEXT_REQUEST_CREDITS} AI credits` };
+      if (left != null && left < n) return { text: `Uses ${n} of this week’s videos (${left} left)`, disabled: true, reason: left === 0 ? 'This week’s videos are used up.' : `Only ${left} of this week’s videos left.` };
+      return { text: `Uses ${n} of this week’s videos${left != null ? ` (${left} left)` : ''}, plus ${TEXT_COST}` };
     }
-    return { text: `Makes ${o.count === 1 ? '1 new image' : '1–2 new images'} (image credits), plus about ${TEXT_REQUEST_CREDITS} AI credits` };
+    return { text: `Makes ${n === 1 ? '1 new image' : `${n} new images`} (image credits), plus ${TEXT_COST}` };
   }
-  return { text: `About ${TEXT_REQUEST_CREDITS} AI credits` };
+  return { text: `${TEXT_COST[0].toUpperCase()}${TEXT_COST.slice(1)}` };
 }
 
 // ───────────── a post's parts ─────────────
@@ -314,15 +318,17 @@ export interface PostNowGate {
  * Whether a version may go out now: in key order, and for "different times" at least 12 hours after the version
  * before it went out (the server checks again). Trial Reels may go back to back.
  */
-export function postNowGate(e: Pick<Experiment, 'mode' | 'state' | 'variants'>, key: VariantKey, postedAt: (postId: string | null) => number | null, now = Date.now()): PostNowGate {
+export function postNowGate(e: Pick<Experiment, 'mode' | 'state' | 'variants'>, key: VariantKey, postedAt: (postId: string | null) => number | null, now = Date.now(), failed: (postId: string | null) => boolean = () => false): PostNowGate {
   if (e.state !== 'draft' && e.state !== 'running') return { ok: false, reason: 'This test has ended.' };
   const list = [...e.variants].sort((x, y) => (x.key < y.key ? -1 : 1));
   const i = list.findIndex((v) => v.key === key);
   if (i === -1) return { ok: false, reason: 'No such version.' };
-  if (list[i].jobId) return { ok: false, reason: 'Already posted.' };
+  // a version is out once its job is, unless that job failed (the server counts only jobs that went out, or may have)
+  const out = (v: (typeof list)[number]) => !!v.jobId && !failed(v.postId);
+  if (out(list[i])) return { ok: false, reason: 'Already posted.' };
   if (i === 0) return { ok: true };
   const prev = list[i - 1];
-  if (!prev.jobId) return { ok: false, reason: `Post version ${prev.key.toUpperCase()} first.` };
+  if (!out(prev)) return { ok: false, reason: `Post version ${prev.key.toUpperCase()} first.` };
   if (e.mode !== 'times') return { ok: true };
   const at = postedAt(prev.postId);
   if (at == null) return { ok: true };

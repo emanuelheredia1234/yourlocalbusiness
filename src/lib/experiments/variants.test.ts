@@ -59,8 +59,11 @@ describe('the AI answer is checked', () => {
 
 describe('cost, times and saving', () => {
   it('shows the cost first, and Visual on a video needs this week’s videos', () => {
-    expect(costLine('post', 'hook', { count: 2 }).text).toMatch(/^About \d+ AI credits$/);
-    expect(costLine('post', 'visual', { count: 2 }).text).toMatch(/1–2 new images/);
+    expect(costLine('post', 'hook', { count: 2 }).text).toMatch(/^About \d+ AI credits \(none on your own AI keys\)$/);
+    // the exact count: one per new version
+    expect(costLine('post', 'visual', { count: 2 }).text).toMatch(/^Makes 2 new images/);
+    expect(costLine('post', 'visual', { count: 2, video: true, videosLeft: 3 }).text).toMatch(/^Uses 2 of this week’s videos \(3 left\)/);
+    expect(costLine('post', 'visual', { count: 2, video: true, videosLeft: 1 })).toMatchObject({ disabled: true, text: 'Uses 2 of this week’s videos (1 left)' });
     expect(costLine('post', 'visual', { count: 1, video: true, videosLeft: 2 }).text).toMatch(/Uses 1 of this week’s videos \(2 left\)/);
     const out = costLine('post', 'visual', { count: 1, video: true, videosLeft: 0 });
     expect(out.disabled).toBe(true);
@@ -92,6 +95,12 @@ describe('Post now order and gap', () => {
     expect(postNowGate(posted, 'b', () => now - 3 * 3_600_000, now).reason).toBe('Wait 9 more hours: versions go out at least 12 hours apart.');
     expect(postNowGate(posted, 'b', () => now - 13 * 3_600_000, now)).toEqual({ ok: true });
     expect(postNowGate(posted, 'a', () => null, now).reason).toBe('Already posted.');
+  });
+  it('a version whose try failed isn’t out: it can be posted again, and the next one waits for it', () => {
+    const failedA = e('times', [v('a', { jobId: 'j1' }), v('b')], 'draft');
+    const failed = (id: string | null) => id === 'p_a';
+    expect(postNowGate(failedA, 'a', () => now - 13 * 3_600_000, now, failed)).toEqual({ ok: true });
+    expect(postNowGate(failedA, 'b', () => now - 13 * 3_600_000, now, failed).reason).toBe('Post version A first.');
   });
   it('Trial Reels may go back to back; an ended test posts nothing', () => {
     expect(postNowGate(e('trial_reels', [v('a', { jobId: 'j1' }), v('b')]), 'b', () => now, now)).toEqual({ ok: true });

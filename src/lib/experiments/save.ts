@@ -125,3 +125,25 @@ export function syncPlannedAt(ref: { id: string; key: VariantKey }, at: string):
     .then(({ experiment }) => useExperiments.getState().upsert(experiment))
     .catch(() => {});
 }
+
+/**
+ * A draft test was deleted: what the workspace kept for it goes too (each version's post's test field, the SEO
+ * page's version B, an email step's version B), so nothing is left pointing at a test that's gone.
+ */
+export function forgetDraftLocally(e: Pick<Experiment, 'id' | 'projectId' | 'variants'>): void {
+  const s = useStore.getState();
+  for (const v of e.variants) if (v.postId) s.updatePost(v.postId, { experiment: undefined });
+  const project = s.projects.find((p) => p.id === e.projectId);
+  if (!project) return;
+  const seo = project.marketing.seoVariant?.experimentId === e.id;
+  const steps = project.marketing.emails.some((m) => m.variants?.experimentId === e.id);
+  if (!seo && !steps) return;
+  s.updateProject(project.id, (p) => ({
+    ...p,
+    marketing: {
+      ...p.marketing,
+      ...(seo ? { seoVariant: undefined } : {}),
+      emails: p.marketing.emails.map((m) => (m.variants?.experimentId === e.id ? { ...m, variants: undefined } : m)),
+    },
+  }));
+}

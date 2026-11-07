@@ -107,7 +107,7 @@ const EMPTY_LIST: Experiment[] = [];
  * A business's A/B tests, loaded when A/B tests are on (signed in, the server has them; never in the claude.ai build).
  * Another account (or signing out) drops what the one before saw.
  */
-export function useProjectExperiments(projectId: string | undefined): { on: boolean; experiments: Experiment[]; usage: ExperimentUsage | null; loading: boolean; error: string } {
+export function useProjectExperiments(projectId: string | undefined): { on: boolean; experiments: Experiment[]; usage: ExperimentUsage | null; loading: boolean; error: string; loaded: boolean } {
   const on = useExperimentsOn();
   const account = useAuth((s) => (s.phase === 'ready' ? (s.user?.id ?? '') : ''));
   const entry = useExperiments((s) => (projectId ? s.byProject[projectId] : undefined));
@@ -119,7 +119,7 @@ export function useProjectExperiments(projectId: string | undefined): { on: bool
   useEffect(() => {
     if (on && projectId) void useExperiments.getState().load(projectId);
   }, [on, projectId, account]);
-  return { on, experiments: on ? (entry?.experiments ?? EMPTY_LIST) : EMPTY_LIST, usage: entry?.usage ?? null, loading: !!entry?.loading, error: entry?.error ?? '' };
+  return { on, experiments: on ? (entry?.experiments ?? EMPTY_LIST) : EMPTY_LIST, usage: entry?.usage ?? null, loading: !!entry?.loading, error: entry?.error ?? '', loaded: !!entry && !entry.loading && !entry.error };
 }
 
 /** Open a test's card: Social › A/B tests, with that test open (a badge, a morning action, the assistant). */

@@ -14,7 +14,7 @@ import { Callout, Spinner } from '../ui/primitives';
 import { useMakeVariations } from './MakeVariations';
 
 export function PageAbPanel({ project }: { project: Project }) {
-  const { experiments, usage } = useProjectExperiments(project.id);
+  const { experiments, usage, loaded } = useProjectExperiments(project.id);
   const v = project.marketing.seoVariant;
   const running = experiments.find((e) => e.kind === 'page' && e.state === 'running');
   const exp = v ? experiments.find((e) => e.id === v.experimentId) : running;
@@ -110,6 +110,15 @@ export function PageAbPanel({ project }: { project: Project }) {
               Clear version B
             </button>
           )}
+        </div>
+      )}
+      {/* version B kept for a test that's gone (deleted elsewhere): it can only be cleared */}
+      {v && !exp && loaded && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-caption text-muted">This version B’s test isn’t there any more.</p>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={clear}>
+            Clear version B
+          </button>
         </div>
       )}
       {error && <Callout tone="bad">{error}</Callout>}

@@ -785,10 +785,10 @@ export interface ExperimentResult {
   /** engagement: what it is measured over (reach, views, impressions) */
   measure?: string;
   perVariant?: Partial<Record<VariantKey, { successes?: number; trials?: number; rate?: number; count?: number }>>;
-  minimums?: { trials?: number; successes?: number; total?: number } | null;
+  minimums?: { trials?: number; successes?: number; total?: number; perVariant?: number } | null;
   computedAt?: string;
   note?: 'time_differs' | 'non_followers';
-  /** not_enough / keep_going: sample, variant_missing, no_common_measure */
+  /** not_enough / keep_going: sample, variant_missing, no_common_measure, not_posted, page_changed, omnisend_picks, omnisend_no_pick */
   reason?: string;
   missing?: { key?: VariantKey; what: string; have: number; need: number }[];
   /** email: Omnisend picked it */

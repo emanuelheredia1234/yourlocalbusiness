@@ -14,6 +14,7 @@ const api = await import('@/lib/experiments/api');
 const { useAuth } = await import('@/lib/cloud/auth');
 const { useExperimentsConfig } = await import('@/lib/experiments/config');
 const { useStore } = await import('@/store/useStore');
+const { useExperiments } = await import('@/store/experiments');
 const { answerCard } = await import('@/store/assistant');
 const { fakeHost, runTool, seedWorkspace, testPost, testChat, TEST_PROJECT } = await import('../testing');
 const { registry } = await import('.');
@@ -104,6 +105,29 @@ describe('A/B test tools', () => {
     expect(no.ok).toBe(false);
     expect(no.error).toMatch(/1,000\+ followers \(you have 640\)/);
     expect((await runTool('set_trial_reel', { postId: 'post_a', mode: 'trial' })).error).toMatch(/Instagram videos only/);
+  });
+
+  it('set_trial_reel on a planned post: the eligibility comes first, so too few followers is refused before any card', async () => {
+    useExperiments.setState({ eligibility: {} });
+    el.mockResolvedValue({ eligible: false, reason: 'followers', followers: 640 });
+    const cards = testChat().filter((m) => m.role === 'card').length;
+    const no = await runTool('set_trial_reel', { postId: 'vid2', mode: 'trial' });
+    expect(no.ok).toBe(false);
+    expect(no.error).toMatch(/1,000\+ followers \(you have 640\)/);
+    expect(testChat().filter((m) => m.role === 'card').length).toBe(cards);
+    // eligible: the card carries the line
+    useExperiments.setState({ eligibility: {} });
+    el.mockResolvedValue({ eligible: true, followers: 2340 });
+    const run = runTool('set_trial_reel', { postId: 'vid2', mode: 'trial' });
+    let card: { id: string; what: string } | null = null;
+    await vi.waitFor(() => {
+      const c = testChat().find((m) => m.role === 'card' && m.card?.state === 'pending');
+      expect(c).toBeTruthy();
+      card = { id: c!.id, what: c!.card!.what };
+    });
+    expect(card!.what).toContain('Trial Reels: available (2,340 followers).');
+    answerCard(card!.id, false);
+    expect((await run).status).toBe('declined');
   });
 
   it('off on the server: the tools say so and open nothing', async () => {

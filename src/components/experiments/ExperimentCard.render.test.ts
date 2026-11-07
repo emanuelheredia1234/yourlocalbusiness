@@ -53,6 +53,26 @@ describe('the experiment card', () => {
     expect(t).not.toContain('Use the winner');
   });
 
+  it('a failed first version (the test given back as a draft) can be posted again; B still waits for it', () => {
+    const failed = { via: 'api', state: 'failed', requestedAt: NOW - 13 * 3_600_000 } as Post['external'];
+    const html = render(exp({ state: 'draft', variants: [v('a', { jobId: 'j1' }), v('b')] }), [post('p_a', { external: failed }), post('p_b')]);
+    const t = words(html);
+    expect(t).toContain('Failed');
+    expect(t).toContain('Post version A first.');
+    // A has its Post now again; B's stays off
+    const buttons = [...html.matchAll(/<button[^>]*>(?:(?!<\/button>).)*Post now<\/button>/g)].map((m) => m[0]);
+    expect(buttons).toHaveLength(2);
+    expect(buttons.filter((b) => /disabled/.test(b))).toHaveLength(1);
+  });
+
+  it('a page test stopped because the page was published again: no Use the winner', () => {
+    const page = exp({ kind: 'page', mode: 'split', changed: 'headline', network: null, metric: 'lead_rate', state: 'stopped', result: { verdict: 'not_enough', reason: 'page_changed', stoppedBy: 'page_changed' }, variants: [v('a', { postId: null }), v('b', { postId: null })] });
+    const t = words(render(page, []));
+    expect(t).not.toContain('Use the winner');
+    expect(t).not.toMatch(/Pick . anyway/);
+    expect(t).toContain('published again');
+  });
+
   it('post states', () => {
     expect(postStateLabel(undefined, null)).toBe('Removed');
     expect(postStateLabel(post('x', { external: { via: 'api', state: 'unknown' } as Post['external'] }), 'j')).toBe('Check again');

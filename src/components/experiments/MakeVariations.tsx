@@ -79,6 +79,9 @@ const localInput = (v: string) => {
 };
 
 /** The dialog's host: mount once (App). */
+/** What a Trial Reels test can compare (P4b §S4): they go out back to back, so never a posting time or a call to action. */
+const TRIAL_CHANGES: ExperimentChanged[] = ['hook', 'caption', 'visual'];
+
 export function MakeVariationsHost() {
   const target = useMakeVariations((s) => s.target);
   const on = useExperimentsOn();
@@ -262,15 +265,19 @@ export function MakeVariations({ target }: { target: VariationTarget }) {
             <legend className="label mb-1">What to change</legend>
             {choices.map((c) => {
               const line = costLine(kind, c.id, { count: n, video: isVideo, videosLeft });
+              // Trial Reels go out back to back: they compare a hook, a caption or a visual
+              const notForTrial = kind === 'post' && mode === 'trial_reels' && !TRIAL_CHANGES.includes(c.id);
+              const off = !!line.disabled || notForTrial;
+              const why = notForTrial ? 'Not for Trial Reels: they go out back to back.' : line.reason;
               return (
                 <label key={c.id} className="flex cursor-pointer items-start gap-3 rounded-md border border-line bg-surface px-3 py-2.5 has-[:checked]:border-primary has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
-                  <input type="radio" name="variation-change" className="mt-1" checked={change === c.id} disabled={!!line.disabled} onChange={() => setChange(c.id)} />
+                  <input type="radio" name="variation-change" className="mt-1" checked={change === c.id} disabled={off} onChange={() => setChange(c.id)} />
                   <span className="flex min-w-0 flex-col">
                     <span className="text-body font-medium text-ink">{c.label}</span>
                     <span className="text-small text-muted">{c.hint}</span>
                     <span className="text-caption text-muted" data-testid={`cost-${c.id}`}>
                       {line.text}
-                      {line.reason ? ` · ${line.reason}` : ''}
+                      {why ? ` · ${why}` : ''}
                     </span>
                   </span>
                 </label>
@@ -295,7 +302,15 @@ export function MakeVariations({ target }: { target: VariationTarget }) {
                   Same network, different times
                 </button>
                 {trialOk && (
-                  <button type="button" className={mode === 'trial_reels' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'} aria-pressed={mode === 'trial_reels'} onClick={() => setMode('trial_reels')}>
+                  <button
+                    type="button"
+                    className={mode === 'trial_reels' ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm'}
+                    aria-pressed={mode === 'trial_reels'}
+                    onClick={() => {
+                      setMode('trial_reels');
+                      if (!TRIAL_CHANGES.includes(change)) setChange('hook');
+                    }}
+                  >
                     Instagram Trial Reels
                   </button>
                 )}

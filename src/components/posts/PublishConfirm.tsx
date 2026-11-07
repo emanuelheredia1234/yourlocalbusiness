@@ -13,6 +13,7 @@ import { networkLabel } from '@/ai/postShared';
 import { beginBusy, endBusy } from '@/lib/busy';
 import { useStore } from '@/store/useStore';
 import type { PublishJob } from '@/lib/integrations/types';
+import type { Post } from '@/lib/types';
 import { Callout, Checkbox, InfoTip, Modal, Spinner } from '../ui/primitives';
 import { TRIAL_HELP, isTrialMode, shareModeLabel, shareModeOf } from '@/lib/trialReels';
 import { MediaThumb } from '../media/MediaUpload';
@@ -53,7 +54,7 @@ export interface Refusal {
 }
 
 /** The words for a refused request (the server's codes; never a provider's own text). */
-function refusal(e: unknown, network: string): Refusal {
+function refusal(e: unknown, network: string, o: { inTest?: boolean } = {}): Refusal {
   if (!(e instanceof IntegrationApiError)) return { title: 'Something went wrong', body: 'Nothing was sent. Try again shortly, or post it yourself.' };
   if (mayHaveBeenSent(e))
     // the request may have reached the server: pressing again sends the same request id
@@ -76,6 +77,8 @@ function refusal(e: unknown, network: string): Refusal {
       return { title: 'Too many posts at once', body: 'Wait a few minutes, then try again.' };
     // A/B tests and Trial Reels (P4b): nothing was sent
     case 'TRIAL_REEL_NOT_ELIGIBLE':
+      // a version of a Trial Reels test can only go out as a Trial Reel: a regular Reel would be refused by the test
+      if (o.inTest && e.reason !== 'unreadable') return { title: 'It can’t go out as a Trial Reel', body: `${e.message} Nothing was sent. This version is part of a Trial Reels test: stop the test to post it as a regular Reel.` };
       return { title: 'It can’t go out as a Trial Reel', body: `${e.message} Nothing was sent.`, regularReel: e.reason !== 'unreadable', askAnyway: e.reason === 'unreadable' };
     case 'EXPERIMENT_LIMIT':
       return { title: 'This month’s A/B tests are used', body: `${e.message} You can still post it as a normal post: take it out of the test first.` };
@@ -84,6 +87,21 @@ function refusal(e: unknown, network: string): Refusal {
     default:
       return { title: 'It wasn’t sent', body: e.message };
   }
+}
+
+/** Whether "Post as a regular Reel" fits this post: a Trial Reel that isn't a version of a Trial Reels test. */
+export const canPostAsRegularReel = (post: Post) => post.platform === 'instagram' && isTrialMode(shareModeOf(post)) && !post.experiment;
+
+/**
+ * "Post as a regular Reel": the post is saved as a regular Reel (CUSTOM), then a NEW confirmation opens for it (a new
+ * request the user confirms: never sent by itself). A version of a Trial Reels test is left as it is.
+ */
+export function postAsRegularReel(postId: string): boolean {
+  const post = useStore.getState().posts.find((p) => p.id === postId);
+  if (!post || !canPostAsRegularReel(post)) return false;
+  useStore.getState().updatePost(post.id, { instagram: { shareMode: 'CUSTOM' } });
+  usePublishConfirm.getState().open(post.id);
+  return true;
 }
 
 export type SendOutcome = { ok: true; job: PublishJob } | { ok: false; error: Refusal };
@@ -119,10 +137,10 @@ export async function sendPublish(postId: string, requestId: string, onStage: (s
     } catch (e) {
       if (mayHaveBeenSent(e)) uncertainRequest.set(postId, requestId);
       else uncertainRequest.delete(postId);
-      return { ok: false, error: refusal(e, network) };
+      return { ok: false, error: refusal(e, network, { inTest: !!post.experiment }) };
     }
   } catch {
-    return { ok: false, error: refusal(null, network) };
+    return { ok: false, error: refusal(null, network, { inTest: !!post.experiment }) };
   } finally {
     sending.delete(postId);
     endBusy(`post-now:${postId}`);
@@ -172,11 +190,9 @@ export function PublishConfirmHost() {
 
   const word = post.platform === 'x' ? 'reply' : 'comment';
   const trial = post.platform === 'instagram' && post.media?.kind === 'video' && isTrialMode(shareModeOf(post));
-  /** "Post as a regular Reel": the post is saved as a Reel, then a NEW confirmation opens (a new request: never automatic). */
   const asRegularReel = () => {
-    useStore.getState().updatePost(post.id, { instagram: undefined });
     close();
-    setTimeout(() => usePublishConfirm.getState().open(post.id), 0);
+    setTimeout(() => postAsRegularReel(post.id), 0);
   };
   return (
     <Modal

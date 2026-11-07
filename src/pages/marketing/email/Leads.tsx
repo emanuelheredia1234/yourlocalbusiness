@@ -9,6 +9,7 @@ import type { LeadSource } from '@/lib/leadFields';
 import { artifactPageId } from '@/lib/codeAssets';
 import { addLeadToSubscribers, leadOwner, leadProject, markLeadsSeen, useLeads } from '@/store/leads';
 import { useStore } from '@/store/useStore';
+import { useExperiments, useProjectExperiments } from '@/store/experiments';
 import { toast, useUI } from '@/store/ui';
 import { Badge, Callout, Empty, InfoTip, Segmented, Spinner, Tooltip, confirmAction } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
@@ -98,6 +99,16 @@ function LeadList({ project }: { project: Project }) {
   const projectId = scope === 'project' ? project.id : undefined;
   const filter = { projectId, ...(source === 'all' ? {} : { source }) };
   const [leads, setLeads] = useState<Lead[] | null>(() => seed(recent, projectId, source));
+  // a version's test by its name (never an id fragment): the page tests the app has loaded, else "Page test"
+  useProjectExperiments(project.id);
+  const testsById = useExperiments((st) => st.byProject);
+  const testName = (id: string) => {
+    for (const entry of Object.values(testsById)) {
+      const e = entry?.experiments.find((x) => x.id === id);
+      if (e) return e.name ? `${e.name} test` : 'Page test';
+    }
+    return 'Page test';
+  };
   const versions = useMemo(() => (__ARTIFACT_BUILD__ ? [] : [...new Set((leads ?? []).filter((l) => l.variantKey).map((l) => `${l.experimentId}:${l.variantKey}`))].sort()), [leads]);
   // the last page was full: there may be more
   const [more, setMore] = useState(false);
@@ -275,7 +286,7 @@ function LeadList({ project }: { project: Project }) {
             <option value="all">Every version</option>
             {versions.map((v) => (
               <option key={v} value={v}>
-                A/B test {v.slice(0, 4)} · version {v.slice(-1).toUpperCase()}
+                {testName(v.split(':')[0])} · version {v.slice(-1).toUpperCase()}
               </option>
             ))}
             <option value="none">Not in a test</option>

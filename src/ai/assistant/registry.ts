@@ -288,6 +288,8 @@ interface ToolBase<P extends SpecMap> {
   summary: string;
   /** build them with arg.* */
   args: P & CheckedArgs<P>;
+  /** something to read first, before validate and any card (e.g. an eligibility the card shows); never a write */
+  prepare?: (args: InferArgs<P>, ctx: ToolContext) => Promise<void>;
   /** a check the schema can't express (e.g. that a post id exists): return the problem, or nothing */
   validate?: (args: InferArgs<P>, ctx: ToolContext) => string | null | undefined | void;
 }

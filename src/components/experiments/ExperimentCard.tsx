@@ -13,6 +13,7 @@ import { deleteExperiment, experimentErrorCopy, refreshExperiment, stopExperimen
 import { CHANGED_LABEL, versionName } from '@/lib/experiments/math';
 import { alsoChanged, postDiff, postNowGate } from '@/lib/experiments/variants';
 import { applyWinner, rewriteUpcoming } from '@/lib/experiments/winner';
+import { forgetDraftLocally } from '@/lib/experiments/save';
 import { shareModeLabel } from '@/lib/trialReels';
 import { networkLabel } from '@/ai/postShared';
 import { Badge, Callout, Spinner, confirmAction } from '../ui/primitives';
@@ -29,6 +30,11 @@ export function postedAtOf(post: Post | undefined): number | null {
   if (post.publishedAt && Number.isFinite(Date.parse(post.publishedAt))) return Date.parse(post.publishedAt);
   if (post.external?.via === 'api' && post.external.requestedAt) return post.external.requestedAt;
   return null;
+}
+
+/** Whether a version's last try certainly failed (nothing went out). */
+export function postFailed(post: Post | undefined): boolean {
+  return !!post && post.status !== 'published' && post.external?.via === 'api' && post.external.state === 'failed';
 }
 
 /** A version's post state in plain words. */
@@ -65,7 +71,9 @@ export function ExperimentCard({ experiment: e, now = Date.now() }: { experiment
   const canRefresh = (e.state === 'running' || e.state === 'finished') && (!refreshAt || refreshAt <= now);
   const verdict = e.result.verdict;
   const anyway = verdict === 'too_close' || verdict === 'tie';
-  const canPick = !e.winner && (e.state === 'running' || e.state === 'finished' || e.state === 'stopped') && (verdict === 'winner' || anyway);
+  // a page published again mid-test can't be compared, and B would replace the newer page: no winner to use
+  const pageChanged = e.result.stoppedBy === 'page_changed' || e.result.reason === 'page_changed';
+  const canPick = !e.winner && !pageChanged && (e.state === 'running' || e.state === 'finished' || e.state === 'stopped') && (verdict === 'winner' || anyway);
 
   const run = async (label: string, fn: () => Promise<void>) => {
     if (busy) return;
@@ -87,11 +95,10 @@ export function ExperimentCard({ experiment: e, now = Date.now() }: { experiment
     });
   const remove = () =>
     run('Deleting…', async () => {
-      if (!(await confirmAction({ title: 'Delete this draft test?', body: 'Its versions stay as normal posts.', confirmLabel: 'Delete', danger: true }))) return;
+      if (!(await confirmAction({ title: 'Delete this draft test?', body: e.kind === 'post' ? 'Its versions stay as normal posts.' : 'Version B is deleted with it. The original stays as it is.', confirmLabel: 'Delete', danger: true }))) return;
       await deleteExperiment(e.id);
       useExperiments.getState().drop(e.projectId, e.id);
-      const s = useStore.getState();
-      for (const v of e.variants) if (v.postId) s.updatePost(v.postId, { experiment: undefined });
+      forgetDraftLocally(e);
     });
   const pick = (key: VariantKey) =>
     run('Saving the winner…', async () => {
@@ -125,8 +132,9 @@ export function ExperimentCard({ experiment: e, now = Date.now() }: { experiment
         <ul className="flex flex-col gap-2">
           {e.variants.map((v) => {
             const post = postOf(v.postId);
-            const gate = postNowGate(e, v.key, (id) => postedAtOf(postOf(id)), now);
-            const posted = !!v.jobId || post?.status === 'published';
+            const gate = postNowGate(e, v.key, (id) => postedAtOf(postOf(id)), now, (id) => postFailed(postOf(id)));
+            // a failed try isn't out: Post now shows again (one press, one attempt)
+            const posted = (!!v.jobId && !postFailed(post)) || post?.status === 'published';
             return (
               <li key={v.key} className="flex flex-wrap items-center gap-3 rounded-md border border-line bg-surface px-3 py-2" data-testid={`variant-${v.key}`}>
                 {post?.media ? (

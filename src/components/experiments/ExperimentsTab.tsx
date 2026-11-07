@@ -36,7 +36,8 @@ export function ExperimentsTab({ project }: { project: Project }) {
         {loading && <Spinner />}
       </div>
       {error && <Callout tone="bad">{error}</Callout>}
-      {!loading && !list.length ? (
+      {/* the list didn't load: whether there are tests isn't known, so no "No A/B tests yet" */}
+      {!loading && !list.length && error ? null : !loading && !list.length ? (
         <Empty icon={<FlaskConical />} title="No A/B tests yet" body={`Open a post’s ⋯ menu and choose Make variations, or start one from an email step or your SEO page. ${LIMITS_COPY}`} />
       ) : (
         list.map((e) => <ExperimentCard key={e.id} experiment={e} />)

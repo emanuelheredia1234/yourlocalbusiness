@@ -165,6 +165,11 @@ const trialTool = defineTool({
   class: 'P-text',
   summary: 'An Instagram video as a Reel or Trial Reel (needs 1,000+ followers); asks first on a planned post.',
   args: { postId: arg.string({ max: 120 }), mode: arg.enum(['reel', 'trial', 'trial_non_followers'] as const) },
+  // the eligibility is read first (§A8): a refusal comes before any card, and the card shows the line
+  prepare: async (a, ctx) => {
+    if (notOn() || !isTrialMode(MODES[a.mode])) return;
+    await useExperiments.getState().loadEligibility(ctx.projectId);
+  },
   validate: (a, ctx) => {
     const off = notOn();
     if (off) return off;
@@ -173,12 +178,17 @@ const trialTool = defineTool({
     if (!canTrialReel(p)) return 'Trial Reels are for Instagram videos only.';
     if (p.status === 'published' || p.external) return 'That post went out already.';
     if (p.experiment) return 'That post is a version in an A/B test, which sets how it goes out.';
+    if (isTrialMode(MODES[a.mode])) {
+      const view = eligibilityView(useExperiments.getState().eligibility[ctx.projectId]?.value);
+      if (view.disabled) return `${view.line}. It stays a regular Reel.`;
+    }
     return null;
   },
-  card: (a) => {
+  card: (a, ctx) => {
     const p = useStore.getState().posts.find((x) => x.id === a.postId);
     if (!p || p.status !== 'scheduled') return null;
-    return { title: `Post “${p.headline}” as a ${shareModeLabel(MODES[a.mode])}?`, what: 'It’s on your calendar: this changes how it goes out on Instagram when you post it.', who: 'Nothing is posted now. You still confirm when you post it.', confirmLabel: 'Change it' };
+    const line = isTrialMode(MODES[a.mode]) ? eligibilityView(useExperiments.getState().eligibility[ctx.projectId]?.value).line : '';
+    return { title: `Post “${p.headline}” as a ${shareModeLabel(MODES[a.mode])}?`, what: `It’s on your calendar: this changes how it goes out on Instagram when you post it.${line ? ` ${line.endsWith('.') ? line : `${line}.`}` : ''}`, who: 'Nothing is posted now. You still confirm when you post it.', confirmLabel: 'Change it' };
   },
   run: async (a, ctx) => {
     const mode = MODES[a.mode];
