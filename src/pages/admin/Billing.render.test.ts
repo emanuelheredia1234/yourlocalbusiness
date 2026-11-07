@@ -104,3 +104,23 @@ describe('the user’s own usage (Settings)', () => {
     expect(wrap(createElement(UsageView, { usage: null, error: 'Couldn’t load your usage.' }))).toContain('Couldn’t load your usage.');
   });
 });
+
+describe('the morning action section', () => {
+  it('the last run, whether a key powers it, and no warning without an alert', async () => {
+    const { MorningOwnerView } = await import('./MorningSection');
+    const html = wrap(createElement(MorningOwnerView, { data: { alert: null, last: { at: new Date().toISOString(), claimed: 18, ai: 12, rules: 5, failed: 1, skipped: 2, exists: 0, late: 1, backlog: 0 }, powered: true, perTick: 24, concurrency: 6 }, error: null }));
+    for (const t of ['Last run', '18', 'Picked by AI', '5 from built-in rules', '3 skipped', 'An AI key powers Morning action.', 'Up to 24 businesses per hourly run, 6 at a time.']) expect(html, t).toContain(t);
+    expect(html).not.toContain('bg-warn-soft');
+  });
+  it('one warning per alert kind this week, in plain words (kinds only)', async () => {
+    const { MorningOwnerView, morningAlertText } = await import('./MorningSection');
+    const at = new Date().toISOString();
+    const html = wrap(createElement(MorningOwnerView, { data: { alert: { kind: 'backlog', at, n: 7, kinds: { ai_key: { at }, backlog: { at, n: 7 } } }, last: null, powered: false, perTick: 24, concurrency: 6 }, error: null }));
+    expect(html).toContain('Morning actions are falling behind: 7 businesses waited more than 3 hours. Raise MORNING_PER_TICK or MORNING_CONCURRENCY.');
+    expect(html).toContain('The AI key that powers Morning action was refused.');
+    expect((html.match(/bg-warn-soft/g) ?? []).length).toBe(2);
+    expect(html).toContain('No AI key powers Morning action');
+    expect(html).toContain('hasn’t run yet');
+    for (const k of ['ai_credits', 'ai_rate', 'ai_model']) expect(morningAlertText(k)).toContain('Morning action');
+  });
+});
