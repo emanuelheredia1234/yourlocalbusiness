@@ -27,3 +27,7 @@ declare module '*/server/localTime.mjs' {
   export function isLate(now: number, tz: string): boolean;
   export function localToUtc(ymd: string, hh: number, mm: number, tz: string): number;
 }
+declare module '*/server/market/render.mjs' {
+  /** the public listing page's price label, in minor units (src/lib/listing.ts priceLabel keeps the same rules) */
+  export function priceLabel(minor: number | null, model: string): string;
+}

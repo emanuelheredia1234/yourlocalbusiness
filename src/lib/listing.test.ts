@@ -2,9 +2,11 @@
 // gallery you pick is the gallery buyers see.
 import { describe, expect, it } from 'vitest';
 import { newProject } from '@/store/defaults';
-import type { MediaRef } from '@/lib/types';
+import type { MediaRef, ServicePriceModel } from '@/lib/types';
 import { compact, SHARED_GALLERY_MAX, SHARED_IMAGE_CHARS } from '@/lib/community';
 import { useOffers } from '@/store/offers';
+import { priceLabel } from './listing';
+import { priceLabel as serverPriceLabel } from '../../server/market/render.mjs';
 import { buildListing, cleanGallery, COVER_STEPS, fitDataUrl, GALLERY_STEPS, galleryIds, LISTING_IMAGE_CHARS, MAX_GALLERY } from './listing';
 
 /** A stand-in JPEG encoder: larger and better-quality images take more characters, like real ones. */
@@ -104,5 +106,22 @@ describe('a listing sold through an offer', () => {
     expect(buildListing(p).offer).toBeUndefined();
     const prev = { ...buildListing(p), web: { slug: 'cut-abc123', url: 'https://yourlocalbusiness.replit.app/market/cut-abc123' } };
     expect(buildListing(p, prev).web).toEqual(prev.web);
+  });
+});
+
+describe('price labels on the public page (server/market/render.mjs) match the app’s', () => {
+  const cases: [number, ServicePriceModel][] = [
+    [49, 'one-time'],
+    [19.5, 'monthly'],
+    [199, 'yearly'],
+    [85, 'per-session'],
+    [300, 'project'],
+    [0, 'free'],
+    [0, 'one-time'],
+    [120, 'quote'],
+    [1234.56, 'one-time'],
+  ];
+  it.each(cases)('%s %s', (price, model) => {
+    expect(serverPriceLabel(Math.round(price * 100), model)).toBe(priceLabel(price, model));
   });
 });

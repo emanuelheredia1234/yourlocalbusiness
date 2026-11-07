@@ -11,6 +11,7 @@ import { pushMyListings, startCommunitySync } from './community';
 import { buildListing, coverFromMedia, galleryFromMedia, galleryIds, leadPrice, listingOfferId } from './listing';
 import { offerIdsForPublish, useOffers } from '@/store/offers';
 import { listingActions, safeEmail, safeUrl } from './listingActions';
+import { refreshWebPage, unlistBeforeRemoving } from '@/store/marketPublic';
 
 export interface ListingCheck {
   ok: boolean;
@@ -100,6 +101,8 @@ export async function publishProjectListing(): Promise<{ listing: Listing; updat
   useStore.getState().updateStudio({ publishedListingId: listing.id, publishedAt: Date.now() });
   await startCommunitySync();
   await pushMyListings();
+  // its public web page (P7), when it has one, gets the same content (a failure is its own toast)
+  if (live) void refreshWebPage(p, listing);
   const shared = useRuntime.getState().community === 'live';
   useStore.getState().notify({ kind: 'info', title: live ? `Listing updated: ${listing.title}` : shared ? `${listing.title} is on the shared Marketplace` : `${listing.title} is in your listings`, route: 'store' });
   toast({ kind: 'success', title: live ? 'Listing updated' : shared ? 'Published to the Marketplace' : 'Saved to your listings', body: shared ? listing.title : `${listing.title}. Only you can see it here for now.`, action: { label: 'View listing', run: () => openInStore(listing.id) } });
@@ -114,6 +117,8 @@ export function unpublishProjectListing(): Listing | null {
   const p = getActiveProject();
   const live = p ? liveListing(p) : undefined;
   if (!live) return null;
+  // its public web page goes too (best effort: its address answers "gone" and Google drops it)
+  void unlistBeforeRemoving([live]);
   useStore.getState().unpublishListing(live.id);
   useStore.getState().updateStudio({ publishedListingId: undefined, publishedAt: undefined });
   void pushMyListings();

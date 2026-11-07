@@ -362,6 +362,8 @@ export interface ListingDraft {
   coverImageId?: string;
   /** brand images shown in the listing's gallery (max 3, what the shared Marketplace keeps) */
   galleryIds?: string[];
+  /** the cover and gallery uploaded as public images for the listing's web page (P7): source image key → hosted path */
+  webImages?: Record<string, string>;
   /** listing image descriptions you edited (the suggested ones are used for the rest) */
   shotPrompts?: Partial<Record<ListingShotId, string>>;
   /** listing images that show a photo you uploaded instead of an AI image (brand image ids) */
