@@ -464,7 +464,7 @@ log says `ads_error_detail_not_saved`.
 list the campaigns still on and what keeps running ("they keep running until you pause them in Ads Manager"); the
 first two need the customer's tick (`ackLiveAds=1`).
 
-**Removing a failed launch.** A failed launch with no platform id, no job sending or unknown and nothing left behind gets **Remove** on the Campaigns tab (and the assistant's `remove_failed_launch`, after a confirm): `DELETE /api/ads/campaigns/:id?projectId=` deletes our row and its jobs, adds an audit line, never calls Zernio, Meta or Google, and otherwise answers "Check Ads Manager first".
+**Removing a failed launch.** A failed launch with no platform id, no job sending or unknown and nothing left behind (no kept, unknown or left-behind created object, no `PARTIAL_LEFT`) gets **Remove** on the Campaigns tab (and the assistant's `remove_failed_launch`, after a confirm, current business only) once its confirm has run out (10 minutes after the send; a day for a Google "not created"): `DELETE /api/ads/campaigns/:id?projectId=` writes the audit line first, then deletes our row and its jobs, never calls Zernio, Meta or Google, and otherwise answers "Check Ads Manager first".
 
 **Routes** (signed in, same site): `/api/ads/accounts`, `/accounts/choice`, `/targeting/search`, `/launch/preview`,
 `/launch`, `/campaigns`, `/campaigns/refresh`, `/campaigns/:id/change/preview`, `/campaigns/:id/change`,

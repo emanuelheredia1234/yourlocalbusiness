@@ -284,6 +284,8 @@ describe('removing a failed launch', () => {
       { platformCampaignId: '120000' },
       { pendingJob: job() },
       { lastJob: job({ state: 'failed', code: 'PARTIAL_LEFT', message: 'x', leftBehind: ['campaign …1234'] }) },
+      // an outcome not yet known, with no pendingJob alongside: never removable
+      { lastJob: job({ state: 'unknown' }), pendingJob: undefined },
     ];
     for (const over of not) {
       const c = failed(over);

@@ -696,6 +696,8 @@ const deleteAdCampaign = defineTool({
 const NOT_IN_ARTIFACT = 'Launching and managing ads needs the app’s own server: it isn’t available in claude.ai.';
 const launchedNow = (projectId: string) => useAdsLaunch.getState().campaigns[projectId] ?? [];
 const findLaunched = (id: string) => Object.values(useAdsLaunch.getState().campaigns).flat().find((c) => c.id === id);
+/** only in the business the chat is about (a removal never reaches another business's list) */
+const findLaunchedHere = (id: string, ctx: ToolContext) => (useAdsLaunch.getState().campaigns[projectOf(ctx).id] ?? []).find((c) => c.id === id);
 
 const listLaunchedAds = defineTool({
   name: 'list_launched_ads',
@@ -771,22 +773,25 @@ const removeFailedLaunchTool = defineTool({
   class: 'D',
   summary: 'Remove a failed launch that created nothing at Meta or Google from the Campaigns list (id from list_launched_ads; the owner confirms).',
   args: { campaignId: arg.string({ max: 60 }) },
-  validate: ({ campaignId }) => {
+  validate: ({ campaignId }, ctx) => {
     if (__ARTIFACT_BUILD__) return NOT_IN_ARTIFACT;
-    const c = findLaunched(campaignId);
-    if (!c) return `There’s no launched campaign with id "${campaignId}": list_launched_ads lists them.`;
+    const c = findLaunchedHere(campaignId, ctx);
+    if (!c) return findLaunched(campaignId) ? `That campaign isn’t in this business: list_launched_ads lists this business’s campaigns.` : `There’s no launched campaign with id "${campaignId}": list_launched_ads lists them.`;
     if (c.state !== 'failed') return 'Only a launch that failed can be removed.';
     return canRemove(c) ? null : 'Part of this launch may exist at Meta or Google. The owner checks Ads Manager first: it can’t be removed from the app.';
   },
-  danger: ({ campaignId }) => {
-    const { title, body, confirmLabel } = removeConfirmText(findLaunched(campaignId)!);
-    return { title, body, confirmLabel };
+  danger: ({ campaignId }, ctx) => {
+    const c = findLaunchedHere(campaignId, ctx)!;
+    const { title, body, confirmLabel } = removeConfirmText(c);
+    return { title, body: `“${c.name}” (${PLATFORM_LABEL[c.platform]}). ${body}`, confirmLabel };
   },
-  run: async ({ campaignId }) => {
-    const c = findLaunched(campaignId)!;
+  run: async ({ campaignId }, ctx) => {
+    const c = findLaunchedHere(campaignId, ctx);
+    if (!c) return { ok: false, error: 'That campaign isn’t in this business any more.' };
     // once: a refused removal is never sent again by itself
     const r = await useAdsLaunch.getState().remove(c.projectId, c.id);
     if (!r.ok) return { ok: false, error: `${r.message ?? 'It wasn’t removed.'} Don’t try again by yourself: tell the owner.` };
+    if (r.alreadyGone) return { data: { removed: 0 }, note: 'It was already removed from the Campaigns list' };
     return { data: { removed: 1 }, note: 'Removed the failed launch from the Campaigns list' };
   },
 });

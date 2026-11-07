@@ -491,7 +491,7 @@ describe('remove_failed_launch', () => {
     const f = vi.fn(async (_u: string, init?: RequestInit) => (init?.method === 'DELETE' ? Response.json({ removed: 'c9' }) : Response.json({ entries: [] })));
     vi.stubGlobal('fetch', f);
     expect(await runTool('remove_failed_launch', { campaignId: 'c9' })).toMatchObject({ ok: false, status: 'declined' });
-    expect(host.calls.dangers[0]).toEqual({ title: 'Remove this failed launch?', body: 'Nothing was created at Meta, so nothing changes there.', confirmLabel: 'Remove' });
+    expect(host.calls.dangers[0]).toEqual({ title: 'Remove this failed launch?', body: '“Rye week” (Meta). Nothing was created at Meta, so nothing changes there.', confirmLabel: 'Remove' });
     expect(f.mock.calls.some(([, i]) => i?.method === 'DELETE')).toBe(false);
     host.restore();
     host = fakeHost({ confirm: true });
@@ -509,6 +509,19 @@ describe('remove_failed_launch', () => {
     expect((await runTool('remove_failed_launch', { campaignId: 'b' })).error).toMatch(/Check|checks Ads Manager first/);
     expect((await runTool('remove_failed_launch', { campaignId: 'zz' })).error).toMatch(/list_launched_ads/);
     expect(host.calls.dangers).toEqual([]);
+  });
+
+  it('never reaches another business: a removable row cached under another project is refused without asking', async () => {
+    const f = vi.fn(async () => Response.json({ removed: 'c9' }));
+    vi.stubGlobal('fetch', f);
+    useAdsLaunch.setState({ campaigns: { 'other-business': [failed({ projectId: 'other-business' })] } });
+    host.restore();
+    host = fakeHost({ confirm: true });
+    const r = await runTool('remove_failed_launch', { campaignId: 'c9' });
+    expect(r.error).toMatch(/isn’t in this business/);
+    expect(host.calls.dangers).toEqual([]);
+    expect(f).not.toHaveBeenCalled();
+    expect(useAdsLaunch.getState().campaigns['other-business']).toHaveLength(1);
   });
 });
 

@@ -45,6 +45,7 @@ export async function removeFailedLaunch(c: LaunchedCampaign, ask: typeof confir
   if (!(await ask(removeConfirmText(c)))) return false;
   const r = await useAdsLaunch.getState().remove(c.projectId, c.id);
   if (!r.ok) toast({ kind: 'error', title: 'Not removed', body: r.message });
+  else if (r.alreadyGone) toast({ kind: 'info', title: 'Already removed', body: r.message });
   else toast({ kind: 'success', title: 'Removed the failed launch' });
   return r.ok;
 }
@@ -63,7 +64,7 @@ export function RemoveButton({ c, size = 'xs' }: { c: LaunchedCampaign; size?: '
     }
   };
   return (
-    <button type="button" className={`btn btn-ghost btn-${size} ${size === 'xs' ? 'ml-1' : ''}`.trim()} disabled={busy} aria-label={`Remove the failed launch ${c.name}`} onClick={() => void go()}>
+    <button type="button" className={`btn btn-danger-ghost btn-${size} ${size === 'xs' ? 'ml-1' : ''}`.trim()} disabled={busy} aria-label={`Remove the failed launch ${c.name}`} onClick={() => void go()}>
       {busy ? <Spinner size={12} /> : <Trash2 />} Remove
     </button>
   );

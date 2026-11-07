@@ -9,7 +9,7 @@ import { loadProject } from '../social/publish.mjs';
 import { ADS_PLATFORMS, CONNECTION_OF, FINAL_STATES, PLATFORM_LABEL, idTailOf } from './contracts.mjs';
 import { accountOption, adAccountRef, choiceFor, connectionFor, listAccounts, setupChecks, targetRef } from './preview.mjs';
 import { jobOut } from './jobs.mjs';
-import { removeProblem } from './remove.mjs';
+import { removeKind, removeProblem } from './remove.mjs';
 import { cut, messageFor } from './messages.mjs';
 import { formatMoney, zernioWhole } from './money.mjs';
 import { limitsToApi, switchesProblem, switchMayBeOn } from './limits.mjs';
@@ -85,8 +85,15 @@ export function verdictOf(review) {
   return 'in_review';
 }
 
+function removableOut(row, jobs, now) {
+  if (row.state !== 'failed' || removeProblem(row, jobs, now)) return {};
+  const kind = removeKind(row, jobs);
+  return { canRemove: true, ...(kind !== 'none' ? { removeKind: kind } : {}) };
+}
+
 /** A launched campaign as the app sees it (LaunchedCampaign): no Zernio ids, our words, cut platform text. */
-export function campaignOut(row, job = null, planIds = null) {
+/** removal: { jobs, now }: every job of a failed row (the list reads them; one job otherwise) */
+export function campaignOut(row, job = null, planIds = null, removal = null) {
   const r = isObj(row.review) ? row.review : {};
   const remote = isObj(row.remote) ? row.remote : {};
   const res = isObj(row.results) ? row.results : null;
@@ -116,7 +123,7 @@ export function campaignOut(row, job = null, planIds = null) {
     ...(row.last_read_at ? { lastReadAt: row.last_read_at } : {}),
     ...(planIds && !planIds.has(row.plan_id) ? { planDeleted: true } : {}),
     // a failed launch with nothing at the platform can be removed from the list (the route checks every job again)
-    ...(row.state === 'failed' && !removeProblem(row, job ? [job] : []) ? { canRemove: true } : {}),
+    ...removableOut(row, removal?.jobs ?? (job ? [job] : []), removal?.now ?? Date.now()),
   };
 }
 
@@ -225,12 +232,17 @@ export async function campaigns(ctx, who, projectId) {
   await ctx.jobs.sweep(who.id);
   const rows = await ctx.db.select('ad_campaigns', { user_id: who.id, project_id: projectId }, { order: 'created_at.desc', limit: 200 });
   const jobs = await ctx.jobs.latestFor(who.id, rows.map((r) => r.id));
+  // a failed row's every job, for Remove (an older job can hold platform ids the latest doesn't)
+  const failedIds = rows.filter((r) => r.state === 'failed').map((r) => r.id);
+  const failedJobs = new Map(failedIds.map((id) => [id, []]));
+  if (failedIds.length) for (const j of await ctx.db.select('ad_jobs', { user_id: who.id, campaign_id: ['in', failedIds] }, { limit: 1000 })) failedJobs.get(j.campaign_id)?.push(j);
+  const now = ctx.now();
   const plans = new Set((await ctx.db.select('user_docs', { user_id: who.id, kind: 'ad' }, { select: 'id', limit: 1000 })).map((p) => p.id));
   const tag = rows[0]?.customer_tag ?? (await ctx.tagOf(who.id));
   const lim = await ctx.limits.effective(tag);
   const committed = await ctx.limits.committed(who.id, lim.ads_currency);
   return {
-    campaigns: rows.map((r) => campaignOut(r, jobs.get(r.id) ?? null, plans)),
+    campaigns: rows.map((r) => campaignOut(r, jobs.get(r.id) ?? null, plans, failedJobs.has(r.id) ? { jobs: failedJobs.get(r.id), now } : null)),
     limits: { ...limitsToApi(lim), committedDaily: committed.daily, liveCampaigns: committed.count, launchOpen: !switchesProblem(lim, ctx.env) },
   };
 }

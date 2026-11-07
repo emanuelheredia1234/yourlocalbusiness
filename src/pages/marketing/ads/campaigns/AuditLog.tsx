@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { Download, ExternalLink } from 'lucide-react';
 import type { AuditEntry } from '@/lib/ads/launchTypes';
 import { getAdAudit } from '@/lib/ads/launchApi';
+import { useAdsLaunch } from '@/store/adsLaunch';
 import { safeFixUrl } from '@/lib/ads/launchFormat';
 import { fmtDateTime } from '@/lib/utils';
 import { download } from '@/components/ui/download';
@@ -60,6 +61,8 @@ export function AuditLog({ projectId, campaignId, title = 'Ad activity' }: { pro
   const [next, setNext] = useState<number | undefined>();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // a write made here (removing a failed launch) bumps this: the list reads again without a reload
+  const rev = useAdsLaunch((s) => (projectId ? (s.auditRev[projectId] ?? 0) : 0));
   const load = async (before?: number) => {
     setBusy(true);
     try {
@@ -75,7 +78,7 @@ export function AuditLog({ projectId, campaignId, title = 'Ad activity' }: { pro
   };
   useEffect(() => {
     if (!__ARTIFACT_BUILD__) void load();
-  }, [projectId, campaignId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, campaignId, rev]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <section aria-label={title} className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">

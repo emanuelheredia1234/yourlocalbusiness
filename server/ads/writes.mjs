@@ -116,7 +116,9 @@ export async function runLaunch(ctx, { userId, tag, job, row, body, spendCap }) 
     const a = await zads.writes.createAd(body, row.launch_key, lctx);
     if (a.outcome === 'failed') {
       const leftBehind = (a.createdObjects ?? []).filter((o) => o.cleanup === 'left_behind');
-      return await finishWith('failed', a.code, { ...(leftBehind.length ? { leftBehind } : {}), ...(a.fixUrl ? { fixUrl: a.fixUrl } : {}), sent: a.sent }, { state: 'failed', configured_status: null }, a.refusal);
+      // every object it made is kept on the job (kept, unknown and deleted too): removing the row checks them
+      const createdObjects = a.createdObjects ?? [];
+      return await finishWith('failed', a.code, { ...(leftBehind.length ? { leftBehind } : {}), ...(createdObjects.length ? { createdObjects } : {}), ...(a.fixUrl ? { fixUrl: a.fixUrl } : {}), sent: a.sent }, { state: 'failed', configured_status: null }, a.refusal);
     }
     if (a.outcome === 'unknown') {
       return await finishWith('unknown', 'UNKNOWN', { step: 'create', ...(a.unconfirmedWrite ? { unconfirmedWrite: a.unconfirmedWrite } : {}), ...(a.createdObjects ? { createdObjects: a.createdObjects } : {}) }, { state: 'unknown' });

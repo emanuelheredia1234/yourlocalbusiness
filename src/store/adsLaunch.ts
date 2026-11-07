@@ -53,7 +53,9 @@ interface AdsLaunchState {
   /** The customer's "Check status": reads only, once. */
   check: (jobId: string) => Promise<{ ok: boolean; message?: string }>;
   /** Remove a failed launch with nothing at Meta or Google from this business's list (one request, never retried). */
-  remove: (projectId: string, campaignId: string) => Promise<{ ok: boolean; message?: string }>;
+  remove: (projectId: string, campaignId: string) => Promise<{ ok: boolean; message?: string; alreadyGone?: boolean }>;
+  /** bumped per business when something writes to its activity log here (AuditLog reads again) */
+  auditRev: Record<string, number>;
   openLaunch: (w: LaunchWindowState) => void;
   closeLaunch: () => void;
   openChange: (w: ChangeWindowState) => void;
@@ -93,6 +95,7 @@ export const useAdsLaunch = create<AdsLaunchState>((set, get) => {
     loading: {},
     error: {},
     audit: {},
+    auditRev: {},
     checkNotes: {},
     launchWindow: null,
     changeWindow: null,
@@ -182,16 +185,24 @@ export const useAdsLaunch = create<AdsLaunchState>((set, get) => {
 
     remove: async (projectId, campaignId) => {
       if (__ARTIFACT_BUILD__ || !projectId) return { ok: false };
+      const drop = (bump: boolean) =>
+        set((s) => ({
+          campaigns: { ...s.campaigns, [projectId]: (s.campaigns[projectId] ?? []).filter((c) => c.id !== campaignId) },
+          manageId: s.manageId === campaignId ? null : s.manageId,
+          ...(bump ? { auditRev: { ...s.auditRev, [projectId]: (s.auditRev[projectId] ?? 0) + 1 } } : {}),
+        }));
       try {
         // once: a refused or failed removal is never sent again by itself
         await removeFailedCampaign(campaignId, projectId);
       } catch (e) {
-        // already gone (another tab): drop it from the list too
-        if (e instanceof AdsApiError && e.status === 404) set((s) => ({ campaigns: { ...s.campaigns, [projectId]: (s.campaigns[projectId] ?? []).filter((c) => c.id !== campaignId) } }));
+        // already gone (another tab): drop it from the list too, and say so plainly
+        if (e instanceof AdsApiError && e.status === 404) {
+          drop(true);
+          return { ok: true, alreadyGone: true, message: 'It was already removed.' };
+        }
         return { ok: false, message: messageOf(e) };
       }
-      set((s) => ({ campaigns: { ...s.campaigns, [projectId]: (s.campaigns[projectId] ?? []).filter((c) => c.id !== campaignId) }, manageId: s.manageId === campaignId ? null : s.manageId }));
-      void get().loadAudit(projectId);
+      drop(true);
       return { ok: true };
     },
 

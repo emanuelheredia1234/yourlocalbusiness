@@ -109,6 +109,26 @@ describe('removing a failed launch', () => {
     expect(useAdsLaunch.getState().manageId).toBeNull();
   });
 
+  it('already removed (404): the row goes, it says so, the activity list is told to read again; never resent', async () => {
+    const f = vi.fn(async () => Response.json({ error: 'That campaign isn’t in your account.', code: 'NOT_FOUND' }, { status: 404 }));
+    vi.stubGlobal('fetch', f);
+    useAdsLaunch.setState({ campaigns: { p1: [failed('c1'), failed('c2')] }, auditRev: {} });
+    expect(await useAdsLaunch.getState().remove('p1', 'c1')).toEqual({ ok: true, alreadyGone: true, message: 'It was already removed.' });
+    expect(f).toHaveBeenCalledTimes(1);
+    expect(useAdsLaunch.getState().campaigns.p1.map((c) => c.id)).toEqual(['c2']);
+    expect(useAdsLaunch.getState().auditRev.p1).toBe(1);
+  });
+
+  it('a removal bumps that business’s activity revision only, and reads no audit into the list’s error', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => (calls.push(`${init?.method ?? 'GET'} ${url}`), init?.method === 'DELETE' ? Response.json({ removed: 'c1' }) : new Response('{}', { status: 503 }))));
+    useAdsLaunch.setState({ campaigns: { p1: [failed('c1')] }, auditRev: { p2: 4 }, error: {} });
+    await useAdsLaunch.getState().remove('p1', 'c1');
+    expect(useAdsLaunch.getState().auditRev).toEqual({ p1: 1, p2: 4 });
+    expect(calls.filter((c) => c.includes('/api/ads/audit'))).toEqual([]);
+    expect(useAdsLaunch.getState().error.p1).toBeFalsy();
+  });
+
   it('a refusal keeps the row, says why, and is never sent again', async () => {
     const f = vi.fn(async () => Response.json({ error: 'Part of this launch may exist at Meta or Google. Check Ads Manager first: it can’t be removed from the app.', code: 'MAY_EXIST_AT_PLATFORM' }, { status: 409 }));
     vi.stubGlobal('fetch', f);
