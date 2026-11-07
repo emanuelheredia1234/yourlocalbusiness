@@ -113,6 +113,11 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    Customer Portal instead.
 9. `supabase/migrations/20261115000000_ad_job_error_detail.sql` (§3c): `ad_jobs.error_detail`, why Zernio refused a
    launch or a change. Run it after `20261108000000_ads_launch.sql`.
+10. `supabase/migrations/20261116000000_ad_policy_confirmed.sql` (§3c "Before your first ad"):
+   `ad_account_choices.policy_confirmed_for` and `policy_confirmed_at`, the customer's answer that a business admin
+   accepted Meta's non-discrimination policy for the chosen ad account. Run it after `20261108000000_ads_launch.sql`.
+   Until it is run, the policy shows as not confirmed and ticking the box says it couldn't be saved (log:
+   `ads_policy_confirm_not_saved`).
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices, and `billing_trials` rows, which keep only keyed hashes of the email and card (their `user_id` becomes
@@ -367,7 +372,8 @@ the verified beneficiary and payer Meta asks for in some countries (Australia, B
 Taiwan, Thailand: Zernio's `verified_advertiser_required`; customers are told to use Ads Manager for those).
 
 **Turn it on**
-1. Run `supabase/migrations/20261108000000_ads_launch.sql` and `20261115000000_ad_job_error_detail.sql` (§2).
+1. Run `supabase/migrations/20261108000000_ads_launch.sql`, `20261115000000_ad_job_error_detail.sql` and
+   `20261116000000_ad_policy_confirmed.sql` (§2).
 2. Zernio: the **ads add-on** must be on your Zernio plan (`ads_addon_required` otherwise). Managed ads cost $0.01
    per active ad a month after the first 500 free, and Zernio needs a payment method on your team past 500 live ads
    (`ads_allowance_exceeded`). These calls show in the ledger as vendor `zernio` with no cost: check Zernio's invoice.
@@ -389,6 +395,39 @@ accounts and chosen for the business; an ad account picked (active, not a Google
 a payment method on the ad account, a Facebook Page (an Instagram professional account is optional), Meta's
 non-discrimination policy accepted, no security hold; on Google an approved billing setup in Google Ads → Billing
 (advisory: the app warns, Google won't show ads without it). Google reviews every ad; Meta does too.
+
+**Before your first ad (Meta).** Once Meta ads is connected (Settings → Connected accounts → Ad accounts, for the
+business on screen, which first asks which ad account it launches on) and again at the top of the launch window, the
+chosen ad account gets three items, each **Done**, **Not done**, **Not confirmed** or **Can't tell**:
+- *Payment method*: Zernio's live payment check and the listing's `billingStatus`. Not done or can't tell links that
+  ad account's own payment settings: `https://business.facebook.com/billing_hub/payment_settings/?asset_id=<digits>`
+  (the `act_` prefix dropped, digits only; anything else gets `https://business.facebook.com/billing_hub/`).
+- *Meta's non-discrimination policy*: Meta has no check for it before a create, so the customer ticks "A business
+  admin has accepted Meta's non-discrimination policy for the business that owns this ad account." (kept per ad
+  account, `ad_account_choices.policy_confirmed_for`). Unticked is a warning with the link, never a block: Meta
+  decides at the launch, and the server enforces nothing from the box. A policy refusal Zernio remembers
+  (`last_refusal`, 7 days) or reports live makes it **Not done**, ticked or not. It says plainly that only a business
+  admin can accept, with the steps and two links (below).
+- *Facebook Page*: Zernio's page check, as before.
+
+**Meta's non-discrimination policy: where it is accepted.** Zernio's fix link,
+`https://www.facebook.com/certification/nondiscrimination`, only records the policy for the person signed in and
+takes no business or ad account; it is not where a business accepts it (the live refusal of 7 Nov). Meta's own
+refusal text says a business admin must accept it "by going to Business Settings, then System Users" (Meta developer
+forum, developers.secure.facebook.com/community/threads/874355924886502), and Meta's 2022 notice says system users
+"will not be able to create ads until the business admins do so" (quoted by jonloomer.com). Admin help pages agree on
+the steps (Phorest, Blend 2026-01-20, Understory, Ako). So every policy fix link (refusal messages and job cards, the
+activity log, the setup checklist and "Before your first ad") is `https://business.facebook.com/latest/settings/system_users`,
+whatever Zernio sends, with these steps: sign in as an admin with full control of the business that owns the ad
+account (only they can accept); open Business Settings → Users → System users; click "Review policy" (or "Add" if
+there's no banner), then "I accept"; no system user needs to be made; come back and tick the box. Zernio's personal
+page stays as a second link ("Also accept it on your own Facebook profile"). Acceptance is once per business; the
+box is per ad account because ad accounts can belong to different businesses. **Unconfirmed** (no signed-in check
+was made): the exact `system_users` path (the documented entry is `/latest/settings/business_users`, then System
+users), the payment link's `asset_id` parameter (Billing Hub itself is documented; the documented fallback is
+`https://business.facebook.com/ads/manager/account_settings/account_billing/?act=<id>`), whether Zernio creates ads
+as the customer or through a system user, any acceptance prompt inside Ads Manager, and Meta's error subcodes
+(2859024, 2859002). If the System users link ever lands on the wrong page, the steps still name the menu.
 
 **Limits** (`ad_limits`, `'*'` = defaults, a customer row overrides field by field):
 | Limit | Default | Checked on |
@@ -441,7 +480,8 @@ audit row in `after` (Zernio's code, type, field and step, its hint cut to 300 c
 Google's or Zernio's docs only, and Meta's subcode and own words); `error_code` keeps our category. Customers read
 our own sentence for Zernio's Meta refusal codes (payment method, non-discrimination policy, Lead Ads terms,
 verified advertiser, unusable ad account, security check, blocked action, budget too low, object not accessible,
-permissions…) with Meta's fix link, then what the refusal left:
+permissions…) with Meta's fix link (ours for the policy and a payment method: see "Before your first ad" above),
+then what the refusal left:
 - nothing: "Nothing was created and no money was spent." (or "Nothing was changed.");
 - a launch whose campaign and ad set Meta kept (Zernio couldn't delete them): those parts, listed ("campaign …1234"),
   which can't spend and can be deleted in Ads Manager;
@@ -464,7 +504,7 @@ log says `ads_error_detail_not_saved`.
 list the campaigns still on and what keeps running ("they keep running until you pause them in Ads Manager"); the
 first two need the customer's tick (`ackLiveAds=1`).
 
-**Routes** (signed in, same site): `/api/ads/accounts`, `/accounts/choice`, `/targeting/search`, `/launch/preview`,
+**Routes** (signed in, same site): `/api/ads/accounts`, `/accounts/choice`, `/accounts/policy`, `/targeting/search`, `/launch/preview`,
 `/launch`, `/campaigns`, `/campaigns/refresh`, `/campaigns/:id/change/preview`, `/campaigns/:id/change`,
 `/campaigns/:id/review`, `/jobs/:id`, `/jobs/:id/check`, `/audit`, `/live`; owner only: `/admin/limits`,
 `/admin/limits/:tag` and `/defaults`, `/admin/customers/:tag/pause-all/preview` and `/pause-all`. Code:
