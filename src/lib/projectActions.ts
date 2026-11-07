@@ -4,7 +4,7 @@
 import type { Origin, Track } from './types';
 import { navigate } from './router';
 import { pushMyListings } from './community';
-import { unlistBeforeRemoving } from '@/store/marketPublic';
+import { marketOn } from './marketConfig';
 import { useStore } from '@/store/useStore';
 import { newProjectId } from '@/store/defaults';
 import { useAnalytics } from '@/store/analytics';
@@ -123,8 +123,12 @@ export async function claimSlotsFor(ids: string[]): Promise<{ claimed: string[];
  * disconnect its social accounts (each business has its own; this frees its business slot).
  */
 export function deleteProjectEverywhere(id: string): void {
-  // its listings' public web pages are taken down first (best effort)
-  void unlistBeforeRemoving(useStore.getState().myListings.filter((l) => l.projectId === id));
+  // its listings' public web pages are taken down first (best effort; loaded only where the feature is on)
+  const listings = useStore.getState().myListings.filter((l) => l.projectId === id);
+  if (marketOn() && listings.length)
+    void import('@/store/marketPublic')
+      .then((m) => m.unlistBeforeRemoving(listings))
+      .catch(() => undefined);
   useStore.getState().deleteProject(id);
   void pushMyListings();
   void releaseSocialFor([id]);
