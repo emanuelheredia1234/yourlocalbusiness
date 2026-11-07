@@ -76,7 +76,7 @@ export async function offersServer({ env: envOver = {}, billing = null, whopTime
     const url = new URL(req.url, 'http://local');
     if (offers.connectPages?.(req, res, url)) return;
     if (offers.buy.matchBuy(url) || url.pathname.startsWith('/b/')) {
-      const site = req.headers['x-test-site'] ? { user_id: String(req.headers['x-test-site']) } : null;
+      const site = req.headers['x-test-site'] ? { user_id: String(req.headers['x-test-site']), ...(req.headers['x-test-site-domain'] ? { domain: String(req.headers['x-test-site-domain']) } : {}) } : null;
       return void offers.buy.serveBuy(req, res, url, site, { notFound: page(404, 'NOT FOUND PAGE'), gone: page(410, 'GONE PAGE'), visitor: (r) => String(r.headers['x-test-ip'] ?? 'local') });
     }
     offers.handle(req, res, url).then((handled) => {
@@ -111,8 +111,8 @@ export async function offersServer({ env: envOver = {}, billing = null, whopTime
     return { status: res.status, body: json, text, headers: res.headers };
   }
 
-  async function visit(path, { method = 'GET', headers = {}, site = null } = {}) {
-    const res = await fetch(`${base}${path}`, { method, redirect: 'manual', headers: { ...(site ? { 'x-test-site': site } : {}), ...headers } });
+  async function visit(path, { method = 'GET', headers = {}, site = null, domain = null } = {}) {
+    const res = await fetch(`${base}${path}`, { method, redirect: 'manual', headers: { ...(site ? { 'x-test-site': site } : {}), ...(domain ? { 'x-test-site-domain': domain } : {}), ...headers } });
     return { status: res.status, headers: res.headers, text: await res.text() };
   }
 

@@ -193,6 +193,8 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
   const faults = [];
   let hookUrl = webhookUrl;
   let connectHookUrl = connectWebhookUrl;
+  /** tests: what a new Checkout Session's url is (default ${base}/__pay/<id>) */
+  let checkoutUrlFor = null;
   let server = null;
   let base = '';
   const sec = () => Math.floor(now() / 1000);
@@ -397,7 +399,7 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
           expires_at: int(body.expires_at) ?? sec() + 24 * 3600,
           livemode: false,
         };
-        s.url = `${base}/__pay/${s.id}`;
+        s.url = checkoutUrlFor ? checkoutUrlFor(s) : `${base}/__pay/${s.id}`;
         r.sessions.set(s.id, s);
         return { status: 200, body: s };
       }
@@ -974,6 +976,10 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     },
     set connectWebhookUrl(u) {
       connectHookUrl = u;
+    },
+    /** tests: make new Checkout Sessions' url something else (null: the default) */
+    set checkoutUrl(fn) {
+      checkoutUrlFor = fn;
     },
     completeCheckout,
     emit,

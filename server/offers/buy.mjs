@@ -14,12 +14,16 @@
 // - A GET that isn't a prefetch counts one click (offer_clicked); a failed count never blocks the buyer.
 // - /b/<id>/done is where Whop sends the buyer back: a thank-you page with no script. It reads nothing from the query
 //   (Whop adds its own) and never says the payment went through: only the webhook knows that.
+// - A Stripe offer (P6) goes to server/offers/stripeCheckout.mjs after these checks: a Checkout Session on the
+//   seller's account per real click, /done reads the session back, /file is the paid download, /back the cancelled
+//   page. /file and /back answer "not found" for any other provider.
 
 import { drain, escapeHtml, leadNotice, NOTICE_CSP, visitorOf, windowCounter } from '../leads.mjs';
 import { PROVIDERS } from './providers.mjs';
 
-const BUY_PATH = /^\/b\/([A-Za-z0-9_-]{22})(\/done)?$/;
-const MAX_PATH = 30;
+const BUY_PATH = /^\/b\/([A-Za-z0-9_-]{22})(\/done|\/file|\/back)?$/;
+const MAX_PATH = 40;
+const ACCOUNT_COLUMNS = 'id,user_id,environment,stripe_account_id,status,charges_enabled,country,display_name,tax_enabled,tax_status';
 const LOOKUP_TIMEOUT = 5000;
 /** Clicks per visitor per hour and per offer per hour (memory only, per server copy). */
 export const OFFER_LIMITS = Object.freeze({ perIp: 60, perOffer: 3000, windowMs: 3_600_000 });
@@ -42,6 +46,8 @@ const prefetch = (req) => /prefetch/i.test(`${String(req.headers['sec-purpose'] 
  * every /b/ is "not found"); log.
  */
 export function createBuy({ db, billing = null, limits = OFFER_LIMITS, enabled = true, log = console, now = () => Date.now() }) {
+  // Stripe offers' handler (server/offers/stripeCheckout.mjs), set once the Connect core is made
+  let stripe = null;
   const lim = { ...OFFER_LIMITS, ...(limits || {}) };
   const perIp = windowCounter(lim.perIp, lim.windowMs);
   const perOffer = windowCounter(lim.perOffer, lim.windowMs);
@@ -88,7 +94,7 @@ export function createBuy({ db, billing = null, limits = OFFER_LIMITS, enabled =
     const p = (async () => {
       let rows;
       try {
-        rows = await timed(db.select('offers', { id }, { select: 'id,user_id,project_id,title,provider,connection_id,provider_ref,status', limit: 1 }));
+        rows = await timed(db.select('offers', { id }, { select: 'id,user_id,project_id,title,provider,connection_id,provider_ref,status,price_minor,currency,delivery,connect_account_id,updated_at', limit: 1 }));
       } catch (e) {
         // the migration wasn't run: there are no offers
         if (e?.code === 'NOT_SET_UP') return null;
@@ -100,7 +106,13 @@ export function createBuy({ db, billing = null, limits = OFFER_LIMITS, enabled =
         const [c] = await timed(db.select('payment_connections', { id: row.connection_id }, { select: 'id,user_id,status,environment,account_id', limit: 1 }));
         conn = c ?? null;
       }
-      const value = row ? { row, conn } : null;
+      // a Stripe offer: its seller account (cached with it, dropped when the account changes)
+      let acct = null;
+      if (row?.provider === 'stripe' && row.connect_account_id) {
+        const [a] = await timed(db.select('connect_accounts', { id: row.connect_account_id }, { select: ACCOUNT_COLUMNS, limit: 1 }));
+        acct = a ?? null;
+      }
+      const value = row ? { row, conn, acct } : null;
       cache.delete(id);
       cache.set(id, { value, until: now() + (row ? 60_000 : 30_000) });
       while (cache.size > MAX_CACHED) cache.delete(cache.keys().next().value);
@@ -143,7 +155,8 @@ export function createBuy({ db, billing = null, limits = OFFER_LIMITS, enabled =
   async function serveBuy(req, res, url, site = null, { notFound, gone, visitor = visitorOf } = {}) {
     const m = enabled && url.pathname.length <= MAX_PATH ? BUY_PATH.exec(url.pathname) : null;
     if (!m) return notFound(req, res);
-    const [, id, done] = m;
+    const [, id, sub] = m;
+    const done = sub === '/done';
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       drain(req);
       return write(req, res, 405, { 'content-type': 'text/plain; charset=utf-8', allow: 'GET, HEAD' }, 'Method not allowed');
@@ -170,6 +183,13 @@ export function createBuy({ db, billing = null, limits = OFFER_LIMITS, enabled =
         }
         if (until && Date.parse(until) < now()) return gone(req, res);
       }
+      if (row.provider === 'stripe' && stripe) {
+        const ctx = { row, acct: found.acct, site, visitorKey: who, url, page: { write, notice, retryAfter, counted } };
+        // the buyer's pages after a checkout: whatever the offer's status now (they paid before it changed)
+        if (sub === '/done') return await stripe.thanks(req, res, ctx);
+        if (sub === '/file') return await stripe.file(req, res, ctx);
+        if (sub === '/back') return await stripe.back(req, res, ctx);
+      } else if (sub === '/file' || sub === '/back') return notFound(req, res);
       if (done) {
         const title = escapeHtml(row.title || 'Your order');
         return notice(req, res, 200, 'Thanks for your order', `Your receipt and access to ${title} come from the seller’s checkout by email.`);
@@ -179,6 +199,10 @@ export function createBuy({ db, billing = null, limits = OFFER_LIMITS, enabled =
       if (row.provider === 'whop' && (!found.conn || found.conn.status !== 'active' || found.conn.user_id !== row.user_id)) return notice(req, res, ...NOT_NOW, retryAfter(3_600_000));
       if (perOffer.full(id)) return notice(req, res, 429, 'Please wait a little', 'This was asked for a lot just now. Try again later.', retryAfter(perOffer.wait(id)));
       perOffer.hit(id);
+      if (row.provider === 'stripe') {
+        if (!stripe) return notice(req, res, ...NOT_NOW, retryAfter(3_600_000));
+        return await stripe.checkout(req, res, { row, acct: found.acct, site, visitorKey: who, url, page: { write, notice, retryAfter, counted } });
+      }
       const target = PROVIDERS[row.provider]?.checkoutTarget(row, { site }) ?? null;
       if (!target) {
         warn('Offers: a buy link’s checkout didn’t pass the checks, so it wasn’t followed.');
@@ -202,6 +226,14 @@ export function createBuy({ db, billing = null, limits = OFFER_LIMITS, enabled =
     serveBuy,
     /** An offer changed or went: the next click looks it up again. */
     drop: (id) => cache.delete(id),
+    /** Stripe offers' handler (server/offers/stripeCheckout.mjs). */
+    setStripe: (handler) => {
+      stripe = handler;
+    },
+    /** A Stripe seller account changed (charges, status, tax): its offers are looked up again. */
+    dropAccount: (rowId) => {
+      for (const [id, e] of [...cache]) if (e.value?.row?.connect_account_id === rowId || e.value?.acct?.id === rowId) cache.delete(id);
+    },
     /** A connection changed (disconnected, key rejected): its offers are looked up again. */
     dropConnection: (connId) => {
       for (const [id, e] of [...cache]) if (e.value?.row?.connection_id === connId) cache.delete(id);

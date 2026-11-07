@@ -12,6 +12,7 @@
 //   POST   /api/offers/<id>/archive   /b/<id> then says "no longer available"
 //   DELETE /api/offers/<id>           only without sales (409 HAS_SALES: archive it instead)
 //   GET    /api/offers/sales?projectId=&env=production|sandbox&before=&limit=   → { sales, next }
+//   POST   /api/offers/sales/<sale id>/download-link  → { url, expiresAt }: a Stripe sale's 7-day download link
 //   GET    /api/offers/summary?projectId=&days=30   → { live: {count, revenue, refunded}, test: {count}, clicks, offers }
 //   GET    /api/payments/whop                        → { connections }
 //   POST   /api/payments/whop  {environment, accountId, key}        connect (needs a plan)
@@ -40,6 +41,9 @@ import { createWhop } from '../payments/whop.mjs';
 import { CONNECT_MIGRATION, accountView, createConnectCore, serveConnectReturn } from '../payments/stripeConnect.mjs';
 import { createBuy, offerLimitsFromEnv } from './buy.mjs';
 import { createStripeOffers } from './stripeOffer.mjs';
+import { createStripeCheckout } from './stripeCheckout.mjs';
+import { leadLinkSecret } from '../leadFiles.mjs';
+import nodeCrypto from 'node:crypto';
 import { CHECKOUT_HOSTS, PROVIDERS } from './providers.mjs';
 import { ID_RE, MAX_OFFERS_PER_USER, OFFERS_MIGRATION, PROJECT_ID_RE, createPaymentCrypto, describeOffer, describeSale, newId, paymentKeysSecret } from './store.mjs';
 
@@ -86,6 +90,9 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   const connect = createConnectCore({ db, env, fetch, now, log, billing, stripe, ...(sellerTermsReady === undefined ? {} : { sellerTermsReady }), onAccountChanged: (rowId) => buy.dropAccount?.(rowId) });
   const stripeOn = enabled && connect.enabled;
   const stripeOffers = createStripeOffers({ db, connect, pc, cleanText: (v, max, what) => cleanText(v, max, what) });
+  const linkSecret = leadLinkSecret(env);
+  const stripeCheckout = createStripeCheckout({ db, connect, billing, env, now, log, linkSecret: linkSecret ? Buffer.from(nodeCrypto.hkdfSync('sha256', linkSecret, Buffer.alloc(0), 'ylb-sale-link', 32)) : null, supabase: { supabaseUrl: env.SUPABASE_URL || '', secretKey: env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '', fetch } });
+  if (stripeOn) buy.setStripe(stripeCheckout);
   const blocked = new Set();
 
   const notes = () => {
@@ -356,9 +363,30 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
     return { days, live, test: { count: test }, clicks: offers.reduce((n, o) => n + (Number(o.clicks) || 0), 0), offers: offers.map((o) => ({ id: o.id, clicks: Number(o.clicks) || 0, sales: perOffer.get(o.id) ?? 0 })) };
   }
 
+  /** POST /api/offers/sales/<sale id>/download-link: a new 7-day link for a buyer who lost theirs (no plan needed). */
+  async function saleDownloadLink(who, saleId, req) {
+    if (!isUuid(saleId)) throw fail(404, 'NOT_FOUND', 'That sale isn’t in your account.');
+    const [sale] = await db.select('sales', { id: saleId, user_id: who.id }, { select: 'id,offer_id,provider,status', limit: 1 });
+    if (!sale || sale.provider !== 'stripe' || !sale.offer_id) throw fail(404, 'NOT_FOUND', 'That sale isn’t in your account.');
+    const [offer] = await db.select('offers', { id: sale.offer_id, user_id: who.id }, { select: 'id,provider,delivery', limit: 1 });
+    if (!offer || offer.provider !== 'stripe' || offer.delivery?.kind !== 'file') throw fail(409, 'NO_FILE', 'This offer has no file to download.');
+    if (!['paid', 'partially_refunded'].includes(sale.status)) throw fail(409, 'NOT_PAID', 'This sale was refunded or disputed, so its download is closed.');
+    const ticket = stripeCheckout.makeTicket(sale.id);
+    if (!ticket) throw notSetUp('Set LEAD_LINK_SECRET (16+ characters) or SUPABASE_SECRET_KEY.', 'Download links aren’t available right now.');
+    const origin = connect.cfg.publicOrigin ?? originFor(req, env);
+    return { url: `${origin}/b/${offer.id}/file?t=${ticket}`, expiresAt: new Date(now() + 7 * 86_400_000).toISOString() };
+  }
+
   async function routeOffers(req, res, url, who) {
     const p = url.pathname;
     const origin = originFor(req, env);
+    const link = /^\/api\/offers\/sales\/([^/]{1,64})\/download-link$/.exec(p.length <= 120 ? p : '');
+    if (link) {
+      if (req.method !== 'POST') throw fail(405, 'BAD_REQUEST', 'Method not allowed.');
+      limited('sale-link', who.id);
+      notBlocked(who);
+      return reply(req, res, 200, await saleDownloadLink(who, link[1], req));
+    }
     const m = /^\/api\/offers(?:\/([^/]{1,64})(?:\/(check|archive))?)?$/.exec(p.length <= 120 ? p : '');
     if (!m) throw fail(404, 'NOT_FOUND', 'Not found.');
     const [, id, action] = m;
