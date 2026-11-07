@@ -1,11 +1,13 @@
 // How one provider event changes a stored sale: the rule public.record_sale applies in Postgres
-// (supabase/migrations/20261113000000_offers.sql), as one JS function. The mock database uses it, and a test reads
+// (supabase/migrations/20261113000000_offers.sql, replaced by 20261118000000_stripe_connect.sql), as one JS function. The mock database uses it, and a test reads
 // the SQL to keep the two the same. Nothing here touches money: it only decides what a sale row says.
 //
 // - A status changes only to one of the same or a later rank (pending < failed < paid < partly refunded < refunded,
 //   disputed last), or, between pending and failed only, to a newer event's.
 // - refunded_minor only grows; amount_minor is filled once (while it's 0); net, email, paid time and membership are
 //   kept once set. currency, offer, business and owner are what the first event wrote.
+// - P6 (Stripe): checkout_session_id, fee_pct, fee_tier, application_fee_id and application_fee_minor are set once
+//   (the stored value, else the incoming one). dispute_status has its own function (record_sale_dispute).
 // - A row of another user is never changed.
 // So a repeated delivery, or an older event arriving after a newer one, changes nothing.
 
@@ -47,6 +49,10 @@ export function mergeSale(stored, incoming) {
         buyer_email: p.buyer_email ?? null,
         paid_at: p.paid_at ?? null,
         last_event_at: p.last_event_at,
+        checkout_session_id: p.checkout_session_id ?? null,
+        fee_pct: big(p.fee_pct),
+        fee_tier: p.fee_tier ?? null,
+        application_fee_id: p.application_fee_id ?? null,
       },
     };
   }
@@ -64,6 +70,11 @@ export function mergeSale(stored, incoming) {
     buyer_email: coalesce(r.buyer_email, p.buyer_email),
     paid_at: coalesce(r.paid_at, p.paid_at),
     provider_membership_id: coalesce(r.provider_membership_id, p.provider_membership_id),
+    checkout_session_id: coalesce(r.checkout_session_id, p.checkout_session_id),
+    fee_pct: coalesce(big(r.fee_pct), big(p.fee_pct)),
+    fee_tier: coalesce(r.fee_tier, p.fee_tier),
+    application_fee_id: coalesce(r.application_fee_id, p.application_fee_id),
+    application_fee_minor: coalesce(big(r.application_fee_minor), big(p.application_fee_minor)),
   };
   const same =
     next.status === r.status &&
@@ -73,7 +84,12 @@ export function mergeSale(stored, incoming) {
     next.net_minor === big(r.net_minor) &&
     next.buyer_email === (r.buyer_email ?? null) &&
     time(next.paid_at) === time(r.paid_at) &&
-    next.provider_membership_id === (r.provider_membership_id ?? null);
+    next.provider_membership_id === (r.provider_membership_id ?? null) &&
+    next.checkout_session_id === (r.checkout_session_id ?? null) &&
+    next.fee_pct === big(r.fee_pct) &&
+    next.fee_tier === (r.fee_tier ?? null) &&
+    next.application_fee_id === (r.application_fee_id ?? null) &&
+    next.application_fee_minor === big(r.application_fee_minor);
   if (same) return { outcome: 'kept', row: r };
   return { outcome: 'updated', row: { ...r, ...next } };
 }

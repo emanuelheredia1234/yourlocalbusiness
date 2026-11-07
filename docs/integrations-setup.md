@@ -920,8 +920,9 @@ These start the things later phases wait on. None of them charges anyone.
    publisher instead of "unverified" on the consent screen.
 5. **Stripe Connect platform profile** (sellers take payments, P6): in the Stripe Dashboard → Connect → Get started,
    fill in the platform profile (what the platform does, who the sellers are, that sellers own their Stripe
-   accounts and see the full Stripe Dashboard, that Stripe collects its fees from the seller and sellers carry
-   negative balances). Don't enable live charges yet.
+   accounts and see the full Stripe Dashboard, that Stripe collects its fees from the seller and Stripe is responsible for
+   negative balances). Don't enable live charges yet. The full steps are §16, "Stripe Connect: sellers get paid
+   (P6)".
 
 ## 10. Plans and billing (P1: Launch, Grow, Scale)
 
@@ -1680,3 +1681,168 @@ project document, and their images in the `public-files` bucket from P2
   (`{ name, subject, preheader, doc, values, brand, footerNote, assetLinks }`), never HTML, after checking buy links,
   links without an address and images the app doesn't host. In the claude.ai artifact build, uploads, Omnisend and
   Manus/Viktor are hidden; an image block takes an https address there, and the HTML export works.
+
+## 16. Stripe Connect: sellers get paid (P6)
+
+Customers sell through **their own Stripe account**, made through the app. Buyers pay on Stripe Checkout on that
+account; the money goes to the seller's Stripe balance; the app takes **our fee** (the plan's percentage) at the sale.
+
+### What the app does
+
+- **Accounts.** Settings → Payments → "Get paid with Stripe" makes a Stripe connected account for the seller
+  (`POST /v1/accounts` with `controller[fees][payer]=account`, `controller[losses][payments]=stripe`,
+  `controller[requirement_collection]=stripe`, `controller[stripe_dashboard][type]=full`): the seller owns it, sees
+  the full Stripe Dashboard, and Stripe charges its own fees to the seller. None of these can change later. The
+  seller picks their country (it can't change) and ticks the seller terms first. They finish on Stripe's own page
+  ("Continue setup", an Account Link that goes only to their browser: never stored, logged or emailed). There is no
+  linking of an existing Stripe account in P6; the app says "If you already have one, sign in with the same email
+  during setup" and promises nothing more.
+- **Fees.** Our fee is `platformFeePct` from `shared/plans.json`: **3%** on Launch, **1%** on Grow, **0%** on Scale.
+  The owner and plans-not-enforced pay 0%. A free (comp) plan, a card trial and a plan in its grace period pay their
+  tier's rate; no plan, an ended plan or a plan paused for non-payment pays Launch's 3%. The fee is
+  `floor(price × pct / 100)` (rounding favours the seller); 0, or anything not below the price, is left out. A seller
+  in Brazil pays no fee unless `STRIPE_PLATFORM_COUNTRY` is `BR` (Stripe doesn't allow it across borders).
+- **Merchant of record.** The seller is the seller: Checkout shows their branding, receipts come from Stripe in their
+  name (only when the seller turns on successful-payment emails in Stripe → Settings → Customer emails; test payments
+  send none, and we never send `receipt_email`, so the pages never promise one), and charges, refunds and disputes live on their account. The thank-you, "cancelled" and download pages name
+  the seller. The app never refunds a buyer: sellers refund and answer disputes in their own Stripe Dashboard.
+- **Checkout.** `/b/<id>` makes a Checkout Session on the seller's account (a direct charge, `Stripe-Account`) with
+  the price inline and our fee as `application_fee_amount`. It sends buyers only to `https://checkout.stripe.com`
+  (never an address from the request), so it can't become an open redirect; anything else is "not available right
+  now" and an owner alert. The query string and the Referer are ignored (`?next=`, `?redirect=` do nothing).
+- **Webhooks.** Connect events come to `POST /api/webhooks/stripe-connect`, signed with the Connect endpoint's own
+  secret (`STRIPE_CONNECT_WEBHOOK_SECRET`). The signature is checked on the raw body, each event is deduped in
+  `webhook_deliveries`, processed (re-read from Stripe, never trusted from the payload), and only then answered 2xx.
+  `application_fee.created` and `application_fee.refunded` come to the platform endpoint `/api/webhooks/stripe`.
+- **Downloads.** An offer delivers nothing (the seller delivers it) or one of the seller's **product files**
+  (Settings → Payments → Product files; uploaded from Attach payment → Stripe → A file). The thank-you page
+  (`/b/<id>/done`) checks the Checkout Session with Stripe, records the sale, and shows a Download button
+  (`/b/<id>/file`): a 60-second signed link, up to `CONNECT_DOWNLOADS_PER_SALE` times within `CONNECT_DOWNLOAD_DAYS`
+  days, closed once the sale is refunded or disputed. A product file is never served at `/m/`. A seller can copy a
+  new 7-day download link from a sale (Analytics → Sales) for a buyer who lost theirs.
+- **Our fee goes back** in proportion when money goes back to the buyer: a refund, or a lost dispute. Each is sent
+  once to Stripe's Application Fee Refund API, with an Idempotency-Key. `CONNECT_RETURN_FEES=off` turns it off.
+
+### Money rules (what the code guarantees)
+
+- No live Stripe call in a test: the tests use `server/test/mock-stripe.mjs`. Keys live only in Replit Secrets and
+  are shown masked; the browser never sees a key or a full `acct_` id (its last 4 only).
+- Every Stripe write sends an Idempotency-Key and is tried once. A timeout is never retried by itself: the app
+  reads back (an account is found again by its metadata tag; a fee return by its source id) and never sends twice.
+  A buyer's own second click within 10 minutes replays the same Checkout Session: the key is a hash of the browser
+  (a first-party `ylb_v` cookie on `/b/`, or before it the address with the user agent and language) and the whole
+  session body, so people sharing an address get their own sessions and a changed body is a new key. A replayed
+  session is read back first: one already paid or expired is never reused (one new session under a derived key).
+  Stripe answering about the key itself (409 still in flight) shows "try again in a minute", not the hour-long page.
+- Our fee back on a sale (`fee_returned_minor`) is set as one absolute value (`sale_fee_returned`: the greatest of
+  the fee returns confirmed and Stripe's `amount_refunded` on the fee), never added to, so a fee refund seen by the
+  write, the hourly read-back and `application_fee.refunded` counts once. A fee return left `sending` for 5 minutes
+  is read back like `unknown`, never sent again; a refund that fails after our fee went back alerts the owner
+  (`fee_return_reversed`), nothing is reversed automatically.
+- Stripe prices are in one of the currencies of `shared/stripe-currencies.json`, at or above Stripe's minimum for
+  that currency. HUF and ISK are refused: Stripe takes them with two decimals while the app keeps them whole.
+- Webhooks: the raw body's signature is checked first; a delivery is deduped in `webhook_deliveries`; any error
+  answers 500 with no delivery row, so Stripe delivers again.
+- `/b/<id>` never becomes an open redirect (above). `/connect/return` and `/connect/refresh` are fixed 302s into the
+  app, whatever the query.
+- Team-level problems (Connect not on, the key missing Connect permissions, a checkout address on an unexpected
+  host, a fee return that failed or wasn't confirmed) go to the owner: **Owner → Customer usage → Stripe Connect**
+  shows them in plain words. Customers only read "Stripe payments aren't available right now".
+- In the claude.ai artifact build, the Payments tab, the Stripe tab in Attach payment, the assistant's payments
+  tools and the owner's Stripe Connect section are all absent.
+
+### Before deploying (every deployment, Connect on or off)
+
+Run `supabase/migrations/20261118000000_stripe_connect.sql` in Supabase → SQL Editor first (safe to run again). Buy
+links and lead magnets read its new columns; until it runs they fall back to the older columns (Whop and outside
+links and lead magnets keep working) and the server logs a reminder naming this file, but product files and Stripe
+buy links can't be made.
+
+### Owner steps, in order
+
+1. **Sandbox first.** Do every step in the Stripe Sandbox with the sandbox key (`sk_test_…`), then repeat in live.
+2. **Enable Connect.** Stripe Dashboard → Connect → Get started. Choose to let sellers own their accounts and see the
+   full Stripe Dashboard, with Stripe collecting its fees from sellers and Stripe responsible for negative balances.
+   This matches the `controller` properties the app sends. Turn on **Radar for connected accounts**.
+3. **Platform profile.** Connect → Settings → Platform profile: what the platform does, who the sellers are (local
+   businesses selling their own goods and services), the countries, and that the seller is the merchant of record.
+   Add Connect branding (name, icon and colour shown during setup).
+4. **Seller terms.** Edit the draft at `/seller-terms` (`server/legal.mjs`): review each point (the seller is the
+   merchant of record; they own their Stripe account and accept Stripe's Connected Account Agreement; Stripe's fees
+   are charged to them by Stripe; our fee is the plan's 3/1/0%, taken at the sale and returned in proportion on
+   refunds and lost disputes; they handle refunds, disputes, taxes, receipts and delivery; Stripe's restricted
+   businesses list; we may pause buy links; buyer emails are stored for the seller). Remove the draft marker, set
+   `SELLER_TERMS_READY = true`, bump `SELLER_TERMS_VERSION`, and republish. **Until then only the owner can set up
+   Stripe selling** (everyone else reads "Selling with Stripe opens soon").
+5. **Restricted key.** Add the Connect permissions to the restricted live key: Accounts (write), Account Links
+   (write), Checkout Sessions (write), Charges, Disputes and PaymentIntents (read), Application Fees (write), Tax
+   settings (read), all "on connected accounts" where offered. The exact permission names are UNCONFIRMED: test with
+   the sandbox key first. A missing one shows as the `key_missing_connect_permission` alert in the owner's view.
+6. **Connect webhook endpoint.** Developers → Webhooks → Add destination → Events from: **Connected accounts** →
+   URL `https://yourlocalbusiness.replit.app/api/webhooks/stripe-connect` → events: `checkout.session.completed`,
+   `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `charge.refunded`,
+   `charge.refund.updated`, `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute.closed`,
+   `charge.dispute.funds_withdrawn`, `charge.dispute.funds_reinstated`, `account.updated`,
+   `account.application.deauthorized`, `payout.failed`. Copy its signing secret into Replit Secrets as
+   **`STRIPE_CONNECT_WEBHOOK_SECRET`**. It is a different secret from `STRIPE_WEBHOOK_SECRET`, and different again in
+   live and sandbox. Then add `application_fee.created` and `application_fee.refunded` to the **existing** platform
+   endpoint `/api/webhooks/stripe`.
+7. **Migration.** Run `supabase/migrations/20261118000000_stripe_connect.sql` (safe to run again) **before**
+   deploying this code, **whether or not Stripe Connect is set up** (see "Before deploying" above).
+8. **`APP_PUBLIC_URL`** must be the app's https address. Live setup links and Checkout return addresses need https;
+   without it, Connect reports "not set up" and the owner's view says why. `CUSTOMER_TAG_SECRET` (16+ characters)
+   is needed too: accounts are tagged with it so one Stripe didn't confirm can be found again.
+9. **A $1 live test, only with the owner's OK.**
+   - Use a test seller account on **Launch** (not the owner, whose fee is 0), so the fee is $0.03.
+   - Make a $1.00 Stripe offer with a small file, buy it with a real card, and check: the sale appears; the
+     thank-you page downloads the file; the platform shows a $0.03 collected fee; the receipt comes from the seller (with their successful-payment emails
+     on).
+   - Then refund it **from the seller's Stripe Dashboard**, and check: the sale shows Refunded; the download link
+     answers "no longer available"; $0.03 goes back to the seller (owner view → Our fees → returned).
+   - Record the results in the owner checklist.
+
+### Secrets
+
+| Secret | What it's for |
+|---|---|
+| `STRIPE_CONNECT_WEBHOOK_SECRET`, `STRIPE_CONNECT_WEBHOOK_SECRET_PREVIOUS` | The Connect endpoint's signing secret, and the previous one while rotating. |
+| `STRIPE_CONNECT` | `off` turns Connect off (on by default once the key and the Connect webhook secret are set). |
+| `STRIPE_PLATFORM_COUNTRY` | The platform's country code, default `US` (the Brazil fee rule). |
+| `CONNECT_RETURN_FEES` | `off` stops returning our fee on refunds and lost disputes. |
+| `CONNECT_DOWNLOADS_PER_SALE` | Downloads per sale, default 10. |
+| `CONNECT_DOWNLOAD_DAYS` | Days a sale's download stays open, default 30. |
+| `CONNECT_SESSIONS_PER_VISITOR_PER_HOUR` | Checkout Sessions per visitor and offer each hour, default 20. |
+
+Reused: `STRIPE_SECRET_KEY` (its mode is the Connect mode: `sk_test_`/`rk_test_` is sandbox), `APP_PUBLIC_URL`,
+`LEAD_LINK_SECRET` (signs sellers' download links) and `CUSTOMER_TAG_SECRET`.
+
+### Cron jobs
+
+`connect-readback` and `connect-fees` (hourly): read back accounts Stripe didn't confirm, and fee returns that are
+unconfirmed or waiting for the fee's id (never a second write). `connect-sync` (daily 04:31 UTC): re-reads active,
+restricted and setting-up accounts and the Stripe Tax status. `connect-reconcile` (daily 05:07 UTC, read-only):
+records completed Checkout Sessions whose webhook was lost.
+
+### What customers see (the app)
+
+- **Settings → Payments → Get paid with Stripe:** the fee line (their tier in bold; the owner sees "No platform
+  fee"), country, the seller terms, then Continue setup, what Stripe needs and by when, Receiving payments, payouts,
+  Open Stripe Dashboard, Stripe Tax (Off/On; the seller sets it up in their Stripe Dashboard first, and Stripe may
+  charge them for it), Refresh status, and Stop selling with Stripe here (their Stripe buy links pause; the Stripe
+  account stays theirs). Back from Stripe, the app reads the account again.
+- **Attach payment → New: Stripe:** title, price, currency, and what the buyer gets (nothing to download, or a
+  product file), with a preview: "Buyer pays $49.00 · Our fee $1.47 (3% on Launch) · Stripe's fee comes out of your
+  Stripe balance." An offer made before setup is finished says "Finish Stripe setup to start selling."
+- **Analytics → Sales:** Stripe sales with our fee and what went back, disputes in words ("Dispute: needs
+  response", "Dispute won", "Dispute lost"), a new download link to copy, and "Refunds and disputes: in your Stripe
+  Dashboard".
+- **The assistant** can read the payments status and sales, open Settings → Payments (Continue setup is the owner's
+  own click), and make a Stripe buy link after a confirm card. It never refunds, answers disputes, changes payouts or
+  Stripe Tax, or disconnects Stripe.
+
+### Open questions for the owner
+
+The defaults above for plans not enforced (0%), comp plans (their tier), no plan or an ended plan (3%), and returning
+our fee on refunds and lost disputes; plus what is UNCONFIRMED in Stripe's docs: which countries each platform
+country may onboard, who pays Stripe Tax's fees, whether a lost dispute returns our fee by itself, whether a seller's
+custom Checkout domain changes the checkout host, and linking an existing Stripe account.

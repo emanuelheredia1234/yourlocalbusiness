@@ -3,6 +3,7 @@
 //
 //   GET /privacy                 the privacy policy
 //   GET /terms                   the terms of service
+//   GET /seller-terms            the terms for selling with Stripe (P6; a DRAFT until the owner publishes it)
 //   GET /privacy-policy          301 → /privacy
 //   GET /terms-of-service        301 → /terms
 //   the same paths with a trailing slash also redirect to the canonical path
@@ -17,6 +18,14 @@ export const PRIVACY_URL = `${LEGAL_ORIGIN}${PRIVACY_PATH}`;
 export const TERMS_URL = `${LEGAL_ORIGIN}${TERMS_PATH}`;
 export const LEGAL_UPDATED = 'November 6, 2026';
 export const LEGAL_UPDATED_ISO = '2026-11-06';
+/**
+ * The terms sellers accept to get paid with Stripe (P6). The owner reviews the draft below, edits it, then sets
+ * SELLER_TERMS_READY = true and a new SELLER_TERMS_VERSION in this file (not an env var: the text and the switch ship
+ * together). Until then only the owner can set up selling with Stripe.
+ */
+export const SELLER_TERMS_PATH = '/seller-terms';
+export const SELLER_TERMS_VERSION = '2026-11-draft';
+export const SELLER_TERMS_READY = false;
 export const OPERATOR_NAME = 'Hector Heredia';
 export const OPERATOR_EMAIL = 'hectorheredia242@gmail.com';
 
@@ -27,6 +36,7 @@ const ALIASES = Object.freeze({
   '/terms/': TERMS_PATH,
   '/privacy-policy/': PRIVACY_PATH,
   '/terms-of-service/': TERMS_PATH,
+  '/seller-terms/': SELLER_TERMS_PATH,
 });
 
 // content-security-policy is required, not decorative: the dev server (vite.config.ts) only keeps a
@@ -43,6 +53,7 @@ export function classifyLegal(pathname) {
   if (ALIASES[path]) return { redirect: ALIASES[path] };
   if (path === PRIVACY_PATH) return { doc: 'privacy' };
   if (path === TERMS_PATH) return { doc: 'terms' };
+  if (path === SELLER_TERMS_PATH) return { doc: 'seller' };
   return null;
 }
 
@@ -76,8 +87,8 @@ const css = `
   @media (max-width: 640px) { article { padding: 24px 18px 8px; } h1 { font-size: 1.7rem; } }
 `;
 
-function layout({ doc, title, description, body }) {
-  const path = doc === 'privacy' ? PRIVACY_PATH : TERMS_PATH;
+function layout({ doc, title, description, body, robots = 'index, follow' }) {
+  const path = doc === 'privacy' ? PRIVACY_PATH : doc === 'seller' ? SELLER_TERMS_PATH : TERMS_PATH;
   const url = `${LEGAL_ORIGIN}${path}`;
   return `<!doctype html>
 <html lang="en">
@@ -87,7 +98,7 @@ function layout({ doc, title, description, body }) {
   <title>${esc(title)} — Your Local Business</title>
   <meta name="description" content="${esc(description)}">
   <link rel="canonical" href="${esc(url)}">
-  <meta name="robots" content="index, follow">
+  <meta name="robots" content="${robots}">
   <style>${css}</style>
 </head>
 <body>
@@ -264,8 +275,48 @@ function termsBody() {
 `;
 }
 
+/** The seller terms: a DRAFT with the points the owner must review (server/legal.mjs SELLER_TERMS_READY). */
+function sellerBody() {
+  return `${SELLER_TERMS_READY ? '' : '<p><strong>Draft: not in force.</strong> These terms are being reviewed and do not apply yet.</p>'}
+<p>Version ${esc(SELLER_TERMS_VERSION)}. These terms apply when you sell through Your Local Business with your own Stripe account.</p>
+
+<h2>You are the seller</h2>
+<p>You are the merchant of record and the seller of what you sell. Your name is on the checkout, the receipt and the card statement. Your Local Business is not the seller and is not a party to your sale.</p>
+
+<h2>Your Stripe account</h2>
+<p>You own your Stripe account and accept Stripe’s Connected Account Agreement and Stripe’s terms when you set it up. Stripe’s own fees are charged to you by Stripe.</p>
+
+<h2>Our fee</h2>
+<p>Our fee is a percentage of each sale set by your plan (Launch 3%, Grow 1%, Scale 0%). Stripe takes it at the time of the sale. When money goes back to a buyer (a refund, or a dispute you lose), we give back our fee on that money in proportion.</p>
+
+<h2>What you handle</h2>
+<p>You handle refunds, disputes, taxes, receipts, customer service and delivery of what you sell. Refunds and disputes are handled in your own Stripe Dashboard.</p>
+
+<h2>What you may not sell</h2>
+<p>You may not sell anything on Stripe’s list of restricted and prohibited businesses, or anything unlawful where you or your buyers are.</p>
+
+<h2>Our rights</h2>
+<p>We may pause your buy links if a sale breaks these terms, Stripe’s terms or the law, or to protect buyers.</p>
+
+<h2>Data</h2>
+<p>We store your buyers’ email addresses for you, so you can see who bought. Our <a href="${PRIVACY_PATH}">Privacy Policy</a> says how we handle them.</p>
+
+<h2>Contact</h2>
+<p>Questions about these terms: ${esc(OPERATOR_NAME)}, <a href="mailto:${esc(OPERATOR_EMAIL)}">${esc(OPERATOR_EMAIL)}</a>.</p>
+`;
+}
+
 /** The full HTML document for a legal page. */
 export function legalHtml(doc) {
+  if (doc === 'seller') {
+    return layout({
+      doc,
+      title: SELLER_TERMS_READY ? 'Seller Terms' : 'Seller Terms (draft)',
+      description: 'The terms for selling through Your Local Business with your own Stripe account.',
+      body: sellerBody(),
+      robots: SELLER_TERMS_READY ? 'index, follow' : 'noindex, nofollow',
+    });
+  }
   if (doc === 'privacy') {
     return layout({
       doc,

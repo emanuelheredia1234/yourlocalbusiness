@@ -34,7 +34,7 @@ Real:
 Not done by the app (it says so where it matters):
 - Sending email: you export the sequence to your email provider (Kit, Mailchimp, MailerLite…), which collects sign-ups and sends it. With Omnisend connected, the app can create campaign drafts there, which you review and send yourself (see "Omnisend: campaign drafts from the email sequence").
 - Paying for ads: ad spend is billed by Meta or Google to the customer's own payment method. The app can launch Meta and Google Search campaigns (once the owner turns it on, after a spend confirm with the amounts) and change them; TikTok and LinkedIn stay copy-and-export. The app never estimates reach or results.
-- Taking payments: buyers pay on each seller's own Whop account or own checkout link, through the offer's buy link (see "Offers and buy links"). The app holds no money, charges no fee on Whop sales, and never refunds: refunds and disputes stay in Whop.
+- Taking payments: buyers pay through each seller's own Stripe account (Stripe Checkout on it), own Whop account or own checkout link, through the offer's buy link (see "Offers and buy links" and "Get paid with Stripe"). The app holds no money and never refunds: refunds and disputes stay in the seller's Stripe Dashboard or Whop. Stripe sales pay our fee (the plan's 3/1/0%); Whop sales pay none.
 
 ## AI: one AI, powered by your API keys
 
@@ -502,6 +502,36 @@ settings, capacity and the backlog alert): docs/integrations-setup.md §13.
 Owner setup (migration `supabase/migrations/20261117000000_experiments.sql`, the optional settings, how the split and
 the results work): docs/integrations-setup.md §14.
 
+## Get paid with Stripe (Stripe Connect)
+
+Self-hosted, signed in (never in the claude.ai build):
+
+- **Settings › Payments › Get paid with Stripe:** the seller makes their own Stripe account through the app (country,
+  the seller terms, then Stripe's own setup page) and sees every payment, refund and dispute in their own Stripe
+  Dashboard. Stripe's fees come out of their Stripe balance; **our fee** is the plan's: 3% on Launch, 1% on Grow, 0%
+  on Scale (none for the owner). Stripe Tax is optional. "Stop selling with Stripe here" pauses the Stripe buy links;
+  the Stripe account stays the seller's.
+- **Attach payment › New: Stripe:** title, price, currency, and what the buyer gets (nothing to download, or a product
+  file from Settings › Payments › Product files), with the fee shown before it's made. `/b/<id>` opens Stripe
+  Checkout on the seller's account; the thank-you page (`/b/<id>/done`) confirms the payment with Stripe and offers
+  the download.
+- **Analytics › Sales:** Stripe sales with our fee and what went back after a refund, disputes in words, and a new
+  7-day download link to copy for a buyer who lost theirs.
+- **Owner › Customer usage › Stripe Connect:** the setup checklist, platform alerts, our fees and the sellers.
+- **The assistant** reads the payments status and sales, opens the setup, and makes a Stripe buy link after a
+  confirm card; it never refunds, answers disputes or changes payouts.
+
+Owner setup: the migration `supabase/migrations/20261118000000_stripe_connect.sql` (run before deploying), Connect
+turned on with the platform profile, the seller terms published (`server/legal.mjs`: until then only the owner can
+sell with Stripe), the Connect permissions on the restricted key, and the Connect webhook
+`https://yourlocalbusiness.replit.app/api/webhooks/stripe-connect` (Events from: Connected accounts) with its signing
+secret in `STRIPE_CONNECT_WEBHOOK_SECRET`, plus `application_fee.created` and `application_fee.refunded` on the
+existing `/api/webhooks/stripe`: docs/integrations-setup.md, "Stripe Connect: sellers get paid (P6)". Tests use
+`server/test/mock-stripe.mjs` and never call Stripe (`npx vitest run server/payments server/offers` for the server,
+`npx vitest run src/lib/stripeConnect.test.ts src/pages/settings/StripeConnectCard.render.test.ts
+src/pages/settings/StripeConnectCard.dom.test.ts src/components/offers src/ai/assistant/tools/payments.test.ts
+src/pages/admin/ConnectSection.render.test.ts` for the app).
+
 ## Scheduled jobs
 
 Replit Autoscale stops the app when it's idle, so nothing runs on a timer inside it. Supabase's pg_cron calls
@@ -546,6 +576,7 @@ Server environment:
 - `LEADS_PER_IP_PER_HOUR` (default 10) and `LEADS_PER_PAGE_PER_HOUR` (default 30): lead form limits (see "Publishing pages")
 - `MAGNET_HITS_PER_IP_PER_HOUR` (default 60), `MAGNET_DOWNLOADS_PER_FILE_PER_HOUR` (default 600) and `MAGNET_SIGNUPS_PER_FILE_PER_HOUR` (default 300): lead magnet limits; `LEAD_LINK_SECRET` (optional, 16+ characters): signs the download tickets, never logged (see "Publishing pages")
 - offers and buy links (`/b/<id>`, Whop): `PAYMENT_KEYS_SECRET` (32+ characters; seals each customer's own Whop key and webhook secret; set it before anyone connects and never change it), `APP_PUBLIC_URL` (the app's https address: Whop webhooks and the buyers' way back), `OFFERS_PROVIDER` (`off` turns offers off), `WHOP_ENABLED` (`off` keeps outside checkout links only), `OFFER_CLICKS_PER_IP_PER_HOUR` (default 60) and `OFFER_CLICKS_PER_OFFER_PER_HOUR` (default 3000). They need `supabase/migrations/20261113000000_offers.sql` (see docs/integrations-setup.md, "Payments: offers and Whop")
+- selling with Stripe (see "Get paid with Stripe"): `STRIPE_CONNECT_WEBHOOK_SECRET` (and `STRIPE_CONNECT_WEBHOOK_SECRET_PREVIOUS` while rotating), `STRIPE_CONNECT` (`off` turns it off), `STRIPE_PLATFORM_COUNTRY` (default `US`), `CONNECT_RETURN_FEES` (`off` keeps our fee after refunds), `CONNECT_DOWNLOADS_PER_SALE` (default 10), `CONNECT_DOWNLOAD_DAYS` (default 30) and `CONNECT_SESSIONS_PER_VISITOR_PER_HOUR` (default 20); it reuses `STRIPE_SECRET_KEY`, `APP_PUBLIC_URL` (https in live mode), `LEAD_LINK_SECRET` and `CUSTOMER_TAG_SECRET`. It needs `supabase/migrations/20261118000000_stripe_connect.sql`
 - accounts: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `ADMIN_EMAILS`, `SIGN_IN_REQUIRED` (see "Accounts")
 - `APP_HOSTS`: the app's own custom domains, comma-separated. The app and `/api` answer only on the app's own hosts (see "Publishing pages")
 - `PAGES_DNS_SERVERS` (optional): the DNS servers the domain check asks (see "Publishing pages")

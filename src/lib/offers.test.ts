@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OffersError, checkoutHint, formatMoney, isCheckoutHost, offerConnection, offerPrice, offerProblem, offersError, requestIdsAfter, toConnection, toOffer, type WhopConnection } from './offers';
+import { OffersError, checkoutHint, decimalToMinor, feePreview, formatMoney, isCheckoutHost, minorToDecimal, offerConnection, offerPrice, offerProblem, offersError, requestIdsAfter, saleStatusLabel, toConnection, toOffer, toSale, type WhopConnection } from './offers';
 
 const ID = 'AAAAAAAAAAAAAAAAAAAAAA';
 
@@ -61,5 +61,62 @@ describe('offers client', () => {
     expect(now?.status).toBe('disconnected');
     expect(offerProblem({ status: 'active' }, now)).toMatch(/isn’t connected any more/);
     expect(offerConnection({ provider: 'external', connectionId: null }, [conn('new-conn')])).toBeNull();
+  });
+});
+
+describe('Stripe offers and sales (P6)', () => {
+  it('a Stripe offer carries its delivery and the setup problem', () => {
+    const o = toOffer({ id: ID, projectId: 'p1', title: 'Guide', priceDisplay: '$49', priceMinor: 4900, currency: 'usd', provider: 'stripe', status: 'active', environment: 'sandbox', checkoutHost: 'checkout.stripe.com', delivery: { kind: 'file', fileId: 'FFFFFFFFFFFFFFFFFFFFFF' }, problem: 'stripe_setup', link: `https://app.test/b/${ID}` });
+    expect(o).toMatchObject({ provider: 'stripe', environment: 'sandbox', delivery: { kind: 'file', fileId: 'FFFFFFFFFFFFFFFFFFFFFF' }, problem: 'stripe_setup' });
+    expect(offerProblem(o!)).toBe('Finish Stripe setup to start selling.');
+    // a bad file id reads as "nothing to download"; a Whop offer has neither
+    expect(toOffer({ id: ID, provider: 'stripe', delivery: { kind: 'file', fileId: '../x' } })?.delivery).toEqual({ kind: 'none' });
+    const w = toOffer({ id: ID, provider: 'whop', delivery: { kind: 'file', fileId: 'FFFFFFFFFFFFFFFFFFFFFF' }, problem: 'stripe_setup' });
+    expect(w?.delivery).toBeUndefined();
+    expect(w?.problem).toBeUndefined();
+  });
+
+  it('a Stripe sale: our fee, the fee returned, the dispute and downloads', () => {
+    const s = toSale({ id: 'S1', provider: 'stripe', status: 'disputed', amountMinor: 4900, refundedMinor: 0, currency: 'usd', environment: 'production', feeMinor: 147, feePct: 3, feeReturnedMinor: 50, disputeStatus: 'won', downloads: 2 });
+    expect(s).toMatchObject({ provider: 'stripe', feeMinor: 147, feePct: 3, feeReturnedMinor: 50, disputeStatus: 'won', downloads: 2 });
+    expect(saleStatusLabel(s!)).toBe('Dispute won');
+    expect(saleStatusLabel({ ...s!, disputeStatus: 'needs_response' })).toBe('Dispute: needs response');
+    expect(saleStatusLabel({ ...s!, disputeStatus: 'lost' })).toBe('Dispute lost');
+    // a Whop sale (or one from before the provider was said) points to Whop
+    const w = toSale({ id: 'S2', status: 'disputed', amountMinor: 100, currency: 'usd' });
+    expect(w?.feeMinor).toBeUndefined();
+    expect(saleStatusLabel(w!)).toBe('Disputed: see Whop');
+    // no fee taken stays null, not 0
+    expect(toSale({ id: 'S3', provider: 'stripe', status: 'paid', amountMinor: 100, currency: 'usd', feeMinor: null })?.feeMinor).toBeNull();
+  });
+
+  it('feePreview mirrors the server: floor, none when 0 or not below the amount, none for a seller in Brazil', () => {
+    expect(feePreview(4900, 3)).toBe(147);
+    expect(feePreview(999, 3)).toBe(29);
+    expect(feePreview(100, 1)).toBe(1);
+    expect(feePreview(99, 1)).toBe(0);
+    expect(feePreview(4900, 0)).toBe(0);
+    expect(feePreview(100, 100)).toBe(0);
+    expect(feePreview(4900, 3, 'BR')).toBe(0);
+    expect(feePreview(4900, 3, 'BR', 'BR')).toBe(147);
+  });
+
+  it('a typed price as minor units, zero-decimal currencies whole', () => {
+    expect(decimalToMinor('49', 'usd')).toBe(4900);
+    expect(decimalToMinor('$49.5', 'usd')).toBe(4950);
+    expect(decimalToMinor('1,299.99', 'eur')).toBe(129999);
+    expect(decimalToMinor('49.999', 'usd')).toBeNull();
+    expect(decimalToMinor('abc', 'usd')).toBeNull();
+    expect(decimalToMinor('500', 'jpy')).toBe(500);
+    expect(decimalToMinor('500.5', 'jpy')).toBeNull();
+    expect(minorToDecimal(decimalToMinor('12.30', 'usd')!, 'usd')).toBe('12.30');
+  });
+
+  it('Stripe’s refusals in the server’s own words (already ours)', () => {
+    expect(offersError(409, { code: 'STRIPE_NOT_CONNECTED', error: 'Set up Stripe in Settings › Payments first.' }).message).toBe('Set up Stripe in Settings › Payments first.');
+    expect(offersError(409, { code: 'TAX_NOT_READY', error: 'Finish Stripe Tax setup in your Stripe Dashboard (Tax → Settings), then try again.' }).message).toMatch(/Stripe Tax/);
+    // NOT_SET_UP stays the generic sentence unless the caller asks for the server's
+    expect(offersError(503, { code: 'NOT_SET_UP', error: 'Selling with Stripe opens soon.' }).message).toMatch(/aren’t set up/);
+    expect(offersError(503, { code: 'NOT_SET_UP', error: 'Selling with Stripe opens soon.' }, ['NOT_SET_UP']).message).toBe('Selling with Stripe opens soon.');
   });
 });

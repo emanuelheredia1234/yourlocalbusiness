@@ -6,7 +6,10 @@ import { TooltipProvider } from '@/components/ui/shadcn/tooltip';
 import type { Offer, Sale, WhopConnection } from '@/lib/offers';
 import { AttachPayment, AttachPaymentForm, AttachedOffer } from './AttachPayment';
 import { OfferRow } from './OffersPanel';
-import { SalesRows } from './SalesTable';
+import { RefundsNote, SalesRows, canRelink } from './SalesTable';
+import { StripeOfferForm, priceProblem, stripePreview } from './StripeOfferForm';
+import type { ConnectAccount, ConnectState } from '@/lib/stripeConnect';
+import type { LeadFile } from '@/lib/leadFiles';
 
 const ID = 'AAAAAAAAAAAAAAAAAAAAAA';
 const OFFER: Offer = {
@@ -110,5 +113,132 @@ describe('Offers and sales', () => {
     expect(html).toContain('Disputed: see Whop');
     expect(html).toContain('ann@example.com');
     expect(html).toContain('Spring course');
+  });
+});
+
+const ACCT: ConnectAccount = { id: 'RRRRRRRRRRRRRRRRRRRRRR', environment: 'production', status: 'active', country: 'US', defaultCurrency: 'usd', displayName: 'Maya Bakes', chargesEnabled: true, payoutsEnabled: true, detailsSubmitted: true, due: { now: 0, pastDue: 0, later: 0, pending: 0 }, deadline: null, disabledReason: null, taxEnabled: false, taxStatus: null, payoutFailedAt: null, accountLast4: 'h9Zq' };
+const CONNECT: ConnectState = { available: true, environment: 'production', account: ACCT, fee: { pct: 3, tier: 'launch' }, termsUrl: '/seller-terms', termsVersion: 'v1', termsReady: true, countries: ['US'] };
+const FILE: LeadFile = { id: 'FFFFFFFFFFFFFFFFFFFFFF', projectId: 'p1', title: 'Spring guide', brand: '', kind: 'file', fileName: 'guide.pdf', mime: 'application/pdf', bytes: 1000, url: '', gate: false, purpose: 'product', coverUrl: null, downloads: 0, lastDownloadAt: null, createdAt: null, updatedAt: null, link: '' };
+const stripeForm = (props: Partial<Parameters<typeof StripeOfferForm>[0]> = {}) => wrap(createElement(StripeOfferForm, { projectId: 'p1', connect: CONNECT, busy: false, error: '', onCreate: () => {}, ...props }));
+const STRIPE_OFFER: Offer = { ...OFFER, id: 'SSSSSSSSSSSSSSSSSSSSSS', provider: 'stripe', checkoutHost: 'checkout.stripe.com', delivery: { kind: 'file', fileId: FILE.id } };
+
+describe('Attach payment › Stripe (P6)', () => {
+  it('Stripe comes first when it’s on, and never in the claude.ai build', () => {
+    const html = form({ stripeOn: true, connect: CONNECT });
+    expect(html.indexOf('New: Stripe')).toBeGreaterThan(-1);
+    expect(html.indexOf('New: Stripe')).toBeLessThan(html.indexOf('New: Whop'));
+    expect(html).toContain('What the buyer gets');
+    expect(form({ stripeOn: false })).not.toContain('New: Stripe');
+    // the seller terms still a draft (not open to this user): no Stripe tab, and Whop or outside links first
+    const closed = form({ stripeOn: true, connect: { ...CONNECT, available: false, account: null } });
+    expect(closed).not.toContain('New: Stripe');
+    expect(closed).toContain('New: Whop');
+    vi.stubGlobal('__ARTIFACT_BUILD__', true);
+    expect(form({ stripeOn: true, connect: CONNECT })).not.toContain('New: Stripe');
+  });
+
+  it('the currency list is Stripe’s own minor units only: no HUF or ISK, even as the account’s default', () => {
+    const html = stripeForm({ connect: { ...CONNECT, account: { ...ACCT, defaultCurrency: 'huf' } } });
+    expect(html).not.toMatch(/<option value="huf"/);
+    expect(html).not.toMatch(/<option value="isk"/);
+    expect(html).toMatch(/<option value="usd" selected=""/);
+  });
+
+  it('no Stripe account: where to set it up', () => {
+    const html = stripeForm({ connect: { ...CONNECT, account: null } });
+    expect(html).toContain('Set up Stripe to sell here');
+    expect(html).toContain('Go to Settings › Payments');
+    expect(html).not.toContain('Create buy link');
+  });
+
+  it('the form: title (the asset’s name), price, the account’s currency, what the buyer gets', () => {
+    const html = stripeForm({ defaultTitle: 'Spring course', connect: { ...CONNECT, account: { ...ACCT, defaultCurrency: 'gbp' } } });
+    expect(html).toMatch(/id="attach-stripe-title"[^>]*value="Spring course"/);
+    expect(html).toMatch(/<option value="gbp" selected="">GBP<\/option>/);
+    expect(html).toContain('Nothing to download');
+    expect(html).toContain('A file');
+    expect(html).toContain('You deliver it yourself');
+    expect(html).toMatch(/<button type="submit"[^>]*disabled=""/);
+    expect(html).not.toMatch(/application fee|KYC/i);
+  });
+
+  it('the preview: our fee per tier; none on Scale or for the owner', () => {
+    expect(stripePreview(4900, 'usd', { pct: 3, tier: 'launch' })).toBe('Buyer pays $49.00 · Our fee $1.47 (3% on Launch) · Stripe’s fee comes out of your Stripe balance.');
+    expect(stripePreview(4900, 'usd', { pct: 1, tier: 'grow' })).toContain('Our fee $0.49 (1% on Grow)');
+    expect(stripePreview(4900, 'usd', { pct: 0, tier: 'scale' })).toContain('No platform fee');
+    expect(stripePreview(4900, 'usd', { pct: 0, tier: 'owner' })).toContain('No platform fee');
+    expect(stripePreview(4900, 'usd', { pct: 3, tier: 'launch' }, 'BR')).toContain('No platform fee on this price');
+  });
+
+  it('a zero-decimal currency takes whole numbers; Stripe’s limits are said before sending', () => {
+    expect(priceProblem('5000', 'jpy')).toBe('');
+    expect(priceProblem('50.5', 'jpy')).toBe('Use a whole number.');
+    expect(priceProblem('0.10', 'usd')).toMatch(/lowest price Stripe takes in USD is \$0\.50/);
+    // Stripe's minimum in each currency (shared/stripe-currencies.json), and no HUF or ISK (Stripe takes them with two decimals)
+    expect(priceProblem('5.00', 'mxn')).toMatch(/lowest price Stripe takes in MXN is MX\$10\.00/);
+    expect(priceProblem('10', 'mxn')).toBe('');
+    expect(priceProblem('5000', 'huf')).toMatch(/can’t be priced in HUF/);
+    expect(priceProblem('5000', 'isk')).toMatch(/can’t be priced in ISK/);
+    expect(priceProblem('49.999', 'usd')).toMatch(/like 49/);
+    expect(stripePreview(5000, 'jpy', { pct: 3, tier: 'launch' })).toContain('Buyer pays ¥5,000 · Our fee ¥150');
+  });
+
+  it('a file: pick one of the product files or upload one', () => {
+    const html = wrap(createElement(StripeOfferForm, { projectId: 'p1', connect: CONNECT, busy: false, error: '', onCreate: () => {}, initialFiles: [FILE] }));
+    // the files list shows once "A file" is chosen (a click): drawn here, the choice is there
+    expect(html).toContain('What the buyer gets');
+    expect(html).toContain('A file');
+  });
+
+  it('Stripe setup not finished: the offer can still be made, with a note', () => {
+    const html = stripeForm({ connect: { ...CONNECT, account: { ...ACCT, status: 'onboarding', chargesEnabled: false } } });
+    expect(html).toContain('Finish Stripe setup to start selling.');
+    expect(html).toContain('Create buy link');
+  });
+
+  it('a Stripe offer’s badges and problem', () => {
+    const html = wrap(createElement(AttachedOffer, { offer: { ...STRIPE_OFFER, problem: 'stripe_setup', environment: 'sandbox' }, onChange: () => {}, onRemove: () => {} }));
+    expect(html).toContain('Stripe');
+    expect(html).toContain('Test mode');
+    expect(html).toContain('Finish Stripe setup to start selling.');
+    const row = wrap(createElement(OfferRow, { offer: STRIPE_OFFER, uses: [], onCheck: () => {}, onPause: () => {}, onArchive: () => {} }));
+    expect(row).toContain('3 sales');
+    expect(row).not.toContain('Refresh from Whop');
+  });
+});
+
+describe('Stripe sales (P6)', () => {
+  const sale = (over: Partial<Sale>): Sale => ({ id: '11111111-1111-4111-8111-111111111111', offerId: STRIPE_OFFER.id, projectId: 'p1', status: 'paid', amountMinor: 4900, refundedMinor: 0, currency: 'usd', environment: 'production', buyerEmail: 'ann@example.com', paidAt: '2026-11-01T10:00:00Z', createdAt: null, provider: 'stripe', feeMinor: 147, feePct: 3, feeReturnedMinor: 0, disputeStatus: null, downloads: 1, ...over });
+
+  it('our fee under the amount, and what went back', () => {
+    const html = wrap(createElement(SalesRows, { sales: [sale({}), sale({ id: '22222222-2222-4222-8222-222222222222', status: 'partially_refunded', refundedMinor: 2450, feeReturnedMinor: 73 })], offers: [STRIPE_OFFER] }));
+    expect(html).toContain('Our fee $1.47');
+    expect(html).toContain('$0.73 returned');
+    expect(html).toContain('$24.50 refunded');
+  });
+
+  it('a dispute in words', () => {
+    const html = wrap(createElement(SalesRows, { sales: [sale({ status: 'disputed', disputeStatus: 'needs_response' }), sale({ id: 'x2', status: 'disputed', disputeStatus: 'won' }), sale({ id: 'x3', status: 'disputed', disputeStatus: 'lost' })], offers: [STRIPE_OFFER] }));
+    expect(html).toContain('Dispute: needs response');
+    expect(html).toContain('Dispute won');
+    expect(html).toContain('Dispute lost');
+    expect(html).not.toContain('see Whop');
+  });
+
+  it('a paid sale with a file: a new download link for the buyer; not when refunded or without a file', () => {
+    expect(canRelink(sale({}), [STRIPE_OFFER])).toBe(true);
+    expect(canRelink(sale({ status: 'refunded' }), [STRIPE_OFFER])).toBe(false);
+    expect(canRelink(sale({}), [{ ...STRIPE_OFFER, delivery: { kind: 'none' } }])).toBe(false);
+    expect(canRelink(sale({ provider: 'whop' }), [STRIPE_OFFER])).toBe(false);
+    const html = wrap(createElement(SalesRows, { sales: [sale({})], offers: [STRIPE_OFFER] }));
+    expect(html).toContain('Download link');
+  });
+
+  it('refunds and disputes: in the Stripe Dashboard', () => {
+    const html = wrap(createElement(RefundsNote, { offers: [STRIPE_OFFER] }));
+    expect(html).toMatch(/href="https:\/\/dashboard\.stripe\.com\/payments"/);
+    expect(html).toContain('in your Stripe Dashboard');
+    expect(html).not.toContain('Whop');
+    expect(wrap(createElement(RefundsNote, { offers: [OFFER] }))).toContain('handled in Whop');
   });
 });

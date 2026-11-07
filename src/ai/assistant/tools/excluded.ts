@@ -15,6 +15,26 @@ export const abTestsHere = defineTool({
   refusal: { text: 'A/B tests and Instagram Trial Reels need the app’s own server, so they aren’t available here. In the self-hosted app, they’re under Social › A/B tests.' },
 });
 
+/** The claude.ai build: payments (Stripe, sales) aren't here (their tools aren't registered). */
+export const paymentsHere = defineTool({
+  name: 'payments',
+  class: 'X',
+  summary: 'Selling with Stripe, sales, buy links’ payments.',
+  args: why,
+  refusal: { text: 'Payments need the app’s own server, so they aren’t available here. In the self-hosted app, they’re in Settings › Payments.' },
+});
+
+/** Money that only the owner moves (P6): never done by the assistant. Not in the claude.ai build (paymentsHere instead). */
+export const paymentExclusions: AnyTool[] = [
+  defineTool({
+    name: 'stripe_money',
+    class: 'X',
+    summary: 'Refunds, disputes, payouts, Stripe Tax.',
+    args: why,
+    refusal: { text: 'Refunds and disputes are done in your Stripe Dashboard (or Whop’s), and payouts, the bank, Stripe Tax and disconnecting are a payout or Stripe Connect detail: only you change them. I opened Settings › Payments (Open Stripe Dashboard is there).', route: 'workspace-settings', tab: 'payments' },
+  }),
+];
+
 export const excludedTools: AnyTool[] = [
   defineTool({
     name: 'change_ai_settings',
@@ -85,4 +105,6 @@ export const excludedTools: AnyTool[] = [
   }),
   // A/B tests and Trial Reels (P4b) need the app's server: in the claude.ai build the assistant only says so
   ...(__ARTIFACT_BUILD__ ? [abTestsHere] : []),
+  // payments (P6) need the app's server too
+  ...(__ARTIFACT_BUILD__ ? [paymentsHere] : paymentExclusions),
 ];

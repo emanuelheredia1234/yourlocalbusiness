@@ -10,6 +10,8 @@ import { createDb } from '../integrations/db.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SQL = fs.readFileSync(path.join(here, '..', '..', 'supabase', 'migrations', '20261113000000_offers.sql'), 'utf8');
+// P6 replaces record_sale (the fee fields): the newest definition is the one that runs
+const CONNECT_SQL = fs.readFileSync(path.join(here, '..', '..', 'supabase', 'migrations', '20261118000000_stripe_connect.sql'), 'utf8');
 const U1 = '11111111-1111-4111-8111-111111111111';
 const U2 = '22222222-2222-4222-8222-222222222222';
 
@@ -95,6 +97,25 @@ describe('mergeSale', () => {
     expect(SQL).toMatch(/n_refunded := greatest\(r\.refunded_minor, v_refunded\)/);
     expect(SQL).toMatch(/r\.user_id <> \(p->>'user_id'\)::uuid/);
   });
+
+  it('P6: the newest record_sale keeps every P3 rule and sets the fee fields once (coalesce), as mergeSale does', () => {
+    const fn = /create or replace function public\.record_sale\(p jsonb\)[\s\S]*?\$\$([\s\S]*?)\$\$/.exec(CONNECT_SQL)[1];
+    expect(fn).toMatch(/ylb_sale_rank\(v_status\) >= public\.ylb_sale_rank\(r\.status\)\s+or \(v_at > r\.last_event_at and r\.status in \('pending', 'failed'\) and v_status in \('pending', 'failed'\)\)/);
+    expect(fn).toMatch(/n_refunded := greatest\(r\.refunded_minor, v_refunded\)/);
+    expect(fn).toMatch(/r\.user_id <> \(p->>'user_id'\)::uuid/);
+    for (const [col, cast] of [['checkout_session_id', ''], ['fee_pct', '::smallint'], ['fee_tier', ''], ['application_fee_id', ''], ['application_fee_minor', '::bigint']]) {
+      expect(fn, col).toMatch(new RegExp(`coalesce\\(r\\.${col}, \\(?p->>'${col}'\\)?${cast.replace(/:/g, ':')}\\)`));
+      expect(fn, col).toMatch(new RegExp(`${col} = n_`));
+    }
+    // the JS: set once, kept after
+    let row = mergeSale(null, event({ provider: 'stripe', provider_payment_id: 'pi_1', checkout_session_id: 'cs_test_1', fee_pct: 3, fee_tier: 'launch', application_fee_minor: null })).row;
+    expect(row).toMatchObject({ checkout_session_id: 'cs_test_1', fee_pct: 3, fee_tier: 'launch', application_fee_id: null, application_fee_minor: null });
+    const later = mergeSale(row, event({ provider: 'stripe', provider_payment_id: 'pi_1', checkout_session_id: 'cs_test_2', fee_pct: 1, fee_tier: 'grow', application_fee_id: 'fee_1', application_fee_minor: 147 }));
+    expect(later.outcome).toBe('updated');
+    row = later.row;
+    expect(row).toMatchObject({ checkout_session_id: 'cs_test_1', fee_pct: 3, fee_tier: 'launch', application_fee_id: 'fee_1', application_fee_minor: 147 });
+    expect(mergeSale(row, event({ provider: 'stripe', provider_payment_id: 'pi_1', application_fee_id: 'fee_2', application_fee_minor: 1 })).outcome).toBe('kept');
+  });
 });
 
 describe('the mock database’s offers tables', () => {
@@ -119,6 +140,47 @@ describe('the mock database’s offers tables', () => {
     const rows = await db.select('sales', { provider_payment_id: 'pay_mock1' });
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ status: 'refunded', refunded_minor: 4900, amount_minor: 4900 });
+  });
+
+  it('P6: record_sale_dispute keeps the newest; sale_downloaded stops at the limit; connect_alert counts', async () => {
+    const p = event({ user_id: uid, provider: 'stripe', provider_payment_id: 'pi_mockdisp', checkout_session_id: 'cs_test_disp' });
+    await db.rpc('record_sale', { p });
+    const args = (status, at) => ({ p_provider: 'stripe', p_env: 'production', p_payment_id: 'pi_mockdisp', p_user: uid, p_status: status, p_amount: 4900, p_at: at });
+    expect(await db.rpc('record_sale_dispute', args('needs_response', '2026-11-07T00:00:00.000Z'))).toBe('updated');
+    expect(await db.rpc('record_sale_dispute', args('won', '2026-11-09T00:00:00.000Z'))).toBe('updated');
+    // an older event after a newer one changes nothing
+    expect(await db.rpc('record_sale_dispute', args('under_review', '2026-11-08T00:00:00.000Z'))).toBe('kept');
+    expect(await db.rpc('record_sale_dispute', { ...args('lost', '2026-11-10T00:00:00.000Z'), p_user: U2 })).toBe('missing');
+    let [s] = await db.select('sales', { provider_payment_id: 'pi_mockdisp' });
+    expect(s).toMatchObject({ status: 'disputed', dispute_status: 'won', dispute_amount_minor: 4900, downloads: 0, fee_returned_minor: 0 });
+    // a second session id on another payment is refused (one sale per session)
+    await expect(db.rpc('record_sale', { p: event({ user_id: uid, provider: 'stripe', provider_payment_id: 'pi_other', checkout_session_id: 'cs_test_disp' }) })).rejects.toBeTruthy();
+    expect(await db.rpc('sale_downloaded', { p_id: s.id, p_max: 2 })).toBe(1);
+    expect(await db.rpc('sale_downloaded', { p_id: s.id, p_max: 2 })).toBe(2);
+    expect(await db.rpc('sale_downloaded', { p_id: s.id, p_max: 2 })).toBeNull();
+    [s] = await db.select('sales', { provider_payment_id: 'pi_mockdisp' });
+    expect(s.downloads).toBe(2);
+    await db.rpc('connect_alert', { p_kind: 'fee_return_failed', p_detail: { code: 'x' } });
+    await db.rpc('connect_alert', { p_kind: 'fee_return_failed', p_detail: { code: 'y' } });
+    const [a] = await db.select('connect_alerts', { kind: 'fee_return_failed' });
+    expect(a).toMatchObject({ count: 2, detail: { code: 'y' }, resolved_at: null });
+  });
+
+  it('P6: connect_accounts: one live row per user and environment, one row per Stripe account; Stripe offers need an account and a price', async () => {
+    const base = { user_id: uid, environment: 'sandbox', country: 'US', terms_version: 'v1', terms_accepted_at: new Date().toISOString(), create_key: 'k' };
+    await db.insert('connect_accounts', { ...base, id: 'f'.repeat(22) });
+    await expect(db.insert('connect_accounts', { ...base, id: 'g'.repeat(22) })).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(db.insert('connect_accounts', { ...base, id: 'h'.repeat(22), environment: 'production', status: 'active' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await db.update('connect_accounts', { id: 'f'.repeat(22) }, { stripe_account_id: 'acct_abcdef123', status: 'onboarding' });
+    await db.update('connect_accounts', { id: 'f'.repeat(22) }, { status: 'disconnected' });
+    await db.insert('connect_accounts', { ...base, id: 'g'.repeat(22) });
+    await expect(db.update('connect_accounts', { id: 'g'.repeat(22) }, { stripe_account_id: 'acct_abcdef123', status: 'onboarding' })).rejects.toMatchObject({ code: 'CONFLICT' });
+    const offer = { id: 'k'.repeat(22), user_id: uid, project_id: 'p1', title: 'Course', provider: 'stripe', provider_ref: {} };
+    await expect(db.insert('offers', offer)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(db.insert('offers', { ...offer, connect_account_id: 'g'.repeat(22), price_minor: 0, currency: 'usd' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(db.insert('offers', { ...offer, connect_account_id: 'g'.repeat(22), price_minor: 900, currency: 'usd', delivery: { kind: 'file' } })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await db.insert('offers', { ...offer, connect_account_id: 'g'.repeat(22), price_minor: 900, currency: 'usd', delivery: { kind: 'file', fileId: 'm'.repeat(22) } });
+    await expect(db.insert('lead_files', { id: 'n'.repeat(22), user_id: uid, project_id: 'p1', kind: 'file', purpose: 'paid' })).rejects.toBeTruthy();
   });
 
   it('offer_clicked counts; one live connection per environment', async () => {

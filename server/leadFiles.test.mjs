@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import http from 'node:http';
 import { createAuth } from './auth.mjs';
 import { createPages } from './pages.mjs';
-import { MAX_LEAD_FILE_BYTES, TICKET_TTL, checkTicket, cleanFileName, leadLinkSecret, makeTicket, normalizeLink, sniffLeadFile, sniffPublicImage } from './leadFiles.mjs';
+import { MAX_LEAD_FILE_BYTES, TICKET_TTL, checkTicket, cleanFileName, leadLinkSecret, makeTicket, normalizeLink, signProductDownload, sniffLeadFile, sniffPublicImage } from './leadFiles.mjs';
 import { createMockSupabase } from './test/mock-supabase.mjs';
 
 const PDF = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n%%EOF\n');
@@ -613,5 +613,61 @@ describe('the parts on their own', () => {
     // one that claims to last a day
     const far = Math.floor((now + 86_400_000) / 1000).toString(36);
     expect(checkTicket(secret, id, `${far}.${k.split('.')[1]}`, now)).toBe(false);
+  });
+});
+
+describe('product files (P6: paid downloads after a Stripe sale)', () => {
+  let carol;
+  let dave;
+  beforeAll(async () => {
+    carol = await supa.tokenFor('carol@products.test');
+    dave = await supa.tokenFor('dave@products.test');
+  });
+
+  it('a product file is a file with no gate, listed by purpose, and never served at /m/ or as a lead form’s magnet', async () => {
+    const { file } = await create(carol, { title: 'Pattern pack', purpose: 'product' });
+    expect(file).toMatchObject({ purpose: 'product', gate: false, kind: 'file' });
+    await upload(carol, file.id, PDF, 'pack.pdf');
+    const magnet = (await create(carol, { title: 'Free tips' })).file;
+    expect(magnet.purpose).toBe('magnet');
+    expect((await api('/api/lead-files?purpose=product', { who: carol })).json().files.map((f) => f.id)).toEqual([file.id]);
+    expect((await api('/api/lead-files?purpose=magnet', { who: carol })).json().files.map((f) => f.id)).toEqual([magnet.id]);
+    expect((await api('/api/lead-files?purpose=paid', { who: carol })).status).toBe(400);
+    expect((await create(carol, { purpose: 'product', kind: 'url', url: 'https://example.com/x' })).code).toBe('BAD_REQUEST');
+    expect((await create(carol, { purpose: 'gift' })).code).toBe('BAD_REQUEST');
+    const r = await visit(`/m/${file.id}`);
+    expect(r.status).toBe(404);
+    expect(r.headers.location).toBeUndefined();
+    expect(await app.pages.findMagnet?.(file.id)).toBeFalsy();
+  });
+
+  it('signProductDownload: a 60-second signed link for the owner’s own product file only', async () => {
+    const { file } = await create(carol, { title: 'Course files', purpose: 'product' });
+    await upload(carol, file.id, PDF, 'course.pdf');
+    const sb = { supabaseUrl: supa.url, secretKey: supa.SECRET };
+    const got = await signProductDownload(sb, file.id, carol.user.id);
+    expect(got.location).toMatch(new RegExp(`^${supa.url}/storage/v1/object/sign/lead-files/.+\\?token=.+&download=course\\.pdf$`));
+    expect(Buffer.from(await (await fetch(got.location)).arrayBuffer()).equals(PDF)).toBe(true);
+    // someone else's, a magnet, not uploaded yet, a bad id: nothing
+    expect(await signProductDownload(sb, file.id, dave.user.id)).toBeNull();
+    const magnet = (await create(carol, { title: 'Free' })).file;
+    await upload(carol, magnet.id, PDF);
+    expect(await signProductDownload(sb, magnet.id, carol.user.id)).toBeNull();
+    const empty = (await create(carol, { title: 'Later', purpose: 'product' })).file;
+    expect(await signProductDownload(sb, empty.id, carol.user.id)).toBeNull();
+    expect(await signProductDownload(sb, '../etc', carol.user.id)).toBeNull();
+    // a magnet's download count is never touched
+    expect(rowsOf('lead_files').find((x) => x.id === file.id).downloads ?? 0).toBe(0);
+  });
+
+  it('a file a Stripe offer delivers can’t be deleted (409 IN_USE)', async () => {
+    const { file } = await create(dave, { title: 'Ebook', purpose: 'product' });
+    supa.tables.set('offers', [...rowsOf('offers'), { id: 'O'.repeat(22), user_id: dave.user.id, project_id: 'biz1', title: 'Ebook', provider: 'stripe', status: 'active', delivery: { kind: 'file', fileId: file.id } }]);
+    const r = await api(`/api/lead-files/${file.id}`, { who: dave, method: 'DELETE' });
+    expect(r.status).toBe(409);
+    expect(r.json().code).toBe('IN_USE');
+    expect(rowsOf('lead_files').some((x) => x.id === file.id)).toBe(true);
+    rowsOf('offers').find((o) => o.id === 'O'.repeat(22)).status = 'archived';
+    expect((await api(`/api/lead-files/${file.id}`, { who: dave, method: 'DELETE' })).status).toBe(200);
   });
 });

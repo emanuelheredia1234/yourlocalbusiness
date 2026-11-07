@@ -36,12 +36,25 @@
 //   POST /billing_portal/sessions (customer, return_url, configuration)
 //   POST /billing_portal/configurations (features[…], business_profile[…]), GET /billing_portal/configurations/:id
 //   GET /invoices/:id
-//   POST /accounts (Connect), GET /accounts/:id, POST /account_links (account, refresh_url, return_url, type)
+//   POST /accounts (Connect: controller, capabilities[…][requested] (→ inactive), business_profile, metadata, country
+//        (two letters), email; requirements and default_currency like Stripe's), GET /accounts/:id,
+//        GET /accounts?limit=&starting_after= (newest first), POST /accounts/:id (business_profile, metadata; identity
+//        fields refused after the first Account Link), POST /account_links (account, refresh_url, return_url, type:
+//        account_update refused for a full-Dashboard account; each url single-use: /__onboard/<acct>/<nonce>)
 //   GET /events/:id, GET /events
+//   Connect payments (with Stripe-Account): POST /checkout/sessions with line_items[n][price_data][currency|unit_amount|
+//        product_data[name]] (account_invalid unless the account's charges are enabled; application_fee_amount a
+//        positive integer below the amount, refused for a BR account (the mock platform is US); automatic_tax only with
+//        active tax settings; expires_at 30 minutes to 24 hours ahead), GET /checkout/sessions/:id (expand[]=
+//        payment_intent, payment_intent.latest_charge), GET /checkout/sessions?created[gte]=&limit=,
+//        GET /payment_intents/:id, GET /charges/:id (expand[]=refunds), POST /refunds {charge|payment_intent, amount,
+//        refund_application_fee, metadata}, GET /disputes/:id, GET /tax/settings
+//   Application fees (platform only; with Stripe-Account 400): GET /application_fees/:id,
+//        POST /application_fees/:id/refunds {amount (≤ what's left), metadata}, GET /application_fees/:id/refunds
 //
 // Test hooks (no key):
 //   GET  /__calls                                         every API call {method, path, account, idempotencyKey,
-//                                                          query?}
+//                                                          query?, body? (a POST's parsed form)}
 //   POST /__checkout/complete {id, account?, paid?, card?}  card: a card fingerprint (default: a new one each time),
 //                                                          the subscription's default_payment_method
 //                                                          finishes a Checkout Session: a subscription (mode
@@ -56,13 +69,32 @@
 //   POST /__invoices/fail {subscription, account?}         a renewal payment fails: an open invoice, the subscription
 //                                                          past_due, invoice.payment_failed + customer.subscription.updated
 //   POST /__customers/decline {id, account?, on?}          the customer's card declines (on: false lifts it)
-//   POST /__accounts/enable {id}                           charges_enabled + details_submitted, account.updated
+//   POST /__accounts/enable {id}                           charges_enabled + details_submitted, capabilities active,
+//                                                          requirements cleared, account.updated
+//   POST /__accounts/requirements {id, currently_due?, past_due?, eventually_due?, disabled_reason?, details_submitted?,
+//                                  charges_enabled?}       account.updated
+//   POST /__accounts/deauthorize {id}                      account.application.deauthorized; afterwards that
+//                                                          Stripe-Account answers 403
+//   POST /__checkout/complete {id, account, paid?, async?, email?}   (mode payment on a connected account) a
+//                                                          PaymentIntent and a Charge on the account, an application
+//                                                          fee on the platform; checkout.session.completed (Connect)
+//                                                          + application_fee.created (platform). async: unpaid until
+//   POST /__checkout/async {id, account, succeeded}        checkout.session.async_payment_succeeded | _failed
+//   POST /__charges/refund {charge, account, amount?}      a refund from the seller's Dashboard (our fee stays):
+//                                                          charge.refunded
+//   POST /__charges/dispute {charge, account, amount?}     charge.dispute.created (needs_response)
+//   POST /__disputes/close {id, account, status: won|lost} charge.dispute.closed + .funds_reinstated | .funds_withdrawn
+//   POST /__tax/active {account, on}                       the account's tax settings active (or pending)
 //   POST /__fail {route, mode, times}                      the next `times` calls to `route` (e.g. "POST
 //                                                          /v1/subscriptions/:id") fail: card_declined (402),
 //                                                          permission (403: a restricted key without that
-//                                                          permission), server (500), rate_limit (429) or timeout (the request
+//                                                          permission), server (500), rate_limit (429), in_use (409
+//                                                          idempotency_key_in_use: the same key still in flight) or timeout (the request
 //                                                          is DONE, then the connection is dropped: the "did it go
 //                                                          through?" case a caller must read back, never resend)
+//
+// Webhooks: platform events go to webhookUrl signed with webhookSecret; events of a connected account (`account`
+// set) go to connectWebhookUrl signed with connectWebhookSecret, as Stripe's Connect endpoints do.
 //
 // signStripeHeader(payload, secret, t) makes a valid Stripe-Signature header (t=…,v1=HMAC-SHA256 of "t.payload");
 // verifyStripeHeader(payload, header, secret, toleranceSec) checks one, as Stripe's libraries do.
@@ -73,6 +105,7 @@ import { fileURLToPath } from 'node:url';
 
 export const TEST_STRIPE_KEY = 'sk_test_mock_0000000000000000000000';
 export const TEST_STRIPE_WEBHOOK_SECRET = 'whsec_test_mock_000000000000000000';
+export const TEST_STRIPE_CONNECT_WEBHOOK_SECRET = 'whsec_test_mock_connect_000000000000';
 
 /** Stripe-Signature for a raw payload: "t=<unix>,v1=<hex HMAC-SHA256 of `${t}.${payload}`>". */
 export function signStripeHeader(payload, secret = TEST_STRIPE_WEBHOOK_SECRET, t = Math.floor(Date.now() / 1000)) {
@@ -127,7 +160,7 @@ export function encodeForm(obj, prefix = '') {
   return pairs.join('&');
 }
 
-const PREFIX = { payment_method: 'pm', customer: 'cus', product: 'prod', price: 'price', 'checkout.session': 'cs_test', subscription: 'sub', subscription_item: 'si', 'billing_portal.session': 'bps', 'billing_portal.configuration': 'bpc', account: 'acct', account_link: 'al', event: 'evt', payment_intent: 'pi', invoice: 'in' };
+const PREFIX = { charge: 'ch', application_fee: 'fee', fee_refund: 'fr', refund: 're', dispute: 'dp', application: 'ca', payment_method: 'pm', customer: 'cus', product: 'prod', price: 'price', 'checkout.session': 'cs_test', subscription: 'sub', subscription_item: 'si', 'billing_portal.session': 'bps', 'billing_portal.configuration': 'bpc', account: 'acct', account_link: 'al', event: 'evt', payment_intent: 'pi', invoice: 'in' };
 const newId = (object) => `${PREFIX[object] ?? 'obj'}_${crypto.randomBytes(12).toString('hex')}`;
 const send = (res, status, body, headers = {}) => {
   res.writeHead(status, { 'content-type': 'application/json', 'request-id': `req_${crypto.randomBytes(7).toString('hex')}`, ...headers });
@@ -139,20 +172,30 @@ const missing = (param) => stripeError(400, 'invalid_request_error', `Missing re
 const int = (v, d = null) => (v === undefined || v === null || v === '' ? d : Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : d);
 const bool = (v) => v === true || v === 'true';
 const list = (data, url) => ({ object: 'list', data, has_more: false, url });
+/** expand[]=a, expand[0]=a or expand=a, as Stripe takes them. */
+const expandOf = (query) => [...query.entries()].filter(([k]) => /^expand(\[\d*\])?$/.test(k)).map(([, v]) => v);
 
-export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_STRIPE_WEBHOOK_SECRET, webhookUrl = '', now = () => Date.now() } = {}) {
+export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_STRIPE_WEBHOOK_SECRET, webhookUrl = '', connectWebhookSecret = TEST_STRIPE_CONNECT_WEBHOOK_SECRET, connectWebhookUrl = '', now = () => Date.now() } = {}) {
   /** objects per account: '' is the platform, acct_… a connected account */
   const realms = new Map();
   const realm = (account = '') => {
-    if (!realms.has(account)) realms.set(account, { paymentMethods: new Map(), customers: new Map(), products: new Map(), prices: new Map(), sessions: new Map(), subscriptions: new Map(), items: new Map(), invoices: new Map(), portalConfigs: new Map(), declining: new Set(), events: [] });
+    if (!realms.has(account)) realms.set(account, { paymentMethods: new Map(), customers: new Map(), products: new Map(), prices: new Map(), sessions: new Map(), subscriptions: new Map(), items: new Map(), invoices: new Map(), portalConfigs: new Map(), paymentIntents: new Map(), charges: new Map(), refunds: new Map(), disputes: new Map(), applicationFees: new Map(), declining: new Set(), taxActive: false, events: [] });
     return realms.get(account);
   };
   const accounts = new Map();
+  /** single-use onboarding links: nonce → { account, used } */
+  const onboardLinks = new Map();
+  /** accounts that removed the platform: their Stripe-Account answers 403 */
+  const deauthorized = new Set();
+  const PLATFORM_COUNTRY = 'US';
   const idempotency = new Map();
   const calls = [];
   const deliveries = [];
   const faults = [];
   let hookUrl = webhookUrl;
+  let connectHookUrl = connectWebhookUrl;
+  /** tests: what a new Checkout Session's url is (default ${base}/__pay/<id>) */
+  let checkoutUrlFor = null;
   let server = null;
   let base = '';
   const sec = () => Math.floor(now() / 1000);
@@ -162,12 +205,14 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     const evt = { id: newId('event'), object: 'event', api_version: '2025-06-30.basil', created: sec(), type, livemode: false, pending_webhooks: 1, data: { object: structuredClone(object), ...(previous ? { previous_attributes: previous } : {}) }, ...(account ? { account } : {}) };
     realm(account).events.unshift(evt);
     const raw = JSON.stringify(evt);
-    const header = signStripeHeader(raw, webhookSecret, sec());
-    const delivery = { event: evt, raw, header, status: 0 };
+    // a connected account's events go to the Connect endpoint, signed with its own secret
+    const header = signStripeHeader(raw, account ? connectWebhookSecret : webhookSecret, sec());
+    const delivery = { event: evt, raw, header, status: 0, connect: !!account };
     deliveries.push(delivery);
-    if (hookUrl) {
+    const target = account ? connectHookUrl : hookUrl;
+    if (target) {
       try {
-        const res = await fetch(hookUrl, { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': header }, body: raw });
+        const res = await fetch(target, { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': header }, body: raw });
         delivery.status = res.status;
       } catch {
         delivery.status = -1;
@@ -290,6 +335,20 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
         if (!body.success_url && body.ui_mode !== 'embedded') return missing('success_url');
         const lines = Array.isArray(body.line_items) ? body.line_items : [];
         if (mode !== 'setup' && !lines.length) return missing('line_items');
+        // inline prices (price_data) are made as one-off prices on the realm, as Stripe does
+        for (const l of lines) {
+          if (!l.price && l.price_data) {
+            const pd = l.price_data;
+            if (!pd.currency || !/^[a-z]{3}$/.test(String(pd.currency))) return missing('line_items[0][price_data][currency]');
+            if (!(int(pd.unit_amount) >= 0)) return missing('line_items[0][price_data][unit_amount]');
+            if (!pd.product_data?.name && !pd.product) return missing('line_items[0][price_data][product_data][name]');
+            const prod = { id: newId('product'), object: 'product', name: pd.product_data?.name ?? '', active: true, metadata: {}, created: sec() };
+            r.products.set(prod.id, prod);
+            const pr = { id: newId('price'), object: 'price', active: false, currency: String(pd.currency), unit_amount: int(pd.unit_amount), product: prod.id, lookup_key: null, nickname: null, recurring: null, type: 'one_time', metadata: {}, created: sec(), livemode: false };
+            r.prices.set(pr.id, pr);
+            l.price = pr.id;
+          }
+        }
         for (const l of lines) {
           if (!l.price) return missing('line_items[0][price]');
           const price = priceById(r, l.price);
@@ -298,6 +357,21 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
         }
         if (body.customer && !r.customers.has(body.customer)) return notFound('customer', body.customer);
         const amount = lines.reduce((n, l) => n + (priceById(r, l.price)?.unit_amount ?? 0) * int(l.quantity, 1), 0);
+        if (account) {
+          const a = accounts.get(account);
+          if (!a.charges_enabled) return stripeError(400, 'invalid_request_error', 'This account cannot currently make live charges.', { code: 'account_invalid' });
+        }
+        if (body.payment_intent_data?.application_fee_amount !== undefined) {
+          const fee = int(body.payment_intent_data.application_fee_amount);
+          if (!account) return stripeError(400, 'invalid_request_error', 'Can only apply an application_fee_amount when the request is made on behalf of another account.', { param: 'payment_intent_data[application_fee_amount]' });
+          if (!(Number.isInteger(fee) && fee > 0 && fee < amount)) return stripeError(400, 'invalid_request_error', 'The application fee must be a positive integer less than the amount.', { param: 'payment_intent_data[application_fee_amount]' });
+          if (accounts.get(account).country === 'BR' && PLATFORM_COUNTRY !== 'BR') return stripeError(400, 'invalid_request_error', 'Application fees aren’t supported for this account’s country.', { param: 'payment_intent_data[application_fee_amount]' });
+        }
+        if (bool(body.automatic_tax?.enabled) && !r.taxActive) return stripeError(400, 'invalid_request_error', 'Stripe Tax isn’t set up on this account.', { param: 'automatic_tax[enabled]', code: 'stripe_tax_inactive' });
+        if (body.expires_at !== undefined) {
+          const ahead = int(body.expires_at) - sec();
+          if (!(ahead >= 30 * 60 && ahead <= 24 * 3600)) return stripeError(400, 'invalid_request_error', 'expires_at must be 30 minutes to 24 hours from now.', { param: 'expires_at' });
+        }
         const s = {
           id: newId('checkout.session'),
           object: 'checkout.session',
@@ -320,21 +394,32 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
           payment_method_types: Array.isArray(body.payment_method_types) ? body.payment_method_types : null,
           custom_text: body.custom_text ?? null,
           payment_intent_data: body.payment_intent_data ? { ...body.payment_intent_data, application_fee_amount: int(body.payment_intent_data.application_fee_amount) } : null,
+          automatic_tax: { enabled: bool(body.automatic_tax?.enabled) },
+          customer_details: null,
           created: sec(),
           expires_at: int(body.expires_at) ?? sec() + 24 * 3600,
           livemode: false,
         };
-        s.url = `${base}/__pay/${s.id}`;
+        s.url = checkoutUrlFor ? checkoutUrlFor(s) : `${base}/__pay/${s.id}`;
         r.sessions.set(s.id, s);
         return { status: 200, body: s };
       }
       if (method === 'GET' && !sid) {
-        const all = [...r.sessions.values()].filter((s) => (!query.get('customer') || s.customer === query.get('customer')) && (!query.get('status') || s.status === query.get('status')));
+        const gte = int(query.get('created[gte]'));
+        const all = [...r.sessions.values()].filter((s) => (!query.get('customer') || s.customer === query.get('customer')) && (!query.get('status') || s.status === query.get('status')) && (gte == null || s.created >= gte));
         return { status: 200, body: list(all.slice(0, int(query.get('limit'), 10)), '/v1/checkout/sessions') };
       }
       const s = r.sessions.get(sid);
       if (!s) return notFound('checkout.session', sid);
-      if (method === 'GET' && !parts[3]) return { status: 200, body: s };
+      if (method === 'GET' && !parts[3]) {
+        const expand = expandOf(query);
+        const out = structuredClone(s);
+        if ((expand.includes('payment_intent') || expand.includes('payment_intent.latest_charge')) && s.payment_intent && r.paymentIntents.has(s.payment_intent)) {
+          out.payment_intent = structuredClone(r.paymentIntents.get(s.payment_intent));
+          if (expand.includes('payment_intent.latest_charge') && out.payment_intent.latest_charge) out.payment_intent.latest_charge = chargeView(r, r.charges.get(out.payment_intent.latest_charge), false);
+        }
+        return { status: 200, body: out };
+      }
       if (method === 'POST' && parts[3] === 'expire') {
         // like Stripe: only an open session can be expired
         if (s.status !== 'open') return stripeError(400, 'invalid_request_error', `This Checkout Session is ${s.status}, so it can't be expired.`, { code: 'checkout_session_not_open' });
@@ -482,20 +567,111 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     if (res === 'accounts') {
       if (account) return stripeError(400, 'invalid_request_error', 'Connected accounts can’t make other accounts.');
       if (method === 'POST' && !id) {
-        const a = { id: newId('account'), object: 'account', type: body.type ?? null, controller: body.controller ?? null, country: body.country ?? 'US', email: body.email ?? null, charges_enabled: false, payouts_enabled: false, details_submitted: false, metadata: body.metadata ?? {}, created: sec() };
+        const country = body.country ?? 'US';
+        if (!/^[A-Z]{2}$/.test(String(country))) return stripeError(400, 'invalid_request_error', `Country '${country}' is unknown.`, { param: 'country', code: 'country_unsupported' });
+        const capabilities = Object.fromEntries(Object.entries(body.capabilities ?? {}).map(([k, v]) => [k, bool(v?.requested) ? 'inactive' : 'unrequested']));
+        const a = {
+          id: newId('account'),
+          object: 'account',
+          type: body.type ?? null,
+          controller: body.controller ?? null,
+          country,
+          email: body.email ?? null,
+          business_profile: { name: null, url: null, ...(body.business_profile ?? {}) },
+          settings: { dashboard: { display_name: body.business_profile?.name ?? null } },
+          capabilities,
+          charges_enabled: false,
+          payouts_enabled: false,
+          details_submitted: false,
+          default_currency: { US: 'usd', GB: 'gbp', CA: 'cad', AU: 'aud', BR: 'brl', JP: 'jpy' }[country] ?? 'eur',
+          requirements: { currently_due: ['business_profile.url', 'external_account', 'individual.dob.day', 'tos_acceptance.date'], eventually_due: ['business_profile.url', 'external_account', 'individual.dob.day', 'tos_acceptance.date'], past_due: [], pending_verification: [], disabled_reason: 'requirements.past_due', current_deadline: null },
+          metadata: body.metadata ?? {},
+          created: sec(),
+          livemode: false,
+        };
         accounts.set(a.id, a);
         return { status: 200, body: a };
+      }
+      if (method === 'GET' && !id) {
+        const all = [...accounts.values()].reverse();
+        const after = query.get('starting_after');
+        const from = after ? all.findIndex((a) => a.id === after) + 1 : 0;
+        const n = Math.min(100, int(query.get('limit'), 10));
+        const page = all.slice(from, from + n);
+        return { status: 200, body: { ...list(page, '/v1/accounts'), has_more: from + n < all.length } };
       }
       const a = accounts.get(id);
       if (!a) return notFound('account', id);
       if (method === 'GET') return { status: 200, body: a };
+      if (method === 'POST') {
+        // like Stripe: once onboarding has started, identity details are the account's own to change
+        if (a.linked && ['email', 'individual', 'company', 'country'].some((k) => body[k] !== undefined)) return stripeError(400, 'invalid_request_error', 'This field can no longer be changed by the platform.', { code: 'account_update_not_allowed' });
+        if (body.business_profile) a.business_profile = { ...a.business_profile, ...body.business_profile };
+        if (body.metadata) a.metadata = { ...a.metadata, ...body.metadata };
+        if (body.email !== undefined) a.email = body.email;
+        return { status: 200, body: a };
+      }
     }
 
     if (res === 'account_links' && method === 'POST') {
+      if (account) return stripeError(400, 'invalid_request_error', 'Account Links are made by the platform.');
       if (!body.account) return missing('account');
       if (!accounts.has(body.account)) return notFound('account', body.account);
       for (const p of ['refresh_url', 'return_url', 'type']) if (!body[p]) return missing(p);
-      return { status: 200, body: { object: 'account_link', created: sec(), expires_at: sec() + 300, url: `${base}/__onboard/${body.account}` } };
+      const a = accounts.get(body.account);
+      if (body.type === 'account_update' && a.controller?.stripe_dashboard?.type === 'full') return stripeError(400, 'invalid_request_error', 'You cannot create `account_update` type Account Links for accounts with access to the full Stripe Dashboard.', { param: 'type' });
+      a.linked = true;
+      const nonce = crypto.randomBytes(8).toString('hex');
+      onboardLinks.set(nonce, { account: a.id, used: false, refresh: body.refresh_url, ret: body.return_url });
+      return { status: 200, body: { object: 'account_link', created: sec(), expires_at: sec() + 300, url: `${base}/__onboard/${body.account}/${nonce}` } };
+    }
+
+    if (res === 'payment_intents' && id && method === 'GET') {
+      const pi = r.paymentIntents.get(id);
+      if (!pi) return notFound('payment_intent', id);
+      return { status: 200, body: pi };
+    }
+
+    if (res === 'charges' && id && method === 'GET') {
+      const ch = r.charges.get(id);
+      if (!ch) return notFound('charge', id);
+      const expand = expandOf(query);
+      return { status: 200, body: chargeView(r, ch, expand.includes('refunds')) };
+    }
+
+    if (res === 'refunds' && method === 'POST' && !id) {
+      const chId = body.charge ?? r.paymentIntents.get(body.payment_intent)?.latest_charge;
+      const ch = chId ? r.charges.get(chId) : null;
+      if (!ch) return body.charge ? notFound('charge', body.charge) : missing('charge');
+      const amount = body.amount === undefined ? ch.amount - ch.amount_refunded : int(body.amount);
+      if (!(amount > 0 && amount <= ch.amount - ch.amount_refunded)) return stripeError(400, 'invalid_request_error', 'Refund amount is greater than the charge’s remaining amount.', { param: 'amount', code: 'amount_too_large' });
+      const refund = await refundCharge(account, ch, amount, { feeToo: bool(body.refund_application_fee), metadata: body.metadata ?? {} });
+      return { status: 200, body: refund };
+    }
+
+    if (res === 'disputes' && id && method === 'GET') {
+      const d = r.disputes.get(id);
+      if (!d) return notFound('dispute', id);
+      return { status: 200, body: d };
+    }
+
+    if (res === 'tax' && id === 'settings' && method === 'GET') {
+      return { status: 200, body: { object: 'tax.settings', status: r.taxActive ? 'active' : 'pending', defaults: { tax_behavior: null, tax_code: null }, livemode: false } };
+    }
+
+    if (res === 'application_fees') {
+      if (account) return stripeError(400, 'invalid_request_error', 'Application fees live on the platform account.');
+      const fee = r.applicationFees.get(id);
+      if (!fee) return notFound('application_fee', id);
+      if (method === 'GET' && !sub) return { status: 200, body: fee };
+      if (sub === 'refunds' && method === 'GET') return { status: 200, body: list(fee.refunds.data, `/v1/application_fees/${fee.id}/refunds`) };
+      if (sub === 'refunds' && method === 'POST') {
+        const amount = body.amount === undefined ? fee.amount - fee.amount_refunded : int(body.amount);
+        if (!(amount > 0 && amount <= fee.amount - fee.amount_refunded)) return stripeError(400, 'invalid_request_error', 'Refund amount is greater than the application fee’s remaining amount.', { param: 'amount', code: 'amount_too_large' });
+        const fr = refundFee(fee, amount, body.metadata ?? {});
+        await emit('application_fee.refunded', fee, '');
+        return { status: 200, body: fr };
+      }
     }
 
     if (res === 'events') {
@@ -525,7 +701,7 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
         faults.push({ route: String(b.route), mode: String(b.mode), times: Number(b.times ?? 1) });
         return send(res, 200, { ok: true });
       }
-      if (url.pathname === '/__checkout/complete' && req.method === 'POST') return send(res, ...(await completeCheckout(b.id, b.account ?? '', b.paid !== false, b.card)));
+      if (url.pathname === '/__checkout/complete' && req.method === 'POST') return send(res, ...(await completeCheckout(b.id, b.account ?? '', b.paid !== false, b.card, { async: b.async === true, email: b.email })));
       if (url.pathname === '/__subscriptions/status' && req.method === 'POST') {
         const r = realm(b.account ?? '');
         const s = r.subscriptions.get(b.id);
@@ -576,9 +752,65 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
       if (url.pathname === '/__accounts/enable' && req.method === 'POST') {
         const a = accounts.get(b.id);
         if (!a) return send(res, 404, { error: 'no such account' });
-        Object.assign(a, { charges_enabled: true, payouts_enabled: true, details_submitted: true });
+        Object.assign(a, { charges_enabled: true, payouts_enabled: true, details_submitted: true, capabilities: Object.fromEntries(Object.keys(a.capabilities ?? {}).map((k) => [k, 'active'])), requirements: { currently_due: [], eventually_due: [], past_due: [], pending_verification: [], disabled_reason: null, current_deadline: null } });
         await emit('account.updated', a, a.id);
         return send(res, 200, a);
+      }
+      if (url.pathname === '/__accounts/requirements' && req.method === 'POST') {
+        const a = accounts.get(b.id);
+        if (!a) return send(res, 404, { error: 'no such account' });
+        const q = a.requirements ?? {};
+        a.requirements = { ...q, ...(b.currently_due ? { currently_due: b.currently_due } : {}), ...(b.eventually_due ? { eventually_due: b.eventually_due } : {}), ...(b.past_due ? { past_due: b.past_due } : {}), ...(b.pending_verification ? { pending_verification: b.pending_verification } : {}), ...(b.disabled_reason !== undefined ? { disabled_reason: b.disabled_reason } : {}) };
+        if (typeof b.details_submitted === 'boolean') a.details_submitted = b.details_submitted;
+        if (typeof b.charges_enabled === 'boolean') a.charges_enabled = b.charges_enabled;
+        if (typeof b.payouts_enabled === 'boolean') a.payouts_enabled = b.payouts_enabled;
+        await emit('account.updated', a, a.id);
+        return send(res, 200, a);
+      }
+      if (url.pathname === '/__accounts/deauthorize' && req.method === 'POST') {
+        const a = accounts.get(b.id);
+        if (!a) return send(res, 404, { error: 'no such account' });
+        deauthorized.add(a.id);
+        await emit('account.application.deauthorized', { id: newId('application'), object: 'application', name: 'Mock platform' }, a.id);
+        return send(res, 200, { ok: true });
+      }
+      if (url.pathname === '/__checkout/async' && req.method === 'POST') return send(res, ...(await asyncCheckout(b.id, b.account ?? '', b.succeeded !== false)));
+      if (url.pathname === '/__charges/refund' && req.method === 'POST') {
+        const ch = realm(b.account ?? '').charges.get(b.charge);
+        if (!ch) return send(res, 404, { error: 'no such charge' });
+        const amount = b.amount ?? ch.amount - ch.amount_refunded;
+        if (!(amount > 0 && amount <= ch.amount - ch.amount_refunded)) return send(res, 400, { error: 'bad amount' });
+        return send(res, 200, await refundCharge(b.account ?? '', ch, amount, { feeToo: false }));
+      }
+      if (url.pathname === '/__charges/dispute' && req.method === 'POST') {
+        const r = realm(b.account ?? '');
+        const ch = r.charges.get(b.charge);
+        if (!ch) return send(res, 404, { error: 'no such charge' });
+        const d = { id: newId('dispute'), object: 'dispute', charge: ch.id, payment_intent: ch.payment_intent, amount: b.amount ?? ch.amount, currency: ch.currency, status: 'needs_response', reason: 'fraudulent', created: sec(), livemode: false };
+        r.disputes.set(d.id, d);
+        ch.disputed = true;
+        await emit('charge.dispute.created', d, b.account ?? '');
+        return send(res, 200, d);
+      }
+      if (url.pathname === '/__disputes/close' && req.method === 'POST') {
+        const d = realm(b.account ?? '').disputes.get(b.id);
+        if (!d) return send(res, 404, { error: 'no such dispute' });
+        d.status = b.status === 'won' ? 'won' : 'lost';
+        await emit('charge.dispute.closed', d, b.account ?? '');
+        await emit(d.status === 'won' ? 'charge.dispute.funds_reinstated' : 'charge.dispute.funds_withdrawn', d, b.account ?? '');
+        return send(res, 200, d);
+      }
+      if (url.pathname === '/__tax/active' && req.method === 'POST') {
+        realm(b.account ?? '').taxActive = b.on !== false;
+        return send(res, 200, { ok: true });
+      }
+      const onboard = /^\/__onboard\/(acct_[A-Za-z0-9]+)\/([0-9a-f]+)$/.exec(url.pathname);
+      if (onboard) {
+        const link = onboardLinks.get(onboard[2]);
+        res.writeHead(200, { 'content-type': 'text/html' });
+        if (!link || link.account !== onboard[1] || link.used) return res.end('<!doctype html><title>Stripe (mock)</title><p>This link has expired.</p>');
+        link.used = true;
+        return res.end('<!doctype html><title>Stripe (mock)</title><p>Mock onboarding.</p>');
       }
       res.writeHead(200, { 'content-type': 'text/html' });
       return res.end('<!doctype html><title>Stripe (mock)</title><p>Mock Stripe page.</p>');
@@ -593,8 +825,8 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     const account = String(req.headers['stripe-account'] ?? '');
     const ikey = req.headers['idempotency-key'] ? String(req.headers['idempotency-key']) : null;
     const route = routeOf(method, parts);
-    calls.push({ method, path: url.pathname, route, account: account || null, idempotencyKey: ikey, ...(url.search ? { query: url.search.slice(1) } : {}) });
-    if (account && !accounts.has(account)) return send(res, 403, { error: { type: 'invalid_request_error', message: `The provided key does not have access to account '${account}' (or that account does not exist).` } });
+    calls.push({ method, path: url.pathname, route, account: account || null, idempotencyKey: ikey, ...(url.search ? { query: url.search.slice(1) } : {}), ...(method === 'POST' ? { body: parseForm(raw) } : {}) });
+    if (account && (!accounts.has(account) || deauthorized.has(account))) return send(res, 403, { error: { type: 'invalid_request_error', message: `The provided key does not have access to account '${account}' (or that account does not exist).` } });
 
     // Stripe's libraries send a DELETE's params in the query string
     const body = method === 'POST' ? parseForm(raw) : method === 'DELETE' ? parseForm(url.search.slice(1)) : {};
@@ -611,6 +843,7 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     if (fault === 'permission') return send(res, 403, { error: { type: 'invalid_request_error', message: 'The provided key does not have the required permissions for this endpoint.' } });
     if (fault === 'server') return send(res, 500, { error: { type: 'api_error', message: 'Something went wrong on Stripe’s end.' } });
     if (fault === 'rate_limit') return send(res, 429, { error: { type: 'invalid_request_error', code: 'rate_limit', message: 'Too many requests.' } });
+    if (fault === 'in_use') return send(res, 409, { error: { type: 'idempotency_error', code: 'idempotency_key_in_use', message: 'There is currently another in-progress request using this Idempotent Key.' } });
 
     const out = await api(method, parts, url.searchParams, body, account);
     if (ikey && method === 'POST' && out.status < 500) idempotency.set(`${account}:${ikey}`, { fingerprint, status: out.status, body: out.body });
@@ -619,13 +852,95 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     return send(res, out.status, out.body);
   }
 
-  async function completeCheckout(id, account = '', paid = true, card = undefined) {
+  /** A charge as the API shows it (refunds only when expanded, as Stripe's current versions do). */
+  function chargeView(r, ch, withRefunds) {
+    if (!ch) return null;
+    const { disputed, ...out } = structuredClone(ch);
+    out.disputed = !!disputed;
+    out.refunds = withRefunds ? list([...r.refunds.values()].filter((x) => x.charge === ch.id), `/v1/charges/${ch.id}/refunds`) : undefined;
+    if (!withRefunds) delete out.refunds;
+    return out;
+  }
+
+  /** A fee refund on the platform (its amount from what's left), recorded on the fee. */
+  function refundFee(fee, amount, metadata = {}) {
+    const fr = { id: newId('fee_refund'), object: 'fee_refund', amount, currency: fee.currency, fee: fee.id, metadata, created: sec() };
+    fee.refunds.data.unshift(fr);
+    fee.amount_refunded += amount;
+    fee.refunded = fee.amount_refunded >= fee.amount;
+    return fr;
+  }
+
+  /** A refund of a connected account's charge: charge.refunded; with feeToo our fee goes back in proportion. */
+  async function refundCharge(account, ch, amount, { feeToo = false, metadata = {} } = {}) {
+    const r = realm(account);
+    const refund = { id: newId('refund'), object: 'refund', amount, charge: ch.id, payment_intent: ch.payment_intent, currency: ch.currency, status: 'succeeded', metadata, created: sec() };
+    r.refunds.set(refund.id, refund);
+    ch.amount_refunded += amount;
+    ch.refunded = ch.amount_refunded >= ch.amount;
+    await emit('charge.refunded', chargeView(r, ch, true), account);
+    if (feeToo && ch.application_fee) {
+      const fee = realm('').applicationFees.get(ch.application_fee);
+      const share = Math.min(fee.amount - fee.amount_refunded, Math.floor((fee.amount * amount) / ch.amount));
+      if (share > 0) {
+        refundFee(fee, share, {});
+        await emit('application_fee.refunded', fee, '');
+      }
+    }
+    return refund;
+  }
+
+  /** A paid payment on a connected account: its PaymentIntent and Charge there, our fee on the platform. */
+  async function payOnAccount(account, s, email) {
+    const r = realm(account);
+    const fee = s.payment_intent_data?.application_fee_amount ?? null;
+    const pi = r.paymentIntents.get(s.payment_intent);
+    const ch = { id: newId('charge'), object: 'charge', amount: s.amount_total, amount_refunded: 0, refunded: false, currency: s.currency, payment_intent: pi.id, application_fee: null, application_fee_amount: fee, billing_details: { email }, status: 'succeeded', paid: true, created: sec(), livemode: false };
+    if (fee) {
+      const af = { id: newId('application_fee'), object: 'application_fee', account, amount: fee, amount_refunded: 0, refunded: false, currency: s.currency, charge: ch.id, originating_transaction: ch.id, refunds: { object: 'list', data: [], has_more: false }, created: sec(), livemode: false };
+      realm('').applicationFees.set(af.id, af);
+      ch.application_fee = af.id;
+    }
+    r.charges.set(ch.id, ch);
+    Object.assign(pi, { status: 'succeeded', latest_charge: ch.id, amount_received: s.amount_total });
+    return ch;
+  }
+
+  async function asyncCheckout(id, account, succeeded) {
+    const r = realm(account);
+    const s = r.sessions.get(id);
+    if (!s || s.status !== 'complete' || s.payment_status !== 'unpaid') return [409, { error: 'not waiting' }];
+    if (succeeded) {
+      s.payment_status = 'paid';
+      const ch = await payOnAccount(account, s, s.customer_details?.email ?? null);
+      await emit('checkout.session.async_payment_succeeded', s, account);
+      if (ch.application_fee) await emit('application_fee.created', realm('').applicationFees.get(ch.application_fee), '');
+    } else {
+      Object.assign(r.paymentIntents.get(s.payment_intent), { status: 'requires_payment_method' });
+      await emit('checkout.session.async_payment_failed', s, account);
+    }
+    return [200, { session: s }];
+  }
+
+  async function completeCheckout(id, account = '', paid = true, card = undefined, { async: delayed = false, email } = {}) {
     const r = realm(account);
     const s = r.sessions.get(id);
     if (!s) return [404, { error: 'no such session' }];
     if (s.status !== 'open') return [409, { error: `session is ${s.status}` }];
     s.status = 'complete';
-    s.payment_status = paid ? 'paid' : 'unpaid';
+    s.payment_status = paid && !delayed ? 'paid' : 'unpaid';
+    if (account && s.mode === 'payment') {
+      const buyer = typeof email === 'string' && email ? email : 'buyer@example.com';
+      s.customer_details = { email: buyer, name: null };
+      const pi = { id: newId('payment_intent'), object: 'payment_intent', amount: s.amount_total, currency: s.currency, status: delayed ? 'processing' : 'requires_payment_method', application_fee_amount: s.payment_intent_data?.application_fee_amount ?? null, latest_charge: null, metadata: s.payment_intent_data?.metadata ?? {}, created: sec(), livemode: false };
+      r.paymentIntents.set(pi.id, pi);
+      s.payment_intent = pi.id;
+      let ch = null;
+      if (paid && !delayed) ch = await payOnAccount(account, s, buyer);
+      await emit('checkout.session.completed', s, account);
+      if (ch?.application_fee) await emit('application_fee.created', realm('').applicationFees.get(ch.application_fee), '');
+      return [200, { session: s, charge: ch ? chargeView(r, ch, false) : null }];
+    }
     if (!s.customer) {
       const c = { id: newId('customer'), object: 'customer', email: s.customer_email, name: null, metadata: {}, created: sec(), livemode: false };
       r.customers.set(c.id, c);
@@ -648,6 +963,8 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     calls,
     deliveries,
     accounts,
+    /** onboarding links made: nonce → { account, used, refresh, ret } */
+    onboardLinks,
     realm,
     get base() {
       return base;
@@ -659,11 +976,18 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     set webhookUrl(u) {
       hookUrl = u;
     },
+    set connectWebhookUrl(u) {
+      connectHookUrl = u;
+    },
+    /** tests: make new Checkout Sessions' url something else (null: the default) */
+    set checkoutUrl(fn) {
+      checkoutUrlFor = fn;
+    },
     completeCheckout,
     emit,
     /** An event as Stripe would sign it, for calling a webhook handler directly: { raw, header, event }. */
-    signed(type, object, { account = '', secret = webhookSecret, t = sec() } = {}) {
-      const event = { id: newId('event'), object: 'event', api_version: '2025-06-30.basil', created: t, type, livemode: false, data: { object }, ...(account ? { account } : {}) };
+    signed(type, object, { account = '', secret = account ? connectWebhookSecret : webhookSecret, t = sec(), livemode = false } = {}) {
+      const event = { id: newId('event'), object: 'event', api_version: '2025-06-30.basil', created: t, type, livemode, data: { object }, ...(account ? { account } : {}) };
       const raw = JSON.stringify(event);
       return { raw, event, header: signStripeHeader(raw, secret, t) };
     },

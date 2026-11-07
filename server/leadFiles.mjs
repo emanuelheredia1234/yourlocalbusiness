@@ -2,11 +2,13 @@
 // link, served at a permanent public address /m/<id>, optionally behind an email gate whose sign-ups go to
 // Email → Leads (page_leads, source 'magnet'). Plus public images (a lead magnet's cover now, email images later).
 //
-//   GET    /api/lead-files?projectId=          → { files: [file] }                                 (signed in, same site)
-//   POST   /api/lead-files                     { projectId, title, brand?, kind: 'file'|'url', url?, gate? } → { file }
+//   GET    /api/lead-files?projectId=[&purpose=magnet|product]  → { files: [file] }           (signed in, same site)
+//   POST   /api/lead-files                     { projectId, title, brand?, kind: 'file'|'url', url?, gate?,
+//                                                purpose?: 'magnet'|'product' } → { file }
 //   PUT    /api/lead-files/<id>/content        raw bytes (x-file-name: the file's name) → { file }
 //   PATCH  /api/lead-files/<id>                { title?, brand?, gate?, url? } → { file }
-//   DELETE /api/lead-files/<id>                → { ok: true } (already gone counts as done)
+//   DELETE /api/lead-files/<id>                → { ok: true } (already gone counts as done; 409 IN_USE while a
+//                                              Stripe offer delivers it)
 //   POST   /api/public-images[?leadFile=<id>|?use=email]  raw image bytes → { url, path } (with leadFile: that file's
 //                                              cover; use=email: an email image, named e-<random>.<ext>)
 //   GET    /api/public-images                  → { images: [{ path, url, bytes, createdAt, use: 'email'|'cover' }], limit }
@@ -17,7 +19,11 @@
 //   file: { id, projectId, title, brand, kind, fileName, mime, bytes, url, gate, coverUrl, downloads, lastDownloadAt,
 //           createdAt, updatedAt, link: <app>/m/<id> }
 //
-// Tables and buckets (supabase/migrations/20261112000000_leads_p2.sql): lead_files (row-level security on, no
+// A product file (purpose 'product', P6): a paid download, a file only, delivered after a Stripe sale through
+// /b/<offer>/file (server/offers/stripeCheckout.mjs, signProductDownload below). It is never served at /m/ (not found),
+// never a lead form's magnet, and counts toward the same per-account limits.
+//
+// Tables and buckets (supabase/migrations/20261112000000_leads_p2.sql, purpose: 20261118000000_stripe_connect.sql): lead_files (row-level security on, no
 // policies: only this server reaches it), lead-files (private: lead-files/<user id>/<id>/<version>/<name>) and
 // public-files (public, images only: public-files/<user id>/<random id>.<ext>). Deleting an account removes all of it
 // (server/auth.mjs clears the buckets; the rows cascade).
@@ -46,6 +52,8 @@ import { LEAD_FILES_BUCKET, PUBLIC_FILES_BUCKET } from './buckets.mjs';
 import { ANSWERS, MAGNET_ID, PROJECT_ID_RE, drain, escapeHtml, leadCounters, leadNotice, readForm, readLeadFields, visitorOf, windowCounter } from './leads.mjs';
 
 export const LEAD_FILES_MIGRATION = 'supabase/migrations/20261112000000_leads_p2.sql';
+/** lead_files.purpose (product files) comes with P6's migration. */
+const CONNECT_MIGRATION_FOR_FILES = 'supabase/migrations/20261118000000_stripe_connect.sql';
 
 const MB = 1024 * 1024;
 export const MAX_LEAD_FILE_BYTES = 25 * MB;
@@ -325,7 +333,7 @@ export function createLeadFiles({
   };
   const unreachable = (e) => fail(502, 'UPSTREAM', e?.name === 'TimeoutError' ? 'Supabase took too long to answer. Try again.' : 'Couldn’t reach Supabase. Try again.');
 
-  async function rest(query, { method = 'GET', body, prefer, timeout = TIMEOUT } = {}) {
+  async function rest(query, { method = 'GET', body, prefer, timeout = TIMEOUT, noPurpose = false } = {}) {
     let res;
     try {
       res = await fetch(`${base}/rest/v1/${query}`, { method, headers: { ...headers, ...(prefer ? { prefer } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(timeout) });
@@ -342,6 +350,17 @@ export function createLeadFiles({
     if (res.ok) return data;
     const code = String(data?.code ?? '').slice(0, 16);
     const message = String(data?.message ?? '').slice(0, 300);
+    // P6's purpose column isn't there yet (its migration not run): lead magnets keep working without it; product files
+    // (P6) wait for it
+    if ((code === 'PGRST204' || code === '42703') && message.includes('purpose') && !noPurpose) {
+      warn('purpose', `Lead magnets: lead_files has no purpose column yet. Run ${CONNECT_MIGRATION_FOR_FILES} in Supabase → SQL Editor (lead magnets keep working).`);
+      if (body?.purpose === 'product' || /[?&]purpose=eq\.product(&|$)/.test(query)) {
+        if (method === 'GET') return [];
+        throw fail(503, 'LEAD_FILES_TABLE', `Run ${CONNECT_MIGRATION_FOR_FILES} in Supabase → SQL Editor.`);
+      }
+      const { purpose: _purpose, ...rest0 } = body && typeof body === 'object' ? body : {};
+      return rest(query.replace(/,purpose(?=[,&]|$)/g, '').replace(/&purpose=eq\.magnet(?=&|$)/, ''), { method, body: body === undefined ? undefined : rest0, prefer, timeout, noPurpose: true });
+    }
     if ((res.status === 404 && (code === 'PGRST205' || code === '42P01' || code === 'PGRST202' || message.includes('lead_files') || message.includes('lead_file_downloaded'))) || code === 'PGRST204' || code === '42703') throw tableMissing();
     if (code === '23503') throw fail(401, 'ACCOUNT_GONE', 'This account doesn’t exist anymore. Sign in again.');
     warn('rest', `Lead magnets: Supabase refused a request (${res.status}${code ? ` ${code}` : ''}).`);
@@ -403,7 +422,7 @@ export function createLeadFiles({
   })();
 
   // ── rows ──
-  const COLUMNS = 'id,user_id,project_id,title,brand,kind,file_name,mime,bytes,sha256,object_path,url,gate,cover_path,downloads,last_download_at,created_at,updated_at';
+  const COLUMNS = 'id,user_id,project_id,title,brand,kind,file_name,mime,bytes,sha256,object_path,url,gate,cover_path,downloads,last_download_at,purpose,created_at,updated_at';
   const describe = (r, origin) => ({
     id: r.id,
     projectId: r.project_id,
@@ -415,6 +434,7 @@ export function createLeadFiles({
     bytes: Number(r.bytes) || 0,
     url: r.kind === 'url' ? r.url ?? '' : '',
     gate: r.gate !== false,
+    purpose: r.purpose === 'product' ? 'product' : 'magnet',
     coverUrl: r.cover_path ? publicUrl(r.cover_path) : null,
     downloads: Number(r.downloads) || 0,
     lastDownloadAt: r.last_download_at ?? null,
@@ -475,7 +495,8 @@ export function createLeadFiles({
   async function findMagnet(id, client = 'server') {
     if (typeof id !== 'string' || !MAGNET_ID.test(id)) return null;
     const r = await findRow(id, typeof client === 'string' && client ? client.slice(0, 200) : 'server');
-    return r ? { id: r.id, user_id: r.user_id, project_id: r.project_id, title: r.title ?? '' } : null;
+    // a paid product file is never a lead form's free download
+    return r && r.purpose !== 'product' ? { id: r.id, user_id: r.user_id, project_id: r.project_id, title: r.title ?? '' } : null;
   }
   /** A ticket for a file (server/leads.mjs gives it after a sign-up that named the file). */
   const ticket = (id) => {
@@ -542,6 +563,9 @@ export function createLeadFiles({
     if (!projectId) throw fail(400, 'BAD_REQUEST', 'Unknown business.');
     const kind = b.kind === 'url' ? 'url' : b.kind === 'file' || b.kind === undefined ? 'file' : null;
     if (!kind) throw fail(400, 'BAD_REQUEST', 'A lead magnet is a file or a link.');
+    const purpose = b.purpose === undefined || b.purpose === 'magnet' ? 'magnet' : b.purpose === 'product' ? 'product' : null;
+    if (!purpose) throw fail(400, 'BAD_REQUEST', 'A download is a lead magnet or a product.');
+    if (purpose === 'product' && kind !== 'file') throw fail(400, 'BAD_REQUEST', 'A product download is a file.');
     const title = text(b.title, MAX_TITLE, 'The title') ?? '';
     const brand = text(b.brand, MAX_BRAND, 'The business name') ?? '';
     if (b.gate !== undefined && typeof b.gate !== 'boolean') throw fail(400, 'BAD_REQUEST', 'gate must be true or false.');
@@ -550,8 +574,10 @@ export function createLeadFiles({
     if (mine.length >= MAX_LEAD_FILES_PER_USER) throw fail(400, 'TOO_MANY', `You can publish up to ${MAX_LEAD_FILES_PER_USER} downloads. Unpublish one first.`);
     await mustExist(uid);
     const id = b64url(crypto.randomBytes(16));
-    const rows = await rest(`lead_files?select=${COLUMNS}`, { method: 'POST', body: { id, user_id: uid, project_id: projectId, title, brand, kind, url, gate: b.gate !== false }, prefer: 'return=representation' });
-    return { file: describe(rows?.[0] ?? { id, user_id: uid, project_id: projectId, title, brand, kind, url, gate: b.gate !== false }, origin) };
+    // a product file has no email gate (the buyer paid; /m/ never serves it)
+    const gate = purpose === 'product' ? false : b.gate !== false;
+    const rows = await rest(`lead_files?select=${COLUMNS}`, { method: 'POST', body: { id, user_id: uid, project_id: projectId, title, brand, kind, url, gate, purpose }, prefer: 'return=representation' });
+    return { file: describe(rows?.[0] ?? { id, user_id: uid, project_id: projectId, title, brand, kind, url, gate, purpose }, origin) };
   }
 
   async function update(who, id, b, origin) {
@@ -633,6 +659,9 @@ export function createLeadFiles({
 
   async function remove(who, id) {
     const uid = who.id;
+    // a Stripe offer that delivers this file keeps it (a buyer's paid download must still be there)
+    const offers = (await rest(`offers?user_id=eq.${uid}&provider=eq.stripe&status=neq.archived&select=id,delivery&limit=1000`).catch((e) => (e?.code === 'LEAD_FILES_TABLE' ? [] : Promise.reject(e)))) ?? [];
+    if (offers.some((o) => o?.delivery?.kind === 'file' && o.delivery.fileId === id)) throw fail(409, 'IN_USE', 'A buy link delivers this file. Change or archive that offer first.');
     const gone = (await rest(`lead_files?id=eq.${id}&user_id=eq.${uid}&select=id,cover_path`, { method: 'DELETE', prefer: 'return=representation' })) ?? [];
     forget(id);
     if (!gone.length) return { ok: true };
@@ -797,7 +826,9 @@ export function createLeadFiles({
         if (method === 'GET') {
           const projectId = url.searchParams.get('projectId') ?? '';
           if (projectId && (projectId.length > 80 || !PROJECT_ID_RE.test(projectId))) return reply(400, { error: 'Unknown business.', code: 'BAD_REQUEST' });
-          const rows = await rest(`lead_files?user_id=eq.${uid}${projectId ? `&project_id=eq.${projectId}` : ''}&select=${COLUMNS}&order=created_at.desc&limit=100`);
+          const purpose = url.searchParams.get('purpose');
+          if (purpose !== null && purpose !== 'magnet' && purpose !== 'product') return reply(400, { error: 'Unknown purpose.', code: 'BAD_REQUEST' });
+          const rows = await rest(`lead_files?user_id=eq.${uid}${projectId ? `&project_id=eq.${projectId}` : ''}${purpose ? `&purpose=eq.${purpose}` : ''}&select=${COLUMNS}&order=created_at.desc&limit=100`);
           return reply(200, { files: (rows ?? []).map((r) => describe(r, origin)) });
         }
         if (method !== 'POST') return notAllowed();
@@ -972,7 +1003,8 @@ ${row.cover_path ? `<img src="${escapeHtml(publicUrl(row.cover_path))}" alt="">\
         drain(req);
         return notice(req, res, [503, 'This can’t be shown right now', 'Try again in a minute.'], '', retryAfter(60_000));
       }
-      if (!row || (row.kind === 'file' && !row.object_path) || (row.kind === 'url' && !row.url) || (site && row.user_id !== site.user_id)) {
+      // a paid product file is never served here (only /b/<offer>/file after a sale)
+      if (!row || row.purpose === 'product' || (row.kind === 'file' && !row.object_path) || (row.kind === 'url' && !row.url) || (site && row.user_id !== site.user_id)) {
         drain(req);
         return notFound(req, res);
       }
@@ -1047,4 +1079,44 @@ ${row.cover_path ? `<img src="${escapeHtml(publicUrl(row.cover_path))}" alt="">\
   }
 
   return { matchApi, handleApi, matchMagnet, serveMagnet, findMagnet, ticket, forgetUser };
+}
+
+/**
+ * A paid product file's 60-second signed download (P6, /b/<offer>/file after a Stripe sale): the signing half of
+ * /m/'s deliver(), for a file the seller owns with purpose 'product'. → { location } | null (missing, someone else's,
+ * not a product, not uploaded). Doesn't count a magnet download. Throws { status: 502 } when Storage can't answer.
+ * supabase: { supabaseUrl, secretKey, fetch }.
+ */
+export async function signProductDownload({ supabaseUrl = '', secretKey = '', fetch: fetchImpl = globalThis.fetch } = {}, fileId, userId) {
+  if (typeof fileId !== 'string' || !MAGNET_ID.test(fileId) || !UUID.test(String(userId ?? ''))) return null;
+  let base = String(supabaseUrl);
+  while (base.endsWith('/')) base = base.slice(0, -1);
+  if (!base || !secretKey) return null;
+  const headers = serviceHeaders(secretKey);
+  const upstream = () => Object.assign(new Error('Couldn’t sign the download.'), { status: 502, code: 'UPSTREAM' });
+  let rows;
+  try {
+    const r = await fetchImpl(`${base}/rest/v1/lead_files?id=eq.${fileId}&user_id=eq.${userId}&select=id,user_id,kind,purpose,object_path,file_name&limit=1`, { headers, signal: AbortSignal.timeout(LOOKUP_TIMEOUT) });
+    if (!r.ok) throw upstream();
+    rows = await r.json();
+  } catch (e) {
+    throw e?.status ? e : upstream();
+  }
+  const row = Array.isArray(rows) ? rows[0] : null;
+  if (!row || row.user_id !== userId || row.purpose !== 'product' || row.kind !== 'file' || !row.object_path) return null;
+  const storageHeaders = { ...headers, 'content-type': 'application/json' };
+  const objectPath = String(row.object_path).split('/').map(encodeURIComponent).join('/');
+  let r;
+  try {
+    r = await fetchImpl(`${base}/storage/v1/object/sign/${LEAD_FILES_BUCKET}/${objectPath}`, { method: 'POST', headers: storageHeaders, body: JSON.stringify({ expiresIn: SIGNED_SECONDS }), signal: AbortSignal.timeout(LOOKUP_TIMEOUT) });
+  } catch {
+    throw upstream();
+  }
+  const got = await r.json().catch(() => null);
+  const signed = typeof got?.signedURL === 'string' ? got.signedURL : '';
+  if (!r.ok || !signed.startsWith('/object/sign/')) {
+    if (r.status === 400 || r.status === 404) return null;
+    throw upstream();
+  }
+  return { location: `${base}/storage/v1${signed}${signed.includes('?') ? '&' : '?'}download=${encodeURIComponent(row.file_name || 'download')}` };
 }

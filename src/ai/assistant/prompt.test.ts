@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Post } from '@/lib/types';
 import { safeStorage } from '@/lib/storage';
 import { useStore } from '@/store/useStore';
+import { useOffers } from '@/store/offers';
 import { defaultSettings, newProject } from '@/store/defaults';
 import type { ChatMessage } from '@/store/assistant';
 import { ASSISTANT_MARKER as MOCK_MARKER, mockAssistantReply } from '../../../server/test/mock-providers.mjs';
@@ -41,6 +42,8 @@ describe('the prompt', () => {
     // every tool: with A/B tests on (their group is listed only then)
     useAuth.setState({ phase: 'ready' } as never);
     useExperimentsConfig.setState({ config: { enabled: true, reachable: true } });
+    // and payments' (listed while the server has offers on)
+    useOffers.setState({ config: { enabled: true, whop: { sandbox: false, production: false }, stripe: { available: true, environment: 'production' }, reachable: true } });
     // and the email studio's (listed once the business has emails)
     useStore.setState((st) => ({ projects: st.projects.map((x) => ({ ...x, marketing: { ...x.marketing, emails: generateEmailSequence(x, null) } })) }));
     const history = [msg('user', 'Hi there'), msg('assistant', 'Hello! How can I help?'), msg('activity', 'Opened Content calendar', { tool: 'navigate', status: 'ok' }), msg('card', 'Make a video?', { card: { title: 'Make a video?', what: 'x', who: 'y', confirmLabel: 'Go', state: 'declined' } })];
@@ -61,6 +64,7 @@ describe('the prompt', () => {
     expect(p.trimEnd().endsWith('This is step 1 of 6.')).toBe(true);
     useAuth.setState({ phase: 'loading' } as never);
     useExperimentsConfig.setState({ config: null });
+    useOffers.setState({ config: null });
   });
 
   it('keeps only the last 12 messages, each one shortened', () => {

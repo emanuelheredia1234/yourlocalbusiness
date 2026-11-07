@@ -1572,9 +1572,13 @@ export function createStripeBilling({
     return row?.user_id ?? null;
   }
 
+  /** P6: our fee events (application_fee.*: the platform's own, no account) go to Stripe Connect. */
+  let platformEventHandler = null;
+
   async function processEvent(evt) {
     const type = String(evt.type ?? '');
     const obj = evt.data?.object ?? {};
+    if (type.startsWith('application_fee.') && !evt.account) return platformEventHandler ? `connect_${await platformEventHandler(evt)}` : 'ignored';
     if (!STRIPE_EVENTS.includes(type)) return 'ignored';
     if (type === 'checkout.session.completed') {
       const uid = String(obj.client_reference_id ?? '');
@@ -1646,7 +1650,7 @@ export function createStripeBilling({
       safeLog('stripe_webhook_mode_mismatch', { live: evt.livemode === true }, log);
       return { status: 200, body: { ok: true, ignored: true } };
     }
-    // Connect events belong to the sellers' payments (a later phase)
+    // a connected account's events belong to the sellers' payments: /api/webhooks/stripe-connect (its own secret)
     if (evt.account) return { status: 200, body: { ok: true, ignored: true } };
     const id = String(evt.id ?? '');
     const dedupeKey = `stripe:${EVENT_ID.test(id) ? id : sha256(raw)}`;
@@ -1965,6 +1969,10 @@ export function createStripeBilling({
     route,
     errorReply,
     webhook,
+    /** P6: who handles our fee events (application_fee.created / .refunded) arriving here (Stripe Connect). */
+    setPlatformEventHandler(fn) {
+      platformEventHandler = typeof fn === 'function' ? fn : null;
+    },
     entitlement,
     requireActive,
     requireSlot,

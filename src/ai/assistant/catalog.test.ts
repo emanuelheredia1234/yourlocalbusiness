@@ -14,12 +14,14 @@ import { runTool, seedWorkspace } from './testing';
 import { useAuth } from '@/lib/cloud/auth';
 import { useExperimentsConfig } from '@/lib/experiments/config';
 import { useStore } from '@/store/useStore';
+import { useOffers } from '@/store/offers';
 import { generateEmailSequence } from '@/ai/local/email';
 
-/** A/B tests on here (signed in, the server has them), or off. */
+/** A/B tests and payments on here (signed in, the server has them), or off. */
 const abOn = (on = true) => {
   useAuth.setState({ phase: on ? 'ready' : 'loading' } as never);
   useExperimentsConfig.setState({ config: on ? { enabled: true, reachable: true } : null });
+  useOffers.setState({ config: on ? { enabled: true, whop: { sandbox: false, production: false }, stripe: { available: true, environment: 'production' }, reachable: true } : null });
 };
 afterEach(() => abOn(false));
 
@@ -78,6 +80,9 @@ describe('the tool list', () => {
     expect(fullGroups(TOOL_GROUPS, { route: 'dashboard' })).toEqual(['social']);
     expect(fullGroups(TOOL_GROUPS, { route: 'calendar' })).toEqual(['social']);
     expect(fullGroups(TOOL_GROUPS, { route: 'workspace-settings' })).toEqual(['brand']);
+    abOn();
+    expect(fullGroups(TOOL_GROUPS, { route: 'workspace-settings' })).toEqual(['brand', 'payments']);
+    abOn(false);
     expect(fullGroups(TOOL_GROUPS, { route: 'studio' }, ALL)).toEqual(['studio', 'marketing', 'agents']);
     expect(fullGroups(TOOL_GROUPS, { route: 'marketing-seo' }, ALL)).toEqual(['marketing', 'agents']);
     expect(fullGroups(TOOL_GROUPS, { route: 'store' }, ALL)).toEqual(['brand', 'studio']);

@@ -261,6 +261,11 @@ describe('account deletion', () => {
 
   it('routes the Stripe webhook to the billing module, and exposes the plans facade (not enforced without billing)', async () => {
     expect(moduleFor('/api/webhooks/stripe')).toBe('billing');
+    // P6: the Connect webhook is a sibling (its own secret, the offers module), never under billing's path
+    expect(moduleFor('/api/webhooks/stripe-connect')).toBe('offers');
+    expect(moduleFor('/api/webhooks/stripe/connect')).toBe('billing');
+    expect(moduleFor('/api/payments/stripe')).toBe('offers');
+    expect(moduleFor('/api/payments/stripe/onboarding')).toBe('offers');
     const r = recorder();
     const integrations = createIntegrations({ env: {}, send: sendLike, factories: r.factories, db: { enabled: false } });
     expect(await integrations.billing.entitlement(UID)).toMatchObject({ plan: 'legacy', active: true });
@@ -588,7 +593,7 @@ describe('offers in the wiring', () => {
   it('without the database: 503 NOT_SET_UP, /b/ off, config says off; deletion still asks offers before billing', async () => {
     const r = recorder();
     const integrations = createIntegrations({ env: {}, send: sendLike, factories: r.factories, db: { enabled: false } });
-    expect(integrations.offersConfig()).toEqual({ enabled: false, whop: { sandbox: false, production: false } });
+    expect(integrations.offersConfig()).toEqual({ enabled: false, whop: { sandbox: false, production: false }, stripe: { available: false, environment: null } });
     expect(integrations.offers.buy.matchBuy(new URL('http://x/b/AAAAAAAAAAAAAAAAAAAAAA'))).toBe(true);
     const s = await serve(integrations);
     try {

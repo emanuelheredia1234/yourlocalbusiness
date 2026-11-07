@@ -29,7 +29,8 @@
 //                                                          Checkout, the portal, businesses, the Stripe webhook)
 //   /api/ads/…                                             server/ads/routes.mjs (launching and changing campaigns;
 //                                                          ad events arrive on /api/webhooks/zernio)
-//   /api/offers…  /api/payments/whop…  /api/webhooks/whop/<id>   server/offers/index.mjs (offers and buy links, the
+//   /api/offers…  /api/payments/whop…  /api/webhooks/whop/<id>   server/offers/index.mjs
+//   /api/payments/stripe…  /api/webhooks/stripe-connect        (Stripe Connect, through the offers module) (offers and buy links, the
 //                                                          users' own Whop accounts; /b/<id> through pages.mjs with
 //                                                          integrations.offers.buy)
 //   /api/morning/…                                         server/morning/index.mjs (the morning action; its hourly job
@@ -88,6 +89,8 @@ export function billingFacade(get) {
     requireSlot: async (who, projectId) => (impl()?.requireSlot ? impl().requireSlot(who, projectId) : null),
     businessLimit: async (userId, who = null) => (impl() ? impl().businessLimit(userId, who) : null),
     pagesServeUntil: async (userId) => (impl() ? impl().pagesServeUntil(userId) : null),
+    /** the owner's views: an account's email (Supabase Auth's admin API, cached), or '' */
+    emailFor: async (userId) => (get()?.emailFor ? get().emailFor(userId) : ''),
     tregCapsFor: async (tag) => (impl() ? impl().tregCapsFor(tag) : null),
     config: () => (impl() ? impl().config() : { enabled: false, enforce: false }),
     notes: () => impl()?.notes?.() ?? [],
@@ -142,7 +145,7 @@ export function moduleFor(pathname) {
   if (under(ROUTE_PREFIXES.seoGoogle)) return 'seoGoogle';
   if (under(ROUTE_PREFIXES.billing) || under(ROUTE_PREFIXES.stripeWebhook)) return 'billing';
   if (under(ROUTE_PREFIXES.ads)) return 'ads';
-  if (under(ROUTE_PREFIXES.offers) || under(ROUTE_PREFIXES.whop) || under(ROUTE_PREFIXES.whopWebhook)) return 'offers';
+  if (under(ROUTE_PREFIXES.offers) || under(ROUTE_PREFIXES.whop) || under(ROUTE_PREFIXES.whopWebhook) || under(ROUTE_PREFIXES.stripePayments) || under(ROUTE_PREFIXES.stripeConnectWebhook)) return 'offers';
   if (under(ROUTE_PREFIXES.morning)) return 'morning';
   if (under(ROUTE_PREFIXES.experiments)) return 'experiments';
   return null;
@@ -212,6 +215,8 @@ export function createIntegrations({
   experimentsModule = modules.experiments;
   adsModule = modules.ads;
   billingModule = modules.billing;
+  // P6: our fee events reach the P1 Stripe endpoint (the platform's); Stripe Connect handles them
+  modules.billing.plans?.setPlatformEventHandler?.((evt) => modules.offers.connectPlatformEvent?.(evt) ?? 'ignored');
   const sitemap = make.sitemap(deps);
   // an upload_completed webhook from Upload-Post finishes its job (sent / failed) the same way "Check again" does
   // (only a job of the business whose profile the event came through)
@@ -264,7 +269,7 @@ export function createIntegrations({
     },
 
     /** pages.mjs's appHostExtras hook: the sitemap module's paths on the app's own host. */
-    appHostExtras: (req, res, url) => sitemap.handle(req, res, url),
+    appHostExtras: (req, res, url) => modules.offers.connectPages?.(req, res, url) || sitemap.handle(req, res, url),
 
     /**
      * Before an account is deleted: the connections at the vendor first (Nango deletes each, one attempt), then

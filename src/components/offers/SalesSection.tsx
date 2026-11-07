@@ -1,16 +1,23 @@
-// Analytics › Sales: sales through the business's Whop buy links (what Whop told the server: live sales only, gross
+// Analytics › Sales: sales through the business's Stripe and Whop buy links (what Stripe or Whop told the server: live sales only, gross
 // per currency with refunds under it), clicks on all its buy links, and the sales list. Test mode sales are only a
 // note. Sales on the owner's own checkout links happen on that site, so only their clicks show. Nothing estimated.
 
 import { useEffect } from 'react';
 import { fmtNum } from '@/lib/utils';
-import { formatMoney, type SalesSummary } from '@/lib/offers';
+import { formatMoney, type Offer, type SalesSummary } from '@/lib/offers';
 import { useOffers, useProjectOffers } from '@/store/offers';
 import { Section, StatStrip } from '@/components/ui/primitives';
 import { SalesTable } from './SalesTable';
 
+/** Who takes the payments of a business's buy links, in words ("Stripe and Whop"; Whop when none say). */
+export function paidThrough(offers: Pick<Offer, 'provider'>[] = []): string {
+  const stripe = offers.some((o) => o.provider === 'stripe');
+  const whop = offers.some((o) => o.provider === 'whop');
+  return stripe && whop ? 'Stripe and Whop' : stripe ? 'Stripe' : 'Whop';
+}
+
 /** The tiles for a summary (render tests draw them directly). */
-export function SalesTiles({ summary, days }: { summary: SalesSummary | null; days: number }) {
+export function SalesTiles({ summary, days, via = 'Whop' }: { summary: SalesSummary | null; days: number; via?: string }) {
   const revenue = summary ? Object.entries(summary.live.revenue).filter(([, n]) => n > 0) : [];
   const refunded = summary ? Object.entries(summary.live.refunded).filter(([, n]) => n > 0) : [];
   const money = (rows: [string, number][]) => rows.map(([cur, n]) => formatMoney(n, cur)).join(' · ');
@@ -18,8 +25,8 @@ export function SalesTiles({ summary, days }: { summary: SalesSummary | null; da
     <div className="flex flex-col gap-2">
       <StatStrip
         items={[
-          { label: 'Sales', value: summary ? fmtNum(summary.live.count) : '–', sub: `Through your Whop buy links, last ${days} days` },
-          { label: 'Revenue', value: summary ? money(revenue) || formatMoney(0, 'usd') : '–', sub: refunded.length ? `${money(refunded)} refunded` : 'Before Whop’s fees' },
+          { label: 'Sales', value: summary ? fmtNum(summary.live.count) : '–', sub: `Through your ${via} buy links, last ${days} days` },
+          { label: 'Revenue', value: summary ? money(revenue) || formatMoney(0, 'usd') : '–', sub: refunded.length ? `${money(refunded)} refunded` : `Before ${via}’s fees${via.includes('Stripe') ? ' and our fee' : ''}` },
           { label: 'Buy link clicks', value: summary ? fmtNum(summary.clicks) : '–', sub: 'All time, every buy link' },
         ]}
       />
@@ -45,10 +52,10 @@ export function SalesSection({ projectId, brand, days }: { projectId: string; br
   if (!on || !loaded || (!offers.length && !history)) return null;
   const fresh = summary && summary.days === days ? summary : null;
   return (
-    <Section title="Sales" description="Sales made through your Whop buy links show here. Sales on your own checkout links happen on that site, so only their clicks show." className="mt-6">
+    <Section title="Sales" description={`Sales made through your ${paidThrough(offers)} buy links show here. Sales on your own checkout links happen on that site, so only their clicks show.`} className="mt-6">
       <div className="flex flex-col gap-6">
-        <SalesTiles summary={fresh} days={days} />
-        {(sold || offers.some((o) => o.provider === 'whop')) && <SalesTable projectId={projectId} brand={brand} offers={offers} />}
+        <SalesTiles summary={fresh} days={days} via={paidThrough(offers)} />
+        {(sold || offers.some((o) => o.provider === 'whop' || o.provider === 'stripe')) && <SalesTable projectId={projectId} brand={brand} offers={offers} />}
       </div>
     </Section>
   );

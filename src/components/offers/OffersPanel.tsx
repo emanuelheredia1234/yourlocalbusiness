@@ -1,5 +1,6 @@
 // Studio › Listing & publish › Offers: everything a business sells through a buy link, with who takes the payment,
-// whether it's selling, its clicks and live sales, and where it's used. Refresh from Whop re-reads a Whop plan's
+// whether it's selling (a Stripe one says when Stripe setup isn't finished), its clicks and live sales, and where it's
+// used. Refresh from Whop re-reads a Whop plan's
 // price; Pause makes its link say "not available right now"; Archive retires it ("no longer available").
 
 import { useState } from 'react';
@@ -75,7 +76,7 @@ export function OfferRow({
       </div>
       <p className="text-caption text-muted">
         {fmtNum(offer.clicks)} click{offer.clicks === 1 ? '' : 's'}
-        {offer.provider === 'whop'
+        {offer.provider === 'whop' || offer.provider === 'stripe'
           ? ` · ${fmtNum(offer.sales.count)} ${offer.environment === 'sandbox' ? 'test ' : ''}sale${offer.sales.count === 1 ? '' : 's'}`
           : ' · sales happen on your own checkout'}
         {offer.sales.last ? ` · last ${fmtRelative(offer.sales.last)}` : ''}

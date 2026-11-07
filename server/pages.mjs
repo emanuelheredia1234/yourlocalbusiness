@@ -89,6 +89,8 @@ export const RESERVED_SLUGS = new Set([
   'index', 'favicon', 'robots', 'sitemap', 'well-known', 'home', 'new', 'edit', 'preview', 'yourlocalbusiness', 'replit', 'supabase', 'manus',
   // upcoming public routes (paid plans, the public marketplace, offers, opt-outs, the cron tick and webhooks)
   'market', 'pricing', 'plans', 'unsubscribe', 'offers', 'thank-you', 'thanks', 'store', 'listings', 'cron', 'webhooks',
+  // Stripe Connect's fixed return pages and the seller terms (P6)
+  'connect', 'seller-terms',
   // the short public prefixes below (already too short to be a name; listed so nobody relaxes SLUG_RE into them)
   'b', 'm', 'o',
 ]);

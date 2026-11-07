@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import { useAuth } from '@/lib/cloud/auth';
 import { listOffers, offersConfig, salesSummary, whopConnections, type Offer, type OffersConfig, type SalesSummary, type WhopConnection } from '@/lib/offers';
+import { connectStatus, type ConnectAccount, type ConnectState } from '@/lib/stripeConnect';
 
 interface OffersState {
   config: OffersConfig | null;
@@ -17,6 +18,13 @@ interface OffersState {
   connections: WhopConnection[] | null;
   /** the last error per project, in plain words ('' when none) */
   error: Record<string, string>;
+  /** the signed-in seller's Stripe account, their fee and the seller terms (null: not loaded yet) */
+  connect: ConnectState | null;
+  /** why the Stripe account couldn't be read ('' when it could) */
+  connectError: string;
+  refreshConnect: () => Promise<ConnectState | null>;
+  /** an account the server just answered with (made, synced, tax changed; null: stopped selling here) */
+  setConnectAccount: (account: ConnectAccount | null) => void;
   loadConfig: (refresh?: boolean) => Promise<OffersConfig>;
   refresh: (projectId: string) => Promise<Offer[]>;
   refreshSummary: (projectId: string, days?: number) => Promise<SalesSummary | null>;
@@ -37,6 +45,8 @@ export const useOffers: UseBoundStore<StoreApi<OffersState>> = create<OffersStat
   summary: {},
   connections: null,
   error: {},
+  connect: null,
+  connectError: '',
   loadConfig: async (refresh = false) => {
     const c = await offersConfig(refresh);
     set({ config: c });
@@ -83,8 +93,48 @@ export const useOffers: UseBoundStore<StoreApi<OffersState>> = create<OffersStat
     }),
   drop: (projectId, id) => set((s) => ({ byProject: { ...s.byProject, [projectId]: (s.byProject[projectId] ?? []).filter((o) => o.id !== id) } })),
   setConnections: (connections) => set({ connections }),
-  reset: () => set({ byProject: {}, summary: {}, connections: null, error: {} }),
+  refreshConnect: async () => {
+    if (__ARTIFACT_BUILD__) return null;
+    try {
+      const c = await connectStatus();
+      set({ connect: c, connectError: '' });
+      return c;
+    } catch (e) {
+      set({ connectError: (e as Error)?.message || 'Couldn’t read your Stripe account. Try again.' });
+      return get().connect;
+    }
+  },
+  setConnectAccount: (account) => set((s) => (s.connect ? { connect: { ...s.connect, account } } : {})),
+  reset: () => set({ byProject: {}, summary: {}, connections: null, error: {}, connect: null, connectError: '' }),
 }));
+
+let landing: 'return' | 'refresh' | null = null;
+/** Back from Stripe's setup page (App reads the address once): Settings › Payments' Stripe card takes it. */
+export function setConnectLanding(kind: 'return' | 'refresh' | null): void {
+  landing = kind;
+}
+export function takeConnectLanding(): 'return' | 'refresh' | null {
+  const k = landing;
+  landing = null;
+  return k;
+}
+
+/**
+ * Back from Stripe's setup page (Settings › Payments ?stripe=return): read the account again each time the window
+ * regains focus for the next 10 minutes (Stripe can finish its checks a little later, or in another tab).
+ */
+export function watchConnectFocus(minutes = 10): () => void {
+  if (__ARTIFACT_BUILD__ || typeof window === 'undefined') return () => {};
+  const until = Date.now() + minutes * 60_000;
+  const onFocus = () => {
+    if (Date.now() > until) return stop();
+    const a = useOffers.getState().connect?.account;
+    if (a && a.status !== 'active') void useOffers.getState().refreshConnect();
+  };
+  const stop = () => window.removeEventListener('focus', onFocus);
+  window.addEventListener('focus', onFocus);
+  return stop;
+}
 
 /** A business's offer by id, as last loaded (undefined: not one of its offers, or not loaded yet). */
 export function findOffer(projectId: string, id: string | undefined): Offer | undefined {
@@ -139,7 +189,7 @@ let lastAccount: string | null = null;
  * React: whether offers are on here (the server has them and you're signed in) and a business's offers, loaded
  * when asked for. Another account (or signing out) drops what the one before saw.
  */
-export function useProjectOffers(projectId: string | undefined): { on: boolean; checking: boolean; offers: Offer[]; loaded: boolean; whop: boolean } {
+export function useProjectOffers(projectId: string | undefined): { on: boolean; checking: boolean; offers: Offer[]; loaded: boolean; whop: boolean; stripe: boolean } {
   const account = useAuth((s) => (s.phase === 'ready' ? s.user?.id ?? '' : ''));
   const config = useOffers((s) => s.config);
   const offers = useOffers((s) => (projectId ? s.byProject[projectId] : undefined));
@@ -153,5 +203,5 @@ export function useProjectOffers(projectId: string | undefined): { on: boolean; 
   useEffect(() => {
     if (on && projectId) void useOffers.getState().refresh(projectId);
   }, [on, projectId, account]);
-  return { on, checking: !__ARTIFACT_BUILD__ && !config, offers: offers ?? [], loaded: !!offers, whop: on && !!(config?.whop.production || config?.whop.sandbox) };
+  return { on, checking: !__ARTIFACT_BUILD__ && !config, offers: offers ?? [], loaded: !!offers, whop: on && !!(config?.whop.production || config?.whop.sandbox), stripe: on && !!config?.stripe.available };
 }

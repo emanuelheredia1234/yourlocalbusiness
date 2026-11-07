@@ -182,7 +182,7 @@ function DeliveryForm({ project, lm }: { project: Project; lm: LeadMagnet }) {
   useEffect(() => {
     if (!d?.fileId) return setStats(null);
     const ctrl = new AbortController();
-    listLeadFiles(project.id, ctrl.signal).then(
+    listLeadFiles(project.id, ctrl.signal, 'magnet').then(
       (files) => setStats(files.find((f) => f.id === d.fileId) ?? null),
       () => undefined,
     );

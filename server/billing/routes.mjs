@@ -398,6 +398,8 @@ export function createBillingRoutes({
     admin,
     /** plans and billing (server/billing/stripe.mjs): entitlement, gates, webhook */
     plans,
+    /** an account's email for the owner's views (cached 10 minutes), or '' */
+    emailFor,
     /** Settle pending treg rows now (also once an hour from the cron tick). */
     settle: () => (missing().length ? Promise.resolve(0) : settleOnce()),
     async onStart() {

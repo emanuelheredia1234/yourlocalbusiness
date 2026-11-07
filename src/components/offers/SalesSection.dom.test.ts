@@ -34,7 +34,7 @@ beforeEach(() => {
   api.listSales.mockResolvedValue({ sales: [], next: null });
   useAuth.setState({ phase: 'ready', user: { id: 'u-sales', email: 'maya@example.com' } });
   useOffers.getState().reset();
-  useOffers.setState({ config: { enabled: true, whop: { sandbox: false, production: true }, reachable: true } });
+  useOffers.setState({ config: { enabled: true, whop: { sandbox: false, production: true }, stripe: { available: false, environment: null }, reachable: true } });
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);

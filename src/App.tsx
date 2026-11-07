@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { useMediaQuery } from '@/lib/hooks';
-import { navigate, takeSettingsSection, useRoute } from '@/lib/router';
+import { navigate, takeSettingsSection, takeStripeLanding, useRoute } from '@/lib/router';
+import { setConnectLanding } from '@/store/offers';
 import { useUI } from '@/store/ui';
 import { initRuntime } from '@/lib/platform';
 import { pingServer } from '@/ai/claude';
@@ -144,6 +145,14 @@ export default function App() {
   useEffect(() => installLeaveGuard(), []);
   // back from Upload-Post's connect page: Settings → Connected accounts (it reads the accounts again there)
   useEffect(() => {
+    // back from Stripe's setup page (the seller's own Stripe account): Settings → Payments reads the account again
+    const stripe = __ARTIFACT_BUILD__ ? null : takeStripeLanding();
+    if (stripe && !needsOnboarding) {
+      setConnectLanding(stripe);
+      useUI.getState().setSettingsTab('payments');
+      void navigate('workspace-settings', { force: true });
+      return;
+    }
     const section = takeSettingsSection();
     if (!section || needsOnboarding) return;
     useUI.getState().setSettingsTab(section);

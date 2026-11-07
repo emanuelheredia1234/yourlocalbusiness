@@ -12,6 +12,7 @@
 //   POST   /api/offers/<id>/archive   /b/<id> then says "no longer available"
 //   DELETE /api/offers/<id>           only without sales (409 HAS_SALES: archive it instead)
 //   GET    /api/offers/sales?projectId=&env=production|sandbox&before=&limit=   → { sales, next }
+//   POST   /api/offers/sales/<sale id>/download-link  → { url, expiresAt }: a Stripe sale's 7-day download link
 //   GET    /api/offers/summary?projectId=&days=30   → { live: {count, revenue, refunded}, test: {count}, clicks, offers }
 //   GET    /api/payments/whop                        → { connections }
 //   POST   /api/payments/whop  {environment, accountId, key}        connect (needs a plan)
@@ -19,6 +20,8 @@
 //   POST   /api/payments/whop/<id>/webhook-secret {secret}   POST …/check   POST …/enable-webhook
 //   PUT    /api/payments/whop/<id>/key {key}         DELETE /api/payments/whop/<id>[?confirm=1]
 //   POST   /api/webhooks/whop/<connection id>        Whop's signed events (server/payments/whop.mjs)
+//   GET|POST|PUT|DELETE /api/payments/stripe…         Stripe Connect sellers (server/payments/stripeConnect.mjs)
+//   POST   /api/webhooks/stripe-connect              Stripe's Connect events (server/payments/connectWebhook.mjs)
 //   GET|HEAD /b/<id>, /b/<id>/done                   visitors (server/offers/buy.mjs, through pages.mjs)
 //
 // Every signed-in route: same site → a signed-in user → the rate bucket → ids checked by shape → every query filtered
@@ -35,7 +38,13 @@ import { ROUTE_PREFIXES } from '../integrations/contracts.mjs';
 import { normalizeLink } from '../leadFiles.mjs';
 import { drain } from '../leads.mjs';
 import { createWhop } from '../payments/whop.mjs';
+import { CONNECT_MIGRATION, accountView, createConnectCore, serveConnectReturn } from '../payments/stripeConnect.mjs';
 import { createBuy, offerLimitsFromEnv } from './buy.mjs';
+import { createStripeOffers } from './stripeOffer.mjs';
+import { createStripeCheckout } from './stripeCheckout.mjs';
+import { createConnectWebhook } from '../payments/connectWebhook.mjs';
+import { leadLinkSecret } from '../leadFiles.mjs';
+import nodeCrypto from 'node:crypto';
 import { CHECKOUT_HOSTS, PROVIDERS } from './providers.mjs';
 import { ID_RE, MAX_OFFERS_PER_USER, OFFERS_MIGRATION, PROJECT_ID_RE, createPaymentCrypto, describeOffer, describeSale, newId, paymentKeysSecret } from './store.mjs';
 
@@ -69,8 +78,8 @@ export function originFor(req, env = process.env) {
  * corsHeaders, sameOrigin, clientKey, env, fetch, now, log, billing. Tests only: whopBases ({ sandbox, production }:
  * the mocks), whopTimeouts.
  */
-export function createOffers({ auth, db, send, readJson, readRaw, limit = () => false, corsHeaders = () => ({}), sameOrigin = () => true, clientKey = (req) => req.socket?.remoteAddress || 'unknown', env = process.env, fetch = globalThis.fetch, now = () => Date.now(), log = console, billing = null, whopBases = null, whopTimeouts = {} } = {}) {
-  const prefixes = [ROUTE_PREFIXES.offers, ROUTE_PREFIXES.whop, ROUTE_PREFIXES.whopWebhook];
+export function createOffers({ auth, db, send, readJson, readRaw, limit = () => false, corsHeaders = () => ({}), sameOrigin = () => true, clientKey = (req) => req.socket?.remoteAddress || 'unknown', env = process.env, fetch = globalThis.fetch, now = () => Date.now(), log = console, billing = null, whopBases = null, whopTimeouts = {}, stripe = null, sellerTermsReady = undefined } = {}) {
+  const prefixes = [ROUTE_PREFIXES.offers, ROUTE_PREFIXES.whop, ROUTE_PREFIXES.whopWebhook, ROUTE_PREFIXES.stripePayments, ROUTE_PREFIXES.stripeConnectWebhook];
   const keys = paymentKeysSecret(env);
   const switchedOff = off(env.OFFERS_PROVIDER);
   const enabled = !switchedOff && !!db?.enabled && !!keys;
@@ -78,22 +87,34 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   const pc = keys ? createPaymentCrypto(keys.secret) : null;
   const buy = createBuy({ db, billing, limits: offerLimitsFromEnv(env), enabled, log, now });
   const whop = createWhop({ db, crypto: pc, fetch, now, log, bases: whopBases, timeouts: whopTimeouts, enabled: enabled });
+  // Stripe Connect: the sellers' own Stripe accounts (its cache drops follow the buy links')
+  const connect = createConnectCore({ db, env, fetch, now, log, billing, stripe, ...(sellerTermsReady === undefined ? {} : { sellerTermsReady }), onAccountChanged: (rowId) => buy.dropAccount?.(rowId) });
+  const stripeOn = enabled && connect.enabled;
+  const stripeOffers = createStripeOffers({ db, connect, pc, cleanText: (v, max, what) => cleanText(v, max, what) });
+  const linkSecret = leadLinkSecret(env);
+  const stripeCheckout = createStripeCheckout({ db, connect, billing, env, now, log, linkSecret: linkSecret ? Buffer.from(nodeCrypto.hkdfSync('sha256', linkSecret, Buffer.alloc(0), 'ylb-sale-link', 32)) : null, supabase: { supabaseUrl: env.SUPABASE_URL || '', secretKey: env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '', fetch } });
+  if (stripeOn) buy.setStripe(stripeCheckout);
+  const connectHooks = createConnectWebhook({ db, connect, now, log });
   const blocked = new Set();
 
   const notes = () => {
     if (switchedOff) return ['Offers and buy links: off (OFFERS_PROVIDER=off). /b/ links answer "not found".'];
     if (!db?.enabled) return ['Offers and buy links: off (they need SUPABASE_URL and SUPABASE_SECRET_KEY).'];
-    const lines = [`Offers and buy links: on at /b/<id> (they need ${OFFERS_MIGRATION} in Supabase; limits: OFFER_CLICKS_PER_IP_PER_HOUR, OFFER_CLICKS_PER_OFFER_PER_HOUR).`];
+    const lines = [`Offers and buy links: on at /b/<id> (they need ${OFFERS_MIGRATION} and then ${CONNECT_MIGRATION} in Supabase, Stripe Connect on or off; limits: OFFER_CLICKS_PER_IP_PER_HOUR, OFFER_CLICKS_PER_OFFER_PER_HOUR).`];
     lines.push(whopOn ? `Whop: on. Each user connects their own Whop account; their keys are sealed with ${keys.source === 'PAYMENT_KEYS_SECRET' ? 'PAYMENT_KEYS_SECRET' : `a key from ${keys.source} (set PAYMENT_KEYS_SECRET, 32+ random characters, to keep them apart; set it before anyone connects, never change it after)`}.` : 'Whop: off (WHOP_ENABLED=off): offers take outside checkout links only.');
     if (whopOn && !String(env.APP_PUBLIC_URL ?? '').startsWith('https://')) lines.push('Whop webhooks: set APP_PUBLIC_URL to the app’s https address so each connection’s webhook can be made automatically.');
+    if (connect.cfg.switchedOff) lines.push('Stripe Connect: off (STRIPE_CONNECT=off).');
+    else if (stripeOn) lines.push(`Stripe Connect: on (${connect.cfg.live ? 'live' : 'sandbox'}; webhook ${ROUTE_PREFIXES.stripeConnectWebhook}, needs ${CONNECT_MIGRATION}).${connect.cfg.ready ? '' : ' Set APP_PUBLIC_URL to the app’s https address before anyone can sell.'}`);
+    else lines.push(`Stripe Connect: off (needs ${connect.cfg.missing().join(', ') || 'Supabase'}).`);
+    if (stripeOn && !connect.sellerTermsReady) lines.push('Stripe Connect: the seller terms are a draft (server/legal.mjs): only the owner can set up selling with Stripe.');
     return lines;
   };
-  const config = () => ({ enabled, whop: { sandbox: whopOn, production: whopOn } });
+  const config = () => ({ enabled, whop: { sandbox: whopOn, production: whopOn }, stripe: { available: stripeOn && connect.cfg.ready, environment: connect.cfg.environment } });
 
   if (!enabled) {
     const stub = stubRoutes({ prefixes, send, corsHeaders, message: 'Offers aren’t set up on this app yet.' });
     // no offers on this app: no email may carry a buy link (server/omnisend.mjs refuses them)
-    return { ...stub, buy, config, notes, cronJobs: () => [], enabled: false, idsFor: async () => [] };
+    return { ...stub, buy, config, notes, cronJobs: () => [], enabled: false, idsFor: async () => [], connectPages: serveConnectReturn };
   }
 
   const reply = (req, res, status, body, extra = {}) => send(res, status, body, { ...corsHeaders(req), 'cache-control': 'no-store', ...extra });
@@ -102,8 +123,13 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   function fromDb(e) {
     if (e?.name !== 'DbError') return e;
     if (e.code === 'NOT_SET_UP') {
-      safeLog('offers_not_set_up', { hint: `run ${OFFERS_MIGRATION}` }, log);
-      return notSetUp(`Run ${OFFERS_MIGRATION} in Supabase → SQL Editor.`);
+      safeLog('offers_not_set_up', { hint: `run ${OFFERS_MIGRATION} and ${CONNECT_MIGRATION}` }, log);
+      return notSetUp(`Run ${OFFERS_MIGRATION} and then ${CONNECT_MIGRATION} in Supabase → SQL Editor.`);
+    }
+    // a column P6 added isn't there: its migration wasn't run
+    if (e.code === 'BAD_REQUEST' && (e.pg === '42703' || e.pg === 'PGRST204')) {
+      safeLog('offers_not_set_up', { hint: `run ${CONNECT_MIGRATION}` }, log);
+      return notSetUp(`Run ${CONNECT_MIGRATION} in Supabase → SQL Editor.`);
     }
     safeLog('offers_db_failed', { code: e.code }, log);
     return fail(503, 'UNAVAILABLE', 'Couldn’t reach the database. Try again shortly.');
@@ -186,7 +212,8 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   async function salesByOffer(userId, offers) {
     const map = new Map();
     if (!offers.length) return map;
-    const envOf = new Map(offers.map((o) => [o.id, o.provider_ref?.environment === 'sandbox' ? 'sandbox' : 'production']));
+    // a Stripe offer sells in this deployment's one Stripe mode
+    const envOf = new Map(offers.map((o) => [o.id, o.provider === 'stripe' ? (connect.cfg.environment ?? 'production') : o.provider_ref?.environment === 'sandbox' ? 'sandbox' : 'production']));
     const rows = await db.select('sales', { user_id: userId, offer_id: ['in', [...envOf.keys()]], status: ['in', SALE_COUNTED] }, { select: 'offer_id,environment,paid_at,created_at', limit: 5000 });
     for (const r of rows) {
       if (r.environment !== envOf.get(r.offer_id)) continue;
@@ -204,14 +231,15 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
     if (!row) throw fail(404, 'NOT_FOUND', 'That offer isn’t in your account.');
     return row;
   }
-  const out = async (row, origin) => describeOffer(row, origin, (await salesByOffer(row.user_id, [row])).get(row.id) ?? { count: 0, last: null });
+  const out = async (row, origin) => describeOffer(row, origin, (await salesByOffer(row.user_id, [row])).get(row.id) ?? { count: 0, last: null }, (await stripeOffers.extrasFor([row])).get(row.id) ?? null);
 
   async function listOffers(who, url, origin) {
     const projectId = url.searchParams.get('projectId');
     const filters = { user_id: who.id, ...(projectId ? { project_id: projectOf(projectId) } : {}), ...(url.searchParams.get('archived') === '1' ? {} : { status: ['neq', 'archived'] }) };
     const rows = await db.select('offers', filters, { order: 'created_at.desc', limit: MAX_OFFERS_PER_USER });
     const sales = await salesByOffer(who.id, rows);
-    return { offers: rows.map((r) => describeOffer(r, origin, sales.get(r.id) ?? { count: 0, last: null })) };
+    const extras = await stripeOffers.extrasFor(rows);
+    return { offers: rows.map((r) => describeOffer(r, origin, sales.get(r.id) ?? { count: 0, last: null }, extras.get(r.id) ?? null)) };
   }
 
   async function createExternal(who, b, origin) {
@@ -238,17 +266,17 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
 
   async function patchOffer(who, id, b, origin) {
     const row = await own(who.id, id);
-    const patch = {};
+    const patch = row.provider === 'stripe' ? await stripeOffers.patchFields(row, b) : {};
     const title = cleanText(b.title, 200, 'The title');
     if (title !== undefined) {
       if (!title) throw fail(400, 'BAD_REQUEST', 'Give the offer a title.');
       patch.title = title;
     }
-    if (b.priceDisplay !== undefined) {
+    if (b.priceDisplay !== undefined && row.provider !== 'stripe') {
       if (row.provider !== 'external') throw fail(400, 'BAD_REQUEST', 'A Whop offer’s price comes from its plan: use “Refresh from Whop”.');
       patch.price_display = cleanText(b.priceDisplay, 40, 'The price');
     }
-    if (b.url !== undefined) {
+    if (b.url !== undefined && row.provider !== 'stripe') {
       if (row.provider !== 'external') throw fail(400, 'BAD_REQUEST', 'Attach another plan to change where a Whop offer goes.');
       patch.provider_ref = { ...(row.provider_ref ?? {}), url: linkOf(b.url) };
     }
@@ -256,6 +284,7 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
       if (b.status === 'paused' && ['active', 'paused'].includes(row.status)) patch.status = 'paused';
       else if (b.status === 'active' && ['active', 'paused'].includes(row.status)) {
         if (row.status === 'paused' && row.provider === 'whop') await sellable(row);
+        if (row.status === 'paused' && row.provider === 'stripe') await stripeOffers.sellable(row);
         patch.status = 'active';
       } else throw fail(409, 'BAD_STATUS', row.status === 'archived' ? 'This offer is archived.' : 'This offer’s link isn’t ready yet: use “Check again”.');
     }
@@ -341,9 +370,30 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
     return { days, live, test: { count: test }, clicks: offers.reduce((n, o) => n + (Number(o.clicks) || 0), 0), offers: offers.map((o) => ({ id: o.id, clicks: Number(o.clicks) || 0, sales: perOffer.get(o.id) ?? 0 })) };
   }
 
+  /** POST /api/offers/sales/<sale id>/download-link: a new 7-day link for a buyer who lost theirs (no plan needed). */
+  async function saleDownloadLink(who, saleId, req) {
+    if (!isUuid(saleId)) throw fail(404, 'NOT_FOUND', 'That sale isn’t in your account.');
+    const [sale] = await db.select('sales', { id: saleId, user_id: who.id }, { select: 'id,offer_id,provider,status', limit: 1 });
+    if (!sale || sale.provider !== 'stripe' || !sale.offer_id) throw fail(404, 'NOT_FOUND', 'That sale isn’t in your account.');
+    const [offer] = await db.select('offers', { id: sale.offer_id, user_id: who.id }, { select: 'id,provider,delivery', limit: 1 });
+    if (!offer || offer.provider !== 'stripe' || offer.delivery?.kind !== 'file') throw fail(409, 'NO_FILE', 'This offer has no file to download.');
+    if (!['paid', 'partially_refunded'].includes(sale.status)) throw fail(409, 'NOT_PAID', 'This sale was refunded or disputed, so its download is closed.');
+    const ticket = stripeCheckout.makeTicket(sale.id);
+    if (!ticket) throw notSetUp('Set LEAD_LINK_SECRET (16+ characters) or SUPABASE_SECRET_KEY.', 'Download links aren’t available right now.');
+    const origin = connect.cfg.publicOrigin ?? originFor(req, env);
+    return { url: `${origin}/b/${offer.id}/file?t=${ticket}`, expiresAt: new Date(now() + 7 * 86_400_000).toISOString() };
+  }
+
   async function routeOffers(req, res, url, who) {
     const p = url.pathname;
     const origin = originFor(req, env);
+    const link = /^\/api\/offers\/sales\/([^/]{1,64})\/download-link$/.exec(p.length <= 120 ? p : '');
+    if (link) {
+      if (req.method !== 'POST') throw fail(405, 'BAD_REQUEST', 'Method not allowed.');
+      limited('sale-link', who.id);
+      notBlocked(who);
+      return reply(req, res, 200, await saleDownloadLink(who, link[1], req));
+    }
     const m = /^\/api\/offers(?:\/([^/]{1,64})(?:\/(check|archive))?)?$/.exec(p.length <= 120 ? p : '');
     if (!m) throw fail(404, 'NOT_FOUND', 'Not found.');
     const [, id, action] = m;
@@ -361,7 +411,13 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
         const got = await whop.createOffer(who, b, origin, pc.offerIdFor);
         return reply(req, res, got.status, { offer: await out(got.row, origin) });
       }
-      throw fail(400, 'BAD_REQUEST', b.provider === 'stripe' ? 'Stripe checkout isn’t available yet.' : 'Choose Whop or your own checkout link.');
+      if (b.provider === 'stripe') {
+        if (!stripeOn) throw notSetUp(`Stripe Connect needs: ${connect.cfg.missing().join(', ') || 'SUPABASE_URL and SUPABASE_SECRET_KEY'}.`, connect.MSG.unavailable);
+        const row = await stripeOffers.create(who, b);
+        buy.drop(row.id);
+        return reply(req, res, 200, { offer: await out(row, origin) });
+      }
+      throw fail(400, 'BAD_REQUEST', 'Choose Whop, Stripe or your own checkout link.');
     }
     if (id === 'sales' && !action && method === 'GET') return reply(req, res, 200, await listSales(who, url));
     if (id === 'summary' && !action && method === 'GET') return reply(req, res, 200, await summary(who, url));
@@ -437,15 +493,81 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
     throw fail(405, 'BAD_REQUEST', 'Method not allowed.');
   }
 
+  /** /api/payments/stripe…: the seller's own Stripe account (server/payments/stripeConnect.mjs). */
+  async function routeStripe(req, res, url, who) {
+    const p = url.pathname;
+    const owner = /^\/api\/payments\/stripe\/admin(?:\/alerts\/([^/]{1,60})\/resolve)?$/.exec(p.length <= 120 ? p : '');
+    if (owner) {
+      if (who.isAdmin !== true) throw fail(403, 'FORBIDDEN', 'Only the app’s owner can see this.');
+      limited('stripe-connect-read', who.id);
+      if (!owner[1] && req.method === 'GET') return reply(req, res, 200, await connect.adminView({ emailFor: async (id) => (billing?.emailFor ? billing.emailFor(id) : '') }));
+      if (owner[1] && req.method === 'POST') return reply(req, res, 200, await connect.resolveAlert(owner[1]));
+      throw fail(405, 'BAD_REQUEST', 'Method not allowed.');
+    }
+    const m = /^\/api\/payments\/stripe(?:\/(onboarding|sync|tax))?$/.exec(p.length <= 80 ? p : '');
+    if (!m) throw fail(404, 'NOT_FOUND', 'Not found.');
+    const [, action] = m;
+    const method = req.method;
+    if (!action && method === 'GET') {
+      limited('stripe-connect-read', who.id);
+      return reply(req, res, 200, await connect.view(who));
+    }
+    if (!stripeOn) throw notSetUp(`Stripe Connect needs: ${connect.cfg.missing().join(', ') || 'SUPABASE_URL and SUPABASE_SECRET_KEY'}.`, connect.MSG.unavailable);
+    if (!action && method === 'POST') {
+      limited('stripe-connect', who.id);
+      notBlocked(who);
+      const b = await body(req);
+      const got = await connect.create(who, b, { needsActive });
+      return reply(req, res, got.status, { account: accountView(got.row) });
+    }
+    if (action === 'onboarding' && method === 'POST') {
+      limited('stripe-connect', who.id);
+      notBlocked(who);
+      await body(req);
+      const origin = connect.cfg.publicOrigin ?? originFor(req, env);
+      return reply(req, res, 200, await connect.onboardingLink(who, origin));
+    }
+    if (action === 'sync' && method === 'POST') {
+      limited('stripe-connect-read', who.id);
+      notBlocked(who);
+      await body(req);
+      return reply(req, res, 200, await connect.sync(who));
+    }
+    if (action === 'tax' && method === 'PUT') {
+      limited('stripe-connect-read', who.id);
+      notBlocked(who);
+      return reply(req, res, 200, await connect.setTax(who, await body(req)));
+    }
+    if (!action && method === 'DELETE') {
+      limited('offers-write', who.id);
+      return reply(req, res, 200, await connect.disconnect(who, { confirm: url.searchParams.get('confirm') === '1' }));
+    }
+    throw fail(405, 'BAD_REQUEST', 'Method not allowed.');
+  }
+
   return {
     enabled: true,
     buy,
     config,
     notes,
     whop,
+    /** Stripe Connect's core (accounts, alerts), for the webhook and tests */
+    connect,
+    /** /connect/return and /connect/refresh on the app's host (fixed redirects into the app) */
+    connectPages: serveConnectReturn,
 
     async handle(req, res, url) {
       const p = url.pathname;
+      if (p === ROUTE_PREFIXES.stripeConnectWebhook || p.startsWith(`${ROUTE_PREFIXES.stripeConnectWebhook}/`)) {
+        if (req.method !== 'POST' || p !== ROUTE_PREFIXES.stripeConnectWebhook) {
+          drain(req);
+          reply(req, res, req.method !== 'POST' ? 405 : 404, { error: req.method !== 'POST' ? 'Method not allowed.' : 'Not found.', code: req.method !== 'POST' ? 'BAD_REQUEST' : 'NOT_FOUND' }, req.method !== 'POST' ? { allow: 'POST' } : {});
+          return true;
+        }
+        const got = await connectHooks.webhook(req, { limited: (r) => limit('stripe-connect-webhook', clientKey(r)), readRaw });
+        reply(req, res, got.status, got.body);
+        return true;
+      }
       if (p.startsWith(ROUTE_PREFIXES.whopWebhook)) {
         if (req.method !== 'POST') {
           drain(req);
@@ -458,11 +580,12 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
         return true;
       }
       const under = (prefix) => p === prefix || p.startsWith(`${prefix}/`);
-      if (!under(ROUTE_PREFIXES.offers) && !under(ROUTE_PREFIXES.whop)) return false;
+      if (!under(ROUTE_PREFIXES.offers) && !under(ROUTE_PREFIXES.whop) && !under(ROUTE_PREFIXES.stripePayments)) return false;
       const who = await user(req, res);
       if (!who) return true;
       try {
         if (under(ROUTE_PREFIXES.offers)) await routeOffers(req, res, url, who);
+        else if (under(ROUTE_PREFIXES.stripePayments)) await routeStripe(req, res, url, who);
         else await routeWhop(req, res, url, who);
       } catch (e) {
         const mapped = fromDb(e);
@@ -475,17 +598,42 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
       return true;
     },
 
-    /** server/cron: the daily webhook check, then the read-only reconcile (both claim their run). */
-    cronJobs: () => (whopOn ? [
-      { name: 'offers-webhooks', dailyAtUtc: '04:17', run: (ctx) => whop.healthCheck(ctx) },
-      { name: 'offers-reconcile', dailyAtUtc: '04:47', run: (ctx) => whop.reconcile(ctx) },
-    ] : []),
+    /**
+     * server/cron: Whop's daily webhook check and read-only reconcile; Stripe Connect's hourly read-backs (accounts
+     * whose create didn't answer, fee returns) and daily account sync and read-only reconcile (all claim their run).
+     */
+    cronJobs: () => [
+      ...(whopOn ? [
+        { name: 'offers-webhooks', dailyAtUtc: '04:17', run: (ctx) => whop.healthCheck(ctx) },
+        { name: 'offers-reconcile', dailyAtUtc: '04:47', run: (ctx) => whop.reconcile(ctx) },
+      ] : []),
+      ...(stripeOn ? [
+        { name: 'connect-readback', everyMs: 3_600_000, run: () => connect.cronReadback() },
+        { name: 'connect-fees', everyMs: 3_600_000, run: () => connectHooks.cronFees() },
+        { name: 'connect-sync', dailyAtUtc: '04:31', run: (ctx) => connect.cronSync(ctx) },
+        { name: 'connect-reconcile', dailyAtUtc: '05:07', run: (ctx) => connectHooks.cronReconcile(ctx) },
+      ] : []),
+    ],
+    /** P1's webhook hands our fee events (application_fee.*) here. */
+    connectPlatformEvent: (evt) => (stripeOn ? connectHooks.onPlatformEvent(evt) : Promise.resolve('ignored')),
+    /** for tests: the Connect webhook's parts (fee returns, crons) */
+    connectHooks,
 
     /** Before an account is deleted: its buy links stop on this copy at once, then one attempt at each webhook. */
     async forgetUser(userId) {
       blocked.add(userId);
       buy.forgetUser(userId);
       await whop.forgetUser(userId);
+      // the seller's Stripe account stays theirs (never deleted here); a fee return still unclear is for the owner to
+      // check in Stripe once the rows are gone
+      if (stripeOn) {
+        try {
+          const unclear = await db.select('connect_fee_returns', { user_id: userId, state: ['in', ['unknown', 'sending']] }, { select: 'source_id', limit: 50 });
+          for (const r of unclear) await connect.alert('fee_return_unknown', { source: String(r.source_id).slice(0, 40), where: 'account_deleted' });
+        } catch {
+          /* best effort */
+        }
+      }
     },
     async unforgetUser(userId) {
       blocked.delete(userId);

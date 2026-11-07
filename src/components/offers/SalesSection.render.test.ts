@@ -26,6 +26,13 @@ describe('Analytics › Sales', () => {
     expect(html).toContain('$0.00');
   });
 
+  it('Revenue: before the provider’s fees, and our fee too for Stripe sales', () => {
+    const summary = { days: 7, live: { count: 1, revenue: { usd: 4900 }, refunded: {} }, test: { count: 0 }, clicks: 1, offers: [] };
+    expect(wrap(createElement(SalesTiles, { days: 7, summary, via: 'Whop' }))).toContain('Before Whop’s fees<');
+    expect(wrap(createElement(SalesTiles, { days: 7, summary, via: 'Stripe' }))).toContain('Before Stripe’s fees and our fee');
+    expect(wrap(createElement(SalesTiles, { days: 7, summary, via: 'Stripe and Whop' }))).toContain('fees and our fee');
+  });
+
   it('nothing at all when offers are off (signed out, server off)', () => {
     expect(wrap(createElement(SalesSection, { projectId: 'p1', brand: 'Maya', days: 30 }))).toBe('');
   });

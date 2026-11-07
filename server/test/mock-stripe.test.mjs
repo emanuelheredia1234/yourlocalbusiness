@@ -2,7 +2,7 @@
 // the portal, webhooks, Connect sellers) answers the way Stripe does. Nothing leaves the machine.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import http from 'node:http';
-import { createMockStripe, encodeForm, parseForm, signStripeHeader, TEST_STRIPE_KEY, TEST_STRIPE_WEBHOOK_SECRET, verifyStripeHeader } from './mock-stripe.mjs';
+import { createMockStripe, encodeForm, parseForm, signStripeHeader, TEST_STRIPE_CONNECT_WEBHOOK_SECRET, TEST_STRIPE_KEY, TEST_STRIPE_WEBHOOK_SECRET, verifyStripeHeader } from './mock-stripe.mjs';
 
 let mock;
 let hook;
@@ -15,14 +15,16 @@ beforeAll(async () => {
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf8');
-      const ok = verifyStripeHeader(raw, req.headers['stripe-signature'], TEST_STRIPE_WEBHOOK_SECRET);
-      received.push({ ok, event: JSON.parse(raw) });
+      // each endpoint checks with its own secret only (Connect events come signed with the Connect secret)
+      const connect = req.url.includes('stripe-connect');
+      const ok = verifyStripeHeader(raw, req.headers['stripe-signature'], connect ? TEST_STRIPE_CONNECT_WEBHOOK_SECRET : TEST_STRIPE_WEBHOOK_SECRET);
+      received.push({ ok, connect, event: JSON.parse(raw) });
       res.writeHead(ok ? 200 : 400);
       res.end();
     });
   });
   await new Promise((r) => hook.listen(0, '127.0.0.1', r));
-  mock = await createMockStripe({ webhookUrl: `http://127.0.0.1:${hook.address().port}/api/webhooks/stripe` }).start();
+  mock = await createMockStripe({ webhookUrl: `http://127.0.0.1:${hook.address().port}/api/webhooks/stripe`, connectWebhookUrl: `http://127.0.0.1:${hook.address().port}/api/webhooks/stripe-connect` }).start();
 });
 
 afterAll(async () => {
@@ -284,6 +286,7 @@ describe('mock-stripe', () => {
     await fetch(`${mock.base}/__accounts/enable`, { method: 'POST', body: JSON.stringify({ id: acct.id }) });
     expect((await stripe('GET', `/v1/accounts/${acct.id}`)).body.charges_enabled).toBe(true);
     expect(received[0].event).toMatchObject({ type: 'account.updated', account: acct.id });
+    expect(received[0]).toMatchObject({ ok: true, connect: true });
 
     // the seller's product and price live on their account
     const product = (await stripe('POST', '/v1/products', { name: 'Ebook' }, { account: acct.id })).body;
@@ -303,5 +306,112 @@ describe('mock-stripe', () => {
 
     // an account nobody made
     expect((await stripe('GET', '/v1/customers', null, { account: 'acct_000000000000000000000000' })).status).toBe(403);
+  });
+
+  it('P6 accounts: controller and capabilities kept, requirements, list for read-back, identity fields locked after a link, single-use links, no account_update for full-Dashboard accounts', async () => {
+    const controller = { fees: { payer: 'account' }, losses: { payments: 'stripe' }, requirement_collection: 'stripe', stripe_dashboard: { type: 'full' } };
+    expect((await stripe('POST', '/v1/accounts', { country: 'usa' })).status).toBe(400);
+    const a = (await stripe('POST', '/v1/accounts', { controller, country: 'US', email: 's@example.com', capabilities: { card_payments: { requested: true }, transfers: { requested: true } }, business_profile: { name: 'Pots' }, metadata: { ylb_tag: 'cust_abc', ylb_env: 'sandbox' } })).body;
+    expect(a).toMatchObject({ controller, country: 'US', default_currency: 'usd', capabilities: { card_payments: 'inactive', transfers: 'inactive' }, business_profile: { name: 'Pots' }, metadata: { ylb_tag: 'cust_abc' } });
+    expect(a.requirements.currently_due.length).toBeGreaterThan(0);
+    const listed = await stripe('GET', '/v1/accounts', { limit: 1 });
+    expect(listed.body.data[0].id).toBe(a.id);
+    expect(listed.body.has_more).toBe(true);
+    const next = await stripe('GET', '/v1/accounts', { limit: 100, starting_after: a.id });
+    expect(next.body.data.some((x) => x.id === a.id)).toBe(false);
+    expect((await stripe('POST', `/v1/accounts/${a.id}`, { email: 'new@example.com' })).status).toBe(200);
+    expect((await stripe('POST', '/v1/account_links', { account: a.id, refresh_url: 'https://app/connect/refresh', return_url: 'https://app/connect/return', type: 'account_update' })).status).toBe(400);
+    const link = (await stripe('POST', '/v1/account_links', { account: a.id, refresh_url: 'https://app/connect/refresh', return_url: 'https://app/connect/return', type: 'account_onboarding' })).body;
+    expect(await (await fetch(link.url)).text()).toContain('Mock onboarding');
+    expect(await (await fetch(link.url)).text()).toContain('expired');
+    expect((await stripe('POST', `/v1/accounts/${a.id}`, { email: 'other@example.com' })).status).toBe(400);
+    expect((await stripe('POST', `/v1/accounts/${a.id}`, { metadata: { x: '1' } })).status).toBe(200);
+    received.length = 0;
+    await fetch(`${mock.base}/__accounts/requirements`, { method: 'POST', body: JSON.stringify({ id: a.id, past_due: ['external_account'], details_submitted: true }) });
+    expect(received[0].event).toMatchObject({ type: 'account.updated', account: a.id, data: { object: { details_submitted: true } } });
+    await fetch(`${mock.base}/__accounts/enable`, { method: 'POST', body: JSON.stringify({ id: a.id }) });
+    expect((await stripe('GET', `/v1/accounts/${a.id}`)).body).toMatchObject({ charges_enabled: true, capabilities: { card_payments: 'active' }, requirements: { currently_due: [], disabled_reason: null } });
+    await fetch(`${mock.base}/__accounts/deauthorize`, { method: 'POST', body: JSON.stringify({ id: a.id }) });
+    expect(received.at(-1).event).toMatchObject({ type: 'account.application.deauthorized', account: a.id });
+    expect((await stripe('GET', '/v1/tax/settings', null, { account: a.id })).status).toBe(403);
+  });
+
+  it('P6 payments: inline prices, the checks on fees, tax and expiry, a paid session with its charge and our fee, refunds, disputes, fee refunds, async payments', async () => {
+    const mk = async (country = 'US') => {
+      const a = (await stripe('POST', '/v1/accounts', { country, controller: { stripe_dashboard: { type: 'full' } } })).body;
+      return a;
+    };
+    const a = await mk();
+    const line = { price_data: { currency: 'usd', unit_amount: 1000, product_data: { name: 'Ebook' } }, quantity: 1 };
+    const base = { mode: 'payment', success_url: 'https://app/b/x/done?session_id={CHECKOUT_SESSION_ID}', cancel_url: 'https://app/b/x/back', line_items: [line], metadata: { ylb_offer: 'x' }, client_reference_id: 'x' };
+    // charges not enabled yet
+    expect((await stripe('POST', '/v1/checkout/sessions', base, { account: a.id })).body.error.code).toBe('account_invalid');
+    await fetch(`${mock.base}/__accounts/enable`, { method: 'POST', body: JSON.stringify({ id: a.id }) });
+    for (const fee of [0, 1000, 1500, -1]) expect((await stripe('POST', '/v1/checkout/sessions', { ...base, payment_intent_data: { application_fee_amount: fee } }, { account: a.id })).status, String(fee)).toBe(400);
+    expect((await stripe('POST', '/v1/checkout/sessions', { ...base, automatic_tax: { enabled: true } }, { account: a.id })).status).toBe(400);
+    expect((await stripe('POST', '/v1/checkout/sessions', { ...base, expires_at: Math.floor(Date.now() / 1000) + 600 }, { account: a.id })).status).toBe(400);
+    await fetch(`${mock.base}/__tax/active`, { method: 'POST', body: JSON.stringify({ account: a.id }) });
+    expect((await stripe('GET', '/v1/tax/settings', null, { account: a.id })).body.status).toBe('active');
+    const br = await mk('BR');
+    await fetch(`${mock.base}/__accounts/enable`, { method: 'POST', body: JSON.stringify({ id: br.id }) });
+    expect((await stripe('POST', '/v1/checkout/sessions', { ...base, payment_intent_data: { application_fee_amount: 30 } }, { account: br.id })).status).toBe(400);
+    expect((await stripe('POST', '/v1/checkout/sessions', base, { account: br.id })).status).toBe(200);
+
+    const s = (await stripe('POST', '/v1/checkout/sessions', { ...base, automatic_tax: { enabled: true }, expires_at: Math.floor(Date.now() / 1000) + 3600, payment_intent_data: { application_fee_amount: 30, metadata: { ylb_offer: 'x' } } }, { account: a.id })).body;
+    expect(s).toMatchObject({ amount_total: 1000, currency: 'usd', client_reference_id: 'x', metadata: { ylb_offer: 'x' }, automatic_tax: { enabled: true } });
+    expect(s.url).toBe(`${mock.base}/__pay/${s.id}`);
+    received.length = 0;
+    const done = await (await fetch(`${mock.base}/__checkout/complete`, { method: 'POST', body: JSON.stringify({ id: s.id, account: a.id, email: 'b@example.com' }) })).json();
+    expect(received.map((d) => [d.event.type, d.connect, d.ok])).toEqual([['checkout.session.completed', true, true], ['application_fee.created', false, true]]);
+    const read = (await stripe('GET', `/v1/checkout/sessions/${s.id}`, { expand: ['payment_intent.latest_charge'] }, { account: a.id })).body;
+    expect(read).toMatchObject({ status: 'complete', payment_status: 'paid', customer_details: { email: 'b@example.com' }, payment_intent: { application_fee_amount: 30, latest_charge: { amount: 1000, application_fee: done.charge.application_fee } } });
+    const feeId = done.charge.application_fee;
+    expect((await stripe('GET', `/v1/application_fees/${feeId}`, null, { account: a.id })).status).toBe(400);
+    expect((await stripe('GET', `/v1/application_fees/${feeId}`)).body).toMatchObject({ account: a.id, amount: 30, amount_refunded: 0, charge: done.charge.id });
+
+    // a Dashboard refund keeps our fee; a refund with refund_application_fee returns its share
+    received.length = 0;
+    await fetch(`${mock.base}/__charges/refund`, { method: 'POST', body: JSON.stringify({ charge: done.charge.id, account: a.id, amount: 400 }) });
+    expect(received.map((d) => d.event.type)).toEqual(['charge.refunded']);
+    expect((await stripe('GET', `/v1/application_fees/${feeId}`)).body.amount_refunded).toBe(0);
+    await stripe('POST', '/v1/refunds', { charge: done.charge.id, amount: 100, refund_application_fee: true }, { account: a.id, idem: 'r1' });
+    expect((await stripe('GET', `/v1/application_fees/${feeId}`)).body.amount_refunded).toBe(3);
+    const ch = (await stripe('GET', `/v1/charges/${done.charge.id}`, { expand: ['refunds'] }, { account: a.id })).body;
+    expect(ch.amount_refunded).toBe(500);
+    expect(ch.refunds.data).toHaveLength(2);
+
+    // our fee back by the fee refund API: only up to what's left; listed with its metadata
+    expect((await stripe('POST', `/v1/application_fees/${feeId}/refunds`, { amount: 28 }, { idem: 'f0' })).status).toBe(400);
+    const fr = await stripe('POST', `/v1/application_fees/${feeId}/refunds`, { amount: 12, metadata: { ylb_source: 're_x' } }, { idem: 'f1' });
+    expect(fr.body).toMatchObject({ object: 'fee_refund', amount: 12, fee: feeId });
+    expect((await stripe('GET', `/v1/application_fees/${feeId}/refunds`)).body.data[0].metadata.ylb_source).toBe('re_x');
+
+    // a dispute: created, then lost
+    received.length = 0;
+    const d = await (await fetch(`${mock.base}/__charges/dispute`, { method: 'POST', body: JSON.stringify({ charge: done.charge.id, account: a.id }) })).json();
+    await fetch(`${mock.base}/__disputes/close`, { method: 'POST', body: JSON.stringify({ id: d.id, account: a.id, status: 'lost' }) });
+    expect(received.map((x) => x.event.type)).toEqual(['charge.dispute.created', 'charge.dispute.closed', 'charge.dispute.funds_withdrawn']);
+    expect((await stripe('GET', `/v1/disputes/${d.id}`, null, { account: a.id })).body.status).toBe('lost');
+
+    // a delayed payment: unpaid, then succeeded with its fee
+    const s2 = (await stripe('POST', '/v1/checkout/sessions', { ...base, payment_intent_data: { application_fee_amount: 30 } }, { account: a.id })).body;
+    await fetch(`${mock.base}/__checkout/complete`, { method: 'POST', body: JSON.stringify({ id: s2.id, account: a.id, async: true }) });
+    expect((await stripe('GET', `/v1/checkout/sessions/${s2.id}`, null, { account: a.id })).body.payment_status).toBe('unpaid');
+    received.length = 0;
+    await fetch(`${mock.base}/__checkout/async`, { method: 'POST', body: JSON.stringify({ id: s2.id, account: a.id, succeeded: true }) });
+    expect(received.map((x) => x.event.type)).toEqual(['checkout.session.async_payment_succeeded', 'application_fee.created']);
+    const listed = (await stripe('GET', '/v1/checkout/sessions', { 'created[gte]': Math.floor(Date.now() / 1000) - 60, limit: 100 }, { account: a.id })).body;
+    expect(listed.data.map((x) => x.id)).toEqual(expect.arrayContaining([s.id, s2.id]));
+    // faults reach the new routes too
+    mock.fail('POST /v1/application_fees/:id/refunds', 'server');
+    expect((await stripe('POST', `/v1/application_fees/${feeId}/refunds`, { amount: 1 }, { idem: 'f2' })).status).toBe(500);
+  });
+
+  it('signed() follows the realm: a Connect event is signed with the Connect secret', () => {
+    const c = mock.signed('account.updated', { id: 'acct_x' }, { account: 'acct_abcdef1' });
+    expect(verifyStripeHeader(c.raw, c.header, TEST_STRIPE_CONNECT_WEBHOOK_SECRET)).toBe(true);
+    expect(verifyStripeHeader(c.raw, c.header, TEST_STRIPE_WEBHOOK_SECRET)).toBe(false);
+    const p = mock.signed('application_fee.created', { id: 'fee_x' });
+    expect(verifyStripeHeader(p.raw, p.header, TEST_STRIPE_WEBHOOK_SECRET)).toBe(true);
   });
 });
