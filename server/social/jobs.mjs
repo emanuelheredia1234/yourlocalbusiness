@@ -44,6 +44,7 @@ export const JOB_MESSAGES = Object.freeze({
   NOT_SENT: 'We couldn’t reach the posting service, so nothing was posted. Try again shortly.',
   X_LINKS_USED: 'This month’s X posts with a link are used up for your account, so nothing was posted. Take the link out (or put it in your X bio) and try again, or post it yourself.',
   SERVICE_UNAVAILABLE: 'Posting from the app isn’t available right now, so nothing was posted. We’ve been notified. You can post it yourself.',
+  TRIAL_REEL_REFUSED: 'Instagram didn’t accept this as a Trial Reel (the account may not be eligible yet, or has hit Instagram’s trial limit). Nothing was posted. Post it as a regular Reel instead?',
 });
 
 /** Plain words for a job that was sent but isn't public yet (TikTok put it in the account's drafts), or may be there twice. */

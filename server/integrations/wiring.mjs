@@ -63,6 +63,7 @@ import { createAdsRoutes } from '../ads/routes.mjs';
 import { createOffers } from '../offers/index.mjs';
 import { createMorning } from '../morning/index.mjs';
 import { createTreg } from '../treg.mjs';
+import { createTrialReels } from '../social/trialReels.mjs';
 import { dbFromEnv, INTEGRATIONS_MIGRATION } from './db.mjs';
 import { createBucketLimiter, readRaw, redactPath, safeLog } from './common.mjs';
 import { ROUTE_PREFIXES } from './contracts.mjs';
@@ -181,7 +182,11 @@ export function createIntegrations({
   const treg = make.treg({ env, fetch, now, db: database, log, tierFor: (tag) => billing.tregCapsFor(tag) });
   // the disconnect route asks the ads module which launched campaigns are still on (R12); the module is made below
   let adsModule = null;
-  const deps = { ...base, connections, nango, treg, liveAdsGuard: (userId, platform) => adsModule?.liveOn?.(userId, platform) ?? [] };
+  // Instagram Trial Reels' eligibility (posting and the experiments module share its 6-hour follower cache); the A/B
+  // tests' posting hooks are late-bound (the experiments module is made after posting)
+  const trialReels = createTrialReels({ db: database, connections, now, log });
+  let experimentsModule = null;
+  const deps = { ...base, connections, nango, treg, trialReels, experimentHooks: () => experimentsModule?.postingHooks ?? null, liveAdsGuard: (userId, platform) => adsModule?.liveOn?.(userId, platform) ?? [] };
 
   const modules = {
     connections: make.connectionRoutes(deps),

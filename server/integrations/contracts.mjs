@@ -142,6 +142,14 @@ export const API_ERROR_CODES = Object.freeze([
   'USE_PORTAL',
   // the morning action asked for in the late window (02:00–05:00 local): { nextAt }
   'NOT_DUE',
+  // A/B tests and Trial Reels (server/experiments, P4b)
+  'TRIAL_REEL_NOT_ELIGIBLE',
+  'EXPERIMENT_LIMIT',
+  'EXPERIMENT_RUNNING',
+  'TOO_SOON',
+  'TOO_SOON_AFTER_VARIANT',
+  'VARIANT_NO_FORM',
+  'CAMPAIGN_UNCONFIRMED',
 ]);
 
 /** The route prefixes the server hands to the integration modules (server/integrations/wiring.mjs). */

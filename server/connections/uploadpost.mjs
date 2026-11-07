@@ -169,6 +169,8 @@ export function jobErrorForCode(code) {
   if (c === 'spam_risk_too_many_pending_share') return 'TIKTOK_DRAFTS_FULL';
   if (c === 'reached_active_user_cap' || c === 'x_daily_write_limit' || c === 'hard_cap') return 'PLATFORM_LIMIT';
   if (/^(MEDIA_REQUIRED|MEDIA_LIMITS|invalid_video_file)$/.test(c)) return 'MEDIA_REFUSED';
+  // Instagram refused a Trial Reel (the account isn't eligible yet, or hit Instagram's trial limit)
+  if (/trial/i.test(c)) return 'TRIAL_REEL_REFUSED';
   if (/duplicate|similar/i.test(c)) return 'DUPLICATE';
   return 'REFUSED';
 }
@@ -200,10 +202,21 @@ export function outcomeOfEntry(entry, { platform = '', top = '', final = false }
     const code = String(entry.error_code ?? '');
     if (entry.reauth_required === true || /reauth|reconnect/i.test(code)) return { state: 'failed', errorCode: 'NEEDS_RECONNECT', reauth: true };
     if ((platform || entry.platform) === 'tiktok' && !clip(code, 60)) return { state: 'unknown', errorCode: 'UNCONFIRMED' };
+    // Instagram refusing a Trial Reel says so only in its text (looked at, never kept or passed on)
+    if ((platform || entry.platform) === 'instagram' && trialRefusal(entry)) return { state: 'failed', errorCode: 'TRIAL_REEL_REFUSED' };
     return { state: 'failed', errorCode: jobErrorForCode(code) };
   }
   return { state: 'pending' };
 }
+
+/** Whether a failed entry (or answer) is Instagram refusing a Trial Reel: its own words, read here only. */
+export function trialRefusal(entry) {
+  if (!isObj(entry)) return false;
+  return [entry.error, entry.error_message, entry.message, entry.error_code].some((t) => typeof t === 'string' && /trial/i.test(t.slice(0, 500)));
+}
+
+/** Instagram's Trial Reel modes (share_mode); CUSTOM, a regular Reel, is Upload-Post's default and never sent. */
+export const TRIAL_SHARE_MODES = Object.freeze(['TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED', 'TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS']);
 
 /** A business profile's connected accounts (Upload-Post's social_accounts) differ from what our doc has for it. */
 export function accountsDiffer(prof, social) {
@@ -1201,6 +1214,51 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     };
   }
 
+  /**
+   * One post's own numbers (P4b: an A/B test's variant), by the request id it was uploaded with (our job id): one
+   * read of /uploadposts/post-analytics/{requestId}?platform=, inside the platform analytics limit (100 per 5 minutes,
+   * analyticsSlot). → { metrics: { views?, reach?, impressions?, likes?, comments?, shares?, saves? } } (numbers only;
+   * a key the network didn't report stays missing, never 0) | { error: 'unavailable' | 'not_found' | 'reconnect' |
+   * 'delayed' } (ours; 'delayed' is the app's own setup, and the owner is told) | throws { kind: 'busy' }.
+   */
+  async function postMetrics(userId, platform, { projectId, requestId } = {}) {
+    requireSetUp();
+    if (!SOCIAL_PLATFORMS.includes(platform) || !REQUEST_ID.test(String(requestId ?? ''))) return { error: 'not_found' };
+    const { value: doc } = await readDoc(userId);
+    const tag = tagOf(doc, userId);
+    if (!analyticsSlot()) throw Object.assign(new Error('busy'), { kind: 'busy' });
+    const res = await call('GET', `/uploadposts/post-analytics/${encodeURIComponent(requestId)}`, { query: { platform: UP_PLATFORM[platform] }, retry429: true });
+    await ledger({ customer_tag: tag, user_id: userId, project_id: projectId ?? null, feature: 'social', endpoint: `${platform}:GET /post-analytics`, http_status: res.status, outcome: res.status < 400 ? 'ok' : res.status >= 500 ? 'unknown' : 'failed' });
+    if (res.status < 200 || res.status >= 300) {
+      const e = readFailure(res);
+      if (e.kind === 'busy') throw e;
+      if (e.kind === 'not_found') return { error: 'not_found' };
+      if (e.kind === 'reconnect') {
+        await markReconnect(userId, projectId, platform);
+        return { error: 'reconnect' };
+      }
+      if (e.kind === 'config') {
+        ownerAlert('post_analytics');
+        return { error: 'delayed' };
+      }
+      return { error: 'unavailable' };
+    }
+    const entry = isObj(res.body?.platforms) ? res.body.platforms[UP_PLATFORM[platform]] : null;
+    if (!isObj(entry) || entry.success === false || entry.post_metrics_error != null || !isObj(entry.post_metrics)) {
+      if (isObj(entry) && /reauth|reconnect/i.test(String(entry.error_code ?? ''))) {
+        await markReconnect(userId, projectId, platform);
+        return { error: 'reconnect' };
+      }
+      return { error: 'unavailable' };
+    }
+    const metrics = {};
+    for (const k of ['views', 'reach', 'impressions', 'likes', 'comments', 'shares', 'saves']) {
+      const v = num(entry.post_metrics[k]);
+      if (v !== undefined) metrics[k] = v;
+    }
+    return { metrics };
+  }
+
   /** Ad results live on Zernio: nothing here. */
   async function adResults() {
     return null;
@@ -1209,7 +1267,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
   // ───────────── posting (one attempt) ─────────────
 
   /** The form an upload sends for one platform. path: '/upload' | '/upload_photos' | '/upload_text'. */
-  function uploadFields(platform, { username, page, jobId, composed, mediaUrl, mediaKind, privacy }) {
+  function uploadFields(platform, { username, page, jobId, composed, mediaUrl, mediaKind, privacy, shareMode }) {
     const text = String(composed?.text ?? '');
     const f = { user: username, 'platform[]': [UP_PLATFORM[platform]], request_id: jobId, external_id: String(jobId).slice(0, 200), title: text };
     if (mediaKind === 'video') Object.assign(f, { video: mediaUrl, async_upload: true });
@@ -1224,6 +1282,11 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
         if (page && page !== PERSONAL) f.target_linkedin_page_id = page;
         // LinkedIn's commentary is `description` on media posts; the media title is at most 400 characters
         if (mediaKind) Object.assign(f, { title: clip(text.split('\n')[0] || 'Post', 400), linkedin_description: text });
+        break;
+      case 'instagram':
+        // a Trial Reel (P4b): a Reel with its share_mode. Nothing else changes, so a regular post's form is as it
+        // was; share_to_feed and collaborators are never sent (Trial Reels can't have them, and we don't offer them)
+        if (mediaKind === 'video' && TRIAL_SHARE_MODES.includes(shareMode)) Object.assign(f, { media_type: 'REELS', share_mode: shareMode });
         break;
       case 'tiktok':
         if (privacy) f.privacy_level = privacy;
@@ -1368,8 +1431,9 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
    * → { state: 'sent'|'failed'|'unknown', url?, errorCode?, ref }. Never throws after the upload was sent; never
    * sends again.
    */
-  async function publish(userId, platform, { projectId, jobId, composed, media, privacy } = {}) {
-    const ref = { via: 'upload_post', requestId: jobId, platform };
+  async function publish(userId, platform, { projectId, jobId, composed, media, privacy, shareMode } = {}) {
+    const trial = platform === 'instagram' && media?.kind === 'video' && TRIAL_SHARE_MODES.includes(shareMode);
+    const ref = { via: 'upload_post', requestId: jobId, platform, ...(trial ? { shareMode } : {}) };
     let picked;
     try {
       picked = await usable(userId, platform, projectId);
@@ -1402,7 +1466,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       }
     }
     const path = media ? (media.kind === 'video' ? '/upload' : '/upload_photos') : '/upload_text';
-    const form = uploadFields(platform, { username, page, jobId, composed, mediaUrl, mediaKind: media?.kind, privacy: tiktok.privacy });
+    const form = uploadFields(platform, { username, page, jobId, composed, mediaUrl, mediaKind: media?.kind, privacy: tiktok.privacy, shareMode: trial ? shareMode : undefined });
     const sent = await oneShot(async () => up.call('POST', path, { form, headers: { 'Idempotency-Key': jobId }, timeoutMs: 120_000 }));
     const res = sent.value;
     await ledger({ customer_tag: tag, user_id: userId, project_id: projectId ?? null, call_id: jobId, feature: 'posting', endpoint: `${platform}:POST ${path}`, http_status: res?.status ?? null, outcome: sent.outcome === 'ok' ? 'ok' : sent.outcome === 'failed' ? 'failed' : 'unknown' });
@@ -1411,7 +1475,8 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
       return { state: 'unknown', errorCode: 'UNCONFIRMED', ref };
     }
     if (sent.outcome === 'failed') {
-      const refused = refusalOutcome(res);
+      // Instagram (through Upload-Post) refusing the Trial Reel outright: our own words, nothing was posted
+      const refused = trial && res?.status >= 400 && res?.status < 500 && trialRefusal(res?.body) ? { state: 'failed', errorCode: 'TRIAL_REEL_REFUSED' } : refusalOutcome(res);
       // the account isn't connected at Upload-Post any more: the doc learns it now (one read), not on every post
       if (refused.resync) await sync(userId, projectId).catch(() => null);
       if (refused.reauth) await markReconnect(userId, projectId, platform);
@@ -2166,6 +2231,7 @@ export function createUploadPostConnections({ env = process.env, fetch = globalT
     targets,
     setTarget,
     insights,
+    postMetrics,
     adResults,
     publish,
     postStatus,

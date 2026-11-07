@@ -406,7 +406,17 @@ export type ApiErrorCode =
   /** cancelling or keeping the plan happens in the Customer Portal for now (the P1c migration isn't run) */
   | 'USE_PORTAL'
   /** the morning action asked for in the late window (02:00–05:00 local): { nextAt } */
-  | 'NOT_DUE';
+  | 'NOT_DUE'
+  /** A/B tests and Trial Reels (P4b): an account not eligible for Trial Reels ({ reason, followers? }), the month's
+   * A/B tests used, a split already running on the page, "Update results" too soon, a variant before its gap, a page
+   * version without the page's form, an Omnisend A/B draft that may have been created */
+  | 'TRIAL_REEL_NOT_ELIGIBLE'
+  | 'EXPERIMENT_LIMIT'
+  | 'EXPERIMENT_RUNNING'
+  | 'TOO_SOON'
+  | 'TOO_SOON_AFTER_VARIANT'
+  | 'VARIANT_NO_FORM'
+  | 'CAMPAIGN_UNCONFIRMED';
 
 export interface ApiError {
   error: string;

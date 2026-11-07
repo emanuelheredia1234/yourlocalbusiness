@@ -13,6 +13,7 @@ import { createMockUploadPost, TEST_UPLOAD_POST_KEY, TEST_UPLOAD_POST_WEBHOOK_SE
 import { makeStorage } from '../test/fakes.mjs';
 import { createPostingRoutes } from './routes.mjs';
 import { createPublicMediaRoutes } from '../media/publicMedia.mjs';
+import { createTrialReels } from './trialReels.mjs';
 
 export const TEST_SECRETS = Object.freeze({
   CUSTOMER_TAG_SECRET: 'test-customer-tag-secret-0123456789',
@@ -55,7 +56,7 @@ function readJson(req, limit = 1 << 20) {
 export const NETWORKS = ['facebook', 'instagram', 'linkedin', 'tiktok', 'x', 'youtube'];
 
 /** Everything a posting test needs, started. Call .close() after. */
-export async function startPosting({ env: envExtra = {}, enabled = true } = {}) {
+export async function startPosting({ env: envExtra = {}, enabled = true, experimentHooks = () => null } = {}) {
   const supa = await (await createMockSupabase()).start();
   const up = await createMockUploadPost().start();
   const clock = { t: Date.now() };
@@ -80,7 +81,8 @@ export async function startPosting({ env: envExtra = {}, enabled = true } = {}) 
   const impl = enabled ? createUploadPostConnections({ env, storage, db, now, log, sleep: async (ms) => void (clock.t += ms) }) : nullConnections;
   const connections = createConnections(enabled ? combineConnections({ social: impl }) : nullConnections);
   const limit = createBucketLimiter({ now });
-  const deps = { auth, db, connections, send: sendLike, readJson, limit, env, now, log };
+  const trialReels = createTrialReels({ db, connections, now, log });
+  const deps = { auth, db, connections, send: sendLike, readJson, limit, env, now, log, trialReels, experimentHooks };
   const routes = createPostingRoutes(deps);
   impl.setPostListener?.((userId, jobId, outcome, where) => routes.posting.fromWebhook(userId, jobId, outcome, where));
   const media = createPublicMediaRoutes({ ...deps, clientKey: () => 'test' });
@@ -106,6 +108,10 @@ export async function startPosting({ env: envExtra = {}, enabled = true } = {}) 
     connections,
     routes,
     media,
+    trialReels,
+    deps,
+    limit,
+    auth,
     clock,
     logs,
     base,

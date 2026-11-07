@@ -27,11 +27,15 @@
 //   GET    /uploadposts/history?request_id=
 //   GET    /analytics/:username?platforms=       (mock.analytics: username → numbers to answer instead)
 //   GET    /uploadposts/post-analytics/cached?user= (empty unless seeded)
+//   GET    /uploadposts/post-analytics/:request_id?platform=  a request's per-post numbers (mock.postMetrics:
+//          request_id → { <platform>: metrics | { error: '…' } } (a post_metrics_error in a 200), or { status, body }
+//          to answer instead); 404 for a request it never saw
 // Test hooks: mock.connect(username, platform, extra), mock.setStatus(requestId, body), mock.signed(event, …).
 //
 // Violations a test fails on: an upload without Idempotency-Key, a second upload with a key it has seen (a
 // resend), the API key in a query string, a Pages/boards list without profile=, an external_id over 200 chars, a
-// new profile's username outside Upload-Post's characters or over 40 characters.
+// new profile's username outside Upload-Post's characters or over 40 characters, an Instagram upload with share_to_feed or
+// collaborators (never offered), or a share_mode that isn't a Trial Reel mode on an Instagram video with media_type REELS.
 
 import crypto from 'node:crypto';
 import http from 'node:http';
@@ -68,6 +72,8 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
   const statusOverride = new Map(); // request_id → a /status body to answer as it is
   const cachedPosts = new Map(); // username → cached post rows (empty unless a test seeds them)
   const analytics = new Map(); // username → numbers that replace the standard ones on /analytics (e.g. { followers })
+  const postMetrics = new Map(); // request_id → { <platform>: metrics | { error } } or { status, body }
+  let analyticsReads = 0;
   const blocked = new Set(); // usernames that answer PROFILE_BLOCKED on generate-jwt
   const failDeletes = new Set(); // usernames whose DELETE /uploadposts/users answers 500 (nothing deleted)
   const failCreates = []; // the next POST /uploadposts/users answers these statuses, one each (nothing made)
@@ -97,6 +103,7 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     if (outcome === 'inbox') return { success: true, fallback_to_inbox: true, post_url: 'Video sent to Inbox (No Public URL)' };
     if (outcome === 'privacy') return { success: false, error_code: 'tiktok_privacy_unavailable' };
     if (outcome === 'tiktok_internal') return { success: false, error: 'TikTok received the video but answered with an internal error' };
+    if (outcome === 'trial_refused') return { success: false, error: 'Instagram: this account is not eligible for trial reels (private detail 1234)', error_code: 'instagram_api_error' };
     return { success: true, url: `https://social.example/${platform}/p/${requestId.slice(0, 8)}`, post_id: `pid_${requestId.slice(0, 8)}` };
   }
 
@@ -112,6 +119,11 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     }
     const user = form.get('user');
     const platforms = form.getAll('platform[]');
+    // Instagram: we never send share_to_feed or collaborators; a share_mode is a Trial Reel mode on a REELS video
+    if (platforms.includes('instagram')) {
+      for (const k of ['share_to_feed', 'collaborators', 'instagram_share_to_feed', 'instagram_collaborators']) if (form.has(k)) violations.push({ kind: 'instagram_field_not_offered', field: k });
+      if (form.has('share_mode') && (kind !== 'video' || form.get('media_type') !== 'REELS' || !['TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED', 'TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS'].includes(form.get('share_mode')))) violations.push({ kind: 'share_mode_invalid', value: form.get('share_mode') });
+    }
     const external = form.get('external_id');
     if (external && String(external).length > 200) violations.push({ kind: 'external_id_too_long' });
     const p = profiles.get(String(user));
@@ -281,6 +293,22 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
       }
       return json(res, 200, out);
     }
+    mm = /^\/uploadposts\/post-analytics\/([A-Za-z0-9_.:-]+)$/.exec(p);
+    if (mm && mm[1] !== 'cached' && m === 'GET') {
+      analyticsReads += 1;
+      const scripted = postMetrics.get(mm[1]);
+      if (scripted && typeof scripted.status === 'number') return json(res, scripted.status, scripted.body ?? {});
+      const r = requests.get(mm[1]);
+      if (!r && !scripted) return err(res, 404, 'Post not found');
+      const only = q.get('platform');
+      const platformsOut = {};
+      for (const pl of only ? [only] : (r?.platforms ?? Object.keys(scripted ?? {}))) {
+        const got = scripted?.[pl];
+        if (got?.error) platformsOut[pl] = { success: true, platform_post_id: `pid_${mm[1].slice(0, 8)}`, post_metrics_error: got.error };
+        else platformsOut[pl] = { success: true, platform_post_id: `pid_${mm[1].slice(0, 8)}`, post_url: `https://social.example/${pl}/p/${mm[1].slice(0, 8)}`, post_metrics: { ...(got ?? {}) }, post_metrics_source: 'platform_api' };
+      }
+      return json(res, 200, { success: true, post: { request_id: mm[1], profile_username: r?.user ?? null, media_type: r?.kind ?? null }, platforms: platformsOut });
+    }
     if (p === '/uploadposts/post-analytics/cached' && m === 'GET') {
       // only posts first read one by one are cached (nothing here unless a test seeds them); x isn't a platform here
       const platform = q.get('platform');
@@ -335,6 +363,11 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
     tiktokSettings,
     cachedPosts,
     analytics,
+    postMetrics,
+    /** how many per-post analytics reads were answered */
+    get analyticsReads() {
+      return analyticsReads;
+    },
     blocked,
     failDeletes,
     failCreates,
@@ -365,7 +398,8 @@ export function createMockUploadPost({ key = TEST_UPLOAD_POST_KEY, cap = 75, web
      * What the next upload does: 'ok' | 'async' | 'async_pending' | 'platform_failed' | 'reauth' | 'skipped' |
      * 'inbox' | 'privacy' | 'hard_cap' | 'scheduled_limit' | 'unauthorized' | 'error500' | 'hang' |
      * 'accepted_then_500' | 'existing_request' (answers with another request's id) | 'tiktok_internal' (failed with
-     * no error_code) | 'x_links_stripped', or { waitFor: promise, then } to hold the answer.
+     * no error_code) | 'x_links_stripped' | 'trial_refused' (Instagram refused the Trial Reel, in its own words), or
+     * { waitFor: promise, then } to hold the answer.
      */
     setUploadOutcome(...next) {
       outcomes.push(...next);

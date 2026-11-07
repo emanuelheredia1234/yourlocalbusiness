@@ -27,7 +27,7 @@ function fromDbError(e) {
 
 export function createPostingRoutes(deps = {}) {
   const { auth, db, connections, send, readJson, sameOrigin = () => true, corsHeaders = () => ({}), limit = () => false, env = process.env, fetch = globalThis.fetch, now = () => Date.now(), log = console } = deps;
-  const posting = createPosting({ db, connections, env, fetch, now, log, mediaStore: deps.mediaStore });
+  const posting = createPosting({ db, connections, env, fetch, now, log, mediaStore: deps.mediaStore, trialReels: deps.trialReels ?? null, experiments: () => deps.experimentHooks?.() ?? null });
   const reply = (req, res, status, body) => send(res, status, body, corsHeaders(req));
 
   async function user(req, res) {

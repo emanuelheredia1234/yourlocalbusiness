@@ -14,12 +14,25 @@
 //
 // What it never does: send a post twice by itself, use text from the request as the post (the post is re-read
 // from the user's account and must match), or put a token or a media link in a log.
+//
+// Instagram Trial Reels (P4b): a saved Instagram video post with instagram.shareMode set to a trial mode goes out as
+// a Trial Reel (share_mode on the upload). The request's content.shareMode must match the saved one (409
+// POST_CHANGED); a trial mode on anything but an Instagram video is 400; an account known not to be eligible is 409
+// TRIAL_REEL_NOT_ELIGIBLE, and one whose followers couldn't be read needs trialUnknownOk: true. An A/B test's
+// variant (post.experiment) goes through the experiments module's hooks: its order, gap and monthly limit before the
+// job, the job id on the variant after it, and the refund rule when it ends.
 
 import { ensureCustomer, fail, isUuid, safeLog, utcDay } from '../integrations/common.mjs';
 import { PUBLISH_PLATFORMS } from '../integrations/contracts.mjs';
 import { cleanHashtags, composeFor, placementOf } from './caption.mjs';
 import { createJobs, jobOut } from './jobs.mjs';
 import { canMakePublicLinks, createMediaStore, formatProblem, MEDIA_ID_RE, mediaKind } from './media.mjs';
+
+/** Instagram's Reel modes: CUSTOM is a regular Reel (the default); the other two are Trial Reels. */
+export const SHARE_MODES = Object.freeze(['CUSTOM', 'TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED', 'TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS']);
+export const isTrialMode = (m) => m === 'TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED' || m === 'TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS';
+/** The Reel mode a saved post asks for (anything unknown is a regular Reel). */
+export const shareModeOf = (post) => (SHARE_MODES.includes(post?.instagram?.shareMode) ? post.instagram.shareMode : 'CUSTOM');
 
 /** The posting caps when billing_caps has no row at all (the migration's '*' row says the same). */
 export const DEFAULT_POST_CAPS = Object.freeze({ postsPerDay: 50, xPostsPerDay: 20 });
@@ -56,6 +69,8 @@ export function contentMatches(post, content, platform) {
   if (content.firstComment !== undefined && norm(content.firstComment) !== norm(post.firstComment)) return false;
   if (content.linkPlacement !== undefined && post.linkPlacement !== undefined && placementOf(content.linkPlacement) !== placementOf(post.linkPlacement)) return false;
   if (content.title !== undefined && norm(content.title) !== norm(post.headline)) return false;
+  // a Trial Reel request against a post saved as a regular Reel (or the other way round)
+  if (content.shareMode !== undefined && content.shareMode !== shareModeOf(post)) return false;
   if (content.link !== undefined && content.link !== '' && !`${post.caption ?? ''}\n${post.firstComment ?? ''}`.includes(String(content.link))) return false;
   if (content.mediaIds !== undefined) {
     if (!Array.isArray(content.mediaIds) || content.mediaIds.length > 1) return false;
@@ -80,7 +95,11 @@ function connectionProblem(platform, status) {
   return fail(409, 'NOT_CONNECTED', `Connect ${name} to post from here, or post it yourself.`);
 }
 
-export function createPosting({ db, connections, env = process.env, fetch = globalThis.fetch, now = () => Date.now(), log = console, mediaStore } = {}) {
+/**
+ * trialReels: server/social/trialReels.mjs (eligibility); experiments(): the experiments module's posting hooks, or
+ * null (EXPERIMENTS=off, or not wired): { beforePublish, undoStart, jobCreated, jobFinished }.
+ */
+export function createPosting({ db, connections, env = process.env, fetch = globalThis.fetch, now = () => Date.now(), log = console, mediaStore, trialReels = null, experiments = () => null } = {}) {
   const jobs = createJobs({ db, now });
   const store = mediaStore ?? createMediaStore({ env, fetch });
   /** background runs, for tests (settled()) */
@@ -116,7 +135,18 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
   }
 
   /** Post a job that is `sending` (one attempt at Upload-Post), and record how it ended. Never throws, never resends. */
-  async function run({ userId, platform, composed, media, privacy }, row) {
+  /** Tell the experiments module how a job ended (a variant's refund rule). Never throws. */
+  async function experimentDone(userId, row) {
+    const hooks = experiments?.();
+    if (!hooks || !row?.provider_ref?.experiment) return;
+    try {
+      await hooks.jobFinished(userId, row);
+    } catch (e) {
+      safeLog('posting_experiment_hook_failed', { code: e?.code || e?.name || 'Error' }, log);
+    }
+  }
+
+  async function run({ userId, platform, composed, media, privacy, shareMode }, row) {
     jobs.active.add(row.id);
     let outcome;
     try {
@@ -126,6 +156,7 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
         composed,
         media,
         privacy,
+        ...(shareMode ? { shareMode } : {}),
         loadMedia: async () => {
           const got = await store.bytes(userId, media.id);
           if (!got) throw Object.assign(new Error('missing'), { code: 'MEDIA_MISSING' });
@@ -156,6 +187,7 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       early.delete(row.id);
     }
     safeLog('posting_job_done', { platform, state: outcome.state, error: outcome.errorCode ?? null }, log);
+    await experimentDone(userId, finished);
     return finished;
   }
 
@@ -195,6 +227,16 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       const status = await statusFor(userId, platform, projectId);
       const problem = connectionProblem(platform, status);
       if (problem) throw problem;
+      // a Trial Reel on an account known not to be eligible is refused before anything is sent; one whose followers
+      // couldn't be read goes only when the customer said "Post as a trial anyway"
+      if (isTrialMode(shareModeOf(post)) && platform === 'instagram' && trialReels) {
+        const el = await trialReels.eligibility(userId, projectId);
+        if (el.eligible === false) {
+          const words = el.reason === 'followers' ? `Trial Reels need 1,000+ followers${Number.isFinite(el.followers) ? ` (this account has ${el.followers.toLocaleString('en-US')})` : ''}. Post it as a regular Reel instead.` : 'Connect Instagram again to post Trial Reels.';
+          throw fail(409, 'TRIAL_REEL_NOT_ELIGIBLE', words, { reason: el.reason, ...(Number.isFinite(el.followers) ? { followers: el.followers } : {}) });
+        }
+        if (el.eligible !== true && body.trialUnknownOk !== true) throw fail(409, 'TRIAL_REEL_NOT_ELIGIBLE', 'We couldn’t check your followers. Trial Reels need a public professional account with 1,000+ followers. Tick “Post as a trial anyway” to try: if Instagram refuses, nothing is posted.', { reason: 'unreadable' });
+      }
 
       const composed = composeFor(platform, post);
       if (composed.error === 'TEXT_TOO_LONG') throw fail(400, 'BAD_REQUEST', 'This post is too long for X (280 characters, a link counts as 23). Shorten it and save it first.');
@@ -211,6 +253,10 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       }
       const why = formatProblem(platform, media);
       if (why) throw fail(400, 'MEDIA_UNSUPPORTED', why);
+      // a Trial Reel: an Instagram video only
+      const shareMode = shareModeOf(post);
+      const trial = isTrialMode(shareMode);
+      if (trial && (platform !== 'instagram' || media?.kind !== 'video')) throw fail(400, 'BAD_REQUEST', 'Trial Reels are for Instagram videos only.');
       // Upload-Post fetches photos and videos from our short-lived links: without MEDIA_URL_SECRET none can be made,
       // so nothing is started (and the owner hears, never the customer: it's the app's setup)
       if (media && !canMakePublicLinks(env)) {
@@ -236,11 +282,25 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
 
       const privacy = typeof body.privacy === 'string' ? body.privacy.slice(0, 40) : undefined;
 
-      const made = await jobs.create({ userId, projectId, postId, platform, clientRequestId });
+      // an A/B test's variant: its order and gap, and (the first one) the test's start, counted in the month's limit
+      const hooks = isObj(post.experiment) ? experiments?.() : null;
+      const exp = hooks ? await hooks.beforePublish(who, { post, postId, projectId, platform }) : null;
+
+      let made;
+      try {
+        made = await jobs.create({ userId, projectId, postId, platform, clientRequestId });
+      } catch (e) {
+        if (exp) await hooks.undoStart(userId, exp).catch(() => {});
+        throw e;
+      }
+      if (made.existing && exp) await hooks.undoStart(userId, exp).catch(() => {});
       if (made.existing && made.why === 'same_request') return { job: jobOut(made.row) };
       if (made.existing) throw fail(409, 'ALREADY_PUBLISHING', `This post is already being posted on ${NETWORK[platform]}.`, { job: jobOut(made.row) });
+      // what the experiment card shows: the Reel mode and the test, kept on the job
+      if (trial || exp) await jobs.note(userId, made.row.id, { ...(trial ? { shareMode } : {}), ...(exp ? { experiment: { id: exp.id, key: exp.key } } : {}) }).catch(() => null);
+      if (exp) await hooks.jobCreated(userId, exp, made.row.id);
       const row = (await jobs.start(userId, made.row.id)) ?? made.row;
-      const p = run({ userId, platform, composed, media, privacy }, row).finally(() => running.delete(p));
+      const p = run({ userId, platform, composed, media, privacy, shareMode: trial ? shareMode : undefined }, row).finally(() => running.delete(p));
       running.add(p);
       return { job: jobOut(row) };
     },
@@ -286,8 +346,16 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
       }
       if (tag) await ledger({ customer_tag: tag, user_id: userId, project_id: row.project_id, call_id: row.id, vendor: 'uploadpost', endpoint: `${row.platform}:GET /uploadposts/status`, outcome: found?.found ? 'sent' : found?.failed ? 'failed' : 'unknown' });
       if (!found) return { job: jobOut(claimed) };
-      if (found.found) return { job: jobOut(await jobs.finish(userId, row.id, { state: 'sent', url: found.url, ref: found.drafts ? { ...(found.ref ?? {}), outcome: 'drafts' } : found.ref })) };
-      if (found.failed) return { job: jobOut(await jobs.finish(userId, row.id, { state: 'failed', errorCode: found.errorCode ?? 'REFUSED', ref: found.ref })) };
+      if (found.found) {
+        const done = await jobs.finish(userId, row.id, { state: 'sent', url: found.url, ref: found.drafts ? { ...(found.ref ?? {}), outcome: 'drafts' } : found.ref });
+        await experimentDone(userId, done);
+        return { job: jobOut(done) };
+      }
+      if (found.failed) {
+        const done = await jobs.finish(userId, row.id, { state: 'failed', errorCode: found.errorCode ?? 'REFUSED', ref: found.ref });
+        await experimentDone(userId, done);
+        return { job: jobOut(done) };
+      }
       // still publishing, or not found yet: stays unknown (never "send again")
       return { job: jobOut((await jobs.byId(userId, row.id)) ?? claimed) };
     },
@@ -311,8 +379,9 @@ export function createPosting({ db, connections, env = process.env, fetch = glob
         early.set(row.id, outcome);
         return null;
       }
-      if (row.state === 'failed') return jobs.postedAfterAll(userId, row, { url: outcome.url, drafts: outcome.drafts });
-      return jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.drafts ? { outcome: 'drafts' } : undefined });
+      const done = row.state === 'failed' ? await jobs.postedAfterAll(userId, row, { url: outcome.url, drafts: outcome.drafts }) : await jobs.finish(userId, row.id, { state: outcome.state, url: outcome.url, errorCode: outcome.errorCode, ref: outcome.drafts ? { outcome: 'drafts' } : undefined });
+      await experimentDone(userId, done);
+      return done;
     },
 
     /** Startup: jobs a restart left `sending` become `unknown`. */
