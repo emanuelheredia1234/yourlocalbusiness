@@ -1675,4 +1675,8 @@ project document, and their images in the `public-files` bucket from P2
   unchanged: Viktor is the owner's only (`OWNER_ONLY`), and Manus runs on the owner's key for the owner and on the
   customer's own key otherwise (`OWN_KEY_NEEDED`). These builds spend Manus credits (the customer's own, or the
   owner's), never the app's AI credits.
-
+- **In the app:** the studio is under Marketing Hub → Email → Sequence (an email's **Blocks**); exports and Omnisend
+  drafts are under Preview & export. The app sends Omnisend the email's block doc and the merge values it owns
+  (`{ name, subject, preheader, doc, values, brand, footerNote, assetLinks }`), never HTML, after checking buy links,
+  links without an address and images the app doesn't host. In the claude.ai artifact build, uploads, Omnisend and
+  Manus/Viktor are hidden; an image block takes an https address there, and the HTML export works.
