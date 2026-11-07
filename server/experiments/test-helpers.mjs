@@ -97,6 +97,7 @@ export async function startExperiments({ env: envExtra = {}, enforce = false } =
     resolveTxt: async (name) => (name === `_ylb-domain.${DOMAIN}` ? [[DOMAIN_TOKEN]] : []),
     lookupLimits: { page: { perMin: 1e6, perClient: 1e6, bytesPerMin: 1e12, bytesPerClient: 1e12 }, domain: { perMin: 1e6, perClient: 1e6 }, image: { perMin: 1e6, perClient: 1e6, bytesPerMin: 1e12, bytesPerClient: 1e12 } },
     tuning: { pageTtl: 1, namesCheck: 0 },
+    leadLimits: { perIp: 10_000, perPage: 10_000, windowMs: 3_600_000 },
   });
   mod.setPages(pages);
   const server = http.createServer((req, res) => {

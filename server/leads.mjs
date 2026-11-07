@@ -64,7 +64,9 @@ const RAW_FACTOR = 4;
 const MAX_LEAD_BYTES = 16 * 1024;
 /** How much of a body that's refused is read (and dropped) so the answer can go out; past it, the connection ends. */
 const MAX_DRAIN = 1024 * 1024;
-const LEAD_COLUMNS = 'id,page_id,slug,project_id,source,kind,consent,payload,name,email,phone,message,time,created_at';
+const LEAD_COLUMNS = 'id,page_id,slug,project_id,source,kind,consent,payload,name,email,phone,message,time,created_at,experiment_id,variant_key';
+/** Before 20261117000000_experiments.sql: the P2 columns without a lead's page version. */
+const P2_LEAD_COLUMNS = 'id,page_id,slug,project_id,source,kind,consent,payload,name,email,phone,message,time,created_at';
 const LEGACY_LEAD_COLUMNS = 'id,page_id,slug,name,email,phone,message,time,created_at';
 /**
  * The extra fields a form may send for a quiz, calculator, booking or lead magnet, with their limits in characters
@@ -424,6 +426,8 @@ export function createLeads({
   corsHeaders = () => ({}),
   rateLimited = () => false,
   allowedOrigin = '',
+  // the A/B page split (server/experiments/pages.mjs pageHooks): which version a lead came from; null when off
+  experiments = null,
 } = {}) {
   let base = String(supabaseUrl);
   while (base.endsWith('/')) base = base.slice(0, -1);
@@ -486,9 +490,17 @@ export function createLeads({
    * is kept without the new columns; a magnet sign-up (no page name) can't be, and that's an error.
    */
   async function keepLead(row) {
-    const full = { id: crypto.randomUUID(), created_at: new Date().toISOString(), ...row };
+    let full = { id: crypto.randomUUID(), created_at: new Date().toISOString(), ...row };
     try {
-      await rest('page_leads', { method: 'POST', body: full, prefer: 'return=minimal', timeout: TIMEOUT });
+      try {
+        await rest('page_leads', { method: 'POST', body: full, prefer: 'return=minimal', timeout: TIMEOUT });
+      } catch (e) {
+        // before the P4b migration: kept without its page version (the lead itself is what matters)
+        if (!e?.noColumn || !('experiment_id' in full)) throw e;
+        const { experiment_id: _x, variant_key: _v, ...rest_ } = full;
+        full = rest_;
+        await rest('page_leads', { method: 'POST', body: full, prefer: 'return=minimal', timeout: TIMEOUT });
+      }
     } catch (e) {
       if (!e?.noColumn || full.source === 'magnet' || !full.slug) throw e.noColumn ? columnsMissing() : e;
       columnsMissing();
@@ -563,8 +575,18 @@ export function createLeads({
       } catch {
         return answer('notSent', retryAfter(60_000));
       }
+      // an A/B split's version (its signed token in the form's address, or on a page's own domain its cookie): the
+      // form is checked in that version's HTML; anything that doesn't check out is ignored and the lead kept as before
+      let version = null;
+      if (page && page.kind === 'seo' && experiments?.leadVariant && !(site && (page.domain !== site.domain || page.user_id !== site.user_id))) {
+        try {
+          version = await experiments.leadVariant(req, url, page, { allowCookie: !!site });
+        } catch {
+          version = null;
+        }
+      }
       // only a page published with this form (an SEO page or an artifact), and on a domain only that domain's own page
-      if (!page || (page.kind !== 'seo' && page.kind !== 'artifact') || !hasLeadForm(page.html, slug) || (site && (page.domain !== site.domain || page.user_id !== site.user_id))) {
+      if (!page || (page.kind !== 'seo' && page.kind !== 'artifact') || !hasLeadForm(version?.html ?? page.html, slug) || (site && (page.domain !== site.domain || page.user_id !== site.user_id))) {
         if (wantsJson(req)) return answer('notFound');
         notFound(req, res);
         return true;
@@ -595,7 +617,9 @@ export function createLeads({
           consent,
           payload: mine ? { ...payload, magnet: mine.id } : payload,
           ...fields,
+          ...(version ? { experiment_id: version.experimentId, variant_key: version.key } : {}),
         });
+        if (version?.running) experiments.countLead?.(version.experimentId, version.key);
       } catch (e) {
         warn(`Lead forms: couldn’t keep a lead (${e?.code === 'LEADS_TABLE' || e?.code === 'LEADS_MIGRATION' ? e.code : e?.detail || e?.code || 'error'}).`);
         return answer('notSent', retryAfter(60_000));
@@ -639,6 +663,9 @@ export function createLeads({
     message: r.message ?? '',
     time: r.time ?? '',
     createdAt: r.created_at ?? null,
+    // the A/B page version it came from (null: no test)
+    experimentId: typeof r.experiment_id === 'string' ? r.experiment_id : null,
+    variantKey: ['a', 'b', 'c'].includes(r.variant_key) ? r.variant_key : null,
   });
 
   async function handleApi(req, res, url) {
@@ -690,7 +717,13 @@ export function createLeads({
         const query = (columns, f) => `page_leads?user_id=eq.${uid}${f}${before ? `&created_at=lt.${encodeURIComponent(before)}` : ''}&select=${columns}&order=created_at.desc,id.desc&limit=${limit}`;
         let rows;
         try {
-          rows = await rest(query(LEAD_COLUMNS, filters));
+          try {
+            rows = await rest(query(LEAD_COLUMNS, filters));
+          } catch (e) {
+            // before the P4b migration: the leads without their page version
+            if (!e?.noColumn) throw e;
+            rows = await rest(query(P2_LEAD_COLUMNS, filters));
+          }
         } catch (e) {
           if (!e?.noColumn) throw e;
           // before the P2 migration: the leads as they were (filters on the new columns can't be answered yet)

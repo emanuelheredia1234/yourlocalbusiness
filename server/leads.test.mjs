@@ -346,7 +346,7 @@ describe('the leads API', () => {
     const { leads } = await r.json();
     const mine = leadsOf(alice).sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : a.id < b.id ? 1 : -1));
     expect(leads.map((l) => l.id)).toEqual(mine.map((x) => x.id));
-    expect(leads[0]).toEqual({ id: mine[0].id, pageId: mine[0].page_id, slug: mine[0].slug, projectId: mine[0].project_id ?? null, source: mine[0].source ?? 'page', kind: mine[0].kind ?? 'form', consent: mine[0].consent === true, payload: mine[0].payload ?? {}, name: mine[0].name, email: mine[0].email, phone: mine[0].phone, message: mine[0].message, time: mine[0].time, createdAt: mine[0].created_at });
+    expect(leads[0]).toEqual({ id: mine[0].id, pageId: mine[0].page_id, slug: mine[0].slug, projectId: mine[0].project_id ?? null, source: mine[0].source ?? 'page', kind: mine[0].kind ?? 'form', consent: mine[0].consent === true, payload: mine[0].payload ?? {}, name: mine[0].name, email: mine[0].email, phone: mine[0].phone, message: mine[0].message, time: mine[0].time, createdAt: mine[0].created_at, experimentId: null, variantKey: null });
     expect(leads.some((l) => l.slug === 'bob-form-page')).toBe(false);
 
     // times as Postgres sends them back (microseconds, +00:00): passed on exactly

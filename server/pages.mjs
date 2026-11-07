@@ -726,6 +726,9 @@ export function createPages({
   billing = null,
   // buy links /b/<id> (server/offers/buy.mjs through integrations.offers.buy): { matchBuy(url), serveBuy(…) }
   offers = null,
+  // the A/B page split (server/experiments/pages.mjs pageHooks): { serve, leadVariant, countLead, onPublished }, or
+  // null (A/B tests off: every page is served as published)
+  experiments = null,
 } = {}) {
   const tune = { ...TUNING, ...tuning };
   const hops = trustedHops;
@@ -1157,6 +1160,25 @@ export function createPages({
     res.writeHead(200, { ...hdrs, 'content-length': page.htmlBytes });
     res.end();
   }
+  /**
+   * A page with a running A/B split goes out as this visitor's version (server/experiments/pages.mjs: `private,
+   * no-store`, Vary: Cookie, the lead token in its forms); any other page, or when that can't be told, as published.
+   */
+  async function sendVersion(req, res, page, html, { sandbox }) {
+    let v = null;
+    if (experiments?.serve && page?.kind === 'seo') {
+      try {
+        v = await experiments.serve(req, page, html);
+      } catch {
+        v = null;
+      }
+    }
+    if (!v) return sendPage(req, res, page, html, { sandbox });
+    const hdrs = { ...COMMON, 'content-type': 'text/html; charset=utf-8', ...(sandbox ? { 'content-security-policy': SEO_CSP } : {}), ...v.headers };
+    if (v.body) return write(req, res, 200, hdrs, v.body);
+    res.writeHead(200, { ...hdrs, 'content-length': page.htmlBytes });
+    res.end();
+  }
   /** Whether a request for the page can be answered without its HTML (HEAD: the row has its size). */
   const headOnly = (req, page) => req.method === 'HEAD' && Number.isInteger(page.htmlBytes);
 
@@ -1356,11 +1378,11 @@ export function createPages({
         if (!shows(page)) notFound(req, res);
         else if (await expired(page)) gone(req, res);
         else if (m?.[3] !== undefined) await sendImage(req, res, page, m[3], client);
-        else if (headOnly(req, page)) sendPage(req, res, page, null, { sandbox: false });
+        else if (headOnly(req, page)) await sendVersion(req, res, page, null, { sandbox: false });
         else {
           const got = await pageWithHtml(page, client);
           if (!got || !shows(got.page)) notFound(req, res);
-          else sendPage(req, res, got.page, got.html, { sandbox: false });
+          else await sendVersion(req, res, got.page, got.html, { sandbox: false });
         }
       }
     } catch (e) {
@@ -1429,11 +1451,11 @@ export function createPages({
       if (!page) notFound(req, res);
       else if (await expired(page)) gone(req, res);
       else if (image !== undefined) await sendImage(req, res, page, image, client);
-      else if (headOnly(req, page)) sendPage(req, res, page, null, { sandbox: true });
+      else if (headOnly(req, page)) await sendVersion(req, res, page, null, { sandbox: true });
       else {
         const got = await pageWithHtml(page, client);
         if (!got) notFound(req, res);
-        else sendPage(req, res, got.page, got.html, { sandbox: true });
+        else await sendVersion(req, res, got.page, got.html, { sandbox: true });
       }
     } catch (e) {
       if (!res.headersSent) unavailable(req, res, e);
@@ -1477,7 +1499,7 @@ export function createPages({
     limits: magnetLimits,
     linkSecret,
   });
-  const leads = createLeads({ enabled, supabaseUrl: url, secretKey, fetch, counters, findPage: leadPage, findMagnet: magnets.findMagnet, ticket: magnets.ticket, reserved, notFound, whoIs, send, corsHeaders, rateLimited, allowedOrigin });
+  const leads = createLeads({ enabled, supabaseUrl: url, secretKey, fetch, counters, findPage: leadPage, findMagnet: magnets.findMagnet, ticket: magnets.ticket, reserved, notFound, whoIs, send, corsHeaders, rateLimited, allowedOrigin, experiments });
 
   // ── the signed-in API ──
   const describePage = (r, origin) => ({
@@ -1645,8 +1667,24 @@ export function createPages({
     // the images it had before go (and leftovers of publishes that stopped halfway)
     const previous = Array.isArray(current?.images) ? String(current.images.find((i) => typeof i?.v === 'string' && i.v)?.v ?? '') : '';
     await removeImages(base, { keep: version, spare: UPLOAD_GRACE, previous });
+    // a new version A: an A/B split running on this page stops (a page that changed mid-test can't be compared)
+    if (kind === 'seo') await experiments?.onPublished?.(uid, pageId);
     const page = describePage(saved ?? { page_id: pageId, kind, slug, title, domain, home, project_id: projectId }, origin);
     return { page, url: page.url, ...(page.domainUrl ? { domainUrl: page.domainUrl } : {}) };
+  }
+
+  /**
+   * "Use the winner" of an A/B page test (server/experiments/pages.mjs): the published page's HTML becomes version B's,
+   * with the same name, domain and images (B may only use the page's own images). One write. → the row, or null when
+   * the page isn't published any more.
+   */
+  async function republishHtml(userId, pageId, html) {
+    if (!enabled) throw fail(503, 'PAGES_OFF', 'Publishing isn’t set up on this server.');
+    const text = storable(String(html ?? ''));
+    if (!text.trim() || Buffer.byteLength(text, 'utf8') > MAX_HTML_BYTES) throw fail(400, 'BAD_REQUEST', 'That version can’t be published.');
+    const rows = await rest(`published_pages?user_id=eq.${userId}&page_id=eq.${encodeURIComponent(pageId)}&select=slug,domain`, { method: 'PATCH', body: { html: text }, prefer: 'return=representation' });
+    forget({ slugs: (rows ?? []).map((r) => r.slug), domains: (rows ?? []).map((r) => r.domain) });
+    return rows?.[0] ?? null;
   }
 
   async function unpublish(who, pageId) {
@@ -1882,6 +1920,8 @@ export function createPages({
     matchPage,
     servePage,
     serveAppHostExtras,
+    /** "Use the winner" of an A/B page test: the page goes live with version B's HTML (server/experiments/pages.mjs). */
+    republishHtml,
     /** What the visitors' caches hold (tests, diagnostics): pages' rows, their HTML (big pages' apart), domains, names. */
     cacheStats: () => ({ pages: pageCache.stats(), html: htmlCache.stats(), bigHtml: bigHtmlCache.stats(), domains: domainCache.stats(), onDomain: onDomainCache.stats(), names: { pages: pageNames.stats(), domains: domainNames.stats() } }),
     close: () => clearInterval(sweeper),
