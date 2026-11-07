@@ -22,10 +22,10 @@ import type { AdJob, LaunchedCampaign } from '@/lib/ads/launchTypes';
 import { AdsApiError } from '@/lib/ads/launchApi';
 const { useAdsLaunch } = await import('@/store/adsLaunch');
 const { CampaignsTab } = await import('./CampaignsTab');
-const { CampaignRow, CampaignCard } = await import('./CampaignRow');
+const { CampaignRow, CampaignCard, removeFailedLaunch } = await import('./CampaignRow');
 const { ManageActions } = await import('./ManageDrawer');
 const { AuditList, auditCsv } = await import('./AuditLog');
-const { manageActions, canLaunchAgain } = await import('./campaignView');
+const { manageActions, canLaunchAgain, canRemove } = await import('./campaignView');
 const { sendChange, changeRequestIdFor } = await import('./ChangeConfirm');
 const { newProject } = await import('@/store/defaults');
 const { safeFixUrl } = await import('@/lib/ads/launchFormat');
@@ -268,5 +268,48 @@ describe('sending a change', () => {
     const r = await sendChange('c8', 'pause', 'tok-8', 'id-1', send);
     expect(r).toMatchObject({ ok: false, uncertain: false });
     expect(changeRequestIdFor('tok-8')).not.toBe('id-1');
+  });
+});
+
+describe('removing a failed launch', () => {
+  const failed = (over: Partial<LaunchedCampaign> = {}) => camp({ state: 'failed', stateMessage: 'Not launched.', configuredStatus: null, platformCampaignId: undefined, openInManagerUrl: undefined, canRemove: true, lastJob: job({ state: 'failed', code: 'PAYMENT_REQUIRED', message: 'Nothing was created and no money was spent.' }), ...over });
+  const card = (c: LaunchedCampaign) => renderToStaticMarkup(createElement(TooltipProvider, null, createElement('ul', null, createElement(CampaignCard, { c, onManage: () => {}, onLaunchAgain: () => {} }))));
+
+  it('shows Remove only when the server allows it and nothing can be at the platform', () => {
+    expect(row(failed())).toContain('Remove');
+    expect(card(failed())).toContain('Remove');
+    const not: Partial<LaunchedCampaign>[] = [
+      { canRemove: undefined },
+      { state: 'ended' },
+      { platformCampaignId: '120000' },
+      { pendingJob: job() },
+      { lastJob: job({ state: 'failed', code: 'PARTIAL_LEFT', message: 'x', leftBehind: ['campaign …1234'] }) },
+    ];
+    for (const over of not) {
+      const c = failed(over);
+      expect(canRemove(c), JSON.stringify(over)).toBe(false);
+      expect(row(c)).not.toMatch(/>\s*Remove\s*</);
+      expect(row(c)).not.toContain('Remove the failed launch');
+    }
+    expect(row(camp())).not.toContain('Remove the failed launch');
+  });
+
+  it('asks first with the plain words; a no sends nothing; a yes sends one DELETE and the row goes', async () => {
+    const c = failed();
+    const f = vi.fn(async (_u: string, init?: RequestInit) => (init?.method === 'DELETE' ? Response.json({ removed: 'c1' }) : Response.json({ entries: [] })));
+    vi.stubGlobal('fetch', f);
+    useAdsLaunch.setState({ campaigns: { proj1: [c] } });
+    const asked: unknown[] = [];
+    expect(await removeFailedLaunch(c, async (o) => (asked.push(o), false))).toBe(false);
+    expect(asked[0]).toEqual({ title: 'Remove this failed launch?', body: 'Nothing was created at Meta, so nothing changes there.', confirmLabel: 'Remove', danger: true });
+    expect(f.mock.calls.some(([, i]) => i?.method === 'DELETE')).toBe(false);
+    expect(await removeFailedLaunch(c, async () => true)).toBe(true);
+    expect(f.mock.calls.filter(([, i]) => i?.method === 'DELETE')).toHaveLength(1);
+    expect(String(f.mock.calls.find(([, i]) => i?.method === 'DELETE')![0])).toContain('/api/ads/campaigns/c1?projectId=proj1');
+    expect(useAdsLaunch.getState().campaigns.proj1).toEqual([]);
+    // a row that may exist at Meta never asks and never sends
+    const left = failed({ platformCampaignId: '1' });
+    expect(await removeFailedLaunch(left, async () => true)).toBe(false);
+    expect(f.mock.calls.filter(([, i]) => i?.method === 'DELETE')).toHaveLength(1);
   });
 });

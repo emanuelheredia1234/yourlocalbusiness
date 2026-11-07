@@ -234,6 +234,8 @@ export interface LaunchedCampaign {
   lastJob?: AdJob;
   lastReadAt?: string;
   planDeleted?: boolean;
+  /** the server's word: a failed launch with nothing at Meta or Google, which can be removed from the list */
+  canRemove?: boolean;
 }
 
 export interface AdLimitsView {

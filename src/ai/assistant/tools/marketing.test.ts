@@ -121,7 +121,7 @@ describe('the group', () => {
       R: ['get_email_funnel', 'list_leads', 'list_ads', 'list_launched_ads', 'get_seo_page', 'list_assets', 'list_published', 'export_file'],
       L: ['edit_lead_magnet', 'edit_email', 'import_subscribers', 'add_lead_to_subscribers', 'create_ad_campaign', 'update_ad_campaign', 'set_page_type', 'set_seo_guide'],
       'P-text': ['generate_lead_magnet', 'generate_email_sequence', 'generate_ads', 'write_seo_page', 'edit_seo_page', 'create_asset', 'edit_asset'],
-      D: ['delete_lead', 'delete_ad_campaign'],
+      D: ['delete_lead', 'delete_ad_campaign', 'remove_failed_launch'],
       Pub: ['publish_seo_page', 'publish_asset', 'open_ad_launch', 'open_ad_change'],
     };
     const names = TOOL_GROUPS.marketing.map((t) => t.name);
@@ -478,6 +478,37 @@ describe('launched ads', () => {
     expect(await realOpenWindow({ kind: 'ad-launch', planId: 'ad9' })).toBe(true);
     expect(useAdsLaunch.getState().launchWindow).toEqual({ planId: 'ad9', fromAssistant: true });
     host = fakeHost();
+  });
+});
+
+describe('remove_failed_launch', () => {
+  const failed = (over: Record<string, unknown> = {}) => ({ id: 'c9', planId: 'x', projectId: activeProject().id, platform: 'meta' as const, name: 'Rye week', tag: null, account: { name: 'Acme', idTail: '1234', currency: 'USD', timezone: 'UTC' }, state: 'failed' as const, stateMessage: 'Not launched', review: { status: null, reasons: [] }, daily: 25, start: '2026-12-01', end: '2026-12-14', launchedAs: 'PAUSED' as const, configuredStatus: null, canRemove: true, lastJob: { id: 'j9', kind: 'launch' as const, platform: 'meta' as const, state: 'failed' as const, code: 'REFUSED', message: 'Nothing was created and no money was spent.', requestedAt: '' }, ...over });
+  beforeEach(() => useAdsLaunch.setState({ campaigns: {}, limits: {}, error: {}, audit: {} }));
+
+  it('asks first, then sends one DELETE for this business; a no sends nothing', async () => {
+    const pid = activeProject().id;
+    useAdsLaunch.setState({ campaigns: { [pid]: [failed()] } });
+    const f = vi.fn(async (_u: string, init?: RequestInit) => (init?.method === 'DELETE' ? Response.json({ removed: 'c9' }) : Response.json({ entries: [] })));
+    vi.stubGlobal('fetch', f);
+    expect(await runTool('remove_failed_launch', { campaignId: 'c9' })).toMatchObject({ ok: false, status: 'declined' });
+    expect(host.calls.dangers[0]).toEqual({ title: 'Remove this failed launch?', body: 'Nothing was created at Meta, so nothing changes there.', confirmLabel: 'Remove' });
+    expect(f.mock.calls.some(([, i]) => i?.method === 'DELETE')).toBe(false);
+    host.restore();
+    host = fakeHost({ confirm: true });
+    expect(await runTool('remove_failed_launch', { campaignId: 'c9' })).toMatchObject({ ok: true, result: { removed: 1 } });
+    const deletes = f.mock.calls.filter(([, i]) => i?.method === 'DELETE');
+    expect(deletes).toHaveLength(1);
+    expect(String(deletes[0][0])).toContain(`/api/ads/campaigns/c9?projectId=${encodeURIComponent(pid)}`);
+    expect(useAdsLaunch.getState().campaigns[pid]).toEqual([]);
+  });
+
+  it('refuses before asking when it isn’t failed, may exist at Meta, or isn’t known', async () => {
+    const pid = activeProject().id;
+    useAdsLaunch.setState({ campaigns: { [pid]: [failed({ id: 'a', state: 'active', canRemove: undefined }), failed({ id: 'b', canRemove: undefined, lastJob: { id: 'j', kind: 'launch', platform: 'meta', state: 'failed', message: '', requestedAt: '', leftBehind: ['campaign …1234'] } })] } });
+    expect((await runTool('remove_failed_launch', { campaignId: 'a' })).error).toMatch(/Only a launch that failed/);
+    expect((await runTool('remove_failed_launch', { campaignId: 'b' })).error).toMatch(/Check|checks Ads Manager first/);
+    expect((await runTool('remove_failed_launch', { campaignId: 'zz' })).error).toMatch(/list_launched_ads/);
+    expect(host.calls.dangers).toEqual([]);
   });
 });
 

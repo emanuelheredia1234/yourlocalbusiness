@@ -510,6 +510,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       for (const r of rows) (owned(r) && matches(r, filters) ? gone : keep).push(r);
       tables.set(table, keep);
       if (projectSlots && table === 'user_docs') for (const d of gone) if (d.kind === 'project') slots.onProjectDelete(d.user_id, d.id);
+      // a removed ad campaign's jobs go with it (ad_jobs.campaign_id: on delete cascade)
+      if (table === 'ad_campaigns' && gone.length) tables.set('ad_jobs', (tables.get('ad_jobs') ?? []).filter((j) => !gone.some((c) => c.id === j.campaign_id)));
       // a removed domain's pages lose it (published_pages.domain: on delete set null)
       if (table === 'published_domains') for (const p of tables.get('published_pages') ?? []) if (gone.some((d) => d.domain === p.domain)) p.domain = null;
       return /return=representation/.test(prefer) ? send(res, 200, gone) : send(res, 204, undefined);

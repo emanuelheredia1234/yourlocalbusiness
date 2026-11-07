@@ -61,7 +61,7 @@ export function setAdsBase(base: string | null): void {
 }
 const base = () => baseOverride ?? serverBaseNow();
 
-type Method = 'GET' | 'POST' | 'PUT';
+type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
 async function call<T>(method: Method, path: string, body?: unknown): Promise<T> {
   let res: Response;
@@ -113,6 +113,12 @@ export const previewChange = (campaignId: string, req: ChangePreviewRequest) => 
 
 export const launchAds = (reviewToken: string, clientRequestId: string) => call<{ job: AdJob; campaign?: LaunchedCampaign; replayed?: boolean }>('POST', '/api/ads/launch', { reviewToken, confirm: true, clientRequestId });
 export const changeAds = (campaignId: string, reviewToken: string, clientRequestId: string) => call<{ job: AdJob; replayed?: boolean }>('POST', `/api/ads/campaigns/${seg(campaignId)}/change`, { reviewToken, confirm: true, clientRequestId });
+
+/**
+ * Remove a failed launch from the list (our database only: nothing is sent to Meta or Google). One request, after
+ * the customer's confirm; the server refuses it when any part may exist at the platform.
+ */
+export const removeFailedCampaign = (campaignId: string, projectId: string) => call<{ removed: string }>('DELETE', `/api/ads/campaigns/${seg(campaignId)}${q({ projectId })}`);
 
 // ───────────── the owner ─────────────
 

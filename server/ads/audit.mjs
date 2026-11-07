@@ -15,7 +15,7 @@ const fixOf = (after) => {
   return r && typeof r === 'object' && r.owner !== true ? safeFixUrl(r.fix?.url) : undefined;
 };
 
-const ACTIONS = ['launch', 'pause', 'resume', 'end', 'budget', 'end_date', 'creative', 'check', 'limits', 'review', 'account'];
+const ACTIONS = ['launch', 'pause', 'resume', 'end', 'budget', 'end_date', 'creative', 'check', 'limits', 'review', 'account', 'remove'];
 const OUTCOMES = ['sending', 'done', 'failed', 'unknown', 'refused', 'info'];
 
 export function createAudit({ db, now = () => Date.now(), log = console } = {}) {

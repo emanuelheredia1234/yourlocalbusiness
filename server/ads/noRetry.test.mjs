@@ -50,6 +50,6 @@ describe('the audit log is append-only', () => {
     expect(Object.keys(audit)).toEqual(['createAudit']);
     const a = audit.createAudit({ db: { insert: async () => {}, select: async () => [] } });
     expect(Object.keys(a).sort()).toEqual(['append', 'list']);
-    for (const [f, src] of files) expect(code(src), f).not.toMatch(/\.(update|delete|upsert)\(\s*'ad_audit'/);
+    for (const [f, src] of files) expect(code(src), f).not.toMatch(/\.(update|delete|remove|upsert)\(\s*'ad_audit'/);
   });
 });
