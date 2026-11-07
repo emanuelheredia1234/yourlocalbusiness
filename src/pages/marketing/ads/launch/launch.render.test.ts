@@ -17,6 +17,7 @@ import { AdsApiError } from '@/lib/ads/launchApi';
 import { META_CTA } from '@/lib/ads';
 import { CTA_MAP, metaMinDays as serverMetaMinDays } from '../../../../../server/ads/build.mjs';
 import { metaMinDays } from '@/lib/ads/launchFormat';
+import { META_REVIEW_TIME } from '@/lib/ads/reviewTime';
 import { newProject } from '@/store/defaults';
 import { newAdCampaign } from '@/ai/local/ads';
 import { SpendConfirm, sendLaunches, launchRequestIdFor, type LaunchItem } from './SpendConfirm';
@@ -75,6 +76,17 @@ describe('the spend confirm', () => {
     expect(html).toContain('Launch paused on Meta');
     expect(html).not.toContain('I understand this will spend real money');
     expect(launchButton(html)).not.toMatch(/disabled=""/);
+  });
+
+  it('an ACTIVE launch on Meta says how long Meta’s review takes; a PAUSED one and Google don’t', () => {
+    expect(META_REVIEW_TIME).toBe('Meta reviews new ads before they run, usually in about 10 minutes (sometimes up to 24 hours). It goes live once approved.');
+    expect(confirmHtml([item(review())])).toContain(META_REVIEW_TIME);
+    expect(confirmHtml([item(review({ status: 'PAUSED' }))])).not.toContain('10 minutes');
+    expect(confirmHtml([item(review({ platform: 'google', spendCap: undefined, ads: [{ variant: 'Search', linkUrl: 'https://acme.example', headlines: ['a', 'b', 'c'] }] }))])).not.toContain('10 minutes');
+    // both platforms: only Meta's section carries it
+    const both = confirmHtml([item(review()), item(review({ platform: 'google', daily: 10, plannedTotal: 140, spendCap: undefined }))]);
+    expect(both.split('10 minutes')).toHaveLength(2);
+    expect(both.slice(both.indexOf('data-testid="spend-google"'))).not.toContain('10 minutes');
   });
 
   it('Google says the app can’t set a total limit', () => {

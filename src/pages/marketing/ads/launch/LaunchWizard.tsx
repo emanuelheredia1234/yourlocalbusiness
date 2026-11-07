@@ -8,9 +8,10 @@ import type { AdCampaign, Project } from '@/lib/types';
 import type { AccountsResponse, AdsPlatform } from '@/lib/ads/launchTypes';
 import { PLATFORM_LABEL } from '@/lib/ads/launchTypes';
 import { AdsApiError, getAdAccounts, previewLaunch } from '@/lib/ads/launchApi';
+import { launchedMessage } from '@/lib/ads/reviewTime';
 import { useAdsLaunch } from '@/store/adsLaunch';
 import { useStore } from '@/store/useStore';
-import { useUI } from '@/store/ui';
+import { toast, useUI } from '@/store/ui';
 import { Callout, Checkbox, Modal, Segmented, Spinner, Stepper } from '@/components/ui/primitives';
 import { AccountStep } from './AccountStep';
 import { AudienceStep } from './AudienceStep';
@@ -199,6 +200,10 @@ export function LaunchWizard({ project, plan, again = null, onClose }: { project
         onClose={() => setConfirming(false)}
         onLaunched={(done) => {
           launched(done);
+          for (const o of done) {
+            const m = launchedMessage(o.platform, items.find((i) => i.key === o.key)?.review.status);
+            if (m) toast(m);
+          }
           // into the Campaigns tab, where the new row is followed until it's sent
           useUI.getState().requestTab('marketing-ads', 'campaigns');
           if (done.length >= items.length) onClose();
