@@ -123,8 +123,8 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   function fromDb(e) {
     if (e?.name !== 'DbError') return e;
     if (e.code === 'NOT_SET_UP') {
-      safeLog('offers_not_set_up', { hint: `run ${OFFERS_MIGRATION}` }, log);
-      return notSetUp(`Run ${OFFERS_MIGRATION} in Supabase → SQL Editor.`);
+      safeLog('offers_not_set_up', { hint: `run ${OFFERS_MIGRATION}${stripeOn ? ` and ${CONNECT_MIGRATION}` : ''}` }, log);
+      return notSetUp(`Run ${OFFERS_MIGRATION}${stripeOn ? ` and then ${CONNECT_MIGRATION}` : ''} in Supabase → SQL Editor.`);
     }
     safeLog('offers_db_failed', { code: e.code }, log);
     return fail(503, 'UNAVAILABLE', 'Couldn’t reach the database. Try again shortly.');
