@@ -14,4 +14,6 @@ declare module '*/server/test/mock-providers.mjs' {
 declare module '*/server/ads/build.mjs' {
   /** the planner's buttons → Meta's callToAction values (src/lib/ads.ts META_CTA keeps the same map) */
   export const CTA_MAP: Readonly<Record<string, string>>;
+  /** the fewest days a Meta daily budget runs more than 24 hours from this start (src/lib/ads/launchFormat.ts metaMinDays) */
+  export function metaMinDays(o: { startDay: string; time?: string | null; asap?: boolean; tz: string; builtAt: number }): number;
 }

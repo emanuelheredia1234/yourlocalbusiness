@@ -50,6 +50,42 @@ export function runsText(start: string, days: number, tz: string): string {
   return `Runs ${days} day${days === 1 ? '' : 's'}: ${dayLabel(start)} to ${dayLabel(end)}, ending 23:59 ${tz}`;
 }
 
+/** The UTC offset of `tz` at instant t, in minutes. */
+function offsetMinutes(tz: string, t: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(t));
+  const get = (k: string) => Number(parts.find((p) => p.type === k)?.value);
+  return Math.round((Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second')) - Math.floor(t / 1000) * 1000) / 60_000);
+}
+
+/** The instant a wall-clock time ('YYYY-MM-DD', 'HH:MM:SS') happens in `tz` (ms), daylight saving included. */
+export function localInstant(ymd: string, hms: string, tz: string): number {
+  const guess = Date.parse(`${ymd}T${hms}Z`);
+  return guess - offsetMinutes(tz, guess - offsetMinutes(tz, guess) * 60_000) * 60_000;
+}
+
+/**
+ * Meta runs a daily budget only on an ad set scheduled for more than 24 hours, and the last day ends 23:59:59 in the
+ * ad account's zone, so one day is never enough (server/ads/build.mjs, which decides: this only keeps the choice
+ * honest). "As soon as approved", or a start already past, counts from the latest the launch can go out.
+ */
+export const META_DAILY_MIN_MS = 24 * 3_600_000;
+export const META_SEND_MARGIN_MS = 15 * 60_000;
+/** the fewest days on Meta whatever the start (a date-only end is 23:59:59) */
+export const META_MIN_DAYS = 2;
+
+/** The fewest days (1 to 90) whose Meta schedule runs a daily budget more than 24 hours from this start; 91 if none. */
+export function metaMinDays(o: { startDay: string; time?: string | null; asap?: boolean; tz: string; now?: number }): number {
+  const now = o.now ?? Date.now();
+  try {
+    const at = o.asap ? now : localInstant(o.startDay, /^([01]\d|2[0-3]):[0-5]\d$/.test(o.time ?? '') ? `${o.time}:00` : '00:00:00', o.tz);
+    const start = Math.max(at, now + META_SEND_MARGIN_MS);
+    for (let n = 1; n <= 90; n += 1) if (localInstant(addDays(o.startDay, n - 1), '23:59:59', o.tz) - start > META_DAILY_MIN_MS) return n;
+    return 91;
+  } catch {
+    return META_MIN_DAYS;
+  }
+}
+
 export interface ConfirmLine {
   label: string;
   value: string;
