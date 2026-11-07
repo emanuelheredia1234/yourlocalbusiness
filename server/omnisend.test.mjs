@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createOmnisendRoutes, OMNISEND_PUBLIC_BASE_URL, OMNISEND_REDIRECT_URI, OMNISEND_SCOPES } from './omnisend.mjs';
+import { createOmnisendRoutes, OMNISEND_PUBLIC_BASE_URL, OMNISEND_REDIRECT_URI, OMNISEND_SCOPES, REPORTS_PER_DAY } from './omnisend.mjs';
 import { createMockSupabase } from './test/mock-supabase.mjs';
 import { createSecretBox } from './secretBox.mjs';
 
@@ -676,6 +676,126 @@ describe('when Omnisend refuses or doesn’t answer', () => {
       expect(steps(fetch)).toEqual(['template', 'campaign']);
       expect(JSON.stringify(res.body)).not.toContain('private');
     }
+  });
+});
+
+// ───────────── A/B test drafts (P4b) ─────────────
+
+describe('A/B test drafts', () => {
+  const VARIANTS = { a: { subject: 'Your guide is inside', body: 'Hi,\n\nHere it is.', ctaLabel: 'Get it', ctaUrl: 'https://copperandcomb.com/free' }, b: { subject: 'Free guide: 5 cuts', body: 'Hi,\n\nHere it is.', ctaLabel: 'Get it', ctaUrl: 'https://copperandcomb.com/free' } };
+  /** Omnisend's API for A/B drafts and results; every call kept in .log. */
+  function abFetch({ campaign, reports, get } = {}) {
+    const log = [];
+    let n = 0;
+    const fn = vi.fn(async (url, options = {}) => {
+      const u = String(url);
+      const method = options.method || 'GET';
+      if (u === 'https://app.omnisend.com/oauth2/token') {
+        const form = new URLSearchParams(options.body);
+        log.push({ kind: 'token' });
+        return jsonResponse({ access_token: `private-at-${form.get('code')}`, refresh_token: 'private-rt', token_type: 'Bearer', scope: OMNISEND_SCOPES.join(' ') });
+      }
+      if (u === 'https://api.omnisend.com/api/email-templates/import') {
+        log.push({ kind: 'template', body: JSON.parse(options.body) });
+        n += 1;
+        return jsonResponse({ id: String(n).repeat(24).slice(0, 24) }, 201);
+      }
+      if (u === 'https://api.omnisend.com/api/campaigns' && method === 'POST') {
+        const body = JSON.parse(options.body);
+        log.push({ kind: 'campaign', body });
+        if (campaign) return campaign(body);
+        return jsonResponse({ id: 'c'.repeat(24), name: body.name, status: 'draft', url: `https://app.omnisend.com/campaigns/${'c'.repeat(24)}/settings`, abTest: { ...body.abTest, variants: { a: { id: 'va1' }, b: { id: 'vb1' } } } }, 201);
+      }
+      if (u.startsWith('https://api.omnisend.com/api/campaigns/') && method === 'GET') {
+        log.push({ kind: 'read', url: u });
+        return get ? get(u) : jsonResponse({ id: 'c'.repeat(24), status: 'sent', abTest: { result: { winnerVariantID: 'vb1' } } });
+      }
+      if (u === 'https://api.omnisend.com/api/analytics/reports') {
+        log.push({ kind: 'reports' });
+        return reports ? reports() : jsonResponse({ reports: [{ alias: 'campaigns-30d', rows: [{ marketingActivityID: 'va1', sent: 300, openRate: 0.3, clickRate: 0.02 }, { marketingActivityID: 'vb1', sent: 300, openRate: 0.45, clickRate: 0.03 }] }, { alias: 'daily-30d', rows: [] }] });
+      }
+      if (u === 'https://api.omnisend.com/api/campaigns?limit=100') return jsonResponse({ campaigns: [] });
+      throw new Error(`Unexpected endpoint ${method} ${u}`);
+    });
+    fn.log = log;
+    return fn;
+  }
+  const kinds = (fetch) => fetch.log.filter((c) => !['token'].includes(c.kind)).map((c) => c.kind);
+
+  it('imports two templates and makes one abTest campaign: both variants, no top-level content, the settings in bounds, the variant ids back', async () => {
+    const fetch = abFetch();
+    const { service } = makeService({ fetch });
+    await connected(service);
+    const got = await service.createAbDraft('account-alpha', { name: 'Guide subject test', variants: VARIANTS, settings: { testSizePercent: 80, decisionHours: 2, winningMetric: 'openRate' } });
+    expect(kinds(fetch)).toEqual(['template', 'template', 'campaign']);
+    const body = fetch.log.find((c) => c.kind === 'campaign').body;
+    expect(body).not.toHaveProperty('content');
+    expect(body).not.toHaveProperty('sendingSettings');
+    expect(body).toEqual({
+      channel: 'email',
+      type: 'abTest',
+      name: 'Guide subject test',
+      language: 'en_US',
+      abTest: {
+        // out-of-range settings fall back to the defaults (30%, 24 hours)
+        settings: { testSizePercent: 30, winningMetric: 'openRate', decisionTime: { amount: 24, unit: 'h' } },
+        variants: { a: { content: { email: { subject: 'Your guide is inside', templateID: '1'.repeat(24) } } }, b: { content: { email: { subject: 'Free guide: 5 cuts', templateID: '2'.repeat(24) } } } },
+      },
+    });
+    expect(got).toEqual({ mode: 'omnisend_ab', campaign: { id: 'c'.repeat(24), name: 'Guide subject test', status: 'draft', url: `https://app.omnisend.com/campaigns/${'c'.repeat(24)}/settings`, variantIds: { a: 'va1', b: 'vb1' } } });
+    const html = fetch.log.filter((c) => c.kind === 'template').map((c) => c.body.html);
+    expect(html.every((h) => h.includes('[[unsubscribe_link]]'))).toBe(true);
+  });
+
+  it('a timeout after the campaign POST is CAMPAIGN_UNCONFIRMED and is never retried', async () => {
+    const fetch = abFetch({ campaign: () => Promise.reject(new DOMException('aborted', 'TimeoutError')) });
+    const { service } = makeService({ fetch });
+    await connected(service);
+    await expect(service.createAbDraft('account-alpha', { name: 'x', variants: VARIANTS })).rejects.toMatchObject({ status: 502, code: 'CAMPAIGN_UNCONFIRMED', campaignMayExist: true, publicMessage: expect.stringMatching(/may have been created: Omnisend didn’t confirm it\. Check Omnisend before trying again\.$/) });
+    expect(kinds(fetch)).toEqual(['template', 'template', 'campaign']);
+  });
+
+  it('when Omnisend refuses the abTest type for the brand (4xx), two regular drafts; a 5xx is not a reason to fall back', async () => {
+    const refuse = (status, type) => (body) => (body.type === 'abTest' ? jsonResponse({ type: `https://problems.omnisend.com/${type}`, detail: 'private detail' }, status) : jsonResponse({ id: body.name.endsWith('A') ? 'a'.repeat(24) : 'b'.repeat(24), name: body.name, status: 'draft', url: '' }, 201));
+    const fetch = abFetch({ campaign: refuse(422, 'campaign-type-not-supported') });
+    const { service } = makeService({ fetch });
+    await connected(service);
+    const got = await service.createAbDraft('account-alpha', { name: 'Fallback', variants: VARIANTS });
+    expect(got.mode).toBe('split');
+    expect(got.campaigns.a).toMatchObject({ id: 'a'.repeat(24), name: 'Fallback — version A' });
+    expect(got.campaigns.b).toMatchObject({ id: 'b'.repeat(24), name: 'Fallback — version B' });
+    const regular = fetch.log.filter((c) => c.kind === 'campaign' && c.body.type === 'regular');
+    expect(regular.map((c) => c.body.content.email.templateID)).toEqual(['1'.repeat(24), '2'.repeat(24)]);
+    const server = abFetch({ campaign: refuse(503, 'campaign-type-not-supported') });
+    const made = makeService({ fetch: server });
+    await connected(made.service);
+    // a 5xx: the A/B draft may exist (never retried, never a fallback)
+    await expect(made.service.createAbDraft('account-alpha', { name: 'x', variants: VARIANTS })).rejects.toMatchObject({ code: 'CAMPAIGN_UNCONFIRMED', campaignMayExist: true });
+    expect(server.log.filter((c) => c.kind === 'campaign')).toHaveLength(1);
+  });
+
+  it('results: Omnisend’s pick and each variant’s rates from the reports (the hourly cache and the daily budget)', async () => {
+    const fetch = abFetch();
+    const { service, clock, storage } = makeService({ fetch });
+    await connected(service);
+    const got = await service.abResults('account-alpha', { abCampaignId: 'c'.repeat(24) });
+    expect(got).toMatchObject({ status: 'ok', campaignStatus: 'sent', winnerId: 'vb1', rates: { va1: { sent: 300, openRate: 0.3, clickRate: 0.02 }, vb1: { sent: 300, openRate: 0.45 } } });
+    // within the hour: the reports come from the cache
+    await service.abResults('account-alpha', { abCampaignId: 'c'.repeat(24) });
+    expect(fetch.log.filter((c) => c.kind === 'reports')).toHaveLength(1);
+    // the day's budget (REPORTS_PER_DAY) is respected: none left today, no reports call
+    clock.now += 61 * 60_000;
+    const brand = sha256('omnisend-brand:private-at-oauth-code').slice(0, 24);
+    const key = `omnisend:reports:${brand}:${new Date(clock.now).toISOString().slice(0, 10)}`;
+    storage.documents.set(key, { value: { count: REPORTS_PER_DAY, lastAt: 0 }, updatedAt: 'v-budget' });
+    const spent = await service.abResults('account-alpha', {});
+    expect(fetch.log.filter((c) => c.kind === 'reports')).toHaveLength(1);
+    expect(spent).toMatchObject({ status: 'ok', reports: 'RATE_LIMITED' });
+    // a revoked read asks for a reconnect, never Omnisend's text
+    const refused = abFetch({ get: () => jsonResponse({ detail: 'private detail' }, 403) });
+    const other = makeService({ fetch: refused });
+    await connected(other.service);
+    expect(await other.service.abResults('account-alpha', { abCampaignId: 'c'.repeat(24) })).toEqual({ status: 'not_connected', errorCode: 'NEEDS_RECONNECT' });
   });
 });
 

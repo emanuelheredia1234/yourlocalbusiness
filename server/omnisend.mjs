@@ -73,10 +73,12 @@ class OmnisendError extends Error {
 
 /** How one call to Omnisend's API failed: 'not_sent', 'unknown' (it may have been done) or what Omnisend answered. */
 class CallFailure extends Error {
-  constructor(kind, status = 0) {
+  constructor(kind, status = 0, type = '') {
     super(`Omnisend call failed: ${kind}`);
     this.kind = kind;
     this.status = status;
+    // Omnisend's problem type (a fixed name, matched only; its text is never passed on)
+    this.type = typeof type === 'string' ? type.slice(0, 200) : '';
   }
 }
 
@@ -476,7 +478,7 @@ export function createOmnisendRoutes({
     if (response.status >= 500) throw new CallFailure('unknown', response.status);
     // Omnisend's problem type, matched against fixed names only (its text is never passed on)
     if (response.status === 422 && typeof result?.type === 'string' && result.type.endsWith('/sender-email-not-available')) throw new CallFailure('sender', 422);
-    throw new CallFailure('refused', response.status);
+    throw new CallFailure('refused', response.status, result?.type);
   }
 
   /** What to tell the customer about a failed step: whether something may now exist in Omnisend, never Omnisend's own text. */
@@ -608,6 +610,136 @@ export function createOmnisendRoutes({
         url: typeof campaign?.url === 'string' && campaign.url.startsWith('https://app.omnisend.com/') ? campaign.url : '',
       },
     });
+  }
+
+  // ───────────── A/B test drafts (P4b: server/experiments/email.mjs) ─────────────
+
+  /** The customer's usable token, or the refusal in our words. */
+  async function usableToken(userId) {
+    if (!credentialsConfigured) throw notSetUp(null);
+    if (!storageReady) throw new OmnisendError(503, 'STORAGE_NOT_READY', 'Secure Omnisend token storage is not configured.');
+    const { value: connection, unreadable } = await readDocument(userDocumentKey(userId));
+    const reason = reconnectReason(connection, unreadable);
+    if (reason === 'scopes') {
+      if (connection.accessToken) await markReconnect(userId, connection.accessToken, 'scopes').catch(() => {});
+      throw new OmnisendError(409, 'SCOPE_REQUIRED', 'Connect Omnisend again and allow campaigns and email templates.');
+    }
+    if (reason) throw new OmnisendError(409, 'RECONNECT_REQUIRED', 'This app can’t use the saved Omnisend connection anymore. Connect Omnisend again.');
+    if (!connection.accessToken) throw new OmnisendError(409, 'NOT_CONNECTED', 'Connect your Omnisend account before creating a draft.');
+    return connection.accessToken;
+  }
+
+  const templateIdOf = (template) => (typeof template?.id === 'string' && /^[a-f0-9]{24}$/i.test(template.id) ? template.id : null);
+  const campaignOut = (campaign, name) => ({
+    id: typeof campaign?.id === 'string' ? campaign.id : '',
+    name: typeof campaign?.name === 'string' ? campaign.name : name,
+    status: typeof campaign?.status === 'string' ? campaign.status : 'draft',
+    url: typeof campaign?.url === 'string' && campaign.url.startsWith('https://app.omnisend.com/') ? campaign.url : '',
+  });
+  /** Omnisend refusing the A/B type for this brand (4xx with a problem type that says so), not a 5xx or a timeout. */
+  const abNotAvailable = (f) => f instanceof CallFailure && f.kind === 'refused' && f.status >= 400 && f.status < 500 && /type-not-supported|ab-?test-not-(available|allowed|supported)|feature-not-available/i.test(f.type);
+
+  /**
+   * An A/B subject (or opening) test as an Omnisend draft: two templates, then one campaign of type abTest with
+   * variants a and b. Never sent: the customer picks the audience and sends in Omnisend. Each write is one attempt.
+   * When Omnisend refuses the abTest type for this brand (4xx), two regular drafts instead ("— version A" and
+   * "— version B"), to send each to half of the list. settings: { testSizePercent 10–50 (30), decisionHours 4–48
+   * (24), winningMetric 'openRate' | 'clickRate' }.
+   * → { mode: 'omnisend_ab', campaign: { id, name, status, url, variantIds: { a, b } } }
+   *   | { mode: 'split', campaigns: { a: {...}, b: {...} } }
+   * Throws an OmnisendError in our words; campaignMayExist is set when a campaign may now exist in Omnisend.
+   */
+  async function createAbDraft(userId, { name, variants, settings = {} } = {}) {
+    const accessToken = await usableToken(userId);
+    if (!isRecord(variants?.a) || !isRecord(variants?.b)) throw new OmnisendError(400, 'INVALID_DRAFT', 'Both versions need a subject and a body.');
+    const a = draftFrom({ ...variants.a, name });
+    const b = draftFrom({ ...variants.b, name });
+    const intIn = (v, lo, hi, d) => (Number.isInteger(v) && v >= lo && v <= hi ? v : d);
+    const testSizePercent = intIn(settings.testSizePercent, 10, 50, 30);
+    const decisionHours = intIn(settings.decisionHours, 4, 48, 24);
+    const winningMetric = settings.winningMetric === 'clickRate' ? 'clickRate' : 'openRate';
+    const title = a.name;
+    const templates = [];
+    for (const [i, d] of [a, b].entries()) {
+      let template;
+      try {
+        template = await omnisendCall(accessToken, '/email-templates/import', { name: chars(`${title} — version ${i ? 'B' : 'A'}`).slice(0, 255).join(''), html: campaignHtml(d) });
+      } catch (failure) {
+        const err = await draftFailure(failure, 'template', userId, accessToken);
+        if (i && err instanceof OmnisendError) err.publicMessage = err.message = `Version A’s email template was imported. ${err.publicMessage}`;
+        throw err;
+      }
+      const id = templateIdOf(template);
+      if (!id) throw new OmnisendError(502, 'TEMPLATE_UNCONFIRMED', `Omnisend didn’t return the new template’s ID, so no campaign draft was created. The template may have been created: check Omnisend before trying again.`);
+      templates.push(id);
+    }
+    const content = (d, templateID) => ({ email: { subject: d.subject, templateID, ...(d.preheader ? { preheader: d.preheader } : {}) } });
+    let campaign;
+    try {
+      campaign = await omnisendCall(accessToken, '/campaigns', {
+        channel: 'email',
+        type: 'abTest',
+        name: title,
+        language: 'en_US',
+        abTest: {
+          settings: { testSizePercent, winningMetric, decisionTime: { amount: decisionHours, unit: 'h' } },
+          variants: { a: { content: content(a, templates[0]) }, b: { content: content(b, templates[1]) } },
+        },
+      });
+    } catch (failure) {
+      if (abNotAvailable(failure)) return splitDrafts(userId, accessToken, title, [a, b], templates);
+      if (failure instanceof CallFailure && failure.kind === 'unknown') throw Object.assign(new OmnisendError(502, 'CAMPAIGN_UNCONFIRMED', 'The email templates were imported, and the A/B campaign draft may have been created: Omnisend didn’t confirm it. Check Omnisend before trying again.'), { campaignMayExist: true });
+      throw await draftFailure(failure, 'campaign', userId, accessToken);
+    }
+    const ids = { a: campaign?.abTest?.variants?.a?.id, b: campaign?.abTest?.variants?.b?.id };
+    return { mode: 'omnisend_ab', campaign: { ...campaignOut(campaign, title), variantIds: Object.fromEntries(Object.entries(ids).filter(([, v]) => typeof v === 'string' && v.length <= 64)) } };
+  }
+
+  /** The fallback: two regular drafts. A second one that fails says the first exists. */
+  async function splitDrafts(userId, accessToken, title, drafts, templates) {
+    const out = {};
+    for (const [i, d] of drafts.entries()) {
+      const key = i ? 'b' : 'a';
+      const name = chars(`${title} — version ${key.toUpperCase()}`).slice(0, LIMITS.name).join('');
+      try {
+        out[key] = campaignOut(await omnisendCall(accessToken, '/campaigns', { channel: 'email', type: 'regular', name, language: 'en_US', content: { email: { templateID: templates[i], subject: d.subject, ...(d.preheader ? { preheader: d.preheader } : {}) } } }), name);
+      } catch (failure) {
+        const err = failure instanceof CallFailure && failure.kind === 'unknown' ? new OmnisendError(502, 'CAMPAIGN_UNCONFIRMED', 'The draft may have been created: Omnisend didn’t confirm it. Check Omnisend before trying again.') : await draftFailure(failure, 'campaign', userId, accessToken);
+        if (i && err instanceof OmnisendError) err.publicMessage = err.message = `Version A’s draft was created in Omnisend. ${err.publicMessage}`;
+        throw Object.assign(err, { campaignMayExist: i > 0 || (failure instanceof CallFailure && failure.kind === 'unknown') });
+      }
+    }
+    return { mode: 'split', campaigns: out };
+  }
+
+  /**
+   * An A/B test's results: Omnisend's pick (GET /campaigns/{id}: status and abTest.result.winnerVariantID) and each
+   * campaign's rates from the email reports (the same hourly cache and REPORTS_PER_DAY budget as the Email Analytics
+   * tab). → { status: 'ok', campaignStatus?, winnerId?, rates: { id: { sent, openRate, clickRate } } } |
+   * { status: 'not_connected', errorCode } | { status: 'error', errorCode }. Never Omnisend's text.
+   */
+  async function abResults(userId, { abCampaignId = null } = {}) {
+    let accessToken;
+    try {
+      accessToken = await usableToken(userId);
+    } catch (e) {
+      return { status: 'not_connected', errorCode: e?.code === 'NOT_CONNECTED' ? 'NOT_CONNECTED' : 'NEEDS_RECONNECT' };
+    }
+    const out = { status: 'ok', rates: {} };
+    if (abCampaignId && /^[a-f0-9]{24}$/i.test(abCampaignId)) {
+      const got = await omnisendRead(accessToken, 'GET', `/campaigns/${abCampaignId}`);
+      if (got.status === 401 || got.status === 403) return { status: 'not_connected', errorCode: 'NEEDS_RECONNECT' };
+      if (got.status === 200 && isRecord(got.body)) {
+        if (typeof got.body.status === 'string') out.campaignStatus = got.body.status.slice(0, 40);
+        const w = got.body.abTest?.result?.winnerVariantID;
+        if (typeof w === 'string' && w.length <= 64) out.winnerId = w;
+      } else if (got.status !== 404) out.partial = true;
+    }
+    const rep = await reports(userId);
+    if (rep.status === 'not_connected') return { status: 'not_connected', errorCode: rep.errorCode };
+    for (const c of rep.data?.campaigns ?? []) out.rates[c.id] = { sent: c.sent, openRate: c.openRate, clickRate: c.clickRate };
+    if (rep.status !== 'ok') out.reports = rep.errorCode ?? 'UNAVAILABLE';
+    return out;
   }
 
   // ───────────── the routes ─────────────
@@ -776,7 +908,7 @@ export function createOmnisendRoutes({
     }
   }
 
-  return { handle, forgetUser, unforgetUser, reports, connected };
+  return { handle, forgetUser, unforgetUser, reports, connected, createAbDraft, abResults };
 }
 
 /** The reports request for the Email Analytics tab (spec §1.5): campaign totals and sends per day, last 30 days. */
