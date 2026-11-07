@@ -2,6 +2,10 @@ import type { EbookExtras } from '@/ai/local/ebook';
 import type { WorkbookSpec } from '@/ai/workbook';
 import type { StrategyState } from './strategyTypes';
 import type { AgentBuild, AgentId } from './agentTypes';
+import type { EmailDoc, ThemeRef } from '../../shared/email/blocks.mjs';
+
+/** The email studio's block doc and theme (P5): shared/email/blocks.mjs. */
+export type { EmailDoc, ThemeRef };
 // ───────────────────────── Domain model: the Project Context Store ─────────────────────────
 
 export type Track = 'product' | 'business';
@@ -423,6 +427,8 @@ export interface LeadMagnet {
   createdAt: number;
   /** the published download (/m/<id>): a PDF made from this guide, an uploaded file, or a link. No secrets: the link is public by design. */
   delivery?: LeadMagnetDelivery;
+  /** made by Manus or Viktor (P5): its words came from their page; the PDF is still the app's own */
+  design?: { source: 'agent'; via: AgentId; buildId?: string; importedAt: number };
 }
 
 /** A lead magnet's published download, served at /m/<fileId> (server/leadFiles.mjs). */
@@ -456,7 +462,12 @@ export interface EmailStep {
   /** an address, or {{buy:<offer id>}} (the offer's buy link, filled in when the email is exported or sent) */
   ctaUrl: string;
   /** an A/B test of this step (P4b): version B, kept until "Create A/B draft in Omnisend" */
-  variants?: { experimentId: string; changed: 'subject' | 'opening'; b: { subject: string; preview: string; body: string } };
+  variants?: { experimentId: string; changed: 'subject' | 'opening'; b: { subject: string; preview: string; body: string; doc?: EmailDoc } };
+  /**
+   * The designed email (P5 email studio): its blocks and theme. Absent: the plain body is the email (a doc is made from
+   * it on the fly). Present: body, ctaLabel and ctaUrl are derived from it (plainFromDoc), for exports and older tabs.
+   */
+  doc?: EmailDoc;
 }
 
 export interface Subscriber {
@@ -1231,6 +1242,8 @@ export interface Project {
     leadMagnet: LeadMagnet | null;
     emails: EmailStep[];
     subscribers: Subscriber[];
+    /** the email studio's default theme for new designs (P5); absent: the brand theme */
+    emailTheme?: ThemeRef;
     /** the newest lead (ms) the owner has seen in Email → Leads: newer ones count as new */
     leadsSeenAt?: number;
     /** the newest lead (ms) the bell announced, so another device doesn't announce it again */
