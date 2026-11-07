@@ -1,7 +1,7 @@
 // Reading verdicts and the tree (server/ads/reads.mjs): Google's review fields, Meta's paused-but-approved ads, and a
 // campaign that is refused only when every one of its ads is.
 import { describe, expect, it } from 'vitest';
-import { adsNotApproved, stateFromNode, verdictOf } from './reads.mjs';
+import { adsNotApproved, stateFromNode, stateText, verdictOf } from './reads.mjs';
 
 describe('verdictOf', () => {
   it('reads Google’s approvalStatus (its reviewStatus is REVIEWED)', () => {
@@ -32,5 +32,12 @@ describe('stateFromNode', () => {
 
   it('every ad refused: the campaign is refused', () => {
     expect(stateFromNode(row, node(['rejected', 'rejected', 'rejected'])).state).toBe('rejected');
+  });
+});
+
+describe('stateText: in review', () => {
+  it('Meta says about 10 minutes, sometimes up to 24 hours (src/lib/ads/reviewTime.ts); Google keeps its own wording', () => {
+    expect(stateText({ platform: 'meta', state: 'in_review' })).toBe('In review at Meta. It usually takes about 10 minutes (sometimes up to 24 hours) and goes live once approved. Nothing is spent until it’s approved.');
+    expect(stateText({ platform: 'google', state: 'in_review' })).toBe('In review at Google. This usually takes up to a day. Nothing is spent until it’s approved.');
   });
 });

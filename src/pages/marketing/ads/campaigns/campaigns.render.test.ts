@@ -62,7 +62,7 @@ beforeEach(() => {
 describe('a campaign row', () => {
   it('says each state in plain words', () => {
     const cases: [Partial<LaunchedCampaign>, string][] = [
-      [{ state: 'in_review', stateMessage: 'In review at Meta. This usually takes up to a day. Nothing is spent until it’s approved.' }, 'In review'],
+      [{ state: 'in_review', stateMessage: 'In review at Meta. It usually takes about 10 minutes (sometimes up to 24 hours) and goes live once approved. Nothing is spent until it’s approved.' }, 'In review'],
       [{ state: 'paused', configuredStatus: 'PAUSED', stateMessage: 'Approved and paused. Resume to start spending.' }, 'Paused'],
       [{ state: 'with_issues', stateMessage: 'Running, but Meta reports a delivery problem. Open Ads Manager to see it.' }, 'Running with limits'],
       [{ state: 'completed', stateMessage: 'Reached its $350.00 limit and stopped.' }, 'Finished'],

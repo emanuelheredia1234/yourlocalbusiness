@@ -13,6 +13,7 @@ import type { AdJob, AdsPlatform, LaunchedCampaign, LaunchReview } from '@/lib/a
 import { PLATFORM_LABEL, PLATFORM_LONG } from '@/lib/ads/launchTypes';
 import { AdsApiError, launchAds, MAY_HAVE_HAPPENED, newRequestId } from '@/lib/ads/launchApi';
 import { combinedLine, launchButton, launchLines, needsMoneyTick } from '@/lib/ads/launchFormat';
+import { META_REVIEW_TIME } from '@/lib/ads/reviewTime';
 import { beginBusy, endBusy } from '@/lib/busy';
 import { Callout, Checkbox, Modal, Spinner } from '@/components/ui/primitives';
 
@@ -146,6 +147,7 @@ export function SpendConfirm({ open, items, again, onClose, onLaunched }: { open
                 </div>
               ))}
             </dl>
+            {it.platform === 'meta' && it.review.status === 'ACTIVE' && <p className="text-small text-muted">{META_REVIEW_TIME}</p>}
             {again && again.platform === it.platform && again.code === 'NOT_CREATED' && it.platform === 'google' && (
               <Callout tone="warn">
                 Google’s data can lag: if you see a campaign tagged {again.tag ?? 'YLB'} in Google Ads, don’t launch again. It was created paused, so it isn’t spending.

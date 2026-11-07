@@ -36,7 +36,8 @@ export function stateText(row) {
     case 'launching':
       return 'Launching…';
     case 'in_review':
-      return `In review at ${P}. This usually takes up to a day. Nothing is spent until it’s approved.`;
+      // Meta: about 10 minutes, sometimes up to 24 hours (src/lib/ads/reviewTime.ts); Google keeps its own wording
+      return row.platform === 'meta' ? 'In review at Meta. It usually takes about 10 minutes (sometimes up to 24 hours) and goes live once approved. Nothing is spent until it’s approved.' : `In review at ${P}. This usually takes up to a day. Nothing is spent until it’s approved.`;
     case 'active':
       return 'Running';
     case 'paused':

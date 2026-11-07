@@ -5,6 +5,7 @@ import { ClipboardList } from 'lucide-react';
 import type { LaunchedCampaign, ReviewView } from '@/lib/ads/launchTypes';
 import { PLATFORM_LABEL } from '@/lib/ads/launchTypes';
 import { AdsApiError, getCampaignReview } from '@/lib/ads/launchApi';
+import { META_IN_REVIEW } from '@/lib/ads/reviewTime';
 import { Spinner, StatusDot } from '@/components/ui/primitives';
 
 const WORD = { approved: ['Approved', 'good'], rejected: ['Not approved', 'bad'], with_issues: ['Approved with limits', 'warn'], in_review: ['In review', 'primary'], unknown: ['Couldn’t read', 'faint'] } as const;
@@ -60,6 +61,8 @@ export function ReviewStatus({ c }: { c: LaunchedCampaign }) {
           })}
         </ul>
       )}
+      {/* only while it is switched on: a paused campaign doesn't go live once approved */}
+      {view && c.platform === 'meta' && c.configuredStatus === 'ACTIVE' && view.ads.some((a) => a.status === 'in_review') && <p className="text-caption text-muted">{META_IN_REVIEW}</p>}
     </section>
   );
 }

@@ -11,9 +11,11 @@ import type { ChangeAction, ChangePreviewRequest, ChangeReview, LaunchedCampaign
 import { PLATFORM_LABEL } from '@/lib/ads/launchTypes';
 import { AdsApiError, changeAds, MAY_HAVE_HAPPENED, newRequestId, previewChange } from '@/lib/ads/launchApi';
 import { changeButton, changeLines, changeTitle, money, todayIn } from '@/lib/ads/launchFormat';
+import { resumedMessage } from '@/lib/ads/reviewTime';
 import { beginBusy, endBusy } from '@/lib/busy';
 import { useAdsLaunch } from '@/store/adsLaunch';
 import { useStore } from '@/store/useStore';
+import { toast } from '@/store/ui';
 import { Callout, Checkbox, Field, Modal, Select, Spinner } from '@/components/ui/primitives';
 import { ClaimTicks } from '../launch/ReviewStep';
 
@@ -119,8 +121,13 @@ export function ChangeConfirm({ c, action, onClose }: { c: LaunchedCampaign; act
     const r = await sendChange(c.id, action, token!, changeRequestIdFor(token!));
     setBusy(false);
     if (!r) return;
-    if (r.ok) onClose();
-    else setErr(r.message);
+    if (!r.ok) {
+      setErr(r.message);
+      return;
+    }
+    const m = action === 'resume' ? resumedMessage(c.platform) : null;
+    if (m) toast(m);
+    onClose();
   };
   const resetReview = () => {
     setReview(null);
