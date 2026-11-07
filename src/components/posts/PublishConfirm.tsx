@@ -77,8 +77,6 @@ function refusal(e: unknown, network: string): Refusal {
     // A/B tests and Trial Reels (P4b): nothing was sent
     case 'TRIAL_REEL_NOT_ELIGIBLE':
       return { title: 'It can’t go out as a Trial Reel', body: `${e.message} Nothing was sent.`, regularReel: e.reason !== 'unreadable', askAnyway: e.reason === 'unreadable' };
-    case 'TRIAL_REEL_REFUSED':
-      return { title: 'Instagram didn’t take the Trial Reel', body: 'Instagram didn’t accept this as a Trial Reel (the account may not be eligible yet, or has hit Instagram’s trial limit). Nothing was posted. Post it as a regular Reel instead?', regularReel: true };
     case 'EXPERIMENT_LIMIT':
       return { title: 'This month’s A/B tests are used', body: `${e.message} You can still post it as a normal post: take it out of the test first.` };
     case 'TOO_SOON_AFTER_VARIANT':

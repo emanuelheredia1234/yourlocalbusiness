@@ -420,9 +420,7 @@ export type ApiErrorCode =
   | 'TOO_SOON'
   | 'TOO_SOON_AFTER_VARIANT'
   | 'VARIANT_NO_FORM'
-  | 'CAMPAIGN_UNCONFIRMED'
-  /** Instagram refused the Trial Reel (a failed job's errorCode, and its copy) */
-  | 'TRIAL_REEL_REFUSED';
+  | 'CAMPAIGN_UNCONFIRMED';
 
 export interface ApiError {
   error: string;
