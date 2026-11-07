@@ -5,6 +5,7 @@ import type { Post } from '@/lib/types';
 import { safeStorage } from '@/lib/storage';
 import { useStore } from '@/store/useStore';
 import { useOffers } from '@/store/offers';
+import { useMarketConfig } from '@/lib/marketConfig';
 import { defaultSettings, newProject } from '@/store/defaults';
 import type { ChatMessage } from '@/store/assistant';
 import { ASSISTANT_MARKER as MOCK_MARKER, mockAssistantReply } from '../../../server/test/mock-providers.mjs';
@@ -44,6 +45,8 @@ describe('the prompt', () => {
     useExperimentsConfig.setState({ config: { enabled: true, reachable: true } });
     // and payments' (listed while the server has offers on)
     useOffers.setState({ config: { enabled: true, whop: { sandbox: false, production: false }, stripe: { available: true, environment: 'production' }, reachable: true } });
+    // and the listing's web page (listed while the server has the public marketplace on)
+    useMarketConfig.setState({ config: { enabled: true, publicUrl: 'https://app.example.com/market', reachable: true } });
     // and the email studio's (listed once the business has emails)
     useStore.setState((st) => ({ projects: st.projects.map((x) => ({ ...x, marketing: { ...x.marketing, emails: generateEmailSequence(x, null) } })) }));
     const history = [msg('user', 'Hi there'), msg('assistant', 'Hello! How can I help?'), msg('activity', 'Opened Content calendar', { tool: 'navigate', status: 'ok' }), msg('card', 'Make a video?', { card: { title: 'Make a video?', what: 'x', who: 'y', confirmLabel: 'Go', state: 'declined' } })];
@@ -65,6 +68,7 @@ describe('the prompt', () => {
     useAuth.setState({ phase: 'loading' } as never);
     useExperimentsConfig.setState({ config: null });
     useOffers.setState({ config: null });
+    useMarketConfig.setState({ config: null });
   });
 
   it('keeps only the last 12 messages, each one shortened', () => {

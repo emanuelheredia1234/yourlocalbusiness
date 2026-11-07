@@ -16,9 +16,10 @@ import { arg, catalogLine, defineTool, type AnyTool } from './registry';
 import { experimentsOnNow } from '@/lib/experiments/config';
 import { getActiveProject } from '@/store/useStore';
 import { useOffers } from '@/store/offers';
+import { marketOn } from '@/lib/marketConfig';
 
 /** The groups listed by name until they're needed (any other group, the core and the excluded tools, is always in full). */
-export const TOOL_GROUP_NAMES = ['social', 'studio', 'marketing', 'brand', 'agents', 'ab', 'email', 'payments'] as const;
+export const TOOL_GROUP_NAMES = ['social', 'studio', 'marketing', 'brand', 'agents', 'ab', 'email', 'payments', 'web'] as const;
 export type ToolGroupName = (typeof TOOL_GROUP_NAMES)[number];
 
 /** What each group covers, in a few words (shown with its tools' names). */
@@ -31,6 +32,7 @@ export const GROUP_ABOUT: Record<ToolGroupName, string> = {
   ab: 'A/B tests, Trial Reels',
   email: 'email designs: blocks, themes, AI design, HTML export',
   payments: 'Stripe: status, our fee, setup, buy links, sales',
+  web: 'the listing’s public web page that Google can index (on or off); moderation is the app owner’s',
 };
 
 /** The groups that fit each page, most fitting first (Code & assets is in Studio, its tools are marketing's). */
@@ -38,12 +40,12 @@ const PAGE_GROUPS: Partial<Record<Route, ToolGroupName[]>> = {
   dashboard: ['social'],
   calendar: ['social'],
   'marketing-social': ['social', 'ab'],
-  studio: ['studio', 'marketing', 'agents'],
+  studio: ['studio', 'web', 'marketing', 'agents'],
   marketing: ['marketing'],
   'marketing-seo': ['marketing', 'agents'],
   'marketing-email': ['marketing', 'email'],
   'marketing-ads': ['marketing'],
-  store: ['brand', 'studio'],
+  store: ['brand', 'studio', 'web'],
   brain: ['brand'],
   analytics: ['brand', 'payments'],
   'workspace-settings': ['brand', 'payments'],
@@ -64,9 +66,10 @@ const isGroupName = (g: unknown): g is ToolGroupName => typeof g === 'string' &&
 /**
  * Groups listed only while their feature is on here, so they cost the prompt nothing otherwise: A/B tests (signed
  * in, and the server has them; never in the claude.ai build), the email studio (once the business has emails), and
- * payments (the server has offers on; never in the claude.ai build).
+ * payments (the server has offers on; never in the claude.ai build), and the listing's public web page (signed in, the
+ * server has the public marketplace on; never in the claude.ai build).
  */
-const GROUP_ON: Partial<Record<ToolGroupName, () => boolean>> = { ab: experimentsOnNow, email: () => (getActiveProject()?.marketing.emails.length ?? 0) > 0, payments: () => !__ARTIFACT_BUILD__ && !!useOffers.getState().config?.enabled };
+const GROUP_ON: Partial<Record<ToolGroupName, () => boolean>> = { ab: experimentsOnNow, email: () => (getActiveProject()?.marketing.emails.length ?? 0) > 0, payments: () => !__ARTIFACT_BUILD__ && !!useOffers.getState().config?.enabled, web: () => marketOn() };
 export const groupOn = (g: ToolGroupName) => GROUP_ON[g]?.() ?? true;
 const uniq = <T>(list: T[]) => [...new Set(list)];
 
