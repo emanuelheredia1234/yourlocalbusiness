@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { newProject } from '@/store/defaults';
 import type { MediaRef } from '@/lib/types';
 import { compact, SHARED_GALLERY_MAX, SHARED_IMAGE_CHARS } from '@/lib/community';
+import { useOffers } from '@/store/offers';
 import { buildListing, cleanGallery, COVER_STEPS, fitDataUrl, GALLERY_STEPS, galleryIds, LISTING_IMAGE_CHARS, MAX_GALLERY } from './listing';
 
 /** A stand-in JPEG encoder: larger and better-quality images take more characters, like real ones. */
@@ -72,5 +73,36 @@ describe('publishing listing images', () => {
     p.studio.listing.galleryIds = ['a', 'b', 'c', 'd'];
     p.studio.listing.coverImageId = 'a';
     expect(galleryIds(p)).toEqual(['b', 'c', 'd']);
+  });
+});
+
+describe('a listing sold through an offer', () => {
+  const OFFER = 'abcdefghijklmnopqrstuv';
+  const offer = (provider: 'whop' | 'external' | 'stripe', status = 'active', environment: 'sandbox' | 'production' | null = 'production') =>
+    ({ id: OFFER, provider, status, environment, checkoutHost: provider === 'stripe' ? 'checkout.stripe.com' : 'whop.com', link: `https://yourlocalbusiness.replit.app/b/${OFFER}` }) as never;
+  const product = () => {
+    const p = newProject('product', 'new');
+    p.studio.listing.offerId = OFFER;
+    return p;
+  };
+
+  it('keeps a Stripe offer (P6) with its /b/ link, like Whop and outside links', () => {
+    const p = product();
+    for (const provider of ['stripe', 'whop', 'external'] as const) {
+      useOffers.setState((s) => ({ ...s, byProject: { [p.id]: [offer(provider)] } }));
+      const l = buildListing(p);
+      expect(l.buyUrl).toBe(`https://yourlocalbusiness.replit.app/b/${OFFER}`);
+      expect(l.offer).toMatchObject({ id: OFFER, provider });
+    }
+    useOffers.setState((s) => ({ ...s, byProject: { [p.id]: [offer('stripe', 'active', 'sandbox')] } }));
+    expect(buildListing(p).offer).toEqual({ id: OFFER, provider: 'stripe', checkoutHost: 'checkout.stripe.com', test: true });
+  });
+
+  it('drops an archived offer, and keeps the public web address across updates', () => {
+    const p = product();
+    useOffers.setState((s) => ({ ...s, byProject: { [p.id]: [offer('stripe', 'archived')] } }));
+    expect(buildListing(p).offer).toBeUndefined();
+    const prev = { ...buildListing(p), web: { slug: 'cut-abc123', url: 'https://yourlocalbusiness.replit.app/market/cut-abc123' } };
+    expect(buildListing(p, prev).web).toEqual(prev.web);
   });
 });

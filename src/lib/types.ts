@@ -1051,7 +1051,9 @@ export interface Listing {
   /** the seller's own page to buy or book (a Stripe Payment Link, Gumroad, Etsy, Calendly…): payment happens there */
   buyUrl?: string;
   /** set when buyUrl is an offer's buy link (https://<app>/b/<id>): where buyers pay, for the "Secure checkout on …" hint */
-  offer?: { id: string; provider: 'whop' | 'external'; checkoutHost: string; test?: boolean };
+  offer?: { id: string; provider: 'whop' | 'external' | 'stripe'; checkoutHost: string; test?: boolean };
+  /** set once the listing is public on the web (P7): its own page at <app>/market/<slug> */
+  web?: { slug: string; url: string };
   /** how to reach the seller */
   contactEmail?: string;
   phone?: string;

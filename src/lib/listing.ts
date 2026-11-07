@@ -74,7 +74,7 @@ export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, 
   // an attached offer (as last loaded from the server) is the listing's buy link: its permanent /b/<id> address
   const offerId = listingOfferId(p);
   const offer = offerId ? findOffer(p.id, offerId) : undefined;
-  const sells = offer && offer.link && offer.status !== 'archived' && (offer.provider === 'whop' || offer.provider === 'external') ? offer : undefined;
+  const sells = offer && offer.link && offer.status !== 'archived' && (offer.provider === 'whop' || offer.provider === 'external' || offer.provider === 'stripe') ? offer : undefined;
   const logoUpload = p.brand.logo.mode === 'upload' && p.brand.logo.uploadDataUrl && p.brand.logo.uploadDataUrl.length < 30_000 ? p.brand.logo.uploadDataUrl : undefined;
   return {
     id: prev?.id ?? p.studio.publishedListingId ?? uid('lst'),
@@ -93,7 +93,7 @@ export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, 
     location: isBiz ? (p.location ? { city: p.location.city, region: p.location.region, lat: p.location.lat, lng: p.location.lng } : { city: 'Online', region: '', online: true }) : undefined,
     website: p.brand.websiteUrl || undefined,
     buyUrl: sells ? sells.link : d.buyUrl?.trim() || undefined,
-    ...(sells ? { offer: { id: sells.id, provider: sells.provider as 'whop' | 'external', checkoutHost: sells.checkoutHost, ...(sells.environment === 'sandbox' ? { test: true } : {}) } } : {}),
+    ...(sells ? { offer: { id: sells.id, provider: sells.provider, checkoutHost: sells.checkoutHost, ...(sells.environment === 'sandbox' ? { test: true } : {}) } } : {}),
     contactEmail: d.contactEmail?.trim() || undefined,
     phone: d.phone?.trim() || undefined,
     bookingType: isBiz ? d.bookingType : 'buy',
@@ -108,6 +108,8 @@ export function buildListing(p: Project, prev?: Listing, coverDataUrl?: string, 
     },
     gallery: gallery ?? (d.galleryIds?.length ? prev?.gallery : undefined),
     createdAt: prev?.createdAt ?? Date.now(),
+    // its public web page (P7) keeps its address across updates
+    ...(prev?.web ? { web: prev.web } : {}),
     origin: 'mine',
     projectId: p.id,
   };
