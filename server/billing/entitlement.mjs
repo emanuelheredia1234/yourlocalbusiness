@@ -14,8 +14,9 @@
 //     automatically).
 //  7. AI credits a month = the tier's + 1,000 per business above the first (paid or free extras); 0 while paused.
 //  8. A card trial (a Stripe subscription 'trialing'): the chosen tier's features, but AI credits are the trial's
-//     allowance (cardTrial.aiCredits, ~$3) for the whole trial; banner 'trial' (days left), 'trial_ending' in its last
-//     cardTrial.endingSoonDays days (Stripe also emails then).
+//     allowance (cardTrial.aiCredits, ~$3) for the whole trial, counted from its first UTC day (server/billing/
+//     stripe.mjs adds creditWindow.baselineUsd: what setup spent that day before the trial, not the trial's); banner
+//     'trial' (days left), 'trial_ending' in its last cardTrial.endingSoonDays days.
 //  9. Before any plan (a new sign-up, never subscribed): paused 'plan' (publishing, posting, ads, video, connecting
 //     and every other paid action refused: "Start your free trial"), but `starter` with a one-off AI allowance
 //     (starter.aiCredits) so setup can make the brand board, strategy and first posts. A plan that ended gets none.
@@ -116,11 +117,10 @@ export function entitlementOf(acct, settings, now = Date.now(), { isAdmin = fals
     const ended = ms(acct?.ended_at);
     // never had a plan: setup's one-off AI allowance (a plan that ended, or a free plan that did, gets none)
     const fresh = ended == null && (!acct || (acct.status === 'none' && !acct.stripe_subscription_id && acct.source !== 'comp'));
-    // counted over the whole account (a sign-up usually has no row yet: from the start), never renewed
-    const since = ms(acct?.created_at);
-    const start = since == null ? STARTER_FROM : iso(Date.UTC(new Date(since).getUTCFullYear(), new Date(since).getUTCMonth(), new Date(since).getUTCDate()));
+    // counted over the whole account, never renewed: always from the start (the billing row is often made later, by a
+    // Checkout that was then abandoned; anchoring on it would forgive what setup used before)
     return BASE('none', {
-      ...(fresh ? { starter: true, creditsPerMonth: PLANS.starter.aiCredits, creditWindow: { start, resetsAt: null } } : {}),
+      ...(fresh ? { starter: true, creditsPerMonth: PLANS.starter.aiCredits, creditWindow: { start: STARTER_FROM, resetsAt: null } } : {}),
       active: false,
       paused: 'plan',
       // a brand-new sign-up has no plan yet; a plan that ended says so

@@ -24,10 +24,13 @@
 //        quantity|deleted], cancel_at_period_end, proration_behavior, payment_behavior, metadata),
 //        DELETE /subscriptions/:id. Subscriptions carry current_period_* on each item too (the basil API version),
 //        billing_cycle_anchor and trial_end (a change of interval starts a new period now). A change with
-//        proration_behavior=always_invoice makes a paid invoice; with payment_behavior=error_if_incomplete and a
-//        customer whose card declines (POST /__customers/decline) it answers 402 card_declined and changes nothing.
-//        trial_end=now ends a trial at once (the subscription goes active with a paid invoice; a declining card answers
-//        402 and nothing changes); cancellation_details[feedback|comment] is kept on the subscription.
+//        proration_behavior=always_invoice makes a paid invoice ($0 while the subscription is trialing, as Stripe bills
+//        items added during a free trial); a customer whose card declines (POST /__customers/decline): with
+//        payment_behavior=error_if_incomplete it answers 402 card_declined and changes nothing, otherwise (Stripe's
+//        default, allow_incomplete) the change is made, its invoice stays open and the subscription goes past_due.
+//        trial_end=now ends a trial at once (active with a paid invoice; a declining card: the same two outcomes);
+//        cancellation_details[feedback|comment] is kept on the subscription. DELETE takes its params in the query
+//        (invoice_now, prorate, cancellation_details[…]) like Stripe's libraries send them.
 //   GET /payment_methods/:id (card.fingerprint, card.brand, card.last4)
 //   POST /subscription_items/:id (quantity, proration_behavior, payment_behavior)
 //   POST /billing_portal/sessions (customer, return_url, configuration)
@@ -37,7 +40,8 @@
 //   GET /events/:id, GET /events
 //
 // Test hooks (no key):
-//   GET  /__calls                                         every API call {method, path, account, idempotencyKey}
+//   GET  /__calls                                         every API call {method, path, account, idempotencyKey,
+//                                                          query?}
 //   POST /__checkout/complete {id, account?, paid?, card?}  card: a card fingerprint (default: a new one each time),
 //                                                          the subscription's default_payment_method
 //                                                          finishes a Checkout Session: a subscription (mode
@@ -55,7 +59,8 @@
 //   POST /__accounts/enable {id}                           charges_enabled + details_submitted, account.updated
 //   POST /__fail {route, mode, times}                      the next `times` calls to `route` (e.g. "POST
 //                                                          /v1/subscriptions/:id") fail: card_declined (402),
-//                                                          server (500), rate_limit (429) or timeout (the request
+//                                                          permission (403: a restricted key without that
+//                                                          permission), server (500), rate_limit (429) or timeout (the request
 //                                                          is DONE, then the connection is dropped: the "did it go
 //                                                          through?" case a caller must read back, never resend)
 //
@@ -311,6 +316,9 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
           payment_intent: null,
           line_items_input: lines.map((l) => ({ price: l.price, quantity: int(l.quantity, 1) })),
           subscription_data: body.subscription_data ? { ...body.subscription_data, trial_period_days: int(body.subscription_data.trial_period_days) } : null,
+          payment_method_collection: body.payment_method_collection ?? 'always',
+          payment_method_types: Array.isArray(body.payment_method_types) ? body.payment_method_types : null,
+          custom_text: body.custom_text ?? null,
           payment_intent_data: body.payment_intent_data ? { ...body.payment_intent_data, application_fee_amount: int(body.payment_intent_data.application_fee_amount) } : null,
           created: sec(),
           expires_at: int(body.expires_at) ?? sec() + 24 * 3600,
@@ -348,6 +356,7 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
       if (!s) return notFound('subscription', id);
       if (method === 'GET') return { status: 200, body: subscriptionView(r, s) };
       if (method === 'DELETE') {
+        if (body.cancellation_details) s.cancellation_details = { ...s.cancellation_details, reason: 'cancellation_requested', ...(body.cancellation_details.feedback ? { feedback: body.cancellation_details.feedback } : {}), ...(body.cancellation_details.comment ? { comment: String(body.cancellation_details.comment).slice(0, 5000) } : {}) };
         s.status = 'canceled';
         s.canceled_at = s.ended_at = sec();
         await emit('customer.subscription.deleted', subscriptionView(r, s), account);
@@ -355,9 +364,14 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
       }
       if (method === 'POST') {
         if (s.status === 'canceled') return stripeError(400, 'invalid_request_error', 'A canceled subscription can only update its cancellation_details and metadata.');
-        // a change charged now with a card that declines: error_if_incomplete refuses it and nothing changes
+        // a change charged now with a card that declines: error_if_incomplete refuses it and nothing changes; Stripe's
+        // default (allow_incomplete) makes the change, leaves its invoice open and the subscription past_due. Items
+        // changed during a free trial are billed $0 (nothing to decline).
         const changesItems = Array.isArray(body.items) && body.items.length > 0;
-        if (changesItems && body.proration_behavior === 'always_invoice' && body.payment_behavior === 'error_if_incomplete' && r.declining.has(s.customer)) {
+        const inTrial = s.status === 'trialing' && body.trial_end !== 'now';
+        const charged = (changesItems && body.proration_behavior === 'always_invoice' && !inTrial) || body.trial_end === 'now';
+        const declines = charged && r.declining.has(s.customer);
+        if (declines && body.payment_behavior === 'error_if_incomplete') {
           return { status: 402, body: { error: { type: 'card_error', code: 'card_declined', decline_code: 'generic_decline', message: 'Your card was declined.' } } };
         }
         const previous = {};
@@ -395,14 +409,13 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
         // a trial that ends now: charged at once (a declining card refuses it and nothing changes)
         if (body.trial_end === 'now') {
           if (s.status !== 'trialing') return stripeError(400, 'invalid_request_error', 'This subscription is not trialing.', { param: 'trial_end' });
-          if (r.declining.has(s.customer)) return { status: 402, body: { error: { type: 'card_error', code: 'card_declined', decline_code: 'generic_decline', message: 'Your card was declined.' } } };
           previous.status = s.status;
           previous.trial_end = s.trial_end;
-          s.status = 'active';
+          s.status = declines ? 'past_due' : 'active';
           s.trial_end = sec();
           s.current_period_start = s.billing_cycle_anchor = sec();
           s.current_period_end = s.current_period_start + periodSec(r, s);
-          newInvoice(r, s, { reason: 'subscription_cycle' });
+          newInvoice(r, s, { reason: 'subscription_cycle', status: declines ? 'open' : 'paid' });
         }
         if (body.metadata) s.metadata = { ...s.metadata, ...body.metadata };
         // like Stripe: a change of billing interval starts a new period now (the billing cycle anchor resets)
@@ -411,7 +424,13 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
           s.current_period_start = s.billing_cycle_anchor = sec();
           s.current_period_end = s.current_period_start + periodSec(r, s);
         }
-        if (previous.items && body.proration_behavior === 'always_invoice') newInvoice(r, s, { reason: 'subscription_update' });
+        if (previous.items && body.proration_behavior === 'always_invoice') {
+          newInvoice(r, s, { reason: 'subscription_update', ...(inTrial ? { amount: 0 } : {}), ...(declines ? { status: 'open' } : {}) });
+          if (declines && s.status === 'active') {
+            previous.status = s.status;
+            s.status = 'past_due';
+          }
+        }
         await emit('customer.subscription.updated', subscriptionView(r, s), account, previous);
         return { status: 200, body: subscriptionView(r, s) };
       }
@@ -574,10 +593,11 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     const account = String(req.headers['stripe-account'] ?? '');
     const ikey = req.headers['idempotency-key'] ? String(req.headers['idempotency-key']) : null;
     const route = routeOf(method, parts);
-    calls.push({ method, path: url.pathname, route, account: account || null, idempotencyKey: ikey });
+    calls.push({ method, path: url.pathname, route, account: account || null, idempotencyKey: ikey, ...(url.search ? { query: url.search.slice(1) } : {}) });
     if (account && !accounts.has(account)) return send(res, 403, { error: { type: 'invalid_request_error', message: `The provided key does not have access to account '${account}' (or that account does not exist).` } });
 
-    const body = method === 'POST' ? parseForm(raw) : {};
+    // Stripe's libraries send a DELETE's params in the query string
+    const body = method === 'POST' ? parseForm(raw) : method === 'DELETE' ? parseForm(url.search.slice(1)) : {};
     // an Idempotency-Key replays the first answer (same request) or refuses a different one
     const fingerprint = `${method} ${url.pathname} ${account} ${raw}`;
     if (ikey && method === 'POST') {
@@ -588,6 +608,7 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
 
     const fault = takeFault(route);
     if (fault === 'card_declined') return send(res, 402, { error: { type: 'card_error', code: 'card_declined', decline_code: 'generic_decline', message: 'Your card was declined.' } });
+    if (fault === 'permission') return send(res, 403, { error: { type: 'invalid_request_error', message: 'The provided key does not have the required permissions for this endpoint.' } });
     if (fault === 'server') return send(res, 500, { error: { type: 'api_error', message: 'Something went wrong on Stripe’s end.' } });
     if (fault === 'rate_limit') return send(res, 429, { error: { type: 'invalid_request_error', code: 'rate_limit', message: 'Too many requests.' } });
 

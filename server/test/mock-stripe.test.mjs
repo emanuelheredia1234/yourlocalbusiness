@@ -198,9 +198,16 @@ describe('mock-stripe', () => {
     expect(first).toMatchObject({ object: 'invoice', subscription: sub.id, amount_paid: 0, status: 'paid' });
     expect((await stripe('GET', '/v1/invoices/in_nope00000000')).status).toBe(404);
 
-    // the card declines: an immediate charge with error_if_incomplete is refused and nothing changes
+    // during the trial an added item is billed $0, as Stripe bills items added during a free trial: nothing to decline
     await fetch(`${mock.base}/__customers/decline`, { method: 'POST', body: JSON.stringify({ id: customer.id }) });
     const add = { items: [{ price: extra.id, quantity: 1 }], proration_behavior: 'always_invoice', payment_behavior: 'error_if_incomplete' };
+    const inTrial = await stripe('POST', `/v1/subscriptions/${sub.id}`, add, { idem: 'p1-in-trial' });
+    expect(inTrial.status).toBe(200);
+    expect((await stripe('GET', `/v1/invoices/${inTrial.body.latest_invoice}`)).body).toMatchObject({ amount_due: 0, status: 'paid' });
+    const trialItem = inTrial.body.items.data.find((i) => i.price.id === extra.id);
+    expect((await stripe('POST', `/v1/subscriptions/${sub.id}`, { items: [{ id: trialItem.id, deleted: true }], proration_behavior: 'none' })).status).toBe(200);
+    // the trial ends: now the card declines an immediate charge, and with error_if_incomplete nothing changes
+    expect((await (await fetch(`${mock.base}/__subscriptions/renew`, { method: 'POST', body: JSON.stringify({ id: sub.id }) })).json()).status).toBe('active');
     const declined = await stripe('POST', `/v1/subscriptions/${sub.id}`, add, { idem: 'p1-declined' });
     expect(declined.status).toBe(402);
     expect(declined.body.error).toMatchObject({ type: 'card_error', code: 'card_declined' });
@@ -232,6 +239,37 @@ describe('mock-stripe', () => {
     expect((await stripe('POST', '/v1/billing_portal/sessions', { customer: customer.id, configuration: config.body.id })).body.configuration).toBe(config.body.id);
     expect((await stripe('POST', '/v1/billing_portal/sessions', { customer: customer.id, configuration: 'bpc_nope00000000' })).status).toBe(404);
     expect(mock.writes('POST /v1/billing_portal/configurations')).toHaveLength(1);
+  });
+
+  it('P1c additions: trial_end=now and a declining card (402 with error_if_incomplete, else past_due with an open invoice), DELETE with its params in the query, Checkout’s trial fields, a permission fault', async () => {
+    await stripe('POST', '/v1/products', { id: 'ylb_test_p1c', name: 'P1c' });
+    const price = (await stripe('POST', '/v1/prices', { product: 'ylb_test_p1c', currency: 'usd', unit_amount: 9700, lookup_key: 'p1c_tier_m', recurring: { interval: 'month' } })).body;
+    const customer = (await stripe('POST', '/v1/customers', { email: 'p1c@example.com' })).body;
+    const trialSub = async () => {
+      const s = await stripe('POST', '/v1/checkout/sessions', { mode: 'subscription', customer: customer.id, success_url: 'https://x/ok', line_items: [{ price: price.id, quantity: 1 }], subscription_data: { trial_period_days: 7 }, payment_method_collection: 'always', payment_method_types: ['card'], custom_text: { submit: { message: 'One free trial per person and card.' } } });
+      expect(s.body).toMatchObject({ payment_method_collection: 'always', payment_method_types: ['card'], custom_text: { submit: { message: 'One free trial per person and card.' } } });
+      return (await (await fetch(`${mock.base}/__checkout/complete`, { method: 'POST', body: JSON.stringify({ id: s.body.id }) })).json()).subscription;
+    };
+    const one = await trialSub();
+    const two = await trialSub();
+    mock.decline(customer.id);
+    // error_if_incomplete: refused, nothing changes
+    const refused = await stripe('POST', `/v1/subscriptions/${one.id}`, { trial_end: 'now', payment_behavior: 'error_if_incomplete' }, { idem: 'p1c-refused' });
+    expect(refused.status).toBe(402);
+    expect((await stripe('GET', `/v1/subscriptions/${one.id}`)).body.status).toBe('trialing');
+    // Stripe's default (allow_incomplete): the trial ends, the invoice stays open, the subscription is past_due
+    const incomplete = await stripe('POST', `/v1/subscriptions/${one.id}`, { trial_end: 'now' }, { idem: 'p1c-incomplete' });
+    expect(incomplete.status).toBe(200);
+    expect(incomplete.body.status).toBe('past_due');
+    expect((await stripe('GET', `/v1/invoices/${incomplete.body.latest_invoice}`)).body).toMatchObject({ status: 'open', amount_paid: 0 });
+    // DELETE takes its params from the query, as Stripe's libraries send them
+    const del = await fetch(`${mock.apiBase}/v1/subscriptions/${two.id}?invoice_now=false&prorate=false&cancellation_details%5Bfeedback%5D=too_expensive&cancellation_details%5Bcomment%5D=Later`, { method: 'DELETE', headers: { authorization: `Bearer ${TEST_STRIPE_KEY}`, 'idempotency-key': 'p1c-del' } });
+    expect((await del.json()).cancellation_details).toMatchObject({ feedback: 'too_expensive', comment: 'Later' });
+    expect(mock.calls.at(-1)).toMatchObject({ method: 'DELETE', route: 'DELETE /v1/subscriptions/:id', query: 'invoice_now=false&prorate=false&cancellation_details%5Bfeedback%5D=too_expensive&cancellation_details%5Bcomment%5D=Later' });
+    // a restricted key without a permission: 403
+    mock.fail('GET /v1/payment_methods/:id', 'permission', 1);
+    expect((await stripe('GET', `/v1/payment_methods/${one.default_payment_method}`)).status).toBe(403);
+    expect((await stripe('GET', `/v1/payment_methods/${one.default_payment_method}`)).status).toBe(200);
   });
 
   it('Connect: an account, its onboarding link, and a direct charge with an application fee on that account only', async () => {

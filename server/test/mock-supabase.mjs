@@ -57,9 +57,12 @@ const PRIMARY_KEYS = {
   offers: ['id'],
   sales: ['id'],
   sale_refunds: ['provider', 'environment', 'refund_id'],
+  // supabase/migrations/20261114000000_trial_paywall.sql
+  billing_trials: ['subscription_id'],
+  cancel_surveys: ['id'],
 };
 /** the integration tables (all server-only) */
-const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops', 'payment_connections', 'offers', 'sales', 'sale_refunds'];
+const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys'];
 /** tables users may read their own rows of but never write (only the server and the database functions do) */
 const USER_READ_ONLY = new Set(['project_slots']);
 /** `generated always as identity` columns: the mock numbers them 1, 2, 3… per table */
@@ -92,11 +95,14 @@ const UNIQUE = {
   ],
   payment_connections: [{ name: 'payment_connections_one_live', cols: ['user_id', 'provider', 'environment'], where: (r) => r.status !== 'disconnected' }],
   sales: [{ name: 'sales_one_per_payment', cols: ['provider', 'environment', 'provider_payment_id'] }],
+  cancel_surveys: [{ name: 'cancel_surveys_portal_once', cols: ['subscription_id'], where: (r) => r.source === 'portal' }],
 };
 /** tables whose created_at defaults to now() here (the newer ones; older tests compare whole rows) */
 const DEFAULT_CREATED = new Set(['payment_connections', 'offers', 'sales']);
 /** tables with a user_id column that isn't a foreign key: deleting the user leaves their rows */
 const NO_USER_FK = new Set(['usage_ledger']);
+/** user_id references auth.users on delete set null: deleting the user keeps the row, without its user */
+const USER_SET_NULL = new Set(['billing_trials']);
 /** the claim_analytics_run slot: no second run for a business within this long of the last one's start */
 const RUN_SLOT_MS = 15 * 60_000;
 /** tables every signed-in person may read (writes stay owner-only), like the market_listings policies */
@@ -105,7 +111,7 @@ const PUBLIC_READ = new Set(['market_listings']);
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'video_starts', 'published_pages', 'published_domains', 'page_leads', 'lead_files', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales', 'sale_refunds']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys']);
 const PROJECT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
 /**
@@ -411,6 +417,15 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       }
       const items = Array.isArray(body) ? body : [body];
       const pk = (url.searchParams.get('on_conflict') || '').split(',').filter(Boolean);
+      // like Postgres: a partial unique index can't be inferred by ON CONFLICT (cols) without its WHERE, which PostgREST
+      // can't send: naming only such an index's columns is refused (42P10). (Tables whose other unique keys this mock
+      // doesn't list keep taking their on_conflict as given.)
+      if (pk.length) {
+        const same = (cols) => cols.length === pk.length && cols.every((c) => pk.includes(c));
+        const full = [PRIMARY_KEYS[table] ?? ['id'], ...(UNIQUE[table] ?? []).filter((u) => !u.where).map((u) => u.cols)];
+        const partialOnly = (UNIQUE[table] ?? []).some((u) => u.where && same(u.cols)) && !full.some(same);
+        if (partialOnly) return send(res, 400, { code: '42P10', details: null, hint: null, message: 'there is no unique or exclusion constraint matching the ON CONFLICT specification' });
+      }
       const keyCols = pk.length ? pk : PRIMARY_KEYS[table] ?? ['id'];
       const upsert = /resolution=merge-duplicates/.test(prefer);
       const skipExisting = /resolution=ignore-duplicates/.test(prefer); // INSERT … ON CONFLICT DO NOTHING
@@ -510,6 +525,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (fn === 'ylb_claim_video_start') return claimVideoStart(req, res, raw);
     if (fn === 'lead_file_downloaded') return leadFileDownloaded(req, res, raw);
     if (fn === 'offer_clicked' || fn === 'record_sale') return offersRpc(req, res, fn, raw);
+    if (fn === 'ylb_cancel_survey_totals') return surveyTotals(req, res, fn);
     if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -537,6 +553,28 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (b.p_email) row.email = b.p_email;
     row.updated_at = new Date().toISOString();
     return send(res, 200, { ...row });
+  }
+
+  /** public.ylb_cancel_survey_totals (20261114000000_trial_paywall.sql): every answer and trial, counted. Server-only. */
+  async function surveyTotals(req, res, fn) {
+    if (missingTables.includes('cancel_surveys') || missingTables.includes('billing_trials')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    const answers = tables.get('cancel_surveys') ?? [];
+    const trials = tables.get('billing_trials') ?? [];
+    const byReason = {};
+    for (const r of answers) {
+      byReason[r.reason] ??= { cancelled: 0, kept: 0 };
+      byReason[r.reason][r.outcome === 'cancelled' ? 'cancelled' : 'kept'] += 1;
+    }
+    const now = dbNow();
+    return send(res, 200, {
+      answers: answers.length,
+      byReason,
+      trialing: trials.filter((t) => t.outcome === 'trialing' && Date.parse(t.trial_ends_at) > now).length,
+      endedEarly: trials.filter((t) => t.outcome === 'ended_early').length,
+      duplicates: trials.filter((t) => ['duplicate', 'ended_early', 'end_failed'].includes(t.outcome)).length,
+    });
   }
 
   /** public.lead_file_downloaded (supabase/migrations/20261112000000_leads_p2.sql): one more download, in one statement. Server-only. */
@@ -1092,8 +1130,12 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       if (!who?.service) return authError(res, 403, 'not_admin', 'User not allowed');
       users.delete(adminUser[1]);
       const theirDomains = new Set((tables.get('published_domains') ?? []).filter((d) => d.user_id === adminUser[1]).map((d) => d.domain));
-      // on delete cascade (usage_ledger.user_id has no foreign key on purpose: its rows stay for invoices)
-      for (const [t, rows] of tables) if (!NO_USER_FK.has(t)) tables.set(t, rows.filter((r) => r.user_id !== adminUser[1]));
+      // on delete cascade (usage_ledger.user_id has no foreign key on purpose: its rows stay for invoices); billing_trials
+      // keeps its rows without the user (on delete set null: one trial per email and card, even after a deletion)
+      for (const [t, rows] of tables) {
+        if (USER_SET_NULL.has(t)) for (const r of rows) if (r.user_id === adminUser[1]) r.user_id = null;
+        if (!NO_USER_FK.has(t) && !USER_SET_NULL.has(t)) tables.set(t, rows.filter((r) => r.user_id !== adminUser[1]));
+      }
       // other accounts' pages on a domain that went with it lose it (on delete set null)
       for (const p of tables.get('published_pages') ?? []) if (theirDomains.has(p.domain)) p.domain = null;
       return send(res, 200, {});
