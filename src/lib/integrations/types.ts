@@ -401,7 +401,9 @@ export type ApiErrorCode =
   /** a money change read back and not there: definite (the next press is a new request) */
   | 'NOT_APPLIED'
   /** cancelling or keeping the plan happens in the Customer Portal for now (the P1c migration isn't run) */
-  | 'USE_PORTAL';
+  | 'USE_PORTAL'
+  /** the morning action asked for in the late window (02:00–05:00 local): { nextAt } */
+  | 'NOT_DUE';
 
 export interface ApiError {
   error: string;

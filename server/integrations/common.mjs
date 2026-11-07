@@ -227,6 +227,9 @@ export const BUCKET_LIMITS = Object.freeze({
   'whop-connect': [{ limit: 10, windowMs: 3_600_000 }],
   'whop-catalog': [{ limit: 30, windowMs: 60_000 }],
   'whop-webhook': [{ limit: 600, windowMs: 60_000 }],
+  'morning-read': [{ limit: 120, windowMs: 60_000 }],
+  'morning-generate': [{ limit: 6, windowMs: 3_600_000 }],
+  'morning-feedback': [{ limit: 60, windowMs: 3_600_000 }],
 });
 
 /**

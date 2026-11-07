@@ -140,6 +140,8 @@ export const API_ERROR_CODES = Object.freeze([
   // a money change read back and not there (definite); cancelling in the Customer Portal until the P1c migration runs
   'NOT_APPLIED',
   'USE_PORTAL',
+  // the morning action asked for in the late window (02:00–05:00 local): { nextAt }
+  'NOT_DUE',
 ]);
 
 /** The route prefixes the server hands to the integration modules (server/integrations/wiring.mjs). */
@@ -160,6 +162,8 @@ export const ROUTE_PREFIXES = Object.freeze({
   offers: '/api/offers',
   whop: '/api/payments/whop',
   whopWebhook: '/api/webhooks/whop/',
+  // the morning action (server/morning/index.mjs)
+  morning: '/api/morning/',
 });
 
 /** Rate-limit buckets (per user unless noted), as `${bucket}:user:<id>` keys for rateLimited(key, factor). */
@@ -187,4 +191,7 @@ export const RATE_BUCKETS = Object.freeze({
   whopConnect: 'whop-connect', // 10 per hour (connect, key, webhook secret, check, disconnect)
   whopCatalog: 'whop-catalog', // 30 per minute (products and plans)
   whopWebhook: 'whop-webhook', // 600 per minute per IP
+  morningRead: 'morning-read', // 120 per minute (today's state, the owner's section)
+  morningGenerate: 'morning-generate', // 6 per hour, counted only when a generation starts (all the user's businesses)
+  morningFeedback: 'morning-feedback', // 60 per hour (Done, Undo, Not useful)
 });
