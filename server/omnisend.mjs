@@ -551,7 +551,7 @@ export function createOmnisendRoutes({
   }
 
   const invalid = (message) => new OmnisendError(400, 'INVALID_DRAFT', message);
-  const noAddress = () => new OmnisendError(400, 'INVALID_CTA', 'This email’s button has no web address yet.');
+  const noAddress = () => new OmnisendError(400, 'INVALID_CTA', 'A button or link in this email has no web address yet.');
 
   /** The merge values the app sends: known tags only, short, and the link tags an address or the app's placeholder. */
   function valuesFrom(raw) {

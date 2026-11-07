@@ -194,6 +194,7 @@ export function parseInline(s: string): InlineNode[];
 export function parseParagraphs(text: string, plain?: boolean): ({ kind: 'p'; lines: string[] } | { kind: 'ul'; items: string[] })[];
 
 export function eachBlock(doc: EmailDoc, fn: (block: Block, parent: ColumnsBlock | null) => void): void;
+export function docLinkSources(doc: EmailDoc): { link: Link; block: Block['type'] }[];
 export function docLinks(doc: EmailDoc): Link[];
 export function docBuyIds(doc: EmailDoc): string[];
 export function docImageSrcs(doc: EmailDoc): string[];

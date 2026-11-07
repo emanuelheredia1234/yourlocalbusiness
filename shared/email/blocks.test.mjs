@@ -55,11 +55,11 @@ describe('what a doc links to and shows', () => {
       { type: 'button', label: 'Get', link: { kind: 'magnet' } },
       { type: 'offer', offerId: 'ZzZzZzZzZzZzZzZzZzZzZz', title: 'T', price: '$1', image: { src: 'https://a.example/1.png', alt: 'a' } },
       { type: 'columns', cols: [{ blocks: [{ type: 'image', src: 'https://a.example/2.png', alt: 'b', link: { kind: 'url', url: 'https://x.example' } }] }, { blocks: [] }] },
-      { type: 'custom', html: '<a href="{{buy:YyYyYyYyYyYyYyYyYyYyYy}}">x</a>' },
+      { type: 'custom', html: '<a href="{{buy:YyYyYyYyYyYyYyYyYyYyYy}}">x</a> <a href="{{ product_link }}">p</a> {{lead_magnet_link}}' },
     ],
   }).doc;
   it('lists links, buy ids and images', () => {
-    expect(docLinks(doc)).toEqual([{ kind: 'page' }, { kind: 'magnet' }, { kind: 'offer', offerId: 'ZzZzZzZzZzZzZzZzZzZzZz' }, { kind: 'url', url: 'https://x.example' }]);
+    expect(docLinks(doc)).toEqual([{ kind: 'page' }, { kind: 'magnet' }, { kind: 'offer', offerId: 'ZzZzZzZzZzZzZzZzZzZzZz' }, { kind: 'url', url: 'https://x.example' }, { kind: 'page' }]);
     expect(docBuyIds(doc).sort()).toEqual([OFFER, 'YyYyYyYyYyYyYyYyYyYyYy', 'ZzZzZzZzZzZzZzZzZzZzZz'].sort());
     expect(docImageSrcs(doc)).toEqual(['https://a.example/1.png', 'https://a.example/2.png']);
   });

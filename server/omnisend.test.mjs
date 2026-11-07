@@ -717,6 +717,8 @@ describe('designed email drafts', () => {
       // a button to the download while it has no address yet (the app's placeholder)
       [designed({ doc: { v: 1, blocks: [{ type: 'button', label: 'Get it', link: { kind: 'magnet' } }] }, values: { ...VALUES, lead_magnet_link: '[link to your free download]' } }), 400, 'INVALID_CTA'],
       [designed({ doc: { v: 1, blocks: [{ type: 'button', label: 'Go', link: { kind: 'url', url: '[link to your offer]' } }] } }), 400, 'INVALID_CTA'],
+      // a custom block's {{lead_magnet_link}} href with no address yet: refused, not a dead # link
+      [designed({ doc: { v: 1, blocks: [{ type: 'custom', html: '<a href="{{lead_magnet_link}}">Get it</a>' }] }, values: { ...VALUES, lead_magnet_link: '[link to your free download]' } }), 400, 'INVALID_CTA'],
       [designed({ doc: { v: 1, blocks: [{ type: 'button', label: 'Calc', link: { kind: 'asset', assetId: 'calc' } }] } }), 400, 'INVALID_CTA'],
       [designed({ doc: { v: 1, blocks: [{ type: 'button', label: 'Calc', link: { kind: 'asset', assetId: 'calc' } }] }, assetLinks: { calc: 'https://elsewhere.example/p/calc' } }), 400, 'INVALID_DRAFT'],
     ];

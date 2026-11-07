@@ -191,24 +191,37 @@ function textsOf(b) {
   }
 }
 
-/** Every link a doc makes: buttons, linked images, offer cards, videos, and [label](target) links in text blocks. */
-export function docLinks(doc) {
+/** Link tokens a custom block uses as an href (the renderer turns them into the magnet's or page's address). */
+const CUSTOM_HREF_TOKEN = /\bhref\s*=\s*["']?\s*\{\{\s*(lead_magnet_link|product_link)\s*\}\}/gi;
+
+/**
+ * Every link a doc makes, with the type of block it is in: buttons, linked images, offer cards, videos,
+ * [label](target) links in text blocks, and {{lead_magnet_link}} / {{product_link}} hrefs in custom HTML.
+ */
+export function docLinkSources(doc) {
   const out = [];
   eachBlock(doc, (b) => {
     if (!isRecord(b)) return;
-    if ((b.type === 'button' || b.type === 'image' || b.type === 'video') && isRecord(b.link)) out.push(b.link);
-    if (b.type === 'offer' && b.offerId) out.push({ kind: 'offer', offerId: b.offerId });
+    const add = (link) => out.push({ link, block: b.type });
+    if ((b.type === 'button' || b.type === 'image' || b.type === 'video') && isRecord(b.link)) add(b.link);
+    if (b.type === 'offer' && b.offerId) add({ kind: 'offer', offerId: b.offerId });
     if (b.type === 'text' && !b.plain) {
       const walk = (nodes) => {
         for (const n of nodes) {
-          if (n.t === 'link') out.push(linkFromTarget(n.target));
+          if (n.t === 'link') add(linkFromTarget(n.target));
           else if (n.children) walk(n.children);
         }
       };
       walk(parseInline(str(b.text)));
     }
+    if (b.type === 'custom') for (const m of str(b.html).matchAll(CUSTOM_HREF_TOKEN)) add({ kind: m[1].toLowerCase() === 'lead_magnet_link' ? 'magnet' : 'page' });
   });
   return out;
+}
+
+/** Every link a doc makes (see docLinkSources). */
+export function docLinks(doc) {
+  return docLinkSources(doc).map((x) => x.link);
 }
 
 /** The offers a doc links to (buy links), each once. */
