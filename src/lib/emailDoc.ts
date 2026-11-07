@@ -123,9 +123,12 @@ export function emailText(step: EmailStep, p: Project, links: Record<string, str
   return renderText(docOf(step, p), { target: 'export', values: {}, links: { ...links, ...renderLinks(p, 'export') } });
 }
 
+/** Whether an image is one the app hosts (its public-files, or its email icons): the only ones the server takes. */
+export const isHostedImage = (src: string) => /^https:\/\/[^/]+\/storage\/v1\/object\/public\/public-files\/[^/]+\/[^/]+$/.test(src) || /^https:\/\/[^/]+\/email-icons\/[a-z]+\.png$/.test(src);
+
 /** Images the server would refuse (not on the app's public-files, nor its email icons). */
 export function unhostedImages(doc: EmailDoc): string[] {
-  return docImageSrcs(doc).filter((src) => !/^https:\/\/[^/]+\/storage\/v1\/object\/public\/public-files\/[^/]+\/[^/]+$/.test(src) && !/^https:\/\/[^/]+\/email-icons\/[a-z]+\.png$/.test(src));
+  return docImageSrcs(doc).filter((src) => !isHostedImage(src));
 }
 
 /** Buy links in a doc that aren't one of the business's offers. */

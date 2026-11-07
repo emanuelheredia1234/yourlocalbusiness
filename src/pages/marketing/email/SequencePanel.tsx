@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, Copy, Download, Eye, FlaskConical, PenLine } from 'lucide-react';
+import { Blocks, ChevronDown, Copy, Download, Eye, FlaskConical, PenLine, Type } from 'lucide-react';
 import { useExperimentsOn } from '@/lib/experiments/config';
 import { useProjectExperiments } from '@/store/experiments';
 import { useMakeVariations } from '@/components/experiments/MakeVariations';
@@ -15,9 +15,10 @@ import { getActiveProject, useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { AIResultBar, AIThinking, GenerateButton } from '@/components/ai/AI';
 import { AutoTextarea, Empty, Field, MoreMenu, Section, Segmented, confirmAction } from '@/components/ui/primitives';
-import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
-import { EmailView, PanelHead, emailTokens, hasUnknownBuyLink } from './shared';
+import { PanelHead, emailTokens, hasUnknownBuyLink } from './shared';
+import { EmailStudio } from './studio/EmailStudio';
+import { EmailPreview } from './studio/EmailFrame';
 import { useProjectOffers } from '@/store/offers';
 import { offerPrice } from '@/lib/offers';
 import { buyToken } from '@/lib/buyLinks';
@@ -36,6 +37,9 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
   const ai = useAI(emailSequenceTask);
   const [open, setOpen] = useState<string | null>(emails[0]?.id ?? null);
   const [preview, setPreview] = useState<Record<string, boolean>>({});
+  // Blocks (the studio) or Plain text, per email: an email without a design opens on its plain words
+  const [mode, setMode] = useState<Record<string, 'blocks' | 'plain'>>({});
+  const modeOf = (e: EmailStep) => mode[e.id] ?? (e.doc ? 'blocks' : 'plain');
   const patch = (id: string, p: Partial<EmailStep>) => updateMarketing({ emails: getActiveProject()!.marketing.emails.map((e) => (e.id === id ? { ...e, ...p } : e)) });
   const totalDays = emails.reduce((n, e) => n + delayToMs(e.delay), 0) / 86_400_000;
   const tokens = emailTokens(project);
@@ -164,9 +168,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
                       />
                       {abOn && e.variants && <EmailAbPanel project={project} step={e} />}
                       {pv ? (
-                        <BrowserFrame>
-                          <EmailView project={project} email={e} tokens={tokens} />
-                        </BrowserFrame>
+                        <EmailPreview project={project} step={e} />
                       ) : (
                         <div className="grid gap-4">
                           <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_auto]">
@@ -187,29 +189,54 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
                           <Field label="Preview text" htmlFor={`pre-${e.id}`} right={<span className={cn('num font-mono', e.preview.length > 90 && 'text-warn')}>{e.preview.length}/90</span>} hint="Shown next to the subject in most inboxes.">
                             <input id={`pre-${e.id}`} className="input" value={e.preview} onChange={(ev) => patch(e.id, { preview: ev.target.value })} />
                           </Field>
-                          <Field label="Body" htmlFor={`body-${e.id}`} hint="Merge tags: {{first_name}}, {{lead_magnet_link}}, {{product_link}}, {{sender_name}}">
-                            <AutoTextarea id={`body-${e.id}`} value={e.body} onChange={(v) => patch(e.id, { body: v })} minRows={8} />
-                          </Field>
-                          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                            <Field label="Button label" htmlFor={`cta-${e.id}`}>
-                              <input id={`cta-${e.id}`} className="input" value={e.ctaLabel} onChange={(ev) => patch(e.id, { ctaLabel: ev.target.value })} />
-                            </Field>
-                            <Field label="Button link" htmlFor={`url-${e.id}`} hint={buyHint(e.ctaUrl)}>
-                              <input id={`url-${e.id}`} className="input font-mono" value={e.ctaUrl} onChange={(ev) => patch(e.id, { ctaUrl: ev.target.value })} />
-                              {offersOn && offers.length > 0 && (
-                                <select aria-label="Use a buy link" className="select mt-2" value={buyIdOf(e.ctaUrl)} onChange={(ev) => ev.target.value && patch(e.id, { ctaUrl: buyToken(ev.target.value) })}>
-                                  <option value="">Use a buy link…</option>
-                                  {offers.map((o) => (
-                                    <option key={o.id} value={o.id}>
-                                      {o.title}
-                                      {offerPrice(o) ? ` · ${offerPrice(o)}` : ''}
-                                      {o.environment === 'sandbox' ? ' · Test mode' : ''}
-                                    </option>
-                                  ))}
-                                </select>
-                              )}
-                            </Field>
-                          </div>
+                          <Segmented
+                            size="sm"
+                            aria-label="Edit as"
+                            value={modeOf(e)}
+                            onChange={(v) => setMode((x) => ({ ...x, [e.id]: v }))}
+                            options={[
+                              { id: 'blocks', label: 'Blocks', icon: <Blocks /> },
+                              { id: 'plain', label: 'Plain text', icon: <Type /> },
+                            ]}
+                          />
+                          {modeOf(e) === 'blocks' ? (
+                            <EmailStudio project={project} step={e} index={i} total={emails.length} />
+                          ) : e.doc ? (
+                            <div className="grid gap-2">
+                              <Field label="Plain text" hint="Made from this email’s blocks, for exports and plain-text inboxes.">
+                                <textarea className="input min-h-40 whitespace-pre-wrap" readOnly value={`${e.body}${e.ctaLabel ? `\n\n[${e.ctaLabel}] → ${e.ctaUrl}` : ''}`} aria-label="Plain text (read only)" />
+                              </Field>
+                              <button type="button" className="btn btn-secondary btn-sm self-start" onClick={() => setMode((x) => ({ ...x, [e.id]: 'blocks' }))}>
+                                <Blocks aria-hidden="true" /> Edit blocks
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <Field label="Body" htmlFor={`body-${e.id}`} hint="Merge tags: {{first_name}}, {{lead_magnet_link}}, {{product_link}}, {{sender_name}}">
+                                <AutoTextarea id={`body-${e.id}`} value={e.body} onChange={(v) => patch(e.id, { body: v })} minRows={8} />
+                              </Field>
+                              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                <Field label="Button label" htmlFor={`cta-${e.id}`}>
+                                  <input id={`cta-${e.id}`} className="input" value={e.ctaLabel} onChange={(ev) => patch(e.id, { ctaLabel: ev.target.value })} />
+                                </Field>
+                                <Field label="Button link" htmlFor={`url-${e.id}`} hint={buyHint(e.ctaUrl)}>
+                                  <input id={`url-${e.id}`} className="input font-mono" value={e.ctaUrl} onChange={(ev) => patch(e.id, { ctaUrl: ev.target.value })} />
+                                  {offersOn && offers.length > 0 && (
+                                    <select aria-label="Use a buy link" className="select mt-2" value={buyIdOf(e.ctaUrl)} onChange={(ev) => ev.target.value && patch(e.id, { ctaUrl: buyToken(ev.target.value) })}>
+                                      <option value="">Use a buy link…</option>
+                                      {offers.map((o) => (
+                                        <option key={o.id} value={o.id}>
+                                          {o.title}
+                                          {offerPrice(o) ? ` · ${offerPrice(o)}` : ''}
+                                          {o.environment === 'sandbox' ? ' · Test mode' : ''}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  )}
+                                </Field>
+                              </div>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
