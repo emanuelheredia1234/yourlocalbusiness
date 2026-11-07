@@ -93,6 +93,18 @@ describe('the block list', () => {
   });
 });
 
+describe('replacing every block', () => {
+  it('keeps a block chosen after a template or design replaces them (the inspector stays)', async () => {
+    const p = setup();
+    await render(p.id);
+    expect(host.querySelector('[data-testid="inspector"]')).not.toBeNull();
+    const { replaceDoc } = await import('@/lib/emailDoc');
+    await act(async () => replaceDoc(p.id, p.marketing.emails[0].id, { v: 1, theme: { id: 'brand' }, blocks: [{ id: 'b_newnewnewn', type: 'heading', text: 'Fresh', level: 1 }] }));
+    expect(host.querySelector('[data-testid="inspector"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="block-list"] > li button[aria-pressed="true"]')?.textContent).toContain('Fresh');
+  });
+});
+
 describe('the link picker', () => {
   it('disables what can’t work yet, saying what fixes it', () => {
     const p = setup();
@@ -132,6 +144,34 @@ describe('in the claude.ai build', () => {
     expect(host.textContent).not.toContain('Upload');
     expect(host.textContent).not.toContain('Generate with AI');
     expect(host.querySelector('input[type="file"]')).toBeNull();
+  });
+
+  it('the whole studio has no uploads and no Manus or Viktor buttons', async () => {
+    vi.stubGlobal('__ARTIFACT_BUILD__', true);
+    const p = setup();
+    const { AgentButtons } = await import('@/components/agents/AgentButtons');
+    const e = p.marketing.emails[0];
+    e.doc = {
+      v: 1,
+      theme: { id: 'brand' },
+      blocks: [
+        { id: 'b_vvvvvvvvvv', type: 'video', thumb: { src: '', alt: '' }, link: { kind: 'url', url: 'https://example.com/v' }, caption: '' },
+        { id: 'b_oooooooooo', type: 'offer', offerId: '', title: 'Cut', price: '$1', buttonLabel: 'Buy' },
+      ],
+    } as never;
+    useStore.setState({ projects: [p], activeProjectId: p.id });
+    const Studio = () => {
+      const q = useStore((st) => st.projects.find((x) => x.id === p.id)!);
+      return createElement(EmailStudio, { project: q, step: q.marketing.emails[0], index: 0, total: 5, actions: createElement(AgentButtons, { target: 'email', stepId: e.id, lead: 'or design it with' }) });
+    };
+    await act(async () => root.render(createElement(TooltipProvider, null, createElement(Studio))));
+    // the video block's inspector, then the offer block's
+    expect(host.querySelector('[data-testid="inspector"]')).not.toBeNull();
+    expect(host.querySelector('input[type="file"]')).toBeNull();
+    await act(async () => (host.querySelectorAll('[data-testid="block-list"] > li button[aria-pressed]')[1] as HTMLButtonElement).click());
+    expect(host.querySelector('[data-testid="inspector"]')).not.toBeNull();
+    expect(host.querySelector('input[type="file"]')).toBeNull();
+    expect(host.textContent).not.toMatch(/Manus|Viktor|Upload/);
   });
 
   it('shows uploads and AI pictures in the app', async () => {

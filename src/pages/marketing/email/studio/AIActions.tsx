@@ -2,6 +2,7 @@
 // template for the email's purpose, or fixed bolder settings). Each replaces the blocks behind a confirm when the
 // owner edited them, with Undo; nothing is retried by itself.
 
+import { useState } from 'react';
 import type { EmailStep, Project } from '@/lib/types';
 import type { EmailDoc } from '../../../../../shared/email/blocks.mjs';
 import type { EmailDesignInput } from '@/ai/emailDesign';
@@ -42,9 +43,12 @@ export function EmailAIActions({ project, step, index }: { project: Project; ste
   const design = useAI(emailDesignTask);
   const bolder = useAI(emailBolderTask);
   const busy = design.running || bolder.running;
+  // the result bar is the last action that ran (not whichever has a result)
+  const [lastRan, setLastRan] = useState<'design' | 'bolder' | null>(null);
 
   const runDesign = async () => {
     if (step.doc && !(await confirmAction({ title: 'Design this email again?', body: 'The AI’s design replaces this email’s blocks (your words stay its words). Undo puts them back. Uses AI credits.', confirmLabel: 'Design it' }))) return;
+    setLastRan('design');
     const doc = await design.run(designInput(step, project, index));
     if (doc && stepOf(project.id, step.id)) {
       replaceDoc(project.id, step.id, doc);
@@ -53,13 +57,15 @@ export function EmailAIActions({ project, step, index }: { project: Project; ste
   };
   const runBolder = async () => {
     const now = stepOf(project.id, step.id) ?? step;
+    setLastRan('bolder');
     const doc: EmailDoc | null = await bolder.run({ doc: docOf(now, project), brandColors: project.brand.colors as unknown as Record<string, string> });
     if (doc && stepOf(project.id, step.id)) {
       replaceDoc(project.id, step.id, doc);
       toast({ kind: 'success', title: 'Made it bolder', body: 'Undo puts the earlier look back.' });
     }
   };
-  const last = bolder.result ?? design.result;
+  const ran = lastRan === 'bolder' ? bolder : lastRan === 'design' ? design : null;
+  const last = ran?.result ?? null;
   const ai = bolder.running ? bolder : design;
   return (
     <>
@@ -76,7 +82,7 @@ export function EmailAIActions({ project, step, index }: { project: Project; ste
       )}
       {!busy && last && (
         <div className="basis-full">
-          <AIResultBar provider={last.provider} skills={last.skills} ms={last.ms} note={last.note} logId={(bolder.result ? bolder : design).logId} />
+          <AIResultBar provider={last.provider} skills={last.skills} ms={last.ms} note={last.note} logId={ran?.logId ?? null} />
         </div>
       )}
     </>

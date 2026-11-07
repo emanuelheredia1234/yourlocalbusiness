@@ -64,16 +64,16 @@ export function BlockList({
                   <span className="block truncate text-small text-ink">{blockSummary(b)}</span>
                 </span>
               </button>
-              <button type="button" className="btn btn-ghost btn-icon btn-xs" aria-label={`Move ${BLOCK_LABEL[b.type]} up`} disabled={i === 0} onClick={() => onMove(b.id, -1)}>
+              <button type="button" className="btn btn-ghost btn-icon btn-xs btn-touch" aria-label={`Move ${BLOCK_LABEL[b.type]} up`} disabled={i === 0} onClick={() => onMove(b.id, -1)}>
                 <ArrowUp />
               </button>
-              <button type="button" className="btn btn-ghost btn-icon btn-xs" aria-label={`Move ${BLOCK_LABEL[b.type]} down`} disabled={i === blocks.length - 1} onClick={() => onMove(b.id, 1)}>
+              <button type="button" className="btn btn-ghost btn-icon btn-xs btn-touch" aria-label={`Move ${BLOCK_LABEL[b.type]} down`} disabled={i === blocks.length - 1} onClick={() => onMove(b.id, 1)}>
                 <ArrowDown />
               </button>
-              <button type="button" className="btn btn-ghost btn-icon btn-xs" aria-label={`Duplicate ${BLOCK_LABEL[b.type]}`} onClick={() => onDuplicate(b.id)}>
+              <button type="button" className="btn btn-ghost btn-icon btn-xs btn-touch" aria-label={`Duplicate ${BLOCK_LABEL[b.type]}`} onClick={() => onDuplicate(b.id)}>
                 <Copy />
               </button>
-              <button type="button" className="btn btn-ghost btn-icon btn-xs" aria-label={`Delete ${BLOCK_LABEL[b.type]}`} onClick={() => onRemove(b.id)}>
+              <button type="button" className="btn btn-ghost btn-icon btn-xs btn-touch" aria-label={`Delete ${BLOCK_LABEL[b.type]}`} onClick={() => onRemove(b.id)}>
                 <Trash2 />
               </button>
             </li>

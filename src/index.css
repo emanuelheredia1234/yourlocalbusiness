@@ -436,6 +436,11 @@
     .btn-icon:not(.btn-xs):not(.btn-sm):not(.btn-lg):not(.btn-xl) {
       min-width: 40px;
     }
+    /* a small icon button in a dense row that still needs a finger-sized target on touch */
+    .btn-icon.btn-touch {
+      width: 40px;
+      height: 40px;
+    }
   }
   /* disabled: a muted fill and faint text, never opacity */
   .btn:disabled,

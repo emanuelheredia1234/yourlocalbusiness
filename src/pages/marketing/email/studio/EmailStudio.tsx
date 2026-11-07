@@ -1,5 +1,5 @@
 // The email studio (P5 §A2): an email's blocks on the left (above on phones), the live preview on the right, the
-// selected block's inspector under the list. The first block edit writes the doc (a plain email gets one made from
+// selected block's inspector under the list (on phones, a drawer opened by choosing a block). The first block edit writes the doc (a plain email gets one made from
 // its words); the plain fields are derived from it. Theme and template at the top, with Undo for replacing changes.
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -8,6 +8,8 @@ import type { Block, BlockType, EmailDoc } from '../../../../../shared/email/blo
 import type { EmailStep, Project } from '@/lib/types';
 import { docOf, setDoc, undoDoc, useEmailUndo } from '@/lib/emailDoc';
 import { toast } from '@/store/ui';
+import { useMediaQuery } from '@/lib/hooks';
+import { Drawer } from '@/components/ui/primitives';
 import { BlockList } from './BlockList';
 import { BLOCK_LABEL, duplicateBlock, insertBlock, moveBlock, newBlock, patchBlock, removeBlock } from './blockOps';
 import { EmailPreview } from './EmailFrame';
@@ -34,11 +36,22 @@ export function EmailStudio({ project, step, index, total, actions }: { project:
   const write = (next: EmailDoc) => setDoc(project.id, step.id, next);
   const setBlocks = (blocks: Block[]) => write({ ...doc, blocks });
   const block = doc.blocks.find((b) => b.id === selected) ?? null;
+  // on phones the inspector is a drawer, opened by choosing a block (so the preview stays next to the list)
+  const wide = useMediaQuery('(min-width: 1024px)');
+  const [drawer, setDrawer] = useState(false);
+  const select = (id: string) => {
+    setSelected(id);
+    setDrawer(true);
+  };
+  // a template, a design or an agent's email replaces every block: keep a block chosen
+  useEffect(() => {
+    if (!doc.blocks.some((b) => b.id === selected)) setSelected(doc.blocks[0]?.id ?? null);
+  }, [doc.blocks, selected]);
 
   const add = (type: BlockType) => {
     const b = newBlock(type, project);
     setBlocks(insertBlock(doc.blocks, b, selected ?? undefined));
-    setSelected(b.id);
+    select(b.id);
   };
   const remove = (id: string) => {
     const i = doc.blocks.findIndex((b) => b.id === id);
@@ -71,13 +84,13 @@ export function EmailStudio({ project, step, index, total, actions }: { project:
           <BlockList
             blocks={doc.blocks}
             selected={selected}
-            onSelect={setSelected}
+            onSelect={select}
             onMove={(id, dir) => setBlocks(moveBlock(doc.blocks, id, dir))}
             onDuplicate={(id) => setBlocks(duplicateBlock(doc.blocks, id))}
             onRemove={remove}
             onAdd={add}
           />
-          {block && (
+          {block && wide && (
             <section className="rounded-md border border-line p-3" aria-label={`${BLOCK_LABEL[block.type]} settings`} data-testid="inspector">
               <p className="mb-3 text-small font-semibold text-ink">{BLOCK_LABEL[block.type]}</p>
               <BlockInspector key={block.id} project={project} block={block} onChange={(patch) => setBlocks(patchBlock(doc.blocks, block.id, patch))} />
@@ -86,6 +99,13 @@ export function EmailStudio({ project, step, index, total, actions }: { project:
         </div>
         <EmailPreview project={project} step={step} doc={preview} />
       </div>
+      {block && !wide && (
+        <Drawer open={drawer} onClose={() => setDrawer(false)} title={`${BLOCK_LABEL[block.type]} settings`}>
+          <div data-testid="inspector">
+            <BlockInspector key={block.id} project={project} block={block} onChange={(patch) => setBlocks(patchBlock(doc.blocks, block.id, patch))} />
+          </div>
+        </Drawer>
+      )}
       <TemplatePicker project={project} step={step} doc={doc} index={index} total={total} open={templates} onClose={() => setTemplates(false)} />
     </div>
   );
