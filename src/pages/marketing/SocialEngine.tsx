@@ -13,6 +13,8 @@ import { CampaignSetup } from './social/CampaignSetup';
 import { PlanView } from './social/PlanView';
 import { BatchView } from './social/BatchView';
 import { SocialAnalytics } from './social/SocialAnalytics';
+import { useExperimentsOn } from '@/lib/experiments/config';
+import { ExperimentsTab } from '@/components/experiments/ExperimentsTab';
 
 type Tab = SocialTab;
 
@@ -27,7 +29,7 @@ export default function SocialEngine() {
   const [tab, setTab] = useState<Tab>(() => requested ?? (!plan ? 'setup' : 'batch'));
   useEffect(() => {
     if (!requested) return;
-    setTab(__ARTIFACT_BUILD__ && requested === 'analytics' ? 'batch' : requested);
+    setTab(__ARTIFACT_BUILD__ && (requested === 'analytics' || requested === 'abtests') ? 'batch' : requested);
     useUI.getState().setSocialTab(null);
   }, [requested]);
   // Once opened, the 7-day batch and the composer stay mounted while you switch tabs, so what they're
@@ -41,6 +43,8 @@ export default function SocialEngine() {
     if (preset?.topic) useUI.setState({ composerPreset: { n: preset.n } });
   }, [preset]);
   const planAI = useAI(campaignPlanTask);
+  // A/B tests (P4b): a tab when the server has them (never in the claude.ai build)
+  const abOn = useExperimentsOn();
   const batchPosts = useMemo(() => allPosts.filter((p) => p.projectId === project.id && p.source === 'batch').sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)), [allPosts, project.id]);
   const covered = useMemo(() => coveredSlots(batchPosts, project.id), [batchPosts, project.id]);
   const invalid = !!campaignProblem(cfg);
@@ -74,6 +78,7 @@ export default function SocialEngine() {
           { id: 'plan', label: label('plan'), count: plan?.summary.total },
           { id: 'batch', label: label('batch'), count: batchPosts.filter((p) => p.status !== 'published').length || undefined },
           { id: 'create', label: label('create') },
+          ...(abOn ? [{ id: 'abtests' as const, label: label('abtests') }] : []),
           ...(__ARTIFACT_BUILD__ ? [] : [{ id: 'analytics' as const, label: label('analytics') }]),
         ]}
       />
@@ -121,6 +126,7 @@ export default function SocialEngine() {
         </div>
       )}
       {!__ARTIFACT_BUILD__ && tab === 'analytics' && <SocialAnalytics project={project} />}
+      {abOn && tab === 'abtests' && <ExperimentsTab project={project} />}
       {shown.has('create') && (
         <section hidden={tab !== 'create'} aria-label="Create individual post">
           <QuickComposer key={`${project.id}:${preset?.n ?? 0}`} initialTopic={preset?.topic} />

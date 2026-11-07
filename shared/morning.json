@@ -62,6 +62,8 @@
     "stale_numbers": { "title": "Update your numbers", "why": "Your connected numbers haven’t been updated for a week. Fresh numbers show what’s working." },
     "socials": { "title": "Add your social profiles", "why": "Your social profiles let the app link your posts and pages together, so people can find you everywhere." },
     "website": { "title": "Add your website address", "why": "With your website address saved, your pages, posts and listings can point people to it." },
+    "variant_due": { "title": "Post version {key} of your A/B test", "why": "Version {key} of “{name}” is planned for today. Posting it on time keeps the test fair." },
+    "experiment_winner": { "title": "See which version won your A/B test", "why": "“{name}” has a clear winner. Using it in what you make next builds on what works." },
     "habit_comments": { "title": "Reply to comments and messages for 15 minutes", "why": "Answering comments and messages quickly builds trust, and the networks show your posts to more people." },
     "habit_bts": { "title": "Share a behind-the-scenes post", "why": "Behind-the-scenes posts show the people behind the business and are easy to make on a busy day.", "topic": "Behind the scenes at {brand}" },
     "habit_referral": { "title": "Ask a happy customer for a referral", "why": "Customers who already like you are the best way to find new ones. One friendly ask today is enough.", "prompt": "Help me write a short message asking a happy customer of {brand} for a referral." }

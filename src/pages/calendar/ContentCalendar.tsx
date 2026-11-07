@@ -1,4 +1,6 @@
 import { useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { openExperimentCard } from '@/store/experiments';
+import { syncPlannedAt } from '@/lib/experiments/save';
 import { CalendarClock, CalendarDays, ChevronLeft, ChevronRight, FileEdit, Pencil, Plus, Search, Send, SlidersHorizontal, Users } from 'lucide-react';
 import type { Brand, Post, PostFormat, PostPlatform, PostType } from '@/lib/types';
 import { addDays, cn, combineDateTime, fmtDate, fmtDateTime, isoToDateStr, isoToTime, todayStr, WEEKDAYS, weekdayIndex } from '@/lib/utils';
@@ -656,6 +658,11 @@ function PostMeta({ post, children }: { post: Post; children?: ReactNode }) {
       </span>
       <PostTypeTag type={post.postType} />
       <span>{styleLabel(post)}</span>
+      {post.experiment && !__ARTIFACT_BUILD__ && (
+        <button type="button" className="btn btn-ghost btn-xs" onClick={() => void openExperimentCard(post.experiment!.id)} aria-label={`Open its A/B test (version ${post.experiment.key.toUpperCase()})`}>
+          A/B · {post.experiment.key.toUpperCase()}
+        </button>
+      )}
       {children}
     </div>
   );
@@ -686,7 +693,11 @@ function QueueRow({ post: p }: { post: Post }) {
         </div>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2 pl-[68px] md:pl-0">
-        <DateTimeButton value={new Date(p.scheduledAt).getTime()} onChange={(ms) => update(p.id, { scheduledAt: new Date(ms).toISOString() })} min={Date.now()} aria-label="Reschedule" />
+        <DateTimeButton value={new Date(p.scheduledAt).getTime()} onChange={(ms) => {
+            update(p.id, { scheduledAt: new Date(ms).toISOString() });
+            // an A/B test's version: its planned time follows (the server checks the 12-hour gap again when it's posted)
+            if (p.experiment) syncPlannedAt(p.experiment, new Date(ms).toISOString());
+          }} min={Date.now()} aria-label="Reschedule" />
         <PostNowButton post={p} />
         <MoreMenu items={menu} />
       </div>

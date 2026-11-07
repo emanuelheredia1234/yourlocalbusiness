@@ -17,6 +17,8 @@ export interface PlanDef {
   video: { maxHeight: number; maxSeconds: number; label: string };
   /** AI videos each business may start a week (Monday to Sunday in its time zone); null = unlimited */
   videosPerWeek: number | null;
+  /** A/B tests the account may start per AI-credit window (P4b); null = unlimited */
+  experimentsPerMonth: number | null;
   adsLaunch: boolean;
   treg: { monthlyMicro: number; dailyMicro: number };
   leadEmailsPerMonth: number;
@@ -136,6 +138,20 @@ export const videosPerWeekLabel = (v: number | null | undefined): string => (v =
 /** AI videos a week for each business on a tier (null = unlimited). */
 export const videosPerWeekFor = (tier: string | null | undefined): number | null => (isTier(tier) ? (planFor(tier).videosPerWeek ?? null) : null);
 
+/** "2", or "Unlimited" (null): A/B tests a month. */
+export const experimentsPerMonthLabel = (v: number | null | undefined): string => (v == null ? 'Unlimited' : n(v));
+
+/** A/B tests a month on a tier (null = unlimited). */
+export const experimentsPerMonthFor = (tier: string | null | undefined): number | null => (isTier(tier) ? (planFor(tier).experimentsPerMonth ?? null) : null);
+
+/** "A/B tests this month: 1 of 2 · resets Dec 1", or "A/B tests this month: 3 · unlimited" (null: nothing to say). */
+export function experimentsUsageLabel(u: { used: number; limit: number | null; resetsAt?: string | null } | null | undefined): string | null {
+  if (!u) return null;
+  const when = u.resetsAt && Number.isFinite(Date.parse(u.resetsAt)) ? new Date(u.resetsAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+  if (u.limit == null) return `A/B tests this month: ${n(u.used)} · unlimited`;
+  return `A/B tests this month: ${n(u.used)} of ${n(u.limit)}${when ? ` · resets ${when}` : ''}`;
+}
+
 /** The comparison table, from plans.json (every row of the Tiers table). */
 export function compareRows(): CompareRow[] {
   const per = <T,>(fn: (p: PlanDef, t: Tier) => T): Record<Tier, T> => Object.fromEntries(TIERS.map((t) => [t, fn(planFor(t), t)])) as Record<Tier, T>;
@@ -147,6 +163,7 @@ export function compareRows(): CompareRow[] {
     { label: 'AI credits per extra business', values: per(() => `+${n(PLANS.additionalBusiness.aiCreditsPerMonth)}`) },
     { label: 'Video', values: per((p) => p.video.label) },
     { label: 'AI videos a week, per business', values: per((p) => videosPerWeekLabel(p.videosPerWeek)) },
+    { label: 'A/B tests a month', values: per((p) => experimentsPerMonthLabel(p.experimentsPerMonth)) },
     { label: 'Launch ads from the app', values: per((p) => p.adsLaunch) },
     { label: 'Analytics updates (budget a month)', values: per((p) => microUsd(p.treg.monthlyMicro)) },
     { label: 'Lead emails a month', values: per((p) => n(p.leadEmailsPerMonth)) },

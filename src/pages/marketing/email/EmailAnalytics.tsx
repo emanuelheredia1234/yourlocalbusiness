@@ -1,6 +1,7 @@
 // Email › Analytics: what the user's email account reports for the last 30 days (sends, opens, clicks,
 // unsubscribes, revenue), its campaigns, and leads from the published page's form. Campaign names are the
 // user's own text from their email tool: shown as text.
+import { ExperimentsSummary } from '@/components/experiments/ExperimentsSummary';
 import { Mail } from 'lucide-react';
 import type { Project } from '@/lib/types';
 import type { EmailData } from '@/lib/integrations/types';
@@ -55,6 +56,7 @@ export function EmailAnalytics({ project, onConnect }: { project: Project; onCon
       >
         {(s, range) => <EmailBody data={s.data} range={range} />}
       </AnalyticsShell>
+      <ExperimentsSummary project={project} kind="email" />
     </div>
   );
 }

@@ -142,6 +142,14 @@ export const API_ERROR_CODES = Object.freeze([
   'USE_PORTAL',
   // the morning action asked for in the late window (02:00–05:00 local): { nextAt }
   'NOT_DUE',
+  // A/B tests and Trial Reels (server/experiments, P4b)
+  'TRIAL_REEL_NOT_ELIGIBLE',
+  'EXPERIMENT_LIMIT',
+  'EXPERIMENT_RUNNING',
+  'TOO_SOON',
+  'TOO_SOON_AFTER_VARIANT',
+  'VARIANT_NO_FORM',
+  'CAMPAIGN_UNCONFIRMED',
 ]);
 
 /** The route prefixes the server hands to the integration modules (server/integrations/wiring.mjs). */
@@ -164,6 +172,8 @@ export const ROUTE_PREFIXES = Object.freeze({
   whopWebhook: '/api/webhooks/whop/',
   // the morning action (server/morning/index.mjs)
   morning: '/api/morning/',
+  // A/B tests and Trial Reels' eligibility (server/experiments/index.mjs)
+  experiments: '/api/experiments',
 });
 
 /** Rate-limit buckets (per user unless noted), as `${bucket}:user:<id>` keys for rateLimited(key, factor). */
@@ -194,4 +204,6 @@ export const RATE_BUCKETS = Object.freeze({
   morningRead: 'morning-read', // 120 per minute (today's state, the owner's section)
   morningGenerate: 'morning-generate', // 6 per hour, counted only when a generation starts (all the user's businesses)
   morningFeedback: 'morning-feedback', // 60 per hour (Done, Undo, Not useful)
+  experiments: 'experiments', // 60 per hour (create, change, start, refresh, stop, use the winner, delete)
+  experimentsRead: 'experiments-read', // 120 per minute (the list, one test, usage, Trial Reels eligibility)
 });

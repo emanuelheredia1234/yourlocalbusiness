@@ -54,6 +54,7 @@ export function PlanCards({ interval, action, busy }: { interval: Interval; acti
               </Line>
               <Line>Video: {p.video.label}</Line>
               <Line>{p.videosPerWeek == null ? 'Unlimited AI videos' : `${p.videosPerWeek} AI videos a week`} per business</Line>
+              <Line>{p.experimentsPerMonth == null ? 'Unlimited A/B tests' : `${p.experimentsPerMonth} A/B tests a month`}</Line>
               <Line off={!p.adsLaunch}>{p.adsLaunch ? 'Launch ads from the app' : 'Ads: plan and export (launch on Grow and Scale)'}</Line>
               <Line>{microUsd(p.treg.monthlyMicro)} a month of analytics updates</Line>
               <Line>{p.leadEmailsPerMonth.toLocaleString('en-US')} lead emails a month</Line>

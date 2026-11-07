@@ -258,6 +258,10 @@ export type PubWindow =
   | { kind: 'ad-launch'; planId: string }
   /** a launched campaign's change window (pause, resume, budget…): the owner reviews and confirms there */
   | { kind: 'ad-change'; campaignId: string; action: 'pause' | 'resume' | 'end' | 'budget' | 'end_date' | 'creative' }
+  /** A/B tests (P4b): "Make variations" prefilled for a post, an email step or the SEO page; the owner generates and saves a draft there */
+  | { kind: 'make-variations'; target: 'post' | 'email' | 'page'; id: string; change?: string; count?: 1 | 2 }
+  /** A/B tests (P4b): a test's card in Social › A/B tests, where the owner posts a version or uses the winner */
+  | { kind: 'experiment'; experimentId: string; name: string }
   | { kind: 'page'; route: Route; tab?: string };
 
 /** Why an excluded tool isn't done by the assistant, and the page where the owner does it. */
@@ -284,6 +288,8 @@ interface ToolBase<P extends SpecMap> {
   summary: string;
   /** build them with arg.* */
   args: P & CheckedArgs<P>;
+  /** something to read first, before validate and any card (e.g. an eligibility the card shows); never a write */
+  prepare?: (args: InferArgs<P>, ctx: ToolContext) => Promise<void>;
   /** a check the schema can't express (e.g. that a post id exists): return the problem, or nothing */
   validate?: (args: InferArgs<P>, ctx: ToolContext) => string | null | undefined | void;
 }

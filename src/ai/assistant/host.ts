@@ -14,6 +14,9 @@ import { openListingWindow } from '@/components/studio/ListingWindowHost';
 import { openAgentBuild } from '@/components/agents/buildWindow';
 import { useUI } from '@/store/ui';
 import { useAdsLaunch } from '@/store/adsLaunch';
+import { useMakeVariations } from '@/components/experiments/MakeVariations';
+import { openExperimentCard } from '@/store/experiments';
+import type { ExperimentChanged } from '@/lib/types';
 import type { DangerSpec, PubWindow } from './registry';
 import { assistantAvailability, askAssistantModel, promptBudget, type Availability } from './transport';
 import { openPage } from './nav';
@@ -78,6 +81,17 @@ export const host: AssistantHost = {
         if (ok) useAdsLaunch.getState().openChange({ campaignId: w.campaignId, action: w.action });
         return ok;
       }
+      case 'make-variations': {
+        // A/B tests (P4b): the dialog, prefilled; nothing is generated or saved until the owner presses there
+        if (__ARTIFACT_BUILD__) return false;
+        const projectId = useStore.getState().activeProjectId ?? '';
+        const target = w.target === 'post' ? { kind: 'post' as const, postId: w.id } : w.target === 'email' ? { kind: 'email' as const, projectId, stepId: w.id } : { kind: 'page' as const, projectId };
+        useMakeVariations.getState().open(target, { ...(w.change ? { change: w.change as ExperimentChanged } : {}), ...(w.count ? { count: w.count } : {}) });
+        return true;
+      }
+      case 'experiment':
+        if (__ARTIFACT_BUILD__) return false;
+        return openExperimentCard(w.experimentId);
       case 'page':
         return openPage(w.route, w.tab);
     }

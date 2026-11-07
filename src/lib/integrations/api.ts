@@ -58,6 +58,9 @@ export class IntegrationApiError extends Error {
   readonly resetsAt?: string;
   readonly useUndo?: boolean;
   readonly op?: BillingOp | null;
+  /** Trial Reels (P4b): why the account can't post one, and its followers when known */
+  readonly reason?: string;
+  readonly followers?: number;
   constructor(status: number, body: Partial<ApiError> | null, fallback = 'Something went wrong. Try again shortly.') {
     super(typeof body?.error === 'string' && body.error ? body.error : fallback);
     this.name = 'IntegrationApiError';
@@ -70,10 +73,12 @@ export class IntegrationApiError extends Error {
     if (typeof body?.resetsAt === 'string') this.resetsAt = body.resetsAt;
     if (body?.useUndo === true) this.useUndo = true;
     if (body?.op && typeof body.op === 'object') this.op = body.op;
+    if (typeof body?.reason === 'string') this.reason = body.reason;
+    if (typeof body?.followers === 'number' && Number.isFinite(body.followers)) this.followers = body.followers;
   }
 }
 
-type Method = 'GET' | 'POST' | 'PUT' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /** The server's address now (Settings › AI keys, or the app's own origin). Tests pass their own. */
 let baseOverride: string | null = null;
@@ -82,7 +87,7 @@ export function setIntegrationsBase(base: string | null): void {
 }
 const base = () => baseOverride ?? serverBaseNow();
 
-async function call<T>(method: Method, path: string, body?: unknown): Promise<T> {
+export async function call<T>(method: Method, path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
     res = await serverFetch(base(), path, {

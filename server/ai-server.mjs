@@ -46,6 +46,9 @@
 //   OFFERS_PROVIDER (off), WHOP_ENABLED (off), OFFER_CLICKS_PER_IP_PER_HOUR (60), OFFER_CLICKS_PER_OFFER_PER_HOUR (3000).
 // Morning action (server/morning/index.mjs; it needs supabase/migrations/20261116000000_morning_action.sql): plain env
 //   MORNING_ACTIONS (off), MORNING_PER_TICK (24 businesses per hourly tick), MORNING_CONCURRENCY (6 at a time).
+// A/B tests (server/experiments/index.mjs; it needs supabase/migrations/20261117000000_experiments.sql): plain env
+//   EXPERIMENTS (off), EXPERIMENT_READS_PER_TICK (40); EXPERIMENT_COOKIE_SECRET is optional (else derived from
+//   SUPABASE_SECRET_KEY).
 
 import http from 'node:http';
 import fs from 'node:fs';
@@ -302,7 +305,9 @@ async function deleteAccount(req, res) {
 // published pages: the signed-in API, the pages themselves, and people's own domains
 // (appHostExtras: the app host's /sitemap.xml, /robots.txt and Search Console file, server/seo/sitemap.mjs)
 // (offers: the buy links /b/<id>, server/offers/buy.mjs)
-const pages = pagesFromEnv(process.env, { auth, whoIs: ai.whoIs, send, readJson, rateLimited, corsHeaders, allowedOrigin: ALLOWED_ORIGIN, distDir: DIST, appHostExtras: integrations.appHostExtras, billing: integrations.billing, offers: integrations.offers?.buy ?? null });
+// (experiments: the A/B page split, server/experiments/pages.mjs; "Use the winner" republishes a page through pages)
+const pages = pagesFromEnv(process.env, { auth, whoIs: ai.whoIs, send, readJson, rateLimited, corsHeaders, allowedOrigin: ALLOWED_ORIGIN, distDir: DIST, appHostExtras: integrations.appHostExtras, billing: integrations.billing, offers: integrations.offers?.buy ?? null, experiments: integrations.experimentPages });
+integrations.setPages(pages);
 
 const crashed = (req, res, e) => {
   console.error(e);
@@ -319,7 +324,8 @@ function route(req, res, url) {
     // what the browser needs to sign in (the publishable key is meant to be public), and whether it can publish pages
     // billing: whether plans are set up and enforced (no key, no ids)
     // offers: whether buy links and Whop are on (booleans only)
-    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config(), billing: integrations.billing.config(), offers: integrations.offersConfig(), morning: integrations.morningConfig() }, corsHeaders(req));
+    // experiments: whether A/B tests are on (P4b)
+    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config(), billing: integrations.billing.config(), offers: integrations.offersConfig(), morning: integrations.morningConfig(), experiments: integrations.experimentsConfig() }, corsHeaders(req));
   }
   if (url.pathname === '/api/health' && req.method === 'GET') {
     // `ok`: the server is up; `ai` says which keys are ready and what powers each function (signed-in users only, with accounts on)

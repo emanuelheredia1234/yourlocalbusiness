@@ -1,5 +1,9 @@
 import { useState } from 'react';
-import { ChevronDown, Copy, Download, Eye, PenLine } from 'lucide-react';
+import { ChevronDown, Copy, Download, Eye, FlaskConical, PenLine } from 'lucide-react';
+import { useExperimentsOn } from '@/lib/experiments/config';
+import { useProjectExperiments } from '@/store/experiments';
+import { useMakeVariations } from '@/components/experiments/MakeVariations';
+import { EmailAbPanel } from '@/components/experiments/EmailAbPanel';
 import type { EmailStep, Project } from '@/lib/types';
 import { cn, slugify } from '@/lib/utils';
 import { delayToMs, renderTokens } from '@/ai/local/email';
@@ -45,6 +49,9 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
     return o ? `Opens the buy link of “${o.title}”${o.environment === 'sandbox' ? ' (Test mode)' : ''}.` : 'This buy link isn’t one of this business’s offers.';
   };
   const magnet = project.marketing.leadMagnet;
+  // A/B tests (P4b): "Make variations" on a step, and its test's panel
+  const abOn = useExperimentsOn();
+  useProjectExperiments(project.id);
 
   const generate = async () => {
     if (emails.length && !(await confirmAction({ title: 'Rewrite all five emails?', body: 'Your edited subject lines, bodies and delays will be replaced.', confirmLabel: 'Rewrite sequence' }))) return;
@@ -134,7 +141,14 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
                       </span>
                       <ChevronDown size={16} className={cn('mt-0.5 shrink-0 text-muted transition-transform duration-180', isOpen && 'rotate-180')} aria-hidden="true" />
                     </button>
-                    <MoreMenu size="xs" label={`More actions for email ${i + 1}`} items={[{ label: 'Copy email', icon: <Copy />, onSelect: () => void copyOne(e) }]} />
+                    <MoreMenu
+                      size="xs"
+                      label={`More actions for email ${i + 1}`}
+                      items={[
+                        { label: 'Copy email', icon: <Copy />, onSelect: () => void copyOne(e) },
+                        ...(abOn && !e.variants ? [{ label: 'Make variations…', icon: <FlaskConical />, onSelect: () => useMakeVariations.getState().open({ kind: 'email', projectId: project.id, stepId: e.id }) }] : []),
+                      ]}
+                    />
                   </div>
                   {isOpen && (
                     <div className="border-t border-line p-4">
@@ -148,6 +162,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
                           { id: 'preview', label: 'Preview', icon: <Eye /> },
                         ]}
                       />
+                      {abOn && e.variants && <EmailAbPanel project={project} step={e} />}
                       {pv ? (
                         <BrowserFrame>
                           <EmailView project={project} email={e} tokens={tokens} />

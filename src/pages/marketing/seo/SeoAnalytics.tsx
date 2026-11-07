@@ -1,6 +1,7 @@
 // SEO page › Analytics: whether Google knows the page (Submit to Google, one confirmed press, steps never
 // retried by the app), Search Console clicks and impressions for this page only, and where it ranks for the
 // keywords you track (Google and Maps).
+import { ExperimentsSummary } from '@/components/experiments/ExperimentsSummary';
 import { useCallback, useEffect, useState } from 'react';
 import { Globe, KeyRound, Search } from 'lucide-react';
 import type { Project } from '@/lib/types';
@@ -49,6 +50,7 @@ export function SeoAnalytics({ project }: { project: Project }) {
       >
         {(snap, range) => <SeoBody data={snap.data} range={range} />}
       </AnalyticsShell>
+      <ExperimentsSummary project={project} kind="page" />
       {editing && <KeywordsDrawer project={project} onClose={() => setEditing(false)} />}
     </div>
   );

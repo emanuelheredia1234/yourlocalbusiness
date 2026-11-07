@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { CalendarClock, Check, Download, Inbox, Mail, Phone, RefreshCw, Trash2, UserPlus } from 'lucide-react';
 import type { Project } from '@/lib/types';
 import { cn, fmtDateTime, fmtRelative, slugify } from '@/lib/utils';
@@ -9,6 +9,7 @@ import type { LeadSource } from '@/lib/leadFields';
 import { artifactPageId } from '@/lib/codeAssets';
 import { addLeadToSubscribers, leadOwner, leadProject, markLeadsSeen, useLeads } from '@/store/leads';
 import { useStore } from '@/store/useStore';
+import { useExperiments, useProjectExperiments } from '@/store/experiments';
 import { toast, useUI } from '@/store/ui';
 import { Badge, Callout, Empty, InfoTip, Segmented, Spinner, Tooltip, confirmAction } from '@/components/ui/primitives';
 import { download } from '@/components/ui/download';
@@ -93,9 +94,22 @@ function LeadList({ project }: { project: Project }) {
   const recent = useLeads((s) => s.recent);
   const [scope, setScope] = useState<Scope>('project');
   const [source, setSourceState] = useState<SourceFilter>(rememberedSource);
+  // A/B tests (P4b): leads from a page test carry the version their visitor saw; filter by it (the loaded leads)
+  const [version, setVersion] = useState('all');
   const projectId = scope === 'project' ? project.id : undefined;
   const filter = { projectId, ...(source === 'all' ? {} : { source }) };
   const [leads, setLeads] = useState<Lead[] | null>(() => seed(recent, projectId, source));
+  // a version's test by its name (never an id fragment): the page tests the app has loaded, else "Page test"
+  useProjectExperiments(project.id);
+  const testsById = useExperiments((st) => st.byProject);
+  const testName = (id: string) => {
+    for (const entry of Object.values(testsById)) {
+      const e = entry?.experiments.find((x) => x.id === id);
+      if (e) return e.name ? `${e.name} test` : 'Page test';
+    }
+    return 'Page test';
+  };
+  const versions = useMemo(() => (__ARTIFACT_BUILD__ ? [] : [...new Set((leads ?? []).filter((l) => l.variantKey).map((l) => `${l.experimentId}:${l.variantKey}`))].sort()), [leads]);
   // the last page was full: there may be more
   const [more, setMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -267,6 +281,17 @@ function LeadList({ project }: { project: Project }) {
             ]}
           />
         </div>
+        {versions.length > 0 && (
+          <select className="select w-auto" aria-label="Which page version" value={version} onChange={(e) => setVersion(e.target.value)}>
+            <option value="all">Every version</option>
+            {versions.map((v) => (
+              <option key={v} value={v}>
+                {testName(v.split(':')[0])} · version {v.slice(-1).toUpperCase()}
+              </option>
+            ))}
+            <option value="none">Not in a test</option>
+          </select>
+        )}
         <div className="ml-auto flex flex-wrap gap-1.5">
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLoads((n) => n + 1)} disabled={loading}>
             <RefreshCw className={cn(loading && 'animate-spin')} aria-hidden="true" /> Refresh
@@ -327,7 +352,7 @@ function LeadList({ project }: { project: Project }) {
             <span />
           </div>
           <ul ref={listRef} tabIndex={-1} aria-label="Leads" className="divide-y divide-line outline-none">
-            {leads.map((lead) => (
+            {leads.filter((l) => version === 'all' || (version === 'none' ? !l.variantKey : `${l.experimentId}:${l.variantKey}` === version)).map((lead) => (
               <LeadItem key={lead.id} lead={lead} project={project} projects={projects} from={ownerOf(lead)} who={who(lead)} busy={busy.has(lead.id)} onSubscribe={() => void subscribe(lead)} onDelete={() => void remove(lead)} />
             ))}
           </ul>
@@ -465,6 +490,11 @@ function LeadItem({ lead, project, projects, from, who, busy, onSubscribe, onDel
       </div>
       <p className="min-w-0 break-words text-small text-muted">
         {sourceLine(lead, from)} · {from ? from.brand.name : 'not in your projects'}
+        {lead.variantKey && !__ARTIFACT_BUILD__ && (
+          <Badge tone="primary" className="ml-1.5 align-middle">
+            Version {lead.variantKey.toUpperCase()}
+          </Badge>
+        )}
       </p>
       <div className="hidden xl:block">{when}</div>
       <div className="flex shrink-0 items-center gap-1 xl:justify-end">

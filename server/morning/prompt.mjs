@@ -38,7 +38,7 @@ export function buildPrompt(facts, rules) {
       MORNING.leadMagnetTypes.join(', ') +
       '), platform (one of ' +
       MORNING.platforms.join(', ') +
-      '), planActionId (only an id from strategy.plan.open, with that action’s kind), postId (only an id from posts.due), prompt (required for kind assistant: the message the owner will send to the assistant).',
+      '), planActionId (only an id from strategy.plan.open, with that action’s kind), postId (only an id from posts.due, or the postId of an experiments.due entry), experimentId (only an id from experiments.ready or experiments.due: an A/B test whose winner is in, or whose next version is planned for today), prompt (required for kind assistant: the message the owner will send to the assistant).',
     '',
     'Rules:',
     '- Rank exactly 3 candidates, the best first.',

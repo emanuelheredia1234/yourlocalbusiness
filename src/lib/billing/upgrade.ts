@@ -1,11 +1,11 @@
 // The upgrade prompt: one dialog for a paid action the plan refused (402 PLAN_REQUIRED / PAYMENT_REQUIRED /
-// CREDITS_USED / BUSINESS_LIMIT / CARD_DECLINED / VIDEO_WEEK_LIMIT, and the ads gate's 403 PLAN_REQUIRED). The server's sentence is
+// CREDITS_USED / BUSINESS_LIMIT / CARD_DECLINED / VIDEO_WEEK_LIMIT / EXPERIMENT_LIMIT, and the ads gate's 403 PLAN_REQUIRED). The server's sentence is
 // shown as is (it's ours, never Stripe's). Nothing is retried after an upgrade: the user presses the action again.
 
 import { setPlanRefusalListener } from '@/ai/claude';
 import { billingOn, useBilling, type UpgradeRequest } from '@/store/billing';
 
-const CODES = new Set<UpgradeRequest['code']>(['PLAN_REQUIRED', 'PAYMENT_REQUIRED', 'CREDITS_USED', 'BUSINESS_LIMIT', 'CARD_DECLINED', 'VIDEO_WEEK_LIMIT']);
+const CODES = new Set<UpgradeRequest['code']>(['PLAN_REQUIRED', 'PAYMENT_REQUIRED', 'CREDITS_USED', 'BUSINESS_LIMIT', 'CARD_DECLINED', 'VIDEO_WEEK_LIMIT', 'EXPERIMENT_LIMIT']);
 
 export interface RefusalBody {
   code?: unknown;
@@ -55,6 +55,8 @@ function fallback(code: UpgradeRequest['code']): string {
       return 'Your plan has no free business slot.';
     case 'VIDEO_WEEK_LIMIT':
       return 'You’ve made all of this week’s AI videos. Resets Monday.';
+    case 'EXPERIMENT_LIMIT':
+      return 'You’ve used this month’s A/B tests.';
     default:
       return 'This needs a plan. Choose one to keep going.';
   }

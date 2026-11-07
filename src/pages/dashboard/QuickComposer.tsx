@@ -1,6 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Bookmark, CalendarClock, FilePlus2, Heart, ImageUp, MessageCircle, Send, X } from 'lucide-react';
-import type { LinkPlacement, MediaRef, Post, PostFormat, PostPlatform, PostType, Project, StyleId } from '@/lib/types';
+import { Bookmark, CalendarClock, FilePlus2, Heart, ImageUp, MessageCircle, Send, X, FlaskConical } from 'lucide-react';
+import { useExperimentsOn } from '@/lib/experiments/config';
+import { useMakeVariations } from '@/components/experiments/MakeVariations';
+import type { LinkPlacement, MediaRef, Post, PostFormat, PostPlatform, PostType, Project, ShareMode, StyleId } from '@/lib/types';
+import { canTrialReel, withShareMode } from '@/lib/trialReels';
+import { TrialReelPicker } from '@/components/experiments/TrialReelPicker';
 import { addDays, cn, todayStr, truncate } from '@/lib/utils';
 import { IMAGE_STYLES, PLATFORMS, POST_PLATFORMS, POST_TYPES, VIDEO_STYLES, isVideoStyle } from '@/ai/knowledge';
 import { suggestTopics } from '@/ai/local/social';
@@ -44,6 +48,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
   const allPosts = useStore((s) => s.posts);
   const saved = savedIds.map((id) => allPosts.find((p) => p.id === id)).filter((p): p is Post => !!p && p.status === 'scheduled');
   const addPosts = useStore((s) => s.addPosts);
+  const abOn = useExperimentsOn();
   const schedule = useStore((s) => s.schedulePosts);
   const ai = useAI(postTask);
   const [topic, setTopic] = useState(initialTopic ?? '');
@@ -68,6 +73,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
   const [storyboard, setStoryboard] = useState<Post['storyboard']>(undefined);
   // where each network's link goes on this post (it starts at the project's setting for that network)
   const [linkWhere, setLinkWhere] = useState<Partial<Record<PostPlatform, LinkPlacement>>>({});
+  const [igMode, setIgMode] = useState<ShareMode>('CUSTOM');
   const link = pageLink(project);
   const linkFor = (p: PostPlatform) => postLinkFor(project, p, linkWhere[p]);
   const [date, setDate] = useState(addDays(todayStr(), 1));
@@ -106,6 +112,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
 
   // one draft per network, each with its link where it goes there (and short enough for X)
   const build = (): Post[] =>
+    // Instagram videos: posted as a regular Reel unless "Post as" says Trial Reel (P4b)
     buildComposerPosts(project, {
       platforms,
       format: effFormat,
@@ -122,7 +129,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
       time,
       media: source === 'upload' ? media ?? undefined : effFormat === 'image' ? genMedia ?? undefined : genVideo ?? undefined,
       linkWhere,
-    });
+    }).map((p) => (p.platform === 'instagram' && canTrialReel(p) ? withShareMode(p, igMode) : p));
 
   const reset = (discard = false) => {
     if (discard) void releaseMedia(genMedia);
@@ -137,6 +144,7 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
     setMedia(null);
     setDesc('');
     setLinkWhere({});
+    setIgMode('CUSTOM');
     ai.reset();
   };
 
@@ -281,6 +289,13 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
           <p className="text-small text-muted">{__ARTIFACT_BUILD__ ? 'No link in your posts yet. Add your website in Settings › Brand.' : 'No link in your posts yet. Publish your page (Marketing → SEO page), or add your website in Settings › Brand.'}</p>
         )}
 
+        {platforms.includes('instagram') && (
+          <TrialReelPicker
+            post={{ id: `composer-${project.id}`, projectId: project.id, platform: 'instagram', format: effFormat, media: (source === 'upload' ? media : effFormat === 'image' ? genMedia : genVideo) ?? undefined, instagram: igMode === 'CUSTOM' ? undefined : { shareMode: igMode }, status: 'draft' }}
+            onChange={(patch) => setIgMode(patch.instagram?.shareMode ?? 'CUSTOM')}
+          />
+        )}
+
         <div className="flex flex-wrap items-center gap-3">
           <GenerateButton variant={hasDraft ? 'ai-outline' : 'ai'} running={ai.running} runningLabel="Writing…" onClick={generate}>
             {hasDraft ? 'Regenerate' : source === 'upload' ? 'Write AI caption' : 'Generate post'}
@@ -350,6 +365,11 @@ export function QuickComposer({ onDone, initialTopic, compact }: { onDone?: () =
                 <li key={p.id} className="flex flex-wrap items-center gap-2">
                   <PlatformChip platform={p.platform} />
                   <span className="min-w-0 flex-1 truncate text-small text-ink-2">{p.headline}</span>
+                  {abOn && !p.experiment && (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => useMakeVariations.getState().open({ kind: 'post', postId: p.id })}>
+                      <FlaskConical /> Make variations
+                    </button>
+                  )}
                   <PostNowButton post={p} />
                 </li>
               ))}

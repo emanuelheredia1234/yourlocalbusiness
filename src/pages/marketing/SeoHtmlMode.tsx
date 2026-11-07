@@ -3,6 +3,8 @@
 // Version switches between them (Undo too). The app can't check claims in free HTML, so a standing note asks the
 // owner to check every claim, price and testimonial before publishing.
 
+import { useExperimentsOn } from '@/lib/experiments/config';
+import { PageAbPanel } from '@/components/experiments/PageAbPanel';
 import { useEffect, useMemo, useState, type RefObject } from 'react';
 import { Inbox, Info, Trash2 } from 'lucide-react';
 import type { Project, SeoMeta } from '@/lib/types';
@@ -61,6 +63,7 @@ export function SeoVersionSwitch({ project, className }: { project: Project; cla
 }
 
 export function SeoHtmlMode({ project, publishRef, rail, onRail }: { project: Project; publishRef?: RefObject<HTMLDivElement>; rail: RailPanel; onRail: (p: RailPanel) => void }) {
+  const abOn = useExperimentsOn();
   const h = project.marketing.seoHtml!;
   const meta = project.marketing.seo!;
   const type = pageTypeOf(project);
@@ -132,6 +135,11 @@ export function SeoHtmlMode({ project, publishRef, rail, onRail }: { project: Pr
           <RailItem value="score" open={rail} title="SEO score" summary={<span className="num font-mono">{result.score}</span>}>
             <ScoreSummary score={result.score} checks={result.checks} words={result.words} density={result.density} onChecks={() => setChecksOpen(true)} />
           </RailItem>
+          {abOn && (
+            <RailItem value="abtest" open={rail} title="A/B test" summary={project.marketing.seoVariant ? 'Version B ready' : 'None'}>
+              <PageAbPanel project={project} />
+            </RailItem>
+          )}
           <RailItem value="publish" open={rail} title="Public page" summary={published ? 'Live' : 'Not published'}>
             <div className="rounded-md outline-none focus-visible:shadow-focus" ref={publishRef} tabIndex={-1}>
               <PublishPanel

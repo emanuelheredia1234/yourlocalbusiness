@@ -80,6 +80,15 @@ describe('entitlementOf', () => {
     expect(e.features).toMatchObject({ leadEmailsPerMonth: 150, publicListings: 15, customDomains: 3, platformFeePct: 1, promptControl: 'style_notes', treg: { monthlyMicro: 8_000_000 } });
   });
 
+  it('A/B tests a month (P4b): 2 / 10 / unlimited by tier, the trialing tier’s on a card trial, unlimited for the owner and legacy plans', () => {
+    expect(entitlementOf(acct({ tier: 'launch' }), ON, NOW).features.experimentsPerMonth).toBe(2);
+    expect(entitlementOf(acct({ tier: 'grow' }), ON, NOW).features.experimentsPerMonth).toBe(10);
+    expect(entitlementOf(acct({ tier: 'scale' }), ON, NOW).features.experimentsPerMonth).toBe(null);
+    expect(entitlementOf(acct({ tier: 'launch', status: 'trialing', current_period_start: at(-2), current_period_end: at(5), trial_ends_at: at(5) }), ON, NOW).features.experimentsPerMonth).toBe(2);
+    expect(entitlementOf(null, ON, NOW, { isAdmin: true }).features.experimentsPerMonth).toBe(null);
+    expect(entitlementOf(acct({ tier: 'launch' }), { enforce: false }, NOW).features.experimentsPerMonth).toBe(null);
+  });
+
   it('yearly and free plans use monthly windows anchored on a day, clamped to the month (day 31 in February)', () => {
     const y = entitlementOf(acct({ interval: 'year', billing_anchor: '2026-01-31T09:00:00Z' }), ON, Date.parse('2026-02-20T00:00:00Z'));
     expect(y.creditWindow).toEqual({ start: '2026-01-31T00:00:00.000Z', resetsAt: '2026-02-28T00:00:00.000Z' });

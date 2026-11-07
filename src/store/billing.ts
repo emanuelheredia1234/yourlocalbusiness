@@ -16,7 +16,7 @@ export type AfterAdd = () => void | Promise<void>;
 
 /** The server's refusal shown by the upgrade prompt (one at a time). */
 export interface UpgradeRequest {
-  code: 'PLAN_REQUIRED' | 'PAYMENT_REQUIRED' | 'CREDITS_USED' | 'BUSINESS_LIMIT' | 'CARD_DECLINED' | 'VIDEO_WEEK_LIMIT';
+  code: 'PLAN_REQUIRED' | 'PAYMENT_REQUIRED' | 'CREDITS_USED' | 'BUSINESS_LIMIT' | 'CARD_DECLINED' | 'VIDEO_WEEK_LIMIT' | 'EXPERIMENT_LIMIT';
   message: string;
   need?: { feature?: string; tier?: string };
   resetsAt?: string;

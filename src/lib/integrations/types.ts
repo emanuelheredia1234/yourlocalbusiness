@@ -130,7 +130,11 @@ export interface PublishRequest {
     mediaIds?: string[];
     /** YouTube, TikTok */
     title?: string;
+    /** Instagram videos: the Reel mode the post was saved with (the server refuses a mismatch) */
+    shareMode?: 'CUSTOM' | 'TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED' | 'TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS';
   };
+  /** a Trial Reel whose followers couldn't be checked: the customer ticked "Post as a trial anyway" */
+  trialUnknownOk?: true;
 }
 
 export interface PublishJob {
@@ -406,7 +410,17 @@ export type ApiErrorCode =
   /** cancelling or keeping the plan happens in the Customer Portal for now (the P1c migration isn't run) */
   | 'USE_PORTAL'
   /** the morning action asked for in the late window (02:00–05:00 local): { nextAt } */
-  | 'NOT_DUE';
+  | 'NOT_DUE'
+  /** A/B tests and Trial Reels (P4b): an account not eligible for Trial Reels ({ reason, followers? }), the month's
+   * A/B tests used, a split already running on the page, "Update results" too soon, a variant before its gap, a page
+   * version without the page's form, an Omnisend A/B draft that may have been created */
+  | 'TRIAL_REEL_NOT_ELIGIBLE'
+  | 'EXPERIMENT_LIMIT'
+  | 'EXPERIMENT_RUNNING'
+  | 'TOO_SOON'
+  | 'TOO_SOON_AFTER_VARIANT'
+  | 'VARIANT_NO_FORM'
+  | 'CAMPAIGN_UNCONFIRMED';
 
 export interface ApiError {
   error: string;
@@ -423,6 +437,9 @@ export interface ApiError {
   useUndo?: boolean;
   /** plans: the money operation this answer is about */
   op?: BillingOp | null;
+  /** Trial Reels: why not (not_connected, needs_reconnect, followers, unreadable) and the follower count */
+  reason?: string;
+  followers?: number;
 }
 
 // ───────────── plans and billing (server/billing/stripe.mjs) ─────────────
@@ -459,6 +476,8 @@ export interface Entitlement {
     video: { maxHeight: number; maxSeconds: number; label?: string };
     /** AI videos each business may start a week (null = unlimited; absent from older servers) */
     videosPerWeek?: number | null;
+    /** A/B tests the account may start per credit window (null = unlimited; absent from older servers) */
+    experimentsPerMonth?: number | null;
     treg: { monthlyMicro: number; dailyMicro: number } | null;
     leadEmailsPerMonth: number | null;
     publicListings: number | null;
@@ -614,6 +633,8 @@ export interface MorningTarget {
   platform?: PostPlatform;
   planActionId?: string;
   postId?: string;
+  /** an A/B test (P4b): its version due today (with postId) or its winner that is in; the app opens the test's card */
+  experimentId?: string;
   /** assistant: the message put in the chat's box (nothing is sent until the owner presses Send) */
   prompt?: string;
 }

@@ -15,6 +15,8 @@ import { OPENABLE_ROUTES } from './nav';
 import { catalogLine } from './registry';
 import { TOOL_GROUPS, registry } from './tools';
 import { workspaceSummary } from './workspace';
+import { useAuth } from '@/lib/cloud/auth';
+import { useExperimentsConfig } from '@/lib/experiments/config';
 
 const post = (id: string, extra: Partial<Post> = {}): Post =>
   ({ id, projectId: 'p1', status: 'scheduled', platform: 'instagram', format: 'image', style: 'minimal', postType: 'tip', headline: `Headline ${id}`, visualPrompt: '', caption: 'Caption', hashtags: [], scheduledAt: '2020-01-01T10:00:00.000Z', watermark: false, source: 'composer', createdAt: 1, updatedAt: 1, seed: 1, ...extra }) as Post;
@@ -35,6 +37,9 @@ const msg = (role: ChatMessage['role'], text: string, extra: Partial<ChatMessage
 
 describe('the prompt', () => {
   it('has the rules, the guide, where the owner is, the workspace, every tool, the chat and the latest message', () => {
+    // every tool: with A/B tests on (their group is listed only then)
+    useAuth.setState({ phase: 'ready' } as never);
+    useExperimentsConfig.setState({ config: { enabled: true, reachable: true } });
     const history = [msg('user', 'Hi there'), msg('assistant', 'Hello! How can I help?'), msg('activity', 'Opened Content calendar', { tool: 'navigate', status: 'ok' }), msg('card', 'Make a video?', { card: { title: 'Make a video?', what: 'x', who: 'y', confirmLabel: 'Go', state: 'declined' } })];
     const p = buildPrompt(input({ history, results: [{ step: 1, tool: 'list_posts', ok: true, status: 'ok', result: { total: 2 } }] }));
     expect(p.startsWith(ASSISTANT_MARKER)).toBe(true);
@@ -51,6 +56,8 @@ describe('the prompt', () => {
     expect(p).toContain('## Latest message from the owner\nWhat is due on my calendar?');
     expect(p).toContain('[{"step":1,"tool":"list_posts","ok":true,"status":"ok","result":{"total":2}}]');
     expect(p.trimEnd().endsWith('This is step 1 of 6.')).toBe(true);
+    useAuth.setState({ phase: 'loading' } as never);
+    useExperimentsConfig.setState({ config: null });
   });
 
   it('keeps only the last 12 messages, each one shortened', () => {

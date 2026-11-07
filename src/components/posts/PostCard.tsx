@@ -20,6 +20,9 @@ import { useImageJob } from '../images/useImageJob';
 import { useCanOfferManus } from './manusShared';
 import { PostNowButton, PublishStatus } from './PostNowButton';
 import { GroupShareBadge, useManusGroups } from './ManusGroups';
+import { useExperimentsOn } from '@/lib/experiments/config';
+import { ExperimentBadge } from '../experiments/ExperimentBadge';
+import { TrialReelPicker } from '../experiments/TrialReelPicker';
 import { DueBadge, PostedBy, addToCalendarFlow, isDue, postHeld, postMenuEntries, useMarkPosted } from './PostActions';
 import { postVideoPrompt } from '@/ai/image';
 import { makePostImage, rewriteInput, rewritePatch } from '@/ai/socialPosts';
@@ -83,6 +86,7 @@ export function PostFields({ post, onChange }: EditableProps) {
         <ChipInput values={post.hashtags} onChange={(v) => onChange({ hashtags: v })} prefix="#" placeholder="#hashtag" />
       </Field>
       <LinkFields post={post} onChange={onChange} />
+      <TrialReelPicker post={post} onChange={onChange} />
       {post.format === 'image' && project ? (
         <PostImagePanel project={project} headline={post.headline} prompt={post.visualPrompt} onPromptChange={(v) => onChange({ visualPrompt: v })} style={post.style} watermark={post.watermark} platform={post.platform} media={post.media} onChange={(m) => onChange({ media: m ?? undefined })} pendingKey={`post:${post.id}`} />
       ) : project ? (
@@ -193,6 +197,8 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
   const [expanded, setExpanded] = useState(false);
   const project = useStore((s) => s.projects.find((p) => p.id === post.projectId));
   const img = useImageJob();
+  // A/B tests: asks the server's config once, so the menu's "Make variations" can show
+  const abOn = useExperimentsOn();
   const makeImage = () =>
     project &&
     img.run(
@@ -315,6 +321,7 @@ export function PostCard({ post, brand, selectable, selected, onSelect }: { post
         <PostedBy post={post} />
         <PublishStatus post={post} />
         <GroupShareBadge post={post} />
+        {abOn && <ExperimentBadge post={post} />}
       </div>
     </PostFrame>
   );

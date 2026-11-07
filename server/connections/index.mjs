@@ -28,6 +28,8 @@
 //   publish(userId, platform, {projectId, jobId, composed, media, loadMedia, privacy}) → {state, url?, errorCode?, ref}
 //     one attempt; 'unknown' when it may have gone out
 //   postStatus(userId, ref) → {found, url} | {failed} | {pending} | null   a read for "Check again"
+//   postMetrics(userId, platform, {projectId, requestId}) → {metrics} | {error} | null   one post's numbers (P4b A/B
+//     tests; social only, optional per side: null when the side has none)
 //   forgetUser(userId) / unforgetUser(userId)
 // and, outside the per-side contract (social only): slots(userId) → {used, cap, projects} (the user's businesses
 // with a profile, of their limit) and forgetProject(userId, projectId) → {freed} (a business was deleted: its
@@ -155,6 +157,7 @@ export function combineConnections({ social = null, ads = null } = {}) {
     adResults: (userId, platform, opts) => (AD_PLATFORMS.includes(platform) ? a.adResults(userId, platform, opts) : null),
     publish: (userId, platform, opts) => s.publish(userId, platform, opts),
     postStatus: (userId, ref) => s.postStatus(userId, ref),
+    postMetrics: async (userId, platform, opts) => (SOCIAL_PLATFORMS.includes(platform) && typeof s.postMetrics === 'function' ? s.postMetrics(userId, platform, opts) : null),
     /** The user's businesses with a social profile, of their limit (null when social is off). */
     slots: async (userId) => (typeof s.slots === 'function' ? s.slots(userId) : null),
     /** A business was deleted: its social profile goes (ad accounts aren't per business: nothing changes there). */
@@ -228,6 +231,12 @@ export function createConnections(impl = nullConnections) {
     async postStatus(userId, ref) {
       checkUser(userId);
       return impl.postStatus(userId, ref);
+    },
+    /** One post's own numbers (an A/B test's variant), or null when the side can't read them. */
+    async postMetrics(userId, platform, opts = {}) {
+      checkUser(userId);
+      checkPlatform(platform);
+      return typeof impl.postMetrics === 'function' ? impl.postMetrics(userId, platform, { ...opts, projectId: projectOf(opts) }) : null;
     },
     async slots(userId) {
       checkUser(userId);

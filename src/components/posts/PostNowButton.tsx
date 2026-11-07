@@ -22,7 +22,7 @@ import { toast } from '@/store/ui';
 import { Badge, Callout, Spinner } from '../ui/primitives';
 import { TONE_BADGE, TONE_BLOCK, type Tone } from './manusShared';
 import { useMarkPosted } from './PostActions';
-import { usePublishConfirm } from './PublishConfirm';
+import { canPostAsRegularReel, postAsRegularReel, usePublishConfirm } from './PublishConfirm';
 import { usePostItYourself } from './PostItYourselfModal';
 import { announceJob } from './PublishJobWatcher';
 
@@ -220,6 +220,12 @@ export function PublishStatus({ post, compact }: { post: Post; compact?: boolean
           {canPostFrom(status) && (
             <button type="button" className="link" onClick={() => usePublishConfirm.getState().open(post.id)}>
               Try again
+            </button>
+          )}
+          {/* a refused Trial Reel: save it as a regular Reel, then a new confirmation (never sent by itself) */}
+          {canPostFrom(status) && canPostAsRegularReel(post) && (
+            <button type="button" className="link" onClick={() => postAsRegularReel(post.id)}>
+              Post as a regular Reel
             </button>
           )}
           {yourself}

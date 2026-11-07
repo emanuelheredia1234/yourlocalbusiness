@@ -1525,6 +1525,16 @@ describe('outcomeOfEntry', () => {
     expect(outcomeOfEntry({ status: 'skipped' })).toEqual({ state: 'failed', errorCode: 'NOT_CONNECTED' });
   });
 
+  it('“trial” in an error reads as a Trial Reel refusal only for a job that was a Trial Reel, on Instagram', () => {
+    const refused = { success: false, error: 'This account is not eligible for trial reels', error_code: 'instagram_api_error' };
+    expect(outcomeOfEntry(refused, { final: true, platform: 'instagram', trial: true })).toEqual({ state: 'failed', errorCode: 'TRIAL_REEL_REFUSED' });
+    // a regular Reel or photo whose error happens to mention a trial
+    expect(outcomeOfEntry(refused, { final: true, platform: 'instagram' })).toEqual({ state: 'failed', errorCode: 'REFUSED' });
+    // another network's error code containing "trial"
+    expect(outcomeOfEntry({ success: false, error_code: 'trial_expired' }, { final: true, platform: 'tiktok' })).toEqual({ state: 'failed', errorCode: 'REFUSED' });
+    expect(outcomeOfEntry({ success: false, error_code: 'trial_expired' }, { final: true, platform: 'facebook', trial: true })).toEqual({ state: 'failed', errorCode: 'REFUSED' });
+  });
+
   it('a /status entry is an answer only when it or the whole request says so: “Queued” with success true is still going; retryable is still going', () => {
     // the documented in-progress answer
     expect(outcomeOfEntry({ platform: 'x', success: true, message: 'Queued' }, { top: 'in_progress' })).toEqual({ state: 'pending' });

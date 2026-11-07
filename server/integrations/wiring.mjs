@@ -34,6 +34,9 @@
 //                                                          integrations.offers.buy)
 //   /api/morning/…                                         server/morning/index.mjs (the morning action; its hourly job
 //                                                          runs first in each tick; aiText: the AI routes' generateText)
+//   /api/experiments…                                      server/experiments/index.mjs (A/B tests and Trial Reels'
+//                                                          eligibility; posting's variant hooks; the page split's
+//                                                          hooks for pages.mjs: integrations.experimentPages)
 //
 // Each module's factory gets the same deps: { auth, storage (appState), db (server/integrations/db.mjs),
 // connections, treg, omnisend, send, readJson, readRaw, rateLimited, limit, corsHeaders, sameOrigin,
@@ -62,7 +65,9 @@ import { createBillingRoutes } from '../billing/routes.mjs';
 import { createAdsRoutes } from '../ads/routes.mjs';
 import { createOffers } from '../offers/index.mjs';
 import { createMorning } from '../morning/index.mjs';
+import { createExperiments } from '../experiments/index.mjs';
 import { createTreg } from '../treg.mjs';
+import { createTrialReels } from '../social/trialReels.mjs';
 import { dbFromEnv, INTEGRATIONS_MIGRATION } from './db.mjs';
 import { createBucketLimiter, readRaw, redactPath, safeLog } from './common.mjs';
 import { ROUTE_PREFIXES } from './contracts.mjs';
@@ -104,6 +109,7 @@ export const DEFAULT_FACTORIES = Object.freeze({
   ads: createAdsRoutes,
   offers: createOffers,
   morning: createMorning,
+  experiments: createExperiments,
   treg: createTreg,
 });
 
@@ -138,6 +144,7 @@ export function moduleFor(pathname) {
   if (under(ROUTE_PREFIXES.ads)) return 'ads';
   if (under(ROUTE_PREFIXES.offers) || under(ROUTE_PREFIXES.whop) || under(ROUTE_PREFIXES.whopWebhook)) return 'offers';
   if (under(ROUTE_PREFIXES.morning)) return 'morning';
+  if (under(ROUTE_PREFIXES.experiments)) return 'experiments';
   return null;
 }
 
@@ -181,7 +188,11 @@ export function createIntegrations({
   const treg = make.treg({ env, fetch, now, db: database, log, tierFor: (tag) => billing.tregCapsFor(tag) });
   // the disconnect route asks the ads module which launched campaigns are still on (R12); the module is made below
   let adsModule = null;
-  const deps = { ...base, connections, nango, treg, liveAdsGuard: (userId, platform) => adsModule?.liveOn?.(userId, platform) ?? [] };
+  // Instagram Trial Reels' eligibility (posting and the experiments module share its 6-hour follower cache); the A/B
+  // tests' posting hooks are late-bound (the experiments module is made after posting)
+  const trialReels = createTrialReels({ db: database, connections, now, log });
+  let experimentsModule = null;
+  const deps = { ...base, connections, nango, treg, trialReels, experimentHooks: () => experimentsModule?.postingHooks ?? null, liveAdsGuard: (userId, platform) => adsModule?.liveOn?.(userId, platform) ?? [] };
 
   const modules = {
     connections: make.connectionRoutes(deps),
@@ -195,7 +206,10 @@ export function createIntegrations({
     offers: make.offers(deps),
     // last: its hourly job runs after the quick sweeps in each tick
     morning: make.morning({ ...deps, aiText, aiPowered }),
+    // A/B tests: after morning (its hourly results job runs after the morning action's)
+    experiments: make.experiments(deps),
   };
+  experimentsModule = modules.experiments;
   adsModule = modules.ads;
   billingModule = modules.billing;
   const sitemap = make.sitemap(deps);
@@ -206,7 +220,7 @@ export function createIntegrations({
   connections.impl?.ads?.setAdsListener?.((userId, zid, evt) => modules.ads.fromWebhook?.(userId, zid, evt));
   // account deletion: the vendor's connections go first (while their ids are still known), then the rest
   // (offers before billing: each Whop webhook gets its one removal attempt while the keys are still there)
-  const FORGET_ORDER = ['ads', 'posting', 'analytics', 'seoGoogle', 'offers', 'billing', 'publicMedia', 'nango', 'connections'];
+  const FORGET_ORDER = ['ads', 'posting', 'analytics', 'seoGoogle', 'offers', 'billing', 'publicMedia', 'experiments', 'nango', 'connections'];
 
   const crashed = (req, res, path, e) => {
     safeLog('integration_error', { path: redactPath(path), error: e?.name || 'Error', code: e?.code }, log);
@@ -225,6 +239,12 @@ export function createIntegrations({
     offersConfig: () => modules.offers.config?.() ?? { enabled: false, whop: { sandbox: false, production: false } },
     /** the morning action, for /api/config */
     morningConfig: () => modules.morning.config?.() ?? { enabled: false },
+    /** A/B tests, for /api/config */
+    experimentsConfig: () => modules.experiments.config?.() ?? { enabled: false },
+    /** the page split's hooks for pages.mjs and leads.mjs (null when A/B tests are off) */
+    experimentPages: modules.experiments.pageHooks ?? null,
+    /** pages.mjs, once made: "Use the winner" republishes a page with version B through it */
+    setPages: (pages) => modules.experiments.setPages?.(pages),
     /** for tests and the startup notes */
     connectionsProvider: selected.provider,
     connectionsSelected: selected,
@@ -346,7 +366,8 @@ export function createIntegrations({
       lines.push(...billing.notes());
       lines.push(...(modules.offers.notes?.() ?? []));
       lines.push(...(modules.morning.notes?.() ?? []));
-      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql, supabase/migrations/20261108000000_ads_launch.sql, supabase/migrations/20261110000000_billing.sql, supabase/migrations/20261111000000_video_week.sql and supabase/migrations/20261116000000_morning_action.sql in Supabase.`);
+      lines.push(...(modules.experiments.notes?.() ?? []));
+      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql, supabase/migrations/20261108000000_ads_launch.sql, supabase/migrations/20261110000000_billing.sql, supabase/migrations/20261111000000_video_week.sql, supabase/migrations/20261116000000_morning_action.sql and supabase/migrations/20261117000000_experiments.sql in Supabase.`);
       return lines;
     },
   };

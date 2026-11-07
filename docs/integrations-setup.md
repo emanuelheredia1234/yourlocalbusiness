@@ -125,6 +125,11 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    accepted Meta's non-discrimination policy for the chosen ad account. Run it after `20261108000000_ads_launch.sql`.
    Until it is run, the policy shows as not confirmed and ticking the box says it couldn't be saved (log:
    `ads_policy_confirm_not_saved`).
+12. `supabase/migrations/20261117000000_experiments.sql` (P4b, §14): `experiments` and `experiment_variants` (A/B
+   tests and their versions; users read their own rows except a page version's HTML, only the server writes), two
+   columns on `page_leads` (`experiment_id`, `variant_key`), the start, count, counter and claim functions, and a
+   trigger that deletes a business's tests with the business. Run it after `20261116100000_ad_policy_confirmed.sql`.
+   Until it is run, A/B tests answer "not set up" and pages serve one version.
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices, and `billing_trials` rows, which keep only keyed hashes of the email and card (their `user_id` becomes
@@ -846,6 +851,31 @@ committed daily and campaigns on, and **Pause all** for a customer (a preview of
 
 The artifact build shows "Connected accounts and live analytics need the full app" instead of any of this.
 
+### A/B tests and Trial Reels (P4b)
+
+- **Make variations** on a post (its ⋯ menu, or "Make variations" next to a post just added in Create post), an
+  email step (its ⋯ menu) or the SEO page (its "A/B test" panel): choose the one thing that differs (the cost shows
+  first: about 3 AI credits, none on your own AI keys; a visual makes one image per new version, or uses one of this
+  week's videos per new version for a video post; Trial Reels compare a hook, caption or visual only), 1 or 2 new
+  versions, review and edit them side by side ("Also changed" warns when an edit touches something else), and save a
+  draft. Then a test card in **Social › A/B tests** with each version's planned time, **Post now** in order (12 hours
+  apart for "different times", with the reason when it can't go yet), the results ("Clear winner", "Too close to
+  call", "Tie", "Not enough data yet"; unknown numbers show as "—"), **Update results**, **Stop test** and **Use the
+  winner** (or "Pick A/B anyway" when it's too close to call).
+- **Use the winner** saves a "Learned: hooks" (or captions, subject lines…) Brain skill for that business (the last 5
+  results), offers "Rewrite N upcoming posts in this style" (AI credits, only when pressed), puts version B's subject
+  or opening into the email step, and for the page keeps the saved page in step with version B when B won.
+- Version posts carry an "A/B" marker on the calendar and a "Test A/B" button on their card; the morning action's A/B
+  reminders open the test; Social, Email and SEO analytics list recent tests.
+- **Trial Reel** ("Post as" on Instagram videos: in Create post, the post editor, and a campaign setup switch for
+  the batch's Instagram videos), with the 1,000-follower check, "Post as a trial anyway" when the count can't be read,
+  and "Post as a regular Reel" (a new confirmation) when Instagram refuses.
+- **A/B tests this month: N of M** with the reset date; at the limit the upgrade prompt names the reset date and the
+  next plan. Leads shows "Version A/B" for leads from a split page, with a filter by version.
+- The assistant can list tests and their results, and open Make variations, a version's posting window, the page's
+  split, the Omnisend draft or Use the winner, where the customer confirms; it never posts or sends by itself.
+- None of this exists in the claude.ai artifact build. Details: §14.
+
 ## 8. What works on day one (no Upload-Post or Zernio key yet, no approvals)
 
 - Manual posting: **Post it yourself**, then **Mark as posted**.
@@ -1119,6 +1149,12 @@ them on again later doesn't restart the free days (they start at the first `enfo
   "…so the rest won't be made"); it never blocks the 30-day plan. Applying a strategy caps its video days to the plan's
   weekly videos, spread across the week, and the saved plan view fits each day's formats to the video days.
 - Before the migration is run, the counts live in the server's memory (they reset when it restarts).
+
+### A/B tests a month (P4b)
+
+Launch 2, Grow 10, Scale unlimited (`experimentsPerMonth` in `shared/plans.json`, shown as "A/B tests a month:
+2 / 10 / Unlimited"). The month is the AI-credit window. A test counts when it starts (the first version posted,
+the page split live, the Omnisend draft made), not when it is drafted. Details: §14.
 
 ### Free trial, paywall and cancelling (P1c)
 
@@ -1453,3 +1489,165 @@ actions.
   and `select public.ylb_morning_backlog(10800);`.
 - **On a Supabase branch, with the owner's OK:** a signed-in user selects only their own rows (and never
   `daily_actions.cost_usd`, `provider` or `model`: those columns aren't granted) and can't insert, update or delete; two SQL sessions calling `ylb_morning_claim` at once get disjoint rows.
+
+## 14. A/B tests and Trial Reels (P4b)
+
+A business can test two (or three) versions of one thing and keep the one that works: a post (the hook, caption,
+visual, call to action or posting time), an Instagram Trial Reel pair, an email (subject or opening, as an Omnisend
+A/B draft) or its SEO page (headline, hero or call to action, as a 50/50 split). Code: `server/experiments/`
+(`index.mjs` routes, `store.mjs`, `math.mjs` the verdict, `social.mjs` post results, `pages.mjs` the page split,
+`email.mjs` Omnisend, `tick.mjs` the hourly job), `server/social/trialReels.mjs` (eligibility), and hooks in
+`server/social/publish.mjs`, `server/pages.mjs`, `server/leads.mjs` and `server/omnisend.mjs`.
+
+### Owner steps
+
+1. Run `supabase/migrations/20261117000000_experiments.sql` in Supabase → SQL Editor (after
+   `20261116100000_ad_policy_confirmed.sql`; safe to run again). It adds `experiments`, `experiment_variants`, two
+   columns on `page_leads` (`experiment_id`, `variant_key`) and four functions (`ylb_experiment_start`,
+   `ylb_experiment_count`, `ylb_experiment_add_counts`, `ylb_experiment_claim_reads`). Until it is run the routes
+   answer "not set up" (the owner sees the file name) and pages serve one version.
+2. Optional settings (§1, README):
+   - `EXPERIMENTS=off` turns it all off: no routes (503), no job, pages serve version A and count nothing.
+   - `EXPERIMENT_READS_PER_TICK` (default 40, 1–200): tests whose results one hourly tick reads.
+   - `EXPERIMENT_COOKIE_SECRET` (optional, 16+ characters): signs the page split's cookies and lead tokens. Unset, a
+     key is derived from `SUPABASE_SECRET_KEY` (HKDF, label `ylb-exp-v1`), so no new Secret is needed. Changing
+     either reassigns visitors once and ignores lead tokens already on open pages.
+3. Nothing new on Upload-Post, Omnisend or Stripe. No new webhook: Upload-Post's `upload_completed` covers versions.
+
+### Limits: A/B tests a month
+
+Launch **2**, Grow **10**, Scale **unlimited** (`shared/plans.json` `experimentsPerMonth`); the owner and plans not
+enforced: unlimited; a card trial gets its tier's limit; a paused plan can't start one (drafts still can). The month is
+the AI-credit window, so it resets with the credits. A test **counts when it starts**, not when it is drafted: the
+first version posted, the page split going live, or the Omnisend draft made. It is given back only when the first
+post certainly failed (an `unknown` job never gives it back) and nothing else went out, or when Omnisend certainly
+made nothing. Stopping never gives it back. At the limit: 402 `EXPERIMENT_LIMIT` with the reset date.
+
+### Posts: same network, different times
+
+Each version is its own post with a planned time; **nothing posts by itself** (Autopilot is P12). The customer presses
+Post now: versions go out in order (A, B, C), at least **12 hours apart** (409 `TOO_SOON_AFTER_VARIANT`), and the
+morning action reminds them when the next one is due. Each post goes through the normal publish route, once, never
+resent. A stopped or cancelled test refuses further versions.
+
+### Instagram Trial Reels
+
+Trial Reels go to non-followers first. The upload adds `media_type=REELS` and `share_mode`
+(`TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS`, the default in a test, or `TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED`); never
+`share_to_feed` or `collaborators`. A regular post sends exactly the same form as before. Trial modes are for
+Instagram videos only (400 otherwise). Two Trial Reel versions can go out back to back; the test decides on views 72
+hours after the last one went out.
+
+Eligibility (`GET /api/experiments/trial-reels/eligibility?projectId=`): Instagram connected and usable for that
+business, and **1,000+ followers**, read from the latest own analytics snapshot under 24 hours old, else one fresh
+read (cached 6 hours per business). Fewer than 1,000: refused (409 `TRIAL_REEL_NOT_ELIGIBLE`). Unreadable: the
+customer must tick "Post as a trial anyway". Upload-Post doesn't say whether an account is professional or public;
+Instagram only connects Business and Creator accounts, which can't be private, so the app explains it instead of
+checking. When Instagram refuses a trial, the post fails once with our message (`TRIAL_REEL_REFUSED`: "Nothing was
+posted. Post it as a regular Reel instead?"), never retried, and Instagram's own words are never shown or logged.
+
+### Post results
+
+The hourly `experiment-results` job (after the morning action) claims running post and email tests
+(`ylb_experiment_claim_reads`, skip-locked with a lease) and reads each posted version through Upload-Post's
+per-post analytics (`GET /uploadposts/post-analytics/{our job id}`, inside the analytics limit, one ledger row each):
+every 3 hours in the first 72 hours after posting, every 12 hours up to the deadline, never after it + 24 hours. When
+the analytics limit is used up the run stops and the rest wait. A failed read keeps the old numbers (reads may be
+tried again; writes never are). Team-level errors (key refused, plan limit) raise the owner alert
+(`uploadpost_owner_alert`); customers see "Results are delayed". **Update results** reads one test now, at most every
+15 minutes. Upload-Post doesn't report link clicks per post, so page tests measure leads instead.
+
+### The page split (SEO pages)
+
+`POST /api/experiments/<id>/page` stores version B's HTML (same size and image rules as a publish: B may only use
+images published with the page; when A has a lead form B must have one too, else 400 `VARIANT_NO_FORM`) and starts
+the split (started first, then B stored, so a second start at the same moment never replaces a running B). At most
+one running split per page (409 `EXPERIMENT_RUNNING`); **republishing the page stops it** (`page_changed`: no verdict,
+and Use the winner is refused, so B never replaces the newer page). Serving, with no scripts:
+
+- The server picks A or B 50/50 for a new visitor and remembers it in a signed cookie `ylbx_<12 hex>` (HttpOnly,
+  Secure, SameSite=Lax, 90 days). A valid cookie keeps the same version; a tampered one is reassigned.
+- Search-engine crawlers and HEAD requests always get A, no cookie, not counted. B keeps A's canonical link.
+- Split pages go out `cache-control: private, no-store` and `vary: Cookie`; other pages are unchanged.
+- Published pages run sandboxed, so the visitor's cookie isn't sent with the lead form. Each `action="/<slug>/lead"`
+  is rewritten to `…/lead?xv=<signed token>` naming the version, and the lead row records `experiment_id` and
+  `variant_key` (Leads shows "Version A/B"). A forged or foreign token is ignored and the lead is still kept. On an
+  own domain the cookie is used when there is no token.
+- Visitors, views and leads are counted in memory and written every 30 seconds (and on the tick) through
+  `ylb_experiment_add_counts`; counts that can't be written are kept up to 10 minutes. A crash can lose a few counts.
+- Another server copy sees a new split within 60 seconds. Tests run up to 30 days. B's HTML and the rendered copies
+  are kept within 64 MB in all (expired entries first, then the oldest).
+- A lead token keeps counting for 7 days from when the split ended (stopped, the winner used, or its deadline).
+
+### Email: Omnisend A/B drafts
+
+`POST /api/experiments/<id>/email` imports two templates and makes one Omnisend campaign of type `abTest` (variants a
+and b, a test size of 10–50%, the winning metric: open rate for a subject test, click rate for an opening test, and a
+decision time of 4–48 hours). It is a **draft**: the customer picks the audience and sends in Omnisend. Each write is
+one attempt; a timeout after the campaign POST is 502 `CAMPAIGN_UNCONFIRMED` ("check Omnisend before trying again").
+Two presses at once make one draft: the one that started the test makes it, the other gets 409.
+When Omnisend answers that the A/B type isn't available for the brand (a 4xx saying so, not a 5xx or a timeout), two
+regular drafts are made instead ("— version A", "— version B") with a note to send each to half of the list using two
+segments made in Omnisend. Results are read at most every 6 hours, inside `REPORTS_PER_DAY`: Omnisend's own pick
+(`abTest.result`) is the verdict for an A/B draft (until it picks: "Keep going", with ours shown beside it, never as
+the verdict); our math decides the two-draft fallback.
+
+### The verdict
+
+`server/experiments/math.mjs` (the app shows the server's result). Minimum sample first: social 300 reach (or views)
+per version and 20 engagements in all; pages 100 visitors per version and 10 leads in all; email 200 sent per
+version; view or reach counts 100 per version and 400 in all. Counts are only called at the deadline (the versions
+went out at different times, so before it the one out longer is just ahead). Then a two-proportion z-test for rates
+(a binomial test for view counts) at
+|z| ≥ 1.96 for two versions, 2.394 for three (Bonferroni), **and** at least a 10% relative lift. Otherwise "Keep
+going" before the deadline, then "Too close to call", "Tie" or "Not enough data". Engagement compares only the
+numbers both versions report; a missing number is never 0. Notes: "These went out at different times" (a times test
+that didn't change the time) and "non-followers" (Trial Reels). A removed post or failed job: "Not enough data"; a
+version still going out is waited for. Past the deadline each version is read once more before the test finishes.
+"Update results" keeps "your pick", who stopped the test and the verdict a winner in use was picked on.
+Deadlines: posts 7 days after the last planned time, Trial Reels 72 hours after the last one, pages 30 days, email
+Omnisend's decision time + 24 hours.
+
+### Use the winner
+
+`POST /api/experiments/<id>/winner` records the pick (the clear winner, or the customer's own call on a close one,
+labelled so) and returns a short "learned" line the app saves as a Brain skill (one per business and thing tested,
+category learned, the last 5 lines kept; hook and call-to-action wins also set the skill's hook style or call to
+action). It changes no content itself, except a page: when B wins, the page is republished once with B's HTML and the
+split ends; the app then puts B's hero into the saved page. The app also offers to rewrite upcoming posts on that
+network in the winning style (one AI request per post, only when the customer confirms).
+
+### In the app
+
+- Everything shows only when `GET /api/config` says `experiments.enabled` and the customer is signed in. The
+  claude.ai artifact build has none of it: no buttons, no requests to `/api/experiments`, no assistant tools (one
+  excluded tool explains); its built-in engine still makes rule-based versions if the dialog is ever opened.
+- Making variations is one AI request in the **social**, **email** or **seo** function (tasks `postVariants`,
+  `emailVariants`, `pageVariants`), so routing, credits and the Brain apply. Only the one changed piece comes back and
+  is checked (not empty, not the same as the original, one line where it must be); an answer that doesn't fit offers
+  one "Try again", never automatic.
+- Post versions are ordinary posts (`experiment: { id, key }`) saved to the account before the draft is made; a
+  refused draft takes them back out. An email's version B is kept on the step until "Create A/B draft in Omnisend";
+  the page's version B is kept as `marketing.seoVariant` (hero fields only; in HTML mode the first `<h1>` and the
+  form's button) and built at "Start the split" the same way a publish is.
+- A post's Instagram Reel mode is `instagram.shareMode`; the publish request sends it (and `trialUnknownOk` after the
+  tick), and the server checks it against the saved post.
+
+### Check it (SQL)
+
+```sql
+select kind, mode, state, count(*) from public.experiments group by 1, 2, 3 order by 1, 2, 3;
+select e.id, v.key, v.visitors, v.views, v.leads, v.metrics, v.metrics_error
+  from public.experiments e join public.experiment_variants v on v.experiment_id = e.id
+ where e.state = 'running' order by e.created_at desc limit 20;
+select variant_key, count(*) from public.page_leads where experiment_id is not null group by 1;
+```
+
+On a Supabase branch, with the owner's OK: a signed-in user selects only their own rows and never
+`experiment_variants.html` (not granted), can't write; two sessions calling `ylb_experiment_start` at the limit:
+exactly one passes.
+
+### Roll back
+
+`EXPERIMENTS=off` and republish: pages serve version A, nothing is counted or read, posts post as regular posts.
+Dropping the two tables loses only the tests; the `page_leads` columns can stay.

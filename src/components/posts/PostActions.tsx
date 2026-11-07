@@ -2,7 +2,7 @@
 // you posted it yourself, copy its text, download its image or video, open it on the network.
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
-import { CalendarClock, CheckCheck, Copy, Download, ExternalLink, MessageSquare, Trash2, Undo2 } from 'lucide-react';
+import { CalendarClock, CheckCheck, Copy, Download, ExternalLink, FlaskConical, MessageSquare, Trash2, Undo2 } from 'lucide-react';
 import type { Post } from '@/lib/types';
 import { cn, fmtDateTime, isoToDateStr, toDateStr } from '@/lib/utils';
 import { copyText } from '@/lib/platform';
@@ -12,6 +12,9 @@ import { networkLabel, postText } from '@/ai/postShared';
 import { apiHolds } from '@/lib/posting';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
+import { experimentsOnNow } from '@/lib/experiments/config';
+import { openExperimentCard } from '@/store/experiments';
+import { useMakeVariations } from '../experiments/MakeVariations';
 import { Badge, Field, Modal, MoreMenu, confirmAction, type MenuEntry } from '../ui/primitives';
 import { download } from '../ui/download';
 
@@ -218,6 +221,11 @@ export function postMenuEntries(post: Post, opts: { onDeleted?: () => void } = {
         else toast({ kind: 'error', title: 'Copy was blocked', body: 'Open the post and copy it from there.' });
       },
     });
+  // A/B tests (P4b): hidden in the claude.ai build and when the server has none
+  if (!__ARTIFACT_BUILD__ && experimentsOnNow()) {
+    if (post.experiment) out.push({ label: 'Open its A/B test', icon: <FlaskConical />, onSelect: () => void openExperimentCard(post.experiment!.id) });
+    else if (post.status !== 'published' && !post.external) out.push({ label: 'Make variations…', icon: <FlaskConical />, onSelect: () => useMakeVariations.getState().open({ kind: 'post', postId: post.id }) });
+  }
   if (post.media) out.push({ label: `Download the ${post.media.kind}`, icon: <Download />, onSelect: () => void downloadPostMedia(post) });
   if (post.postUrl) out.push({ label: `Open on ${networkLabel(post.platform)}`, icon: <ExternalLink />, onSelect: () => void window.open(post.postUrl, '_blank', 'noopener,noreferrer') });
   out.push('separator', {

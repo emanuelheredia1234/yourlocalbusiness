@@ -1,7 +1,7 @@
 // Plans as the app shows them (src/lib/plans.ts, shared/plans.json): prices, the annual saving, the tier that has a
 // feature, the comparison table, and billing hidden in the artifact build.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PLANS, TIERS, compareRows, creditsFor, featureTier, formatPrice, isBillingUi, monthsFree, priceLine, tierRank, videosPerWeekFor, yearlySavings } from './plans';
+import { PLANS, TIERS, compareRows, creditsFor, experimentsPerMonthFor, experimentsUsageLabel, featureTier, formatPrice, isBillingUi, monthsFree, priceLine, tierRank, videosPerWeekFor, yearlySavings } from './plans';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -53,6 +53,10 @@ describe('tiers and features', () => {
     expect(rows.find((r) => r.label === 'AI credits a month')!.values.grow).toBe(PLANS.plans.grow.aiCreditsPerMonth.toLocaleString('en-US'));
     expect(rows.find((r) => r.label === 'Fee on your sales')!.values).toEqual({ launch: '3%', grow: '1%', scale: 'None' });
     expect(rows.find((r) => r.label === 'AI videos a week, per business')!.values).toEqual({ launch: '3', grow: '5', scale: 'Unlimited' });
+    expect(rows.find((r) => r.label === 'A/B tests a month')!.values).toEqual({ launch: '2', grow: '10', scale: 'Unlimited' });
+    expect([experimentsPerMonthFor('launch'), experimentsPerMonthFor('grow'), experimentsPerMonthFor('scale'), experimentsPerMonthFor('owner')]).toEqual([2, 10, null, null]);
+    expect(experimentsUsageLabel({ used: 1, limit: 2, resetsAt: '2026-12-01T12:00:00Z' })).toMatch(/^A\/B tests this month: 1 of 2 · resets Dec 1$/);
+    expect(experimentsUsageLabel({ used: 3, limit: null })).toBe('A/B tests this month: 3 · unlimited');
     expect([videosPerWeekFor('launch'), videosPerWeekFor('grow'), videosPerWeekFor('scale'), videosPerWeekFor('owner')]).toEqual([3, 5, null, null]);
   });
 });

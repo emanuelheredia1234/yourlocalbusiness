@@ -5,6 +5,7 @@
 // Each change names the project it is for (the open one by default): an AI answer that comes back after
 // the owner switched projects still lands in the project it was asked for.
 
+import { canTrialReel, withShareMode } from '@/lib/trialReels';
 import type { CampaignConfig, CampaignPlan, LinkPlacement, Post, PostPlatform, Project } from '@/lib/types';
 import { useStore } from '@/store/useStore';
 import { videoDaysOf, videoDaysPatch } from '@/lib/campaign';
@@ -115,6 +116,9 @@ export function weekBatchInput(project: Project, covered: Set<string>): { plan: 
 /** The batch's new posts go in as drafts, and the project remembers the batch. */
 export function applyWeekBatch(posts: Post[], projectId = activeId()): void {
   if (!posts.length) return;
+  // the setup's "Post Instagram videos as Trial Reels" (P4b): set on each new Instagram video post (never in the claude.ai build)
+  const trial = !__ARTIFACT_BUILD__ && useStore.getState().projects.find((p) => p.id === projectId)?.marketing.campaign.instagramTrialReels === true;
+  if (trial) posts = posts.map((p) => (p.platform === 'instagram' && canTrialReel(p) ? withShareMode(p, 'TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS') : p));
   useStore.getState().addPosts(posts);
   updateMarketingOf(projectId, { batchId: posts[0].batchId });
 }

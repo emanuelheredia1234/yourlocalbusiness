@@ -6,6 +6,15 @@ import { arg, defineTool, type AnyTool } from '../registry';
 
 const why = { what: arg.string({ optional: true, max: 200, desc: 'what the owner asked for' }) };
 
+/** The claude.ai build: A/B tests and Instagram Trial Reels aren't here (their tools aren't registered). */
+export const abTestsHere = defineTool({
+  name: 'ab_tests',
+  class: 'X',
+  summary: 'A/B tests (Make variations, results, Use the winner) and Instagram Trial Reels.',
+  args: why,
+  refusal: { text: 'A/B tests and Instagram Trial Reels need the app’s own server, so they aren’t available here. In the self-hosted app, they’re under Social › A/B tests.' },
+});
+
 export const excludedTools: AnyTool[] = [
   defineTool({
     name: 'change_ai_settings',
@@ -74,4 +83,6 @@ export const excludedTools: AnyTool[] = [
         : 'Manus only gets the app’s fixed instructions or your own words: Facebook groups, photos and brand voice from their buttons, pages and assets from Build with Manus, and anything else from you, with the chat’s To: Manus switch. I don’t start Manus tasks myself, but I can draft a message for you to send.',
     },
   }),
+  // A/B tests and Trial Reels (P4b) need the app's server: in the claude.ai build the assistant only says so
+  ...(__ARTIFACT_BUILD__ ? [abTestsHere] : []),
 ];

@@ -76,7 +76,7 @@ describe('the catalog', () => {
 
 describe('the registry', () => {
   it('has every group, each in its own file (the groups fill theirs)', () => {
-    expect(Object.keys(TOOL_GROUPS)).toEqual(['core', 'social', 'studio', 'marketing', 'brand', 'agents', 'morning', 'excluded']);
+    expect(Object.keys(TOOL_GROUPS)).toEqual(['core', 'social', 'studio', 'marketing', 'brand', 'agents', 'morning', 'ab', 'excluded']);
     expect(TOOL_GROUPS.social).toBe(socialTools);
     expect(TOOL_GROUPS.studio).toBe(studioTools);
     expect(TOOL_GROUPS.marketing).toBe(marketingTools);

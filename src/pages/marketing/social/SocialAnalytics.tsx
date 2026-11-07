@@ -1,6 +1,7 @@
 // Social › Analytics: followers, posts, engagement and reach across the networks, from the user's own
 // connected accounts where they're connected and from public data otherwise. Captions are someone else's
 // text: shown as text, links open with noopener.
+import { ExperimentsSummary } from '@/components/experiments/ExperimentsSummary';
 import { useMemo } from 'react';
 import { Link2 } from 'lucide-react';
 import type { Project, SocialPlatform } from '@/lib/types';
@@ -34,28 +35,32 @@ export function SocialAnalytics({ project }: { project: Project }) {
   const appPosts = useMemo(() => posts.filter((p) => p.projectId === project.id && p.status === 'published' && p.publishedBy === 'api'), [posts, project.id]);
 
   return (
-    <AnalyticsShell<SocialData>
-      project={project}
-      source="social"
-      label="Social analytics"
-      metered
-      empty={
-        !hasHandle && !connected ? (
-          <Empty
-            icon={<Link2 />}
-            title="Add your handles in Settings → Connected accounts"
-            body="Your profiles give public stats; connected accounts add your own reach."
-            action={
-              <button type="button" className="btn btn-secondary btn-sm" onClick={openConnectedAccounts}>
-                Open Connected accounts
-              </button>
-            }
-          />
-        ) : undefined
-      }
-    >
-      {(snap, range) => <SocialBody data={snap.data} range={range} appPosted={appPosts.filter((p) => inRange(p.publishedAt, range)).length} />}
-    </AnalyticsShell>
+    <div className="flex flex-col gap-4">
+      <AnalyticsShell<SocialData>
+        project={project}
+        source="social"
+        label="Social analytics"
+        metered
+        empty={
+          !hasHandle && !connected ? (
+            <Empty
+              icon={<Link2 />}
+              title="Add your handles in Settings → Connected accounts"
+              body="Your profiles give public stats; connected accounts add your own reach."
+              action={
+                <button type="button" className="btn btn-secondary btn-sm" onClick={openConnectedAccounts}>
+                  Open Connected accounts
+                </button>
+              }
+            />
+          ) : undefined
+        }
+      >
+        {(snap, range) => <SocialBody data={snap.data} range={range} appPosted={appPosts.filter((p) => inRange(p.publishedAt, range)).length} />}
+      </AnalyticsShell>
+      {/* A/B tests (P4b): hidden in the claude.ai build and when there are none */}
+      <ExperimentsSummary project={project} kind="post" />
+    </div>
   );
 }
 

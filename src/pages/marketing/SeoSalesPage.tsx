@@ -1,3 +1,5 @@
+import { useExperimentsOn } from '@/lib/experiments/config';
+import { PageAbPanel } from '@/components/experiments/PageAbPanel';
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, Check, CircleDashed, Copy, Download, ExternalLink, Eye, EyeOff, ImagePlus, Monitor, PenLine, RefreshCw, Smartphone, Undo2, X } from 'lucide-react';
 import type { MediaRef, PageType, Project, PromptImage, Published, SalesPage, SalesSection, SalesTheme, SeoMeta } from '@/lib/types';
@@ -63,7 +65,7 @@ import { SeoHtmlMode, SeoVersionSwitch } from './SeoHtmlMode';
 type Marketing = Project['marketing'];
 type AIHook<I, O> = ReturnType<typeof useAI<I, O>>;
 /** The left column's panels (one open at a time). */
-export type RailPanel = 'type' | 'links' | 'score' | 'publish' | 'guide' | 'meta' | 'sections' | '';
+export type RailPanel = 'type' | 'links' | 'score' | 'publish' | 'abtest' | 'guide' | 'meta' | 'sections' | '';
 
 const marketing = () => getActiveProject()!.marketing;
 const NO_IMAGES: PromptImage[] = [];
@@ -163,6 +165,7 @@ function SeoBuilder({ tabs }: { tabs?: ReactNode }) {
   // The left column: one panel open at a time, opened afresh when the page (or HTML mode) first shows.
   const mode = htmlMode ? 'html' : page && meta ? 'page' : 'none';
   const [railMode, setRailMode] = useState(mode);
+  const abOn = useExperimentsOn();
   const [rail, setRail] = useState<RailPanel>(() => firstPanel({ html: htmlMode, published: !!published, unplaced: unplaced.length }));
   if (railMode !== mode) {
     setRailMode(mode);
@@ -452,7 +455,12 @@ function SeoBuilder({ tabs }: { tabs?: ReactNode }) {
               <RailItem value="score" open={rail} title="SEO score" summary={<span className="num font-mono">{result.score}</span>}>
                 <ScoreSummary score={result.score} checks={result.checks} words={result.words} density={result.density} onChecks={() => setChecksOpen(true)} />
               </RailItem>
-              <RailItem value="publish" open={rail} title="Public page" summary={published ? 'Live' : 'Not published'}>
+              {abOn && (
+            <RailItem value="abtest" open={rail} title="A/B test" summary={project.marketing.seoVariant ? 'Version B ready' : 'None'}>
+              <PageAbPanel project={project} />
+            </RailItem>
+          )}
+          <RailItem value="publish" open={rail} title="Public page" summary={published ? 'Live' : 'Not published'}>
                 <div className="rounded-md outline-none focus-visible:shadow-focus" ref={publishRef} tabIndex={-1}>
                   <PublishPanel
                     pageId={seoPageId(project)}

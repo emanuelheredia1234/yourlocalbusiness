@@ -35,6 +35,9 @@ export interface Lead {
   time: string;
   /** ISO, exactly as the server sent it (paging passes it back unchanged) */
   createdAt: string;
+  /** a page A/B test (P4b): the test and the version of the page this lead's visitor saw */
+  experimentId?: string;
+  variantKey?: 'a' | 'b' | 'c';
 }
 
 export const LEADS_PAGE_SIZE = 50;
@@ -75,6 +78,7 @@ export function toLead(raw: unknown): Lead | null {
     message: str(r.message),
     time: str(r.time),
     createdAt: str(r.createdAt),
+    ...(/^[0-9a-f-]{36}$/i.test(str(r.experimentId)) && ['a', 'b', 'c'].includes(str(r.variantKey)) ? { experimentId: str(r.experimentId), variantKey: str(r.variantKey) as 'a' | 'b' | 'c' } : {}),
   };
 }
 

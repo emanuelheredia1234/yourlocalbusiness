@@ -23,7 +23,8 @@ const slug = (s) =>
 export function keyOf(c, facts) {
   const t = c.target ?? {};
   let k;
-  if (t.planActionId) k = `plan:${t.planActionId}`;
+  if (t.experimentId) k = `experiment:${t.experimentId}:${t.postId ? `post:${t.postId}` : 'winner'}`;
+  else if (t.planActionId) k = `plan:${t.planActionId}`;
   else if (t.postId) k = `post:${t.postId}`;
   else if (c.kind === 'leads') k = `leads:${facts?.leads?.newest ?? ''}`;
   else if (c.kind === 'build_page') k = `build_page:${t.pageType ?? ''}`;
@@ -53,7 +54,16 @@ export function ruleCandidates(facts, now) {
     add('new_leads', 100, 'leads', fill(T.new_leads.title, { n, leads: n === 1 ? 'lead' : 'leads' }), fill(T.new_leads.why, { n, people: n === 1 ? 'person' : 'people' }));
   }
   const due = facts.posts?.due?.[0];
-  if (due) add('post_due', 90, 'calendar', T.post_due.title, fill(T.post_due.why, { headline: safe(due.headline, 60) || 'a post' }), { postId: due.id });
+  // a due A/B test version is suggested as such below, not twice
+  if (due && due.id !== facts.experiments?.due?.[0]?.postId) add('post_due', 90, 'calendar', T.post_due.title, fill(T.post_due.why, { headline: safe(due.headline, 60) || 'a post' }), { postId: due.id });
+  // A/B tests (P4b): the next version due today (the app only reminds; nothing posts by itself), and a winner that's in
+  const nextVariant = facts.experiments?.due?.[0];
+  if (nextVariant) {
+    const key = String(nextVariant.key ?? '').toUpperCase();
+    add('variant_due', 88, 'calendar', fill(T.variant_due.title, { key }), fill(T.variant_due.why, { key, name: safe(nextVariant.name, 60) || 'your A/B test' }), { experimentId: nextVariant.id, postId: nextVariant.postId });
+  }
+  const won = facts.experiments?.ready?.[0];
+  if (won) add('experiment_winner', 85, 'analytics', T.experiment_winner.title, fill(T.experiment_winner.why, { name: safe(won.name, 60) || 'Your A/B test' }), { experimentId: won.id });
   const plan = facts.strategy?.plan;
   const step = plan?.open?.[0];
   if (step) {

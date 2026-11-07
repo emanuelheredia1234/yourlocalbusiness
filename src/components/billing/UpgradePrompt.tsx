@@ -19,6 +19,7 @@ const TITLES = {
   BUSINESS_LIMIT: 'Your plan is full',
   CARD_DECLINED: 'Your card was declined',
   VIDEO_WEEK_LIMIT: 'This week’s AI videos are used',
+  EXPERIMENT_LIMIT: 'This month’s A/B tests are used',
 } as const;
 
 const fmtDate = (iso?: string | null) => shortDate(iso);
@@ -35,7 +36,7 @@ export function UpgradePrompt() {
   // no plan yet (setup done, looking around): every locked action leads to the free trial
   const trialOffer = req.code === 'PLAN_REQUIRED' && !paying && plan?.plan !== 'owner' && trialDays > 0 ? trialDays : 0;
   const current = plan?.tier ?? null;
-  const tier: Tier | null = (req.code === 'PLAN_REQUIRED' || req.code === 'VIDEO_WEEK_LIMIT') && paying ? upgradeTier(req.need?.tier, current) : null;
+  const tier: Tier | null = (req.code === 'PLAN_REQUIRED' || req.code === 'VIDEO_WEEK_LIMIT' || req.code === 'EXPERIMENT_LIMIT') && paying ? upgradeTier(req.need?.tier, current) : null;
   const interval = account?.interval ?? 'month';
   const go = (fn: () => void) => () => {
     close();
