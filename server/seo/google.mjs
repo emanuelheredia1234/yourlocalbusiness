@@ -35,10 +35,10 @@ const VERIFIED_LEVELS = new Set(['siteOwner', 'siteFullUser', 'siteRestrictedUse
 /** treg error kinds that mean Google was never asked (or refused outright): the step failed, nothing was done. */
 const DEFINITE = new Set(['bad_request', 'config', 'not_found', 'customer_cap', 'customer_blocked', 'too_expensive', 'team_unavailable']);
 /** Of those, the ones where treg itself refused, so Google was never asked at all. */
-const NEVER_SENT = new Set(['config', 'customer_cap', 'customer_blocked', 'too_expensive', 'team_unavailable']);
+export const NEVER_SENT = new Set(['config', 'customer_cap', 'customer_blocked', 'too_expensive', 'team_unavailable']);
 
 /** One attempt of a write: 'ok' | 'failed' | 'unknown' (+ the value). A treg refusal before anything happened is failed. */
-async function attempt(fn) {
+export async function attempt(fn) {
   return oneShot(async () => {
     try {
       return await fn();
