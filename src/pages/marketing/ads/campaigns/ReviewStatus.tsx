@@ -61,7 +61,8 @@ export function ReviewStatus({ c }: { c: LaunchedCampaign }) {
           })}
         </ul>
       )}
-      {view && c.platform === 'meta' && view.ads.some((a) => a.status === 'in_review') && <p className="text-caption text-muted">{META_IN_REVIEW}</p>}
+      {/* only while it is switched on: a paused campaign doesn't go live once approved */}
+      {view && c.platform === 'meta' && c.configuredStatus === 'ACTIVE' && view.ads.some((a) => a.status === 'in_review') && <p className="text-caption text-muted">{META_IN_REVIEW}</p>}
     </section>
   );
 }

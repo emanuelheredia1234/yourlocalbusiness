@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// Meta's review time in a real DOM: the per-ad review says it next to an ad "In review" (Meta only), and a resume
+// Meta's review time in a real DOM: the per-ad review says it next to an ad "In review" (Meta only, campaign on), and a resume
 // on Meta ends with a message that ads Meta hasn't approved yet are reviewed first (Google and pause say nothing).
 // Every request is stubbed: nothing leaves the test.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -86,22 +86,31 @@ const press = async (text: RegExp) => {
 };
 
 describe('the review per ad', () => {
-  it('says Meta’s review time next to an ad in review', async () => {
+  it('says Meta’s review time next to an ad in review on a campaign that is on', async () => {
     reviewStatus.value = 'in_review';
-    act(() => root.render(createElement(ReviewStatus, { c: camp() })));
+    act(() => root.render(createElement(ReviewStatus, { c: camp({ state: 'in_review', configuredStatus: 'ACTIVE', launchedAs: 'ACTIVE' }) })));
     await press(/Read each ad/);
     expect(host.textContent).toContain('In review');
     expect(host.textContent).toContain(META_IN_REVIEW);
   });
 
+  it('says nothing about it on a paused campaign: it doesn’t go live once approved', async () => {
+    reviewStatus.value = 'in_review';
+    act(() => root.render(createElement(ReviewStatus, { c: camp() })));
+    await press(/Read each ad/);
+    expect(host.textContent).toContain('In review');
+    expect(host.textContent).not.toContain('10 minutes');
+    expect(host.textContent).not.toContain('goes live');
+  });
+
   it('says nothing about it once every ad is approved, or on Google', async () => {
     reviewStatus.value = 'approved';
-    act(() => root.render(createElement(ReviewStatus, { c: camp() })));
+    act(() => root.render(createElement(ReviewStatus, { c: camp({ state: 'active', configuredStatus: 'ACTIVE', launchedAs: 'ACTIVE' }) })));
     await press(/Read each ad/);
     expect(host.textContent).toContain('Approved');
     expect(host.textContent).not.toContain('10 minutes');
     reviewStatus.value = 'in_review';
-    act(() => root.render(createElement(ReviewStatus, { key: 'g', c: camp({ platform: 'google' }) })));
+    act(() => root.render(createElement(ReviewStatus, { key: 'g', c: camp({ platform: 'google', state: 'in_review', configuredStatus: 'ACTIVE', launchedAs: 'ACTIVE' }) })));
     await press(/Read each ad/);
     expect(host.textContent).toContain('In review');
     expect(host.textContent).not.toContain('10 minutes');
