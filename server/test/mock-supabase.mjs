@@ -63,13 +63,16 @@ const PRIMARY_KEYS = {
   // supabase/migrations/20261116000000_morning_action.sql
   business_settings: ['user_id', 'project_id'],
   daily_actions: ['id'],
+  // supabase/migrations/20261117000000_experiments.sql
+  experiments: ['id'],
+  experiment_variants: ['experiment_id', 'key'],
 };
 /** the integration tables (all server-only) */
 const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys'];
 /** tables users may read their own rows of but never write (only the server and the database functions do) */
-const USER_READ_ONLY = new Set(['project_slots', 'business_settings', 'daily_actions']);
+const USER_READ_ONLY = new Set(['project_slots', 'business_settings', 'daily_actions', 'experiments', 'experiment_variants']);
 /** columns users are not granted (column-level `grant select`): naming one, or `*`, is refused as Postgres does */
-const USER_HIDDEN_COLUMNS = { daily_actions: ['cost_usd', 'provider', 'model'] };
+const USER_HIDDEN_COLUMNS = { daily_actions: ['cost_usd', 'provider', 'model'], experiment_variants: ['html'] };
 /** `generated always as identity` columns: the mock numbers them 1, 2, 3… per table */
 const IDENTITY = { usage_ledger: 'id', analytics_history: 'id', ad_audit: 'id' };
 /**
@@ -102,10 +105,14 @@ const UNIQUE = {
   sales: [{ name: 'sales_one_per_payment', cols: ['provider', 'environment', 'provider_payment_id'] }],
   cancel_surveys: [{ name: 'cancel_surveys_portal_once', cols: ['subscription_id'], where: (r) => r.source === 'portal' }],
   daily_actions: [{ name: 'daily_actions_one_per_day', cols: ['user_id', 'project_id', 'local_date'] }],
+  experiments: [{ name: 'experiments_one_running_page', cols: ['user_id', 'subject_ref'], where: (r) => r.kind === 'page' && r.state === 'running' }],
+  experiment_variants: [{ name: 'experiment_variants_one_per_post', cols: ['user_id', 'post_id'], where: (r) => r.post_id != null }],
 };
 /** Column defaults Postgres fills on insert (only for a new row: an upsert that matches keeps the stored values). */
 const INSERT_DEFAULTS = {
   business_settings: () => ({ time_zone: 'UTC', next_action_at: null, last_active_at: new Date().toISOString(), claim_id: null, claimed_until: null, last_outcome: null, last_run_at: null, created_at: new Date().toISOString() }),
+  experiments: () => ({ id: crypto.randomUUID(), network: null, name: '', started_at: null, ends_at: null, result: {}, winner: null, winner_used_at: null, counted_month: null, last_read_at: null, read_claim: null, read_claimed_until: null, created_at: new Date().toISOString() }),
+  experiment_variants: () => ({ label: '', post_id: null, job_id: null, planned_at: null, share_mode: null, html: null, html_sha256: null, omnisend_campaign_id: null, omnisend_variant_id: null, metrics: {}, metrics_at: null, metrics_error: null, visitors: 0, views: 0, leads: 0, created_at: new Date().toISOString() }),
   daily_actions: () => ({ id: crypto.randomUUID(), engine: null, candidates: [], chosen: null, feedback: [], fallback: null, error_code: null, cost_usd: 0, own_key: false, provider: null, model: null, attempts: 1, started_at: new Date().toISOString(), generated_at: null, done_at: null, created_at: new Date().toISOString() }),
 };
 /** tables whose created_at defaults to now() here (the newer ones; older tests compare whole rows) */
@@ -114,6 +121,8 @@ const DEFAULT_CREATED = new Set(['payment_connections', 'offers', 'sales']);
 const NO_USER_FK = new Set(['usage_ledger']);
 /** user_id references auth.users on delete set null: deleting the user keeps the row, without its user */
 const USER_SET_NULL = new Set(['billing_trials']);
+/** supabase/migrations/20261117000000_experiments.sql's server-only functions */
+const EXPERIMENT_FNS = new Set(['ylb_experiment_start', 'ylb_experiment_count', 'ylb_experiment_add_counts', 'ylb_experiment_claim_reads']);
 /** the claim_analytics_run slot: no second run for a business within this long of the last one's start */
 const RUN_SLOT_MS = 15 * 60_000;
 /** tables every signed-in person may read (writes stay owner-only), like the market_listings policies */
@@ -122,7 +131,7 @@ const PUBLIC_READ = new Set(['market_listings']);
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'video_starts', 'published_pages', 'published_domains', 'page_leads', 'lead_files', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys', 'business_settings', 'daily_actions']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys', 'business_settings', 'daily_actions', 'experiments', 'experiment_variants']);
 const PROJECT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
 /**
@@ -141,6 +150,42 @@ const CHECKS = {
     if (!v.payload || typeof v.payload !== 'object' || Array.isArray(v.payload) || Buffer.byteLength(JSON.stringify(v.payload)) > 8192) return 'page_leads_payload_check';
     if (v.name.length > 120 || v.email.length > 254 || v.phone.length > 40 || v.message.length > 2000 || v.time.length > 120) return 'page_leads_sizes';
     if (!v.email && !v.phone) return 'page_leads_contact';
+    if (v.variant_key != null && !['a', 'b', 'c'].includes(v.variant_key)) return 'page_leads_variant_key_check';
+    return null;
+  },
+  // supabase/migrations/20261117000000_experiments.sql
+  experiments: (r) => {
+    const v = { name: '', result: {}, ...r };
+    if (!PROJECT_ID.test(String(v.project_id))) return 'experiments_project_id_check';
+    if (!['post', 'email', 'page'].includes(v.kind)) return 'experiments_kind_check';
+    const MODES = { post: ['times', 'trial_reels'], email: ['omnisend_ab', 'split'], page: ['split'] };
+    const CHANGED = { post: ['hook', 'caption', 'visual', 'cta', 'time'], email: ['subject', 'opening'], page: ['headline', 'hero', 'cta'] };
+    const METRICS = { post: ['engagement_rate', 'views', 'reach'], email: ['open_rate', 'click_rate'], page: ['lead_rate'] };
+    if (!MODES[v.kind].includes(v.mode)) return 'experiments_mode_check';
+    if (!CHANGED[v.kind].includes(v.changed)) return 'experiments_changed_check';
+    if (!METRICS[v.kind].includes(v.metric)) return 'experiments_metric_check';
+    if (v.network != null && !['instagram', 'facebook', 'tiktok', 'linkedin', 'x', 'youtube'].includes(v.network)) return 'experiments_network_check';
+    if (v.mode === 'trial_reels' && v.network !== 'instagram') return 'experiments_trial_reels_instagram';
+    if (v.kind === 'post' && v.network == null) return 'experiments_post_network';
+    if (typeof v.subject_ref !== 'string' || v.subject_ref.length < 1 || v.subject_ref.length > 120) return 'experiments_subject_ref_check';
+    if (String(v.name).length > 120) return 'experiments_name_check';
+    if (!['draft', 'running', 'finished', 'stopped', 'cancelled'].includes(v.state)) return 'experiments_state_check';
+    if (!v.result || typeof v.result !== 'object' || Array.isArray(v.result) || Buffer.byteLength(JSON.stringify(v.result)) > 4096) return 'experiments_result_check';
+    if (v.winner != null && !['a', 'b', 'c'].includes(v.winner)) return 'experiments_winner_check';
+    return null;
+  },
+  experiment_variants: (r) => {
+    const v = { label: '', metrics: {}, visitors: 0, views: 0, leads: 0, ...r };
+    if (!['a', 'b', 'c'].includes(v.key)) return 'experiment_variants_key_check';
+    if (String(v.label).length > 80) return 'experiment_variants_label_check';
+    if (v.post_id != null && (String(v.post_id).length < 1 || String(v.post_id).length > 120)) return 'experiment_variants_post_id_check';
+    if (v.share_mode != null && !['CUSTOM', 'TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED', 'TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS'].includes(v.share_mode)) return 'experiment_variants_share_mode_check';
+    if (v.html != null && Buffer.byteLength(String(v.html)) > 1_500_000) return 'experiment_variants_html_check';
+    if (v.html_sha256 != null && !/^[0-9a-f]{64}$/.test(String(v.html_sha256))) return 'experiment_variants_html_sha256_check';
+    if (v.omnisend_campaign_id != null && !/^[0-9a-f]{24}$/.test(String(v.omnisend_campaign_id))) return 'experiment_variants_omnisend_campaign_id_check';
+    if (!v.metrics || typeof v.metrics !== 'object' || Array.isArray(v.metrics) || Buffer.byteLength(JSON.stringify(v.metrics)) > 4096) return 'experiment_variants_metrics_check';
+    if (v.metrics_error != null && String(v.metrics_error).length > 40) return 'experiment_variants_metrics_error_check';
+    if (!(Number(v.visitors) >= 0 && Number(v.views) >= 0 && Number(v.leads) >= 0)) return 'experiment_variants_counts_check';
     return null;
   },
   published_pages: (r) => (r.project_id != null && !PROJECT_ID.test(String(r.project_id)) ? 'published_pages_project_id_format' : null),
@@ -562,6 +607,9 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       if (projectSlots && table === 'user_docs') for (const d of gone) if (d.kind === 'project') slots.onProjectDelete(d.user_id, d.id);
       // 20261116000000_morning_action.sql: deleting a business deletes its morning rows (always on)
       if (table === 'user_docs') for (const d of gone) if (d.kind === 'project') morningOnProjectDelete(d.user_id, d.id);
+      // 20261117000000_experiments.sql: deleting a business deletes its tests (always on); a test's variants go with it
+      if (table === 'user_docs') for (const d of gone) if (d.kind === 'project') experimentsOnProjectDelete(d.user_id, d.id);
+      if (table === 'experiments' && gone.length) experimentsCascade(gone);
       // a removed ad campaign's jobs go with it (ad_jobs.campaign_id: on delete cascade)
       if (table === 'ad_campaigns' && gone.length) tables.set('ad_jobs', (tables.get('ad_jobs') ?? []).filter((j) => !gone.some((c) => c.id === j.campaign_id)));
       // a removed domain's pages lose it (published_pages.domain: on delete set null)
@@ -581,6 +629,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (fn === 'offer_clicked' || fn === 'record_sale') return offersRpc(req, res, fn, raw);
     if (fn === 'ylb_cancel_survey_totals') return surveyTotals(req, res, fn);
     if (fn === 'ylb_morning_claim' || fn === 'ylb_morning_backlog') return morningRpc(req, res, fn, raw);
+    if (EXPERIMENT_FNS.has(fn)) return experimentsRpc(req, res, fn, raw);
     if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -1017,6 +1066,94 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       const doc = (tables.get('user_docs') ?? []).find((d) => d.user_id === s.user_id && d.kind === 'project' && d.id === s.project_id);
       const tz = doc?.data?.timeZone;
       out.push({ user_id: s.user_id, project_id: s.project_id, time_zone: s.time_zone, doc_time_zone: tz == null ? null : String(tz), next_action_at: s.next_action_at, claim_id: s.claim_id });
+    }
+    return send(res, 200, out);
+  }
+
+  // ───────────── A/B tests (supabase/migrations/20261117000000_experiments.sql) ─────────────
+  // Each call runs without an await, so it is one statement as the advisory lock and the row lock make it in Postgres.
+
+  function experimentsCascade(gone) {
+    const ids = new Set(gone.map((e) => e.id));
+    if (tables.has('experiment_variants')) tables.set('experiment_variants', tables.get('experiment_variants').filter((v) => !ids.has(v.experiment_id)));
+  }
+  function experimentsOnProjectDelete(u, id) {
+    if (!tables.has('experiments')) return;
+    const all = tables.get('experiments');
+    const gone = all.filter((e) => e.user_id === u && e.project_id === id);
+    if (!gone.length) return;
+    tables.set('experiments', all.filter((e) => !gone.includes(e)));
+    experimentsCascade(gone);
+  }
+  const dayOf = (v) => String(v ?? '').slice(0, 10);
+
+  async function experimentsRpc(req, res, fn, raw) {
+    if (missingTables.includes('experiments')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    let b;
+    try {
+      b = JSON.parse(raw || '{}');
+    } catch {
+      return send(res, 400, { message: 'invalid json' });
+    }
+    const rows = tables.get('experiments') ?? [];
+    tables.set('experiments', rows);
+    const at = dbNow();
+    const counted = (u, win) => rows.filter((e) => e.user_id === u && e.counted_month != null && dayOf(e.counted_month) === dayOf(win) && e.state !== 'draft').length;
+    if (fn === 'ylb_experiment_count') return send(res, 200, counted(b.p_user, b.p_window_start));
+    if (fn === 'ylb_experiment_start') {
+      const e = rows.find((r) => r.id === b.p_id && r.user_id === b.p_user);
+      if (!e) return send(res, 200, 'missing');
+      if (e.state !== 'draft') return send(res, 200, 'state');
+      if (b.p_limit != null && counted(b.p_user, b.p_window_start) >= Number(b.p_limit)) return send(res, 200, 'limit');
+      const next = { ...e, state: 'running', started_at: new Date(at).toISOString(), counted_month: dayOf(b.p_window_start) };
+      if (uniqueRefusal('experiments', next, rows.filter((r) => r !== e))) return send(res, 200, 'running');
+      Object.assign(e, next, { updated_at: new Date().toISOString() });
+      return send(res, 200, 'ok');
+    }
+    if (fn === 'ylb_experiment_add_counts') {
+      if (!Array.isArray(b.p_rows)) return send(res, 200, 0);
+      const sums = new Map();
+      for (const x of b.p_rows.slice(0, 200)) {
+        if (!x || !/^[0-9a-f-]{36}$/.test(String(x.experiment_id)) || !['a', 'b', 'c'].includes(x.key)) continue;
+        const k = `${x.experiment_id}|${x.key}`;
+        const cur = sums.get(k) ?? { v: 0, w: 0, l: 0 };
+        cur.v += Math.max(0, Number(x.visitors) || 0);
+        cur.w += Math.max(0, Number(x.views) || 0);
+        cur.l += Math.max(0, Number(x.leads) || 0);
+        sums.set(k, cur);
+      }
+      let n = 0;
+      for (const v of tables.get('experiment_variants') ?? []) {
+        const add = sums.get(`${v.experiment_id}|${v.key}`);
+        if (!add || rows.find((e) => e.id === v.experiment_id)?.state !== 'running') continue;
+        v.visitors = (Number(v.visitors) || 0) + add.v;
+        v.views = (Number(v.views) || 0) + add.w;
+        v.leads = (Number(v.leads) || 0) + add.l;
+        v.updated_at = new Date().toISOString();
+        n += 1;
+      }
+      return send(res, 200, n);
+    }
+    // ylb_experiment_claim_reads
+    const lim = Math.max(1, Math.min(Number(b.p_limit) || 1, 200));
+    const lease = Math.max(60, Math.min(Number(b.p_lease) || 600, 3600));
+    const due = (e) => {
+      if (e.state !== 'running' || !['post', 'email'].includes(e.kind)) return false;
+      if (e.read_claimed_until != null && Date.parse(e.read_claimed_until) >= at) return false;
+      if (e.last_read_at == null) return true;
+      return Date.parse(e.last_read_at) < at - (e.kind === 'post' ? 3 : 6) * 3_600_000;
+    };
+    const picked = rows
+      .filter(due)
+      .sort((x, y) => (x.last_read_at == null ? -1 : y.last_read_at == null ? 1 : Date.parse(x.last_read_at) - Date.parse(y.last_read_at)) || (x.id < y.id ? -1 : 1))
+      .slice(0, lim);
+    const out = [];
+    for (const e of picked) {
+      e.read_claim = crypto.randomUUID();
+      e.read_claimed_until = new Date(at + lease * 1000).toISOString();
+      out.push({ id: e.id, user_id: e.user_id, read_claim: e.read_claim });
     }
     return send(res, 200, out);
   }

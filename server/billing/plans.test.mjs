@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { OWNER_PLAN, PLANS, PRICE_TABLE, TIERS, creditsFor, creditsToUsd, intervalFromLookupKey, lookupKeyFor, lookupKeysAll, planFor, tierFromLookupKey, tierRank, usdToCredits, videosPerWeekFor } from './plans.mjs';
 
-const KEYS = ['name', 'price', 'lookupKeys', 'businessesIncluded', 'aiCreditsPerMonth', 'video', 'videosPerWeek', 'adsLaunch', 'treg', 'leadEmailsPerMonth', 'publicListings', 'customDomains', 'platformFeePct', 'promptControl', 'support'];
+const KEYS = ['name', 'price', 'lookupKeys', 'businessesIncluded', 'aiCreditsPerMonth', 'video', 'videosPerWeek', 'experimentsPerMonth', 'adsLaunch', 'treg', 'leadEmailsPerMonth', 'publicListings', 'customDomains', 'platformFeePct', 'promptControl', 'support'];
 
 describe('plans.json', () => {
   it('has the three tiers in order, each with every key', () => {
@@ -61,6 +61,9 @@ describe('plans.json', () => {
     expect(videosPerWeekFor('launch')).toBe(3);
     expect(videosPerWeekFor('grow')).toBe(5);
     expect(videosPerWeekFor('scale')).toBe(null);
+    // A/B tests a month (P4b): 2 / 10 / unlimited; the owner's plan is unlimited
+    expect(TIERS.map((t) => PLANS.plans[t].experimentsPerMonth)).toEqual([2, 10, null]);
+    expect(OWNER_PLAN.experimentsPerMonth ?? null).toBe(null);
     expect(videosPerWeekFor('owner')).toBe(null);
     expect(videosPerWeekFor('none')).toBe(0);
   });

@@ -17,6 +17,8 @@ export interface PlanDef {
   video: { maxHeight: number; maxSeconds: number; label: string };
   /** AI videos each business may start a week (Monday to Sunday in its time zone); null = unlimited */
   videosPerWeek: number | null;
+  /** A/B tests the account may start per AI-credit window (P4b); null = unlimited */
+  experimentsPerMonth: number | null;
   adsLaunch: boolean;
   treg: { monthlyMicro: number; dailyMicro: number };
   leadEmailsPerMonth: number;
