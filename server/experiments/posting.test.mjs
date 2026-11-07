@@ -203,7 +203,7 @@ describe('when the test can’t record its job', () => {
     } finally {
       t.supa.behavior.fail = null;
     }
-    expect([r.status, r.body.code]).toEqual([503, 'UNAVAILABLE']);
+    expect([r.status, r.body.code]).toEqual([409, 'BAD_REQUEST']);
     expect(t.postCalls().length).toBe(sends);
     const jobs = await t.db.select('post_publish_jobs', { user_id: alice.id, post_id: a.id });
     expect(jobs.map((j) => j.state)).toEqual(['failed']);
