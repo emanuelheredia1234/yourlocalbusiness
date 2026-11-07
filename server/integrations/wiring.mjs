@@ -213,6 +213,8 @@ export function createIntegrations({
   experimentsModule = modules.experiments;
   adsModule = modules.ads;
   billingModule = modules.billing;
+  // P6: our fee events reach the P1 Stripe endpoint (the platform's); Stripe Connect handles them
+  modules.billing.plans?.setPlatformEventHandler?.((evt) => modules.offers.connectPlatformEvent?.(evt) ?? 'ignored');
   const sitemap = make.sitemap(deps);
   // an upload_completed webhook from Upload-Post finishes its job (sent / failed) the same way "Check again" does
   // (only a job of the business whose profile the event came through)

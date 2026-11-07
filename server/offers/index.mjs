@@ -42,6 +42,7 @@ import { CONNECT_MIGRATION, accountView, createConnectCore, serveConnectReturn }
 import { createBuy, offerLimitsFromEnv } from './buy.mjs';
 import { createStripeOffers } from './stripeOffer.mjs';
 import { createStripeCheckout } from './stripeCheckout.mjs';
+import { createConnectWebhook } from '../payments/connectWebhook.mjs';
 import { leadLinkSecret } from '../leadFiles.mjs';
 import nodeCrypto from 'node:crypto';
 import { CHECKOUT_HOSTS, PROVIDERS } from './providers.mjs';
@@ -93,6 +94,7 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   const linkSecret = leadLinkSecret(env);
   const stripeCheckout = createStripeCheckout({ db, connect, billing, env, now, log, linkSecret: linkSecret ? Buffer.from(nodeCrypto.hkdfSync('sha256', linkSecret, Buffer.alloc(0), 'ylb-sale-link', 32)) : null, supabase: { supabaseUrl: env.SUPABASE_URL || '', secretKey: env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '', fetch } });
   if (stripeOn) buy.setStripe(stripeCheckout);
+  const connectHooks = createConnectWebhook({ db, connect, now, log });
   const blocked = new Set();
 
   const notes = () => {
@@ -543,6 +545,16 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
 
     async handle(req, res, url) {
       const p = url.pathname;
+      if (p === ROUTE_PREFIXES.stripeConnectWebhook || p.startsWith(`${ROUTE_PREFIXES.stripeConnectWebhook}/`)) {
+        if (req.method !== 'POST' || p !== ROUTE_PREFIXES.stripeConnectWebhook) {
+          drain(req);
+          reply(req, res, req.method !== 'POST' ? 405 : 404, { error: req.method !== 'POST' ? 'Method not allowed.' : 'Not found.', code: req.method !== 'POST' ? 'BAD_REQUEST' : 'NOT_FOUND' }, req.method !== 'POST' ? { allow: 'POST' } : {});
+          return true;
+        }
+        const got = await connectHooks.webhook(req, { limited: (r) => limit('stripe-connect-webhook', clientKey(r)), readRaw });
+        reply(req, res, got.status, got.body);
+        return true;
+      }
       if (p.startsWith(ROUTE_PREFIXES.whopWebhook)) {
         if (req.method !== 'POST') {
           drain(req);
@@ -573,17 +585,42 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
       return true;
     },
 
-    /** server/cron: the daily webhook check, then the read-only reconcile (both claim their run). */
-    cronJobs: () => (whopOn ? [
-      { name: 'offers-webhooks', dailyAtUtc: '04:17', run: (ctx) => whop.healthCheck(ctx) },
-      { name: 'offers-reconcile', dailyAtUtc: '04:47', run: (ctx) => whop.reconcile(ctx) },
-    ] : []),
+    /**
+     * server/cron: Whop's daily webhook check and read-only reconcile; Stripe Connect's hourly read-backs (accounts
+     * whose create didn't answer, fee returns) and daily account sync and read-only reconcile (all claim their run).
+     */
+    cronJobs: () => [
+      ...(whopOn ? [
+        { name: 'offers-webhooks', dailyAtUtc: '04:17', run: (ctx) => whop.healthCheck(ctx) },
+        { name: 'offers-reconcile', dailyAtUtc: '04:47', run: (ctx) => whop.reconcile(ctx) },
+      ] : []),
+      ...(stripeOn ? [
+        { name: 'connect-readback', everyMs: 3_600_000, run: () => connect.cronReadback() },
+        { name: 'connect-fees', everyMs: 3_600_000, run: () => connectHooks.cronFees() },
+        { name: 'connect-sync', dailyAtUtc: '04:31', run: (ctx) => connect.cronSync(ctx) },
+        { name: 'connect-reconcile', dailyAtUtc: '05:07', run: (ctx) => connectHooks.cronReconcile(ctx) },
+      ] : []),
+    ],
+    /** P1's webhook hands our fee events (application_fee.*) here. */
+    connectPlatformEvent: (evt) => (stripeOn ? connectHooks.onPlatformEvent(evt) : Promise.resolve('ignored')),
+    /** for tests: the Connect webhook's parts (fee returns, crons) */
+    connectHooks,
 
     /** Before an account is deleted: its buy links stop on this copy at once, then one attempt at each webhook. */
     async forgetUser(userId) {
       blocked.add(userId);
       buy.forgetUser(userId);
       await whop.forgetUser(userId);
+      // the seller's Stripe account stays theirs (never deleted here); a fee return still unclear is for the owner to
+      // check in Stripe once the rows are gone
+      if (stripeOn) {
+        try {
+          const unclear = await db.select('connect_fee_returns', { user_id: userId, state: 'unknown' }, { select: 'source_id', limit: 50 });
+          for (const r of unclear) await connect.alert('fee_return_unknown', { source: String(r.source_id).slice(0, 40), where: 'account_deleted' });
+        } catch {
+          /* best effort */
+        }
+      }
     },
     async unforgetUser(userId) {
       blocked.delete(userId);
