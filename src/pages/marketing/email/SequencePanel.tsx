@@ -7,7 +7,7 @@ import { EmailAbPanel } from '@/components/experiments/EmailAbPanel';
 import type { EmailStep, Project } from '@/lib/types';
 import { cn, slugify } from '@/lib/utils';
 import { delayToMs, renderTokens } from '@/ai/local/email';
-import { emailSequenceTask } from '@/ai/tasks';
+import { emailDesignTask, emailSequenceTask } from '@/ai/tasks';
 import { useAI } from '@/ai/useAI';
 import { applyEmailSequence, delayLabel, sequenceText } from '@/lib/emailFunnel';
 import { copyText } from '@/lib/platform';
@@ -19,6 +19,8 @@ import { download } from '@/components/ui/download';
 import { PanelHead, emailTokens, hasUnknownBuyLink } from './shared';
 import { EmailStudio } from './studio/EmailStudio';
 import { EmailPreview } from './studio/EmailFrame';
+import { EmailAIActions, designInput } from './studio/AIActions';
+import { replaceDoc } from '@/lib/emailDoc';
 import { useProjectOffers } from '@/store/offers';
 import { offerPrice } from '@/lib/offers';
 import { buyToken } from '@/lib/buyLinks';
@@ -35,6 +37,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
   const updateMarketing = useStore((s) => s.updateMarketing);
   const emails = project.marketing.emails;
   const ai = useAI(emailSequenceTask);
+  const designAll = useAI(emailDesignTask);
   const [open, setOpen] = useState<string | null>(emails[0]?.id ?? null);
   const [preview, setPreview] = useState<Record<string, boolean>>({});
   // Blocks (the studio) or Plain text, per email: an email without a design opens on its plain words
@@ -64,6 +67,23 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
       applyEmailSequence(r, project.id);
       setOpen(r[0]?.id ?? null);
     }
+  };
+  // one AI request per email, one after another; the first failure stops it (nothing is retried)
+  const designEvery = async () => {
+    const n = getActiveProject()!.marketing.emails.length;
+    if (!(await confirmAction({ title: `Design all ${n} emails?`, body: `Uses AI credits for ${n} emails, one request each. Each email’s blocks are replaced; your words stay. Undo is on each email.`, confirmLabel: `Design all ${n}` }))) return;
+    for (let i = 0; i < n; i++) {
+      const p = getActiveProject();
+      const e = p?.id === project.id ? p.marketing.emails[i] : undefined;
+      if (!p || !e) return;
+      const doc = await designAll.run(designInput(e, p, i));
+      if (!doc) {
+        toast({ kind: 'error', title: `Stopped at email ${i + 1}`, body: 'Its design didn’t come back. The emails before it are designed; press Design all again or design this one on its own.' });
+        return;
+      }
+      replaceDoc(project.id, e.id, doc);
+    }
+    toast({ kind: 'success', title: `Designed all ${n} emails`, body: 'Open an email to change its blocks, or Undo on it.' });
   };
   const copyAll = async () => {
     const text = sequenceText(getActiveProject()!, tokens);
@@ -106,8 +126,11 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
         description={`${magnet ? `For everyone who claims “${magnet.title}” · ` : ''}Runs over ${span}`}
         actions={
           <>
-            <GenerateButton size="sm" running={ai.running} runningLabel="Writing…" onClick={generate}>
+            <GenerateButton size="sm" running={ai.running} disabled={designAll.running} runningLabel="Writing…" onClick={generate}>
               Rewrite sequence
+            </GenerateButton>
+            <GenerateButton size="sm" running={designAll.running} disabled={ai.running} runningLabel="Designing…" onClick={() => void designEvery()}>
+              Design all {emails.length}
             </GenerateButton>
             <button type="button" className="btn btn-primary btn-sm" onClick={onPreview}>
               <Eye /> Preview & export
@@ -123,6 +146,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
       />
       <div className="flex flex-col gap-4">
         <AIThinking running={ai.running} stage={ai.stage} chars={ai.chars} onStop={ai.stop} />
+        <AIThinking running={designAll.running} stage={designAll.stage} chars={designAll.chars} onStop={designAll.stop} />
         {ai.result && !ai.running && <AIResultBar provider={ai.result.provider} skills={ai.result.skills} ms={ai.result.ms} note={ai.result.note} logId={ai.logId} />}
         <ol className="relative flex flex-col gap-3 before:absolute before:bottom-5 before:left-[39px] before:top-5 before:w-px before:bg-line max-sm:before:hidden">
           {emails.map((e, i) => {
@@ -200,7 +224,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
                             ]}
                           />
                           {modeOf(e) === 'blocks' ? (
-                            <EmailStudio project={project} step={e} index={i} total={emails.length} />
+                            <EmailStudio project={project} step={e} index={i} total={emails.length} actions={<EmailAIActions project={project} step={e} index={i} />} />
                           ) : e.doc ? (
                             <div className="grid gap-2">
                               <Field label="Plain text" hint="Made from this email’s blocks, for exports and plain-text inboxes.">

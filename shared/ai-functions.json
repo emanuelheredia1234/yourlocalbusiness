@@ -14,7 +14,7 @@
     { "id": "listing", "label": "Marketplace listing", "group": "writing", "kind": "text", "desc": "Listing title, description and tags.", "tasks": ["listing"] },
     { "id": "code", "label": "Code & assets", "group": "writing", "kind": "text", "desc": "Calculators, forms, widgets and code edits.", "tasks": ["code", "codeEdit"] },
     { "id": "seo", "label": "SEO & sales pages", "group": "writing", "kind": "text", "desc": "SEO metadata, sales pages and page sections.", "tasks": ["seoMeta", "salesPage", "salesSection", "salesPageEdit", "pageVariants"] },
-    { "id": "email", "label": "Emails & lead magnets", "group": "writing", "kind": "text", "desc": "Lead magnets and email sequences.", "tasks": ["leadMagnet", "emailSequence", "emailVariants"] },
+    { "id": "email", "label": "Emails & lead magnets", "group": "writing", "kind": "text", "desc": "Lead magnets, email sequences, and email designs (Design this email, Make it bolder, the assistant's block edits).", "tasks": ["leadMagnet", "emailSequence", "emailVariants", "emailDesign", "emailBolder", "emailBlocksEdit"] },
     { "id": "social", "label": "Social posts & campaigns", "group": "writing", "kind": "text", "desc": "Posts, captions, campaign plans and content batches.", "tasks": ["campaignPlan", "contentBatch", "post", "postVariants"] },
     { "id": "ads", "label": "Ads", "group": "writing", "kind": "text", "desc": "Ad copy and campaign variants.", "tasks": ["ads"] },
     { "id": "illustrations", "label": "Illustrations", "group": "writing", "kind": "text", "desc": "Brand illustrations drawn as SVG.", "tasks": ["postImage", "listingImage"] },
