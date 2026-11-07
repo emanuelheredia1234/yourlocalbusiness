@@ -1,11 +1,12 @@
 // One launched campaign: state in plain words (spec §9.3), money in the account's own currency, results as of
 // their read time, and what can be done now. An unknown outcome offers Check status only (never "Try again");
-// platform text (review reasons) is rendered as plain text, never a link.
+// platform text (review reasons, a refusal's own words) is rendered as plain text, labelled, never a link. A refused
+// launch or change says why (the server's words) and links Meta's or Google's own page that fixes it, if any.
 import { useEffect, useState } from 'react';
 import { ExternalLink, RefreshCw, Settings2 } from 'lucide-react';
-import type { LaunchedCampaign } from '@/lib/ads/launchTypes';
+import type { AdJob, AdsPlatform, LaunchedCampaign } from '@/lib/ads/launchTypes';
 import { PLATFORM_LABEL } from '@/lib/ads/launchTypes';
-import { money, shortDay } from '@/lib/ads/launchFormat';
+import { money, safeFixUrl, shortDay } from '@/lib/ads/launchFormat';
 import { fmtNum, fmtRelative } from '@/lib/utils';
 import { useAdsLaunch } from '@/store/adsLaunch';
 import { toast } from '@/store/ui';
@@ -34,6 +35,27 @@ export function CheckStatusButton({ jobId, canCheckAt, size = 'xs' }: { jobId: s
     <button type="button" className={`btn btn-secondary btn-${size}`} disabled={busy || wait > 0} title={wait > 0 ? 'You can check again in a few seconds.' : undefined} onClick={() => void check()}>
       {busy ? <Spinner size={12} /> : <RefreshCw />} Check status
     </button>
+  );
+}
+
+/** The platform's own words for a refusal the server had no sentence for: plain text, quoted, labelled as theirs. */
+function PlatformSays({ job, platform }: { job: AdJob; platform: AdsPlatform }) {
+  if (!job.platformSays) return null;
+  return (
+    <span className="mt-0.5 block whitespace-pre-line break-words text-ink-2">
+      <span className="text-muted">{PLATFORM_LABEL[platform]}’s message: </span>“{job.platformSays}”
+    </span>
+  );
+}
+
+/** A refused job's fix link, only to Meta's or Google's own site. */
+function FixLink({ job }: { job: AdJob }) {
+  const fix = safeFixUrl(job.fixUrl);
+  if (!fix) return null;
+  return (
+    <a href={fix} target="_blank" rel="noopener noreferrer" className="link inline-flex items-center gap-0.5">
+      Fix it <ExternalLink size={12} aria-hidden="true" />
+    </a>
   );
 }
 
@@ -72,15 +94,23 @@ export function CampaignNotes({ c, onLaunchAgain }: { c: LaunchedCampaign; onLau
   return (
     <>
       {c.state === 'failed' && (
-        <p className="mt-1 text-caption text-bad">
-          {c.lastJob?.message ?? 'Not launched.'}
-          {c.lastJob?.leftBehind?.length ? ` Left behind: ${c.lastJob.leftBehind.join(', ')}.` : ''}
-          {canLaunchAgain(c) && onLaunchAgain && (
-            <button type="button" className="link ml-1" onClick={onLaunchAgain}>
-              Launch again
-            </button>
+        <div className="mt-1 text-caption text-bad">
+          <p>
+            {c.lastJob?.message ?? 'Not launched.'}
+            {c.lastJob?.leftBehind?.length ? ` Left behind: ${c.lastJob.leftBehind.join(', ')}.` : ''}
+          </p>
+          {c.lastJob && <PlatformSays job={c.lastJob} platform={c.platform} />}
+          {(safeFixUrl(c.lastJob?.fixUrl) || (canLaunchAgain(c) && onLaunchAgain)) && (
+            <span className="mt-0.5 flex flex-wrap items-center gap-x-3">
+              {c.lastJob && <FixLink job={c.lastJob} />}
+              {canLaunchAgain(c) && onLaunchAgain && (
+                <button type="button" className="link" onClick={onLaunchAgain}>
+                  Launch again
+                </button>
+              )}
+            </span>
           )}
-        </p>
+        </div>
       )}
       {c.state === 'rejected' && c.review.reasons.length > 0 && (
         <div className="mt-1 text-caption text-ink-2">
@@ -95,7 +125,13 @@ export function CampaignNotes({ c, onLaunchAgain }: { c: LaunchedCampaign; onLau
         </div>
       )}
       {c.lastJob?.state === 'done' && c.lastJob.code && <p className="mt-1 text-caption text-warn">{c.lastJob.message}</p>}
-      {c.lastJob?.state === 'failed' && c.state !== 'failed' && <p className="mt-1 text-caption text-bad">{c.lastJob.message}</p>}
+      {c.lastJob?.state === 'failed' && c.state !== 'failed' && (
+        <div className="mt-1 text-caption text-bad">
+          <p>{c.lastJob.message}</p>
+          <PlatformSays job={c.lastJob} platform={c.platform} />
+          <FixLink job={c.lastJob} />
+        </div>
+      )}
       {c.adsNotApproved && (
         <p className="mt-1 text-caption text-warn">
           {c.adsNotApproved.count} of {c.adsNotApproved.of} ads {c.adsNotApproved.count === 1 ? 'was' : 'were'} not approved by {PLATFORM_LABEL[c.platform]}; the others can still run. Swap the refused one, or open {managerName(c)} to ask for another review.

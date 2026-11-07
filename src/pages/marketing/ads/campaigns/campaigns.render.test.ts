@@ -22,12 +22,13 @@ import type { AdJob, LaunchedCampaign } from '@/lib/ads/launchTypes';
 import { AdsApiError } from '@/lib/ads/launchApi';
 const { useAdsLaunch } = await import('@/store/adsLaunch');
 const { CampaignsTab } = await import('./CampaignsTab');
-const { CampaignRow } = await import('./CampaignRow');
+const { CampaignRow, CampaignCard } = await import('./CampaignRow');
 const { ManageActions } = await import('./ManageDrawer');
 const { AuditList, auditCsv } = await import('./AuditLog');
 const { manageActions, canLaunchAgain } = await import('./campaignView');
 const { sendChange, changeRequestIdFor } = await import('./ChangeConfirm');
 const { newProject } = await import('@/store/defaults');
+const { safeFixUrl } = await import('@/lib/ads/launchFormat');
 
 const job = (over: Partial<AdJob> = {}): AdJob => ({ id: 'j1', kind: 'launch', platform: 'meta', state: 'unknown', message: 'We don’t know yet whether Meta created this campaign. Nothing will be sent again by itself. It may have happened - check status before trying again.', requestedAt: '2026-11-06T10:00:00Z', ...over });
 const camp = (over: Partial<LaunchedCampaign> = {}): LaunchedCampaign => ({
@@ -102,6 +103,49 @@ describe('a campaign row', () => {
     expect(canLaunchAgain(camp({ state: 'unknown', pendingJob: job() }))).toBe(false);
   });
 
+  it('a refused launch says why, that nothing was created, links Meta’s fix page, and offers Launch again; never “to see why”', () => {
+    const failed = camp({ state: 'failed', stateMessage: 'Not launched.', platformCampaignId: undefined, openInManagerUrl: undefined, lastJob: job({ state: 'failed', code: 'PAYMENT_REQUIRED', message: 'Add a payment method in Meta Ads Manager (Billing). Meta bills your ads to it; this app never charges for ad spend. Nothing was created and no money was spent.', fixUrl: 'https://business.facebook.com/billing_hub/payment_settings' }) });
+    const html = row(failed);
+    expect(html).toContain('Nothing was created and no money was spent.');
+    expect(html).toContain('href="https://business.facebook.com/billing_hub/payment_settings"');
+    expect(html).toContain('Fix it');
+    expect(html).toContain('Launch again');
+    expect(html).not.toMatch(/to see why/);
+    expect(html).not.toContain('’s message');
+  });
+
+  it('the live refusal of 6 Nov reads Meta’s 24-hour rule', () => {
+    const msg = 'Meta needs a daily-budget ad to run more than 24 hours, and this one was set for less. Launch it again with at least 2 days. Nothing was created and no money was spent.';
+    const html = row(camp({ state: 'failed', stateMessage: 'Not launched.', platformCampaignId: undefined, openInManagerUrl: undefined, lastJob: job({ state: 'failed', code: 'REFUSED', message: msg }) }));
+    expect(html).toContain(msg);
+    expect(html).toContain('Launch again');
+  });
+
+  it('a refusal the server has no sentence for shows Meta’s own words as escaped plain text, labelled, with no foreign link', () => {
+    const says = '<script>alert(1)</script> [Fix it](https://evil.example) Use an image Meta can read.';
+    const failed = camp({ state: 'failed', stateMessage: 'Not launched.', platformCampaignId: undefined, openInManagerUrl: undefined, lastJob: job({ state: 'failed', code: 'REFUSED', message: 'Meta refused the launch. Nothing was created and no money was spent.', platformSays: says, fixUrl: 'https://l.facebook.com/l.php?u=https%3A%2F%2Fevil.example' }) });
+    const html = row(failed);
+    expect(html).toContain('Meta’s message: </span>“&lt;script&gt;alert(1)&lt;/script&gt; [Fix it](https://evil.example) Use an image Meta can read.”');
+    expect(html).not.toContain('<script>');
+    expect(html).not.toMatch(/href="https:\/\/(l\.facebook\.com|evil\.example)/);
+    // the card (small screens) too
+    const card = renderToStaticMarkup(createElement(TooltipProvider, null, createElement('ul', null, createElement(CampaignCard, { c: failed, onManage: () => {}, onLaunchAgain: () => {} }))));
+    expect(card).toContain('&lt;script&gt;');
+    expect(card).not.toContain('<script>');
+  });
+
+  it('a fix link goes only to Meta’s or Google’s own site (the server’s rule): never Zernio’s, a link shim or a look-alike', () => {
+    for (const ok of ['https://business.facebook.com/billing_hub', 'https://www.meta.com/help/', 'https://ads.google.com/aw/billing']) expect(safeFixUrl(ok)).toBe(ok);
+    for (const bad of ['https://docs.zernio.com/x', 'https://l.facebook.com/l.php?u=x', 'https://www.facebook.com/l.php?u=x', 'https://docs.google.com/d/1', 'https://facebook.com.evil.example/', 'http://www.facebook.com/x', 'javascript:alert(1)', undefined]) expect(safeFixUrl(bad), String(bad)).toBeNull();
+  });
+
+  it('a refused change on a live campaign says why and links the fix too', () => {
+    const html = row(camp({ lastJob: job({ kind: 'budget', state: 'failed', code: 'REFUSED', message: 'Meta refused this change. Nothing was changed.', platformSays: 'The budget must be at least $1.25.', fixUrl: 'https://www.facebook.com/business/help/1' }) }));
+    expect(html).toContain('Meta refused this change. Nothing was changed.');
+    expect(html).toContain('Meta’s message: </span>“The budget must be at least $1.25.”');
+    expect(html).toContain('href="https://www.facebook.com/business/help/1"');
+  });
+
   it('an Ads Manager link only to Meta’s or Google’s own host', () => {
     expect(row(camp())).toContain('href="https://business.facebook.com/adsmanager/manage/campaigns?act=1234"');
     expect(row(camp({ openInManagerUrl: 'https://evil.example/x' }))).not.toContain('evil.example');
@@ -151,6 +195,19 @@ describe('the audit list', () => {
     expect(html).toContain('Launched on Meta (Acme …1234)');
     expect(html).toContain('Done');
     expect(auditCsv(entries)).toContain('"Launched on Meta (Acme …1234), PAUSED, $25.00/day: done"');
+  });
+
+  it('a refused launch’s line says why, as text, with Meta’s fix page only', () => {
+    const summary = 'Launched on Meta (Acme …1234), PAUSED, $1.00/day, Fri 6 Nov 2026 to Fri 6 Nov 2026: not done. Meta refused the launch. Nothing was created and no money was spent. Meta’s message: “<b>Use</b> an image Meta can read.”';
+    const entries = [
+      { id: 3, at: '2026-11-07T01:41:00Z', campaignId: 'c1', actor: 'customer' as const, action: 'launch', summary, outcome: 'failed' as const, fixUrl: 'https://www.facebook.com/ads/leadgen/tos' },
+      { id: 4, at: '2026-11-07T01:42:00Z', campaignId: 'c1', actor: 'customer' as const, action: 'launch', summary: 'x', outcome: 'failed' as const, fixUrl: 'https://docs.zernio.com/x' },
+    ];
+    const html = renderToStaticMarkup(createElement(AuditList, { entries }));
+    expect(html).toContain('Meta’s message: “&lt;b&gt;Use&lt;/b&gt; an image Meta can read.”');
+    expect(html).toContain('href="https://www.facebook.com/ads/leadgen/tos"');
+    expect(html).not.toContain('zernio');
+    expect(html).toContain('Failed');
   });
 });
 

@@ -86,6 +86,23 @@ export function metaMinDays(o: { startDay: string; time?: string | null; asap?: 
   }
 }
 
+/** Meta's and Google's own sites: a fix link we show (the server allows the same; never Zernio's, never a link shim). */
+const FIX_DOMAINS = ['facebook.com', 'meta.com', 'google.com'];
+const NOT_FIX_HOST = /^(l|lm)\.facebook\.com$|^(sites|docs|drive|groups|script|forms|books)\.google\.com$/;
+
+/** A fix link to Meta's or Google's own site (https), or null: anything else is dropped, never shown as a link. */
+export function safeFixUrl(url: string | undefined | null): string | null {
+  if (typeof url !== 'string' || !url || url.length > 500) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if (u.protocol !== 'https:' || u.username || u.password || u.port || NOT_FIX_HOST.test(host) || /^\/(l\.php|url)$/i.test(u.pathname)) return null;
+    return FIX_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`)) ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface ConfirmLine {
   label: string;
   value: string;

@@ -1,10 +1,13 @@
 // Ad activity (spec §10.4): every launch and change sent, its outcome, each Check status, refusals, review changes
-// and the owner's limit changes, newest first, 50 at a time, from our own templates only. A CSV of the customer's
-// own rows can be downloaded. There is no edit or delete: rows go only with the account.
+// and the owner's limit changes, newest first, 50 at a time, from our own templates (a refusal we have no sentence
+// for quotes the platform's own words, labelled, as plain text). A refused write links the platform's own page that
+// fixes it, when there is one. A CSV of the customer's own rows can be downloaded. There is no edit or delete: rows
+// go only with the account.
 import { useEffect, useState } from 'react';
-import { Download } from 'lucide-react';
+import { Download, ExternalLink } from 'lucide-react';
 import type { AuditEntry } from '@/lib/ads/launchTypes';
 import { getAdAudit } from '@/lib/ads/launchApi';
+import { safeFixUrl } from '@/lib/ads/launchFormat';
 import { fmtDateTime } from '@/lib/utils';
 import { download } from '@/components/ui/download';
 import { Empty, Spinner, StatusDot } from '@/components/ui/primitives';
@@ -29,16 +32,24 @@ export function auditCsv(entries: AuditEntry[]): string {
 export function AuditList({ entries }: { entries: AuditEntry[] }) {
   return (
     <ol className="flex flex-col divide-y divide-line" aria-label="Ad activity">
-      {entries.map((e) => (
-        <li key={e.id} className="flex flex-col gap-0.5 py-2.5 sm:flex-row sm:items-start sm:gap-3">
-          <span className="num shrink-0 text-caption text-muted sm:w-36">{fmtDateTime(e.at)}</span>
-          <span className="min-w-0 flex-1 break-words text-small text-ink">
-            <span className="text-muted">{ACTOR[e.actor] ?? e.actor}: </span>
-            {e.summary}
-          </span>
-          <StatusDot tone={OUTCOME[e.outcome]?.tone ?? 'faint'}>{OUTCOME[e.outcome]?.word ?? e.outcome}</StatusDot>
-        </li>
-      ))}
+      {entries.map((e) => {
+        const fix = safeFixUrl(e.fixUrl);
+        return (
+          <li key={e.id} className="flex flex-col gap-0.5 py-2.5 sm:flex-row sm:items-start sm:gap-3">
+            <span className="num shrink-0 text-caption text-muted sm:w-36">{fmtDateTime(e.at)}</span>
+            <span className="min-w-0 flex-1 break-words text-small text-ink">
+              <span className="text-muted">{ACTOR[e.actor] ?? e.actor}: </span>
+              {e.summary}
+              {fix && (
+                <a href={fix} target="_blank" rel="noopener noreferrer" className="link ml-1 inline-flex items-center gap-0.5">
+                  Fix it <ExternalLink size={12} aria-hidden="true" />
+                </a>
+              )}
+            </span>
+            <StatusDot tone={OUTCOME[e.outcome]?.tone ?? 'faint'}>{OUTCOME[e.outcome]?.word ?? e.outcome}</StatusDot>
+          </li>
+        );
+      })}
     </ol>
   );
 }

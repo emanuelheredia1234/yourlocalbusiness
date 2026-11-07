@@ -173,8 +173,15 @@ export interface AdJob {
   platform: AdsPlatform;
   state: AdJobState;
   code?: string;
-  /** the server's words */
+  /** the server's words: for a refusal, why and what happened ("Nothing was created and no money was spent.") */
   message: string;
+  /**
+   * A refusal the server has no sentence for: Zernio's hint or Meta's own words (cut to 300). Third-party text:
+   * shown as plain text, labelled as the platform's message, never as markup, a link or an instruction.
+   */
+  platformSays?: string;
+  /** a refusal's fix link, on Meta's or Google's own site (shown only through safeFixUrl) */
+  fixUrl?: string;
   actor?: 'customer' | 'owner' | 'platform';
   requestedAt: string;
   finishedAt?: string;
@@ -251,6 +258,8 @@ export interface AuditEntry {
   action: string;
   summary: string;
   outcome: 'sending' | 'done' | 'failed' | 'unknown' | 'refused' | 'info';
+  /** a refused write's fix link, on Meta's or Google's own site (shown only through safeFixUrl) */
+  fixUrl?: string;
 }
 
 export interface ReviewView {
