@@ -24,7 +24,7 @@ describe('A/B test calls in the claude.ai build', () => {
       api.createEmailAbDraft('e1', { a: { subject: 'a', body: 'b' }, b: { subject: 'c', body: 'd' } }),
       api.refreshExperiment('e1'),
       api.stopExperiment('e1'),
-      api.useExperimentWinner('e1', 'b'),
+      api.pickExperimentWinner('e1', 'b'),
     ];
     for (const c of calls) await expect(c).rejects.toMatchObject({ code: 'NOT_SET_UP' });
     expect(await experimentsConfig(true)).toEqual({ enabled: false, reachable: false });

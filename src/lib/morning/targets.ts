@@ -13,6 +13,7 @@ import { openPage, pageName } from '@/ai/assistant/nav';
 import { useAssistant } from '@/store/assistant';
 import { useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
+import { openExperimentCard } from '@/store/experiments';
 
 export interface DoIt {
   label: string;
@@ -26,6 +27,7 @@ export const isPlanKind = (k: string): k is ActionKind => PLAN_KINDS.has(k);
 /** The page a candidate's button opens, in words (the assistant tool says where it leads). */
 export function targetPage(c: Pick<MorningCandidate, 'kind' | 'target'>): string {
   const page = (r: Route, tab?: string) => pageName(r, tab);
+  if (c.target?.experimentId && !__ARTIFACT_BUILD__ && (c.kind === 'calendar' || c.kind === 'analytics')) return page('marketing-social', 'abtests');
   switch (c.kind) {
     case 'leads':
       return page('marketing-email', 'leads');
@@ -56,6 +58,11 @@ export function targetPage(c: Pick<MorningCandidate, 'kind' | 'target'>): string
 /** "Do it": its label and what it runs, or null (done outside the app, or a kind the app doesn't know). */
 export function doIt(c: Pick<MorningCandidate, 'kind' | 'title' | 'target'>, project: Project): DoIt | null {
   const t = c.target ?? {};
+  // an A/B test's version due today, or its winner that's in: the test's card (Social › A/B tests)
+  if (t.experimentId && !__ARTIFACT_BUILD__ && (c.kind === 'calendar' || c.kind === 'analytics')) {
+    const id = t.experimentId;
+    return { label: c.kind === 'calendar' ? 'Open the A/B test' : 'See which version won', run: () => void openExperimentCard(id) };
+  }
   switch (c.kind) {
     case 'leads':
       return { label: 'Open your leads', run: () => void openPage('marketing-email', 'leads') };

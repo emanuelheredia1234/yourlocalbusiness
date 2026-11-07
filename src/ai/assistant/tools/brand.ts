@@ -480,7 +480,7 @@ const rateGeneration = defineTool({
   run: ({ rating, logId, reasons, note }) => {
     const g = generationFor(logId, activeProject().id)!;
     s().rateGeneration(g.id, rating === 'up' ? 1 : -1, reasons ?? [], note ?? '');
-    const learned = rating === 'down' ? s().skills.find((k) => k.source === 'feedback') : undefined;
+    const learned = rating === 'down' ? s().skills.find((k) => k.source === 'feedback' && !k.libraryId?.startsWith('ab:')) : undefined;
     return {
       data: { rated: g.label, made: fmtRelative(g.createdAt), rating, ...(learned ? { learnedSkill: { id: learned.id, rules: describeDirectives(effectiveDirectives(learned)) } } : {}) },
       note: rating === 'up' ? `Rated “${g.label}” as useful` : `Taught the Brain from your feedback on “${g.label}”`,

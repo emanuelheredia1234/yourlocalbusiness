@@ -11,7 +11,7 @@ import type { EmailStep, Experiment, ExperimentChanged, Post, Project, SeoVarian
 import { saveNow } from '@/lib/cloud/auth';
 import { useStore } from '@/store/useStore';
 import { useExperiments } from '@/store/experiments';
-import { createExperiment, deleteExperiment } from './api';
+import { createExperiment, deleteExperiment, patchExperiment } from './api';
 import { KEYS, variantPost, type EmailFields, type PostFields } from './variants';
 
 export interface PostVersion {
@@ -116,4 +116,12 @@ export function postsOfTest(e: Pick<Experiment, 'variants'>, posts = useStore.ge
     if (p) out[v.key] = p;
   }
   return out;
+}
+
+/** A version moved on the calendar: its planned time on the test follows (one request; a refusal changes nothing else). */
+export function syncPlannedAt(ref: { id: string; key: VariantKey }, at: string): void {
+  if (__ARTIFACT_BUILD__) return;
+  void patchExperiment(ref.id, { variants: [{ key: ref.key, plannedAt: at }] })
+    .then(({ experiment }) => useExperiments.getState().upsert(experiment))
+    .catch(() => {});
 }

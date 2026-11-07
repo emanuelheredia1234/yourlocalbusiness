@@ -67,7 +67,7 @@ export const createEmailAbDraft = (id: string, variants: { a: EmailVersion; b: E
 export const refreshExperiment = (id: string): Promise<{ experiment: Experiment }> => (__ARTIFACT_BUILD__ ? noServer() : call('POST', `/api/experiments/${seg(id)}/refresh`, {}));
 export const stopExperiment = (id: string): Promise<{ experiment: Experiment }> => (__ARTIFACT_BUILD__ ? noServer() : call('POST', `/api/experiments/${seg(id)}/stop`, {}));
 /** "Use the winner" (override: "Pick one anyway" on a test too close to call or a tie). */
-export const useExperimentWinner = (id: string, key: VariantKey, override = false): Promise<{ experiment: Experiment; learning: ExperimentLearning }> =>
+export const pickExperimentWinner = (id: string, key: VariantKey, override = false): Promise<{ experiment: Experiment; learning: ExperimentLearning }> =>
   __ARTIFACT_BUILD__ ? noServer() : call('POST', `/api/experiments/${seg(id)}/winner`, { key, ...(override ? { override: true } : {}) });
 
 /** Plain words for a refused A/B request (the server's own words for most codes). */

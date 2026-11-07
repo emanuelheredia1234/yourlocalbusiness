@@ -449,7 +449,8 @@ export function unfilledPlaceholders(text: string): string[] {
 export function learnFromFeedback(skills: Skill[], reasons: string[], freeText: string, scope: string): Skill[] {
   const picked = FEEDBACK_REASONS.filter((r) => reasons.includes(r.id));
   if (!picked.length && !freeText.trim()) return skills;
-  const existing = skills.find((s) => s.source === 'feedback');
+  // (an A/B test's learned skill is feedback too, but one per business and dimension: it isn't this one)
+  const existing = skills.find((s) => s.source === 'feedback' && !s.libraryId?.startsWith('ab:'));
   const base: Skill =
     existing ??
     newSkill({
