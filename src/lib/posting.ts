@@ -9,6 +9,7 @@ import type { ConnectPlatform, ConnectionStatus, LinkPlacementChoice, PublishJob
 import { getJob } from '@/lib/integrations/api';
 import { firstCommentOf, pageLink, postPlacement, xLength } from '@/lib/pageLink';
 import { networkLabel, postText } from '@/ai/postShared';
+import { isTrialMode, shareModeOf } from '@/lib/trialReels';
 
 /** The connected-account platform a post's network posts through (the same names). */
 export const connectPlatformOf = (p: PostPlatform): ConnectPlatform => p;
@@ -139,7 +140,7 @@ export function newClientRequestId(): string {
 }
 
 /** The request Confirm sends: the saved post as it is (the server re-reads it and refuses one that changed). */
-export function buildPublishRequest(post: Post, project: Project | undefined, o: { clientRequestId: string; mediaIds?: string[] }): PublishRequest {
+export function buildPublishRequest(post: Post, project: Project | undefined, o: { clientRequestId: string; mediaIds?: string[]; trialUnknownOk?: boolean }): PublishRequest {
   const link = project ? pageLink(project) : null;
   const comment = firstCommentOf(post);
   return {
@@ -155,7 +156,10 @@ export function buildPublishRequest(post: Post, project: Project | undefined, o:
       ...(comment ? { firstComment: comment } : {}),
       ...(o.mediaIds?.length ? { mediaIds: o.mediaIds } : {}),
       ...(post.platform === 'tiktok' && post.headline ? { title: post.headline.slice(0, 90) } : {}),
+      // Instagram videos: the Reel mode the post was saved with (the server checks it against the saved post)
+      ...(post.platform === 'instagram' && post.media?.kind === 'video' ? { shareMode: shareModeOf(post) } : {}),
     },
+    ...(o.trialUnknownOk && isTrialMode(shareModeOf(post)) ? { trialUnknownOk: true as const } : {}),
   };
 }
 
@@ -220,6 +224,8 @@ export function failureCopy(job: Pick<PublishJob, 'errorCode' | 'errorMessage'>,
       return 'Posting is busy right now. Try again in a minute.';
     case 'SERVICE_UNAVAILABLE':
       return 'Posting from the app isn’t available right now. We’ve been notified. You can post it yourself.';
+    case 'TRIAL_REEL_REFUSED':
+      return 'Instagram didn’t accept this as a Trial Reel (the account may not be eligible yet, or has hit Instagram’s trial limit). Nothing was posted. Post it as a regular Reel instead?';
     case 'UNCONFIRMED':
     case 'INTERRUPTED':
       return 'It may have been posted - check before trying again.';

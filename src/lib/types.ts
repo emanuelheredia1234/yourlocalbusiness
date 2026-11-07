@@ -455,6 +455,8 @@ export interface EmailStep {
   ctaLabel: string;
   /** an address, or {{buy:<offer id>}} (the offer's buy link, filled in when the email is exported or sent) */
   ctaUrl: string;
+  /** an A/B test of this step (P4b): version B, kept until "Create A/B draft in Omnisend" */
+  variants?: { experimentId: string; changed: 'subject' | 'opening'; b: { subject: string; preview: string; body: string } };
 }
 
 export interface Subscriber {
@@ -464,6 +466,13 @@ export interface Subscriber {
   joinedAt: number;
   /** optin: signed up on your page · import: from a CSV you imported · lead: added from a lead your page's form sent */
   source: 'optin' | 'import' | 'lead';
+}
+
+/** Version B of the SEO page: only the fields that differ (section mode: the hero; HTML mode: the first h1 and the form's button). */
+export interface SeoVariant {
+  experimentId: string;
+  changed: 'headline' | 'hero' | 'cta';
+  overrides: { headline?: string; subheadline?: string; imageId?: string; ctaLabel?: string };
 }
 
 export interface SeoMeta {
@@ -734,12 +743,131 @@ export interface Post {
   /** the first comment's text, with the link, when the link goes in the first comment */
   firstComment?: string;
   source: 'batch' | 'composer' | 'ads';
+  /** this post is a version in an A/B test (P4b): the original is A; the server checks order, gap and limits */
+  experiment?: PostExperimentRef;
+  /** Instagram videos only: a regular Reel (CUSTOM, the default) or a Trial Reel shown to non-followers first */
+  instagram?: { shareMode: ShareMode };
   planSlotId?: string;
   batchId?: string;
   skills?: string[];
   createdAt: number;
   updatedAt: number;
   seed: number;
+}
+
+// ───────────── A/B tests and Instagram Trial Reels (P4b; the server's JSON, server/experiments/index.mjs) ─────────────
+
+/** Instagram's Reel modes: CUSTOM is a regular Reel; the other two are Trial Reels. */
+export type ShareMode = 'CUSTOM' | 'TRIAL_REELS_SHARE_TO_FOLLOWERS_IF_LIKED' | 'TRIAL_REELS_DONT_SHARE_TO_FOLLOWERS';
+export type VariantKey = 'a' | 'b' | 'c';
+export interface PostExperimentRef {
+  id: string;
+  key: VariantKey;
+}
+export type ExperimentKind = 'post' | 'email' | 'page';
+export type ExperimentMode = 'times' | 'trial_reels' | 'omnisend_ab' | 'split';
+export type ExperimentChanged = 'hook' | 'caption' | 'visual' | 'cta' | 'time' | 'subject' | 'opening' | 'headline' | 'hero';
+export type ExperimentMetric = 'engagement_rate' | 'views' | 'reach' | 'open_rate' | 'click_rate' | 'lead_rate';
+export type ExperimentState = 'draft' | 'running' | 'finished' | 'stopped' | 'cancelled';
+export type ExperimentVerdict = 'winner' | 'too_close' | 'tie' | 'not_enough' | 'keep_going';
+
+export interface ExperimentResult {
+  verdict?: ExperimentVerdict;
+  winner?: VariantKey;
+  /** keep_going / too_close: the one ahead so far */
+  leader?: VariantKey;
+  /** relative, in % (18.2 = +18.2%) */
+  lift?: number;
+  z?: number;
+  metric?: ExperimentMetric;
+  /** engagement: what it is measured over (reach, views, impressions) */
+  measure?: string;
+  perVariant?: Partial<Record<VariantKey, { successes?: number; trials?: number; rate?: number; count?: number }>>;
+  minimums?: { trials?: number; successes?: number; total?: number } | null;
+  computedAt?: string;
+  note?: 'time_differs' | 'non_followers';
+  /** not_enough / keep_going: sample, variant_missing, no_common_measure */
+  reason?: string;
+  missing?: { key?: VariantKey; what: string; have: number; need: number }[];
+  /** email: Omnisend picked it */
+  source?: 'omnisend';
+  ours?: { verdict: ExperimentVerdict; winner?: VariantKey };
+  campaignStatus?: string;
+  pickedByYou?: boolean;
+  stoppedBy?: string;
+  delayed?: boolean;
+  /** a Trial Reels test: the eligibility answer when it was made */
+  eligibility?: TrialEligibility;
+}
+
+export interface ExperimentVariant {
+  key: VariantKey;
+  label: string;
+  postId: string | null;
+  jobId: string | null;
+  plannedAt: string | null;
+  shareMode: ShareMode | null;
+  hasHtml: boolean;
+  omnisendCampaignId: string | null;
+  /** social: views, reach, likes, comments, shares, saves, impressions; email: sent, openRate, clickRate (a missing key is unknown) */
+  metrics: Partial<Record<'views' | 'reach' | 'impressions' | 'likes' | 'comments' | 'shares' | 'saves' | 'sent' | 'openRate' | 'clickRate', number>>;
+  metricsAt: string | null;
+  metricsError: string | null;
+  visitors: number;
+  views: number;
+  leads: number;
+}
+
+export interface Experiment {
+  id: string;
+  projectId: string;
+  kind: ExperimentKind;
+  mode: ExperimentMode;
+  changed: ExperimentChanged;
+  network: PostPlatform | null;
+  metric: ExperimentMetric;
+  subjectRef: string;
+  name: string;
+  state: ExperimentState;
+  startedAt: string | null;
+  endsAt: string | null;
+  result: ExperimentResult;
+  /** results are late (a team-level problem the owner was told about) */
+  delayed: boolean;
+  winner: VariantKey | null;
+  winnerUsedAt: string | null;
+  counted: boolean;
+  lastReadAt: string | null;
+  /** when "Update results" can be pressed again */
+  refreshAt: string | null;
+  createdAt: string | null;
+  variants: ExperimentVariant[];
+}
+
+export interface ExperimentUsage {
+  used: number;
+  /** null = unlimited */
+  limit: number | null;
+  resetsAt: string | null;
+}
+
+/** "Use the winner": the server's short learned line (no AI), saved by the app as a Brain skill. */
+export interface ExperimentLearning {
+  changed: ExperimentChanged;
+  winnerLabel: string;
+  loserLabels: string[];
+  metric: ExperimentMetric;
+  lift: number | null;
+  summary: string;
+  override?: boolean;
+}
+
+/** Whether a business's Instagram may post Trial Reels (GET /api/experiments/trial-reels/eligibility). */
+export interface TrialEligibility {
+  eligible: true | false | 'unknown';
+  reason?: 'not_connected' | 'needs_reconnect' | 'followers' | 'unreadable';
+  followers?: number;
+  checkedAt?: string;
 }
 
 /** One Facebook group in a group share, as Manus reported it. */
@@ -1121,6 +1249,8 @@ export interface Project {
     pageType?: PageType;
     /** the SEO page as Manus or Viktor made it (HTML mode), when the owner used one of theirs */
     seoHtml?: SeoHtml;
+    /** an A/B test of the SEO page (P4b): version B's changes over the page as it is */
+    seoVariant?: SeoVariant;
     /** where each network's link goes on new posts; absent: the built-in default for that network */
     linkPlacement?: Partial<Record<PostPlatform, LinkPlacement>>;
     campaign: CampaignConfig;
