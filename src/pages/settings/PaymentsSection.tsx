@@ -14,6 +14,7 @@ import { useOffers } from '@/store/offers';
 import { toast } from '@/store/ui';
 import { Badge, Callout, CopyButton, Field, Segmented, SettingsSection, Spinner, confirmAction } from '@/components/ui/primitives';
 import { StripeConnectCard } from './StripeConnectCard';
+import { ProductFilesCard } from './ProductFilesCard';
 
 const MODE_LABEL: Record<WhopEnvironment, string> = { production: 'Live', sandbox: 'Test mode' };
 const NOTICE: Record<string, string> = {
@@ -370,6 +371,7 @@ export function PaymentsSection() {
   return (
     <div className="flex max-w-[880px] flex-col gap-4">
       <StripeConnectCard />
+      <ProductFilesCard />
       {/* Whop off here: Stripe alone, without the "payments aren't set up" note */}
       {status !== 'off' && <PaymentsView status={status} connections={connections} environment={environment} onEnvironment={setEnvironment} actions={actions} />}
     </div>

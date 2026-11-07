@@ -65,7 +65,6 @@ const MESSAGES: Record<string, string> = {
   TOO_LARGE: 'That file is too big: a download can be up to 25 MB, a cover image up to 5 MB.',
   UPGRADE: 'Publishing downloads needs an active plan. See Settings › Plan.',
   BAD_URL: 'Use a full web address starting with https://.',
-  IN_USE: 'A buy link delivers this file. Change or archive that offer first.',
   LEADS_MIGRATION: 'Downloads need an update to the app’s database first. Ask the app’s owner to run the latest migration.',
 };
 

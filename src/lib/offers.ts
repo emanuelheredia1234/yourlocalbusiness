@@ -336,6 +336,12 @@ export async function listOffers(projectId: string, opts: { archived?: boolean; 
   return (Array.isArray(body.offers) ? body.offers : []).map(toOffer).filter((o): o is Offer => !!o);
 }
 
+/** Every business's offers (archived left out): which of them use a product file. */
+export async function listAllOffers(signal?: AbortSignal): Promise<Offer[]> {
+  const { body } = await call<{ offers?: unknown }>('GET', '/api/offers', undefined, signal);
+  return (Array.isArray(body.offers) ? body.offers : []).map(toOffer).filter((o): o is Offer => !!o);
+}
+
 /** An offer for the owner's own checkout link. clientRequestId (one per press of Create) makes a double press one offer. */
 export async function createExternalOffer(input: { projectId: string; title: string; url: string; priceDisplay?: string; clientRequestId?: string }): Promise<Offer> {
   return one((await call<{ offer?: unknown }>('POST', '/api/offers', { ...input, provider: 'external' })).body);
