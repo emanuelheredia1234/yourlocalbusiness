@@ -164,6 +164,34 @@ export function postFacts(posts, tz, now, today = actionDayOf(now, tz)) {
   };
 }
 
+/**
+ * The business's A/B tests (P4b), ids and the owner's own names only: tests whose winner is in and not used yet, and
+ * "same network, different times" tests whose next version is planned for today (or earlier) and not posted.
+ * Versions go out in key order, so only the next one is due.
+ */
+export function experimentFacts(rows, variantRows, tz, today) {
+  const ready = [];
+  const due = [];
+  const byExp = new Map();
+  for (const v of arr(variantRows)) {
+    if (!byExp.has(v.experiment_id)) byExp.set(v.experiment_id, []);
+    byExp.get(v.experiment_id).push(v);
+  }
+  for (const e of arr(rows)) {
+    const name = clip(e.name, 60);
+    const result = obj(e.result);
+    if (['running', 'finished'].includes(e.state) && result.verdict === 'winner' && ['a', 'b', 'c'].includes(result.winner) && !e.winner_used_at && ready.length < 2) {
+      ready.push({ id: String(e.id), name, kind: clip(e.kind, 10), changed: clip(e.changed, 20), winner: result.winner });
+    }
+    if (e.kind === 'post' && e.mode === 'times' && ['draft', 'running'].includes(e.state) && due.length < 2) {
+      const next = (byExp.get(e.id) ?? []).sort((a, b) => String(a.key).localeCompare(String(b.key))).find((v) => !v.job_id);
+      const at = ms(next?.planned_at);
+      if (next?.post_id && at != null && localDateOf(at, tz) <= today) due.push({ id: String(e.id), name, key: next.key, postId: clip(next.post_id, 80) });
+    }
+  }
+  return { ready, due };
+}
+
 /** Numbers only from each analytics snapshot (never text, URLs or competitors' ads). */
 function numbersOf(snap) {
   const values = {};
@@ -209,7 +237,7 @@ export async function readFacts(db, { userId, projectId, tz, now }) {
   const u = { user_id: userId };
   const since30 = iso(now - 30 * DAY_MS);
   const today = actionDayOf(now, tz);
-  const [docs, postRows, adRows, listingRows, snaps, leadRows, saleRows, offerRows, history] = await Promise.all([
+  const [docs, postRows, adRows, listingRows, snaps, leadRows, saleRows, offerRows, history, experimentRows] = await Promise.all([
     db.select('user_docs', { ...u, kind: 'project', id: projectId }, { select: 'id,data', limit: 1 }),
     soft(db.select('user_docs', { ...u, kind: 'post' }, { select: 'id,projectId:data->>projectId,status:data->>status,source:data->>source,scheduledAt:data->>scheduledAt,publishedAt:data->>publishedAt,headline:data->>headline', order: 'updated_at.desc', limit: 500 })),
     soft(db.select('user_docs', { ...u, kind: 'ad' }, { select: 'id,projectId:data->>projectId', limit: 500 })),
@@ -219,7 +247,12 @@ export async function readFacts(db, { userId, projectId, tz, now }) {
     soft(db.select('sales', { ...u, project_id: projectId, environment: 'production', status: ['in', ['paid', 'partially_refunded']], paid_at: ['gte', since30] }, { select: 'offer_id,amount_minor,currency,paid_at', limit: 1000 })),
     soft(db.select('offers', { ...u, project_id: projectId, status: 'active' }, { select: 'id,title,clicks', limit: 100 })),
     soft(db.select('daily_actions', { ...u, project_id: projectId, local_date: ['gte', addDays(today, -MORNING.notUsefulDays)] }, { select: 'local_date,state,candidates,chosen,feedback', order: 'local_date.desc', limit: 40 })),
+    // A/B tests (P4b; supabase/migrations/20261117000000_experiments.sql): ids, names and states only
+    soft(db.select('experiments', { ...u, project_id: projectId, state: ['in', ['draft', 'running', 'finished']] }, { select: 'id,kind,mode,changed,name,state,result,winner_used_at', order: 'updated_at.desc', limit: 20 })),
   ]);
+  const expRows = arr(experimentRows);
+  const timed = expRows.filter((e) => e.kind === 'post' && e.mode === 'times').map((e) => e.id);
+  const varRows = timed.length ? await soft(db.select('experiment_variants', { ...u, experiment_id: ['in', timed] }, { select: 'experiment_id,key,post_id,job_id,planned_at', limit: 60 })) : [];
   const p = obj(docs?.[0]?.data);
   if (!docs?.[0]) throw Object.assign(new Error('The business isn’t there.'), { code: 'NOT_FOUND' });
   const posts = arr(postRows).filter((x) => x.projectId === projectId);
@@ -291,6 +324,7 @@ export async function readFacts(db, { userId, projectId, tz, now }) {
         .slice(0, 2)
         .map((o) => ({ title: clip(o.title, 60), clicks: Number(o.clicks) || 0 })),
     },
+    experiments: experimentFacts(expRows, varRows, tz, today),
     history: historyFacts(arr(history), today),
   };
 }

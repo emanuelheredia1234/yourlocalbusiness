@@ -1,12 +1,13 @@
 // Generation (server/morning/generate.mjs and its parts): the schema check, the rules, choosing (repeats last, Not
 // useful never), the facts (no personal data), the prompt, metering through the AI routes' gate, the fallbacks and
 // the owner alerts. mock-providers and mock-supabase only.
+import crypto from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { BASE, morningServer } from './test-helpers.mjs';
 import { checkContext, checkCandidate, parseAnswer, validateAnswer } from './validate.mjs';
 import { ruleCandidates, keyOf } from './rules.mjs';
 import { chooseCandidates, fallbackFor, makeAction } from './generate.mjs';
-import { readFacts, derivedDoneOf, postFacts } from './facts.mjs';
+import { readFacts, derivedDoneOf, postFacts, experimentFacts } from './facts.mjs';
 import { buildPrompt, MORNING_MARKER } from './prompt.mjs';
 import { mockMorningReply } from '../test/mock-providers.mjs';
 import { utcDay } from '../limits.mjs';
@@ -138,6 +139,71 @@ describe('rules and choosing', () => {
     expect(done({ kind: 'website' })).toBe(false);
     expect(done({ kind: 'packages' })).toBe(false);
     expect(done({ kind: 'link_settings' })).toBe(false);
+  });
+});
+
+describe('A/B tests in the morning action (P4b)', () => {
+  const LA = 'America/Los_Angeles';
+  const at = (h) => new Date(BASE + h * 3_600_000).toISOString();
+  const rows = [
+    { id: 'e_times', kind: 'post', mode: 'times', changed: 'hook', name: 'Question hooks', state: 'running', result: { verdict: 'keep_going' }, winner_used_at: null },
+    { id: 'e_won', kind: 'post', mode: 'trial_reels', changed: 'caption', name: 'Short captions', state: 'finished', result: { verdict: 'winner', winner: 'b', lift: 18 }, winner_used_at: null },
+    { id: 'e_used', kind: 'page', mode: 'split', changed: 'headline', name: 'Used', state: 'finished', result: { verdict: 'winner', winner: 'a' }, winner_used_at: at(-24) },
+    { id: 'e_later', kind: 'post', mode: 'times', changed: 'cta', name: 'Later', state: 'draft', result: {}, winner_used_at: null },
+  ];
+  const variants = [
+    { experiment_id: 'e_times', key: 'b', post_id: 'post_b', job_id: null, planned_at: at(2) },
+    { experiment_id: 'e_times', key: 'a', post_id: 'post_a', job_id: 'job-1', planned_at: at(-20) },
+    { experiment_id: 'e_later', key: 'a', post_id: 'post_l', job_id: null, planned_at: at(30) },
+  ];
+
+  it('the facts: a winner that is in and not used; the next unposted version planned for today', () => {
+    expect(experimentFacts(rows, variants, LA, '2026-11-07')).toEqual({
+      ready: [{ id: 'e_won', name: 'Short captions', kind: 'post', changed: 'caption', winner: 'b' }],
+      due: [{ id: 'e_times', name: 'Question hooks', key: 'b', postId: 'post_b' }],
+    });
+    // A not posted yet: B isn't due before A, whatever its date
+    const aFirst = variants.map((v) => (v.key === 'a' && v.experiment_id === 'e_times' ? { ...v, job_id: null, planned_at: at(48) } : v));
+    expect(experimentFacts(rows, aFirst, LA, '2026-11-07').due).toEqual([]);
+    expect(experimentFacts([], [], LA, '2026-11-07')).toEqual({ ready: [], due: [] });
+  });
+
+  it('the rules: version due (the post isn’t suggested twice) and the winner, each passing the check, with the test’s key', () => {
+    const f = { ...facts0(), posts: { plannedNext7: 1, due: [{ id: 'post_b', headline: 'Version B' }] }, experiments: experimentFacts(rows, variants, LA, '2026-11-07') };
+    const rules = ruleCandidates(f, BASE);
+    const due = rules.find((r) => r.rule === 'variant_due');
+    const won = rules.find((r) => r.rule === 'experiment_winner');
+    expect(due).toMatchObject({ kind: 'calendar', title: 'Post version B of your A/B test', target: { experimentId: 'e_times', postId: 'post_b' }, key: 'experiment:e_times:post:post_b' });
+    expect(due.why).toContain('“Question hooks”');
+    expect(won).toMatchObject({ kind: 'analytics', target: { experimentId: 'e_won' }, key: 'experiment:e_won:winner' });
+    expect(rules.find((r) => r.rule === 'post_due')).toBeUndefined();
+    const ctx = checkContext(f);
+    for (const r of [due, won]) expect(checkCandidate(r, ctx).candidate, r.rule).toBeTruthy();
+    // the AI may name only the tests given, and a test's post only with that test
+    const ai = { kind: 'analytics', title: 'See which version won your test', why: 'Your caption test has a clear winner, so use it next.' };
+    expect(checkCandidate({ ...ai, target: { experimentId: 'e_other' } }, ctx).drop).toBe('experimentId');
+    expect(checkCandidate({ ...ai, target: { experimentId: 'e_won' } }, ctx).candidate.target).toEqual({ experimentId: 'e_won' });
+    expect(checkCandidate({ ...ai, kind: 'calendar', target: { experimentId: 'e_won', postId: 'post_x' } }, ctx).drop).toBe('postId');
+  });
+
+  it('readFacts reads the business’s tests (ids, names, states; never page HTML)', async () => {
+    const app = await morningServer();
+    try {
+      const who = await app.user('ab@m.test');
+      await app.business(who, 'proj_ab');
+      const base = { user_id: who.id, project_id: 'proj_ab', network: 'instagram', metric: 'engagement_rate' };
+      const [t] = await app.db.insert('experiments', { ...base, kind: 'post', mode: 'times', changed: 'hook', subject_ref: 'post_a', name: 'Question hooks', state: 'running' }, { returning: true });
+      await app.db.insert('experiments', { ...base, kind: 'post', mode: 'trial_reels', changed: 'caption', subject_ref: 'post_c', name: 'Short captions', state: 'finished', result: { verdict: 'winner', winner: 'a' } });
+      await app.db.insert('experiments', { ...base, project_id: 'proj_other', kind: 'post', mode: 'trial_reels', changed: 'caption', subject_ref: 'post_z', name: 'Other business', state: 'finished', result: { verdict: 'winner', winner: 'a' } });
+      await app.db.insert('experiment_variants', { experiment_id: t.id, key: 'a', user_id: who.id, post_id: 'post_a', job_id: crypto.randomUUID(), planned_at: at(-20) });
+      await app.db.insert('experiment_variants', { experiment_id: t.id, key: 'b', user_id: who.id, post_id: 'post_b', planned_at: at(1) });
+      const facts = await readFacts(app.db, { userId: who.id, projectId: 'proj_ab', tz: LA, now: BASE });
+      expect(facts.experiments.due).toEqual([{ id: t.id, name: 'Question hooks', key: 'b', postId: 'post_b' }]);
+      expect(facts.experiments.ready.map((e) => e.name)).toEqual(['Short captions']);
+      expect(buildPrompt(facts, ruleCandidates(facts, BASE))).toContain('experimentId (only an id from experiments.ready or experiments.due');
+    } finally {
+      await app.close();
+    }
   });
 });
 

@@ -624,6 +624,8 @@ export interface MorningTarget {
   platform?: PostPlatform;
   planActionId?: string;
   postId?: string;
+  /** an A/B test (P4b): its version due today (with postId) or its winner that is in; the app opens the test's card */
+  experimentId?: string;
   /** assistant: the message put in the chat's box (nothing is sent until the owner presses Send) */
   prompt?: string;
 }

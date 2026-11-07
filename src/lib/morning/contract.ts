@@ -23,10 +23,11 @@ const slug = (s: unknown) =>
     .slice(0, 60);
 
 /** A candidate's key (the server's keyOf): what "the same idea" means for repeats and Not useful. */
-export function morningKey(c: { kind: string; title: string; target?: { planActionId?: string; postId?: string; pageType?: string; topic?: string; prompt?: string } }, newestLead = ''): string {
+export function morningKey(c: { kind: string; title: string; target?: { experimentId?: string; planActionId?: string; postId?: string; pageType?: string; topic?: string; prompt?: string } }, newestLead = ''): string {
   const t = c.target ?? {};
   let k: string;
-  if (t.planActionId) k = `plan:${t.planActionId}`;
+  if (t.experimentId) k = `experiment:${t.experimentId}:${t.postId ? `post:${t.postId}` : 'winner'}`;
+  else if (t.planActionId) k = `plan:${t.planActionId}`;
   else if (t.postId) k = `post:${t.postId}`;
   else if (c.kind === 'leads') k = `leads:${newestLead}`;
   else if (c.kind === 'build_page') k = `build_page:${t.pageType ?? ''}`;

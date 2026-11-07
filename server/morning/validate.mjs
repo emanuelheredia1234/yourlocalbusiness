@@ -33,7 +33,8 @@ export const MORNING_OUTPUT_SCHEMA = Object.freeze({
               leadMagnetType: { enum: MORNING.leadMagnetTypes },
               platform: { enum: MORNING.platforms },
               planActionId: { type: 'string', description: 'one of the open plan actions given' },
-              postId: { type: 'string', description: 'one of the due posts given' },
+              postId: { type: 'string', description: 'one of the due posts given (or a due A/B test version’s post)' },
+              experimentId: { type: 'string', description: 'one of the A/B tests given (experiments.ready or experiments.due)' },
               prompt: { type: 'string', maxLength: L.prompt, description: 'required for assistant' },
             },
           },
@@ -82,7 +83,7 @@ const len = (s) => Array.from(s).length;
 
 /**
  * One candidate as it may be stored, or { drop: reason }. ctx: { facts, openActions: Map id → action,
- * duePosts: Set of ids, numbers: factNumbers(facts) }.
+ * duePosts: Set of ids, experiments: Map id → due post id or null, numbers: factNumbers(facts) }.
  */
 export function checkCandidate(raw, ctx) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { drop: 'shape' };
@@ -118,8 +119,13 @@ export function checkCandidate(raw, ctx) {
     if (!a || a.kind !== raw.kind) return { drop: 'planActionId' };
     target.planActionId = a.id;
   }
+  if (rt.experimentId !== undefined && rt.experimentId !== null) {
+    if (!ctx.experiments.has(rt.experimentId)) return { drop: 'experimentId' };
+    target.experimentId = rt.experimentId;
+  }
   if (rt.postId !== undefined && rt.postId !== null) {
-    if (!ctx.duePosts.has(rt.postId)) return { drop: 'postId' };
+    const ofTest = target.experimentId ? ctx.experiments.get(target.experimentId) : null;
+    if (!ctx.duePosts.has(rt.postId) && ofTest !== rt.postId) return { drop: 'postId' };
     target.postId = rt.postId;
   }
   if (raw.kind === 'assistant' && !target.prompt) return { drop: 'prompt' };
@@ -140,6 +146,8 @@ export function checkContext(facts) {
     facts,
     openActions: new Map((facts?.strategy?.plan?.open ?? []).map((a) => [a.id, a])),
     duePosts: new Set((facts?.posts?.due ?? []).map((p) => p.id)),
+    // A/B test id → the post of its version due today (null for a test whose winner is in)
+    experiments: new Map([...(facts?.experiments?.ready ?? []).map((e) => [e.id, null]), ...(facts?.experiments?.due ?? []).map((e) => [e.id, e.postId])]),
     numbers: factNumbers(facts),
   };
 }

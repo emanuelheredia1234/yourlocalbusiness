@@ -43,6 +43,8 @@ describe('shared/morning.json', () => {
       { kind: 'build_page', title: 'Build it', target: { planActionId: 'a_x1' } },
       { kind: 'assistant', title: 'Ask', target: { prompt: 'Help me write a short, warm thank-you message to a new customer of Copper Kettle.' } },
       { kind: 'socials', title: 'Add profiles', target: {} },
+      { kind: 'calendar', title: 'Post version B of your A/B test', target: { experimentId: 'e1', postId: 'post_2' } },
+      { kind: 'analytics', title: 'See which version won your A/B test', target: { experimentId: 'e1' } },
     ] as const;
     for (const c of cases) expect(morningKey(c as never)).toBe(keyOf(c, {}));
   });
