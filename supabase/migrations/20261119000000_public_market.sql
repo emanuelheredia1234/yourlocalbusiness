@@ -27,6 +27,15 @@
 
 -- ───────────── tables ─────────────
 
+-- The search column's text. A generated column needs an immutable expression, and array_to_string is only stable,
+-- so it lives in this immutable SQL function (it reads nothing but its arguments).
+create or replace function public.ylb_market_search_text(p_title text, p_tagline text, p_category text, p_tags text[])
+  returns tsvector
+  language sql immutable parallel safe set search_path = '' as $$
+  select pg_catalog.to_tsvector('simple'::regconfig,
+    p_title || ' ' || coalesce(p_tagline, '') || ' ' || p_category || ' ' || coalesce(pg_catalog.array_to_string(p_tags, ' '), ''))
+$$;
+
 create table if not exists public.public_listings (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -64,9 +73,7 @@ create table if not exists public.public_listings (
   hidden_reason text check (hidden_reason is null or hidden_reason in ('spam', 'scam', 'prohibited', 'offensive', 'misleading', 'other')),
   held_at timestamptz,
   report_count integer not null default 0 check (report_count >= 0),
-  search tsvector generated always as (
-    to_tsvector('simple', title || ' ' || coalesce(tagline, '') || ' ' || category || ' ' || array_to_string(tags, ' '))
-  ) stored,
+  search tsvector generated always as (public.ylb_market_search_text(title, tagline, category, tags)) stored,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (user_id, listing_id)
