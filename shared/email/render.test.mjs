@@ -250,16 +250,19 @@ describe('themes', () => {
       expect(warnings).toEqual([]);
       const out = renderEmail({ ...ALL, theme: { id } }, ctx('omnisend'));
       expect(out.html).toContain(`background-color:${tokens.bg};`);
-      expect(out.html).toContain(`bgcolor="${tokens.primary}"`);
+      expect(out.html).toContain(`fillcolor="${tokens.primary}"`);
       expect(out.html).toContain(tokens.fontStack.split(',')[0].replace(/'/g, '&#39;'));
     }
   });
 
   it('the brand’s colours appear inline; overrides apply', () => {
     const out = renderEmail({ v: 1, theme: { id: 'brand', overrides: { radius: 0, size: 18 } }, blocks: [{ type: 'button', label: 'Go', link: { kind: 'page' } }] }, ctx('omnisend', { brand: { name: 'X', colors: { primary: '#7a1f5c' } } }));
-    expect(out.html).toContain('bgcolor="#7a1f5c"');
+    expect(out.html).toContain('fillcolor="#7a1f5c"');
     expect(out.html).toContain('font-size:18px;line-height:1.2;');
     expect(out.html).toContain('border-radius:0px;');
+    // the button's cell has no colour: Outlook would paint a square box behind the rounded shape
+    expect(out.html).not.toMatch(/<td[^>]*bgcolor="#7a1f5c"/);
+    expect(out.html).toContain('background-color:#7a1f5c;border-radius:0px;');
   });
 
   it('a dark brand: text falls back to dark on white, with a warning', () => {

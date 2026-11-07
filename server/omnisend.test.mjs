@@ -646,7 +646,7 @@ describe('designed email drafts', () => {
     expect(html).not.toContain('evil.example');
     expect(html.split('[[unsubscribe_link]]')).toHaveLength(2);
     // the brand's colours, inline
-    expect(html).toContain('bgcolor="#7a1f5c"');
+    expect(html).toContain('fillcolor="#7a1f5c"');
     expect(html).toContain('Welcome, &#91;First name&#93;');
   });
 

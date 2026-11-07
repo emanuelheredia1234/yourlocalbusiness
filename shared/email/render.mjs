@@ -300,6 +300,8 @@ function imageHtml(b, rc, box) {
 }
 
 /** A bulletproof button: a table cell with its colour, an <a>, and a VML roundrect for Outlook on Windows. */
+// The cell has no colour of its own: Outlook (Windows) would paint it as a square box behind the rounded VML shape;
+// the VML's fillcolor and the link's background-color colour the button.
 function buttonCore({ label, href, full = false, outline = false, align = 'center' }, rc, box) {
   const t = rc.t;
   const size = Math.max(15, t.size);
@@ -313,7 +315,7 @@ function buttonCore({ label, href, full = false, outline = false, align = 'cente
   const text = escapeHtml(label);
   const vml = `<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${attr(href)}" style="height:${height}px;v-text-anchor:middle;width:${width}px;" arcsize="${arc}%" ${outline ? `strokecolor="${t.primary}" strokeweight="2px"` : 'stroke="f"'} fillcolor="${bg}"><w:anchorlock/><center style="color:${fg};${font(rc)}font-size:${size}px;font-weight:bold;">${text}</center></v:roundrect><![endif]-->`;
   const a = `<!--[if !mso]><!--><a ${linkAttrs(href)} style="display:${full ? 'block' : 'inline-block'};padding:${Math.round(size * 0.8)}px 28px;${font(rc)}font-size:${size}px;line-height:1.2;font-weight:bold;color:${fg};text-decoration:none;text-align:center;background-color:${bg};border-radius:${radius}px;${border}mso-hide:all;">${text}</a><!--<![endif]-->`;
-  return `<table ${TABLE} align="${align}"${full ? ' width="100%"' : ''} style="margin:0 ${align === 'center' ? 'auto' : '0'};border-collapse:separate;"><tr><td align="center" bgcolor="${bg}" style="border-radius:${radius}px;background-color:${bg};">${vml}${a}</td></tr></table>`;
+  return `<table ${TABLE} align="${align}"${full ? ' width="100%"' : ''} style="margin:0 ${align === 'center' ? 'auto' : '0'};border-collapse:separate;"><tr><td align="center" style="border-radius:${radius}px;">${vml}${a}</td></tr></table>`;
 }
 
 function buttonHtml(b, rc, box) {
