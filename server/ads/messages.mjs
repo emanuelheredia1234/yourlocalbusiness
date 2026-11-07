@@ -128,7 +128,8 @@ const MESSAGES = {
   AD_ACCOUNT_UNUSABLE: 'Meta says this ad account can’t run ads right now: it isn’t active, or the business is restricted from advertising. Check the account’s status in Meta Ads Manager.',
   META_ACTION_BLOCKED: 'Meta has blocked the Facebook login connected here from making ads for now. It usually lifts by itself: wait a few hours before trying again.',
   META_OBJECT_NOT_ACCESSIBLE: 'Meta couldn’t open something this ad uses: it was deleted, or the connected login lost access to it. Check your Page and ad account in Meta, then try again.',
-  // a pause or an end Meta refused: the reason without "wait" or "try again", then what to do now (STILL_RUNNING)
+  // a pause or an end Meta refused: the reason without "wait" or "try again" (only a rate limit keeps its "Try again
+  // in a minute"), then what to do now (STILL_RUNNING)
   STOP_REFUSED: (c) => `${P(c)} refused to ${c?.action === 'end' ? 'end' : 'pause'} this campaign.`,
   META_ACTION_BLOCKED_STOP: 'Meta has blocked the Facebook login connected here from making ad changes for now.',
   META_OBJECT_NOT_ACCESSIBLE_STOP: 'Meta couldn’t open this campaign: it was deleted, or the connected login lost access to it.',
@@ -329,7 +330,8 @@ const metaWords = (d) => cut([d.metaTitle, d.metaMessage].filter((x) => typeof x
  * - A change that went through in part (CHANGE_INCOMPLETE, or any refusal after steps that did: `done`): what went
  *   through, then why the rest didn't. Never "Nothing was changed".
  * - A refused pause or end (kind 'pause' | 'end'): the reason, then "It's still running: pause it in Meta Ads Manager
- *   now." Never "wait" or "try again": the campaign is still spending.
+ *   now." Never "wait", and no "try again" except a rate limit's own "Try again in a minute": the campaign is still
+ *   spending, so pausing it in Ads Manager comes right after.
  * - The refusal of a write that was sent: the reason, then what it left (NOTHING_DONE, or for a launch whose objects
  *   Meta kept, `leftBehind`, the half-made campaign that can't spend). Never "open Ads Manager to see why" for a
  *   launch. The reason is our sentence for Zernio's code when we have one (REFUSAL_REASON), else for our category; a
