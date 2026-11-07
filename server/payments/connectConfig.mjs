@@ -54,11 +54,13 @@ export function connectConfig(env = process.env, { mode = null } = {}) {
     const out = [];
     if (!environment) out.push('STRIPE_SECRET_KEY');
     if (!webhookSecrets.length) out.push('STRIPE_CONNECT_WEBHOOK_SECRET');
+    // accounts are tagged with the customer tag (never the raw user id): read-back finds them by it
+    if (String(env.CUSTOMER_TAG_SECRET ?? '').length < 16) out.push('CUSTOMER_TAG_SECRET');
     if (!publicUrlOk) out.push('APP_PUBLIC_URL (https)');
     return out;
   };
   // on by default once the key and the Connect secret are there
-  cfg.enabled = !switchedOff && !!environment && webhookSecrets.length > 0;
+  cfg.enabled = !switchedOff && !!environment && webhookSecrets.length > 0 && String(env.CUSTOMER_TAG_SECRET ?? '').length >= 16;
   // and able to send buyers and sellers to Stripe (an https address in live mode)
   cfg.ready = cfg.enabled && publicUrlOk;
   return cfg;

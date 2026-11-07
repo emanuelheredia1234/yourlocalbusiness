@@ -170,6 +170,10 @@ export const ROUTE_PREFIXES = Object.freeze({
   offers: '/api/offers',
   whop: '/api/payments/whop',
   whopWebhook: '/api/webhooks/whop/',
+  // Stripe Connect for sellers (server/payments/stripeConnect.mjs, through the offers module) and its own webhook: a
+  // sibling of /api/webhooks/stripe, never under it (that one is billing's)
+  stripePayments: '/api/payments/stripe',
+  stripeConnectWebhook: '/api/webhooks/stripe-connect',
   // the morning action (server/morning/index.mjs)
   morning: '/api/morning/',
   // A/B tests and Trial Reels' eligibility (server/experiments/index.mjs)
@@ -201,6 +205,10 @@ export const RATE_BUCKETS = Object.freeze({
   whopConnect: 'whop-connect', // 10 per hour (connect, key, webhook secret, check, disconnect)
   whopCatalog: 'whop-catalog', // 30 per minute (products and plans)
   whopWebhook: 'whop-webhook', // 600 per minute per IP
+  stripeConnect: 'stripe-connect', // 10 per hour (create a seller account, onboarding links)
+  stripeConnectRead: 'stripe-connect-read', // 120 per minute (the account, sync, tax, the owner's view)
+  stripeConnectWebhook: 'stripe-connect-webhook', // 600 per minute per IP
+  saleLink: 'sale-link', // 30 per hour (a seller's new download link for a buyer)
   morningRead: 'morning-read', // 120 per minute (today's state, the owner's section)
   morningGenerate: 'morning-generate', // 6 per hour, counted only when a generation starts (all the user's businesses)
   morningFeedback: 'morning-feedback', // 60 per hour (Done, Undo, Not useful)

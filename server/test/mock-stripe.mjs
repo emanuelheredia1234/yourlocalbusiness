@@ -54,7 +54,7 @@
 //
 // Test hooks (no key):
 //   GET  /__calls                                         every API call {method, path, account, idempotencyKey,
-//                                                          query?}
+//                                                          query?, body? (a POST's parsed form)}
 //   POST /__checkout/complete {id, account?, paid?, card?}  card: a card fingerprint (default: a new one each time),
 //                                                          the subscription's default_payment_method
 //                                                          finishes a Checkout Session: a subscription (mode
@@ -822,7 +822,7 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     const account = String(req.headers['stripe-account'] ?? '');
     const ikey = req.headers['idempotency-key'] ? String(req.headers['idempotency-key']) : null;
     const route = routeOf(method, parts);
-    calls.push({ method, path: url.pathname, route, account: account || null, idempotencyKey: ikey, ...(url.search ? { query: url.search.slice(1) } : {}) });
+    calls.push({ method, path: url.pathname, route, account: account || null, idempotencyKey: ikey, ...(url.search ? { query: url.search.slice(1) } : {}), ...(method === 'POST' ? { body: parseForm(raw) } : {}) });
     if (account && (!accounts.has(account) || deauthorized.has(account))) return send(res, 403, { error: { type: 'invalid_request_error', message: `The provided key does not have access to account '${account}' (or that account does not exist).` } });
 
     // Stripe's libraries send a DELETE's params in the query string
@@ -959,6 +959,8 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     calls,
     deliveries,
     accounts,
+    /** onboarding links made: nonce → { account, used, refresh, ret } */
+    onboardLinks,
     realm,
     get base() {
       return base;

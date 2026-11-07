@@ -71,14 +71,14 @@ describe('feeShare', () => {
 });
 
 describe('connectConfig', () => {
-  const env = { STRIPE_CONNECT_WEBHOOK_SECRET: 'whsec_x', APP_PUBLIC_URL: 'https://app.example.test/x' };
+  const env = { STRIPE_CONNECT_WEBHOOK_SECRET: 'whsec_x', APP_PUBLIC_URL: 'https://app.example.test/x', CUSTOMER_TAG_SECRET: 'tag-secret-0123456789' };
   it('is on with the key and the Connect secret; off with STRIPE_CONNECT=off; names what’s missing, never values', () => {
     const c = connectConfig(env, { mode: 'test' });
     expect(c).toMatchObject({ enabled: true, ready: true, environment: 'sandbox', live: false, platformCountry: 'US', returnFees: true, downloadsPerSale: 10, downloadDays: 30, sessionsPerVisitorPerHour: 20, publicOrigin: 'https://app.example.test' });
     expect(connectConfig({ ...env, STRIPE_CONNECT: 'off' }, { mode: 'test' }).enabled).toBe(false);
     const none = connectConfig({}, { mode: null });
     expect(none.enabled).toBe(false);
-    expect(none.missing()).toEqual(['STRIPE_SECRET_KEY', 'STRIPE_CONNECT_WEBHOOK_SECRET']);
+    expect(none.missing()).toEqual(['STRIPE_SECRET_KEY', 'STRIPE_CONNECT_WEBHOOK_SECRET', 'CUSTOMER_TAG_SECRET']);
     expect(JSON.stringify(none.missing())).not.toContain('whsec');
   });
   it('live mode needs an https APP_PUBLIC_URL to be ready', () => {

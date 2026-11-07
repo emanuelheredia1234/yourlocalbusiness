@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "note": "Countries where Stripe supports businesses (stripe.com/global). Which of them a connected account may use depends on the platform's own country: per-platform availability is UNCONFIRMED, and Stripe's onboarding has the final say.",
+  "countries": ["AE", "AT", "AU", "BE", "BG", "BR", "CA", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB", "GI", "GR", "HK", "HR", "HU", "IE", "IT", "JP", "LI", "LT", "LU", "LV", "MT", "MX", "MY", "NL", "NO", "NZ", "PL", "PT", "RO", "SE", "SG", "SI", "SK", "TH", "US"]
+}
