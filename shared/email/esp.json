@@ -1,0 +1,8 @@
+{
+  "omnisend": { "label": "Omnisend", "unsubscribe": "[[unsubscribe_link]]" },
+  "mailchimp": { "label": "Mailchimp", "unsubscribe": "*|UNSUB|*" },
+  "kit": { "label": "Kit", "unsubscribe": "{{ unsubscribe_url }}" },
+  "mailerlite": { "label": "MailerLite", "unsubscribe": "{$unsubscribe}" },
+  "brevo": { "label": "Brevo", "unsubscribe": "{{ unsubscribe }}" },
+  "other": { "label": "Other", "unsubscribe": null }
+}
