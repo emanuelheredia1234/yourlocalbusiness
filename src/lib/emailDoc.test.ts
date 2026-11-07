@@ -10,6 +10,8 @@ import { emailTokens } from '@/pages/marketing/email/shared';
 import { sequenceCsv, sequenceText } from './emailFunnel';
 import { BUY_PREVIEW, docOf, emailHtml, emailText, emailValues, renderCtx, replaceDoc, setDoc, undoDoc, unhostedImages, unknownBuyIds, variantDoc } from './emailDoc';
 import type { EmailDoc } from '../../shared/email/blocks.mjs';
+import { applyTemplate } from '../../shared/email/migrate.mjs';
+import { applyEmailChange, emailDiff, openingOf } from './experiments/variants';
 import type { Project } from './types';
 
 const OFFER = 'AbCdEfGhIjKlMnOpQrStUv';
@@ -133,5 +135,25 @@ describe('the render context', () => {
     const step = { ...e, doc: docOf(e, p), variants: { experimentId: 'x', changed: 'opening' as const, b: { subject: e.subject, preview: e.preview, body: `A new opening.\n\n${e.body.split(/\n\s*\n/).slice(1).join('\n\n')}` } } };
     const b = variantDoc(step, p)!;
     expect(b.blocks[0]).toMatchObject({ type: 'text', text: step.variants.b.body });
+  });
+
+  it('an email with blocks: the opening is the first text block’s, not the heading (MakeVariations to version B)', () => {
+    const p = setup();
+    const e = p.marketing.emails[1];
+    const doc = applyTemplate('quick_win', { subject: 'Your tip', body: 'First para.\n\nSecond para.', ctaLabel: '', ctaUrl: '' }) as EmailDoc;
+    setDoc(p.id, e.id, doc);
+    const step = now(p.id).marketing.emails[1];
+    expect(step.body.startsWith('Your tip\n\n')).toBe(true);
+    expect(openingOf(step)).toBe('First para.');
+    const b = applyEmailChange(step, 'opening', 'Quick one today. First para.');
+    expect(emailDiff(step, b)).toEqual(['opening']);
+    const withB = { ...step, variants: { experimentId: 'x', changed: 'opening' as const, b: { subject: b.subject, preview: b.preview, body: b.body } } };
+    const bDoc = variantDoc(withB, now(p.id))!;
+    const texts = bDoc.blocks.filter((x) => x.type === 'text').map((x) => (x as { text: string }).text).join('\n\n');
+    const heads = bDoc.blocks.filter((x) => x.type === 'heading').map((x) => (x as { text: string }).text);
+    expect(heads).toContain('Your tip');
+    expect(texts).toContain('Quick one today. First para.');
+    expect(texts).not.toMatch(/Your tip/);
+    expect(texts).toContain('Second para.');
   });
 });

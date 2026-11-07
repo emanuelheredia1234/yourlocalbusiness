@@ -4,6 +4,8 @@
 
 import type { EmailStep, Experiment, ExperimentChanged, ExperimentKind, Post, VariantKey } from '@/lib/types';
 import { uid } from '@/lib/utils';
+import { eachBlock, type Block, type EmailDoc } from '../../../shared/email/blocks.mjs';
+import { plainFromDoc } from '../../../shared/email/migrate.mjs';
 
 export type PostChange = 'hook' | 'caption' | 'visual' | 'cta' | 'time';
 export type EmailChange = 'subject' | 'opening';
@@ -147,25 +149,52 @@ export function postPiece(p: PostFields, change: PostChange): string {
 
 // ───────────── email and page ─────────────
 
-export type EmailFields = Pick<EmailStep, 'subject' | 'preview' | 'body'>;
+export type EmailFields = Pick<EmailStep, 'subject' | 'preview' | 'body'> & { doc?: EmailDoc };
 
-export const firstParagraph = (body: string) => body.replace(/\r\n?/g, '\n').trim().split(/\n\s*\n/)[0] ?? '';
+const paragraphs = (body: string) => body.replace(/\r\n?/g, '\n').trim().split(/\n\s*\n/);
 
-export function applyEmailChange(source: EmailFields, change: EmailChange, value: string): EmailFields {
+export const firstParagraph = (body: string) => paragraphs(body)[0] ?? '';
+
+/**
+ * Which paragraph of the body is the email's opening. A plain email: the first. An email with blocks: the first
+ * paragraph of its first text block (its body starts with the headings' words, so paragraph 0 is often a heading).
+ */
+export function openingIndex(source: Pick<EmailFields, 'body' | 'doc'>): number {
+  const doc = source.doc;
+  if (!doc) return 0;
+  let first: Block | null = null;
+  eachBlock(doc, (b) => {
+    if (!first && b?.type === 'text' && String(b.text ?? '').trim()) first = b;
+  });
+  if (!first) return 0;
+  const opening = firstParagraph(plainFromDoc({ ...doc, blocks: [first] }).body);
+  const at = paragraphs(source.body).findIndex((x) => x.trim() === opening.trim());
+  return at < 0 ? 0 : at;
+}
+
+/** The email's opening paragraph (see openingIndex). */
+export const openingOf = (source: Pick<EmailFields, 'body' | 'doc'>): string => paragraphs(source.body)[openingIndex(source)] ?? '';
+
+/** Version B's opening: the paragraph of B's body where A's opening is (B shares A's blocks). */
+export const variantOpening = (a: Pick<EmailFields, 'body' | 'doc'>, bBody: string): string => paragraphs(bBody)[openingIndex(a)] ?? '';
+
+export function applyEmailChange<T extends EmailFields>(source: T, change: EmailChange, value: string): T {
   if (change === 'subject') return { ...source, subject: value.trim() };
-  const paras = source.body.replace(/\r\n?/g, '\n').trim().split(/\n\s*\n/);
-  paras[0] = value.trim();
+  const paras = paragraphs(source.body);
+  paras[openingIndex(source)] = value.trim();
   return { ...source, body: paras.join('\n\n') };
 }
 
+/** What differs between two versions; the opening is the one of version A (both share A's blocks). */
 export function emailDiff(a: EmailFields, b: EmailFields): string[] {
   const out: string[] = [];
   if (norm(a.subject) !== norm(b.subject)) out.push('subject');
   if (norm(a.preview) !== norm(b.preview)) out.push('preview');
-  const ra = a.body.replace(/\r\n?/g, '\n').trim().split(/\n\s*\n/);
-  const rb = b.body.replace(/\r\n?/g, '\n').trim().split(/\n\s*\n/);
-  if (norm(ra[0]) !== norm(rb[0])) out.push('opening');
-  if (norm(ra.slice(1).join(' ')) !== norm(rb.slice(1).join(' '))) out.push('rest');
+  const at = openingIndex(a);
+  const ra = paragraphs(a.body);
+  const rb = paragraphs(b.body);
+  if (norm(ra[at]) !== norm(rb[at])) out.push('opening');
+  if (norm(ra.filter((_, i) => i !== at).join(' ')) !== norm(rb.filter((_, i) => i !== at).join(' '))) out.push('rest');
   return out;
 }
 

@@ -12,6 +12,7 @@ import { createEmailAbDraft, deleteExperiment, experimentErrorCopy } from '@/lib
 import { Callout, Field, Spinner } from '../ui/primitives';
 import { docOf, variantDoc } from '@/lib/emailDoc';
 import { draftProblem, emailDraftPayload } from '@/lib/emailDraft';
+import { openingOf, variantOpening } from '@/lib/experiments/variants';
 
 export function EmailAbPanel({ project, step }: { project: Project; step: EmailStep }) {
   const v = step.variants;
@@ -71,11 +72,11 @@ export function EmailAbPanel({ project, step }: { project: Project; step: EmailS
       <div className="grid gap-2 text-small text-ink-2 sm:grid-cols-2">
         <p>
           <span className="label">A · Original</span>
-          {v.changed === 'subject' ? step.subject : step.body.split(/\n\s*\n/)[0]}
+          {v.changed === 'subject' ? step.subject : openingOf(step)}
         </p>
         <p>
           <span className="label">B</span>
-          {v.changed === 'subject' ? v.b.subject : v.b.body.split(/\n\s*\n/)[0]}
+          {v.changed === 'subject' ? v.b.subject : variantOpening(step, v.b.body)}
         </p>
       </div>
       {!started && !made && (

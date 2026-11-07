@@ -18,7 +18,9 @@ import { useStore } from '@/store/useStore';
 import { useExperiments } from '@/store/experiments';
 import { pickExperimentWinner } from './api';
 import { withSeoVariant } from './page';
-import { captionParts } from './variants';
+import { applyEmailChange, captionParts, variantOpening } from './variants';
+import { normalizeDoc } from '../../../shared/email/blocks.mjs';
+import { plainOf, variantDoc } from '@/lib/emailDoc';
 
 const DIMENSION_NAME: Record<string, string> = { hook: 'hooks', caption: 'captions', visual: 'visuals', cta: 'calls to action', time: 'posting times', subject: 'subject lines', opening: 'email openings', headline: 'page headlines', hero: 'page heroes' };
 export const MAX_LEARNED_LINES = 5;
@@ -86,7 +88,8 @@ function winnerTextOf(e: Experiment, key: VariantKey, project: Project | undefin
   }
   if (e.kind === 'email' && key === 'b') {
     const step = project?.marketing.emails.find((s) => s.variants?.experimentId === e.id);
-    return e.changed === 'subject' ? step?.variants?.b.subject : step?.variants?.b.body.split(/\n\s*\n/)[0];
+    if (!step?.variants) return undefined;
+    return e.changed === 'subject' ? step.variants.b.subject : variantOpening(step, step.variants.b.body);
   }
   return undefined;
 }
@@ -116,9 +119,12 @@ export async function applyWinner(e: Experiment, key: VariantKey, o: { override?
           const { variants, ...rest } = s;
           if (key !== 'b') return rest;
           if (variants.changed === 'subject') return { ...rest, subject: variants.b.subject };
-          const paras = rest.body.split(/\n\s*\n/);
-          paras[0] = variants.b.body.split(/\n\s*\n/)[0] ?? paras[0];
-          return { ...rest, body: paras.join('\n\n') };
+          // an email with blocks: its doc gets B's opening too (every render, export and draft uses the doc)
+          if (s.doc) {
+            const doc = normalizeDoc(variantDoc(s, p) ?? s.doc).doc;
+            return { ...rest, doc, ...plainOf(doc, p) };
+          }
+          return { ...rest, body: applyEmailChange(rest, 'opening', variantOpening(rest, variants.b.body)).body };
         }),
       },
     }));

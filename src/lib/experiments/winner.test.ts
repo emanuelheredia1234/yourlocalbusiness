@@ -87,6 +87,25 @@ describe('Use the winner', () => {
     expect(api.pickExperimentWinner).toHaveBeenLastCalledWith('e2', 'b', false);
   });
 
+  it('email with blocks, B won the opening: the doc gets B’s opening too (renders and drafts use the doc)', async () => {
+    const { applyTemplate } = await import('../../../shared/email/migrate.mjs');
+    const { normalizeDoc } = await import('../../../shared/email/blocks.mjs');
+    const { plainOf } = await import('@/lib/emailDoc');
+    const p0 = useStore.getState().projects[0];
+    const doc = normalizeDoc(applyTemplate('quick_win', { subject: 'Your tip', body: 'First para.\n\nSecond para.', ctaLabel: '', ctaUrl: '' })).doc;
+    const body = plainOf(doc, p0).body;
+    const bBody = body.replace('First para.', 'Quick one today. First para.');
+    useStore.getState().updateProject('p1', (p) => ({ ...p, marketing: { ...p.marketing, emails: [{ ...p.marketing.emails[0], doc, body, variants: { experimentId: 'e3', changed: 'opening', b: { subject: 'Welcome!', preview: 'p', body: bBody } } }] } }));
+    vi.mocked(api.pickExperimentWinner).mockResolvedValue({ experiment: exp({ id: 'e3', kind: 'email', changed: 'opening', winner: 'b' }), learning: learning({ changed: 'opening' }) });
+    await applyWinner(exp({ id: 'e3', kind: 'email', changed: 'opening' }), 'b');
+    const step = useStore.getState().projects[0].marketing.emails[0];
+    expect(step.variants).toBeUndefined();
+    const texts = step.doc!.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n\n');
+    expect(texts).toContain('Quick one today. First para.');
+    expect(step.body).toContain('Quick one today. First para.');
+    expect(step.body.startsWith('Your tip')).toBe(true);
+  });
+
   it('"Pick one anyway" sends override', async () => {
     vi.mocked(api.pickExperimentWinner).mockResolvedValue({ experiment: exp({ winner: 'a' }), learning: learning({ override: true, lift: null }) });
     await applyWinner(exp({ result: { verdict: 'too_close' } }), 'a', { override: true });

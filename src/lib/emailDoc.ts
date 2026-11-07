@@ -5,7 +5,8 @@
 
 import { create } from 'zustand';
 import type { EmailStep, Project } from './types';
-import { docImageSrcs, docBuyIds, eachBlock, normalizeDoc, MERGE_TAGS, type EmailDoc, type ThemeRef } from '../../shared/email/blocks.mjs';
+import { docImageSrcs, docBuyIds, eachBlock, normalizeDoc, MERGE_TAGS, type Block, type EmailDoc, type TextBlock, type ThemeRef } from '../../shared/email/blocks.mjs';
+import { variantOpening } from './experiments/variants';
 import { docFromPlain, plainFromDoc } from '../../shared/email/migrate.mjs';
 import { renderEmail, renderText, type EspId, type RenderContext, type RenderResult, type RenderTarget } from '../../shared/email/render.mjs';
 import { emailTokens, signedUpAt } from '@/pages/marketing/email/shared';
@@ -167,11 +168,16 @@ export function variantDoc(step: EmailStep, p: Project): EmailDoc | undefined {
   if (!v || !step.doc) return undefined;
   const doc = structuredClone(step.doc) as EmailDoc;
   if (v.changed !== 'opening') return doc;
-  const opening = v.b.body.split(/\n\s*\n/)[0] ?? '';
-  const first = doc.blocks.find((b) => b.type === 'text');
-  if (first && first.type === 'text' && opening) {
-    const rest = first.text.split(/\n\s*\n/).slice(1);
-    first.text = [opening, ...rest].join('\n\n');
+  // B's opening sits where A's is in the body (after the headings' words), and replaces the first text block's first paragraph
+  const opening = variantOpening(step, v.b.body).trim();
+  let first: Block | null = null;
+  eachBlock(doc, (b) => {
+    if (!first && b.type === 'text' && b.text.trim()) first = b;
+  });
+  const text = first as TextBlock | null;
+  if (text && opening) {
+    const rest = text.text.replace(/\r\n?/g, '\n').trim().split(/\n\s*\n/).slice(1);
+    text.text = [opening, ...rest].join('\n\n');
   }
   void p;
   return doc;
