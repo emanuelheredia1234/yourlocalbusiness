@@ -31,8 +31,12 @@ import { copyButton, downloadButton, fileButton, noteInChat } from '../buttons';
 import { deleteConfirm, manusCard } from '../confirm';
 import { host } from '../host';
 import { activeProject } from '../lookup';
+import { marketOwnerExclusions } from './excluded';
 import { arg, clip, defineTool, untrusted, type AnyTool, type ArgValue, type ChatButton, type ConfirmCardSpec } from '../registry';
 import { useOffers } from '@/store/offers';
+import { isOnWeb, limitText, MarketError, missingText, statusLine, useMarketConfig } from '@/lib/marketPublic';
+import { marketConfig, marketOn } from '@/lib/marketConfig';
+import { atLimit, putListingOnWeb, takeListingOffWeb, useMarketPublic } from '@/store/marketPublic';
 
 const SHOT_IDS = ['hero', 'lifestyle', 'inside', 'offer'] as const satisfies readonly ListingShotId[];
 const PACKAGE_MODELS = ['per-session', 'project', 'monthly', 'one-time', 'quote', 'free'] as const satisfies readonly ServicePriceModel[];
@@ -198,11 +202,39 @@ function visibility(): string {
   return useRuntime.getState().community === 'live' ? 'only the owner (“Show my listings to other people” is off)' : 'only the owner (no shared Marketplace in this view)';
 }
 
+// ───────────── the listing's public web page (P7) ─────────────
+
+const WEB_OFF = 'Public web listings aren’t available here.';
+
+/** The server's config and your public listings, read once (nothing in the claude.ai build or with the market off). */
+async function readWeb(): Promise<void> {
+  if (__ARTIFACT_BUILD__) return;
+  if (!useMarketConfig.getState().config?.reachable) await marketConfig();
+  if (marketOn() && !useMarketPublic.getState().loaded) await useMarketPublic.getState().load();
+}
+
+/** get_listing's web field: the listing's public page, or null with a note where the feature is off. */
+function webOf(p: Project): { web: Record<string, unknown> | null; webNote?: string } {
+  if (__ARTIFACT_BUILD__ || !marketOn()) return { web: null, webNote: WEB_OFF };
+  const live = liveListing(p);
+  const st = useMarketPublic.getState();
+  const s = live ? st.byListing[live.id] : undefined;
+  return {
+    web: {
+      public: isOnWeb(s),
+      ...(s ? { url: s.url, status: statusLine(s)?.text ?? 'Off the web', indexable: s.indexable, ...(s.missing.length ? { missing: s.missing.map(missingText) } : {}) } : {}),
+      limit: st.limit,
+      used: st.used,
+    },
+  };
+}
+
 const getListing = defineTool({
   name: 'get_listing',
   class: 'R',
-  summary: 'The listing: words, price, links, what’s missing to publish, live or not, who sees it, the four images, brand image ids.',
+  summary: 'The listing: words, price, links, what’s missing, live or not, who sees it, web page, images, brand image ids.',
   args: {},
+  prepare: () => readWeb(),
   run: () => {
     const p = activeProject();
     const d = p.studio.listing;
@@ -229,6 +261,7 @@ const getListing = defineTool({
         website: p.brand.websiteUrl || null,
         live: live ? { since: p.studio.publishedAt ? fmtDateTime(p.studio.publishedAt) : null, upToDate: !listingChanged(p, live) } : null,
         whoSeesIt: visibility(),
+        ...webOf(p),
         missing: checks.filter((c) => !c.ok && !c.optional).map((c) => c.label),
         tips: checks.filter((c) => !c.ok && c.optional).map((c) => c.label),
         images: listingShots(p).map((s) => {
@@ -555,6 +588,60 @@ const unpublishListing = defineTool({
     const gone = unpublishProjectListing();
     if (!gone) return { ok: false, error: 'This project’s listing isn’t on the Marketplace any more.' };
     return { data: { unpublished: gone.title }, note: `Unpublished your listing “${clip(gone.title, 60)}”` };
+  },
+});
+
+const setListingPublicTool = defineTool({
+  name: 'set_listing_public',
+  class: 'P-text',
+  summary: 'Put the published listing on the web (its own page Google can index), or take it off. Asks on a card first.',
+  args: { on: arg.boolean() },
+  prepare: () => readWeb(),
+  validate: ({ on }) => {
+    if (__ARTIFACT_BUILD__ || !marketOn()) return `${WEB_OFF} They need the app’s own server with the public marketplace on, signed in.`;
+    const p = activeProject();
+    const live = liveListing(p);
+    if (!live) return 'The listing isn’t published yet. Publish it to the Marketplace first (publish_listing); then it can go on the web.';
+    const s = useMarketPublic.getState().byListing[live.id];
+    if (s?.status === 'hidden') return 'Your Local Business hid this listing from the web, so it can’t go back on.';
+    if (on && isOnWeb(s)) return `It’s already on the web at ${s!.url}.`;
+    if (!on && !isOnWeb(s)) return 'It isn’t on the web.';
+    if (on && atLimit(live.id)) return limitText(useMarketPublic.getState().limit ?? 0);
+    return null;
+  },
+  card: ({ on }) => {
+    const live = liveListing(activeProject());
+    const title = clip(live?.title ?? 'your listing', 80);
+    const s = live ? useMarketPublic.getState().byListing[live.id] : undefined;
+    const where = s?.url ?? `${useMarketConfig.getState().config?.publicUrl ?? '/market'}/<its name>`;
+    return on
+      ? {
+          title: `Put “${title}” on the web?`,
+          what: `It gets its own public page at ${where} that anyone can open and Google can list, on its own schedule (usually days to weeks; nothing is guaranteed). Its cover and gallery are uploaded as public images. Your email address isn’t shown.`,
+          who: 'Everyone on the web, including search engines.',
+          confirmLabel: 'Put on the web',
+        }
+      : { title: `Take “${title}” off the web?`, what: `Its address (${where}) stops working and Google drops it. The listing stays on the Marketplace.`, who: 'Visitors and search engines.', confirmLabel: 'Take it off' };
+  },
+  run: async ({ on }, ctx) => {
+    if (useStore.getState().activeProjectId !== ctx.projectId) return { ok: false, error: 'The owner switched projects, so nothing changed.' };
+    const p = activeProject();
+    const live = liveListing(p);
+    if (!live) return { ok: false, error: 'The listing isn’t published any more.' };
+    try {
+      if (!on) {
+        await takeListingOffWeb(live.id);
+        return { data: { public: false }, note: `Took “${clip(live.title, 60)}” off the web` };
+      }
+      const s = await putListingOnWeb(p, live);
+      return {
+        data: { public: true, url: s.url, status: statusLine(s)?.text ?? s.status, indexable: s.indexable, ...(s.missing.length ? { missing: s.missing.map(missingText) } : {}), google: 'Google picks it up on its own schedule; nothing is submitted from here.' },
+        note: s.status === 'live' ? `Put “${clip(live.title, 60)}” on the web` : `Put “${clip(live.title, 60)}” on the web (not on Google yet)`,
+      };
+    } catch (e) {
+      // the server's own words: the plan's limit, hidden by the owner, a paused plan
+      return { ok: false, error: e instanceof MarketError || e instanceof Error ? e.message : 'That didn’t work. Try again.' };
+    }
   },
 });
 
@@ -899,3 +986,11 @@ export const studioTools: AnyTool[] = [
   downloadProductFileTool,
   deleteProductFileTool,
 ];
+
+/**
+ * The listing's public web page (P7): its own group, listed only while the server has the public marketplace on and
+ * you're signed in (catalog.ts), so it costs the prompt nothing otherwise. The app owner's moderation is an owner-only
+ * page. The claude.ai build has none of it (the excluded group says why).
+ */
+export const webToolsFor = (artifact: boolean): AnyTool[] => (artifact ? [] : [setListingPublicTool, ...marketOwnerExclusions]);
+export const webTools: AnyTool[] = webToolsFor(__ARTIFACT_BUILD__);

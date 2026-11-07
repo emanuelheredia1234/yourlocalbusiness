@@ -329,7 +329,8 @@ function route(req, res, url) {
     // billing: whether plans are set up and enforced (no key, no ids)
     // offers: whether buy links and Whop are on (booleans only)
     // experiments: whether A/B tests are on (P4b)
-    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config(), billing: integrations.billing.config(), offers: integrations.offersConfig(), morning: integrations.morningConfig(), experiments: integrations.experimentsConfig() }, corsHeaders(req));
+    // market: whether the public marketplace is on, and its address (P7)
+    return send(res, 200, { accounts: auth.publicConfig(), pages: pages.config(), billing: integrations.billing.config(), offers: integrations.offersConfig(), morning: integrations.morningConfig(), experiments: integrations.experimentsConfig(), market: integrations.marketConfig() }, corsHeaders(req));
   }
   if (url.pathname === '/api/health' && req.method === 'GET') {
     // `ok`: the server is up; `ai` says which keys are ready and what powers each function (signed-in users only, with accounts on)
@@ -354,6 +355,9 @@ function route(req, res, url) {
   // the app's short public routes: /m/<id> (a lead magnet's download, server/leadFiles.mjs), /b/<id> (a buy link,
   // server/offers/buy.mjs), /o/ (not yet)
   if (pages.matchPublicRoute(url)) return void pages.servePublicRoute(req, res, url).catch((e) => crashed(req, res, e));
+  // the public marketplace (/market, /market/<name>, /market/<name>/report; server/market/): the app's host only (another
+  // host never gets here: serveDomain answers it), before the 405 below so a report form's POST reaches it
+  if (integrations.marketPublic.match(url)) return void integrations.marketPublic.handle(req, res, url).catch((e) => crashed(req, res, e));
   // a visitor sending a published page's form (/<name>/lead; server/leads.mjs)
   if (req.method === 'POST' && pages.matchLead(url)) return void pages.receiveLead(req, res, url).then((handled) => handled || send(res, 405, 'Method not allowed'), (e) => crashed(req, res, e));
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');

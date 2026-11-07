@@ -14,7 +14,7 @@ An AI workspace for researching, building, branding, listing and marketing digit
 | **Marketing Hub** | Four channels: **SEO** (metadata, live 0–100 score with checklist, Google and link previews, click-to-edit sales page, section manager; guide the AI in your own words, edit with AI (the whole page or one section) with undo, your own photos as the main image and a gallery, publish at an address you name, HTML export with JSON-LD), **Email** (lead magnet with a published download at a permanent /m/ link (a PDF of the guide, a file or a link, optionally behind an email gate), opt-in page copy and preview, 5-email sequence with editable delays, preview and CSV export for your email provider, subscriber list with CSV import and export), **Social** (cadence, watermark, 5 image + 5 video styles, platforms and your handles, post-type mix, 30-day plan, 7-day ready-to-post batch with mockups, add to calendar in bulk, and a **Create individual post** tab for one post at a time), **Paid ads** (objectives, platforms, budget, targeting, A/B creatives, Google search ads, then copy or CSV export to each platform's ads manager, or **Launch…** on Meta and Google Search from the app with a spend confirm, and a **Campaigns** tab to pause, resume, end, change the budget or end date and swap the ad; see docs §3c). |
 | **Content calendar** | Planned (5-week calendar with drag-to-move, or list; posts whose time has passed are flagged **Due**), Posted (by Manus, or marked by you, with the real link when there is one), Drafts; full inline editor with a platform preview. Nothing posts on its own: Manus posts when you confirm, or you post yourself and choose **Mark as posted**. |
 | **Analytics** | Real counts only: posts that went out (reported by Manus or marked by you) with period deltas, posts planned and due, things made with AI, a daily chart (with table view), posts by network, type and format, and the posted list with links. Likes, views, clicks and sales live on each network and on your own checkout, so the app doesn't show or estimate them. |
-| **Marketplace** | Products and local businesses, search, category pills, location filter + map, and listing details. Buyers buy, book or get in touch through each seller's own checkout or booking link, website, email or phone: the app takes no payments and sends no messages. No ratings, reviews or sold counts (nothing measures them). |
+| **Marketplace** | Products and local businesses, search, category pills, location filter + map, and listing details. Buyers buy, book or get in touch through each seller's own checkout or booking link, website, email or phone: the app takes no payments and sends no messages. No ratings, reviews or sold counts (nothing measures them). Public on the web: listings you choose get their own page at `/market/<name>` that Google can index (3/15/50 by plan). |
 | **Brain** | Skills (voice, audience, rules, offers, SEO, email…) written in plain language and parsed into rules, a skill library, knowledge documents (facts and key terms are extracted), a with/without playground with highlighted differences, an activity log, and learned preferences from thumbs-down feedback. |
 | **Settings** | Brand kit (logo upload or designer, colors, banner, images, socials), **AI** (your API keys: what each one powers, its model and effort, priority, usage, and the Brain switch), social accounts, projects, backup/restore, preferences, and **Account** (save status, password, log out, delete account). |
 | **Accounts** | Sign up and sign in with email and password; each person's workspace and files are saved to their account (Supabase) and open on any device. |
@@ -531,6 +531,44 @@ existing `/api/webhooks/stripe`: docs/integrations-setup.md, "Stripe Connect: se
 `npx vitest run src/lib/stripeConnect.test.ts src/pages/settings/StripeConnectCard.render.test.ts
 src/pages/settings/StripeConnectCard.dom.test.ts src/components/offers src/ai/assistant/tools/payments.test.ts
 src/pages/admin/ConnectSection.render.test.ts` for the app).
+
+## Public marketplace (P7)
+
+Self-hosted, signed in, never in the claude.ai build. The in-app Marketplace stays as it is (signed in only); a seller
+can also turn on **Public on the web** for a published listing (Studio › Listing & publish, My listings' menu, or the
+assistant's `set_listing_public` after a confirm card). The app uploads the cover and gallery as hosted images
+(`public-files/<uid>/l-<random>.<ext>`, never data URLs) and sends the listing to `PUT /api/market/public/<id>`; the
+server checks it and keeps its own copy (`public_listings`), and only that copy is ever shown to visitors.
+
+- **Addresses** (the app's own host only; a custom domain answers "not found"): `/market` (the grid, with category,
+  search and pages), `/market/<name>` (one listing; the name is set once and never changes) and
+  `/market/<name>/report`. The canonical address is always the app's own.
+- **What's shown:** title, tagline, price, photos, description, services, what's included, the city (never map
+  coordinates), and a way to act: **Buy** goes through the listing's P3/P6 buy link (`/b/<id>`, `rel="nofollow"`), and
+  the seller's own site has `rel="ugc nofollow noopener"`. Never the email address, ratings, reviews or sold counts.
+  Every word is the seller's, escaped on output; the pages carry no scripts (one JSON-LD data block).
+- **Plans:** 3 public listings on Launch, 15 on Grow, 50 on Scale (unlimited for the owner); at most 10 new ones a
+  day. Over the limit after a downgrade, the newest ones go off the web (the daily `market-sweep`).
+- **Google:** a listing goes on Google (`index`, the grid and `/sitemap.xml`) only when it's full enough: 200+
+  characters and 35+ words of description, a cover photo, 3+ tags, a price (or Get a quote / Free), a way to buy or
+  reach the seller, a description that isn't another seller's, and a paid plan (not during a card trial). Otherwise
+  it's on the web with `noindex` and the Studio lists what to add. Search results and report pages are always
+  `noindex`. Sitemaps go to Search Console at most once a day (the owner's button, or the daily
+  `market-sitemap-submit` when something changed); sellers never submit anything, and indexing is never guaranteed.
+- **Reports and moderation:** visitors report a listing with a form (no script); 3 distinct reporters in 7 days put
+  it on hold (`noindex`, off the grid and sitemap) until the owner looks. The owner sees open reports, held and
+  hidden listings in Owner › Customer usage › Public marketplace, and hides (the page answers 410; the seller can't
+  turn it back on), unhides or dismisses. Sellers see only the status and a count, never who reported or why.
+- **Off:** the seller's switch (or deleting the listing or business) makes the page answer 410, so Google drops it;
+  unlisted rows go after 180 days.
+- **Caching:** pages are cached 60 s (search 30 s) with an ETag; a change shows at once on the server copy that made
+  it and within 60 s on the others.
+
+Owner setup: run `supabase/migrations/20261119000000_public_market.sql`, optionally set `MARKET_REPORT_SECRET`, and
+check that `GSC_APP_PROPERTY` is a verified property: docs/integrations-setup.md, "Public marketplace (P7)". Tests
+use mock-supabase and treg's fake and never call Google (`npx vitest run server/market` for the server, `npx vitest
+run src/lib/marketPublic.test.ts src/pages/studio/PublishTab.render.test.ts src/pages/admin/MarketSection.render.test.ts
+src/ai/assistant/tools/studio.web.test.ts` for the app).
 
 ## Scheduled jobs
 

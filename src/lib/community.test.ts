@@ -26,4 +26,13 @@ describe('a listing from another seller', () => {
     expect(fromShared({ ...base, seller: null }, 'u', 'l')).toBeNull();
     expect(fromShared({ ...base, cover: 'x' }, 'u', 'l')).toBeNull();
   });
+
+  it('keeps its public web page (P7) as this app’s own /market/<slug> address, never the address the seller wrote', () => {
+    const origin = 'https://yourlocalbusiness.replit.app';
+    const web = { slug: 'budget-planner-ab12cd', url: `${origin}/market/budget-planner-ab12cd` };
+    expect(fromShared({ ...base, web }, 'u', 'l', origin)?.web).toEqual(web);
+    // an outside address is never kept: the link is rebuilt from the slug on this app
+    expect(fromShared({ ...base, web: { ...web, url: 'https://phish.example/market/budget-planner-ab12cd' } }, 'u', 'l', origin)?.web).toEqual(web);
+    expect(fromShared({ ...base, web: { slug: '<script>', url: `${origin}/market/<script>` } }, 'u', 'l', origin)).not.toHaveProperty('web');
+  });
 });

@@ -3,7 +3,8 @@
 // accounts, calls and the profile estimates) and ad accounts (Zernio) side by side, Upload-Post profiles used of the
 // plan's 75 overall and per customer, their caps (edit, block, reset), the check of our ledger
 // against treg's own totals, a CSV to bill from, the ad launch limits (AdsLimitsSection) and Stripe Connect
-// (ConnectSection: sellers, our fees, platform alerts). The server
+// (ConnectSection: sellers, our fees, platform alerts) and the public marketplace (MarketSection: reports, hide and
+// unhide, the sitemap submit). The server
 // answers all of it to admins only; this page charges nothing. Team-level provider alerts show as plain words, never amounts or links.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ban, CircleCheck, Download, Pencil, Receipt, RefreshCw, RotateCcw } from 'lucide-react';
@@ -18,6 +19,7 @@ import { AdsLimitsSection } from './AdsLimitsSection';
 import { PlansAdminSection } from './PlansAdminSection';
 import { CancelSurveysSection } from './CancelSurveysSection';
 import { MorningSection } from './MorningSection';
+import { MarketSection } from './MarketSection';
 import { ConnectSection } from './ConnectSection';
 import { OWNER_SECTION_ID, scrollToOwnerSection, takeOwnerSection } from './ownerLinks';
 import { Badge, Callout, Empty, Field, InfoTip, Modal, MoreMenu, PageHeader, Select, SettingsSection, Skeleton, Spinner, StatStrip, confirmAction, type MenuEntry } from '@/components/ui/primitives';
@@ -309,6 +311,7 @@ export function BillingView({ data, report, onEdit, onChanged }: { data: Data; r
         <AdsLimitsSection />
       </div>
       <MorningSection />
+      <MarketSection />
     </div>
   );
 }

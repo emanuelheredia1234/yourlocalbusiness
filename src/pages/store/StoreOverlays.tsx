@@ -4,6 +4,8 @@ import { cn, fmtMoney } from '@/lib/utils';
 import { FORMATS } from '@/ai/knowledge';
 import { useUI } from '@/store/ui';
 import { Badge, InfoTip, Modal } from '@/components/ui/primitives';
+import { useMarketOn } from '@/lib/marketConfig';
+import { ListingWebRow, ReportListingDialog } from '@/components/market/ReportListing';
 import { MiniMark } from '@/components/brand/Logo';
 import { ListingCover } from './ListingParts';
 import { priceLabel } from '@/lib/listing';
@@ -15,7 +17,13 @@ function ListingModal() {
   const open = useUI((s) => s.openListing);
   const l = useMemo(() => findListing(id), [id]);
   const [view, setView] = useState(0);
-  useEffect(() => setView(0), [id]);
+  const [reporting, setReporting] = useState(false);
+  // public web pages (P7): "View on the web" and "Report listing" need the app's server with the market on
+  const webOn = useMarketOn();
+  useEffect(() => {
+    setView(0);
+    setReporting(false);
+  }, [id]);
   if (!id || !l) return null;
   const close = () => open(null);
   const isBiz = l.kind === 'business';
@@ -119,8 +127,10 @@ function ListingModal() {
           ) : (
             <p className="text-small text-muted">{mine ? 'Add your own buy or booking link, email or phone in the Studio (Publish tab), so people can reach you.' : 'The seller hasn’t added a way to buy or get in touch yet.'}</p>
           )}
+          <ListingWebRow listing={l} mine={mine} webOn={webOn} onReport={() => setReporting(true)} />
         </aside>
       </div>
+      {reporting && l.web && l.seller.ownerId && <ReportListingDialog slug={l.web.slug} sellerId={l.seller.ownerId} title={l.title} onClose={() => setReporting(false)} />}
     </Modal>
   );
 }

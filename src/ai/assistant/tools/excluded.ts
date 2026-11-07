@@ -24,6 +24,26 @@ export const paymentsHere = defineTool({
   refusal: { text: 'Payments need the app’s own server, so they aren’t available here. In the self-hosted app, they’re in Settings › Payments.' },
 });
 
+/** The claude.ai build: public web listings (P7) need the app's server (set_listing_public isn't registered there). */
+export const webListingsHere = defineTool({
+  name: 'set_listing_public',
+  class: 'X',
+  summary: 'Put a listing on the web (its own public page Google can index), or take it off.',
+  args: why,
+  refusal: { text: 'Public web listings need the app’s server, so they aren’t available here. In the self-hosted app, it’s the “Public on the web” switch in Studio › Listing & publish.' },
+});
+
+/** The app owner's moderation of public listings and the sitemap submit (P7): owner-only pages, never the assistant (in the web group). */
+export const marketOwnerExclusions: AnyTool[] = [
+  defineTool({
+    name: 'moderate_market',
+    class: 'X',
+    summary: 'Review reported web listings, hide or unhide them, or send the sitemap to Google (the app’s owner only).',
+    args: why,
+    refusal: { text: 'Reports, hiding listings and sending the sitemap to Google are only done by the app’s owner, on the owner’s admin page (Public marketplace). I opened it.', route: 'admin-billing' },
+  }),
+];
+
 /** Money that only the owner moves (P6): never done by the assistant. Not in the claude.ai build (paymentsHere instead). */
 export const paymentExclusions: AnyTool[] = [
   defineTool({
@@ -107,4 +127,6 @@ export const excludedTools: AnyTool[] = [
   ...(__ARTIFACT_BUILD__ ? [abTestsHere] : []),
   // payments (P6) need the app's server too
   ...(__ARTIFACT_BUILD__ ? [paymentsHere] : paymentExclusions),
+  // public web listings (P7) need the app's server (in the self-hosted app they're the web group's, studio.ts)
+  ...(__ARTIFACT_BUILD__ ? [webListingsHere] : []),
 ];

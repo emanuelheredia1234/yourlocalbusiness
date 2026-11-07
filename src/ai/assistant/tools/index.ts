@@ -4,7 +4,7 @@
 import { createRegistry } from '../registry';
 import { coreTools } from './core';
 import { socialTools } from './social';
-import { studioTools } from './studio';
+import { studioTools, webTools } from './studio';
 import { marketingTools } from './marketing';
 import { brandTools } from './brand';
 import { agentTools } from './agents';
@@ -14,6 +14,6 @@ import { excludedTools } from './excluded';
 import { emailTools } from './email';
 import { paymentTools } from './payments';
 
-export const TOOL_GROUPS = { core: coreTools, social: socialTools, studio: studioTools, marketing: marketingTools, brand: brandTools, agents: agentTools, morning: morningTools, ab: experimentTools, email: emailTools, payments: paymentTools, excluded: excludedTools };
+export const TOOL_GROUPS = { core: coreTools, social: socialTools, studio: studioTools, marketing: marketingTools, brand: brandTools, agents: agentTools, morning: morningTools, ab: experimentTools, email: emailTools, payments: paymentTools, web: webTools, excluded: excludedTools };
 
 export const registry = createRegistry(Object.values(TOOL_GROUPS).flat());

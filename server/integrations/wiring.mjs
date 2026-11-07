@@ -38,6 +38,9 @@
 //   /api/experiments…                                      server/experiments/index.mjs (A/B tests and Trial Reels'
 //                                                          eligibility; posting's variant hooks; the page split's
 //                                                          hooks for pages.mjs: integrations.experimentPages)
+//   /api/market…                                           server/market/index.mjs (the public marketplace: sellers'
+//                                                          "Public on the web", reports, the owner's moderation; its
+//                                                          pages /market… on the app host: integrations.marketPublic)
 //
 // Each module's factory gets the same deps: { auth, storage (appState), db (server/integrations/db.mjs),
 // connections, treg, omnisend, send, readJson, readRaw, rateLimited, limit, corsHeaders, sameOrigin,
@@ -67,6 +70,7 @@ import { createAdsRoutes } from '../ads/routes.mjs';
 import { createOffers } from '../offers/index.mjs';
 import { createMorning } from '../morning/index.mjs';
 import { createExperiments } from '../experiments/index.mjs';
+import { createMarket } from '../market/index.mjs';
 import { createTreg } from '../treg.mjs';
 import { createTrialReels } from '../social/trialReels.mjs';
 import { dbFromEnv, INTEGRATIONS_MIGRATION } from './db.mjs';
@@ -113,6 +117,7 @@ export const DEFAULT_FACTORIES = Object.freeze({
   offers: createOffers,
   morning: createMorning,
   experiments: createExperiments,
+  market: createMarket,
   treg: createTreg,
 });
 
@@ -148,6 +153,7 @@ export function moduleFor(pathname) {
   if (under(ROUTE_PREFIXES.offers) || under(ROUTE_PREFIXES.whop) || under(ROUTE_PREFIXES.whopWebhook) || under(ROUTE_PREFIXES.stripePayments) || under(ROUTE_PREFIXES.stripeConnectWebhook)) return 'offers';
   if (under(ROUTE_PREFIXES.morning)) return 'morning';
   if (under(ROUTE_PREFIXES.experiments)) return 'experiments';
+  if (under(ROUTE_PREFIXES.market)) return 'market';
   return null;
 }
 
@@ -211,6 +217,8 @@ export function createIntegrations({
     morning: make.morning({ ...deps, aiText, aiPowered }),
     // A/B tests: after morning (its hourly results job runs after the morning action's)
     experiments: make.experiments(deps),
+    // the public marketplace: after offers and billing (it reads both; the offers config late-bound, for test mode)
+    market: make.market({ ...deps, offersConfig: () => modules.offers?.config?.() ?? null }),
   };
   experimentsModule = modules.experiments;
   adsModule = modules.ads;
@@ -218,6 +226,9 @@ export function createIntegrations({
   // P6: our fee events reach the P1 Stripe endpoint (the platform's); Stripe Connect handles them
   modules.billing.plans?.setPlatformEventHandler?.((evt) => modules.offers.connectPlatformEvent?.(evt) ?? 'ignored');
   const sitemap = make.sitemap(deps);
+  // the sitemap lists the market's live listings; the market drops the sitemap's cache when one changes
+  sitemap.setMarket?.(modules.market);
+  modules.market.setSitemap?.(sitemap);
   // an upload_completed webhook from Upload-Post finishes its job (sent / failed) the same way "Check again" does
   // (only a job of the business whose profile the event came through)
   connections.impl?.social?.setPostListener?.((userId, jobId, outcome, where) => modules.posting.posting?.fromWebhook?.(userId, jobId, outcome, where));
@@ -225,7 +236,7 @@ export function createIntegrations({
   connections.impl?.ads?.setAdsListener?.((userId, zid, evt) => modules.ads.fromWebhook?.(userId, zid, evt));
   // account deletion: the vendor's connections go first (while their ids are still known), then the rest
   // (offers before billing: each Whop webhook gets its one removal attempt while the keys are still there)
-  const FORGET_ORDER = ['ads', 'posting', 'analytics', 'seoGoogle', 'offers', 'billing', 'publicMedia', 'experiments', 'nango', 'connections'];
+  const FORGET_ORDER = ['ads', 'posting', 'analytics', 'seoGoogle', 'market', 'offers', 'billing', 'publicMedia', 'experiments', 'nango', 'connections'];
 
   const crashed = (req, res, path, e) => {
     safeLog('integration_error', { path: redactPath(path), error: e?.name || 'Error', code: e?.code }, log);
@@ -248,6 +259,10 @@ export function createIntegrations({
     experimentsConfig: () => modules.experiments.config?.() ?? { enabled: false },
     /** the page split's hooks for pages.mjs and leads.mjs (null when A/B tests are off) */
     experimentPages: modules.experiments.pageHooks ?? null,
+    /** the public marketplace's pages (/market… on the app's host only), for ai-server.mjs */
+    marketPublic: modules.market.publicRoutes ?? { match: () => false, handle: async () => {} },
+    /** the public marketplace, for /api/config: { enabled, publicUrl } */
+    marketConfig: () => modules.market.config?.() ?? { enabled: false, publicUrl: null },
     /** pages.mjs, once made: "Use the winner" republishes a page with version B through it */
     setPages: (pages) => modules.experiments.setPages?.(pages),
     /** for tests and the startup notes */
@@ -372,6 +387,7 @@ export function createIntegrations({
       lines.push(...(modules.offers.notes?.() ?? []));
       lines.push(...(modules.morning.notes?.() ?? []));
       lines.push(...(modules.experiments.notes?.() ?? []));
+      lines.push(...(modules.market.notes?.() ?? []));
       if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql, supabase/migrations/20261108000000_ads_launch.sql, supabase/migrations/20261110000000_billing.sql, supabase/migrations/20261111000000_video_week.sql, supabase/migrations/20261116000000_morning_action.sql and supabase/migrations/20261117000000_experiments.sql in Supabase.`);
       return lines;
     },

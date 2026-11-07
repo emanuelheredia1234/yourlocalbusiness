@@ -15,11 +15,13 @@ import { useAuth } from '@/lib/cloud/auth';
 import { useExperimentsConfig } from '@/lib/experiments/config';
 import { useStore } from '@/store/useStore';
 import { useOffers } from '@/store/offers';
+import { useMarketConfig } from '@/lib/marketConfig';
 import { generateEmailSequence } from '@/ai/local/email';
 
-/** A/B tests and payments on here (signed in, the server has them), or off. */
+/** A/B tests, payments and public web listings on here (signed in, the server has them), or off. */
 const abOn = (on = true) => {
   useAuth.setState({ phase: on ? 'ready' : 'loading' } as never);
+  useMarketConfig.setState({ config: on ? { enabled: true, publicUrl: 'https://app.example.com/market', reachable: true } : null });
   useExperimentsConfig.setState({ config: on ? { enabled: true, reachable: true } : null });
   useOffers.setState({ config: on ? { enabled: true, whop: { sandbox: false, production: false }, stripe: { available: true, environment: 'production' }, reachable: true } : null });
 };

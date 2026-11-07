@@ -11,13 +11,14 @@
 //   await db.rpc('claim_analytics_run', { p_user, p_project, p_id, p_sources });
 //
 // Filters: { col: value } is col = value; { col: [op, value] } with op one of eq, neq, gt, gte, lt, lte, is, in
-// (in takes an array). Errors are DbError { status, code } with code NOT_SET_UP (the migration wasn't run),
-// CONFLICT (a unique key: `constraint` names it), FOREIGN_KEY, UNAVAILABLE; never the database's own text.
+// (in takes an array), or wfts (a full-text match: websearch_to_tsquery('simple', value) on a tsvector column).
+// Errors are DbError { status, code } with code NOT_SET_UP (the migration wasn't run), CONFLICT (a unique key:
+// `constraint` names it), FOREIGN_KEY, UNAVAILABLE; never the database's own text.
 
 import { serviceHeaders } from '../secretBox.mjs';
 
 export const INTEGRATIONS_MIGRATION = 'supabase/migrations/20261105000000_integrations.sql';
-const OPS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is', 'in']);
+const OPS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'is', 'in', 'wfts']);
 const NAME = /^[a-z_][a-z0-9_]*$/;
 
 export class DbError extends Error {
@@ -51,7 +52,7 @@ export function filterQuery(filters = {}) {
     if (!NAME.test(col)) throw new DbError(400, 'BAD_REQUEST', `Bad column name: ${col}`);
     const [op, value] = Array.isArray(f) ? f : [f === null ? 'is' : 'eq', f];
     if (!OPS.has(op)) throw new DbError(400, 'BAD_REQUEST', `Bad filter: ${op}`);
-    q.append(col, `${op}.${filterValue(op, value)}`);
+    q.append(col, op === 'wfts' ? `wfts(simple).${String(value)}` : `${op}.${filterValue(op, value)}`);
   }
   return q;
 }

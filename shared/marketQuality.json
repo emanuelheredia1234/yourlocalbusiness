@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "minDescriptionChars": 200,
+  "minDescriptionWords": 35,
+  "minTags": 3,
+  "maxTitleCapsShare": 0.7,
+  "maxRepeatedChars": 4,
+  "keys": ["description_length", "title_caps", "cover", "tags", "action", "price", "duplicate", "trial"]
+}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Map as MapIcon, Pencil, Search, SlidersHorizontal, Store as StoreIcon, X } from 'lucide-react';
+import { Globe, Map as MapIcon, Pencil, Search, SlidersHorizontal, Store as StoreIcon, X } from 'lucide-react';
 import type { Listing, ListingKind } from '@/lib/types';
 import { cn, fmtDate } from '@/lib/utils';
 import { navigate } from '@/lib/router';
@@ -11,12 +11,16 @@ import { filterListings, listingCities, type ListingSort } from '@/lib/marketpla
 import { useActiveProject, useStore } from '@/store/useStore';
 import { toast, useTabRequest, useUI } from '@/store/ui';
 import { tabsOf } from '@/lib/pageTabs';
-import { Drawer, Empty, Field, MoreMenu, PageHeader, Segmented, Select, StatusDot, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
+import { Badge, Drawer, Empty, Field, MoreMenu, PageHeader, Segmented, Select, StatusDot, Tabs, Toggle, confirmAction } from '@/components/ui/primitives';
 import { Icon } from '@/components/ui/Icon';
 import { ListingCard, ListingCover, UsMap } from './ListingParts';
 import { priceLabel } from '@/lib/listing';
 import { useAllListings } from './useListings';
 import { listingActions } from '@/lib/listingActions';
+import { useMarketOn } from '@/lib/marketConfig';
+import { isOnWeb, statusLine } from '@/lib/marketPublic';
+import { unlistBeforeRemoving, useMarketPublic } from '@/store/marketPublic';
+import { toggleWeb } from '@/components/market/PublicWebToggle';
 
 type Kind = 'all' | ListingKind;
 type Sort = ListingSort;
@@ -304,6 +308,12 @@ export default function Marketplace() {
 function MyListings() {
   const myListings = useStore((s) => s.myListings);
   const openListing = useUI((s) => s.openListing);
+  const webOn = useMarketOn();
+  const webLoaded = useMarketPublic((s) => s.loaded);
+  // which of them are on the web (P7): read once when the tab opens
+  useEffect(() => {
+    if (webOn && !webLoaded) void useMarketPublic.getState().load();
+  }, [webOn, webLoaded]);
   if (!myListings.length)
     return (
       <Empty
@@ -345,18 +355,44 @@ function MyListingRow({ listing: l, onOpen }: { listing: Listing; onOpen: () => 
   const unpublish = useStore((s) => s.unpublishListing);
   const updateStudio = useStore((s) => s.updateProject);
   const reachable = listingActions(l).length > 0;
+  const webOn = useMarketOn();
+  const web = useMarketPublic((s) => s.byListing[l.id]);
+  const webBusy = useMarketPublic((s) => !!s.busy[l.id]);
+  const onWeb = isOnWeb(web);
+  const webLine = webOn ? statusLine(web) : null;
+  const project = useStore((s) => s.projects.find((p) => p.id === l.projectId));
+  const setWeb = async (on: boolean) => {
+    if (!project) return toast({ kind: 'error', title: 'Open its business first', body: 'This listing’s business isn’t on this device.' });
+    try {
+      await toggleWeb(project, l, on);
+    } catch (e) {
+      toast({ kind: 'error', title: on ? 'Couldn’t put it on the web' : 'Couldn’t take it off the web', body: (e as Error).message });
+    }
+  };
+  const webItems = webOn && web?.status !== 'hidden' ? [{ label: onWeb ? 'Take off the web' : 'Put on the web', icon: <Globe />, disabled: webBusy, onSelect: () => void setWeb(!onWeb) }] : [];
   const edit = () => {
     if (l.projectId) useStore.getState().setActiveProject(l.projectId);
     navigate('studio');
   };
   const remove = async () => {
     if (!(await confirmAction({ title: 'Unpublish this listing?', body: 'It will be removed from the marketplace. You can publish again anytime.', confirmLabel: 'Unpublish', danger: true }))) return;
+    // its public web page goes too (best effort)
+    void unlistBeforeRemoving([l]);
     unpublish(l.id);
     if (l.projectId) updateStudio(l.projectId, (p) => ({ ...p, studio: { ...p.studio, publishedListingId: undefined, publishedAt: undefined } }));
     pushMyListings();
     toast({ kind: 'success', title: 'Listing unpublished' });
   };
-  const status = reachable ? <StatusDot tone="good">Live</StatusDot> : <StatusDot tone="warn">No buy link or contact yet</StatusDot>;
+  const status = (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      {reachable ? <StatusDot tone="good">Live</StatusDot> : <StatusDot tone="warn">No buy link or contact yet</StatusDot>}
+      {webLine && (
+        <Badge tone={webLine.tone === 'good' ? 'good' : webLine.tone === 'bad' ? 'bad' : webLine.tone === 'warn' ? 'warn' : 'neutral'} className="whitespace-nowrap">
+          {web?.status === 'live' ? 'On the web' : web?.status === 'thin' ? 'On the web, not on Google yet' : web?.status === 'held' ? 'Under review' : web?.status === 'hidden' ? 'Hidden from the web' : 'Off the web'}
+        </Badge>
+      )}
+    </span>
+  );
   return (
     <tr className="transition-colors duration-120 hover:bg-surface-2">
       <td className="px-4 py-3">
@@ -384,11 +420,13 @@ function MyListingRow({ listing: l, onOpen }: { listing: Listing; onOpen: () => 
             <button type="button" className="btn btn-danger-ghost btn-sm" onClick={() => void remove()}>
               Unpublish
             </button>
+            {webItems.length > 0 && <MoreMenu items={webItems} />}
           </span>
           <span className="sm:hidden">
             <MoreMenu
               items={[
                 { label: 'Edit', icon: <Pencil />, onSelect: edit },
+                ...webItems,
                 'separator',
                 { label: 'Unpublish', danger: true, onSelect: () => void remove() },
               ]}

@@ -62,7 +62,9 @@ describe('app-host sitemap, robots.txt and verification file', () => {
   it('answers robots.txt and the Google verification file, and leaves everything else alone', async () => {
     const sitemap = createSitemapRoutes({ db, env: { ...ENV, GSC_APP_VERIFICATION_FILE: 'google1a2b3c4d5e6f7a8b.html' } });
     const robots = await call(sitemap, 'GET', '/robots.txt');
-    expect(robots.raw).toBe(`User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${APP}/sitemap.xml\n`);
+    expect(robots.raw).toBe(`User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /market?q=\nDisallow: /market?*&q=\nDisallow: /market/*/report\nSitemap: ${APP}/sitemap.xml\n`);
+    // the market's own pages stay allowed: only its search results and report forms are disallowed
+    expect(robots.raw.split('\n')).not.toContain('Disallow: /market');
     expect(robotsTxt('https://x.example')).toContain('Sitemap: https://x.example/sitemap.xml');
     const file = await call(sitemap, 'GET', '/google1a2b3c4d5e6f7a8b.html');
     expect(file.raw).toBe('google-site-verification: google1a2b3c4d5e6f7a8b.html');

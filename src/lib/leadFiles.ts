@@ -180,13 +180,14 @@ export async function deleteLeadFile(id: string): Promise<void> {
 }
 
 /** A public image (with leadFile: that download's cover, replacing the one before). Never SVG. */
-export async function uploadPublicImage(blob: Blob, name: string, leadFile?: string, use?: 'email'): Promise<{ url: string; path: string }> {
+export async function uploadPublicImage(blob: Blob, name: string, leadFile?: string, use?: 'email' | 'listing'): Promise<{ url: string; path: string }> {
   // hosting needs the app's own server: never called in the claude.ai build (and the path isn't in its bundle)
   if (__ARTIFACT_BUILD__) throw new LeadFilesError('Image hosting needs the app’s own server.', 'NO_SERVER');
   if (refusedFileName(name) || !/\.(png|jpe?g|webp|gif)$/i.test(name.trim())) throw new LeadFilesError(MESSAGES.IMAGE_TYPE, 'FILE_TYPE', 415);
   if (blob.size > MAX_PUBLIC_IMAGE_BYTES) throw new LeadFilesError(MESSAGES.TOO_LARGE, 'TOO_LARGE', 413);
   // an email's image (P5: e-<random>.<ext>, listed apart from covers), or a lead file's cover
-  const query = use === 'email' ? '?use=email' : leadFile ? `?leadFile=${idPath(leadFile)}` : '';
+  // or a public listing's image (P7: l-<random>.<ext>)
+  const query = use === 'email' ? '?use=email' : use === 'listing' ? '?use=listing' : leadFile ? `?leadFile=${idPath(leadFile)}` : '';
   const j = await call<{ url?: unknown; path?: unknown }>('POST', `/api/public-images${query}`, { body: blob, headers: { 'content-type': 'application/octet-stream' } });
   const url = str(j.url);
   if (!/^https?:\/\//i.test(url)) throw new LeadFilesError('The server’s answer couldn’t be read. Try again.', 'BAD_ANSWER');

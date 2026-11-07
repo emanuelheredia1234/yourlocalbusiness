@@ -11,6 +11,7 @@ import type { Listing } from './types';
 import { getDb, getUser, useRuntime, type DbNs } from './platform';
 import { useStore } from '@/store/useStore';
 import { marketAccess, useAuth } from './cloud/auth';
+import { webOf } from './marketConfig';
 
 interface CommunityState {
   listings: Listing[];
@@ -35,14 +36,19 @@ const unsubs: (() => void)[] = [];
 /** Images in a listing: small data URLs only (never an outside address that could track viewers). */
 const isDataImage = (v: unknown): v is string => typeof v === 'string' && /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(v) && v.length <= 120_000;
 
-/** Another seller's listing as it came from the shared store: only well-formed fields, made-up numbers dropped. */
-export function fromShared(raw: unknown, sellerId: string, id: string): Listing | null {
+/**
+ * Another seller's listing as it came from the shared store: only well-formed fields, made-up numbers dropped. Its
+ * public web page (P7) is kept only when it is this app's own /market/<slug> address (origin: the app's).
+ */
+export function fromShared(raw: unknown, sellerId: string, id: string, origin?: string): Listing | null {
   const l = raw as Listing | null;
   if (!l || typeof l !== 'object' || typeof l.title !== 'string' || !l.title.trim() || !l.seller || typeof l.seller !== 'object' || !l.cover || typeof l.cover !== 'object') return null;
   const cover = { ...l.cover, imageDataUrl: isDataImage(l.cover.imageDataUrl) ? l.cover.imageDataUrl : undefined };
   const logo = l.seller.logo ? { ...l.seller.logo, dataUrl: isDataImage(l.seller.logo.dataUrl) ? l.seller.logo.dataUrl : undefined } : undefined;
   const gallery = Array.isArray(l.gallery) ? l.gallery.filter(isDataImage).slice(0, 4) : undefined;
-  return cleanListing({ ...l, id, cover, gallery: gallery?.length ? gallery : undefined, seller: { ...l.seller, name: String(l.seller.name ?? ''), logo, ownerId: sellerId }, tags: Array.isArray(l.tags) ? l.tags.filter((t) => typeof t === 'string') : [], origin: 'community' });
+  const { web: rawWeb, ...rest } = l;
+  const web = webOf(rawWeb, origin);
+  return cleanListing({ ...rest, ...(web ? { web } : {}), id, cover, gallery: gallery?.length ? gallery : undefined, seller: { ...l.seller, name: String(l.seller.name ?? ''), logo, ownerId: sellerId }, tags: Array.isArray(l.tags) ? l.tags.filter((t) => typeof t === 'string') : [], origin: 'community' });
 }
 
 /** The most a shared listing image may weigh (data-URL characters); larger ones are left out. The Studio makes

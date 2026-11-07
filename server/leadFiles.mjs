@@ -9,10 +9,12 @@
 //   PATCH  /api/lead-files/<id>                { title?, brand?, gate?, url? } → { file }
 //   DELETE /api/lead-files/<id>                → { ok: true } (already gone counts as done; 409 IN_USE while a
 //                                              Stripe offer delivers it)
-//   POST   /api/public-images[?leadFile=<id>|?use=email]  raw image bytes → { url, path } (with leadFile: that file's
-//                                              cover; use=email: an email image, named e-<random>.<ext>)
-//   GET    /api/public-images                  → { images: [{ path, url, bytes, createdAt, use: 'email'|'cover' }], limit }
-//   DELETE /api/public-images/<name>           the caller's own image; 409 IN_USE while it's a download's cover
+//   POST   /api/public-images[?leadFile=<id>|?use=email|?use=listing]  raw image bytes → { url, path } (with leadFile:
+//                                              that file's cover; use=email: an email image, named e-<random>.<ext>;
+//                                              use=listing: a public listing's image (P7), named l-<random>.<ext>)
+//   GET    /api/public-images                  → { images: [{ path, url, bytes, createdAt, use: 'email'|'listing'|'cover' }], limit }
+//   DELETE /api/public-images/<name>           the caller's own image; 409 IN_USE while it's a download's cover or on
+//                                              a public listing that isn't unlisted
 //   GET|HEAD|POST /m/<id>                      (visitors) the download: a gate page (no script) or a redirect to a
 //                                              60-second signed link or the outside link; POST is the gate's form
 //
@@ -80,7 +82,7 @@ const MAX_MAGNET_PATH = 25;
 const API_PATH = /^\/api\/lead-files(?:\/([^/]{1,64})(\/content)?)?$/;
 const IMAGES_PATH = '/api/public-images';
 /** A public image's object name under the caller's folder: an email image (e-) or a cover, 16 random bytes, its type. */
-const IMAGE_NAME = /^(e-)?[A-Za-z0-9_-]{22}\.(png|jpg|webp|gif)$/;
+const IMAGE_NAME = /^([el]-)?[A-Za-z0-9_-]{22}\.(png|jpg|webp|gif)$/;
 
 /** Visitors per hour on /m/ (each request), requests per file per hour, and the gate's sign-ups per file per hour. */
 export const MAGNET_LIMITS = Object.freeze({ perIp: 60, perFile: 600, signupsPerFile: 300, windowMs: 3_600_000 });
@@ -676,7 +678,7 @@ export function createLeadFiles({
     const uid = who.id;
     const leadFile = url.searchParams.get('leadFile');
     const use = url.searchParams.get('use');
-    if (use !== null && use !== 'email') {
+    if (use !== null && use !== 'email' && use !== 'listing') {
       drain(req);
       throw fail(400, 'BAD_REQUEST', 'Unknown use for this image.');
     }
@@ -702,8 +704,10 @@ export function createLeadFiles({
     const have = await listFiles(PUBLIC_FILES_BUCKET, `${uid}/`, 0);
     if (have.length >= MAX_PUBLIC_IMAGES_PER_USER) throw fail(400, 'TOO_MANY', `You can keep up to ${MAX_PUBLIC_IMAGES_PER_USER} public images. Remove a download’s cover first.`);
     await mustExist(uid);
-    // an email image is named e-<random> so the list can tell it from a download's cover (a cover never is)
-    const path = `${uid}/${use === 'email' && !row ? 'e-' : ''}${b64url(crypto.randomBytes(16))}.${type.ext}`;
+    // an email image is named e-<random> and a public listing's l-<random>, so the list can tell them from a
+    // download's cover (a cover never is)
+    const prefix = row ? '' : use === 'email' ? 'e-' : use === 'listing' ? 'l-' : '';
+    const path = `${uid}/${prefix}${b64url(crypto.randomBytes(16))}.${type.ext}`;
     await putObject(PUBLIC_FILES_BUCKET, path, bytes, type.mime);
     if (row) {
       let rows;
@@ -746,7 +750,7 @@ export function createLeadFiles({
         url: publicUrl(`${prefix}${i.name}`),
         bytes: Number(i.metadata?.size) || 0,
         createdAt: typeof i.created_at === 'string' ? i.created_at : null,
-        use: i.name.startsWith('e-') ? 'email' : 'cover',
+        use: i.name.startsWith('e-') ? 'email' : i.name.startsWith('l-') ? 'listing' : 'cover',
       }));
     return { images, limit: MAX_PUBLIC_IMAGES_PER_USER };
   }
@@ -756,6 +760,11 @@ export function createLeadFiles({
     const path = `${uid}/${name}`;
     const using = (await rest(`lead_files?user_id=eq.${uid}&cover_path=eq.${encodeURIComponent(path)}&select=id&limit=1`)) ?? [];
     if (using.length) throw fail(409, 'IN_USE', 'This image is a download’s cover. Change the cover first.');
+    // a public listing (P7) that isn't unlisted shows it (no table yet: nothing does)
+    if (name.startsWith('l-')) {
+      const listed = (await rest(`public_listings?user_id=eq.${uid}&status=neq.unlisted&select=cover_path,gallery_paths&limit=1000`).catch((e) => (e?.code === 'LEAD_FILES_TABLE' ? [] : Promise.reject(e)))) ?? [];
+      if (listed.some((l) => l?.cover_path === path || (Array.isArray(l?.gallery_paths) && l.gallery_paths.includes(path)))) throw fail(409, 'IN_USE', 'This image is on a public listing. Change the listing’s images first.');
+    }
     await removeObjects(PUBLIC_FILES_BUCKET, [path]);
     return { ok: true };
   }

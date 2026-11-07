@@ -1312,7 +1312,8 @@ describe('the real server', () => {
       expect(server.calls().filter((c) => c.kind === 'token').map((c) => c.code)).toEqual(['alice-code']);
 
       // callbacks from one caller with made-up states: none reads storage, and over RATE_LIMIT_PER_MIN they're turned away
-      const reads = () => supa.calls.filter((c) => c.method === 'GET' && c.path === '/rest/v1/app_state').length;
+      // (the server's own cron tick reads its cron:<job> claims on its own schedule: those aren't the callback's reads)
+      const reads = () => supa.calls.filter((c) => c.method === 'GET' && c.path === '/rest/v1/app_state' && !String(c.query?.key ?? '').startsWith('eq.cron:')).length;
       const outcomes = [];
       for (let i = 0; i < 8; i += 1) {
         const randomState = `${crypto.randomBytes(32).toString('base64url')}.${crypto.randomBytes(16).toString('base64url').slice(0, 22)}.${crypto.randomBytes(16).toString('base64url').slice(0, 22)}`;
