@@ -1,6 +1,6 @@
 // "Attach payment": one dialog used wherever something is sold (an asset's Buy buttons, the SEO checkout page, the
-// listing, an email's button). It picks one of the business's offers or makes a new one: a Whop plan from the
-// owner's own Whop account, or their own checkout link. The caller keeps only the offer's id; pages hold
+// listing, an email's button). It picks one of the business's offers or makes a new one: sold through the owner's
+// own Stripe account (P6, StripeOfferForm), a Whop plan from their own Whop account, or their own checkout link. The caller keeps only the offer's id; pages hold
 // {{buy:<id>}}, which becomes the offer's permanent buy link /b/<id>. Signed out, with the server's offers off, or
 // in the claude.ai build, the caller's old plain link field shows instead.
 
@@ -13,6 +13,7 @@ import {
   checkOffer,
   checkoutHint,
   createExternalOffer,
+  createStripeOffer,
   createWhopOffer,
   offerConnection,
   offerPrice,
@@ -27,7 +28,9 @@ import {
   type WhopPlan,
   type WhopProduct,
 } from '@/lib/offers';
+import type { ConnectState } from '@/lib/stripeConnect';
 import { useOffers, useProjectOffers } from '@/store/offers';
+import { StripeOfferForm, type StripeOfferInput } from './StripeOfferForm';
 import { useUI } from '@/store/ui';
 import { navigate } from '@/lib/router';
 import { Badge, Callout, CopyButton, Field, Modal, Segmented, Spinner } from '@/components/ui/primitives';
@@ -40,6 +43,7 @@ export function OfferBadges({ offer }: { offer: Offer }) {
     <span className="inline-flex flex-wrap items-center gap-1">
       <Badge tone="neutral">{PROVIDER_LABEL[offer.provider]}</Badge>
       {offer.environment === 'sandbox' && <Badge tone="warn">Test mode</Badge>}
+      {offer.problem === 'stripe_setup' && offer.status === 'active' && <Badge tone="warn">Stripe setup</Badge>}
       {offer.status === 'paused' && <Badge tone="warn">Paused</Badge>}
       {offer.status === 'checkout_unknown' && <Badge tone="warn">Not confirmed</Badge>}
     </span>
@@ -76,7 +80,7 @@ export function AttachedOffer({ offer, connection, onChange, onRemove }: { offer
   );
 }
 
-type Tab = 'pick' | 'whop' | 'external';
+type Tab = 'pick' | 'stripe' | 'whop' | 'external';
 
 /** The dialog's body (render tests draw it directly). */
 export function AttachPaymentForm({
@@ -84,6 +88,9 @@ export function AttachPaymentForm({
   offers,
   connections,
   whopOn,
+  stripeOn: stripeAsked = false,
+  connect = null,
+  defaultTitle = '',
   value,
   initialTab,
   initialPending,
@@ -93,6 +100,12 @@ export function AttachPaymentForm({
   offers: Offer[];
   connections: WhopConnection[];
   whopOn: boolean;
+  /** selling through the owner's own Stripe account is on here (never in the claude.ai build) */
+  stripeOn?: boolean;
+  /** the owner's Stripe account and fee (null: not loaded yet) */
+  connect?: ConnectState | null;
+  /** a new offer's title to start with (the asset's or page's name) */
+  defaultTitle?: string;
   value?: string;
   initialTab?: Tab;
   /** a Whop offer whose link Whop didn't confirm yet */
@@ -100,10 +113,11 @@ export function AttachPaymentForm({
   onAttach: (offer: Offer) => void;
 }) {
   const choosable = offers.filter((o) => o.status !== 'archived' && o.status !== 'draft');
-  const [tab, setTab] = useState<Tab>(initialTab ?? (choosable.length ? 'pick' : whopOn && connections.length ? 'whop' : 'external'));
+  const stripeOn = stripeAsked && !__ARTIFACT_BUILD__;
+  const [tab, setTab] = useState<Tab>(initialTab ?? (choosable.length ? 'pick' : stripeOn ? 'stripe' : whopOn && connections.length ? 'whop' : 'external'));
   // a double press of Create makes one offer, and one Whop checkout link: each kind keeps its request id until the
   // server definitely refused it (then nothing was made, and another try is a new request, never Whop's replay)
-  const [crids, setCrids] = useState(() => ({ whop: requestId(), own: requestId() }));
+  const [crids, setCrids] = useState(() => ({ whop: requestId(), own: requestId(), stripe: requestId() }));
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [pending, setPending] = useState<Offer | null>(initialPending ?? null);
@@ -155,7 +169,7 @@ export function AttachPaymentForm({
   const [url, setUrl] = useState('');
   const [price, setPrice] = useState('');
 
-  const run = async (what: string, fn: () => Promise<void>, kind?: 'whop' | 'own') => {
+  const run = async (what: string, fn: () => Promise<void>, kind?: 'whop' | 'own' | 'stripe') => {
     setBusy(what);
     setError('');
     try {
@@ -212,8 +226,14 @@ export function AttachPaymentForm({
       );
     }, 'own');
 
+  const createStripe = (input: StripeOfferInput) =>
+    run('create', async () => {
+      done(await createStripeOffer({ projectId, ...input, clientRequestId: crids.stripe }));
+    }, 'stripe');
+
   const tabs = [
     ...(choosable.length ? [{ id: 'pick' as const, label: 'Your offers' }] : []),
+    ...(stripeOn ? [{ id: 'stripe' as const, label: 'New: Stripe' }] : []),
     ...(whopOn ? [{ id: 'whop' as const, label: 'New: Whop' }] : []),
     { id: 'external' as const, label: 'New: your own link' },
   ];
@@ -261,6 +281,16 @@ export function AttachPaymentForm({
             </li>
           ))}
         </ul>
+      )}
+
+      {tab === 'stripe' && stripeOn && (
+        connect ? (
+          <StripeOfferForm projectId={projectId} connect={connect} defaultTitle={defaultTitle} busy={busy === 'create'} error={error} onCreate={(i) => void createStripe(i)} />
+        ) : (
+          <p className="flex items-center gap-2 text-small text-muted">
+            <Spinner size={14} /> Checking your Stripe account…
+          </p>
+        )
       )}
 
       {tab === 'whop' && !usable.length && (
@@ -394,6 +424,7 @@ export function AttachPayment({
   onDetach,
   fallback,
   label = 'Attach payment',
+  defaultTitle,
 }: {
   projectId: string;
   value?: string;
@@ -401,14 +432,21 @@ export function AttachPayment({
   onDetach: () => void;
   fallback?: ReactNode;
   label?: string;
+  /** a new offer's title to start with (optional: the asset's or page's name) */
+  defaultTitle?: string;
 }) {
-  const { on, offers, loaded, whop } = useProjectOffers(projectId);
+  const { on, offers, loaded, whop, stripe } = useProjectOffers(projectId);
   const connections = useOffers((s) => s.connections);
+  const connect = useOffers((s) => s.connect);
   const [open, setOpen] = useState(false);
   const [openKey, setOpenKey] = useState(0);
   useEffect(() => {
     if (on && whop && connections === null) void useOffers.getState().refreshConnections();
   }, [on, whop, connections]);
+  // the Stripe account (and fee) when the dialog opens: read again each time, as its setup may have moved on
+  useEffect(() => {
+    if (open && on && stripe && !__ARTIFACT_BUILD__) void useOffers.getState().refreshConnect();
+  }, [open, on, stripe]);
   if (!on) return <>{fallback ?? null}</>;
   const offer = value ? offers.find((o) => o.id === value) : undefined;
   const conn = offer ? offerConnection(offer, connections) : null;
@@ -444,13 +482,16 @@ export function AttachPayment({
         </div>
       )}
       {!offer && fallback && <div className="min-w-0">{fallback}</div>}
-      <Modal open={open} onClose={() => setOpen(false)} title="Attach payment" subtitle="What its Buy buttons sell. Buyers pay on Whop or your own checkout; the app never takes payments." size="md">
+      <Modal open={open} onClose={() => setOpen(false)} title="Attach payment" subtitle={stripe ? 'What its Buy buttons sell. Buyers pay through your own Stripe account, Whop, or your own checkout.' : 'What its Buy buttons sell. Buyers pay on Whop or your own checkout; the app never takes payments.'} size="md">
         <AttachPaymentForm
           key={openKey}
           projectId={projectId}
           offers={offers}
           connections={connections ?? []}
           whopOn={whop}
+          stripeOn={stripe}
+          connect={connect}
+          defaultTitle={defaultTitle}
           value={value}
           onAttach={(o) => {
             setOpen(false);
