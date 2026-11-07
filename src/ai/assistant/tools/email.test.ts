@@ -99,6 +99,18 @@ describe('AI design', () => {
     expect(card.card).toMatchObject({ title: 'Design all 5 emails with AI?', cost: expect.stringMatching(/5 AI requests/) });
     answerCard(card.id, false);
     await run;
+    expect([1, 2, 3, 4, 5].every((n) => !email(n).doc)).toBe(true);
+  });
+
+  it('“all”: one yes designs every email, with no more cards', async () => {
+    const run = runTool('design_email', { email: 'all' });
+    await tick();
+    const pending = () => testChat().filter((m) => m.role === 'card' && m.card?.state === 'pending');
+    expect(pending()).toHaveLength(1);
+    answerCard(pending()[0].id, true);
+    expect(await run).toMatchObject({ ok: true, result: { designed: [1, 2, 3, 4, 5] } });
+    expect(testChat().filter((m) => m.role === 'card')).toHaveLength(1);
+    expect([1, 2, 3, 4, 5].every((n) => (email(n).doc?.blocks.length ?? 0) > 0)).toBe(true);
   });
 });
 
