@@ -129,6 +129,8 @@ describe('the subscription lifecycle through the webhook', () => {
 
   it('active → more businesses → failed payment (7 days of grace) → paid → unpaid locks extras → deleted keeps the oldest → resubscribe', async () => {
     const u = await h.user('life@example.com');
+    // the first business needs no plan (setup makes it before the paywall); a second does
+    expect(await h.claim(u, 'p1')).toMatchObject({ ok: true, state: 'active', starter: true });
     expect(await h.claim(u, 'p0')).toEqual({ ok: false, reason: 'plan_required' });
     const sub = await h.subscribe(u, { tier: 'grow', interval: 'month' });
     expect(h.account(u)).toMatchObject({ source: 'stripe', tier: 'grow', interval: 'month', status: 'active', business_limit: 1, extra_businesses: 0 });

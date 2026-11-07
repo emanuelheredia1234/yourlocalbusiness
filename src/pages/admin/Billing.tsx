@@ -15,6 +15,8 @@ import { toast } from '@/store/ui';
 import { download } from '@/components/ui/download';
 import { AdsLimitsSection } from './AdsLimitsSection';
 import { PlansAdminSection } from './PlansAdminSection';
+import { CancelSurveysSection } from './CancelSurveysSection';
+import { OWNER_SECTION_ID, scrollToOwnerSection, takeOwnerSection } from './ownerLinks';
 import { Badge, Callout, Empty, Field, InfoTip, Modal, MoreMenu, PageHeader, Select, SettingsSection, Skeleton, Spinner, StatStrip, confirmAction, type MenuEntry } from '@/components/ui/primitives';
 
 /** USD from integer micros, 2 decimals (4 under a cent). */
@@ -181,10 +183,22 @@ export default function Billing() {
   return (
     <div>
       {header}
+      <OwnerScroll />
       <BillingView data={data} report={report} onEdit={setEditing} onChanged={() => void load()} />
       {editing && <CapModal target={editing} defaults={data.defaults} onClose={() => setEditing(null)} onSaved={() => void load()} />}
     </div>
   );
+}
+
+/** Settings › Owner asked for a section: scroll to it once the page has drawn. */
+function OwnerScroll() {
+  useEffect(() => {
+    const want = takeOwnerSection();
+    if (!want || want === 'overview') return;
+    const t = setTimeout(() => scrollToOwnerSection(want), 60);
+    return () => clearTimeout(t);
+  }, []);
+  return null;
 }
 
 /** Everything under the header (rendered in tests with fixed data). */
@@ -201,7 +215,7 @@ export function BillingView({ data, report, onEdit, onChanged }: { data: Data; r
   );
   const d = data.defaults;
   return (
-    <div className="flex flex-col gap-6">
+    <div id={OWNER_SECTION_ID.overview} className="flex scroll-mt-4 flex-col gap-6">
       {data.alert && <Callout tone="warn">Analytics provider needs attention (billing). Check the provider’s balance and plan.</Callout>}
       {data.uploadPostAlert && (
         <Callout tone="warn" title="Social posting needs attention">
@@ -283,8 +297,13 @@ export function BillingView({ data, report, onEdit, onChanged }: { data: Data; r
           </div>
         </dl>
       </SettingsSection>
-      <PlansAdminSection />
-      <AdsLimitsSection />
+      <div id={OWNER_SECTION_ID.plans} className="flex scroll-mt-4 flex-col gap-6">
+        <PlansAdminSection />
+        <CancelSurveysSection />
+      </div>
+      <div id={OWNER_SECTION_ID['ad-limits']} className="scroll-mt-4">
+        <AdsLimitsSection />
+      </div>
     </div>
   );
 }

@@ -445,3 +445,26 @@ describe('disconnecting an ad account with launched campaigns still on (R12)', (
     }
   });
 });
+
+describe('the redirect back from Zernio (Check with ?accountId=, and Abandon for ?error=)', () => {
+  it('Check passes the account Zernio named (only this user’s rows count); a bad id is ignored', async () => {
+    const { accountId } = await connectAdsOverHttp('bob', 'tiktok_ads', 'tiktok');
+    const r = await app.call('bob', 'POST', '/api/integrations/connections/tiktok_ads/check', { accountId });
+    expect(r.status).toBe(200);
+    expect((await r.json()).connection.state).toBe('connected');
+    const bad = await app.call('bob', 'POST', '/api/integrations/connections/tiktok_ads/check', { accountId: '<script>' });
+    expect(bad.status).toBe(200);
+  });
+
+  it('Abandon stops the waiting and keeps our reason; it needs sign-in and same origin like the rest', async () => {
+    const start = await app.call('alice', 'POST', '/api/integrations/connections/reddit_ads/connect', {});
+    expect(start.status).toBe(200);
+    const listed = await (await app.call('alice', 'GET', '/api/integrations/connections')).json();
+    expect(listed.connections.find((c) => c.platform === 'reddit_ads').state).toBe('pending');
+    const r = await app.call('alice', 'POST', '/api/integrations/connections/reddit_ads/abandon', { reason: 'state_expired' });
+    expect(r.status).toBe(200);
+    expect((await r.json()).connection).toMatchObject({ state: 'not_connected', lastError: 'state_expired' });
+    expect((await app.call(null, 'POST', '/api/integrations/connections/reddit_ads/abandon', { reason: 'x' })).status).toBe(401);
+    expect((await app.call('alice', 'POST', '/api/integrations/connections/reddit_ads/abandon', { reason: 'x' }, { origin: 'https://evil.example' })).status).toBe(403);
+  });
+});

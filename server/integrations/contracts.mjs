@@ -137,6 +137,9 @@ export const API_ERROR_CODES = Object.freeze([
   'BILLING_PENDING',
   'OWNER_PLAN',
   'NOT_ALLOWED_ON_PLAN',
+  // a money change read back and not there (definite); cancelling in the Customer Portal until the P1c migration runs
+  'NOT_APPLIED',
+  'USE_PORTAL',
 ]);
 
 /** The route prefixes the server hands to the integration modules (server/integrations/wiring.mjs). */

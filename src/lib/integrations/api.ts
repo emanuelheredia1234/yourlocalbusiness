@@ -13,6 +13,9 @@ import type {
   BillingOp,
   BillingOpResponse,
   BillingSettingsResponse,
+  CancelOffer,
+  CancelReason,
+  CancelSurveysResponse,
   BusinessesResponse,
   AnalyticsSource,
   ApiError,
@@ -103,7 +106,10 @@ const seg = encodeURIComponent;
 export const getConnections = (projectId?: string) => call<ConnectionsResponse>('GET', `/api/integrations/connections${q({ projectId })}`);
 export const connect = (platform: ConnectPlatform, projectId?: string) => call<ConnectLink>('POST', `/api/integrations/connections/${seg(platform)}/connect`, projectId ? { projectId } : {});
 export const reconnect = (platform: ConnectPlatform, projectId?: string) => call<ConnectLink>('POST', `/api/integrations/connections/${seg(platform)}/reconnect`, projectId ? { projectId } : {});
-export const checkConnection = (platform: ConnectPlatform, projectId?: string) => call<{ connection: ConnectionStatus }>('POST', `/api/integrations/connections/${seg(platform)}/check`, projectId ? { projectId } : {});
+/** accountId: the account Zernio named on its way back (?accountId=), a hint the server checks against this user's rows. */
+export const checkConnection = (platform: ConnectPlatform, projectId?: string, accountId?: string) => call<{ connection: ConnectionStatus }>('POST', `/api/integrations/connections/${seg(platform)}/check`, { ...(projectId ? { projectId } : {}), ...(accountId ? { accountId } : {}) });
+/** A connect that came back with ?error=: the platform stops waiting on the server and keeps our reason code. */
+export const abandonConnection = (platform: ConnectPlatform, reason: string, projectId?: string) => call<{ connection: ConnectionStatus }>('POST', `/api/integrations/connections/${seg(platform)}/abandon`, { reason, ...(projectId ? { projectId } : {}) });
 /** ackLiveAds: for Meta ads / Google Ads, the customer saw the campaigns that stay on (else 409 ADS_LIVE). */
 export const disconnect = (platform: ConnectPlatform, projectId?: string, ackLiveAds = false) => call<{ ok: true }>('DELETE', `/api/integrations/connections/${seg(platform)}${q({ projectId, ...(ackLiveAds ? { ackLiveAds: '1' } : {}) })}`);
 export const getTargets = (platform: ConnectPlatform, projectId?: string) => call<{ targets: Target[] }>('GET', `/api/integrations/connections/${seg(platform)}/targets${q({ projectId })}`);
@@ -164,6 +170,13 @@ export const getBusinesses = () => call<BusinessesResponse>('GET', '/api/billing
 export const changeBusinesses = (req: { action: 'add' | 'remove' | 'undo_remove'; clientRequestId: string; confirm: true; projectId?: string }) => call<BillingOpResponse>('POST', '/api/billing/businesses', req);
 export const setActiveBusinesses = (projectIds: string[]) => call<BusinessesResponse>('PUT', '/api/billing/businesses/active', { projectIds });
 export const changePlan = (req: { tier: PlanTier; interval: PlanInterval; clientRequestId: string; confirm: true }) => call<BillingOpResponse>('POST', '/api/billing/plan', req);
+/** The cancel survey, then cancel at the period's end (sent once per clientRequestId; a 202 is read back, never resent). */
+export const cancelPlan = (req: { reason: CancelReason; comment?: string; offer?: CancelOffer; clientRequestId: string; confirm: true }) => call<BillingOpResponse>('POST', '/api/billing/cancel', req);
+/** The survey of someone who took the alternative instead (nothing changes in Stripe). */
+export const keepPlanSurvey = (req: { reason: CancelReason; comment?: string; offer: CancelOffer; outcome: 'kept' | 'switched' }) => call<{ ok: true }>('POST', '/api/billing/cancel/survey', req);
+/** Keep the plan after all (undo cancel at period end). */
+export const resumePlan = (clientRequestId: string) => call<BillingOpResponse>('POST', '/api/billing/resume', { clientRequestId, confirm: true });
+export const getCancelSurveys = () => call<CancelSurveysResponse>('GET', '/api/billing/surveys');
 /** The owner only. */
 export const getBillingAccounts = (status?: string) => call<{ accounts: OwnerBillingAccount[] }>('GET', `/api/billing/accounts${q({ status })}`);
 export const putCompPlan = (customerTag: string, body: { tier: PlanTier | 'none'; extraBusinesses?: number; until?: string | null; note?: string }) => call<{ ok: true }>('PUT', `/api/billing/accounts/${seg(customerTag)}/comp`, body);

@@ -3,7 +3,7 @@
 // user action (the same request id after "try again in a minute"), and plan refusals opening the upgrade prompt.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const api = vi.hoisted(() => ({ getPlan: vi.fn(), getBusinesses: vi.fn(), startCheckout: vi.fn(), changePlan: vi.fn(), openPortal: vi.fn() }));
+const api = vi.hoisted(() => ({ getPlan: vi.fn(), getBusinesses: vi.fn(), startCheckout: vi.fn(), changePlan: vi.fn(), openPortal: vi.fn(), resumePlan: vi.fn() }));
 vi.mock('@/lib/integrations/api', async (orig) => ({ ...(await orig<typeof import('@/lib/integrations/api')>()), ...api }));
 const confirm = vi.hoisted(() => ({ confirmAction: vi.fn(async (_req: { title: string; body?: string }) => true) }));
 vi.mock('@/components/ui/primitives', async (orig) => ({ ...(await orig<typeof import('@/components/ui/primitives')>()), ...confirm }));
@@ -13,7 +13,8 @@ const { useAuth } = await import('@/lib/cloud/auth');
 const { useBillingConfig } = await import('@/lib/billing/config');
 const { useUI } = await import('@/store/ui');
 const { clearPlanIntent, hasLivePlan, readPlanIntent, savePlanIntent, takeCheckoutReturn, useBilling } = await import('./billing');
-const { changeKind, changeRefusal, checkout, confirmPlanChange, setGoTo, upgradeTier } = await import('@/lib/billing/actions');
+const { changeKind, changeRefusal, checkout, confirmPlanChange, keepPlan, setGoTo, upgradeTier } = await import('@/lib/billing/actions');
+const { afterCheckout } = await import('@/components/billing/PlanBanner');
 const { checkoutTotal } = await import('@/pages/plans/Plans');
 const { showUpgrade } = await import('@/lib/billing/upgrade');
 
@@ -257,5 +258,57 @@ describe('the upgrade prompt', () => {
     useBillingConfig.setState({ enabled: false });
     expect(showUpgrade({ code: 'PLAN_REQUIRED', error: 'x' })).toBe(false);
     expect(useBilling.getState().upgrade).toBeNull();
+  });
+});
+
+describe('Keep my plan (P1c review)', () => {
+  it('a change read back and not there (NOT_APPLIED) is definite: the next press is a new request; an unclear one keeps its id', async () => {
+    api.getPlan.mockResolvedValue(PLAN());
+    api.resumePlan.mockRejectedValueOnce(new IntegrationApiError(202, { error: 'We’re confirming your last change.', code: 'BILLING_PENDING' }));
+    await keepPlan();
+    api.resumePlan.mockRejectedValueOnce(new IntegrationApiError(409, { error: 'That change didn’t go through. Try again.', code: 'NOT_APPLIED' }));
+    await keepPlan();
+    api.resumePlan.mockResolvedValueOnce({ ok: true, op: { id: 'o', kind: 'resume', state: 'done' } });
+    expect(await keepPlan()).toBe(true);
+    const ids = api.resumePlan.mock.calls.map((c) => c[0]);
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).not.toBe(ids[1]);
+  });
+
+  it('before the server can do it here: the Customer Portal opens instead (nothing sent to resume)', async () => {
+    api.openPortal.mockResolvedValue({ url: 'https://billing.stripe.test/portal' });
+    useBilling.setState({ cancelInApp: false });
+    expect(await keepPlan()).toBe(true);
+    expect(api.resumePlan).not.toHaveBeenCalled();
+    expect(gone).toEqual(['https://billing.stripe.test/portal']);
+    // the server says so after all (an older read): the portal, and the app remembers
+    useBilling.setState({ cancelInApp: true });
+    api.resumePlan.mockRejectedValueOnce(new IntegrationApiError(409, { error: 'Cancelling here isn’t ready yet. Use Manage billing instead.', code: 'USE_PORTAL' }));
+    await keepPlan();
+    expect(gone).toHaveLength(2);
+    expect(useBilling.getState().cancelInApp).toBe(false);
+  });
+
+  it('the plan read says whether cancelling runs here', async () => {
+    api.getPlan.mockResolvedValue(PLAN({ billing: { enabled: true, enforce: true, cancelInApp: false } }));
+    await useBilling.getState().refresh();
+    expect(useBilling.getState().cancelInApp).toBe(false);
+    api.getPlan.mockResolvedValue(PLAN());
+    await useBilling.getState().refresh();
+    expect(useBilling.getState().cancelInApp).toBe(true);
+  });
+});
+
+describe('back from Checkout with a second trial (P1c review)', () => {
+  it('says the trial didn’t start and nothing was charged (never “You’re on Grow”)', async () => {
+    api.getPlan.mockResolvedValue(PLAN({ plan: { ...PLAN().plan, active: false, paused: 'plan', banner: 'plan_ended' }, account: { ...PLAN().account, status: 'canceled', trialRefused: 'refused' } }));
+    await afterCheckout('cs_test_abc123');
+    const t = useUI.getState().toasts.at(-1);
+    expect(t).toMatchObject({ kind: 'error', title: 'Your free trial didn’t start', action: { label: 'See plans' } });
+    expect(t?.body).toContain('nothing was charged');
+    // still being checked: says so, with a refresh (never the trial's dates)
+    api.getPlan.mockResolvedValue(PLAN({ account: { ...PLAN().account, status: 'trialing', trialRefused: 'checking' } }));
+    await afterCheckout('cs_test_abc123');
+    expect(useUI.getState().toasts.at(-1)).toMatchObject({ kind: 'info', title: 'We’re checking your free trial', action: { label: 'Refresh' } });
   });
 });

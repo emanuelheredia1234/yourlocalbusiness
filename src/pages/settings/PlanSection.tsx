@@ -1,6 +1,9 @@
 // Settings › Plan: the plan (tier, price, status, renewal, AI credits), the businesses it covers (add one, remove one
-// at renewal, undo, choose which stay active), and Manage billing (Stripe's Customer Portal: card, invoices,
-// cancelling). Every change is one request with its own id; a change being confirmed is read back, never re-sent.
+// at renewal, undo, choose which stay active), Manage billing (Stripe's Customer Portal: card, invoices), and Cancel
+// plan (a quick survey first, src/components/billing/CancelDialog.tsx; also after a failed payment, when it ends the
+// plan now) or Keep my plan after a cancel. Before the server can do those two (cancelInApp false) they open the
+// portal. A card trial shows its days left (no extra business until it ends); with no plan yet, Start your free
+// trial. Every change is one request with its own id; a change being confirmed is read back, never re-sent.
 //
 // Signed in, plans shown (never in the artifact build). The owner sees the owner plan.
 
@@ -10,9 +13,10 @@ import { navigate } from '@/lib/router';
 import { changeBusinesses, IntegrationApiError, newRequestId, setActiveBusinesses } from '@/lib/integrations/api';
 import type { BusinessSlot, Entitlement, PlanAccount } from '@/lib/integrations/types';
 import { formatPrice, isInterval, isTier, planFor, PLANS, tierName } from '@/lib/plans';
-import { manageBilling } from '@/lib/billing/actions';
+import { keepPlan, manageBilling } from '@/lib/billing/actions';
+import { CancelDialog } from '@/components/billing/CancelDialog';
 import { releaseHeld } from '@/lib/cloud/auth';
-import { useBilling } from '@/store/billing';
+import { useBilling, useTrialDays } from '@/store/billing';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { HeldProjectsNotice } from '@/components/billing/HeldProjects';
@@ -27,10 +31,12 @@ export function statusChip(plan: Entitlement | null, account: PlanAccount | null
   if (plan.plan === 'legacy') return { tone: 'neutral', label: 'Plans not started' };
   if (plan.paused === 'payment') return { tone: 'bad', label: 'Payment needed' };
   if (plan.banner === 'grace') return { tone: 'warn', label: `Payment problem until ${fmtDate(plan.graceUntil ?? account?.graceUntil)}` };
-  if (plan.paused === 'plan' || plan.banner === 'plan_ended') return { tone: 'neutral', label: account ? 'Ended' : 'No plan' };
+  // only a plan that really ended says Ended: no plan yet (setup, a Checkout left half way) or a second trial that was
+  // refused never had one
+  if (plan.paused === 'plan' || plan.banner === 'plan_ended') return { tone: 'neutral', label: plan.banner === 'plan_ended' && !account?.trialRefused ? 'Ended' : 'No plan' };
   if (account?.cancelAtPeriodEnd) return { tone: 'warn', label: `Cancels ${fmtDate(account.currentPeriodEnd)}` };
   if (account?.source === 'comp') return { tone: 'primary', label: account.compUntil ? `Free until ${fmtDate(account.compUntil)}` : 'Free plan' };
-  if (account?.status === 'trialing') return { tone: 'primary', label: `Trial ends ${fmtDate(plan.trialEndsAt ?? account.trialEndsAt)}` };
+  if (account?.status === 'trialing') return { tone: 'primary', label: plan.trialDaysLeft != null ? `Free trial · ${plan.trialDaysLeft === 1 ? '1 day' : `${plan.trialDaysLeft} days`} left` : `Trial ends ${fmtDate(plan.trialEndsAt ?? account.trialEndsAt)}` };
   return { tone: 'good', label: 'Active' };
 }
 
@@ -43,9 +49,12 @@ export function PlanSection() {
   const error = useBilling((s) => s.error);
   const refresh = useBilling((s) => s.refresh);
   const projects = useStore((s) => s.projects);
-  const [busy, setBusy] = useState<null | 'portal' | 'check'>(null);
+  const [busy, setBusy] = useState<null | 'portal' | 'check' | 'keep'>(null);
   const [removing, setRemoving] = useState(false);
   const [choosing, setChoosing] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const trialDays = useTrialDays();
+  const cancelInApp = useBilling((s) => s.cancelInApp);
 
   useEffect(() => {
     void refresh();
@@ -70,6 +79,12 @@ export function PlanSection() {
   const owner = plan.plan === 'owner';
   const legacy = plan.plan === 'legacy';
   const canChangeBusinesses = account?.source === 'stripe' && plan.active && ['active', 'trialing'].includes(account.status);
+  // a trial covers one business: more start once it ends
+  const inTrial = account?.status === 'trialing';
+  // any Stripe plan still going can be cancelled (after a failed payment it ends now) or kept
+  const canCancel = account?.source === 'stripe' && ['trialing', 'active', 'past_due', 'unpaid'].includes(account.status);
+  // a second trial on a card or email that had one: cancelled at once, it never was a plan
+  const refused = account?.trialRefused === 'refused';
   const chip = statusChip(plan, account);
   const name = (id: string) => projects.find((p) => p.id === id)?.brand.name || 'A business not on this device';
   const tier = isTier(account?.tier) ? account.tier : null;
@@ -133,15 +148,41 @@ export function PlanSection() {
           <>
             <SettingsRow label="Plan" description={account?.pendingDowngrade ? `Switches to ${tierName(account.pendingDowngrade.tier)} on ${fmtDate(account.pendingDowngrade.at)}.` : undefined}>
               <span className="text-ui text-ink">
-                {plan.plan === 'none' || !tier ? 'No plan' : `${tierName(plan.tier ?? tier)}${account?.source === 'comp' ? ' (free)' : ''}`}
-                {tier && interval && account?.source === 'stripe' && (
+                {plan.plan === 'none' || !tier || refused ? 'No plan' : `${tierName(plan.tier ?? tier)}${account?.source === 'comp' ? ' (free)' : ''}`}
+                {tier && interval && account?.source === 'stripe' && !refused && (
                   <span className="ml-2 text-small text-muted">
                     {formatPrice(planFor(tier).price[interval])}/{interval}
                   </span>
                 )}
               </span>
             </SettingsRow>
-            {account?.source === 'stripe' && account.currentPeriodEnd && (
+            {plan.trial && tier && interval && (
+              <SettingsRow label="Free trial" description={account?.cancelAtPeriodEnd ? 'You cancelled it: nothing is charged, and your plan ends with the trial. Keep my plan undoes that.' : 'Cancel before then and you pay nothing.'}>
+                <span className="text-small text-ink">
+                  {plan.trialDaysLeft === 1 ? '1 day left' : `${plan.trialDaysLeft ?? 0} days left`} ·{' '}
+                  {account?.cancelAtPeriodEnd ? `ends ${fmtDate(plan.trialEndsAt ?? account?.trialEndsAt)}` : `${formatPrice(planFor(tier).price[interval])}/${interval} from ${fmtDate(plan.trialEndsAt ?? account?.trialEndsAt)}`}
+                </span>
+              </SettingsRow>
+            )}
+            {refused && (
+              <Callout tone="warn" className="my-3" action={<button type="button" className="btn btn-primary btn-xs" onClick={() => void navigate('plans', { force: true })}>See plans</button>}>
+                Your free trial didn’t start: this card or email already had one. We cancelled it, so nothing was charged. Choose a plan to start today.
+              </Callout>
+            )}
+            {plan.plan === 'none' && !account?.source?.match(/comp|owner/) && plan.paused === 'plan' && plan.banner !== 'plan_ended' && (
+              <Callout
+                tone="info"
+                className="my-3"
+                action={
+                  <button type="button" className="btn btn-primary btn-xs" onClick={() => void navigate('plans', { force: true })}>
+                    {trialDays ? `Start ${trialDays}-day free trial` : 'See plans'}
+                  </button>
+                }
+              >
+                You’re looking around for free. Publishing, posting, ads, AI video and connecting accounts start with a plan{trialDays ? `: try any plan free for ${trialDays} days` : ''}.
+              </Callout>
+            )}
+            {account?.source === 'stripe' && account.currentPeriodEnd && !plan.trial && ['active', 'past_due', 'unpaid'].includes(account.status) && (
               <SettingsRow label={account.cancelAtPeriodEnd ? 'Ends' : 'Next renewal'}>
                 <span className="text-small text-ink">{fmtDate(account.currentPeriodEnd)}</span>
               </SettingsRow>
@@ -157,7 +198,8 @@ export function PlanSection() {
                 <div className="w-full max-w-[320px]">
                   <ProgressBar value={Math.min(credits.monthly, credits.usedCredits ?? 0)} max={Math.max(1, credits.monthly)} aria-label="AI credits used" />
                   <p className="num mt-1.5 text-small text-muted">
-                    {(credits.usedCredits ?? 0).toLocaleString('en-US')} of {credits.monthly.toLocaleString('en-US')} credits used{credits.resetsAt ? ` · renews ${fmtDate(credits.resetsAt)}` : ''}
+                    {(credits.usedCredits ?? 0).toLocaleString('en-US')} of {credits.monthly.toLocaleString('en-US')} credits used
+                    {plan.trial ? ' during your trial' : plan.starter ? ' to set up (once, before a plan)' : credits.resetsAt ? ` · renews ${fmtDate(credits.resetsAt)}` : ''}
                   </p>
                 </div>
               </SettingsRow>
@@ -171,6 +213,26 @@ export function PlanSection() {
                   {busy === 'portal' ? <Spinner size={14} /> : <CreditCard />} Manage billing
                 </button>
               )}
+              {canCancel && account?.cancelAtPeriodEnd && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={busy === 'keep'}
+                  onClick={async () => {
+                    setBusy('keep');
+                    await keepPlan();
+                    setBusy(null);
+                  }}
+                >
+                  {busy === 'keep' && <Spinner size={14} />} Keep my plan
+                </button>
+              )}
+              {canCancel && !account?.cancelAtPeriodEnd && (
+                // before the server can cancel here, Stripe's billing page does it (and asks its own question)
+                <button type="button" className="btn btn-ghost btn-sm sm:ml-auto" onClick={() => (cancelInApp ? setCancelling(true) : void portal())}>
+                  {account?.status === 'trialing' ? 'Cancel trial' : 'Cancel plan'}
+                </button>
+              )}
             </div>
           </>
         )}
@@ -179,9 +241,13 @@ export function PlanSection() {
       {!owner && !legacy && (
         <SettingsSection
           title="Businesses"
-          description={limit == null ? 'Unlimited businesses.' : `${used} of ${limit} ${limit === 1 ? 'business' : 'businesses'}. Each extra business is ${formatPrice(PLANS.additionalBusiness.price[interval ?? 'month'])}/${interval ?? 'month'}.`}
+          description={
+            limit == null
+              ? 'Unlimited businesses.'
+              : `${used} of ${limit} ${limit === 1 ? 'business' : 'businesses'}. Each extra business is ${formatPrice(PLANS.additionalBusiness.price[interval ?? 'month'])}/${interval ?? 'month'}${inTrial ? ', added once your free trial ends' : ''}.`
+          }
           actions={
-            canChangeBusinesses ? (
+            canChangeBusinesses && !inTrial ? (
               <button type="button" className="btn btn-secondary btn-sm" onClick={() => useBilling.getState().openAddBusiness()}>
                 <Plus /> Add a business — {formatPrice(PLANS.additionalBusiness.price[interval ?? 'month'])}/{interval ?? 'month'}
               </button>
@@ -232,6 +298,7 @@ export function PlanSection() {
       {loading && <span className="sr-only" role="status">Updating your plan</span>}
       <RemoveDialog open={removing} onClose={() => setRemoving(false)} slots={slots.filter((s) => s.state === 'active' && !s.lockAt)} name={name} at={account?.currentPeriodEnd ?? null} />
       <ChooseDialog open={choosing} onClose={() => setChoosing(false)} slots={slots} limit={limit ?? 1} name={name} />
+      <CancelDialog open={cancelling} onClose={() => setCancelling(false)} account={account} />
     </div>
   );
 }

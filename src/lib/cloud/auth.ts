@@ -14,6 +14,7 @@ import { stopTurn } from '@/store/assistant';
 import { createSync, supabaseBackend, useSyncStatus, type Sync } from './sync';
 import { createMediaSync, type MediaSync } from './media';
 import { setBillingConfig } from '@/lib/billing/config';
+import { parseConnectReturn } from '@/lib/integrations/connectReturn';
 
 export interface AccountsConfig {
   enabled: boolean;
@@ -188,16 +189,25 @@ async function loadConfig(): Promise<AccountsConfig | null> {
   }
 }
 
-/** Error Supabase put in the address after a link that didn't work (expired, already used). */
-function linkError(): string | null {
+/**
+ * Error Supabase put in the address after a link that didn't work (expired, already used). A connect coming back from
+ * Zernio (?ylb_connect=…, or its ?error=…&error_reason=…) isn't one: it is left in the address for the connect-return
+ * watcher (src/lib/integrations/connectReturnWatcher.ts), which reads it once the sign-in is known. Only the keys read
+ * here leave the address (the hash too when the error was in it).
+ */
+export function linkError(loc: Pick<Location, 'pathname' | 'search' | 'hash'> = location, hist: Pick<History, 'replaceState' | 'state'> = history): string | null {
+  if (parseConnectReturn(loc.search)) return null;
   const read = (s: string) => new URLSearchParams(s.replace(/^[?#]/, ''));
-  const q = read(location.search);
-  const h = /(^#|&)error(_code|_description)?=/.test(location.hash) ? read(location.hash) : null;
+  const q = read(loc.search);
+  const inHash = /(^#|&)error(_code|_description)?=/.test(loc.hash);
+  const h = inHash ? read(loc.hash) : null;
   const code = q.get('error_code') ?? h?.get('error_code');
   const desc = q.get('error_description') ?? h?.get('error_description') ?? code ?? q.get('error') ?? h?.get('error');
   if (!desc) return null;
-  // tidy the address
-  history.replaceState(null, '', location.pathname);
+  // tidy the address: Supabase's keys only (the rest of the query stays, and the hash unless the error was in it)
+  for (const k of ['error', 'error_code', 'error_description']) q.delete(k);
+  const rest = q.toString();
+  hist.replaceState(hist.state, '', `${loc.pathname}${rest ? `?${rest}` : ''}${inHash ? '' : loc.hash}`);
   return /expired|invalid/i.test(`${desc} ${code ?? ''}`) ? 'That link has expired or was already used. Sign in, or ask for a new link.' : desc;
 }
 

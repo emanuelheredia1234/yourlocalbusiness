@@ -9,26 +9,29 @@ export interface BillingConfig {
   enabled: boolean;
   /** plans are enforced (slots, credits, gating) */
   enforce: boolean;
+  /** the card trial's length new sign-ups are offered (0: none) */
+  trialDays: number;
 }
 
 const KEY = 'ylb-billing-config';
+const trialDaysOf = (v: unknown): number => (typeof v === 'number' && Number.isInteger(v) && v > 0 && v <= 30 ? v : 0);
 
 function stored(): BillingConfig {
   try {
     const c = JSON.parse(safeStorage.getItem(KEY) || 'null') as Partial<BillingConfig> | null;
-    return { enabled: c?.enabled === true, enforce: c?.enforce === true };
+    return { enabled: c?.enabled === true, enforce: c?.enforce === true, trialDays: trialDaysOf(c?.trialDays) };
   } catch {
-    return { enabled: false, enforce: false };
+    return { enabled: false, enforce: false, trialDays: 0 };
   }
 }
 
-export const useBillingConfig = create<BillingConfig>(() => (typeof __ARTIFACT_BUILD__ !== 'undefined' && __ARTIFACT_BUILD__ ? { enabled: false, enforce: false } : stored()));
+export const useBillingConfig = create<BillingConfig>(() => (typeof __ARTIFACT_BUILD__ !== 'undefined' && __ARTIFACT_BUILD__ ? { enabled: false, enforce: false, trialDays: 0 } : stored()));
 
 /** From /api/config (anything else counts as off). */
 export function setBillingConfig(raw: unknown): void {
   if (typeof __ARTIFACT_BUILD__ !== 'undefined' && __ARTIFACT_BUILD__) return;
   const b = raw && typeof raw === 'object' ? (raw as Partial<BillingConfig>) : null;
-  const next: BillingConfig = { enabled: b?.enabled === true, enforce: b?.enabled === true && b?.enforce === true };
+  const next: BillingConfig = { enabled: b?.enabled === true, enforce: b?.enabled === true && b?.enforce === true, trialDays: b?.enabled === true ? trialDaysOf(b?.trialDays) : 0 };
   safeStorage.setItem(KEY, JSON.stringify(next));
   useBillingConfig.setState(next);
 }

@@ -25,7 +25,8 @@ export const PORTAL_FEATURES = Object.freeze({
   payment_method_update: { enabled: 'true' },
   invoice_history: { enabled: 'true' },
   customer_update: { enabled: 'true', allowed_updates: ['email', 'address', 'tax_id'] },
-  subscription_cancel: { enabled: 'true', mode: 'at_period_end', cancellation_reason: { enabled: 'true', options: ['too_expensive', 'missing_features', 'unused', 'other'] } },
+  // the cancellation survey is on: the app reads the answer from the subscription's cancellation_details (P1c)
+  subscription_cancel: { enabled: 'true', mode: 'at_period_end', cancellation_reason: { enabled: 'true', options: ['too_expensive', 'missing_features', 'switched_service', 'unused', 'too_complex', 'low_quality', 'customer_service', 'other'] } },
   subscription_update: { enabled: 'false' },
 });
 
@@ -107,7 +108,7 @@ export async function runSetup({ args = [], env = process.env, fetch = globalThi
   if (flags.has('--portal')) {
     if (!apply) out('Customer Portal: dry run. With --apply --portal a configuration is made (card, invoices, cancel at period end; plan and quantity changes off).');
     else {
-      const made = await stripe.post('/v1/billing_portal/configurations', { features: PORTAL_FEATURES, business_profile: { headline: 'Manage your plan' } }, { idempotencyKey: 'ylb-setup-portal-v1' });
+      const made = await stripe.post('/v1/billing_portal/configurations', { features: PORTAL_FEATURES, business_profile: { headline: 'Manage your plan' } }, { idempotencyKey: 'ylb-setup-portal-v2' });
       if (made.outcome === 'ok') {
         portal = made.value.id;
         out(`Customer Portal configuration: ${portal}  (set STRIPE_PORTAL_CONFIGURATION to it)`);

@@ -14,7 +14,7 @@ import { useEffect } from 'react';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { AnalyticsSettings, AnalyticsSettingsInput, AnalyticsSnapshot, AnalyticsSource, ConnectPlatform, ConnectionStatus, RefreshRun, SocialSlots } from '@/lib/integrations/types';
 import { ANALYTICS_SOURCES, AD_PLATFORMS, SOCIAL_PLATFORMS } from '@/lib/integrations/types';
-import { IntegrationApiError, checkConnection, connect as connectApi, disconnect as disconnectApi, getConnections, getRun, getSnapshots, reconnect as reconnectApi, refreshAnalytics, releaseProjectSocial, saveAnalyticsSettings } from '@/lib/integrations/api';
+import { IntegrationApiError, abandonConnection, checkConnection, connect as connectApi, disconnect as disconnectApi, getConnections, getRun, getSnapshots, reconnect as reconnectApi, refreshAnalytics, releaseProjectSocial, saveAnalyticsSettings } from '@/lib/integrations/api';
 import { serverFetch } from '@/ai/claude';
 import { serverBaseNow } from '@/lib/cloud/auth';
 import { safeStorage } from '@/lib/storage';
@@ -123,7 +123,9 @@ export interface AnalyticsState {
   /** Connect / Reconnect: one request for a link, opened in a new tab; then the row waits for the network. */
   connectPlatform: (platform: ConnectPlatform, mode?: 'connect' | 'reconnect') => Promise<{ ok: boolean; message?: string }>;
   /** "Check": asks the server to read the account back from the network's service, then re-reads every row. */
-  checkPlatform: (platform: ConnectPlatform) => Promise<{ ok: boolean; message?: string }>;
+  checkPlatform: (platform: ConnectPlatform, opts?: { accountId?: string }) => Promise<{ ok: boolean; message?: string }>;
+  /** A connect that came back with an error (Zernio's redirect): the row stops waiting here and on the server. */
+  abandonPlatform: (platform: ConnectPlatform, reason: string) => Promise<{ ok: boolean; message?: string }>;
   /** ackLiveAds: the customer saw the ad campaigns on this connection that stay on (the server refuses without it). */
   disconnectPlatform: (platform: ConnectPlatform, opts?: { ackLiveAds?: boolean }) => Promise<{ ok: boolean; message?: string }>;
   /** A business was deleted (or its slot is held by one that was): its social accounts are disconnected and its slot freed. One request each. */
@@ -236,6 +238,12 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
         if (c && c.state !== 'not_connected' && c.state !== 'pending') {
           delete pending[p];
           delete expired[p];
+        } else if (c?.state === 'not_connected' && c.lastError) {
+          // the server stopped waiting (a connect starts by clearing lastError): the connect came back with an error,
+          // in another tab (its row says why), or the server's own wait ran out ("That didn't finish")
+          delete pending[p];
+          if (c.lastError === 'not_finished') expired[p] = true;
+          else delete expired[p];
         } else if (now - at > PENDING_EXPIRES_MS) {
           delete pending[p];
           expired[p] = true;
@@ -386,12 +394,12 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
       }
     },
 
-    checkPlatform: async (platform) => {
+    checkPlatform: async (platform, opts = {}) => {
       if (artifact()) return { ok: false };
       if (get().pending[platform] !== undefined) {
         // the server reads the account back (the service's "connected" message can go missing), then every row
         try {
-          await checkConnection(platform, activeProject());
+          await checkConnection(platform, activeProject(), opts.accountId);
         } catch {
           /* the re-read below still shows where it stands */
         }
@@ -404,7 +412,24 @@ export const useAnalytics: UseBoundStore<StoreApi<AnalyticsState>> = create<Anal
         return { ok: true };
       }
       try {
-        const { connection } = await checkConnection(platform, activeProject());
+        const { connection } = await checkConnection(platform, activeProject(), opts.accountId);
+        set({ connections: [...get().connections.filter((c) => c.platform !== platform), connection] });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, message: messageOf(e) };
+      }
+    },
+
+    abandonPlatform: async (platform, reason) => {
+      if (artifact()) return { ok: false };
+      // this browser stops waiting whatever the server says (the row shows the reason once the server has it)
+      const pending = { ...get().pending };
+      const expired = { ...get().expired };
+      delete pending[platform];
+      delete expired[platform];
+      set({ pending, expired });
+      try {
+        const { connection } = await abandonConnection(platform, reason, activeProject());
         set({ connections: [...get().connections.filter((c) => c.platform !== platform), connection] });
         return { ok: true };
       } catch (e) {

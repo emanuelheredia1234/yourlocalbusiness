@@ -1,6 +1,7 @@
 // #plans: the public plans page (Launch, Grow, Scale), signed out too. A monthly / annual switch (annual shows the
 // saving), three cards, the comparison table from shared/plans.json, and the FAQ. Start → sign up → Stripe Checkout
-// → back to the app (the plan is read again there). Signed in with a plan, the buttons switch plans instead.
+// → back to the app (the plan is read again there). Signed in with a plan, the buttons switch plans instead. A first
+// plan starts with the card trial when the server offers one ("Start 7-day free trial"; charged on day 8).
 //
 // Not in the claude.ai artifact build, and not while the app's server hasn't set up Stripe ("not available here").
 
@@ -11,7 +12,7 @@ import { navigate } from '@/lib/router';
 import { PLANS, SHARED_FEATURES, TIERS, compareRows, creditsUsd, formatPrice, microUsd, monthsFree, planFor, tierRank, yearlySavings, type Interval, type Tier } from '@/lib/plans';
 import { changeKind, changeRefusal, checkout, confirmPlanChange } from '@/lib/billing/actions';
 import { useAuth, showSignIn } from '@/lib/cloud/auth';
-import { hasLivePlan, savePlanIntent, useBilling, useBillingOn } from '@/store/billing';
+import { hasLivePlan, readPlanIntent, savePlanIntent, useBilling, useBillingOn, useTrialDays } from '@/store/billing';
 import { useStore } from '@/store/useStore';
 import { AppMark } from '@/components/layout/Shell';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Badge, Callout, Segmented, Spinner } from '@/components/ui/primitives';
@@ -102,9 +103,23 @@ export function IntervalSwitch({ value, onChange }: { value: Interval; onChange:
 
 // ───────────── what each card's button does ─────────────
 
-/** The cards' buttons for whoever is looking: start (signed out or no plan), current plan, or switch. */
-export function usePlanActions(interval: Interval): { action: (tier: Tier) => CardAction; busy: Tier | null } {
+/** "Start 7-day free trial" (a first plan, when offered), else "Start with Grow". */
+export function startLabel(tier: Tier, trialDays: number): string {
+  return trialDays > 0 ? `Start ${trialDays}-day free trial` : `Start with ${planFor(tier).name}`;
+}
+
+/** Under a trial button: what happens on the day it ends. */
+export function trialNote(tier: Tier, interval: Interval, trialDays: number): string {
+  return `Free for ${trialDays} days, then ${formatPrice(planFor(tier).price[interval])}/${interval}. Cancel any time before day ${trialDays + 1} and you pay nothing.`;
+}
+
+/**
+ * The cards' buttons for whoever is looking: start (signed out or no plan), current plan, or switch. before: runs just
+ * before the browser leaves for Stripe Checkout (setup saves the business first).
+ */
+export function usePlanActions(interval: Interval, opts: { before?: () => void } = {}): { action: (tier: Tier) => CardAction; busy: Tier | null } {
   const phase = useAuth((s) => s.phase);
+  const trialDays = useTrialDays();
   const plan = useBilling((s) => s.plan);
   const account = useBilling((s) => s.account);
   const used = useBilling((s) => s.businesses?.used ?? 0);
@@ -120,11 +135,12 @@ export function usePlanActions(interval: Interval): { action: (tier: Tier) => Ca
   };
   const action = (tier: Tier): CardAction => {
     const name = planFor(tier).name;
-    if (phase === 'off') return { label: `Start with ${name}`, disabled: true, note: 'Plans need an account, and accounts are off on this server.' };
+    if (phase === 'off') return { label: startLabel(tier, 0), disabled: true, note: 'Plans need an account, and accounts are off on this server.' };
     if (phase !== 'ready') {
       // signed out (or a guest): remember the choice, create the account, then on to Stripe
       return {
-        label: `Start with ${name}`,
+        label: startLabel(tier, trialDays),
+        ...(trialDays ? { note: trialNote(tier, interval, trialDays) } : {}),
         onClick: () => {
           savePlanIntent({ tier, interval });
           if (phase === 'guest') showSignIn();
@@ -134,7 +150,15 @@ export function usePlanActions(interval: Interval): { action: (tier: Tier) => Ca
     }
     if (plan?.plan === 'owner') return { label: 'Owner plan', disabled: true };
     // Checkout keeps every active business: more than one is charged as extra businesses, so the card says the total
-    if (!live || account?.source !== 'stripe') return { label: `Start with ${name}`, onClick: run(tier, () => checkout(tier, interval)), ...(used > 1 ? { note: checkoutTotal(tier, interval, used) } : {}) };
+    if (!live || account?.source !== 'stripe') {
+      const start = async () => {
+        opts.before?.();
+        return checkout(tier, interval);
+      };
+      // the trial covers one business: with more, the plan starts paid (the server makes that Checkout without one)
+      const days = used > 1 ? 0 : trialDays;
+      return { label: startLabel(tier, days), onClick: run(tier, start), ...(used > 1 ? { note: checkoutTotal(tier, interval, used) } : days ? { note: trialNote(tier, interval, days) } : {}) };
+    }
     const kind = changeKind(account.tier, account.interval, tier, interval);
     if (kind === 'same') return { label: 'Current plan', disabled: true };
     if (kind === 'to_month') return { label: `Switch to ${name}`, disabled: true, note: 'Yearly to monthly happens at renewal: contact support.' };
@@ -155,6 +179,12 @@ export function checkoutTotal(tier: Tier, interval: Interval, businesses: number
 
 // ───────────── the page ─────────────
 
+/** The FAQ's free-trial answer (what the app promises: no email it can't send). */
+export const TRIAL_FAQ = (days: number) => ({
+  q: 'How does the free trial work?',
+  a: `Your first plan starts with ${days} days free. You add a card at checkout, nothing is charged during the trial, and Stripe charges the plan on day ${days + 1} unless you cancel before (in Settings › Plan). The trial includes ${PLANS.cardTrial.aiCredits.toLocaleString('en-US')} AI credits and everything else on the plan you chose, for one business; you can add more businesses once it ends. The app shows the days left, and says so in its last ${PLANS.cardTrial.endingSoonDays} days. One trial per person and card: if yours had one before, the trial doesn’t start and nothing is charged.`,
+});
+
 const FAQ: { q: string; a: ReactNode }[] = [
   { q: 'What is an AI credit?', a: 'About one cent of AI cost on the app’s keys: writing, images, video and research all use credits. Your plan’s credits renew each month. If you add your own AI keys in Settings, those requests never use credits.' },
   { q: 'How do extra businesses work?', a: `Each plan includes one business. Each extra one is ${formatPrice(PLANS.additionalBusiness.price.month)}/month (${formatPrice(PLANS.additionalBusiness.price.year)}/year on yearly plans) and adds ${PLANS.additionalBusiness.aiCreditsPerMonth.toLocaleString('en-US')} AI credits a month. Adding one charges the rest of the current period today; removing one takes effect at renewal, with no refund.` },
@@ -172,8 +202,10 @@ export default function PlansPage() {
   const hasProject = useStore((s) => s.projects.length > 0);
   const [interval, setPeriod] = useState<Interval>('month');
   const { action, busy } = usePlanActions(interval);
+  const trialDays = useTrialDays();
   const rows = compareRows();
   const inApp = phase === 'ready' || phase === 'guest' || phase === 'off';
+  const faq = trialDays ? [TRIAL_FAQ(trialDays), ...FAQ] : FAQ;
 
   return (
     <div className="min-h-full bg-surface">
@@ -205,7 +237,9 @@ export default function PlansPage() {
           <>
             <div className="mx-auto max-w-[720px] text-center">
               <h1 className="text-phone-display text-ink sm:text-display">Plans for your local business</h1>
-              <p className="mt-3 text-body-lg text-muted">Start with one business and add more any time. Pay securely with Stripe; cancel whenever you like.</p>
+              <p className="mt-3 text-body-lg text-muted">
+                {trialDays ? `Try any plan free for ${trialDays} days. ` : ''}Start with one business and add more any time. Pay securely with Stripe; cancel whenever you like.
+              </p>
               <div className="mt-6 flex justify-center">
                 <IntervalSwitch value={interval} onChange={setPeriod} />
               </div>
@@ -214,7 +248,7 @@ export default function PlansPage() {
             <div className="mt-10">
               <PlanCards interval={interval} action={action} busy={busy} />
             </div>
-            <p className="mt-4 text-center text-small text-muted">Start → create your account → pay with Stripe → straight back to the app.</p>
+            <p className="mt-4 text-center text-small text-muted">{trialDays ? `Start → create your account → set up your business → add a card with Stripe (nothing charged for ${trialDays} days).` : 'Start → create your account → pay with Stripe → straight back to the app.'}</p>
 
             <section className="mt-16" aria-labelledby="compare-title">
               <h2 id="compare-title" className="text-h2 text-ink">
@@ -269,7 +303,7 @@ export default function PlansPage() {
                 Questions
               </h2>
               <Accordion type="single" collapsible className="card mt-4 px-5">
-                {FAQ.map((f, i) => (
+                {faq.map((f, i) => (
                   <AccordionItem key={f.q} value={`q${i}`}>
                     <AccordionTrigger>{f.q}</AccordionTrigger>
                     <AccordionContent>
@@ -324,5 +358,40 @@ export function PlanPickerScreen({ footer }: { footer?: ReactNode }) {
         </p>
       </main>
     </div>
+  );
+}
+
+/**
+ * Setup's Launch step with no plan yet (P1c): the paywall. The business, brand board and first drafts are made; a
+ * plan (a free trial with a card, when offered) unlocks publishing, posting, ads, video and connecting accounts.
+ * before: saves the business before the browser leaves for Stripe. onSkip: look around first (paid actions locked).
+ */
+export function LaunchPaywall({ before, onSkip }: { before: () => void; onSkip: () => void }) {
+  const [interval, setPeriod] = useState<Interval>(() => readPlanIntent()?.interval ?? 'month');
+  const { action, busy } = usePlanActions(interval, { before });
+  const trialDays = useTrialDays();
+  return (
+    <section aria-labelledby="launch-plan" className="flex flex-col gap-5" data-paywall>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h2 id="launch-plan" className="text-h2 text-ink">
+            {trialDays ? `Start your ${trialDays}-day free trial` : 'Choose your plan to launch'}
+          </h2>
+          <p className="mt-1 max-w-[60ch] text-body text-muted">
+            {trialDays
+              ? `Pick a plan and add a card with Stripe. Nothing is charged for ${trialDays} days, and you can cancel any time before day ${trialDays + 1} in Settings › Plan.`
+              : 'Pick a plan to publish, post, run ads and make videos. You’ll pay securely with Stripe.'}
+          </p>
+        </div>
+        <IntervalSwitch value={interval} onChange={setPeriod} />
+      </div>
+      <PlanCards interval={interval} action={action} busy={busy} />
+      <p className="text-small text-muted">
+        Not ready? You can look around and edit everything first; publishing, posting, ads, AI video and connecting accounts wait for a plan.{' '}
+        <button type="button" className="link" onClick={onSkip}>
+          Not now, look around first
+        </button>
+      </p>
+    </section>
   );
 }

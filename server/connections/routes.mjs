@@ -10,7 +10,12 @@
 //   POST   /api/integrations/connections/:platform/connect          {connectLink, expiresAt} | {alreadyConnected: true}
 //                                                                    body {projectId?}: the business that connects it
 //   POST   /api/integrations/connections/:platform/reconnect        same
-//   POST   /api/integrations/connections/:platform/check            {connection}   body {projectId?}
+//   POST   /api/integrations/connections/:platform/check            {connection}   body {projectId?, accountId?}
+//                                                                    (accountId: the one Zernio named on its redirect
+//                                                                    back, a hint; only this user's own rows count)
+//   POST   /api/integrations/connections/:platform/abandon          {connection}   body {projectId?, reason}: the
+//                                                                    connect came back with ?error=: it stops waiting
+//                                                                    and keeps the reason (our code) as lastError
 //   DELETE /api/integrations/connections/:platform[?projectId=][&ackLiveAds=1]   {ok: true} | 409 ADS_LIVE {live}
 //                                                                    (Meta ads / Google Ads while a campaign launched
 //                                                                    from the app is on: after disconnecting the app
@@ -159,7 +164,7 @@ export function createConnectionRoutes(deps = {}) {
         });
         return true;
       }
-      const m = /^\/api\/integrations\/connections\/([a-z_]+)(?:\/(connect|reconnect|check|targets|target))?$/.exec(path);
+      const m = /^\/api\/integrations\/connections\/([a-z_]+)(?:\/(connect|reconnect|check|abandon|targets|target))?$/.exec(path);
       if (!m || !PLATFORMS.includes(m[1])) throw fail(404, 'NOT_FOUND', 'Not found.');
       const [, platform, action = ''] = m;
       if (!connections.enabled || !(AD_PLATFORMS.includes(platform) ? connections.adsEnabled : connections.socialEnabled)) throw fail(503, 'CONNECTIONS_NOT_ENABLED', 'Connecting accounts is coming soon. You can still post yourself and mark posts as posted.');
@@ -176,8 +181,17 @@ export function createConnectionRoutes(deps = {}) {
         return true;
       }
       if (route === 'POST check') {
-        const projectId = projectFrom((await body(req)).projectId);
-        reply(req, res, 200, { connection: await connections.check(who.id, platform, { projectId }) });
+        const b = await body(req);
+        const projectId = projectFrom(b.projectId);
+        // Zernio's ?accountId= from the redirect back: only a hint (the server keeps only this user's own rows)
+        const accountId = typeof b.accountId === 'string' && /^[0-9a-f]{24}$/i.test(b.accountId) ? b.accountId : undefined;
+        reply(req, res, 200, { connection: await connections.check(who.id, platform, { projectId, ...(accountId ? { accountId } : {}) }) });
+        return true;
+      }
+      if (route === 'POST abandon') {
+        const b = await body(req);
+        const reason = typeof b.reason === 'string' ? b.reason.slice(0, 60) : '';
+        reply(req, res, 200, { connection: await connections.abandon(who.id, platform, { projectId: projectFrom(b.projectId), reason }) });
         return true;
       }
       if (route === 'DELETE ') {

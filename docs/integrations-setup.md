@@ -106,9 +106,15 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    Run it after `20261103050000_page_leads.sql`.
 7. `supabase/migrations/20261113000000_offers.sql` (P3, §12): offers, payment connections, sales and their refunds,
    buy link clicks. Run it after `20261105000000_integrations.sql`.
+8. `supabase/migrations/20261114000000_trial_paywall.sql` (P1c, §10 "Free trial, paywall and cancelling"): the first
+   business needs no plan, the 7-day card trial (`billing_trials`), the cancel survey (`cancel_surveys`, with the
+   owner's totals `ylb_cancel_survey_totals`) and the cancel / resume / end-trial operations. Run it after
+   `20261110000000_billing.sql`. Until it is run, no trial is offered and Cancel plan / Keep my plan open the
+   Customer Portal instead.
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
-invoices. Their ad accounts are disconnected at Zernio first (every account in their Zernio profile, then the
+invoices, and `billing_trials` rows, which keep only keyed hashes of the email and card (their `user_id` becomes
+null) so the same email or card can't start a second free trial on a new account. Their ad accounts are disconnected at Zernio first (every account in their Zernio profile, then the
 profile). Their Upload-Post profiles (one per business, with every social connection in them) are deleted once the
 account itself is gone, so a deletion that stops half way loses no connection; if a delete fails, the daily check
 finishes it. Deleting one business in the app deletes that business's profile right away.
@@ -631,8 +637,21 @@ One screen with two sections:
   and a slot still held by a business the server finds deleted shows **Free it** (with a confirm). The "How connecting works" tip says plainly that
   the sign-in page is run by Upload-Post, so its name shows there and on the network's permission screen.
 - **Ad accounts** (Zernio): Google Ads, Meta Ads, LinkedIn Ads, TikTok Ads, Pinterest Ads, Reddit Ads, Microsoft
-  Ads, and X Ads as "Coming soon". Read only: "The app only reads them and never changes your ads or spends
-  money."
+  Ads, and X Ads as "Coming soon". The card says: "See your ad results here. When launching is turned on, you can
+  also launch and change campaigns from the app, and each change waits for your confirmation."
+- **Coming back from Zernio's connect page.** The connect link sends the browser back to `APP_URL/?ylb_connect=<platform>`
+  and Zernio adds `connected=<platform>&profileId=&accountId=` on success, or `error=&platform=&error_reason=&
+  error_message=&is_user_fixable=` on failure. On success the app checks that platform at once
+  (`POST …/<platform>/check {accountId}`: the account id is a hint, only the user's own rows count) and says it is
+  connected. On failure it calls `POST …/<platform>/abandon {reason}` (the row stops waiting and keeps the reason)
+  and says why in its own words for `no_pages_granted`, `page_not_granted`, `ad_accounts_not_granted`,
+  `state_expired` / `invalid_state`, `reconnect_required`, `meta_ads_authorization_denied` and `connection_failed`.
+  `ads_addon_required` and `payment_required` are the Zernio team's problem: the owner is told what to fix and an
+  owner alert is logged; customers see "isn't available right now". Zernio's `error_message` is never shown. The
+  parameters are then taken out of the address bar.
+- **Reading accounts back** asks `GET /v1/accounts` with `adAccountRows=true` (one row per ad account; without it
+  Zernio lists each ads login once, so a second Meta ad account on the same login would be missed), and accepts a
+  `profileId` given as the id or as the Profile object.
 - **Gmail** (§3d): one mailbox for this account, for outreach later. **Connect** and **Disconnect**. Until
   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set, customers see that Gmail isn’t set up yet and the owner
   sees those secret names and the redirect URI. Nothing is sent from this screen.
@@ -787,14 +806,23 @@ Nothing is enforced until the owner turns plans on; until then the app behaves a
 1. **Stripe Sandbox first.** In the Stripe Dashboard, open a Sandbox (Developers → Sandboxes) and copy its secret key
    (`sk_test_…`) into the workspace Secrets as `STRIPE_SECRET_KEY`. Everything below is done in the Sandbox, end to
    end, before anything live.
-2. Run the migration `supabase/migrations/20261110000000_billing.sql` (and check the rule on a branch, below).
+2. Run the migration `supabase/migrations/20261110000000_billing.sql` (and check the rule on a branch, below), then
+   `20261111000000_video_week.sql` (P1b) and `20261114000000_trial_paywall.sql` (P1c: the free first business, the
+   7-day card trial and the cancel survey; until it is run no trial is offered).
 3. Set `APP_URL` (the app's https address).
 4. **Products and prices** with the setup script (below): a dry run, then `--apply`.
 5. **Webhook** (below): the endpoint URL and the 10 events; its signing secret into `STRIPE_WEBHOOK_SECRET`.
-6. **Customer Portal** settings (below).
+6. **Customer Portal** settings (below), with the cancellation reason survey on. In Stripe → Settings → Billing →
+   Subscriptions and emails: Smart Retries ("Failed payments", below) and the free trial reminder ("Send a reminder
+   email 7 days before a free trial ends", see "Free trial, paywall and cancelling").
 7. Optional: **Stripe Tax** (below).
-8. Try it in the Sandbox: create an account, choose a plan on `#plans`, pay with `4242 4242 4242 4242`, come back to
-   the app, add a business, try `4000 0000 0000 0341` (a card that declines later) for the failed-payment path.
+8. Try it in the Sandbox: create an account and set up a business, then on `#plans` start the 7-day free trial with
+   `4242 4242 4242 4242` (once plans are on, setup's Launch step shows the same plans); Settings › Plan shows the days
+   left. Try **Cancel trial** (the survey) and **Keep my plan**. A trial on a card that already had one is cancelled
+   at once, by design: every `4242…` test card has the same fingerprint, so a second test trial needs another test
+   card (for example `5555 5555 5555 4444`). For the paid path, set **Card trial** to 0 in Customer usage › Plans,
+   then on a new account choose a plan on `#plans`, pay with `4242 4242 4242 4242`, come back to the app, add a
+   business, and try `4000 0000 0000 0341` (a card that declines later) for the failed-payment path.
 9. Owner → Billing → Plans → **Turn on plans**.
 10. Live (only with the owner's explicit OK): create a **restricted live key** (`rk_live_…`, permissions below), run
     the setup script with it and `--live`, add the live webhook endpoint and its secret, set up the live Portal, and
@@ -811,7 +839,7 @@ Nothing is enforced until the owner turns plans on; until then the app behaves a
 
 | Secret | What it is |
 |---|---|
-| `STRIPE_SECRET_KEY` | In production a **restricted live key** (`rk_live_…`) with: Customers write, Checkout Sessions write, Subscriptions write, Billing Portal write (sessions; configurations if you use `--portal`), Prices read, Products read, Invoices read, Events read. For setup only, the script needs Products and Prices write too (use a separate key for that, or add and remove the permission). The Sandbox key (`sk_test_…`) goes in the workspace Secrets only. The app shows only its last 4 characters. |
+| `STRIPE_SECRET_KEY` | In production a **restricted live key** (`rk_live_…`) with: Customers write, Checkout Sessions write, Subscriptions write, Billing Portal write (sessions; configurations if you use `--portal`), Prices read, Products read, Invoices read, Events read, PaymentMethods read (the trial's one-card check reads the card's fingerprint; without it the owner is alerted with `billing_alert_trial_card_unread` and the card isn't checked). For setup only, the script needs Products and Prices write too (use a separate key for that, or add and remove the permission). The Sandbox key (`sk_test_…`) goes in the workspace Secrets only. The app shows only its last 4 characters. |
 | `STRIPE_WEBHOOK_SECRET` | The endpoint's signing secret (`whsec_…`). |
 | `STRIPE_WEBHOOK_SECRET_PREVIOUS` | Only while rotating the signing secret: the old one, so events signed with it still verify. Remove it once rotated. |
 | `STRIPE_PORTAL_CONFIGURATION` | Optional: the Customer Portal configuration id (`bpc_…`) to use instead of the default one. |
@@ -847,8 +875,10 @@ Prices are found by lookup key, never by id: `ylb_{launch,grow,scale,business}_{
 ### Customer Portal
 
 Stripe → Settings → Billing → Customer portal (or `--apply --portal`): payment methods on, invoice history on,
-cancel **at period end** on, **subscription updates (plan and quantity changes) off** (the app does those so each one is
-sent once and confirmed). Business information and links to the terms and privacy pages
+cancel **at period end** on with the **cancellation reason survey on** (every reason: too expensive, missing features,
+switched service, unused, too complex, low quality, customer service, other: the app reads the answer from the
+subscription's `cancellation_details` and counts it with its own survey), **subscription updates (plan and quantity
+changes) off** (the app does those so each one is sent once and confirmed). Business information and links to the terms and privacy pages
 (`https://yourlocalbusiness.replit.app/terms` and `https://yourlocalbusiness.replit.app/privacy`).
 
 ### Stripe Tax (optional)
@@ -871,7 +901,8 @@ key, the webhook secret, `APP_URL` and all 8 prices are in place, and says which
 
 - Every existing account with at least one business gets **30 days of Grow free** (`existing_trial_days`), with as many
   businesses as it has. Then they choose a plan; Checkout preselects their extra businesses.
-- New sign-ups choose a plan (optional card trial: `card_trial_days`, off by default).
+- New sign-ups set up their first business free, then meet the paywall at setup's Launch step (the 7-day card trial,
+  `card_trial_days`, 7 by default; see "Free trial, paywall and cancelling").
 - Every business already has a slot (the migration's backfill, and the trigger while plans were off).
 
 **Rollback**: turn plans off (the same switch). Everything is ungated again at once; nothing is deleted, and turning
@@ -990,11 +1021,71 @@ them on again later doesn't restart the free days (they start at the first `enfo
   weekly videos, spread across the week, and the saved plan view fits each day's formats to the video days.
 - Before the migration is run, the counts live in the server's memory (they reset when it restarts).
 
+### Free trial, paywall and cancelling (P1c)
+
+Migration `supabase/migrations/20261114000000_trial_paywall.sql`. No new Secrets: the trial's email and card hashes
+are keyed with `CUSTOMER_TAG_SECRET`.
+
+- **Sign-up and setup are free.** With plans on, a new account makes its first business without a plan
+  (`claim_project_slot` lets someone with no business start one; any other business still needs a plan's slot) and
+  goes through setup: business, brand board, strategy, first drafts. Setup's AI runs on a one-off allowance
+  (`starter.aiCredits` in `shared/plans.json`, 200 credits ≈ $2, never renewed; own AI keys never count).
+- **Locked before a plan:** publishing pages and assets, posting, connecting accounts, analytics updates, launching
+  ads, AI video and every other paid action answer 402 `PLAN_REQUIRED`; the app shows **Start your free trial**.
+  Browsing and editing stay open. A plan that ended gets no allowance and no trial.
+- **The paywall** is setup's Launch step: the plan cards with **Start 7-day free trial** and "Not now, look around
+  first". `#plans`, the sign-up screen, Settings › Plan and the upgrade prompt say the same.
+- **The trial:** Stripe Checkout with `trial_period_days` (the owner's `card_trial_days`, 7 by default; 0 turns it
+  off in Customer usage › Plans), the card required (`payment_method_collection=always`) and the subscription
+  cancelled if the card is gone at the end. Nothing is charged until day 8. A trial Checkout takes cards only
+  (`payment_method_types=card`: Link has no card fingerprint) and says on Stripe's page, next to the pay button, "One
+  free trial per person and card…". The trial gives the chosen tier's features with its own AI allowance
+  (`cardTrial.aiCredits`, 300 credits ≈ $3) for the whole trial, counted from its first UTC day: what setup spent that
+  day before the trial began is stored with the trial (`billing_trials.ai_baseline_usd`) and not counted. It covers the
+  plan's one business: a Checkout with extra businesses starts paid (no trial; Stripe's page says so), and Add a
+  business answers "Extra businesses start after your free trial" until it ends (Stripe would bill an added business
+  $0 until day 8). The app shows the days left, and "ending soon" in the last `cardTrial.endingSoonDays` (3) days.
+  **Turn on Stripe's trial reminder** (owner step): Stripe → Settings → Billing → Subscriptions and emails → Email
+  notifications and customer management → "Send a reminder email 7 days before a free trial ends". For a 7-day trial
+  Stripe sends it as the trial starts (the end date and the price); there is no "3 days before" setting, and Stripe
+  sends none in a sandbox. The app's own copy says only that.
+  If the card fails on day 8, the normal past-due grace applies.
+- **One trial per person:** never after a plan, a free plan or a trial on the account, nor for an email that had one
+  (HMAC of the address in `billing_trials`, kept when the account is deleted). Checkout can't check the card before
+  it's typed in, so a trial whose card fingerprint (HMAC) already had a trial on another account is **cancelled at
+  once, nothing charged** (never turned into a charge the customer didn't agree to): one
+  `DELETE /v1/subscriptions/<id>?invoice_now=false&prorate=false` with Idempotency-Key `ylb-trial-cancel-<subscription>`,
+  recorded as a money operation so it is never resent (an unclear answer is read back). The app then says "Your free
+  trial didn't start… nothing was charged" and offers the plan without a trial; that Checkout says "This plan starts
+  today: free trials are for first plans only." on Stripe's page. Of two trials on one card, the one that started
+  first keeps it. A card that couldn't be read (`billing_alert_trial_card_unread`: no PaymentMethods permission, a
+  failed read) is read again on every sync while its trial runs; a later trial on it that got through is cancelled
+  at its own next sync. The owner is alerted (`billing_alert_trial_duplicate`; `billing_alert_trial_end_failed` when
+  Stripe refuses the cancel or it is never confirmed: that trial then runs on as Checkout said, and nothing more is
+  sent).
+- **Cancel plan** (Settings › Plan): a short survey first: one required reason (too expensive, not using it enough,
+  missing a feature, results not good enough, switching to another tool, too hard to use, only needed it for a short
+  time, other) and an optional comment. The reason brings up one alternative (a cheaper plan, tips through Strategy or
+  own AI keys, "tell us the missing feature"), never blocking the cancel. Cancelling is
+  `POST /api/billing/cancel` → `cancel_at_period_end` with Stripe's `cancellation_details` (sent once per press,
+  Idempotency-Key `ylb-cancel-<user>-<id>`); a trial cancelled this way ends without a charge. After a failed payment
+  (past due, unpaid) Cancel ends the plan now instead (`DELETE` with `invoice_now=false`, `prorate=false`: Stripe stops
+  trying the card, nothing more is charged); every other change still waits for the card. The answer is kept once
+  the cancel went through (read back, if its answer was unclear), never for one that failed. A change that was read
+  back and isn't there answers `409 NOT_APPLIED` (the app's next press is a new request). **Keep my plan** undoes it
+  (`POST /api/billing/resume`, also while past due). Taking the alternative saves the answer only
+  (`POST /api/billing/cancel/survey`). Before the migration is run, both answer `409 USE_PORTAL` and the app opens the
+  Customer Portal.
+- **What the owner sees:** Customer usage › Plans → **Why people cancel** (`GET /api/billing/surveys`): totals by
+  reason over every answer (cancelled and stayed; `ylb_cancel_survey_totals`), the latest comments (from the app and
+  from the Portal), trials running and second trials stopped. The accounts table shows when each trial ends.
+
 ### Cron jobs
 
 `billing-hourly` (pending removals and downgrades at period end, due locks, free trials ending, unknown operations
 read back, slots claimed for a business that was never saved freed after a day), `stripe-reconcile` (04:17 UTC: re-reads every subscription, adopts a completed Checkout whose webhook was
-missed; never writes to Stripe), `billing-retention` (04:47 UTC: counts accounts past 90 days; deletes nothing).
+missed; never writes to Stripe, except cancelling a second trial on an already-used card once (nothing charged), as
+an operation that is never resent), `billing-retention` (04:47 UTC: counts accounts past 90 days; deletes nothing).
 
 ### The database rule (check on a Supabase branch, with the owner's OK)
 

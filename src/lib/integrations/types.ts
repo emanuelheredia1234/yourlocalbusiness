@@ -397,7 +397,11 @@ export type ApiErrorCode =
   | 'CARD_DECLINED'
   | 'BILLING_PENDING'
   | 'OWNER_PLAN'
-  | 'NOT_ALLOWED_ON_PLAN';
+  | 'NOT_ALLOWED_ON_PLAN'
+  /** a money change read back and not there: definite (the next press is a new request) */
+  | 'NOT_APPLIED'
+  /** cancelling or keeping the plan happens in the Customer Portal for now (the P1c migration isn't run) */
+  | 'USE_PORTAL';
 
 export interface ApiError {
   error: string;
@@ -421,7 +425,7 @@ export interface ApiError {
 export type PlanTier = 'launch' | 'grow' | 'scale';
 export type PlanInterval = 'month' | 'year';
 export type PlanName = 'legacy' | 'owner' | 'none' | PlanTier;
-export type PlanBanner = 'grace' | 'trial_ending' | 'cancel_at_period_end' | 'payment' | 'plan_ended';
+export type PlanBanner = 'grace' | 'trial' | 'trial_ending' | 'cancel_at_period_end' | 'payment' | 'plan_ended';
 export type PlanStatus = 'none' | 'trialing' | 'active' | 'past_due' | 'unpaid' | 'canceled' | 'incomplete' | 'incomplete_expired' | 'paused' | 'expired';
 
 /** What a user's plan allows now (entitlementOf on the server). */
@@ -437,7 +441,14 @@ export interface Entitlement {
   /** null = unlimited */
   businessLimit: number | null;
   creditsPerMonth: number | null;
-  creditWindow: { start: string; resetsAt: string } | null;
+  /** resetsAt null: setup's one-off allowance before a plan (never renews). baselineUsd: a card trial's first day,
+   * what setup spent before the trial began (not the trial's) */
+  creditWindow: { start: string; resetsAt: string | null; baselineUsd?: number } | null;
+  /** a 7-day card trial is running (the trial's own AI allowance) */
+  trial?: boolean;
+  trialDaysLeft?: number | null;
+  /** no plan yet: paid actions are locked, setup's one-off AI allowance is on */
+  starter?: boolean;
   features: {
     adsLaunch: boolean;
     video: { maxHeight: number; maxSeconds: number; label?: string };
@@ -465,6 +476,11 @@ export interface PlanAccount {
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
   trialEndsAt: string | null;
+  /** a Stripe card trial is running */
+  trialing?: boolean;
+  /** the subscription was a second trial on a card or email that had one: 'refused' (cancelled, nothing charged),
+   * 'checking' (that cancel is on its way) */
+  trialRefused?: 'refused' | 'checking';
   graceUntil: string | null;
   compUntil?: string | null;
   extraBusinesses: number;
@@ -482,7 +498,7 @@ export interface BusinessSlot {
 
 export interface BillingOp {
   id: string;
-  kind: 'add_business' | 'remove_business' | 'undo_remove' | 'change_plan' | 'cancel_for_delete';
+  kind: 'add_business' | 'remove_business' | 'undo_remove' | 'change_plan' | 'cancel_for_delete' | 'checkout' | 'cancel' | 'resume' | 'end_trial';
   state: 'sending' | 'done' | 'failed' | 'unknown' | 'not_applied';
   errorCode?: string;
 }
@@ -493,8 +509,17 @@ export interface PlanCredits {
   resetsAt: string | null;
 }
 
+/** The card trial this person may start (#plans and the end of setup say "Start 7-day free trial"). */
+export interface TrialOffer {
+  days: number;
+  eligible: boolean;
+}
+
 export interface PlanResponse {
-  billing: { enabled: boolean; enforce: boolean };
+  /** cancelInApp false: Cancel plan and Keep my plan open the Customer Portal (absent: in the app) */
+  billing: { enabled: boolean; enforce: boolean; cancelInApp?: boolean };
+  /** absent from servers before P1c */
+  trial?: TrialOffer;
   plan: Entitlement;
   account: PlanAccount | null;
   businesses: { limit: number | null; used: number; slots: BusinessSlot[] };
@@ -533,6 +558,8 @@ export interface OwnerBillingAccount {
   extraBusinesses: number;
   compExtra: number;
   currentPeriodEnd: string | null;
+  /** while a card trial runs */
+  trialEndsAt?: string | null;
   graceUntil: string | null;
   compUntil: string | null;
   cancelAtPeriodEnd: boolean;
@@ -547,4 +574,22 @@ export interface BillingSettingsResponse {
   stripe: { mode: 'test' | 'live' | null; key: string | null; webhookSecret: string | null; prices: Record<string, 'ok' | 'missing'> | null };
   missing: string[];
   existingAccountsStarted?: number;
+}
+
+// ───────────── cancelling (P1c) ─────────────
+
+export type CancelReason = 'too_expensive' | 'not_using' | 'missing_feature' | 'results' | 'switching' | 'too_hard' | 'short_term' | 'other';
+export type CancelOffer = 'cheaper_plan' | 'tips' | 'tell_feature' | 'none';
+
+/** The owner's view of why people cancel, and the trials (GET /api/billing/surveys). */
+export interface CancelSurveysResponse {
+  /** the P1c migration isn't run yet */
+  missing?: string;
+  counts: Partial<Record<CancelReason, { cancelled: number; kept: number }>>;
+  /** every answer kept (absent from an older server: the recent list's length) */
+  total?: number;
+  /** the database's totals weren't there: the counts are the latest rows only */
+  partial?: boolean;
+  recent: { reason: CancelReason; comment: string | null; source: 'app' | 'portal'; outcome: 'cancelled' | 'kept' | 'switched'; offer: CancelOffer | null; tier: string | null; at: string; customerTag: string | null }[];
+  trials: { trialing: number; endedEarly: number; duplicates: number; list: { customerTag: string; tier: string | null; startedAt: string; trialEndsAt: string | null; outcome: string }[] };
 }

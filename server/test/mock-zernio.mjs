@@ -9,14 +9,19 @@
 //   POST   /profiles                      201 {profile} | 409 profile_external_id_conflict {details.existingProfileId}
 //   GET    /connect/:platform/ads         {authUrl} (a test page on this mock) | {alreadyConnected: true}
 //   GET    /accounts?profileId=           {accounts} (a classic Meta Ads connect also lists its hidden Facebook
-//                                         account: enabled false, the metaads account's parentAccountId)
+//                                         account: enabled false, the metaads account's parentAccountId). Like
+//                                         Zernio: by default each ads login shows once per profile and platform (its
+//                                         oldest row); adAccountRows=true lists one row per ad account. profileId
+//                                         comes as the id, or as the Profile object (POST /__shape {profileId:
+//                                         'object'}); POST /__shape {rejectAdAccountRows: true} answers 400 on that
+//                                         parameter (an older Zernio)
 //   DELETE /accounts/:id                  200 {gracePeriodEndsAt} (+ account.disconnected webhook) | 404
 //   DELETE /profiles/:id                  200 | 400 while it still has accounts | 404
 //   /ads/…                                every ads route: server/test/mock-zernio-ads.mjs (reads, launches, changes,
 //                                         fault injection and the write rules a test fails on)
 // Ads only: social accounts, posting and social stats are Upload-Post's (server/test/mock-uploadpost.mjs).
 // Test hooks (no key): GET /__calls, GET /__violations, POST /__complete {platform, profileId, username, ads?,
-// hiddenParent?} (finishes a connect: makes the account, with a hidden Facebook account for a classic Meta Ads
+// hiddenParent?, login?} (login: the ads login it was connected through; rows of one login collapse by default) (finishes a connect: makes the account, with a hidden Facebook account for a classic Meta Ads
 // connect when hiddenParent, and sends a signed account.connected webhook), GET /__connect (the page),
 // POST /__fail {route, mode, times} and POST /__expectRepeat {n} (the ads mock's fault injection and repeat rule).
 //
@@ -50,6 +55,28 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
   let server = null;
   let base = '';
   let hookUrl = webhookUrl;
+  /** how the listing shows profileId ('string' | 'object'), and whether adAccountRows is refused (an older Zernio) */
+  const shape = { profileId: 'string', rejectAdAccountRows: false };
+  const ADS_PLATFORMS = new Set(Object.values(ADS));
+  /** GET /accounts rows as Zernio sends them: one per ads login unless adAccountRows, profileId in the chosen shape */
+  function listed(profileId, adAccountRows) {
+    const mine = accounts.filter((a) => !profileId || a.profileId === profileId);
+    const seen = new Set();
+    const rows = adAccountRows
+      ? mine
+      : mine.filter((a) => {
+          if (!ADS_PLATFORMS.has(a.platform) || !a._login) return true;
+          const k = `${a.profileId}:${a.platform}:${a._login}`;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+    return rows.map(({ _login, ...a }) => {
+      if (shape.profileId !== 'object') return a;
+      const p = profiles.find((x) => x._id === a.profileId);
+      return { ...a, profileId: { _id: a.profileId, name: p?.name ?? '', ...(p?.externalId ? { externalId: p.externalId } : {}) } };
+    });
+  }
 
   async function sendWebhook(event) {
     const payload = { id: crypto.randomUUID(), timestamp: new Date().toISOString(), ...event };
@@ -64,24 +91,23 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     }
   }
 
-  let populateProfiles = false;
   const profileRef = (profileId) => {
     const p = profiles.find((x) => x._id === profileId);
     return p ? [{ id: p._id, externalId: p.externalId ?? null }] : [];
   };
   const ads = createMockZernioAds({ calls, violations, sendWebhook: (e) => sendWebhook(e), connections: () => accounts, profileRef, now });
 
-  function addAccount({ platform, profileId, username = 'joesbakery', displayName, isActive = true, enabled, parentAccountId }) {
-    const a = { _id: oid(), platform, profileId, username, displayName: displayName ?? `${username} (${platform})`, isActive, ...(enabled !== undefined ? { enabled } : {}), ...(parentAccountId ? { parentAccountId } : {}), createdAt: new Date().toISOString() };
+  function addAccount({ platform, profileId, username = 'joesbakery', displayName, isActive = true, enabled, parentAccountId, login }) {
+    const a = { _id: oid(), platform, profileId, username, displayName: displayName ?? `${username} (${platform})`, isActive, ...(enabled !== undefined ? { enabled } : {}), ...(parentAccountId ? { parentAccountId } : {}), ...(login ? { _login: login } : {}), createdAt: new Date().toISOString() };
     accounts.push(a);
     return a;
   }
 
-  async function complete({ platform, profileId, username = 'joesbakery', ads = false, hiddenParent = false }) {
+  async function complete({ platform, profileId, username = 'joesbakery', ads = false, hiddenParent = false, login, displayName }) {
     const zPlatform = ads ? ADS[platform] ?? platform : platform;
     // Zernio's classic Meta Ads OAuth: a hidden Facebook account for the Page (not billed, not postable) is the parent
     const parent = ads && hiddenParent ? addAccount({ platform: 'facebook', profileId, username, enabled: false }) : null;
-    const a = addAccount({ platform: zPlatform, profileId, username, ...(parent ? { parentAccountId: parent._id } : {}) });
+    const a = addAccount({ platform: zPlatform, profileId, username, ...(displayName ? { displayName } : {}), ...(login ? { login } : {}), ...(parent ? { parentAccountId: parent._id } : {}) });
     await sendWebhook({ event: 'account.connected', profiles: profileRef(profileId), account: { accountId: a._id, profileId, platform: zPlatform, username, displayName: a.displayName } });
     return a;
   }
@@ -108,9 +134,10 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
       return json(res, 200, { authUrl: `${base}/__connect?platform=${m[1]}&profileId=${profileId}${m[2] ? '&ads=1' : ''}&state=${state}`, state });
     }
     if (req.method === 'GET' && p === '/accounts') {
-      // Zernio may send profileId as the populated profile object ({ _id, name, ... }) instead of a string
-      const listed = accounts.filter((a) => !q.get('profileId') || a.profileId === q.get('profileId'));
-      return json(res, 200, { accounts: populateProfiles ? listed.map((a) => ({ ...a, profileId: { _id: a.profileId, name: 'Main' } })) : listed, hasAnalyticsAccess: true });
+      const rows = q.get('adAccountRows');
+      if (rows !== null && shape.rejectAdAccountRows) return err(res, 400, 'invalid_parameter', 'invalid_request_error', { param: 'adAccountRows' });
+      if (rows !== null && !/^(true|false)$/i.test(rows)) return err(res, 400, 'invalid_parameter', 'invalid_request_error', { param: 'adAccountRows' });
+      return json(res, 200, { accounts: listed(q.get('profileId'), /^true$/i.test(rows ?? '')), hasAnalyticsAccess: true });
     }
     m = /^\/profiles\/([0-9a-f]{24})$/.exec(p);
     if (m && req.method === 'DELETE') {
@@ -151,6 +178,11 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     if (url.pathname === '/__calls') return json(res, 200, { calls });
     if (url.pathname === '/__violations') return json(res, 200, { violations });
     if (url.pathname === '/__complete' && req.method === 'POST') return json(res, 200, { account: await complete(body ?? {}) });
+    if (url.pathname === '/__shape' && req.method === 'POST') {
+      if (body?.profileId === 'object' || body?.profileId === 'string') shape.profileId = body.profileId;
+      if (typeof body?.rejectAdAccountRows === 'boolean') shape.rejectAdAccountRows = body.rejectAdAccountRows;
+      return json(res, 200, { shape });
+    }
     if (url.pathname === '/__fail' && req.method === 'POST') {
       ads.fail(String(body?.route ?? ''), String(body?.mode ?? ''), body?.times);
       return json(res, 200, { ok: true });
@@ -171,6 +203,7 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
   return {
     profiles,
     accounts,
+    shape,
     calls,
     violations,
     webhooks,
@@ -198,7 +231,7 @@ export function createMockZernio({ key = TEST_ZERNIO_KEY, webhookSecret = TEST_Z
     profileRef,
     /** List accounts with profileId as the populated profile object, as Zernio may. */
     setPopulateProfiles(on) {
-      populateProfiles = !!on;
+      shape.profileId = on ? 'object' : 'string';
     },
     async start(port = 0) {
       server = http.createServer((req, res) => void handler(req, res).catch(() => err(res, 500, 'internal_error', 'api_error')));

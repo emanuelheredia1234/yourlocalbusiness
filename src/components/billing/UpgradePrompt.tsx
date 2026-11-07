@@ -1,11 +1,13 @@
 // The one dialog for a paid action the plan refused (src/lib/billing/upgrade.ts opens it): the server's sentence,
-// the tier that has it, and what to do next. Nothing runs again by itself afterwards.
+// the tier that has it, and what to do next. Nothing runs again by itself afterwards. With no plan yet and a card trial
+// on offer, a plan refusal says "Start your free trial". A card trial's credits used up: only own AI keys help until
+// it ends (a business or another plan adds none during it).
 
 import { CreditCard } from 'lucide-react';
 import { navigate } from '@/lib/router';
 import { formatPrice, planFor, tierName, type Tier } from '@/lib/plans';
 import { confirmPlanChange, manageBilling, upgradeTier } from '@/lib/billing/actions';
-import { useBilling, useBillingOn } from '@/store/billing';
+import { useBilling, useBillingOn, useTrialDays } from '@/store/billing';
 import { useUI } from '@/store/ui';
 import { Modal } from '@/components/ui/primitives';
 import { shortDate } from '@/lib/videoWeek';
@@ -27,8 +29,11 @@ export function UpgradePrompt() {
   const plan = useBilling((s) => s.plan);
   const account = useBilling((s) => s.account);
   const close = useBilling((s) => s.closeUpgrade);
+  const trialDays = useTrialDays();
   if (!on || !req) return null;
   const paying = account?.source === 'stripe' && !!plan?.active;
+  // no plan yet (setup done, looking around): every locked action leads to the free trial
+  const trialOffer = req.code === 'PLAN_REQUIRED' && !paying && plan?.plan !== 'owner' && trialDays > 0 ? trialDays : 0;
   const current = plan?.tier ?? null;
   const tier: Tier | null = (req.code === 'PLAN_REQUIRED' || req.code === 'VIDEO_WEEK_LIMIT') && paying ? upgradeTier(req.need?.tier, current) : null;
   const interval = account?.interval ?? 'month';
@@ -44,8 +49,17 @@ export function UpgradePrompt() {
     void navigate('workspace-settings', { force: true });
   });
 
+  // the trial's AI credits are fixed until it ends
+  const trialCredits = req.code === 'CREDITS_USED' && (req.trial === true || plan?.trial === true);
   let actions: JSX.Element;
-  switch (req.code) {
+  switch (trialCredits ? 'TRIAL_CREDITS' : req.code) {
+    case 'TRIAL_CREDITS':
+      actions = (
+        <button type="button" className="btn btn-primary btn-sm" onClick={ownKeys} data-autofocus>
+          Use my own AI keys
+        </button>
+      );
+      break;
     case 'PAYMENT_REQUIRED':
     case 'CARD_DECLINED':
       actions = (
@@ -109,7 +123,11 @@ export function UpgradePrompt() {
       );
       break;
     default:
-      actions = tier ? (
+      actions = trialOffer ? (
+        <button type="button" className="btn btn-primary btn-sm" onClick={seePlans} data-autofocus>
+          Start {trialOffer}-day free trial
+        </button>
+      ) : tier ? (
         <>
           <button type="button" className="btn btn-secondary btn-sm" onClick={seePlans}>
             See plans
@@ -126,8 +144,13 @@ export function UpgradePrompt() {
   }
 
   return (
-    <Modal open onClose={close} size="sm" title={TITLES[req.code]} footer={actions}>
+    <Modal open onClose={close} size="sm" title={trialOffer ? 'Start your free trial' : trialCredits ? 'Your trial’s AI credits are used' : TITLES[req.code]} footer={actions}>
       <p className="text-body text-ink-2">{req.message}</p>
+      {trialOffer > 0 && (
+        <p className="mt-2 text-small text-muted">
+          Try any plan free for {trialOffer} days. You add a card at checkout; nothing is charged until day {trialOffer + 1}, and you can cancel before then in Settings › Plan.
+        </p>
+      )}
       {tier && (
         <p className="mt-2 text-small text-muted">
           {planFor(tier).name} is {formatPrice(planFor(tier).price[interval])}/{interval}
@@ -135,7 +158,7 @@ export function UpgradePrompt() {
         </p>
       )}
       {req.code === 'VIDEO_WEEK_LIMIT' && <p className="mt-2 text-small text-muted">{req.resetsAt ? `This week’s videos reset on Monday, ${shortDate(req.resetsAt, req.timeZone)}.` : 'This week’s videos reset on Monday.'} Videos made with your own AI keys don’t count.</p>}
-      {req.code === 'CREDITS_USED' && req.resetsAt && <p className="mt-2 text-small text-muted">Your credits renew on {fmtDate(req.resetsAt)}. Your own AI keys never use credits.</p>}
+      {req.code === 'CREDITS_USED' && req.resetsAt && <p className="mt-2 text-small text-muted">{trialCredits ? `Your plan’s monthly credits start on ${fmtDate(req.resetsAt)}, when the trial ends.` : `Your credits renew on ${fmtDate(req.resetsAt)}.`} Your own AI keys never use credits.</p>}
     </Modal>
   );
 }

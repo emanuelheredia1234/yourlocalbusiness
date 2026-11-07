@@ -64,13 +64,24 @@ const DEFAULT = '*';
 const iso = (ms) => new Date(ms).toISOString();
 const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
-/** A listed account's profile id: Zernio sends it as a string or as the populated profile object ({ _id, ... }). */
-const profileIdOf = (v) => (isObj(v) ? String(v._id ?? '') : v == null ? '' : String(v));
 const clip = (s, n = 120) => {
   const t = (typeof s === 'string' || typeof s === 'number' ? String(s) : '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 const docKey = (userId) => `zernio:user:${sha256(String(userId))}`;
+/**
+ * The profile an account sits in. Zernio's listing gives `profileId` as an id string, or as the Profile object
+ * itself ({_id, name, …}) when it's expanded: both are read ('' when there's none).
+ */
+export const profileIdOf = (a) => {
+  const p = a?.profileId;
+  if (typeof p === 'string') return p;
+  if (p && typeof p === 'object' && !Array.isArray(p)) return typeof p._id === 'string' ? p._id : typeof p.id === 'string' ? p.id : '';
+  return '';
+};
+/** Why a connect came back unfinished (Zernio's ?error_reason=, kept as our code): anything else is connection_failed. */
+export const CONNECT_ERROR_REASONS = Object.freeze(['no_pages_granted', 'page_not_granted', 'ad_accounts_not_granted', 'ads_addon_required', 'payment_required', 'state_expired', 'invalid_state', 'reconnect_required', 'meta_ads_authorization_denied', 'connection_failed', 'cancelled']);
+export const connectErrorReason = (r) => (CONNECT_ERROR_REASONS.includes(String(r ?? '')) ? String(r) : 'connection_failed');
 const blankDoc = () => ({ v: 1, accounts: {}, choice: {}, pending: {}, lastError: {} });
 const isAds = (platform) => AD_PLATFORMS.includes(platform);
 
@@ -280,7 +291,8 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     if (!isAds(platform)) throw fail(404, 'NOT_FOUND', 'Unknown account type.');
     const { profileId } = await ensureProfile(userId);
     const { value: doc } = await readDoc(userId);
-    const redirect = `${appOrigin(env)}/?connected=${encodeURIComponent(platform)}`;
+    // our own marker (Zernio appends its own ?connected=…&accountId=… or ?error=…&error_reason=…): the app reads both
+    const redirect = `${appOrigin(env)}/?ylb_connect=${encodeURIComponent(platform)}`;
     const query = { profileId, redirect_url: redirect, ...brandQuery() };
     const ads = ADS_CONNECT[platform];
     const path = `/connect/${ads.connect}/ads`;
@@ -323,13 +335,39 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
 
   // ───────────── reading the accounts back ─────────────
 
-  /** GET /v1/accounts for the user's profile → the doc's accounts (labels, state). Assigns a waiting business. */
-  async function sync(userId) {
+  /**
+   * GET /v1/accounts for one profile, every ads account row: by default Zernio lists each ads login once per profile and
+   * platform (its oldest row), so a second Meta ad account connected through the same login would never show, and an
+   * account.connected webhook's row would be dropped again by the next read. adAccountRows=true lists one row per ad
+   * account. A Zernio that doesn't know the parameter (400 on it) is asked again without it (a read: safe to repeat).
+   * Rows are kept only when they sit in this profile (profileId as an id or as the Profile object).
+   */
+  async function listAccounts(profileId) {
+    const query = { profileId, includeOverLimit: 'true', adAccountRows: 'true' };
+    let res = await call('GET', '/accounts', { query, retry429: true });
+    if (res.status === 400 && zernioError(res).param === 'adAccountRows') {
+      const { adAccountRows, ...plain } = query;
+      res = await call('GET', '/accounts', { query: plain, retry429: true });
+    }
+    if (res.status < 200 || res.status >= 300) return { res, accounts: null };
+    const accounts = (Array.isArray(res.body?.accounts) ? res.body.accounts : []).filter((a) => {
+      if (!isObj(a) || !ZID.test(String(a._id ?? ''))) return false;
+      const pid = profileIdOf(a);
+      return !pid || pid === profileId;
+    });
+    return { res, accounts };
+  }
+
+  /**
+   * GET /v1/accounts for the user's profile → the doc's accounts (labels, state). Assigns a waiting business: to the
+   * account Zernio named on its way back (hint.accountId, when it's one of this user's rows for that platform), else to
+   * the first new one.
+   */
+  async function sync(userId, hint = null) {
     const { value: doc } = await readDoc(userId);
     if (!doc.profileId) return doc;
-    const res = await call('GET', '/accounts', { query: { profileId: doc.profileId, includeOverLimit: 'true' }, retry429: true });
-    if (res.status < 200 || res.status >= 300) throw callFailure(res);
-    const all = (Array.isArray(res.body?.accounts) ? res.body.accounts : []).filter((a) => isObj(a) && ZID.test(String(a._id ?? '')) && (!profileIdOf(a.profileId) || profileIdOf(a.profileId) === doc.profileId));
+    const { res, accounts: all } = await listAccounts(doc.profileId);
+    if (!all) throw callFailure(res);
     const listed = all.filter((a) => FROM_ZERNIO[a.platform]);
     // the hidden posting account an ad account's connect made (enabled: false), which holds the customer's token
     const hiddenParent = (a) => {
@@ -351,9 +389,15 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
           connectedAt: old?.connectedAt ?? (typeof a.createdAt === 'string' && Number.isFinite(Date.parse(a.createdAt)) ? a.createdAt : iso(now())),
           ...(hiddenParent(a) ? { parent: hiddenParent(a) } : old?.parent ? { parent: old.parent } : {}),
         };
-        if (!old) assignPending(d, platform, zid);
+        if (!old && !(hint?.platform === platform && hint.accountId)) assignPending(d, platform, zid);
       }
       d.accounts = next;
+      // the account Zernio said it connected (new, or a login that was already there and was signed in again)
+      if (hint?.accountId && next[hint.accountId]?.platform === hint.platform) assignPending(d, hint.platform, hint.accountId);
+      else if (hint?.platform && hint.accountId) {
+        const fresh = Object.keys(next).find((zid) => !before[zid] && next[zid].platform === hint.platform);
+        if (fresh) assignPending(d, hint.platform, fresh);
+      }
       pruneChoices(d);
       return { value: d, result: d };
     });
@@ -378,9 +422,28 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     }
   }
 
-  async function check(userId, platform, { projectId } = {}) {
+  /** accountId: the account Zernio named when it sent the customer back (?accountId=), a hint only. */
+  async function check(userId, platform, { projectId, accountId } = {}) {
     requireSetUp();
-    const doc = await sync(userId);
+    const doc = await sync(userId, ZID.test(String(accountId ?? '')) ? { platform, accountId: String(accountId) } : null);
+    return statusOf(doc, platform, projectId);
+  }
+
+  /**
+   * Zernio sent the customer back with ?error=…: this platform stops waiting, and the reason is kept as lastError (our
+   * code, never Zernio's text). The team-level ones (ads add-on, Zernio billing) also go to the owner.
+   */
+  async function abandon(userId, platform, { projectId, reason } = {}) {
+    requireSetUp();
+    if (!isAds(platform)) throw fail(404, 'NOT_FOUND', 'Unknown account type.');
+    const code = connectErrorReason(reason);
+    if (code === 'ads_addon_required' || code === 'payment_required') ownerAlert(code);
+    const doc = await updateDoc(userId, (d) => {
+      delete d.pending[platform];
+      d.lastError[platform] = code;
+      return { value: d, result: d };
+    });
+    log_('zernio_connect_returned_error', { platform, reason: code });
     return statusOf(doc, platform, projectId);
   }
 
@@ -555,7 +618,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
       const platform = FROM_ZERNIO[a.platform];
       if (!ZID.test(zid) || !platform) return 'ignored';
       // the account must sit in this customer's own profile (account.profileId), not only the event's profiles list
-      if (profileIdOf(a.profileId) && who.doc.profileId && profileIdOf(a.profileId) !== who.doc.profileId) return 'not_ours';
+      if (profileIdOf(a) && who.doc.profileId && profileIdOf(a) !== who.doc.profileId) return 'not_ours';
       // Zernio puts disconnectionType inside `account` (webhooks/accounts); the top level is read too for older senders
       const disconnection = String(a.disconnectionType ?? evt.disconnectionType ?? '');
       await updateDoc(userId, (d) => {
@@ -633,8 +696,8 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     // every account in the customer's profile is disconnected, hidden posting accounts too (one attempt each; a
     // failure stops the deletion), then the profile itself, then the doc
     if (setUp && doc.profileId) {
-      const listed = await call('GET', '/accounts', { query: { profileId: doc.profileId, includeOverLimit: 'true' }, retry429: true }).catch(() => null);
-      const fromZernio = listed && listed.status >= 200 && listed.status < 300 && Array.isArray(listed.body?.accounts) ? listed.body.accounts.filter((a) => isObj(a) && ZID.test(String(a._id ?? '')) && (!profileIdOf(a.profileId) || profileIdOf(a.profileId) === doc.profileId)).map((a) => String(a._id)) : [];
+      const listed = await listAccounts(doc.profileId).catch(() => null);
+      const fromZernio = listed?.accounts ? listed.accounts.map((a) => String(a._id)) : [];
       const known = Object.entries(doc.accounts ?? {}).flatMap(([zid, a]) => [zid, ...(a?.parent ? [a.parent] : [])]);
       for (const zid of [...new Set([...fromZernio, ...known])]) {
         const res = await call('DELETE', `/accounts/${zid}`);
@@ -727,6 +790,7 @@ export function createZernioConnections({ env = process.env, fetch = globalThis.
     connectLink: (userId, platform, opts = {}) => startConnect(userId, platform, { ...opts, reconnect: false }),
     reconnectLink: (userId, platform, opts = {}) => startConnect(userId, platform, { ...opts, reconnect: true }),
     check,
+    abandon,
     disconnect,
     targets,
     setTarget,

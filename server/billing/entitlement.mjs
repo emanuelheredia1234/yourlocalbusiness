@@ -13,12 +13,21 @@
 //  6. After a plan ends (ended_at), published pages keep serving 30 days and data is kept 90 days (never deleted
 //     automatically).
 //  7. AI credits a month = the tier's + 1,000 per business above the first (paid or free extras); 0 while paused.
+//  8. A card trial (a Stripe subscription 'trialing'): the chosen tier's features, but AI credits are the trial's
+//     allowance (cardTrial.aiCredits, ~$3) for the whole trial, counted from its first UTC day (server/billing/
+//     stripe.mjs adds creditWindow.baselineUsd: what setup spent that day before the trial, not the trial's); banner
+//     'trial' (days left), 'trial_ending' in its last cardTrial.endingSoonDays days.
+//  9. Before any plan (a new sign-up, never subscribed): paused 'plan' (publishing, posting, ads, video, connecting
+//     and every other paid action refused: "Start your free trial"), but `starter` with a one-off AI allowance
+//     (starter.aiCredits) so setup can make the brand board, strategy and first posts. A plan that ended gets none.
 //     The window: monthly Stripe plans use the billing period; yearly and free plans use monthly windows anchored on
 //     the billing anchor's (or the account's creation) day of the month, clamped to the month's length, in UTC days.
 
 import { OWNER_PLAN, PLANS, creditsFor, planFor } from './plans.mjs';
 
 const DAY_MS = 86_400_000;
+/** Setup's AI allowance counts every day before a plan (no row yet: from long before any account existed). */
+const STARTER_FROM = '2020-01-01T00:00:00.000Z';
 const ms = (v) => (v == null ? null : typeof v === 'number' ? v : Number.isFinite(Date.parse(v)) ? Date.parse(v) : null);
 const iso = (t) => (t == null ? null : new Date(t).toISOString());
 
@@ -89,6 +98,9 @@ const BASE = (plan, over = {}) => ({
   features: featuresOf(OWNER_PLAN),
   graceUntil: null,
   trialEndsAt: null,
+  trial: false,
+  trialDaysLeft: null,
+  starter: false,
   pagesServeUntil: null,
   dataKeptUntil: null,
   ...over,
@@ -103,7 +115,12 @@ export function entitlementOf(acct, settings, now = Date.now(), { isAdmin = fals
   if (isAdmin === true || acct?.source === 'owner') return BASE('owner', { source: 'owner', status: 'active' });
   if (!acct || acct.tier === 'none' || !planFor(acct.tier)) {
     const ended = ms(acct?.ended_at);
+    // never had a plan: setup's one-off AI allowance (a plan that ended, or a free plan that did, gets none)
+    const fresh = ended == null && (!acct || (acct.status === 'none' && !acct.stripe_subscription_id && acct.source !== 'comp'));
+    // counted over the whole account, never renewed: always from the start (the billing row is often made later, by a
+    // Checkout that was then abandoned; anchoring on it would forgive what setup used before)
     return BASE('none', {
+      ...(fresh ? { starter: true, creditsPerMonth: PLANS.starter.aiCredits, creditWindow: { start: STARTER_FROM, resetsAt: null } } : {}),
       active: false,
       paused: 'plan',
       // a brand-new sign-up has no plan yet; a plan that ended says so
@@ -112,7 +129,7 @@ export function entitlementOf(acct, settings, now = Date.now(), { isAdmin = fals
       status: acct?.status ?? 'none',
       source: acct?.source ?? null,
       businessLimit: 1,
-      creditsPerMonth: 0,
+      ...(fresh ? {} : { creditsPerMonth: 0 }),
       features: { ...featuresOf(PLANS.plans.launch), adsLaunch: false },
       ...(ended != null ? { pagesServeUntil: iso(ended + PLANS.pagesAfterCancelDays * DAY_MS), dataKeptUntil: iso(ended + PLANS.dataAfterCancelDays * DAY_MS) } : {}),
     });
@@ -124,6 +141,9 @@ export function entitlementOf(acct, settings, now = Date.now(), { isAdmin = fals
   const status = acct.status;
   const trialEnds = ms(acct.trial_ends_at);
   const trialSoon = trialEnds != null && trialEnds > now && trialEnds - now <= 7 * DAY_MS;
+  // a card trial (Stripe): the last few days are "ending soon"
+  const cardTrial = acct.source === 'stripe' && acct.status === 'trialing' && trialEnds != null && trialEnds > now;
+  const cardTrialSoon = cardTrial && trialEnds - now <= PLANS.cardTrial.endingSoonDays * DAY_MS;
   let active = false;
   let paused = 'plan';
   let banner = null;
@@ -143,7 +163,7 @@ export function entitlementOf(acct, settings, now = Date.now(), { isAdmin = fals
   } else if (status === 'active' || status === 'trialing') {
     active = true;
     paused = null;
-    banner = acct.cancel_at_period_end ? 'cancel_at_period_end' : status === 'trialing' && trialSoon ? 'trial_ending' : null;
+    banner = acct.cancel_at_period_end ? 'cancel_at_period_end' : cardTrial ? (cardTrialSoon ? 'trial_ending' : 'trial') : status === 'trialing' && trialSoon ? 'trial_ending' : null;
   } else if (status === 'past_due') {
     // no grace date recorded (a missed failure event): 7 days after the period's end
     graceUntil = ms(acct.grace_until) ?? (ms(acct.current_period_end) != null ? ms(acct.current_period_end) + PLANS.graceDays * DAY_MS : now + PLANS.graceDays * DAY_MS);
@@ -176,8 +196,11 @@ export function entitlementOf(acct, settings, now = Date.now(), { isAdmin = fals
     source: acct.source,
     // past due after grace keeps its businesses (slots aren't locked); unpaid and ended plans keep one
     businessLimit: active || (paused === 'payment' && status === 'past_due') ? limit : 1,
-    creditsPerMonth: active ? creditsFor(tier, extras) : 0,
-    creditWindow: creditWindow(acct, now),
+    // a card trial: the trial's allowance for the whole trial, whatever the tier
+    creditsPerMonth: active ? (cardTrial ? PLANS.cardTrial.aiCredits : creditsFor(tier, extras)) : 0,
+    creditWindow: cardTrial ? { start: iso(ms(acct.current_period_start) ?? ms(acct.created_at) ?? now), resetsAt: iso(trialEnds) } : creditWindow(acct, now),
+    trial: cardTrial,
+    trialDaysLeft: cardTrial ? Math.max(0, Math.ceil((trialEnds - now) / DAY_MS)) : null,
     features: featuresOf(plan),
     graceUntil: iso(graceUntil),
     trialEndsAt: iso(trialEnds),

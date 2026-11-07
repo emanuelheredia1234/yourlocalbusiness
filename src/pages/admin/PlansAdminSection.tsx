@@ -60,7 +60,7 @@ export function PlansAdminSection() {
   const toggle = async (v: boolean) => {
     const ok = await confirmAction(
       v
-        ? { title: 'Turn on plans?', body: `Every account with a business gets ${settings?.settings.existingTrialDays ?? 30} days of Grow free, then needs a plan. New sign-ups choose a plan first. You can turn plans off again at any time.`, confirmLabel: 'Turn on plans' }
+        ? { title: 'Turn on plans?', body: `Every account with a business gets ${settings?.settings.existingTrialDays ?? 30} days of Grow free, then needs a plan. New sign-ups set up their first business free, then choose a plan (with the card trial when it’s on). You can turn plans off again at any time.`, confirmLabel: 'Turn on plans' }
         : { title: 'Turn off plans?', body: 'Everything is ungated at once (as before plans). Nothing is deleted, and subscriptions in Stripe keep running.', confirmLabel: 'Turn off plans', danger: true },
     );
     if (ok) await save({ enforce: v });
@@ -109,7 +109,7 @@ export function PlansAdminSection() {
               <span className="text-small text-muted">Prices not checked</span>
             )}
           </SettingsRow>
-          <SettingsRow label="Card trial" description="Days a new subscriber tries a plan before the first charge (0 = off)." htmlFor="plans-trial">
+          <SettingsRow label="Card trial" description="Days a new sign-up tries their first plan, card taken at checkout, before the first charge (0 = off). One trial per person and card." htmlFor="plans-trial">
             <Select<string>
               id="plans-trial"
               value={String(s.settings.cardTrialDays)}
@@ -152,7 +152,7 @@ export function PlansAdminSection() {
                       <Badge tone={STATUS_TONE[a.status] ?? 'neutral'}>{a.cancelAtPeriodEnd ? 'cancelling' : a.status.replace('_', ' ')}</Badge>
                     </td>
                     <td className="num px-4 py-2 text-ink">{a.businessLimit ?? '∞'}</td>
-                    <td className="px-4 py-2 text-ink-2">{fmtDate(a.currentPeriodEnd)}</td>
+                    <td className="px-4 py-2 text-ink-2">{a.trialEndsAt ? `Trial ends ${fmtDate(a.trialEndsAt)}` : fmtDate(a.currentPeriodEnd)}</td>
                     <td className="px-4 py-2 text-ink-2">{fmtDate(a.graceUntil)}</td>
                     <td className="px-4 py-2 text-ink-2">{fmtDate(a.compUntil)}</td>
                     <td className="px-4 py-2 text-ink-2">{fmtDate(a.dataExpiresAt)}</td>
