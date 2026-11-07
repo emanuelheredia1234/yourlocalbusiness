@@ -4,28 +4,19 @@
 import { useMemo, type ReactNode } from 'react';
 import {
   ArrowRight,
-  AtSign,
-  Brain,
   CalendarDays,
   CheckCheck,
   Check,
   Clock,
-  CodeXml,
   Compass,
   ExternalLink,
   Globe,
-  Link2,
-  Mail,
-  MapPin,
-  Megaphone,
   PenSquare,
   Pencil,
   Plus,
-  Store,
-  Target,
 } from 'lucide-react';
 import type { Post, Project } from '@/lib/types';
-import type { ActionKind, StrategyAction, StrategyState } from '@/lib/strategyTypes';
+import type { StrategyAction, StrategyState } from '@/lib/strategyTypes';
 import { cn, ensureUrl, stripProtocol } from '@/lib/utils';
 import { navigate } from '@/lib/router';
 import { useMediaQuery, useNow } from '@/lib/hooks';
@@ -52,6 +43,8 @@ import { useConnections } from '@/store/analytics';
 import { AIThinking, AiCard, GenerateButton, Spark } from '@/components/ai/AI';
 import { Badge, Empty, MoreMenu, PageHeader, ProgressBar, Section, Skeleton, StatStrip, StatusDot, Swatch } from '@/components/ui/primitives';
 import { CHECKING_LABEL, startRun, useCheckingServer } from '@/pages/strategy/runs';
+import { AREA, ICON, WRITES } from './actionMeta';
+import { MorningCard } from './MorningCard';
 
 /** "Good morning" before noon, "Good afternoon" before 6 pm, then "Good evening". */
 function greetingFor(d: Date): string {
@@ -135,6 +128,7 @@ export function Dashboard() {
         <FirstSteps project={project} />
       ) : (
         <>
+          <MorningCard project={project} ctx={ctx} className="mb-4" />
           <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
             <PlanCard project={project} s={s} ctx={ctx} className="lg:col-span-8" primaryTaken={!!next && !postHeld(next)} />
             <NextPost project={project} post={next} now={now} className="lg:col-span-4" />
@@ -210,54 +204,6 @@ function FirstSteps({ project }: { project: Project }) {
 }
 
 // ───────────── this week's plan ─────────────
-
-/** Where an action happens, for its row's meta line. */
-const AREA: Record<ActionKind, string> = {
-  build_page: 'Your page',
-  publish_page: 'Your page',
-  link_settings: 'Links',
-  campaign_setup: 'Social',
-  plan_30: 'Social',
-  batch_7: 'Social',
-  write_post: 'Social post',
-  calendar: 'Calendar',
-  lead_magnet: 'Email',
-  welcome_emails: 'Email',
-  outreach: 'Email',
-  code_asset: 'Studio',
-  listing: 'Marketplace',
-  listing_images: 'Marketplace',
-  product_file: 'Studio',
-  packages: 'Studio',
-  socials: 'Settings',
-  website: 'Settings',
-  brain: 'Brain',
-  ads: 'Ads',
-  offline: 'Outside the app',
-};
-const ICON: Partial<Record<ActionKind, ReactNode>> = {
-  build_page: <Globe />,
-  publish_page: <Globe />,
-  link_settings: <Link2 />,
-  campaign_setup: <Megaphone />,
-  plan_30: <CalendarDays />,
-  batch_7: <CalendarDays />,
-  write_post: <PenSquare />,
-  calendar: <CalendarDays />,
-  lead_magnet: <Mail />,
-  welcome_emails: <Mail />,
-  outreach: <Mail />,
-  code_asset: <CodeXml />,
-  listing: <Store />,
-  listing_images: <Store />,
-  socials: <AtSign />,
-  website: <Globe />,
-  brain: <Brain />,
-  ads: <Target />,
-  offline: <MapPin />,
-};
-/** The actions whose button leads to the AI writing something (the rest open a page). */
-const WRITES = new Set<ActionKind>(['write_post', 'build_page', 'plan_30', 'batch_7', 'lead_magnet', 'welcome_emails', 'ads']);
 
 /** A 20px check circle: filled when done, an empty ring when not. */
 function CheckCircle({ done }: { done: boolean }) {
