@@ -47,11 +47,13 @@ describe('the report form', () => {
 
   it('a token younger than 3 s or older than 1 h is refused and stores nothing', async () => {
     const secret = Buffer.from('k'.repeat(32));
-    const t = makeFormToken(secret, 'a-slug', 1_000_000);
-    expect(checkFormToken(secret, 'a-slug', t, 1_001_000)).toBe(false);
-    expect(checkFormToken(secret, 'a-slug', t, 1_004_000)).toBe(true);
-    expect(checkFormToken(secret, 'a-slug', t, 1_000_000 + 3_600_001)).toBe(false);
-    expect(checkFormToken(secret, 'other-slug', t, 1_004_000)).toBe(false);
+    const t = makeFormToken(secret, 'a-slug', 'visitor-a', 1_000_000);
+    expect(checkFormToken(secret, 'a-slug', 'visitor-a', t, 1_001_000)).toBe(false);
+    expect(checkFormToken(secret, 'a-slug', 'visitor-a', t, 1_004_000)).toBe(true);
+    expect(checkFormToken(secret, 'a-slug', 'visitor-a', t, 1_000_000 + 3_600_001)).toBe(false);
+    expect(checkFormToken(secret, 'other-slug', 'visitor-a', t, 1_004_000)).toBe(false);
+    // another visitor's browser can't use it
+    expect(checkFormToken(secret, 'a-slug', 'visitor-b', t, 1_004_000)).toBe(false);
     const { slug } = await liveListing('tok@example.com');
     const fast = await report(slug, { wait: 0 });
     expect(fast.status).toBe(400);
@@ -163,13 +165,111 @@ describe('the hold and moderation', () => {
   it('signed-in reports work, and reporting your own listing is 400', async () => {
     const { seller, slug, row } = await liveListing('signed@example.com');
     const b = await s.user('reporter@example.com');
-    expect((await s.call(seller, 'POST', '/api/market/reports', { slug, reason: 'spam' })).status).toBe(400);
-    expect((await s.call(b, 'POST', '/api/market/reports', { slug, reason: 'bogus' })).status).toBe(400);
-    expect((await s.call(b, 'POST', '/api/market/reports', { slug, reason: 'spam', note: 'dup listing' })).body).toEqual({ ok: true });
-    expect((await s.call(b, 'POST', '/api/market/reports', { slug, reason: 'spam' })).body).toEqual({ ok: true });
+    const sellerId = seller.id;
+    expect((await s.call(seller, 'POST', '/api/market/reports', { slug, sellerId, reason: 'spam' })).status).toBe(400);
+    expect((await s.call(b, 'POST', '/api/market/reports', { slug, sellerId, reason: 'bogus' })).status).toBe(400);
+    expect((await s.call(b, 'POST', '/api/market/reports', { slug, sellerId, reason: 'spam', note: 'dup listing' })).body).toEqual({ ok: true });
+    expect((await s.call(b, 'POST', '/api/market/reports', { slug, sellerId, reason: 'spam' })).body).toEqual({ ok: true });
     expect(s.rows('public_listing_reports')).toHaveLength(1);
     expect(s.rows('public_listing_reports')[0].reporter_kind).toBe('user');
     expect(row().report_count).toBe(1);
-    expect((await s.call(b, 'POST', '/api/market/reports', { slug: 'missing-one-abcdef', reason: 'spam' })).status).toBe(404);
+    expect((await s.call(b, 'POST', '/api/market/reports', { slug: 'missing-one-abcdef', sellerId, reason: 'spam' })).status).toBe(404);
+  });
+
+  it('a signed-in report goes only to the web page of the in-app listing’s own seller', async () => {
+    const victim = await liveListing('victim@example.com');
+    const forger = await s.user('forger@example.com');
+    const b = await s.user('reporter2@example.com');
+    // an in-app listing of the forger's that carries the victim's slug: its seller doesn't own that page
+    const r = await s.call(b, 'POST', '/api/market/reports', { slug: victim.slug, sellerId: forger.id, reason: 'scam' });
+    expect(r.status).toBe(404);
+    expect((await s.call(b, 'POST', '/api/market/reports', { slug: victim.slug, reason: 'scam' })).status).toBe(400);
+    expect(s.rows('public_listing_reports')).toHaveLength(0);
+    expect(victim.row().report_count).toBe(0);
+  });
+});
+
+describe('reports from another site', () => {
+  /** A cross-site POST of a token this visitor's own form gave them. */
+  async function postWith(slug, headers, ip = `203.0.113.${++ipN}`) {
+    const page = await s.visit(`/market/${slug}/report`, { headers: { 'x-test-ip': ip } });
+    s.advance(4000);
+    return s.visit(`/market/${slug}/report`, { method: 'POST', headers: { 'x-test-ip': ip, 'content-type': 'application/x-www-form-urlencoded', ...headers }, body: form({ reason: 'scam', t: tokenFrom(page.text), website: '' }) });
+  }
+
+  it('a POST from another site (Origin or Sec-Fetch-Site) is refused and stores nothing', async () => {
+    const { slug, row } = await liveListing('csrf@example.com');
+    for (const headers of [{ origin: 'https://evil.example' }, { 'sec-fetch-site': 'cross-site' }, { origin: 'null' }]) {
+      const r = await postWith(slug, headers);
+      expect(r.status).toBe(403);
+      expect(r.text).toContain('Please send the form again.');
+    }
+    expect(s.rows('public_listing_reports')).toHaveLength(0);
+    expect(row().status).toBe('live');
+    // the app's own origin, or the host that served the form, is fine
+    expect((await postWith(slug, { origin: 'https://yourlocalbusiness.replit.app', 'sec-fetch-site': 'same-origin' })).status).toBe(200);
+    expect((await postWith(slug, { origin: s.base })).status).toBe(200);
+    expect(s.rows('public_listing_reports')).toHaveLength(2);
+  });
+
+  it('one copied token posted by many visitors’ browsers files nothing', async () => {
+    const { slug, row } = await liveListing('copied@example.com');
+    const page = await s.visit(`/market/${slug}/report`, { headers: { 'x-test-ip': '198.51.100.200' } });
+    const t = tokenFrom(page.text);
+    s.advance(4000);
+    for (let i = 0; i < 4; i++) {
+      const r = await s.visit(`/market/${slug}/report`, { method: 'POST', headers: { 'x-test-ip': `198.51.100.${10 + i}`, 'content-type': 'application/x-www-form-urlencoded' }, body: form({ reason: 'scam', t, website: '' }) });
+      expect(r.status).toBe(400);
+      expect(r.text).toContain('Please send the form again.');
+    }
+    expect(s.rows('public_listing_reports')).toHaveLength(0);
+    expect(row().status).toBe('live');
+  });
+});
+
+describe('the hold never brings back a listing that is off the web', () => {
+  it('a report against a stale cached row doesn’t hold (or serve) a listing its seller unlisted', async () => {
+    const { slug, row } = await liveListing('stale@example.com');
+    await report(slug);
+    await report(slug);
+    // the page is cached as live on this copy; another copy unlists it (straight in the table: no cache drop here)
+    expect((await s.visit(`/market/${slug}`)).status).toBe(200);
+    Object.assign(row(), { status: 'unlisted', unlisted_at: new Date(s.clock()).toISOString() });
+    await s.market.reports.file(await s.market.store.bySlug(slug), { reason: 'scam', hash: 'f'.repeat(64), kind: 'visitor' });
+    expect(row()).toMatchObject({ status: 'unlisted', held_at: null });
+    s.market.store.drop();
+    expect((await s.visit(`/market/${slug}`)).status).toBe(410);
+  });
+
+  it('nor one the sweep put over the limit', async () => {
+    const { slug, row } = await liveListing('stale2@example.com');
+    await report(slug);
+    await report(slug);
+    await s.visit(`/market/${slug}`);
+    row().status = 'over_limit';
+    await s.market.reports.file(await s.market.store.bySlug(slug), { reason: 'scam', hash: 'e'.repeat(64), kind: 'visitor' });
+    expect(row()).toMatchObject({ status: 'over_limit', held_at: null });
+  });
+
+  it('a row with unlisted_at set is gone whatever its status says', async () => {
+    const { statusOf } = await import('./quality.mjs');
+    expect(statusOf({ status: 'held', held_at: '2026-11-01T00:00:00Z', unlisted_at: '2026-11-02T00:00:00Z' })).toBe('gone');
+    expect(statusOf({ status: 'live', unlisted_at: '2026-11-02T00:00:00Z' })).toBe('gone');
+    expect(statusOf({ status: 'live', unlisted_at: null })).toBe('live');
+  });
+
+  it('unhide keeps a listing over the limit when the seller’s plan has no room for it', async () => {
+    const seller = await s.user('full@example.com');
+    const ids = [];
+    for (const n of ['a1', 'a2', 'a3']) ids.push((await s.put(seller, `lst_${n}`, s.listing(seller, { title: `Stoneware mug number ${n}`, description: `${n} ${s.listing(seller).description}` }))).body.listing.slug);
+    const owner = await s.user('boss3@example.com', { isAdmin: true });
+    const first = s.rows('public_listings').find((r) => r.slug === ids[0]);
+    expect((await s.call(owner, 'POST', `/api/market/admin/listings/${first.id}/hide`, { reason: 'spam' })).status).toBe(200);
+    // a fourth goes on the web while the first is hidden (Launch: 3)
+    expect((await s.put(seller, 'lst_a4', s.listing(seller, { title: 'Stoneware mug number a4', description: `a4 ${s.listing(seller).description}` }))).status).toBe(201);
+    const back = await s.call(owner, 'POST', `/api/market/admin/listings/${first.id}/unhide`);
+    expect(back.body).toMatchObject({ ok: true, status: 'over_limit' });
+    expect(first.status).toBe('over_limit');
+    expect((await s.visit(`/market/${ids[0]}`)).status).toBe(410);
   });
 });

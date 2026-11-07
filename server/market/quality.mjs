@@ -55,7 +55,7 @@ export function statusOf(row, { blocked = false, serveUntil = null, now = Date.n
   if (!row) return 'missing';
   if (blocked) return 'gone';
   if (serveUntil && Date.parse(serveUntil) < now) return 'gone';
-  if (row.hidden_at || row.status === 'hidden') return 'gone';
+  if (row.hidden_at || row.unlisted_at || row.status === 'hidden') return 'gone';
   if (['unlisted', 'over_limit'].includes(row.status)) return 'gone';
   if (row.held_at || row.status === 'held') return 'held';
   return row.status === 'live' ? 'live' : 'thin';
