@@ -143,7 +143,7 @@ function privacyBody() {
 <p>You can disconnect a service in Settings → Connected accounts. Disconnecting deletes the tokens we hold and, where the provider allows it, asks the provider to revoke the grant. Deleting your account does the same.</p>
 
 <h2>Payments</h2>
-<p>Paid plans are processed by Stripe. Stripe collects your card. <strong>We do not store full card numbers.</strong> We keep what we need to run the plan: the plan name, status, renewal, business slots, and Stripe’s customer and subscription identifiers. Receipts stay with Stripe.</p>
+<p>Paid plans are processed by Stripe. Stripe collects your card. <strong>We do not store full card numbers.</strong> We keep what we need to run the plan: the plan name, status, renewal, business slots, and Stripe’s customer and subscription identifiers. For the free trial (one per person and card) we keep keyed hashes of the email address and the card’s fingerprint, never the address or the card. Receipts stay with Stripe.</p>
 
 <h2>Usage and billing records</h2>
 <p>We keep records of plan limits and of usage that the product meters (for example analytics calls, posts, and similar counts), tied to an opaque customer tag rather than putting your email in every row. Those records are how the product applies caps and how the operator can bill. They are not sold.</p>
@@ -167,7 +167,7 @@ function privacyBody() {
 
 <h2>How long we keep it</h2>
 <p>We keep account and business information while the account is active. Connected-account tokens are deleted when you disconnect that service or delete the account. On deletion we also delete the profile and the content stored for the account.</p>
-<p>Two narrow leftovers can remain. Usage rows may keep the opaque customer tag, without your email, so a past invoice can still be matched. Stripe may keep its own receipts under Stripe’s terms. A Gmail or Omnisend grant is revoked at the provider when that call succeeds; if the provider is unreachable, the tokens are still deleted here, and you can also remove the app in the provider’s own settings.</p>
+<p>A few narrow leftovers can remain. Usage rows may keep the opaque customer tag, without your email, so a past invoice can still be matched. Stripe may keep its own receipts under Stripe’s terms. If you started a free trial, its record keeps a keyed hash of the email address and of the card you used (neither can be turned back into the address or the card), so the same email or card can’t start a second free trial. A Gmail or Omnisend grant is revoked at the provider when that call succeeds; if the provider is unreachable, the tokens are still deleted here, and you can also remove the app in the provider’s own settings.</p>
 
 <h2>Who else receives information</h2>
 <p>We use these providers to run the service. They receive only what that part of the product needs:</p>
