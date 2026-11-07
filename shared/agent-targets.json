@@ -20,5 +20,19 @@
     "landing": "A landing page: one offer and one call to action.",
     "showcase": "A showcase page: what I sell, with photos, and a button for each.",
     "checkout": "A checkout page: one offer, what's included, the price and a Buy now button that opens my payment link."
+  },
+  "email": {
+    "welcome": "A welcome email that thanks new subscribers and delivers my free download.",
+    "nurture": "A helpful email with one practical tip for my audience and a link to learn more.",
+    "offer": "An email that presents one of my offers, with what's included and one button.",
+    "newsletter": "A short newsletter email with two or three sections and a button."
+  },
+  "leadMagnet": {
+    "checklist": "A printable checklist: short steps people can tick off and finish today.",
+    "guide": "A short printable how-to guide: a few clear steps, one section each.",
+    "cheatsheet": "A one-page cheat sheet: the essentials of my topic at a glance.",
+    "template": "A fill-in template people print and complete to get started.",
+    "swipe": "A swipe file: done-for-you examples people can copy and adapt.",
+    "workbook": "A 7-day workbook: one short section of prompts and exercises for each day."
   }
 }

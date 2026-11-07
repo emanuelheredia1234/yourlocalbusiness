@@ -4,10 +4,12 @@ declare module '*/server/providers/registry.mjs' {
   export function describeProviders(): { id: string; kinds: Record<string, { efforts: { id: string; label: string; note: string }[] } | undefined> }[];
 }
 declare module '*/server/agents/templates.mjs' {
-  /** What each kind of asset (CODE_KINDS) or page (PAGE_TYPES) is, in the words Manus and Viktor get. */
-  export const AGENT_TARGETS: { asset: Record<string, string>; seo: Record<string, string> };
+  /** What each kind of asset (CODE_KINDS), page (PAGE_TYPES), email or lead magnet (P5) is, in the words Manus and Viktor get. */
+  export const AGENT_TARGETS: { asset: Record<string, string>; seo: Record<string, string>; email: Record<string, string>; leadMagnet: Record<string, string> };
   /** The kinds' names in the Manus task title. */
-  export const KIND_LABELS: { asset: Record<string, string>; seo: Record<string, string> };
+  export const KIND_LABELS: { asset: Record<string, string>; seo: Record<string, string>; email: Record<string, string>; leadMagnet: Record<string, string> };
+  /** What the agents can build. */
+  export const BUILD_TARGETS: readonly ('asset' | 'seo' | 'email' | 'leadMagnet')[];
   /** The owner's words: a build request (and its changes), and a chat message, per agent. */
   export const CAPS: { manus: { build: number; chat: number }; viktor: { build: number; chat: number } };
   export const MANUS_LIMIT: number;

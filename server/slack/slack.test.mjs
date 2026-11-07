@@ -551,6 +551,11 @@ describe('who may use it', () => {
       expect((await app.call('/api/ai/slack/where', { method: 'PUT', body: { kind: 'dm' }, headers: as('owner') })).status).toBe(200);
       const body = { kind: 'chat', chat: { text: 'hi', website: '', images: [] }, ref: ref() };
       expect((await app.call('/api/ai/slack/send', { body, headers: as('user') })).json).toMatchObject({ code: 'OWNER_ONLY' });
+      // P5: an email or a lead magnet built by Viktor is the owner's too
+      for (const [target, kind] of [['email', 'welcome'], ['leadMagnet', 'guide']]) {
+        const build = { kind: 'build', build: { target, kind, facts: [{ id: 'name', value: 'Bean & Leaf' }], website: '', request: 'Make it warm', images: [] }, ref: ref() };
+        expect((await app.call('/api/ai/slack/send', { body: build, headers: as('user') })).json).toMatchObject({ code: 'OWNER_ONLY' });
+      }
       // the admin token doesn't make another account the owner
       expect((await app.call('/api/ai/slack/send', { body, headers: { ...as('user'), 'x-admin-token': 'admin-secret-token' } })).status).toBe(403);
       const sent = await app.call('/api/ai/slack/send', { body, headers: as('owner') });
