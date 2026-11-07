@@ -388,7 +388,7 @@ export function createIntegrations({
       lines.push(...(modules.morning.notes?.() ?? []));
       lines.push(...(modules.experiments.notes?.() ?? []));
       lines.push(...(modules.market.notes?.() ?? []));
-      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql, supabase/migrations/20261108000000_ads_launch.sql, supabase/migrations/20261110000000_billing.sql, supabase/migrations/20261111000000_video_week.sql, supabase/migrations/20261116000000_morning_action.sql, supabase/migrations/20261117000000_experiments.sql and supabase/migrations/20261119000000_public_market.sql in Supabase.`);
+      if (database.enabled) lines.push(`Integrations need ${INTEGRATIONS_MIGRATION}, supabase/migrations/20261106000000_zernio.sql, supabase/migrations/20261107000000_upload_post.sql, supabase/migrations/20261108000000_ads_launch.sql, supabase/migrations/20261110000000_billing.sql, supabase/migrations/20261111000000_video_week.sql, supabase/migrations/20261116000000_morning_action.sql and supabase/migrations/20261117000000_experiments.sql in Supabase.`);
       return lines;
     },
   };

@@ -240,7 +240,7 @@ export function gridHtml({ origin, imageUrl, rows, categories = [], category = n
   const body = `${topBar(origin)}
 <nav class="crumbs" aria-label="Breadcrumb">${crumbs.map((c, i) => (i === crumbs.length - 1 ? `<span>${escapeHtml(c.name)}</span>` : `<a href="${escapeHtml(c.url)}">${escapeHtml(c.name)}</a>`)).join(' › ')}</nav>
 <h1>${escapeHtml(heading)}</h1>
-<form class="search" method="get" action="${escapeHtml(origin)}/market" role="search"><input type="search" name="q" maxlength="80" value="${escapeHtml(q)}" placeholder="Search listings" aria-label="Search listings"><button type="submit">Search</button></form>
+<form class="search" method="get" action="/market" role="search"><input type="search" name="q" maxlength="80" value="${escapeHtml(q)}" placeholder="Search listings" aria-label="Search listings"><button type="submit">Search</button></form>
 ${nav}
 ${rows.length ? `<ul class="grid">\n${cards}\n</ul>` : '<p class="muted">No listings here yet.</p>'}
 ${pager}
@@ -259,7 +259,8 @@ export const REASON_LABELS = Object.freeze({
 
 /** The report form (no script): reason radios, an optional note, the form token and a hidden honeypot field. */
 export function reportFormHtml(row, { origin, token, problem = '' }) {
-  const action = `${origin}/market/${row.slug}/report`;
+  // relative: the CSP's form-action 'self' holds on whichever of the app's hosts served the form
+  const action = `/market/${row.slug}/report`;
   const body = `${topBar(origin)}
 <main class="card">
 <h1>Report this listing</h1>
