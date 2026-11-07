@@ -2,9 +2,11 @@
 // for a reason only the owner can fix (a payment method, the non-discrimination policy, a disabled account, a security
 // check, a temporary block) stays until a later create succeeds or for 7 days, even once it's fixed, and only a create
 // clears it. The setup checklist (preview.mjs setupChecks) warns about it instead of blocking while the live checks for
-// its cause pass, so a launch goes ahead (one create; Meta checks again). A live problem, a blocker without a check, a
-// missing billingStatus or a temporary block still block. Against the mock Zernio's custom health answer only
-// (state.health), with the launch window's own checklist, summary and review rendered from the server's answers.
+// its cause pass, so a launch goes ahead (one create; Meta checks again). A live problem (any blocker not from
+// last_refusal, a failing account status check), a blocker without a check, billingStatus `missing`, a temporary block
+// or a code we don't know still block, with the red line in place of the line it's about. Against the mock Zernio's
+// custom health answer only (state.health), with the launch window's own checklist, summary and review rendered from
+// the server's answers.
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -20,13 +22,17 @@ const FIX = {
   ad_account_unusable: 'https://www.facebook.com/business/help/422289316306981',
   meta_security_check_required: '/dashboard/zernio-only',
 };
-/** what the customer reads for each remembered refusal */
+/** the fix link Zernio's account status check carries when it fails (not the same as a remembered refusal's) */
+const ACCOUNT_QUALITY = 'https://business.facebook.com/accountquality';
+/** what the customer reads for each remembered refusal (never "the last launch": a later refusal of another kind doesn't clear it) */
 const SAYS = {
-  ad_account_payment_required: 'Meta refused the last launch on this ad account because of its payment method. If you’ve added or fixed it since, you can launch again: Meta checks it when you launch.',
-  ad_account_policy_not_accepted: 'Meta refused the last launch on this ad account because its non-discrimination policy hadn’t been accepted. If a business admin has accepted it since, you can launch again: Meta checks it when you launch.',
-  ad_account_unusable: 'Meta refused the last launch on this ad account because the account was disabled or restricted. If Meta has lifted that since, you can launch again: Meta checks it when you launch.',
-  meta_security_check_required: 'Meta refused the last launch from the Facebook login connected here because of a security check. If you’ve done the check on facebook.com since, you can launch again: Meta checks it when you launch.',
+  ad_account_payment_required: 'Meta refused a launch on this ad account in the last 7 days because of its payment method. If you’ve added or fixed it since, you can launch again: Meta checks it when you launch.',
+  ad_account_policy_not_accepted: 'Meta refused a launch on this ad account in the last 7 days because its non-discrimination policy hadn’t been accepted. If a business admin has accepted it since, you can launch again: Meta checks it when you launch.',
+  ad_account_unusable: 'Meta refused a launch on this ad account in the last 7 days because the account was disabled or restricted. If Meta has lifted that since, you can launch again: Meta checks it when you launch.',
+  meta_security_check_required: 'Meta refused a launch from the Facebook login connected here in the last 7 days because of a security check. If you’ve done the check on facebook.com since, you can launch again: Meta checks it when you launch.',
 };
+/** the payment line next to a remembered payment refusal (never "that’s fine" beside it) */
+const PAYMENT_UNSEEN = 'We can’t see this ad account’s payment method from here.';
 
 let t;
 let u;
@@ -55,7 +61,7 @@ function health({ remembered = ['ad_account_payment_required'], payment = 'unkno
     ready: false,
     blockers: [...remembered.map((code) => blocker('last_refusal', code)), ...blockers],
     checks: [
-      { id: 'account_status', status: accountStatus, title: 'Account status', message: 'SECRET-PLATFORM-TEXT' },
+      { id: 'account_status', status: accountStatus, title: 'Account status', message: 'SECRET-PLATFORM-TEXT', ...(['missing', 'error'].includes(accountStatus) ? { code: 'ad_account_unusable', fix: { label: 'Account quality', url: ACCOUNT_QUALITY } } : {}) },
       { id: 'payment', status: payment, title: 'Payment method', message: 'SECRET-PLATFORM-TEXT', ...(['missing', 'error'].includes(payment) ? { code: 'ad_account_payment_required', ...fix('ad_account_payment_required') } : {}) },
       { id: 'page', status: 'ok', title: 'Facebook Page', message: 'x' },
       { id: 'instagram', status: 'ok', title: 'Instagram', message: 'x' },
@@ -67,6 +73,9 @@ function health({ remembered = ['ad_account_payment_required'], payment = 'unkno
 
 const setup = async () => (await t.call(u, 'GET', '/api/ads/accounts?projectId=proj-1&platform=meta')).body.setup;
 const red = (list) => list.filter((c) => c.state === 'missing');
+const lineOf = (list, id) => list.find((c) => c.id === id);
+/** the red line Meta's "not letting this ad account create ads" takes: in place of the account line, never next to a green one */
+const accountBlocked = (extra = {}) => ({ id: 'account', state: 'missing', code: 'ACTION_BLOCKED', message: 'Meta isn’t letting this ad account create ads right now. Open Ads Manager to see why.', ...extra });
 const warnFor = (code, ourCode) => ({ id: 'last_refusal', state: 'warn', code: ourCode, message: SAYS[code], ...(code === 'meta_security_check_required' ? {} : { fixUrl: FIX[code] }) });
 const creates = () => t.writes().filter((w) => w.method === 'POST' && w.path === '/api/v1/ads/create');
 
@@ -86,7 +95,9 @@ describe('a remembered refusal the live checks don’t confirm: a warning, and t
     health({ payment: 'unknown' });
     const s = await setup();
     expect(red(s)).toEqual([]);
-    expect(s.find((c) => c.id === 'payment')).toMatchObject({ state: 'unknown', code: 'PAYMENT_UNKNOWN' });
+    // the payment line is neutral next to Meta's payment refusal: nothing says "that's fine"
+    expect(s.find((c) => c.id === 'payment')).toEqual({ id: 'payment', state: 'unknown', code: 'PAYMENT_UNKNOWN', message: PAYMENT_UNSEEN });
+    expect(JSON.stringify(s)).not.toMatch(/that’s fine/);
     expect(s.filter((c) => c.id === 'last_refusal')).toEqual([warnFor('ad_account_payment_required', 'PAYMENT_REQUIRED')]);
     expect(checklistSummary(s)).toEqual({ tone: 'warn', text: 'Ready, 2 to check' });
 
@@ -106,7 +117,9 @@ describe('a remembered refusal the live checks don’t confirm: a warning, and t
     const list = renderToStaticMarkup(createElement(SetupChecklist, { checks: await setup() }));
     expect(list).toContain(SAYS.ad_account_payment_required);
     expect(list).toContain(`href="${BILLING}"`);
+    expect(list).toContain(PAYMENT_UNSEEN);
     expect(list).not.toContain('Add a payment method');
+    expect(list).not.toContain('that’s fine');
     const pv = await t.preview(u, await t.request(u));
     expect(pv.body.reviewToken).toEqual(expect.any(String));
     const html = renderToStaticMarkup(createElement(ReviewStep, { review: pv.body.review, error: null, stale: false, confirmed: [], onClaims: () => {} }));
@@ -164,6 +177,16 @@ describe('a remembered refusal the live checks don’t confirm: a warning, and t
     const s = await setup();
     expect(red(s)).toEqual([]);
     expect(s.filter((c) => c.id === 'last_refusal')).toEqual([warnFor('meta_security_check_required', 'SECURITY_CHECK'), warnFor('ad_account_payment_required', 'PAYMENT_REQUIRED')]);
+    expect(lineOf(s, 'payment').message).toBe(PAYMENT_UNSEEN);
+  });
+
+  it('(g) a security check only, with the payment method out of sight: the payment line keeps its usual words', async () => {
+    listing({ billingStatus: 'unknown' });
+    health({ remembered: ['meta_security_check_required'], payment: 'unknown' });
+    const s = await setup();
+    expect(red(s)).toEqual([]);
+    expect(s.filter((c) => c.id === 'last_refusal')).toEqual([warnFor('meta_security_check_required', 'SECURITY_CHECK')]);
+    expect(lineOf(s, 'payment')).toMatchObject({ state: 'unknown', code: 'PAYMENT_UNKNOWN', message: expect.stringMatching(/Business Billing Hub/) });
   });
 });
 
@@ -194,19 +217,73 @@ describe('still blocks, as before', () => {
     await reviewBlocked('PAYMENT_REQUIRED');
   });
 
-  it('(f) a remembered temporary block (meta_action_blocked, kept a day)', async () => {
+  it('(f) a remembered temporary block (meta_action_blocked, kept a day): one red line in place of the account line', async () => {
     health({ remembered: ['meta_action_blocked'], payment: 'ok' });
     const s = await setup();
-    expect(red(s)).toEqual([{ id: 'ready', state: 'missing', code: 'ACTION_BLOCKED', message: expect.any(String) }]);
+    expect(red(s)).toEqual([accountBlocked()]);
+    expect(s.filter((c) => c.id === 'account')).toHaveLength(1);
     expect(s.some((c) => c.id === 'last_refusal')).toBe(false);
     await reviewBlocked('ACTION_BLOCKED');
   });
 
-  it('(h) a remembered payment refusal and a live account status problem: the live reason, never a red payment line next to the green one', async () => {
+  it('(h) a remembered payment refusal and a live account status problem: the live reason in place of the account line, the payment line stays green', async () => {
     health({ payment: 'ok', accountStatus: 'error', blockers: [blocker('account_status', 'ad_account_unusable')] });
     const s = await setup();
-    expect(red(s)).toEqual([{ id: 'ready', state: 'missing', code: 'ACTION_BLOCKED', message: expect.any(String), fixUrl: FIX.ad_account_unusable }]);
-    expect(s.find((c) => c.id === 'payment')).toMatchObject({ state: 'ok' });
+    expect(red(s)).toEqual([accountBlocked({ fixUrl: FIX.ad_account_unusable })]);
+    // never "The ad account is active." next to it
+    expect(s.filter((c) => c.id === 'account')).toHaveLength(1);
+    expect(lineOf(s, 'payment')).toMatchObject({ state: 'ok' });
+    expect(s.some((c) => c.id === 'last_refusal')).toBe(false);
+    await reviewBlocked('ACTION_BLOCKED');
+  });
+
+  it.each([
+    ['ad_account_payment_required', 'error'],
+    ['ad_account_policy_not_accepted', 'error'],
+    ['meta_security_check_required', 'error'],
+    ['ad_account_unusable', 'error'],
+    ['ad_account_payment_required', 'missing'],
+  ])('(h) remembered %s while the account status check is %s with no blocker of its own (the ad account list says active): blocks with the account reason and its link', async (remembered, accountStatus) => {
+    listing({ billingStatus: 'unknown' });
+    health({ remembered: [remembered], payment: 'unknown', accountStatus });
+    const s = await setup();
+    expect(red(s)).toEqual([accountBlocked({ fixUrl: ACCOUNT_QUALITY })]);
+    expect(s.filter((c) => c.id === 'account')).toHaveLength(1);
+    expect(lineOf(s, 'payment')).toMatchObject({ state: 'unknown' });
+    expect(s.some((c) => c.id === 'last_refusal')).toBe(false);
+    await reviewBlocked('ACTION_BLOCKED');
+  });
+
+  it('a live account status blocker with a code we’d downgrade if remembered (policy), its own check ok: blocks', async () => {
+    health({ remembered: [], payment: 'ok', blockers: [blocker('account_status', 'ad_account_policy_not_accepted')] });
+    const s = await setup();
+    expect(red(s)).toEqual([{ id: 'account', state: 'missing', code: 'POLICY_NOT_ACCEPTED', message: 'A business admin needs to accept Meta’s non-discrimination policy in Ads Manager.', fixUrl: FIX.ad_account_policy_not_accepted }]);
+    expect(s.some((c) => c.id === 'last_refusal')).toBe(false);
+    await reviewBlocked('POLICY_NOT_ACCEPTED');
+  });
+
+  it('a live payment blocker while the payment check reads unknown, next to a remembered payment refusal: one red payment line, no warning', async () => {
+    listing({ billingStatus: 'unknown' });
+    health({ payment: 'unknown', blockers: [blocker('payment', 'ad_account_payment_required')] });
+    const s = await setup();
+    expect(red(s)).toEqual([{ id: 'payment', state: 'missing', code: 'PAYMENT_REQUIRED', message: expect.stringMatching(/^Add a payment method/), fixUrl: BILLING }]);
+    expect(s.filter((c) => c.id === 'payment')).toHaveLength(1);
+    expect(s.some((c) => c.id === 'last_refusal')).toBe(false);
+    await reviewBlocked('PAYMENT_REQUIRED');
+  });
+
+  it('a remembered refusal with a code we don’t know: blocks as Meta not letting the ad account create ads', async () => {
+    health({ remembered: ['some_new_code'], payment: 'ok' });
+    const s = await setup();
+    expect(red(s)).toEqual([accountBlocked()]);
+    expect(s.some((c) => c.id === 'last_refusal')).toBe(false);
+    await reviewBlocked('ACTION_BLOCKED');
+  });
+
+  it('Zernio says not ready but lists no blocker: blocks', async () => {
+    health({ remembered: [], payment: 'ok' });
+    const s = await setup();
+    expect(red(s)).toEqual([accountBlocked()]);
     expect(s.some((c) => c.id === 'last_refusal')).toBe(false);
     await reviewBlocked('ACTION_BLOCKED');
   });
