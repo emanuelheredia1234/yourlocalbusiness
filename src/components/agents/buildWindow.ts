@@ -7,8 +7,9 @@ import { create } from 'zustand';
 import type { AgentBuild, AgentId, BuildFactId, BuildTarget } from '@/lib/agentTypes';
 import type { Project, PromptImage } from '@/lib/types';
 import { NO_DRAFT, defaultKind, useCodeTabMemory } from '@/lib/codeAssets';
+import { REQUEST_MAX, emailKindFor, openBuildPage } from '@/ai/agents/builds';
+import { plainOf } from '@/lib/emailDoc';
 import { pageTypeOf } from '@/lib/pageTypes';
-import { openPage } from '@/ai/assistant/nav';
 import { getActiveProject } from '@/store/useStore';
 
 export interface BuildWindowFields {
@@ -27,19 +28,45 @@ export interface BuildWindowFields {
 }
 
 export interface BuildWindowState {
-  /** the window is open for this project's asset or SEO page */
-  open: { projectId: string; target: BuildTarget } | null;
+  /** the window is open for this project's asset, SEO page, email (stepId: which one) or lead magnet */
+  open: { projectId: string; target: BuildTarget; stepId?: string } | null;
   /** what's filled in, per `${projectId}:${target}` */
   fields: Record<string, BuildWindowFields>;
 }
 
 export const useAgentBuildWindow = create<BuildWindowState>(() => ({ open: null, fields: {} }));
 
-export const windowKey = (projectId: string, target: BuildTarget) => `${projectId}:${target}`;
+export const windowKey = (projectId: string, target: BuildTarget, stepId?: string) => (stepId ? `${projectId}:${target}:${stepId}` : `${projectId}:${target}`);
+
+/**
+ * An email's words for the agent to design (the owner's request slot): its subject and plain text, cut at a
+ * paragraph to fit what the agent takes, with a note when it's cut.
+ */
+export function emailRequestOf(subject: string, body: string, cap: number): string {
+  const head = `Design this email. Subject: ${subject.trim()}\n\nThe email’s words:\n`;
+  const note = '\n\n(The rest of the email is left out: keep it short.)';
+  const full = `${head}${body.trim()}`;
+  if (full.length <= cap) return full;
+  const paras = body.trim().split(/\n\s*\n/);
+  let text = head;
+  for (const p of paras) {
+    if (`${text}${p}\n\n`.length + note.length > cap) break;
+    text += `${p}\n\n`;
+  }
+  return `${text.trimEnd()}${note}`.slice(0, cap);
+}
 
 /** The window's fields from the page itself: the kind, the owner's words and images there, and their website. */
-export function prefillFields(p: Project, target: BuildTarget, via: AgentId): BuildWindowFields {
+export function prefillFields(p: Project, target: BuildTarget, via: AgentId, stepId?: string): BuildWindowFields {
   const website = (p.brand.websiteUrl ?? '').trim();
+  if (target === 'email') {
+    const emails = p.marketing.emails;
+    const i = Math.max(0, emails.findIndex((e) => e.id === stepId));
+    const step = emails[i];
+    const body = step ? (step.doc ? plainOf(step.doc, p).body : step.body) : '';
+    return { via, kind: emailKindFor(i, emails.length), website, request: step ? emailRequestOf(step.subject, body, REQUEST_MAX[via]) : '', images: [], unticked: [], profile: '' };
+  }
+  if (target === 'leadMagnet') return { via, kind: p.marketing.leadMagnet?.type ?? 'checklist', website, request: '', images: [], unticked: [], profile: '' };
   if (target === 'asset') {
     const draft = useCodeTabMemory.getState().drafts[p.id] ?? NO_DRAFT;
     return { via, kind: draft.kind ?? defaultKind(p), website, request: draft.prompt, images: draft.images, unticked: [], profile: '' };
@@ -57,7 +84,7 @@ export function fieldsFromBuild(b: AgentBuild, base: BuildWindowFields): BuildWi
 export function setWindowFields(patch: Partial<BuildWindowFields>): void {
   const s = useAgentBuildWindow.getState();
   if (!s.open) return;
-  const key = windowKey(s.open.projectId, s.open.target);
+  const key = windowKey(s.open.projectId, s.open.target, s.open.stepId);
   const cur = s.fields[key];
   if (!cur) return;
   useAgentBuildWindow.setState({ fields: { ...s.fields, [key]: { ...cur, ...patch } } });
@@ -68,7 +95,7 @@ export function closeAgentBuild(forget = false): void {
   const s = useAgentBuildWindow.getState();
   if (!s.open) return;
   if (!forget) return useAgentBuildWindow.setState({ open: null });
-  const { [windowKey(s.open.projectId, s.open.target)]: _gone, ...fields } = s.fields;
+  const { [windowKey(s.open.projectId, s.open.target, s.open.stepId)]: _gone, ...fields } = s.fields;
   useAgentBuildWindow.setState({ open: null, fields });
 }
 
@@ -77,17 +104,19 @@ export function closeAgentBuild(forget = false): void {
  * that agent, prefilled from the page's own fields (or what was typed in it before, or `from`: a build to try again).
  * `kind` picks the kind (the SEO builder's chosen page type). False when the owner chose to stay where they were.
  */
-export async function openAgentBuild(o: { target: BuildTarget; via: AgentId; kind?: string; from?: AgentBuild }): Promise<boolean> {
-  const ok = o.target === 'asset' ? await openPage('studio', 'code') : await openPage('marketing-seo');
+export async function openAgentBuild(o: { target: BuildTarget; via: AgentId; kind?: string; from?: AgentBuild; stepId?: string }): Promise<boolean> {
+  const ok = await openBuildPage(o.target);
   if (!ok) return false;
   const p = getActiveProject();
   if (!p) return false;
-  const key = windowKey(p.id, o.target);
+  const stepId = o.target === 'email' ? o.stepId ?? o.from?.stepId ?? p.marketing.emails[0]?.id : undefined;
+  if (o.target === 'email' && !stepId) return false;
+  const key = windowKey(p.id, o.target, stepId);
   const s = useAgentBuildWindow.getState();
-  const fresh = prefillFields(p, o.target, o.via);
+  const fresh = prefillFields(p, o.target, o.via, stepId);
   let fields = s.fields[key] ?? fresh;
   if (o.from) fields = fieldsFromBuild(o.from, fresh);
   fields = { ...fields, via: o.via, ...(o.kind && !o.from ? { kind: o.kind } : {}) };
-  useAgentBuildWindow.setState({ open: { projectId: p.id, target: o.target }, fields: { ...s.fields, [key]: fields } });
+  useAgentBuildWindow.setState({ open: { projectId: p.id, target: o.target, ...(stepId ? { stepId } : {}) }, fields: { ...s.fields, [key]: fields } });
   return true;
 }

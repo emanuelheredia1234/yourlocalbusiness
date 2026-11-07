@@ -15,7 +15,8 @@ import { MAX_PROMPT_IMAGES, planPromptImages, reportRefusals } from '@/lib/promp
 import { deleteBlob } from '@/lib/storage';
 import { useRuntime } from '@/lib/platform';
 import { buildFacts, chosenFacts } from '@/ai/agents/facts';
-import { REQUEST_MAX, buildRequestOf, kindNoun, startBuild } from '@/ai/agents/builds';
+import { EMAIL_KIND_LABEL, REQUEST_MAX, buildRequestOf, kindNoun, startBuild } from '@/ai/agents/builds';
+import { LEAD_MAGNET_TYPES } from '@/ai/local/email';
 import { agentErrorText, manusPreview, newRef, viktorPreview } from '@/ai/agents/api';
 import { MANUS_PROFILES, agentCost, agentName, agentPlace, agentWho, useAgentReady } from '@/ai/agents/who';
 import { openPage } from '@/ai/assistant/nav';
@@ -51,26 +52,42 @@ export function checkWebsite(raw: string): { url: string; error: string } {
 export function AgentBuildHost() {
   const open = useAgentBuildWindow((s) => s.open);
   if (!open || __ARTIFACT_BUILD__) return null;
-  return <AgentBuildWindow key={windowKey(open.projectId, open.target)} projectId={open.projectId} target={open.target} />;
+  return <AgentBuildWindow key={windowKey(open.projectId, open.target, open.stepId)} projectId={open.projectId} target={open.target} stepId={open.stepId} />;
 }
 
-export function AgentBuildWindow({ projectId, target }: { projectId: string; target: BuildTarget }) {
+export function AgentBuildWindow({ projectId, target, stepId }: { projectId: string; target: BuildTarget; stepId?: string }) {
   const project = useStore((s) => s.projects.find((p) => p.id === projectId));
-  const fields = useAgentBuildWindow((s) => s.fields[windowKey(projectId, target)]);
+  const fields = useAgentBuildWindow((s) => s.fields[windowKey(projectId, target, stepId)]);
   const [step, setStep] = useState<1 | 2>(1);
   if (!project || !fields) return null;
-  return step === 1 ? <BuildForm project={project} target={target} f={fields} onNext={() => setStep(2)} /> : <BuildConfirm project={project} target={target} f={fields} onBack={() => setStep(1)} />;
+  return step === 1 ? <BuildForm project={project} target={target} f={fields} onNext={() => setStep(2)} /> : <BuildConfirm project={project} target={target} f={fields} stepId={stepId} onBack={() => setStep(1)} />;
 }
 
-/** The kinds the window offers: Code & assets' (business-only ones for a business) or the six page types. */
+/** The kinds the window offers: Code & assets' (business-only ones for a business), the six page types, the email kinds or the lead magnet types. */
 function kindOptions(p: Project, target: BuildTarget): string[] {
+  if (target === 'email') return Object.keys(EMAIL_KIND_LABEL);
+  if (target === 'leadMagnet') return LEAD_MAGNET_TYPES.map((t) => t.id);
   return target === 'asset' ? CODE_KINDS.filter((k) => !k.business || p.track === 'business').map((k) => k.id) : PAGE_TYPES;
 }
+
+/** The window's title for each target. */
+export const BUILD_TITLE: Record<BuildTarget, string> = {
+  asset: 'Build an asset with Manus or Viktor',
+  seo: 'Build your SEO page with Manus or Viktor',
+  email: 'Design an email with Manus or Viktor',
+  leadMagnet: 'Make your lead magnet with Manus or Viktor',
+};
+const PLACEHOLDER: Record<BuildTarget, string> = {
+  asset: 'For example: a booking widget for my yoga classes, with my three class types and a short note about what to bring.',
+  seo: 'For example: a calm, friendly page for first-time customers. Show my three services with photos.',
+  email: 'For example: a warm, simple email in my brand colours with one big button.',
+  leadMagnet: 'For example: a one-page checklist for first-time home bakers, with 5 sections and a tip in each.',
+};
 
 /** Why step 1 can't go on yet ('' when it can). */
 export function stepOneProblem(p: Project, target: BuildTarget, f: BuildWindowFields, ready: boolean): string {
   if (!ready) return '';
-  if (!kindOptions(p, target).includes(f.kind)) return target === 'asset' ? 'Choose what to build.' : 'Choose the kind of page.';
+  if (!kindOptions(p, target).includes(f.kind)) return target === 'seo' ? 'Choose the kind of page.' : 'Choose what to build.';
   if (target === 'seo' && missingLink(p, f.kind as PageType) === 'payment') return 'Add your payment link first. The app never takes payments: Buy now opens your own link.';
   if (checkWebsite(f.website).error) return checkWebsite(f.website).error;
   if (f.request.trim().length > REQUEST_MAX[f.via]) return `Your words are too long for ${agentName(f.via)}: at most ${REQUEST_MAX[f.via].toLocaleString('en-US')} characters.`;
@@ -124,7 +141,7 @@ export function BuildForm({ project, target, f, onNext }: { project: Project; ta
       open
       onClose={() => closeAgentBuild()}
       size="lg"
-      title={target === 'asset' ? 'Build an asset with Manus or Viktor' : 'Build your SEO page with Manus or Viktor'}
+      title={BUILD_TITLE[target]}
       subtitle="Step 1 of 2"
       footer={
         <>
@@ -170,7 +187,23 @@ export function BuildForm({ project, target, f, onNext }: { project: Project; ta
           )}
         </fieldset>
 
-        {target === 'asset' ? (
+        {target === 'email' || target === 'leadMagnet' ? (
+          <Field label="What" htmlFor={`${ids}-kind`}>
+            <select id={`${ids}-kind`} className="select" value={f.kind} onChange={(e) => setWindowFields({ kind: e.target.value })}>
+              {target === 'email'
+                ? Object.entries(EMAIL_KIND_LABEL).map(([id, label]) => (
+                    <option key={id} value={id}>
+                      {label}
+                    </option>
+                  ))
+                : LEAD_MAGNET_TYPES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+            </select>
+          </Field>
+        ) : target === 'asset' ? (
           <Field label="What" htmlFor={`${ids}-kind`}>
             <select id={`${ids}-kind`} className="select" value={f.kind} onChange={(e) => setWindowFields({ kind: e.target.value })}>
               {CODE_KINDS.filter((k) => !k.business || project.track === 'business').map((k) => (
@@ -193,7 +226,7 @@ export function BuildForm({ project, target, f, onNext }: { project: Project; ta
           right={<span className={cn('num font-mono', f.request.trim().length > cap && 'text-bad')}>{`${f.request.trim().length.toLocaleString('en-US')} / ${cap.toLocaleString('en-US')}`}</span>}
           hint="Your own words, sent as you write them inside the app’s template. Paste or drop images here too."
         >
-          <AutoTextarea id={`${ids}-request`} value={f.request} onChange={(v) => setWindowFields({ request: v })} minRows={4} placeholder={target === 'asset' ? 'For example: a booking widget for my yoga classes, with my three class types and a short note about what to bring.' : 'For example: a calm, friendly page for first-time customers. Show my three services with photos.'} {...paste} />
+          <AutoTextarea id={`${ids}-request`} value={f.request} onChange={(v) => setWindowFields({ request: v })} minRows={4} placeholder={PLACEHOLDER[target]} {...paste} />
         </Field>
 
         <PromptImages
@@ -264,7 +297,7 @@ export function confirmWhat(target: BuildTarget, kind: string, o: { words: boole
 }
 
 /** Step 2: the confirm, with who does the work, what it costs and the exact message (a dry run). Send is one click, once. */
-export function BuildConfirm({ project, target, f, onBack }: { project: Project; target: BuildTarget; f: BuildWindowFields; onBack: () => void }) {
+export function BuildConfirm({ project, target, f, stepId, onBack }: { project: Project; target: BuildTarget; f: BuildWindowFields; stepId?: string; onBack: () => void }) {
   const name = agentName(f.via);
   // one Ref for the exact message shown and the one sent
   const [ref] = useState(() => newRef());
@@ -276,7 +309,7 @@ export function BuildConfirm({ project, target, f, onBack }: { project: Project;
   const [error, setError] = useState<{ title: string; body: string; settings: boolean } | null>(null);
   const facts = chosenFacts(project, f.unticked);
   const website = checkWebsite(f.website).url;
-  const input = { projectId: project.id, via: f.via, target, kind: f.kind, request: f.request, website, images: f.images, facts, ...(f.via === 'manus' && f.profile ? { profile: f.profile } : {}) };
+  const input = { projectId: project.id, via: f.via, target, kind: f.kind, request: f.request, website, images: f.images, facts, ...(stepId ? { stepId } : {}), ...(f.via === 'manus' && f.profile ? { profile: f.profile } : {}) };
   const over = preview.data ? preview.data.chars > preview.data.limit : false;
 
   useEffect(() => {

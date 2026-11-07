@@ -9,6 +9,7 @@ import { describeProviders } from '../../../server/providers/registry.mjs';
 import { AGENT_TARGETS, BUILD_TARGETS, KIND_LABELS } from '../../../server/agents/templates.mjs';
 import { LEAD_MAGNET_TYPES } from '@/ai/local/email';
 import { MANUS_PROFILES } from './who';
+import { EMAIL_KIND_LABEL, emailKindFor, kindLabel } from './builds';
 
 describe('what Manus and Viktor are told to build', () => {
   it('covers every Code & assets kind and every SEO page type, and nothing else', () => {
@@ -33,6 +34,15 @@ describe('what Manus and Viktor are told to build', () => {
       expect(Object.keys(KIND_LABELS[target]).sort()).toEqual(Object.keys(targets[target]).sort());
       for (const desc of Object.values(targets[target])) expect(desc).toMatch(/^[A-Z0-9].*\.$/);
     }
+  });
+});
+
+describe('the app’s names for emails and lead magnets (P5)', () => {
+  it('match the server’s, and each email of the sequence gets a kind', () => {
+    expect(EMAIL_KIND_LABEL).toEqual(KIND_LABELS.email);
+    expect([0, 1, 2, 3, 4].map((i) => emailKindFor(i, 5))).toEqual(['welcome', 'nurture', 'nurture', 'nurture', 'offer']);
+    expect(kindLabel('email', 'offer')).toBe('offer email');
+    expect(kindLabel('leadMagnet', 'checklist')).toBe('checklist');
   });
 });
 

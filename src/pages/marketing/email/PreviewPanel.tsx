@@ -17,6 +17,8 @@ import { emailHtml } from '@/lib/emailDoc';
 import { DRAFT_CODE_TEXT, draftHasPlaceholders, draftProblem, emailDraftPayload } from '@/lib/emailDraft';
 import { ESP_IDS, ESP_TOOLS, RenderError, type EspId } from '../../../../shared/email/render.mjs';
 import { EmailPreview } from './studio/EmailFrame';
+import { AgentButtons } from '@/components/agents/AgentButtons';
+import { emailKindFor } from '@/ai/agents/builds';
 
 const OMNISEND_CALLBACK_URL = 'https://yourlocalbusiness.replit.app/api/integrations/omnisend/callback';
 const OMNISEND_PUBLIC_APP_URL = 'https://yourlocalbusiness.replit.app';
@@ -484,6 +486,7 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
                   <button type="button" className="btn btn-secondary btn-xs" onClick={() => downloadHtml(e, i)}>
                     <Download /> Download .html
                   </button>
+                  <AgentButtons target="email" stepId={e.id} kind={emailKindFor(i, emails.length)} lead="Design with" />
                   {connected && (
                     <button type="button" className="btn btn-secondary btn-xs" disabled={!!draft?.busy} onClick={() => void createOmnisendDraft(e.id, i)}>
                       {draft?.busy ? 'Creating…' : 'Create Omnisend draft'}

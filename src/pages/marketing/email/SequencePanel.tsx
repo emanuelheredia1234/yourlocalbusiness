@@ -21,6 +21,9 @@ import { EmailStudio } from './studio/EmailStudio';
 import { EmailPreview } from './studio/EmailFrame';
 import { EmailAIActions, designInput } from './studio/AIActions';
 import { replaceDoc } from '@/lib/emailDoc';
+import { AgentButtons } from '@/components/agents/AgentButtons';
+import { AgentBuildList } from '@/components/agents/AgentBuildList';
+import { emailKindFor } from '@/ai/agents/builds';
 import { useProjectOffers } from '@/store/offers';
 import { offerPrice } from '@/lib/offers';
 import { buyToken } from '@/lib/buyLinks';
@@ -132,6 +135,7 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
             <GenerateButton size="sm" running={designAll.running} disabled={ai.running} runningLabel="Designing…" onClick={() => void designEvery()}>
               Design all {emails.length}
             </GenerateButton>
+            <AgentButtons target="email" stepId={open ?? emails[0]?.id} kind={emailKindFor(Math.max(0, emails.findIndex((x) => x.id === open)), emails.length)} lead="Design with" />
             <button type="button" className="btn btn-primary btn-sm" onClick={onPreview}>
               <Eye /> Preview & export
             </button>
@@ -224,7 +228,21 @@ export function SequencePanel({ project, onPreview }: { project: Project; onPrev
                             ]}
                           />
                           {modeOf(e) === 'blocks' ? (
-                            <EmailStudio project={project} step={e} index={i} total={emails.length} actions={<EmailAIActions project={project} step={e} index={i} />} />
+                            <div className="flex flex-col gap-4">
+                              <EmailStudio
+                                project={project}
+                                step={e}
+                                index={i}
+                                total={emails.length}
+                                actions={
+                                  <>
+                                    <EmailAIActions project={project} step={e} index={i} />
+                                    <AgentButtons target="email" stepId={e.id} kind={emailKindFor(i, emails.length)} lead="or design it with" />
+                                  </>
+                                }
+                              />
+                              <AgentBuildList target="email" stepId={e.id} />
+                            </div>
                           ) : e.doc ? (
                             <div className="grid gap-2">
                               <Field label="Plain text" hint="Made from this email’s blocks, for exports and plain-text inboxes.">

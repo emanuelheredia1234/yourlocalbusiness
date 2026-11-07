@@ -16,6 +16,7 @@ import { beginBusy, busyJobs, endBusy } from '@/lib/busy';
 import { PAGE_TYPE_LABEL } from '@/lib/pageTypes';
 import { uid } from '@/lib/utils';
 import { codeKindLabel } from '@/ai/local/code';
+import { LEAD_MAGNET_TYPES } from '@/ai/local/email';
 import { useStore } from '@/store/useStore';
 import { toast } from '@/store/ui';
 import { confirmAction } from '@/components/ui/primitives';
@@ -74,7 +75,21 @@ const sendingHere = (id: string) => busyJobs().some((j) => j.id === busyId(id));
 /** "booking page", "pricing table": what the build makes, for sentences. */
 export function kindLabel(target: BuildTarget, kind: string): string {
   if (target === 'seo') return (PAGE_TYPE_LABEL as Record<string, string>)[kind]?.toLowerCase() ?? 'page';
+  if (target === 'email') return (EMAIL_KIND_LABEL as Record<string, string>)[kind]?.toLowerCase() ?? 'email';
+  if (target === 'leadMagnet') return LEAD_MAGNET_TYPES.find((t) => t.id === kind)?.label.toLowerCase() ?? 'lead magnet';
   return codeKindLabel(kind as never).toLowerCase();
+}
+
+/** The kinds of email Manus and Viktor design (shared/agent-targets.json), named as the server names them. */
+export const EMAIL_KIND_LABEL = { welcome: 'Welcome email', nurture: 'Tip email', offer: 'Offer email', newsletter: 'Newsletter email' } as const;
+export type EmailKind = keyof typeof EMAIL_KIND_LABEL;
+/** The kind that suits an email of the sequence: the first welcomes, the last offers, the rest teach. */
+export const emailKindFor = (index: number, total: number): EmailKind => (index <= 0 ? 'welcome' : index >= total - 1 ? 'offer' : 'nurture');
+/** Where a build's page goes: Studio › Code & assets, Marketing › SEO page, or Email (its sequence or lead magnet). */
+export function openBuildPage(target: BuildTarget): Promise<boolean> {
+  if (target === 'asset') return openPage('studio', 'code');
+  if (target === 'seo') return openPage('marketing-seo');
+  return openPage('marketing-email', target === 'email' ? 'sequence' : 'magnet');
 }
 
 /** "a booking page", "an interactive calculator". */
@@ -105,8 +120,8 @@ const notes = (images: PromptImage[]): ImageNote[] => images.map((i) => ({ key: 
 function announce(projectId: string, b: AgentBuild): void {
   const name = agentName(b.via);
   const what = kindLabel(b.target, b.kind);
-  const route = b.target === 'asset' ? 'studio' : 'marketing-seo';
-  const open = () => void (b.target === 'asset' ? openPage('studio', 'code') : openPage('marketing-seo'));
+  const route = b.target === 'asset' ? 'studio' : b.target === 'seo' ? 'marketing-seo' : 'marketing-email';
+  const open = () => void openBuildPage(b.target);
   const p = useStore.getState().projects.find((x) => x.id === projectId);
   const brand = p?.brand.name ? ` for ${p.brand.name}` : '';
   if (b.state === 'built') {
@@ -142,6 +157,8 @@ export interface BuildInput {
   profile?: string;
   /** the request's Ref (the build window makes it first, so the exact message it shows is the one sent) */
   ref?: string;
+  /** an email build: which email it designs */
+  stepId?: string;
 }
 
 /** The request the server writes its fixed template around. */
@@ -174,6 +191,7 @@ export async function startBuild(o: BuildInput): Promise<StartOutcome> {
     lastSentAt: now,
     ref: o.ref ?? newRef(),
     rounds: 1,
+    ...(o.stepId ? { stepId: o.stepId } : {}),
     ...(o.via === 'manus' && o.profile ? { profile: o.profile } : {}),
   };
   addBuild(o.projectId, build);
@@ -644,7 +662,7 @@ export async function buildResultHtml(projectId: string, id: string): Promise<Ag
 /** The build's page as a source for the preview and the importer. */
 export function buildSource(b: AgentBuild, h: AgentHtml): AgentHtmlSource {
   const url = agentLink(b);
-  return { via: b.via, html: h.html, images: b.images, ...(url ? { url } : {}), buildId: b.id, kind: b.kind, request: b.request };
+  return { via: b.via, html: h.html, images: b.images, ...(url ? { url } : {}), buildId: b.id, kind: b.kind, request: b.request, ...(b.stepId ? { stepId: b.stepId } : {}) };
 }
 
 /** What to tell the owner when the page couldn't be had. */
