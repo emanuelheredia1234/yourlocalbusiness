@@ -25,7 +25,10 @@ function fixUrlOn(url, hosts) {
     const u = new URL(url);
     if (u.protocol !== 'https:' || u.username || u.password || u.port || !hosts.includes(u.hostname.toLowerCase()) || REDIRECT_PATH.test(u.pathname)) return undefined;
     for (const v of u.searchParams.values()) if (LINK_VALUE.test(v)) return undefined;
-    return u.toString();
+    // the bound holds for the link as kept: percent-encoding can make it several times longer than it came, past
+    // what ad_jobs.error_detail may hold (its 4096-byte check), and the app drops a link over 500 anyway
+    const out = u.toString();
+    return out.length <= 500 ? out : undefined;
   } catch {
     return undefined;
   }

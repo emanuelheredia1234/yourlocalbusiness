@@ -148,6 +148,18 @@ describe('writes: one attempt, outcome per status class', () => {
     expect(r).not.toHaveProperty('fixUrl');
   });
 
+  it('keeps the longest refusal well under ad_jobs.error_detail’s 4096-byte check, however long its fix link grows', () => {
+    // every field at its longest, in 3-byte characters (the most bytes per character `cut` counts)
+    const w = (n) => '中'.repeat(n);
+    const body = (url) => ({ code: 'c'.repeat(64), type: 'platform_error', param: 'p'.repeat(100), details: { stage: 'creative', hint: w(400), fix: { label: w(100), url } }, platformError: { error_subcode: 1885272, error_user_title: w(200), error_user_msg: w(400) } });
+    // under 500 characters as sent, 4,255 once percent-encoded: dropped, never kept past the check (the job would lose it all)
+    expect(refusalDetail({ status: 400, body: body(`https://www.facebook.com/${w(470)}`) })).not.toHaveProperty('fix');
+    // the longest link kept (500 characters) still leaves the database room for its own overhead
+    const longest = refusalDetail({ status: 400, body: body(`https://www.facebook.com/${'a'.repeat(475)}`) });
+    expect(longest.fix.url).toHaveLength(500);
+    expect(Buffer.byteLength(JSON.stringify(longest))).toBeLessThan(3600);
+  });
+
   it('a team-level refusal (a restricted Zernio key, our rate limits) keeps its code only, never its words, and alerts the owner', async () => {
     const t = setup();
     mock.ads.fail('POST /ads/create', 'restricted-key');

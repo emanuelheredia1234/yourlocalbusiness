@@ -237,6 +237,19 @@ describe('review fixes: what a refusal says, and where its fix link may go', () 
     expect(note('PAYMENT_REQUIRED', {}, 'https://translate.google.com/translate?u=https://evil.example')).not.toHaveProperty('fixUrl');
   });
 
+  it('keeps a fix link to 500 characters as it is kept, not only as it came (percent-encoding makes it longer)', () => {
+    const grows = `https://www.facebook.com/${'中'.repeat(100)}`;
+    expect(grows.length).toBeLessThan(500);
+    expect(new URL(grows).toString().length).toBeGreaterThan(500);
+    expect(safeFixUrl(grows)).toBeUndefined();
+    expect(keptFixUrl(grows)).toBeUndefined();
+    const fits = `https://www.facebook.com/${'中'.repeat(10)}`;
+    expect(safeFixUrl(fits)).toBe(new URL(fits).toString());
+    const exactly = `https://www.facebook.com/${'a'.repeat(475)}`;
+    expect(exactly).toHaveLength(500);
+    expect(keptFixUrl(exactly)).toBe(exactly);
+  });
+
   it('never cuts an emoji in half, and drops a lone half from the text (Postgres refuses it, losing the row)', () => {
     const smile = '😀';
     const at298 = cut(`${'a'.repeat(298)}${smile}tail`, 300);
