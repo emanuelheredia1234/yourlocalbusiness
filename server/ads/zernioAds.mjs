@@ -19,16 +19,19 @@
 //   create that lists what it made (details.createdObjects) and has no unconfirmedWrite: that is a definite failure,
 //   and the left-behind ids are kept.
 // - not_set_up (no ZERNIO_API_KEY) → failed ADS_UNAVAILABLE, never unknown: nothing was sent.
-// - The owner's problems (key refused, plan, ads add-on, allowance, Zernio payment) are ADS_UNAVAILABLE for the
-//   customer, a zernio_owner_alert log line and the 'zernio:alert' app_state key the owner's page reads.
-// Raw Zernio/Meta/Google text never leaves this file: results carry codes and ids only, and a fix link only when its
-// host is on the allowlist. Every call writes a ledger row (vendor zernio, feature ads, cost 0, estimated false:
-// an estimated zernio row would count as a connection cost in server/billing/invoice.mjs). safeLog only.
+// - The owner's problems (key refused or restricted, plan, ads add-on, allowance, Zernio payment) are ADS_UNAVAILABLE
+//   for the customer, a zernio_owner_alert log line and the 'zernio:alert' app_state key the owner's page reads.
+// Results carry codes and ids, a fix link only when its host is on the allowlist, and for a definite refusal its
+// safe fields as data (`refusal`, refusalDetail below): Zernio's code, type and field, its hint and fix link, and
+// Meta's subcode and own words, cut to plain text. Zernio's `error` sentence and the raw platformError never leave
+// this file, and a team-level refusal keeps its code only. Every call writes a ledger row (vendor zernio, feature
+// ads, cost 0, estimated false: an estimated zernio row would count as a connection cost in
+// server/billing/invoice.mjs). safeLog only.
 
 import { oneShot, safeLog } from '../integrations/common.mjs';
 import { ZernioCallError, zernioError } from '../zernio.mjs';
 import { CONNECTION_OF, ZERNIO_UPDATE_PLATFORM } from './contracts.mjs';
-import { OWNER_CODES, safeFixUrl, ZERNIO_CODES } from './messages.mjs';
+import { cut, keptFixUrl, OWNER_CODES, safeFixUrl, ZERNIO_CODES } from './messages.mjs';
 
 export const AD_TIMEOUTS = Object.freeze({ create: 120_000, update: 60_000, creative: 120_000 });
 /** oneShot's own limit is longer than the call's (the client has no signal; its own timeout fires first) */
@@ -39,14 +42,22 @@ const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const idOf = (v) => (typeof v === 'string' || typeof v === 'number') && ID.test(String(v)) ? String(v) : null;
 const iso = (t) => new Date(t).toISOString();
 
+/**
+ * A restricted Zernio key (zrk_) without the ads resource group: Zernio answers 403 insufficient_permissions with
+ * `required_group` (or unclassified_resource). That is our key, never the customer's login.
+ */
+const restrictedKey = (b) => (b.code === 'insufficient_permissions' && typeof b.required_group === 'string') || b.code === 'unclassified_resource';
+/** a 429 about the customer's own ad account (Meta's per-account queue); any other 429 is our key's limits */
+const adAccountLimit = (b) => b.details?.reason === 'ad_account_busy' || b.details?.reason === 'ad_account_write_cap';
+
 /** Our code for a refusal (never the text). platform: our 'meta' | 'google'. */
 export function codeForResponse(res, platform) {
   const e = zernioError(res);
   const b = isObj(res?.body) ? res.body : {};
   if (e.status === 401 && (e.code === 'reconnect_required' || e.code === 'ads_connection_required')) return 'RECONNECT';
   if (e.status === 401 || e.status === 402) return 'ADS_UNAVAILABLE';
-  if (OWNER_CODES.includes(e.code)) return 'ADS_UNAVAILABLE';
-  if (e.status === 429) return b.details?.reason === 'ad_account_busy' || b.details?.reason === 'ad_account_write_cap' ? 'AD_ACCOUNT_BUSY' : 'RATE_LIMITED';
+  if (OWNER_CODES.includes(e.code) || restrictedKey(b)) return 'ADS_UNAVAILABLE';
+  if (e.status === 429) return adAccountLimit(b) ? 'AD_ACCOUNT_BUSY' : 'RATE_LIMITED';
   if (Number(b.platformError?.error_subcode) === 324 || Number(b.details?.subcode) === 324) return 'IMAGE_UNREACHABLE';
   if (Object.hasOwn(ZERNIO_CODES, e.code)) return ZERNIO_CODES[e.code];
   if (e.status === 409 && (e.code === 'invalid_field_value' || /budget_level/i.test(e.code))) return 'BUDGET_LEVEL';
@@ -59,7 +70,47 @@ export function codeForResponse(res, platform) {
 export function isOwnerProblem(res) {
   const e = zernioError(res);
   if (e.status === 401) return !(e.code === 'reconnect_required' || e.code === 'ads_connection_required');
-  return e.status === 402 || OWNER_CODES.includes(e.code);
+  return e.status === 402 || OWNER_CODES.includes(e.code) || restrictedKey(isObj(res?.body) ? res.body : {});
+}
+
+const ERROR_TYPES = ['invalid_request_error', 'authentication_error', 'permission_error', 'not_found', 'rate_limit_error', 'platform_error', 'api_error'];
+const STAGES = ['media', 'campaign', 'adset', 'creative', 'ad', 'activation', 'other'];
+const MACHINE_CODE = /^[A-Za-z0-9_.:-]{1,64}$/;
+const PARAM = /^[A-Za-z0-9_.[\]-]{1,100}$/;
+
+/**
+ * A definite refusal's safe fields (Zernio's ErrorResponse), kept as data on the job and its audit row, never as
+ * instructions or markup: Zernio's code, type and the field it names, the failed step, its English hint (cut to
+ * 300) and fix link ({ label, url }: https on Meta's, Google's or Zernio's own site only), and for a platform error
+ * Meta's subcode and its own title and message (cut). team: a team-level problem (our Zernio plan, add-on, billing,
+ * key or rate limits): its status, code and type only, marked owner. → object | null
+ */
+export function refusalDetail(res, { team = false } = {}) {
+  const b = isObj(res?.body) ? res.body : {};
+  const d = isObj(b.details) ? b.details : {};
+  const out = {};
+  const status = Number(res?.status);
+  if (Number.isInteger(status) && status >= 400 && status <= 599) out.status = status;
+  if (typeof b.code === 'string' && MACHINE_CODE.test(b.code)) out.code = b.code;
+  if (ERROR_TYPES.includes(b.type)) out.type = b.type;
+  if (team) return { ...out, owner: true };
+  if (typeof b.param === 'string' && PARAM.test(b.param)) out.param = b.param;
+  if (STAGES.includes(d.stage)) out.stage = d.stage;
+  const hint = cut(d.hint, 300);
+  if (hint) out.hint = hint;
+  const fix = isObj(d.fix) ? d.fix : isObj(b.fix) ? b.fix : null;
+  const url = keptFixUrl(fix?.url);
+  if (url) out.fix = { ...(cut(fix.label, 80) ? { label: cut(fix.label, 80) } : {}), url };
+  if (b.type === 'platform_error' && isObj(b.platformError)) {
+    const p = b.platformError;
+    const sub = Number(p.error_subcode);
+    if (Number.isSafeInteger(sub) && sub > 0) out.subcode = sub;
+    const title = cut(p.error_user_title, 120);
+    if (title) out.metaTitle = title;
+    const msg = cut(p.error_user_msg, 300);
+    if (msg) out.metaMessage = msg;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 function cleanCreatedObjects(list) {
@@ -140,7 +191,7 @@ export function createZernioAds({ client, ledger = null, storage = null, log = c
 
   /**
    * One write, inside oneShot: never retried, never looped. → { outcome, status, code?, sent, ids?, activationFailed?,
-   * createdObjects?, unconfirmedWrite?, fixUrl? }.
+   * createdObjects?, unconfirmedWrite?, fixUrl?, refusal? } (refusal: a definite refusal's safe fields, refusalDetail).
    */
   async function write(method, template, path, body, { idempotencyKey, timeoutMs }, ctx) {
     if (!client?.enabled) return { outcome: 'failed', status: 0, code: 'ADS_UNAVAILABLE', sent: false };
@@ -179,15 +230,19 @@ export function createZernioAds({ client, ledger = null, storage = null, log = c
         safeLog('ads_idempotency_mismatch', { template }, log);
         out = { outcome: 'failed', status: 422, code: 'IDEMPOTENCY_MISMATCH', sent: true };
       } else {
-        if (isOwnerProblem(res)) ownerAlert(e.code || `http_${e.status}`);
-        out = { outcome: 'failed', status: e.status, code: codeForResponse(res, ctx?.platform), sent: true, ...(fixUrl ? { fixUrl } : {}) };
+        const owner = isOwnerProblem(res);
+        if (owner) ownerAlert(e.code || `http_${e.status}`);
+        // the refusal's own reason, as data; a team-level one (ours: plan, add-on, billing, key, our rate limits) keeps its code only
+        const refusal = refusalDetail(res, { team: owner || (e.status === 429 && !adAccountLimit(b)) });
+        out = { outcome: 'failed', status: e.status, code: codeForResponse(res, ctx?.platform), sent: true, ...(fixUrl ? { fixUrl } : {}), ...(refusal ? { refusal } : {}) };
       }
     } else {
       // 5xx, a timeout or a cut connection: unknown, unless Zernio says exactly what it made and nothing is unconfirmed
       const createdObjects = cleanCreatedObjects(details.createdObjects);
       const unconfirmedWrite = cleanUnconfirmed(details.unconfirmedWrite);
       if (res && res.status >= 500 && Array.isArray(details.createdObjects) && !unconfirmedWrite) {
-        out = { outcome: 'failed', status: res.status, code: createdObjects.some((o) => o.cleanup === 'left_behind') ? 'PARTIAL_LEFT' : 'CREATE_FAILED', sent: true, createdObjects };
+        const refusal = refusalDetail(res);
+        out = { outcome: 'failed', status: res.status, code: createdObjects.some((o) => o.cleanup === 'left_behind') ? 'PARTIAL_LEFT' : 'CREATE_FAILED', sent: true, createdObjects, ...(refusal ? { refusal } : {}) };
       } else {
         out = { outcome: 'unknown', status: res?.status ?? 0, code: 'UNKNOWN', sent: true, ...(createdObjects.length ? { createdObjects } : {}), ...(unconfirmedWrite ? { unconfirmedWrite } : {}) };
       }

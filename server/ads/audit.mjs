@@ -1,11 +1,19 @@
 // The customer-visible ad audit log (table ad_audit, spec §10.4): one row per write attempt sent, its outcome, each
 // Check status, each refused attempt, review changes from refresh or the webhook, and the owner's limit changes and
-// pauses. Summaries are built from our templates only (never platform text). Append-only: this module has no
-// update or delete, and neither has anything else in server/ads/ (a test greps for it); rows go only with the
-// account (on delete cascade).
+// pauses. Summaries are built from our templates; the one exception is a refusal we have no sentence for, whose
+// line quotes the platform's own words, cut and labelled (messages.mjs refusalOf). A refused write keeps its
+// refusal's safe fields in `after` ({ refusal }); the list passes on only its fix link, when the host is allowed.
+// Append-only: this module has no update or delete, and neither has anything else in server/ads/ (a test greps for
+// it); rows go only with the account (on delete cascade).
 
 import { safeLog } from '../integrations/common.mjs';
-import { cut } from './messages.mjs';
+import { cut, safeFixUrl } from './messages.mjs';
+
+/** A refusal's fix link the customer may follow (never a team-level one), from a row's `after`. */
+const fixOf = (after) => {
+  const r = after && typeof after === 'object' ? after.refusal : null;
+  return r && typeof r === 'object' && r.owner !== true ? safeFixUrl(r.fix?.url) : undefined;
+};
 
 const ACTIONS = ['launch', 'pause', 'resume', 'end', 'budget', 'end_date', 'creative', 'check', 'limits', 'review', 'account'];
 const OUTCOMES = ['sending', 'done', 'failed', 'unknown', 'refused', 'info'];
@@ -48,7 +56,10 @@ export function createAudit({ db, now = () => Date.now(), log = console } = {}) 
     const rows = await db.select('ad_audit', f, { order: 'id.desc', limit: limit + 1 });
     const page = rows.slice(0, limit);
     return {
-      entries: page.map((r) => ({ id: r.id, at: r.at, campaignId: r.campaign_id ?? null, actor: r.actor, action: r.action, summary: r.summary, outcome: r.outcome })),
+      entries: page.map((r) => {
+        const fixUrl = fixOf(r.after);
+        return { id: r.id, at: r.at, campaignId: r.campaign_id ?? null, actor: r.actor, action: r.action, summary: r.summary, outcome: r.outcome, ...(fixUrl ? { fixUrl } : {}) };
+      }),
       ...(rows.length > limit ? { next: page[page.length - 1].id } : {}),
     };
   }

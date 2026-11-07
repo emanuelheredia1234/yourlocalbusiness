@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startAds } from './test-helpers.mjs';
 import { TEST_ZERNIO_KEY } from '../test/mock-zernio.mjs';
+import { META_REFUSALS } from '../test/mock-zernio-ads.mjs';
+import { messageFor, REFUSAL_REASON, ZERNIO_CODES } from './messages.mjs';
 
 let t;
 let u;
@@ -237,6 +239,90 @@ describe('Meta’s 24-hour rule for a daily budget (the live refusal of 6 Nov)',
   });
 });
 
+describe('why Meta refused: the refusal’s own reason, kept and said plainly', () => {
+  beforeEach(async () => ready());
+  const NOTHING = 'Nothing was created and no money was spent.';
+  const failedAudit = async () => (await t.audit(u.id)).find((a) => a.action === 'launch' && a.outcome === 'failed');
+  const auditList = async () => (await t.call(u, 'GET', '/api/ads/audit?projectId=proj-1')).body.entries;
+
+  it.each(Object.keys(META_REFUSALS))('%s: stored on the job and its audit row; the customer reads our sentence, nothing was created, and the fix link', async (code) => {
+    t.zm.ads.fail('POST /ads/create', `meta-refusal:${code}`);
+    const r = await t.launchPlan(u, 'meta');
+    const m = META_REFUSALS[code];
+    // the job keeps today's category, and the refusal's safe fields
+    const row = await t.jobRow(r.job.id);
+    expect(row).toMatchObject({ state: 'failed', error_code: ZERNIO_CODES[code] ?? 'REFUSED' });
+    expect(row.error_detail).toMatchObject({ code, type: m.type, status: m.status, hint: `zernio-hint for ${code}`, ...(m.fix ? { fix: m.fix } : {}), ...(m.param ? { param: m.param } : {}) });
+    if (m.type === 'platform_error') expect(row.error_detail).toMatchObject({ metaMessage: `META-OWN-WORDS for ${code}`, ...(m.subcode ? { subcode: m.subcode } : {}) });
+    expect((await failedAudit()).after).toEqual({ refusal: row.error_detail });
+    // the customer: our own sentence for the code, then what happened, the fix link; never Zernio's or Meta's words
+    const said = `${messageFor(REFUSAL_REASON[code], { platform: 'meta' })} ${NOTHING}`;
+    expect(r.job).toMatchObject({ state: 'failed', message: said });
+    expect(r.job.message).not.toMatch(/to see why/);
+    expect(r.job.platformSays).toBeUndefined();
+    if (m.fix) expect(r.job.fixUrl).toBe(m.fix.url);
+    else expect(r.job).not.toHaveProperty('fixUrl');
+    const campaigns = await t.call(u, 'GET', '/api/ads/campaigns?projectId=proj-1');
+    expect(campaigns.body.campaigns[0]).toMatchObject({ state: 'failed', lastJob: { message: said } });
+    // the activity log says the same, with the same link
+    const entry = (await auditList()).find((e) => e.action === 'launch' && e.outcome === 'failed');
+    expect(entry.summary).toMatch(new RegExp(`: not done\\. ${said.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+    if (m.fix) expect(entry.fixUrl).toBe(m.fix.url);
+    const all = JSON.stringify([r, campaigns.body, await auditList()]);
+    expect(all).not.toMatch(/zernio-hint|META-OWN-WORDS|mock |platformError|error_user/);
+  });
+
+  it('a refusal Zernio has no code for: Zernio’s hint, cut and as plain text, labelled as Meta’s message; never a foreign link', async () => {
+    t.zm.ads.fail('POST /ads/create', 'meta-refusal-unknown');
+    const r = await t.launchPlan(u, 'meta');
+    expect(r.job).toMatchObject({ state: 'failed', code: 'REFUSED', message: `Meta refused the launch. ${NOTHING}` });
+    expect(r.job.platformSays).toHaveLength(300);
+    expect(r.job.platformSays.startsWith('<script>alert(1)</script> [Fix it](https://evil.example) Use an image Meta can read.')).toBe(true);
+    expect(r.job.platformSays).not.toMatch(/[\u0000-\u001f\u202a-\u202e]/);
+    // a link shim on facebook.com, labelled "Click here to claim": never shown
+    expect(r.job).not.toHaveProperty('fixUrl');
+    expect((await t.jobRow(r.job.id)).error_detail).not.toHaveProperty('fix');
+    const entry = (await auditList()).find((e) => e.action === 'launch' && e.outcome === 'failed');
+    expect(entry.summary).toContain(`: not done. Meta refused the launch. ${NOTHING} Meta’s message: “<script>alert(1)</script>`);
+    expect(entry.summary.length).toBeLessThanOrEqual(500);
+    expect(entry.summary.endsWith('…”')).toBe(true);
+    expect(entry).not.toHaveProperty('fixUrl');
+  });
+
+  it('a team-level refusal (our Zernio key) stays the owner’s: the customer reads “isn’t available”, never Zernio’s words', async () => {
+    t.zm.ads.fail('POST /ads/create', 'restricted-key');
+    const r = await t.launchPlan(u, 'meta');
+    expect(r.job).toMatchObject({ state: 'failed', code: 'ADS_UNAVAILABLE', message: messageFor('ADS_UNAVAILABLE') });
+    expect(r.job).not.toHaveProperty('platformSays');
+    expect(r.job).not.toHaveProperty('fixUrl');
+    expect((await t.jobRow(r.job.id)).error_detail).toEqual({ status: 403, code: 'insufficient_permissions', type: 'permission_error', owner: true });
+    const all = JSON.stringify([r, await t.call(u, 'GET', '/api/ads/campaigns?projectId=proj-1'), await auditList(), await t.audit(u.id)]);
+    expect(all).not.toMatch(/SECRET-TEAM-TEXT|required_group|zernio/i);
+    expect(t.storage.documents.get('zernio:alert')?.value?.kind).toBe('insufficient_permissions');
+  });
+
+  it('a refused change keeps its reason too and says nothing was changed', async () => {
+    const launched = await t.launchPlan(u, 'meta', { status: 'PAUSED' });
+    t.zm.ads.fail('PUT /ads/ad-sets/:id', 'meta-refusal:budget_too_low');
+    const res = await t.changeCampaign(u, launched.campaign.id, { action: 'budget', dailyBudget: 20 });
+    expect(res.job).toMatchObject({ state: 'failed', code: 'BUDGET_TOO_LOW', message: `${messageFor('BUDGET_TOO_LOW', { platform: 'meta' })} Nothing was changed.` });
+    expect((await t.jobRow(res.job.id)).error_detail).toMatchObject({ code: 'budget_too_low', subcode: 1885272, param: 'budgetAmount' });
+    expect(res.campaign.lastJob.message).toBe(res.job.message);
+  });
+
+  it('the live refusal of 6 Nov, as it was stored (REFUSED, nothing else): the Campaigns tab now says why, not “open Ads Manager”', async () => {
+    const id = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
+    const asked = '2026-11-07T01:40:00.000Z'; // 5:40 PM in Los Angeles on Fri 6 Nov 2026
+    await t.db.insert('ad_campaigns', { id, user_id: u.id, customer_tag: 'cust_000000000000000000000000', project_id: 'proj-1', plan_id: 'plan-1', platform: 'meta', zernio_account_id: 'a'.repeat(24), ad_account_id: 'act_1', ad_account_name: 'Acme Plumbing', currency: 'USD', timezone: 'America/Los_Angeles', name: 'Winter pipes · Meta · YLB 0123456789ab', launch_key: crypto.randomUUID(), goal: 'traffic', budget_level: 'adset', daily_budget: 1, start_at: asked, end_at: '2026-11-07T07:59:59.000Z', launched_as: 'PAUSED', state: 'failed', configured_status: null, review: {}, remote: {}, sent_body: {} });
+    await t.db.insert('ad_jobs', { id: jobId, user_id: u.id, campaign_id: id, kind: 'launch', actor: 'customer', client_request_id: crypto.randomUUID(), state: 'failed', error_code: 'REFUSED', request: { platform: 'meta', account: { name: 'Acme Plumbing', idTail: 't_1', currency: 'USD', timezone: 'America/Los_Angeles' }, status: 'PAUSED', daily: 1, days: 1, start: '2026-11-06', startTime: null, asap: true, end: '2026-11-06', plannedTotal: 1 }, provider_ref: { sent: true }, requested_at: asked, finished_at: asked });
+    const got = await t.call(u, 'GET', '/api/ads/campaigns?projectId=proj-1');
+    const c = got.body.campaigns.find((x) => x.id === id);
+    expect(c.lastJob.message).toBe(`Meta needs a daily-budget ad to run more than 24 hours, and this one was set for less. Launch it again with at least 2 days. ${NOTHING}`);
+    expect(JSON.stringify(c)).not.toMatch(/to see why/);
+  });
+});
+
 describe('Google', () => {
   beforeEach(async () => ready({}, { platforms: ['google_ads'] }));
 
@@ -295,7 +381,7 @@ describe('Google', () => {
     const res = await t.changeCampaign(u, r.campaign.id, { action: 'budget', dailyBudget: 20 });
     expect(res.preview.body.review.confirmKind).toBe('short');
     expect(res.job).toMatchObject({ state: 'failed', code: 'SHARED_BUDGET' });
-    expect(res.job.message).toBe('This budget is shared with other campaigns in Google Ads; change it there.');
+    expect(res.job.message).toBe('This budget is shared with other campaigns in Google Ads; change it there. Nothing was changed.');
   });
 });
 

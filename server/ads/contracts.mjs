@@ -61,7 +61,10 @@
  * @property {AdsPlatform} platform
  * @property {AdJobState} state
  * @property {string} [code]
- * @property {string} message           ours
+ * @property {string} message           ours: for a refusal, the reason and what happened (messages.mjs refusalOf)
+ * @property {string} [platformSays]    a refusal we have no sentence for: Zernio's hint or Meta's own words, cut,
+ *                                      plain text (the app labels it as the platform's message)
+ * @property {string} [fixUrl]          a refusal's fix link, on Meta's or Google's own site only
  * @property {string} requestedAt
  * @property {string} [finishedAt]
  * @property {string} [checkedAt]

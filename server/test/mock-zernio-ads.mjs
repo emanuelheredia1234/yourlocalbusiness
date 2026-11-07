@@ -30,7 +30,9 @@
 // then drops the connection), created-not-stored-hang (Meta objects made that only the live read and source=all
 // see, then no answer), 503-left-behind, 502-unconfirmed, 201-activation-failed, 409-idempotency, 422-budget-too-low,
 // 403-payment, 403-ads-allowance, 402-payment, 429-ad-account-busy, 401-reconnect, 401-key, meta-code-31, 500, 502,
-// 409-budget-level, 409-shared-budget, 422-key-mismatch, live-read-failed (GET /ads/{id}?live=true: statusReadAt null).
+// 409-budget-level, 409-shared-budget, 422-key-mismatch, live-read-failed (GET /ads/{id}?live=true: statusReadAt null),
+// and on creates and updates: meta-refusal:<code> (each of Zernio's Meta ads refusals, META_REFUSALS), meta-refusal-
+// unknown (a code with no mapping and hostile hint text) and restricted-key (our Zernio key lacks the ads group).
 
 import crypto from 'node:crypto';
 
@@ -130,6 +132,43 @@ function metaScheduleMs(body, tz, now) {
 }
 /** Meta runs a daily budget only on an ad set scheduled for more than 24 hours */
 const META_DAILY_MIN_MS = 24 * 3_600_000;
+
+/**
+ * Zernio's "Meta ads refusals" (ErrorResponse.details, openapi): each with its own code, the field to fix, an English
+ * hint, a fix link to Meta's page when there is one, and (platform_error) Meta's subcode and own words. The hint and
+ * Meta's words carry markers (zernio-hint, META-OWN-WORDS) so a test can tell whether they reached the customer.
+ */
+export const META_REFUSALS = Object.freeze({
+  ad_account_payment_required: { status: 403, type: 'permission_error', subcode: 1359188, param: 'adAccountId', fix: { label: 'Add a payment method', url: 'https://business.facebook.com/billing_hub/payment_settings' } },
+  ad_account_policy_not_accepted: { status: 400, type: 'platform_error', subcode: 2859002, fix: { label: 'Accept the policy', url: 'https://business.facebook.com/settings/ad-accounts' } },
+  lead_ads_terms_not_accepted: { status: 400, type: 'platform_error', subcode: 1815089, fix: { label: 'Accept the terms', url: 'https://www.facebook.com/ads/leadgen/tos' } },
+  verified_advertiser_required: { status: 400, type: 'platform_error', subcode: 3858634, param: 'regionalRegulationIdentities' },
+  ad_account_unusable: { status: 422, type: 'invalid_request_error', subcode: 2490592, fix: { label: 'Restricted accounts', url: 'https://www.facebook.com/business/help/422289316306981' } },
+  meta_security_check_required: { status: 400, type: 'platform_error', fix: { label: 'Log in to Facebook', url: 'https://www.facebook.com/' } },
+  meta_action_blocked: { status: 400, type: 'platform_error', subcode: 2859015 },
+  budget_too_low: { status: 400, type: 'platform_error', subcode: 1885272, param: 'budgetAmount' },
+  meta_object_not_accessible: { status: 400, type: 'platform_error', subcode: 33 },
+});
+
+/** A refusal in Zernio's envelope: 'meta-refusal:<code>' (META_REFUSALS), 'meta-refusal-unknown', 'restricted-key'. */
+function refusal(res, mode) {
+  if (mode === 'restricted-key') return err(res, 403, 'insufficient_permissions', 'permission_error', { required_group: 'ads', details: { hint: 'SECRET-TEAM-TEXT: enable the ads group on your Zernio key' } });
+  if (mode === 'meta-refusal-unknown') {
+    // a code Zernio has no hint mapping for, with hostile text: markup, a direction override, a NUL, far too long
+    const hint = `<script>alert(1)</script> [Fix it](https://evil.example) Use an image Meta can read. ${'More words. '.repeat(40)}${String.fromCharCode(0x202e)}gnp.exe${String.fromCharCode(0)}`;
+    return err(res, 400, 'platform_api_error', 'platform_error', { platform: 'meta', param: 'creatives[0].imageUrl', details: { stage: 'creative', hint, fix: { label: 'Click here to claim', url: 'https://l.facebook.com/l.php?u=https%3A%2F%2Fevil.example' } }, platformError: { code: 100, error_subcode: 1487194, error_user_title: 'Invalid image', error_user_msg: 'META-OWN-WORDS' } });
+  }
+  const code = mode.slice('meta-refusal:'.length);
+  const r = META_REFUSALS[code];
+  if (!r) throw new Error(`mock: no such Meta refusal ${code}`);
+  return err(res, r.status, code, r.type, {
+    ...(r.param ? { param: r.param } : {}),
+    platform: 'meta',
+    details: { hint: `zernio-hint for ${code}`, ...(r.fix ? { fix: r.fix } : {}) },
+    ...(r.type === 'platform_error' ? { platformError: { code: 100, ...(r.subcode ? { error_subcode: r.subcode } : {}), error_user_title: 'META-OWN-WORDS title', error_user_msg: `META-OWN-WORDS for ${code}` } } : {}),
+  });
+}
+const isRefusal = (mode) => typeof mode === 'string' && (mode.startsWith('meta-refusal') || mode === 'restricted-key');
 
 /** Route template of an /ads path (ids replaced), for fault matching and the ledger. */
 export function adsTemplate(method, p) {
@@ -347,6 +386,7 @@ export function createMockZernioAds({ violations, sendWebhook = async () => ({})
     if (mode === 'meta-code-31') return err(res, 400, 'meta_security_check_required', 'platform_error', { details: { fix: { url: '/dashboard/zernio-only' } } });
     if (mode === '500') return err(res, 500, 'internal_error', 'api_error');
     if (mode === '502') return err(res, 502, 'platform_api_error', 'platform_error');
+    if (isRefusal(mode)) return refusal(res, mode);
     // Meta refuses a daily budget on an ad set that runs 24 hours or less (the live refusal of 6 Nov 2026): the app
     // must never send one, so it is a violation too. Zernio has no code of its own for it: Meta's words only.
     if (platform === 'meta' && body?.budgetType !== 'lifetime') {
@@ -464,6 +504,7 @@ export function createMockZernioAds({ violations, sendWebhook = async () => ({})
     if (mode === '403-ads-allowance') return err(res, 403, 'ads_allowance_exceeded', 'permission_error');
     if (mode === '429-ad-account-busy') return err(res, 429, 'rate_limited', 'rate_limit_error', { details: { reason: 'ad_account_busy' } });
     if (mode === '409-budget-level') return err(res, 409, 'BUDGET_LEVEL_MISMATCH', 'invalid_request_error');
+    if (isRefusal(mode)) return refusal(res, mode);
     let m = /^\/ads\/campaigns\/([^/]+)\/status$/.exec(p);
     if (m) {
       const c = state.campaigns.get(m[1]);
