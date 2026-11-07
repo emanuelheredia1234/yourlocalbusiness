@@ -2,10 +2,11 @@
 // mock-zernio-ads.mjs): one attempt per write, the outcome for every status class, the owner's problems kept from the
 // customer, a ledger row per call, the key only in the Authorization header, and nothing live (R10).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createZernioAds, codeForResponse, createIds } from './zernioAds.mjs';
+import { createZernioAds, codeForResponse, createIds, refusalDetail } from './zernioAds.mjs';
+import { ZERNIO_CODES } from './messages.mjs';
 import { createZernioClient } from '../zernio.mjs';
 import { createMockZernio, TEST_ZERNIO_KEY } from '../test/mock-zernio.mjs';
-import { assertLocalZernio } from '../test/mock-zernio-ads.mjs';
+import { assertLocalZernio, META_REFUSALS } from '../test/mock-zernio-ads.mjs';
 import { makeLog, makeStorage } from '../test/fakes.mjs';
 
 let mock;
@@ -45,7 +46,8 @@ function metaBody(extra = {}) {
     goal: 'traffic',
     budgetAmount: 25,
     budgetType: 'daily',
-    endDate: '2026-12-14',
+    // a month from now: the mock refuses a Meta daily budget scheduled for 24 hours or less, as Meta does
+    endDate: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
     status: 'PAUSED',
     campaignStatus: 'PAUSED',
     adSetStatus: 'ACTIVE',
@@ -103,8 +105,107 @@ describe('writes: one attempt, outcome per status class', () => {
     expect(r).toMatchObject({ outcome, code });
     // exactly one request reached the mock: no retry, even after a 429 or a 5xx
     expect(mock.calls.slice(before).filter((c) => c.method === 'POST')).toHaveLength(1);
-    expect(JSON.stringify(r)).not.toMatch(/SECRET|mock |platformError|hint/);
+    // the refusal's own words travel only inside `refusal`, as cut data; Zernio's `error` sentence and the raw
+    // platform payload never leave the module
+    expect(JSON.stringify({ ...r, refusal: undefined })).not.toMatch(/SECRET|mock |platformError|hint/);
+    expect(JSON.stringify(r)).not.toMatch(/mock |platformError|error_user|"error"/);
     if (r.fixUrl) expect(r.fixUrl).toMatch(/^https:\/\/(business\.)?facebook\.com\//);
+  });
+
+  it.each(Object.keys(META_REFUSALS))('keeps the safe fields of Zernio’s %s refusal (code, field, hint, fix, Meta’s subcode and words)', async (code) => {
+    const t = setup();
+    mock.ads.fail('POST /ads/create', `meta-refusal:${code}`);
+    const r = await t.zads.writes.createAd(metaBody(), key(), CTX);
+    const m = META_REFUSALS[code];
+    expect(r).toMatchObject({ outcome: 'failed', status: m.status, code: ZERNIO_CODES[code] ?? 'REFUSED' });
+    expect(r.refusal).toEqual({
+      status: m.status,
+      code,
+      type: m.type,
+      ...(m.param ? { param: m.param } : {}),
+      hint: `zernio-hint for ${code}`,
+      ...(m.fix ? { fix: m.fix } : {}),
+      ...(m.type === 'platform_error' ? { ...(m.subcode ? { subcode: m.subcode } : {}), metaTitle: 'META-OWN-WORDS title', metaMessage: `META-OWN-WORDS for ${code}` } : {}),
+    });
+    // never Zernio's `error` sentence, never the raw platform payload
+    expect(JSON.stringify(r)).not.toMatch(/mock |platformError|error_user/);
+    expect(t.storage.documents.get('zernio:alert')).toBeUndefined();
+  });
+
+  it('treats Zernio’s hint and Meta’s words as untrusted text: plain, cut to 300, no control or direction characters, no foreign fix link', async () => {
+    const t = setup();
+    mock.ads.fail('PUT /ads/campaigns/:id/status', 'meta-refusal-unknown');
+    const r = await t.zads.writes.setCampaignStatus('123456', 'meta', 'paused', CTX);
+    expect(r).toMatchObject({ outcome: 'failed', code: 'REFUSED' });
+    const d = r.refusal;
+    expect(d).toMatchObject({ status: 400, code: 'platform_api_error', type: 'platform_error', param: 'creatives[0].imageUrl', stage: 'creative', subcode: 1487194, metaTitle: 'Invalid image', metaMessage: 'META-OWN-WORDS' });
+    expect(d.hint).toHaveLength(300);
+    expect(d.hint.startsWith('<script>alert(1)</script> [Fix it](https://evil.example)')).toBe(true);
+    expect(d.hint.endsWith('…')).toBe(true);
+    expect(d.hint).not.toMatch(/[\u0000-\u001f\u202a-\u202e\u2066-\u2069]/);
+    // a link shim on facebook.com is never a fix link
+    expect(d).not.toHaveProperty('fix');
+    expect(r).not.toHaveProperty('fixUrl');
+  });
+
+  it('keeps the longest refusal well under ad_jobs.error_detail’s 4096-byte check, however long its fix link grows', () => {
+    // every field at its longest, in 3-byte characters (the most bytes per character `cut` counts)
+    const w = (n) => '中'.repeat(n);
+    const body = (url) => ({ code: 'c'.repeat(64), type: 'platform_error', param: 'p'.repeat(100), details: { stage: 'creative', hint: w(400), fix: { label: w(100), url } }, platformError: { error_subcode: 1885272, error_user_title: w(200), error_user_msg: w(400) } });
+    // under 500 characters as sent, 4,255 once percent-encoded: dropped, never kept past the check (the job would lose it all)
+    expect(refusalDetail({ status: 400, body: body(`https://www.facebook.com/${w(470)}`) })).not.toHaveProperty('fix');
+    // the longest link kept (500 characters) still leaves the database room for its own overhead
+    const longest = refusalDetail({ status: 400, body: body(`https://www.facebook.com/${'a'.repeat(475)}`) });
+    expect(longest.fix.url).toHaveLength(500);
+    expect(Buffer.byteLength(JSON.stringify(longest))).toBeLessThan(3600);
+  });
+
+  it('a team-level refusal (a restricted Zernio key, our rate limits) keeps its code only, never its words, and alerts the owner', async () => {
+    const t = setup();
+    mock.ads.fail('POST /ads/create', 'restricted-key');
+    const r = await t.zads.writes.createAd(metaBody(), key(), CTX);
+    expect(r).toMatchObject({ outcome: 'failed', code: 'ADS_UNAVAILABLE', refusal: { status: 403, code: 'insufficient_permissions', type: 'permission_error', owner: true } });
+    expect(Object.keys(r.refusal).sort()).toEqual(['code', 'owner', 'status', 'type']);
+    expect(JSON.stringify(r)).not.toContain('SECRET-TEAM-TEXT');
+    await new Promise((res) => setTimeout(res, 5));
+    expect(t.storage.documents.get('zernio:alert')?.value?.kind).toBe('insufficient_permissions');
+    // an add-on or allowance problem: the same
+    mock.ads.fail('POST /ads/create', '403-ads-allowance');
+    expect((await t.zads.writes.createAd(metaBody(), key(), CTX)).refusal).toEqual({ status: 403, code: 'ads_allowance_exceeded', type: 'permission_error', owner: true });
+  });
+
+  it('a 429 on our own key (no ad-account reason) is team-level: its status only, never its hint, no owner alert, one request', async () => {
+    const t = setup();
+    for (const [route, send] of [
+      ['POST /ads/create', () => t.zads.writes.createAd(metaBody(), key(), CTX)],
+      ['PUT /ads/campaigns/:id/status', () => t.zads.writes.setCampaignStatus('123456', 'meta', 'paused', CTX)],
+    ]) {
+      mock.ads.fail(route, '429-key');
+      const before = mock.calls.length;
+      const r = await send();
+      expect(r).toMatchObject({ outcome: 'failed', status: 429, code: 'RATE_LIMITED', refusal: { status: 429, owner: true } });
+      expect(Object.keys(r.refusal).sort()).toEqual(['owner', 'status']);
+      expect(JSON.stringify(r)).not.toMatch(/SECRET-TEAM-TEXT|retryAfterSeconds|hint/);
+      expect(mock.calls.slice(before).filter((c) => c.method !== 'GET')).toHaveLength(1);
+    }
+    await new Promise((res) => setTimeout(res, 5));
+    // as today: the customer reads "try again in a minute"; there's no alert for our rate limits
+    expect(t.storage.documents.get('zernio:alert')).toBeUndefined();
+    // an ad account's own queue (ad_account_busy) is the customer's, not ours
+    mock.ads.fail('POST /ads/create', '429-ad-account-busy');
+    expect((await t.zads.writes.createAd(metaBody(), key(), CTX)).refusal).toEqual({ status: 429, code: 'rate_limited', type: 'rate_limit_error' });
+    expect(refusalDetail({ status: 429, body: { error: 'Too many', details: { retryAfterSeconds: 30 } } }, { team: true })).toEqual({ status: 429, owner: true });
+  });
+
+  it('the mock refuses a Meta daily budget scheduled for 24 hours or less, like Meta (and flags the send)', async () => {
+    const t = setup();
+    const before = mock.violations.length;
+    // today in the ad account's zone (act_1: America/Chicago): it would end at 23:59:59 tonight
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
+    const r = await t.zads.writes.createAd(metaBody({ endDate: today }), key(), CTX);
+    expect(r).toMatchObject({ outcome: 'failed', code: 'REFUSED', status: 400 });
+    expect(mock.violations.slice(before).map((v) => v.kind)).toEqual(['meta_daily_schedule_24h']);
+    mock.violations.splice(before);
   });
 
   it('a timeout is unknown (it may have happened), and nothing is sent again', async () => {
@@ -128,6 +229,20 @@ describe('writes: one attempt, outcome per status class', () => {
     const b = await t.zads.writes.createAd(metaBody(), key(), CTX);
     expect(b).toMatchObject({ outcome: 'unknown' });
     expect(b.unconfirmedWrite).toMatchObject({ type: 'ad' });
+  });
+
+  it.each(['ad_account_unusable', 'insufficient_permissions'])('a refused create (%s) keeps the objects Zernio couldn’t delete, ids only', async (code) => {
+    const t = setup();
+    mock.ads.fail('POST /ads/create', `left-behind:${code}`);
+    const r = await t.zads.writes.createAd(metaBody(), key(), CTX);
+    expect(r).toMatchObject({ outcome: 'failed', status: META_REFUSALS[code].status, code: ZERNIO_CODES[code], refusal: { code } });
+    expect(r.createdObjects).toEqual([
+      { type: 'campaign', id: expect.stringMatching(/^\d+$/), cleanup: 'left_behind' },
+      { type: 'adset', id: expect.stringMatching(/^\d+$/), cleanup: 'left_behind' },
+    ]);
+    // a refusal that made nothing has none
+    mock.ads.fail('POST /ads/create', `meta-refusal:${code}`);
+    expect(await t.zads.writes.createAd(metaBody(), key(), CTX)).not.toHaveProperty('createdObjects');
   });
 
   it('the owner’s problems are ADS_UNAVAILABLE for the customer, with an owner alert', async () => {

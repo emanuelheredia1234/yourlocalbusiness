@@ -4,19 +4,7 @@
 import { CircleAlert, CircleCheck, CircleHelp, ExternalLink, TriangleAlert } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { SetupCheck } from '@/lib/ads/launchTypes';
-
-const ALLOWED_HOSTS = ['facebook.com', 'business.facebook.com', 'www.facebook.com', 'adsmanager.facebook.com', 'ads.google.com', 'support.google.com'];
-
-/** A link to Meta's or Google's own pages only; anything else is dropped (never a link from platform text). */
-export function safeFixUrl(url: string | undefined): string | null {
-  if (!url) return null;
-  try {
-    const u = new URL(url);
-    return u.protocol === 'https:' && ALLOWED_HOSTS.includes(u.hostname) ? u.toString() : null;
-  } catch {
-    return null;
-  }
-}
+import { safeFixUrl } from '@/lib/ads/launchFormat';
 
 const ICON = {
   ok: { Icon: CircleCheck, cls: 'text-good', word: 'Done' },

@@ -22,14 +22,19 @@
 // other than ACTIVE, or a Meta campaignStatus other than PAUSED; budgetType is missing or not daily; endDate, a place
 // or linkUrl is missing; Google gets fewer than 3 headlines or 2 descriptions; Meta creativeFeatures aren't all
 // OPT_OUT or appear inside a creatives[] item; a Meta campaign is switched on without a spend cap; a spend cap or
-// budget isn't a whole number; a spend cap is 0 or null; any request carries validateOnly.
+// budget isn't a whole number; a spend cap is 0 or null; any request carries validateOnly; a Meta daily budget is
+// scheduled for 24 hours or less (refused like Meta does, with Meta's words and no Zernio code of its own).
 //
 // Faults (POST /__fail {route, mode, times}): route is 'METHOD template' (e.g. 'POST /ads/create',
 // 'PUT /ads/campaigns/:id', 'GET /ads/accounts/live'). Modes: timeout (never answers), hang-then-create (creates,
 // then drops the connection), created-not-stored-hang (Meta objects made that only the live read and source=all
 // see, then no answer), 503-left-behind, 502-unconfirmed, 201-activation-failed, 409-idempotency, 422-budget-too-low,
 // 403-payment, 403-ads-allowance, 402-payment, 429-ad-account-busy, 401-reconnect, 401-key, meta-code-31, 500, 502,
-// 409-budget-level, 409-shared-budget, 422-key-mismatch, live-read-failed (GET /ads/{id}?live=true: statusReadAt null).
+// 409-budget-level, 409-shared-budget, 422-key-mismatch, live-read-failed (GET /ads/{id}?live=true: statusReadAt null),
+// and on creates and updates: meta-refusal:<code> (each of Zernio's Meta ads refusals, META_REFUSALS), meta-refusal-
+// unknown (a code with no mapping and hostile hint text), restricted-key (our Zernio key lacks the ads group) and
+// 429-key (our key's own rate limit: no code, a hint marked SECRET-TEAM-TEXT); on creates, left-behind:<code> (that
+// refusal after Meta made the campaign and ad set, which Zernio couldn't delete: listed as left_behind).
 
 import crypto from 'node:crypto';
 
@@ -100,6 +105,78 @@ const INTERESTS = [
 
 const ALL_OPT_OUT = (m) => m && typeof m === 'object' && Object.values(m).every((v) => v === 'OPT_OUT');
 const whole = (v) => Number.isInteger(v) && v > 0;
+
+/** The instant a wall-clock time in `tz` happens (ms): the mock's own copy, so it never leans on the code it checks. */
+function wallClock(ymd, hms, tz) {
+  const offset = (t) => {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+    return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second)) - Math.floor(t / 1000) * 1000;
+  };
+  const guess = Date.parse(`${ymd}T${hms}Z`);
+  return guess - offset(guess - offset(guess));
+}
+
+/**
+ * How long a Meta create's ad set would run (ms), as Meta reads it: dates without an offset are in the ad account's
+ * zone, a date-only end is 23:59:59 that day, and a start that is missing or already past is now.
+ */
+function metaScheduleMs(body, tz, now) {
+  const at = (v, endOfDay) => {
+    if (typeof v !== 'string') return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return wallClock(v, endOfDay ? '23:59:59' : '00:00:00', tz);
+    const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(:\d{2})?$/.exec(v);
+    if (m) return wallClock(m[1], `${m[2]}${m[3] ?? ':00'}`, tz);
+    const t = Date.parse(v);
+    return Number.isFinite(t) ? t : null;
+  };
+  const end = at(body?.endDate, true);
+  return end == null ? null : end - Math.max(at(body?.startDate, false) ?? now, now);
+}
+/** Meta runs a daily budget only on an ad set scheduled for more than 24 hours */
+const META_DAILY_MIN_MS = 24 * 3_600_000;
+
+/**
+ * Zernio's "Meta ads refusals" (ErrorResponse.details, openapi): each with its own code, the field to fix, an English
+ * hint, a fix link to Meta's page when there is one, and (platform_error) Meta's subcode and own words. The hint and
+ * Meta's words carry markers (zernio-hint, META-OWN-WORDS) so a test can tell whether they reached the customer.
+ */
+export const META_REFUSALS = Object.freeze({
+  ad_account_payment_required: { status: 403, type: 'permission_error', subcode: 1359188, param: 'adAccountId', fix: { label: 'Add a payment method', url: 'https://business.facebook.com/billing_hub/payment_settings' } },
+  ad_account_policy_not_accepted: { status: 400, type: 'platform_error', subcode: 2859002, fix: { label: 'Accept the policy', url: 'https://business.facebook.com/settings/ad-accounts' } },
+  lead_ads_terms_not_accepted: { status: 400, type: 'platform_error', subcode: 1815089, fix: { label: 'Accept the terms', url: 'https://www.facebook.com/ads/leadgen/tos' } },
+  verified_advertiser_required: { status: 400, type: 'platform_error', subcode: 3858634, param: 'regionalRegulationIdentities' },
+  ad_account_unusable: { status: 422, type: 'invalid_request_error', subcode: 2490592, fix: { label: 'Restricted accounts', url: 'https://www.facebook.com/business/help/422289316306981' } },
+  meta_security_check_required: { status: 400, type: 'platform_error', fix: { label: 'Log in to Facebook', url: 'https://www.facebook.com/' } },
+  meta_action_blocked: { status: 400, type: 'platform_error', subcode: 2859015 },
+  budget_too_low: { status: 400, type: 'platform_error', subcode: 1885272, param: 'budgetAmount' },
+  meta_object_not_accessible: { status: 400, type: 'platform_error', subcode: 33 },
+  // the login lacks the Advertise permission on the ad account, the Page or the Instagram account (not our key: no required_group)
+  insufficient_permissions: { status: 403, type: 'permission_error' },
+});
+
+/**
+ * A refusal in Zernio's envelope: 'meta-refusal:<code>' (META_REFUSALS), 'meta-refusal-unknown', 'restricted-key',
+ * '429-key'. more: extra `details` (a failed create's stage and createdObjects).
+ */
+function refusal(res, mode, more = {}) {
+  if (mode === '429-key') return json(res, 429, { error: 'Rate limit exceeded. Please retry after 12 seconds. SECRET-TEAM-TEXT', details: { currentCount: 601, limit: 600, retryAfterSeconds: 12, hint: 'SECRET-TEAM-TEXT: upgrade your Zernio plan' } }, { 'retry-after': '12' });
+  if (mode === 'restricted-key') return err(res, 403, 'insufficient_permissions', 'permission_error', { required_group: 'ads', details: { hint: 'SECRET-TEAM-TEXT: enable the ads group on your Zernio key' } });
+  if (mode === 'meta-refusal-unknown') {
+    // a code Zernio has no hint mapping for, with hostile text: markup, a direction override, a NUL, far too long
+    const hint = `<script>alert(1)</script> [Fix it](https://evil.example) Use an image Meta can read. ${'More words. '.repeat(40)}${String.fromCharCode(0x202e)}gnp.exe${String.fromCharCode(0)}`;
+    return err(res, 400, 'platform_api_error', 'platform_error', { platform: 'meta', param: 'creatives[0].imageUrl', details: { stage: 'creative', hint, fix: { label: 'Click here to claim', url: 'https://l.facebook.com/l.php?u=https%3A%2F%2Fevil.example' } }, platformError: { code: 100, error_subcode: 1487194, error_user_title: 'Invalid image', error_user_msg: 'META-OWN-WORDS' } });
+  }
+  const code = mode.slice('meta-refusal:'.length);
+  const r = META_REFUSALS[code];
+  if (!r) throw new Error(`mock: no such Meta refusal ${code}`);
+  return err(res, r.status, code, r.type, {
+    ...(r.param ? { param: r.param } : {}),
+    platform: 'meta',
+    details: { hint: `zernio-hint for ${code}`, ...(r.fix ? { fix: r.fix } : {}), ...more },
+    ...(r.type === 'platform_error' ? { platformError: { code: 100, ...(r.subcode ? { error_subcode: r.subcode } : {}), error_user_title: 'META-OWN-WORDS title', error_user_msg: `META-OWN-WORDS for ${code}` } } : {}),
+  });
+}
+const isRefusal = (mode) => typeof mode === 'string' && (mode.startsWith('meta-refusal') || mode === 'restricted-key' || mode === '429-key');
 
 /** Route template of an /ads path (ids replaced), for fault matching and the ledger. */
 export function adsTemplate(method, p) {
@@ -317,11 +394,27 @@ export function createMockZernioAds({ violations, sendWebhook = async () => ({})
     if (mode === 'meta-code-31') return err(res, 400, 'meta_security_check_required', 'platform_error', { details: { fix: { url: '/dashboard/zernio-only' } } });
     if (mode === '500') return err(res, 500, 'internal_error', 'api_error');
     if (mode === '502') return err(res, 502, 'platform_api_error', 'platform_error');
+    if (isRefusal(mode)) return refusal(res, mode);
+    // Meta refuses a daily budget on an ad set that runs 24 hours or less (the live refusal of 6 Nov 2026): the app
+    // must never send one, so it is a violation too. Zernio has no code of its own for it: Meta's words only.
+    if (platform === 'meta' && body?.budgetType !== 'lifetime') {
+      const ms = metaScheduleMs(body, acct.timezoneName, state.clock());
+      if (ms != null && ms <= META_DAILY_MIN_MS) {
+        violation('meta_daily_schedule_24h', { hours: Math.round(ms / 360_000) / 10 });
+        return err(res, 400, 'platform_api_error', 'platform_error', { platform: 'meta', param: 'endDate', details: { stage: 'adset', adAccountId: acct.id, createdObjects: [{ type: 'campaign', id: digits(15), cleanup: 'deleted' }] }, platformError: { code: 100, error_user_title: 'Ad set schedule too short', error_user_msg: 'Ad sets with a daily budget must be scheduled to run for more than 24 hours.' } });
+      }
+    }
     if (acct.billingStatus === 'missing') return err(res, 403, 'ad_account_payment_required', 'permission_error');
     if (idemKey) state.idem.set(idemKey, { hash: h, inFlight: true });
     const release = () => {
       if (idemKey) state.idem.delete(idemKey);
     };
+    if (typeof mode === 'string' && mode.startsWith('left-behind:')) {
+      // Meta made the campaign and ad set, refused the ad, and refused Zernio's cleanup deletes too
+      const c = makeTree({ zid, platform, adAccountId: acct.id, body, withAds: false });
+      release();
+      return refusal(res, `meta-refusal:${mode.slice('left-behind:'.length)}`, { stage: 'ad', adAccountId: acct.id, createdObjects: [{ type: 'campaign', id: c.id, cleanup: 'left_behind' }, { type: 'adset', id: c.adSets[0].id, cleanup: 'left_behind' }] });
+    }
     if (mode === '503-left-behind') {
       const c = makeTree({ zid, platform, adAccountId: acct.id, body, withAdSet: false });
       release();
@@ -425,6 +518,7 @@ export function createMockZernioAds({ violations, sendWebhook = async () => ({})
     if (mode === '403-ads-allowance') return err(res, 403, 'ads_allowance_exceeded', 'permission_error');
     if (mode === '429-ad-account-busy') return err(res, 429, 'rate_limited', 'rate_limit_error', { details: { reason: 'ad_account_busy' } });
     if (mode === '409-budget-level') return err(res, 409, 'BUDGET_LEVEL_MISMATCH', 'invalid_request_error');
+    if (isRefusal(mode)) return refusal(res, mode);
     let m = /^\/ads\/campaigns\/([^/]+)\/status$/.exec(p);
     if (m) {
       const c = state.campaigns.get(m[1]);

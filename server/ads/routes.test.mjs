@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startAds } from './test-helpers.mjs';
 import { TEST_ZERNIO_KEY } from '../test/mock-zernio.mjs';
+import { META_REFUSALS } from '../test/mock-zernio-ads.mjs';
+import { messageFor, REFUSAL_REASON, ZERNIO_CODES } from './messages.mjs';
 
 let t;
 let u;
@@ -183,15 +185,145 @@ describe('launch: confirm, token, one send (R1, R2)', () => {
     expect(res.campaign.adsOff).toBeUndefined();
   });
 
-  it('never shows Zernio’s, Meta’s or Google’s text, the key or a Zernio id', async () => {
-    t.zm.ads.fail('POST /ads/create', '422-budget-too-low');
+  it('never shows Zernio’s, Meta’s or Google’s text for a refusal we have a sentence for, the key or a Zernio id', async () => {
+    // (Meta's own words go along only where our sentence needs them: budget_too_low, below)
+    t.zm.ads.fail('POST /ads/create', '403-payment');
     const r = await t.launchPlan(u, 'meta');
-    expect(r.job).toMatchObject({ state: 'failed', code: 'BUDGET_TOO_LOW' });
+    expect(r.job).toMatchObject({ state: 'failed', code: 'PAYMENT_REQUIRED' });
     const all = JSON.stringify([r, await t.call(u, 'GET', '/api/ads/campaigns?projectId=proj-1'), await t.call(u, 'GET', '/api/ads/audit?projectId=proj-1'), await t.call(u, 'GET', '/api/ads/accounts?projectId=proj-1&platform=meta')]);
     expect(all).not.toMatch(/SECRET|mock |platformError|error_user_msg/);
     expect(all).not.toContain(TEST_ZERNIO_KEY);
     for (const a of t.zm.accounts) expect(all).not.toContain(a._id);
     expect(t.lines.join('\n')).not.toContain(TEST_ZERNIO_KEY);
+  });
+});
+
+describe('Meta’s 24-hour rule for a daily budget (the live refusal of 6 Nov)', () => {
+  beforeEach(async () => ready());
+  const DAILY_24H = /^Meta needs a daily-budget ad to run more than 24 hours\. Choose at least [23] days\.$/;
+
+  it('blocks a schedule of 24 hours or less at Review, with no review token, and sends nothing', async () => {
+    const before = t.writes().length;
+    // as soon as approved today with 1 day (the incident), a later day with 1 day, a late start time
+    for (const extra of [{ startDate: null, durationDays: 1 }, { startDate: t.day(10), durationDays: 1 }, { startDate: t.day(3), startTime: '23:30', durationDays: 1 }]) {
+      const pv = await t.preview(u, await t.request(u, 'meta', extra));
+      expect(pv.status).toBe(200);
+      expect(pv.body.reviewToken).toBeUndefined();
+      const b = pv.body.review.blockers.find((n) => n.code === 'META_DAILY_24H');
+      expect(b?.message).toMatch(DAILY_24H);
+    }
+    // 2 days from a later day (and from a late start time) pass: Meta gets more than 24 hours
+    for (const extra of [{ startDate: t.day(10), durationDays: 2 }, { startDate: t.day(3), startTime: '23:30', durationDays: 2 }]) {
+      const ok = await t.preview(u, await t.request(u, 'meta', extra));
+      expect(codes(ok.body.review.blockers)).toEqual([]);
+      expect(ok.body.reviewToken).toBeTruthy();
+    }
+    expect(t.writes(before)).toEqual([]);
+  });
+
+  it('“Launch again” after a refused launch goes through the same check', async () => {
+    t.zm.ads.fail('POST /ads/create', '403-payment');
+    const first = await t.launchPlan(u, 'meta', { startDate: t.day(10), durationDays: 2 });
+    expect(first.job.state).toBe('failed');
+    expect(first.campaign.state).toBe('failed');
+    // Launch again opens a new review of the same plan: 1 day is refused before anything is sent
+    const before = t.writes().length;
+    const short = await t.preview(u, await t.request(u, 'meta', { startDate: null, durationDays: 1 }));
+    expect(codes(short.body.review.blockers)).toContain('META_DAILY_24H');
+    expect(short.body.reviewToken).toBeUndefined();
+    expect(t.writes(before)).toEqual([]);
+    const again = await t.launchPlan(u, 'meta', { startDate: t.day(5), durationDays: 2 });
+    expect(again.job.state).toBe('done');
+    const creates = t.writes().filter((w) => w.path === '/api/v1/ads/create');
+    expect(creates).toHaveLength(2);
+    expect(creates[1].body).toMatchObject({ startDate: t.day(5), endDate: t.day(6) });
+  });
+});
+
+describe('why Meta refused: the refusal’s own reason, kept and said plainly', () => {
+  beforeEach(async () => ready());
+  const NOTHING = 'Nothing was created and no money was spent.';
+  const failedAudit = async () => (await t.audit(u.id)).find((a) => a.action === 'launch' && a.outcome === 'failed');
+  const auditList = async () => (await t.call(u, 'GET', '/api/ads/audit?projectId=proj-1')).body.entries;
+
+  it.each(Object.keys(META_REFUSALS))('%s: stored on the job and its audit row; the customer reads our sentence, nothing was created, and the fix link', async (code) => {
+    t.zm.ads.fail('POST /ads/create', `meta-refusal:${code}`);
+    const r = await t.launchPlan(u, 'meta');
+    const m = META_REFUSALS[code];
+    // the job keeps today's category, and the refusal's safe fields
+    const row = await t.jobRow(r.job.id);
+    expect(row).toMatchObject({ state: 'failed', error_code: ZERNIO_CODES[code] ?? 'REFUSED' });
+    expect(row.error_detail).toMatchObject({ code, type: m.type, status: m.status, hint: `zernio-hint for ${code}`, ...(m.fix ? { fix: m.fix } : {}), ...(m.param ? { param: m.param } : {}) });
+    if (m.type === 'platform_error') expect(row.error_detail).toMatchObject({ metaMessage: `META-OWN-WORDS for ${code}`, ...(m.subcode ? { subcode: m.subcode } : {}) });
+    expect((await failedAudit()).after).toEqual({ refusal: row.error_detail });
+    // the customer: our own sentence for the code, then what happened, the fix link; never Zernio's words, and
+    // Meta's own only where our sentence needs them (Meta's minimum budget is only in Meta's message)
+    const said = `${messageFor(REFUSAL_REASON[code], { platform: 'meta' })} ${NOTHING}`;
+    const metaSays = code === 'budget_too_low' ? `META-OWN-WORDS title: META-OWN-WORDS for ${code}` : undefined;
+    expect(r.job).toMatchObject({ state: 'failed', message: said });
+    expect(r.job.message).not.toMatch(/to see why/);
+    expect(r.job.platformSays).toBe(metaSays);
+    if (m.fix) expect(r.job.fixUrl).toBe(m.fix.url);
+    else expect(r.job).not.toHaveProperty('fixUrl');
+    const campaigns = await t.call(u, 'GET', '/api/ads/campaigns?projectId=proj-1');
+    expect(campaigns.body.campaigns[0]).toMatchObject({ state: 'failed', lastJob: { message: said } });
+    // the activity log says the same, with the same link
+    const entry = (await auditList()).find((e) => e.action === 'launch' && e.outcome === 'failed');
+    const line = `${said}${metaSays ? ` Meta’s message: “${metaSays}”` : ''}`;
+    expect(entry.summary).toMatch(new RegExp(`: not done\\. ${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+    if (m.fix) expect(entry.fixUrl).toBe(m.fix.url);
+    const all = JSON.stringify([r, campaigns.body, await auditList()]);
+    expect(all).not.toMatch(metaSays ? /zernio-hint|mock |platformError|error_user/ : /zernio-hint|META-OWN-WORDS|mock |platformError|error_user/);
+  });
+
+  it('a refusal Zernio has no code for: Zernio’s hint, cut and as plain text, labelled as Meta’s message; never a foreign link', async () => {
+    t.zm.ads.fail('POST /ads/create', 'meta-refusal-unknown');
+    const r = await t.launchPlan(u, 'meta');
+    expect(r.job).toMatchObject({ state: 'failed', code: 'REFUSED', message: `Meta refused the launch. ${NOTHING}` });
+    expect(r.job.platformSays).toHaveLength(300);
+    expect(r.job.platformSays.startsWith('<script>alert(1)</script> [Fix it](https://evil.example) Use an image Meta can read.')).toBe(true);
+    expect(r.job.platformSays).not.toMatch(/[\u0000-\u001f\u202a-\u202e]/);
+    // a link shim on facebook.com, labelled "Click here to claim": never shown
+    expect(r.job).not.toHaveProperty('fixUrl');
+    expect((await t.jobRow(r.job.id)).error_detail).not.toHaveProperty('fix');
+    const entry = (await auditList()).find((e) => e.action === 'launch' && e.outcome === 'failed');
+    expect(entry.summary).toContain(`: not done. Meta refused the launch. ${NOTHING} Meta’s message: “<script>alert(1)</script>`);
+    expect(entry.summary.length).toBeLessThanOrEqual(500);
+    expect(entry.summary.endsWith('…”')).toBe(true);
+    expect(entry).not.toHaveProperty('fixUrl');
+  });
+
+  it('a team-level refusal (our Zernio key) stays the owner’s: the customer reads “isn’t available”, never Zernio’s words', async () => {
+    t.zm.ads.fail('POST /ads/create', 'restricted-key');
+    const r = await t.launchPlan(u, 'meta');
+    expect(r.job).toMatchObject({ state: 'failed', code: 'ADS_UNAVAILABLE', message: messageFor('ADS_UNAVAILABLE') });
+    expect(r.job).not.toHaveProperty('platformSays');
+    expect(r.job).not.toHaveProperty('fixUrl');
+    expect((await t.jobRow(r.job.id)).error_detail).toEqual({ status: 403, code: 'insufficient_permissions', type: 'permission_error', owner: true });
+    const all = JSON.stringify([r, await t.call(u, 'GET', '/api/ads/campaigns?projectId=proj-1'), await auditList(), await t.audit(u.id)]);
+    expect(all).not.toMatch(/SECRET-TEAM-TEXT|required_group|zernio/i);
+    expect(t.storage.documents.get('zernio:alert')?.value?.kind).toBe('insufficient_permissions');
+  });
+
+  it('a refused change keeps its reason too and says nothing was changed', async () => {
+    const launched = await t.launchPlan(u, 'meta', { status: 'PAUSED' });
+    t.zm.ads.fail('PUT /ads/ad-sets/:id', 'meta-refusal:budget_too_low');
+    const res = await t.changeCampaign(u, launched.campaign.id, { action: 'budget', dailyBudget: 20 });
+    expect(res.job).toMatchObject({ state: 'failed', code: 'BUDGET_TOO_LOW', message: `${messageFor('BUDGET_TOO_LOW', { platform: 'meta' })} Nothing was changed.` });
+    expect((await t.jobRow(res.job.id)).error_detail).toMatchObject({ code: 'budget_too_low', subcode: 1885272, param: 'budgetAmount' });
+    expect(res.campaign.lastJob.message).toBe(res.job.message);
+  });
+
+  it('the live refusal of 6 Nov, as it was stored (REFUSED, nothing else): the Campaigns tab now says why, not “open Ads Manager”', async () => {
+    const id = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
+    const asked = '2026-11-07T01:40:00.000Z'; // 5:40 PM in Los Angeles on Fri 6 Nov 2026
+    await t.db.insert('ad_campaigns', { id, user_id: u.id, customer_tag: 'cust_000000000000000000000000', project_id: 'proj-1', plan_id: 'plan-1', platform: 'meta', zernio_account_id: 'a'.repeat(24), ad_account_id: 'act_1', ad_account_name: 'Acme Plumbing', currency: 'USD', timezone: 'America/Los_Angeles', name: 'Winter pipes · Meta · YLB 0123456789ab', launch_key: crypto.randomUUID(), goal: 'traffic', budget_level: 'adset', daily_budget: 1, start_at: asked, end_at: '2026-11-07T07:59:59.000Z', launched_as: 'PAUSED', state: 'failed', configured_status: null, review: {}, remote: {}, sent_body: {} });
+    await t.db.insert('ad_jobs', { id: jobId, user_id: u.id, campaign_id: id, kind: 'launch', actor: 'customer', client_request_id: crypto.randomUUID(), state: 'failed', error_code: 'REFUSED', request: { platform: 'meta', account: { name: 'Acme Plumbing', idTail: 't_1', currency: 'USD', timezone: 'America/Los_Angeles' }, status: 'PAUSED', daily: 1, days: 1, start: '2026-11-06', startTime: null, asap: true, end: '2026-11-06', plannedTotal: 1 }, provider_ref: { sent: true }, requested_at: asked, finished_at: asked });
+    const got = await t.call(u, 'GET', '/api/ads/campaigns?projectId=proj-1');
+    const c = got.body.campaigns.find((x) => x.id === id);
+    expect(c.lastJob.message).toBe(`Meta needs a daily-budget ad to run more than 24 hours, and this one was set for less. Launch it again with at least 2 days. ${NOTHING}`);
+    expect(JSON.stringify(c)).not.toMatch(/to see why/);
   });
 });
 
@@ -253,7 +385,7 @@ describe('Google', () => {
     const res = await t.changeCampaign(u, r.campaign.id, { action: 'budget', dailyBudget: 20 });
     expect(res.preview.body.review.confirmKind).toBe('short');
     expect(res.job).toMatchObject({ state: 'failed', code: 'SHARED_BUDGET' });
-    expect(res.job.message).toBe('This budget is shared with other campaigns in Google Ads; change it there.');
+    expect(res.job.message).toBe('This budget is shared with other campaigns in Google Ads; change it there. Nothing was changed.');
   });
 });
 
@@ -750,5 +882,116 @@ describe('ads off and the owner', () => {
     expect(writePaths(from)).toEqual(['PUT /ads/campaigns/:id/status']);
     const audit = await t.audit(u.id);
     expect(audit.some((a) => a.actor === 'owner' && /Paused by the app owner/.test(a.summary) && a.outcome === 'done')).toBe(true);
+  });
+});
+
+describe('what a refusal leaves: a change done in part, a campaign still running, objects Meta kept, a launch not switched on', () => {
+  beforeEach(async () => ready());
+  const auditList = async () => (await t.call(u, 'GET', '/api/ads/audit?projectId=proj-1')).body.entries;
+  const lastAudit = async (action, outcome) => (await auditList()).find((e) => e.action === action && e.outcome === outcome);
+  const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const CAP_ONLY = 'Only the first part of this change went through (a higher spending limit, which can’t spend by itself).';
+
+  it('a budget increase refused after its spending limit went up says only that part went through, never “Nothing was changed”', async () => {
+    const launched = await t.launchPlan(u, 'meta', { status: 'PAUSED' });
+    t.zm.ads.fail('PUT /ads/ad-sets/:id', 'meta-refusal:meta_action_blocked');
+    const from = t.writes().length;
+    const r = await t.changeCampaign(u, launched.campaign.id, { action: 'budget', dailyBudget: 40 });
+    expect(writePaths(from)).toEqual(['PUT /ads/campaigns/:id', 'PUT /ads/ad-sets/:id']);
+    const said = `${CAP_ONLY} ${messageFor('META_ACTION_BLOCKED')}`;
+    expect(r.job).toMatchObject({ state: 'failed', code: 'ACTION_BLOCKED', message: said });
+    // the limit did go up, on Meta and on the row; the budget didn't
+    expect(metaCampaign(await t.row(launched.campaign.id)).spendCap).toBe(560);
+    expect(r.campaign).toMatchObject({ spendCap: 560, daily: 25, lastJob: { message: said } });
+    expect((await t.jobRow(r.job.id)).provider_ref).toMatchObject({ done: ['cap'], op: 'adSetBudget' });
+    expect((await lastAudit('budget', 'failed')).summary).toMatch(new RegExp(`: not done\\. ${escapeRe(said)}$`));
+    expect(JSON.stringify([r, await auditList()])).not.toMatch(/Nothing was changed/);
+  });
+
+  it('a 409 on the budget after the spending limit went up says the same, with that reason', async () => {
+    const launched = await t.launchPlan(u, 'meta', { status: 'PAUSED' });
+    t.zm.ads.fail('PUT /ads/ad-sets/:id', '409-budget-level');
+    const r = await t.changeCampaign(u, launched.campaign.id, { action: 'budget', dailyBudget: 40 });
+    expect(r.job).toMatchObject({ state: 'failed', code: 'BUDGET_LEVEL', message: `${CAP_ONLY} ${messageFor('BUDGET_LEVEL')}` });
+  });
+
+  it('a resume whose campaign switch is refused after an ad was switched on says the campaign itself is still paused', async () => {
+    const launched = await t.launchPlan(u, 'meta', { status: 'PAUSED' });
+    const row = await t.row(launched.campaign.id);
+    await t.db.update('ad_campaigns', { id: row.id }, { remote: { ...row.remote, offAds: [row.remote.zernioAdIds[0]] } });
+    t.zm.ads.fail('PUT /ads/campaigns/:id/status', 'meta-refusal:ad_account_payment_required');
+    const from = t.writes().length;
+    const r = await t.changeCampaign(u, launched.campaign.id, { action: 'resume' });
+    expect(writePaths(from)).toEqual(['PUT /ads/:zad/status', 'PUT /ads/campaigns/:id/status']);
+    const said = `Only part of this change went through: parts of it were switched on, but the campaign itself is still paused, so it can’t spend yet. ${messageFor('PAYMENT_REQUIRED')}`;
+    expect(r.job).toMatchObject({ state: 'failed', code: 'PAYMENT_REQUIRED', message: said, fixUrl: META_REFUSALS.ad_account_payment_required.fix.url });
+    expect(metaCampaign(row).configuredStatus).toBe('PAUSED');
+    expect((await lastAudit('resume', 'failed')).summary).toContain(`: not done. ${said}`);
+  });
+
+  it('a refused pause says the campaign is still running and to pause it in Ads Manager now, never “wait”', async () => {
+    const launched = await t.launchPlan(u, 'meta', { status: 'PAUSED' });
+    metaCampaign(await t.row(launched.campaign.id)).configuredStatus = 'ACTIVE';
+    t.zm.ads.fail('PUT /ads/campaigns/:id/status', 'meta-refusal:meta_action_blocked');
+    const r = await t.changeCampaign(u, launched.campaign.id, { action: 'pause' });
+    const said = 'Meta has blocked the Facebook login connected here from making ad changes for now. It’s still running: pause it in Meta Ads Manager now.';
+    expect(r.job).toMatchObject({ state: 'failed', message: said });
+    expect(r.campaign.lastJob.message).toBe(said);
+    expect(metaCampaign(await t.row(launched.campaign.id)).configuredStatus).toBe('ACTIVE');
+    expect((await lastAudit('pause', 'failed')).summary).toMatch(new RegExp(`: not done\\. ${escapeRe(said)}$`));
+    expect(JSON.stringify([r, await auditList()])).not.toMatch(/wait a few hours|Nothing was changed/);
+  });
+
+  it.each(['ad_account_unusable', 'insufficient_permissions'])('a launch Meta refused (%s) after making the campaign and ad set lists what it kept, never “Nothing was created”', async (code) => {
+    t.zm.ads.fail('POST /ads/create', `left-behind:${code}`);
+    const r = await t.launchPlan(u, 'meta');
+    const said = `${messageFor(REFUSAL_REASON[code], { platform: 'meta' })} ${messageFor('PARTIAL_LEFT')} No money was spent.`;
+    expect(r.job).toMatchObject({ state: 'failed', code: ZERNIO_CODES[code], message: said });
+    expect(r.job.leftBehind).toEqual([expect.stringMatching(/^campaign …\d{4}$/), expect.stringMatching(/^adset …\d{4}$/)]);
+    expect(r.campaign.state).toBe('failed');
+    expect((await t.jobRow(r.job.id)).provider_ref.leftBehind).toHaveLength(2);
+    const campaigns = (await t.call(u, 'GET', '/api/ads/campaigns?projectId=proj-1')).body;
+    expect(campaigns.campaigns[0].lastJob).toMatchObject({ message: said, leftBehind: r.job.leftBehind });
+    expect((await lastAudit('launch', 'failed')).summary).toMatch(new RegExp(`: not done\\. ${escapeRe(said)}$`));
+    expect(JSON.stringify([r, campaigns, await auditList()])).not.toMatch(/Nothing was created/);
+    // what Meta kept is there, paused and with no ads (so it can't spend)
+    const kept = [...t.zm.ads.state.campaigns.values()].at(-1);
+    expect(kept).toMatchObject({ configuredStatus: 'PAUSED' });
+    expect(kept.ads()).toEqual([]);
+  });
+
+  it('an ACTIVE launch whose switch-on Meta refused says why, with Meta’s fix page, on the card and in the activity log', async () => {
+    t.zm.ads.fail('PUT /ads/campaigns/:id/status', 'meta-refusal:ad_account_payment_required');
+    const r = await t.launchPlan(u, 'meta', { status: 'ACTIVE' });
+    expect(writePaths()).toEqual(['POST /ads/create', 'PUT /ads/campaigns/:id', 'PUT /ads/campaigns/:id/status']);
+    const said = `${messageFor('ACTIVATION_NOT_SENT', { platform: 'meta' })} ${messageFor('PAYMENT_REQUIRED')}`;
+    const fix = META_REFUSALS.ad_account_payment_required.fix.url;
+    expect(r.job).toMatchObject({ state: 'done', code: 'ACTIVATION_NOT_SENT', message: said, fixUrl: fix });
+    expect(r.campaign).toMatchObject({ state: 'paused', configuredStatus: 'PAUSED', spendCap: 350, lastJob: { message: said, fixUrl: fix } });
+    const entry = await lastAudit('launch', 'done');
+    expect(entry.summary).toMatch(new RegExp(`: done\\. ${escapeRe(said)}$`));
+    expect(entry.fixUrl).toBe(fix);
+    expect(JSON.stringify([r, await auditList()])).not.toMatch(/zernio-hint|META-OWN-WORDS/);
+  });
+
+  it('budget_too_low passes on Meta’s own words (its minimum), labelled and as plain text; never Zernio’s hint', async () => {
+    t.zm.ads.fail('POST /ads/create', '422-budget-too-low');
+    const r = await t.launchPlan(u, 'meta');
+    expect(r.job).toMatchObject({ state: 'failed', code: 'BUDGET_TOO_LOW', message: `${messageFor('BUDGET_TOO_LOW', { platform: 'meta' })} Nothing was created and no money was spent.`, platformSays: 'Your budget is too low: SECRET-PLATFORM-TEXT' });
+    expect((await lastAudit('launch', 'failed')).summary).toContain('Meta’s message: “Your budget is too low: SECRET-PLATFORM-TEXT”');
+  });
+
+  it('a 429 on our own Zernio key stays team-level: “try again in a minute”, none of Zernio’s words, no link, no alert', async () => {
+    t.zm.ads.fail('POST /ads/create', '429-key');
+    const r = await t.launchPlan(u, 'meta');
+    expect(r.job).toMatchObject({ state: 'failed', code: 'RATE_LIMITED', message: messageFor('RATE_LIMITED', { platform: 'meta' }) });
+    expect(r.job).not.toHaveProperty('platformSays');
+    expect(r.job).not.toHaveProperty('fixUrl');
+    expect((await t.jobRow(r.job.id)).error_detail).toEqual({ status: 429, owner: true });
+    expect(await lastAudit('launch', 'failed')).not.toHaveProperty('fixUrl');
+    const all = JSON.stringify([r, (await t.call(u, 'GET', '/api/ads/campaigns?projectId=proj-1')).body, await auditList(), await t.audit(u.id)]);
+    expect(all).not.toMatch(/SECRET-TEAM-TEXT|retryAfterSeconds|Zernio/i);
+    expect(t.storage.documents.get('zernio:alert')).toBeUndefined();
+    expect(writePaths()).toEqual(['POST /ads/create']);
   });
 });

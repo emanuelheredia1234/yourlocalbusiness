@@ -73,7 +73,7 @@ export function createAdsRoutes(deps = {}) {
   const zimpl = connections?.adsEnabled ? (connections.impl?.ads ?? null) : null;
   const ledger = createLedger({ db, now, log });
   const zads = createZernioAds({ client: zimpl?.client ?? null, ledger, storage, log, now, ...(deps.adTimeouts ? { timeouts: deps.adTimeouts } : {}) });
-  const jobs = createAdJobs({ db, now });
+  const jobs = createAdJobs({ db, now, log });
   const audit = createAudit({ db, now, log });
   const limits = createAdLimits({ db, env, now });
   const gate = typeof deps.canLaunchAds === 'function' ? deps.canLaunchAds : defaultGate;

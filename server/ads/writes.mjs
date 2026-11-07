@@ -8,14 +8,17 @@
 // ACTIVE, switch it on. All of it is covered by the one spend confirm. A tree that exists without its limit or its
 // switch spends nothing, so a create that answers late can never be running untracked.
 // Change: the cap goes up first and is never lowered, children before the campaign switch, the switch last.
+// A step Zernio refused keeps the refusal's safe fields (zernioAds.mjs refusalDetail) on the job (error_detail) and
+// in its audit row (after.refusal), and the audit line says why (messages.mjs refusalOf).
 
 import { safeLog } from '../integrations/common.mjs';
 import { createIds } from './zernioAds.mjs';
 import { findOwn } from './live.mjs';
-import { messageFor } from './messages.mjs';
+import { cut, messageFor, platformSaysLine } from './messages.mjs';
 import { PLATFORM_LABEL, idTailOf } from './contracts.mjs';
 import { formatMoney } from './money.mjs';
 import { dayLabel, todayIn } from './build.mjs';
+import { jobRefusal } from './jobs.mjs';
 
 const iso = (t) => new Date(t).toISOString();
 
@@ -50,7 +53,24 @@ export function changeSummary(row, action, request = {}) {
   }
 }
 
-const outcomeText = (base, state, code, platform) => (state === 'done' ? `${base}: done${code ? `. ${messageFor(code, { platform })}` : ''}` : state === 'unknown' ? `${base}: not confirmed yet. Check status before doing anything else.` : `${base}: not done. ${messageFor(code ?? 'REFUSED', { platform })}`);
+/**
+ * The audit line of a finished launch or change. A failure, or a done launch with a refused step (made but not
+ * switched on), says why (jobRefusal): our sentence, then, when we have no sentence for the refusal or ours needs
+ * Meta's own number, the platform's own words quoted and labelled, cut to what the 500-character line has left.
+ */
+function outcomeText(base, state, code, platform, said = null) {
+  if (state === 'unknown') return `${base}: not confirmed yet. Check status before doing anything else.`;
+  const line = state === 'done' ? `${base}: done${code ? `. ${said?.message ?? messageFor(code, { platform })}` : ''}` : `${base}: not done. ${said?.message ?? messageFor(code ?? 'REFUSED', { platform })}`;
+  return said?.platformSays ? `${line} ${platformSaysLine(platform, cut(said.platformSays, Math.max(40, 470 - line.length)))}` : line;
+}
+
+/**
+ * Why a job of this row ended as it did, for its audit line: as the app will say it (jobs.mjs jobOut), from the job
+ * as it is now finished (ref: what this run adds to provider_ref, e.g. the steps that went through, what was left).
+ */
+const outcomeOf = (job, kind, code, refusal, platform, ref) => jobRefusal({ ...job, kind, error_code: code ?? 'REFUSED', error_detail: refusal ?? null, provider_ref: { ...(job.provider_ref ?? {}), ...(ref ?? {}) } }, platform);
+/** the jobs whose line says why: failed ones, and done ones a refused step left short */
+const saysWhy = (state, code, refusal) => state === 'failed' || (state === 'done' && !!code && !!refusal);
 
 async function patchCampaign(ctx, userId, id, patch) {
   try {
@@ -84,17 +104,19 @@ export async function runLaunch(ctx, { userId, tag, job, row, body, spendCap }) 
   jobs.active.add(job.id);
   ctx.busy.add(busyKey);
   const base = launchSummary(row);
-  const finishWith = async (state, code, ref, campaignPatch) => {
+  /** refusal: the refused step's safe fields (error_detail) */
+  const finishWith = async (state, code, ref, campaignPatch, refusal = null) => {
     if (campaignPatch) await patchCampaign(ctx, userId, row.id, campaignPatch);
-    await jobs.finish(userId, job.id, { state, code, ref });
-    await audit.append({ userId, tag, projectId: row.project_id, campaignId: row.id, jobId: job.id, actor: 'customer', action: 'launch', summary: outcomeText(base, state, code, platform), outcome: state });
+    await jobs.finish(userId, job.id, { state, code, ref, detail: refusal });
+    const said = saysWhy(state, code, refusal) ? outcomeOf(job, 'launch', code, refusal, platform, ref) : null;
+    await audit.append({ userId, tag, projectId: row.project_id, campaignId: row.id, jobId: job.id, actor: 'customer', action: 'launch', summary: outcomeText(base, state, code, platform, said), ...(refusal ? { after: { refusal } } : {}), outcome: state });
   };
   try {
     await jobs.note(userId, job.id, { step: 'create', sentAt: iso(ctx.now()) });
     const a = await zads.writes.createAd(body, row.launch_key, lctx);
     if (a.outcome === 'failed') {
       const leftBehind = (a.createdObjects ?? []).filter((o) => o.cleanup === 'left_behind');
-      return await finishWith('failed', a.code, { ...(leftBehind.length ? { leftBehind } : {}), ...(a.fixUrl ? { fixUrl: a.fixUrl } : {}), sent: a.sent }, { state: 'failed', configured_status: null });
+      return await finishWith('failed', a.code, { ...(leftBehind.length ? { leftBehind } : {}), ...(a.fixUrl ? { fixUrl: a.fixUrl } : {}), sent: a.sent }, { state: 'failed', configured_status: null }, a.refusal);
     }
     if (a.outcome === 'unknown') {
       return await finishWith('unknown', 'UNKNOWN', { step: 'create', ...(a.unconfirmedWrite ? { unconfirmedWrite: a.unconfirmedWrite } : {}), ...(a.createdObjects ? { createdObjects: a.createdObjects } : {}) }, { state: 'unknown' });
@@ -107,18 +129,21 @@ export async function runLaunch(ctx, { userId, tag, job, row, body, spendCap }) 
       // (b) the spending limit, before anything can spend
       await jobs.note(userId, job.id, { step: 'cap', sentAt: iso(ctx.now()), ids });
       const b = ids.campaignId ? await localSafe(() => zads.writes.setCampaignSpendCap(ids.campaignId, spendCap, lctx)) : { outcome: 'failed', code: 'CAP_NOT_SET' };
-      if (b.outcome === 'failed') return await finishWith('done', 'CAP_NOT_SET', { ids, capFailed: b.code }, { state: 'paused', configured_status: 'PAUSED', review: { status: 'in_review' } });
+      if (b.outcome === 'failed') return await finishWith('done', 'CAP_NOT_SET', { ids, capFailed: b.code }, { state: 'paused', configured_status: 'PAUSED', review: { status: 'in_review' } }, b.refusal);
       if (b.outcome === 'unknown') return await finishWith('unknown', 'UNKNOWN', { step: 'cap', ids, sentAt: iso(ctx.now()) }, { state: 'paused', configured_status: 'PAUSED', review: { status: 'in_review' } });
       await patchCampaign(ctx, userId, row.id, { spend_cap: spendCap });
     }
     // (c) only for ACTIVE: switch the campaign on
     let state = 'paused';
     let configured = 'PAUSED';
+    let refusal = null;
     if (row.launched_as === 'ACTIVE') {
       await jobs.note(userId, job.id, { step: 'activate', sentAt: iso(ctx.now()), ids });
       const c = ids.campaignId ? await localSafe(() => zads.writes.setCampaignStatus(ids.campaignId, platform, 'active', lctx)) : { outcome: 'failed', code: 'REFUSED' };
-      if (c.outcome === 'failed') code = 'ACTIVATION_NOT_SENT';
-      else if (c.outcome === 'unknown') return await finishWith('unknown', 'UNKNOWN', { step: 'activate', ids, sentAt: iso(ctx.now()) }, { state: 'unknown', configured_status: 'PAUSED', review: { status: 'in_review' } });
+      if (c.outcome === 'failed') {
+        code = 'ACTIVATION_NOT_SENT';
+        refusal = c.refusal ?? null;
+      } else if (c.outcome === 'unknown') return await finishWith('unknown', 'UNKNOWN', { step: 'activate', ids, sentAt: iso(ctx.now()) }, { state: 'unknown', configured_status: 'PAUSED', review: { status: 'in_review' } });
       else {
         state = 'in_review';
         configured = 'ACTIVE';
@@ -130,7 +155,7 @@ export async function runLaunch(ctx, { userId, tag, job, row, body, spendCap }) 
       remote.offAdSet = off.offAdSet;
       code = code ?? 'ACTIVATION_FAILED';
     }
-    return await finishWith('done', code, { ids }, { state, configured_status: configured, remote, review: { status: 'in_review' } });
+    return await finishWith('done', code, { ids }, { state, configured_status: configured, remote, review: { status: 'in_review' } }, refusal);
   } catch (e) {
     // anything unexpected after the create may have been sent: unknown, never resent
     safeLog('ads_launch_error', { error: e?.name || 'Error', code: e?.code }, ctx.log);
@@ -219,10 +244,12 @@ export async function runChange(ctx, { userId, tag, job, row, ops, action, reque
   jobs.active.add(job.id);
   if (!stop) ctx.busy.add(busyKey);
   const base = actor === 'owner' ? `Paused by the app owner on ${where(row)}` : changeSummary(row, action, request);
-  const finishWith = async (state, code, ref, campaignPatch) => {
+  /** refusal: the refused step's safe fields (error_detail) */
+  const finishWith = async (state, code, ref, campaignPatch, refusal = null) => {
     if (campaignPatch && Object.keys(campaignPatch).length) await patchCampaign(ctx, userId, row.id, campaignPatch);
-    await jobs.finish(userId, job.id, { state, code, ref });
-    await audit.append({ userId, tag, projectId: row.project_id, campaignId: row.id, jobId: job.id, actor, action, summary: outcomeText(base, state, code, platform), outcome: state });
+    await jobs.finish(userId, job.id, { state, code, ref, detail: refusal });
+    const said = saysWhy(state, code, refusal) ? outcomeOf({ ...job, request: job.request ?? request }, action, code, refusal, platform, ref) : null;
+    await audit.append({ userId, tag, projectId: row.project_id, campaignId: row.id, jobId: job.id, actor, action, summary: outcomeText(base, state, code, platform, said), ...(refusal ? { after: { refusal } } : {}), outcome: state });
   };
   try {
     const done = [];
@@ -244,7 +271,7 @@ export async function runChange(ctx, { userId, tag, job, row, ops, action, reque
       if (op.op === 'campaignBudget' && platform === 'google' && r.status === 409) code = 'SHARED_BUDGET';
       if ((op.op === 'adSetBudget' || op.op === 'campaignBudget') && platform === 'meta' && r.status === 409 && code === 'REFUSED') code = 'BUDGET_LEVEL';
       if (code === 'REFUSED' && done.length) code = 'CHANGE_INCOMPLETE';
-      return await finishWith('failed', code, { step: i, op: op.op, done, ...(r.fixUrl ? { fixUrl: r.fixUrl } : {}) }, null);
+      return await finishWith('failed', code, { step: i, op: op.op, done, ...(r.fixUrl ? { fixUrl: r.fixUrl } : {}) }, null, r.refusal);
     }
     return await finishWith('done', null, { done }, effectOf(row, action, ops, request, ctx.now()));
   } catch (e) {

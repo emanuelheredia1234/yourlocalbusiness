@@ -15,12 +15,13 @@ vi.mock('@/components/ui/primitives', async (orig) => ({
 import type { LaunchReview } from '@/lib/ads/launchTypes';
 import { AdsApiError } from '@/lib/ads/launchApi';
 import { META_CTA } from '@/lib/ads';
-import { CTA_MAP } from '../../../../../server/ads/build.mjs';
+import { CTA_MAP, metaMinDays as serverMetaMinDays } from '../../../../../server/ads/build.mjs';
+import { metaMinDays } from '@/lib/ads/launchFormat';
 import { newProject } from '@/store/defaults';
 import { newAdCampaign } from '@/ai/local/ads';
 import { SpendConfirm, sendLaunches, launchRequestIdFor, type LaunchItem } from './SpendConfirm';
 import { BudgetStep } from './BudgetStep';
-import { draftProblems, forCurrency, newDraft, previewRequest, readyToConfirm, requestKey, splitLine } from './draft';
+import { draftProblems, forCurrency, minDaysFor, newDraft, previewRequest, readyToConfirm, requestKey, splitLine } from './draft';
 
 const review = (over: Partial<LaunchReview> = {}): LaunchReview => ({
   platform: 'meta',
@@ -195,5 +196,64 @@ describe('the launch choices', () => {
 
   it('the planner’s buttons map to Meta’s values exactly as the server does', () => {
     expect(META_CTA).toEqual(CTA_MAP);
+  });
+});
+
+describe('Meta’s 24-hour rule in Budget and dates', () => {
+  const project = { ...newProject('business', 'new'), id: 'proj1' };
+  const plan14 = () => ({ ...newAdCampaign(project), id: 'ad3', platforms: ['meta'] as ('meta' | 'google')[], dailyBudget: 25, durationDays: 14 });
+  const oneDayPlan = { ...newAdCampaign(project), id: 'ad2', platforms: ['meta', 'google'] as ('meta' | 'google')[], dailyBudget: 1, durationDays: 1 };
+  const LA = { ref: 'adacct_x', platform: 'meta' as const, name: 'Acme', idTail: '1234', currency: 'USD', timezone: 'America/Los_Angeles', usable: true };
+  // the live launch: 5:40 PM in Los Angeles on Fri 6 Nov 2026
+  const AT = Date.parse('2026-11-07T01:40:00Z');
+  const budget = (draft: ReturnType<typeof newDraft>, now = AT) => renderToStaticMarkup(createElement(BudgetStep, { plan: oneDayPlan, draft, account: { ...LA, platform: draft.platform }, limits: undefined, split: null, twoPlatforms: false, onChange: () => {}, now }));
+
+  it('never starts Meta at one day (Google keeps the plan’s)', () => {
+    expect(newDraft(oneDayPlan, 'meta', 1).durationDays).toBe(2);
+    expect(newDraft(oneDayPlan, 'google', 1).durationDays).toBe(1);
+    expect(newDraft(plan14(), 'meta', 1).durationDays).toBe(14);
+  });
+
+  it('as soon as approved today with 1 day: the field says why and the review can’t be asked for', () => {
+    const d = { ...newDraft(oneDayPlan, 'meta', 1), durationDays: 1 };
+    const html = budget(d);
+    expect(html).toContain('Meta needs a daily-budget ad to run more than 24 hours. Choose at least 2 days.');
+    expect(html).toMatch(/type="number" min="2"/);
+    expect(draftProblems(d, { accountChosen: true, minDays: minDaysFor(d, LA.timezone, AT) })).toContain('Meta needs a daily-budget ad to run more than 24 hours. Choose at least 2 days.');
+    const two = { ...d, durationDays: 2 };
+    expect(budget(two)).not.toContain('Choose at least');
+    expect(budget(two)).toContain('At least 2 on Meta: a daily budget needs more than 24 hours.');
+    expect(draftProblems(two, { accountChosen: true, minDays: minDaysFor(two, LA.timezone, AT) }).join(' ')).not.toContain('24 hours');
+  });
+
+  it('a later day with 1 day, and a late start time, need more', () => {
+    const later = { ...newDraft(oneDayPlan, 'meta', 1), durationDays: 1, startMode: 'day' as const, startDate: '2026-11-20', startTime: '09:00' };
+    expect(budget(later)).toContain('Choose at least 2 days.');
+    // 23:30 the evening before the clocks go forward (14 Mar 2027): 2 days are only 23½ hours
+    const dst = { ...later, durationDays: 2, startDate: '2027-03-13', startTime: '23:30' };
+    expect(minDaysFor(dst, LA.timezone, AT)).toBe(3);
+    expect(budget(dst)).toContain('Choose at least 3 days.');
+    // as soon as approved at 23:55: the launch can go out after midnight
+    expect(minDaysFor({ ...later, startMode: 'asap', durationDays: 2 }, LA.timezone, Date.parse('2026-11-07T07:55:00Z'))).toBe(3);
+  });
+
+  it('Google has no such rule', () => {
+    const g = { ...newDraft(oneDayPlan, 'google', 1), durationDays: 1 };
+    expect(budget(g)).not.toContain('24 hours');
+    expect(minDaysFor(g, 'America/New_York', AT)).toBe(1);
+    expect(draftProblems(g, { accountChosen: true, minDays: 1 }).join(' ')).not.toContain('24 hours');
+  });
+
+  it('works out the minimum exactly as the server does (the server decides)', () => {
+    const cases = [
+      { startDay: '2026-11-06', asap: true, tz: 'America/Los_Angeles', now: AT },
+      { startDay: '2026-11-06', asap: true, tz: 'America/Los_Angeles', now: Date.parse('2026-11-07T07:50:00Z') },
+      { startDay: '2026-12-01', time: '00:00', tz: 'America/Chicago', now: AT },
+      { startDay: '2026-12-01', time: '23:59', tz: 'Asia/Kolkata', now: AT },
+      { startDay: '2027-03-13', time: '23:30', tz: 'America/Chicago', now: AT },
+      { startDay: '2027-03-13', time: '22:00', tz: 'America/Chicago', now: AT },
+      { startDay: '2026-10-31', time: '23:30', tz: 'Europe/London', now: Date.parse('2026-10-01T00:00:00Z') },
+    ];
+    for (const c of cases) expect(metaMinDays(c), JSON.stringify(c)).toBe(serverMetaMinDays({ ...c, builtAt: c.now }));
   });
 });

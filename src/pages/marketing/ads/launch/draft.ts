@@ -1,9 +1,12 @@
 // The launch window's choices for one platform, before they go to the server's preview. Nothing that spends is
 // ever prefilled: PAUSED/ACTIVE and the "special category" question start unanswered, and with two platforms the
 // daily amounts start empty (the plan's daily is the total for both). Amounts are never carried across currencies.
+// On Meta the days start at 2 or more and can't be fewer than its 24-hour rule allows from the start picked
+// (minDaysFor): one day never runs a daily budget more than 24 hours there, and Meta refuses that.
 
 import type { AdCampaign } from '@/lib/types';
 import type { AdsPlatform, LaunchChoice, LaunchPreviewRequest, LaunchReview, TargetOption } from '@/lib/ads/launchTypes';
+import { META_MIN_DAYS, metaMinDays, todayIn } from '@/lib/ads/launchFormat';
 
 export interface LaunchDraft {
   platform: AdsPlatform;
@@ -56,7 +59,8 @@ export function newDraft(plan: AdCampaign, platform: AdsPlatform, platformCount:
     // one platform: the plan's daily; two: empty, the customer splits it
     daily: platformCount === 1 && Number.isInteger(plan.dailyBudget) ? String(plan.dailyBudget) : '',
     dailyTouched: false,
-    durationDays: Math.max(1, Math.min(90, plan.durationDays || 14)),
+    // Meta needs more than 24 hours for a daily budget: never one day there by default
+    durationDays: Math.max(platform === 'meta' ? META_MIN_DAYS : 1, Math.min(90, plan.durationDays || 14)),
     startMode: 'asap',
     startDate: '',
     startTime: '09:00',
@@ -76,8 +80,22 @@ export function forCurrency(d: LaunchDraft, currency: string | undefined): Launc
 /** The daily amount as a whole number, or null when it isn't one. */
 export const dailyOf = (d: LaunchDraft): number | null => (/^\d{1,7}$/.test(d.daily.trim()) && Number(d.daily) >= 1 ? Number(d.daily) : null);
 
+/**
+ * The fewest days this draft can run (Meta: more than 24 hours for a daily budget, from its start in the ad
+ * account's zone; 2 until the zone is known; Google: 1). The server's review decides; this keeps the choice honest.
+ */
+export function minDaysFor(d: LaunchDraft, tz: string | undefined, now = Date.now()): number {
+  if (d.platform !== 'meta') return 1;
+  if (!tz) return META_MIN_DAYS;
+  const day = d.startMode === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(d.startDate) ? d.startDate : todayIn(tz, now);
+  return Math.max(META_MIN_DAYS, metaMinDays({ startDay: day, time: d.startMode === 'day' ? d.startTime || '09:00' : null, asap: d.startMode !== 'day', tz, now }));
+}
+
+/** "Meta needs a daily-budget ad to run more than 24 hours. Choose at least 2 days." (the server's words too) */
+export const metaDaysProblem = (minDays: number) => `Meta needs a daily-budget ad to run more than 24 hours. Choose at least ${minDays} days.`;
+
 /** What's still missing before a preview can be asked for, in plain words (the server checks everything again). */
-export function draftProblems(d: LaunchDraft, o: { accountChosen: boolean; minDaily?: number }): string[] {
+export function draftProblems(d: LaunchDraft, o: { accountChosen: boolean; minDaily?: number; minDays?: number }): string[] {
   const out: string[] = [];
   if (!o.accountChosen) out.push('Pick the ad account.');
   if (!d.locations.length) out.push('Pick at least one place.');
@@ -87,6 +105,7 @@ export function draftProblems(d: LaunchDraft, o: { accountChosen: boolean; minDa
   if (daily == null) out.push('Enter the daily amount as a whole number.');
   else if (o.minDaily && daily < o.minDaily) out.push(`The daily amount must be at least ${o.minDaily}.`);
   if (!Number.isInteger(d.durationDays) || d.durationDays < 1 || d.durationDays > 90) out.push('Pick between 1 and 90 days.');
+  else if (d.platform === 'meta' && d.durationDays < (o.minDays ?? META_MIN_DAYS)) out.push(metaDaysProblem(o.minDays ?? META_MIN_DAYS));
   if (d.startMode === 'day' && !/^\d{4}-\d{2}-\d{2}$/.test(d.startDate)) out.push('Pick the start day.');
   if (!d.status) out.push('Choose Paused or Active.');
   return out;

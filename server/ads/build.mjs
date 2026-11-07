@@ -8,6 +8,7 @@
 //   canonical(value) / hashOf(value)       sorted-key JSON and its sha256
 //   metaCreativeFor(...) / searchTextFor(...) the creative swap bodies (§9.1)
 //   dates helpers: todayIn(tz, t), addDays(ymd, n), localInstant(ymd, hms, tz), withOffset(ymd, hms, tz)
+//   metaMinDays(...) / launchWasTooShort(job)  Meta's daily budget needs a schedule of more than 24 hours
 //
 // R3: a launch always sends status, campaignStatus, adSetStatus and adStatus. Ad set and ad are ACTIVE, the campaign
 // holds the money (R11): the campaign is always created PAUSED (Meta and Google) and switched on only by the launch's
@@ -37,6 +38,18 @@ export const metaSpendCap = (plannedTotal, currency) => (plannedTotal > 0 && Obj
 const SHORTENERS = ['bit.ly', 'tinyurl.com', 't.co', 'goo.gl', 'ow.ly', 'is.gd', 'buff.ly', 'rebrand.ly', 'cutt.ly', 'shorturl.at', 'tiny.cc', 'rb.gy', 'lnkd.in'];
 export const LIMITS = Object.freeze({ metaHeadline: 255, metaHeadlineWarn: 40, metaBody: 2000, metaDescription: 255, googleHeadline: 30, googleDescription: 90, keyword: 80, maxDays: 90 });
 export const META_MIN_RADIUS_MI = 10;
+/**
+ * Meta runs a daily budget only on an ad set scheduled for MORE than 24 hours (end − start), and this app always
+ * sends a daily budget. A date-only end is 23:59:59 in the ad account's zone, so a 1-day Meta launch never qualifies,
+ * even from midnight. Google runs whole days and has no such rule.
+ */
+export const META_DAILY_MIN_MS = 24 * 3_600_000;
+/**
+ * How late Meta may make an ad set after its review: the review token lives 10 minutes and the create takes up to
+ * 2 more. A start that is already past, or this close to the review, is counted from then (Meta starts the ad set
+ * when it makes it), so a launch that passes here can't come out shorter at Meta.
+ */
+export const META_SEND_MARGIN_MS = 15 * 60_000;
 
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v) => (typeof v === 'string' ? v.replace(/\r\n/g, '\n').trim() : '');
@@ -107,6 +120,34 @@ export function dayLabel(ymd) {
   return new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${ymd}T00:00:00Z`)).replace(/,/g, '');
 }
 
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * The fewest days (1 to 90) whose Meta schedule runs a daily budget more than 24 hours, from this start, in the ad
+ * account's zone (daylight saving included); 91 when none would. startDay 'YYYY-MM-DD', time 'HH:MM' or null (the
+ * day's start), asap: "as soon as approved" (counted from the review). builtAt: the review's clock.
+ */
+export function metaMinDays({ startDay, time = null, asap = false, tz, builtAt }) {
+  const start = Math.max(asap ? builtAt : localInstant(startDay, HHMM.test(time ?? '') ? `${time}:00` : '00:00:00', tz), builtAt + META_SEND_MARGIN_MS);
+  for (let n = 1; n <= LIMITS.maxDays; n += 1) if (localInstant(addDays(startDay, n - 1), '23:59:59', tz) - start > META_DAILY_MIN_MS) return n;
+  return LIMITS.maxDays + 1;
+}
+
+/**
+ * Whether a Meta launch job was scheduled for 24 hours or less, from what its confirm showed (job.request: the
+ * review summary) and when it was sent (requested_at). Our own data only, never the platform's text: it names Meta's
+ * 24-hour rule as the likely reason for a refusal Zernio gave no code of its own for.
+ */
+export function launchWasTooShort(job) {
+  const r = job?.request && typeof job.request === 'object' ? job.request : {};
+  const tz = r.account?.timezone;
+  if (r.platform !== 'meta' || !validTimeZone(tz) || !isYmd(r.start) || !isYmd(r.end)) return false;
+  const sent = Date.parse(job.requested_at ?? '');
+  const start = r.asap ? sent : localInstant(r.start, HHMM.test(r.startTime ?? '') ? `${r.startTime}:00` : '00:00:00', tz);
+  const from = Number.isFinite(sent) ? Math.max(start, sent) : start;
+  return Number.isFinite(from) && localInstant(r.end, '23:59:59', tz) - from <= META_DAILY_MIN_MS;
+}
+
 // ───────────── the parts both platforms share ─────────────
 
 /** The page the ads send people to: the plan's own, else the website or buy link. '' when there is none. */
@@ -166,7 +207,10 @@ const dedupe = (list) => {
   return out;
 };
 
-/** The dates of a launch, in the account's zone: { today, startDay, endDay, startDate?, endDate, startAt, endAt, problem? }. */
+/**
+ * The dates of a launch, in the account's zone: { today, startDay, endDay, startDate?, endDate, startAt, endAt,
+ * minDays (Meta: the fewest days its daily budget accepts from this start), problem? }.
+ */
 export function launchDates({ platform, picks, tz, builtAt }) {
   const today = todayIn(tz, builtAt);
   const days = picks.durationDays;
@@ -175,7 +219,7 @@ export function launchDates({ platform, picks, tz, builtAt }) {
   const startDay = picks.startDate ?? today;
   if (startDay < today) return { today, problem: 'START_IN_PAST' };
   const endDay = addDays(startDay, days - 1);
-  const time = platform === 'meta' && typeof picks.startTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(picks.startTime) ? picks.startTime : null;
+  const time = platform === 'meta' && typeof picks.startTime === 'string' && HHMM.test(picks.startTime) ? picks.startTime : null;
   // "As soon as approved" omits startDate (omitted = starts immediately), so the body doesn't change before the send
   const startDate = picks.startDate == null ? undefined : platform === 'meta' && time ? `${startDay}T${time}:00` : startDay;
   return {
@@ -189,6 +233,7 @@ export function launchDates({ platform, picks, tz, builtAt }) {
     asap: picks.startDate == null,
     startAt: new Date(picks.startDate == null ? builtAt : localInstant(startDay, time ? `${time}:00` : '00:00:00', tz)).toISOString(),
     endAt: new Date(localInstant(endDay, '23:59:59', tz)).toISOString(),
+    ...(platform === 'meta' ? { minDays: metaMinDays({ startDay, time, asap: picks.startDate == null, tz, builtAt }) } : {}),
   };
 }
 
@@ -223,7 +268,12 @@ export function buildLaunch({ platform, plan, project, account, zid, picks, laun
 
   const dates = validTimeZone(tz) ? launchDates({ platform, picks, tz, builtAt }) : { problem: 'GOOGLE_NO_TIMEZONE' };
   if (dates.problem) block(dates.problem);
-  else if (dates.asap) warn('START_DAY_COUNTS');
+  else {
+    // Meta refuses a daily budget on an ad set that runs 24 hours or less (as soon as approved today, one day, a
+    // late start time): the server's own check, before anything is sent; the browser's is only a hint
+    if (platform === 'meta' && dates.days < dates.minDays) block('META_DAILY_24H', { days: dates.minDays });
+    if (dates.asap) warn('START_DAY_COUNTS');
+  }
 
   const goal = goalOf(plan.objective);
   if (plan.objective === 'leads' || plan.objective === 'sales') warn('GOAL_NOTE');

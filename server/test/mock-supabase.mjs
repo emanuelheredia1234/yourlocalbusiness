@@ -702,7 +702,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
   }
 
   /**
-   * public.ads_begin_launch / ads_begin_change (supabase/migrations/20261108000000_ads_launch.sql): one transaction
+   * public.ads_begin_launch / ads_begin_change (supabase/migrations/20261108000000_ads_launch.sql; ad_jobs.error_detail
+   * from 20261115000000_ad_job_error_detail.sql): one transaction
    * each. The same (user_id, client_request_id) answers the job that is there; otherwise the campaign row (launch),
    * the job and the audit row go in together, or none does (a unique index refuses with 23505 and its name).
    */
@@ -738,7 +739,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     } else if (!t('ad_campaigns').some((r) => r.id === j.campaign_id && r.user_id === j.user_id)) {
       return send(res, 409, { code: '23503', message: 'insert or update on table "ad_jobs" violates foreign key constraint "ad_jobs_campaign_id_fkey"' });
     }
-    const job = { actor: 'customer', before: null, provider_ref: {}, error_code: null, requested_at: at, finished_at: null, checked_at: null, ...j, ...(camp ? { campaign_id: camp.id } : {}), updated_at: at };
+    const job = { actor: 'customer', before: null, provider_ref: {}, error_code: null, error_detail: null, requested_at: at, finished_at: null, checked_at: null, ...j, ...(camp ? { campaign_id: camp.id } : {}), updated_at: at };
     const refusedJob = uniqueRefusal('ad_jobs', job, t('ad_jobs'));
     if (refusedJob) return send(res, 409, refusedJob);
     const n = (identities.get('ad_audit') ?? 0) + 1;

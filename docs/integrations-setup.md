@@ -111,6 +111,8 @@ Run these once in Supabase → SQL Editor (each is safe to run again):
    owner's totals `ylb_cancel_survey_totals`) and the cancel / resume / end-trial operations. Run it after
    `20261110000000_billing.sql`. Until it is run, no trial is offered and Cancel plan / Keep my plan open the
    Customer Portal instead.
+9. `supabase/migrations/20261115000000_ad_job_error_detail.sql` (§3c): `ad_jobs.error_detail`, why Zernio refused a
+   launch or a change. Run it after `20261108000000_ads_launch.sql`.
 
 Deleting an account deletes its rows, except usage ledger rows, which keep only the opaque customer tag for
 invoices, and `billing_trials` rows, which keep only keyed hashes of the email and card (their `user_id` becomes
@@ -360,10 +362,12 @@ search ad from the plan's search ad), then pause, resume, end, change the daily 
 only) and swap the ad from the Campaigns tab. Ad spend is billed by Meta or Google to **the customer's own**
 payment method; the app never handles ad money. Not from the app yet: TikTok, LinkedIn, Google Display, PMax and
 Video, lead forms, pixels and conversion goals, custom audiences, sitelinks, creating ad accounts or payment
-methods, deleting campaigns, special ad categories (housing, jobs, credit, politics, gambling) and EU targeting.
+methods, deleting campaigns, special ad categories (housing, jobs, credit, politics, gambling), EU targeting and
+the verified beneficiary and payer Meta asks for in some countries (Australia, Brazil, India, Malaysia, Singapore,
+Taiwan, Thailand: Zernio's `verified_advertiser_required`; customers are told to use Ads Manager for those).
 
 **Turn it on**
-1. Run `supabase/migrations/20261108000000_ads_launch.sql` (§2).
+1. Run `supabase/migrations/20261108000000_ads_launch.sql` and `20261115000000_ad_job_error_detail.sql` (§2).
 2. Zernio: the **ads add-on** must be on your Zernio plan (`ads_addon_required` otherwise). Managed ads cost $0.01
    per active ad a month after the first 500 free, and Zernio needs a payment method on your team past 500 live ads
    (`ads_allowance_exceeded`). These calls show in the ledger as vendor `zernio` with no cost: check Zernio's invoice.
@@ -422,6 +426,39 @@ for a sync newer than the send, as Google's data reaches Zernio 15 to 60 minutes
 itself, on a page load or on a restart. To look for a launch in Ads Manager yourself, search for the tag in its
 name: `YLB` and 12 letters and digits (e.g. `Winter pipes · Meta · YLB 1a2b3c4d5e6f`). "Launch again" (only after
 the check says it wasn't created) uses a new tag.
+
+**Meta's 24-hour rule.** Meta runs a daily budget only on an ad set scheduled for more than 24 hours, and the last
+day ends 23:59:59 in the ad account's zone, so a 1-day Meta launch is always refused (the launch of 6 Nov: as soon
+as approved at 5:40 PM, 1 day, about 6 hours). The review now blocks it before anything is sent ("Meta needs a
+daily-budget ad to run more than 24 hours. Choose at least 2 days."), counting "as soon as approved" or a start
+already past from the latest the launch can go out (the review lasts 10 minutes), and Budget and dates starts Meta at
+2 days or more. Launch again goes through the same check; Google runs whole days and is unchanged. Changing a running
+Meta ad set's end date isn't checked: Zernio's docs don't say Meta applies the rule there (if it refuses, the
+customer sees why, below).
+
+**Why a launch or change was refused.** The job keeps the refusal's safe fields in `ad_jobs.error_detail` and its
+audit row in `after` (Zernio's code, type, field and step, its hint cut to 300 characters, the fix link on Meta's,
+Google's or Zernio's docs only, and Meta's subcode and own words); `error_code` keeps our category. Customers read
+our own sentence for Zernio's Meta refusal codes (payment method, non-discrimination policy, Lead Ads terms,
+verified advertiser, unusable ad account, security check, blocked action, budget too low, object not accessible,
+permissions…) with Meta's fix link, then what the refusal left:
+- nothing: "Nothing was created and no money was spent." (or "Nothing was changed.");
+- a launch whose campaign and ad set Meta kept (Zernio couldn't delete them): those parts, listed ("campaign …1234"),
+  which can't spend and can be deleted in Ads Manager;
+- a change that went through in part (the spending limit raised before Meta refused the budget, the end date or the
+  campaign switch): "Only the first part of this change went through…", never "Nothing was changed";
+- a refused pause or end: "It's still running: pause it in Meta Ads Manager now", never "wait";
+- a launch made but not switched on: why, with the fix link.
+
+A refusal with no code of ours shows Zernio's hint as "Meta's message: "…"", plain text; "budget too low" also shows
+Meta's own message, which names Meta's minimum. Fix links go only to an exact list of hosts (`facebook.com`,
+`www.`, `business.` and `adsmanager.facebook.com`, `www.` and `transparency.meta.com`, `ads.google.com`,
+`support.google.com`), never through a redirect. Zernio plan, add-on, billing, key and rate-limit problems are never
+shown to customers: plan, add-on, billing and key problems alert you (Owner → Billing, `zernio_owner_alert`); a rate
+limit on our key only tells the customer to try again in a minute (no alert). To look one up: `select error_code,
+error_detail, provider_ref from public.ad_jobs where id = '…';` (`provider_ref.done`: the steps of a change that went
+through; `leftBehind`: what Meta kept of a launch). Before the migration is run, jobs finish without the detail and the
+log says `ads_error_detail_not_saved`.
 
 **Where live spend is named.** Deleting the app account, disconnecting Meta ads or Google Ads, and deleting a plan
 list the campaigns still on and what keeps running ("they keep running until you pause them in Ads Manager"); the
@@ -713,21 +750,24 @@ setup checklist), **Who sees it** (each place in the plan becomes a lookup and t
 radius and interests; Google: language; the "housing, jobs, credit…" question with no default), **The ads** (Meta:
 1 to 3 versions, each with its image: "Make the image" or "Use my photo"), **Budget and dates** (a daily amount per
 platform in that account's own currency, never converted; two platforms start empty under the plan's total; start,
-days and the computed last day with the time zone; the customer's limit and what's in use; **Paused / Active** with
-no default) and **Review** (the server's own review of exactly what will be sent, with blockers, claim ticks,
-warnings and what's left out). **Continue to confirm** opens the spend confirm: account and id tail, daily, dates
-with the time zone, planned total, Meta's spending limit (or Google's "pause or end it to stop"), Paused or Active,
-the ads and the link, the limit after this, and for an Active launch the "I understand this will spend real money"
-tick. The button repeats the choice and the amount ("Launch on Meta and spend $25.00 a day").
+days and the computed last day with the time zone, at least 2 days on Meta (§3c); the customer's limit and what's in
+use; **Paused / Active** with no default) and **Review** (the server's own review of exactly what will be sent, with
+blockers, claim ticks, warnings and what's left out). **Continue to confirm** opens the spend confirm: account and
+id tail, daily, dates with the time zone, planned total, Meta's spending limit (or Google's "pause or end it to
+stop"), Paused or Active, the ads and the link, the limit after this, and for an Active launch the "I understand
+this will spend real money" tick. The button repeats the choice and the amount ("Launch on Meta and spend $25.00 a
+day").
 
 The **Campaigns** tab: the limits strip (daily limit, committed, live campaigns), Refresh (reads Meta and Google at
 most every 5 minutes; also when the tab opens), the setup summary per platform, one row per campaign (state in plain
 words, daily, dates, spent so far, results as of their read time, Manage, Open in Ads Manager) and the full **Ad
 activity** (newest first, CSV). A row whose outcome is unknown shows the "may have happened" note and **Check
-status**, never "Try again". **Manage** shows the numbers, each ad's review, the campaign's activity, and Pause /
-Resume / Change daily budget / Change end date (Meta) / Swap ad / End, each with a preview and a confirm (the spend
-confirm for anything that can raise spend), and off with the reason while a change is still going or unconfirmed.
-The planner shows "Launched on Meta · Paused" on a launched plan and says edits don't change the live campaign.
+status**, never "Try again". A refused launch or change says why and what it left (nothing, a change done in part,
+parts Meta kept, a campaign still running), and links Meta's fix page when there is one (§3c); a refused launch
+offers **Launch again**. **Manage** shows the numbers, each ad's review, the campaign's activity, and Pause / Resume
+/ Change daily budget / Change end date (Meta) / Swap ad / End, each with a preview and a confirm (the spend confirm
+for anything that can raise spend), and off with the reason while a change is still going or unconfirmed. The planner
+shows "Launched on Meta · Paused" on a launched plan and says edits don't change the live campaign.
 
 The assistant can list launched campaigns and **open** the launch or change window; it never launches, resumes or
 changes a budget, never picks Paused or Active and never ticks a box.

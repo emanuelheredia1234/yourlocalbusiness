@@ -18,7 +18,7 @@ import { AdsStep } from './AdsStep';
 import { BudgetStep } from './BudgetStep';
 import { ReviewStep } from './ReviewStep';
 import { SpendConfirm, type LaunchAgain, type LaunchItem, type LaunchOutcome } from './SpendConfirm';
-import { draftProblems, forCurrency, launchablePlatforms, newDraft, previewRequest, readyToConfirm, requestKey, splitLine, type LaunchDraft } from './draft';
+import { draftProblems, forCurrency, launchablePlatforms, minDaysFor, newDraft, previewRequest, readyToConfirm, requestKey, splitLine, type LaunchDraft } from './draft';
 
 const STEPS = ['Ad account', 'Who sees it', 'The ads', 'Budget and dates', 'Review'] as const;
 
@@ -80,7 +80,7 @@ export function LaunchWizard({ project, plan, again = null, onClose }: { project
   const patch = (p: AdsPlatform, v: Partial<LaunchDraft>) => setDrafts((all) => ({ ...all, [p]: { ...all[p], ...v } }));
   const currencyOf = (p: AdsPlatform) => accounts[p]?.chosen?.currency;
   const split = splitLine(Object.values(drafts), plan, currencyOf);
-  const problems = draftProblems(d, { accountChosen: !!chosen?.usable, minDaily: chosen?.minDailyBudget });
+  const problems = draftProblems(d, { accountChosen: !!chosen?.usable, minDaily: chosen?.minDailyBudget, minDays: minDaysFor(d, chosen?.timezone || undefined) });
   const ready = (p: string) => readyToConfirm(drafts[p], project.id, plan.id);
   const included = platforms.filter((p) => drafts[p].include);
   const allReady = included.length > 0 && included.every(ready);

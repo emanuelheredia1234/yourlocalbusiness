@@ -1,7 +1,7 @@
 // Building the Zernio request from a saved plan (server/ads/build.mjs, spec §6): golden bodies for a Meta plan with
 // three creatives and a Google search plan, then every rule of §6 that decides what is sent.
 import { describe, expect, it } from 'vitest';
-import { addDays, buildLaunch, CTA_MAP, hashOf, keywordOf, launchDates, metaCreativeFor, namesFor, searchTextFor, storedBody, todayIn, withOffset } from './build.mjs';
+import { addDays, buildLaunch, CTA_MAP, hashOf, keywordOf, launchDates, launchWasTooShort, metaCreativeFor, metaMinDays, namesFor, searchTextFor, storedBody, todayIn, withOffset } from './build.mjs';
 import { AUSTIN, BERLIN, BUILT_AT, GOOGLE_ACCOUNT, LAUNCH_KEY, mediaUrl, META_ACCOUNT, picks, plan, project, TEXAS, US, ZID_GOOGLE, ZID_META } from './test-fixtures.mjs';
 
 const meta = (p = {}, pk = {}, extra = {}) => buildLaunch({ platform: 'meta', plan: plan(p), project: project(), account: META_ACCOUNT, zid: ZID_META, picks: picks(pk), launchKey: LAUNCH_KEY, builtAt: BUILT_AT, mediaUrl: mediaUrl(), ...extra });
@@ -157,6 +157,69 @@ describe('dates in the ad account’s time zone', () => {
 
   it('blocks when the account’s time zone is unknown', () => {
     expect(codes(buildLaunch({ platform: 'google', plan: plan(), project: project(), account: { ...GOOGLE_ACCOUNT, timezone: null }, zid: ZID_GOOGLE, picks: picks(), launchKey: LAUNCH_KEY, builtAt: BUILT_AT }).blockers)).toContain('GOOGLE_NO_TIMEZONE');
+  });
+});
+
+describe('Meta’s 24-hour rule for a daily budget (the live refusal of 6 Nov)', () => {
+  const blocker = (b) => b.blockers.find((n) => n.code === 'META_DAILY_24H');
+  // BUILT_AT is 10:00 on Fri 20 Nov 2026 in America/Chicago (the account's zone)
+  const at = (iso) => ({ builtAt: Date.parse(iso), mediaUrl: mediaUrl(Date.parse(iso)) });
+
+  it('blocks “as soon as approved” today with 1 day (the incident: about 6 hours), with a plain message', () => {
+    const b = meta({}, { startDate: null, durationDays: 1 }, at('2026-11-20T23:40:00Z'));
+    expect(blocker(b)).toEqual({ code: 'META_DAILY_24H', message: 'Meta needs a daily-budget ad to run more than 24 hours. Choose at least 2 days.' });
+    // the ad set would end at 23:59:59 the same evening
+    expect(b.dates).toMatchObject({ asap: true, startDay: '2026-11-20', endDay: '2026-11-20', minDays: 2 });
+  });
+
+  it('blocks a future start day with 1 day: a date-only end is 23:59:59, so not even midnight to midnight is enough', () => {
+    expect(blocker(meta({}, { startDate: '2026-12-01', durationDays: 1 }))?.message).toContain('Choose at least 2 days.');
+    expect(blocker(meta({}, { startDate: '2026-12-01', startTime: '00:00', durationDays: 1 }))).toBeTruthy();
+  });
+
+  it('blocks a start time late in the day when the schedule comes to 24 hours or less', () => {
+    expect(blocker(meta({}, { startDate: '2026-11-20', startTime: '18:00', durationDays: 1 }))).toBeTruthy();
+    // 23:30 the evening before the clocks go forward (14 Mar 2027): 2 days are only 23½ hours
+    const dst = meta({}, { startDate: '2027-03-13', startTime: '23:30', durationDays: 2 });
+    expect(blocker(dst)?.message).toBe('Meta needs a daily-budget ad to run more than 24 hours. Choose at least 3 days.');
+    expect(blocker(meta({}, { startDate: '2027-03-13', startTime: '23:30', durationDays: 3 }))).toBeUndefined();
+  });
+
+  it('counts “as soon as approved” from the latest the create can go out (the review lasts 10 minutes)', () => {
+    // 23:50 in Chicago with 2 days: 24 h 10 min from the review, under 24 h from a send 10 minutes later
+    const late = meta({}, { startDate: null, durationDays: 2 }, at('2026-11-21T05:50:00Z'));
+    expect(blocker(late)?.message).toContain('Choose at least 3 days.');
+    // a start time already past counts from the send, not from the morning: 00:00 today, reviewed at 23:50, 2 days
+    expect(blocker(meta({}, { startDate: '2026-11-20', startTime: '00:00', durationDays: 2 }, at('2026-11-21T05:50:00Z')))?.message).toContain('Choose at least 3 days.');
+  });
+
+  it('lets 2 days through (as soon as approved, a future day, a late start time) and leaves Google alone', () => {
+    expect(blocker(meta({}, { startDate: null, durationDays: 2 }))).toBeUndefined();
+    expect(blocker(meta({}, { startDate: null, durationDays: 2 }, at('2026-11-21T01:40:00Z')))).toBeUndefined();
+    expect(blocker(meta({}, { startDate: '2026-12-01', durationDays: 2 }))).toBeUndefined();
+    expect(blocker(meta({}, { startDate: '2026-12-01', startTime: '23:30', durationDays: 2 }))).toBeUndefined();
+    expect(meta({}, { startDate: '2026-12-01', durationDays: 2 }).blockers).toEqual([]);
+    // Google runs whole days: one day is fine there
+    const g = google({}, { startDate: null, durationDays: 1 });
+    expect(codes(g.blockers)).not.toContain('META_DAILY_24H');
+    expect(g.dates).not.toHaveProperty('minDays');
+  });
+
+  it('works out the fewest days from the start, in the account’s zone', () => {
+    const tz = 'America/Chicago';
+    expect(metaMinDays({ startDay: '2026-12-01', tz, builtAt: BUILT_AT })).toBe(2);
+    expect(metaMinDays({ startDay: '2026-11-20', asap: true, tz, builtAt: Date.parse('2026-11-21T05:55:00Z') })).toBe(3);
+    expect(metaMinDays({ startDay: '2027-03-13', time: '23:30', tz, builtAt: BUILT_AT })).toBe(3);
+    expect(metaMinDays({ startDay: '2027-03-13', time: '22:00', tz, builtAt: BUILT_AT })).toBe(2);
+  });
+
+  it('recognises a sent Meta launch whose schedule was 24 hours or less from its own confirm (never Meta’s text)', () => {
+    // the live job: as soon as approved at 5:40 PM in Los Angeles on Fri 6 Nov 2026, 1 day
+    const incident = { kind: 'launch', requested_at: '2026-11-07T01:40:00Z', request: { platform: 'meta', account: { timezone: 'America/Los_Angeles' }, start: '2026-11-06', startTime: null, asap: true, end: '2026-11-06', days: 1 } };
+    expect(launchWasTooShort(incident)).toBe(true);
+    expect(launchWasTooShort({ ...incident, request: { ...incident.request, end: '2026-11-07', days: 2 } })).toBe(false);
+    expect(launchWasTooShort({ ...incident, request: { ...incident.request, platform: 'google' } })).toBe(false);
+    expect(launchWasTooShort({ kind: 'launch', request: null })).toBe(false);
   });
 });
 

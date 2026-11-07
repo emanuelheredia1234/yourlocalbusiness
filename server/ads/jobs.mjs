@@ -7,17 +7,41 @@
 // - A `sending` job older than 300 s (longer than one job's step timeouts) that this process isn't running was left
 //   by a restart: it becomes `unknown` INTERRUPTED (its campaign too, when it was launching), on startup and on every
 //   read. Nothing is ever sent again by itself: `unknown` reads "may have happened - check status before trying again".
+// - error_code is our category; error_detail (20261115000000_ad_job_error_detail.sql) keeps the refusal's safe fields
+//   (zernioAds.mjs refusalDetail), from which the app is told why (messages.mjs refusalOf).
 // Every query names the server-resolved user.
 
-import { fail } from '../integrations/common.mjs';
-import { messageFor } from './messages.mjs';
+import { fail, safeLog } from '../integrations/common.mjs';
+import { messageFor, refusalOf } from './messages.mjs';
+import { launchWasTooShort } from './build.mjs';
 
 export const STUCK_AFTER_MS = 300_000;
 export const CHECK_EVERY_MS = 30_000;
 
 const iso = (ms) => new Date(ms).toISOString();
 
-/** A job as the app sees it (AdJob): our message, no provider ids. */
+/**
+ * Why a failed job failed (or a done one with a refused step, e.g. made but not switched on), as the customer reads
+ * it: our words, the platform's own only as labelled data. From the row: its action (a refused pause or end says
+ * it's still running), the steps of a change that went through (provider_ref.done: never "Nothing was changed"
+ * after them), whether its campaign switch was still to come (request.ops), and what Meta kept of a refused launch
+ * (provider_ref.leftBehind).
+ */
+export function jobRefusal(row, platform) {
+  const p = platform ?? row.platform ?? 'meta';
+  const req = row.request ?? {};
+  const ref = row.provider_ref ?? {};
+  const kind = row.kind === 'launch' ? 'launch' : typeof row.kind === 'string' && row.kind ? row.kind : 'change';
+  const done = kind === 'launch' || !Array.isArray(ref.done) ? [] : ref.done.filter((o) => typeof o === 'string');
+  const campaignOff = Array.isArray(req.ops) && req.ops.some((o) => o?.op === 'campaignStatus' && o.status === 'active') && !done.includes('campaignStatus');
+  const leftBehind = kind === 'launch' && Array.isArray(ref.leftBehind) ? ref.leftBehind.length : 0;
+  return refusalOf({ code: row.error_code ?? 'REFUSED', detail: row.error_detail ?? null, kind, platform: p, ctx: { currency: req.account?.currency ?? req.currency, cap: req.spendCap ?? req.newSpendCap }, shortSchedule: kind === 'launch' && p === 'meta' && launchWasTooShort(row), done, campaignOff, leftBehind });
+}
+
+/** A done job that a refused step left short (e.g. made but not switched on) and whose refusal was kept. */
+const doneWithRefusal = (row) => row.state === 'done' && !!row.error_code && !!row.error_detail && typeof row.error_detail === 'object';
+
+/** A job as the app sees it (AdJob): our message, no provider ids; for a refusal, why (platformSays, fixUrl). */
 export function jobOut(row, platform) {
   if (!row) return null;
   const p = platform ?? row.platform ?? 'meta';
@@ -25,14 +49,17 @@ export function jobOut(row, platform) {
   const unknownCode = row.kind === 'launch' ? 'UNKNOWN_LAUNCH' : 'UNKNOWN';
   const req = row.request ?? {};
   const said = { platform: p, currency: req.account?.currency ?? req.currency, cap: req.spendCap ?? req.newSpendCap };
+  const refused = row.state === 'failed' || doneWithRefusal(row) ? jobRefusal(row, p) : null;
   const message =
     row.state === 'unknown'
       ? messageFor(code === 'INTERRUPTED' ? 'INTERRUPTED' : code && code !== 'UNKNOWN' ? code : unknownCode, said)
-      : row.state === 'failed' || (row.state === 'done' && code)
-        ? messageFor(code ?? 'REFUSED', said)
-        : row.state === 'done'
-          ? messageFor('DONE')
-          : messageFor('SENDING');
+      : refused
+        ? refused.message
+        : row.state === 'done' && code
+          ? messageFor(code, said)
+          : row.state === 'done'
+            ? messageFor('DONE')
+            : messageFor('SENDING');
   const checked = row.checked_at ? Date.parse(row.checked_at) : 0;
   return {
     id: row.id,
@@ -41,6 +68,8 @@ export function jobOut(row, platform) {
     state: row.state,
     ...(code ? { code } : {}),
     message,
+    ...(refused?.platformSays ? { platformSays: refused.platformSays } : {}),
+    ...(refused?.fixUrl ? { fixUrl: refused.fixUrl } : {}),
     actor: row.actor ?? 'customer',
     requestedAt: row.requested_at,
     ...(row.finished_at ? { finishedAt: row.finished_at } : {}),
@@ -50,7 +79,7 @@ export function jobOut(row, platform) {
   };
 }
 
-export function createAdJobs({ db, now = () => Date.now() }) {
+export function createAdJobs({ db, now = () => Date.now(), log = console }) {
   /** jobs this process is running right now (never swept as stuck) */
   const active = new Set();
 
@@ -91,13 +120,27 @@ export function createAdJobs({ db, now = () => Date.now() }) {
     return got[0] ?? null;
   }
 
-  /** sending|unknown → done | failed | unknown. A finished job stays as it is. */
-  async function finish(userId, jobId, { state, code = null, ref }) {
+  /**
+   * sending|unknown → done | failed | unknown. A finished job stays as it is. detail: the refusal's safe fields
+   * (error_detail). Before 20261115000000_ad_job_error_detail.sql is run the column isn't there: the job is still
+   * finished, without them (a database write; nothing goes to Zernio).
+   */
+  async function finish(userId, jobId, { state, code = null, ref, detail = null }) {
     const cur = await byId(userId, jobId);
     if (!cur) return null;
     if (!['queued', 'sending', 'unknown'].includes(cur.state)) return cur;
     const patch = { state, finished_at: iso(now()), error_code: code ?? (state === 'unknown' ? 'UNKNOWN' : state === 'failed' ? 'REFUSED' : null), ...(ref ? { provider_ref: { ...(cur.provider_ref ?? {}), ...ref } } : {}) };
-    const got = await db.update('ad_jobs', { id: jobId, user_id: userId, state: cur.state }, patch, { returning: true });
+    const where = { id: jobId, user_id: userId, state: cur.state };
+    let got;
+    if (detail) {
+      try {
+        got = await db.update('ad_jobs', where, { ...patch, error_detail: detail }, { returning: true });
+      } catch (e) {
+        if (e?.name !== 'DbError' || e.code !== 'BAD_REQUEST') throw e;
+        safeLog('ads_error_detail_not_saved', { code: e.code, hint: 'run supabase/migrations/20261115000000_ad_job_error_detail.sql' }, log);
+        got = await db.update('ad_jobs', where, patch, { returning: true });
+      }
+    } else got = await db.update('ad_jobs', where, patch, { returning: true });
     return got[0] ?? (await byId(userId, jobId));
   }
 

@@ -2,9 +2,8 @@
 // the account and the limits again; nothing is sent to Meta or Google). Blockers stop the launch; claim words
 // need the customer's own tick; warnings and what's left out are said plainly.
 import type { ClaimFlag, LaunchReview, PlainNote } from '@/lib/ads/launchTypes';
-import { launchLines } from '@/lib/ads/launchFormat';
+import { launchLines, safeFixUrl } from '@/lib/ads/launchFormat';
 import { Callout, Checkbox } from '@/components/ui/primitives';
-import { safeFixUrl } from '../campaigns/SetupChecklist';
 
 function Notes({ title, tone, notes }: { title: string; tone: 'bad' | 'warn' | 'info'; notes: PlainNote[] }) {
   if (!notes.length) return null;
