@@ -13,9 +13,10 @@ import type { ChatMessage } from '@/store/assistant';
 import { matchPageIntent } from './intents';
 import type { StepResult } from './prompt';
 import { arg, catalogLine, defineTool, type AnyTool } from './registry';
+import { experimentsOnNow } from '@/lib/experiments/config';
 
 /** The groups listed by name until they're needed (any other group, the core and the excluded tools, is always in full). */
-export const TOOL_GROUP_NAMES = ['social', 'studio', 'marketing', 'brand', 'agents'] as const;
+export const TOOL_GROUP_NAMES = ['social', 'studio', 'marketing', 'brand', 'agents', 'ab'] as const;
 export type ToolGroupName = (typeof TOOL_GROUP_NAMES)[number];
 
 /** What each group covers, in a few words (shown with its tools' names). */
@@ -25,13 +26,14 @@ export const GROUP_ABOUT: Record<ToolGroupName, string> = {
   marketing: 'lead magnet, emails, subscribers, leads, ad campaigns, the SEO page, code & assets, published pages',
   brand: 'brand kit, Brain skills and documents, brand voice, analytics, the Marketplace, product ideas, projects, backup',
   agents: 'Manus and Viktor (Slack): open their build window for a page or asset, draft a message the owner confirms and sends them, what they’re working on',
+  ab: 'A/B tests, Trial Reels',
 };
 
 /** The groups that fit each page, most fitting first (Code & assets is in Studio, its tools are marketing's). */
 const PAGE_GROUPS: Partial<Record<Route, ToolGroupName[]>> = {
   dashboard: ['social'],
   calendar: ['social'],
-  'marketing-social': ['social'],
+  'marketing-social': ['social', 'ab'],
   studio: ['studio', 'marketing', 'agents'],
   marketing: ['marketing'],
   'marketing-seo': ['marketing', 'agents'],
@@ -54,6 +56,13 @@ export const GROUP_BUDGET = 8_000;
 const LIST_TOOLS = 'list_tools';
 
 const isGroupName = (g: unknown): g is ToolGroupName => typeof g === 'string' && (TOOL_GROUP_NAMES as readonly string[]).includes(g);
+
+/**
+ * Groups listed only while their feature is on here, so they cost the prompt nothing otherwise: A/B tests (signed
+ * in, and the server has them; never in the claude.ai build).
+ */
+const GROUP_ON: Partial<Record<ToolGroupName, () => boolean>> = { ab: experimentsOnNow };
+export const groupOn = (g: ToolGroupName) => GROUP_ON[g]?.() ?? true;
 const uniq = <T>(list: T[]) => [...new Set(list)];
 
 /** A group's tool lines, as the tool list shows them in full. */
@@ -95,7 +104,7 @@ export function fullGroups(groups: Record<string, AnyTool[]>, o: CatalogInput, b
   const groupOf = new Map<string, ToolGroupName>();
   const size = new Map<ToolGroupName, number>();
   for (const [g, tools] of Object.entries(groups)) {
-    if (!isGroupName(g) || !tools.length) continue;
+    if (!isGroupName(g) || !tools.length || !groupOn(g)) continue;
     for (const t of tools) groupOf.set(t.name, g);
     size.set(g, groupText(tools).length);
   }
@@ -137,6 +146,7 @@ export function toolCatalog(groups: Record<string, AnyTool[]>, o: CatalogInput, 
     // the core and the groups in full (in the registry's order), the tools that only explain, then the others by name
     for (const [g, tools] of Object.entries(groups)) {
       if (g === 'excluded') last.push(...tools);
+      else if (isGroupName(g) && !groupOn(g)) continue;
       else if (!isGroupName(g) || full.includes(g)) first.push(...tools);
       else if (tools.length) named.push(`- ${g} (${GROUP_ABOUT[g]}): ${tools.map((t) => t.name).join(', ')}`);
     }

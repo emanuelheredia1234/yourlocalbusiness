@@ -76,6 +76,10 @@ function windowNote(w: PubWindow): string {
       return 'Opened the launch window: pick the ad account, places, budget and Paused or Active, review it, then confirm the spend there';
     case 'ad-change':
       return 'Opened the change window: check what changes and what it costs, then confirm there';
+    case 'make-variations':
+      return 'Opened “Make variations”: choose what changes, check the cost, generate, then save the draft test there';
+    case 'experiment':
+      return `Opened the A/B test${w.name ? ` “${w.name}”` : ''}: confirm there`;
     case 'page':
       return `Opened ${pageName(w.route, w.tab)}: confirm there`;
   }

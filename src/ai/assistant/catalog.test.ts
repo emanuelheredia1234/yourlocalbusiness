@@ -11,6 +11,15 @@ import { catalogLine, defineTool, type AnyTool } from './registry';
 import { sendToAssistant } from './run';
 import { TOOL_GROUPS, registry } from './tools';
 import { runTool, seedWorkspace } from './testing';
+import { useAuth } from '@/lib/cloud/auth';
+import { useExperimentsConfig } from '@/lib/experiments/config';
+
+/** A/B tests on here (signed in, the server has them), or off. */
+const abOn = (on = true) => {
+  useAuth.setState({ phase: on ? 'ready' : 'loading' } as never);
+  useExperimentsConfig.setState({ config: on ? { enabled: true, reachable: true } : null });
+};
+afterEach(() => abOn(false));
 
 type Group = (typeof TOOL_GROUP_NAMES)[number];
 const result = (tool: string, extra: Partial<StepResult> = {}): StepResult => ({ step: 1, tool, ok: true, status: 'ok', ...extra });
@@ -23,6 +32,7 @@ const ALL = Infinity;
 
 describe('the tool list', () => {
   it('has the core and the excluded tools in full, the page’s group in full, the others by name with how to get them', () => {
+    abOn();
     const c = toolCatalog(TOOL_GROUPS, { route: 'marketing-ads', message: 'hello' });
     expect(c.groups).toEqual(['marketing']);
     expect(full(c.full, 'core') && full(c.full, 'excluded') && full(c.full, 'marketing')).toBe(true);
@@ -41,6 +51,18 @@ describe('the tool list', () => {
       expect(c.full).toContain(t.name);
       expect(names).toContain(t.name);
     }
+  });
+
+  it('lists the A/B test group only while A/B tests are on here (it costs the prompt nothing otherwise)', () => {
+    abOn(false);
+    const off = toolCatalog(TOOL_GROUPS, { route: 'marketing-social', message: 'hello' });
+    expect(off.full).not.toContain('list_experiments');
+    expect(off.full).not.toContain('- ab (');
+    abOn();
+    const on = toolCatalog(TOOL_GROUPS, { route: 'marketing-social', message: 'hello' });
+    expect(on.groups).toEqual(['social', 'ab']);
+    expect(on.full).toContain(catalogLine(TOOL_GROUPS.ab[0]));
+    expect(toolCatalog(TOOL_GROUPS, { route: 'calendar', message: 'hello' }).full).toContain(`- ab (${GROUP_ABOUT.ab}): list_experiments`);
   });
 
   it('fits each page: Studio has Code & assets (marketing’s) next, the Marketplace has studio next, when there’s room', () => {
