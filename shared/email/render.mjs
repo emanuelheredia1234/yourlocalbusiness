@@ -423,8 +423,11 @@ function customHtml(b, rc, box) {
     warn(rc, 'IMAGE_EMPTY');
     return '';
   });
-  // merge tags in its text (already escaped markup around them)
-  html = html.replace(new RegExp(TAG_RE.source, 'g'), (raw, name) => tagHtml(name, raw, rc, false));
+  // merge tags in its text only, never inside a tag's attributes (a value could break out of a style)
+  html = html
+    .split(/(<[^>]*>)/)
+    .map((part) => (part.startsWith('<') ? part : part.replace(new RegExp(TAG_RE.source, 'g'), (raw, name) => tagHtml(name, raw, rc, false))))
+    .join('');
   return rowFor(b, `<div class="${scope}" style="${textStyle(rc)}">${html}</div>`, rc, box);
 }
 

@@ -154,7 +154,7 @@ const STYLE_PROPS = new Set(['color', 'background-color', 'background', 'font-fa
 const BOX_PROP = /^(padding|margin)(-(top|right|bottom|left))?$/;
 const BORDER_PROP = /^border(-(top|right|bottom|left))?(-(width|style|color))?$|^border(-(top|bottom)-(left|right))?-radius$/;
 const DISPLAYS = new Set(['block', 'inline', 'inline-block', 'none', 'table', 'table-cell']);
-const BANNED_VALUE = /url\s*\(|expression\s*\(|javascript:|vbscript:|@import|behavior|-moz-binding|var\s*\(|image\s*\(|image-set\s*\(|attr\s*\(|\\|<|>|\/\*|position/i;
+const BANNED_VALUE = /url\s*\(|expression\s*\(|javascript:|vbscript:|@import|behavior|-moz-binding|var\s*\(|image\s*\(|image-set\s*\(|attr\s*\(|\\|<|>|\{|\}|\/\*|position/i;
 const COLOR_VALUE = /^(#[0-9a-f]{3,8}|(rgb|rgba|hsl|hsla)\(\s*[0-9.%\s,/]+\)|[a-z]{3,20})$/i;
 
 /** Split CSS declarations on ; outside quotes and brackets. */

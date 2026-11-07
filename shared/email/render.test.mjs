@@ -129,6 +129,22 @@ describe('invariants', () => {
     }
   });
 
+  it('merge tags in custom HTML fill its text only, never a style or other attribute', () => {
+    const doc = { v: 1, theme: { id: 'brand' }, blocks: [{ type: 'custom', html: '<p style="font-family:{{first_name}}" title="{{first_name}}">Hi</p><p>Dear {{first_name}}</p>' }] };
+    const values = { ...BASE_CTX.values, first_name: 'x;background-image:url(https://track.example/p.gif)' };
+    for (const target of TARGETS) {
+      const { html } = renderEmail(doc, ctx(target, { values }));
+      // the value lands in the text only, never in a tag
+      expect(html.split('url(')).toHaveLength(2);
+      expect(html).toContain('Dear x;background-image:url(https://track.example/p.gif)</p>');
+      expect(html).not.toMatch(/<[^>]*url\(/);
+      expect(html).not.toMatch(/style="[^"]*background-image/);
+    }
+    // the value alone in a style: no url( anywhere
+    const onlyStyle = { ...doc, blocks: [{ type: 'custom', html: '<p style="font-family:{{first_name}}">Hi</p>' }] };
+    expect(renderEmail(onlyStyle, ctx('omnisend', { values })).html).not.toContain('url(');
+  });
+
   it('every <img has alt and width; every <a goes to https, #, or the unsubscribe tag', () => {
     for (const target of TARGETS) {
       const { html } = renderEmail(ALL, ctx(target));

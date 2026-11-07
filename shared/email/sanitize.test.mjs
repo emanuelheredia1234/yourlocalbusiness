@@ -128,6 +128,9 @@ describe('inline styles', () => {
     expect(filterStyle('color:red!important')).toBe('color:red');
     expect(filterStyle('color:red !important', { allowImportant: true })).toBe('color:red!important');
     for (const bad of ['background:url(x)', 'width:expression(1)', 'color:var(--x)', 'font-family:\\61 rial', 'behavior:url(a)', 'background-color:red;/*x*/']) expect(filterStyle(bad)).not.toMatch(/url|expression|var\(|\\|behavior|\/\*/);
+    // a merge tag is never kept in a style (its value could add CSS after sanitizing)
+    expect(filterStyle('font-family:{{first_name}};color:red')).toBe('color:red');
+    expect(filterStyle('color:}')).toBe('');
   });
 });
 

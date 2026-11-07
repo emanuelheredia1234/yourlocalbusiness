@@ -660,6 +660,14 @@ describe('designed email drafts', () => {
     expect(html.split('[[unsubscribe_link]]')).toHaveLength(2);
   });
 
+  it('a merge value can’t add CSS through a custom block’s style (no remote pixel past IMAGE_NOT_HOSTED)', async () => {
+    const doc = { v: 1, blocks: [{ type: 'custom', html: '<p style="font-family:{{first_name}}">Hi</p>' }] };
+    const { res, html } = await draftWith(designed({ doc, values: { ...VALUES, first_name: 'x;background-image:url(https://track.example/p.gif)' } }));
+    expect(res.statusCode).toBe(201);
+    expect(html).not.toContain('url(');
+    expect(html).not.toContain('track.example');
+  });
+
   it('buy links: the caller’s own offers only (UNKNOWN_BUY_LINK otherwise, nothing made in Omnisend)', async () => {
     for (const doc of [
       { v: 1, blocks: [{ type: 'button', label: 'Buy', link: { kind: 'offer', offerId: BETA_OFFER } }] },
