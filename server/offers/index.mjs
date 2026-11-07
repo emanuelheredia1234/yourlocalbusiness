@@ -39,6 +39,7 @@ import { drain } from '../leads.mjs';
 import { createWhop } from '../payments/whop.mjs';
 import { CONNECT_MIGRATION, accountView, createConnectCore, serveConnectReturn } from '../payments/stripeConnect.mjs';
 import { createBuy, offerLimitsFromEnv } from './buy.mjs';
+import { createStripeOffers } from './stripeOffer.mjs';
 import { CHECKOUT_HOSTS, PROVIDERS } from './providers.mjs';
 import { ID_RE, MAX_OFFERS_PER_USER, OFFERS_MIGRATION, PROJECT_ID_RE, createPaymentCrypto, describeOffer, describeSale, newId, paymentKeysSecret } from './store.mjs';
 
@@ -84,6 +85,7 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   // Stripe Connect: the sellers' own Stripe accounts (its cache drops follow the buy links')
   const connect = createConnectCore({ db, env, fetch, now, log, billing, stripe, ...(sellerTermsReady === undefined ? {} : { sellerTermsReady }), onAccountChanged: (rowId) => buy.dropAccount?.(rowId) });
   const stripeOn = enabled && connect.enabled;
+  const stripeOffers = createStripeOffers({ db, connect, pc, cleanText: (v, max, what) => cleanText(v, max, what) });
   const blocked = new Set();
 
   const notes = () => {
@@ -196,7 +198,8 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   async function salesByOffer(userId, offers) {
     const map = new Map();
     if (!offers.length) return map;
-    const envOf = new Map(offers.map((o) => [o.id, o.provider_ref?.environment === 'sandbox' ? 'sandbox' : 'production']));
+    // a Stripe offer sells in this deployment's one Stripe mode
+    const envOf = new Map(offers.map((o) => [o.id, o.provider === 'stripe' ? (connect.cfg.environment ?? 'production') : o.provider_ref?.environment === 'sandbox' ? 'sandbox' : 'production']));
     const rows = await db.select('sales', { user_id: userId, offer_id: ['in', [...envOf.keys()]], status: ['in', SALE_COUNTED] }, { select: 'offer_id,environment,paid_at,created_at', limit: 5000 });
     for (const r of rows) {
       if (r.environment !== envOf.get(r.offer_id)) continue;
@@ -214,14 +217,15 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
     if (!row) throw fail(404, 'NOT_FOUND', 'That offer isn’t in your account.');
     return row;
   }
-  const out = async (row, origin) => describeOffer(row, origin, (await salesByOffer(row.user_id, [row])).get(row.id) ?? { count: 0, last: null });
+  const out = async (row, origin) => describeOffer(row, origin, (await salesByOffer(row.user_id, [row])).get(row.id) ?? { count: 0, last: null }, (await stripeOffers.extrasFor([row])).get(row.id) ?? null);
 
   async function listOffers(who, url, origin) {
     const projectId = url.searchParams.get('projectId');
     const filters = { user_id: who.id, ...(projectId ? { project_id: projectOf(projectId) } : {}), ...(url.searchParams.get('archived') === '1' ? {} : { status: ['neq', 'archived'] }) };
     const rows = await db.select('offers', filters, { order: 'created_at.desc', limit: MAX_OFFERS_PER_USER });
     const sales = await salesByOffer(who.id, rows);
-    return { offers: rows.map((r) => describeOffer(r, origin, sales.get(r.id) ?? { count: 0, last: null })) };
+    const extras = await stripeOffers.extrasFor(rows);
+    return { offers: rows.map((r) => describeOffer(r, origin, sales.get(r.id) ?? { count: 0, last: null }, extras.get(r.id) ?? null)) };
   }
 
   async function createExternal(who, b, origin) {
@@ -248,17 +252,17 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
 
   async function patchOffer(who, id, b, origin) {
     const row = await own(who.id, id);
-    const patch = {};
+    const patch = row.provider === 'stripe' ? await stripeOffers.patchFields(row, b) : {};
     const title = cleanText(b.title, 200, 'The title');
     if (title !== undefined) {
       if (!title) throw fail(400, 'BAD_REQUEST', 'Give the offer a title.');
       patch.title = title;
     }
-    if (b.priceDisplay !== undefined) {
+    if (b.priceDisplay !== undefined && row.provider !== 'stripe') {
       if (row.provider !== 'external') throw fail(400, 'BAD_REQUEST', 'A Whop offer’s price comes from its plan: use “Refresh from Whop”.');
       patch.price_display = cleanText(b.priceDisplay, 40, 'The price');
     }
-    if (b.url !== undefined) {
+    if (b.url !== undefined && row.provider !== 'stripe') {
       if (row.provider !== 'external') throw fail(400, 'BAD_REQUEST', 'Attach another plan to change where a Whop offer goes.');
       patch.provider_ref = { ...(row.provider_ref ?? {}), url: linkOf(b.url) };
     }
@@ -266,6 +270,7 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
       if (b.status === 'paused' && ['active', 'paused'].includes(row.status)) patch.status = 'paused';
       else if (b.status === 'active' && ['active', 'paused'].includes(row.status)) {
         if (row.status === 'paused' && row.provider === 'whop') await sellable(row);
+        if (row.status === 'paused' && row.provider === 'stripe') await stripeOffers.sellable(row);
         patch.status = 'active';
       } else throw fail(409, 'BAD_STATUS', row.status === 'archived' ? 'This offer is archived.' : 'This offer’s link isn’t ready yet: use “Check again”.');
     }
@@ -371,7 +376,13 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
         const got = await whop.createOffer(who, b, origin, pc.offerIdFor);
         return reply(req, res, got.status, { offer: await out(got.row, origin) });
       }
-      throw fail(400, 'BAD_REQUEST', b.provider === 'stripe' ? 'Stripe checkout isn’t available yet.' : 'Choose Whop or your own checkout link.');
+      if (b.provider === 'stripe') {
+        if (!stripeOn) throw notSetUp(`Stripe Connect needs: ${connect.cfg.missing().join(', ') || 'SUPABASE_URL and SUPABASE_SECRET_KEY'}.`, connect.MSG.unavailable);
+        const row = await stripeOffers.create(who, b);
+        buy.drop(row.id);
+        return reply(req, res, 200, { offer: await out(row, origin) });
+      }
+      throw fail(400, 'BAD_REQUEST', 'Choose Whop, Stripe or your own checkout link.');
     }
     if (id === 'sales' && !action && method === 'GET') return reply(req, res, 200, await listSales(who, url));
     if (id === 'summary' && !action && method === 'GET') return reply(req, res, 200, await summary(who, url));

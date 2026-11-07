@@ -51,7 +51,9 @@ describe('/api/offers', () => {
     expect((await h.call(who, 'GET', '/api/offers?projectId=p1&archived=1')).body.offers).toHaveLength(1);
     expect((await h.call(who, 'DELETE', `/api/offers/${id}`)).body).toEqual({ ok: true });
     expect((await h.call(who, 'DELETE', `/api/offers/${id}`)).body).toEqual({ ok: true });
-    expect((await h.call(who, 'POST', '/api/offers', { projectId: 'p1', title: 'x', provider: 'stripe' })).status).toBe(400);
+    // Stripe without Connect set up on this app (no key, no Connect secret): not set up, never a half-made offer
+    expect((await h.call(who, 'POST', '/api/offers', { projectId: 'p1', title: 'x', provider: 'stripe' })).body.code).toBe('NOT_SET_UP');
+    expect((await h.call(who, 'POST', '/api/offers', { projectId: 'p1', title: 'x', provider: 'paypal' })).status).toBe(400);
   });
 
   it('writes need a plan; reading, pausing, archiving and deleting don’t', async () => {

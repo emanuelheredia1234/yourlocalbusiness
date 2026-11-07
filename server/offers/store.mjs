@@ -81,10 +81,13 @@ export function hostOf(href) {
   }
 }
 
-/** What the browser sees of an offer: never a key, never the checkout link's query string (the host is enough). */
-export function describeOffer(r, origin, sales = null) {
+/**
+ * What the browser sees of an offer: never a key, never the checkout link's query string (the host is enough).
+ * stripe: a Stripe offer's extras ({ environment, delivery, problem? }, server/offers/stripeOffer.mjs).
+ */
+export function describeOffer(r, origin, sales = null, stripe = null) {
   const ref = r.provider_ref && typeof r.provider_ref === 'object' ? r.provider_ref : {};
-  const checkoutHost = r.provider === 'whop' ? hostOf(ref.purchaseUrl) || (ref.environment === 'sandbox' ? 'sandbox.whop.com' : 'whop.com') : r.provider === 'external' ? hostOf(ref.url) : '';
+  const checkoutHost = r.provider === 'whop' ? hostOf(ref.purchaseUrl) || (ref.environment === 'sandbox' ? 'sandbox.whop.com' : 'whop.com') : r.provider === 'external' ? hostOf(ref.url) : r.provider === 'stripe' ? 'checkout.stripe.com' : '';
   return {
     id: r.id,
     projectId: r.project_id,
@@ -94,12 +97,14 @@ export function describeOffer(r, origin, sales = null) {
     currency: r.currency ?? null,
     provider: r.provider,
     status: r.status,
-    environment: r.provider === 'whop' ? (ref.environment === 'sandbox' ? 'sandbox' : 'production') : null,
+    environment: r.provider === 'whop' ? (ref.environment === 'sandbox' ? 'sandbox' : 'production') : r.provider === 'stripe' ? (stripe?.environment ?? null) : null,
     // the Whop connection it sells through (the browser matches it by id: a reconnect makes a new one)
     connectionId: r.provider === 'whop' ? r.connection_id ?? null : null,
     checkoutHost,
     // an outside link is the owner's own: they see it to edit it
     ...(r.provider === 'external' ? { url: typeof ref.url === 'string' ? ref.url : '' } : {}),
+    // a Stripe offer: how the buyer gets it, and whether the seller still has Stripe setup to finish
+    ...(r.provider === 'stripe' ? { delivery: stripe?.delivery ?? { kind: 'none' }, ...(stripe?.problem ? { problem: stripe.problem } : {}) } : {}),
     clicks: Number(r.clicks) || 0,
     lastClickAt: r.last_click_at ?? null,
     sales: sales ?? { count: 0, last: null },
@@ -123,6 +128,10 @@ export function describeSale(r) {
     buyerEmail: r.buyer_email ?? null,
     paidAt: r.paid_at ?? null,
     createdAt: r.created_at ?? null,
+    // P6 (Stripe): our fee, how much of it went back, a dispute's status, the paid downloads
+    ...(r.provider === 'stripe'
+      ? { feeMinor: r.application_fee_minor == null ? null : Number(r.application_fee_minor), feePct: r.fee_pct == null ? null : Number(r.fee_pct), feeReturnedMinor: Number(r.fee_returned_minor) || 0, disputeStatus: r.dispute_status ?? null, downloads: Number(r.downloads) || 0 }
+      : {}),
   };
 }
 
