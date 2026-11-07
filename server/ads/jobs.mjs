@@ -20,13 +20,26 @@ export const CHECK_EVERY_MS = 30_000;
 
 const iso = (ms) => new Date(ms).toISOString();
 
-/** Why a failed job failed, as the customer reads it (our words; the platform's own only as labelled data). */
+/**
+ * Why a failed job failed (or a done one with a refused step, e.g. made but not switched on), as the customer reads
+ * it: our words, the platform's own only as labelled data. From the row: its action (a refused pause or end says
+ * it's still running), the steps of a change that went through (provider_ref.done: never "Nothing was changed"
+ * after them), whether its campaign switch was still to come (request.ops), and what Meta kept of a refused launch
+ * (provider_ref.leftBehind).
+ */
 export function jobRefusal(row, platform) {
   const p = platform ?? row.platform ?? 'meta';
   const req = row.request ?? {};
-  const kind = row.kind === 'launch' ? 'launch' : 'change';
-  return refusalOf({ code: row.error_code ?? 'REFUSED', detail: row.error_detail ?? null, kind, platform: p, ctx: { currency: req.account?.currency ?? req.currency, cap: req.spendCap ?? req.newSpendCap }, shortSchedule: kind === 'launch' && p === 'meta' && launchWasTooShort(row) });
+  const ref = row.provider_ref ?? {};
+  const kind = row.kind === 'launch' ? 'launch' : typeof row.kind === 'string' && row.kind ? row.kind : 'change';
+  const done = kind === 'launch' || !Array.isArray(ref.done) ? [] : ref.done.filter((o) => typeof o === 'string');
+  const campaignOff = Array.isArray(req.ops) && req.ops.some((o) => o?.op === 'campaignStatus' && o.status === 'active') && !done.includes('campaignStatus');
+  const leftBehind = kind === 'launch' && Array.isArray(ref.leftBehind) ? ref.leftBehind.length : 0;
+  return refusalOf({ code: row.error_code ?? 'REFUSED', detail: row.error_detail ?? null, kind, platform: p, ctx: { currency: req.account?.currency ?? req.currency, cap: req.spendCap ?? req.newSpendCap }, shortSchedule: kind === 'launch' && p === 'meta' && launchWasTooShort(row), done, campaignOff, leftBehind });
 }
+
+/** A done job that a refused step left short (e.g. made but not switched on) and whose refusal was kept. */
+const doneWithRefusal = (row) => row.state === 'done' && !!row.error_code && !!row.error_detail && typeof row.error_detail === 'object';
 
 /** A job as the app sees it (AdJob): our message, no provider ids; for a refusal, why (platformSays, fixUrl). */
 export function jobOut(row, platform) {
@@ -36,7 +49,7 @@ export function jobOut(row, platform) {
   const unknownCode = row.kind === 'launch' ? 'UNKNOWN_LAUNCH' : 'UNKNOWN';
   const req = row.request ?? {};
   const said = { platform: p, currency: req.account?.currency ?? req.currency, cap: req.spendCap ?? req.newSpendCap };
-  const refused = row.state === 'failed' ? jobRefusal(row, p) : null;
+  const refused = row.state === 'failed' || doneWithRefusal(row) ? jobRefusal(row, p) : null;
   const message =
     row.state === 'unknown'
       ? messageFor(code === 'INTERRUPTED' ? 'INTERRUPTED' : code && code !== 'UNKNOWN' ? code : unknownCode, said)

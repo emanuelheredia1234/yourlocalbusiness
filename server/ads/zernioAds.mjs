@@ -11,7 +11,8 @@
 // Outcome rules (R1, R8):
 // - 2xx → ok. A Meta create's `warnings: ["activation_failed: …"]` → ok with activationFailed (which levels stayed
 //   off is read back, never parsed out of the text).
-// - A definite 4xx → failed, with our code (messages.mjs ZERNIO_CODES); 429 → failed RATE_LIMITED or AD_ACCOUNT_BUSY
+// - A definite 4xx → failed, with our code (messages.mjs ZERNIO_CODES) and, for a refused create, what Zernio
+//   couldn't clean up (details.createdObjects: left_behind ids); 429 → failed RATE_LIMITED or AD_ACCOUNT_BUSY
 //   (nothing ran); a local 429 (no ZERNIO_RPM slot in time) → failed RATE_LIMITED, nothing was sent.
 // - 409 idempotency_conflict → unknown (the first request with that key is still running); a 422 about the
 //   Idempotency-Key → failed IDEMPOTENCY_MISMATCH (Zernio refused; nothing was created).
@@ -234,7 +235,10 @@ export function createZernioAds({ client, ledger = null, storage = null, log = c
         if (owner) ownerAlert(e.code || `http_${e.status}`);
         // the refusal's own reason, as data; a team-level one (ours: plan, add-on, billing, key, our rate limits) keeps its code only
         const refusal = refusalDetail(res, { team: owner || (e.status === 429 && !adAccountLimit(b)) });
-        out = { outcome: 'failed', status: e.status, code: codeForResponse(res, ctx?.platform), sent: true, ...(fixUrl ? { fixUrl } : {}), ...(refusal ? { refusal } : {}) };
+        // a refused Meta create can still leave objects Zernio couldn't delete (e.g. 422 ad_account_unusable, 403
+        // insufficient_permissions after the campaign and ad set were made): their ids, so the customer is told
+        const createdObjects = cleanCreatedObjects(details.createdObjects);
+        out = { outcome: 'failed', status: e.status, code: codeForResponse(res, ctx?.platform), sent: true, ...(fixUrl ? { fixUrl } : {}), ...(refusal ? { refusal } : {}), ...(createdObjects.length ? { createdObjects } : {}) };
       }
     } else {
       // 5xx, a timeout or a cut connection: unknown, unless Zernio says exactly what it made and nothing is unconfirmed

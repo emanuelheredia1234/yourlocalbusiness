@@ -32,7 +32,9 @@
 // 403-payment, 403-ads-allowance, 402-payment, 429-ad-account-busy, 401-reconnect, 401-key, meta-code-31, 500, 502,
 // 409-budget-level, 409-shared-budget, 422-key-mismatch, live-read-failed (GET /ads/{id}?live=true: statusReadAt null),
 // and on creates and updates: meta-refusal:<code> (each of Zernio's Meta ads refusals, META_REFUSALS), meta-refusal-
-// unknown (a code with no mapping and hostile hint text) and restricted-key (our Zernio key lacks the ads group).
+// unknown (a code with no mapping and hostile hint text), restricted-key (our Zernio key lacks the ads group) and
+// 429-key (our key's own rate limit: no code, a hint marked SECRET-TEAM-TEXT); on creates, left-behind:<code> (that
+// refusal after Meta made the campaign and ad set, which Zernio couldn't delete: listed as left_behind).
 
 import crypto from 'node:crypto';
 
@@ -148,10 +150,16 @@ export const META_REFUSALS = Object.freeze({
   meta_action_blocked: { status: 400, type: 'platform_error', subcode: 2859015 },
   budget_too_low: { status: 400, type: 'platform_error', subcode: 1885272, param: 'budgetAmount' },
   meta_object_not_accessible: { status: 400, type: 'platform_error', subcode: 33 },
+  // the login lacks the Advertise permission on the ad account, the Page or the Instagram account (not our key: no required_group)
+  insufficient_permissions: { status: 403, type: 'permission_error' },
 });
 
-/** A refusal in Zernio's envelope: 'meta-refusal:<code>' (META_REFUSALS), 'meta-refusal-unknown', 'restricted-key'. */
-function refusal(res, mode) {
+/**
+ * A refusal in Zernio's envelope: 'meta-refusal:<code>' (META_REFUSALS), 'meta-refusal-unknown', 'restricted-key',
+ * '429-key'. more: extra `details` (a failed create's stage and createdObjects).
+ */
+function refusal(res, mode, more = {}) {
+  if (mode === '429-key') return json(res, 429, { error: 'Rate limit exceeded. Please retry after 12 seconds. SECRET-TEAM-TEXT', details: { currentCount: 601, limit: 600, retryAfterSeconds: 12, hint: 'SECRET-TEAM-TEXT: upgrade your Zernio plan' } }, { 'retry-after': '12' });
   if (mode === 'restricted-key') return err(res, 403, 'insufficient_permissions', 'permission_error', { required_group: 'ads', details: { hint: 'SECRET-TEAM-TEXT: enable the ads group on your Zernio key' } });
   if (mode === 'meta-refusal-unknown') {
     // a code Zernio has no hint mapping for, with hostile text: markup, a direction override, a NUL, far too long
@@ -164,11 +172,11 @@ function refusal(res, mode) {
   return err(res, r.status, code, r.type, {
     ...(r.param ? { param: r.param } : {}),
     platform: 'meta',
-    details: { hint: `zernio-hint for ${code}`, ...(r.fix ? { fix: r.fix } : {}) },
+    details: { hint: `zernio-hint for ${code}`, ...(r.fix ? { fix: r.fix } : {}), ...more },
     ...(r.type === 'platform_error' ? { platformError: { code: 100, ...(r.subcode ? { error_subcode: r.subcode } : {}), error_user_title: 'META-OWN-WORDS title', error_user_msg: `META-OWN-WORDS for ${code}` } } : {}),
   });
 }
-const isRefusal = (mode) => typeof mode === 'string' && (mode.startsWith('meta-refusal') || mode === 'restricted-key');
+const isRefusal = (mode) => typeof mode === 'string' && (mode.startsWith('meta-refusal') || mode === 'restricted-key' || mode === '429-key');
 
 /** Route template of an /ads path (ids replaced), for fault matching and the ledger. */
 export function adsTemplate(method, p) {
@@ -401,6 +409,12 @@ export function createMockZernioAds({ violations, sendWebhook = async () => ({})
     const release = () => {
       if (idemKey) state.idem.delete(idemKey);
     };
+    if (typeof mode === 'string' && mode.startsWith('left-behind:')) {
+      // Meta made the campaign and ad set, refused the ad, and refused Zernio's cleanup deletes too
+      const c = makeTree({ zid, platform, adAccountId: acct.id, body, withAds: false });
+      release();
+      return refusal(res, `meta-refusal:${mode.slice('left-behind:'.length)}`, { stage: 'ad', adAccountId: acct.id, createdObjects: [{ type: 'campaign', id: c.id, cleanup: 'left_behind' }, { type: 'adset', id: c.adSets[0].id, cleanup: 'left_behind' }] });
+    }
     if (mode === '503-left-behind') {
       const c = makeTree({ zid, platform, adAccountId: acct.id, body, withAdSet: false });
       release();

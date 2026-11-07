@@ -1,45 +1,59 @@
 // Our plain words for every ads code (spec §11, §12). A code maps to one sentence here, and a fix link is passed on
-// only when its host is on the allowlist (R6). Zernio's, Meta's and Google's own text is shown in one case only: a
-// refusal we have no sentence of our own for (refusalOf), cut and as plain text, labelled as the platform's message.
+// only when its host is on the allowlist (R6). Zernio's, Meta's and Google's own text is shown in two cases only: a
+// refusal we have no sentence of our own for, and one whose sentence needs Meta's own number (its minimum budget)
+// (refusalOf), cut and as plain text, labelled as the platform's message.
 
 import { formatMoney } from './money.mjs';
 import { MANAGER_LABEL, PLATFORM_LABEL } from './contracts.mjs';
 
-/** The sites a refusal's fix link may point at: Meta's and Google's own (a customer may be sent there) and Zernio's. */
-export const FIX_DOMAINS = Object.freeze(['facebook.com', 'meta.com', 'google.com', 'zernio.com']);
-/** the ones a customer is ever sent to (customers have no Zernio login: Zernio's links stay with the owner) */
-const CUSTOMER_FIX_DOMAINS = Object.freeze(['facebook.com', 'meta.com', 'google.com']);
-/** link shims and pages anyone can publish, under those domains: never a fix link */
-const NOT_FIX_HOST = /^(l|lm)\.facebook\.com$|^(sites|docs|drive|groups|script|forms|books)\.google\.com$/;
+/**
+ * The exact hosts a customer may be sent to by a refusal's fix link: Meta's and Google's own pages for ad accounts,
+ * billing and help. Never any other subdomain (Google and Meta host pages anyone can publish, translators and
+ * redirectors under their names). src/lib/ads/launchFormat.ts keeps the same list.
+ */
+export const FIX_HOSTS = Object.freeze(['facebook.com', 'www.facebook.com', 'business.facebook.com', 'adsmanager.facebook.com', 'www.meta.com', 'transparency.meta.com', 'ads.google.com', 'support.google.com']);
+/** Zernio's own docs: kept with a refusal for the owner, never shown (customers have no Zernio login) */
+const OWNER_FIX_HOSTS = Object.freeze(['zernio.com', 'docs.zernio.com']);
+/** redirectors and login dialogs on those hosts (l.php, /url, the outbound-link warning, OAuth dialogs) */
+const REDIRECT_PATH = /^\/(l\.php|url)$|^\/flx\/warn(\/|$)|^\/(v\d+(\.\d+)?\/)?dialog(\/|$)/i;
+/** a query value that is a link (https://…, //…): a page that sends the reader on to it */
+const LINK_VALUE = /^\s*(https?:|[\\/]{2})/i;
 
-function fixUrlOn(url, domains) {
+function fixUrlOn(url, hosts) {
   if (typeof url !== 'string' || url.length > 500) return undefined;
   try {
     const u = new URL(url);
-    const host = u.hostname.toLowerCase();
-    if (u.protocol !== 'https:' || u.username || u.password || u.port || NOT_FIX_HOST.test(host) || /^\/(l\.php|url)$/i.test(u.pathname)) return undefined;
-    return domains.some((d) => host === d || host.endsWith(`.${d}`)) ? u.toString() : undefined;
+    if (u.protocol !== 'https:' || u.username || u.password || u.port || !hosts.includes(u.hostname.toLowerCase()) || REDIRECT_PATH.test(u.pathname)) return undefined;
+    for (const v of u.searchParams.values()) if (LINK_VALUE.test(v)) return undefined;
+    return u.toString();
   } catch {
     return undefined;
   }
 }
 
-/** A fix link we may show the customer (https, on Meta's or Google's own site), or undefined. */
-export const safeFixUrl = (url) => fixUrlOn(url, CUSTOMER_FIX_DOMAINS);
-/** A fix link we may keep with a refusal (https, on Meta's, Google's or Zernio's own site), or undefined. */
-export const keptFixUrl = (url) => fixUrlOn(url, FIX_DOMAINS);
+/** A fix link we may show the customer (https, one of FIX_HOSTS, no redirect), or undefined. */
+export const safeFixUrl = (url) => fixUrlOn(url, FIX_HOSTS);
+/** A fix link we may keep with a refusal (FIX_HOSTS, or Zernio's docs for the owner), or undefined. */
+export const keptFixUrl = (url) => fixUrlOn(url, [...FIX_HOSTS, ...OWNER_FIX_HOSTS]);
+
+/** half of a surrogate pair on its own (half an emoji): Postgres refuses it in json and text, so the row is lost */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 
 /**
- * Third-party text as data (R6): control and direction-override characters out, whitespace flattened, cut to n
- * characters. The result is plain text: the app renders it as text, never as markup or a link.
+ * Third-party text as data (R6): control and direction-override characters and lone surrogates out, whitespace
+ * flattened, cut to n characters between whole characters (never half an emoji). The result is plain text: the app
+ * renders it as text, never as markup or a link.
  */
 export function cut(value, n = 200) {
   const t = (typeof value === 'string' || typeof value === 'number' ? String(value) : '')
     .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(LONE_SURROGATE, '')
     .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+  if (t.length <= n) return t;
+  const head = t.slice(0, n - 1);
+  return `${/[\ud800-\udbff]$/.test(head) ? head.slice(0, -1) : head}…`;
 }
 
 const P = (ctx) => PLATFORM_LABEL[ctx?.platform] ?? 'Meta';
@@ -77,11 +91,14 @@ const MESSAGES = {
   INSTAGRAM_OK: 'An Instagram professional account is linked, so ads can show on Instagram too.',
   META_OBJECT_GONE: 'Meta can’t find part of this campaign any more (it may have been deleted in Ads Manager). Refresh the Campaigns tab.',
   POLICY_NOT_ACCEPTED: 'A business admin needs to accept Meta’s non-discrimination policy in Ads Manager.',
-  VERIFIED_ADVERTISER: 'Meta needs you to verify your business before running ads here.',
+  // Meta wants the verified beneficiary and payer sent with the ad set (regionalRegulationIdentities), even when
+  // they're set in Ads Manager: this app doesn't send them, so verifying again wouldn't help
+  VERIFIED_ADVERTISER: 'Ads shown in this country need Meta’s verified beneficiary and payer details, which this app can’t send yet. Use Meta Ads Manager for this one.',
   SECURITY_CHECK: 'Meta has put a security check on the Facebook login connected to this ad account. Log in to facebook.com and follow Meta’s steps. This can take a few days.',
   ACTION_BLOCKED: 'Meta isn’t letting this ad account create ads right now. Open Ads Manager to see why.',
   RECONNECT: (c) => `Reconnect your ${c?.platform === 'google' ? 'Google Ads' : 'Meta ads'} account (Settings → Connected accounts).`,
-  PERMISSIONS: 'Your login doesn’t have permission to advertise on this ad account. Ask its admin, or pick another account.',
+  PERMISSIONS: 'The Facebook login connected here doesn’t have permission to advertise with this ad account, its Facebook Page or its Instagram account. Ask an admin to give it, or pick another account.',
+  ACCOUNT_NOT_SELECTED: (c) => `This ad account wasn’t ticked when ${c?.platform === 'google' ? 'Google Ads' : 'Meta ads'} was connected. Reconnect it (Settings → Connected accounts) and tick this ad account.`,
   ACCOUNT_SPEND_CAP: 'Your ad account’s spending limit is reached, so ads won’t show until you raise it in Ads Manager.',
   ACCOUNT_OK: 'The ad account is active.',
   CONNECTED_OK: (c) => `${c?.platform === 'google' ? 'Google Ads' : 'Meta ads'} is connected.`,
@@ -108,6 +125,19 @@ const MESSAGES = {
   AD_ACCOUNT_UNUSABLE: 'Meta says this ad account can’t run ads right now: it isn’t active, or the business is restricted from advertising. Check the account’s status in Meta Ads Manager.',
   META_ACTION_BLOCKED: 'Meta has blocked the Facebook login connected here from making ads for now. It usually lifts by itself: wait a few hours before trying again.',
   META_OBJECT_NOT_ACCESSIBLE: 'Meta couldn’t open something this ad uses: it was deleted, or the connected login lost access to it. Check your Page and ad account in Meta, then try again.',
+  // a pause or an end Meta refused: the reason without "wait" or "try again", then what to do now (STILL_RUNNING)
+  STOP_REFUSED: (c) => `${P(c)} refused to ${c?.action === 'end' ? 'end' : 'pause'} this campaign.`,
+  META_ACTION_BLOCKED_STOP: 'Meta has blocked the Facebook login connected here from making ad changes for now.',
+  META_OBJECT_NOT_ACCESSIBLE_STOP: 'Meta couldn’t open this campaign: it was deleted, or the connected login lost access to it.',
+  IG_UNRESOLVED_STOP: 'Meta couldn’t find the Instagram account linked to your Facebook Page.',
+  STILL_RUNNING: (c) => `It’s still running: pause it in ${M(c)} now.`,
+  MAY_STILL_RUN: (c) => `If it’s still running, pause it in ${M(c)} now.`,
+  // why the rest of a change done in part wasn't made (CHANGE_INCOMPLETE first)
+  REST_REFUSED: (c) => `${P(c)} refused the rest.`,
+  REST_REFUSED_SEE_WHY: (c) => `${P(c)} refused the rest: open ${M(c)} to see why.`,
+  REST_RATE_LIMITED: (c) => `${P(c)} was busy, so the rest wasn’t sent. Try again in a minute.`,
+  REST_ACCOUNT_BUSY: 'Another change to this ad account was still going, so the rest wasn’t sent. Try again in a minute.',
+  REST_NOT_SENT: 'Review it and try again.',
   IG_UNRESOLVED: 'Meta couldn’t find the Instagram account linked to your Facebook Page. Link an Instagram professional account to the Page in Meta, then try again.',
   NOT_FOUND_REMOTE: (c) => `${P(c)} can’t find this campaign any more. Refresh the Campaigns tab.`,
   // what the plan or the request is missing (§6)
@@ -175,13 +205,21 @@ const MESSAGES = {
   NO_SPEND_CAP: 'This campaign has no spending limit on Meta yet: resuming sets one first (what’s spent so far plus the rest of the plan).',
   // outcomes of a launch or change (§7.5, §8)
   CAP_NOT_SET: (c) => `Created and paused. Meta didn’t accept the ${money(c, 'cap')} spending limit (Meta refuses limits under about 100 US dollars), so we didn’t switch it on. Run it longer or raise the budget, then resume.`,
+  // CAP_NOT_SET when Meta said why (the refusal's reason follows)
+  CAP_REFUSED: (c) => `Created and paused. Meta didn’t accept the ${money(c, 'cap')} spending limit, so we didn’t switch it on.`,
   ACTIVATION_NOT_SENT: (c) => (c?.platform === 'google' ? 'Created and paused. We couldn’t switch it on: press Resume.' : 'Created and paused, with its spending limit. We couldn’t switch it on: press Resume.'),
   ACTIVATION_FAILED: 'Created, but Meta didn’t accept switching some of it on. Those parts stay off; Resume switches them on.',
   PARTIAL_LEFT: 'Meta kept parts of a half-made campaign (no ads in it, so it can’t spend). You can delete them in Meta Ads Manager.',
   NOT_CREATED: (c) => `${P(c)} didn’t create this campaign. Nothing is running. You can launch it again.`,
   CREATE_FAILED: (c) => `${P(c)} refused the launch. Nothing is running.`,
   NOT_CHANGED: (c) => `${P(c)} didn’t make this change. Nothing changed.`,
-  CHANGE_INCOMPLETE: 'Only the first part of this change went through (a higher spending limit, which can’t spend by itself). Review it and try again.',
+  // what went through of a change done in part (c.done: the steps that did; c.campaignOff: the campaign's own switch
+  // was to come last and didn't); refusalOf adds why the rest didn't
+  CHANGE_INCOMPLETE: (c) => {
+    const on = Array.isArray(c?.done) && c.done.some((o) => o === 'adSetStatus' || o === 'adStatus');
+    if (!on) return 'Only the first part of this change went through (a higher spending limit, which can’t spend by itself).';
+    return c?.campaignOff ? 'Only part of this change went through: parts of it were switched on, but the campaign itself is still paused, so it can’t spend yet.' : 'Only part of this change went through: parts of it were switched on, but not all of it.';
+  },
   INTERRUPTED: (c) => `The app restarted while sending this to ${P(c)}. It may have happened - check status before trying again.`,
   UNKNOWN: (c) => `We don’t know yet whether ${P(c)} made this change. Nothing will be sent again by itself. It may have happened - check status before trying again.`,
   UNKNOWN_LAUNCH: (c) => `We don’t know yet whether ${P(c)} created this campaign. Nothing will be sent again by itself. It may have happened - check status before trying again.`,
@@ -264,43 +302,87 @@ export const REFUSAL_REASON = Object.freeze({
   instagram_account_restricted: 'IG_RESTRICTED',
   instagram_business_account_unresolved: 'IG_UNRESOLVED',
   insufficient_permissions: 'PERMISSIONS',
-  ad_account_not_selected: 'PERMISSIONS',
+  ad_account_not_selected: 'ACCOUNT_NOT_SELECTED',
   invalid_targeting: 'INVALID_TARGETING',
   linked_account_required: 'NO_PAGE',
 });
+/** Zernio's codes whose sentence needs Meta's own words too: Meta's minimum budget is only in its message */
+const META_WORDS_TOO = new Set(['budget_too_low']);
 
 /** our categories for the refusal of a write that was sent (zernioAds.mjs codeForResponse): a reason to say */
 const REFUSAL_CATEGORIES = new Set(['REFUSED', 'RECONNECT', 'IMAGE_UNREACHABLE', 'NOT_FOUND_REMOTE', ...Object.values(ZERNIO_CODES).filter((c) => c !== 'ADS_UNAVAILABLE')]);
 const NOTHING_DONE = Object.freeze({ launch: 'Nothing was created and no money was spent.', change: 'Nothing was changed.' });
+/** a refused pause or end: these reasons without their "wait" or "try again" (the campaign is still spending) */
+const STOP_REASON = Object.freeze({ META_ACTION_BLOCKED: 'META_ACTION_BLOCKED_STOP', META_OBJECT_NOT_ACCESSIBLE: 'META_OBJECT_NOT_ACCESSIBLE_STOP', IG_UNRESOLVED: 'IG_UNRESOLVED_STOP' });
+/** a refused pause or end for these may be about a campaign that is gone: "if it's still running" */
+const MAY_BE_GONE = new Set(['NOT_FOUND_REMOTE', 'META_OBJECT_GONE', 'META_OBJECT_NOT_ACCESSIBLE']);
+/** why the rest of a change done in part wasn't sent, for categories whose own sentence says "Nothing was sent" */
+const REST_REASON = Object.freeze({ RATE_LIMITED: 'REST_RATE_LIMITED', AD_ACCOUNT_BUSY: 'REST_ACCOUNT_BUSY' });
+
+const metaWords = (d) => cut([d.metaTitle, d.metaMessage].filter((x) => typeof x === 'string' && x).join(': '), 300);
 
 /**
- * What a failed launch or change says (spec §11, R6). For the refusal of a write that was sent: the reason, then what
- * happened (NOTHING_DONE: never "open Ads Manager to see why" for a launch, where nothing was created). The reason is
- * our sentence for Zernio's code when we have one (REFUSAL_REASON), else for our category; a refused Meta launch
- * whose own schedule was 24 hours or less (shortSchedule) names Meta's 24-hour rule. Zernio's hint (else Meta's own
- * title and message) goes along as `platformSays` only when we have no sentence for Zernio's code: third-party
- * text, cut, that the app shows as plain text labelled as the platform's message. A team-level problem
- * (detail.owner: our Zernio plan, add-on, billing, key or rate limits) keeps its safe sentence and nothing else, as
- * does every failure that isn't a refusal (nothing sent, a half-made launch, a change done in part).
- *   detail: ad_jobs.error_detail (zernioAds.mjs refusalDetail); kind: 'launch' | a change. → { message, platformSays?, fixUrl? }
+ * What a failed launch or change says (spec §11, R6), and a launch made but not switched on (its refused step).
+ * - A change that went through in part (CHANGE_INCOMPLETE, or any refusal after steps that did: `done`): what went
+ *   through, then why the rest didn't. Never "Nothing was changed".
+ * - A refused pause or end (kind 'pause' | 'end'): the reason, then "It's still running: pause it in Meta Ads Manager
+ *   now." Never "wait" or "try again": the campaign is still spending.
+ * - The refusal of a write that was sent: the reason, then what it left (NOTHING_DONE, or for a launch whose objects
+ *   Meta kept, `leftBehind`, the half-made campaign that can't spend). Never "open Ads Manager to see why" for a
+ *   launch. The reason is our sentence for Zernio's code when we have one (REFUSAL_REASON), else for our category; a
+ *   refused Meta launch whose own schedule was 24 hours or less (shortSchedule) names Meta's 24-hour rule.
+ * - Anything else (nothing sent, a half-made launch, made but not switched on): its own sentence, then the refused
+ *   step's reason when we have one.
+ * Zernio's hint (else Meta's own title and message) goes along as `platformSays` when we have no sentence for
+ * Zernio's code, and Meta's own words when our sentence needs them (META_WORDS_TOO): third-party text, cut, that the
+ * app shows as plain text labelled as the platform's message. A team-level problem (detail.owner: our Zernio plan,
+ * add-on, billing, key or rate limits) never gets either, nor its fix link.
+ *   detail: ad_jobs.error_detail (zernioAds.mjs refusalDetail); kind: 'launch' | the change's action; done: the
+ *   change's steps that went through; campaignOff: its campaign switch was to come last and didn't; leftBehind: how
+ *   many objects of a refused launch Meta kept. → { message, platformSays?, fixUrl? }
  */
-export function refusalOf({ code, detail = null, kind = 'launch', platform = 'meta', ctx = {}, shortSchedule = false }) {
-  const c = { ...ctx, platform };
+export function refusalOf({ code, detail = null, kind = 'launch', platform = 'meta', ctx = {}, shortSchedule = false, done = [], campaignOff = false, leftBehind = 0 }) {
+  const c = { ...ctx, platform, action: kind };
   const d = detail && typeof detail === 'object' && !Array.isArray(detail) && detail.owner !== true ? detail : null;
   const known = d && typeof d.code === 'string' && Object.hasOwn(REFUSAL_REASON, d.code) ? REFUSAL_REASON[d.code] : null;
-  const says = d && !known ? cut(d.hint, 300) || cut([d.metaTitle, d.metaMessage].filter((x) => typeof x === 'string' && x).join(': '), 300) : '';
+  const says = !d ? '' : !known ? cut(d.hint, 300) || metaWords(d) : META_WORDS_TOO.has(d.code) ? metaWords(d) || cut(d.hint, 300) : '';
   const fixUrl = d ? safeFixUrl(d.fix?.url) : undefined;
-  const extra = { ...(says ? { platformSays: says } : {}), ...(fixUrl ? { fixUrl } : {}) };
-  // not a refusal of ours to explain (nothing sent, a half-made launch, a change done in part): its own sentence,
-  // and the refused step's reason after it when we have one
-  if (!REFUSAL_CATEGORIES.has(code)) return { message: known ? `${messageFor(code, c)} ${messageFor(known, c)}` : messageFor(code, c), ...extra };
-  const done = NOTHING_DONE[kind === 'launch' ? 'launch' : 'change'];
-  if (known) return { message: `${messageFor(known, c)} ${done}`, ...extra };
-  if (code === 'REFUSED' && shortSchedule) return { message: `${messageFor('REFUSED_24H', c)} ${done}`, ...extra };
-  if (code !== 'REFUSED') return { message: `${messageFor(code, c)} ${done}`, ...extra };
-  if (kind === 'launch') return { message: `${messageFor('LAUNCH_REFUSED', c)} ${done}`, ...extra };
+  const said = (message) => ({ message, ...(says ? { platformSays: says } : {}), ...(fixUrl ? { fixUrl } : {}) });
+  const launch = kind === 'launch';
+  const stop = kind === 'pause' || kind === 'end';
+  const steps = Array.isArray(done) ? done : [];
+
+  if (!launch && !stop && (code === 'CHANGE_INCOMPLETE' || steps.length > 0)) {
+    const rest = known
+      ? messageFor(known, c)
+      : Object.hasOwn(REST_REASON, code)
+        ? messageFor(REST_REASON[code], c)
+        : code === 'ADS_UNAVAILABLE' || (REFUSAL_CATEGORIES.has(code) && code !== 'REFUSED')
+          ? messageFor(code, c)
+          : says
+            ? messageFor('REST_REFUSED', c)
+            : d
+              ? messageFor('REST_REFUSED_SEE_WHY', c)
+              : messageFor('REST_NOT_SENT', c);
+    return said(`${messageFor('CHANGE_INCOMPLETE', { ...c, done: steps, campaignOff })} ${rest}`);
+  }
+  if (stop) {
+    const why = known ? messageFor(STOP_REASON[known] ?? known, c) : code === 'REFUSED' || code === 'CHANGE_INCOMPLETE' ? messageFor('STOP_REFUSED', c) : messageFor(code, c);
+    // ADS_UNAVAILABLE's own sentence already says how to pause it now
+    if (code === 'ADS_UNAVAILABLE') return said(why);
+    return said(`${why} ${messageFor(MAY_BE_GONE.has(known ?? code) ? 'MAY_STILL_RUN' : 'STILL_RUNNING', c)}`);
+  }
+  if (!REFUSAL_CATEGORIES.has(code)) {
+    const own = code === 'CAP_NOT_SET' && (known || says) ? messageFor('CAP_REFUSED', c) : messageFor(code, c);
+    return said(known ? `${own} ${messageFor(known, c)}` : own);
+  }
+  const what = !launch ? NOTHING_DONE.change : leftBehind > 0 ? `${messageFor('PARTIAL_LEFT', c)} No money was spent.` : NOTHING_DONE.launch;
+  if (known) return said(`${messageFor(known, c)} ${what}`);
+  if (code === 'REFUSED' && launch && shortSchedule) return said(`${messageFor('REFUSED_24H', c)} ${what}`);
+  if (code !== 'REFUSED') return said(`${messageFor(code, c)} ${what}`);
+  if (launch) return said(`${messageFor('LAUNCH_REFUSED', c)} ${what}`);
   // a change Meta refused without a word: the campaign is there in Ads Manager, so it can say why
-  return { message: says ? `${messageFor('CHANGE_REFUSED', c)} ${done}` : messageFor('REFUSED', c), ...extra };
+  return said(says ? `${messageFor('CHANGE_REFUSED', c)} ${what}` : messageFor('REFUSED', c));
 }
 
 /** The platform's own words for a refusal, labelled and quoted as data (the activity log's line). */

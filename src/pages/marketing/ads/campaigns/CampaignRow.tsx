@@ -1,7 +1,8 @@
 // One launched campaign: state in plain words (spec §9.3), money in the account's own currency, results as of
 // their read time, and what can be done now. An unknown outcome offers Check status only (never "Try again");
 // platform text (review reasons, a refusal's own words) is rendered as plain text, labelled, never a link. A refused
-// launch or change says why (the server's words) and links Meta's or Google's own page that fixes it, if any.
+// launch or change, and a launch made but not switched on, says why (the server's words) and links Meta's or
+// Google's own page that fixes it, if any.
 import { useEffect, useState } from 'react';
 import { ExternalLink, RefreshCw, Settings2 } from 'lucide-react';
 import type { AdJob, AdsPlatform, LaunchedCampaign } from '@/lib/ads/launchTypes';
@@ -124,7 +125,13 @@ export function CampaignNotes({ c, onLaunchAgain }: { c: LaunchedCampaign; onLau
           </ul>
         </div>
       )}
-      {c.lastJob?.state === 'done' && c.lastJob.code && <p className="mt-1 text-caption text-warn">{c.lastJob.message}</p>}
+      {c.lastJob?.state === 'done' && c.lastJob.code && (
+        <div className="mt-1 text-caption text-warn">
+          <p>{c.lastJob.message}</p>
+          <PlatformSays job={c.lastJob} platform={c.platform} />
+          <FixLink job={c.lastJob} />
+        </div>
+      )}
       {c.lastJob?.state === 'failed' && c.state !== 'failed' && (
         <div className="mt-1 text-caption text-bad">
           <p>{c.lastJob.message}</p>

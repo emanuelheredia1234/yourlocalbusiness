@@ -86,18 +86,25 @@ export function metaMinDays(o: { startDay: string; time?: string | null; asap?: 
   }
 }
 
-/** Meta's and Google's own sites: a fix link we show (the server allows the same; never Zernio's, never a link shim). */
-const FIX_DOMAINS = ['facebook.com', 'meta.com', 'google.com'];
-const NOT_FIX_HOST = /^(l|lm)\.facebook\.com$|^(sites|docs|drive|groups|script|forms|books)\.google\.com$/;
+/**
+ * The exact hosts a fix link may go to: Meta's and Google's own pages for ad accounts, billing and help (the server's
+ * FIX_HOSTS, server/ads/messages.mjs). Never another subdomain: Google and Meta host pages anyone can publish,
+ * translators and redirectors under their names. Never Zernio's (customers have no Zernio login).
+ */
+const FIX_HOSTS = ['facebook.com', 'www.facebook.com', 'business.facebook.com', 'adsmanager.facebook.com', 'www.meta.com', 'transparency.meta.com', 'ads.google.com', 'support.google.com'];
+/** redirectors and login dialogs on those hosts (l.php, /url, the outbound-link warning, OAuth dialogs) */
+const REDIRECT_PATH = /^\/(l\.php|url)$|^\/flx\/warn(\/|$)|^\/(v\d+(\.\d+)?\/)?dialog(\/|$)/i;
+/** a query value that is a link (https://…, //…): a page that sends the reader on to it */
+const LINK_VALUE = /^\s*(https?:|[\\/]{2})/i;
 
-/** A fix link to Meta's or Google's own site (https), or null: anything else is dropped, never shown as a link. */
+/** A fix link to one of Meta's or Google's own pages (https), or null: anything else is dropped, never shown as a link. */
 export function safeFixUrl(url: string | undefined | null): string | null {
   if (typeof url !== 'string' || !url || url.length > 500) return null;
   try {
     const u = new URL(url);
-    const host = u.hostname.toLowerCase();
-    if (u.protocol !== 'https:' || u.username || u.password || u.port || NOT_FIX_HOST.test(host) || /^\/(l\.php|url)$/i.test(u.pathname)) return null;
-    return FIX_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`)) ? u.toString() : null;
+    if (u.protocol !== 'https:' || u.username || u.password || u.port || !FIX_HOSTS.includes(u.hostname.toLowerCase()) || REDIRECT_PATH.test(u.pathname)) return null;
+    for (const v of u.searchParams.values()) if (LINK_VALUE.test(v)) return null;
+    return u.toString();
   } catch {
     return null;
   }

@@ -173,20 +173,26 @@ export interface AdJob {
   platform: AdsPlatform;
   state: AdJobState;
   code?: string;
-  /** the server's words: for a refusal, why and what happened ("Nothing was created and no money was spent.") */
+  /**
+   * the server's words: for a refusal, why and what it left ("Nothing was created and no money was spent.", "Only
+   * part of this change went through…", "It’s still running: pause it in Meta Ads Manager now.")
+   */
   message: string;
   /**
-   * A refusal the server has no sentence for: Zernio's hint or Meta's own words (cut to 300). Third-party text:
-   * shown as plain text, labelled as the platform's message, never as markup, a link or an instruction.
+   * A refusal the server has no sentence for, or whose sentence needs Meta's own number (its minimum budget):
+   * Zernio's hint or Meta's own words (cut to 300). Third-party text: shown as plain text, labelled as the platform's
+   * message, never as markup, a link or an instruction. Also on a done launch a refused step left short (made but
+   * not switched on).
    */
   platformSays?: string;
-  /** a refusal's fix link, on Meta's or Google's own site (shown only through safeFixUrl) */
+  /** a refusal's fix link, to one of Meta's or Google's own pages (shown only through safeFixUrl) */
   fixUrl?: string;
   actor?: 'customer' | 'owner' | 'platform';
   requestedAt: string;
   finishedAt?: string;
   checkedAt?: string;
   canCheckAt?: string;
+  /** what Meta kept of a refused launch ("campaign …1234"): it can't spend, the customer can delete it */
   leftBehind?: string[];
 }
 

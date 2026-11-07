@@ -54,18 +54,23 @@ export function changeSummary(row, action, request = {}) {
 }
 
 /**
- * The audit line of a finished launch or change. A failure says why (jobRefusal): our sentence, then, for a refusal
- * we have no sentence for, the platform's own words quoted and labelled, cut to what the 500-character line has left.
+ * The audit line of a finished launch or change. A failure, or a done launch with a refused step (made but not
+ * switched on), says why (jobRefusal): our sentence, then, when we have no sentence for the refusal or ours needs
+ * Meta's own number, the platform's own words quoted and labelled, cut to what the 500-character line has left.
  */
-function outcomeText(base, state, code, platform, failed = null) {
-  if (state === 'done') return `${base}: done${code ? `. ${messageFor(code, { platform })}` : ''}`;
+function outcomeText(base, state, code, platform, said = null) {
   if (state === 'unknown') return `${base}: not confirmed yet. Check status before doing anything else.`;
-  const line = `${base}: not done. ${failed?.message ?? messageFor(code ?? 'REFUSED', { platform })}`;
-  return failed?.platformSays ? `${line} ${platformSaysLine(platform, cut(failed.platformSays, Math.max(40, 470 - line.length)))}` : line;
+  const line = state === 'done' ? `${base}: done${code ? `. ${said?.message ?? messageFor(code, { platform })}` : ''}` : `${base}: not done. ${said?.message ?? messageFor(code ?? 'REFUSED', { platform })}`;
+  return said?.platformSays ? `${line} ${platformSaysLine(platform, cut(said.platformSays, Math.max(40, 470 - line.length)))}` : line;
 }
 
-/** Why a job of this row failed, for its audit line: as the app will say it (jobs.mjs jobOut). */
-const failedAs = (job, kind, code, refusal, platform) => jobRefusal({ ...job, kind, error_code: code ?? 'REFUSED', error_detail: refusal ?? null }, platform);
+/**
+ * Why a job of this row ended as it did, for its audit line: as the app will say it (jobs.mjs jobOut), from the job
+ * as it is now finished (ref: what this run adds to provider_ref, e.g. the steps that went through, what was left).
+ */
+const outcomeOf = (job, kind, code, refusal, platform, ref) => jobRefusal({ ...job, kind, error_code: code ?? 'REFUSED', error_detail: refusal ?? null, provider_ref: { ...(job.provider_ref ?? {}), ...(ref ?? {}) } }, platform);
+/** the jobs whose line says why: failed ones, and done ones a refused step left short */
+const saysWhy = (state, code, refusal) => state === 'failed' || (state === 'done' && !!code && !!refusal);
 
 async function patchCampaign(ctx, userId, id, patch) {
   try {
@@ -103,8 +108,8 @@ export async function runLaunch(ctx, { userId, tag, job, row, body, spendCap }) 
   const finishWith = async (state, code, ref, campaignPatch, refusal = null) => {
     if (campaignPatch) await patchCampaign(ctx, userId, row.id, campaignPatch);
     await jobs.finish(userId, job.id, { state, code, ref, detail: refusal });
-    const failed = state === 'failed' ? failedAs(job, 'launch', code, refusal, platform) : null;
-    await audit.append({ userId, tag, projectId: row.project_id, campaignId: row.id, jobId: job.id, actor: 'customer', action: 'launch', summary: outcomeText(base, state, code, platform, failed), ...(refusal ? { after: { refusal } } : {}), outcome: state });
+    const said = saysWhy(state, code, refusal) ? outcomeOf(job, 'launch', code, refusal, platform, ref) : null;
+    await audit.append({ userId, tag, projectId: row.project_id, campaignId: row.id, jobId: job.id, actor: 'customer', action: 'launch', summary: outcomeText(base, state, code, platform, said), ...(refusal ? { after: { refusal } } : {}), outcome: state });
   };
   try {
     await jobs.note(userId, job.id, { step: 'create', sentAt: iso(ctx.now()) });
@@ -243,8 +248,8 @@ export async function runChange(ctx, { userId, tag, job, row, ops, action, reque
   const finishWith = async (state, code, ref, campaignPatch, refusal = null) => {
     if (campaignPatch && Object.keys(campaignPatch).length) await patchCampaign(ctx, userId, row.id, campaignPatch);
     await jobs.finish(userId, job.id, { state, code, ref, detail: refusal });
-    const failed = state === 'failed' ? failedAs(job, action, code, refusal, platform) : null;
-    await audit.append({ userId, tag, projectId: row.project_id, campaignId: row.id, jobId: job.id, actor, action, summary: outcomeText(base, state, code, platform, failed), ...(refusal ? { after: { refusal } } : {}), outcome: state });
+    const said = saysWhy(state, code, refusal) ? outcomeOf({ ...job, request: job.request ?? request }, action, code, refusal, platform, ref) : null;
+    await audit.append({ userId, tag, projectId: row.project_id, campaignId: row.id, jobId: job.id, actor, action, summary: outcomeText(base, state, code, platform, said), ...(refusal ? { after: { refusal } } : {}), outcome: state });
   };
   try {
     const done = [];

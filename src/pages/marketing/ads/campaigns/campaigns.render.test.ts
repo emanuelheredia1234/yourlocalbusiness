@@ -139,6 +139,37 @@ describe('a campaign row', () => {
     for (const bad of ['https://docs.zernio.com/x', 'https://l.facebook.com/l.php?u=x', 'https://www.facebook.com/l.php?u=x', 'https://docs.google.com/d/1', 'https://facebook.com.evil.example/', 'http://www.facebook.com/x', 'javascript:alert(1)', undefined]) expect(safeFixUrl(bad), String(bad)).toBeNull();
   });
 
+  it('a fix link goes to an exact list of hosts only: no other subdomain of Google, Facebook or Meta, no translator or redirector', () => {
+    for (const ok of ['https://facebook.com/', 'https://www.facebook.com/business/help/422289316306981', 'https://adsmanager.facebook.com/adsmanager/manage/accounts?act=1', 'https://transparency.meta.com/policies', 'https://support.google.com/google-ads/answer/1']) expect(safeFixUrl(ok), ok).toBe(ok);
+    for (const bad of [
+      'https://translate.google.com/translate?u=https://evil.example/pay',
+      'https://colab.research.google.com/drive/1',
+      'https://lookerstudio.google.com/reporting/1',
+      'https://www.google.com/maps/d/viewer?mid=1',
+      'https://www.google.com/amp/s/evil.example/',
+      'https://www.facebook.com/flx/warn/?u=https%3A%2F%2Fevil.example',
+      'https://www.facebook.com/dialog/oauth?client_id=1',
+      'https://business.facebook.com/settings?next=https%3A%2F%2Fevil.example',
+      'https://m.facebook.com/x',
+      'https://about.meta.com/x',
+    ])
+      expect(safeFixUrl(bad), bad).toBeNull();
+    // and the card shows no link for one
+    const html = row(camp({ state: 'failed', stateMessage: 'Not launched.', platformCampaignId: undefined, openInManagerUrl: undefined, lastJob: job({ state: 'failed', code: 'PAYMENT_REQUIRED', message: 'Add a payment method in Meta Ads Manager (Billing).', fixUrl: 'https://translate.google.com/translate?u=https://evil.example/pay' }) }));
+    expect(html).not.toContain('Fix it');
+    expect(html).not.toContain('translate.google.com');
+  });
+
+  it('a launch made but not switched on says why, with Meta’s words as plain text and Meta’s fix page', () => {
+    const says = '<b>Budget</b> minimum is $1.00';
+    const html = row(camp({ state: 'paused', stateMessage: 'Paused', configuredStatus: 'PAUSED', lastJob: job({ state: 'done', code: 'ACTIVATION_NOT_SENT', message: 'Created and paused, with its spending limit. We couldn’t switch it on: press Resume. Add a payment method in Meta Ads Manager (Billing).', platformSays: says, fixUrl: 'https://business.facebook.com/billing_hub/payment_settings' }) }));
+    expect(html).toContain('We couldn’t switch it on: press Resume. Add a payment method in Meta Ads Manager (Billing).');
+    expect(html).toContain('Meta’s message: </span>“&lt;b&gt;Budget&lt;/b&gt; minimum is $1.00”');
+    expect(html).not.toContain('<b>Budget');
+    expect(html).toContain('href="https://business.facebook.com/billing_hub/payment_settings"');
+    expect(html).toContain('Fix it');
+  });
+
   it('a refused change on a live campaign says why and links the fix too', () => {
     const html = row(camp({ lastJob: job({ kind: 'budget', state: 'failed', code: 'REFUSED', message: 'Meta refused this change. Nothing was changed.', platformSays: 'The budget must be at least $1.25.', fixUrl: 'https://www.facebook.com/business/help/1' }) }));
     expect(html).toContain('Meta refused this change. Nothing was changed.');

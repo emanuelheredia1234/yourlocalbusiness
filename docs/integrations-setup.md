@@ -356,7 +356,9 @@ search ad from the plan's search ad), then pause, resume, end, change the daily 
 only) and swap the ad from the Campaigns tab. Ad spend is billed by Meta or Google to **the customer's own**
 payment method; the app never handles ad money. Not from the app yet: TikTok, LinkedIn, Google Display, PMax and
 Video, lead forms, pixels and conversion goals, custom audiences, sitelinks, creating ad accounts or payment
-methods, deleting campaigns, special ad categories (housing, jobs, credit, politics, gambling) and EU targeting.
+methods, deleting campaigns, special ad categories (housing, jobs, credit, politics, gambling), EU targeting and
+the verified beneficiary and payer Meta asks for in some countries (Australia, Brazil, India, Malaysia, Singapore,
+Taiwan, Thailand: Zernio's `verified_advertiser_required`; customers are told to use Ads Manager for those).
 
 **Turn it on**
 1. Run `supabase/migrations/20261108000000_ads_launch.sql` and `20261115000000_ad_job_error_detail.sql` (§2).
@@ -430,13 +432,27 @@ customer sees why, below).
 
 **Why a launch or change was refused.** The job keeps the refusal's safe fields in `ad_jobs.error_detail` and its
 audit row in `after` (Zernio's code, type, field and step, its hint cut to 300 characters, the fix link on Meta's,
-Google's or Zernio's own site only, and Meta's subcode and own words); `error_code` keeps our category. Customers
-read our own sentence for Zernio's Meta refusal codes (payment method, non-discrimination policy, Lead Ads terms,
-verified advertiser, unusable ad account, security check, blocked action, budget too low, object not accessible…)
-with Meta's fix link, then "Nothing was created and no money was spent." (or "Nothing was changed."). A refusal with
-no code of ours shows Zernio's hint as "Meta's message: "…"", plain text. Zernio plan, add-on, billing, key and rate
-limit problems still reach only you. To look one up: `select error_code, error_detail from public.ad_jobs where id =
-'…';`. Before the migration is run, jobs finish without the detail and the log says `ads_error_detail_not_saved`.
+Google's or Zernio's docs only, and Meta's subcode and own words); `error_code` keeps our category. Customers read
+our own sentence for Zernio's Meta refusal codes (payment method, non-discrimination policy, Lead Ads terms,
+verified advertiser, unusable ad account, security check, blocked action, budget too low, object not accessible,
+permissions…) with Meta's fix link, then what the refusal left:
+- nothing: "Nothing was created and no money was spent." (or "Nothing was changed.");
+- a launch whose campaign and ad set Meta kept (Zernio couldn't delete them): those parts, listed ("campaign …1234"),
+  which can't spend and can be deleted in Ads Manager;
+- a change that went through in part (the spending limit raised before Meta refused the budget, the end date or the
+  campaign switch): "Only the first part of this change went through…", never "Nothing was changed";
+- a refused pause or end: "It's still running: pause it in Meta Ads Manager now", never "wait";
+- a launch made but not switched on: why, with the fix link.
+
+A refusal with no code of ours shows Zernio's hint as "Meta's message: "…"", plain text; "budget too low" also shows
+Meta's own message, which names Meta's minimum. Fix links go only to an exact list of hosts (`facebook.com`,
+`www.`, `business.` and `adsmanager.facebook.com`, `www.` and `transparency.meta.com`, `ads.google.com`,
+`support.google.com`), never through a redirect. Zernio plan, add-on, billing, key and rate-limit problems are never
+shown to customers: plan, add-on, billing and key problems alert you (Owner → Billing, `zernio_owner_alert`); a rate
+limit on our key only tells the customer to try again in a minute (no alert). To look one up: `select error_code,
+error_detail, provider_ref from public.ad_jobs where id = '…';` (`provider_ref.done`: the steps of a change that went
+through; `leftBehind`: what Meta kept of a launch). Before the migration is run, jobs finish without the detail and the
+log says `ads_error_detail_not_saved`.
 
 **Where live spend is named.** Deleting the app account, disconnecting Meta ads or Google Ads, and deleting a plan
 list the campaigns still on and what keeps running ("they keep running until you pause them in Ads Manager"); the
@@ -727,12 +743,12 @@ The **Campaigns** tab: the limits strip (daily limit, committed, live campaigns)
 most every 5 minutes; also when the tab opens), the setup summary per platform, one row per campaign (state in plain
 words, daily, dates, spent so far, results as of their read time, Manage, Open in Ads Manager) and the full **Ad
 activity** (newest first, CSV). A row whose outcome is unknown shows the "may have happened" note and **Check
-status**, never "Try again". A refused launch or change says why, that nothing was created or changed, and links
-Meta's fix page when there is one (§3c); a refused launch offers **Launch again**. **Manage** shows the numbers,
-each ad's review, the campaign's activity, and Pause / Resume / Change daily budget / Change end date (Meta) / Swap
-ad / End, each with a preview and a confirm (the spend confirm for anything that can raise spend), and off with the
-reason while a change is still going or unconfirmed. The planner shows "Launched on Meta · Paused" on a launched
-plan and says edits don't change the live campaign.
+status**, never "Try again". A refused launch or change says why and what it left (nothing, a change done in part,
+parts Meta kept, a campaign still running), and links Meta's fix page when there is one (§3c); a refused launch
+offers **Launch again**. **Manage** shows the numbers, each ad's review, the campaign's activity, and Pause / Resume
+/ Change daily budget / Change end date (Meta) / Swap ad / End, each with a preview and a confirm (the spend confirm
+for anything that can raise spend), and off with the reason while a change is still going or unconfirmed. The planner
+shows "Launched on Meta · Paused" on a launched plan and says edits don't change the live campaign.
 
 The assistant can list launched campaigns and **open** the launch or change window; it never launches, resumes or
 changes a budget, never picks Paused or Active and never ticks a box.
