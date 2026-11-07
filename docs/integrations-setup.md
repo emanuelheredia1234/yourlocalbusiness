@@ -53,6 +53,7 @@ name only.
 | `NANGO_WEBHOOK_SIGNING_KEY_PREVIOUS` | Only while rotating Nango's signing key | Remove it once Nango signs with the new one. |
 | `GOOGLE_CLIENT_ID` | **Turns customer Gmail connect on** | The OAuth web client's id, from Google Cloud → Credentials (§3d). |
 | `GOOGLE_CLIENT_SECRET` | With `GOOGLE_CLIENT_ID` | The OAuth web client's secret. Replit Secrets only. Never in the repo. |
+| `MARKET_REPORT_SECRET` | Optional: signs the public marketplace's report forms and hashes reporters (§17) | 16+ random characters. Unset, the app derives one from `SUPABASE_SECRET_KEY`. Changing it only makes open report forms stale. |
 
 Plain settings (not secret; Replit Secrets or env):
 
@@ -88,6 +89,11 @@ Plain settings (not secret; Replit Secrets or env):
 | `MORNING_CONCURRENCY` | `6` | How many of them at a time (1–10). |
 | `GSC_APP_PROPERTY` | — | `https://yourlocalbusiness.replit.app/` once that Search Console property is verified. Its host is also the app's own address for the back button on Upload-Post's connect page (unset: `https://yourlocalbusiness.replit.app`), so set it to the app's real address if that ever changes. |
 | `GSC_APP_VERIFICATION_FILE` | — | Optional extra HTML verification file name, e.g. `google1a2b3c4d5e6f7a8b.html`. The homepage file `google2598e017b2dc1e02.html` is already served (§6). |
+| `MARKET_PUBLIC` | on | `off` turns the public marketplace off (§17): every `/market` page answers "not found" and its API 503 NOT_SET_UP. |
+| `MARKET_REPORTS_PER_IP_PER_HOUR` | `5` | Reports one visitor can send an hour (§17). |
+| `MARKET_REPORTS_PER_LISTING_PER_HOUR` | `30` | Reports one listing can get an hour. |
+| `MARKET_REPORT_HOLD_AT` | `3` | Distinct reporters in 7 days that put a listing on hold (noindex, off the grid) until you review it. |
+| `MARKET_NEW_PUBLIC_PER_DAY` | `10` | New public listings one account can put on the web a day. |
 
 The Supabase and Omnisend Secrets you already have are unchanged (`SUPABASE_SERVICE_ROLE_KEY` is still read as an older name for `SUPABASE_SECRET_KEY`).
 
@@ -155,6 +161,8 @@ through **pg_net**, with `Authorization: Bearer <CRON_SECRET>`. Each tick runs t
 | `posting-sweep`, `analytics-sweep`, `ads-sweep` | hourly (each tick) | Posts, analytics runs and ad changes left "sending"/"running" by a restart become "unknown"/ended; nothing is re-sent |
 | `morning-actions` | hourly (each tick, first; leaves 8 s of the tick to the rest) | Makes the morning action of each business that is due (§13), up to `MORNING_PER_TICK`; the rest wait. Marks interrupted ones failed; never re-runs one |
 | `morning-prune` | daily from 05:23 UTC | Deletes morning actions older than 120 days |
+| `market-sweep` | daily from 04:20 UTC | Public listings over a plan's limit after a downgrade go off the web (the earliest stay), quality is checked again, and listings unlisted more than 180 days ago are deleted (§17) |
+| `market-sitemap-submit` | daily from 05:40 UTC | Sends `/sitemap.xml` to Search Console only when the public market changed since the last submit and `GSC_APP_PROPERTY` is set (§17); never more than once a day, shared with the owner's button |
 
 Each job runs **at most once per period**: the run is claimed first in `app_state` (one row per job), so a repeated
 call, a slow pg_net retry or two copies of the app never run it twice. A job that fails is recorded and waits for
@@ -1846,3 +1854,84 @@ The defaults above for plans not enforced (0%), comp plans (their tier), no plan
 our fee on refunds and lost disputes; plus what is UNCONFIRMED in Stripe's docs: which countries each platform
 country may onboard, who pays Stripe Tax's fees, whether a lost dispute returns our fee by itself, whether a seller's
 custom Checkout domain changes the checkout host, and linking an existing Stripe account.
+
+## 17. Public marketplace (P7)
+
+A seller can put a published listing **on the web**: its own page at `https://yourlocalbusiness.replit.app/market/<name>`
+that Google can index, plus a grid at `/market` with categories and search. The in-app Marketplace is unchanged (signed
+in only, `market_listings`). The public pages are the server's own copy (`public_listings`): the server checks every
+listing before it goes up and renders every page itself. Code: `server/market/` (each file starts with what it does),
+the app's side in `src/lib/marketPublic.ts`, `src/store/marketPublic.ts` and `src/components/market/`.
+
+### Owner steps
+
+1. In Supabase → SQL Editor, run `supabase/migrations/20261119000000_public_market.sql` (safe to run again). Until
+   then `/api/market` answers 503 with that file's name, and `/market` shows the "not available" notice.
+2. Optional: put `MARKET_REPORT_SECRET` (16+ random characters) in Replit Secrets, so report forms aren't signed with a
+   key derived from `SUPABASE_SECRET_KEY`.
+3. Check that `GSC_APP_PROPERTY` is a **verified** Search Console property (§6). The market's pages go into the same
+   `/sitemap.xml`, so nothing new needs verifying. Without it, listings still appear in the sitemap, but nothing is
+   sent to Google.
+4. Check the cron tick runs (§2a): `market-sweep` (04:20 UTC) and `market-sitemap-submit` (05:40 UTC).
+5. After the first live listings, press **Send sitemap to Google** once (Owner → Customer usage → Public marketplace).
+6. Moderate there: open reports (Hide with a reason, or Dismiss), held listings, hidden listings (Unhide).
+7. Optional: a custom domain for the app itself (also in `APP_HOSTS`) ranks better than `*.replit.app`. Sellers'
+   own custom domains never serve `/market` (it answers "not found" there), so there's never duplicate content.
+
+### Settings
+
+| Name | Default | Meaning |
+|---|---|---|
+| `MARKET_PUBLIC` | on (with accounts and `SUPABASE_SECRET_KEY`) | `off`: every `/market` page answers "not found", the API 503 NOT_SET_UP, and the app hides the switch. |
+| `MARKET_REPORT_SECRET` | derived from `SUPABASE_SECRET_KEY` | Signs report forms (valid 3 s to 1 h) and hashes reporters. Never a raw IP is stored. |
+| `MARKET_REPORTS_PER_IP_PER_HOUR` | `5` | Reports per visitor an hour. |
+| `MARKET_REPORTS_PER_LISTING_PER_HOUR` | `30` | Reports per listing an hour (and 500 in all). |
+| `MARKET_REPORT_HOLD_AT` | `3` | Distinct reporters in 7 days that put a listing on hold. |
+| `MARKET_NEW_PUBLIC_PER_DAY` | `10` | New public listings per account a day. |
+
+Reused: `GSC_APP_PROPERTY` (the canonical address and the sitemap property), `APP_PUBLIC_URL`, `SUPABASE_URL` and
+`SUPABASE_SECRET_KEY`. The server prints the market's notes at startup (names only, never values).
+
+### What customers see
+
+- **Studio → Listing & publish:** once the listing is published, a **Public on the web** switch ("Anyone can find this
+  listing on Google at yourlocalbusiness.replit.app/market. Turn it off anytime."), the plan's count ("Public
+  listings: 2 of 3 on Launch"; at the limit the switch is off with "Your plan includes 3 public listings. Upgrade or
+  turn one off."), and the status: On the web (with View); On the web, not shown on Google yet (with what to add);
+  Under review after visitor reports; Hidden by Your Local Business (with the reason; the switch is off); Off the web:
+  over your plan's limit. Updating the listing updates its web page; unpublishing it or deleting the business takes
+  the page down.
+- **Marketplace → My listings:** the same status as a badge, and Put on the web / Take off the web in each row's menu.
+- **A listing's details:** View on the web, and Report listing for another seller's public listing.
+- **The assistant:** `get_listing` says whether the listing is on the web; `set_listing_public` asks on a card first.
+  Moderation and the sitemap are never the assistant's.
+- Sellers read "Google picks up new listings on its own schedule, usually within days to weeks. Nothing is
+  guaranteed." They never submit anything and never see Search Console errors: those go to the owner's section and
+  the logs (treg's `team_unavailable` raises the owner alert).
+
+### What the code guarantees
+
+- **Escaping and no scripts:** listing text is stored as typed (normalized: control, zero-width and bidi-override
+  characters out) and escaped every time it's shown. The CSP is `default-src 'none'` with no `script-src`; the only
+  `<script>` is one JSON-LD data block, escaped so `</script>` can't end it.
+- **Hosted images only:** a listing's images are the seller's own uploads (`public-files/<uid>/l-<random>.<ext>`) that
+  exist in Storage. A data URL or an outside image address is refused (`IMAGE_NOT_HOSTED`). An image a public listing
+  uses can't be deleted (409 `IN_USE`).
+- **Links:** https only, no IP addresses, credentials or local hosts. Outside links carry `rel="ugc nofollow
+  noopener"`; addresses in a description are shown as text, two at most.
+- **Buy only through `/b/<id>`:** the listing's own offer (the seller's, not a draft, not archived), checked again at
+  render: paused or "checkout unknown" shows "Not available to buy right now"; archived shows no Buy. A Stripe offer's
+  price is the price shown. `/b/` is `noindex`.
+- **No made-up data:** no email address, ratings, reviews or sold counts, ever.
+- **Not indexed until complete:** thin, held, trial and duplicate listings are `noindex` and stay out of the grid and the
+  sitemap; unlisted, hidden, over-limit and ended-plan (30+ days) listings answer 410.
+- **Limits under a lock:** the plan's limit and the daily count are checked in one database function per seller, so
+  two presses at once can't go over.
+
+### Indexing
+
+Nothing guarantees Google indexes a page, or when. The sitemap is sent at most once a day across the app (the owner's
+button, or the daily job when something changed); a lost answer is never resent without reading Search Console first.
+Pages on a custom app domain usually rank better than on `*.replit.app`. Caches: 60 s per server copy (search 30 s),
+so a change shows everywhere within a minute.
+
