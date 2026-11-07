@@ -1894,8 +1894,8 @@ Reused: `GSC_APP_PROPERTY` (the canonical address and the sitemap property), `AP
 
 ### What customers see
 
-- **Studio → Listing & publish:** once the listing is published, a **Public on the web** switch ("Anyone can find this
-  listing on Google at yourlocalbusiness.replit.app/market. Turn it off anytime."), the plan's count ("Public
+- **Studio → Listing & publish:** once the listing is published, a **Public on the web** switch ("Anyone can open this
+  listing at yourlocalbusiness.replit.app/market, and Google can list it once it's complete. Turn it off anytime."), the plan's count ("Public
   listings: 2 of 3 on Launch"; at the limit the switch is off with "Your plan includes 3 public listings. Upgrade or
   turn one off."), and the status: On the web (with View); On the web, not shown on Google yet (with what to add);
   Under review after visitor reports; Hidden by Your Local Business (with the reason; the switch is off); Off the web:
@@ -1921,7 +1921,16 @@ Reused: `GSC_APP_PROPERTY` (the canonical address and the sitemap property), `AP
   noopener"`; addresses in a description are shown as text, two at most.
 - **Buy only through `/b/<id>`:** the listing's own offer (the seller's, not a draft, not archived), checked again at
   render: paused or "checkout unknown" shows "Not available to buy right now"; archived shows no Buy. A Stripe offer's
-  price is the price shown. `/b/` is `noindex`.
+  price is the price shown, read at render (a later price change shows within a minute), and a Stripe offer in test
+  mode says so. `/b/` is `noindex`.
+- **One address per page:** the canonical, `og:url`, JSON-LD, Buy and the sitemap's market lines are built from the
+  app's address (`GSC_APP_PROPERTY`, else the app's fixed address), never from the request's Host.
+- **Structured data Google accepts:** a Product (a Service for a business) only when there is a price to state; a quote
+  sends only the BreadcrumbList; "From $X" is an AggregateOffer with `lowPrice`. No BreadcrumbList on `/market` itself.
+- **Reports can't be forged:** the report form refuses a POST from another site (`Origin`, `Sec-Fetch-Site`), and its
+  token is good only for the visitor it was made for. A signed-in report counts only when the web page belongs to the
+  in-app listing's seller. A hold reads the listing from the database, so it never brings back one its seller took off
+  or the sweep put over the limit; unhiding one keeps it over the limit when the plan has no room.
 - **No made-up data:** no email address, ratings, reviews or sold counts, ever.
 - **Not indexed until complete:** thin, held, trial and duplicate listings are `noindex` and stay out of the grid and the
   sitemap; unlisted, hidden, over-limit and ended-plan (30+ days) listings answer 410.
