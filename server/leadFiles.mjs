@@ -7,7 +7,10 @@
 //   PUT    /api/lead-files/<id>/content        raw bytes (x-file-name: the file's name) → { file }
 //   PATCH  /api/lead-files/<id>                { title?, brand?, gate?, url? } → { file }
 //   DELETE /api/lead-files/<id>                → { ok: true } (already gone counts as done)
-//   POST   /api/public-images[?leadFile=<id>]  raw image bytes → { url, path } (with leadFile: that file's cover)
+//   POST   /api/public-images[?leadFile=<id>|?use=email]  raw image bytes → { url, path } (with leadFile: that file's
+//                                              cover; use=email: an email image, named e-<random>.<ext>)
+//   GET    /api/public-images                  → { images: [{ path, url, bytes, createdAt, use: 'email'|'cover' }], limit }
+//   DELETE /api/public-images/<name>           the caller's own image; 409 IN_USE while it's a download's cover
 //   GET|HEAD|POST /m/<id>                      (visitors) the download: a gate page (no script) or a redirect to a
 //                                              60-second signed link or the outside link; POST is the gate's form
 //
@@ -68,6 +71,8 @@ const MAGNET_PATH = /^\/m\/([A-Za-z0-9_-]{22})$/;
 const MAX_MAGNET_PATH = 25;
 const API_PATH = /^\/api\/lead-files(?:\/([^/]{1,64})(\/content)?)?$/;
 const IMAGES_PATH = '/api/public-images';
+/** A public image's object name under the caller's folder: an email image (e-) or a cover, 16 random bytes, its type. */
+const IMAGE_NAME = /^(e-)?[A-Za-z0-9_-]{22}\.(png|jpg|webp|gif)$/;
 
 /** Visitors per hour on /m/ (each request), requests per file per hour, and the gate's sign-ups per file per hour. */
 export const MAGNET_LIMITS = Object.freeze({ perIp: 60, perFile: 600, signupsPerFile: 300, windowMs: 3_600_000 });
@@ -479,7 +484,7 @@ export function createLeadFiles({
   };
 
   // ── the signed-in API ──
-  const matchApi = (url) => url.pathname === IMAGES_PATH || url.pathname === '/api/lead-files' || url.pathname.startsWith('/api/lead-files/');
+  const matchApi = (url) => url.pathname === IMAGES_PATH || url.pathname.startsWith(`${IMAGES_PATH}/`) || url.pathname === '/api/lead-files' || url.pathname.startsWith('/api/lead-files/');
 
   /** A raw body of at most max bytes (content-length required). Rejects with { status: 411 | 413 | 400 }. */
   function readRaw(req, max) {
@@ -641,6 +646,11 @@ export function createLeadFiles({
   async function publicImage(req, who, url, origin) {
     const uid = who.id;
     const leadFile = url.searchParams.get('leadFile');
+    const use = url.searchParams.get('use');
+    if (use !== null && use !== 'email') {
+      drain(req);
+      throw fail(400, 'BAD_REQUEST', 'Unknown use for this image.');
+    }
     if (leadFile !== null && !(leadFile.length === 22 && MAGNET_ID.test(leadFile))) {
       drain(req);
       throw fail(404, 'NOT_FOUND', 'That download isn’t in your list.');
@@ -663,7 +673,8 @@ export function createLeadFiles({
     const have = await listFiles(PUBLIC_FILES_BUCKET, `${uid}/`, 0);
     if (have.length >= MAX_PUBLIC_IMAGES_PER_USER) throw fail(400, 'TOO_MANY', `You can keep up to ${MAX_PUBLIC_IMAGES_PER_USER} public images. Remove a download’s cover first.`);
     await mustExist(uid);
-    const path = `${uid}/${b64url(crypto.randomBytes(16))}.${type.ext}`;
+    // an email image is named e-<random> so the list can tell it from a download's cover (a cover never is)
+    const path = `${uid}/${use === 'email' && !row ? 'e-' : ''}${b64url(crypto.randomBytes(16))}.${type.ext}`;
     await putObject(PUBLIC_FILES_BUCKET, path, bytes, type.mime);
     if (row) {
       let rows;
@@ -682,6 +693,42 @@ export function createLeadFiles({
       if (previous && previous !== path && previous.startsWith(`${uid}/`)) await removeObjects(PUBLIC_FILES_BUCKET, [previous]).catch(() => {});
     }
     return { url: publicUrl(path), path };
+  }
+
+  /** The caller's public images: email images and covers, newest first. */
+  async function listPublicImages(uid) {
+    const prefix = `${uid}/`;
+    const res = await storage(`object/list/${PUBLIC_FILES_BUCKET}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prefix, limit: 1000, offset: 0, sortBy: { column: 'created_at', order: 'desc' } }) });
+    const text = await res.text().catch(() => '');
+    if (!res.ok) {
+      if (/bucket not found/i.test(text)) return { images: [], limit: MAX_PUBLIC_IMAGES_PER_USER };
+      throw fail(502, 'UPSTREAM', `Couldn’t list your images (error ${res.status}).`);
+    }
+    let items;
+    try {
+      items = JSON.parse(text);
+    } catch {
+      items = [];
+    }
+    const images = (Array.isArray(items) ? items : [])
+      .filter((i) => i?.id != null && typeof i.name === 'string' && IMAGE_NAME.test(i.name))
+      .map((i) => ({
+        path: `${prefix}${i.name}`,
+        url: publicUrl(`${prefix}${i.name}`),
+        bytes: Number(i.metadata?.size) || 0,
+        createdAt: typeof i.created_at === 'string' ? i.created_at : null,
+        use: i.name.startsWith('e-') ? 'email' : 'cover',
+      }));
+    return { images, limit: MAX_PUBLIC_IMAGES_PER_USER };
+  }
+
+  /** One of the caller's public images, unless a download uses it as its cover (409 IN_USE). Gone already: done. */
+  async function removePublicImage(uid, name) {
+    const path = `${uid}/${name}`;
+    const using = (await rest(`lead_files?user_id=eq.${uid}&cover_path=eq.${encodeURIComponent(path)}&select=id&limit=1`)) ?? [];
+    if (using.length) throw fail(409, 'IN_USE', 'This image is a download’s cover. Change the cover first.');
+    await removeObjects(PUBLIC_FILES_BUCKET, [path]);
+    return { ok: true };
   }
 
   async function handleApi(req, res, url) {
@@ -728,9 +775,20 @@ export function createLeadFiles({
     };
     try {
       if (p === IMAGES_PATH) {
+        // listing and removing never need a plan
+        if (method === 'GET') return reply(200, await listPublicImages(uid));
         if (method !== 'POST') return notAllowed();
         await needsActive(who);
         return reply(200, await publicImage(req, who, url, origin));
+      }
+      if (p.startsWith(`${IMAGES_PATH}/`)) {
+        const name = p.slice(IMAGES_PATH.length + 1);
+        if (method !== 'DELETE') return notAllowed();
+        if (name.length > 40 || !IMAGE_NAME.test(name)) {
+          drain(req);
+          return reply(404, { error: 'That image isn’t in your list.', code: 'NOT_FOUND' });
+        }
+        return reply(200, await removePublicImage(uid, name));
       }
       const m = p.length <= 120 ? API_PATH.exec(p) : null;
       if (!m) return notFoundHere();

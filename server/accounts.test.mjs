@@ -258,7 +258,8 @@ describe('deleting an account clears every bucket of theirs', () => {
     const leaving = await supa.tokenFor('leaving-buckets@example.com');
     const staying = await supa.tokenFor('staying-buckets@example.com');
     const put = (key) => supa.objects.set(key, { bytes: Buffer.from('x'), type: 'application/pdf', created: Date.now() });
-    const theirs = [`media/${leaving.user.id}/m1`, `lead-files/${leaving.user.id}/AAAAAAAAAAAAAAAAAAAAAA/v1-abc/guide.pdf`, `public-files/${leaving.user.id}/BBBBBBBBBBBBBBBBBBBBBB.png`];
+    // (public-files: a download's cover, and an email image (P5: e-<random>))
+    const theirs = [`media/${leaving.user.id}/m1`, `lead-files/${leaving.user.id}/AAAAAAAAAAAAAAAAAAAAAA/v1-abc/guide.pdf`, `public-files/${leaving.user.id}/BBBBBBBBBBBBBBBBBBBBBB.png`, `public-files/${leaving.user.id}/e-EEEEEEEEEEEEEEEEEEEEEE.webp`];
     const others = [`lead-files/${staying.user.id}/CCCCCCCCCCCCCCCCCCCCCC/v1-abc/guide.pdf`, `public-files/${staying.user.id}/DDDDDDDDDDDDDDDDDDDDDD.png`];
     for (const k of [...theirs, ...others]) put(k);
     await auth.deleteUser(leaving.user.id);
