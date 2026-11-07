@@ -12,6 +12,8 @@ import { renderEmail, renderText, type EspId, type RenderContext, type RenderRes
 import { emailTokens, signedUpAt } from '@/pages/marketing/email/shared';
 import { buyLinksOf } from '@/store/offers';
 import { useStore } from '@/store/useStore';
+import { useAuth } from '@/lib/cloud/auth';
+import { sanitizeEmailHtml } from '../../shared/email/sanitize.mjs';
 
 export type { EmailDoc, ThemeRef };
 
@@ -133,12 +135,46 @@ export function emailText(step: EmailStep, p: Project, links: Record<string, str
   return renderText(docOf(step, p), { target: 'export', values: {}, links: { ...links, ...renderLinks(p, 'export') } }, { footer: false });
 }
 
-/** Whether an image is one the app hosts (its public-files, or its email icons): the only ones the server takes. */
-export const isHostedImage = (src: string) => /^https:\/\/[^/]+\/storage\/v1\/object\/public\/public-files\/[^/]+\/[^/]+$/.test(src) || /^https:\/\/[^/]+\/email-icons\/[a-z]+\.png$/.test(src);
+/** The names the server takes for an email image in public-files (as server/omnisend.mjs's PUBLIC_FILE_NAME). */
+const PUBLIC_FILE_NAME = /^(e-)?[A-Za-z0-9_-]{22}\.(png|jpg|webp|gif)$/;
 
-/** Images the server would refuse (not on the app's public-files, nor its email icons). */
+/**
+ * Whether an image is one the app hosts for this owner (their public-files folder, with a name the server takes, or
+ * the app's email icons): the only ones the server keeps. uid: the signed-in owner's (unknown: any folder).
+ */
+export function isHostedImage(src: string, uid: string | undefined = useAuth.getState().user?.id): boolean {
+  const m = /^https:\/\/[^/]+\/storage\/v1\/object\/public\/public-files\/([^/]+)\/([^/]+)$/.exec(src);
+  if (m) {
+    let folder = m[1];
+    try {
+      folder = decodeURIComponent(folder);
+    } catch {
+      return false;
+    }
+    return PUBLIC_FILE_NAME.test(m[2]) && (!uid || folder === uid);
+  }
+  return /^https:\/\/[^/]+\/email-icons\/[a-z]+\.png$/.test(src);
+}
+
+/** The https images a custom block's HTML keeps once cleaned (what the server checks again). */
+function customImageSrcs(doc: EmailDoc): string[] {
+  const out: string[] = [];
+  eachBlock(doc, (b) => {
+    if (b.type !== 'custom') return;
+    let html = '';
+    try {
+      html = sanitizeEmailHtml(b.html).html;
+    } catch {
+      return;
+    }
+    for (const m of html.matchAll(/<img\b[^>]*\ssrc="(https:\/\/[^"]+)"/g)) out.push(m[1].replace(/&amp;/g, '&'));
+  });
+  return out;
+}
+
+/** Images the server would refuse or drop (not this owner's public-files, nor the email icons), custom HTML's too. */
 export function unhostedImages(doc: EmailDoc): string[] {
-  return docImageSrcs(doc).filter((src) => !isHostedImage(src));
+  return [...new Set([...docImageSrcs(doc), ...customImageSrcs(doc)])].filter((src) => !isHostedImage(src));
 }
 
 /** Buy links in a doc that aren't one of the business's offers. */

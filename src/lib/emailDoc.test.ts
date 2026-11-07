@@ -8,7 +8,8 @@ import { useOffers } from '@/store/offers';
 import { generateEmailSequence } from '@/ai/local/email';
 import { emailTokens } from '@/pages/marketing/email/shared';
 import { sequenceCsv, sequenceText } from './emailFunnel';
-import { BUY_PREVIEW, docOf, emailHtml, emailText, emailValues, renderCtx, replaceDoc, setDoc, undoDoc, unhostedImages, unknownBuyIds, variantDoc } from './emailDoc';
+import { useAuth } from '@/lib/cloud/auth';
+import { BUY_PREVIEW, isHostedImage, docOf, emailHtml, emailText, emailValues, renderCtx, replaceDoc, setDoc, undoDoc, unhostedImages, unknownBuyIds, variantDoc } from './emailDoc';
 import type { EmailDoc } from '../../shared/email/blocks.mjs';
 import { applyTemplate } from '../../shared/email/migrate.mjs';
 import { applyEmailChange, emailDiff, openingOf } from './experiments/variants';
@@ -142,6 +143,22 @@ describe('the render context', () => {
     };
     expect(unknownBuyIds(doc, p)).toEqual([OTHER]);
     expect(unhostedImages(doc)).toEqual(['https://cdn.example/x.png']);
+  });
+
+  it('images the server would drop: another owner’s folder, a name it doesn’t take, custom HTML’s too', () => {
+    const mine = 'https://abc.supabase.co/storage/v1/object/public/public-files/u1/e-AAAAAAAAAAAAAAAAAAAAAA.png';
+    const theirs = 'https://abc.supabase.co/storage/v1/object/public/public-files/u2/e-AAAAAAAAAAAAAAAAAAAAAA.png';
+    const oddName = 'https://abc.supabase.co/storage/v1/object/public/public-files/u1/logo.svg';
+    useAuth.setState({ user: { id: 'u1', email: 'a@b.c' } });
+    try {
+      expect(isHostedImage(mine)).toBe(true);
+      expect(isHostedImage(theirs)).toBe(false);
+      expect(isHostedImage(oddName)).toBe(false);
+      const doc: EmailDoc = { v: 1, theme: { id: 'brand' }, blocks: [{ id: 'b_kkkkkkkkkk', type: 'custom', html: `<img src="${mine}" alt="a"><img src="${theirs}" alt="b"><img src="https://track.example/p.gif" alt="">`, source: 'owner' } as EmailDoc['blocks'][number]] };
+      expect(unhostedImages(doc).sort()).toEqual(['https://track.example/p.gif', theirs].sort());
+    } finally {
+      useAuth.setState({ user: null });
+    }
   });
 
   it('makes version B’s doc with B’s opening in the first text block', () => {
