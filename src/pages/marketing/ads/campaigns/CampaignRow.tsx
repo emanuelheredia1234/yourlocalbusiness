@@ -4,15 +4,15 @@
 // launch or change, and a launch made but not switched on, says why (the server's words) and links Meta's or
 // Google's own page that fixes it, if any.
 import { useEffect, useState } from 'react';
-import { ExternalLink, RefreshCw, Settings2 } from 'lucide-react';
+import { ExternalLink, RefreshCw, Settings2, Trash2 } from 'lucide-react';
 import type { AdJob, AdsPlatform, LaunchedCampaign } from '@/lib/ads/launchTypes';
 import { PLATFORM_LABEL } from '@/lib/ads/launchTypes';
 import { money, safeFixUrl, shortDay } from '@/lib/ads/launchFormat';
 import { fmtNum, fmtRelative } from '@/lib/utils';
 import { useAdsLaunch } from '@/store/adsLaunch';
 import { toast } from '@/store/ui';
-import { Badge, Callout, Spinner, StatusDot } from '@/components/ui/primitives';
-import { canLaunchAgain, managerLink, managerName, sendingJob, stateBadge, unknownJob } from './campaignView';
+import { Badge, Callout, Spinner, StatusDot, confirmAction } from '@/components/ui/primitives';
+import { canLaunchAgain, canRemove, managerLink, managerName, removeConfirmText, sendingJob, stateBadge, unknownJob } from './campaignView';
 
 export function CheckStatusButton({ jobId, canCheckAt, size = 'xs' }: { jobId: string; canCheckAt?: string; size?: 'xs' | 'sm' }) {
   const [busy, setBusy] = useState(false);
@@ -35,6 +35,37 @@ export function CheckStatusButton({ jobId, canCheckAt, size = 'xs' }: { jobId: s
   return (
     <button type="button" className={`btn btn-secondary btn-${size}`} disabled={busy || wait > 0} title={wait > 0 ? 'You can check again in a few seconds.' : undefined} onClick={() => void check()}>
       {busy ? <Spinner size={12} /> : <RefreshCw />} Check status
+    </button>
+  );
+}
+
+/** Ask, then remove a failed launch from this business's list: one request, nothing sent to Meta or Google. */
+export async function removeFailedLaunch(c: LaunchedCampaign, ask: typeof confirmAction = confirmAction): Promise<boolean> {
+  if (!canRemove(c)) return false;
+  if (!(await ask(removeConfirmText(c)))) return false;
+  const r = await useAdsLaunch.getState().remove(c.projectId, c.id);
+  if (!r.ok) toast({ kind: 'error', title: 'Not removed', body: r.message });
+  else if (r.alreadyGone) toast({ kind: 'info', title: 'Already removed', body: r.message });
+  else toast({ kind: 'success', title: 'Removed the failed launch' });
+  return r.ok;
+}
+
+/** "Remove" on a failed launch with nothing at the platform; nothing otherwise. */
+export function RemoveButton({ c, size = 'xs' }: { c: LaunchedCampaign; size?: 'xs' | 'sm' }) {
+  const [busy, setBusy] = useState(false);
+  if (!canRemove(c)) return null;
+  const go = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await removeFailedLaunch(c);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" className={`btn btn-danger-ghost btn-${size} ${size === 'xs' ? 'ml-1' : ''}`.trim()} disabled={busy} aria-label={`Remove the failed launch ${c.name}`} onClick={() => void go()}>
+      {busy ? <Spinner size={12} /> : <Trash2 />} Remove
     </button>
   );
 }
@@ -196,6 +227,7 @@ export function CampaignRow({ c, onManage, onLaunchAgain }: { c: LaunchedCampaig
         <button type="button" className="btn btn-secondary btn-xs" onClick={onManage}>
           <Settings2 /> Manage
         </button>
+        <RemoveButton c={c} />
         {link && (
           <a href={link} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-xs ml-1" aria-label={`Open in ${managerName(c)}`} title={`Open in ${managerName(c)}`}>
             <ExternalLink />
@@ -237,6 +269,7 @@ export function CampaignCard({ c, onManage, onLaunchAgain }: { c: LaunchedCampai
         <button type="button" className="btn btn-secondary btn-sm" onClick={onManage}>
           <Settings2 /> Manage
         </button>
+        <RemoveButton c={c} size="sm" />
         {link && (
           <a href={link} target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm">
             Open in {managerName(c)} <ExternalLink />

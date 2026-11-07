@@ -20,7 +20,7 @@ const fixOf = (after, acct) => {
   return r && r.owner !== true ? fixUrlFor(r.code, r.fix?.url, acct?.ad_account_id, acct?.platform ?? 'meta') : undefined;
 };
 
-const ACTIONS = ['launch', 'pause', 'resume', 'end', 'budget', 'end_date', 'creative', 'check', 'limits', 'review', 'account'];
+const ACTIONS = ['launch', 'pause', 'resume', 'end', 'budget', 'end_date', 'creative', 'check', 'limits', 'review', 'account', 'remove'];
 const OUTCOMES = ['sending', 'done', 'failed', 'unknown', 'refused', 'info'];
 
 export function createAudit({ db, now = () => Date.now(), log = console } = {}) {

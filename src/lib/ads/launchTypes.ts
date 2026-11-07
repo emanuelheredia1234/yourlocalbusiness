@@ -258,6 +258,10 @@ export interface LaunchedCampaign {
   lastJob?: AdJob;
   lastReadAt?: string;
   planDeleted?: boolean;
+  /** the server's word: a failed launch with nothing at Meta or Google, which can be removed from the list */
+  canRemove?: boolean;
+  /** why nothing changes at the platform: made then deleted again, or Google showed none of it (absent: nothing made) */
+  removeKind?: 'deleted' | 'unseen';
 }
 
 export interface AdLimitsView {

@@ -394,6 +394,8 @@ export function createMockZernioAds({ violations, sendWebhook = async () => ({})
     if (mode === 'meta-code-31') return err(res, 400, 'meta_security_check_required', 'platform_error', { details: { fix: { url: '/dashboard/zernio-only' } } });
     if (mode === '500') return err(res, 500, 'internal_error', 'api_error');
     if (mode === '502') return err(res, 502, 'platform_api_error', 'platform_error');
+    // a refused create that made a campaign first, with Zernio's word on what became of it (deleted, kept, unknown)
+    if (typeof mode === 'string' && mode.startsWith('created:')) return err(res, 400, 'platform_api_error', 'platform_error', { platform: 'meta', details: { stage: 'adset', adAccountId: acct.id, createdObjects: [{ type: 'campaign', id: digits(15), cleanup: mode.slice('created:'.length) }] }, platformError: { code: 100, error_user_title: 'Invalid parameter', error_user_msg: 'The ad set could not be created.' } });
     if (isRefusal(mode)) return refusal(res, mode);
     // Meta refuses a daily budget on an ad set that runs 24 hours or less (the live refusal of 6 Nov 2026): the app
     // must never send one, so it is a violation too. Zernio has no code of its own for it: Meta's words only.

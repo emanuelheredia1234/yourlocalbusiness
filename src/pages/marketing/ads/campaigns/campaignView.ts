@@ -37,6 +37,30 @@ export function canLaunchAgain(c: LaunchedCampaign): boolean {
   return c.lastJob?.state === 'failed' && (!code || code === 'NOT_CREATED' || code === 'PARTIAL_LEFT' || code === 'CREATE_FAILED' || code === 'REFUSED' || !/UNKNOWN|INTERRUPTED/.test(code));
 }
 
+/**
+ * "Remove" only for a failed launch the server says left nothing at Meta or Google (no platform id, no job sending
+ * or unknown, nothing left behind). Removing touches our list only; the server checks every rule again.
+ */
+export function canRemove(c: LaunchedCampaign): boolean {
+  return c.canRemove === true && c.state === 'failed' && !c.platformCampaignId && !c.pendingJob && !c.lastJob?.leftBehind?.length && c.lastJob?.state !== 'unknown';
+}
+
+/** "…, so nothing changes there.": true for this launch (as the server's audit line, remove.mjs removeWords). */
+export function removeWords(c: LaunchedCampaign): string {
+  const p = PLATFORM_LABEL[c.platform];
+  if (c.removeKind === 'deleted') return `What it made at ${p} was deleted again, so nothing changes there.`;
+  if (c.removeKind === 'unseen') return `${p} showed none of it when it was checked, so nothing changes there.`;
+  return `Nothing was created at ${p}, so nothing changes there.`;
+}
+
+/** The confirm's words for removing a failed launch. */
+export const removeConfirmText = (c: LaunchedCampaign) => ({
+  title: 'Remove this failed launch?',
+  body: removeWords(c),
+  confirmLabel: 'Remove',
+  danger: true,
+});
+
 export interface ActionView {
   action: ChangeAction;
   label: string;
