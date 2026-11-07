@@ -60,11 +60,14 @@ const PRIMARY_KEYS = {
   // supabase/migrations/20261114000000_trial_paywall.sql
   billing_trials: ['subscription_id'],
   cancel_surveys: ['id'],
+  // supabase/migrations/20261116000000_morning_action.sql
+  business_settings: ['user_id', 'project_id'],
+  daily_actions: ['id'],
 };
 /** the integration tables (all server-only) */
 const INTEGRATION_TABLES = ['billing_customers', 'billing_caps', 'usage_ledger', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'post_publish_jobs', 'analytics_history', 'webhook_deliveries', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'ad_limits', 'billing_settings', 'billing_accounts', 'billing_ops', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys'];
 /** tables users may read their own rows of but never write (only the server and the database functions do) */
-const USER_READ_ONLY = new Set(['project_slots']);
+const USER_READ_ONLY = new Set(['project_slots', 'business_settings', 'daily_actions']);
 /** `generated always as identity` columns: the mock numbers them 1, 2, 3… per table */
 const IDENTITY = { usage_ledger: 'id', analytics_history: 'id', ad_audit: 'id' };
 /**
@@ -96,6 +99,12 @@ const UNIQUE = {
   payment_connections: [{ name: 'payment_connections_one_live', cols: ['user_id', 'provider', 'environment'], where: (r) => r.status !== 'disconnected' }],
   sales: [{ name: 'sales_one_per_payment', cols: ['provider', 'environment', 'provider_payment_id'] }],
   cancel_surveys: [{ name: 'cancel_surveys_portal_once', cols: ['subscription_id'], where: (r) => r.source === 'portal' }],
+  daily_actions: [{ name: 'daily_actions_one_per_day', cols: ['user_id', 'project_id', 'local_date'] }],
+};
+/** Column defaults Postgres fills on insert (only for a new row: an upsert that matches keeps the stored values). */
+const INSERT_DEFAULTS = {
+  business_settings: () => ({ time_zone: 'UTC', next_action_at: null, last_active_at: new Date().toISOString(), claim_id: null, claimed_until: null, last_outcome: null, last_run_at: null, created_at: new Date().toISOString() }),
+  daily_actions: () => ({ id: crypto.randomUUID(), engine: null, candidates: [], chosen: null, feedback: [], fallback: null, error_code: null, cost_usd: 0, own_key: false, provider: null, model: null, attempts: 1, started_at: new Date().toISOString(), generated_at: null, done_at: null, created_at: new Date().toISOString() }),
 };
 /** tables whose created_at defaults to now() here (the newer ones; older tests compare whole rows) */
 const DEFAULT_CREATED = new Set(['payment_connections', 'offers', 'sales']);
@@ -111,7 +120,7 @@ const PUBLIC_READ = new Set(['market_listings']);
 const SERVICE_ONLY = new Set(['user_secrets', 'app_state', 'ai_usage_daily', 'video_starts', 'published_pages', 'published_domains', 'page_leads', 'lead_files', ...INTEGRATION_TABLES]);
 const DUPLICATE = { code: '23505', message: 'duplicate key value violates unique constraint' };
 /** tables whose user_id references auth.users (a row for a user that's gone is refused, as Postgres does) */
-const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys']);
+const USER_FK = new Set(['published_pages', 'published_domains', 'billing_customers', 'analytics_settings', 'analytics_snapshots', 'analytics_runs', 'analytics_history', 'post_publish_jobs', 'seo_google_steps', 'ad_account_choices', 'ad_campaigns', 'ad_jobs', 'ad_audit', 'billing_accounts', 'billing_ops', 'project_slots', 'video_starts', 'page_leads', 'lead_files', 'payment_connections', 'offers', 'sales', 'sale_refunds', 'billing_trials', 'cancel_surveys', 'business_settings', 'daily_actions']);
 const PROJECT_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
 /**
@@ -183,6 +192,34 @@ Object.assign(CHECKS, {
     if (!['pending', 'paid', 'failed', 'refunded', 'partially_refunded', 'disputed'].includes(r.status)) return 'sales_status_check';
     if (!/^[a-z]{3}$/.test(String(r.currency))) return 'sales_currency_format';
     if (r.buyer_email != null && String(r.buyer_email).length > 254) return 'sales_buyer_email_size';
+    return null;
+  },
+});
+const MORNING_ZONE = /^[A-Za-z][A-Za-z0-9_+/-]{0,63}$/;
+Object.assign(CHECKS, {
+  business_settings: (r) => {
+    if (!PROJECT_ID.test(String(r.project_id))) return 'business_settings_project_id_check';
+    if (!MORNING_ZONE.test(String(r.time_zone ?? 'UTC'))) return 'business_settings_time_zone_check';
+    if (r.last_outcome != null && !['ready', 'rules', 'failed', 'exists', 'skipped_plan', 'skipped_slot', 'skipped_late'].includes(r.last_outcome)) return 'business_settings_last_outcome_check';
+    return null;
+  },
+  daily_actions: (r) => {
+    const v = { candidates: [], feedback: [], cost_usd: 0, attempts: 1, ...r };
+    if (!PROJECT_ID.test(String(v.project_id))) return 'daily_actions_project_id_check';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v.local_date))) return 'daily_actions_local_date_check';
+    if (typeof v.time_zone !== 'string' || v.time_zone.length < 1 || v.time_zone.length > 64) return 'daily_actions_time_zone_check';
+    if (!['generating', 'ready', 'done', 'dismissed', 'failed'].includes(v.state)) return 'daily_actions_state_check';
+    if (!['cron', 'visit', 'manual'].includes(v.source)) return 'daily_actions_source_check';
+    if (v.engine != null && !['ai', 'rules'].includes(v.engine)) return 'daily_actions_engine_check';
+    if (!Array.isArray(v.candidates) || v.candidates.length > 3 || Buffer.byteLength(JSON.stringify(v.candidates)) > 8192) return 'daily_actions_candidates_check';
+    if (v.chosen != null && !(Number.isInteger(v.chosen) && v.chosen >= 0 && v.chosen <= 2)) return 'daily_actions_chosen_check';
+    if (!Array.isArray(v.feedback) || v.feedback.length > 3 || Buffer.byteLength(JSON.stringify(v.feedback)) > 2048) return 'daily_actions_feedback_check';
+    if (v.fallback != null && !['no_ai', 'own_key', 'credits', 'daily_limit', 'invalid_output', 'refused', 'ai_error', 'fresh'].includes(v.fallback)) return 'daily_actions_fallback_check';
+    if (v.error_code != null && String(v.error_code).length > 40) return 'daily_actions_error_code_check';
+    if (!(Number(v.cost_usd) >= 0)) return 'daily_actions_cost_usd_check';
+    if (!(Number.isInteger(Number(v.attempts)) && v.attempts >= 1 && v.attempts <= 3)) return 'daily_actions_attempts_check';
+    if (v.provider != null && String(v.provider).length > 40) return 'daily_actions_provider_check';
+    if (v.model != null && String(v.model).length > 128) return 'daily_actions_model_check';
     return null;
   },
 });
@@ -346,11 +383,14 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (!select || select === '*') return { ...row };
     const out = {};
     for (const c of select.split(',').map((s) => s.trim()).filter(Boolean)) {
-      // alias:column->>key (a JSON field as text), as PostgREST reads it
-      const j = /^(?:(\w+):)?(\w+)->>(\w+)$/.exec(c);
+      // alias:column->a->>b (a JSON field as text; ->key keeps JSON), as PostgREST reads it
+      const j = /^(?:(\w+):)?(\w+)((?:->>?\w+)+)$/.exec(c);
       if (j) {
-        const v = row[j[2]]?.[j[3]];
-        out[j[1] ?? j[3]] = v == null ? null : typeof v === 'object' ? JSON.stringify(v) : String(v);
+        const steps = [...j[3].matchAll(/(->>?)(\w+)/g)].map((m) => [m[1], m[2]]);
+        let v = row[j[2]];
+        for (const [, key] of steps) v = v != null && typeof v === 'object' ? v[key] : undefined;
+        const asText = steps[steps.length - 1][0] === '->>';
+        out[j[1] ?? steps[steps.length - 1][1]] = v == null ? null : asText ? (typeof v === 'object' ? JSON.stringify(v) : String(v)) : v;
       } else out[c] = row[c];
     }
     return out;
@@ -451,7 +491,9 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
         const i = rows.findIndex((r) => keyCols.every((c) => r[c] === row[c]));
         if (i >= 0 && skipExisting) continue;
         if (i >= 0 && !upsert) return send(res, 409, DUPLICATE);
-        const next = i >= 0 ? { ...rows[i], ...row } : row;
+        const next = i >= 0 ? { ...rows[i], ...row } : INSERT_DEFAULTS[table] ? { ...INSERT_DEFAULTS[table](), ...row } : row;
+        // INSERT … ON CONFLICT DO NOTHING also skips a row that clashes with another unique key (daily_actions_one_per_day)
+        if (i < 0 && skipExisting && uniqueRefusal(table, next, rows)) continue;
         // the primary key stays unique when an upsert matched on another unique key (a renamed slug)
         if (rows.some((r, j) => j !== i && primary.every((c) => r[c] === next[c]))) return send(res, 409, DUPLICATE);
         const refused = checkRefusal(table, next) ?? (table === 'published_pages' ? pageRefusal(next, rows.filter((_, j) => j !== i), null) : null) ?? uniqueRefusal(table, next, rows.filter((_, j) => j !== i));
@@ -510,6 +552,8 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       for (const r of rows) (owned(r) && matches(r, filters) ? gone : keep).push(r);
       tables.set(table, keep);
       if (projectSlots && table === 'user_docs') for (const d of gone) if (d.kind === 'project') slots.onProjectDelete(d.user_id, d.id);
+      // 20261116000000_morning_action.sql: deleting a business deletes its morning rows (always on)
+      if (table === 'user_docs') for (const d of gone) if (d.kind === 'project') morningOnProjectDelete(d.user_id, d.id);
       // a removed domain's pages lose it (published_pages.domain: on delete set null)
       if (table === 'published_domains') for (const p of tables.get('published_pages') ?? []) if (gone.some((d) => d.domain === p.domain)) p.domain = null;
       return /return=representation/.test(prefer) ? send(res, 200, gone) : send(res, 204, undefined);
@@ -526,6 +570,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (fn === 'lead_file_downloaded') return leadFileDownloaded(req, res, raw);
     if (fn === 'offer_clicked' || fn === 'record_sale') return offersRpc(req, res, fn, raw);
     if (fn === 'ylb_cancel_survey_totals') return surveyTotals(req, res, fn);
+    if (fn === 'ylb_morning_claim' || fn === 'ylb_morning_backlog') return morningRpc(req, res, fn, raw);
     if (fn !== 'ylb_add_ai_usage') return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     if (missingTables.includes('ai_usage_daily')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
     const who = await caller(req);
@@ -910,6 +955,60 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     const out = slots.apply(b.p_user, b.p_row ?? {}, b.p_fetched_at ?? null);
     if (out.error) return send(res, 409, out.error);
     return send(res, 200, out.wrote);
+  }
+
+  // ───────────── morning action (supabase/migrations/20261116000000_morning_action.sql) ─────────────
+  // Each call runs without an await, so two concurrent calls get disjoint rows (the real row lock, `for update skip
+  // locked`, is checked on a Supabase branch).
+
+  function morningOnProjectDelete(u, id) {
+    for (const t of ['daily_actions', 'business_settings']) if (tables.has(t)) tables.set(t, tables.get(t).filter((r) => !(r.user_id === u && r.project_id === id)));
+  }
+
+  /** public.ylb_morning_eligible: saved and onboarded, slot not locked, on a plan (or plans not enforced). */
+  function morningEligible(s) {
+    const doc = (tables.get('user_docs') ?? []).find((d) => d.user_id === s.user_id && d.kind === 'project' && d.id === s.project_id);
+    if (!doc || doc.data?.onboarded !== true) return false;
+    if ((tables.get('project_slots') ?? []).some((p) => p.user_id === s.user_id && p.project_id === s.project_id && p.state === 'locked')) return false;
+    if (!slots.enforced()) return true;
+    const a = (tables.get('billing_accounts') ?? []).find((r) => r.user_id === s.user_id);
+    return !!a && (a.source === 'owner' || (['active', 'trialing', 'past_due'].includes(a.status) && (a.source !== 'comp' || a.comp_until == null || Date.parse(a.comp_until) > dbNow())));
+  }
+
+  function morningDue(s, at, olderThanMs = 0) {
+    return s.next_action_at != null && Date.parse(s.next_action_at) <= at - olderThanMs && Date.parse(s.last_active_at) >= at - 14 * 86_400_000 && (s.claimed_until == null || Date.parse(s.claimed_until) < at) && morningEligible(s);
+  }
+
+  async function morningRpc(req, res, fn, raw) {
+    if (missingTables.includes('business_settings')) return send(res, 404, { code: 'PGRST202', message: `Could not find the function public.${fn} in the schema cache` });
+    const who = await caller(req);
+    if (!who?.service) return send(res, 401, { code: '42501', message: `permission denied for function ${fn}` });
+    let b;
+    try {
+      b = JSON.parse(raw || '{}');
+    } catch {
+      return send(res, 400, { message: 'invalid json' });
+    }
+    const at = dbNow();
+    const rows = tables.get('business_settings') ?? [];
+    if (fn === 'ylb_morning_backlog') return send(res, 200, rows.filter((s) => morningDue(s, at, Math.max(0, Number(b.p_older_than_seconds) || 0) * 1000)).length);
+    const lim = Math.max(1, Math.min(Number(b.p_limit) || 1, 200));
+    const lease = Math.max(60, Math.min(Number(b.p_lease_seconds) || 600, 3600));
+    const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
+    const picked = rows
+      .filter((s) => morningDue(s, at))
+      .sort((x, y) => cmp(Date.parse(x.next_action_at), Date.parse(y.next_action_at)) || cmp(x.user_id, y.user_id) || cmp(x.project_id, y.project_id))
+      .slice(0, lim);
+    const out = [];
+    for (const s of picked) {
+      s.claim_id = crypto.randomUUID();
+      s.claimed_until = new Date(at + lease * 1000).toISOString();
+      s.updated_at = new Date().toISOString();
+      const doc = (tables.get('user_docs') ?? []).find((d) => d.user_id === s.user_id && d.kind === 'project' && d.id === s.project_id);
+      const tz = doc?.data?.timeZone;
+      out.push({ user_id: s.user_id, project_id: s.project_id, time_zone: s.time_zone, doc_time_zone: tz == null ? null : String(tz), next_action_at: s.next_action_at, claim_id: s.claim_id });
+    }
+    return send(res, 200, out);
   }
 
   // ───────────── Storage subset ─────────────
