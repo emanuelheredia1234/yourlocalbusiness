@@ -806,14 +806,23 @@ Nothing is enforced until the owner turns plans on; until then the app behaves a
 1. **Stripe Sandbox first.** In the Stripe Dashboard, open a Sandbox (Developers → Sandboxes) and copy its secret key
    (`sk_test_…`) into the workspace Secrets as `STRIPE_SECRET_KEY`. Everything below is done in the Sandbox, end to
    end, before anything live.
-2. Run the migration `supabase/migrations/20261110000000_billing.sql` (and check the rule on a branch, below).
+2. Run the migration `supabase/migrations/20261110000000_billing.sql` (and check the rule on a branch, below), then
+   `20261111000000_video_week.sql` (P1b) and `20261114000000_trial_paywall.sql` (P1c: the free first business, the
+   7-day card trial and the cancel survey; until it is run no trial is offered).
 3. Set `APP_URL` (the app's https address).
 4. **Products and prices** with the setup script (below): a dry run, then `--apply`.
 5. **Webhook** (below): the endpoint URL and the 10 events; its signing secret into `STRIPE_WEBHOOK_SECRET`.
-6. **Customer Portal** settings (below).
+6. **Customer Portal** settings (below), with the cancellation reason survey on. In Stripe → Settings → Billing →
+   Subscriptions and emails: Smart Retries ("Failed payments", below) and the free trial reminder ("Send a reminder
+   email 7 days before a free trial ends", see "Free trial, paywall and cancelling").
 7. Optional: **Stripe Tax** (below).
-8. Try it in the Sandbox: create an account, choose a plan on `#plans`, pay with `4242 4242 4242 4242`, come back to
-   the app, add a business, try `4000 0000 0000 0341` (a card that declines later) for the failed-payment path.
+8. Try it in the Sandbox: create an account and set up a business, then on `#plans` start the 7-day free trial with
+   `4242 4242 4242 4242` (once plans are on, setup's Launch step shows the same plans); Settings › Plan shows the days
+   left. Try **Cancel trial** (the survey) and **Keep my plan**. A trial on a card that already had one is cancelled
+   at once, by design: every `4242…` test card has the same fingerprint, so a second test trial needs another test
+   card (for example `5555 5555 5555 4444`). For the paid path, set **Card trial** to 0 in Customer usage › Plans,
+   then on a new account choose a plan on `#plans`, pay with `4242 4242 4242 4242`, come back to the app, add a
+   business, and try `4000 0000 0000 0341` (a card that declines later) for the failed-payment path.
 9. Owner → Billing → Plans → **Turn on plans**.
 10. Live (only with the owner's explicit OK): create a **restricted live key** (`rk_live_…`, permissions below), run
     the setup script with it and `--live`, add the live webhook endpoint and its secret, set up the live Portal, and
