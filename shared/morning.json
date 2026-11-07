@@ -1,0 +1,10 @@
+{
+  "hour": 5,
+  "lateHours": 3,
+  "activeDays": 14,
+  "recentDays": 7,
+  "notUsefulDays": 30,
+  "keepDays": 120,
+  "maxAttempts": 3,
+  "staleMinutes": 10
+}

@@ -18,54 +18,14 @@
 
 import crypto from 'node:crypto';
 import { serviceHeaders } from './secretBox.mjs';
+import { midnightUtc, validTimeZone, wall, ymdOf, zoneOf } from './localTime.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DAY_MS = 86_400_000;
 export const VIDEO_WEEK_MIGRATION = 'supabase/migrations/20261111000000_video_week.sql';
 
-/** Whether Intl knows this IANA time zone. */
-export function validTimeZone(tz) {
-  if (typeof tz !== 'string' || !tz || tz.length > 64) return false;
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** The first valid time zone of the candidates (the business's, then the browser's), else 'UTC'. */
-export const zoneOf = (...candidates) => candidates.find(validTimeZone) ?? 'UTC';
-
-const partsFmt = new Map();
-/** The wall-clock date and time of `t` in `tz`, as numbers. */
-function wall(t, tz) {
-  let f = partsFmt.get(tz);
-  if (!f) {
-    f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'short' });
-    partsFmt.set(tz, f);
-  }
-  const o = {};
-  for (const p of f.formatToParts(new Date(t))) o[p.type] = p.value;
-  return { y: Number(o.year), m: Number(o.month), d: Number(o.day), h: Number(o.hour), mi: Number(o.minute), s: Number(o.second), wd: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(o.weekday) };
-}
-
-/** How far `tz` is ahead of UTC at `t`, in ms. */
-function offsetAt(t, tz) {
-  const w = wall(t, tz);
-  return Date.UTC(w.y, w.m - 1, w.d, w.h, w.mi, w.s) - Math.floor(t / 1000) * 1000;
-}
-
-/** The UTC time of a local date's midnight in `tz` (after a daylight-saving gap at midnight: the first time that exists). */
-function midnightUtc(ymd, tz) {
-  const [y, m, d] = ymd.split('-').map(Number);
-  const guess = Date.UTC(y, m - 1, d);
-  let t = guess - offsetAt(guess, tz);
-  t = guess - offsetAt(t, tz);
-  return t;
-}
-
-const ymdOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+// the Intl helpers live in server/localTime.mjs (re-exported here: server/providers/routes.mjs imports them from this file)
+export { validTimeZone, zoneOf } from './localTime.mjs';
 
 /**
  * The week `now` falls in for a business in `tz`: { weekStart: the Monday (YYYY-MM-DD, local), resetsAt: the next
