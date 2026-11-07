@@ -129,7 +129,8 @@ export function emailHtml(step: EmailStep, p: Project, target: 'preview' | 'expo
 
 /** The email's plain-text part (CSV/.txt export): merge tags stay for the email tool to fill, buy links are filled in. */
 export function emailText(step: EmailStep, p: Project, links: Record<string, string> = buyLinksOf(p.id)): string {
-  return renderText(docOf(step, p), { target: 'export', values: {}, links: { ...links, ...renderLinks(p, 'export') } });
+  // the words only: the footer and unsubscribe link are the email tool's (and the button's link is its own line)
+  return renderText(docOf(step, p), { target: 'export', values: {}, links: { ...links, ...renderLinks(p, 'export') } }, { footer: false });
 }
 
 /** Whether an image is one the app hosts (its public-files, or its email icons): the only ones the server takes. */

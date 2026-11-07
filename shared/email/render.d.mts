@@ -61,5 +61,5 @@ export function luminance(hex: string): number;
 export function contrast(a: string, b: string): number;
 export function resolveTheme(ref: ThemeRef | undefined, brandColors?: BrandColorsIn): { tokens: ResolvedTheme; warnings: string[] };
 export function renderEmail(doc: EmailDoc | unknown, ctx: RenderContext): RenderResult;
-export function renderText(doc: EmailDoc | unknown, ctx: RenderContext): string;
+export function renderText(doc: EmailDoc | unknown, ctx: RenderContext, opts?: { footer?: boolean }): string;
 export function hasCustomBlocks(doc: EmailDoc): boolean;

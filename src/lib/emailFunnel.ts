@@ -53,12 +53,12 @@ export function renderBuyLinks(text: string, links: Record<string, string>): str
 }
 
 /** An email's words as text: a designed email's plain-text part (P5), else its body; buy links filled in. */
-const bodyText = (p: Project, e: EmailStep, links: Record<string, string>) => (e.doc ? emailText(e, p, links) : renderBuyLinks(e.body, links));
+const bodyText = (p: Project, e: EmailStep, links: Record<string, string>) => (e.doc ? emailText(e, p, links).trim() : renderBuyLinks(e.body, links));
 
 /** The sequence as plain text (Copy all, Export), its buy links filled in (links: see renderBuyLinks). */
 export function sequenceText(p: Project, links: Record<string, string> = {}): string {
   return p.marketing.emails
-    .map((e, i) => [`EMAIL ${i + 1}: ${e.purpose}`, `Send: ${delayLabel(e, i)}`, `Subject: ${e.subject}`, `Preview: ${e.preview}`, '', bodyText(p, e, links), ...(e.doc ? [] : ['', `[${e.ctaLabel}] → ${renderBuyLinks(e.ctaUrl ?? '', links)}`])].join('\n'))
+    .map((e, i) => [`EMAIL ${i + 1}: ${e.purpose}`, `Send: ${delayLabel(e, i)}`, `Subject: ${e.subject}`, `Preview: ${e.preview}`, '', bodyText(p, e, links), ...(e.ctaLabel ? ['', `[${e.ctaLabel}] → ${renderBuyLinks(e.ctaUrl ?? '', links)}`] : [])].join('\n'))
     .join('\n\n────────────────────────\n\n');
 }
 

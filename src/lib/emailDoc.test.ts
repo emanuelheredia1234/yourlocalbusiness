@@ -89,6 +89,21 @@ describe('exports from a doc', () => {
     expect(csv).toContain('"<html>x</html>"');
     expect(sequenceCsv(q).split('\n')[0]).toBe('step,send,subject,preview,body,button,button_link');
   });
+
+  it('Copy all and CSV: the button’s link kept as its own line, no footer or unsubscribe placeholder', () => {
+    const p = setup();
+    const e = p.marketing.emails[1];
+    setDoc(p.id, e.id, { v: 1, theme: { id: 'brand' }, blocks: [{ id: 'b_eeeeeeeeee', type: 'text', text: 'Here it is.' }, { id: 'b_ffffffffff', type: 'button', label: 'Get it', link: { kind: 'magnet' }, style: 'solid' }] });
+    const q = now(p.id);
+    const text = sequenceText(q);
+    expect(text).toContain('[Get it] → {{lead_magnet_link}}');
+    expect(text).not.toContain('[Add your unsubscribe link]');
+    expect(text).not.toContain('You’re receiving this');
+    const csv = sequenceCsv(q);
+    expect(csv).toContain('"Here it is.\n\nGet it","Get it","{{lead_magnet_link}}"');
+    expect(csv).not.toContain('[Add your unsubscribe link]');
+    expect(emailText(q.marketing.emails[1], q).trim().endsWith('Get it')).toBe(true);
+  });
 });
 
 describe('the render context', () => {

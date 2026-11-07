@@ -659,10 +659,16 @@ function textFor(d, ctx, rc, unsub) {
   return `${[...parts, '--', footer.join('\n')].join('\n\n').replace(/\n{3,}/g, '\n\n').trim()}\n`;
 }
 
-/** The plain-text part alone (Gmail's multipart, CSV and .txt exports). Same ctx as renderEmail. */
-export function renderText(doc, ctx) {
+/**
+ * The plain-text part alone (Gmail's multipart, CSV and .txt exports). Same ctx as renderEmail. opts.footer false:
+ * the words only, no footer (the app's Copy all and CSV body; only for the export and preview targets).
+ */
+export function renderText(doc, ctx, { footer = true } = {}) {
   const { doc: d } = normalizeDoc(doc);
   const rc = contextFor(d, ctx);
+  if (!footer && (ctx.target === 'export' || ctx.target === 'preview')) {
+    return `${d.blocks.map((b) => blockText(b, rc)).filter((x) => x.trim()).join('\n\n').replace(/\n{3,}/g, '\n\n').trim()}\n`;
+  }
   const unsub = unsubscribeFor(ctx, rc);
   return textFor(d, ctx, rc, unsub);
 }
