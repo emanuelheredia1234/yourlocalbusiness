@@ -65,6 +65,8 @@ export function installUpgradeListener(): void {
   setPlanRefusalListener((path, status, body) => {
     // billing's own routes answer in their dialogs (Add a business, Plan)
     if (path.startsWith('/api/billing/')) return;
+    // the morning card shows its own "Start your free trial" (the prompt opens only from its button)
+    if (path.startsWith('/api/morning/')) return;
     if (status === 402 || (status === 403 && (body as RefusalBody)?.code === 'PLAN_REQUIRED') || (body as RefusalBody)?.code === 'BUSINESS_LIMIT') showUpgrade(body as RefusalBody);
   });
 }

@@ -27,6 +27,11 @@ import type {
   ConnectionsResponse,
   CustomerUsage,
   CustomersResponse,
+  MorningAction,
+  MorningOwner,
+  MorningReason,
+  MorningToday,
+  MorningVerdict,
   NangoResponse,
   OwnerBillingAccount,
   PlanInterval,
@@ -183,6 +188,21 @@ export const putCompPlan = (customerTag: string, body: { tier: PlanTier | 'none'
 export const syncBillingAccount = (customerTag: string) => call<{ ok: true }>('POST', `/api/billing/accounts/${seg(customerTag)}/sync`, {});
 export const getBillingSettings = () => call<BillingSettingsResponse>('GET', '/api/billing/settings');
 export const putBillingSettings = (body: { enforce?: boolean; cardTrialDays?: number; existingTrialDays?: number }) => call<BillingSettingsResponse>('PUT', '/api/billing/settings', body);
+
+// ───────────── the morning action (P4) ─────────────
+// One request each, never retried here. In the claude.ai build none of these reach a server: the card there is a
+// local, rule-based version (src/lib/morning/local.ts), and these refuse before any request.
+
+const noServer = () => Promise.reject(new IntegrationApiError(503, { error: 'The morning action needs the app’s server.', code: 'NOT_SET_UP' }));
+
+/** Today's state for a business (reads and records the visit; never makes an action). timeZone: the business's zone. */
+export const getMorningToday = (projectId: string, timeZone: string): Promise<MorningToday> => (__ARTIFACT_BUILD__ ? noServer() : call<MorningToday>('GET', `/api/morning/today${q({ projectId, timeZone })}`));
+/** visit: the first Dashboard visit after 5 am; manual: "Get today’s action" (re-runs a failed day, at most 3 times). */
+export const startMorning = (projectId: string, mode: 'visit' | 'manual', timeZone: string): Promise<{ action: MorningAction | null }> => (__ARTIFACT_BUILD__ ? noServer() : call<{ action: MorningAction | null }>('POST', '/api/morning/today', { projectId, mode, timeZone }));
+export const sendMorningFeedback = (id: string, verdict: MorningVerdict, reason?: MorningReason, note?: string): Promise<{ action: MorningAction }> =>
+  __ARTIFACT_BUILD__ ? noServer() : call<{ action: MorningAction }>('POST', `/api/morning/actions/${seg(id)}/feedback`, { verdict, ...(reason ? { reason } : {}), ...(note ? { note } : {}) });
+/** The owner only: the last run, whether a key powers it, and alerts. */
+export const getMorningOwner = (): Promise<MorningOwner> => (__ARTIFACT_BUILD__ ? noServer() : call<MorningOwner>('GET', '/api/morning/owner'));
 
 /** A fresh id for one user action (Stripe's Idempotency-Key is made from it on the server). */
 export function newRequestId(): string {
