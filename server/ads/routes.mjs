@@ -1,8 +1,9 @@
 // Launching and changing Meta and Google ad campaigns (spec §3, as adapted). Every route: sameOrigin, a signed-in
 // user, then its rate-limit bucket; answers are { error, code } in our words, never Zernio's, Meta's or Google's.
 //
-//   GET  /api/ads/accounts?projectId=&platform=          {accounts, chosen?, connection, setup, canLaunch}
+//   GET  /api/ads/accounts?projectId=&platform=          {accounts, chosen?, connection, setup, firstAd?, canLaunch}
 //   PUT  /api/ads/accounts/choice                         {projectId, platform, adAccountRef} → {chosen}
+//   PUT  /api/ads/accounts/policy                         {projectId, platform, adAccountRef, confirmed} → {policyConfirmed}
 //   GET  /api/ads/targeting/search?projectId=&platform=&dimension=geo|interest&q=   {results}
 //   POST /api/ads/launch/preview                          LaunchPreviewRequest → {review, reviewToken?}
 //   POST /api/ads/launch                                  {reviewToken, confirm: true, clientRequestId} → {job, campaign}
@@ -45,7 +46,7 @@ import { beforeOf, loadPlan, mediaUrlFor, opsHash, planChange, previewChange, pr
 import { storedBody } from './build.mjs';
 import { launchSummary, changeSummary, runChange, runLaunch, where } from './writes.mjs';
 import { checkJob } from './reconcile.mjs';
-import { accounts, campaignOut, campaigns, liveRowOut, liveRows, refresh, reviewOf, setChoice, targeting } from './reads.mjs';
+import { accounts, campaignOut, campaigns, liveRowOut, liveRows, refresh, reviewOf, setChoice, setPolicyConfirmed, targeting } from './reads.mjs';
 import { createAdsWebhook } from './webhook.mjs';
 import { loadProject } from '../social/publish.mjs';
 import { messageFor } from './messages.mjs';
@@ -206,7 +207,7 @@ export function createAdsRoutes(deps = {}) {
   async function replay(who, job, tok) {
     sameReview(job, tok);
     const row = (await db.select('ad_campaigns', { id: job.campaign_id, user_id: who.id }, { limit: 1 }))[0];
-    return { job: jobOut(job, row?.platform), ...(row ? { campaign: campaignOut(row, job) } : {}), replayed: true };
+    return { job: jobOut(job, row?.platform, row?.ad_account_id), ...(row ? { campaign: campaignOut(row, job) } : {}), replayed: true };
   }
 
   async function launch(who, b) {
@@ -299,7 +300,7 @@ export function createAdsRoutes(deps = {}) {
     const begun = Array.isArray(got) ? got[0] : got;
     if (begun?.existing) {
       sameReview(begun.job, tok);
-      return { job: jobOut(begun.job, tok.platform), ...(begun.campaign ? { campaign: campaignOut(begun.campaign, begun.job) } : {}), replayed: true };
+      return { job: jobOut(begun.job, tok.platform, begun.campaign?.ad_account_id), ...(begun.campaign ? { campaign: campaignOut(begun.campaign, begun.job) } : {}), replayed: true };
     }
     const jobRow = begun?.job ?? job;
     const campRow = begun?.campaign ?? row;
@@ -310,7 +311,7 @@ export function createAdsRoutes(deps = {}) {
     if (late.length) throw await cancelBegun(who, jobRow, campRow.id, entry, late[0], true);
     // the one send, in the background; the app follows the job with GET /api/ads/jobs/:id
     track(runLaunch(ctx, { userId: who.id, tag: conn.tag, job: jobRow, row: campRow, body: built.body, spendCap: built.spendCap }));
-    return { job: jobOut(jobRow, tok.platform), campaign: campaignOut(campRow, jobRow) };
+    return { job: jobOut(jobRow, tok.platform, campRow?.ad_account_id), campaign: campaignOut(campRow, jobRow) };
   }
 
   // ───────────── a change ─────────────
@@ -335,7 +336,7 @@ export function createAdsRoutes(deps = {}) {
     if (same) {
       if (same.campaign_id !== row.id) throw fail(409, 'BAD_REQUEST', 'Open the window again.');
       sameReview(same, peekToken(b.reviewToken, who.id, 'change'));
-      return { job: jobOut(same, row.platform), replayed: true };
+      return { job: jobOut(same, row.platform, row.ad_account_id), replayed: true };
     }
     const tok = verifyToken(env, b.reviewToken, { uid: who.id, kind: 'change', now: now() });
     if (tok.cid !== row.id) throw fail(400, 'BAD_REQUEST', 'That review isn’t valid. Review it again.');
@@ -396,7 +397,7 @@ export function createAdsRoutes(deps = {}) {
       const raced = await jobs.byClientRequest(who.id, b.clientRequestId);
       if (raced && raced.campaign_id === row.id) {
         sameReview(raced, tok);
-        return { job: jobOut(raced, row.platform), replayed: true };
+        return { job: jobOut(raced, row.platform, row.ad_account_id), replayed: true };
       }
       if (e instanceof IntegrationError) await refused(entry, e);
       throw e;
@@ -412,7 +413,7 @@ export function createAdsRoutes(deps = {}) {
       const raced = e?.name === 'DbError' && e.code === 'CONFLICT' ? await jobs.byClientRequest(who.id, b.clientRequestId) : null;
       if (raced) {
         sameReview(raced, tok);
-        return { job: jobOut(raced, row.platform), replayed: true };
+        return { job: jobOut(raced, row.platform, row.ad_account_id), replayed: true };
       }
       if (e?.name === 'DbError' && e.code === 'CONFLICT' && e.constraint === 'ad_jobs_one_live') {
         const err = fail(409, 'JOB_LIVE', messageFor('JOB_LIVE'));
@@ -429,7 +430,7 @@ export function createAdsRoutes(deps = {}) {
     const begun = Array.isArray(got) ? got[0] : got;
     if (begun?.existing) {
       sameReview(begun.job, tok);
-      return { job: jobOut(begun.job, row.platform), replayed: true };
+      return { job: jobOut(begun.job, row.platform, row.ad_account_id), replayed: true };
     }
     const jobRow = begun?.job ?? job;
     if (tok.spend) {
@@ -439,7 +440,7 @@ export function createAdsRoutes(deps = {}) {
       if (late.length) throw await cancelBegun(who, jobRow, row.id, entry, late[0], false);
     }
     track(runChange(ctx, { userId: who.id, tag: row.customer_tag, job: jobRow, row, ops: planned.ops, action, request }));
-    return { job: jobOut(jobRow, row.platform) };
+    return { job: jobOut(jobRow, row.platform, row.ad_account_id) };
   }
 
   // ───────────── jobs ─────────────
@@ -450,7 +451,7 @@ export function createAdsRoutes(deps = {}) {
     const job = await jobs.byId(who.id, jobId);
     if (!job) throw fail(404, 'NOT_FOUND', 'That job isn’t in your account.');
     const row = (await db.select('ad_campaigns', { id: job.campaign_id, user_id: who.id }, { limit: 1 }))[0];
-    return { job: jobOut(job, row?.platform), ...(row ? { campaign: campaignOut(row, job) } : {}) };
+    return { job: jobOut(job, row?.platform, row?.ad_account_id), ...(row ? { campaign: campaignOut(row, job) } : {}) };
   }
 
   async function check(who, jobId) {
@@ -458,7 +459,7 @@ export function createAdsRoutes(deps = {}) {
     await jobs.sweep(who.id);
     const out = await checkJob(ctx, who, jobId);
     if (!out) throw fail(404, 'NOT_FOUND', 'That job isn’t in your account.');
-    return { job: jobOut(out.job, out.campaign.platform), campaign: campaignOut(out.campaign, out.job), ...(out.note ? { note: out.note } : {}) };
+    return { job: jobOut(out.job, out.campaign.platform, out.campaign.ad_account_id), campaign: campaignOut(out.campaign, out.job), ...(out.note ? { note: out.note } : {}) };
   }
 
   // ───────────── the owner ─────────────
@@ -584,7 +585,7 @@ export function createAdsRoutes(deps = {}) {
         for (const s of started) await runChange(ctx, { userId, tag: s.row.customer_tag, job: s.job, row: s.row, ops: s.ops, action: 'pause', request: { action: 'pause', ops: s.ops }, actor: 'owner' });
       })(),
     );
-    return { jobs: started.map((s) => jobOut(s.job, s.row.platform)), skipped };
+    return { jobs: started.map((s) => jobOut(s.job, s.row.platform, s.row.ad_account_id)), skipped };
   }
 
   // ───────────── the router ─────────────
@@ -633,6 +634,10 @@ export function createAdsRoutes(deps = {}) {
     if (p === `${PREFIX}accounts/choice` && m === 'PUT') {
       limited('ads-read', who.id);
       return reply(req, res, 200, await setChoice(ctx, who, await body(req)));
+    }
+    if (p === `${PREFIX}accounts/policy` && m === 'PUT') {
+      limited('ads-read', who.id);
+      return reply(req, res, 200, await setPolicyConfirmed(ctx, who, await body(req)));
     }
     if (p === `${PREFIX}targeting/search` && m === 'GET') {
       limited('ads-read', who.id);

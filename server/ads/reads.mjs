@@ -4,10 +4,10 @@
 // and disconnect warnings, R12). Reads only: nothing here writes to Zernio. Platform text (names, review reasons) is
 // data: cut, plain text, never a link unless allowlisted (R6).
 
-import { fail } from '../integrations/common.mjs';
+import { fail, safeLog } from '../integrations/common.mjs';
 import { loadProject } from '../social/publish.mjs';
 import { ADS_PLATFORMS, CONNECTION_OF, FINAL_STATES, PLATFORM_LABEL, idTailOf } from './contracts.mjs';
-import { accountOption, adAccountRef, choiceFor, connectionFor, listAccounts, setupChecks, targetRef } from './preview.mjs';
+import { accountOption, adAccountRef, choiceFor, connectionFor, firstAdChecks, listAccounts, setupChecks, targetRef } from './preview.mjs';
 import { jobOut } from './jobs.mjs';
 import { cut, messageFor } from './messages.mjs';
 import { formatMoney, zernioWhole } from './money.mjs';
@@ -111,7 +111,7 @@ export function campaignOut(row, job = null, planIds = null) {
     ...(Array.isArray(remote.offAds) && remote.offAds.length ? { adsOff: remote.offAds.length } : {}),
     ...(remote.offAdSet ? { adSetOff: true } : {}),
     ...(adsNotApproved(row) ? { adsNotApproved: adsNotApproved(row) } : {}),
-    ...(job && ['queued', 'sending', 'unknown'].includes(job.state) ? { pendingJob: jobOut(job, row.platform) } : job ? { lastJob: jobOut(job, row.platform) } : {}),
+    ...(job && ['queued', 'sending', 'unknown'].includes(job.state) ? { pendingJob: jobOut(job, row.platform, row.ad_account_id) } : job ? { lastJob: jobOut(job, row.platform, row.ad_account_id) } : {}),
     ...(row.last_read_at ? { lastReadAt: row.last_read_at } : {}),
     ...(planIds && !planIds.has(row.plan_id) ? { planDeleted: true } : {}),
   };
@@ -147,15 +147,50 @@ export async function accounts(ctx, who, q) {
   if (!listed.accounts.length) return { accounts: [], connection: { label: conn.label }, setup: [{ id: 'accounts', state: 'missing', code: 'NO_AD_ACCOUNTS', message: messageFor('NO_AD_ACCOUNTS', { platform }) }], canLaunch };
   const { row, stale } = await choiceFor(ctx, who.id, projectId, platform, conn.zid);
   const chosenAcct = row ? listed.accounts.find((a) => a.adAccountId === row.ad_account_id) : null;
-  const setup = await setupChecks(ctx, conn.zid, platform, chosenAcct, lctx);
+  const seen = {};
+  const setup = await setupChecks(ctx, conn.zid, platform, chosenAcct, lctx, seen);
   return {
     accounts: listed.accounts.map((a) => accountOption(ctx.env, conn.zid, platform, a)),
     ...(chosenAcct ? { chosen: accountOption(ctx.env, conn.zid, platform, chosenAcct) } : {}),
     ...(stale ? { choiceStale: true } : {}),
     connection: { label: conn.label },
     setup,
+    // "Before your first ad": Meta only, for the chosen ad account
+    ...(platform === 'meta' && chosenAcct ? { firstAd: firstAdChecks(setup, chosenAcct, row, seen) } : {}),
     canLaunch,
   };
+}
+
+/**
+ * PUT /api/ads/accounts/policy {projectId, platform: 'meta', adAccountRef, confirmed} → {policyConfirmed}
+ * The customer's own answer that a business admin accepted Meta's non-discrimination policy, kept with the business's
+ * chosen ad account (ad_account_choices.policy_confirmed_for: that ad account's id, so it never carries over to
+ * another). Our database only: nothing is sent to Zernio or Meta, and nothing is enforced from it (Meta decides at
+ * the launch). The ad account must be the one chosen for the business on its current connection.
+ */
+export async function setPolicyConfirmed(ctx, who, body) {
+  const projectId = projectOf(body?.projectId);
+  const platform = body?.platform === 'meta' ? 'meta' : null;
+  const ref = typeof body?.adAccountRef === 'string' && /^adacct_[0-9a-f]{32}$/.test(body.adAccountRef) ? body.adAccountRef : null;
+  if (!projectId || !platform || !ref || typeof body?.confirmed !== 'boolean') throw fail(400, 'BAD_REQUEST', 'Tick or untick the box for the chosen Meta ad account.');
+  await loadProject(ctx.db, who.id, projectId);
+  const conn = await connectionFor(ctx, who, projectId, platform);
+  if (!conn.ok) throw fail(409, conn.code, conn.message);
+  const { row } = await choiceFor(ctx, who.id, projectId, platform, conn.zid);
+  if (!row || adAccountRef(ctx.env, conn.zid, row.ad_account_id) !== ref) throw fail(409, 'ACCOUNT_CHANGED', messageFor('ACCOUNT_CHANGED'));
+  const confirmed = body.confirmed;
+  const where = { user_id: who.id, project_id: projectId, platform, zernio_account_id: conn.zid, ad_account_id: row.ad_account_id };
+  let got;
+  try {
+    got = await ctx.db.update('ad_account_choices', where, { policy_confirmed_for: confirmed ? row.ad_account_id : null, policy_confirmed_at: confirmed ? iso(ctx.now()) : null }, { returning: true });
+  } catch (e) {
+    if (e?.name !== 'DbError' || e.code !== 'BAD_REQUEST') throw e;
+    // the column isn't there yet: the owner's to fix, never shown to the customer
+    safeLog('ads_policy_confirm_not_saved', { code: e.code, hint: 'run supabase/migrations/20261116000000_ad_policy_confirmed.sql' }, ctx.log);
+    throw fail(503, 'UNAVAILABLE', 'Your answer couldn’t be saved just now. Try again later.');
+  }
+  if (!got?.length) throw fail(409, 'ACCOUNT_CHANGED', messageFor('ACCOUNT_CHANGED'));
+  return { policyConfirmed: confirmed };
 }
 
 /** Whether launching is open for this user: the switches and the plan gate (never the limits). */

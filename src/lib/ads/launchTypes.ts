@@ -46,12 +46,36 @@ export interface AdAccountOption {
   minDailyBudget?: number;
 }
 
+/** One item of "Before your first ad" (server/ads/preview.mjs firstAdChecks): our words, Meta's own links only. */
+export interface FirstAdItem {
+  id: 'payment' | 'policy' | 'page';
+  status: 'done' | 'not_done' | 'unconfirmed' | 'unknown';
+  message: string;
+  fixUrl?: string;
+  fixLabel?: string;
+  /** the policy: a second link (the person's own acceptance) and the steps a business admin follows */
+  alsoUrl?: string;
+  alsoLabel?: string;
+  steps?: string[];
+  /** the policy: the customer ticked that a business admin accepted it (kept per ad account) */
+  confirmed?: boolean;
+}
+
+/** "Before your first ad" for the chosen Meta ad account. */
+export interface FirstAdCheck {
+  adAccount: { name: string; idTail: string };
+  items: FirstAdItem[];
+  ready: boolean;
+}
+
 export interface AccountsResponse {
   accounts: AdAccountOption[];
   chosen?: AdAccountOption;
   choiceStale?: boolean;
   connection: { label: string } | null;
   setup: SetupCheck[];
+  /** Meta only, once an ad account is chosen */
+  firstAd?: FirstAdCheck;
   canLaunch: boolean;
 }
 
