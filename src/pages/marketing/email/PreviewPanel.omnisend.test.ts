@@ -237,20 +237,24 @@ describe('Omnisend drafts', () => {
     expect(sent).toHaveLength(5);
     sent.forEach((draft, i) => {
       const email = p.marketing.emails[i];
-      expect(draft).toEqual({
-        name: `Copper & Comb — Email ${i + 1}`,
-        subject: renderTokens(email.subject, tokens),
-        preheader: renderTokens(email.preview, tokens),
-        body: renderTokens(email.body, tokens),
-        ctaLabel: renderTokens(email.ctaLabel, tokens),
-        ctaUrl: renderTokens(email.ctaUrl, tokens),
-      });
-      expect(draft).toEqual(omnisendDraft(p, email, i, tokens));
-      expect(JSON.stringify(draft)).not.toContain('{{');
+      // the block doc and the values the app owns: never HTML (the server renders what Omnisend gets)
+      expect(Object.keys(draft).sort()).toEqual(['assetLinks', 'brand', 'doc', 'footerNote', 'name', 'preheader', 'subject', 'values']);
+      expect(draft).toEqual(JSON.parse(JSON.stringify(omnisendDraft(p, email, i))));
+      expect(draft.name).toBe(`Copper & Comb — Email ${i + 1}`);
+      expect(draft.subject).toBe(renderTokens(email.subject, tokens));
+      expect(draft.preheader).toBe(renderTokens(email.preview, tokens));
+      expect(draft.body).toBeUndefined();
+      expect(JSON.stringify(draft)).not.toMatch(/<html|<table|<p[ >]/i);
+      expect(draft.doc.blocks[0]).toMatchObject({ type: 'text', text: email.body });
+      expect(draft.values.first_name).toBe('[First name]');
       // the published download's link, or the offer's (the website: no page is published here)
-      expect(draft.ctaUrl).toMatch(/^https:\/\/(app\.example\/m\/AbCdEfGhIjKlMnOpQrStUv|copperandcomb\.com)$/);
-      // the body the preview shows is the body sent
-      expect(host.querySelectorAll('ol > li')[i].textContent).toContain(draft.body.split('\n')[0]);
+      expect(draft.values.lead_magnet_link).toBe('https://app.example/m/AbCdEfGhIjKlMnOpQrStUv');
+      expect(draft.values.product_link).toMatch(/^https:\/\/copperandcomb\.com\/?$/);
+      expect(draft.footerNote).toContain('copperandcomb.com');
+      // the email the preview shows is the email sent
+      const frame = host.querySelectorAll('ol > li')[i].querySelector('iframe');
+      expect(frame?.getAttribute('title')).toBe(`Email preview: ${draft.subject}`);
+      expect(frame?.getAttribute('srcdoc')).toContain('href="#unsubscribe-preview"');
     });
     const status = host.querySelector('ol > li [role="status"]');
     expect(status?.textContent).toContain('Draft created in Omnisend: Copper & Comb — Email 1. Nothing has been sent.');
@@ -305,5 +309,40 @@ describe('Omnisend drafts', () => {
     expect(host.textContent).toContain('Reconnect needed');
     expect(host.textContent).toContain('Omnisend no longer accepts this connection, so nothing was created. Connect Omnisend again.');
     expect(buttons('Create Omnisend draft')).toHaveLength(0);
+  });
+
+  it('refuses here, before any request, a buy link that isn’t an offer and an image the app doesn’t host', async () => {
+    const p = project({ emails: true, website: 'copperandcomb.com' });
+    p.marketing.emails = p.marketing.emails.map((e, i) =>
+      i === 0
+        ? { ...e, doc: { v: 1, theme: { id: 'brand' }, blocks: [{ id: 'b_aaaaaaaaaa', type: 'button', label: 'Buy', link: { kind: 'offer', offerId: 'ZzZzZzZzZzZzZzZzZzZzZz' }, style: 'solid' }] } }
+        : i === 1
+          ? { ...e, doc: { v: 1, theme: { id: 'brand' }, blocks: [{ id: 'b_bbbbbbbbbb', type: 'image', src: 'https://cdn.example/x.png', alt: 'x', width: 'full', origin: 'url' }] } }
+          : e,
+    );
+    const f = await renderConnected(p);
+    await act(async () => buttons('Create Omnisend draft')[0].click());
+    await act(async () => buttons('Create Omnisend draft')[1].click());
+    await settle();
+    expect(calls(f, DRAFTS_PATH)).toHaveLength(0);
+    const alerts = [...host.querySelectorAll('ol > li [role="alert"]')].map((a) => a.textContent);
+    expect(alerts[0]).toContain('isn’t one of this business’s offers');
+    expect(alerts[1]).toBe('Upload this image in the email studio first: images in emails have to be hosted by the app.');
+  });
+
+  it('says the server’s new refusals in the app’s words, one request per click', async () => {
+    for (const [code, text] of [
+      ['IMAGE_NOT_HOSTED', 'Upload this image in the email studio first'],
+      ['UNKNOWN_BUY_LINK', 'isn’t one of this business’s offers'],
+      ['TOO_LARGE', 'too large for an Omnisend draft'],
+    ] as const) {
+      act(() => root.unmount());
+      root = createRoot(host);
+      const f = await renderConnected(project({ emails: true, website: 'copperandcomb.com' }), async () => json(code === 'TOO_LARGE' ? 413 : 400, { error: 'x', code }));
+      await act(async () => buttons('Create Omnisend draft')[0].click());
+      await settle();
+      expect(calls(f, DRAFTS_PATH)).toHaveLength(1);
+      expect(host.querySelector('ol > li [role="alert"]')?.textContent).toContain(text);
+    }
   });
 });

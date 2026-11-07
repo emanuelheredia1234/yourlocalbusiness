@@ -1,17 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Download, ExternalLink, Mail } from 'lucide-react';
+import { Code, Download, ExternalLink, FileArchive, Mail } from 'lucide-react';
 import type { EmailStep, Project } from '@/lib/types';
 import { cn, slugify } from '@/lib/utils';
 import { renderTokens } from '@/ai/local/email';
 import { serverFetch } from '@/ai/claude';
 import { delayLabel, sequenceCsv } from '@/lib/emailFunnel';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger, Callout, CopyButton, Empty, InfoTip, Section, StatusDot } from '@/components/ui/primitives';
-import { BrowserFrame } from '@/components/frames/Frames';
 import { download } from '@/components/ui/download';
 import { serverBaseNow } from '@/lib/cloud/auth';
-import { EmailView, PanelHead, emailTokens, hasUnknownBuyLink, missingLinkFix } from './shared';
+import { PanelHead, emailTokens, hasUnknownBuyLink } from './shared';
 import { useProjectOffers } from '@/store/offers';
 import { toast } from '@/store/ui';
+import { copyText } from '@/lib/platform';
+import { zip } from '@/lib/zip';
+import { emailHtml } from '@/lib/emailDoc';
+import { DRAFT_CODE_TEXT, draftHasPlaceholders, draftProblem, emailDraftPayload } from '@/lib/emailDraft';
+import { ESP_IDS, ESP_TOOLS, RenderError, type EspId } from '../../../../shared/email/render.mjs';
+import { EmailPreview } from './studio/EmailFrame';
 
 const OMNISEND_CALLBACK_URL = 'https://yourlocalbusiness.replit.app/api/integrations/omnisend/callback';
 const OMNISEND_PUBLIC_APP_URL = 'https://yourlocalbusiness.replit.app';
@@ -119,31 +124,39 @@ function toStatus(raw: unknown): OmnisendStatus | null {
 /** The server has no Omnisend routes (an older server, or no server at all): the card stays out of the way. */
 const notOffered = (e: unknown) => e instanceof OmnisendRequestError && (e.code === 'NETWORK' || e.status === 404);
 
-const isWebAddress = (value: string) => {
-  try {
-    const url = new URL(value.trim());
-    return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password;
-  } catch {
-    return false;
-  }
-};
-
-/** One email as its Omnisend draft: every field with the values the preview shows. */
-export function omnisendDraft(project: Project, email: EmailStep, index: number, tokens: Record<string, string>) {
-  const ctaLabel = renderTokens(email.ctaLabel, tokens).trim();
-  return {
-    name: `${project.brand.name} — Email ${index + 1}`,
-    subject: renderTokens(email.subject, tokens),
-    preheader: renderTokens(email.preview, tokens),
-    body: renderTokens(email.body, tokens),
-    ctaLabel,
-    // the preview shows no button without a label: neither does the draft
-    ctaUrl: ctaLabel ? renderTokens(email.ctaUrl, tokens).trim() : '',
-  };
+/** One email as its Omnisend draft: the block doc and the values the preview shows (the server renders the HTML). */
+export function omnisendDraft(project: Project, email: EmailStep, index: number) {
+  return emailDraftPayload(project, email, index);
 }
 
-/** Values in [brackets] (a name, a link the brand has no address for): the owner fills them in before sending. */
-const hasPlaceholders = (draft: ReturnType<typeof omnisendDraft>) => [draft.subject, draft.preheader, draft.body, draft.ctaLabel].some((text) => /\[[^\]\n]{1,60}\]/.test(text));
+// ───────────── HTML export ─────────────
+
+const ESP_KEY = 'ylb:email-esp';
+/** The email tool exports are for, remembered in this browser. */
+function readEsp(): EspId {
+  try {
+    const v = localStorage.getItem(ESP_KEY);
+    return v && (ESP_IDS as readonly string[]).includes(v) ? (v as EspId) : 'omnisend';
+  } catch {
+    return 'omnisend';
+  }
+}
+function saveEsp(v: EspId) {
+  try {
+    localStorage.setItem(ESP_KEY, v);
+  } catch {
+    /* the choice just isn't remembered */
+  }
+}
+
+/** One email's HTML for an email tool (its unsubscribe tag in the footer), or why it can't be made. */
+export function exportHtml(project: Project, email: EmailStep, esp: EspId): { html: string } | { error: string } {
+  try {
+    return { html: emailHtml(email, project, 'export', { esp }).html };
+  } catch (e) {
+    return { error: e instanceof RenderError && e.code === 'TOO_LARGE' ? 'This email is too large to export (over 200 KB).' : 'This email couldn’t be exported.' };
+  }
+}
 
 /** Omnisend: connect your own brand and create campaign drafts from the sequence (the app never sends). */
 function useOmnisend() {
@@ -329,6 +342,11 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
   const tokens = emailTokens(project);
   const omnisend = useOmnisend();
   const [drafts, setDrafts] = useState<Record<string, DraftState>>({});
+  const [esp, setEsp] = useState<EspId>(readEsp);
+  const pickEsp = (v: EspId) => {
+    setEsp(v);
+    saveEsp(v);
+  };
   const settle = (emailId: string, state: DraftState) => setDrafts((current) => ({ ...current, [emailId]: state }));
 
   const exportCsv = () => {
@@ -340,19 +358,11 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
   async function createOmnisendDraft(emailId: string, index: number) {
     const email = emails[index];
     if (!email) return;
-    const draft = omnisendDraft(project, email, index, tokens);
-    if (offersOn && !offersLoaded && (hasUnknownBuyLink(draft.ctaUrl) || hasUnknownBuyLink(draft.body))) {
-      settle(emailId, { tone: 'bad', message: 'This business’s offers are still loading. Try again in a moment.' });
-      return;
-    }
-    // a buy link that isn't one of this business's offers would go nowhere (the server refuses it anyway)
-    if (hasUnknownBuyLink(draft.ctaUrl) || hasUnknownBuyLink(draft.body)) {
-      settle(emailId, { tone: 'bad', message: 'This buy link isn’t one of this business’s offers. Choose one of its offers for the button, or paste a web address.' });
-      return;
-    }
-    // the draft is what the preview shows, so its button needs somewhere to go first
-    if (draft.ctaLabel && !isWebAddress(draft.ctaUrl)) {
-      settle(emailId, { tone: 'bad', message: `This email’s button has no web address yet. ${missingLinkFix(project, email.ctaUrl)}` });
+    const draft = omnisendDraft(project, email, index);
+    // checked here first: a buy link that isn't one of this business's offers, a link with no address, an image the app doesn't host
+    const problem = draftProblem(project, draft, { offersLoading: offersOn && !offersLoaded });
+    if (problem) {
+      settle(emailId, { tone: 'bad', message: problem });
       return;
     }
     settle(emailId, { busy: true });
@@ -360,15 +370,37 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
       const result = (await omnisendRequest(`${API}/campaign-drafts`, { method: 'POST', body: draft })) as { campaign?: { name?: unknown; url?: unknown } } | null;
       const name = typeof result?.campaign?.name === 'string' ? result.campaign.name : draft.name;
       const url = typeof result?.campaign?.url === 'string' && result.campaign.url.startsWith('https://app.omnisend.com/') ? result.campaign.url : '';
-      const fill = hasPlaceholders(draft) ? ' Before you send it, replace the values in [brackets] in Omnisend.' : '';
+      const fill = draftHasPlaceholders(draft) ? ' Before you send it, replace the values in [brackets] in Omnisend.' : '';
       settle(emailId, { tone: 'done', message: `Draft created in Omnisend: ${name}. Nothing has been sent.${fill}`, url });
     } catch (e) {
       const code = e instanceof OmnisendRequestError ? e.code : '';
-      settle(emailId, { tone: CHECK_OMNISEND.has(code) ? 'warn' : 'bad', message: e instanceof Error ? e.message : 'Could not create the Omnisend draft.' });
+      settle(emailId, { tone: CHECK_OMNISEND.has(code) ? 'warn' : 'bad', message: DRAFT_CODE_TEXT[code] ?? (e instanceof Error ? e.message : 'Could not create the Omnisend draft.') });
       // the connection has to be made again: the card says so and offers Connect
       if (RECONNECT_CODES.has(code)) void omnisend.refresh();
     }
   }
+
+  const copyHtml = async (e: EmailStep) => {
+    const out = exportHtml(project, e, esp);
+    if ('error' in out) return toast({ kind: 'error', title: out.error });
+    if (await copyText(out.html)) toast({ kind: 'success', title: 'HTML copied', body: `Paste it into ${ESP_TOOLS[esp].label} as a custom HTML email.` });
+    else toast({ kind: 'error', title: 'Copy was blocked', body: 'Use Download .html instead.' });
+  };
+  const downloadHtml = (e: EmailStep, i: number) => {
+    const out = exportHtml(project, e, esp);
+    if ('error' in out) return toast({ kind: 'error', title: out.error });
+    void download(`${slugify(project.brand.name) || 'email'}-email-${i + 1}.html`, out.html);
+  };
+  const exportAll = () => {
+    const files: { name: string; data: string }[] = [];
+    for (const [i, e] of emails.entries()) {
+      const out = exportHtml(project, e, esp);
+      if ('error' in out) return toast({ kind: 'error', title: `Email ${i + 1}: ${out.error}` });
+      files.push({ name: `email-${i + 1}.html`, data: out.html });
+    }
+    files.push({ name: 'sequence.csv', data: sequenceCsv(project, tokens) });
+    void download(`${slugify(project.brand.name) || 'email'}-emails.zip`, new Blob([zip(files) as Uint8Array<ArrayBuffer>], { type: 'application/zip' }));
+  };
 
   if (!emails.length) {
     return (
@@ -411,9 +443,21 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
         }
         description="Set it up as an automation in your email tool. Values in [brackets] are filled in by it."
         actions={
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => exportCsv()}>
-            <Download /> Export CSV
-          </button>
+          <>
+            <select className="select w-auto" aria-label="Email tool for HTML exports" value={esp} onChange={(e) => pickEsp(e.target.value as EspId)}>
+              {ESP_IDS.map((id) => (
+                <option key={id} value={id}>
+                  HTML for {ESP_TOOLS[id].label}
+                </option>
+              ))}
+            </select>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={exportAll}>
+              <FileArchive /> Export all (.zip)
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => exportCsv()}>
+              <Download /> Export CSV
+            </button>
+          </>
         }
       />
       {!omnisend.unavailable && (
@@ -434,6 +478,12 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
                 <div className="flex flex-wrap gap-1.5">
                   <CopyButton size="xs" label="Copy subject" text={() => renderTokens(e.subject, tokens)} />
                   <CopyButton size="xs" label="Copy body" text={() => e.body} />
+                  <button type="button" className="btn btn-secondary btn-xs" onClick={() => void copyHtml(e)}>
+                    <Code /> Copy HTML
+                  </button>
+                  <button type="button" className="btn btn-secondary btn-xs" onClick={() => downloadHtml(e, i)}>
+                    <Download /> Download .html
+                  </button>
                   {connected && (
                     <button type="button" className="btn btn-secondary btn-xs" disabled={!!draft?.busy} onClick={() => void createOmnisendDraft(e.id, i)}>
                       {draft?.busy ? 'Creating…' : 'Create Omnisend draft'}
@@ -454,9 +504,9 @@ export function PreviewPanel({ project, onWrite }: { project: Project; onWrite: 
                   </p>
                 )}
               </div>
-              <BrowserFrame className="max-w-[720px]">
-                <EmailView project={project} email={e} tokens={tokens} />
-              </BrowserFrame>
+              <div className="flex min-w-0 max-w-[720px] flex-col gap-2">
+                <EmailPreview project={project} step={e} />
+              </div>
             </li>
           );
         })}
