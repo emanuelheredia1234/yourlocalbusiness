@@ -22,7 +22,8 @@
 // other than ACTIVE, or a Meta campaignStatus other than PAUSED; budgetType is missing or not daily; endDate, a place
 // or linkUrl is missing; Google gets fewer than 3 headlines or 2 descriptions; Meta creativeFeatures aren't all
 // OPT_OUT or appear inside a creatives[] item; a Meta campaign is switched on without a spend cap; a spend cap or
-// budget isn't a whole number; a spend cap is 0 or null; any request carries validateOnly.
+// budget isn't a whole number; a spend cap is 0 or null; any request carries validateOnly; a Meta daily budget is
+// scheduled for 24 hours or less (refused like Meta does, with Meta's words and no Zernio code of its own).
 //
 // Faults (POST /__fail {route, mode, times}): route is 'METHOD template' (e.g. 'POST /ads/create',
 // 'PUT /ads/campaigns/:id', 'GET /ads/accounts/live'). Modes: timeout (never answers), hang-then-create (creates,
@@ -100,6 +101,35 @@ const INTERESTS = [
 
 const ALL_OPT_OUT = (m) => m && typeof m === 'object' && Object.values(m).every((v) => v === 'OPT_OUT');
 const whole = (v) => Number.isInteger(v) && v > 0;
+
+/** The instant a wall-clock time in `tz` happens (ms): the mock's own copy, so it never leans on the code it checks. */
+function wallClock(ymd, hms, tz) {
+  const offset = (t) => {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+    return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second)) - Math.floor(t / 1000) * 1000;
+  };
+  const guess = Date.parse(`${ymd}T${hms}Z`);
+  return guess - offset(guess - offset(guess));
+}
+
+/**
+ * How long a Meta create's ad set would run (ms), as Meta reads it: dates without an offset are in the ad account's
+ * zone, a date-only end is 23:59:59 that day, and a start that is missing or already past is now.
+ */
+function metaScheduleMs(body, tz, now) {
+  const at = (v, endOfDay) => {
+    if (typeof v !== 'string') return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return wallClock(v, endOfDay ? '23:59:59' : '00:00:00', tz);
+    const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(:\d{2})?$/.exec(v);
+    if (m) return wallClock(m[1], `${m[2]}${m[3] ?? ':00'}`, tz);
+    const t = Date.parse(v);
+    return Number.isFinite(t) ? t : null;
+  };
+  const end = at(body?.endDate, true);
+  return end == null ? null : end - Math.max(at(body?.startDate, false) ?? now, now);
+}
+/** Meta runs a daily budget only on an ad set scheduled for more than 24 hours */
+const META_DAILY_MIN_MS = 24 * 3_600_000;
 
 /** Route template of an /ads path (ids replaced), for fault matching and the ledger. */
 export function adsTemplate(method, p) {
@@ -317,6 +347,15 @@ export function createMockZernioAds({ violations, sendWebhook = async () => ({})
     if (mode === 'meta-code-31') return err(res, 400, 'meta_security_check_required', 'platform_error', { details: { fix: { url: '/dashboard/zernio-only' } } });
     if (mode === '500') return err(res, 500, 'internal_error', 'api_error');
     if (mode === '502') return err(res, 502, 'platform_api_error', 'platform_error');
+    // Meta refuses a daily budget on an ad set that runs 24 hours or less (the live refusal of 6 Nov 2026): the app
+    // must never send one, so it is a violation too. Zernio has no code of its own for it: Meta's words only.
+    if (platform === 'meta' && body?.budgetType !== 'lifetime') {
+      const ms = metaScheduleMs(body, acct.timezoneName, state.clock());
+      if (ms != null && ms <= META_DAILY_MIN_MS) {
+        violation('meta_daily_schedule_24h', { hours: Math.round(ms / 360_000) / 10 });
+        return err(res, 400, 'platform_api_error', 'platform_error', { platform: 'meta', param: 'endDate', details: { stage: 'adset', adAccountId: acct.id, createdObjects: [{ type: 'campaign', id: digits(15), cleanup: 'deleted' }] }, platformError: { code: 100, error_user_title: 'Ad set schedule too short', error_user_msg: 'Ad sets with a daily budget must be scheduled to run for more than 24 hours.' } });
+      }
+    }
     if (acct.billingStatus === 'missing') return err(res, 403, 'ad_account_payment_required', 'permission_error');
     if (idemKey) state.idem.set(idemKey, { hash: h, inFlight: true });
     const release = () => {

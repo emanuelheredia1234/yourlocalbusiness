@@ -195,6 +195,48 @@ describe('launch: confirm, token, one send (R1, R2)', () => {
   });
 });
 
+describe('Meta’s 24-hour rule for a daily budget (the live refusal of 6 Nov)', () => {
+  beforeEach(async () => ready());
+  const DAILY_24H = /^Meta needs a daily-budget ad to run more than 24 hours\. Choose at least [23] days\.$/;
+
+  it('blocks a schedule of 24 hours or less at Review, with no review token, and sends nothing', async () => {
+    const before = t.writes().length;
+    // as soon as approved today with 1 day (the incident), a later day with 1 day, a late start time
+    for (const extra of [{ startDate: null, durationDays: 1 }, { startDate: t.day(10), durationDays: 1 }, { startDate: t.day(3), startTime: '23:30', durationDays: 1 }]) {
+      const pv = await t.preview(u, await t.request(u, 'meta', extra));
+      expect(pv.status).toBe(200);
+      expect(pv.body.reviewToken).toBeUndefined();
+      const b = pv.body.review.blockers.find((n) => n.code === 'META_DAILY_24H');
+      expect(b?.message).toMatch(DAILY_24H);
+    }
+    // 2 days from a later day (and from a late start time) pass: Meta gets more than 24 hours
+    for (const extra of [{ startDate: t.day(10), durationDays: 2 }, { startDate: t.day(3), startTime: '23:30', durationDays: 2 }]) {
+      const ok = await t.preview(u, await t.request(u, 'meta', extra));
+      expect(codes(ok.body.review.blockers)).toEqual([]);
+      expect(ok.body.reviewToken).toBeTruthy();
+    }
+    expect(t.writes(before)).toEqual([]);
+  });
+
+  it('“Launch again” after a refused launch goes through the same check', async () => {
+    t.zm.ads.fail('POST /ads/create', '403-payment');
+    const first = await t.launchPlan(u, 'meta', { startDate: t.day(10), durationDays: 2 });
+    expect(first.job.state).toBe('failed');
+    expect(first.campaign.state).toBe('failed');
+    // Launch again opens a new review of the same plan: 1 day is refused before anything is sent
+    const before = t.writes().length;
+    const short = await t.preview(u, await t.request(u, 'meta', { startDate: null, durationDays: 1 }));
+    expect(codes(short.body.review.blockers)).toContain('META_DAILY_24H');
+    expect(short.body.reviewToken).toBeUndefined();
+    expect(t.writes(before)).toEqual([]);
+    const again = await t.launchPlan(u, 'meta', { startDate: t.day(5), durationDays: 2 });
+    expect(again.job.state).toBe('done');
+    const creates = t.writes().filter((w) => w.path === '/api/v1/ads/create');
+    expect(creates).toHaveLength(2);
+    expect(creates[1].body).toMatchObject({ startDate: t.day(5), endDate: t.day(6) });
+  });
+});
+
 describe('Google', () => {
   beforeEach(async () => ready({}, { platforms: ['google_ads'] }));
 

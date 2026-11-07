@@ -105,6 +105,7 @@ const MESSAGES = {
   NO_FINAL_URL: 'Add the https page your ads send people to (not a link shortener).',
   START_IN_PAST: 'The start date has passed. Pick today or a later day.',
   BAD_DATES: 'Pick a start date and a number of days between 1 and 90.',
+  META_DAILY_24H: (c) => `Meta needs a daily-budget ad to run more than 24 hours. Choose at least ${Number.isInteger(c?.days) && c.days > 1 ? c.days : 2} days.`,
   RADIUS_RAISED: 'Meta’s smallest city radius is 10 miles, so the radius is 10 miles.',
   COUNTRY_DROPPED: (c) => `${cut(c?.name, 60)} was left out because a place inside it is picked (Meta refuses both together).`,
   GOAL_NOTE: 'Meta and Google will optimise for clicks to your page. Lead forms and sales tracking aren’t set up from this app.',

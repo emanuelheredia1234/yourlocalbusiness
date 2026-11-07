@@ -45,7 +45,8 @@ function metaBody(extra = {}) {
     goal: 'traffic',
     budgetAmount: 25,
     budgetType: 'daily',
-    endDate: '2026-12-14',
+    // a month from now: the mock refuses a Meta daily budget scheduled for 24 hours or less, as Meta does
+    endDate: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
     status: 'PAUSED',
     campaignStatus: 'PAUSED',
     adSetStatus: 'ACTIVE',
@@ -105,6 +106,17 @@ describe('writes: one attempt, outcome per status class', () => {
     expect(mock.calls.slice(before).filter((c) => c.method === 'POST')).toHaveLength(1);
     expect(JSON.stringify(r)).not.toMatch(/SECRET|mock |platformError|hint/);
     if (r.fixUrl) expect(r.fixUrl).toMatch(/^https:\/\/(business\.)?facebook\.com\//);
+  });
+
+  it('the mock refuses a Meta daily budget scheduled for 24 hours or less, like Meta (and flags the send)', async () => {
+    const t = setup();
+    const before = mock.violations.length;
+    // today in the ad account's zone (act_1: America/Chicago): it would end at 23:59:59 tonight
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
+    const r = await t.zads.writes.createAd(metaBody({ endDate: today }), key(), CTX);
+    expect(r).toMatchObject({ outcome: 'failed', code: 'REFUSED', status: 400 });
+    expect(mock.violations.slice(before).map((v) => v.kind)).toEqual(['meta_daily_schedule_24h']);
+    mock.violations.splice(before);
   });
 
   it('a timeout is unknown (it may have happened), and nothing is sent again', async () => {
