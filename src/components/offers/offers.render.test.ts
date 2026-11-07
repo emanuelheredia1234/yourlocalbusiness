@@ -129,8 +129,19 @@ describe('Attach payment › Stripe (P6)', () => {
     expect(html.indexOf('New: Stripe')).toBeLessThan(html.indexOf('New: Whop'));
     expect(html).toContain('What the buyer gets');
     expect(form({ stripeOn: false })).not.toContain('New: Stripe');
+    // the seller terms still a draft (not open to this user): no Stripe tab, and Whop or outside links first
+    const closed = form({ stripeOn: true, connect: { ...CONNECT, available: false, account: null } });
+    expect(closed).not.toContain('New: Stripe');
+    expect(closed).toContain('New: Whop');
     vi.stubGlobal('__ARTIFACT_BUILD__', true);
     expect(form({ stripeOn: true, connect: CONNECT })).not.toContain('New: Stripe');
+  });
+
+  it('the currency list is Stripe’s own minor units only: no HUF or ISK, even as the account’s default', () => {
+    const html = stripeForm({ connect: { ...CONNECT, account: { ...ACCT, defaultCurrency: 'huf' } } });
+    expect(html).not.toMatch(/<option value="huf"/);
+    expect(html).not.toMatch(/<option value="isk"/);
+    expect(html).toMatch(/<option value="usd" selected=""/);
   });
 
   it('no Stripe account: where to set it up', () => {
@@ -162,7 +173,12 @@ describe('Attach payment › Stripe (P6)', () => {
   it('a zero-decimal currency takes whole numbers; Stripe’s limits are said before sending', () => {
     expect(priceProblem('5000', 'jpy')).toBe('');
     expect(priceProblem('50.5', 'jpy')).toBe('Use a whole number.');
-    expect(priceProblem('0.10', 'usd')).toMatch(/lowest price Stripe takes is \$0\.50/);
+    expect(priceProblem('0.10', 'usd')).toMatch(/lowest price Stripe takes in USD is \$0\.50/);
+    // Stripe's minimum in each currency (shared/stripe-currencies.json), and no HUF or ISK (Stripe takes them with two decimals)
+    expect(priceProblem('5.00', 'mxn')).toMatch(/lowest price Stripe takes in MXN is MX\$10\.00/);
+    expect(priceProblem('10', 'mxn')).toBe('');
+    expect(priceProblem('5000', 'huf')).toMatch(/can’t be priced in HUF/);
+    expect(priceProblem('5000', 'isk')).toMatch(/can’t be priced in ISK/);
     expect(priceProblem('49.999', 'usd')).toMatch(/like 49/);
     expect(stripePreview(5000, 'jpy', { pct: 3, tier: 'launch' })).toContain('Buyer pays ¥5,000 · Our fee ¥150');
   });

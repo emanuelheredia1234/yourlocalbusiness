@@ -34,6 +34,14 @@ describe('Get paid with Stripe', () => {
     expect(html).not.toMatch(/connect your existing/i);
   });
 
+  it('not open to this user (the seller terms a draft): “opens soon”, never the setup form or the terms box', () => {
+    const html = render({ ...STATE, available: false, termsReady: false });
+    expect(html).toContain('Selling with Stripe opens soon.');
+    expect(html).not.toMatch(/<select id="stripe-country"/);
+    expect(html).not.toContain('Seller terms');
+    expect(html).not.toMatch(/btn-primary[^>]*>Get paid with Stripe/);
+  });
+
   it('the fee line: the seller’s tier marked; the owner pays none', () => {
     const launch = render(STATE);
     expect(launch).toContain('Stripe’s fees come out of your Stripe balance. Our fee is');

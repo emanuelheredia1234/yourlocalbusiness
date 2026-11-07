@@ -21,6 +21,10 @@
 import { drain, escapeHtml, leadNotice, NOTICE_CSP, visitorOf, windowCounter } from '../leads.mjs';
 import { PROVIDERS } from './providers.mjs';
 
+const OFFER_COLUMNS = 'id,user_id,project_id,title,provider,connection_id,provider_ref,status,price_minor,currency,delivery,connect_account_id,updated_at';
+/** The offers columns before P6 (Whop and outside links need only these). */
+const P3_COLUMNS = 'id,user_id,project_id,title,provider,connection_id,provider_ref,status,updated_at';
+const CONNECT_MIGRATION_PATH = 'supabase/migrations/20261118000000_stripe_connect.sql';
 const BUY_PATH = /^\/b\/([A-Za-z0-9_-]{22})(\/done|\/file|\/back)?$/;
 const MAX_PATH = 40;
 const ACCOUNT_COLUMNS = 'id,user_id,environment,stripe_account_id,status,charges_enabled,country,display_name,tax_enabled,tax_status';
@@ -65,6 +69,10 @@ export function createBuy({ db, billing = null, limits = OFFER_LIMITS, enabled =
     log.warn?.(line);
   };
 
+  // P6's columns, missing until its migration runs: then the P3 columns (asked again after 5 minutes)
+  let p6MissingAt = -Infinity;
+  const p6Missing = () => now() - p6MissingAt < 5 * 60_000;
+
   const takeLookup = (client) => {
     const t = now();
     if (t - budgetStart >= 60_000) {
@@ -94,11 +102,16 @@ export function createBuy({ db, billing = null, limits = OFFER_LIMITS, enabled =
     const p = (async () => {
       let rows;
       try {
-        rows = await timed(db.select('offers', { id }, { select: 'id,user_id,project_id,title,provider,connection_id,provider_ref,status,price_minor,currency,delivery,connect_account_id,updated_at', limit: 1 }));
+        rows = await timed(db.select('offers', { id }, { select: p6Missing() ? P3_COLUMNS : OFFER_COLUMNS, limit: 1 }));
       } catch (e) {
         // the migration wasn't run: there are no offers
         if (e?.code === 'NOT_SET_UP') return null;
-        throw e;
+        // P6's columns aren't there yet (20261118000000_stripe_connect.sql not run): Whop and outside links still work
+        if (e?.code === 'BAD_REQUEST' && (e.pg === '42703' || e.pg === 'PGRST204') && !p6Missing()) {
+          p6MissingAt = now();
+          warn(`Buy links: the offers table has no Stripe Connect columns yet. Run ${CONNECT_MIGRATION_PATH} in Supabase → SQL Editor (Whop and outside links keep working).`);
+          rows = await timed(db.select('offers', { id }, { select: P3_COLUMNS, limit: 1 }));
+        } else throw e;
       }
       const row = rows?.[0] ?? null;
       let conn = null;

@@ -37,6 +37,15 @@ describe('Stripe offers', () => {
 
   it('checks the price and the delivery: another user’s file or a magnet is refused', async () => {
     for (const [priceMinor, currency] of [[49, 'usd'], [100_000_000, 'usd'], [10.5, 'usd'], ['4900', 'usd'], [4900, 'dollars'], [4900, '']]) expect((await make(s.who, { priceMinor, currency })).body.code, `${priceMinor} ${currency}`).toBe('BAD_PRICE');
+    // HUF and ISK: Stripe takes them with two decimals while our minor units keep them whole (5000 Ft would charge
+    // 50 Ft): refused until that's handled, as is any currency off the list
+    for (const currency of ['huf', 'isk', 'xof']) expect((await make(s.who, { priceMinor: 500000, currency })).body.code, currency).toBe('BAD_CURRENCY');
+    // Stripe's minimum in the currency, not only USD's 0.50
+    const small = await make(s.who, { priceMinor: 500, currency: 'mxn' });
+    expect(small.body.code).toBe('BAD_PRICE');
+    expect(small.body.error).toContain('MXN');
+    expect((await make(s.who, { priceMinor: 1000, currency: 'mxn' })).status).toBe(200);
+    expect((await make(s.who, { priceMinor: 30, currency: 'gbp' })).body.code).toBe('BAD_PRICE');
     const other = await h.user('other-files@example.com');
     const theirs = await productFile(other);
     expect((await make(s.who, { delivery: { kind: 'file', fileId: theirs } })).body.code).toBe('BAD_DELIVERY');

@@ -4,7 +4,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import crypto from 'node:crypto';
 import { offersServer, testBilling, APP_URL } from '../offers/test-helpers.mjs';
-import { CONNECT_CONTROLLER, accountView, requirementsOf, statusOf } from './stripeConnect.mjs';
+import { CONNECT_CONTROLLER, accountView, requirementsOf, statusOf, validLinkUrl } from './stripeConnect.mjs';
 
 const ACCT = 'POST /v1/accounts';
 
@@ -33,7 +33,7 @@ describe('Stripe Connect seller accounts', () => {
     expect(w.body.controller).toEqual(JSON.parse(JSON.stringify(CONNECT_CONTROLLER)));
     expect(Object.keys(w.body.controller).sort()).toEqual(['fees', 'losses', 'requirement_collection', 'stripe_dashboard']);
     expect(w.body.capabilities).toEqual({ card_payments: { requested: 'true' }, transfers: { requested: 'true' } });
-    expect(w.body.metadata).toEqual({ ylb_tag: expect.stringMatching(/^cust_[0-9a-f]{24}$/), ylb_env: 'sandbox' });
+    expect(w.body.metadata).toEqual({ ylb_tag: expect.stringMatching(/^cust_[0-9a-f]{24}$/), ylb_env: 'sandbox', ylb_req: expect.stringMatching(/^[0-9a-f]{24}$/) });
     expect(w.body.email).toBe('body@example.com');
     expect(JSON.stringify(w.body)).not.toContain(who.id);
     // the owner row is made first (the fee at buy time needs it): the entitlement was asked with who
@@ -163,6 +163,77 @@ describe('Stripe Connect seller accounts', () => {
     const on = await h.call(s.who, 'PUT', '/api/payments/stripe/tax', { enabled: true });
     expect(on.body.account).toMatchObject({ taxEnabled: true, taxStatus: 'active' });
     expect((await h.call(s.who, 'PUT', '/api/payments/stripe/tax', { enabled: false })).body.account.taxEnabled).toBe(false);
+  });
+
+  it('setting up again after stopping: the old Stripe offers move to the new account and can be resumed', async () => {
+    const s = await h.stripeSeller('again@example.com');
+    const o = (await h.call(s.who, 'POST', '/api/offers', { projectId: 'p1', provider: 'stripe', title: 'Ebook', priceMinor: 900, currency: 'usd', clientRequestId: crypto.randomUUID() })).body.offer;
+    await h.call(s.who, 'DELETE', '/api/payments/stripe?confirm=1');
+    expect((await h.call(s.who, 'PATCH', `/api/offers/${o.id}`, { status: 'active' })).body.code).toBe('NOT_SELLABLE');
+    const again = await create(s.who);
+    expect(again.status).toBe(200);
+    const fresh = rowOf(s.who);
+    expect(fresh.id).not.toBe(s.row.id);
+    expect(h.rows('offers').find((x) => x.id === o.id)).toMatchObject({ connect_account_id: fresh.id, status: 'paused' });
+    expect((await h.call(s.who, 'PATCH', `/api/offers/${o.id}`, { status: 'active' })).status).toBe(200);
+  });
+
+  it('a Stripe answer about the key itself (409 in flight) keeps the row to read back, with no false owner alert', async () => {
+    const who = await h.user('in-flight@example.com');
+    const alerts = h.rows('connect_alerts').find((a) => a.kind === 'connect_not_enabled')?.count ?? 0;
+    h.stripe.fail(ACCT, 'in_use');
+    const res = await create(who);
+    expect(res.status).toBe(202);
+    expect(rowOf(who)).toMatchObject({ status: 'unknown' });
+    expect(h.rows('connect_alerts').find((a) => a.kind === 'connect_not_enabled')?.count ?? 0).toBe(alerts);
+  });
+
+  it('a person’s same-key retry sends the stored body (its business name), never this request’s', async () => {
+    const who = await h.user('same-key@example.com');
+    const crid = crypto.randomUUID();
+    h.stripe.fail(ACCT, 'server');
+    expect((await create(who, { clientRequestId: crid, businessName: 'First Name Co' })).status).toBe(202);
+    const res = await create(who, { clientRequestId: crid, businessName: 'Second Name Co' });
+    expect(res.status).toBe(200);
+    const [first, second] = h.stripe.writes(ACCT).slice(-2);
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(second.body.business_profile).toEqual(first.body.business_profile);
+    expect(second.body.business_profile.name).toBe('First Name Co');
+  });
+
+  it('the read-back skips the seller’s older account (another row’s), asks Stripe at most once a minute per row, and tells the owner when it gives up', async () => {
+    const s = await h.stripeSeller('old-acct@example.com');
+    await h.call(s.who, 'DELETE', '/api/payments/stripe?confirm=1');
+    // a new create that never reached Stripe
+    await h.db.insert('connect_accounts', { id: 'N'.repeat(22), user_id: s.who.id, environment: 'sandbox', status: 'unknown', country: 'US', terms_version: 'v', terms_accepted_at: new Date(h.clock()).toISOString(), create_key: 'ylb-connect-acct:new', create_started_at: new Date(h.clock()).toISOString() });
+    const mismatches = h.rows('connect_alerts').find((a) => a.kind === 'account_mismatch')?.count ?? 0;
+    const reads = () => h.stripe.calls.filter((c) => c.method === 'GET' && c.path === '/v1/accounts').length;
+    const before = reads();
+    const view = await h.call(s.who, 'GET', '/api/payments/stripe');
+    expect(view.body.account.status).toBe('unknown');
+    expect(rowOf(s.who).stripe_account_id ?? null).toBeNull();
+    expect(h.rows('connect_alerts').find((a) => a.kind === 'account_mismatch')?.count ?? 0).toBe(mismatches);
+    const once = reads();
+    expect(once).toBeGreaterThan(before);
+    // the card's next polls within the minute: no Stripe read
+    await h.call(s.who, 'GET', '/api/payments/stripe');
+    await h.call(s.who, 'GET', '/api/payments/stripe');
+    expect(reads()).toBe(once);
+    // ten minutes on, still not found: the owner is told, then the row goes
+    h.advance(11 * 60_000);
+    await h.offers.connect.cronReadback();
+    expect(h.rows('connect_accounts').find((r) => r.id === 'N'.repeat(22))).toBeUndefined();
+    expect(h.rows('connect_alerts').find((a) => a.kind === 'connect_readback_lost')).toBeTruthy();
+  });
+});
+
+describe('validLinkUrl (onboarding links the server hands out)', () => {
+  it('Stripe’s https hosts only: no http, other host, port or user', () => {
+    expect(validLinkUrl('https://connect.stripe.com/setup/e/acct_1/abc')).toBe('https://connect.stripe.com/setup/e/acct_1/abc');
+    expect(validLinkUrl('https://dashboard.stripe.com/x')).toBeTruthy();
+    for (const bad of ['http://connect.stripe.com/x', 'https://connect.stripe.com.evil.example/x', 'https://evilstripe.com/x', 'https://connect.stripe.com:8443/x', 'https://u:p@connect.stripe.com/x', 'javascript:alert(1)', '', null]) expect(validLinkUrl(bad), String(bad)).toBeNull();
+    expect(validLinkUrl('http://127.0.0.1:9/__onboard/a/b', { testBase: 'http://127.0.0.1:9' })).toBeTruthy();
+    expect(validLinkUrl('http://127.0.0.1:9/__onboard/a/b')).toBeNull();
   });
 });
 

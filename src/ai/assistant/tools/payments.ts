@@ -5,7 +5,7 @@
 // Stripe Tax and stopping selling are never done here (excluded.ts says where). Buyer emails only when the owner asks,
 // and never into other tools. Not in the claude.ai build.
 
-import { createStripeOffer, decimalToMinor, formatMoney, listOffers, listSales, requestId, salesSummary, STRIPE_PRICE_MAX, STRIPE_PRICE_MIN, whopConnections, type Offer, type Sale } from '@/lib/offers';
+import { createStripeOffer, decimalToMinor, formatMoney, listOffers, listSales, requestId, salesSummary, stripePriceProblem, whopConnections, type Offer, type Sale } from '@/lib/offers';
 import { disabledWords, dueWords, feeLabel, onboardingLink, stripePreview, type ConnectState } from '@/lib/stripeConnect';
 import { listLeadFiles, type LeadFile } from '@/lib/leadFiles';
 import { useOffers } from '@/store/offers';
@@ -146,7 +146,8 @@ const offerTool = defineTool({
     const currency = (a.currency ?? c.account.defaultCurrency ?? 'usd').toLowerCase();
     const minor = decimalToMinor(String(a.price), currency);
     if (minor == null) return currency === 'jpy' ? 'Use a whole number for this currency.' : 'Use a price like 49 or 49.50.';
-    if (minor < STRIPE_PRICE_MIN || minor > STRIPE_PRICE_MAX) return `The price must be from ${formatMoney(STRIPE_PRICE_MIN, currency)} to ${formatMoney(STRIPE_PRICE_MAX, currency)}.`;
+    const priceProblem = stripePriceProblem(minor, currency);
+    if (priceProblem) return priceProblem;
     if (a.fileId) {
       const f = pending.get(ctx.projectId);
       if (f?.error) return f.error;

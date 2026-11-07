@@ -1,0 +1,28 @@
+{
+  "_about": "Currencies a Stripe buy link may be priced in (P6), and Stripe's minimum charge in each, in minor units (docs.stripe.com/currencies, minimum and maximum charge amounts). Read by server/offers/stripeOffer.mjs and src/lib/offers.ts. Only currencies whose minor unit is the same for us and for Stripe's API: HUF and ISK are left out (Stripe takes them with two decimals while we keep them whole), as are Stripe's other zero-decimal currencies except JPY.",
+  "currencies": ["usd", "eur", "gbp", "cad", "aud", "nzd", "chf", "sek", "nok", "dkk", "pln", "czk", "ron", "bgn", "mxn", "brl", "jpy", "sgd", "hkd", "myr", "thb", "aed"],
+  "minMinor": {
+    "usd": 50,
+    "eur": 50,
+    "gbp": 30,
+    "cad": 50,
+    "aud": 50,
+    "nzd": 50,
+    "chf": 50,
+    "sek": 300,
+    "nok": 300,
+    "dkk": 250,
+    "pln": 200,
+    "czk": 1500,
+    "ron": 200,
+    "bgn": 100,
+    "mxn": 1000,
+    "brl": 50,
+    "jpy": 50,
+    "sgd": 50,
+    "hkd": 400,
+    "myr": 200,
+    "thb": 1000,
+    "aed": 200
+  }
+}

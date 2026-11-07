@@ -40,7 +40,7 @@ describe('the thank-you page and the paid download', () => {
     for (const q of ['', '?session_id=nope', '?session_id=cs_test_short', `?session_id=cs_live_${'a'.repeat(300)}`, '?session_id={CHECKOUT_SESSION_ID}']) {
       const r = await visit(`/b/${noneOffer.id}/done${q}`);
       expect(r.status).toBe(200);
-      expect(r.text).toContain('Your receipt comes from');
+      expect(r.text).toContain('sends receipts, yours comes by email');
       expect(r.text).not.toContain('Payment received');
       expect(r.headers.get('content-security-policy')).toContain("default-src 'none'");
       expect(r.headers.get('cache-control')).toBe('no-store');
@@ -139,6 +139,41 @@ describe('the thank-you page and the paid download', () => {
     expect(checkSaleTicket(secret, old)).toBeNull();
     expect(checkSaleTicket(secret, makeSaleTicket(secret, sale.id))).toBe(sale.id);
     expect(checkSaleTicket(Buffer.alloc(32, 8), makeSaleTicket(secret, sale.id))).toBeNull();
+  });
+
+  it('a failed delayed payment stays failed when the buyer reloads the thank-you page (never "processing" again)', async () => {
+    const sid = await buy(fileOffer, { async: true });
+    await fetch(`${h.stripe.base}/__checkout/async`, { method: 'POST', body: JSON.stringify({ id: sid, account: s.accountId, succeeded: false }) });
+    expect(saleOf(sid).status).toBe('failed');
+    const r = await visit(`/b/${fileOffer.id}/done?session_id=${sid}`);
+    expect(r.text).not.toContain('processing');
+    expect(r.text).not.toContain('Payment received');
+    expect(saleOf(sid).status).toBe('failed');
+    expect((await visit(`/b/${fileOffer.id}/file?session_id=${sid}`)).status).toBe(410);
+    expect(saleOf(sid).status).toBe('failed');
+  });
+
+  it('names the seller (never the offer’s title) and never promises a receipt for a test payment', async () => {
+    const sid = await buy(noneOffer);
+    const r = await visit(`/b/${noneOffer.id}/done?session_id=${sid}`);
+    expect(r.text).toContain('Sold by the seller');
+    expect(r.text).not.toContain('Sold by Lesson');
+    expect(r.text).toContain('This was a test payment: no receipt is sent.');
+    expect(r.text).not.toMatch(/your receipt comes from/i);
+  });
+
+  it('a seller’s new link works its own 7 days even after the thank-you page’s download days', async () => {
+    const sid = await buy(fileOffer);
+    await visit(`/b/${fileOffer.id}/done?session_id=${sid}`);
+    const sale = saleOf(sid);
+    sale.paid_at = new Date(Date.now() - 45 * 86_400_000).toISOString();
+    expect((await visit(`/b/${fileOffer.id}/file?session_id=${sid}`)).status).toBe(410);
+    const got = await h.call(s.who, 'POST', `/api/offers/sales/${sale.id}/download-link`, {});
+    const t = new URL(got.body.url).searchParams.get('t');
+    expect((await visit(`/b/${fileOffer.id}/file?t=${t}`)).status).toBe(302);
+    // refunded: still closed, ticket or not
+    sale.status = 'refunded';
+    expect((await visit(`/b/${fileOffer.id}/file?t=${t}`)).status).toBe(410);
   });
 
   it('/back: "Checkout cancelled. Nothing was charged." with a link back; reads no query', async () => {

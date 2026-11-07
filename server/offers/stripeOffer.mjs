@@ -8,25 +8,34 @@
 //
 // - The seller's live Stripe account (onboarding, restricted or active) is needed: else 409 STRIPE_NOT_CONNECTED.
 //   An offer made while onboarding has problem 'stripe_setup' and /b/ says "not available to buy right now".
-// - Price: whole minor units, 50 to 99,999,999 (Stripe's usual minimum for USD; other currencies' minimums are
-//   Stripe's to refuse at checkout), a 3-letter currency. The price text is the server's.
+// - Price: whole minor units, from Stripe's minimum in that currency (at least 50) to 99,999,999, in one of the
+//   currencies of shared/stripe-currencies.json (never HUF or ISK: Stripe takes those with two decimals while our
+//   minor units keep them whole, so a price would be charged at 1/100). The price text is the server's.
 // - Delivery: 'none' (the seller delivers) or 'file': a product file (lead_files.purpose 'product') of the same user.
 // - The id comes from the clientRequestId (a double press makes one row).
 
+import fs from 'node:fs';
 import { fail, isUuid } from '../integrations/common.mjs';
 import { ID_RE, MAX_OFFERS_PER_USER, PROJECT_ID_RE, priceText } from './store.mjs';
 
 export const STRIPE_PRICE_MIN = 50;
 export const STRIPE_PRICE_MAX = 99_999_999;
+const CURRENCIES = JSON.parse(fs.readFileSync(new URL('../../shared/stripe-currencies.json', import.meta.url), 'utf8'));
+export const STRIPE_CURRENCIES = Object.freeze([...CURRENCIES.currencies]);
+/** Stripe's lowest charge in a currency, in its minor units (at least STRIPE_PRICE_MIN). */
+export const stripeMinFor = (currency) => Math.max(STRIPE_PRICE_MIN, Number(CURRENCIES.minMinor[String(currency).toLowerCase()]) || STRIPE_PRICE_MIN);
 /** Account statuses an offer may be made on (it sells only once 'active'). */
 const OFFER_ACCOUNT = ['onboarding', 'restricted', 'active'];
 
 /** A Stripe offer's price in our checks: { priceMinor, currency } (throws 400). */
 export function stripePriceOf(priceMinor, currency) {
   const n = typeof priceMinor === 'number' ? priceMinor : NaN;
-  if (!Number.isSafeInteger(n) || n < STRIPE_PRICE_MIN || n > STRIPE_PRICE_MAX) throw fail(400, 'BAD_PRICE', 'Set a price from 0.50 to 999,999.99.');
   const cur = typeof currency === 'string' ? currency.trim().toLowerCase() : '';
   if (!/^[a-z]{3}$/.test(cur)) throw fail(400, 'BAD_PRICE', 'Choose a currency.');
+  if (!STRIPE_CURRENCIES.includes(cur)) throw fail(400, 'BAD_CURRENCY', `Stripe buy links can’t be priced in ${cur.toUpperCase()} here yet. Choose another currency.`);
+  if (!Number.isSafeInteger(n) || n > STRIPE_PRICE_MAX) throw fail(400, 'BAD_PRICE', 'Set a price from 0.50 to 999,999.99.');
+  const min = stripeMinFor(cur);
+  if (n < min) throw fail(400, 'BAD_PRICE', `The lowest price Stripe takes in ${cur.toUpperCase()} is ${priceText(min, cur) || min}.`);
   if (!priceText(n, cur)) throw fail(400, 'BAD_PRICE', 'Choose a currency.');
   return { priceMinor: n, currency: cur };
 }

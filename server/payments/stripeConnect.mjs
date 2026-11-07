@@ -50,7 +50,30 @@ const PENDING_MS = 2 * 60_000;
 const GIVE_UP_MS = 10 * 60_000;
 const SAME_KEY_MS = 24 * 3_600_000;
 const READBACK_PAGES = 10;
-export const ALERT_KINDS = Object.freeze(['connect_not_enabled', 'platform_profile_incomplete', 'key_missing_connect_permission', 'checkout_url_unexpected', 'webhook_secret_missing', 'fee_return_failed', 'fee_return_unknown', 'account_mismatch', 'fee_not_allowed_br', 'connect_no_public_url', 'connect_readback_lost']);
+/** A seller's own page polls while Stripe confirms: read Stripe back at most once a minute per row (the cron does the rest). */
+const READBACK_EVERY_MS = 60_000;
+const STUCK_RETURN_MS = 5 * 60_000;
+/** Stripe's onboarding links: https on connect.stripe.com (or another stripe.com host), nothing else. */
+export function validLinkUrl(raw, { testBase = null } = {}) {
+  if (typeof raw !== 'string' || !raw || raw.length > 2000) return null;
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.username || u.password) return null;
+  if (u.protocol === 'https:' && u.port === '' && (u.hostname === 'connect.stripe.com' || u.hostname.endsWith('.stripe.com'))) return u.href;
+  if (testBase) {
+    try {
+      if (u.origin === new URL(testBase).origin) return u.href;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+export const ALERT_KINDS = Object.freeze(['connect_not_enabled', 'platform_profile_incomplete', 'key_missing_connect_permission', 'checkout_url_unexpected', 'webhook_secret_missing', 'fee_return_failed', 'fee_return_unknown', 'account_mismatch', 'fee_not_allowed_br', 'connect_no_public_url', 'connect_readback_lost', 'fee_return_reversed', 'link_url_unexpected']);
 const ROW_COLUMNS = 'id,user_id,environment,stripe_account_id,status,country,default_currency,display_name,charges_enabled,payouts_enabled,details_submitted,requirements,tax_status,tax_enabled,payout_failed_at,terms_version,terms_accepted_at,create_key,create_started_at,last_event_at,synced_at,created_at,updated_at';
 
 const MSG = Object.freeze({
@@ -123,6 +146,8 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
   const iso = (t = now()) => new Date(t).toISOString();
   const ms = (v) => (v == null ? null : Number.isFinite(Date.parse(v)) ? Date.parse(v) : null);
   const alertedAt = new Map();
+  const readBackAt = new Map(); // row id → when its account was last looked for (the seller's polls)
+  const testBase = stripe.mode === 'test' && String(env.STRIPE_API_BASE ?? '').trim() ? String(env.STRIPE_API_BASE).trim() : null;
 
   /**
    * An owner alert: a log line and the connect_alerts row (best effort; codes only, never a key, an email or a cs_ id).
@@ -222,6 +247,19 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
   /** The tag accounts carry in their metadata (customer tag: never the raw user id). */
   const tagOf = (userId) => customerTag(userId, env);
   const createKeyFor = (userId, clientRequestId) => `ylb-connect-acct:${sha256(`${userId}:${cfg.environment}:${clientRequestId}`).slice(0, 40)}`;
+  /** The create's own mark in the account's metadata (from its Idempotency-Key): the read-back matches this one. */
+  const reqTagOf = (createKey) => sha256(`req:${createKey}`).slice(0, 24);
+
+  /** A new account for a seller who stopped selling here before: their old Stripe offers move to it (still paused). */
+  async function adoptOffers(row) {
+    try {
+      const old = await db.select('connect_accounts', { user_id: row.user_id, environment: row.environment, status: 'disconnected' }, { select: 'id', limit: 50 });
+      const ids = old.map((r) => r.id).filter((id) => id !== row.id);
+      if (ids.length) await db.update('offers', { user_id: row.user_id, provider: 'stripe', connect_account_id: ['in', ids] }, { connect_account_id: row.id });
+    } catch (e) {
+      safeLog('connect_offers_move_failed', { code: e?.code }, log);
+    }
+  }
 
   /**
    * A row whose create didn't answer ('unknown', or 'creating' too long): find the account by its metadata (read
@@ -241,20 +279,29 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
         return row;
       }
       const data = Array.isArray(list?.data) ? list.data : [];
-      found = data.find((a) => a?.metadata?.ylb_tag === tag && a?.metadata?.ylb_env === cfg.environment) ?? null;
+      // this user's accounts in this environment, made by this create (an older account of theirs, e.g. one they
+      // stopped selling with, is another row's: skipped, and the search goes on)
+      for (const a of data) {
+        if (a?.metadata?.ylb_tag !== tag || a?.metadata?.ylb_env !== cfg.environment || !ACCOUNT_ID_RE.test(String(a.id))) continue;
+        if (a.metadata.ylb_req && a.metadata.ylb_req !== reqTagOf(row.create_key)) continue;
+        const other = await rowByAccount(a.id);
+        if (other && other.id !== row.id) continue;
+        found = a;
+        break;
+      }
       if (found || !list?.has_more || !data.length) break;
       after = data.at(-1).id;
     }
-    if (found && ACCOUNT_ID_RE.test(String(found.id))) {
-      const other = await rowByAccount(found.id);
-      if (other && other.id !== row.id) {
-        void alert('account_mismatch', { where: 'readback' });
-        return row;
-      }
+    if (found) {
       safeLog('connect_account_adopted', { env: cfg.environment }, log);
-      return applyAccount(row, found, { stripe_account_id: found.id, status: statusOf(found) });
+      const saved = await applyAccount(row, found, { stripe_account_id: found.id, status: statusOf(found) });
+      await adoptOffers(saved);
+      return saved;
     }
     if (now() - (ms(row.create_started_at) ?? now()) >= GIVE_UP_MS) {
+      // the create may still have gone through (a read that missed it): the owner checks for an account with no seller
+      // before this seller makes another
+      await alert('connect_readback_lost', { env: cfg.environment });
       await db.remove('connect_accounts', { id: row.id, user_id: row.user_id, status: ['in', ['creating', 'unknown']] });
       safeLog('connect_readback_not_found', { env: cfg.environment }, log);
       return null;
@@ -262,7 +309,10 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
     return row;
   }
 
-  /** The one-shot create of a row inserted just before. → { status, row }. */
+  /**
+   * The one-shot create of a row inserted just before (or a person's same-key retry: the stored body again, the
+   * business name from the row). → { status, row }.
+   */
   async function sendCreate(row, who, { country, businessName }) {
     const body = {
       controller: CONNECT_CONTROLLER,
@@ -270,7 +320,7 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
       ...(who.email ? { email: String(who.email).slice(0, 254) } : {}),
       capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
       ...(businessName ? { business_profile: { name: businessName } } : {}),
-      metadata: { ylb_tag: tagOf(who.id), ylb_env: cfg.environment },
+      metadata: { ylb_tag: tagOf(who.id), ylb_env: cfg.environment, ylb_req: reqTagOf(row.create_key) },
     };
     const got = await stripe.post('/v1/accounts', body, { idempotencyKey: row.create_key });
     if (got.outcome === 'ok' && ACCOUNT_ID_RE.test(String(got.value?.id ?? ''))) {
@@ -281,8 +331,15 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
         throw fail(409, 'CONFLICT', MSG.tryAgain);
       }
       const saved = await applyAccount(row, acct, { stripe_account_id: acct.id, status: statusOf(acct) });
+      await adoptOffers(saved);
       safeLog('connect_account_created', { env: cfg.environment }, log);
       return { status: 200, row: saved };
+    }
+    if (got.outcome === 'failed' && (got.status === 409 || got.error?.type === 'idempotency_error' || /^idempotency/.test(String(got.error?.code ?? '')))) {
+      // the same key still in flight, or Stripe refusing it: not a refusal of the account. Keep the row and read back.
+      const saved = await patchRow(row, { status: 'unknown' });
+      safeLog('connect_account_key_busy', { env: cfg.environment, status: got.status }, log);
+      return { status: 202, row: saved };
     }
     if (got.outcome === 'failed') {
       await db.remove('connect_accounts', { id: row.id, user_id: row.user_id, status: 'creating' });
@@ -333,7 +390,8 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
         // a person pressing again with the same request within 24 hours: the same key, sent once more
         if (found.create_key === key && age < SAME_KEY_MS) {
           const sending = await patchRow(found, { status: 'creating' });
-          return sendCreate(sending, who, { country: found.country, businessName });
+          // the stored body: the same key must carry the same parameters (never this request's business name)
+          return sendCreate(sending, who, { country: found.country, businessName: found.display_name ?? '' });
         }
         return { status: 202, row: found };
       }
@@ -341,7 +399,7 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
     }
     let row;
     try {
-      [row] = await db.insert('connect_accounts', { id: newId(), user_id: who.id, environment: cfg.environment, status: 'creating', country, terms_version: SELLER_TERMS_VERSION, terms_accepted_at: iso(), create_key: key, create_started_at: iso() }, { returning: true });
+      [row] = await db.insert('connect_accounts', { id: newId(), user_id: who.id, environment: cfg.environment, status: 'creating', country, display_name: businessName, terms_version: SELLER_TERMS_VERSION, terms_accepted_at: iso(), create_key: key, create_started_at: iso() }, { returning: true });
     } catch (e) {
       if (e?.code === 'CONFLICT') throw fail(409, 'PENDING', MSG.confirming);
       throw e;
@@ -360,7 +418,19 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
       throw notSetUp('Set APP_PUBLIC_URL to the app’s https address.', MSG.unavailable);
     }
     const got = await stripe.post('/v1/account_links', { account: row.stripe_account_id, type: 'account_onboarding', collection_options: { fields: 'eventually_due' }, refresh_url: `${origin}/connect/refresh`, return_url: `${origin}/connect/return` }, { idempotencyKey: `ylb-connect-link:${row.id}:${crypto.randomBytes(16).toString('hex')}` });
-    if (got.outcome === 'ok' && typeof got.value?.url === 'string' && /^https?:\/\//.test(got.value.url)) return { url: got.value.url };
+    if (got.outcome === 'ok') {
+      // the browser is sent there: Stripe's own hosts only, checked here (not only in the app)
+      const href = validLinkUrl(got.value?.url, { testBase });
+      if (href) return { url: href };
+      let host = '';
+      try {
+        host = new URL(String(got.value?.url ?? '')).host.slice(0, 120);
+      } catch {
+        host = 'unreadable';
+      }
+      void alert('link_url_unexpected', { host });
+      throw fail(503, 'UNAVAILABLE', MSG.unavailable);
+    }
     if (got.outcome === 'failed') throw mapStripeError(got.error, 'link');
     // a new click makes a new link: harmless
     throw fail(503, 'UNAVAILABLE', 'Try again.');
@@ -369,7 +439,13 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
   /** The seller's row after a read-back of an unclear create (GET /api/payments/stripe does this), or null. */
   async function current(userId) {
     let row = await liveRow(userId);
-    if (row && (row.status === 'unknown' || (row.status === 'creating' && now() - (ms(row.create_started_at) ?? now()) >= PENDING_MS))) row = await readBack(row);
+    if (row && (row.status === 'unknown' || (row.status === 'creating' && now() - (ms(row.create_started_at) ?? now()) >= PENDING_MS))) {
+      // the seller's page asks every few seconds: Stripe is read at most once a minute per row
+      if (now() - (readBackAt.get(row.id) ?? -Infinity) < READBACK_EVERY_MS) return row;
+      readBackAt.set(row.id, now());
+      while (readBackAt.size > 5000) readBackAt.delete(readBackAt.keys().next().value);
+      row = await readBack(row);
+    }
     return row;
   }
 
@@ -521,7 +597,10 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
       }
       sellers.push({ customerTag: tag, email: await emailFor(r.user_id).catch(() => ''), status: r.status, country: r.country, chargesEnabled: r.charges_enabled === true, payoutsEnabled: r.payouts_enabled === true, dueNow: Number(q.currently_due) || 0, last30: bySeller.get(r.user_id) ?? { count: 0, gross: {}, fees: {} } });
     }
-    const returns = await db.select('connect_fee_returns', { environment, state: ['in', ['unknown', 'failed', 'skipped']] }, { select: 'source_id,state,amount_minor,error_code,created_at', order: 'created_at.desc', limit: 100 });
+    // to check: unclear, refused, waiting, left 'sending' (the hourly job reads those back), or reversed afterwards
+    const returns = (await db.select('connect_fee_returns', { environment, state: ['in', ['unknown', 'failed', 'skipped', 'sending']] }, { select: 'source_id,state,amount_minor,error_code,created_at,updated_at', order: 'created_at.desc', limit: 100 })).filter((r) => r.state !== 'sending' || now() - (Date.parse(r.updated_at ?? '') || now()) >= STUCK_RETURN_MS);
+    const reversed = await db.select('connect_fee_returns', { environment, state: 'ok', error_code: 'refund_reversed' }, { select: 'source_id,state,amount_minor,error_code,created_at,updated_at', order: 'created_at.desc', limit: 50 });
+    returns.push(...reversed);
     const alerts = await db.select('connect_alerts', { resolved_at: null }, { order: 'last_at.desc', limit: 100 });
     return {
       setup,

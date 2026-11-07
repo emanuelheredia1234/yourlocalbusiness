@@ -6,15 +6,15 @@
 
 import { useEffect, useState } from 'react';
 import { CircleAlert, Plus, Upload } from 'lucide-react';
-import { STRIPE_PRICE_MAX, STRIPE_PRICE_MIN, decimalToMinor, formatMoney, type OffersError } from '@/lib/offers';
+import { STRIPE_CURRENCIES, decimalToMinor, stripePriceProblem, type OffersError } from '@/lib/offers';
 import { stripePreview, type ConnectState } from '@/lib/stripeConnect';
 import { LEAD_FILE_ACCEPT, MAX_LEAD_FILE_BYTES, createLeadFile, listLeadFiles, refusedFileName, uploadLeadFileContent, type LeadFile } from '@/lib/leadFiles';
 import { navigate } from '@/lib/router';
 import { useUI } from '@/store/ui';
 import { Callout, Field, Segmented, Spinner } from '@/components/ui/primitives';
 
-/** Currencies offered first (the account's own default is always offered too). */
-export const STRIPE_CURRENCIES = ['usd', 'eur', 'gbp', 'cad', 'aud', 'nzd', 'chf', 'sek', 'nok', 'dkk', 'pln', 'czk', 'huf', 'ron', 'bgn', 'mxn', 'brl', 'jpy', 'sgd', 'hkd', 'myr', 'thb', 'aed'] as const;
+/** Currencies offered (shared/stripe-currencies.json; the account's own default first when it's one of them). */
+export { STRIPE_CURRENCIES };
 
 export { stripePreview };
 
@@ -32,9 +32,7 @@ export function priceProblem(text: string, currency: string): string {
   if (!text.trim()) return '';
   const minor = decimalToMinor(text, currency);
   if (minor == null) return currency.toUpperCase() === 'JPY' ? 'Use a whole number.' : 'Use a number like 49 or 49.50.';
-  if (minor < STRIPE_PRICE_MIN) return `The lowest price Stripe takes is ${formatMoney(STRIPE_PRICE_MIN, currency)}.`;
-  if (minor > STRIPE_PRICE_MAX) return `The highest price is ${formatMoney(STRIPE_PRICE_MAX, currency)}.`;
-  return '';
+  return stripePriceProblem(minor, currency);
 }
 
 /** The Stripe tab's body (render tests draw it directly). */
@@ -59,7 +57,7 @@ export function StripeOfferForm({
   const account = connect?.account ?? null;
   const [title, setTitle] = useState(defaultTitle);
   const [price, setPrice] = useState('');
-  const [currency, setCurrency] = useState(account?.defaultCurrency ?? 'usd');
+  const [currency, setCurrency] = useState(account?.defaultCurrency && STRIPE_CURRENCIES.includes(account.defaultCurrency) ? account.defaultCurrency : 'usd');
   const [deliver, setDeliver] = useState<'none' | 'file'>('none');
   const [files, setFiles] = useState<LeadFile[] | null>(initialFiles);
   const [fileId, setFileId] = useState('');
@@ -119,7 +117,7 @@ export function StripeOfferForm({
     );
   }
 
-  const currencies = [...new Set([...(account.defaultCurrency ? [account.defaultCurrency] : []), ...STRIPE_CURRENCIES])];
+  const currencies = [...new Set([...(account.defaultCurrency && STRIPE_CURRENCIES.includes(account.defaultCurrency) ? [account.defaultCurrency] : []), ...STRIPE_CURRENCIES])];
   const minor = decimalToMinor(price, currency);
   const problem = priceProblem(price, currency);
   const ready = !!title.trim() && minor != null && !problem && (deliver === 'none' || !!fileId);

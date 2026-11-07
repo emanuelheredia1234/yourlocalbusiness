@@ -1703,7 +1703,8 @@ account; the money goes to the seller's Stripe balance; the app takes **our fee*
   `floor(price × pct / 100)` (rounding favours the seller); 0, or anything not below the price, is left out. A seller
   in Brazil pays no fee unless `STRIPE_PLATFORM_COUNTRY` is `BR` (Stripe doesn't allow it across borders).
 - **Merchant of record.** The seller is the seller: Checkout shows their branding, receipts come from Stripe in their
-  name, and charges, refunds and disputes live on their account. The thank-you, "cancelled" and download pages name
+  name (only when the seller turns on successful-payment emails in Stripe → Settings → Customer emails; test payments
+  send none, and we never send `receipt_email`, so the pages never promise one), and charges, refunds and disputes live on their account. The thank-you, "cancelled" and download pages name
   the seller. The app never refunds a buyer: sellers refund and answer disputes in their own Stripe Dashboard.
 - **Checkout.** `/b/<id>` makes a Checkout Session on the seller's account (a direct charge, `Stripe-Account`) with
   the price inline and our fee as `application_fee_amount`. It sends buyers only to `https://checkout.stripe.com`
@@ -1728,7 +1729,18 @@ account; the money goes to the seller's Stripe balance; the app takes **our fee*
   are shown masked; the browser never sees a key or a full `acct_` id (its last 4 only).
 - Every Stripe write sends an Idempotency-Key and is tried once. A timeout is never retried by itself: the app
   reads back (an account is found again by its metadata tag; a fee return by its source id) and never sends twice.
-  A buyer's own second click within 10 minutes replays the same Checkout Session.
+  A buyer's own second click within 10 minutes replays the same Checkout Session: the key is a hash of the browser
+  (a first-party `ylb_v` cookie on `/b/`, or before it the address with the user agent and language) and the whole
+  session body, so people sharing an address get their own sessions and a changed body is a new key. A replayed
+  session is read back first: one already paid or expired is never reused (one new session under a derived key).
+  Stripe answering about the key itself (409 still in flight) shows "try again in a minute", not the hour-long page.
+- Our fee back on a sale (`fee_returned_minor`) is set as one absolute value (`sale_fee_returned`: the greatest of
+  the fee returns confirmed and Stripe's `amount_refunded` on the fee), never added to, so a fee refund seen by the
+  write, the hourly read-back and `application_fee.refunded` counts once. A fee return left `sending` for 5 minutes
+  is read back like `unknown`, never sent again; a refund that fails after our fee went back alerts the owner
+  (`fee_return_reversed`), nothing is reversed automatically.
+- Stripe prices are in one of the currencies of `shared/stripe-currencies.json`, at or above Stripe's minimum for
+  that currency. HUF and ISK are refused: Stripe takes them with two decimals while the app keeps them whole.
 - Webhooks: the raw body's signature is checked first; a delivery is deduped in `webhook_deliveries`; any error
   answers 500 with no delivery row, so Stripe delivers again.
 - `/b/<id>` never becomes an open redirect (above). `/connect/return` and `/connect/refresh` are fixed 302s into the
@@ -1738,6 +1750,13 @@ account; the money goes to the seller's Stripe balance; the app takes **our fee*
   shows them in plain words. Customers only read "Stripe payments aren't available right now".
 - In the claude.ai artifact build, the Payments tab, the Stripe tab in Attach payment, the assistant's payments
   tools and the owner's Stripe Connect section are all absent.
+
+### Before deploying (every deployment, Connect on or off)
+
+Run `supabase/migrations/20261118000000_stripe_connect.sql` in Supabase → SQL Editor first (safe to run again). Buy
+links and lead magnets read its new columns; until it runs they fall back to the older columns (Whop and outside
+links and lead magnets keep working) and the server logs a reminder naming this file, but product files and Stripe
+buy links can't be made.
 
 ### Owner steps, in order
 
@@ -1769,14 +1788,15 @@ account; the money goes to the seller's Stripe balance; the app takes **our fee*
    live and sandbox. Then add `application_fee.created` and `application_fee.refunded` to the **existing** platform
    endpoint `/api/webhooks/stripe`.
 7. **Migration.** Run `supabase/migrations/20261118000000_stripe_connect.sql` (safe to run again) **before**
-   deploying this code: lead files now read its `purpose` column.
+   deploying this code, **whether or not Stripe Connect is set up** (see "Before deploying" above).
 8. **`APP_PUBLIC_URL`** must be the app's https address. Live setup links and Checkout return addresses need https;
    without it, Connect reports "not set up" and the owner's view says why. `CUSTOMER_TAG_SECRET` (16+ characters)
    is needed too: accounts are tagged with it so one Stripe didn't confirm can be found again.
 9. **A $1 live test, only with the owner's OK.**
    - Use a test seller account on **Launch** (not the owner, whose fee is 0), so the fee is $0.03.
    - Make a $1.00 Stripe offer with a small file, buy it with a real card, and check: the sale appears; the
-     thank-you page downloads the file; the platform shows a $0.03 collected fee; the receipt comes from the seller.
+     thank-you page downloads the file; the platform shows a $0.03 collected fee; the receipt comes from the seller (with their successful-payment emails
+     on).
    - Then refund it **from the seller's Stripe Dashboard**, and check: the sale shows Refunded; the download link
      answers "no longer available"; $0.03 goes back to the seller (owner view → Our fees → returned).
    - Record the results in the owner checklist.

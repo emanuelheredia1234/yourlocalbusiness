@@ -12,9 +12,14 @@
 //   checkout.stripe.com (tests: the mock's own /__pay/ with a test key). Anything else: no redirect, an owner alert.
 //   Nothing from the request (query, Referer, Host) chooses where anyone goes: success and cancel pages use the
 //   seller's verified domain (when served there) or APP_PUBLIC_URL.
-// - One write per click, never retried here: the Idempotency-Key covers the offer, the visitor, the offer's last
-//   change, the fee and a 10-minute window, so a double click or an email scanner gets Stripe's replay of one
-//   session. A timeout answers "try again in a minute" (the buyer's own retry replays the same key).
+// - One write per click, never retried here: the Idempotency-Key is a hash of the browser (a first-party ylb_v cookie
+//   set on the redirect; before it, the address with the browser's user agent and language) and the whole session
+//   body (offer, price, fee and its plan, origin, tax, the 10-minute window), so a double click or an email scanner
+//   gets Stripe's replay of one session, and a changed body is a new key (never Stripe's idempotency_error). A replay
+//   is read back before anyone is sent to it: a session already completed or expired (someone else on the same
+//   address paid it) is never reused; one new session is made under a key derived from it. Stripe still working on the
+//   same key (409), or refusing it, answers "try again in a minute". A timeout answers the same (the buyer's own retry
+//   replays the same key).
 // - The fee is the seller's plan's (billing.entitlement; fail closed: no fee known, no sale) and is left out at 0,
 //   at or above the price, or for a seller in Brazil (server/payments/connectFee.mjs).
 // - HEAD and prefetches never make a session nor count a click.
@@ -33,6 +38,10 @@ export const SESSION_RE = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/;
 const BUCKET_MS = 10 * 60_000;
 const DAY_MS = 86_400_000;
 const TICKET_DAYS = 7;
+const VISITOR_COOKIE = 'ylb_v';
+const COOKIE_RE = /(?:^|;\s*)ylb_v=([A-Za-z0-9_-]{22})(?:;|$)/;
+/** Replays followed at most this many times for one click (each a new session under a key derived from the last). */
+const MAX_FRESH = 2;
 const PREFETCH = (req) => /prefetch/i.test(`${String(req.headers['sec-purpose'] ?? '').slice(0, 100)} ${String(req.headers.purpose ?? '').slice(0, 100)} ${String(req.headers['x-moz'] ?? '').slice(0, 100)}`);
 
 /**
@@ -144,15 +153,29 @@ export function createStripeCheckout({ db, connect, billing = null, env = proces
     return Number.isSafeInteger(price) && price > 0 && /^[a-z]{3}$/.test(String(row.currency ?? ''));
   }
 
-  /** The thank-you and other pages name the seller (the merchant of record), never us. */
-  const sellerName = (acct, row) => escapeHtml(String(acct?.display_name || row.title || 'the seller').slice(0, 120));
+  /** The thank-you and other pages name the seller (the merchant of record), never us (and never the offer's title). */
+  const sellerName = (acct) => escapeHtml(String(acct?.display_name || 'the seller').slice(0, 120));
+
+  /** Whether a Stripe answer is about the Idempotency-Key itself (still in flight: 409; or refused). */
+  const keyTrouble = (got) => got.status === 409 || got.error?.type === 'idempotency_error' || /^idempotency/.test(String(got.error?.code ?? ''));
+
+  /** A replayed session as it is now: true when it can still be paid (open, not expired), false when not, null unread. */
+  async function stillOpen(acct, session) {
+    try {
+      const now_ = await stripe.get(`/v1/checkout/sessions/${encodeURIComponent(session.id)}`, {}, { account: acct.stripe_account_id });
+      return now_?.id === session.id && now_.status === 'open' && !(Number(now_.expires_at) * 1000 <= now());
+    } catch (e) {
+      safeLog('connect_session_read_failed', { kind: e?.kind, code: e?.code }, log);
+      return null;
+    }
+  }
 
   /** GET|HEAD /b/<id> for a Stripe offer (after buy.mjs's checks). page: buy.mjs's helpers. */
   async function checkout(req, res, { row, acct, site, visitorKey, page }) {
     const { notice, write, retryAfter, counted } = page;
     if (!sellable(row, acct)) return notice(req, res, ...NOT_NOW, retryAfter(3_600_000));
     // a preview or a prefetch: a link to continue, no session and no click
-    if (req.method === 'HEAD' || PREFETCH(req)) return write(req, res, 200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': NOTICE_CSP }, leadNotice(escapeHtml(row.title || 'Checkout'), `Payments are processed by Stripe for ${sellerName(acct, row)}.</p>\n<p class="back"><a href="/b/${row.id}" rel="nofollow">Continue to checkout</a>`, ''));
+    if (req.method === 'HEAD' || PREFETCH(req)) return write(req, res, 200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': NOTICE_CSP }, leadNotice(escapeHtml(row.title || 'Checkout'), `Payments are processed by Stripe for ${sellerName(acct)}.</p>\n<p class="back"><a href="/b/${row.id}" rel="nofollow">Continue to checkout</a>`, ''));
     const key = `${visitorKey}|${row.id}`;
     if (perVisitor.full(key)) return notice(req, res, 429, 'Please wait a little', 'This was asked for a lot just now. Try again later.', retryAfter(perVisitor.wait(key)));
     perVisitor.hit(key);
@@ -176,7 +199,9 @@ export function createStripeCheckout({ db, connect, billing = null, env = proces
     await counted(row.id);
     const t = now();
     const bucket = Math.floor(t / BUCKET_MS);
-    const idem = `ylb-cs:${sha256(`${row.id}|${visitorKey}|${row.updated_at ?? ''}|${feeMinor}|${bucket}`).slice(0, 48)}`;
+    // the browser: its own cookie, else (its first click) the address with its user agent and language
+    const cookie = COOKIE_RE.exec(String(req.headers.cookie ?? '').slice(0, 4096))?.[1] ?? null;
+    const browser = cookie ? `c:${cookie}` : `a:${sha256(`${visitorKey}|${String(req.headers['user-agent'] ?? '').slice(0, 300)}|${String(req.headers['accept-language'] ?? '').slice(0, 100)}`)}`;
     const body = {
       mode: 'payment',
       line_items: [{ price_data: { currency: row.currency, unit_amount: amount, product_data: { name: String(row.title || 'Order').slice(0, 200) } }, quantity: 1 }],
@@ -188,7 +213,20 @@ export function createStripeCheckout({ db, connect, billing = null, env = proces
       expires_at: Math.floor((bucket * BUCKET_MS) / 1000) + 3600,
       ...(acct.tax_enabled === true && acct.tax_status === 'active' ? { automatic_tax: { enabled: true } } : {}),
     };
-    const got = await stripe.post('/v1/checkout/sessions', body, { idempotencyKey: idem, account: acct.stripe_account_id });
+    // the key covers the whole body: a change of origin, tax, fee or plan is a new key, not Stripe's idempotency_error
+    const bodyHash = sha256(`${row.updated_at ?? ''}|${JSON.stringify(body)}`);
+    let got = await stripe.post('/v1/checkout/sessions', body, { idempotencyKey: `ylb-cs:${sha256(`${browser}|${bodyHash}`).slice(0, 48)}`, account: acct.stripe_account_id });
+    // a replay is the first answer as it was: read the session now, and never send anyone to one already paid or over
+    for (let fresh = 0; got.outcome === 'ok' && got.replayed && SESSION_RE.test(String(got.value?.id ?? '')); fresh++) {
+      const open = await stillOpen(acct, got.value);
+      if (open === true) break;
+      if (open === null || fresh >= MAX_FRESH) {
+        safeLog('connect_checkout_replay_closed', { read: open !== null }, log);
+        return notice(req, res, 503, 'Checkout didn’t open', `Checkout didn’t open. Try again in a minute.</p>\n<p class="back"><a href="/b/${row.id}" rel="nofollow">Try again</a>`, retryAfter(60_000));
+      }
+      // one new session, under a key derived from the closed one (a new write, so a new key; a repeat replays it)
+      got = await stripe.post('/v1/checkout/sessions', body, { idempotencyKey: `ylb-cs:${sha256(`${browser}|${bodyHash}|after:${got.value.id}`).slice(0, 48)}`, account: acct.stripe_account_id });
+    }
     if (got.outcome === 'ok') {
       const href = validCheckoutUrl(got.value?.url, { testBase });
       if (!href) {
@@ -201,8 +239,15 @@ export function createStripeCheckout({ db, connect, billing = null, env = proces
         void connect.alert('checkout_url_unexpected', { host });
         return notice(req, res, ...NOT_NOW, retryAfter(3_600_000));
       }
-      res.writeHead(303, { 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex', 'cache-control': 'no-store', location: href, 'content-length': 0 });
+      // this browser's own key from now on (first-party, this path only, an hour)
+      const setCookie = cookie ? {} : { 'set-cookie': `${VISITOR_COOKIE}=${crypto.randomBytes(16).toString('base64url')}; Path=/b/; Max-Age=3600; HttpOnly; SameSite=Lax${origin.startsWith('https://') ? '; Secure' : ''}` };
+      res.writeHead(303, { 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex', 'cache-control': 'no-store', ...setCookie, location: href, 'content-length': 0 });
       return res.end();
+    }
+    if (got.outcome === 'failed' && keyTrouble(got)) {
+      // a double click still in flight (409), or a key Stripe refused: a minute, not an hour
+      safeLog('connect_checkout_key_busy', { status: got.status }, log);
+      return notice(req, res, 503, 'Checkout didn’t open', `Checkout didn’t open. Try again in a minute.</p>\n<p class="back"><a href="/b/${row.id}" rel="nofollow">Try again</a>`, retryAfter(60_000));
     }
     if (got.outcome === 'failed') {
       const mapped = connect.mapStripeError(got.error, 'checkout');
@@ -217,7 +262,9 @@ export function createStripeCheckout({ db, connect, billing = null, env = proces
 
   const html = { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': NOTICE_CSP };
   /** The thank-you page that claims nothing (a session we can't confirm, or none). */
-  const plainThanks = (req, res, row, acct, page) => page.write(req, res, 200, html, leadNotice('Thanks for your order', `Thanks. Your receipt comes from ${sellerName(acct, row)} by email.`, ''));
+  const plainThanks = (req, res, row, acct, page) => page.write(req, res, 200, html, leadNotice('Thanks for your order', `Thanks. If ${sellerName(acct)} sends receipts, yours comes by email.`, ''));
+  /** The receipt line: Stripe emails one only when the seller turned that on, and never for a test payment. */
+  const receiptLine = (session, seller) => (session.livemode === true ? ` If ${seller} sends receipts, yours comes by email.` : ' This was a test payment: no receipt is sent.');
 
   /**
    * A Checkout Session read back from Stripe on the offer's own account, checked to be this offer's (metadata,
@@ -243,10 +290,14 @@ export function createStripeCheckout({ db, connect, billing = null, env = proces
     return value;
   }
 
-  /** Record a paid (or pending) session as a sale: the same shape as the webhook's (record_sale is idempotent). */
+  /**
+   * Record a paid session as a sale: the same shape as the webhook's (record_sale is idempotent). Only 'paid': a
+   * payment still processing, or one that failed, is the webhook's to record (a page load is no event, and its time
+   * could put a failed payment back to pending).
+   */
   async function recordFromSession(session, row, acct) {
-    const status = session.payment_status === 'paid' ? 'paid' : 'pending';
-    const p = saleFromSession(session, row, acct, { status, at: now() });
+    if (session.status !== 'complete' || session.payment_status !== 'paid') return null;
+    const p = saleFromSession(session, row, acct, { status: 'paid', at: now() });
     if (!/^pi_[A-Za-z0-9]+$/.test(String(p.provider_payment_id ?? ''))) return null;
     try {
       await db.rpc('record_sale', { p });
@@ -261,17 +312,24 @@ export function createStripeCheckout({ db, connect, billing = null, env = proces
     const sid = url.searchParams.get('session_id');
     const session = await verifiedSession(row, acct, sid);
     if (!session) return plainThanks(req, res, row, acct, page);
-    const seller = sellerName(acct, row);
+    const seller = sellerName(acct);
     if (session.status === 'complete' && session.payment_status === 'paid') {
       if (req.method === 'GET') await recordFromSession(session, row, acct);
-      const by = `Payment received. Sold by ${seller}. Payments are processed by Stripe for ${seller}; your receipt comes from them by email.`;
+      const by = `Payment received. Sold by ${seller}. Payments are processed by Stripe for ${seller}.${receiptLine(session, seller)}`;
       if (row.delivery?.kind === 'file') {
         return page.write(req, res, 200, { ...html, 'content-security-policy': DOWNLOAD_NOTICE_CSP }, leadNotice('Thanks for your order', `${by}</p>\n<p>Save this page to download again for ${cfg.downloadDays} days.`, '', { href: `/b/${row.id}/file?session_id=${sid}`, label: String(row.title || 'your file').slice(0, 120) }));
       }
       return page.write(req, res, 200, html, leadNotice('Thanks for your order', `${by}</p>\n<p>The seller will be in touch.`, ''));
     }
     if (session.status === 'complete') {
-      if (req.method === 'GET') await recordFromSession(session, row, acct);
+      // not paid: processing, unless the webhook already recorded that it failed (then the plain page claims nothing)
+      let sale = null;
+      try {
+        [sale] = await db.select('sales', { provider: 'stripe', environment: cfg.environment, checkout_session_id: sid }, { select: 'status', limit: 1 });
+      } catch {
+        sale = null;
+      }
+      if (sale?.status === 'failed') return plainThanks(req, res, row, acct, page);
       return page.write(req, res, 200, html, leadNotice('Your payment is processing', `Your payment is processing. ${seller} will email you.`, ''));
     }
     return page.write(req, res, 200, html, leadNotice('Checkout not finished', `This checkout wasn’t finished. Nothing was charged.</p>\n<p class="back"><a href="/b/${row.id}" rel="nofollow">Go back to checkout</a>`, ''));
@@ -287,6 +345,7 @@ export function createStripeCheckout({ db, connect, billing = null, env = proces
     // a preview or a prefetch: no count, no signed link
     if (req.method === 'HEAD' || PREFETCH(req)) return write(req, res, 200, html, leadNotice(escapeHtml(row.title || 'Download'), 'Open this link to download your file.', ''));
     let sale = null;
+    let byTicket = false;
     const sid = url.searchParams.get('session_id');
     const t = url.searchParams.get('t');
     if (sid && SESSION_RE.test(sid)) {
@@ -295,7 +354,7 @@ export function createStripeCheckout({ db, connect, billing = null, env = proces
       if (!sale) {
         // the thank-you page's record may not be there yet: the same read and record
         const session = await verifiedSession(row, acct, sid);
-        if (session?.status === 'complete') {
+        if (session?.status === 'complete' && session.payment_status === 'paid') {
           await recordFromSession(session, row, acct);
           sale = await find();
         }
@@ -303,11 +362,14 @@ export function createStripeCheckout({ db, connect, billing = null, env = proces
     } else if (t && linkSecret) {
       const saleId = checkSaleTicket(linkSecret, t, now());
       if (saleId) sale = (await db.select('sales', { id: saleId }, { select: SALE_COLUMNS, limit: 1 }))[0] ?? null;
+      byTicket = !!sale;
     }
     if (!sale || sale.offer_id !== row.id || sale.user_id !== row.user_id) return gone();
     if (!['paid', 'partially_refunded'].includes(sale.status)) return gone();
+    // the thank-you page's link lasts downloadDays from the payment; a seller's new link (a ticket) lasts its own 7
+    // days, whenever it was made (the per-sale count still applies)
     const paid = Date.parse(sale.paid_at ?? '');
-    if (!Number.isFinite(paid) || now() - paid > cfg.downloadDays * DAY_MS) return gone();
+    if (!byTicket && (!Number.isFinite(paid) || now() - paid > cfg.downloadDays * DAY_MS)) return gone();
     let n;
     try {
       n = await db.rpc('sale_downloaded', { p_id: sale.id, p_max: cfg.downloadsPerSale });

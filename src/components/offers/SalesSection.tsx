@@ -26,7 +26,7 @@ export function SalesTiles({ summary, days, via = 'Whop' }: { summary: SalesSumm
       <StatStrip
         items={[
           { label: 'Sales', value: summary ? fmtNum(summary.live.count) : '–', sub: `Through your ${via} buy links, last ${days} days` },
-          { label: 'Revenue', value: summary ? money(revenue) || formatMoney(0, 'usd') : '–', sub: refunded.length ? `${money(refunded)} refunded` : `Before ${via}’s fees` },
+          { label: 'Revenue', value: summary ? money(revenue) || formatMoney(0, 'usd') : '–', sub: refunded.length ? `${money(refunded)} refunded` : `Before ${via}’s fees${via.includes('Stripe') ? ' and our fee' : ''}` },
           { label: 'Buy link clicks', value: summary ? fmtNum(summary.clicks) : '–', sub: 'All time, every buy link' },
         ]}
       />

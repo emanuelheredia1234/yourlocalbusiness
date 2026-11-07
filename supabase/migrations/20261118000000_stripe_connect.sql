@@ -309,6 +309,25 @@ $$;
 revoke execute on function public.record_sale_dispute(text, text, text, uuid, text, bigint, timestamptz) from public, anon, authenticated;
 grant execute on function public.record_sale_dispute(text, text, text, uuid, text, bigint, timestamptz) to service_role;
 
+-- Our fee back on a sale as one absolute value, in one statement: the greatest of what it says now, the sum of the
+-- sale's fee returns confirmed ('ok') and what Stripe says of the application fee (p_fee_refunded, its
+-- amount_refunded; 0 when not known). Never added to, so a fee refund seen by two paths (the write's answer, the
+-- hourly read-back, application_fee.refunded) counts once. The new value, or null for no such sale.
+create or replace function public.sale_fee_returned(p_sale uuid, p_fee_refunded bigint)
+returns bigint
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.sales s set fee_returned_minor = greatest(s.fee_returned_minor, coalesce(p_fee_refunded, 0),
+    coalesce((select sum(r.amount_minor) from public.connect_fee_returns r where r.sale_id = s.id and r.state = 'ok'), 0))
+  where s.id = p_sale
+  returning s.fee_returned_minor;
+$$;
+
+revoke execute on function public.sale_fee_returned(uuid, bigint) from public, anon, authenticated;
+grant execute on function public.sale_fee_returned(uuid, bigint) to service_role;
+
 -- One more download of a sale's product file, in one statement: the new count, or null once p_max is reached.
 create or replace function public.sale_downloaded(p_id uuid, p_max integer)
 returns integer

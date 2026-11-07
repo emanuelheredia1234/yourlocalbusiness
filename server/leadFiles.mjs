@@ -52,6 +52,8 @@ import { LEAD_FILES_BUCKET, PUBLIC_FILES_BUCKET } from './buckets.mjs';
 import { ANSWERS, MAGNET_ID, PROJECT_ID_RE, drain, escapeHtml, leadCounters, leadNotice, readForm, readLeadFields, visitorOf, windowCounter } from './leads.mjs';
 
 export const LEAD_FILES_MIGRATION = 'supabase/migrations/20261112000000_leads_p2.sql';
+/** lead_files.purpose (product files) comes with P6's migration. */
+const CONNECT_MIGRATION_FOR_FILES = 'supabase/migrations/20261118000000_stripe_connect.sql';
 
 const MB = 1024 * 1024;
 export const MAX_LEAD_FILE_BYTES = 25 * MB;
@@ -331,7 +333,7 @@ export function createLeadFiles({
   };
   const unreachable = (e) => fail(502, 'UPSTREAM', e?.name === 'TimeoutError' ? 'Supabase took too long to answer. Try again.' : 'Couldn’t reach Supabase. Try again.');
 
-  async function rest(query, { method = 'GET', body, prefer, timeout = TIMEOUT } = {}) {
+  async function rest(query, { method = 'GET', body, prefer, timeout = TIMEOUT, noPurpose = false } = {}) {
     let res;
     try {
       res = await fetch(`${base}/rest/v1/${query}`, { method, headers: { ...headers, ...(prefer ? { prefer } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(timeout) });
@@ -348,6 +350,17 @@ export function createLeadFiles({
     if (res.ok) return data;
     const code = String(data?.code ?? '').slice(0, 16);
     const message = String(data?.message ?? '').slice(0, 300);
+    // P6's purpose column isn't there yet (its migration not run): lead magnets keep working without it; product files
+    // (P6) wait for it
+    if ((code === 'PGRST204' || code === '42703') && message.includes('purpose') && !noPurpose) {
+      warn('purpose', `Lead magnets: lead_files has no purpose column yet. Run ${CONNECT_MIGRATION_FOR_FILES} in Supabase → SQL Editor (lead magnets keep working).`);
+      if (body?.purpose === 'product' || /[?&]purpose=eq\.product(&|$)/.test(query)) {
+        if (method === 'GET') return [];
+        throw fail(503, 'LEAD_FILES_TABLE', `Run ${CONNECT_MIGRATION_FOR_FILES} in Supabase → SQL Editor.`);
+      }
+      const { purpose: _purpose, ...rest0 } = body && typeof body === 'object' ? body : {};
+      return rest(query.replace(/,purpose(?=[,&]|$)/g, '').replace(/&purpose=eq\.magnet(?=&|$)/, ''), { method, body: body === undefined ? undefined : rest0, prefer, timeout, noPurpose: true });
+    }
     if ((res.status === 404 && (code === 'PGRST205' || code === '42P01' || code === 'PGRST202' || message.includes('lead_files') || message.includes('lead_file_downloaded'))) || code === 'PGRST204' || code === '42703') throw tableMissing();
     if (code === '23503') throw fail(401, 'ACCOUNT_GONE', 'This account doesn’t exist anymore. Sign in again.');
     warn('rest', `Lead magnets: Supabase refused a request (${res.status}${code ? ` ${code}` : ''}).`);

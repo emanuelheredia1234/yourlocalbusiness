@@ -125,6 +125,73 @@ describe('/b/<id> for a Stripe offer', () => {
     expect(h.stripe.realm(s.accountId).sessions.size).toBe(1);
   });
 
+  it('buyers on one address: different browsers (cookies) get their own sessions; the redirect sets the browser’s cookie', async () => {
+    const s = await h.stripeSeller('nat@example.com');
+    const o = await offerFor(s);
+    const first = await visit(`/b/${o.id}`, { ip: '198.18.2.1' });
+    const cookie = /^ylb_v=([A-Za-z0-9_-]{22});/.exec(first.headers.get('set-cookie') ?? '');
+    expect(cookie).toBeTruthy();
+    expect(first.headers.get('set-cookie')).toMatch(/Path=\/b\/; Max-Age=3600; HttpOnly; SameSite=Lax/);
+    const a = await visit(`/b/${o.id}`, { ip: '198.18.2.1', headers: { cookie: 'ylb_v=AAAAAAAAAAAAAAAAAAAAAA' } });
+    const b = await visit(`/b/${o.id}`, { ip: '198.18.2.1', headers: { cookie: 'other=1; ylb_v=BBBBBBBBBBBBBBBBBBBBBB' } });
+    expect(a.status).toBe(303);
+    expect(b.status).toBe(303);
+    expect(a.headers.get('location')).not.toBe(b.headers.get('location'));
+    // a browser with its cookie gets no new one
+    expect(a.headers.get('set-cookie')).toBeNull();
+    // no cookie yet: the address with the browser's user agent tells two people apart
+    const c = await visit(`/b/${o.id}`, { ip: '198.18.2.2', headers: { 'user-agent': 'Phone A' } });
+    const d = await visit(`/b/${o.id}`, { ip: '198.18.2.2', headers: { 'user-agent': 'Laptop B' } });
+    expect(c.headers.get('location')).not.toBe(d.headers.get('location'));
+  });
+
+  it('a replayed session someone already paid is never reused: one new session (a new key), never a redirect to the paid one', async () => {
+    const s = await h.stripeSeller('replay-paid@example.com');
+    const o = await offerFor(s);
+    const first = await visit(`/b/${o.id}`, { ip: '198.18.3.1' });
+    const paidSid = first.headers.get('location').split('/__pay/')[1];
+    await fetch(`${h.stripe.base}/__checkout/complete`, { method: 'POST', body: JSON.stringify({ id: paidSid, account: s.accountId }) });
+    // the same address and browser within the window: Stripe replays the paid session; it's read back and not used
+    const again = await visit(`/b/${o.id}`, { ip: '198.18.3.1' });
+    expect(again.status).toBe(303);
+    expect(again.headers.get('location')).not.toContain(paidSid);
+    const writes = h.stripe.writes(CS).filter((w) => w.account === s.accountId);
+    expect(writes).toHaveLength(3);
+    expect(writes[1].idempotencyKey).toBe(writes[0].idempotencyKey);
+    expect(writes[2].idempotencyKey).not.toBe(writes[0].idempotencyKey);
+    expect(h.stripe.realm(s.accountId).sessions.size).toBe(2);
+    // a third click replays the new (open) session
+    const third = await visit(`/b/${o.id}`, { ip: '198.18.3.1' });
+    expect(third.headers.get('location')).toBe(again.headers.get('location'));
+    expect(h.stripe.realm(s.accountId).sessions.size).toBe(2);
+  });
+
+  it('the key covers the whole body: the seller’s domain then the app host (or tax turned on) is a new key, never Stripe’s idempotency_error', async () => {
+    const s = await h.stripeSeller('two-hosts@example.com');
+    const o = await offerFor(s);
+    const onDomain = await visit(`/b/${o.id}`, { ip: '198.18.4.1', site: s.who.id, domain: 'shop.two.example' });
+    const onApp = await visit(`/b/${o.id}`, { ip: '198.18.4.1' });
+    expect(onDomain.status).toBe(303);
+    expect(onApp.status).toBe(303);
+    const w = h.stripe.writes(CS).filter((x) => x.account === s.accountId);
+    expect(w[0].idempotencyKey).not.toBe(w[1].idempotencyKey);
+    expect(h.stripe.calls.filter((c) => c.route === CS && c.account === s.accountId).length).toBe(2);
+  });
+
+  it('a double click still in flight (Stripe 409) or a refused key: "try again in a minute" (Retry-After 60), never the hour-long NOT_NOW', async () => {
+    const s = await h.stripeSeller('in-flight@example.com');
+    const o = await offerFor(s);
+    h.stripe.fail(CS, 'in_use');
+    const r = await visit(`/b/${o.id}`, { ip: '198.18.5.1' });
+    expect(r.status).toBe(503);
+    expect(r.text).toContain('Try again in a minute');
+    expect(r.headers.get('retry-after')).toBe('60');
+    expect(r.headers.get('location')).toBeNull();
+    // the buyer's next click opens checkout
+    const again = await visit(`/b/${o.id}`, { ip: '198.18.5.1' });
+    expect(again.status).toBe(303);
+  });
+
   it('never an open redirect: a session url elsewhere is not followed (owner alert); ?next=, ?redirect= and a Referer change nothing', async () => {
     const s = await h.stripeSeller('redirect@example.com');
     const o = await offerFor(s);

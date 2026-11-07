@@ -218,6 +218,71 @@ describe('the Connect webhook and our fee back', () => {
     const out = await h.offers.connectHooks.cronReconcile();
     expect(out.recorded).toBeGreaterThanOrEqual(1);
     expect(saleOf(sid)).toMatchObject({ status: 'paid' });
+    // the payment's own time, not the job's
+    const created = h.stripe.realm(s.accountId).sessions.get(sid).created;
+    expect(saleOf(sid).paid_at).toBe(new Date(created * 1000).toISOString());
+    expect(h.stripe.writes().length).toBe(writes);
+  });
+
+  it('our fee back is counted once when the write timed out and both application_fee.refunded and the hourly read-back see it', async () => {
+    const { sid, charge } = await pay();
+    h.stripe.fail(FEE_REFUND, 'timeout');
+    await fetch(`${h.stripe.base}/__charges/refund`, { method: 'POST', body: JSON.stringify({ charge: charge.id, account: s.accountId, amount: 2450 }) });
+    expect(h.rows('connect_fee_returns').find((r) => r.sale_id === saleOf(sid).id).state).toBe('unknown');
+    // Stripe did refund 73 of our 147: the platform's application_fee.refunded says so
+    expect(await h.offers.connectPlatformEvent({ type: 'application_fee.refunded', data: { object: { id: charge.application_fee } } })).toBe('fee_applied');
+    expect(saleOf(sid).fee_returned_minor).toBe(73);
+    // the hourly read-back finds the same fee refund: still 73, not 146
+    await h.offers.connectHooks.cronFees();
+    expect(h.rows('connect_fee_returns').find((r) => r.sale_id === saleOf(sid).id).state).toBe('ok');
+    expect(saleOf(sid).fee_returned_minor).toBe(73);
+    await h.offers.connectPlatformEvent({ type: 'application_fee.refunded', data: { object: { id: charge.application_fee } } });
+    expect(saleOf(sid).fee_returned_minor).toBe(73);
+    // the next half refund gets its full share back (73 + 73 of 147), not 0
+    await fetch(`${h.stripe.base}/__charges/refund`, { method: 'POST', body: JSON.stringify({ charge: charge.id, account: s.accountId, amount: 2450 }) });
+    expect(saleOf(sid).fee_returned_minor).toBe(146);
+    expect(h.rows('connect_fee_returns').filter((r) => r.sale_id === saleOf(sid).id).map((r) => r.amount_minor)).toEqual([73, 73]);
+  });
+
+  it('a fee return left "sending" (the server stopped around the write) is read back after 5 minutes, never sent again', async () => {
+    const { sid, charge } = await pay();
+    await fetch(`${h.stripe.base}/__charges/refund`, { method: 'POST', body: JSON.stringify({ charge: charge.id, account: s.accountId, amount: 4900 }) });
+    const ret = h.rows('connect_fee_returns').find((r) => r.sale_id === saleOf(sid).id);
+    // as if the POST went through but the row and the sale were never updated
+    Object.assign(ret, { state: 'sending', fee_refund_id: null, updated_at: new Date().toISOString() });
+    saleOf(sid).fee_returned_minor = 0;
+    const writes = h.stripe.writes(FEE_REFUND).length;
+    // a fresh one is in flight: left alone
+    await h.offers.connectHooks.cronFees();
+    expect(ret.state).toBe('sending');
+    // the owner sees it once it's old, and the hourly job reads it back
+    ret.updated_at = new Date(Date.now() - 6 * 60_000).toISOString();
+    const admin = await h.user('fees-owner@example.com', { isAdmin: true });
+    const view = await h.call(admin, 'GET', '/api/payments/stripe/admin');
+    expect(view.body.fees.returns.some((r) => r.sourceId === ret.source_id && r.state === 'sending')).toBe(true);
+    await h.offers.connectHooks.cronFees();
+    const after = h.rows('connect_fee_returns').find((r) => r.source_id === ret.source_id);
+    expect(after).toMatchObject({ state: 'ok', fee_refund_id: expect.stringMatching(/^fr_/) });
+    expect(saleOf(sid).fee_returned_minor).toBe(147);
+    expect(h.stripe.writes(FEE_REFUND).length).toBe(writes);
+  });
+
+  it('a refund that fails after our fee went back: an owner alert once, nothing reversed', async () => {
+    const { sid, charge } = await pay();
+    await fetch(`${h.stripe.base}/__charges/refund`, { method: 'POST', body: JSON.stringify({ charge: charge.id, account: s.accountId, amount: 4900 }) });
+    const ret = h.rows('connect_fee_returns').find((r) => r.sale_id === saleOf(sid).id);
+    expect(ret.state).toBe('ok');
+    const refund = h.stripe.realm(s.accountId).refunds.get(ret.source_id);
+    refund.status = 'failed';
+    const writes = h.stripe.writes().length;
+    const before = h.rows('connect_alerts').find((a) => a.kind === 'fee_return_reversed')?.count ?? 0;
+    for (let i = 0; i < 2; i++) {
+      const e = hook({ type: 'charge.refund.updated', object: { id: refund.id, charge: charge.id } });
+      expect((await post(e.raw, e.header)).status).toBe(200);
+    }
+    await vi.waitFor(() => expect(h.rows('connect_alerts').find((a) => a.kind === 'fee_return_reversed')?.count).toBe(before + 1));
+    expect(h.rows('connect_fee_returns').find((r) => r.source_id === ret.source_id)).toMatchObject({ state: 'ok', error_code: 'refund_reversed' });
+    expect(saleOf(sid).fee_returned_minor).toBe(147);
     expect(h.stripe.writes().length).toBe(writes);
   });
 

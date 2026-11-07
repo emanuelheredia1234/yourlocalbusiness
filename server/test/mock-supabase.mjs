@@ -681,7 +681,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
     if (fn === 'ylb_claim_video_start') return claimVideoStart(req, res, raw);
     if (fn === 'lead_file_downloaded') return leadFileDownloaded(req, res, raw);
     if (fn === 'offer_clicked' || fn === 'record_sale') return offersRpc(req, res, fn, raw);
-    if (fn === 'record_sale_dispute' || fn === 'sale_downloaded' || fn === 'connect_alert') return connectRpc(req, res, fn, raw);
+    if (fn === 'record_sale_dispute' || fn === 'sale_downloaded' || fn === 'connect_alert' || fn === 'sale_fee_returned') return connectRpc(req, res, fn, raw);
     if (fn === 'ylb_cancel_survey_totals') return surveyTotals(req, res, fn);
     if (fn === 'ylb_morning_claim' || fn === 'ylb_morning_backlog') return morningRpc(req, res, fn, raw);
     if (EXPERIMENT_FNS.has(fn)) return experimentsRpc(req, res, fn, raw);
@@ -757,7 +757,7 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
   }
 
   /**
-   * public.record_sale_dispute, public.sale_downloaded and public.connect_alert
+   * public.record_sale_dispute, public.sale_downloaded, public.sale_fee_returned and public.connect_alert
    * (supabase/migrations/20261118000000_stripe_connect.sql), each in one step (no await: like one statement). Server-only.
    */
   async function connectRpc(req, res, fn, raw) {
@@ -784,6 +784,14 @@ export async function createMockSupabase({ confirmEmail = true, tokenTtl = 3600,
       return send(res, 204, undefined);
     }
     const rows = tables.get('sales') ?? [];
+    if (fn === 'sale_fee_returned') {
+      const r = rows.find((x) => x.id === b.p_sale);
+      if (!r) return send(res, 200, null);
+      const ok = (tables.get('connect_fee_returns') ?? []).filter((x) => x.sale_id === r.id && x.state === 'ok').reduce((n, x) => n + (Number(x.amount_minor) || 0), 0);
+      r.fee_returned_minor = Math.max(Number(r.fee_returned_minor) || 0, Number(b.p_fee_refunded) || 0, ok);
+      r.updated_at = at;
+      return send(res, 200, r.fee_returned_minor);
+    }
     if (fn === 'sale_downloaded') {
       const r = rows.find((x) => x.id === b.p_id);
       if (!r || !((Number(r.downloads) || 0) < Number(b.p_max))) return send(res, 200, null);

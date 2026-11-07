@@ -6,6 +6,7 @@
 // server with accounts, so none of this is offered in the claude.ai build.
 
 import { serverFetch } from '@/ai/claude';
+import stripeCurrencies from '../../shared/stripe-currencies.json';
 import { serverBaseNow } from '@/lib/cloud/auth';
 import checkoutHosts from '../../shared/checkout-hosts.json';
 import { OFFER_ID } from './buyLinks';
@@ -625,6 +626,24 @@ export function decimalToMinor(text: string, currency: string): number | null {
 /** Stripe's limits on a price we check before sending (the server checks again): 0.50 to 999,999.99. */
 export const STRIPE_PRICE_MIN = 50;
 export const STRIPE_PRICE_MAX = 99_999_999;
+
+/**
+ * Currencies a Stripe buy link may be priced in, and Stripe's minimum in each (shared/stripe-currencies.json, the
+ * server's list too). Never HUF or ISK: Stripe takes those with two decimals while our minor units keep them whole.
+ */
+export const STRIPE_CURRENCIES: readonly string[] = Object.freeze([...stripeCurrencies.currencies]);
+const STRIPE_MIN: Record<string, number> = stripeCurrencies.minMinor;
+export const stripeMinFor = (currency: string): number => Math.max(STRIPE_PRICE_MIN, STRIPE_MIN[currency.toLowerCase()] ?? STRIPE_PRICE_MIN);
+
+/** What's wrong with a Stripe price in minor units, in words ('' when it's fine), as the server checks it. */
+export function stripePriceProblem(minor: number, currency: string): string {
+  const cur = currency.toLowerCase();
+  if (!STRIPE_CURRENCIES.includes(cur)) return `Stripe buy links can’t be priced in ${cur.toUpperCase()} here yet. Choose another currency.`;
+  const min = stripeMinFor(cur);
+  if (minor < min) return `The lowest price Stripe takes in ${cur.toUpperCase()} is ${formatMoney(min, cur)}.`;
+  if (minor > STRIPE_PRICE_MAX) return `The highest price is ${formatMoney(STRIPE_PRICE_MAX, cur)}.`;
+  return '';
+}
 
 /**
  * Our fee on a Stripe sale, for display only (the server decides): floor(amount × pct / 100), and none when that's

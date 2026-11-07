@@ -88,7 +88,8 @@
 //   POST /__fail {route, mode, times}                      the next `times` calls to `route` (e.g. "POST
 //                                                          /v1/subscriptions/:id") fail: card_declined (402),
 //                                                          permission (403: a restricted key without that
-//                                                          permission), server (500), rate_limit (429) or timeout (the request
+//                                                          permission), server (500), rate_limit (429), in_use (409
+//                                                          idempotency_key_in_use: the same key still in flight) or timeout (the request
 //                                                          is DONE, then the connection is dropped: the "did it go
 //                                                          through?" case a caller must read back, never resend)
 //
@@ -842,6 +843,7 @@ export function createMockStripe({ key = TEST_STRIPE_KEY, webhookSecret = TEST_S
     if (fault === 'permission') return send(res, 403, { error: { type: 'invalid_request_error', message: 'The provided key does not have the required permissions for this endpoint.' } });
     if (fault === 'server') return send(res, 500, { error: { type: 'api_error', message: 'Something went wrong on Stripe’s end.' } });
     if (fault === 'rate_limit') return send(res, 429, { error: { type: 'invalid_request_error', code: 'rate_limit', message: 'Too many requests.' } });
+    if (fault === 'in_use') return send(res, 409, { error: { type: 'idempotency_error', code: 'idempotency_key_in_use', message: 'There is currently another in-progress request using this Idempotent Key.' } });
 
     const out = await api(method, parts, url.searchParams, body, account);
     if (ikey && method === 'POST' && out.status < 500) idempotency.set(`${account}:${ikey}`, { fingerprint, status: out.status, body: out.body });

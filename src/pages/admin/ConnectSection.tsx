@@ -27,8 +27,13 @@ export const CONNECT_ALERTS: Record<string, string> = {
   account_mismatch: 'A Stripe sale named a buy link that isn’t that seller’s. It wasn’t recorded: check the server log.',
   fee_not_allowed_br: 'A seller in Brazil sold without our fee: Stripe doesn’t allow it across borders.',
   connect_no_public_url: 'A buy link couldn’t open checkout: APP_PUBLIC_URL isn’t an https address. Set it in Replit Secrets.',
-  connect_readback_lost: 'A seller’s Stripe account couldn’t be confirmed after Stripe didn’t answer. They can press Get paid with Stripe again.',
+  connect_readback_lost: 'A seller’s Stripe account couldn’t be confirmed after Stripe didn’t answer, so we stopped waiting for it. Look in Stripe (Connect → Accounts) for an account with no seller here before they press Get paid with Stripe again.',
+  fee_return_reversed: 'A refund failed or was cancelled after we returned our fee for it. The seller kept that part of our fee. Check the refund in Stripe; nothing was reversed automatically.',
+  link_url_unexpected: 'Stripe sent a setup link on a host we don’t send sellers to, so it wasn’t opened. Check the host in the server log.',
 };
+/** A fee return's state in words (the owner's list). */
+export const returnWords = (r: { state: string; errorCode: string | null }): string =>
+  r.state === 'failed' ? 'Failed' : r.state === 'unknown' || r.state === 'sending' ? 'Not confirmed' : r.state === 'ok' && r.errorCode === 'refund_reversed' ? 'Refund reversed' : 'Waiting for the fee';
 export const alertWords = (kind: string): string => CONNECT_ALERTS[kind] ?? `Stripe Connect needs a look (${kind.replace(/_/g, ' ')}). Check the server log.`;
 
 const STATUS_WORDS: Record<string, { tone: 'good' | 'warn' | 'bad' | 'neutral'; text: string }> = {
@@ -153,7 +158,7 @@ export function ConnectView({ data, error, busy, onResolve }: { data: ConnectAdm
             <ul className="mt-1 flex flex-col gap-1">
               {data.fees.returns.map((r) => (
                 <li key={r.sourceId} className="flex flex-wrap items-center gap-2 text-small">
-                  <Badge tone={r.state === 'failed' ? 'bad' : 'warn'}>{r.state === 'failed' ? 'Failed' : r.state === 'unknown' ? 'Not confirmed' : 'Waiting for the fee'}</Badge>
+                  <Badge tone={r.state === 'failed' ? 'bad' : 'warn'}>{returnWords(r)}</Badge>
                   <span className="num text-ink-2">{r.amountMinor} (smallest currency unit)</span>
                   <span className="text-caption text-muted">
                     {r.createdAt ? fmtRelative(r.createdAt) : ''}

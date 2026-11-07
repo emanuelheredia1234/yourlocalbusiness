@@ -139,13 +139,14 @@ export function createStripeClient({ env = process.env, fetch = globalThis.fetch
         } catch {
           json = null;
         }
-        return { status: res.status, body: json };
+        // Stripe's replay of the first answer to this Idempotency-Key (that answer as it was then, not the object now)
+        return { status: res.status, body: json, replayed: res.headers?.get?.('idempotent-replayed') === 'true' };
       },
       { timeoutMs },
     );
     if (got.outcome === 'ok') {
       if (!got.value?.body || typeof got.value.body !== 'object') return { outcome: 'unknown', reason: 'no_body' };
-      return { outcome: 'ok', value: got.value.body };
+      return { outcome: 'ok', value: got.value.body, ...(got.value.replayed ? { replayed: true } : {}) };
     }
     if (got.outcome === 'failed') return { outcome: 'failed', status: got.status, error: errorFrom(got.status, got.value?.body) };
     return { outcome: 'unknown', reason: got.reason ?? 'error' };

@@ -120,8 +120,11 @@ export function StripeConnectView({ state, error, actions, pollEnded = false, st
           </p>
         )}
 
+        {/* not open to this user yet (the seller terms are still a draft: only the owner can set it up) */}
+        {state && !a && !state.available && <Callout tone="info">Selling with Stripe opens soon. You can use Whop or your own checkout link until then.</Callout>}
+
         {/* none (or stopped): the country, the seller terms, and the button */}
-        {state && !a && (
+        {state && !a && state.available && (
           <>
             {stopped && <Callout tone="info">You stopped selling with Stripe here. Your Stripe account is still yours, in your Stripe Dashboard. Set it up again whenever you like.</Callout>}
             <FeeLine fee={state.fee} />
@@ -253,7 +256,7 @@ export function StripeConnectView({ state, error, actions, pollEnded = false, st
         {test && <p className="text-caption text-muted">Test mode: buyers can’t really pay (use the card 4242 4242 4242 4242), and test sales never count as revenue.</p>}
         <p className="flex items-start gap-2 text-caption text-muted">
           <ShieldCheck size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
-          You’re the seller: receipts come from Stripe in your name, and your money goes to your own Stripe balance.
+          You’re the seller: your money goes to your own Stripe balance. Stripe emails buyers a receipt in your name only if you turn on successful-payment emails (Stripe Dashboard → Settings → Customer emails).
         </p>
       </div>
     </SettingsSection>

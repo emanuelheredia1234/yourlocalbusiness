@@ -113,8 +113,12 @@ export function AttachPaymentForm({
   onAttach: (offer: Offer) => void;
 }) {
   const choosable = offers.filter((o) => o.status !== 'archived' && o.status !== 'draft');
-  const stripeOn = stripeAsked && !__ARTIFACT_BUILD__;
+  // Stripe selling not open to this user (the seller terms still a draft: only the owner sets it up): no Stripe tab
+  const stripeOn = stripeAsked && !__ARTIFACT_BUILD__ && connect?.available !== false;
   const [tab, setTab] = useState<Tab>(initialTab ?? (choosable.length ? 'pick' : stripeOn ? 'stripe' : whopOn && connections.length ? 'whop' : 'external'));
+  useEffect(() => {
+    if (tab === 'stripe' && !stripeOn) setTab(choosable.length ? 'pick' : whopOn && connections.length ? 'whop' : 'external');
+  }, [tab, stripeOn, choosable.length, whopOn, connections.length]);
   // a double press of Create makes one offer, and one Whop checkout link: each kind keeps its request id until the
   // server definitely refused it (then nothing was made, and another try is a new request, never Whop's replay)
   const [crids, setCrids] = useState(() => ({ whop: requestId(), own: requestId(), stripe: requestId() }));

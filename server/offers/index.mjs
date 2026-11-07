@@ -100,7 +100,7 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   const notes = () => {
     if (switchedOff) return ['Offers and buy links: off (OFFERS_PROVIDER=off). /b/ links answer "not found".'];
     if (!db?.enabled) return ['Offers and buy links: off (they need SUPABASE_URL and SUPABASE_SECRET_KEY).'];
-    const lines = [`Offers and buy links: on at /b/<id> (they need ${OFFERS_MIGRATION} in Supabase; limits: OFFER_CLICKS_PER_IP_PER_HOUR, OFFER_CLICKS_PER_OFFER_PER_HOUR).`];
+    const lines = [`Offers and buy links: on at /b/<id> (they need ${OFFERS_MIGRATION} and then ${CONNECT_MIGRATION} in Supabase, Stripe Connect on or off; limits: OFFER_CLICKS_PER_IP_PER_HOUR, OFFER_CLICKS_PER_OFFER_PER_HOUR).`];
     lines.push(whopOn ? `Whop: on. Each user connects their own Whop account; their keys are sealed with ${keys.source === 'PAYMENT_KEYS_SECRET' ? 'PAYMENT_KEYS_SECRET' : `a key from ${keys.source} (set PAYMENT_KEYS_SECRET, 32+ random characters, to keep them apart; set it before anyone connects, never change it after)`}.` : 'Whop: off (WHOP_ENABLED=off): offers take outside checkout links only.');
     if (whopOn && !String(env.APP_PUBLIC_URL ?? '').startsWith('https://')) lines.push('Whop webhooks: set APP_PUBLIC_URL to the app’s https address so each connection’s webhook can be made automatically.');
     if (connect.cfg.switchedOff) lines.push('Stripe Connect: off (STRIPE_CONNECT=off).');
@@ -123,8 +123,13 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   function fromDb(e) {
     if (e?.name !== 'DbError') return e;
     if (e.code === 'NOT_SET_UP') {
-      safeLog('offers_not_set_up', { hint: `run ${OFFERS_MIGRATION}${stripeOn ? ` and ${CONNECT_MIGRATION}` : ''}` }, log);
-      return notSetUp(`Run ${OFFERS_MIGRATION}${stripeOn ? ` and then ${CONNECT_MIGRATION}` : ''} in Supabase → SQL Editor.`);
+      safeLog('offers_not_set_up', { hint: `run ${OFFERS_MIGRATION} and ${CONNECT_MIGRATION}` }, log);
+      return notSetUp(`Run ${OFFERS_MIGRATION} and then ${CONNECT_MIGRATION} in Supabase → SQL Editor.`);
+    }
+    // a column P6 added isn't there: its migration wasn't run
+    if (e.code === 'BAD_REQUEST' && (e.pg === '42703' || e.pg === 'PGRST204')) {
+      safeLog('offers_not_set_up', { hint: `run ${CONNECT_MIGRATION}` }, log);
+      return notSetUp(`Run ${CONNECT_MIGRATION} in Supabase → SQL Editor.`);
     }
     safeLog('offers_db_failed', { code: e.code }, log);
     return fail(503, 'UNAVAILABLE', 'Couldn’t reach the database. Try again shortly.');
@@ -623,7 +628,7 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
       // check in Stripe once the rows are gone
       if (stripeOn) {
         try {
-          const unclear = await db.select('connect_fee_returns', { user_id: userId, state: 'unknown' }, { select: 'source_id', limit: 50 });
+          const unclear = await db.select('connect_fee_returns', { user_id: userId, state: ['in', ['unknown', 'sending']] }, { select: 'source_id', limit: 50 });
           for (const r of unclear) await connect.alert('fee_return_unknown', { source: String(r.source_id).slice(0, 40), where: 'account_deleted' });
         } catch {
           /* best effort */

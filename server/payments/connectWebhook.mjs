@@ -23,6 +23,8 @@ import { saleFromSession } from '../offers/stripeCheckout.mjs';
 
 const EVENT_ID = /^evt_[A-Za-z0-9]+$/;
 const DAY_MS = 86_400_000;
+/** A fee return still 'sending' after this is read back as 'unknown' (never sent again). */
+export const STUCK_MS = 5 * 60_000;
 const SALE_COLUMNS = 'id,user_id,project_id,offer_id,environment,provider_account,provider_payment_id,status,amount_minor,refunded_minor,application_fee_minor,application_fee_id,fee_returned_minor,currency,checkout_session_id,created_at';
 const OFFER_COLUMNS = 'id,user_id,project_id,title,provider,connect_account_id';
 export const CONNECT_EVENTS = Object.freeze(['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed', 'charge.refunded', 'charge.refund.updated', 'account.updated', 'account.application.deauthorized', 'payout.failed']);
@@ -127,6 +129,13 @@ export function createConnectWebhook({ db, connect, now = () => Date.now(), log 
       await db.insert('sale_refunds', refunds.map((r) => ({ provider: 'stripe', environment: env(), refund_id: r.id, provider_payment_id: sale.provider_payment_id, user_id: sale.user_id, amount_minor: Math.max(0, Number(r.amount) || 0) })), { ignoreDuplicates: true, onConflict: 'provider,environment,refund_id' });
     }
     for (const r of refunds) if (r.status === 'succeeded' && /^re_/.test(r.id)) sale = (await returnFee(sale, r.id, Number(r.amount) || 0)) ?? sale;
+    // a refund that failed (or was cancelled) after our fee went back: the seller keeps it; the owner decides (never
+    // reversed here). Marked once per refund, so a repeat event doesn't alert again.
+    for (const r of refunds) {
+      if (!['failed', 'canceled'].includes(r.status) || !/^re_/.test(r.id)) continue;
+      const marked = await db.update('connect_fee_returns', { environment: env(), source_id: r.id, state: 'ok', error_code: null }, { error_code: 'refund_reversed' }, { returning: true });
+      if (marked.length) void connect.alert('fee_return_reversed', { status: String(r.status) });
+    }
     return `refund_${status}`;
   }
 
@@ -152,11 +161,14 @@ export function createConnectWebhook({ db, connect, now = () => Date.now(), log 
 
   // ───────────── our fee back ─────────────
 
-  async function bumpReturned(saleId, add, atLeast = 0) {
-    const [s] = await db.select('sales', { id: saleId }, { select: 'id,fee_returned_minor', limit: 1 });
-    if (!s) return;
-    const next = Math.max((Number(s.fee_returned_minor) || 0) + add, atLeast);
-    if (next !== Number(s.fee_returned_minor)) await db.update('sales', { id: saleId }, { fee_returned_minor: next });
+  /**
+   * The sale's fee_returned_minor as one absolute value, in one statement (sale_fee_returned): the greatest of what it
+   * says now, the sum of its fee returns confirmed ('ok') and what Stripe says of the fee (feeRefunded). Never added
+   * to, so a fee refund seen by two paths (the write's answer, the hourly read-back, application_fee.refunded) counts
+   * once, and two server copies can't lose an update.
+   */
+  async function feeReturned(saleId, feeRefunded = 0) {
+    await db.rpc('sale_fee_returned', { p_sale: saleId, p_fee_refunded: Math.max(0, Number(feeRefunded) || 0) });
   }
 
   /** The one-shot fee refund for a fee_returns row already written ('sending'). */
@@ -165,7 +177,7 @@ export function createConnectWebhook({ db, connect, now = () => Date.now(), log 
     const where = { environment: ret.environment, source_id: ret.source_id };
     if (got.outcome === 'ok' && /^fr_[A-Za-z0-9]+$/.test(String(got.value?.id ?? ''))) {
       await db.update('connect_fee_returns', where, { state: 'ok', fee_refund_id: got.value.id, error_code: null });
-      await bumpReturned(ret.sale_id, Number(ret.amount_minor));
+      await feeReturned(ret.sale_id);
       safeLog('connect_fee_returned', { env: env() }, log);
       return 'ok';
     }
@@ -220,7 +232,7 @@ export function createConnectWebhook({ db, connect, now = () => Date.now(), log 
     if (!sale.application_fee_id) patch.application_fee_id = fee.id;
     if (sale.application_fee_minor == null && Number(fee.amount) > 0) patch.application_fee_minor = Number(fee.amount);
     if (Object.keys(patch).length) await db.update('sales', { id: sale.id }, patch);
-    await bumpReturned(sale.id, 0, Number(fee.amount_refunded) || 0);
+    await feeReturned(sale.id, Number(fee.amount_refunded) || 0);
     // a fee return that waited for this id
     await db.update('connect_fee_returns', { sale_id: sale.id, state: 'skipped', application_fee_id: '' }, { application_fee_id: fee.id });
     return 'fee_applied';
@@ -309,13 +321,24 @@ export function createConnectWebhook({ db, connect, now = () => Date.now(), log 
 
   // ───────────── cron ─────────────
 
-  /** Fee returns that are 'unknown' (read back by metadata, never re-sent) or 'skipped' (find the fee's id). */
+  /**
+   * Fee returns that are 'unknown' (read back by metadata, never re-sent), 'skipped' (find the fee's id) or left in
+   * 'sending' for over 5 minutes (the server stopped, or the database failed, around the write: it may have gone
+   * through, so it becomes 'unknown' and is read back, never sent again).
+   */
   async function cronFees() {
     if (!connect.enabled) return { checked: 0 };
-    const rows = await db.select('connect_fee_returns', { environment: env(), state: ['in', ['unknown', 'skipped']] }, { order: 'updated_at.asc', limit: 200 });
+    const rows = await db.select('connect_fee_returns', { environment: env(), state: ['in', ['unknown', 'skipped', 'sending']] }, { order: 'updated_at.asc', limit: 200 });
     const out = { checked: rows.length, resolved: 0, sent: 0, waiting: 0 };
-    for (const ret of rows) {
+    for (let ret of rows) {
       try {
+        if (ret.state === 'sending') {
+          if (now() - (Date.parse(ret.updated_at ?? '') || now()) < STUCK_MS) continue;
+          const [moved] = await db.update('connect_fee_returns', { environment: ret.environment, source_id: ret.source_id, state: 'sending' }, { state: 'unknown' }, { returning: true });
+          if (!moved) continue;
+          safeLog('connect_fee_return_stuck', { env: env() }, log);
+          ret = moved;
+        }
         if (ret.state === 'skipped') {
           let feeId = ret.application_fee_id;
           if (!feeId) {
@@ -343,8 +366,8 @@ export function createConnectWebhook({ db, connect, now = () => Date.now(), log 
         const list = await stripe.get(`/v1/application_fees/${encodeURIComponent(ret.application_fee_id)}/refunds`, { limit: 100 });
         const found = (Array.isArray(list?.data) ? list.data : []).find((r) => r?.metadata?.ylb_source === ret.source_id);
         if (found) {
-          await db.update('connect_fee_returns', { environment: ret.environment, source_id: ret.source_id, state: 'unknown' }, { state: 'ok', fee_refund_id: found.id });
-          await bumpReturned(ret.sale_id, Number(found.amount) || Number(ret.amount_minor));
+          await db.update('connect_fee_returns', { environment: ret.environment, source_id: ret.source_id, state: 'unknown' }, { state: 'ok', fee_refund_id: found.id, ...(Number(found.amount) > 0 ? { amount_minor: Number(found.amount) } : {}) });
+          await feeReturned(ret.sale_id);
           out.resolved++;
         } else if (now() - Date.parse(ret.created_at ?? iso()) > DAY_MS) {
           void connect.alert('fee_return_unknown', { source: String(ret.source_id).slice(0, 40) }, { oncePerMs: DAY_MS });
@@ -381,7 +404,8 @@ export function createConnectWebhook({ db, connect, now = () => Date.now(), log 
           if (s?.status !== 'complete' || !s.metadata?.ylb_offer) continue;
           const [have] = await db.select('sales', { provider: 'stripe', environment: env(), checkout_session_id: s.id }, { select: 'id', limit: 1 });
           if (have) continue;
-          const out = await onSession(row, { type: 'checkout.session.completed', created: Math.floor(now() / 1000), data: { object: { id: s.id } } });
+          // the session's own time (not now): paid_at and the event order stay the payment's
+          const out = await onSession(row, { type: 'checkout.session.completed', created: Number(s.created) > 0 ? Number(s.created) : Math.floor(now() / 1000), data: { object: { id: s.id } } });
           if (String(out).startsWith('sale_')) recorded++;
         }
       } catch (e) {
