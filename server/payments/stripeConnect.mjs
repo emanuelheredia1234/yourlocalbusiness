@@ -457,6 +457,87 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
     return 'disconnected';
   }
 
+  // ───────────── the owner's view ─────────────
+
+  let connectCheck = { at: 0, value: null };
+  /** Whether Stripe lets this key make connected accounts (a cached read: a refusal says it isn't enabled). */
+  async function connectEnabledCheck() {
+    if (now() - connectCheck.at < 5 * 60_000) return connectCheck.value;
+    let value = null;
+    try {
+      await stripe.get('/v1/accounts', { limit: 1 });
+      value = true;
+    } catch (e) {
+      value = e instanceof StripeError && ['auth', 'invalid'].includes(e.kind) ? false : null;
+    }
+    connectCheck = { at: now(), value };
+    return value;
+  }
+
+  /** GET /api/payments/stripe/admin (owner only): setup, sellers, our fees, fee returns to check, alerts. */
+  async function adminView({ emailFor = async () => '' } = {}) {
+    const environment = cfg.environment;
+    const setup = { environment, missing: cfg.missing(), publicUrlOk: cfg.publicUrlOk, sellerTermsReady, termsVersion: SELLER_TERMS_VERSION, returnFees: cfg.returnFees, connectEnabled: enabled ? await connectEnabledCheck() : null, webhookLastAt: null };
+    if (!enabled) return { setup, accounts: { counts: {}, sellers: [] }, fees: { currencies: {}, returns: [] }, alerts: [] };
+    const rows = await db.select('connect_accounts', { environment }, { select: ROW_COLUMNS, order: 'created_at.desc', limit: 1000 });
+    const counts = {};
+    for (const r of rows) counts[r.status] = (counts[r.status] ?? 0) + 1;
+    setup.webhookLastAt = rows.map((r) => r.last_event_at).filter(Boolean).sort().at(-1) ?? null;
+    const since30 = iso(now() - 30 * 86_400_000);
+    const d = new Date(now());
+    const monthStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
+    const sales = await db.select('sales', { provider: 'stripe', environment, created_at: ['gte', since30 < monthStart ? since30 : monthStart] }, { select: 'user_id,status,amount_minor,currency,application_fee_minor,fee_returned_minor,created_at', limit: 10000 });
+    const counted = ['paid', 'partially_refunded', 'refunded', 'disputed'];
+    const currencies = {};
+    const bySeller = new Map();
+    for (const x of sales) {
+      if (!counted.includes(x.status)) continue;
+      const cur = String(x.currency);
+      currencies[cur] ??= { last30: { fees: 0, returned: 0, net: 0 }, monthToDate: { fees: 0, returned: 0, net: 0 } };
+      const fee = Number(x.application_fee_minor) || 0;
+      const back = Number(x.fee_returned_minor) || 0;
+      for (const [k, from] of [['last30', since30], ['monthToDate', monthStart]]) {
+        if (String(x.created_at) < from) continue;
+        currencies[cur][k].fees += fee;
+        currencies[cur][k].returned += back;
+        currencies[cur][k].net += fee - back;
+      }
+      if (String(x.created_at) >= since30) {
+        const m = bySeller.get(x.user_id) ?? { count: 0, gross: {}, fees: {} };
+        m.count++;
+        m.gross[cur] = (m.gross[cur] ?? 0) + (Number(x.amount_minor) || 0);
+        m.fees[cur] = (m.fees[cur] ?? 0) + fee - back;
+        bySeller.set(x.user_id, m);
+      }
+    }
+    const sellers = [];
+    for (const r of rows.filter((x) => x.status !== 'disconnected').slice(0, 100)) {
+      const q = r.requirements ?? {};
+      let tag = '';
+      try {
+        tag = tagOf(r.user_id);
+      } catch {
+        tag = '';
+      }
+      sellers.push({ customerTag: tag, email: await emailFor(r.user_id).catch(() => ''), status: r.status, country: r.country, chargesEnabled: r.charges_enabled === true, payoutsEnabled: r.payouts_enabled === true, dueNow: Number(q.currently_due) || 0, last30: bySeller.get(r.user_id) ?? { count: 0, gross: {}, fees: {} } });
+    }
+    const returns = await db.select('connect_fee_returns', { environment, state: ['in', ['unknown', 'failed', 'skipped']] }, { select: 'source_id,state,amount_minor,error_code,created_at', order: 'created_at.desc', limit: 100 });
+    const alerts = await db.select('connect_alerts', { resolved_at: null }, { order: 'last_at.desc', limit: 100 });
+    return {
+      setup,
+      accounts: { counts, sellers },
+      fees: { currencies, returns: returns.map((r) => ({ sourceId: r.source_id, state: r.state, amountMinor: Number(r.amount_minor) || 0, errorCode: r.error_code ?? null, createdAt: r.created_at ?? null })) },
+      alerts: alerts.map((a) => ({ kind: a.kind, count: Number(a.count) || 0, firstAt: a.first_at, lastAt: a.last_at, detail: a.detail ?? {} })),
+    };
+  }
+
+  /** POST /api/payments/stripe/admin/alerts/<kind>/resolve (owner only). */
+  async function resolveAlert(kind) {
+    if (!/^[a-z0-9_]{1,60}$/.test(String(kind ?? ''))) throw fail(404, 'NOT_FOUND', 'No such alert.');
+    const done = await db.update('connect_alerts', { kind, resolved_at: null }, { resolved_at: iso() }, { returning: true });
+    return { ok: true, resolved: done.length };
+  }
+
   // ───────────── cron ─────────────
 
   /** Rows whose create didn't answer: read back (never re-sent). */
@@ -512,6 +593,8 @@ export function createConnectCore({ db, env = process.env, fetch = globalThis.fe
     deauthorized,
     cronReadback,
     cronSync,
+    adminView,
+    resolveAlert,
     sellerTermsReady,
     MSG,
   };

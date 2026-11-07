@@ -89,6 +89,8 @@ export function billingFacade(get) {
     requireSlot: async (who, projectId) => (impl()?.requireSlot ? impl().requireSlot(who, projectId) : null),
     businessLimit: async (userId, who = null) => (impl() ? impl().businessLimit(userId, who) : null),
     pagesServeUntil: async (userId) => (impl() ? impl().pagesServeUntil(userId) : null),
+    /** the owner's views: an account's email (Supabase Auth's admin API, cached), or '' */
+    emailFor: async (userId) => (get()?.emailFor ? get().emailFor(userId) : ''),
     tregCapsFor: async (tag) => (impl() ? impl().tregCapsFor(tag) : null),
     config: () => (impl() ? impl().config() : { enabled: false, enforce: false }),
     notes: () => impl()?.notes?.() ?? [],

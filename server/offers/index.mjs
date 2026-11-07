@@ -491,6 +491,14 @@ export function createOffers({ auth, db, send, readJson, readRaw, limit = () => 
   /** /api/payments/stripe…: the seller's own Stripe account (server/payments/stripeConnect.mjs). */
   async function routeStripe(req, res, url, who) {
     const p = url.pathname;
+    const owner = /^\/api\/payments\/stripe\/admin(?:\/alerts\/([^/]{1,60})\/resolve)?$/.exec(p.length <= 120 ? p : '');
+    if (owner) {
+      if (who.isAdmin !== true) throw fail(403, 'FORBIDDEN', 'Only the app’s owner can see this.');
+      limited('stripe-connect-read', who.id);
+      if (!owner[1] && req.method === 'GET') return reply(req, res, 200, await connect.adminView({ emailFor: async (id) => (billing?.emailFor ? billing.emailFor(id) : '') }));
+      if (owner[1] && req.method === 'POST') return reply(req, res, 200, await connect.resolveAlert(owner[1]));
+      throw fail(405, 'BAD_REQUEST', 'Method not allowed.');
+    }
     const m = /^\/api\/payments\/stripe(?:\/(onboarding|sync|tax))?$/.exec(p.length <= 80 ? p : '');
     if (!m) throw fail(404, 'NOT_FOUND', 'Not found.');
     const [, action] = m;

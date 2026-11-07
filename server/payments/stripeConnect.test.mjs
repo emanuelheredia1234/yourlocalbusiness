@@ -166,6 +166,37 @@ describe('Stripe Connect seller accounts', () => {
   });
 });
 
+describe('the owner’s Connect view', () => {
+  let h;
+  beforeAll(async () => {
+    h = await offersServer({ stripe: true, billing: testBilling() });
+  });
+  afterAll(() => h.close());
+
+  it('is the owner’s only: setup (Secret names only), sellers, our fees, alerts; an alert can be marked resolved', async () => {
+    const s = await h.stripeSeller('admin-seller@example.com');
+    const o = (await h.call(s.who, 'POST', '/api/offers', { projectId: 'p1', provider: 'stripe', title: 'Kit', priceMinor: 4900, currency: 'usd', clientRequestId: crypto.randomUUID() })).body.offer;
+    const sid = (await h.visit(`/b/${o.id}`)).headers.get('location').split('/__pay/')[1];
+    await h.visit(`/b/${o.id}/done?session_id=${sid}`);
+    await fetch(`${h.stripe.base}/__checkout/complete`, { method: 'POST', body: JSON.stringify({ id: sid, account: s.accountId }) });
+    await h.visit(`/b/${o.id}/done?session_id=${sid}`);
+    await h.offers.connect.alert('checkout_url_unexpected', { host: 'x.example' });
+    const plain = await h.user('not-owner@example.com');
+    expect((await h.call(plain, 'GET', '/api/payments/stripe/admin')).status).toBe(403);
+    const owner = await h.user('the-owner@example.com', { isAdmin: true });
+    const v = await h.call(owner, 'GET', '/api/payments/stripe/admin');
+    expect(v.status).toBe(200);
+    expect(v.body.setup).toMatchObject({ environment: 'sandbox', missing: [], publicUrlOk: true, connectEnabled: true, returnFees: true });
+    expect(v.body.accounts.counts.active).toBeGreaterThanOrEqual(1);
+    expect(v.body.accounts.sellers[0]).toMatchObject({ customerTag: expect.stringMatching(/^cust_/), status: 'active', chargesEnabled: true });
+    expect(v.body.fees.currencies.usd.last30).toMatchObject({ fees: 147, returned: 0, net: 147 });
+    expect(v.body.alerts.map((a) => a.kind)).toContain('checkout_url_unexpected');
+    expect(JSON.stringify(v.body)).not.toMatch(/sk_test_|whsec_|acct_[A-Za-z0-9]{6,}/);
+    expect((await h.call(owner, 'POST', '/api/payments/stripe/admin/alerts/checkout_url_unexpected/resolve', {})).body).toEqual({ ok: true, resolved: 1 });
+    expect((await h.call(owner, 'GET', '/api/payments/stripe/admin')).body.alerts.map((a) => a.kind)).not.toContain('checkout_url_unexpected');
+  });
+});
+
 describe('the seller terms draft', () => {
   let h;
   beforeAll(async () => {

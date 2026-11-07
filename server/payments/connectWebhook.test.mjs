@@ -84,7 +84,7 @@ describe('the Connect webhook and our fee back', () => {
     const other = await h.stripeSeller('hooks-other@example.com');
     const theirs = (await h.call(other.who, 'POST', '/api/offers', { projectId: 'p1', provider: 'stripe', title: 'X', priceMinor: 999, currency: 'usd', clientRequestId: crypto.randomUUID() })).body.offer;
     // a session on s's account that names the other seller's offer
-    const made = await fetch(`${h.stripe.apiBase}/v1/checkout/sessions`, { method: 'POST', headers: { authorization: `Bearer ${h.env.STRIPE_SECRET_KEY}`, 'stripe-account': s.accountId, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ mode: 'payment', success_url: 'https://x/y', 'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][unit_amount]': '999', 'line_items[0][price_data][product_data][name]': 'X', 'line_items[0][quantity]': '1', 'metadata[ylb_offer]': theirs.id, client_reference_id: theirs.id }).toString() }).then((r) => r.json());
+    const made = await fetch(`${h.stripe.apiBase}/v1/checkout/sessions`, { method: 'POST', headers: { authorization: `Bearer ${h.env.STRIPE_SECRET_KEY}`, 'stripe-account': s.accountId, 'idempotency-key': `test-${crypto.randomUUID()}`, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ mode: 'payment', success_url: 'https://x/y', 'line_items[0][price_data][currency]': 'usd', 'line_items[0][price_data][unit_amount]': '999', 'line_items[0][price_data][product_data][name]': 'X', 'line_items[0][quantity]': '1', 'metadata[ylb_offer]': theirs.id, client_reference_id: theirs.id }).toString() }).then((r) => r.json());
     await fetch(`${h.stripe.base}/__checkout/complete`, { method: 'POST', body: JSON.stringify({ id: made.id, account: s.accountId }) });
     expect(saleOf(made.id)).toBeUndefined();
     await vi.waitFor(() => expect(h.rows('connect_alerts').some((a) => a.kind === 'account_mismatch')).toBe(true));
@@ -219,6 +219,17 @@ describe('the Connect webhook and our fee back', () => {
     expect(out.recorded).toBeGreaterThanOrEqual(1);
     expect(saleOf(sid)).toMatchObject({ status: 'paid' });
     expect(h.stripe.writes().length).toBe(writes);
+  });
+
+  it('rules: every Stripe write had an Idempotency-Key; no key, secret or session id in any log line', () => {
+    const writes = h.stripe.writes();
+    expect(writes.length).toBeGreaterThan(10);
+    for (const w of writes) expect(w.idempotencyKey, w.route).toBeTruthy();
+    const logs = h.logs.join('\n');
+    expect(logs).not.toMatch(/sk_(test|live)_/);
+    expect(logs).not.toMatch(/whsec_/);
+    expect(logs).not.toMatch(/cs_(test|live)_[A-Za-z0-9]{6,}/);
+    expect(logs).not.toContain('payer@example.com');
   });
 
   describe('our fee events on the P1 endpoint', () => {
