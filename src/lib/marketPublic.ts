@@ -231,11 +231,13 @@ export interface MarketAdmin {
 export type SubmitOutcome = { outcome: 'ok' | 'failed' | 'unknown' | 'skipped'; alreadySubmittedAt?: string; reason?: string };
 
 const arr = <T>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
-const alertText = (v: unknown): string | null => {
+/** treg's owner alert ({ kind, at }) in words: kinds only, never treg's own text. */
+export const alertText = (v: unknown): string | null => {
   if (!v) return null;
-  if (typeof v === 'string') return v;
-  const o = v as Record<string, unknown>;
-  return str(o.message) || str(o.text) || str(o.kind) || 'The Search Console connection needs attention.';
+  const kind = typeof v === 'string' ? v : str((v as Record<string, unknown>).kind);
+  if (!kind) return null;
+  if (kind === 'team_unavailable') return 'treg’s team connection is unavailable, so Search Console calls are off until it’s back. Check the team in treg.';
+  return `treg needs attention (${kind.replace(/[^a-z0-9_]/gi, '').replace(/_/g, ' ')}). Check the team in treg.`;
 };
 
 export async function fetchMarketAdmin(): Promise<MarketAdmin> {
@@ -401,19 +403,19 @@ export function publicInput(l: Listing, images: { coverPath?: string; galleryPat
 }
 
 /** The words of a public listing's status, for its seller. */
-export function statusLine(s: PublicListingState | undefined): { tone: 'success' | 'warning' | 'danger' | 'neutral'; text: string } | null {
+export function statusLine(s: PublicListingState | undefined): { tone: 'good' | 'warn' | 'bad' | 'faint'; text: string } | null {
   if (!s) return null;
   switch (s.status) {
     case 'live':
-      return { tone: 'success', text: 'On the web' };
+      return { tone: 'good', text: 'On the web' };
     case 'thin':
-      return { tone: 'warning', text: 'On the web, not shown on Google yet' };
+      return { tone: 'warn', text: 'On the web, not shown on Google yet' };
     case 'held':
-      return { tone: 'warning', text: 'Under review after visitor reports' };
+      return { tone: 'warn', text: 'Under review after visitor reports' };
     case 'hidden':
-      return { tone: 'danger', text: `Hidden by Your Local Business: ${reasonLabel(s.hiddenReason).toLowerCase()}` };
+      return { tone: 'bad', text: `Hidden by Your Local Business: ${reasonLabel(s.hiddenReason).toLowerCase()}` };
     case 'over_limit':
-      return { tone: 'neutral', text: 'Off the web: over your plan’s limit' };
+      return { tone: 'faint', text: 'Off the web: over your plan’s limit' };
     default:
       return null;
   }

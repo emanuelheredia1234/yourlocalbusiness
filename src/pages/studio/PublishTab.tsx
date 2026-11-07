@@ -22,6 +22,7 @@ import { ListingImages, PhotoUploadButton } from './ListingImages';
 import { VideoPanel } from '@/components/images/VideoPanel';
 import { AttachPayment } from '@/components/offers/AttachPayment';
 import { OffersPanel } from '@/components/offers/OffersPanel';
+import { PublicWebToggle } from '@/components/market/PublicWebToggle';
 
 /** A starting description for the listing's demo video. */
 function demoVideoPrompt(project: Project): string {
@@ -491,6 +492,8 @@ export function PublishTab({ project }: { project: Project }) {
             </div>
           )}
         </div>
+
+        {!__ARTIFACT_BUILD__ && live && <PublicWebToggle project={project} listing={live} />}
 
         <section className="flex flex-col gap-3 border-t border-line pt-5" aria-label="Visibility">
           <h3 className="text-h4 text-ink">Who can see it</h3>
