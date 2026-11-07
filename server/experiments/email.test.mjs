@@ -86,6 +86,22 @@ describe('the Omnisend A/B draft', () => {
     expect(r.body.experiment.variants.map((v) => v.omnisendCampaignId)).toEqual(['a1'.repeat(12), 'b1'.repeat(12)]);
     expect(r.body.split.note).toMatch(/Send version A to half of your list and version B to the other half/);
   });
+
+  it('designed versions (P5): the docs go through as they are; a version with neither text nor design makes nothing', async () => {
+    const doc = (opening) => ({ v: 1, blocks: [{ type: 'text', text: opening }, { type: 'button', label: 'Get it', link: { kind: 'magnet' } }] });
+    const variants = { a: { subject: 'Your guide', doc: doc('Here it is.'), values: { lead_magnet_link: 'https://app.example/m/x' } }, b: { subject: 'Your guide', doc: doc('You asked, so here it is.'), values: { lead_magnet_link: 'https://app.example/m/x' } } };
+    const e = await emailTest('opening');
+    const r = await t.x(alice, 'POST', `/api/experiments/${e.id}/email`, { variants });
+    expect(r.status).toBe(201);
+    const [, , args] = t.omnisend.state.calls.at(-1);
+    expect(args.variants).toEqual(variants);
+    const n = t.omnisend.state.calls.length;
+    for (const bad of [{ a: variants.a, b: { subject: 'x' } }, { a: { doc: variants.a.doc }, b: variants.b }, { a: variants.a, b: { subject: 'x', doc: [] } }]) {
+      const u = await t.x(alice, 'POST', `/api/experiments/${(await emailTest('opening')).id}/email`, { variants: bad });
+      expect([u.status, u.body.code]).toEqual([400, 'BAD_REQUEST']);
+    }
+    expect(t.omnisend.state.calls.length).toBe(n);
+  });
 });
 
 describe('email results', () => {

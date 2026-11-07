@@ -23,7 +23,10 @@ export function createEmailExperiments(deps) {
     if (e.state !== 'draft') throw fail(409, 'BAD_REQUEST', 'This email test already has its Omnisend draft.');
     if (!omnisend?.createAbDraft) throw fail(503, 'NOT_SET_UP', 'Omnisend isn’t set up on this app yet.');
     const v = b?.variants;
-    if (!v || typeof v !== 'object' || typeof v.a !== 'object' || typeof v.b !== 'object' || !v.a || !v.b) throw fail(400, 'BAD_REQUEST', 'Both versions need a subject and a body.');
+    // each version: a subject and its words (the plain-text body of older tabs, or the email's block doc: P5);
+    // server/omnisend.mjs checks and renders each version as it is, B being A with its subject or opening changed
+    const version = (x) => !!x && typeof x === 'object' && typeof x.subject === 'string' && (typeof x.body === 'string' || (!!x.doc && typeof x.doc === 'object' && !Array.isArray(x.doc)));
+    if (!v || typeof v !== 'object' || !version(v.a) || !version(v.b)) throw fail(400, 'BAD_REQUEST', 'Both versions need a subject and the email (its text or its design).');
     const s = b.settings && typeof b.settings === 'object' ? b.settings : {};
     const settings = {
       testSizePercent: Number.isInteger(s.testSizePercent) ? Math.max(10, Math.min(50, s.testSizePercent)) : 30,
