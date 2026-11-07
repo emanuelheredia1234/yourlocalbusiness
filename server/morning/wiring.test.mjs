@@ -24,7 +24,7 @@ describe('morning wiring', () => {
     const integrations = createIntegrations({ env: {}, send, db, auth, appState: { enabled: false } });
     expect(integrations.morningConfig()).toEqual({ enabled: true });
     const names = integrations.cronJobs().map((j) => j.name);
-    expect(names.slice(-2)).toEqual(['morning-actions', 'morning-prune']);
+    expect(names.slice(-3)).toEqual(['morning-actions', 'morning-prune', 'experiment-results']);
     const hourly = integrations.cronJobs().find((j) => j.name === 'morning-actions');
     expect(hourly).toMatchObject({ everyMs: 3_600_000, minMs: 25_000, first: true, leaveMs: 8_000 });
     // registered with the others, it runs first
@@ -35,7 +35,7 @@ describe('morning wiring', () => {
     const notes = integrations.notes().join('\n');
     expect(notes).toContain('Morning action: on (needs supabase/migrations/20261116000000_morning_action.sql); up to 24 businesses per hourly tick');
     expect(notes).toContain('No AI key powers Morning action');
-    expect(notes).toContain('supabase/migrations/20261116000000_morning_action.sql in Supabase');
+    expect(notes).toContain('supabase/migrations/20261116000000_morning_action.sql and supabase/migrations/20261117000000_experiments.sql in Supabase');
     const powered = createIntegrations({ env: {}, send, db, auth, appState: { enabled: false }, aiPowered: () => true }).notes().join('\n');
     expect(powered).not.toContain('No AI key powers Morning action');
   });

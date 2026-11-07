@@ -230,6 +230,8 @@ export const BUCKET_LIMITS = Object.freeze({
   'morning-read': [{ limit: 120, windowMs: 60_000 }],
   'morning-generate': [{ limit: 6, windowMs: 3_600_000 }],
   'morning-feedback': [{ limit: 60, windowMs: 3_600_000 }],
+  experiments: [{ limit: 60, windowMs: 3_600_000 }],
+  'experiments-read': [{ limit: 120, windowMs: 60_000 }],
 });
 
 /**
