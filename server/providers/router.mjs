@@ -62,6 +62,22 @@ export function asProviderError(e, label = '') {
   return new ProviderError('UPSTREAM', `${label || 'The provider'} had an unexpected error: ${e?.message || e}`, { provider: label });
 }
 
+/** Reasoning efforts from least to most (registry SCALES.reasoning). */
+const REASONING_RANK = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
+
+/**
+ * The effort a writing request runs at under a cap: for a model that takes reasoning efforts, the highest accepted
+ * one not above the cap, else the lowest accepted; a model with no effort setting (or another scale) is left alone.
+ */
+export function effortUnder(efforts, effort, cap) {
+  if (!cap || !(cap in REASONING_RANK)) return effort;
+  const known = (efforts ?? []).filter((e) => e in REASONING_RANK);
+  if (!known.length) return effort;
+  if (effort in REASONING_RANK && REASONING_RANK[effort] <= REASONING_RANK[cap] && known.includes(effort)) return effort;
+  const under = known.filter((e) => REASONING_RANK[e] <= REASONING_RANK[cap]).sort((a, b) => REASONING_RANK[b] - REASONING_RANK[a]);
+  return under[0] ?? [...known].sort((a, b) => REASONING_RANK[a] - REASONING_RANK[b])[0];
+}
+
 function canFallBack(err, kind) {
   if (err.code === 'ABORTED') return false;
   if (kind === 'video' || kind === 'agent') return err.notStarted;
@@ -309,8 +325,11 @@ export class AIRouter {
   /**
    * research: { maxSearches, location } (research.mjs researchFromBody) asks the key to search the web.
    * Keys that can search go first; the reply's meta then says what the searches found (meta.research).
+   * effortCap ('low'): each key runs at the highest effort its model accepts not above it (meta.effort says which).
+   * strictFallback: move to the next key only when the failure certainly started nothing (it may have billed), as
+   * videos do. Both are off unless a caller asks (the morning action does).
    */
-  async text(fn, { prompt, images = [], tier = 'default', signal, brain = null, userId = null, ownKeys = null, meter = null, research = null }) {
+  async text(fn, { prompt, images = [], tier = 'default', signal, brain = null, userId = null, ownKeys = null, meter = null, research = null, effortCap = null, strictFallback = false }) {
     if (fnById[fn]?.kind !== 'text') throw new ProviderError('BAD_REQUEST', 'Unknown AI function.', { status: 400 });
     let route = this.plan(fn, 'text', ownKeys);
     if (!route.length) throw this.noProvider(fn);
@@ -323,7 +342,8 @@ export class AIRouter {
     const attempts = [];
     let last = null;
     for (const step of route) {
-      const { id, model, effort } = step;
+      const { id, model } = step;
+      const effort = effortCap ? effortUnder(effortIds(id, 'text', model), step.effort, effortCap) : step.effort;
       const web = research && canResearch(id, model) ? research : null;
       const t0 = Date.now();
       try {
@@ -349,7 +369,7 @@ export class AIRouter {
         if (paid) meter?.cost?.(cost?.usd, { unsure: true });
         attempts.push({ provider: id, providerLabel: step.own ? ownLabel(id) : PROVIDERS[id].label, code: last.code, error: last.message });
         // a key asked to search may have run (and billed) searches: move on only if it certainly started nothing
-        const next = web ? last.notStarted && !['CONTENT_POLICY', 'REFUSAL', 'ABORTED'].includes(last.code) : canFallBack(last, 'text');
+        const next = web || strictFallback ? last.notStarted && !['CONTENT_POLICY', 'REFUSAL', 'ABORTED'].includes(last.code) : canFallBack(last, 'text');
         if (!next || signal?.aborted) break;
       }
     }
