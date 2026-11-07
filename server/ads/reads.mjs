@@ -185,8 +185,10 @@ export async function setPolicyConfirmed(ctx, who, body) {
     got = await ctx.db.update('ad_account_choices', where, { policy_confirmed_for: confirmed ? row.ad_account_id : null, policy_confirmed_at: confirmed ? iso(ctx.now()) : null }, { returning: true });
   } catch (e) {
     if (e?.name !== 'DbError' || e.code !== 'BAD_REQUEST') throw e;
-    // the column isn't there yet: the owner's to fix, never shown to the customer
-    safeLog('ads_policy_confirm_not_saved', { code: e.code, hint: 'run supabase/migrations/20261116000000_ad_policy_confirmed.sql' }, ctx.log);
+    // the owner's to fix, never shown to the customer: the migration is blamed only for a column that isn't there
+    // (PGRST204 on a write, 42703); anything else (a check refusing the value, 23514) is logged as itself
+    const noColumn = e.pg === 'PGRST204' || e.pg === '42703';
+    safeLog('ads_policy_confirm_not_saved', { code: e.code, pg: e.pg ?? null, ...(noColumn ? { hint: 'run supabase/migrations/20261116000000_ad_policy_confirmed.sql' } : {}) }, ctx.log);
     throw fail(503, 'UNAVAILABLE', 'Your answer couldn’t be saved just now. Try again later.');
   }
   if (!got?.length) throw fail(409, 'ACCOUNT_CHANGED', messageFor('ACCOUNT_CHANGED'));

@@ -417,17 +417,25 @@ refusal text says a business admin must accept it "by going to Business Settings
 forum, developers.secure.facebook.com/community/threads/874355924886502), and Meta's 2022 notice says system users
 "will not be able to create ads until the business admins do so" (quoted by jonloomer.com). Admin help pages agree on
 the steps (Phorest, Blend 2026-01-20, Understory, Ako). So every policy fix link (refusal messages and job cards, the
-activity log, the setup checklist and "Before your first ad") is `https://business.facebook.com/latest/settings/system_users`,
-whatever Zernio sends, with these steps: sign in as an admin with full control of the business that owns the ad
-account (only they can accept); open Business Settings → Users → System users; click "Review policy" (or "Add" if
-there's no banner), then "I accept"; no system user needs to be made; come back and tick the box. Zernio's personal
-page stays as a second link ("Also accept it on your own Facebook profile"). Acceptance is once per business; the
-box is per ad account because ad accounts can belong to different businesses. **Unconfirmed** (no signed-in check
-was made): the exact `system_users` path (the documented entry is `/latest/settings/business_users`, then System
-users), the payment link's `asset_id` parameter (Billing Hub itself is documented; the documented fallback is
+activity log, the setup checklist and "Before your first ad") on Meta is the documented Business Settings entry,
+`https://business.facebook.com/latest/settings/business_users`, whatever Zernio sends, with these steps: sign in as an
+admin with full control of the business that owns the ad account (only they can accept); open Business Settings and
+check the business name in the top-left menu is the one that owns ad account …<tail>, switching to it if not (the
+link carries no `business_id`: Zernio's listing gives no owning business, so Meta opens the business last used); go
+to Users → System users; click "Review policy" (or "Add" if there's no banner), then "I accept"; no system user needs
+to be made; come back and tick the box. Zernio's personal page stays as an optional second link ("Your own acceptance
+on Facebook (only if Meta asks you)"). Acceptance is once per business; the box is per ad account because ad
+accounts can belong to different businesses. A Google refusal never gets these Meta links (Zernio's own safe link
+only). A live policy blocker reads "Meta reports that this ad account's non-discrimination policy hasn't been
+accepted…"; only a remembered one says "in the last 7 days… you can launch again". **Unconfirmed** (no signed-in
+check was made): whether `/latest/settings/business_users` opens Business Settings → Users for the business last used
+(and the System users page's own path), a `business_id` parameter on it, the payment link's `asset_id` parameter (Billing Hub itself is documented; the documented fallback is
 `https://business.facebook.com/ads/manager/account_settings/account_billing/?act=<id>`), whether Zernio creates ads
 as the customer or through a system user, any acceptance prompt inside Ads Manager, and Meta's error subcodes
-(2859024, 2859002). If the System users link ever lands on the wrong page, the steps still name the menu.
+(2859024, 2859002), and what Zernio's payment check `status: 'error'` means (the panel reads it as "Can't tell"). If
+the link ever lands on the wrong page, the steps still name the menu. Ticking the box before the migration is run
+logs `ads_policy_confirm_not_saved` with `pg` (`PGRST204` or `42703`) and the migration hint; any other database code
+is logged without the hint.
 
 **Limits** (`ad_limits`, `'*'` = defaults, a customer row overrides field by field):
 | Limit | Default | Checked on |

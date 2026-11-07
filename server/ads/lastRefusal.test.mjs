@@ -27,7 +27,7 @@ const FIX = {
  * (Business Settings → Users → System users, where a business admin accepts it), whatever Zernio sent; else Zernio's
  */
 const PAYMENT_SETTINGS = 'https://business.facebook.com/billing_hub/payment_settings/?asset_id=1';
-const POLICY_ADMIN = 'https://business.facebook.com/latest/settings/system_users';
+const POLICY_ADMIN = 'https://business.facebook.com/latest/settings/business_users';
 const SHOWN = { ...FIX, ad_account_payment_required: PAYMENT_SETTINGS, ad_account_policy_not_accepted: POLICY_ADMIN };
 /** the fix link Zernio's account status check carries when it fails (not the same as a remembered refusal's) */
 const ACCOUNT_QUALITY = 'https://business.facebook.com/accountquality';
@@ -264,7 +264,7 @@ describe('still blocks, as before', () => {
   it('a live account status blocker with a code we’d downgrade if remembered (policy), its own check ok: blocks', async () => {
     health({ remembered: [], payment: 'ok', blockers: [blocker('account_status', 'ad_account_policy_not_accepted')] });
     const s = await setup();
-    expect(red(s)).toEqual([{ id: 'account', state: 'missing', code: 'POLICY_NOT_ACCEPTED', message: 'A business admin needs to accept Meta’s non-discrimination policy: in Meta Business Settings → Users → System users, click “Review policy” (or “Add”), then “I accept”.', fixUrl: POLICY_ADMIN }]);
+    expect(red(s)).toEqual([{ id: 'account', state: 'missing', code: 'POLICY_NOT_ACCEPTED', message: 'A business admin needs to accept Meta’s non-discrimination policy: in Meta Business Settings for the business that owns this ad account, open Users → System users, click “Review policy” (or “Add”), then “I accept”.', fixUrl: POLICY_ADMIN }]);
     expect(s.some((c) => c.id === 'last_refusal')).toBe(false);
     await reviewBlocked('POLICY_NOT_ACCEPTED');
   });

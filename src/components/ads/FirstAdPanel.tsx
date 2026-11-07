@@ -1,12 +1,23 @@
 // Settings → Connected accounts → Ad accounts, under Meta ads once it's connected: "Before your first ad" for the
-// business on screen. With no ad account picked for the business yet, it asks which one first (saved for the
-// business, our database only); then it shows the checks (BeforeFirstAd). Shown only when launching is on for the
-// user; any problem reading the ad accounts leaves it out (the launch window says it again with the reason).
+// business on screen. With no ad account picked for the business yet (or the one picked isn't on this connection any
+// more), it asks which one first (saved for the business, our database only); then it shows the checks
+// (BeforeFirstAd). With no ad account it can use, it says why (the checklist's red line). Shown only when launching is
+// on for the user; a failed read leaves it out (the launch window says it again with the reason).
 import { useCallback, useEffect, useState } from 'react';
 import type { AccountsResponse } from '@/lib/ads/launchTypes';
 import { AdsApiError, chooseAdAccount, getAdAccounts } from '@/lib/ads/launchApi';
 import { Spinner } from '@/components/ui/primitives';
 import { BeforeFirstAd } from '@/pages/marketing/ads/launch/BeforeFirstAd';
+
+/**
+ * Why there's no ad account to pick (none listed, or none Meta lets you use): the checklist's first red line, else a
+ * plain sentence. undefined when there is one to pick, or nothing to say (a read that failed).
+ */
+export function noAccountReason(data: Pick<AccountsResponse, 'accounts' | 'setup'>): string | undefined {
+  if (data.accounts.some((a) => a.usable)) return undefined;
+  const red = data.setup.find((c) => c.state === 'missing' && c.id !== 'account')?.message;
+  return red ?? (data.accounts.length ? 'None of your Meta ad accounts can run ads right now. Open Meta Ads Manager to see why.' : undefined);
+}
 
 export function FirstAdPanel({ projectId, businessName, connectedKey }: { projectId: string; businessName: string; connectedKey: string }) {
   const [data, setData] = useState<AccountsResponse | null>(null);
@@ -40,14 +51,16 @@ export function FirstAdPanel({ projectId, businessName, connectedKey }: { projec
     }
   };
   const usable = data.accounts.filter((a) => a.usable);
+  const why = usable.length ? undefined : noAccountReason(data);
 
   return (
     <div className="flex flex-col gap-2 py-3">
       {data.firstAd ? (
-        <BeforeFirstAd projectId={projectId} adAccountRef={data.chosen?.ref} firstAd={data.firstAd} onChanged={() => void load()} />
+        <BeforeFirstAd key={data.chosen?.ref ?? ''} projectId={projectId} adAccountRef={data.chosen?.ref} firstAd={data.firstAd} onChanged={() => void load()} />
       ) : usable.length > 0 ? (
         <section className="flex flex-col gap-2 rounded-lg border border-line p-3" aria-label="Before your first ad">
           <p className="text-ui font-medium text-ink">Before your first ad</p>
+          {data.choiceStale && <p className="text-small text-warn">The ad account picked before isn’t on this Meta connection any more. Pick one again.</p>}
           <p className="text-small text-ink-2">Pick the Meta ad account {businessName} launches on, and we’ll check what Meta needs before your first ad.</p>
           <div role="radiogroup" aria-label="Ad account" className="flex flex-col gap-2">
             {usable.map((a) => (
@@ -59,6 +72,11 @@ export function FirstAdPanel({ projectId, businessName, connectedKey }: { projec
               </button>
             ))}
           </div>
+        </section>
+      ) : why ? (
+        <section className="flex flex-col gap-2 rounded-lg border border-line p-3" aria-label="Before your first ad">
+          <p className="text-ui font-medium text-ink">Before your first ad</p>
+          <p className="text-small text-bad">{why}</p>
         </section>
       ) : null}
       {problem && (

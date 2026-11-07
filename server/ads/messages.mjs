@@ -42,12 +42,14 @@ export const keptFixUrl = (url) => fixUrlOn(url, [...FIX_HOSTS, ...OWNER_FIX_HOS
 /**
  * Where a business admin accepts Meta's non-discrimination policy for a business: Business Settings → Users → System
  * users ("Review policy", then "I accept"). Meta's own refusal text sends admins there; acceptance is once per
- * business, by an admin with full control. The exact `system_users` path is UNCONFIRMED (the documented entry is
- * /latest/settings/business_users, then System users), so the steps we show name the menu too. Zernio's link
- * (facebook.com/certification/nondiscrimination) only records the signed-in person's own acceptance and takes no
- * business: it is kept as the second link (POLICY_PERSONAL_URL). docs/integrations-setup.md §3c has the sources.
+ * business, by an admin with full control. The link is the documented Business Settings entry (Users → People); the
+ * System users page under it is one click on, and its own path is UNCONFIRMED, so the steps we show name the menu.
+ * It carries no business_id (Zernio's listing gives no owning business), so Meta opens the business last used: the
+ * steps say to check the business name first. Zernio's link (facebook.com/certification/nondiscrimination) only
+ * records the signed-in person's own acceptance and takes no business: it is kept as an optional second link
+ * (POLICY_PERSONAL_URL). docs/integrations-setup.md §3c has the sources.
  */
-export const POLICY_ADMIN_URL = 'https://business.facebook.com/latest/settings/system_users';
+export const POLICY_ADMIN_URL = 'https://business.facebook.com/latest/settings/business_users';
 /** The person's own acceptance of the policy (Zernio's link): a second step, never the fix for a business. */
 export const POLICY_PERSONAL_URL = 'https://www.facebook.com/certification/nondiscrimination';
 /** Meta's Billing Hub, where the user picks the ad account (the last resort when the id isn't digits) */
@@ -64,11 +66,13 @@ export function paymentSettingsUrl(adAccountId) {
 }
 
 /**
- * The fix link for a refusal or health blocker with Zernio's code: ours for the two Meta gets wrong for a business
- * (the policy: Business Settings, whatever Zernio sent; a payment method: that ad account's payment settings, when
- * the ad account is known), else Zernio's own link when it passes safeFixUrl.
+ * The fix link for a refusal or health blocker with Zernio's code: on Meta, ours for the two Zernio gets wrong for a
+ * business (the policy: Business Settings, whatever Zernio sent; a payment method: that ad account's payment
+ * settings, when the ad account is known), else Zernio's own link when it passes safeFixUrl. Another platform (a
+ * Google customer id) always gets Zernio's own link: never a Meta page.
  */
-export function fixUrlFor(zernioCode, zernioUrl, adAccountId) {
+export function fixUrlFor(zernioCode, zernioUrl, adAccountId, platform = 'meta') {
+  if (platform !== 'meta') return safeFixUrl(zernioUrl);
   if (zernioCode === 'ad_account_policy_not_accepted') return POLICY_ADMIN_URL;
   if (zernioCode === 'ad_account_payment_required' && adAccountId != null && String(adAccountId) !== '') return paymentSettingsUrl(adAccountId);
   return safeFixUrl(zernioUrl);
@@ -128,7 +132,7 @@ const MESSAGES = {
   NO_INSTAGRAM: 'Your ads will show on Facebook only: no Instagram professional account is linked to your Page.',
   INSTAGRAM_OK: 'An Instagram professional account is linked, so ads can show on Instagram too.',
   META_OBJECT_GONE: 'Meta can’t find part of this campaign any more (it may have been deleted in Ads Manager). Refresh the Campaigns tab.',
-  POLICY_NOT_ACCEPTED: 'A business admin needs to accept Meta’s non-discrimination policy: in Meta Business Settings → Users → System users, click “Review policy” (or “Add”), then “I accept”.',
+  POLICY_NOT_ACCEPTED: 'A business admin needs to accept Meta’s non-discrimination policy: in Meta Business Settings for the business that owns this ad account, open Users → System users, click “Review policy” (or “Add”), then “I accept”.',
   // Meta wants the verified beneficiary and payer sent with the ad set (regionalRegulationIdentities), even when
   // they're set in Ads Manager: this app doesn't send them, so verifying again wouldn't help
   VERIFIED_ADVERTISER: 'Ads shown in this country need Meta’s verified beneficiary and payer details, which this app can’t send yet. Use Meta Ads Manager for this one.',
@@ -387,7 +391,7 @@ export function refusalOf({ code, detail = null, kind = 'launch', platform = 'me
   const d = detail && typeof detail === 'object' && !Array.isArray(detail) && detail.owner !== true ? detail : null;
   const known = d && typeof d.code === 'string' && Object.hasOwn(REFUSAL_REASON, d.code) ? REFUSAL_REASON[d.code] : null;
   const says = !d ? '' : !known ? cut(d.hint, 300) || metaWords(d) : META_WORDS_TOO.has(d.code) ? metaWords(d) || cut(d.hint, 300) : '';
-  const fixUrl = d ? fixUrlFor(d.code, d.fix?.url, ctx?.adAccountId) : undefined;
+  const fixUrl = d ? fixUrlFor(d.code, d.fix?.url, ctx?.adAccountId, platform) : undefined;
   const said = (message) => ({ message, ...(says ? { platformSays: says } : {}), ...(fixUrl ? { fixUrl } : {}) });
   const launch = kind === 'launch';
   const stop = kind === 'pause' || kind === 'end';

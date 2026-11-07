@@ -245,7 +245,7 @@ export function ConnectedAccounts() {
       <SettingsSection title="Ad accounts" description="See your ad results here. When launching is turned on, you can also launch and change campaigns from the app, and each change waits for your confirmation.">
         {sideOff(adsOn, 'Connecting ad accounts')}
         {ADS.map(row)}
-        {adsOn && business && byPlatform.meta_ads?.state === 'connected' && <FirstAdPanel key={business.id} projectId={business.id} businessName={name} connectedKey={`${byPlatform.meta_ads.targetLabel ?? ''}:${byPlatform.meta_ads.state}`} />}
+        {adsOn && business && byPlatform.meta_ads?.state === 'connected' && <FirstAdPanel key={business.id} projectId={business.id} businessName={name} connectedKey={`${byPlatform.meta_ads.targetLabel ?? ''}:${byPlatform.meta_ads.state}:${byPlatform.meta_ads.connectedAt ?? ''}`} />}
       </SettingsSection>
       <GmailAccount />
       <OtherIntegrations />

@@ -31,7 +31,7 @@ const codes = (list) => (list ?? []).map((n) => n.code);
 const writePaths = (from = 0) => t.writes(from).map((w) => `${w.method} ${w.path.replace('/api/v1', '').replace(/\/[0-9a-f]{24}(?=\/|$)/g, '/:zad').replace(/\/\d{6,}/g, '/:id')}`);
 
 /** the fix link the customer is shown: ours for a payment method (act_1's payment settings) and the policy, else Zernio's */
-const SHOWN_FIX = { ad_account_payment_required: 'https://business.facebook.com/billing_hub/payment_settings/?asset_id=1', ad_account_policy_not_accepted: 'https://business.facebook.com/latest/settings/system_users' };
+const SHOWN_FIX = { ad_account_payment_required: 'https://business.facebook.com/billing_hub/payment_settings/?asset_id=1', ad_account_policy_not_accepted: 'https://business.facebook.com/latest/settings/business_users' };
 const shownFix = (code) => SHOWN_FIX[code] ?? META_REFUSALS[code]?.fix?.url;
 
 describe('launch: confirm, token, one send (R1, R2)', () => {

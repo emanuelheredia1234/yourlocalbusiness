@@ -7,11 +7,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startAds } from './test-helpers.mjs';
-import { FIRST_AD, POLICY_STEPS } from './preview.mjs';
+import { FIRST_AD, policySteps } from './preview.mjs';
 import { safeFixUrl } from './messages.mjs';
+import { createDb, DbError } from '../integrations/db.mjs';
 import { BeforeFirstAd } from '../../src/pages/marketing/ads/launch/BeforeFirstAd.tsx';
+import { noAccountReason } from '../../src/components/ads/FirstAdPanel.tsx';
 
-const POLICY_ADMIN = 'https://business.facebook.com/latest/settings/system_users';
+const POLICY_ADMIN = 'https://business.facebook.com/latest/settings/business_users';
 const POLICY_PERSONAL = 'https://www.facebook.com/certification/nondiscrimination';
 const paymentOf = (digits) => `https://business.facebook.com/billing_hub/payment_settings/?asset_id=${digits}`;
 
@@ -68,7 +70,9 @@ describe('the checklist', () => {
       ['page', 'done'],
     ]);
     expect(item(firstAd, 'payment')).toEqual({ id: 'payment', status: 'done', message: FIRST_AD.PAYMENT_DONE });
-    expect(item(firstAd, 'policy')).toEqual({ id: 'policy', status: 'unconfirmed', message: FIRST_AD.POLICY_UNCONFIRMED, fixUrl: POLICY_ADMIN, fixLabel: 'Open Business Settings', alsoUrl: POLICY_PERSONAL, alsoLabel: 'Also accept it on your own Facebook profile', steps: [...POLICY_STEPS], confirmed: false });
+    expect(item(firstAd, 'policy')).toEqual({ id: 'policy', status: 'unconfirmed', message: FIRST_AD.POLICY_UNCONFIRMED, fixUrl: POLICY_ADMIN, fixLabel: 'Open Business Settings', alsoUrl: POLICY_PERSONAL, alsoLabel: 'Your own acceptance on Facebook (only if Meta asks you)', steps: policySteps('1'), confirmed: false });
+    // the steps say to check which business Meta opened (the link can't name it), with this ad account's tail
+    expect(item(firstAd, 'policy').steps[1]).toBe('Open Meta Business Settings. Check the business name in the top-left menu is the one that owns ad account …1; switch to it if not.');
     expect(item(firstAd, 'policy').message).toMatch(/Only a business admin can accept it/);
     expect(firstAd.ready).toBe(false);
     // an unconfirmed policy never blocks: the setup checklist has no red line, and the review isn't blocked by it
@@ -102,6 +106,25 @@ describe('the checklist', () => {
     const { firstAd } = await accounts();
     expect(item(firstAd, 'payment').fixUrl).toBe('https://business.facebook.com/billing_hub/payment_settings/?asset_id=1106745002143814');
     for (const i of firstAd.items) for (const url of [i.fixUrl, i.alsoUrl].filter(Boolean)) expect(safeFixUrl(url), url).toBe(url);
+  });
+
+  it('Zernio’s payment check answering "error" (the listing doesn’t say missing): "can’t tell", never "no payment method"', async () => {
+    await t.choose(u, 'meta');
+    remembered([], { payment: 'error' });
+    t.zm.ads.state.health.act_1.status = 'ok';
+    t.zm.ads.state.health.act_1.ready = true;
+    const { firstAd } = await accounts();
+    expect(item(firstAd, 'payment')).toEqual({ id: 'payment', status: 'unknown', message: FIRST_AD.PAYMENT_UNKNOWN, fixUrl: paymentOf('1'), fixLabel: 'Check payment settings' });
+  });
+
+  it('Settings says why when there’s no ad account to pick (none listed, or none usable); nothing when one can be picked', async () => {
+    expect(noAccountReason(await accounts())).toBeUndefined();
+    for (const a of t.zm.ads.state.adAccounts.meta) a.accountStatus = 2; // disabled
+    expect(noAccountReason(await accounts())).toBe('None of your Meta ad accounts can run ads right now. Open Meta Ads Manager to see why.');
+    t.zm.ads.state.adAccounts.meta.length = 0;
+    const none = await accounts();
+    expect(noAccountReason(none)).toBe(none.setup[0].message);
+    expect(none.setup[0].code).toBe('NO_AD_ACCOUNTS');
   });
 
   it('Google: no firstAd', async () => {
@@ -181,6 +204,62 @@ describe('a remembered policy refusal', () => {
   });
 });
 
+describe('a live policy blocker', () => {
+  it('marks the policy "not done" in neutral words (never "refused in the last 7 days… you can launch again")', async () => {
+    await t.choose(u, 'meta');
+    remembered([]);
+    const h = t.zm.ads.state.health.act_1;
+    h.status = 'blocked';
+    h.ready = false;
+    h.blockers = [{ check: 'account_status', code: 'ad_account_policy_not_accepted', message: 'SECRET-PLATFORM-TEXT', fix: { label: 'x', url: POLICY_PERSONAL } }];
+    const { firstAd, setup } = await accounts();
+    expect(item(firstAd, 'policy')).toMatchObject({ status: 'not_done', message: FIRST_AD.POLICY_LIVE, fixUrl: POLICY_ADMIN });
+    expect(item(firstAd, 'policy').message).not.toMatch(/7 days|launch again/);
+    expect(setup.find((c) => c.code === 'POLICY_NOT_ACCEPTED')).toMatchObject({ state: 'missing', fixUrl: POLICY_ADMIN });
+  });
+});
+
+describe('the answer can’t be saved', () => {
+  async function failing(pg) {
+    const a = await t.choose(u, 'meta');
+    const orig = t.db.update;
+    t.db.update = async (table, ...rest) => {
+      if (table === 'ad_account_choices') throw new DbError(400, 'BAD_REQUEST', 'The database refused that value.', { pg });
+      return orig(table, ...rest);
+    };
+    try {
+      return await confirm(a.ref, true);
+    } finally {
+      t.db.update = orig;
+    }
+  }
+
+  it('before the migration is run (no column): 503 with our words, no database text, and the log names the migration', async () => {
+    const r = await failing('PGRST204');
+    expect(r.status).toBe(503);
+    expect(r.body).toMatchObject({ code: 'UNAVAILABLE', error: 'Your answer couldn’t be saved just now. Try again later.' });
+    expect(JSON.stringify(r.body)).not.toMatch(/database|PGRST|refused that value|migration/i);
+    const line = t.lines.find((l) => l.includes('ads_policy_confirm_not_saved'));
+    expect(JSON.parse(line)).toEqual({ event: 'ads_policy_confirm_not_saved', code: 'BAD_REQUEST', pg: 'PGRST204', hint: 'run supabase/migrations/20261116000000_ad_policy_confirmed.sql' });
+    expect((await choiceRow()).policy_confirmed_for ?? null).toBeNull();
+  });
+
+  it('a check refusing the value: the same customer words, logged as itself (never blames a migration already run)', async () => {
+    const r = await failing('23514');
+    expect(r.status).toBe(503);
+    const line = t.lines.find((l) => l.includes('ads_policy_confirm_not_saved'));
+    expect(JSON.parse(line)).toEqual({ event: 'ads_policy_confirm_not_saved', code: 'BAD_REQUEST', pg: '23514' });
+  });
+
+  it('the database layer passes Postgres’s code along for the log (only a code, never the message)', async () => {
+    const fake = async () => new Response(JSON.stringify({ code: 'PGRST204', message: 'Could not find the policy_confirmed_for column SECRET-ROW' }), { status: 400, headers: { 'content-type': 'application/json' } });
+    const db = createDb({ supabaseUrl: 'https://db.test', secretKey: 'k', fetch: fake });
+    const e = await db.update('ad_account_choices', { user_id: 'u' }, { policy_confirmed_for: 'act_1' }).catch((x) => x);
+    expect(e).toMatchObject({ name: 'DbError', status: 400, code: 'BAD_REQUEST', pg: 'PGRST204' });
+    expect(e.message).not.toContain('SECRET-ROW');
+  });
+});
+
 describe('the app shows it', () => {
   const render = (props) => renderToStaticMarkup(createElement(BeforeFirstAd, { projectId: 'proj-1', adAccountRef: 'adacct_x', onChanged: () => {}, ...props }));
 
@@ -195,6 +274,8 @@ describe('the app shows it', () => {
     expect(html).toContain(`href="${POLICY_PERSONAL}"`);
     expect(html).toContain('Only a business admin can accept');
     expect(html).toContain('Users, then System users');
+    expect(html).toContain('Check the business name in the top-left menu is the one that owns ad account …2');
+    expect(html).toContain('Your own acceptance on Facebook (only if Meta asks you)');
     expect(html).toMatch(/role="checkbox"[^>]*aria-checked="false"/);
     expect(html).toContain('A business admin has accepted Meta’s non-discrimination policy');
   });
