@@ -142,7 +142,7 @@ const META_DAILY_MIN_MS = 24 * 3_600_000;
  */
 export const META_REFUSALS = Object.freeze({
   ad_account_payment_required: { status: 403, type: 'permission_error', subcode: 1359188, param: 'adAccountId', fix: { label: 'Add a payment method', url: 'https://business.facebook.com/billing_hub/payment_settings' } },
-  ad_account_policy_not_accepted: { status: 400, type: 'platform_error', subcode: 2859002, fix: { label: 'Accept the policy', url: 'https://business.facebook.com/settings/ad-accounts' } },
+  ad_account_policy_not_accepted: { status: 400, type: 'platform_error', subcode: 2859002, fix: { label: 'Accept the policy', url: 'https://www.facebook.com/certification/nondiscrimination' } },
   lead_ads_terms_not_accepted: { status: 400, type: 'platform_error', subcode: 1815089, fix: { label: 'Accept the terms', url: 'https://www.facebook.com/ads/leadgen/tos' } },
   verified_advertiser_required: { status: 400, type: 'platform_error', subcode: 3858634, param: 'regionalRegulationIdentities' },
   ad_account_unusable: { status: 422, type: 'invalid_request_error', subcode: 2490592, fix: { label: 'Restricted accounts', url: 'https://www.facebook.com/business/help/422289316306981' } },

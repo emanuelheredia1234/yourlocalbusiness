@@ -7,12 +7,16 @@
 // it); rows go only with the account (on delete cascade).
 
 import { safeLog } from '../integrations/common.mjs';
-import { cut, safeFixUrl } from './messages.mjs';
+import { cut, fixUrlFor } from './messages.mjs';
 
-/** A refusal's fix link the customer may follow (never a team-level one), from a row's `after`. */
-const fixOf = (after) => {
-  const r = after && typeof after === 'object' ? after.refusal : null;
-  return r && typeof r === 'object' && r.owner !== true ? safeFixUrl(r.fix?.url) : undefined;
+/**
+ * A refusal's fix link the customer may follow (never a team-level one), from a row's `after`: ours for the policy, and
+ * for a payment method the campaign's own ad account's payment settings (messages.mjs fixUrlFor).
+ */
+const refusalIn = (after) => (after && typeof after === 'object' && after.refusal && typeof after.refusal === 'object' ? after.refusal : null);
+const fixOf = (after, adAccountId) => {
+  const r = refusalIn(after);
+  return r && r.owner !== true ? fixUrlFor(r.code, r.fix?.url, adAccountId) : undefined;
 };
 
 const ACTIONS = ['launch', 'pause', 'resume', 'end', 'budget', 'end_date', 'creative', 'check', 'limits', 'review', 'account'];
@@ -55,9 +59,13 @@ export function createAudit({ db, now = () => Date.now(), log = console } = {}) 
     if (Number.isInteger(before) && before > 0) f.id = ['lt', before];
     const rows = await db.select('ad_audit', f, { order: 'id.desc', limit: limit + 1 });
     const page = rows.slice(0, limit);
+    // the ad accounts of the campaigns with a payment refusal on this page, for their own payment settings link
+    const payIds = [...new Set(page.filter((r) => r.campaign_id && refusalIn(r.after)?.code === 'ad_account_payment_required').map((r) => r.campaign_id))];
+    const accountOf = new Map();
+    if (payIds.length) for (const c of await db.select('ad_campaigns', { user_id: userId, id: ['in', payIds] }, { select: 'id,ad_account_id', limit: payIds.length })) accountOf.set(c.id, c.ad_account_id);
     return {
       entries: page.map((r) => {
-        const fixUrl = fixOf(r.after);
+        const fixUrl = fixOf(r.after, accountOf.get(r.campaign_id));
         return { id: r.id, at: r.at, campaignId: r.campaign_id ?? null, actor: r.actor, action: r.action, summary: r.summary, outcome: r.outcome, ...(fixUrl ? { fixUrl } : {}) };
       }),
       ...(rows.length > limit ? { next: page[page.length - 1].id } : {}),
