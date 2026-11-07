@@ -3,15 +3,17 @@
 // us the missing feature), which the person can take or ignore. "Cancel plan" stays one press away.
 //
 // The cancel is one request with an id made when the dialog opens (an unclear answer sends the same id again: the
-// server reads Stripe back, never cancels twice). It ends the plan at the end of the period (a trial: before day 8,
-// so nothing is charged). Taking the alternative instead saves the answer and changes nothing in Stripe.
+// server reads Stripe back, never cancels twice; a definite refusal, NOT_APPLIED included, makes a new id). It ends
+// the plan at the end of the period (a trial: before day 8, so nothing is charged), or now after a failed payment
+// (Stripe stops trying the card). Taking the alternative instead saves the answer and changes nothing in Stripe.
+// While the server can't cancel here yet (USE_PORTAL), the Customer Portal does.
 
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, Lightbulb, MessageSquare, TrendingDown } from 'lucide-react';
 import { cancelPlan, IntegrationApiError, keepPlanSurvey, newRequestId } from '@/lib/integrations/api';
 import type { CancelOffer, CancelReason, PlanAccount } from '@/lib/integrations/types';
 import { formatPrice, isInterval, isTier, planFor, tierName, TIERS, tierRank, type Interval, type Tier } from '@/lib/plans';
-import { confirmPlanChange } from '@/lib/billing/actions';
+import { confirmPlanChange, manageBilling } from '@/lib/billing/actions';
 import { navigate } from '@/lib/router';
 import { useBilling } from '@/store/billing';
 import { toast, useUI } from '@/store/ui';
@@ -76,6 +78,8 @@ export function CancelDialog({ open, onClose, account }: { open: boolean; onClos
   const tier = isTier(account?.tier) ? account.tier : null;
   const interval = isInterval(account?.interval) ? account.interval : null;
   const trial = account?.status === 'trialing';
+  // a payment failed: the plan ends now (no final invoice; Stripe stops trying the card)
+  const unpaid = account?.status === 'past_due' || account?.status === 'unpaid';
   const alt = alternativeFor(reason, tier, interval);
   const ends = fmtDate(trial ? account?.trialEndsAt : account?.currentPeriodEnd);
 
@@ -84,11 +88,18 @@ export function CancelDialog({ open, onClose, account }: { open: boolean; onClos
     setSending('cancel');
     try {
       const out = await cancelPlan({ reason, ...(comment.trim() ? { comment: comment.trim().slice(0, 1000) } : {}), offer: alt?.offer ?? 'none', clientRequestId: requestId.current, confirm: true });
-      if (out.op?.state === 'done' || out.ok) toast({ kind: 'success', title: trial ? `Your trial ends on ${ends}. You won’t be charged.` : `Your plan ends on ${ends}.`, body: 'You can keep your plan any time before then.' });
+      if (out.op?.state === 'done' || out.ok) toast(unpaid ? { kind: 'success', title: 'Your plan has ended. Nothing more is charged.', body: 'Your work is kept, and published pages keep working for 30 days.' } : { kind: 'success', title: trial ? `Your trial ends on ${ends}. You won’t be charged.` : `Your plan ends on ${ends}.`, body: 'You can keep your plan any time before then.' });
       else toast({ kind: 'info', title: 'We’re confirming your cancel. This takes a minute.' });
       onClose();
     } catch (e) {
       const err = e instanceof IntegrationApiError ? e : null;
+      if (err?.code === 'USE_PORTAL') {
+        // cancelling here isn't ready on this server: Stripe's billing page does it (and asks its own question)
+        useBilling.setState({ cancelInApp: false });
+        onClose();
+        void manageBilling();
+        return;
+      }
       toast({ kind: 'error', title: err?.message ?? 'Couldn’t cancel just now. Try again shortly.' });
       if (err && !UNSURE.has(err.code)) requestId.current = newRequestId();
     } finally {
@@ -131,7 +142,13 @@ export function CancelDialog({ open, onClose, account }: { open: boolean; onClos
       persistent={!!sending}
       size="md"
       title={trial ? 'Cancel your free trial?' : 'Cancel your plan?'}
-      subtitle={trial ? `Nothing is charged: your trial ends on ${ends}. You keep everything until then.` : `Your plan runs until ${ends || 'the end of this period'}. Published pages keep working for 30 days after that, and your work is kept.`}
+      subtitle={
+        trial
+          ? `Nothing is charged: your trial ends on ${ends}. You keep everything until then.`
+          : unpaid
+            ? 'Your last payment didn’t go through, so your plan ends now and Stripe stops trying your card: nothing more is charged. Published pages keep working for 30 days, and your work is kept.'
+            : `Your plan runs until ${ends || 'the end of this period'}. Published pages keep working for 30 days after that, and your work is kept.`
+      }
       footer={
         <>
           <button type="button" className="btn btn-secondary btn-sm" onClick={onClose} disabled={!!sending}>

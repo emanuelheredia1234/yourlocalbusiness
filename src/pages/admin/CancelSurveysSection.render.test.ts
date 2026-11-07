@@ -23,8 +23,18 @@ describe('Why people cancel', () => {
         },
       }),
     );
-    for (const t of ['It’s too expensive', 'It’s missing a feature I need', 'Too much for a small shop', 'Needs Etsy', 'Stripe billing page', 'Trials running', 'Second trials ended early']) expect(html).toContain(t);
+    for (const t of ['It’s too expensive', 'It’s missing a feature I need', 'Too much for a small shop', 'Needs Etsy', 'Stripe billing page', 'Trials running', 'Second trials stopped']) expect(html).toContain(t);
     expect(html.indexOf('It’s too expensive')).toBeLessThan(html.indexOf('It’s missing a feature I need'));
+  });
+
+  it('Cancel answers is the total over every answer (the list shows only the latest)', () => {
+    const recent = Array.from({ length: 50 }, (_, i) => ({ reason: 'other' as const, comment: null, source: 'app' as const, outcome: 'cancelled' as const, offer: null, tier: null, at: new Date(Date.now() - i * 1000).toISOString(), customerTag: null }));
+    const data = { counts: { other: { cancelled: 120, kept: 3 } }, total: 123, recent, trials: { trialing: 0, endedEarly: 0, duplicates: 0, list: [] } };
+    const html = wrap(createElement(CancelSurveysView, { error: null, data }));
+    expect(html).toMatch(/Cancel answers<\/span><span[^>]*>123</);
+    expect(html).toContain('>120<');
+    // an older server (no total): the list's length
+    expect(wrap(createElement(CancelSurveysView, { error: null, data: { ...data, total: undefined, partial: true } }))).toContain('the latest answers only');
   });
 
   it('says which migration to run when the tables are missing', () => {

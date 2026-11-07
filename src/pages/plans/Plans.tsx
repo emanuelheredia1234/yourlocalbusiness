@@ -155,7 +155,9 @@ export function usePlanActions(interval: Interval, opts: { before?: () => void }
         opts.before?.();
         return checkout(tier, interval);
       };
-      return { label: startLabel(tier, trialDays), onClick: run(tier, start), ...(used > 1 ? { note: checkoutTotal(tier, interval, used) } : trialDays ? { note: trialNote(tier, interval, trialDays) } : {}) };
+      // the trial covers one business: with more, the plan starts paid (the server makes that Checkout without one)
+      const days = used > 1 ? 0 : trialDays;
+      return { label: startLabel(tier, days), onClick: run(tier, start), ...(used > 1 ? { note: checkoutTotal(tier, interval, used) } : days ? { note: trialNote(tier, interval, days) } : {}) };
     }
     const kind = changeKind(account.tier, account.interval, tier, interval);
     if (kind === 'same') return { label: 'Current plan', disabled: true };
@@ -177,9 +179,10 @@ export function checkoutTotal(tier: Tier, interval: Interval, businesses: number
 
 // ───────────── the page ─────────────
 
-const TRIAL_FAQ = (days: number) => ({
+/** The FAQ's free-trial answer (what the app promises: no email it can't send). */
+export const TRIAL_FAQ = (days: number) => ({
   q: 'How does the free trial work?',
-  a: `Your first plan starts with ${days} days free. You add a card at checkout, nothing is charged during the trial, and Stripe charges the plan on day ${days + 1} unless you cancel before. The trial includes ${PLANS.cardTrial.aiCredits.toLocaleString('en-US')} AI credits and everything else on the plan you chose. You get a reminder ${PLANS.cardTrial.endingSoonDays} days before it ends. One trial per person.`,
+  a: `Your first plan starts with ${days} days free. You add a card at checkout, nothing is charged during the trial, and Stripe charges the plan on day ${days + 1} unless you cancel before (in Settings › Plan). The trial includes ${PLANS.cardTrial.aiCredits.toLocaleString('en-US')} AI credits and everything else on the plan you chose, for one business; you can add more businesses once it ends. The app shows the days left, and says so in its last ${PLANS.cardTrial.endingSoonDays} days. One trial per person and card: if yours had one before, the trial doesn’t start and nothing is charged.`,
 });
 
 const FAQ: { q: string; a: ReactNode }[] = [

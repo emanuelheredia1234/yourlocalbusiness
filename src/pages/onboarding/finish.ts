@@ -5,9 +5,16 @@ import { FORMATS, POST_PLATFORMS } from '@/ai/knowledge';
 import { generateListing } from '@/ai/local/studio';
 import { useStore } from '@/store/useStore';
 import { defaultStudio } from '@/store/defaults';
+import { clearPlanIntent } from '@/store/billing';
 
-/** Finalize a wizard project: fill studio + listing defaults, seed the Brain with a brand-voice skill. */
+/**
+ * Finalize a wizard project: fill studio + listing defaults, seed the Brain with a brand-voice skill. A plan chosen on
+ * #plans before signing up waited for this step (the Launch paywall): it is used up now, whichever way setup ends (the
+ * paywall's Start, "Not now, look around first", Go to dashboard, Open Studio), so a later reload never sends the
+ * browser to Stripe Checkout on its own.
+ */
 export function finishOnboarding(projectId: string): void {
+  clearPlanIntent();
   const s = useStore.getState();
   const p = s.projects.find((x) => x.id === projectId);
   if (!p) return;

@@ -19,7 +19,7 @@ import { finishOnboarding } from './finish';
 import { claimSlot, slotMessage, slotsNeeded, type SlotResult } from '@/lib/cloud/slots';
 import { newProjectId } from '@/store/defaults';
 import { LaunchPaywall, PlanPickerScreen } from '@/pages/plans/Plans';
-import { clearPlanIntent, useBilling, useBillingOn } from '@/store/billing';
+import { useBilling, useBillingOn } from '@/store/billing';
 import { Callout } from '@/components/ui/primitives';
 
 /** The first project's creation, once (React may run the effect twice): its business slot is claimed first. */
@@ -335,15 +335,10 @@ export function Onboarding() {
             {paywall && (
               <div className="mt-10 border-t border-line pt-8">
                 <LaunchPaywall
-                  // the business is finished (saved) before the browser leaves for Stripe; Checkout comes back to it
-                  before={() => {
-                    clearPlanIntent();
-                    finishOnboarding(project.id);
-                  }}
-                  onSkip={() => {
-                    clearPlanIntent();
-                    finish('dashboard');
-                  }}
+                  // the business is finished (saved) before the browser leaves for Stripe; Checkout comes back to it.
+                  // finishOnboarding also uses up a plan chosen before signing up (every way out of setup does)
+                  before={() => finishOnboarding(project.id)}
+                  onSkip={() => finish('dashboard')}
                 />
               </div>
             )}

@@ -15,8 +15,8 @@ const api = vi.hoisted(() => ({ cancelPlan: vi.fn(), keepPlanSurvey: vi.fn(), ge
 vi.mock('@/lib/integrations/api', async (orig) => ({ ...(await orig<typeof import('@/lib/integrations/api')>()), ...api }));
 const nav = vi.hoisted(() => ({ navigate: vi.fn(async () => true) }));
 vi.mock('@/lib/router', async (orig) => ({ ...(await orig<typeof import('@/lib/router')>()), navigate: nav.navigate }));
-const actions = vi.hoisted(() => ({ confirmPlanChange: vi.fn(async () => true) }));
-vi.mock('@/lib/billing/actions', async (orig) => ({ ...(await orig<typeof import('@/lib/billing/actions')>()), confirmPlanChange: actions.confirmPlanChange }));
+const actions = vi.hoisted(() => ({ confirmPlanChange: vi.fn(async () => true), manageBilling: vi.fn(async () => true) }));
+vi.mock('@/lib/billing/actions', async (orig) => ({ ...(await orig<typeof import('@/lib/billing/actions')>()), confirmPlanChange: actions.confirmPlanChange, manageBilling: actions.manageBilling }));
 
 const { IntegrationApiError } = await import('@/lib/integrations/api');
 const { CancelDialog, alternativeFor, REASONS } = await import('./CancelDialog');
@@ -40,7 +40,7 @@ const open = async (account = ACCT(), onClose = vi.fn()) => {
 };
 
 beforeEach(() => {
-  for (const f of [...Object.values(api), nav.navigate, actions.confirmPlanChange]) f.mockClear();
+  for (const f of [...Object.values(api), nav.navigate, actions.confirmPlanChange, actions.manageBilling]) f.mockClear();
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -90,6 +90,38 @@ describe('Cancel plan', () => {
     const ids = api.cancelPlan.mock.calls.map((c) => c[0].clientRequestId);
     expect(ids[0]).toBe(ids[1]);
     expect(ids[2]).not.toBe(ids[1]);
+  });
+
+  it('a change read back and not there (NOT_APPLIED) is definite: the next press is a new request, never stuck on the old one', async () => {
+    api.cancelPlan.mockRejectedValueOnce(new IntegrationApiError(409, { error: 'That change didn’t go through. Try again.', code: 'NOT_APPLIED' }));
+    await open();
+    await pick('other');
+    await click(button('Cancel plan')!);
+    api.cancelPlan.mockResolvedValueOnce({ ok: true, op: { id: 'o', kind: 'cancel', state: 'done' } });
+    await click(button('Cancel plan')!);
+    const ids = api.cancelPlan.mock.calls.map((c) => c[0].clientRequestId);
+    expect(ids).toHaveLength(2);
+    expect(ids[1]).not.toBe(ids[0]);
+  });
+
+  it('after a failed payment it says the plan ends now and nothing more is charged', async () => {
+    api.cancelPlan.mockResolvedValue({ ok: true, op: { id: 'o', kind: 'cancel', state: 'done' } });
+    const onClose = await open(ACCT({ status: 'past_due', graceUntil: '2026-11-20T12:00:00Z' }));
+    expect(host.textContent).toContain('Cancel your plan?');
+    expect(host.textContent).toContain('your plan ends now and Stripe stops trying your card: nothing more is charged');
+    await pick('too_expensive');
+    await click(button('Cancel plan')!);
+    expect(api.cancelPlan).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('before the server can cancel here (USE_PORTAL): the dialog closes and Stripe’s billing page opens', async () => {
+    api.cancelPlan.mockRejectedValueOnce(new IntegrationApiError(409, { error: 'Cancelling here isn’t ready yet. Use Manage billing instead.', code: 'USE_PORTAL' }));
+    const onClose = await open();
+    await pick('other');
+    await click(button('Cancel plan')!);
+    expect(actions.manageBilling).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalled();
   });
 
   it('a trial says nothing is charged; taking the alternative saves the answer and sends no cancel', async () => {

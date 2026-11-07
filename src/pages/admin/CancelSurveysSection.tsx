@@ -1,6 +1,7 @@
 // Owner → Customer usage → Why people cancel: the cancel survey's answers (in-app, and the Customer Portal's own
-// survey read from Stripe) as counts by reason, the latest comments, and the card trials (running, ended early as a
-// second trial on a card already used). Customers are shown by their opaque tag only.
+// survey read from Stripe) as totals by reason over every answer, the latest comments, and the card trials (running,
+// stopped as a second trial on a card or email already used: cancelled, nothing charged). Customers are shown by
+// their opaque tag only.
 import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { getCancelSurveys, IntegrationApiError } from '@/lib/integrations/api';
@@ -59,10 +60,11 @@ export function CancelSurveysView({ data, error }: { data: CancelSurveysResponse
       <StatStrip
         items={[
           { label: 'Trials running', value: data.trials.trialing },
-          { label: 'Second trials ended early', value: data.trials.endedEarly, info: 'A trial on a card or email that already had one is ended at once (charged that day).' },
-          { label: 'Cancel answers', value: data.recent.length },
+          { label: 'Second trials stopped', value: data.trials.endedEarly, info: 'A trial on a card or email that already had one is cancelled at once. Nothing is charged; the app tells the person, and their next Checkout has no trial.' },
+          { label: 'Cancel answers', value: data.total ?? data.recent.length },
         ]}
       />
+      {data.partial && <p className="text-caption text-muted">These counts are the latest answers only: run the trial migration again to count every one.</p>}
       {rows.length ? (
         <table className="w-full text-left text-small" aria-label="Answers by reason">
           <thead className="border-b border-line text-caption text-muted">

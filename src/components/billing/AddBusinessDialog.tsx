@@ -1,6 +1,7 @@
 // Add a business: buys one more business slot on a paid plan (one Stripe change, charged today for the rest of the
 // period). The request id is made when the dialog opens and reused if it's submitted again, so a double click is one
-// charge. "Being confirmed" is read back every 10 s for up to 2 minutes (never re-sent); then Settings › Plan.
+// charge. "Being confirmed" is read back every 10 s for up to 2 minutes (never re-sent); then Settings › Plan. During
+// a free trial nothing is added (the trial covers one business): it says when that's possible.
 
 import { useEffect, useRef, useState } from 'react';
 import { Building2, CreditCard } from 'lucide-react';
@@ -43,7 +44,9 @@ export function AddBusinessDialog() {
   }, [open]);
 
   if (!on || !open) return null;
-  const paying = account?.source === 'stripe';
+  // a free trial covers one business; more start once it ends (the server refuses them until then)
+  const inTrial = account?.source === 'stripe' && account.status === 'trialing';
+  const paying = account?.source === 'stripe' && !inTrial;
   const yearly = account?.interval === 'year';
   const price = PLANS.additionalBusiness.price;
   const pending = businesses?.pendingRemove ?? account?.pendingRemove ?? null;
@@ -148,7 +151,11 @@ export function AddBusinessDialog() {
 
   return (
     <Modal open onClose={busy ? () => undefined : close} persistent={busy} size="sm" title="Add a business" icon={<Building2 />} footer={footer}>
-      {!paying ? (
+      {inTrial ? (
+        <p className="text-body text-ink-2">
+          Extra businesses start after your free trial{account?.trialEndsAt ? `, which ends on ${new Date(account.trialEndsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}` : ''}. You can add one then, for {formatPrice(price.month)}/month (or {formatPrice(price.year)}/year on yearly plans).
+        </p>
+      ) : !paying ? (
         <p className="text-body text-ink-2">Your plan doesn’t add businesses here. Choose a paid plan in Settings › Plan to add more.</p>
       ) : (
         <div className="flex flex-col gap-3">
