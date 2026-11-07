@@ -84,7 +84,8 @@ export function createDb({ supabaseUrl = '', secretKey = '', fetch = globalThis.
     }
     if (pg === '23505') return new DbError(409, 'CONFLICT', 'That already exists.', { constraint: /"([a-z0-9_]+)"/.exec(String(body?.message || ''))?.[1] ?? null });
     if (pg === '23503') return new DbError(409, 'FOREIGN_KEY', 'That refers to something that isn’t there.');
-    if (pg === '23514' || pg === '22P02' || pg === '428C9' || res.status === 400) return new DbError(400, 'BAD_REQUEST', 'The database refused that value.');
+    // pg: Postgres's or PostgREST's own error code (e.g. 23514 a check, PGRST204 a column not there), for the log only
+    if (pg === '23514' || pg === '22P02' || pg === '428C9' || res.status === 400) return new DbError(400, 'BAD_REQUEST', 'The database refused that value.', { pg: /^[A-Z0-9]{1,16}$/.test(pg) ? pg : null });
     return new DbError(502, 'UNAVAILABLE', `Supabase answered ${res.status}.`);
   }
 

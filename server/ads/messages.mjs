@@ -39,6 +39,45 @@ export const safeFixUrl = (url) => fixUrlOn(url, FIX_HOSTS);
 /** A fix link we may keep with a refusal (FIX_HOSTS, or Zernio's docs for the owner), or undefined. */
 export const keptFixUrl = (url) => fixUrlOn(url, [...FIX_HOSTS, ...OWNER_FIX_HOSTS]);
 
+/**
+ * Where a business admin accepts Meta's non-discrimination policy for a business: Business Settings → Users → System
+ * users ("Review policy", then "I accept"). Meta's own refusal text sends admins there; acceptance is once per
+ * business, by an admin with full control. The link is the documented Business Settings entry (Users → People); the
+ * System users page under it is one click on, and its own path is UNCONFIRMED, so the steps we show name the menu.
+ * It carries no business_id (Zernio's listing gives no owning business), so Meta opens the business last used: the
+ * steps say to check the business name first. Zernio's link (facebook.com/certification/nondiscrimination) only
+ * records the signed-in person's own acceptance and takes no business: it is kept as an optional second link
+ * (POLICY_PERSONAL_URL). docs/integrations-setup.md §3c has the sources.
+ */
+export const POLICY_ADMIN_URL = 'https://business.facebook.com/latest/settings/business_users';
+/** The person's own acceptance of the policy (Zernio's link): a second step, never the fix for a business. */
+export const POLICY_PERSONAL_URL = 'https://www.facebook.com/certification/nondiscrimination';
+/** Meta's Billing Hub, where the user picks the ad account (the last resort when the id isn't digits) */
+export const BILLING_HUB_URL = 'https://business.facebook.com/billing_hub/';
+
+/**
+ * One Meta ad account's payment settings in Billing Hub: act_<digits> or <digits>, digits only (never anything else
+ * in the link). The `asset_id` parameter is UNCONFIRMED (Billing Hub itself is documented); an id that isn't digits
+ * gets Billing Hub, where the user picks the account.
+ */
+export function paymentSettingsUrl(adAccountId) {
+  const digits = String(adAccountId ?? '').replace(/^act_/, '');
+  return /^\d{1,20}$/.test(digits) ? `${BILLING_HUB_URL}payment_settings/?asset_id=${digits}` : BILLING_HUB_URL;
+}
+
+/**
+ * The fix link for a refusal or health blocker with Zernio's code: on Meta, ours for the two Zernio gets wrong for a
+ * business (the policy: Business Settings, whatever Zernio sent; a payment method: that ad account's payment
+ * settings, when the ad account is known), else Zernio's own link when it passes safeFixUrl. Another platform (a
+ * Google customer id) always gets Zernio's own link: never a Meta page.
+ */
+export function fixUrlFor(zernioCode, zernioUrl, adAccountId, platform = 'meta') {
+  if (platform !== 'meta') return safeFixUrl(zernioUrl);
+  if (zernioCode === 'ad_account_policy_not_accepted') return POLICY_ADMIN_URL;
+  if (zernioCode === 'ad_account_payment_required' && adAccountId != null && String(adAccountId) !== '') return paymentSettingsUrl(adAccountId);
+  return safeFixUrl(zernioUrl);
+}
+
 /** half of a surrogate pair on its own (half an emoji): Postgres refuses it in json and text, so the row is lost */
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 
@@ -93,7 +132,7 @@ const MESSAGES = {
   NO_INSTAGRAM: 'Your ads will show on Facebook only: no Instagram professional account is linked to your Page.',
   INSTAGRAM_OK: 'An Instagram professional account is linked, so ads can show on Instagram too.',
   META_OBJECT_GONE: 'Meta can’t find part of this campaign any more (it may have been deleted in Ads Manager). Refresh the Campaigns tab.',
-  POLICY_NOT_ACCEPTED: 'A business admin needs to accept Meta’s non-discrimination policy in Ads Manager.',
+  POLICY_NOT_ACCEPTED: 'A business admin needs to accept Meta’s non-discrimination policy: in Meta Business Settings for the business that owns this ad account, open Users → System users, click “Review policy” (or “Add”), then “I accept”.',
   // Meta wants the verified beneficiary and payer sent with the ad set (regionalRegulationIdentities), even when
   // they're set in Ads Manager: this app doesn't send them, so verifying again wouldn't help
   VERIFIED_ADVERTISER: 'Ads shown in this country need Meta’s verified beneficiary and payer details, which this app can’t send yet. Use Meta Ads Manager for this one.',
@@ -344,14 +383,15 @@ const metaWords = (d) => cut([d.metaTitle, d.metaMessage].filter((x) => typeof x
  * add-on, billing, key or rate limits) never gets either, nor its fix link.
  *   detail: ad_jobs.error_detail (zernioAds.mjs refusalDetail); kind: 'launch' | the change's action; done: the
  *   change's steps that went through; campaignOff: its campaign switch was to come last and didn't; leftBehind: how
- *   many objects of a refused launch Meta kept. → { message, platformSays?, fixUrl? }
+ *   many objects of a refused launch Meta kept; ctx.adAccountId: the campaign's ad account, for its own payment
+ *   settings link (fixUrlFor). → { message, platformSays?, fixUrl? }
  */
 export function refusalOf({ code, detail = null, kind = 'launch', platform = 'meta', ctx = {}, shortSchedule = false, done = [], campaignOff = false, leftBehind = 0 }) {
   const c = { ...ctx, platform, action: kind };
   const d = detail && typeof detail === 'object' && !Array.isArray(detail) && detail.owner !== true ? detail : null;
   const known = d && typeof d.code === 'string' && Object.hasOwn(REFUSAL_REASON, d.code) ? REFUSAL_REASON[d.code] : null;
   const says = !d ? '' : !known ? cut(d.hint, 300) || metaWords(d) : META_WORDS_TOO.has(d.code) ? metaWords(d) || cut(d.hint, 300) : '';
-  const fixUrl = d ? safeFixUrl(d.fix?.url) : undefined;
+  const fixUrl = d ? fixUrlFor(d.code, d.fix?.url, ctx?.adAccountId, platform) : undefined;
   const said = (message) => ({ message, ...(says ? { platformSays: says } : {}), ...(fixUrl ? { fixUrl } : {}) });
   const launch = kind === 'launch';
   const stop = kind === 'pause' || kind === 'end';

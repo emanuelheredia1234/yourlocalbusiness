@@ -15,7 +15,7 @@ import { canMakePublicLinks, publicMediaUrl } from '../social/media.mjs';
 import { ADS_PLATFORMS, CONNECTION_OF, LAUNCH_CHOICES, idTailOf } from './contracts.mjs';
 import { buildLaunch, canonical, daysBetween, hashOf, isYmd, metaCreativeFor, metaSpendCap, searchTextFor, todayIn, validTimeZone, withOffset } from './build.mjs';
 import { findOwn } from './live.mjs';
-import { cut, messageFor, note, safeFixUrl } from './messages.mjs';
+import { cut, fixUrlFor, messageFor, note, paymentSettingsUrl, POLICY_ADMIN_URL, POLICY_PERSONAL_URL } from './messages.mjs';
 import { compareWhole, isCurrency, sumWhole, timesDays, toMinor, fromMinor, zernioWhole, dailyProblem } from './money.mjs';
 import { increaseProblems, launchProblems, switchesProblem } from './limits.mjs';
 
@@ -199,8 +199,13 @@ const LINE_OF_CHECK = Object.freeze({ account_status: 'account', payment: 'payme
 const LINE_OF_CODE = Object.freeze({ PAYMENT_REQUIRED: 'payment', NO_PAGE: 'page', ACTION_BLOCKED: 'account' });
 const lineOf = (b, code) => (typeof b?.check === 'string' && Object.hasOwn(LINE_OF_CHECK, b.check) ? LINE_OF_CHECK[b.check] : LINE_OF_CODE[code]);
 
-/** The setup checklist for the chosen ad account (§12). Reads health (Meta) or billing (Google). */
-export async function setupChecks(ctx, zid, platform, account, lctx) {
+/**
+ * The setup checklist for the chosen ad account (§12). Reads health (Meta) or billing (Google). seen: filled with
+ * what "Before your first ad" needs beyond the list, even what the list doesn't show because a red line comes first:
+ * policyLive (Zernio reports the policy as a live blocker), policyRemembered (Zernio remembers a policy refusal,
+ * last_refusal), paymentError (Zernio's payment check answered 'error', nothing else says the method is missing).
+ */
+export async function setupChecks(ctx, zid, platform, account, lctx, seen = {}) {
   const checks = [{ id: 'connected', state: 'ok', message: messageFor('CONNECTED_OK', { platform }) }];
   if (!account) {
     checks.push({ id: 'account', state: 'missing', code: 'ACCOUNT_NOT_CHOSEN', message: messageFor('ACCOUNT_NOT_CHOSEN') });
@@ -218,10 +223,11 @@ export async function setupChecks(ctx, zid, platform, account, lctx) {
     const list = (Array.isArray(hb.checks) ? hb.checks : []).filter(isObj);
     const byId = (id) => list.find((c) => c.id === id);
     const pay = byId('payment');
-    const fixOf = (c) => safeFixUrl(c?.fix?.url);
+    // a blocker's or check's fix link: ours for the policy and a payment method (messages.mjs fixUrlFor), else Zernio's
+    const fixOf = (c) => fixUrlFor(c?.code, c?.fix?.url, account.adAccountId);
     const payFails = pay?.status === 'missing' || pay?.status === 'error' || account.billingStatus === 'missing';
     if (pay?.status === 'ok' && !payFails) checks.push({ id: 'payment', state: 'ok', message: 'A payment method is on the ad account.' });
-    else if (payFails) checks.push({ id: 'payment', state: 'missing', code: 'PAYMENT_REQUIRED', message: messageFor('PAYMENT_REQUIRED'), ...(fixOf(pay) ? { fixUrl: fixOf(pay) } : {}) });
+    else if (payFails) checks.push({ id: 'payment', state: 'missing', code: 'PAYMENT_REQUIRED', message: messageFor('PAYMENT_REQUIRED'), fixUrl: paymentSettingsUrl(account.adAccountId) });
     else checks.push({ id: 'payment', state: 'unknown', code: 'PAYMENT_UNKNOWN', message: messageFor('PAYMENT_UNKNOWN') });
     const page = byId('page');
     checks.push(page && page.status !== 'ok' ? { id: 'page', state: 'missing', code: 'NO_PAGE', message: messageFor('NO_PAGE') } : { id: 'page', state: 'ok', message: messageFor('PAGE_OK') });
@@ -229,6 +235,11 @@ export async function setupChecks(ctx, zid, platform, account, lctx) {
     checks.push(ig && ig.status !== 'ok' ? { id: 'instagram', state: 'warn', code: 'NO_INSTAGRAM', message: messageFor('NO_INSTAGRAM') } : { id: 'instagram', state: 'ok', message: messageFor('INSTAGRAM_OK') });
     const cap = byId('spend_cap');
     if ((cap && cap.status !== 'ok') || (hb.status === 'blocked' && hb.ready === true)) checks.push({ id: 'spend_cap', state: 'warn', code: 'ACCOUNT_SPEND_CAP', message: messageFor('ACCOUNT_SPEND_CAP') });
+    const POLICY = 'ad_account_policy_not_accepted';
+    const policyBlockers = (Array.isArray(hb.blockers) ? hb.blockers : []).filter((b) => isObj(b) && b.code === POLICY);
+    seen.policyLive = policyBlockers.some((b) => b.check !== 'last_refusal');
+    seen.policyRemembered = policyBlockers.some((b) => b.check === 'last_refusal') || (byId('last_refusal')?.code === POLICY && ['missing', 'error'].includes(byId('last_refusal')?.status));
+    seen.paymentError = pay?.status === 'error' && account.billingStatus !== 'missing';
     if (hb.ready === false) {
       const blockers = (Array.isArray(hb.blockers) ? hb.blockers : []).filter(isObj);
       // an account status check that fails is a live blocker, even when Zernio lists none for it
@@ -269,6 +280,78 @@ export async function setupChecks(ctx, zid, platform, account, lctx) {
     checks.push({ id: 'review', state: 'ok', message: messageFor('GOOGLE_REVIEW') });
   }
   return checks;
+}
+
+/**
+ * The customer's own answer that a business admin accepted Meta's non-discrimination policy, for this ad account
+ * (ad_account_choices.policy_confirmed_for, 20261116000000_ad_policy_confirmed.sql). Before that migration is run
+ * the column isn't there and the answer reads as not given.
+ */
+export const policyConfirmedFor = (row, adAccountId) => !!row && !!adAccountId && row.policy_confirmed_for === adAccountId;
+
+/** What "Before your first ad" says for each item (the setup checklist's words where it has them). */
+export const FIRST_AD = Object.freeze({
+  PAYMENT_DONE: 'A payment method is on this ad account.',
+  PAYMENT_NOT_DONE: 'This ad account has no payment method Meta can bill. Add one in its payment settings: Meta bills your ads to it; this app never charges for ad spend.',
+  PAYMENT_UNKNOWN: 'We can’t see this ad account’s payment method from here. Open its payment settings to check one is there.',
+  POLICY_UNCONFIRMED: 'Meta needs a business admin to accept its non-discrimination policy once for the business that owns this ad account. Only a business admin can accept it, and Meta doesn’t let us check it from here, so tick the box once it’s done.',
+  POLICY_DONE: 'You told us a business admin accepted Meta’s non-discrimination policy. Meta checks it again when you launch.',
+  POLICY_REFUSED: 'Meta refused a launch on this ad account in the last 7 days because its non-discrimination policy hadn’t been accepted. Only a business admin can accept it. If one has since, you can launch again: Meta checks it when you launch.',
+  POLICY_LIVE: 'Meta reports that this ad account’s non-discrimination policy hasn’t been accepted. Only a business admin can accept it.',
+  PAGE_UNKNOWN: 'We couldn’t check the Facebook Page just now. Try again shortly.',
+});
+/**
+ * The plain steps to accept the policy (Meta's refusal text, and admins' help pages: docs §3c). The link can't name the
+ * business (Zernio gives no owning business), so Meta opens the one last used: step 2 says to check it.
+ */
+export const policySteps = (idTail) => [
+  'Sign in to Facebook as an admin with full control of the business that owns this ad account. Only a business admin can accept.',
+  `Open Meta Business Settings. Check the business name in the top-left menu is the one that owns ad account …${idTail}; switch to it if not.`,
+  'Go to Users, then System users.',
+  'Click “Review policy” (or “Add” if there’s no banner), then “I accept”. You don’t need to create a system user: close the window after.',
+  'Come back here and tick the box below.',
+];
+
+/**
+ * "Before your first ad" (Meta, the chosen ad account): a payment method, Meta's non-discrimination policy, a
+ * Facebook Page. Built from the setup checklist (its live payment check and the listing's billingStatus, the Page
+ * check) and the customer's own answer for the policy, which nothing at Meta can confirm before a launch: unanswered
+ * is a warning with the link, never a block (Meta decides at the launch). A policy refusal Zernio remembers
+ * (last_refusal) or reports live makes it "not done", whatever the answer, each with its own words. seen: setupChecks'
+ * own.
+ *   status: 'done' | 'not_done' | 'unconfirmed' | 'unknown'
+ */
+export function firstAdChecks(setup, account, choiceRow, seen = {}) {
+  const line = (id) => setup.find((c) => c.id === id);
+  const pay = line('payment');
+  const listed = account.billingStatus;
+  // Zernio's payment check answering 'error' (with nothing else saying the method is missing) is "can't tell", never
+  // a claim that there's no payment method
+  const payment =
+    pay?.state === 'ok' || (!pay && listed === 'ok')
+      ? { id: 'payment', status: 'done', message: FIRST_AD.PAYMENT_DONE }
+      : (pay?.state === 'missing' && seen.paymentError !== true) || listed === 'missing'
+        ? { id: 'payment', status: 'not_done', message: FIRST_AD.PAYMENT_NOT_DONE, fixUrl: paymentSettingsUrl(account.adAccountId), fixLabel: 'Open payment settings' }
+        : { id: 'payment', status: 'unknown', message: FIRST_AD.PAYMENT_UNKNOWN, fixUrl: paymentSettingsUrl(account.adAccountId), fixLabel: 'Check payment settings' };
+  const confirmed = policyConfirmedFor(choiceRow, account.adAccountId);
+  // a live blocker says only what Meta reports now; a remembered refusal says when, and that a launch may go ahead
+  const live = seen.policyLive === true || setup.some((c) => c.code === 'POLICY_NOT_ACCEPTED' && c.id !== 'last_refusal');
+  const remembered = seen.policyRemembered === true || setup.some((c) => c.code === 'POLICY_NOT_ACCEPTED' && c.id === 'last_refusal');
+  const policy = {
+    id: 'policy',
+    status: live || remembered ? 'not_done' : confirmed ? 'done' : 'unconfirmed',
+    message: live ? FIRST_AD.POLICY_LIVE : remembered ? FIRST_AD.POLICY_REFUSED : confirmed ? FIRST_AD.POLICY_DONE : FIRST_AD.POLICY_UNCONFIRMED,
+    fixUrl: POLICY_ADMIN_URL,
+    fixLabel: 'Open Business Settings',
+    alsoUrl: POLICY_PERSONAL_URL,
+    alsoLabel: 'Your own acceptance on Facebook (only if Meta asks you)',
+    steps: policySteps(account.idTail),
+    confirmed,
+  };
+  const pg = line('page');
+  const page = pg?.state === 'ok' ? { id: 'page', status: 'done', message: pg.message } : pg ? { id: 'page', status: 'not_done', message: pg.message } : { id: 'page', status: 'unknown', message: FIRST_AD.PAGE_UNKNOWN };
+  const items = [payment, policy, page];
+  return { adAccount: { name: account.name, idTail: account.idTail }, items, ready: items.every((i) => i.status === 'done') };
 }
 
 // ───────────── the launch ─────────────

@@ -1,7 +1,7 @@
 // Our plain words (server/ads/messages.mjs, spec §11): every code a sentence, fix links only to allowlisted hosts,
 // third-party text cut and flattened, the owner's problems never in the customer's words.
 import { describe, expect, it } from 'vitest';
-import { cut, hasMessage, keptFixUrl, messageFor, note, OWNER_CODES, REFUSAL_REASON, refusalOf, safeFixUrl, ZERNIO_CODES } from './messages.mjs';
+import { BILLING_HUB_URL, cut, fixUrlFor, hasMessage, keptFixUrl, messageFor, note, OWNER_CODES, paymentSettingsUrl, POLICY_ADMIN_URL, POLICY_PERSONAL_URL, REFUSAL_REASON, refusalOf, safeFixUrl, ZERNIO_CODES } from './messages.mjs';
 
 describe('messages', () => {
   it('has a sentence for every code Zernio’s refusals map to', () => {
@@ -89,7 +89,8 @@ describe('why a launch or change was refused (refusalOf)', () => {
         expect(JSON.stringify(r), code).not.toMatch(/META-OWN-WORDS/);
       }
       expect(JSON.stringify(r), code).not.toMatch(/zernio-hint/);
-      expect(r.fixUrl, code).toBe('https://www.facebook.com/help/1');
+      // the policy: always where a business admin accepts it (Zernio's link only records the signed-in person's own)
+      expect(r.fixUrl, code).toBe(code === 'ad_account_policy_not_accepted' ? POLICY_ADMIN_URL : 'https://www.facebook.com/help/1');
     }
     expect(REFUSAL_REASON).toMatchObject(Object.fromEntries(Object.keys(cases).map((c) => [c, expect.any(String)])));
     for (const code of new Set(Object.values(REFUSAL_REASON))) expect(hasMessage(code), code).toBe(true);
@@ -259,5 +260,65 @@ describe('review fixes: what a refusal says, and where its fix link may go', () 
     expect(cut(`ok ${smile}`)).toBe(`ok ${smile}`);
     // the stored JSON has no half character in it
     for (const t of [at298, cut(`${'b'.repeat(199)}${smile}`, 200)]) expect(JSON.stringify(t)).not.toMatch(/\\ud[89ab]/i);
+  });
+});
+
+describe('our own fix links: the policy and one ad account’s payment settings', () => {
+  it('builds the payment settings link from the ad account id, digits only', () => {
+    expect(paymentSettingsUrl('act_1106745002143814')).toBe('https://business.facebook.com/billing_hub/payment_settings/?asset_id=1106745002143814');
+    expect(paymentSettingsUrl('1106745002143814')).toBe('https://business.facebook.com/billing_hub/payment_settings/?asset_id=1106745002143814');
+    // anything else in the id: Billing Hub, where the user picks the account (never the id in the link)
+    for (const bad of ['act_12&x=https://evil.example', 'act_', 'act_123456789012345678901', '', null, undefined, 'act_12/../x', ' act_1']) expect(paymentSettingsUrl(bad), String(bad)).toBe(BILLING_HUB_URL);
+  });
+
+  it('every link we build passes safeFixUrl unchanged (Meta’s own hosts, no redirect)', () => {
+    for (const url of [POLICY_ADMIN_URL, POLICY_PERSONAL_URL, BILLING_HUB_URL, paymentSettingsUrl('act_1106745002143814')]) expect(safeFixUrl(url), url).toBe(url);
+    expect(new URL(POLICY_ADMIN_URL).hostname).toBe('business.facebook.com');
+    expect(new URL(paymentSettingsUrl('act_1')).hostname).toBe('business.facebook.com');
+  });
+
+  it('the policy always gets Business Settings; a payment method the ad account’s own settings when the account is known; else Zernio’s safe link', () => {
+    expect(fixUrlFor('ad_account_policy_not_accepted', 'https://www.facebook.com/certification/nondiscrimination', 'act_9')).toBe(POLICY_ADMIN_URL);
+    expect(fixUrlFor('ad_account_policy_not_accepted', undefined)).toBe(POLICY_ADMIN_URL);
+    expect(fixUrlFor('ad_account_payment_required', 'https://business.facebook.com/billing_hub/payment_settings', 'act_1106745002143814')).toBe('https://business.facebook.com/billing_hub/payment_settings/?asset_id=1106745002143814');
+    expect(fixUrlFor('ad_account_payment_required', 'https://business.facebook.com/billing_hub/payment_settings')).toBe('https://business.facebook.com/billing_hub/payment_settings');
+    expect(fixUrlFor('meta_action_blocked', 'https://evil.example/x', 'act_1')).toBeUndefined();
+    expect(fixUrlFor('meta_action_blocked', 'https://www.facebook.com/help/1', 'act_1')).toBe('https://www.facebook.com/help/1');
+  });
+
+  it('a Google refusal never gets a Meta page: Zernio’s own safe link, whatever the code', () => {
+    expect(fixUrlFor('ad_account_payment_required', 'https://ads.google.com/aw/billing', '1234567890', 'google')).toBe('https://ads.google.com/aw/billing');
+    expect(fixUrlFor('ad_account_payment_required', undefined, '1234567890', 'google')).toBeUndefined();
+    expect(fixUrlFor('ad_account_policy_not_accepted', undefined, '1234567890', 'google')).toBeUndefined();
+    const pay = refusalOf({ code: 'PAYMENT_REQUIRED', detail: { code: 'ad_account_payment_required', fix: { url: 'https://ads.google.com/aw/billing' } }, kind: 'launch', platform: 'google', ctx: { adAccountId: '1234567890' } });
+    expect(pay.fixUrl).toBe('https://ads.google.com/aw/billing');
+  });
+
+  it('a refused launch for the policy says where an admin accepts it, with that link; a payment one links the campaign’s ad account', () => {
+    const policy = refusalOf({ code: 'POLICY_NOT_ACCEPTED', detail: { code: 'ad_account_policy_not_accepted', fix: { url: 'https://www.facebook.com/certification/nondiscrimination' } }, kind: 'launch', platform: 'meta' });
+    expect(policy.message).toBe('A business admin needs to accept Meta’s non-discrimination policy: in Meta Business Settings for the business that owns this ad account, open Users → System users, click “Review policy” (or “Add”), then “I accept”. Nothing was created and no money was spent.');
+    expect(policy.fixUrl).toBe(POLICY_ADMIN_URL);
+    const pay = refusalOf({ code: 'PAYMENT_REQUIRED', detail: { code: 'ad_account_payment_required' }, kind: 'launch', platform: 'meta', ctx: { adAccountId: 'act_1106745002143814' } });
+    expect(pay.fixUrl).toBe('https://business.facebook.com/billing_hub/payment_settings/?asset_id=1106745002143814');
+    // a team-level refusal never gets a link, ours included
+    expect(refusalOf({ code: 'ADS_UNAVAILABLE', detail: { code: 'ad_account_policy_not_accepted', owner: true }, kind: 'launch', platform: 'meta' })).not.toHaveProperty('fixUrl');
+  });
+});
+
+describe('the activity log’s payment link', () => {
+  it('links a Meta campaign’s own payment settings, and a Google campaign Zernio’s link, never a Meta page', async () => {
+    const { createAudit } = await import('./audit.mjs');
+    const refusal = (url) => ({ refusal: { code: 'ad_account_payment_required', ...(url ? { fix: { url } } : {}) } });
+    const rows = [
+      { id: 2, at: 'x', campaign_id: 'c-meta', actor: 'customer', action: 'launch', summary: 's', outcome: 'refused', after: refusal('https://business.facebook.com/billing_hub/payment_settings') },
+      { id: 1, at: 'x', campaign_id: 'c-google', actor: 'customer', action: 'launch', summary: 's', outcome: 'refused', after: refusal('https://ads.google.com/aw/billing') },
+    ];
+    const campaigns = [
+      { id: 'c-meta', ad_account_id: 'act_1106745002143814', platform: 'meta' },
+      { id: 'c-google', ad_account_id: '1234567890', platform: 'google' },
+    ];
+    const db = { insert: async () => {}, select: async (table) => (table === 'ad_audit' ? rows : campaigns) };
+    const { entries } = await createAudit({ db }).list('u-1');
+    expect(entries.map((e) => e.fixUrl)).toEqual(['https://business.facebook.com/billing_hub/payment_settings/?asset_id=1106745002143814', 'https://ads.google.com/aw/billing']);
   });
 });

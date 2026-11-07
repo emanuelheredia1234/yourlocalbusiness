@@ -5,7 +5,9 @@
 //   slot of a business they deleted. Connect opens the posting service's hosted, branded sign-in page (Upload-Post)
 //   in a new tab; the row then waits for the network. Reconnect when a network asks to sign in again; Disconnect
 //   stops this business using the account.
-// - Ad accounts: the ad accounts the app reads results from (Zernio). Read only for now.
+// - Ad accounts: the ad accounts the app reads results from (Zernio). Once Meta ads is connected and launching is on,
+//   "Before your first ad" for the business on screen (FirstAdPanel): its ad account's payment method, Meta's
+//   non-discrimination policy and its Facebook Page.
 // Each side is switched on by its own key; a side that's off says so, and the owner alone sees which Replit
 // Secrets to add and the webhook address to register (names and addresses, never values).
 // Other integrations (Nango: future booking tools and CRMs) show only when the owner has set them up.
@@ -24,6 +26,7 @@ import { toast } from '@/store/ui';
 import { PlatformMark } from '@/components/posts/PlatformIcon';
 import { Badge, Callout, InfoTip, Modal, MoreMenu, OptionCards, SettingsRow, SettingsSection, Spinner, StatusDot, confirmAction, type MenuEntry } from '@/components/ui/primitives';
 import { disconnectWarning, liveAdsFor } from '@/components/ads/liveAds';
+import { FirstAdPanel } from '@/components/ads/FirstAdPanel';
 import { PLATFORM_NAMES } from '@/pages/marketing/analytics/links';
 import { connectErrorMessage, isConnectErrorReason } from '@/lib/integrations/connectReturn';
 import { GmailAccount } from './GmailAccount';
@@ -242,6 +245,7 @@ export function ConnectedAccounts() {
       <SettingsSection title="Ad accounts" description="See your ad results here. When launching is turned on, you can also launch and change campaigns from the app, and each change waits for your confirmation.">
         {sideOff(adsOn, 'Connecting ad accounts')}
         {ADS.map(row)}
+        {adsOn && business && byPlatform.meta_ads?.state === 'connected' && <FirstAdPanel key={business.id} projectId={business.id} businessName={name} connectedKey={`${byPlatform.meta_ads.targetLabel ?? ''}:${byPlatform.meta_ads.state}:${byPlatform.meta_ads.connectedAt ?? ''}`} />}
       </SettingsSection>
       <GmailAccount />
       <OtherIntegrations />

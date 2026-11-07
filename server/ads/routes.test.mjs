@@ -30,6 +30,10 @@ const metaCampaign = (row) => t.zm.ads.state.campaigns.get(row.remote.campaignId
 const codes = (list) => (list ?? []).map((n) => n.code);
 const writePaths = (from = 0) => t.writes(from).map((w) => `${w.method} ${w.path.replace('/api/v1', '').replace(/\/[0-9a-f]{24}(?=\/|$)/g, '/:zad').replace(/\/\d{6,}/g, '/:id')}`);
 
+/** the fix link the customer is shown: ours for a payment method (act_1's payment settings) and the policy, else Zernio's */
+const SHOWN_FIX = { ad_account_payment_required: 'https://business.facebook.com/billing_hub/payment_settings/?asset_id=1', ad_account_policy_not_accepted: 'https://business.facebook.com/latest/settings/business_users' };
+const shownFix = (code) => SHOWN_FIX[code] ?? META_REFUSALS[code]?.fix?.url;
+
 describe('launch: confirm, token, one send (R1, R2)', () => {
   beforeEach(async () => ready());
 
@@ -263,7 +267,7 @@ describe('why Meta refused: the refusal’s own reason, kept and said plainly', 
     expect(r.job).toMatchObject({ state: 'failed', message: said });
     expect(r.job.message).not.toMatch(/to see why/);
     expect(r.job.platformSays).toBe(metaSays);
-    if (m.fix) expect(r.job.fixUrl).toBe(m.fix.url);
+    if (m.fix) expect(r.job.fixUrl).toBe(shownFix(code));
     else expect(r.job).not.toHaveProperty('fixUrl');
     const campaigns = await t.call(u, 'GET', '/api/ads/campaigns?projectId=proj-1');
     expect(campaigns.body.campaigns[0]).toMatchObject({ state: 'failed', lastJob: { message: said } });
@@ -271,7 +275,7 @@ describe('why Meta refused: the refusal’s own reason, kept and said plainly', 
     const entry = (await auditList()).find((e) => e.action === 'launch' && e.outcome === 'failed');
     const line = `${said}${metaSays ? ` Meta’s message: “${metaSays}”` : ''}`;
     expect(entry.summary).toMatch(new RegExp(`: not done\\. ${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
-    if (m.fix) expect(entry.fixUrl).toBe(m.fix.url);
+    if (m.fix) expect(entry.fixUrl).toBe(shownFix(code));
     const all = JSON.stringify([r, campaigns.body, await auditList()]);
     expect(all).not.toMatch(metaSays ? /zernio-hint|mock |platformError|error_user/ : /zernio-hint|META-OWN-WORDS|mock |platformError|error_user/);
   });
@@ -924,7 +928,7 @@ describe('what a refusal leaves: a change done in part, a campaign still running
     const r = await t.changeCampaign(u, launched.campaign.id, { action: 'resume' });
     expect(writePaths(from)).toEqual(['PUT /ads/:zad/status', 'PUT /ads/campaigns/:id/status']);
     const said = `Only part of this change went through: parts of it were switched on, but the campaign itself is still paused, so it can’t spend yet. ${messageFor('PAYMENT_REQUIRED')}`;
-    expect(r.job).toMatchObject({ state: 'failed', code: 'PAYMENT_REQUIRED', message: said, fixUrl: META_REFUSALS.ad_account_payment_required.fix.url });
+    expect(r.job).toMatchObject({ state: 'failed', code: 'PAYMENT_REQUIRED', message: said, fixUrl: shownFix('ad_account_payment_required') });
     expect(metaCampaign(row).configuredStatus).toBe('PAUSED');
     expect((await lastAudit('resume', 'failed')).summary).toContain(`: not done. ${said}`);
   });
@@ -965,7 +969,7 @@ describe('what a refusal leaves: a change done in part, a campaign still running
     const r = await t.launchPlan(u, 'meta', { status: 'ACTIVE' });
     expect(writePaths()).toEqual(['POST /ads/create', 'PUT /ads/campaigns/:id', 'PUT /ads/campaigns/:id/status']);
     const said = `${messageFor('ACTIVATION_NOT_SENT', { platform: 'meta' })} ${messageFor('PAYMENT_REQUIRED')}`;
-    const fix = META_REFUSALS.ad_account_payment_required.fix.url;
+    const fix = shownFix('ad_account_payment_required');
     expect(r.job).toMatchObject({ state: 'done', code: 'ACTIVATION_NOT_SENT', message: said, fixUrl: fix });
     expect(r.campaign).toMatchObject({ state: 'paused', configuredStatus: 'PAUSED', spendCap: 350, lastJob: { message: said, fixUrl: fix } });
     const entry = await lastAudit('launch', 'done');

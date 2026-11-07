@@ -91,6 +91,8 @@ const seg = encodeURIComponent;
 export const getAdAccounts = (projectId: string, platform: AdsPlatform) => call<AccountsResponse>('GET', `/api/ads/accounts${q({ projectId, platform })}`);
 /** Our database only (no write to Meta or Google). */
 export const chooseAdAccount = (projectId: string, platform: AdsPlatform, adAccountRef: string) => call<{ chosen: AccountsResponse['chosen'] }>('PUT', '/api/ads/accounts/choice', { projectId, platform, adAccountRef });
+/** The customer's own answer that a business admin accepted Meta's non-discrimination policy (our database only). */
+export const confirmAdPolicy = (projectId: string, adAccountRef: string, confirmed: boolean) => call<{ policyConfirmed: boolean }>('PUT', '/api/ads/accounts/policy', { projectId, platform: 'meta', adAccountRef, confirmed });
 export const searchTargeting = (projectId: string, platform: AdsPlatform, dimension: 'geo' | 'interest', term: string) => call<{ results: TargetOption[] }>('GET', `/api/ads/targeting/search${q({ projectId, platform, dimension, q: term })}`);
 export const getCampaigns = (projectId: string) => call<CampaignsResponse>('GET', `/api/ads/campaigns${q({ projectId })}`);
 /** One read per connection; at most once per business every 5 minutes. */

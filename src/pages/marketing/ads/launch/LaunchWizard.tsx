@@ -1,6 +1,7 @@
 // The launch window (spec §7.2): one tab per platform in the plan, five steps each (ad account, who sees it, the
-// ads, budget and dates, review). The review is the server's own (it reads the saved plan again); the spend
-// confirm then sends one launch per platform. Nothing that spends is prefilled, and nothing here launches by
+// ads, budget and dates, review), with "Before your first ad" on top once a Meta ad account is chosen (BeforeFirstAd).
+// The review is the server's own (it reads the saved plan again); the spend confirm then sends one launch per
+// platform. Nothing that spends is prefilled, and nothing here launches by
 // itself: the only write is SpendConfirm's button.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ArrowRight, ClipboardCheck } from 'lucide-react';
@@ -13,6 +14,7 @@ import { useStore } from '@/store/useStore';
 import { useUI } from '@/store/ui';
 import { Callout, Checkbox, Modal, Segmented, Spinner, Stepper } from '@/components/ui/primitives';
 import { AccountStep } from './AccountStep';
+import { BeforeFirstAd } from './BeforeFirstAd';
 import { AudienceStep } from './AudienceStep';
 import { AdsStep } from './AdsStep';
 import { BudgetStep } from './BudgetStep';
@@ -44,9 +46,11 @@ export function LaunchWizard({ project, plan, again = null, onClose }: { project
   const [confirming, setConfirming] = useState(false);
   const limits = useAdsLaunch((s) => s.limits[project.id]);
 
+  // quiet: read again without the "Reading your ad accounts…" spinner (after the policy box is ticked, so the step
+  // on screen stays put)
   const loadAccounts = useCallback(
-    async (p: AdsPlatform) => {
-      setLoading((l) => ({ ...l, [p]: true }));
+    async (p: AdsPlatform, quiet = false) => {
+      if (!quiet) setLoading((l) => ({ ...l, [p]: true }));
       try {
         const r = await getAdAccounts(project.id, p);
         setAccounts((a) => ({ ...a, [p]: r }));
@@ -56,7 +60,7 @@ export function LaunchWizard({ project, plan, again = null, onClose }: { project
       } catch (e) {
         setAcctErr((x) => ({ ...x, [p]: e instanceof AdsApiError ? e.message : 'Your ad accounts couldn’t be read. Try again shortly.' }));
       } finally {
-        setLoading((l) => ({ ...l, [p]: false }));
+        if (!quiet) setLoading((l) => ({ ...l, [p]: false }));
       }
     },
     [project.id],
@@ -184,6 +188,7 @@ export function LaunchWizard({ project, plan, again = null, onClose }: { project
               <Checkbox id={`lw-include-${tab}`} checked={d.include} onChange={(v) => patch(tab, { include: v })} label={`Launch on ${PLATFORM_LABEL[tab]}`} />
             </div>
           )}
+          {acct?.firstAd && <BeforeFirstAd key={`${tab}:${chosen?.ref ?? ''}`} projectId={project.id} adAccountRef={chosen?.ref} firstAd={acct.firstAd} onChanged={() => void loadAccounts(tab, true)} />}
           <Stepper steps={STEPS.map((title, i) => ({ title, summary: summaries[i] || undefined, state: i < cur ? 'done' : i === cur ? 'current' : 'upcoming', content: i === cur ? content(i) : undefined }))} />
           {platforms.length > 1 && cur === STEPS.length - 1 && (
             <p className="text-small text-muted">
