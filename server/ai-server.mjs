@@ -160,9 +160,11 @@ function serveStatic(req, res, url) {
   if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(DIST, 'index.html');
   const ext = path.extname(file).toLowerCase();
   const immutable = file.includes(`${path.sep}assets${path.sep}`);
+  // email icons (P5) are fetched by inbox apps for every email that shows them: cached a year (not renamed per build)
+  const emailIcon = file.startsWith(path.join(DIST, 'email-icons') + path.sep);
   res.writeHead(200, {
     'content-type': MIME[ext] || 'application/octet-stream',
-    'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+    'cache-control': immutable ? 'public, max-age=31536000, immutable' : emailIcon ? 'public, max-age=31536000' : 'no-cache',
     'x-content-type-options': 'nosniff',
   });
   // a file that can't be read after all ends this response, not the server

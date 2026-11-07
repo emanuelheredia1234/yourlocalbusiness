@@ -525,7 +525,7 @@ describe('campaign drafts', () => {
     }
     const html = template.body.html;
     // the plain-text shape (older tabs) is made a doc and rendered here, as a designed email
-    const expected = renderEmail(docFromPlain({ id: 'draft', body: 'Hello <script>bad()</script>\n\nThanks\nThe team', ctaLabel: DRAFT.ctaLabel, ctaUrl: DRAFT.ctaUrl }), { target: 'omnisend', subject: '<script>alert(1)</script>', preheader: DRAFT.preheader, brand: {}, values: { first_name: '[First name]' }, links: {}, footerNote: '', iconBase: OMNISEND_PUBLIC_BASE_URL }).html;
+    const expected = renderEmail(docFromPlain({ id: 'draft', body: 'Hello <script>bad()</script>\n\nThanks\nThe team', ctaLabel: DRAFT.ctaLabel, ctaUrl: DRAFT.ctaUrl }), { target: 'omnisend', subject: '<script>alert(1)</script>', preheader: DRAFT.preheader, brand: {}, values: { first_name: '[First name]' }, links: {}, footerNote: '', iconBase: '' }).html;
     expect(html).toBe(expected);
     expect(html).toMatch(/<p style="[^"]*">Hello &lt;script&gt;bad\(\)&lt;\/script&gt;<\/p>/);
     expect(html).toContain('Thanks<br>The team');
@@ -639,7 +639,7 @@ describe('designed email drafts', () => {
     const { res, html, calls } = await draftWith(designed({ links: { [`buy:${ALPHA_OFFER}`]: 'https://evil.example/pay' } }));
     expect(res.statusCode).toBe(201);
     expect(calls).toEqual(['template', 'campaign']);
-    const expected = renderEmail(normalizeDoc(DOC).doc, { target: 'omnisend', subject: 'Your guide', preheader: 'Page one', brand: BRAND, values: VALUES, links: { [`buy:${ALPHA_OFFER}`]: `https://yourlocalbusiness.replit.app/b/${ALPHA_OFFER}` }, footerNote: 'You signed up at copperandcomb.com.', iconBase: OMNISEND_PUBLIC_BASE_URL }).html;
+    const expected = renderEmail(normalizeDoc(DOC).doc, { target: 'omnisend', subject: 'Your guide', preheader: 'Page one', brand: BRAND, values: VALUES, links: { [`buy:${ALPHA_OFFER}`]: `https://yourlocalbusiness.replit.app/b/${ALPHA_OFFER}` }, footerNote: 'You signed up at copperandcomb.com.', iconBase: '' }).html;
     expect(html).toBe(expected);
     expect(html).toContain(`href="https://yourlocalbusiness.replit.app/b/${ALPHA_OFFER}"`);
     // a client-sent link is never used
@@ -685,8 +685,16 @@ describe('designed email drafts', () => {
     }
     expect((await draftWith(img(imageOf('account-alpha', 'AAAAAAAAAAAAAAAAAAAAAA.jpg')))).res.statusCode).toBe(201);
     expect((await draftWith(designed({ brand: { ...BRAND, logoUrl: 'https://elsewhere.example/logo.png' } }))).res.body.code).toBe('IMAGE_NOT_HOSTED');
-    const icons = await draftWith(designed({ doc: { v: 1, blocks: [{ type: 'social', style: 'icons', links: [{ platform: 'instagram', url: 'https://instagram.com/cc' }] }] } }));
-    expect(icons.html).toContain('src="https://yourlocalbusiness.replit.app/email-icons/instagram.png"');
+    // social icons are text links until the owner adds the icon files (EMAIL_ICONS=on)
+    const social = designed({ doc: { v: 1, blocks: [{ type: 'social', style: 'icons', links: [{ platform: 'instagram', url: 'https://instagram.com/cc' }] }] } });
+    const text = await draftWith(social);
+    expect(text.html).not.toContain('/email-icons/');
+    expect(text.html).toContain('>Instagram</a>');
+    const fetch = omnisendFetch();
+    const { service } = makeService({ fetch, env: { OMNISEND_CLIENT_ID: 'client-id-test', OMNISEND_CLIENT_SECRET: 'client-secret-test', SUPABASE_URL: SUPABASE, EMAIL_ICONS: 'on' } });
+    await connected(service);
+    expect((await call(service, 'POST', `${API}/campaign-drafts`, { body: social })).statusCode).toBe(201);
+    expect(fetch.log.find((c) => c.kind === 'template').body.html).toContain('src="https://yourlocalbusiness.replit.app/email-icons/instagram.png"');
   });
 
   it('checks the values, the brand, the links and the doc before anything is made', async () => {

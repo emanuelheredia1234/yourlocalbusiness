@@ -194,6 +194,8 @@ export function createOmnisendRoutes({
   // where an email's images may live: the caller's own folder in the public-files bucket, and the app's icons
   const supabaseBase = String(env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
   const iconsPrefix = `${OMNISEND_PUBLIC_BASE_URL}/email-icons/`;
+  // social icons (public/email-icons/<platform>.png) only once the owner has added them: text links until then
+  const iconBase = ['on', 'true', '1'].includes(String(env.EMAIL_ICONS || '').trim().toLowerCase()) ? OMNISEND_PUBLIC_BASE_URL : '';
   const appOrigins = new Set([OMNISEND_PUBLIC_BASE_URL, ...[env.APP_PUBLIC_URL].map((u) => safeHttpUrl(u)).filter(Boolean).map((u) => new URL(u).origin)]);
   const reply = (req, res, status, body, headers = {}) => send(res, status, body, { ...corsHeaders(req), ...headers });
 
@@ -684,7 +686,7 @@ export function createOmnisendRoutes({
     }
     let rendered;
     try {
-      rendered = renderEmail(doc, { target: 'omnisend', subject, preheader, brand, values, links, footerNote, iconBase: OMNISEND_PUBLIC_BASE_URL, imageAllowed: (src) => hostedImage(src, userId) });
+      rendered = renderEmail(doc, { target: 'omnisend', subject, preheader, brand, values, links, footerNote, iconBase, imageAllowed: (src) => hostedImage(src, userId) });
     } catch (e) {
       if (e instanceof RenderError && e.code === 'TOO_LARGE') throw new OmnisendError(413, 'TOO_LARGE', 'This email is too large for an Omnisend draft.');
       // a bug on our side (the unsubscribe guard, anything else): the owner's log, generic words for the customer
