@@ -457,6 +457,23 @@ leads, the plan, a due post's editor) or the assistant with a message in its box
 Owner setup (migration `supabase/migrations/20261116000000_morning_action.sql`, the key to tick, the optional
 settings, capacity and the backlog alert): docs/integrations-setup.md §13.
 
+## A/B tests and Trial Reels
+
+- **Posts:** two or three versions of one post that differ in one thing (hook, caption, visual, call to action or
+  time). Each has a planned time and goes out when you press Post now, in order and at least 12 hours apart; the
+  morning action reminds you. Nothing posts by itself.
+- **Instagram Trial Reels:** a video shown to non-followers first (accounts with 1,000+ followers). Two Trial Reels
+  make a quick test. Regular posts are sent exactly as before.
+- **Emails:** an Omnisend A/B draft (subject or opening), sent by you in Omnisend; two regular drafts when Omnisend
+  doesn't offer A/B for the brand.
+- **SEO pages:** a 50/50 split remembered per visitor, with each lead tagged with the version it came from.
+- **Results** from Upload-Post's per-post analytics, Omnisend's reports and the page's own visitors and leads; a
+  winner needs enough data and a 10% lift. **Use the winner** saves what was learned to the Brain.
+- **Limits:** Launch 2, Grow 10, Scale unlimited A/B tests a month, counted when a test starts.
+
+Owner setup (migration `supabase/migrations/20261117000000_experiments.sql`, the optional settings, how the split and
+the results work): docs/integrations-setup.md §14.
+
 ## Scheduled jobs
 
 Replit Autoscale stops the app when it's idle, so nothing runs on a timer inside it. Supabase's pg_cron calls
@@ -507,6 +524,7 @@ Server environment:
 - `TRUSTED_PROXY_HOPS` (optional, default 2): how many `X-Forwarded-For` addresses the platform's proxies add at its end, so visitors are told apart by the address they connected from (see "Publishing pages")
 - `OMNISEND_CLIENT_ID` and `OMNISEND_CLIENT_SECRET`: the OAuth credentials Omnisend issues (see "Omnisend: campaign drafts from the email sequence")
 - the morning action (see "Morning action"): `MORNING_ACTIONS` (`off` turns it off), `MORNING_PER_TICK` (default 24, 1–200 businesses per hourly tick) and `MORNING_CONCURRENCY` (default 6, 1–10 at a time). It needs `supabase/migrations/20261116000000_morning_action.sql`
+- A/B tests and Trial Reels (see "A/B tests and Trial Reels"): `EXPERIMENTS` (`off` turns them off; pages then serve one version), `EXPERIMENT_READS_PER_TICK` (default 40, 1–200 tests' results per hourly tick) and the optional `EXPERIMENT_COOKIE_SECRET` (16+ characters; unset, it is derived from `SUPABASE_SECRET_KEY`). They need `supabase/migrations/20261117000000_experiments.sql`
 - `CRON_SECRET`: the bearer for `POST /api/cron/tick`, which runs the scheduled jobs; the same value goes in the Supabase Vault secret `cron_secret` (see "Scheduled jobs"). `CRON_BUDGET_MS` (default 40000) is one tick's time budget
 
 `GET /api/config` tells the app whether accounts are on and whether it can publish pages, and `DELETE /api/account` deletes the signed-in user, with their saved workspace, files, published pages and leads.
