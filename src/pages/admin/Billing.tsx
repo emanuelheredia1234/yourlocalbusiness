@@ -2,7 +2,8 @@
 // customer's analytics cost (treg), their social posting (Upload-Post: one profile per business, their connected
 // accounts, calls and the profile estimates) and ad accounts (Zernio) side by side, Upload-Post profiles used of the
 // plan's 75 overall and per customer, their caps (edit, block, reset), the check of our ledger
-// against treg's own totals, a CSV to bill from, and the ad launch limits (AdsLimitsSection). The server
+// against treg's own totals, a CSV to bill from, the ad launch limits (AdsLimitsSection) and Stripe Connect
+// (ConnectSection: sellers, our fees, platform alerts). The server
 // answers all of it to admins only; this page charges nothing. Team-level provider alerts show as plain words, never amounts or links.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ban, CircleCheck, Download, Pencil, Receipt, RefreshCw, RotateCcw } from 'lucide-react';
@@ -17,6 +18,7 @@ import { AdsLimitsSection } from './AdsLimitsSection';
 import { PlansAdminSection } from './PlansAdminSection';
 import { CancelSurveysSection } from './CancelSurveysSection';
 import { MorningSection } from './MorningSection';
+import { ConnectSection } from './ConnectSection';
 import { OWNER_SECTION_ID, scrollToOwnerSection, takeOwnerSection } from './ownerLinks';
 import { Badge, Callout, Empty, Field, InfoTip, Modal, MoreMenu, PageHeader, Select, SettingsSection, Skeleton, Spinner, StatStrip, confirmAction, type MenuEntry } from '@/components/ui/primitives';
 
@@ -301,6 +303,7 @@ export function BillingView({ data, report, onEdit, onChanged }: { data: Data; r
       <div id={OWNER_SECTION_ID.plans} className="flex scroll-mt-4 flex-col gap-6">
         <PlansAdminSection />
         <CancelSurveysSection />
+        <ConnectSection />
       </div>
       <div id={OWNER_SECTION_ID['ad-limits']} className="scroll-mt-4">
         <AdsLimitsSection />
